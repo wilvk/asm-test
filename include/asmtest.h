@@ -157,6 +157,15 @@ void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
 void asm_call_capture_sret(regs_t *out, void *fn, void *result,
                            const long *args, int nargs);
 
+/* Call fn taking `niargs` integer register args followed by a large
+ * (memory-class) struct passed by value (`ssize` bytes at `sptr`). x86-64 copies
+ * the struct inline onto the stack; AArch64 passes a pointer to it (per AAPCS64).
+ * Small (<=16-byte) structs need no special call — pass their eightbytes as
+ * ordinary integer/double args (e.g. struct{long,long} via ASM_CALL2, or
+ * struct{long;double} via asm_call_capture_fp). */
+void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
+                                int niargs, const void *sptr, size_t ssize);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */

@@ -22,7 +22,7 @@ ASM_SYNTAX ?= gas
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
-                  $(BUILD)/test_struct
+                  $(BUILD)/test_struct $(BUILD)/test_structparam
 
 .PHONY: all test demo-fail clean
 all: test
@@ -80,6 +80,10 @@ $(BUILD)/test_args: $(FRAMEWORK_OBJS) $(BUILD)/args.o $(BUILD)/test_args.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(BUILD)/test_struct: $(FRAMEWORK_OBJS) $(BUILD)/structs.o $(BUILD)/test_struct.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_structparam: $(FRAMEWORK_OBJS) $(BUILD)/structparam.o \
+                           $(BUILD)/test_structparam.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 test: $(SUITES)

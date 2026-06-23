@@ -23,6 +23,9 @@ roadmap (Phases 5–11).
 - **Struct return** via `ASM_SRET(&regs, fn, &out, ...)`: large structs come
   back through the hidden result pointer (`rdi`/`x8`); small ones land in the
   captured `regs.ret`/`regs.rdx`.
+- **Struct-by-value parameters**: small structs pass as their eightbytes via the
+  integer/FP paths; large ones via `asm_call_capture_bigstruct` (inline stack
+  copy on x86-64, by-pointer on AArch64).
 - **Floating-point** via `ASM_FCALLn(&regs, fn, doubles...)`: marshals `double`
   args into the FP registers and captures the FP return (`regs.fret`), with
   `ASSERT_FP_EQ` and `ASSERT_FP_NEAR(&regs, expected, ulps)`.

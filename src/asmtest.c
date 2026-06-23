@@ -329,6 +329,33 @@ void asmtest_guarded_free_under(void *p, size_t n) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Large struct-by-value parameter (arch-divergent dispatch)           */
+/* ------------------------------------------------------------------ */
+
+#if defined(__x86_64__)
+extern void asm_bigstruct_x86(regs_t *out, void *fn, const long *iargs,
+                              int niargs, const void *sptr, size_t ssize);
+#endif
+
+void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
+                                int niargs, const void *sptr, size_t ssize) {
+#if defined(__aarch64__)
+    /* AAPCS64: a >16-byte struct is passed as a pointer to a copy; for a
+     * read-only callee, passing the struct's own address is equivalent. */
+    long args[16];
+    int i;
+    for (i = 0; i < niargs && i < 15; i++)
+        args[i] = iargs[i];
+    args[i] = (long)(uintptr_t)sptr;
+    (void)ssize;
+    asm_call_capture_args(out, fn, args, i + 1);
+#else
+    /* SysV: copy the struct inline onto the stack. */
+    asm_bigstruct_x86(out, fn, iargs, niargs, sptr, ssize);
+#endif
+}
+
+/* ------------------------------------------------------------------ */
 /* Crash handling: turn fatal signals into test failures               */
 /* ------------------------------------------------------------------ */
 

@@ -925,3 +925,105 @@ ASM_FUNC asm_call_capture_sret
 #endif
 
 ASM_ENDFUNC asm_call_capture_sret
+
+#if defined(__x86_64__)
+/*
+ * void asm_bigstruct_x86(regs_t *out, void *fn, const long *iargs, int niargs,
+ *                        const void *sptr, size_t ssize);
+ * SysV-only helper: pass niargs integer register args, then copy an ssize-byte
+ * by-value struct inline onto the stack (memory class). AArch64 uses a pointer
+ * instead, handled in C (asm_call_capture_bigstruct).
+ *   out -> %rdi, fn -> %rsi, iargs -> %rdx, niargs -> %rcx, sptr -> %r8,
+ *   ssize -> %r9
+ */
+ASM_FUNC asm_bigstruct_x86
+    pushq   %rbp
+    movq    %rsp, %rbp
+    pushq   %rbx
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $48, %rsp
+    movq    %rdi, -48(%rbp)        /* out    */
+    movq    %rsi, -56(%rbp)        /* fn     */
+    movq    %rdx, -64(%rbp)        /* iargs  */
+    movq    %rcx, -72(%rbp)        /* niargs */
+    movq    %r8,  -80(%rbp)        /* sptr   */
+    movq    %r9,  -88(%rbp)        /* ssize  */
+
+    /* 16-align rsp, reserve round_up(ssize, 16). */
+    andq    $-16, %rsp
+    movq    %r9, %rax
+    addq    $15, %rax
+    andq    $-16, %rax
+    subq    %rax, %rsp
+
+    /* Byte-copy the struct: [rsp + i] = sptr[i]. */
+    movq    -80(%rbp), %r8
+    movq    -88(%rbp), %r9
+    xorq    %rcx, %rcx
+50:
+    cmpq    %r9, %rcx
+    jge     51f
+    movb    (%r8,%rcx,1), %al
+    movb    %al, (%rsp,%rcx,1)
+    incq    %rcx
+    jmp     50b
+51:
+    /* Load niargs integer register args. */
+    movq    -64(%rbp), %r11
+    movq    -72(%rbp), %r10
+    cmpq    $1, %r10
+    jl      52f
+    movq    0(%r11), %rdi
+    cmpq    $2, %r10
+    jl      52f
+    movq    8(%r11), %rsi
+    cmpq    $3, %r10
+    jl      52f
+    movq    16(%r11), %rdx
+    cmpq    $4, %r10
+    jl      52f
+    movq    24(%r11), %rcx
+    cmpq    $5, %r10
+    jl      52f
+    movq    32(%r11), %r8
+    cmpq    $6, %r10
+    jl      52f
+    movq    40(%r11), %r9
+52:
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    movq    -56(%rbp), %r11
+    xorl    %eax, %eax
+    call    *%r11
+
+    movq    -48(%rbp), %r11
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movabsq $0x2222222222222222, %rax
+    movq    %rax, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+
+    leaq    -40(%rbp), %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbx
+    popq    %rbp
+    ret
+ASM_ENDFUNC asm_bigstruct_x86
+#endif

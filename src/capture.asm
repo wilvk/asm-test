@@ -414,3 +414,94 @@ ASM_FUNC asm_call_capture_sret
     pop     rbp
     ret
 ASM_ENDFUNC asm_call_capture_sret
+
+; void asm_bigstruct_x86(regs_t *out, void *fn, const long *iargs, int niargs,
+;                        const void *sptr, size_t ssize);
+;   out -> rdi, fn -> rsi, iargs -> rdx, niargs -> rcx, sptr -> r8, ssize -> r9
+ASM_FUNC asm_bigstruct_x86
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 48
+    mov     [rbp - 48], rdi         ; out
+    mov     [rbp - 56], rsi         ; fn
+    mov     [rbp - 64], rdx         ; iargs
+    mov     [rbp - 72], rcx         ; niargs
+    mov     [rbp - 80], r8          ; sptr
+    mov     [rbp - 88], r9          ; ssize
+
+    and     rsp, -16
+    mov     rax, r9
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    mov     r8, [rbp - 80]
+    mov     r9, [rbp - 88]
+    xor     rcx, rcx
+.bcopy:
+    cmp     rcx, r9
+    jge     .bdone
+    mov     al, [r8 + rcx]
+    mov     [rsp + rcx], al
+    inc     rcx
+    jmp     .bcopy
+.bdone:
+    mov     r11, [rbp - 64]
+    mov     r10, [rbp - 72]
+    cmp     r10, 1
+    jl      .rdone
+    mov     rdi, [r11 + 0]
+    cmp     r10, 2
+    jl      .rdone
+    mov     rsi, [r11 + 8]
+    cmp     r10, 3
+    jl      .rdone
+    mov     rdx, [r11 + 16]
+    cmp     r10, 4
+    jl      .rdone
+    mov     rcx, [r11 + 24]
+    cmp     r10, 5
+    jl      .rdone
+    mov     r8, [r11 + 32]
+    cmp     r10, 6
+    jl      .rdone
+    mov     r9, [r11 + 40]
+.rdone:
+    mov     rbx, 0x1111111111111111
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rbp - 56]
+    xor     eax, eax
+    call    r11
+
+    mov     r11, [rbp - 48]
+    mov     [r11 + 0], rax
+    mov     [r11 + 8], rdx
+    mov     [r11 + 16], rbx
+    mov     rax, 0x2222222222222222
+    mov     [r11 + 24], rax
+    mov     [r11 + 32], r12
+    mov     [r11 + 40], r13
+    mov     [r11 + 48], r14
+    mov     [r11 + 56], r15
+    pushfq
+    pop     rax
+    mov     [r11 + 64], rax
+
+    lea     rsp, [rbp - 40]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_bigstruct_x86
