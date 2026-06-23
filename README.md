@@ -21,6 +21,9 @@ roadmap (Phases 5–11).
 - **Floating-point** via `ASM_FCALLn(&regs, fn, doubles...)`: marshals `double`
   args into the FP registers and captures the FP return (`regs.fret`), with
   `ASSERT_FP_EQ` and `ASSERT_FP_NEAR(&regs, expected, ulps)`.
+- **SIMD** via `ASM_VCALLn(&regs, fn, vec128_t...)`: marshals 128-bit vector
+  args and captures the whole vector file (`regs.vec[]`, return in `vec[0]`),
+  with `ASSERT_VEC_EQ` plus lane assertions `ASSERT_DEQ/DNEAR` / `ASSERT_FEQ/FNEAR`.
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.

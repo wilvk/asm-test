@@ -190,28 +190,83 @@ static uint64_t fp_ulp_distance(double a, double b) {
     return ia > ib ? (uint64_t)(ia - ib) : (uint64_t)(ib - ia);
 }
 
-void asmtest_assert_fp_eq(const char *file, int line, const regs_t *r,
-                          double expected) {
-    if (!(r->fret == expected)) /* '==' is false for NaN, which is intended */
-        asmtest_fail(file, line, "ASSERT_FP_EQ: %.17g != %.17g", r->fret,
+/* 32-bit float ULP distance, analogous to fp_ulp_distance. */
+static uint32_t fp_ulp_distance_f(float a, float b) {
+    int32_t ia, ib;
+    memcpy(&ia, &a, sizeof ia);
+    memcpy(&ib, &b, sizeof ib);
+    if (ia < 0)
+        ia = (int32_t)0x80000000U - ia;
+    if (ib < 0)
+        ib = (int32_t)0x80000000U - ib;
+    return ia > ib ? (uint32_t)(ia - ib) : (uint32_t)(ib - ia);
+}
+
+void asmtest_assert_double_eq(const char *file, int line, double actual,
+                              double expected) {
+    if (!(actual == expected)) /* '==' is false for NaN, which is intended */
+        asmtest_fail(file, line, "ASSERT_*EQ (double): %.17g != %.17g", actual,
                      expected);
 }
 
-void asmtest_assert_fp_near(const char *file, int line, const regs_t *r,
-                            double expected, unsigned long max_ulps) {
-    double actual = r->fret;
+void asmtest_assert_double_near(const char *file, int line, double actual,
+                                double expected, unsigned long max_ulps) {
     if (isnan(actual) || isnan(expected)) {
         if (isnan(actual) && isnan(expected))
             return;
-        asmtest_fail(file, line, "ASSERT_FP_NEAR: NaN mismatch (%.17g vs %.17g)",
+        asmtest_fail(file, line, "ASSERT_*NEAR (double): NaN mismatch (%.17g "
+                                 "vs %.17g)",
                      actual, expected);
     }
     uint64_t d = fp_ulp_distance(actual, expected);
     if (d > max_ulps)
         asmtest_fail(file, line,
-                     "ASSERT_FP_NEAR: %.17g vs %.17g differ by %llu ulps "
-                     "(max %lu)",
+                     "ASSERT_*NEAR (double): %.17g vs %.17g differ by %llu "
+                     "ulps (max %lu)",
                      actual, expected, (unsigned long long)d, max_ulps);
+}
+
+void asmtest_assert_float_eq(const char *file, int line, float actual,
+                             float expected) {
+    if (!(actual == expected))
+        asmtest_fail(file, line, "ASSERT_FEQ (float): %.9g != %.9g",
+                     (double)actual, (double)expected);
+}
+
+void asmtest_assert_float_near(const char *file, int line, float actual,
+                               float expected, unsigned long max_ulps) {
+    if (isnan(actual) || isnan(expected)) {
+        if (isnan(actual) && isnan(expected))
+            return;
+        asmtest_fail(file, line, "ASSERT_FNEAR (float): NaN mismatch (%.9g vs "
+                                 "%.9g)",
+                     (double)actual, (double)expected);
+    }
+    uint32_t d = fp_ulp_distance_f(actual, expected);
+    if (d > max_ulps)
+        asmtest_fail(file, line,
+                     "ASSERT_FNEAR (float): %.9g vs %.9g differ by %u ulps "
+                     "(max %lu)",
+                     (double)actual, (double)expected, d, max_ulps);
+}
+
+void asmtest_assert_vec_eq(const char *file, int line, const char *idxexpr,
+                           const unsigned char *actual,
+                           const unsigned char *expected) {
+    size_t i = 0;
+    while (i < 16 && actual[i] == expected[i])
+        i++;
+    if (i == 16)
+        return;
+    char expect_hex[64], actual_hex[64];
+    hexdump_window(expect_hex, sizeof expect_hex, expected, 0, 16);
+    hexdump_window(actual_hex, sizeof actual_hex, actual, 0, 16);
+    asmtest_fail(file, line,
+                 "ASSERT_VEC_EQ(vec[%s]): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       expect: %s\n"
+                 "       actual: %s",
+                 idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
 }
 
 /* ------------------------------------------------------------------ */

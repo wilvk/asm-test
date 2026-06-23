@@ -175,13 +175,14 @@ whole signature must be ≤6 integer arguments (all `long`) with an integer
 return. Phases 5–7 widen *what can be tested*; 8–9 mature *the runner*; 10–11
 add reach.
 
-- **Phase 5 — Floating-point & SIMD: _scalars done; vectors planned._**
-  `asm_call_capture_fp` marshals `double` args into the FP argument registers
-  (`xmm0–7` / `d0–7`) and captures the scalar FP return into `regs_t.fret`, with
-  `ASSERT_FP_EQ` and `ASSERT_FP_NEAR(&r, expected, ulps)` (ULP-distance
-  tolerance). `ASM_FCALLn` drive it; callee-saved integers are still checked
-  across the FP call. Remaining: capturing the full 128-bit vector file
-  (`xmm0–15` / `v0–31`) for routines that return or compute with SIMD.
+- **Phase 5 — Floating-point & SIMD: _done._** `asm_call_capture_fp` marshals
+  `double` args into the FP argument registers (`xmm0–7` / `d0–7`) and captures
+  the scalar FP return into `regs_t.fret`, with `ASSERT_FP_EQ` /
+  `ASSERT_FP_NEAR(&r, expected, ulps)`. `asm_call_capture_vec` marshals 8 full
+  128-bit vector args and captures the entire vector file (`xmm0–15` / `v0–31`)
+  into `regs_t.vec[]` (return = `vec[0]`), with `ASSERT_VEC_EQ` plus raw lane
+  assertions `ASSERT_DEQ/DNEAR` (double) and `ASSERT_FEQ/FNEAR` (float). Driven
+  by `ASM_FCALLn` / `ASM_VCALLn`; callee-saved integers stay checked across both.
 - **Phase 6 — Full ABI call model: _planned._** Replace the fixed
   `ASM_CALL0..6(long[6])` macros with a call descriptor expressing stack-passed
   arguments (the 7th and beyond), mixed integer/float ordering, struct-by-value

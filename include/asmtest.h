@@ -14,6 +14,7 @@
 
 #include <setjmp.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* ------------------------------------------------------------------ */
 /* Test / hook registration                                            */
@@ -42,6 +43,16 @@ typedef struct asmtest_hook {
 /* Field offsets MUST match the stores in src/capture.s.               */
 /* ------------------------------------------------------------------ */
 
+/* One 128-bit vector register, viewable as several lane layouts. The vector
+ * return value is vec[0] (xmm0 / v0); vec[] is filled by asm_call_capture_vec. */
+typedef union {
+    unsigned char u8[16];
+    uint32_t u32[4];
+    uint64_t u64[2];
+    float f32[4];
+    double f64[2];
+} vec128_t;
+
 #if defined(__x86_64__)
 
 typedef struct {
@@ -55,6 +66,7 @@ typedef struct {
     unsigned long r15;   /* 56 callee-saved           */
     unsigned long flags; /* 64 = RFLAGS               */
     double fret;         /* 72 = xmm0 (FP return); valid after asm_call_capture_fp */
+    vec128_t vec[16];    /* 80 = xmm0..15; valid after asm_call_capture_vec */
 } regs_t;
 
 #define ASMTEST_SENTINEL_RBX 0x1111111111111111UL
@@ -88,6 +100,7 @@ typedef struct {
     unsigned long x29;   /* 88 frame pointer          */
     unsigned long flags; /* 96 = NZCV                 */
     double fret;         /* 104 = d0 (FP return); valid after asm_call_capture_fp */
+    vec128_t vec[32];    /* 112 = v0..31; valid after asm_call_capture_vec */
 } regs_t;
 
 #define ASMTEST_SENTINEL_X19 0x1111111111111111UL
@@ -121,6 +134,13 @@ void asm_call_capture(regs_t *out, void *fn, const long *args);
 void asm_call_capture_fp(regs_t *out, void *fn, const long *iargs,
                          const double *fargs);
 
+/* Like asm_call_capture, but marshals 8 full 128-bit vector args into the
+ * vector argument registers (xmm0-7 / v0-7) and captures the entire vector
+ * register file into out->vec[] (the vector return is out->vec[0]). iargs has
+ * 6 slots, vargs has 8. */
+void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
+                          const vec128_t *vargs);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
@@ -138,10 +158,17 @@ void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
 void asmtest_assert_abi(const char *file, int line, const regs_t *r);
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name);
-void asmtest_assert_fp_eq(const char *file, int line, const regs_t *r,
-                          double expected);
-void asmtest_assert_fp_near(const char *file, int line, const regs_t *r,
-                            double expected, unsigned long max_ulps);
+void asmtest_assert_double_eq(const char *file, int line, double actual,
+                              double expected);
+void asmtest_assert_double_near(const char *file, int line, double actual,
+                                double expected, unsigned long max_ulps);
+void asmtest_assert_float_eq(const char *file, int line, float actual,
+                             float expected);
+void asmtest_assert_float_near(const char *file, int line, float actual,
+                               float expected, unsigned long max_ulps);
+void asmtest_assert_vec_eq(const char *file, int line, const char *idxexpr,
+                           const unsigned char *actual,
+                           const unsigned char *expected);
 
 /* Allocate n writable bytes followed by an inaccessible guard page, so a
  * one-past-the-end access faults (and is reported as a test failure). Free
@@ -235,6 +262,18 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
                         (double[8]){(double)(x), (double)(y), (double)(z), 0, \
                                     0, 0, 0, 0})
 
+/* ASM_VCALLn: call fn with n 128-bit vector args (vec128_t) and capture the
+ * whole vector file; the vector return is out->vec[0]. */
+#define ASM_VCALL1(out, fn, v0)                                               \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
+                         (vec128_t[8]){(v0)})
+#define ASM_VCALL2(out, fn, v0, v1)                                           \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
+                         (vec128_t[8]){(v0), (v1)})
+#define ASM_VCALL3(out, fn, v0, v1, v2)                                       \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
+                         (vec128_t[8]){(v0), (v1), (v2)})
+
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
@@ -311,8 +350,27 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 /* Floating-point return assertions (read out->fret from asm_call_capture_fp).
  * ASSERT_FP_EQ is exact; ASSERT_FP_NEAR allows a distance in ULPs. */
 #define ASSERT_FP_EQ(r, expected)                                             \
-    asmtest_assert_fp_eq(__FILE__, __LINE__, (r), (expected))
+    asmtest_assert_double_eq(__FILE__, __LINE__, (r)->fret, (expected))
 #define ASSERT_FP_NEAR(r, expected, ulps)                                     \
-    asmtest_assert_fp_near(__FILE__, __LINE__, (r), (expected), (ulps))
+    asmtest_assert_double_near(__FILE__, __LINE__, (r)->fret, (expected),     \
+                               (ulps))
+
+/* Raw scalar double/float assertions — handy for individual vector lanes,
+ * e.g. ASSERT_DEQ(r.vec[0].f64[1], 2.0) or ASSERT_FNEAR(r.vec[0].f32[0], 1.0f,
+ * 1). */
+#define ASSERT_DEQ(actual, expected)                                          \
+    asmtest_assert_double_eq(__FILE__, __LINE__, (actual), (expected))
+#define ASSERT_DNEAR(actual, expected, ulps)                                  \
+    asmtest_assert_double_near(__FILE__, __LINE__, (actual), (expected), (ulps))
+#define ASSERT_FEQ(actual, expected)                                          \
+    asmtest_assert_float_eq(__FILE__, __LINE__, (actual), (expected))
+#define ASSERT_FNEAR(actual, expected, ulps)                                  \
+    asmtest_assert_float_near(__FILE__, __LINE__, (actual), (expected), (ulps))
+
+/* Bytewise compare a captured 128-bit vector register to 16 expected bytes
+ * (hexdump diff on failure): ASSERT_VEC_EQ(&r, 0, expected.u8). */
+#define ASSERT_VEC_EQ(r, idx, expect_ptr)                                     \
+    asmtest_assert_vec_eq(__FILE__, __LINE__, #idx, (r)->vec[idx].u8,         \
+                          (const unsigned char *)(expect_ptr))
 
 #endif /* ASMTEST_H */
