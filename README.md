@@ -4,13 +4,18 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 0** (runnable skeleton). See [DESIGN.md](DESIGN.md) for the
-full plan and roadmap.
+Currently at **Phase 1**. See [DESIGN.md](DESIGN.md) for the full plan and
+roadmap.
+
+**Available now:** auto-discovered `TEST(...)` cases, a runner with `main()`,
+per-suite `SETUP`/`TEARDOWN`, `SKIP(reason)`, TAP-style colored reporting, and
+assertions: `ASSERT_TRUE/FALSE`, `ASSERT_EQ/NE/LT/LE/GT/GE`, `ASSERT_STREQ`,
+`ASSERT_MEM_EQ`.
 
 ## Quick start
 
 ```sh
-make test        # build and run the example suite
+make test        # build and run the example suites
 make demo-fail   # see how a failing assertion is reported
 make clean
 ```

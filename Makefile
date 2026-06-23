@@ -1,6 +1,6 @@
-# asm-test — Phase 0 build (x86-64 macOS, GAS syntax via clang).
+# asm-test — Phase 1 build (x86-64 macOS, GAS syntax via clang).
 #
-#   make test        build and run the example suite (green)
+#   make test        build and run the example suites (green)
 #   make demo-fail   build and run the intentional-failure demo
 #   make clean       remove build artifacts
 
@@ -11,7 +11,7 @@ ASFLAGS :=
 BUILD   := build
 
 FRAMEWORK_OBJ := $(BUILD)/asmtest.o
-ADD_OBJ       := $(BUILD)/add.o
+SUITES        := $(BUILD)/test_arith $(BUILD)/test_mem
 
 .PHONY: all test demo-fail clean
 all: test
@@ -19,28 +19,31 @@ all: test
 $(BUILD):
 	mkdir -p $(BUILD)
 
+# Framework runtime.
 $(FRAMEWORK_OBJ): src/asmtest.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(ADD_OBJ): examples/add.s | $(BUILD)
+# Generic rules: assemble .s and compile example .c into build/.
+$(BUILD)/%.o: examples/%.s | $(BUILD)
 	$(AS) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/test_arith.o: examples/test_arith.c include/asmtest.h | $(BUILD)
+$(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/test_arith: $(FRAMEWORK_OBJ) $(ADD_OBJ) $(BUILD)/test_arith.o
+# One test binary per suite: framework + routine(s) + test cases.
+$(BUILD)/test_arith: $(FRAMEWORK_OBJ) $(BUILD)/add.o $(BUILD)/test_arith.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-test: $(BUILD)/test_arith
-	./$(BUILD)/test_arith
-
-$(BUILD)/test_failure_demo.o: examples/test_failure_demo.c include/asmtest.h | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/test_failure_demo: $(FRAMEWORK_OBJ) $(ADD_OBJ) $(BUILD)/test_failure_demo.o
+$(BUILD)/test_mem: $(FRAMEWORK_OBJ) $(BUILD)/mem.o $(BUILD)/test_mem.o
 	$(CC) $(CFLAGS) $^ -o $@
+
+test: $(SUITES)
+	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
+$(BUILD)/test_failure_demo: $(FRAMEWORK_OBJ) $(BUILD)/add.o $(BUILD)/test_failure_demo.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 demo-fail: $(BUILD)/test_failure_demo
 	-./$(BUILD)/test_failure_demo
 
