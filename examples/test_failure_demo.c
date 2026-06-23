@@ -30,3 +30,19 @@ TEST(demo, buffer_overrun_caught) {
     p[8] = 0x41;
     asmtest_guarded_free(p, 8);
 }
+
+TEST(demo, buffer_underrun_caught) {
+    /* A leading guard page catches one-before-the-start (underrun) writes. */
+    unsigned char *p = asmtest_guarded_alloc_under(8);
+    p[-1] = 0x41;
+    asmtest_guarded_free_under(p, 8);
+}
+
+TEST(demo, mem_diff_shows_hexdump) {
+    /* ASSERT_MEM_EQ reports a hexdump window of expected vs actual. */
+    unsigned char actual[16], expect[16];
+    for (int i = 0; i < 16; i++)
+        actual[i] = expect[i] = (unsigned char)i;
+    actual[5] = 0xff; /* introduce a single-byte difference */
+    ASSERT_MEM_EQ(actual, expect, 16);
+}

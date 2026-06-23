@@ -88,18 +88,43 @@ void asmtest_assert_streq(const char *file, int line, const char *aexpr,
                      aexpr, bexpr, a, b);
 }
 
+/* Append a hexdump of bytes [start,end) of `p` into buf (best-effort). */
+static void hexdump_window(char *buf, size_t cap, const unsigned char *p,
+                           size_t start, size_t end) {
+    size_t off = 0;
+    for (size_t j = start; j < end && off + 4 < cap; j++)
+        off += (size_t)snprintf(buf + off, cap - off, "%02x%s", p[j],
+                                j + 1 < end ? " " : "");
+}
+
 void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
                            const char *bexpr, const void *a, const void *b,
                            size_t n) {
-    const unsigned char *pa = (const unsigned char *)a;
-    const unsigned char *pb = (const unsigned char *)b;
-    for (size_t i = 0; i < n; i++) {
-        if (pa[i] != pb[i])
-            asmtest_fail(file, line,
-                         "ASSERT_MEM_EQ(%s, %s, %zu): byte %zu differs: "
-                         "0x%02x != 0x%02x",
-                         aexpr, bexpr, n, i, pa[i], pb[i]);
-    }
+    const unsigned char *pa = (const unsigned char *)a; /* actual */
+    const unsigned char *pb = (const unsigned char *)b; /* expected */
+    size_t i = 0;
+    while (i < n && pa[i] == pb[i])
+        i++;
+    if (i == n)
+        return; /* equal */
+
+    /* Hexdump a window around the first difference: expected vs actual. */
+    size_t start = (i >= 8) ? i - 8 : 0;
+    size_t end = start + 16;
+    if (end > n)
+        end = n;
+    char expect_hex[64], actual_hex[64];
+    hexdump_window(expect_hex, sizeof expect_hex, pb, start, end);
+    hexdump_window(actual_hex, sizeof actual_hex, pa, start, end);
+
+    asmtest_fail(file, line,
+                 "ASSERT_MEM_EQ(%s, %s, %zu): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       bytes [%zu,%zu)\n"
+                 "       expect: %s\n"
+                 "       actual: %s",
+                 aexpr, bexpr, n, i, pb[i], pa[i], start, end, expect_hex,
+                 actual_hex);
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,6 +206,31 @@ void asmtest_guarded_free(void *p, size_t n) {
     size_t usable = round_up_page(n, pg);
     unsigned char *base = (unsigned char *)p - (usable - n);
     munmap(base, usable + (size_t)pg);
+}
+
+void *asmtest_guarded_alloc_under(size_t n) {
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t usable = round_up_page(n, pg);
+    size_t total = (size_t)pg + usable;
+    unsigned char *base = mmap(NULL, total, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED)
+        return NULL;
+    if (mprotect(base, (size_t)pg, PROT_NONE) != 0) { /* leading guard page */
+        munmap(base, total);
+        return NULL;
+    }
+    /* Buffer starts right after the guard page, so buf[-1] faults. */
+    return base + (size_t)pg;
+}
+
+void asmtest_guarded_free_under(void *p, size_t n) {
+    if (p == NULL)
+        return;
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t usable = round_up_page(n, pg);
+    unsigned char *base = (unsigned char *)p - (size_t)pg;
+    munmap(base, (size_t)pg + usable);
 }
 
 /* ------------------------------------------------------------------ */

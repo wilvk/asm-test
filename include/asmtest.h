@@ -137,6 +137,11 @@ void asmtest_assert_flag(const char *file, int line, const regs_t *r,
 void *asmtest_guarded_alloc(size_t n);
 void asmtest_guarded_free(void *p, size_t n);
 
+/* Like asmtest_guarded_alloc, but the guard page precedes the buffer so a
+ * one-before-the-start access (underrun) faults. Free with _free_under. */
+void *asmtest_guarded_alloc_under(size_t n);
+void asmtest_guarded_free_under(void *p, size_t n);
+
 extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 
 /* ------------------------------------------------------------------ */
@@ -236,6 +241,26 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 #define ASSERT_GT(a, b) ASMTEST_CMP_(a, >, b, "GT")
 #define ASSERT_GE(a, b) ASMTEST_CMP_(a, >=, b, "GE")
 
+/* Unsigned 64-bit comparisons — use these for addresses, register values, and
+ * anything that may exceed LONG_MAX (the signed ASSERT_* would misorder and
+ * misprint those). Compared and reported as unsigned hex. */
+#define ASMTEST_UCMP_(a, op, b, opname)                                       \
+    do {                                                                      \
+        unsigned long asmtest_ua_ = (unsigned long)(a);                      \
+        unsigned long asmtest_ub_ = (unsigned long)(b);                      \
+        if (!(asmtest_ua_ op asmtest_ub_))                                   \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_" opname "(%s, %s): 0x%lx vs 0x%lx", #a,     \
+                         #b, asmtest_ua_, asmtest_ub_);                       \
+    } while (0)
+
+#define ASSERT_UEQ(a, b) ASMTEST_UCMP_(a, ==, b, "UEQ")
+#define ASSERT_UNE(a, b) ASMTEST_UCMP_(a, !=, b, "UNE")
+#define ASSERT_ULT(a, b) ASMTEST_UCMP_(a, <, b, "ULT")
+#define ASSERT_ULE(a, b) ASMTEST_UCMP_(a, <=, b, "ULE")
+#define ASSERT_UGT(a, b) ASMTEST_UCMP_(a, >, b, "UGT")
+#define ASSERT_UGE(a, b) ASMTEST_UCMP_(a, >=, b, "UGE")
+
 #define ASSERT_STREQ(a, b)                                                    \
     asmtest_assert_streq(__FILE__, __LINE__, #a, #b, (a), (b))
 
@@ -245,6 +270,10 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 
 /* Verify the routine restored all callee-saved registers (ABI compliance). */
 #define ASSERT_ABI_PRESERVED(r) asmtest_assert_abi(__FILE__, __LINE__, (r))
+
+/* Compare a named register/struct field unsigned: ASSERT_REG_EQ(&r, rax, 42)
+ * (x86) or ASSERT_REG_EQ(&r, x[0], 42) (AArch64 emu). */
+#define ASSERT_REG_EQ(r, field, val) ASSERT_UEQ((r)->field, (val))
 
 /* Flag assertions take a short name: ASSERT_FLAG_SET(&r, CF). */
 #define ASSERT_FLAG_SET(r, FLG)                                               \

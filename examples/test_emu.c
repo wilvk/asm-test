@@ -33,7 +33,7 @@ TEST(emu, runs_routine_in_isolation) {
     emu_result_t r;
     long args[] = {20, 22};
     ASSERT_TRUE(emu_call(E, (void *)add_signed, CODE_WINDOW, args, 2, 0, &r));
-    ASSERT_EQ(r.regs.rax, 42);
+    ASSERT_REG_EQ(&r.regs, rax, 42);
 }
 
 TEST(emu, full_state_reveals_clobbered_callee_saved) {
@@ -71,7 +71,7 @@ TEST(emu, fault_injection_catches_bad_load) {
     bool ok = emu_call(E, (void *)load_long, CODE_WINDOW, args, 1, 0, &r);
     ASSERT_FALSE(ok);
     ASSERT_TRUE(r.faulted);
-    ASSERT_EQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_UEQ(r.fault_addr, 0xdead0000UL);
     ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
 }
 
@@ -107,7 +107,7 @@ TEST(emu_arm64, runs_routine_in_isolation) {
     emu_arm64_result_t r;
     long args[] = {20, 22};
     ASSERT_TRUE(emu_arm64_call(e, A64_ADD, sizeof A64_ADD, args, 2, 0, &r));
-    ASSERT_EQ(r.regs.x[0], 42);
+    ASSERT_REG_EQ(&r.regs, x[0], 42);
     emu_arm64_close(e);
 }
 
@@ -128,7 +128,7 @@ TEST(emu_arm64, fault_injection_catches_bad_load) {
     bool ok = emu_arm64_call(e, A64_LOAD, sizeof A64_LOAD, args, 1, 0, &r);
     ASSERT_FALSE(ok);
     ASSERT_TRUE(r.faulted);
-    ASSERT_EQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_UEQ(r.fault_addr, 0xdead0000UL);
     ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
     emu_arm64_close(e);
 }

@@ -211,16 +211,16 @@ add reach.
   once the above depth lands: the Windows x64 ABI (shadow space, distinct
   callee-saved set) and RISC-V / ARM32 emulator guests.
 
-**Near-term correctness fixes (independent of the phasing above):**
+**Near-term correctness fixes (independent of the phasing above): _done._**
 
-- `ASSERT_EQ` casts both operands to signed `long`, so comparisons of large
-  unsigned 64-bit values (addresses, `r.regs.rax`) can be wrong — add unsigned
-  variants or compare as `uint64_t`.
-- `ASSERT_MEM_EQ` reports only the first differing byte; §4.5 promises a hexdump
-  diff on failure.
-- No generic `ASSERT_REG_EQ(&r, reg, val)`; tests hand-compare struct fields.
-- Guard-page buffers catch tail overruns only; an optional leading guard page
-  would catch underruns too.
+- _Done._ Added unsigned 64-bit comparisons `ASSERT_UEQ/UNE/ULT/ULE/UGT/UGE`
+  (compared and reported as unsigned hex) for addresses and register values; the
+  signed `ASSERT_EQ` family remains for signed integers.
+- _Done._ `ASSERT_MEM_EQ` now reports the first differing byte plus a hexdump
+  window of expected vs actual.
+- _Done._ Added `ASSERT_REG_EQ(&r, field, val)` (unsigned field compare).
+- _Done._ Added `asmtest_guarded_alloc_under` / `_free_under` with a leading
+  guard page so underruns (`buf[-1]`) fault, alongside the trailing-guard alloc.
 
 ---
 
