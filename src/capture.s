@@ -16,9 +16,13 @@
  *
  * Sentinels MUST match ASMTEST_SENTINEL_* in asmtest.h.
  */
-    .text
-    .globl _asm_call_capture
-_asm_call_capture:
+#include "asm.h"
+
+#if !defined(__x86_64__)
+#  error "capture.s currently supports x86-64 only (AArch64 planned for a later phase)"
+#endif
+
+ASM_FUNC(asm_call_capture)
     /* Preserve this function's caller's callee-saved registers. */
     pushq   %rbx
     pushq   %rbp
@@ -74,3 +78,4 @@ _asm_call_capture:
     popq    %rbp
     popq    %rbx
     ret
+ASM_ENDFUNC(asm_call_capture)

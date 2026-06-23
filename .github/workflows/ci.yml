@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both x86-64: gcc/ELF on Linux, clang/Mach-O on Intel macOS.
+        os: [ubuntu-latest, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          cc --version
+          make --version | head -1
+          uname -m
+
+      - name: Build and run test suites
+        run: make test
+
+      - name: Failure demo (informational; detects intentional failures)
+        run: make demo-fail

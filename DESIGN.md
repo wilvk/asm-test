@@ -144,15 +144,19 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
 
 ## 6. Phasing
 
-- **Phase 0 — Skeleton (proof of life):** repo layout, Makefile, runner `main`,
-  `TEST` + registration, `ASSERT_EQ` on return values, one example asm routine
-  plus a passing and a failing test.
-- **Phase 1 — Assertion library:** full `ASSERT_*` set, setjmp failure model,
-  colored TAP output, pass/fail/skip summary, exit codes, setup/teardown.
-- **Phase 2 — Introspection:** `capture.s` trampolines, ABI-preservation +
-  RFLAGS assertions, memory canaries / guard pages.
-- **Phase 3 — Portability & CI:** opt-in NASM backend, arch-abstraction layer
-  (AArch64 PCS for Apple Silicon), GitHub Actions workflow.
+- **Phase 0 — Skeleton (proof of life): _done._** repo layout, Makefile, runner
+  `main`, `TEST` + registration, `ASSERT_EQ` on return values, one example asm
+  routine plus a passing and a failing test.
+- **Phase 1 — Assertion library: _done._** full `ASSERT_*` set, setjmp failure
+  model, colored TAP output, pass/fail/skip summary, exit codes, setup/teardown.
+- **Phase 2 — Introspection: _done._** `capture.s` trampoline, ABI-preservation
+  + RFLAGS assertions, guard pages, and fatal-signal-to-failure handling.
+- **Phase 3 — Portability & CI: _in progress._** Cross-platform Linux + macOS on
+  x86-64 (shared GAS sources via `ASM_FUNC`, ELF/Mach-O symbol abstraction) and
+  a GitHub Actions matrix (ubuntu + Intel macOS) are done. Still planned:
+  AArch64 (Apple Silicon) support and the opt-in NASM backend — both need
+  hardware/tooling not available on the dev host, so they are best validated via
+  CI (an arm64 runner / a NASM job).
 - **Phase 4 — (optional) Emulator tier:** integrate
   [Unicorn Engine](https://www.unicorn-engine.org/) to preload registers/memory,
   run a routine in isolation, and read back full CPU state + perform fault

@@ -12,6 +12,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+/* Linux spells it MAP_ANONYMOUS; macOS/BSD provide MAP_ANON. */
+#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
 /* siglongjmp return codes for the per-test jump buffer. */
 enum { JMP_FAIL = 1, JMP_SKIP = 2 };
 
@@ -144,7 +149,7 @@ void *asmtest_guarded_alloc(size_t n) {
     size_t usable = round_up_page(n, pg);
     size_t total = usable + (size_t)pg;
     unsigned char *base = mmap(NULL, total, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANON, -1, 0);
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED)
         return NULL;
     if (mprotect(base + usable, (size_t)pg, PROT_NONE) != 0) {

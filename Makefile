@@ -1,13 +1,16 @@
-# asm-test — Phase 2 build (x86-64 macOS, GAS syntax via clang).
+# asm-test — Phase 3 build (x86-64, Linux + macOS).
 #
 #   make test        build and run the example suites (green)
 #   make demo-fail   build and run the intentional-failure demo
 #   make clean       remove build artifacts
+#
+# CC defaults to the system compiler (clang on macOS, gcc on Linux); both
+# assemble the GAS-syntax .s sources. The .s files are run through the C
+# preprocessor (-x assembler-with-cpp) so they can #include "asm.h".
 
-CC      := clang
-AS      := clang            # clang assembles GAS-syntax .s on macOS
+CC      ?= cc
 CFLAGS  := -Wall -Wextra -O0 -g -Iinclude
-ASFLAGS :=
+ASFLAGS := -x assembler-with-cpp -Iinclude
 BUILD   := build
 
 # Framework runtime: C runner + the asm capture trampoline.
@@ -24,12 +27,12 @@ $(BUILD):
 $(BUILD)/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/capture.o: src/capture.s | $(BUILD)
-	$(AS) $(ASFLAGS) -c $< -o $@
+$(BUILD)/capture.o: src/capture.s include/asm.h | $(BUILD)
+	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 
-# Generic rules: assemble .s and compile example .c into build/.
-$(BUILD)/%.o: examples/%.s | $(BUILD)
-	$(AS) $(ASFLAGS) -c $< -o $@
+# Generic rules: assemble example .s (with cpp) and compile example .c.
+$(BUILD)/%.o: examples/%.s include/asm.h | $(BUILD)
+	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@

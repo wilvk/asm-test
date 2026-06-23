@@ -1,10 +1,12 @@
 # asm-test
 
+[![CI](https://github.com/wilvk/asm-test/actions/workflows/ci.yml/badge.svg)](https://github.com/wilvk/asm-test/actions/workflows/ci.yml)
+
 A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 2**. See [DESIGN.md](DESIGN.md) for the full plan and
+Currently at **Phase 3**. See [DESIGN.md](DESIGN.md) for the full plan and
 roadmap.
 
 **Available now:**
@@ -19,6 +21,9 @@ roadmap.
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.
+- **Portable across Linux and macOS** (x86-64): the same GAS-syntax sources
+  build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`. CI runs
+  the suites on both.
 
 ## Quick start
 
@@ -30,14 +35,17 @@ make clean
 
 ## Writing a test
 
-Assembly routine (`examples/add.s`, System V AMD64 ABI, GAS syntax):
+Assembly routine (`examples/add.s`, System V AMD64 ABI, GAS syntax). `ASM_FUNC`
+handles the ELF/Mach-O symbol differences so it builds on Linux and macOS:
 
 ```asm
-    .globl _add_signed
-_add_signed:
+#include "asm.h"
+
+ASM_FUNC(add_signed)
     movq %rdi, %rax
     addq %rsi, %rax
     ret
+ASM_ENDFUNC(add_signed)
 ```
 
 C test (`examples/test_arith.c`):
@@ -57,5 +65,6 @@ exits nonzero if any fail.
 
 ## Requirements
 
-x86-64 macOS with `clang` (used to assemble GAS-syntax `.s` and compile C).
-Other assemblers/architectures are planned — see [DESIGN.md](DESIGN.md).
+x86-64 Linux or macOS, with `make` and a C compiler (`cc` — gcc or clang),
+which also assembles the GAS-syntax `.s` sources. AArch64 (Apple Silicon) and an
+opt-in NASM backend are planned — see [DESIGN.md](DESIGN.md).
