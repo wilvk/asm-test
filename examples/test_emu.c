@@ -86,3 +86,63 @@ TEST(emu, reads_preloaded_guest_memory) {
     ASSERT_FALSE(r.faulted);
     ASSERT_EQ(r.regs.rax, 0x1234);
 }
+
+/* -------------------------------------------------------------------------
+ * AArch64 guest: raw machine code run on whatever host this is (Unicorn
+ * emulates AArch64 even on an x86-64 host). Bytes assembled from:
+ *   add x0, x0, x1  -> 8b010000      ldr x0, [x0] -> f9400000
+ *   add x0, x0, x2  -> 8b020000      ret          -> d65f03c0
+ * stored little-endian.
+ * ------------------------------------------------------------------------- */
+static const unsigned char A64_ADD[] = {0x00, 0x00, 0x01, 0x8b,
+                                        0xc0, 0x03, 0x5f, 0xd6};
+static const unsigned char A64_ADD3[] = {0x00, 0x00, 0x01, 0x8b, 0x00, 0x00,
+                                         0x02, 0x8b, 0xc0, 0x03, 0x5f, 0xd6};
+static const unsigned char A64_LOAD[] = {0x00, 0x00, 0x40, 0xf9,
+                                         0xc0, 0x03, 0x5f, 0xd6};
+
+TEST(emu_arm64, runs_routine_in_isolation) {
+    emu_arm64_t *e = emu_arm64_open();
+    ASSERT_TRUE(e != NULL);
+    emu_arm64_result_t r;
+    long args[] = {20, 22};
+    ASSERT_TRUE(emu_arm64_call(e, A64_ADD, sizeof A64_ADD, args, 2, 0, &r));
+    ASSERT_EQ(r.regs.x[0], 42);
+    emu_arm64_close(e);
+}
+
+TEST(emu_arm64, mid_routine_single_step) {
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    long args[] = {1, 2, 100};
+    /* one instruction only: x0 = x0 + x1 = 3; the +x2 has not run yet. */
+    emu_arm64_call(e, A64_ADD3, sizeof A64_ADD3, args, 3, 1, &r);
+    ASSERT_EQ(r.regs.x[0], 3);
+    emu_arm64_close(e);
+}
+
+TEST(emu_arm64, fault_injection_catches_bad_load) {
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    long args[] = {(long)0xdead0000UL};
+    bool ok = emu_arm64_call(e, A64_LOAD, sizeof A64_LOAD, args, 1, 0, &r);
+    ASSERT_FALSE(ok);
+    ASSERT_TRUE(r.faulted);
+    ASSERT_EQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
+    emu_arm64_close(e);
+}
+
+TEST(emu_arm64, reads_preloaded_guest_memory) {
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    uint64_t addr = 0x00300000UL;
+    long value = 0x4321;
+    ASSERT_TRUE(emu_arm64_map(e, addr, 0x1000));
+    ASSERT_TRUE(emu_arm64_write(e, addr, &value, sizeof value));
+    long args[] = {(long)addr};
+    ASSERT_TRUE(emu_arm64_call(e, A64_LOAD, sizeof A64_LOAD, args, 1, 0, &r));
+    ASSERT_FALSE(r.faulted);
+    ASSERT_EQ(r.regs.x[0], 0x4321);
+    emu_arm64_close(e);
+}

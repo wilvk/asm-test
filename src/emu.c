@@ -156,3 +156,103 @@ bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
     out->ok = (err == UC_ERR_OK) && !fr.faulted;
     return out->ok;
 }
+
+/* ------------------------------------------------------------------ */
+/* AArch64 guest                                                       */
+/* ------------------------------------------------------------------ */
+
+struct emu_arm64 {
+    uc_engine *uc;
+};
+
+emu_arm64_t *emu_arm64_open(void) {
+    emu_arm64_t *e = (emu_arm64_t *)calloc(1, sizeof *e);
+    if (e == NULL)
+        return NULL;
+    if (uc_open(UC_ARCH_ARM64, UC_MODE_ARM, &e->uc) != UC_ERR_OK) {
+        free(e);
+        return NULL;
+    }
+    if (uc_mem_map(e->uc, EMU_CODE_BASE, EMU_CODE_SIZE, UC_PROT_ALL) !=
+            UC_ERR_OK ||
+        uc_mem_map(e->uc, EMU_STACK_BASE, EMU_STACK_SIZE,
+                   UC_PROT_READ | UC_PROT_WRITE) != UC_ERR_OK) {
+        uc_close(e->uc);
+        free(e);
+        return NULL;
+    }
+    return e;
+}
+
+void emu_arm64_close(emu_arm64_t *e) {
+    if (e == NULL)
+        return;
+    uc_close(e->uc);
+    free(e);
+}
+
+bool emu_arm64_map(emu_arm64_t *e, uint64_t addr, size_t size) {
+    return uc_mem_map(e->uc, addr, size, UC_PROT_READ | UC_PROT_WRITE) ==
+           UC_ERR_OK;
+}
+
+bool emu_arm64_write(emu_arm64_t *e, uint64_t addr, const void *data,
+                     size_t len) {
+    return uc_mem_write(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+bool emu_arm64_read(emu_arm64_t *e, uint64_t addr, void *data, size_t len) {
+    return uc_mem_read(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+static void read_all_regs_arm64(uc_engine *uc, emu_arm64_regs_t *r) {
+    for (int i = 0; i <= 28; i++) /* x0..x28 are consecutive enum values */
+        uc_reg_read(uc, UC_ARM64_REG_X0 + i, &r->x[i]);
+    uc_reg_read(uc, UC_ARM64_REG_X29, &r->x[29]);
+    uc_reg_read(uc, UC_ARM64_REG_X30, &r->x[30]);
+    uc_reg_read(uc, UC_ARM64_REG_SP, &r->sp);
+    uc_reg_read(uc, UC_ARM64_REG_PC, &r->pc);
+    uc_reg_read(uc, UC_ARM64_REG_NZCV, &r->nzcv);
+}
+
+bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
+                    const long *args, int nargs, uint64_t max_insns,
+                    emu_arm64_result_t *out) {
+    static const int arg_regs[6] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
+                                    UC_ARM64_REG_X2, UC_ARM64_REG_X3,
+                                    UC_ARM64_REG_X4, UC_ARM64_REG_X5};
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+
+    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+        out->uc_err = -1;
+        return false;
+    }
+
+    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
+    uc_reg_write(uc, UC_ARM64_REG_SP, &sp);
+    uint64_t lr = EMU_RET_MAGIC; /* `ret` branches to lr */
+    uc_reg_write(uc, UC_ARM64_REG_X30, &lr);
+
+    for (int i = 0; i < nargs && i < 6; i++) {
+        uint64_t v = (uint64_t)args[i];
+        uc_reg_write(uc, arg_regs[i], &v);
+    }
+
+    fault_rec_t fr = {0};
+    uc_hook hh;
+    uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
+                0);
+
+    uc_err err =
+        uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
+    uc_hook_del(uc, hh);
+
+    out->uc_err = (int)err;
+    out->faulted = fr.faulted;
+    out->fault_addr = fr.addr;
+    out->fault_kind = fr.kind;
+    read_all_regs_arm64(uc, &out->regs);
+    out->ok = (err == UC_ERR_OK) && !fr.faulted;
+    return out->ok;
+}

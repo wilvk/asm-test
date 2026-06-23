@@ -64,4 +64,40 @@ bool emu_read(emu_t *e, uint64_t addr, void *data, size_t len);
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out);
 
+/* ------------------------------------------------------------------ */
+/* AArch64 guest (emulated regardless of host architecture)            */
+/*                                                                     */
+/* Cross-arch emulation can't copy bytes from a host-native routine, so */
+/* emu_arm64_call takes raw AArch64 machine code directly.              */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t x[31]; /* x0..x30 (x29 = fp, x30 = lr) */
+    uint64_t sp, pc, nzcv;
+} emu_arm64_regs_t;
+
+typedef struct {
+    bool ok;
+    int uc_err;
+    bool faulted;
+    uint64_t fault_addr;
+    emu_fault_kind_t fault_kind;
+    emu_arm64_regs_t regs;
+} emu_arm64_result_t;
+
+typedef struct emu_arm64 emu_arm64_t;
+
+emu_arm64_t *emu_arm64_open(void);
+void emu_arm64_close(emu_arm64_t *e);
+bool emu_arm64_map(emu_arm64_t *e, uint64_t addr, size_t size);
+bool emu_arm64_write(emu_arm64_t *e, uint64_t addr, const void *data,
+                     size_t len);
+bool emu_arm64_read(emu_arm64_t *e, uint64_t addr, void *data, size_t len);
+
+/* Run raw AArch64 machine code with integer args in x0..x5. Stops when the
+ * routine's `ret` branches to the sentinel LR, or after max_insns. */
+bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
+                    const long *args, int nargs, uint64_t max_insns,
+                    emu_arm64_result_t *out);
+
 #endif /* ASMTEST_EMU_H */

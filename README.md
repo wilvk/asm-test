@@ -29,9 +29,10 @@ roadmap.
   Intel syntax, x86-64 only) — the Intel-syntax sources live alongside the GAS
   ones and are also exercised in CI.
 - **Emulator tier** (optional, `make emu-test`, needs libunicorn): run a routine
-  inside a virtual x86-64 CPU to preload arbitrary registers/memory, single-step
-  mid-routine, read back the **full** register file, and catch invalid memory
-  accesses as precise faults — beyond what ABI-boundary inspection can see.
+  inside a virtual CPU (x86-64 or AArch64 guest) to preload arbitrary
+  registers/memory, single-step mid-routine, read back the **full** register
+  file, and catch invalid memory accesses as precise faults — beyond what
+  ABI-boundary inspection can see. ARM64 routines emulate even on an x86-64 host.
 
 ## Quick start
 
