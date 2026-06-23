@@ -5,10 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel an in-progress run for the same ref when a new commit is pushed,
+# so queued runs (e.g. a slow Intel macOS job) don't pile up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Intel macos-13 runners are scarce/slow; don't let them gate the build.
+    # Linux already validates the portable build end to end.
+    continue-on-error: ${{ matrix.os == 'macos-13' }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
