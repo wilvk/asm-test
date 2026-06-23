@@ -6,8 +6,8 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 3**. See [DESIGN.md](DESIGN.md) for the full plan and
-roadmap.
+Currently at **Phase 4**. See [DESIGN.md](DESIGN.md) for the full plan and
+roadmap (Phases 5–11).
 
 **Available now:**
 

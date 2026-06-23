@@ -168,6 +168,60 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   a built routine; the AArch64 path (`emu_arm64_*`) takes raw machine code, so
   ARM64 routines emulate even on an x86-64 host. Has its own CI job.
 
+The phases below are **planned**, ordered to deepen the framework's core
+promise — calling assembly through the real ABI and inspecting the result —
+before broadening reach. The current testable surface is narrow: a routine's
+whole signature must be ≤6 integer arguments (all `long`) with an integer
+return. Phases 5–7 widen *what can be tested*; 8–9 mature *the runner*; 10–11
+add reach.
+
+- **Phase 5 — Floating-point & SIMD: _planned._** Capture the FP/vector file
+  (`xmm0–15` on SysV, `v0–31` on AAPCS64) alongside the GP registers, marshal
+  floating arguments into the FP argument registers, and add `ASSERT_FP_EQ` /
+  `ASSERT_FP_NEAR(&r, expected, ulps)`. Closes the largest functional gap:
+  routines that return `double` or use SSE/NEON are currently untestable, since
+  `capture.s` touches only integer registers and `regs_t` has no FP fields.
+- **Phase 6 — Full ABI call model: _planned._** Replace the fixed
+  `ASM_CALL0..6(long[6])` macros with a call descriptor expressing stack-passed
+  arguments (the 7th and beyond), mixed integer/float ordering, struct-by-value
+  parameters, and struct return (the SysV `sret` hidden pointer and
+  small-struct-in-registers rules). The headline feature is "calls through the
+  real ABI"; today only the ≤6-integer-argument subset is exercised.
+- **Phase 7 — Differential / property testing: _planned._** Let a test supply
+  both the routine and a C reference, then fuzz inputs and assert equivalence:
+  `ASSERT_MATCHES_REF(fn, ref, gen, n)`. Turns fixed-vector assertions into
+  specification conformance over thousands of random inputs; pairs naturally
+  with the emulator tier, where a looping or faulting routine cannot take down
+  the harness.
+- **Phase 8 — Runner robustness & CLI: _planned._** `fork()` each test into a
+  child with an `alarm()` timeout, so an infinite loop or heap corruption in the
+  routine under test becomes a reported timeout/failure instead of hanging or
+  poisoning later tests (the native path has no equivalent to the emulator's
+  `max_insns`). Add argv handling to `main()`: `--filter` by suite/name glob,
+  `--list`, `--shuffle`/`--seed`, and `--format=junit` for CI ingestion.
+- **Phase 9 — Benchmark mode: _planned._** A `BENCH(suite, name)` form measuring
+  cycles per call via `rdtsc` / `cntvct_el0`, reporting min/median over repeated
+  runs. Assembly is usually written for speed; the capture trampoline already
+  provides the call path.
+- **Phase 10 — Emulator coverage & tracing: _planned._** Build on the Phase 4
+  emulator (both guests already hook `UC_HOOK_MEM_INVALID`): add `UC_HOOK_CODE`
+  instruction tracing and basic-block coverage of the routine under test — "did
+  the tests exercise every branch?" is uniquely answerable inside the emulator.
+- **Phase 11 — Breadth: _planned._** Additional calling conventions and targets
+  once the above depth lands: the Windows x64 ABI (shadow space, distinct
+  callee-saved set) and RISC-V / ARM32 emulator guests.
+
+**Near-term correctness fixes (independent of the phasing above):**
+
+- `ASSERT_EQ` casts both operands to signed `long`, so comparisons of large
+  unsigned 64-bit values (addresses, `r.regs.rax`) can be wrong — add unsigned
+  variants or compare as `uint64_t`.
+- `ASSERT_MEM_EQ` reports only the first differing byte; §4.5 promises a hexdump
+  diff on failure.
+- No generic `ASSERT_REG_EQ(&r, reg, val)`; tests hand-compare struct fields.
+- Guard-page buffers catch tail overruns only; an optional leading guard page
+  would catch underruns too.
+
 ---
 
 ## 7. Key decisions (revisit as needed)
