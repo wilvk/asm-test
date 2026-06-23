@@ -4,13 +4,21 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 1**. See [DESIGN.md](DESIGN.md) for the full plan and
+Currently at **Phase 2**. See [DESIGN.md](DESIGN.md) for the full plan and
 roadmap.
 
-**Available now:** auto-discovered `TEST(...)` cases, a runner with `main()`,
-per-suite `SETUP`/`TEARDOWN`, `SKIP(reason)`, TAP-style colored reporting, and
-assertions: `ASSERT_TRUE/FALSE`, `ASSERT_EQ/NE/LT/LE/GT/GE`, `ASSERT_STREQ`,
-`ASSERT_MEM_EQ`.
+**Available now:**
+
+- Auto-discovered `TEST(...)` cases, a runner with `main()`, per-suite
+  `SETUP`/`TEARDOWN`, `SKIP(reason)`, TAP-style colored reporting.
+- Value assertions: `ASSERT_TRUE/FALSE`, `ASSERT_EQ/NE/LT/LE/GT/GE`,
+  `ASSERT_STREQ`, `ASSERT_MEM_EQ`.
+- **Register/flags capture** via `ASM_CALLn(&regs, fn, args...)`, then
+  `ASSERT_ABI_PRESERVED(&regs)` (callee-saved compliance) and
+  `ASSERT_FLAG_SET/CLEAR(&regs, CF|PF|ZF|SF|OF)`.
+- **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
+  faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
+  buggy routine into a reported failure instead of killing the runner.
 
 ## Quick start
 
