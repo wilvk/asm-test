@@ -141,6 +141,24 @@ void asm_call_capture_fp(regs_t *out, void *fn, const long *iargs,
 void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
                           const vec128_t *vargs);
 
+/* Like asm_call_capture_fp, but with an arbitrary number of double args: the
+ * first 8 go in the FP argument registers (xmm0-7 / d0-7), the rest spill onto
+ * the stack per the ABI. iargs has 6 register slots; fargs has `nfargs` entries.
+ * As with asm_call_capture_args, this path uses the frame-pointer register
+ * (rbp / x29), so that register is reported preserved but not independently
+ * checked by ASSERT_ABI_PRESERVED. */
+void asm_call_capture_fp_n(regs_t *out, void *fn, const long *iargs,
+                           const double *fargs, int nfargs);
+
+/* Like asm_call_capture_vec, but with an arbitrary number of 128-bit vector
+ * args: the first 8 go in the vector argument registers (xmm0-7 / v0-7), the
+ * rest spill onto the stack (16-byte slots) per the ABI. iargs has 6 register
+ * slots; vargs has `nvargs` entries; the whole vector file is captured into
+ * out->vec[] as asm_call_capture_vec does. Uses the frame-pointer register
+ * (see asm_call_capture_fp_n). */
+void asm_call_capture_vec_n(regs_t *out, void *fn, const long *iargs,
+                            const vec128_t *vargs, int nvargs);
+
 /* Call fn with an arbitrary number of integer args: the first 6 (x86-64) / 8
  * (AArch64) go in registers, the rest are passed on the stack per the ABI.
  * Captures the GP result and flags. NOTE: on this path the frame-pointer
@@ -312,6 +330,20 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 #define ASM_VCALL3(out, fn, v0, v1, v2)                                       \
     asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
                          (vec128_t[8]){(v0), (v1), (v2)})
+
+/* ASM_FCALLN: call fn with any number (>=1) of double args, the 9th+ spilling
+ * onto the stack as the ABI requires. The double return lands in out->fret. */
+#define ASM_FCALLN(out, fn, ...)                                              \
+    asm_call_capture_fp_n(                                                    \
+        (out), (void *)(fn), (long[6]){0}, (double[]){__VA_ARGS__},           \
+        (int)(sizeof((double[]){__VA_ARGS__}) / sizeof(double)))
+
+/* ASM_VCALLN: call fn with any number (>=1) of 128-bit vector args, the 9th+
+ * spilling onto the stack. Captures the whole vector file (return = vec[0]). */
+#define ASM_VCALLN(out, fn, ...)                                              \
+    asm_call_capture_vec_n(                                                   \
+        (out), (void *)(fn), (long[6]){0}, (vec128_t[]){__VA_ARGS__},         \
+        (int)(sizeof((vec128_t[]){__VA_ARGS__}) / sizeof(vec128_t)))
 
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */

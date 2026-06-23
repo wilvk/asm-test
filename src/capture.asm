@@ -223,6 +223,267 @@ ASM_FUNC asm_call_capture_vec
     ret
 ASM_ENDFUNC asm_call_capture_vec
 
+; void asm_call_capture_fp_n(regs_t *out, void *fn, const long iargs[6],
+;                            const double *fargs, int nfargs);
+;   out -> rdi, fn -> rsi, iargs -> rdx, fargs -> rcx, nfargs -> r8
+; First 8 doubles in xmm0-7, the rest on the stack. rbp is the frame pointer
+; (so rbp is reported preserved, not independently checked).
+ASM_FUNC asm_call_capture_fp_n
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 48
+    mov     [rbp - 48], rdi         ; out
+    mov     [rbp - 56], rsi         ; fn
+    mov     [rbp - 64], rdx         ; iargs
+    mov     [rbp - 72], rcx         ; fargs
+    mov     [rbp - 80], r8          ; nfargs
+
+    ; n_stack = max(0, nfargs - 8) -> r10
+    mov     r10, r8
+    sub     r10, 8
+    jg      .have_nstack
+    xor     r10, r10
+.have_nstack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 3
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    ; Copy overflow doubles: [rsp + i*8] = fargs[8 + i]
+    mov     r8, [rbp - 72]
+    xor     rcx, rcx
+.copy:
+    cmp     rcx, r10
+    jge     .copydone
+    mov     rax, [r8 + rcx*8 + 64]
+    mov     [rsp + rcx*8], rax
+    inc     rcx
+    jmp     .copy
+.copydone:
+    ; Load FP register args xmm0..7 (only as many as nfargs)
+    mov     r11, [rbp - 72]        ; fargs
+    mov     r10, [rbp - 80]        ; nfargs
+    cmp     r10, 1
+    jl      .regdone
+    movsd   xmm0, [r11 + 0]
+    cmp     r10, 2
+    jl      .regdone
+    movsd   xmm1, [r11 + 8]
+    cmp     r10, 3
+    jl      .regdone
+    movsd   xmm2, [r11 + 16]
+    cmp     r10, 4
+    jl      .regdone
+    movsd   xmm3, [r11 + 24]
+    cmp     r10, 5
+    jl      .regdone
+    movsd   xmm4, [r11 + 32]
+    cmp     r10, 6
+    jl      .regdone
+    movsd   xmm5, [r11 + 40]
+    cmp     r10, 7
+    jl      .regdone
+    movsd   xmm6, [r11 + 48]
+    cmp     r10, 8
+    jl      .regdone
+    movsd   xmm7, [r11 + 56]
+.regdone:
+    ; Integer args: iargs -> rdi,rsi,rdx,rcx,r8,r9
+    mov     rax, [rbp - 64]
+    mov     rdi, [rax + 0]
+    mov     rsi, [rax + 8]
+    mov     rcx, [rax + 24]
+    mov     r8,  [rax + 32]
+    mov     r9,  [rax + 40]
+    mov     rdx, [rax + 16]
+
+    mov     rbx, 0x1111111111111111
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    ; al = min(nfargs, 8): variadic-ABI vector-register count
+    mov     rax, [rbp - 80]
+    cmp     rax, 8
+    jle     .alok
+    mov     eax, 8
+.alok:
+    mov     r11, [rbp - 56]
+    call    r11
+
+    mov     r11, [rbp - 48]
+    mov     [r11 + 0], rax
+    mov     [r11 + 8], rdx
+    mov     [r11 + 16], rbx
+    mov     rax, 0x2222222222222222 ; rbp: reported preserved, not checked
+    mov     [r11 + 24], rax
+    mov     [r11 + 32], r12
+    mov     [r11 + 40], r13
+    mov     [r11 + 48], r14
+    mov     [r11 + 56], r15
+    pushfq
+    pop     rax
+    mov     [r11 + 64], rax
+    movsd   [r11 + 72], xmm0        ; fret = xmm0
+
+    lea     rsp, [rbp - 40]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_fp_n
+
+; void asm_call_capture_vec_n(regs_t *out, void *fn, const long iargs[6],
+;                             const vec128_t *vargs, int nvargs);
+;   out -> rdi, fn -> rsi, iargs -> rdx, vargs -> rcx, nvargs -> r8
+; First 8 vectors in xmm0-7, the rest on the stack (16-byte slots). rbp is the
+; frame pointer (reported preserved, not independently checked).
+ASM_FUNC asm_call_capture_vec_n
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 48
+    mov     [rbp - 48], rdi         ; out
+    mov     [rbp - 56], rsi         ; fn
+    mov     [rbp - 64], rdx         ; iargs
+    mov     [rbp - 72], rcx         ; vargs
+    mov     [rbp - 80], r8          ; nvargs
+
+    ; n_stack = max(0, nvargs - 8) -> r10 (each slot is 16 bytes)
+    mov     r10, r8
+    sub     r10, 8
+    jg      .have_nstack
+    xor     r10, r10
+.have_nstack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 4                  ; n_stack * 16 (already 16-aligned)
+    sub     rsp, rax
+
+    ; Copy overflow vectors as 8-byte words: words = n_stack*2,
+    ; [rsp + j*8] = vargs[128 + j*8]
+    mov     r9, r10
+    shl     r9, 1
+    mov     r8, [rbp - 72]
+    xor     rcx, rcx
+.copy:
+    cmp     rcx, r9
+    jge     .copydone
+    mov     rax, [r8 + rcx*8 + 128]
+    mov     [rsp + rcx*8], rax
+    inc     rcx
+    jmp     .copy
+.copydone:
+    ; Load vector register args xmm0..7 (only as many as nvargs)
+    mov     r11, [rbp - 72]        ; vargs
+    mov     r10, [rbp - 80]        ; nvargs
+    cmp     r10, 1
+    jl      .regdone
+    movdqu  xmm0, [r11 + 0]
+    cmp     r10, 2
+    jl      .regdone
+    movdqu  xmm1, [r11 + 16]
+    cmp     r10, 3
+    jl      .regdone
+    movdqu  xmm2, [r11 + 32]
+    cmp     r10, 4
+    jl      .regdone
+    movdqu  xmm3, [r11 + 48]
+    cmp     r10, 5
+    jl      .regdone
+    movdqu  xmm4, [r11 + 64]
+    cmp     r10, 6
+    jl      .regdone
+    movdqu  xmm5, [r11 + 80]
+    cmp     r10, 7
+    jl      .regdone
+    movdqu  xmm6, [r11 + 96]
+    cmp     r10, 8
+    jl      .regdone
+    movdqu  xmm7, [r11 + 112]
+.regdone:
+    ; Integer args: iargs -> rdi,rsi,rdx,rcx,r8,r9
+    mov     rax, [rbp - 64]
+    mov     rdi, [rax + 0]
+    mov     rsi, [rax + 8]
+    mov     rcx, [rax + 24]
+    mov     r8,  [rax + 32]
+    mov     r9,  [rax + 40]
+    mov     rdx, [rax + 16]
+
+    mov     rbx, 0x1111111111111111
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    ; al = min(nvargs, 8)
+    mov     rax, [rbp - 80]
+    cmp     rax, 8
+    jle     .alok
+    mov     eax, 8
+.alok:
+    mov     r11, [rbp - 56]
+    call    r11
+
+    mov     r11, [rbp - 48]
+    mov     [r11 + 0], rax
+    mov     [r11 + 8], rdx
+    mov     [r11 + 16], rbx
+    mov     rax, 0x2222222222222222
+    mov     [r11 + 24], rax
+    mov     [r11 + 32], r12
+    mov     [r11 + 40], r13
+    mov     [r11 + 48], r14
+    mov     [r11 + 56], r15
+    pushfq
+    pop     rax
+    mov     [r11 + 64], rax
+    movsd   [r11 + 72], xmm0        ; fret
+
+    ; Full vector file: xmm0..15 -> vec[0..15] at offset 80
+    movdqu  [r11 + 80],  xmm0
+    movdqu  [r11 + 96],  xmm1
+    movdqu  [r11 + 112], xmm2
+    movdqu  [r11 + 128], xmm3
+    movdqu  [r11 + 144], xmm4
+    movdqu  [r11 + 160], xmm5
+    movdqu  [r11 + 176], xmm6
+    movdqu  [r11 + 192], xmm7
+    movdqu  [r11 + 208], xmm8
+    movdqu  [r11 + 224], xmm9
+    movdqu  [r11 + 240], xmm10
+    movdqu  [r11 + 256], xmm11
+    movdqu  [r11 + 272], xmm12
+    movdqu  [r11 + 288], xmm13
+    movdqu  [r11 + 304], xmm14
+    movdqu  [r11 + 320], xmm15
+
+    lea     rsp, [rbp - 40]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_vec_n
+
 ; void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
 ;   out -> rdi, fn -> rsi, args -> rdx, nargs -> rcx
 ; First 6 integer args in registers, the rest on the stack. rbp is the frame

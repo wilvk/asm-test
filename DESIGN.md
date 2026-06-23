@@ -191,9 +191,11 @@ add reach.
   their eightbytes through the integer/FP register paths, and large ones via
   `asm_call_capture_bigstruct` (x86-64 copies inline onto the stack, AArch64
   passes a pointer, dispatched in C). Mixed integer/float register args work
-  through `asm_call_capture_fp`. All on both arches and both assemblers. (One
-  rare edge remains unimplemented: float/vector *register-overflow* args spilling
-  to the stack, i.e. more than 8 FP/vector args.)
+  through `asm_call_capture_fp`. Float/vector *register-overflow* args (more than
+  8 FP/vector args) now spill to the stack too, via `asm_call_capture_fp_n` /
+  `asm_call_capture_vec_n` (`ASM_FCALLN` / `ASM_VCALLN`), which marshal the first
+  8 into registers and the rest onto the stack per the ABI. All on both arches
+  and both assemblers.
 - **Phase 7 — Differential / property testing: _planned._** Let a test supply
   both the routine and a C reference, then fuzz inputs and assert equivalence:
   `ASSERT_MATCHES_REF(fn, ref, gen, n)`. Turns fixed-vector assertions into

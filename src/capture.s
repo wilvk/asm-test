@@ -497,6 +497,548 @@ ASM_FUNC asm_call_capture_vec
 ASM_ENDFUNC asm_call_capture_vec
 
 /*
+ * void asm_call_capture_fp_n(regs_t *out, void *fn, const long iargs[6],
+ *                            const double *fargs, int nfargs);
+ * Like asm_call_capture_fp but with arbitrary FP arity: the first 8 doubles go
+ * in the FP argument registers, the rest spill onto the stack. Uses the
+ * frame-pointer register to unwind the variable-size outgoing-argument area, so
+ * that register (rbp / x29) is reported preserved but not independently checked.
+ */
+ASM_FUNC asm_call_capture_fp_n
+
+#if defined(__x86_64__)
+/* out -> %rdi, fn -> %rsi, iargs -> %rdx, fargs -> %rcx, nfargs -> %r8 */
+    pushq   %rbp
+    movq    %rsp, %rbp
+    pushq   %rbx
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $48, %rsp
+    movq    %rdi, -48(%rbp)        /* out    */
+    movq    %rsi, -56(%rbp)        /* fn     */
+    movq    %rdx, -64(%rbp)        /* iargs  */
+    movq    %rcx, -72(%rbp)        /* fargs  */
+    movq    %r8,  -80(%rbp)        /* nfargs */
+
+    /* n_stack = max(0, nfargs - 8) -> r10 */
+    movq    %r8, %r10
+    subq    $8, %r10
+    jg      60f
+    xorq    %r10, %r10
+60:
+    /* 16-align rsp, then reserve round_up(n_stack*8, 16) bytes. */
+    andq    $-16, %rsp
+    movq    %r10, %rax
+    shlq    $3, %rax
+    addq    $15, %rax
+    andq    $-16, %rax
+    subq    %rax, %rsp
+
+    /* Copy overflow doubles: [rsp + i*8] = fargs[8 + i]. */
+    movq    -72(%rbp), %r8
+    xorq    %rcx, %rcx
+61:
+    cmpq    %r10, %rcx
+    jge     62f
+    movq    64(%r8,%rcx,8), %rax
+    movq    %rax, (%rsp,%rcx,8)
+    incq    %rcx
+    jmp     61b
+62:
+    /* Load FP register args xmm0..7 (only as many as nfargs). */
+    movq    -72(%rbp), %r11        /* fargs  */
+    movq    -80(%rbp), %r10        /* nfargs */
+    cmpq    $1, %r10
+    jl      63f
+    movsd   0(%r11),  %xmm0
+    cmpq    $2, %r10
+    jl      63f
+    movsd   8(%r11),  %xmm1
+    cmpq    $3, %r10
+    jl      63f
+    movsd   16(%r11), %xmm2
+    cmpq    $4, %r10
+    jl      63f
+    movsd   24(%r11), %xmm3
+    cmpq    $5, %r10
+    jl      63f
+    movsd   32(%r11), %xmm4
+    cmpq    $6, %r10
+    jl      63f
+    movsd   40(%r11), %xmm5
+    cmpq    $7, %r10
+    jl      63f
+    movsd   48(%r11), %xmm6
+    cmpq    $8, %r10
+    jl      63f
+    movsd   56(%r11), %xmm7
+63:
+    /* Integer args: iargs -> rdi,rsi,rdx,rcx,r8,r9 (6 register slots). */
+    movq    -64(%rbp), %rax
+    movq    0(%rax),  %rdi
+    movq    8(%rax),  %rsi
+    movq    24(%rax), %rcx
+    movq    32(%rax), %r8
+    movq    40(%rax), %r9
+    movq    16(%rax), %rdx
+
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    /* al = min(nfargs, 8): variadic-ABI vector-register count. */
+    movq    -80(%rbp), %rax
+    cmpq    $8, %rax
+    jle     64f
+    movl    $8, %eax
+64:
+    movq    -56(%rbp), %r11        /* fn */
+    call    *%r11
+
+    movq    -48(%rbp), %r11        /* out */
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movabsq $0x2222222222222222, %rax  /* rbp: reported preserved, not checked */
+    movq    %rax, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+    movsd   %xmm0, 72(%r11)        /* fret = xmm0 */
+
+    leaq    -40(%rbp), %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbx
+    popq    %rbp
+    ret
+
+#elif defined(__aarch64__)
+/* out -> x0, fn -> x1, iargs -> x2, fargs -> x3, nfargs -> x4 */
+    stp     x29, x30, [sp, #-160]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+    stp     x23, x24, [sp, #48]
+    stp     x25, x26, [sp, #64]
+    stp     x27, x28, [sp, #80]
+    str     x0, [sp, #96]          /* out    */
+    str     x1, [sp, #104]         /* fn     */
+    str     x2, [sp, #112]         /* iargs  */
+    str     x3, [sp, #120]         /* fargs  */
+    str     x4, [sp, #128]         /* nfargs */
+
+    /* n_stack = max(0, nfargs - 8) -> x9 */
+    subs    x9, x4, #8
+    b.gt    60f
+    mov     x9, #0
+60:
+    lsl     x10, x9, #3
+    add     x10, x10, #15
+    and     x10, x10, #-16
+    sub     sp, sp, x10
+
+    /* Copy overflow doubles: [sp + i*8] = fargs[8 + i]. */
+    ldr     x11, [x29, #120]
+    mov     x12, #0
+61:
+    cmp     x12, x9
+    b.ge    62f
+    add     x13, x12, #8
+    ldr     x14, [x11, x13, lsl #3]
+    str     x14, [sp, x12, lsl #3]
+    add     x12, x12, #1
+    b       61b
+62:
+    /* Load FP register args d0..7 (only as many as nfargs). */
+    ldr     x11, [x29, #120]       /* fargs  */
+    ldr     x10, [x29, #128]       /* nfargs */
+    cmp     x10, #1
+    b.lt    63f
+    ldr     d0, [x11, #0]
+    cmp     x10, #2
+    b.lt    63f
+    ldr     d1, [x11, #8]
+    cmp     x10, #3
+    b.lt    63f
+    ldr     d2, [x11, #16]
+    cmp     x10, #4
+    b.lt    63f
+    ldr     d3, [x11, #24]
+    cmp     x10, #5
+    b.lt    63f
+    ldr     d4, [x11, #32]
+    cmp     x10, #6
+    b.lt    63f
+    ldr     d5, [x11, #40]
+    cmp     x10, #7
+    b.lt    63f
+    ldr     d6, [x11, #48]
+    cmp     x10, #8
+    b.lt    63f
+    ldr     d7, [x11, #56]
+63:
+    /* Integer args: iargs -> x0..x5. */
+    ldr     x9, [x29, #112]
+    ldp     x0, x1, [x9, #0]
+    ldp     x2, x3, [x9, #16]
+    ldp     x4, x5, [x9, #32]
+
+    ldr     x19, =0x1111111111111111
+    ldr     x20, =0x2222222222222222
+    ldr     x21, =0x3333333333333333
+    ldr     x22, =0x4444444444444444
+    ldr     x23, =0x5555555555555555
+    ldr     x24, =0x6666666666666666
+    ldr     x25, =0x7777777777777777
+    ldr     x26, =0x8888888888888888
+    ldr     x27, =0x9999999999999999
+    ldr     x28, =0xAAAAAAAAAAAAAAAA
+
+    ldr     x10, [x29, #104]       /* fn */
+    blr     x10
+
+    ldr     x11, [x29, #96]        /* out */
+    str     x0,  [x11, #0]
+    str     x19, [x11, #8]
+    str     x20, [x11, #16]
+    str     x21, [x11, #24]
+    str     x22, [x11, #32]
+    str     x23, [x11, #40]
+    str     x24, [x11, #48]
+    str     x25, [x11, #56]
+    str     x26, [x11, #64]
+    str     x27, [x11, #72]
+    str     x28, [x11, #80]
+    ldr     x12, =0xBBBBBBBBBBBBBBBB  /* x29: reported preserved, not checked */
+    str     x12, [x11, #88]
+    mrs     x12, nzcv
+    str     x12, [x11, #96]
+    str     d0, [x11, #104]        /* fret = d0 */
+
+    mov     sp, x29
+    ldp     x19, x20, [sp, #16]
+    ldp     x21, x22, [sp, #32]
+    ldp     x23, x24, [sp, #48]
+    ldp     x25, x26, [sp, #64]
+    ldp     x27, x28, [sp, #80]
+    ldp     x29, x30, [sp], #160
+    ret
+
+#else
+#  error "capture.s supports x86-64 and AArch64 only"
+#endif
+
+ASM_ENDFUNC asm_call_capture_fp_n
+
+/*
+ * void asm_call_capture_vec_n(regs_t *out, void *fn, const long iargs[6],
+ *                             const vec128_t *vargs, int nvargs);
+ * Like asm_call_capture_vec but with arbitrary vector arity: the first 8
+ * 128-bit vectors go in the vector argument registers, the rest spill onto the
+ * stack (16-byte slots). Captures the whole vector file. Uses the frame-pointer
+ * register (rbp / x29), reported preserved but not independently checked.
+ */
+ASM_FUNC asm_call_capture_vec_n
+
+#if defined(__x86_64__)
+/* out -> %rdi, fn -> %rsi, iargs -> %rdx, vargs -> %rcx, nvargs -> %r8 */
+    pushq   %rbp
+    movq    %rsp, %rbp
+    pushq   %rbx
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $48, %rsp
+    movq    %rdi, -48(%rbp)        /* out    */
+    movq    %rsi, -56(%rbp)        /* fn     */
+    movq    %rdx, -64(%rbp)        /* iargs  */
+    movq    %rcx, -72(%rbp)        /* vargs  */
+    movq    %r8,  -80(%rbp)        /* nvargs */
+
+    /* n_stack = max(0, nvargs - 8) -> r10 (each slot is 16 bytes). */
+    movq    %r8, %r10
+    subq    $8, %r10
+    jg      70f
+    xorq    %r10, %r10
+70:
+    andq    $-16, %rsp
+    movq    %r10, %rax
+    shlq    $4, %rax               /* n_stack * 16 (already 16-aligned) */
+    subq    %rax, %rsp
+
+    /* Copy overflow vectors as 8-byte words: words = n_stack*2,
+       [rsp + j*8] = vargs[128 + j*8]. */
+    movq    %r10, %r9
+    shlq    $1, %r9
+    movq    -72(%rbp), %r8
+    xorq    %rcx, %rcx
+71:
+    cmpq    %r9, %rcx
+    jge     72f
+    movq    128(%r8,%rcx,8), %rax
+    movq    %rax, (%rsp,%rcx,8)
+    incq    %rcx
+    jmp     71b
+72:
+    /* Load vector register args xmm0..7 (only as many as nvargs). */
+    movq    -72(%rbp), %r11        /* vargs  */
+    movq    -80(%rbp), %r10        /* nvargs */
+    cmpq    $1, %r10
+    jl      73f
+    movdqu  0(%r11),   %xmm0
+    cmpq    $2, %r10
+    jl      73f
+    movdqu  16(%r11),  %xmm1
+    cmpq    $3, %r10
+    jl      73f
+    movdqu  32(%r11),  %xmm2
+    cmpq    $4, %r10
+    jl      73f
+    movdqu  48(%r11),  %xmm3
+    cmpq    $5, %r10
+    jl      73f
+    movdqu  64(%r11),  %xmm4
+    cmpq    $6, %r10
+    jl      73f
+    movdqu  80(%r11),  %xmm5
+    cmpq    $7, %r10
+    jl      73f
+    movdqu  96(%r11),  %xmm6
+    cmpq    $8, %r10
+    jl      73f
+    movdqu  112(%r11), %xmm7
+73:
+    /* Integer args: iargs -> rdi,rsi,rdx,rcx,r8,r9 (6 register slots). */
+    movq    -64(%rbp), %rax
+    movq    0(%rax),  %rdi
+    movq    8(%rax),  %rsi
+    movq    24(%rax), %rcx
+    movq    32(%rax), %r8
+    movq    40(%rax), %r9
+    movq    16(%rax), %rdx
+
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    /* al = min(nvargs, 8): variadic-ABI vector-register count. */
+    movq    -80(%rbp), %rax
+    cmpq    $8, %rax
+    jle     74f
+    movl    $8, %eax
+74:
+    movq    -56(%rbp), %r11        /* fn */
+    call    *%r11
+
+    movq    -48(%rbp), %r11        /* out */
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movabsq $0x2222222222222222, %rax  /* rbp: reported preserved, not checked */
+    movq    %rax, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+    movsd   %xmm0, 72(%r11)        /* fret */
+
+    /* Full vector file: xmm0..15 -> vec[0..15] at offset 80. */
+    movdqu  %xmm0,  80(%r11)
+    movdqu  %xmm1,  96(%r11)
+    movdqu  %xmm2,  112(%r11)
+    movdqu  %xmm3,  128(%r11)
+    movdqu  %xmm4,  144(%r11)
+    movdqu  %xmm5,  160(%r11)
+    movdqu  %xmm6,  176(%r11)
+    movdqu  %xmm7,  192(%r11)
+    movdqu  %xmm8,  208(%r11)
+    movdqu  %xmm9,  224(%r11)
+    movdqu  %xmm10, 240(%r11)
+    movdqu  %xmm11, 256(%r11)
+    movdqu  %xmm12, 272(%r11)
+    movdqu  %xmm13, 288(%r11)
+    movdqu  %xmm14, 304(%r11)
+    movdqu  %xmm15, 320(%r11)
+
+    leaq    -40(%rbp), %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbx
+    popq    %rbp
+    ret
+
+#elif defined(__aarch64__)
+/* out -> x0, fn -> x1, iargs -> x2, vargs -> x3, nvargs -> x4 */
+    stp     x29, x30, [sp, #-160]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+    stp     x23, x24, [sp, #48]
+    stp     x25, x26, [sp, #64]
+    stp     x27, x28, [sp, #80]
+    str     x0, [sp, #96]          /* out    */
+    str     x1, [sp, #104]         /* fn     */
+    str     x2, [sp, #112]         /* iargs  */
+    str     x3, [sp, #120]         /* vargs  */
+    str     x4, [sp, #128]         /* nvargs */
+
+    /* n_stack = max(0, nvargs - 8) -> x9 (each slot is 16 bytes). */
+    subs    x9, x4, #8
+    b.gt    70f
+    mov     x9, #0
+70:
+    lsl     x10, x9, #4            /* n_stack * 16 */
+    sub     sp, sp, x10
+
+    /* Copy overflow vectors as 8-byte words: words = n_stack*2,
+       [sp + j*8] = vargs[128 + j*8]. */
+    lsl     x9, x9, #1
+    ldr     x11, [x29, #120]
+    mov     x12, #0
+71:
+    cmp     x12, x9
+    b.ge    72f
+    add     x13, x12, #16
+    ldr     x14, [x11, x13, lsl #3]
+    str     x14, [sp, x12, lsl #3]
+    add     x12, x12, #1
+    b       71b
+72:
+    /* Load vector register args q0..7 (only as many as nvargs). */
+    ldr     x11, [x29, #120]       /* vargs  */
+    ldr     x10, [x29, #128]       /* nvargs */
+    cmp     x10, #1
+    b.lt    73f
+    ldr     q0, [x11, #0]
+    cmp     x10, #2
+    b.lt    73f
+    ldr     q1, [x11, #16]
+    cmp     x10, #3
+    b.lt    73f
+    ldr     q2, [x11, #32]
+    cmp     x10, #4
+    b.lt    73f
+    ldr     q3, [x11, #48]
+    cmp     x10, #5
+    b.lt    73f
+    ldr     q4, [x11, #64]
+    cmp     x10, #6
+    b.lt    73f
+    ldr     q5, [x11, #80]
+    cmp     x10, #7
+    b.lt    73f
+    ldr     q6, [x11, #96]
+    cmp     x10, #8
+    b.lt    73f
+    ldr     q7, [x11, #112]
+73:
+    /* Integer args: iargs -> x0..x5. */
+    ldr     x9, [x29, #112]
+    ldp     x0, x1, [x9, #0]
+    ldp     x2, x3, [x9, #16]
+    ldp     x4, x5, [x9, #32]
+
+    ldr     x19, =0x1111111111111111
+    ldr     x20, =0x2222222222222222
+    ldr     x21, =0x3333333333333333
+    ldr     x22, =0x4444444444444444
+    ldr     x23, =0x5555555555555555
+    ldr     x24, =0x6666666666666666
+    ldr     x25, =0x7777777777777777
+    ldr     x26, =0x8888888888888888
+    ldr     x27, =0x9999999999999999
+    ldr     x28, =0xAAAAAAAAAAAAAAAA
+
+    ldr     x10, [x29, #104]       /* fn */
+    blr     x10
+
+    ldr     x11, [x29, #96]        /* out */
+    str     x0,  [x11, #0]
+    str     x19, [x11, #8]
+    str     x20, [x11, #16]
+    str     x21, [x11, #24]
+    str     x22, [x11, #32]
+    str     x23, [x11, #40]
+    str     x24, [x11, #48]
+    str     x25, [x11, #56]
+    str     x26, [x11, #64]
+    str     x27, [x11, #72]
+    str     x28, [x11, #80]
+    ldr     x12, =0xBBBBBBBBBBBBBBBB  /* x29: reported preserved, not checked */
+    str     x12, [x11, #88]
+    mrs     x12, nzcv
+    str     x12, [x11, #96]
+    str     d0, [x11, #104]        /* fret */
+
+    /* Full vector file: v0..31 -> vec[0..31] at offset 112. */
+    str     q0,  [x11, #112]
+    str     q1,  [x11, #128]
+    str     q2,  [x11, #144]
+    str     q3,  [x11, #160]
+    str     q4,  [x11, #176]
+    str     q5,  [x11, #192]
+    str     q6,  [x11, #208]
+    str     q7,  [x11, #224]
+    str     q8,  [x11, #240]
+    str     q9,  [x11, #256]
+    str     q10, [x11, #272]
+    str     q11, [x11, #288]
+    str     q12, [x11, #304]
+    str     q13, [x11, #320]
+    str     q14, [x11, #336]
+    str     q15, [x11, #352]
+    str     q16, [x11, #368]
+    str     q17, [x11, #384]
+    str     q18, [x11, #400]
+    str     q19, [x11, #416]
+    str     q20, [x11, #432]
+    str     q21, [x11, #448]
+    str     q22, [x11, #464]
+    str     q23, [x11, #480]
+    str     q24, [x11, #496]
+    str     q25, [x11, #512]
+    str     q26, [x11, #528]
+    str     q27, [x11, #544]
+    str     q28, [x11, #560]
+    str     q29, [x11, #576]
+    str     q30, [x11, #592]
+    str     q31, [x11, #608]
+
+    mov     sp, x29
+    ldp     x19, x20, [sp, #16]
+    ldp     x21, x22, [sp, #32]
+    ldp     x23, x24, [sp, #48]
+    ldp     x25, x26, [sp, #64]
+    ldp     x27, x28, [sp, #80]
+    ldp     x29, x30, [sp], #160
+    ret
+
+#else
+#  error "capture.s supports x86-64 and AArch64 only"
+#endif
+
+ASM_ENDFUNC asm_call_capture_vec_n
+
+/*
  * void asm_call_capture_args(regs_t *out, void *fn, const long *args,
  *                            int nargs);
  * Passes `nargs` integer args: the first 6 (x86-64) / 8 (AArch64) in registers,
