@@ -21,7 +21,7 @@ ASM_SYNTAX ?= gas
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
-                  $(BUILD)/test_fp $(BUILD)/test_simd
+                  $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args
 
 .PHONY: all test demo-fail clean
 all: test
@@ -73,6 +73,9 @@ $(BUILD)/test_fp: $(FRAMEWORK_OBJS) $(BUILD)/fp.o $(BUILD)/test_fp.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(BUILD)/test_simd: $(FRAMEWORK_OBJS) $(BUILD)/simd.o $(BUILD)/test_simd.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_args: $(FRAMEWORK_OBJS) $(BUILD)/args.o $(BUILD)/test_args.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 test: $(SUITES)

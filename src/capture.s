@@ -495,3 +495,221 @@ ASM_FUNC asm_call_capture_vec
 #endif
 
 ASM_ENDFUNC asm_call_capture_vec
+
+/*
+ * void asm_call_capture_args(regs_t *out, void *fn, const long *args,
+ *                            int nargs);
+ * Passes `nargs` integer args: the first 6 (x86-64) / 8 (AArch64) in registers,
+ * the remainder on the stack per the ABI. Uses the frame-pointer register to
+ * unwind the variable-size outgoing-argument area, so that register (rbp / x29)
+ * is reported as preserved but not independently checked.
+ */
+ASM_FUNC asm_call_capture_args
+
+#if defined(__x86_64__)
+/* out -> %rdi, fn -> %rsi, args -> %rdx, nargs -> %rcx */
+    pushq   %rbp
+    movq    %rsp, %rbp
+    pushq   %rbx
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $32, %rsp
+    movq    %rdi, -48(%rbp)        /* out   */
+    movq    %rsi, -56(%rbp)        /* fn    */
+    movq    %rdx, -64(%rbp)        /* args  */
+    movq    %rcx, -72(%rbp)        /* nargs */
+
+    /* n_stack = max(0, nargs - 6) -> r10 */
+    movq    %rcx, %r10
+    subq    $6, %r10
+    jg      10f
+    xorq    %r10, %r10
+10:
+    /* 16-align rsp, then reserve round_up(n_stack*8, 16) bytes. */
+    andq    $-16, %rsp
+    movq    %r10, %rax
+    shlq    $3, %rax
+    addq    $15, %rax
+    andq    $-16, %rax
+    subq    %rax, %rsp
+
+    /* Copy overflow args: [rsp + i*8] = args[6 + i]. */
+    movq    -64(%rbp), %r8
+    xorq    %rcx, %rcx
+11:
+    cmpq    %r10, %rcx
+    jge     12f
+    movq    48(%r8,%rcx,8), %rax
+    movq    %rax, (%rsp,%rcx,8)
+    incq    %rcx
+    jmp     11b
+12:
+    /* Load the register args (only as many as nargs). */
+    movq    -64(%rbp), %r11        /* args  */
+    movq    -72(%rbp), %r10        /* nargs */
+    cmpq    $1, %r10
+    jl      13f
+    movq    0(%r11), %rdi
+    cmpq    $2, %r10
+    jl      13f
+    movq    8(%r11), %rsi
+    cmpq    $3, %r10
+    jl      13f
+    movq    16(%r11), %rdx
+    cmpq    $4, %r10
+    jl      13f
+    movq    24(%r11), %rcx
+    cmpq    $5, %r10
+    jl      13f
+    movq    32(%r11), %r8
+    cmpq    $6, %r10
+    jl      13f
+    movq    40(%r11), %r9
+13:
+    /* Seed callee-saved sentinels (rbp is the frame pointer). */
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    movq    -56(%rbp), %r11        /* fn */
+    xorl    %eax, %eax
+    call    *%r11
+
+    movq    -48(%rbp), %r11        /* out */
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movabsq $0x2222222222222222, %rax  /* rbp: reported preserved, not checked */
+    movq    %rax, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+
+    leaq    -40(%rbp), %rsp        /* drop the variable area + locals */
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbx
+    popq    %rbp
+    ret
+
+#elif defined(__aarch64__)
+/* out -> x0, fn -> x1, args -> x2, nargs -> x3 */
+    stp     x29, x30, [sp, #-160]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+    stp     x23, x24, [sp, #48]
+    stp     x25, x26, [sp, #64]
+    stp     x27, x28, [sp, #80]
+    str     x0, [sp, #96]          /* out   */
+    str     x1, [sp, #104]         /* fn    */
+    str     x2, [sp, #112]         /* args  */
+    str     x3, [sp, #120]         /* nargs */
+
+    /* n_stack = max(0, nargs - 8) -> x9 */
+    subs    x9, x3, #8
+    b.gt    20f
+    mov     x9, #0
+20:
+    /* reserve round_up(n_stack*8, 16) bytes (sp stays 16-aligned). */
+    lsl     x10, x9, #3
+    add     x10, x10, #15
+    and     x10, x10, #-16
+    sub     sp, sp, x10
+
+    /* Copy overflow args: [sp + i*8] = args[8 + i]. */
+    ldr     x11, [x29, #112]
+    mov     x12, #0
+21:
+    cmp     x12, x9
+    b.ge    22f
+    add     x13, x12, #8
+    ldr     x14, [x11, x13, lsl #3]
+    str     x14, [sp, x12, lsl #3]
+    add     x12, x12, #1
+    b       21b
+22:
+    /* Load the register args (only as many as nargs). */
+    ldr     x11, [x29, #112]
+    ldr     x10, [x29, #120]
+    cmp     x10, #1
+    b.lt    23f
+    ldr     x0, [x11, #0]
+    cmp     x10, #2
+    b.lt    23f
+    ldr     x1, [x11, #8]
+    cmp     x10, #3
+    b.lt    23f
+    ldr     x2, [x11, #16]
+    cmp     x10, #4
+    b.lt    23f
+    ldr     x3, [x11, #24]
+    cmp     x10, #5
+    b.lt    23f
+    ldr     x4, [x11, #32]
+    cmp     x10, #6
+    b.lt    23f
+    ldr     x5, [x11, #40]
+    cmp     x10, #7
+    b.lt    23f
+    ldr     x6, [x11, #48]
+    cmp     x10, #8
+    b.lt    23f
+    ldr     x7, [x11, #56]
+23:
+    /* Seed callee-saved sentinels (x29 is the frame pointer). */
+    ldr     x19, =0x1111111111111111
+    ldr     x20, =0x2222222222222222
+    ldr     x21, =0x3333333333333333
+    ldr     x22, =0x4444444444444444
+    ldr     x23, =0x5555555555555555
+    ldr     x24, =0x6666666666666666
+    ldr     x25, =0x7777777777777777
+    ldr     x26, =0x8888888888888888
+    ldr     x27, =0x9999999999999999
+    ldr     x28, =0xAAAAAAAAAAAAAAAA
+
+    ldr     x10, [x29, #104]       /* fn */
+    blr     x10
+
+    ldr     x11, [x29, #96]        /* out */
+    str     x0,  [x11, #0]
+    str     x19, [x11, #8]
+    str     x20, [x11, #16]
+    str     x21, [x11, #24]
+    str     x22, [x11, #32]
+    str     x23, [x11, #40]
+    str     x24, [x11, #48]
+    str     x25, [x11, #56]
+    str     x26, [x11, #64]
+    str     x27, [x11, #72]
+    str     x28, [x11, #80]
+    ldr     x12, =0xBBBBBBBBBBBBBBBB  /* x29: reported preserved, not checked */
+    str     x12, [x11, #88]
+    mrs     x12, nzcv
+    str     x12, [x11, #96]
+
+    mov     sp, x29                /* drop the variable area */
+    ldp     x19, x20, [sp, #16]
+    ldp     x21, x22, [sp, #32]
+    ldp     x23, x24, [sp, #48]
+    ldp     x25, x26, [sp, #64]
+    ldp     x27, x28, [sp, #80]
+    ldp     x29, x30, [sp], #160
+    ret
+
+#else
+#  error "capture.s supports x86-64 and AArch64 only"
+#endif
+
+ASM_ENDFUNC asm_call_capture_args

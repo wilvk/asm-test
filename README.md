@@ -18,6 +18,8 @@ roadmap (Phases 5–11).
 - **Register/flags capture** via `ASM_CALLn(&regs, fn, args...)`, then
   `ASSERT_ABI_PRESERVED(&regs)` (callee-saved compliance),
   `ASSERT_FLAG_SET/CLEAR(&regs, CF|PF|ZF|SF|OF)`, and `ASSERT_REG_EQ`.
+- **Arbitrary integer arity** via `ASM_CALLN(&regs, fn, ...)`: passes the
+  overflow (7th+ on x86-64, 9th+ on AArch64) on the stack per the ABI.
 - **Floating-point** via `ASM_FCALLn(&regs, fn, doubles...)`: marshals `double`
   args into the FP registers and captures the FP return (`regs.fret`), with
   `ASSERT_FP_EQ` and `ASSERT_FP_NEAR(&regs, expected, ulps)`.

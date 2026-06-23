@@ -183,12 +183,15 @@ add reach.
   into `regs_t.vec[]` (return = `vec[0]`), with `ASSERT_VEC_EQ` plus raw lane
   assertions `ASSERT_DEQ/DNEAR` (double) and `ASSERT_FEQ/FNEAR` (float). Driven
   by `ASM_FCALLn` / `ASM_VCALLn`; callee-saved integers stay checked across both.
-- **Phase 6 — Full ABI call model: _planned._** Replace the fixed
-  `ASM_CALL0..6(long[6])` macros with a call descriptor expressing stack-passed
-  arguments (the 7th and beyond), mixed integer/float ordering, struct-by-value
-  parameters, and struct return (the SysV `sret` hidden pointer and
-  small-struct-in-registers rules). The headline feature is "calls through the
-  real ABI"; today only the ≤6-integer-argument subset is exercised.
+- **Phase 6 — Full ABI call model: _integer stack args done; structs planned._**
+  `asm_call_capture_args` / `ASM_CALLN(&r, fn, ...)` pass any number of integer
+  arguments — the first 6 (x86-64) / 8 (AArch64) in registers, the rest on the
+  stack with correct alignment (a variable-size outgoing-arg frame, unwound via
+  the frame-pointer register) — on both arches and both assemblers. Mixed
+  integer/float arguments in registers already work through `asm_call_capture_fp`
+  (each class fills its own registers in order). Remaining: float/vector args
+  that overflow to the stack (>8), struct-by-value parameters, and struct return
+  (the SysV `sret` hidden pointer and small-struct-in-registers rules).
 - **Phase 7 — Differential / property testing: _planned._** Let a test supply
   both the routine and a C reference, then fuzz inputs and assert equivalence:
   `ASSERT_MATCHES_REF(fn, ref, gen, n)`. Turns fixed-vector assertions into

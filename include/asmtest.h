@@ -141,6 +141,13 @@ void asm_call_capture_fp(regs_t *out, void *fn, const long *iargs,
 void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
                           const vec128_t *vargs);
 
+/* Call fn with an arbitrary number of integer args: the first 6 (x86-64) / 8
+ * (AArch64) go in registers, the rest are passed on the stack per the ABI.
+ * Captures the GP result and flags. NOTE: on this path the frame-pointer
+ * register (rbp / x29) is used as a frame pointer, so it is not independently
+ * verified by ASSERT_ABI_PRESERVED — the other callee-saved registers are. */
+void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
@@ -246,6 +253,13 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
     asm_call_capture((out), (void *)(fn),                                     \
                      (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),    \
                                (long)(e), (long)(f)})
+
+/* ASM_CALLN: call fn with any number (>=1) of integer args, overflowing onto
+ * the stack as the ABI requires. nargs is derived from the argument list. */
+#define ASM_CALLN(out, fn, ...)                                               \
+    asm_call_capture_args(                                                    \
+        (out), (void *)(fn), (long[]){__VA_ARGS__},                          \
+        (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
 
 /* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the
  * double return lands in out->fret. For routines mixing integer and float
