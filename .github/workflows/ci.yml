@@ -59,3 +59,17 @@ jobs:
 
       - name: Failure demo (NASM backend)
         run: make ASM_SYNTAX=nasm demo-fail
+
+  # Optional emulator tier (Unicorn Engine; x86-64 guest).
+  emu:
+    name: emu (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libunicorn
+        run: sudo apt-get update && sudo apt-get install -y libunicorn-dev pkg-config
+
+      - name: Build and run emulator suite
+        run: make emu-test

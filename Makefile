@@ -78,5 +78,23 @@ $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/test_fai
 demo-fail: $(BUILD)/test_failure_demo
 	-./$(BUILD)/test_failure_demo
 
+# --- Optional emulator tier (Phase 4; requires libunicorn) -----------------
+# `make emu-test` runs the Unicorn-backed suite. The emulated guest is x86-64
+# and the routine bytes are copied from the built routines, so build this on an
+# x86-64 host (default GAS backend).
+UNICORN_CFLAGS ?= $(shell pkg-config --cflags unicorn 2>/dev/null)
+UNICORN_LIBS   ?= $(shell pkg-config --libs unicorn 2>/dev/null || echo -lunicorn)
+
+$(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
+
+$(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
+                   $(BUILD)/flags.o $(BUILD)/emu.o $(BUILD)/test_emu.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
+
+.PHONY: emu-test
+emu-test: $(BUILD)/test_emu
+	./$(BUILD)/test_emu
+
 clean:
 	rm -rf $(BUILD)

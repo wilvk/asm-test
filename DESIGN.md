@@ -159,10 +159,14 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   ubuntu-24.04-arm, macos-latest, macos-13). The opt-in **NASM backend**
   (`ASM_SYNTAX=nasm`) ships Intel-syntax counterparts of the sources (x86-64
   only) with its own `asm_nasm.inc`, and has its own CI job.
-- **Phase 4 — (optional) Emulator tier:** integrate
-  [Unicorn Engine](https://www.unicorn-engine.org/) to preload registers/memory,
-  run a routine in isolation, and read back full CPU state + perform fault
-  injection — free of ABI constraints.
+- **Phase 4 — Emulator tier: _done (x86-64 guest)._** A
+  [Unicorn Engine](https://www.unicorn-engine.org/) wrapper (`src/emu.c`,
+  `include/asmtest_emu.h`, built with `-lunicorn`) copies a routine into a
+  virtual x86-64 CPU, preloads registers/memory, runs it to `ret` or single
+  steps N instructions, reads back the full register file, and reports invalid
+  accesses as precise faults — all free of ABI constraints and host arch
+  (Unicorn emulates x86-64 regardless of host). Has its own CI job. AArch64-guest
+  emulation is a natural follow-up (Unicorn supports `UC_ARCH_ARM64`).
 
 ---
 

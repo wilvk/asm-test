@@ -15,3 +15,9 @@ ASM_FUNC fill_bytes
 .done:
     ret
 ASM_ENDFUNC fill_bytes
+
+; long load_long(void *p); returns *(long *)p.  p -> rdi
+ASM_FUNC load_long
+    mov     rax, [rdi]
+    ret
+ASM_ENDFUNC load_long

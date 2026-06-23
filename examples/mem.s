@@ -32,3 +32,18 @@ ASM_FUNC fill_bytes
     ret
 #endif
 ASM_ENDFUNC fill_bytes
+
+/*
+ * long load_long(void *p);  returns *(long *)p.  Used by the emulator tier's
+ * fault-injection demo (point p at unmapped memory and watch the emu catch it).
+ *   x86-64: p -> %rdi   AArch64: p -> x0
+ */
+ASM_FUNC load_long
+#if defined(__x86_64__)
+    movq    (%rdi), %rax
+    ret
+#elif defined(__aarch64__)
+    ldr     x0, [x0]
+    ret
+#endif
+ASM_ENDFUNC load_long
