@@ -42,3 +42,20 @@ jobs:
 
       - name: Failure demo (informational; detects intentional failures)
         run: make demo-fail
+
+  # Opt-in NASM backend (Intel syntax, x86-64 only).
+  nasm:
+    name: nasm (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nasm
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Build and run test suites (NASM backend)
+        run: make ASM_SYNTAX=nasm test
+
+      - name: Failure demo (NASM backend)
+        run: make ASM_SYNTAX=nasm demo-fail

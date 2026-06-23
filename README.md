@@ -25,12 +25,16 @@ roadmap.
   build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`; each
   routine and the capture trampoline carry both an x86-64 and an AArch64 body
   selected by `#if`. CI runs the suites on all four target combinations.
+- **Two assembler backends:** GAS (default) or NASM (`make ASM_SYNTAX=nasm`,
+  Intel syntax, x86-64 only) — the Intel-syntax sources live alongside the GAS
+  ones and are also exercised in CI.
 
 ## Quick start
 
 ```sh
-make test        # build and run the example suites
-make demo-fail   # see how a failing assertion is reported
+make test                   # build and run the example suites
+make demo-fail              # see how a failing assertion is reported
+make ASM_SYNTAX=nasm test   # same suites via the NASM backend (x86-64)
 make clean
 ```
 
@@ -67,5 +71,5 @@ exits nonzero if any fail.
 ## Requirements
 
 x86-64 or AArch64, Linux or macOS, with `make` and a C compiler (`cc` — gcc or
-clang), which also assembles the GAS-syntax `.s` sources. An opt-in NASM backend
-is still planned — see [DESIGN.md](DESIGN.md).
+clang), which also assembles the GAS-syntax `.s` sources. The optional NASM
+backend additionally needs `nasm` (x86-64 only). See [DESIGN.md](DESIGN.md).

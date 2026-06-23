@@ -1,17 +1,22 @@
-# asm-test — Phase 3 build (x86-64, Linux + macOS).
+# asm-test build.
 #
-#   make test        build and run the example suites (green)
-#   make demo-fail   build and run the intentional-failure demo
-#   make clean       remove build artifacts
+#   make test                    build and run the example suites (green)
+#   make demo-fail               build and run the intentional-failure demo
+#   make clean                   remove build artifacts
+#   make ASM_SYNTAX=nasm test    use the NASM (Intel-syntax) backend instead
 #
-# CC defaults to the system compiler (clang on macOS, gcc on Linux); both
-# assemble the GAS-syntax .s sources. The .s files are run through the C
-# preprocessor (-x assembler-with-cpp) so they can #include "asm.h".
+# Default backend (gas): CC (clang on macOS, gcc on Linux) assembles the
+# GAS-syntax .s sources through the C preprocessor (-x assembler-with-cpp) so
+# they can #include "asm.h". Supports x86-64 and AArch64, Linux and macOS.
+#
+# NASM backend (ASM_SYNTAX=nasm): nasm assembles the Intel-syntax .asm sources.
+# x86-64 only (NASM has no AArch64 target).
 
-CC      ?= cc
-CFLAGS  := -Wall -Wextra -O0 -g -Iinclude
-ASFLAGS := -x assembler-with-cpp -Iinclude
-BUILD   := build
+CC         ?= cc
+CFLAGS     := -Wall -Wextra -O0 -g -Iinclude
+ASFLAGS    := -x assembler-with-cpp -Iinclude
+BUILD      := build
+ASM_SYNTAX ?= gas
 
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
@@ -23,19 +28,35 @@ all: test
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# Framework objects.
+# C objects (backend-independent).
 $(BUILD)/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+ifeq ($(ASM_SYNTAX),nasm)
+# --- NASM backend (x86-64 only) -------------------------------------------
+NASM ?= nasm
+ifeq ($(shell uname -s),Darwin)
+NASMFLAGS := -f macho64 -Iinclude/
+else
+NASMFLAGS := -f elf64 -Iinclude/
+endif
+
+$(BUILD)/capture.o: src/capture.asm include/asm_nasm.inc | $(BUILD)
+	$(NASM) $(NASMFLAGS) $< -o $@
+
+$(BUILD)/%.o: examples/%.asm include/asm_nasm.inc | $(BUILD)
+	$(NASM) $(NASMFLAGS) $< -o $@
+else
+# --- GAS backend (default; x86-64 and AArch64) ----------------------------
 $(BUILD)/capture.o: src/capture.s include/asm.h | $(BUILD)
 	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 
-# Generic rules: assemble example .s (with cpp) and compile example .c.
 $(BUILD)/%.o: examples/%.s include/asm.h | $(BUILD)
 	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
-
-$(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+endif
 
 # One test binary per suite: framework + routine(s) + test cases.
 $(BUILD)/test_arith: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/test_arith.o
