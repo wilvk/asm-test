@@ -11,7 +11,7 @@ extern long clobbers_rbx(long a, long b);
 TEST(demo, compliant_routine_passes) {
     regs_t r;
     ASM_CALL2(&r, sum_via_rbx, 3, 4);
-    ASSERT_EQ(r.rax, 7);
+    ASSERT_EQ(r.ret, 7);
     ASSERT_ABI_PRESERVED(&r);
 }
 
@@ -19,8 +19,8 @@ TEST(demo, abi_violation_detected) {
     /* clobbers_rbx computes the right answer but trashes a callee-saved reg. */
     regs_t r;
     ASM_CALL2(&r, clobbers_rbx, 3, 4);
-    ASSERT_EQ(r.rax, 7);
-    ASSERT_ABI_PRESERVED(&r); /* fails: rbx not restored */
+    ASSERT_EQ(r.ret, 7);
+    ASSERT_ABI_PRESERVED(&r); /* fails: callee-saved register not restored */
 }
 
 TEST(demo, buffer_overrun_caught) {

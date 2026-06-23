@@ -151,12 +151,13 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   model, colored TAP output, pass/fail/skip summary, exit codes, setup/teardown.
 - **Phase 2 — Introspection: _done._** `capture.s` trampoline, ABI-preservation
   + RFLAGS assertions, guard pages, and fatal-signal-to-failure handling.
-- **Phase 3 — Portability & CI: _in progress._** Cross-platform Linux + macOS on
-  x86-64 (shared GAS sources via `ASM_FUNC`, ELF/Mach-O symbol abstraction) and
-  a GitHub Actions matrix (ubuntu + Intel macOS) are done. Still planned:
-  AArch64 (Apple Silicon) support and the opt-in NASM backend — both need
-  hardware/tooling not available on the dev host, so they are best validated via
-  CI (an arm64 runner / a NASM job).
+- **Phase 3 — Portability & CI: _done (except NASM)._** Cross-platform across
+  x86-64 and AArch64 on Linux and macOS: shared sources with `ASM_FUNC`
+  (`.macro`-based, since `;` is a comment on AArch64) abstracting ELF/Mach-O
+  symbol decoration, and per-arch routine/trampoline bodies selected by `#if`.
+  A GitHub Actions matrix runs the suites on all four combinations
+  (ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13). The opt-in NASM
+  backend is the remaining item.
 - **Phase 4 — (optional) Emulator tier:** integrate
   [Unicorn Engine](https://www.unicorn-engine.org/) to preload registers/memory,
   run a routine in isolation, and read back full CPU state + perform fault

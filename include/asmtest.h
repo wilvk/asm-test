@@ -1,12 +1,13 @@
 /*
- * asmtest.h — public API for the asm-test framework (Phase 2).
+ * asmtest.h — public API for the asm-test framework.
  *
  * Write assembly routines (the code under test) and C test cases that call
  * them through the real ABI. The framework provides test discovery, a runner
  * with main(), per-suite setup/teardown, assertions, register/flags capture,
  * ABI-preservation checks, guard-page buffers, and crash-to-failure handling.
  *
- * See DESIGN.md for the full plan.
+ * Supported targets: x86-64 (System V AMD64 ABI) and AArch64 (AAPCS64), on
+ * Linux and macOS. See DESIGN.md for the full plan.
  */
 #ifndef ASMTEST_H
 #define ASMTEST_H
@@ -35,22 +36,26 @@ typedef struct asmtest_hook {
 
 /* ------------------------------------------------------------------ */
 /* Captured CPU state (filled by asm_call_capture in capture.s)        */
+/*                                                                     */
+/* `ret` (return value) and `flags` are present on every target so     */
+/* tests stay portable; the named callee-saved fields differ by arch.  */
+/* Field offsets MUST match the stores in src/capture.s.               */
 /* ------------------------------------------------------------------ */
 
+#if defined(__x86_64__)
+
 typedef struct {
-    unsigned long rax;    /* offset 0  — return value          */
-    unsigned long rdx;    /* offset 8  — second return register */
-    unsigned long rbx;    /* offset 16 — callee-saved          */
-    unsigned long rbp;    /* offset 24 — callee-saved          */
-    unsigned long r12;    /* offset 32 — callee-saved          */
-    unsigned long r13;    /* offset 40 — callee-saved          */
-    unsigned long r14;    /* offset 48 — callee-saved          */
-    unsigned long r15;    /* offset 56 — callee-saved          */
-    unsigned long rflags; /* offset 64 — flags as fn left them */
+    unsigned long ret;   /* 0  = rax (return value)   */
+    unsigned long rdx;   /* 8  = second return reg    */
+    unsigned long rbx;   /* 16 callee-saved           */
+    unsigned long rbp;   /* 24 callee-saved           */
+    unsigned long r12;   /* 32 callee-saved           */
+    unsigned long r13;   /* 40 callee-saved           */
+    unsigned long r14;   /* 48 callee-saved           */
+    unsigned long r15;   /* 56 callee-saved           */
+    unsigned long flags; /* 64 = RFLAGS               */
 } regs_t;
 
-/* Sentinels the trampoline seeds into callee-saved regs before the call.
- * MUST match the movabsq immediates in src/capture.s. */
 #define ASMTEST_SENTINEL_RBX 0x1111111111111111UL
 #define ASMTEST_SENTINEL_RBP 0x2222222222222222UL
 #define ASMTEST_SENTINEL_R12 0x3333333333333333UL
@@ -58,12 +63,52 @@ typedef struct {
 #define ASMTEST_SENTINEL_R14 0x5555555555555555UL
 #define ASMTEST_SENTINEL_R15 0x6666666666666666UL
 
-/* RFLAGS bit masks (use the short name with ASSERT_FLAG_*). */
+/* RFLAGS bit masks. */
 #define ASMTEST_CF (1UL << 0)  /* carry    */
 #define ASMTEST_PF (1UL << 2)  /* parity   */
 #define ASMTEST_ZF (1UL << 6)  /* zero     */
 #define ASMTEST_SF (1UL << 7)  /* sign     */
 #define ASMTEST_OF (1UL << 11) /* overflow */
+
+#elif defined(__aarch64__)
+
+typedef struct {
+    unsigned long ret;   /* 0  = x0 (return value)    */
+    unsigned long x19;   /* 8  callee-saved           */
+    unsigned long x20;   /* 16 */
+    unsigned long x21;   /* 24 */
+    unsigned long x22;   /* 32 */
+    unsigned long x23;   /* 40 */
+    unsigned long x24;   /* 48 */
+    unsigned long x25;   /* 56 */
+    unsigned long x26;   /* 64 */
+    unsigned long x27;   /* 72 */
+    unsigned long x28;   /* 80 */
+    unsigned long x29;   /* 88 frame pointer          */
+    unsigned long flags; /* 96 = NZCV                 */
+} regs_t;
+
+#define ASMTEST_SENTINEL_X19 0x1111111111111111UL
+#define ASMTEST_SENTINEL_X20 0x2222222222222222UL
+#define ASMTEST_SENTINEL_X21 0x3333333333333333UL
+#define ASMTEST_SENTINEL_X22 0x4444444444444444UL
+#define ASMTEST_SENTINEL_X23 0x5555555555555555UL
+#define ASMTEST_SENTINEL_X24 0x6666666666666666UL
+#define ASMTEST_SENTINEL_X25 0x7777777777777777UL
+#define ASMTEST_SENTINEL_X26 0x8888888888888888UL
+#define ASMTEST_SENTINEL_X27 0x9999999999999999UL
+#define ASMTEST_SENTINEL_X28 0xAAAAAAAAAAAAAAAAUL
+#define ASMTEST_SENTINEL_X29 0xBBBBBBBBBBBBBBBBUL
+
+/* NZCV condition-flag bit masks (CF/ZF share names with x86). */
+#define ASMTEST_VF (1UL << 28) /* overflow */
+#define ASMTEST_CF (1UL << 29) /* carry    */
+#define ASMTEST_ZF (1UL << 30) /* zero     */
+#define ASMTEST_NF (1UL << 31) /* negative */
+
+#else
+#error "asm-test supports x86-64 and AArch64 only"
+#endif
 
 /* Call fn (in capture.s), capturing CPU state into *out. args has 6 slots. */
 void asm_call_capture(regs_t *out, void *fn, const long *args);

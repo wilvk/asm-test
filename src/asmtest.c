@@ -111,12 +111,26 @@ void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
         const char *name;
         unsigned long got, want;
     } chk[] = {
+#if defined(__x86_64__)
         {"rbx", r->rbx, ASMTEST_SENTINEL_RBX},
         {"rbp", r->rbp, ASMTEST_SENTINEL_RBP},
         {"r12", r->r12, ASMTEST_SENTINEL_R12},
         {"r13", r->r13, ASMTEST_SENTINEL_R13},
         {"r14", r->r14, ASMTEST_SENTINEL_R14},
         {"r15", r->r15, ASMTEST_SENTINEL_R15},
+#elif defined(__aarch64__)
+        {"x19", r->x19, ASMTEST_SENTINEL_X19},
+        {"x20", r->x20, ASMTEST_SENTINEL_X20},
+        {"x21", r->x21, ASMTEST_SENTINEL_X21},
+        {"x22", r->x22, ASMTEST_SENTINEL_X22},
+        {"x23", r->x23, ASMTEST_SENTINEL_X23},
+        {"x24", r->x24, ASMTEST_SENTINEL_X24},
+        {"x25", r->x25, ASMTEST_SENTINEL_X25},
+        {"x26", r->x26, ASMTEST_SENTINEL_X26},
+        {"x27", r->x27, ASMTEST_SENTINEL_X27},
+        {"x28", r->x28, ASMTEST_SENTINEL_X28},
+        {"x29", r->x29, ASMTEST_SENTINEL_X29},
+#endif
     };
     for (size_t i = 0; i < sizeof chk / sizeof chk[0]; i++) {
         if (chk[i].got != chk[i].want)
@@ -129,10 +143,10 @@ void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
 
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name) {
-    int set = (r->rflags & mask) != 0;
+    int set = (r->flags & mask) != 0;
     if (set != want_set)
-        asmtest_fail(file, line, "ASSERT_FLAG_%s(%s): rflags=0x%lx",
-                     want_set ? "SET" : "CLEAR", name, r->rflags);
+        asmtest_fail(file, line, "ASSERT_FLAG_%s(%s): flags=0x%lx",
+                     want_set ? "SET" : "CLEAR", name, r->flags);
 }
 
 /* ------------------------------------------------------------------ */

@@ -22,8 +22,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both x86-64: gcc/ELF on Linux, clang/Mach-O on Intel macOS.
-        os: [ubuntu-latest, macos-13]
+        # Cover {x86-64, AArch64} x {Linux/ELF, macOS/Mach-O}.
+        #   ubuntu-latest     x86-64  Linux  (gcc, ELF @function)
+        #   ubuntu-24.04-arm  aarch64 Linux  (gcc, ELF %function)
+        #   macos-latest      aarch64 macOS  (clang, Mach-O)
+        #   macos-13          x86-64  macOS  (clang, Mach-O) — scarce, non-blocking
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     steps:
       - uses: actions/checkout@v4
 

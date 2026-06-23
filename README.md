@@ -21,9 +21,10 @@ roadmap.
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.
-- **Portable across Linux and macOS** (x86-64): the same GAS-syntax sources
-  build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`. CI runs
-  the suites on both.
+- **Portable across x86-64 and AArch64, Linux and macOS:** the same sources
+  build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`; each
+  routine and the capture trampoline carry both an x86-64 and an AArch64 body
+  selected by `#if`. CI runs the suites on all four target combinations.
 
 ## Quick start
 
@@ -65,6 +66,6 @@ exits nonzero if any fail.
 
 ## Requirements
 
-x86-64 Linux or macOS, with `make` and a C compiler (`cc` — gcc or clang),
-which also assembles the GAS-syntax `.s` sources. AArch64 (Apple Silicon) and an
-opt-in NASM backend are planned — see [DESIGN.md](DESIGN.md).
+x86-64 or AArch64, Linux or macOS, with `make` and a C compiler (`cc` — gcc or
+clang), which also assembles the GAS-syntax `.s` sources. An opt-in NASM backend
+is still planned — see [DESIGN.md](DESIGN.md).

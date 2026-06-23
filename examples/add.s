@@ -1,13 +1,20 @@
 /*
- * add.s — example routine under test (x86-64, System V AMD64 ABI, GAS syntax).
- * Portable across Linux/macOS via ASM_FUNC (see include/asm.h).
+ * add.s — example routine under test. Portable across x86-64 and AArch64,
+ * Linux and macOS (ASM_FUNC handles symbol decoration; #if selects the body).
  *
- * long add_signed(long a, long b);  a -> %rdi, b -> %rsi, result -> %rax
+ * long add_signed(long a, long b);
+ *   x86-64: a -> %rdi, b -> %rsi, result -> %rax
+ *   AArch64: a -> x0,  b -> x1,   result -> x0
  */
 #include "asm.h"
 
-ASM_FUNC(add_signed)
-    movq    %rdi, %rax          /* rax = a     */
-    addq    %rsi, %rax          /* rax = a + b */
+ASM_FUNC add_signed
+#if defined(__x86_64__)
+    movq    %rdi, %rax
+    addq    %rsi, %rax
     ret
-ASM_ENDFUNC(add_signed)
+#elif defined(__aarch64__)
+    add     x0, x0, x1
+    ret
+#endif
+ASM_ENDFUNC add_signed
