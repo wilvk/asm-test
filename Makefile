@@ -20,7 +20,8 @@ ASM_SYNTAX ?= gas
 
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
-SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture
+SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
+                  $(BUILD)/test_fp
 
 .PHONY: all test demo-fail clean
 all: test
@@ -68,11 +69,15 @@ $(BUILD)/test_mem: $(FRAMEWORK_OBJS) $(BUILD)/mem.o $(BUILD)/test_mem.o
 $(BUILD)/test_capture: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/test_capture.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(BUILD)/test_fp: $(FRAMEWORK_OBJS) $(BUILD)/fp.o $(BUILD)/test_fp.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 test: $(SUITES)
 	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
-$(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/test_failure_demo.o
+$(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \
+                            $(BUILD)/test_failure_demo.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 demo-fail: $(BUILD)/test_failure_demo

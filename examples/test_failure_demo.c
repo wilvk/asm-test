@@ -7,6 +7,7 @@
 
 extern long sum_via_rbx(long a, long b);
 extern long clobbers_rbx(long a, long b);
+extern double fp_add(double a, double b);
 
 TEST(demo, compliant_routine_passes) {
     regs_t r;
@@ -45,4 +46,11 @@ TEST(demo, mem_diff_shows_hexdump) {
         actual[i] = expect[i] = (unsigned char)i;
     actual[5] = 0xff; /* introduce a single-byte difference */
     ASSERT_MEM_EQ(actual, expect, 16);
+}
+
+TEST(demo, fp_exact_mismatch) {
+    /* 0.1 + 0.2 is not exactly 0.3; ASSERT_FP_EQ reports the difference. */
+    regs_t r;
+    ASM_FCALL2(&r, fp_add, 0.1, 0.2);
+    ASSERT_FP_EQ(&r, 0.3);
 }

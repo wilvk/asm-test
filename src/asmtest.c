@@ -4,8 +4,10 @@
  */
 #include "asmtest.h"
 
+#include <math.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -172,6 +174,44 @@ void asmtest_assert_flag(const char *file, int line, const regs_t *r,
     if (set != want_set)
         asmtest_fail(file, line, "ASSERT_FLAG_%s(%s): flags=0x%lx",
                      want_set ? "SET" : "CLEAR", name, r->flags);
+}
+
+/* Distance between two doubles in units in the last place (ULPs). Maps the
+ * sign-magnitude bit pattern to a monotonic ordering so adjacent representable
+ * values differ by 1. Assumes neither is NaN. */
+static uint64_t fp_ulp_distance(double a, double b) {
+    int64_t ia, ib;
+    memcpy(&ia, &a, sizeof ia);
+    memcpy(&ib, &b, sizeof ib);
+    if (ia < 0)
+        ia = (int64_t)0x8000000000000000ULL - ia;
+    if (ib < 0)
+        ib = (int64_t)0x8000000000000000ULL - ib;
+    return ia > ib ? (uint64_t)(ia - ib) : (uint64_t)(ib - ia);
+}
+
+void asmtest_assert_fp_eq(const char *file, int line, const regs_t *r,
+                          double expected) {
+    if (!(r->fret == expected)) /* '==' is false for NaN, which is intended */
+        asmtest_fail(file, line, "ASSERT_FP_EQ: %.17g != %.17g", r->fret,
+                     expected);
+}
+
+void asmtest_assert_fp_near(const char *file, int line, const regs_t *r,
+                            double expected, unsigned long max_ulps) {
+    double actual = r->fret;
+    if (isnan(actual) || isnan(expected)) {
+        if (isnan(actual) && isnan(expected))
+            return;
+        asmtest_fail(file, line, "ASSERT_FP_NEAR: NaN mismatch (%.17g vs %.17g)",
+                     actual, expected);
+    }
+    uint64_t d = fp_ulp_distance(actual, expected);
+    if (d > max_ulps)
+        asmtest_fail(file, line,
+                     "ASSERT_FP_NEAR: %.17g vs %.17g differ by %llu ulps "
+                     "(max %lu)",
+                     actual, expected, (unsigned long long)d, max_ulps);
 }
 
 /* ------------------------------------------------------------------ */

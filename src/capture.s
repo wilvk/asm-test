@@ -144,3 +144,152 @@ ASM_FUNC asm_call_capture
 #endif
 
 ASM_ENDFUNC asm_call_capture
+
+/*
+ * void asm_call_capture_fp(regs_t *out, void *fn, const long iargs[6],
+ *                          const double fargs[8]);
+ * Like asm_call_capture but also marshals 8 double args into the FP argument
+ * registers and captures the FP return (xmm0 / d0) into out->fret (offset 72
+ * on x86-64, 104 on AArch64).
+ */
+ASM_FUNC asm_call_capture_fp
+
+#if defined(__x86_64__)
+/* out -> %rdi, fn -> %rsi, iargs -> %rdx, fargs -> %rcx */
+    pushq   %rbx
+    pushq   %rbp
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $24, %rsp
+    movq    %rdi, 0(%rsp)           /* stash out */
+    movq    %rsi, 8(%rsp)           /* stash fn  */
+
+    /* Float args: fargs (rcx) -> xmm0..xmm7. */
+    movsd   0(%rcx),  %xmm0
+    movsd   8(%rcx),  %xmm1
+    movsd   16(%rcx), %xmm2
+    movsd   24(%rcx), %xmm3
+    movsd   32(%rcx), %xmm4
+    movsd   40(%rcx), %xmm5
+    movsd   48(%rcx), %xmm6
+    movsd   56(%rcx), %xmm7
+
+    /* Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9. */
+    movq    %rdx, %rax
+    movq    0(%rax),  %rdi
+    movq    8(%rax),  %rsi
+    movq    24(%rax), %rcx
+    movq    32(%rax), %r8
+    movq    40(%rax), %r9
+    movq    16(%rax), %rdx
+
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x2222222222222222, %rbp
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    movq    8(%rsp), %r11
+    movl    $8, %eax                /* variadic ABI: 8 vector registers */
+    call    *%r11
+
+    movq    0(%rsp), %r11
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movq    %rbp, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+    movsd   %xmm0, 72(%r11)         /* fret = xmm0 */
+
+    addq    $24, %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbp
+    popq    %rbx
+    ret
+
+#elif defined(__aarch64__)
+/* out -> x0, fn -> x1, iargs -> x2, fargs -> x3 */
+    sub     sp, sp, #112
+    stp     x19, x20, [sp, #0]
+    stp     x21, x22, [sp, #16]
+    stp     x23, x24, [sp, #32]
+    stp     x25, x26, [sp, #48]
+    stp     x27, x28, [sp, #64]
+    stp     x29, x30, [sp, #80]
+    str     x0, [sp, #96]
+    str     x1, [sp, #104]
+
+    /* Float args: fargs (x3) -> d0..d7. */
+    ldr     d0, [x3, #0]
+    ldr     d1, [x3, #8]
+    ldr     d2, [x3, #16]
+    ldr     d3, [x3, #24]
+    ldr     d4, [x3, #32]
+    ldr     d5, [x3, #40]
+    ldr     d6, [x3, #48]
+    ldr     d7, [x3, #56]
+
+    /* Integer args: iargs (x2) -> x0..x5. */
+    mov     x9, x2
+    ldp     x0, x1, [x9, #0]
+    ldp     x2, x3, [x9, #16]
+    ldp     x4, x5, [x9, #32]
+
+    ldr     x19, =0x1111111111111111
+    ldr     x20, =0x2222222222222222
+    ldr     x21, =0x3333333333333333
+    ldr     x22, =0x4444444444444444
+    ldr     x23, =0x5555555555555555
+    ldr     x24, =0x6666666666666666
+    ldr     x25, =0x7777777777777777
+    ldr     x26, =0x8888888888888888
+    ldr     x27, =0x9999999999999999
+    ldr     x28, =0xAAAAAAAAAAAAAAAA
+    ldr     x29, =0xBBBBBBBBBBBBBBBB
+
+    ldr     x10, [sp, #104]
+    blr     x10
+
+    ldr     x11, [sp, #96]
+    str     x0,  [x11, #0]
+    str     x19, [x11, #8]
+    str     x20, [x11, #16]
+    str     x21, [x11, #24]
+    str     x22, [x11, #32]
+    str     x23, [x11, #40]
+    str     x24, [x11, #48]
+    str     x25, [x11, #56]
+    str     x26, [x11, #64]
+    str     x27, [x11, #72]
+    str     x28, [x11, #80]
+    str     x29, [x11, #88]
+    mrs     x12, nzcv
+    str     x12, [x11, #96]
+    str     d0, [x11, #104]         /* fret = d0 */
+
+    ldp     x19, x20, [sp, #0]
+    ldp     x21, x22, [sp, #16]
+    ldp     x23, x24, [sp, #32]
+    ldp     x25, x26, [sp, #48]
+    ldp     x27, x28, [sp, #64]
+    ldp     x29, x30, [sp, #80]
+    add     sp, sp, #112
+    ret
+
+#else
+#  error "capture.s supports x86-64 and AArch64 only"
+#endif
+
+ASM_ENDFUNC asm_call_capture_fp

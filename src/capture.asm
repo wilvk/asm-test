@@ -66,3 +66,72 @@ ASM_FUNC asm_call_capture
     pop     rbx
     ret
 ASM_ENDFUNC asm_call_capture
+
+; void asm_call_capture_fp(regs_t *out, void *fn, const long iargs[6],
+;                          const double fargs[8]);
+;   out -> rdi, fn -> rsi, iargs -> rdx, fargs -> rcx
+; Marshals 8 doubles into xmm0-7 and captures the FP return (xmm0) at out+72.
+ASM_FUNC asm_call_capture_fp
+    push    rbx
+    push    rbp
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 24
+    mov     [rsp + 0], rdi
+    mov     [rsp + 8], rsi
+
+    ; Float args: fargs (rcx) -> xmm0..xmm7
+    movsd   xmm0, [rcx + 0]
+    movsd   xmm1, [rcx + 8]
+    movsd   xmm2, [rcx + 16]
+    movsd   xmm3, [rcx + 24]
+    movsd   xmm4, [rcx + 32]
+    movsd   xmm5, [rcx + 40]
+    movsd   xmm6, [rcx + 48]
+    movsd   xmm7, [rcx + 56]
+
+    ; Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9
+    mov     rax, rdx
+    mov     rdi, [rax + 0]
+    mov     rsi, [rax + 8]
+    mov     rcx, [rax + 24]
+    mov     r8,  [rax + 32]
+    mov     r9,  [rax + 40]
+    mov     rdx, [rax + 16]
+
+    mov     rbx, 0x1111111111111111
+    mov     rbp, 0x2222222222222222
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rsp + 8]
+    mov     eax, 8                  ; variadic ABI: 8 vector registers
+    call    r11
+
+    mov     r11, [rsp + 0]
+    mov     [r11 + 0],  rax
+    mov     [r11 + 8],  rdx
+    mov     [r11 + 16], rbx
+    mov     [r11 + 24], rbp
+    mov     [r11 + 32], r12
+    mov     [r11 + 40], r13
+    mov     [r11 + 48], r14
+    mov     [r11 + 56], r15
+    pushfq
+    pop     rax
+    mov     [r11 + 64], rax
+    movsd   [r11 + 72], xmm0        ; fret = xmm0
+
+    add     rsp, 24
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbp
+    pop     rbx
+    ret
+ASM_ENDFUNC asm_call_capture_fp

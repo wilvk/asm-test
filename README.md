@@ -13,11 +13,14 @@ roadmap (Phases 5–11).
 
 - Auto-discovered `TEST(...)` cases, a runner with `main()`, per-suite
   `SETUP`/`TEARDOWN`, `SKIP(reason)`, TAP-style colored reporting.
-- Value assertions: `ASSERT_TRUE/FALSE`, `ASSERT_EQ/NE/LT/LE/GT/GE`,
-  `ASSERT_STREQ`, `ASSERT_MEM_EQ`.
+- Value assertions: `ASSERT_TRUE/FALSE`, `ASSERT_EQ/NE/LT/LE/GT/GE`, unsigned
+  `ASSERT_UEQ/UNE/ULT/ULE/UGT/UGE`, `ASSERT_STREQ`, `ASSERT_MEM_EQ` (hexdump diff).
 - **Register/flags capture** via `ASM_CALLn(&regs, fn, args...)`, then
-  `ASSERT_ABI_PRESERVED(&regs)` (callee-saved compliance) and
-  `ASSERT_FLAG_SET/CLEAR(&regs, CF|PF|ZF|SF|OF)`.
+  `ASSERT_ABI_PRESERVED(&regs)` (callee-saved compliance),
+  `ASSERT_FLAG_SET/CLEAR(&regs, CF|PF|ZF|SF|OF)`, and `ASSERT_REG_EQ`.
+- **Floating-point** via `ASM_FCALLn(&regs, fn, doubles...)`: marshals `double`
+  args into the FP registers and captures the FP return (`regs.fret`), with
+  `ASSERT_FP_EQ` and `ASSERT_FP_NEAR(&regs, expected, ulps)`.
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.

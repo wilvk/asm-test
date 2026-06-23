@@ -54,6 +54,7 @@ typedef struct {
     unsigned long r14;   /* 48 callee-saved           */
     unsigned long r15;   /* 56 callee-saved           */
     unsigned long flags; /* 64 = RFLAGS               */
+    double fret;         /* 72 = xmm0 (FP return); valid after asm_call_capture_fp */
 } regs_t;
 
 #define ASMTEST_SENTINEL_RBX 0x1111111111111111UL
@@ -86,6 +87,7 @@ typedef struct {
     unsigned long x28;   /* 80 */
     unsigned long x29;   /* 88 frame pointer          */
     unsigned long flags; /* 96 = NZCV                 */
+    double fret;         /* 104 = d0 (FP return); valid after asm_call_capture_fp */
 } regs_t;
 
 #define ASMTEST_SENTINEL_X19 0x1111111111111111UL
@@ -113,6 +115,12 @@ typedef struct {
 /* Call fn (in capture.s), capturing CPU state into *out. args has 6 slots. */
 void asm_call_capture(regs_t *out, void *fn, const long *args);
 
+/* Like asm_call_capture, but also marshals 8 double args into the FP argument
+ * registers (xmm0-7 / d0-7) and captures the FP return into out->fret. iargs
+ * has 6 slots, fargs has 8. */
+void asm_call_capture_fp(regs_t *out, void *fn, const long *iargs,
+                         const double *fargs);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
@@ -130,6 +138,10 @@ void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
 void asmtest_assert_abi(const char *file, int line, const regs_t *r);
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name);
+void asmtest_assert_fp_eq(const char *file, int line, const regs_t *r,
+                          double expected);
+void asmtest_assert_fp_near(const char *file, int line, const regs_t *r,
+                            double expected, unsigned long max_ulps);
 
 /* Allocate n writable bytes followed by an inaccessible guard page, so a
  * one-past-the-end access faults (and is reported as a test failure). Free
@@ -208,6 +220,21 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
                      (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),    \
                                (long)(e), (long)(f)})
 
+/* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the
+ * double return lands in out->fret. For routines mixing integer and float
+ * args, call asm_call_capture_fp directly. */
+#define ASM_FCALL1(out, fn, x)                                                \
+    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
+                        (double[8]){(double)(x), 0, 0, 0, 0, 0, 0, 0})
+#define ASM_FCALL2(out, fn, x, y)                                             \
+    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
+                        (double[8]){(double)(x), (double)(y), 0, 0, 0, 0, 0,  \
+                                    0})
+#define ASM_FCALL3(out, fn, x, y, z)                                          \
+    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
+                        (double[8]){(double)(x), (double)(y), (double)(z), 0, \
+                                    0, 0, 0, 0})
+
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
@@ -280,5 +307,12 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
     asmtest_assert_flag(__FILE__, __LINE__, (r), ASMTEST_##FLG, 1, #FLG)
 #define ASSERT_FLAG_CLEAR(r, FLG)                                             \
     asmtest_assert_flag(__FILE__, __LINE__, (r), ASMTEST_##FLG, 0, #FLG)
+
+/* Floating-point return assertions (read out->fret from asm_call_capture_fp).
+ * ASSERT_FP_EQ is exact; ASSERT_FP_NEAR allows a distance in ULPs. */
+#define ASSERT_FP_EQ(r, expected)                                             \
+    asmtest_assert_fp_eq(__FILE__, __LINE__, (r), (expected))
+#define ASSERT_FP_NEAR(r, expected, ulps)                                     \
+    asmtest_assert_fp_near(__FILE__, __LINE__, (r), (expected), (ulps))
 
 #endif /* ASMTEST_H */
