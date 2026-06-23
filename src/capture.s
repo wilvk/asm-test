@@ -713,3 +713,215 @@ ASM_FUNC asm_call_capture_args
 #endif
 
 ASM_ENDFUNC asm_call_capture_args
+
+/*
+ * void asm_call_capture_sret(regs_t *out, void *fn, void *result,
+ *                            const long *args, int nargs);
+ * Calls fn which returns a large struct via the hidden result pointer (rdi on
+ * x86-64, x8 on AArch64). The visible integer args follow: x86-64 uses 5
+ * register slots (rsi..r9), AArch64 uses 8 (x0..x7), then the stack.
+ */
+ASM_FUNC asm_call_capture_sret
+
+#if defined(__x86_64__)
+/* out -> %rdi, fn -> %rsi, result -> %rdx, args -> %rcx, nargs -> %r8 */
+    pushq   %rbp
+    movq    %rsp, %rbp
+    pushq   %rbx
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $48, %rsp
+    movq    %rdi, -48(%rbp)        /* out    */
+    movq    %rsi, -56(%rbp)        /* fn     */
+    movq    %rdx, -64(%rbp)        /* result */
+    movq    %rcx, -72(%rbp)        /* args   */
+    movq    %r8,  -80(%rbp)        /* nargs  */
+
+    /* n_stack = max(0, nargs - 5)  (5 visible register args: rsi..r9) */
+    movq    %r8, %r10
+    subq    $5, %r10
+    jg      30f
+    xorq    %r10, %r10
+30:
+    andq    $-16, %rsp
+    movq    %r10, %rax
+    shlq    $3, %rax
+    addq    $15, %rax
+    andq    $-16, %rax
+    subq    %rax, %rsp
+
+    /* Copy overflow args: [rsp + i*8] = args[5 + i]. */
+    movq    -72(%rbp), %r8
+    xorq    %rcx, %rcx
+31:
+    cmpq    %r10, %rcx
+    jge     32f
+    movq    40(%r8,%rcx,8), %rax
+    movq    %rax, (%rsp,%rcx,8)
+    incq    %rcx
+    jmp     31b
+32:
+    /* Load visible register args into rsi,rdx,rcx,r8,r9 (only as many as nargs). */
+    movq    -72(%rbp), %r11
+    movq    -80(%rbp), %r10
+    cmpq    $1, %r10
+    jl      33f
+    movq    0(%r11), %rsi
+    cmpq    $2, %r10
+    jl      33f
+    movq    8(%r11), %rdx
+    cmpq    $3, %r10
+    jl      33f
+    movq    16(%r11), %rcx
+    cmpq    $4, %r10
+    jl      33f
+    movq    24(%r11), %r8
+    cmpq    $5, %r10
+    jl      33f
+    movq    32(%r11), %r9
+33:
+    movq    -64(%rbp), %rdi        /* hidden result pointer */
+    movabsq $0x1111111111111111, %rbx
+    movabsq $0x3333333333333333, %r12
+    movabsq $0x4444444444444444, %r13
+    movabsq $0x5555555555555555, %r14
+    movabsq $0x6666666666666666, %r15
+
+    movq    -56(%rbp), %r11        /* fn */
+    xorl    %eax, %eax
+    call    *%r11
+
+    movq    -48(%rbp), %r11        /* out */
+    movq    %rax, 0(%r11)
+    movq    %rdx, 8(%r11)
+    movq    %rbx, 16(%r11)
+    movabsq $0x2222222222222222, %rax
+    movq    %rax, 24(%r11)
+    movq    %r12, 32(%r11)
+    movq    %r13, 40(%r11)
+    movq    %r14, 48(%r11)
+    movq    %r15, 56(%r11)
+    pushfq
+    popq    %rax
+    movq    %rax, 64(%r11)
+
+    leaq    -40(%rbp), %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbx
+    popq    %rbp
+    ret
+
+#elif defined(__aarch64__)
+/* out -> x0, fn -> x1, result -> x2, args -> x3, nargs -> x4 */
+    stp     x29, x30, [sp, #-176]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+    stp     x23, x24, [sp, #48]
+    stp     x25, x26, [sp, #64]
+    stp     x27, x28, [sp, #80]
+    str     x0, [sp, #96]          /* out    */
+    str     x1, [sp, #104]         /* fn     */
+    str     x2, [sp, #112]         /* result */
+    str     x3, [sp, #120]         /* args   */
+    str     x4, [sp, #128]         /* nargs  */
+
+    /* n_stack = max(0, nargs - 8) */
+    subs    x9, x4, #8
+    b.gt    40f
+    mov     x9, #0
+40:
+    lsl     x10, x9, #3
+    add     x10, x10, #15
+    and     x10, x10, #-16
+    sub     sp, sp, x10
+
+    ldr     x11, [x29, #120]
+    mov     x12, #0
+41:
+    cmp     x12, x9
+    b.ge    42f
+    add     x13, x12, #8
+    ldr     x14, [x11, x13, lsl #3]
+    str     x14, [sp, x12, lsl #3]
+    add     x12, x12, #1
+    b       41b
+42:
+    ldr     x11, [x29, #120]
+    ldr     x10, [x29, #128]
+    cmp     x10, #1
+    b.lt    43f
+    ldr     x0, [x11, #0]
+    cmp     x10, #2
+    b.lt    43f
+    ldr     x1, [x11, #8]
+    cmp     x10, #3
+    b.lt    43f
+    ldr     x2, [x11, #16]
+    cmp     x10, #4
+    b.lt    43f
+    ldr     x3, [x11, #24]
+    cmp     x10, #5
+    b.lt    43f
+    ldr     x4, [x11, #32]
+    cmp     x10, #6
+    b.lt    43f
+    ldr     x5, [x11, #40]
+    cmp     x10, #7
+    b.lt    43f
+    ldr     x6, [x11, #48]
+    cmp     x10, #8
+    b.lt    43f
+    ldr     x7, [x11, #56]
+43:
+    ldr     x8, [x29, #112]        /* hidden result pointer (x8) */
+    ldr     x19, =0x1111111111111111
+    ldr     x20, =0x2222222222222222
+    ldr     x21, =0x3333333333333333
+    ldr     x22, =0x4444444444444444
+    ldr     x23, =0x5555555555555555
+    ldr     x24, =0x6666666666666666
+    ldr     x25, =0x7777777777777777
+    ldr     x26, =0x8888888888888888
+    ldr     x27, =0x9999999999999999
+    ldr     x28, =0xAAAAAAAAAAAAAAAA
+
+    ldr     x10, [x29, #104]       /* fn */
+    blr     x10
+
+    ldr     x11, [x29, #96]        /* out */
+    str     x0,  [x11, #0]
+    str     x19, [x11, #8]
+    str     x20, [x11, #16]
+    str     x21, [x11, #24]
+    str     x22, [x11, #32]
+    str     x23, [x11, #40]
+    str     x24, [x11, #48]
+    str     x25, [x11, #56]
+    str     x26, [x11, #64]
+    str     x27, [x11, #72]
+    str     x28, [x11, #80]
+    ldr     x12, =0xBBBBBBBBBBBBBBBB
+    str     x12, [x11, #88]
+    mrs     x12, nzcv
+    str     x12, [x11, #96]
+
+    mov     sp, x29
+    ldp     x19, x20, [sp, #16]
+    ldp     x21, x22, [sp, #32]
+    ldp     x23, x24, [sp, #48]
+    ldp     x25, x26, [sp, #64]
+    ldp     x27, x28, [sp, #80]
+    ldp     x29, x30, [sp], #176
+    ret
+
+#else
+#  error "capture.s supports x86-64 and AArch64 only"
+#endif
+
+ASM_ENDFUNC asm_call_capture_sret

@@ -148,6 +148,15 @@ void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
  * verified by ASSERT_ABI_PRESERVED — the other callee-saved registers are. */
 void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
 
+/* Call fn that returns a large (memory-class) struct via the hidden result
+ * pointer (SysV passes it in rdi, AAPCS64 in x8). The struct is written to
+ * `result`; the `nargs` visible integer args follow the ABI (x86-64: rsi.. then
+ * stack; AArch64: x0.. then stack). Inspect the returned struct via `result`.
+ * Small (<=16-byte) structs are returned in registers instead and need no
+ * special call: read them from regs_t (rax/rdx, or vec[0]/vec[1] for SSE). */
+void asm_call_capture_sret(regs_t *out, void *fn, void *result,
+                           const long *args, int nargs);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
@@ -259,6 +268,13 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 #define ASM_CALLN(out, fn, ...)                                               \
     asm_call_capture_args(                                                    \
         (out), (void *)(fn), (long[]){__VA_ARGS__},                          \
+        (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+
+/* ASM_SRET: call fn that returns a large struct into *result, with >=1 visible
+ * integer args. */
+#define ASM_SRET(out, fn, result, ...)                                        \
+    asm_call_capture_sret(                                                    \
+        (out), (void *)(fn), (result), (long[]){__VA_ARGS__},                \
         (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
 
 /* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the

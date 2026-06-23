@@ -183,15 +183,17 @@ add reach.
   into `regs_t.vec[]` (return = `vec[0]`), with `ASSERT_VEC_EQ` plus raw lane
   assertions `ASSERT_DEQ/DNEAR` (double) and `ASSERT_FEQ/FNEAR` (float). Driven
   by `ASM_FCALLn` / `ASM_VCALLn`; callee-saved integers stay checked across both.
-- **Phase 6 — Full ABI call model: _integer stack args done; structs planned._**
-  `asm_call_capture_args` / `ASM_CALLN(&r, fn, ...)` pass any number of integer
-  arguments — the first 6 (x86-64) / 8 (AArch64) in registers, the rest on the
-  stack with correct alignment (a variable-size outgoing-arg frame, unwound via
-  the frame-pointer register) — on both arches and both assemblers. Mixed
-  integer/float arguments in registers already work through `asm_call_capture_fp`
-  (each class fills its own registers in order). Remaining: float/vector args
-  that overflow to the stack (>8), struct-by-value parameters, and struct return
-  (the SysV `sret` hidden pointer and small-struct-in-registers rules).
+- **Phase 6 — Full ABI call model: _args + struct return done; struct params
+  planned._** `asm_call_capture_args` / `ASM_CALLN(&r, fn, ...)` pass any number
+  of integer arguments — the first 6 (x86-64) / 8 (AArch64) in registers, the
+  rest on the stack with correct alignment (a variable-size outgoing-arg frame,
+  unwound via the frame-pointer register). `asm_call_capture_sret` / `ASM_SRET`
+  handle large (memory-class) struct returns through the hidden result pointer
+  (rdi / x8); small (<=16-byte) struct returns already land in the captured
+  rax:rdx (x0:x1). Mixed integer/float register args work through
+  `asm_call_capture_fp`. All on both arches and both assemblers. Remaining:
+  float/vector args overflowing to the stack (>8) and struct-by-value
+  parameters (the SysV eightbyte / AArch64 HFA classification).
 - **Phase 7 — Differential / property testing: _planned._** Let a test supply
   both the routine and a C reference, then fuzz inputs and assert equivalence:
   `ASSERT_MATCHES_REF(fn, ref, gen, n)`. Turns fixed-vector assertions into

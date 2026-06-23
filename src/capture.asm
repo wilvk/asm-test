@@ -320,3 +320,97 @@ ASM_FUNC asm_call_capture_args
     pop     rbp
     ret
 ASM_ENDFUNC asm_call_capture_args
+
+; void asm_call_capture_sret(regs_t *out, void *fn, void *result,
+;                            const long *args, int nargs);
+;   out -> rdi, fn -> rsi, result -> rdx, args -> rcx, nargs -> r8
+; Hidden result pointer goes in rdi; visible args use rsi..r9 then the stack.
+ASM_FUNC asm_call_capture_sret
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 48
+    mov     [rbp - 48], rdi         ; out
+    mov     [rbp - 56], rsi         ; fn
+    mov     [rbp - 64], rdx         ; result
+    mov     [rbp - 72], rcx         ; args
+    mov     [rbp - 80], r8          ; nargs
+
+    mov     r10, r8
+    sub     r10, 5
+    jg      .have_nstack
+    xor     r10, r10
+.have_nstack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 3
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    mov     r8, [rbp - 72]
+    xor     rcx, rcx
+.copy:
+    cmp     rcx, r10
+    jge     .copydone
+    mov     rax, [r8 + rcx*8 + 40]
+    mov     [rsp + rcx*8], rax
+    inc     rcx
+    jmp     .copy
+.copydone:
+    mov     r11, [rbp - 72]
+    mov     r10, [rbp - 80]
+    cmp     r10, 1
+    jl      .regdone
+    mov     rsi, [r11 + 0]
+    cmp     r10, 2
+    jl      .regdone
+    mov     rdx, [r11 + 8]
+    cmp     r10, 3
+    jl      .regdone
+    mov     rcx, [r11 + 16]
+    cmp     r10, 4
+    jl      .regdone
+    mov     r8, [r11 + 24]
+    cmp     r10, 5
+    jl      .regdone
+    mov     r9, [r11 + 32]
+.regdone:
+    mov     rdi, [rbp - 64]         ; hidden result pointer
+    mov     rbx, 0x1111111111111111
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rbp - 56]
+    xor     eax, eax
+    call    r11
+
+    mov     r11, [rbp - 48]
+    mov     [r11 + 0], rax
+    mov     [r11 + 8], rdx
+    mov     [r11 + 16], rbx
+    mov     rax, 0x2222222222222222
+    mov     [r11 + 24], rax
+    mov     [r11 + 32], r12
+    mov     [r11 + 40], r13
+    mov     [r11 + 48], r14
+    mov     [r11 + 56], r15
+    pushfq
+    pop     rax
+    mov     [r11 + 64], rax
+
+    lea     rsp, [rbp - 40]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_sret
