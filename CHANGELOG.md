@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Python binding (Track P).** A pure-ctypes package in `bindings/python/`
+  (no `cffi`/compile step) loads the shared library and the `asmtest_abi.json`
+  manifest and exposes `capture()` / `capture_fp()` / `capture_vec()` (returning
+  a `Regs` snapshot with `ret`, `flags`, `fret`, vector lanes, `abi_preserved`,
+  and `flag_set`) plus an `Emulator` context manager whose `EmuResult` surfaces
+  faults as data. Struct layout is read from the manifest, so the binding is
+  correct for whatever architecture the library was built for. `make
+  python-test` builds the shared libs, manifest, corpus, and a routine fixture
+  lib, then runs pytest; the suite replays the same `corpus.json` the C
+  reference emits and reproduces every case. A new `bindings-python` CI job
+  (x86-64 + arm64 Linux) runs it — the reusable per-language CI template
+  (bindings plan 0.5), which completes Track 0.
+
 - **Shared libraries + ABI manifest (Track 0).** The first slice of the
   multi-language bindings substrate. `make shared` builds
   `libasmtest.{so,dylib}` (framework runtime + capture trampoline, from `-fPIC`

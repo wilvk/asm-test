@@ -63,16 +63,16 @@ That gap is closed in **Track 0**.
 
 ---
 
-## Track 0 — Shared substrate *(prerequisite for every language) — in progress (0.1–0.4 done; 0.5 remains)*
+## Track 0 — Shared substrate *(prerequisite for every language) — done*
 
 **Goal.** Build the artifacts and contracts every binding consumes, once, so each
 language track is mechanical.
 
-**Status: 0.1 – 0.4 landed; only 0.5 (per-language CI template) remains.** The
-sub-items that make a binding *possible* (loadable shared libraries),
-*correct* (a drift-proof layout contract), *generation-friendly* (a macro-free
-binding-ABI surface with non-jumping verdict shims), and *verifiable* (a shared
-conformance corpus) are done and verified on x86-64 macOS:
+**Status: done (0.1 – 0.5).** Every sub-item is in place: a binding is *possible*
+(loadable shared libraries), *correct* (a drift-proof layout contract),
+*generation-friendly* (a macro-free binding-ABI surface with non-jumping verdict
+shims), *verifiable* (a shared conformance corpus), and *CI'd* (a reusable
+per-language job, first instantiated for Python). Verified on x86-64 macOS:
 
 - **0.1 shared libraries.** `make shared` builds `libasmtest.{so,dylib}` from
   `-fPIC` objects (framework runtime + capture trampoline, in a separate
@@ -103,10 +103,11 @@ conformance corpus) are done and verified on x86-64 macOS:
   source of truth for "did the binding wire the ABI up correctly".
 
 Kept `make install` (static + headers) unchanged so the Track B install stays
-toolchain-light; the shared install is opt-in via the new targets. **Remaining:
-0.5** (a reusable per-language CI template) — best landed alongside the first
-language binding (Track P) that needs it. The sub-sections below describe the
-full scope.
+toolchain-light; the shared install is opt-in via the new targets. **0.5** landed
+alongside the first binding: the `bindings-python` CI job (x86-64 + arm64 Linux)
+is the reusable per-language template — install the language toolchain, build the
+shared libs + manifest + corpus, run the binding tests. The sub-sections below
+describe the full scope.
 
 ### 0.1 Shared-library build targets *(done)*
 
@@ -153,7 +154,7 @@ full scope.
   same corpus and must reproduce the same results — one source of truth for "did the
   binding wire the ABI up correctly", reused by all tracks.
 
-### 0.5 CI scaffolding *(planned)*
+### 0.5 CI scaffolding *(done)*
 
 - A reusable CI job template (toolchain install → build the two shared libs → run
   the language's binding tests over the conformance corpus) parameterised per
@@ -188,7 +189,23 @@ Each track delivers, unless noted, the same five things:
 - **(e) Runner integration + packaging** — plug into the native test runner and
   publish to the language's registry.
 
-### Track P — Python *(first; proves the substrate) — planned*
+### Track P — Python *(first; proves the substrate) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/python/`](../../bindings/python/).
+A **pure-ctypes** package (no `cffi`/compile step) loads the shared library and
+the `asmtest_abi.json` manifest, then exposes `capture()` / `capture_fp()` /
+`capture_vec()` returning a `Regs` snapshot (`ret`, `flags`, `fret`, vector
+lanes, `abi_preserved` via the native verdict shim, `flag_set` via the manifest
+masks) and an `Emulator` context manager whose `EmuResult` surfaces faults as
+data. `make python-test` builds the shared libs + manifest + corpus + a routine
+fixture lib and runs pytest; [`tests/test_conformance.py`](../../bindings/python/tests/test_conformance.py)
+replays the same `corpus.json` the C reference emits and reproduces all 8 cases
+(10/10 green on x86-64 macOS), proving the substrate end to end from another
+language. The `bindings-python` CI job runs it on x86-64 + arm64 Linux. A
+`pyproject.toml` packages it; the deferred follow-ons are cffi API-mode, wheels
+bundling the prebuilt libs (`cibuildwheel`/PyPI), and the Tier-2 idiomatic
+assertion layer. The ctypes path consuming the manifest is the layout chosen
+below; the rest of the table is the eventual target.
 
 | Aspect | Approach |
 |---|---|

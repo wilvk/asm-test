@@ -101,6 +101,32 @@ jobs:
       - name: Build and run emulator suite
         run: make emu-test
 
+  # Track P: the Python binding (pure ctypes; consumes the asmtest_abi.json
+  # layout manifest and replays the conformance corpus). Runs on x86-64 and
+  # arm64 Linux to verify the manifest-driven layout on both, mirroring the emu
+  # job. Doubles as the reusable per-language CI template (bindings plan 0.5):
+  # install the language toolchain -> build the shared libs -> run the binding
+  # tests over the conformance corpus.
+  bindings-python:
+    name: bindings-python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install libunicorn (emulator tier)
+        run: make deps DEPS_ARGS=--emu
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Build shared libs + manifest + corpus, run the binding tests
+        run: make python-test
+
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).
   sanitize:

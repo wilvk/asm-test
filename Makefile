@@ -44,6 +44,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
+.PHONY: python-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -229,8 +230,12 @@ $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
 ifeq ($(ASM_SYNTAX),nasm)
 $(BUILD)/pic/capture.o: src/capture.asm include/asm_nasm.inc | $(BUILD)/pic
 	$(NASM) $(NASMFLAGS) $< -o $@
+$(BUILD)/pic/%.o: examples/%.asm include/asm_nasm.inc | $(BUILD)/pic
+	$(NASM) $(NASMFLAGS) $< -o $@
 else
 $(BUILD)/pic/capture.o: src/capture.s include/asm.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(ASFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/%.o: examples/%.s include/asm.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(ASFLAGS) -fPIC -c $< -o $@
 endif
 
@@ -538,6 +543,34 @@ conformance: $(BUILD)/conformance
 	./$(BUILD)/conformance
 	./$(BUILD)/conformance --emit > bindings/conformance/corpus.json
 	@echo "conformance: wrote bindings/conformance/corpus.json"
+
+# --- Python binding (Track P) ----------------------------------------------
+# A pure-ctypes binding that loads the shared lib + manifest and replays the
+# conformance corpus from Python. `make python-test` builds the shared libs, the
+# manifest, the corpus, and a fixture lib exporting the canonical routines as
+# symbols (the "code under test" a binding dlsym()s), then runs pytest. Requires
+# python3 + pytest, and libunicorn (for the emulator cases), like `make emu-test`.
+PYTEST ?= python3 -m pytest
+ifeq ($(UNAME_S),Darwin)
+CORPUS_LIB     := $(BUILD)/libasmtest_corpus.dylib
+CORPUS_LDFLAGS := -dynamiclib
+else
+CORPUS_LIB     := $(BUILD)/libasmtest_corpus.so
+CORPUS_LDFLAGS := -shared
+endif
+CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/flags.o \
+                       $(BUILD)/pic/fp.o $(BUILD)/pic/simd.o
+
+$(CORPUS_LIB): $(CORPUS_ROUTINE_OBJS)
+	$(CC) $(CFLAGS) $(CORPUS_LDFLAGS) $^ -o $@
+
+python-test: shared-emu manifest conformance $(CORPUS_LIB)
+	cd bindings/python && \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
+	  ASMTEST_MANIFEST=$(abspath asmtest_abi.json) \
+	  ASMTEST_CORPUS_JSON=$(abspath bindings/conformance/corpus.json) \
+	  ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
+	  $(PYTEST) -q
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html
