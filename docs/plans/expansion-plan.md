@@ -193,9 +193,21 @@ strength: cross-arch, mid-routine introspection no ABI-boundary tool can match.
 
 ---
 
-## Track D — Quality infrastructure
+## Track D — Quality infrastructure *(done)*
 
 **Goal.** Harden the framework's own C, since its job is rigor.
+
+**Status: done.** Makefile knobs `SAN=1` (ASan + UBSan) and `COV=1` (gcov) flow
+through `CFLAGS`; convenience targets `make sanitize`, `make coverage`, and `make
+tidy` (clang-tidy, curated in `.clang-tidy`) drive them. CI gains four things: a
+`sanitize` job (full ASan + UBSan + LeakSanitizer on Linux), an `analyze` job
+(clang-tidy, informational baseline — not gating yet), a `coverage` job that uploads
+`asmtest.c.gcov` as an artifact, and the `emu` job extended to a `{x86-64, arm64}`
+matrix. Verified locally on x86-64 macOS: `make sanitize` is clean (no ASan/UBSan
+reports, 32/32 self-tests, zero failures across suites), `make coverage` reports
+69% of `src/asmtest.c`, and `clang --analyze` (the engine behind the `clang-analyzer-*`
+checks) finds nothing. LeakSanitizer and clang-tidy run in CI on Linux, where those
+tools are available.
 
 ### Deliverables
 

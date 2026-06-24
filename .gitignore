@@ -7,3 +7,9 @@ build/
 # Generated packaging artifacts (Track B)
 asmtest.pc
 asmtest_single.h
+
+# Coverage / analysis artifacts (Track D)
+*.gcov
+*.gcno
+*.gcda
+*.plist

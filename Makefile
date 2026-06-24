@@ -19,6 +19,19 @@ ASFLAGS    := -x assembler-with-cpp -Iinclude
 BUILD      := build
 ASM_SYNTAX ?= gas
 
+# Quality tooling (Track D). These flow through CFLAGS, which both the compile
+# and link rules use (so the sanitizer/coverage runtimes link in); clang/gcc
+# accept them as no-ops on the assembler step.
+#   make SAN=1 ...   build with AddressSanitizer + UndefinedBehaviorSanitizer
+#   make COV=1 ...   build with gcov/llvm-cov coverage instrumentation
+# See the `sanitize`, `coverage`, and `tidy` convenience targets below.
+ifeq ($(SAN),1)
+CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
+endif
+ifeq ($(COV),1)
+CFLAGS += --coverage
+endif
+
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
@@ -28,6 +41,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
+.PHONY: sanitize coverage tidy
 all: test
 
 # Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
@@ -163,6 +177,48 @@ uninstall:
 	      $(incdir)/asm_nasm.inc
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
+
+# --- Quality tooling targets (Track D) -------------------------------------
+# Build + run the example suites and the self-tests under ASan + UBSan. The
+# framework catches SIGSEGV/SIGBUS itself (crash containment), so tell ASan not
+# to grab those signals; UBSan halts on the first violation. detect_leaks is
+# left at its platform default (LSan on Linux; unsupported on macOS).
+ASAN_RUN_OPTIONS ?= handle_segv=0:handle_sigbus=0:handle_sigfpe=0:abort_on_error=0
+UBSAN_RUN_OPTIONS ?= halt_on_error=1:print_stacktrace=1
+sanitize:
+	$(MAKE) clean
+	ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) \
+	    $(MAKE) SAN=1 test
+	ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) \
+	    $(MAKE) SAN=1 check
+
+# Coverage of the runner (src/asmtest.c). Forked children _exit() without
+# flushing gcov, so drive the suites with --no-fork (one process, normal exit)
+# across a few non-crashing invocations; .gcda accumulates across runs. Emits
+# asmtest.c.gcov, surfaced as a CI artifact (informational, not a gate).
+coverage:
+	$(MAKE) clean
+	$(MAKE) COV=1 $(BUILD)/tests_positive $(BUILD)/tests_negative \
+	    $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_refmatch \
+	    $(BUILD)/test_bench
+	-./$(BUILD)/tests_positive --no-fork >/dev/null 2>&1
+	-./$(BUILD)/tests_positive --format=junit >/dev/null 2>&1
+	-./$(BUILD)/tests_positive --shuffle --seed=1 >/dev/null 2>&1
+	-./$(BUILD)/tests_negative --no-fork --filter='neg.eq' >/dev/null 2>&1
+	-./$(BUILD)/tests_negative --no-fork --filter='neg.mem_eq' >/dev/null 2>&1
+	-./$(BUILD)/tests_negative --format=junit --filter='neg.flag_set' >/dev/null 2>&1
+	-./$(BUILD)/test_fp --no-fork >/dev/null 2>&1       # FP return + ULP paths
+	-./$(BUILD)/test_simd --no-fork >/dev/null 2>&1     # vector capture/assert
+	-./$(BUILD)/test_refmatch --no-fork >/dev/null 2>&1 # differential engine
+	-./$(BUILD)/test_bench --bench >/dev/null 2>&1      # benchmark mode
+	gcov -o $(BUILD) src/asmtest.c
+
+# Static analysis over the runner with clang-tidy (checks curated in
+# .clang-tidy). Informational by default — findings are warnings, not errors —
+# so the job reports a baseline without gating; promote to gating later.
+CLANG_TIDY ?= clang-tidy
+tidy:
+	$(CLANG_TIDY) src/asmtest.c -- $(CFLAGS)
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
 $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \

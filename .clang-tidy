@@ -1,0 +1,25 @@
+# clang-tidy configuration for asm-test (Track D static analysis).
+#
+# Curated for a small, portable C codebase: the clang static analyzer plus
+# bug-prone / portability / performance families, with checks that fight this
+# project's idioms switched off. Findings are reported as warnings (the CI job
+# does not pass --warnings-as-errors), establishing a baseline without gating;
+# promote to gating once the baseline is reviewed.
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  portability-*,
+  performance-*,
+  misc-*,
+  readability-inconsistent-declaration-parameter-name,
+  readability-misleading-indentation,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-assignment-in-if-condition,
+  -misc-no-recursion,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+# The runner deliberately uses setjmp/longjmp, fork, signals, and varargs; keep
+# those analyzer notes visible but don't fail the build on them.
+WarningsAsErrors: ''
+HeaderFilterRegex: 'include/asmtest.*\.h$'
+FormatStyle: none

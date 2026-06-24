@@ -79,11 +79,16 @@ jobs:
         run: make ASM_SYNTAX=nasm bench
 
   # Optional emulator tier (Unicorn Engine; x86-64 [incl. Win64 ABI], AArch64,
-  # RISC-V, and ARM32 guests).
+  # RISC-V, and ARM32 guests). The guests are host-independent, so run on both
+  # x86-64 and arm64 hosts to exercise the wrapper on each.
   emu:
-    name: emu (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: emu (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
 
@@ -92,3 +97,44 @@ jobs:
 
       - name: Build and run emulator suite
         run: make emu-test
+
+  # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
+  # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).
+  sanitize:
+    name: sanitize (asan+ubsan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run under sanitizers
+        run: make sanitize
+
+  # Quality: static analysis with clang-tidy (checks curated in .clang-tidy).
+  # Informational — reports a baseline without gating (no --warnings-as-errors).
+  analyze:
+    name: analyze (clang-tidy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+      - name: Run clang-tidy
+        run: make tidy
+
+  # Quality: coverage of the runner (src/asmtest.c), surfaced as an artifact.
+  # Informational, not a gate.
+  coverage:
+    name: coverage (gcov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate coverage
+        run: make coverage
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: asmtest-coverage
+          path: asmtest.c.gcov
+          if-no-files-found: error
