@@ -281,12 +281,15 @@ flags), possibly a `.clang-tidy`.
 ## Track E — Breadth (opportunistic)
 
 Lower priority; pick up individually as interest dictates. Four of the five items
-have landed; the native Win64 trampoline remains deferred (it needs a Windows host).
+have landed; the native Win64 trampoline remains deferred (it needs a Win64
+toolchain — a Windows host, or Docker + Wine on the existing Linux CI).
 
 - **Native Win64 trampoline** — *deferred.* Win64 is emulator-only today; a native
-  trampoline would need a Windows host/CI runner. Scope only if Windows support
-  becomes a goal. See [Track E.1 — Native Win64 trampoline (scoping)](#track-e1--native-win64-trampoline-scoping)
-  below for the full breakdown of what it takes.
+  trampoline needs a Win64 toolchain and a host to run it — a `windows-latest`
+  runner, or **Docker + Wine** on the existing Linux CI (no Windows host). Scope
+  only if a native Win64 tier becomes a goal. See [Track E.1 — Native Win64
+  trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for the
+  full breakdown of what it takes, including the Docker + Wine option.
 - **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests
   concurrently as a pool of forked children over the existing per-test fork model
   (`run_parallel` in `src/asmtest.c`, using `poll()` over the children's result
@@ -316,11 +319,17 @@ have landed; the native Win64 trampoline remains deferred (it needs a Windows ho
 
 ## Track E.1 — Native Win64 trampoline (scoping)
 
+> For the concrete phased *how* (substrate, trampoline, layout, runner port, CI),
+> see the [Native Win64 tier implementation plan](win64-native-tier-plan.md). This
+> section is the *scoping* it builds on.
+
 The one Track E item left undone. This section records *what it takes* so the
 decision to pick it up is informed, not so it is recommended — the short version
 is that **the trampoline is the easy part; the hard part is that the whole runner
-is POSIX**, and a native Win64 tier means porting that runner to Win32 and
-standing up a Windows toolchain and CI.
+is POSIX**, and a native Win64 tier means porting that runner to Win32. The
+toolchain and CI need not run *on Windows*, though: **Docker + Wine** (Option 2
+below) executes real Win64 PEs on the project's existing Linux CI, so the runner
+port can be developed and tested without ever provisioning a Windows host.
 
 **Context — Win64 already works in the emulator.** `emu_call_win64` /
 `emu_call_win64_traced` (`src/emu.c`) run a routine's bytes under the Microsoft
@@ -332,11 +341,14 @@ SEH, TLS, and Windows syscalls) at the cost of a second platform port.
 
 ### What's required
 
-**1. A Windows host, toolchain, and CI runner *(the gating dependency)*.** The
-project is POSIX-only across a 4-way `{x86-64, AArch64} × {Linux, macOS}` matrix.
-Native Win64 needs a `windows-latest` runner and a Windows assembler: **MSVC**
-(`cl` + `ml64`/MASM) or **MinGW-w64** (gcc + GAS). NASM already supports
-`-f win64`, so the existing NASM `.asm` path is the cheapest assembler route.
+**1. A Win64 toolchain and a host to run it *(Option 1: a real Windows runner)*.**
+The project is POSIX-only across a 4-way `{x86-64, AArch64} × {Linux, macOS}`
+matrix. The most faithful host is a `windows-latest` runner with a Windows
+assembler: **MSVC** (`cl` + `ml64`/MASM) or **MinGW-w64** (gcc + GAS). NASM
+already supports `-f win64`, so the existing NASM `.asm` path is the cheapest
+assembler route. This is no longer a hard *gating* dependency, though — the same
+assemblers run as Linux cross-tools under **Docker + Wine** (Option 2 below),
+which removes the Windows host itself and keeps Win64 on the existing Linux CI.
 
 **2. A Win64 capture trampoline.** Mirror the ~8 `asm_call_capture*` variants in
 `src/capture.s` for the Microsoft x64 ABI. Deltas from the System V version
@@ -378,21 +390,77 @@ crash-to-failure, `CreateTimerQueueTimer` or a watchdog thread for timeouts,
 `VirtualAlloc` + `PAGE_NOACCESS` for guard pages, and `WaitForMultipleObjects`
 for the parallel pool. This port is the bulk of the work.
 
+### Option 2 — Docker + Wine (no Windows host)
+
+A `windows-latest` runner is not the only way to *execute* real Win64 code.
+**Wine runs a real Win64 PE on Linux** — real PE loader, real Win32 personality —
+so the entire native tier (the trampoline **and** the §4 Win32 runner port) can be
+built, run, and CI'd on the project's existing Linux Docker infrastructure with no
+Windows machine in the loop. Wine doesn't remove the runner port (the runner still
+has to *become* Win32); it removes the Windows **host**.
+
+**How it maps onto the existing Docker setup.** The bindings already test each
+toolchain in its own image — `Dockerfile.bindings-base` → `bindings/<lang>/
+Dockerfile` → `make docker-<lang>` (build the base once, cached, then a small
+image on top). Win64 gets the same treatment: a `Dockerfile.win64` on the same
+`ubuntu:24.04` base installing
+
+- **`mingw-w64`** (`x86_64-w64-mingw32-gcc`, GAS) and/or **`nasm`** (`-f win64`) —
+  the assemblers/linkers from requirement #1, as Linux *cross*-tools;
+- **`wine64`** (WineHQ stable; modern WoW64) — the execution environment;
+
+plus a `make docker-win64` target that cross-compiles the framework + a Win64
+suite to a PE and runs it under `wine64`, mirroring `make docker-<lang>` (and
+joining `make docker-bindings` / the `bindings` CI matrix).
+
+**What it buys, between the two endpoints.**
+
+| | `ms_abi` native (lightest) | **Docker + Wine** | `windows-latest` (heaviest) |
+|---|---|---|---|
+| Host needed | none (Linux/macOS x86-64) | none (Linux Docker) | a Windows runner |
+| PE loader / Win32 APIs | ✗ (ABI only) | ✓ (Wine implements them) | ✓ (real OS) |
+| §4 runner port exercised | ✗ | ✓ (CreateProcess, SEH, VirtualAlloc, timers all work under Wine) | ✓ |
+| OS fidelity | ABI only | high, not 100% | authoritative |
+
+So the full §4 port — `CreateProcess` isolation, a vectored-exception/SEH
+crash-to-failure path, `CreateTimerQueueTimer` timeouts, `VirtualAlloc` +
+`PAGE_NOACCESS` guard pages, `WaitForMultipleObjects` for the pool — can be
+developed and regression-tested entirely under Wine in Docker, because Wine
+implements all of them. (The MinGW emulated-`fork` shortcut stays just as
+unreliable under Wine as on Windows, so the proper Win32 port is still the path to
+real isolation.)
+
+**Caveats.** Wine ≠ Windows at the edges (some SEH corner cases and syscalls
+differ), so green-under-Wine is strong but not final — keep one occasional
+`windows-latest` job for authoritative sign-off, or accept Wine's fidelity and
+drop it. Needs 64-bit Wine, and it is x86-64 only: on an AArch64 host, Win64-x64
+stays emulator-only (Unicorn), exactly as today.
+
+> Even lighter, if only the **ABI** needs validating (not the PE loader or OS):
+> compile the call site with GCC/Clang `__attribute__((ms_abi))` and capture the
+> Win64 register/flag state natively on the existing x86-64 Linux/macOS rows — no
+> Wine, no PE, no Windows. Reach for Wine when you also want the real PE loader and
+> the Win32 runner port under test.
+
 ### Effort
 
 - Trampoline + `regs_t` + header branch: **~2–3 days** (ABI is known/encoded).
 - Win32 runner port (isolation, signals→SEH, timeout, guard pages, parallel):
   **~1–2 weeks** done properly; the MinGW shortcut is cheaper but compromises
   isolation.
-- CI + toolchain wiring: **~1 day**.
+- CI + toolchain wiring: **~1 day** for a `windows-latest` runner, or a comparable
+  day for a `Dockerfile.win64` + `make docker-win64` (Option 2) on the existing
+  Linux CI — no Windows host to provision.
 
 ### Recommended first slice (if pursued)
 
 Lowest-risk wedge that validates the trampoline without the full runner port:
-a **NASM `-f win64` trampoline + a `windows-latest` CI job running a single
-suite with `--no-fork`**. That exercises the Win64 ABI and capture path on real
-hardware; whether the Win32 isolation port is worth doing can be decided from
-there.
+a **NASM `-f win64` trampoline + a single suite run with `--no-fork`**. Run it
+the cheapest way first — cross-assembled and executed under `wine64` in a `make
+docker-win64` image (Option 2), needing no Windows runner — and add a
+`windows-latest` job later only if real-OS sign-off is wanted. Either exercises
+the Win64 ABI and capture path on real x86-64 hardware; whether the Win32
+isolation port is worth doing can be decided from there.
 
 ### Acceptance criteria (full tier)
 

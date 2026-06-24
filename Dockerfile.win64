@@ -1,0 +1,39 @@
+# Dockerfile.win64 — native Win64 tier (Win64 native tier plan, Phase 0).
+#
+# Win64 is NOT a language binding: this image cross-compiles to a Windows PE
+# (mingw-w64 + `nasm -f win64`) and runs it under Wine, so the real Microsoft x64
+# ABI is exercised on the existing Linux CI with NO Windows host. It is FROM the
+# shared bindings base (C toolchain + libunicorn) and adds only the cross-tools
+# and Wine, matching the per-language `bindings/<lang>/Dockerfile` pattern.
+#
+# Build context = repo root.
+#   docker build -f Dockerfile.win64 \
+#     --build-arg BASE_IMAGE=asmtest-bindings-base -t asmtest-win64 .
+
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# mingw-w64: the x86_64-w64-mingw32-gcc cross-compiler/linker (PE output).
+# nasm:      assembles the Win64 trampoline/sources with `-f win64`.
+# wine64:    runs the resulting PE headless — the substitute for a Windows host.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      mingw-w64 nasm wine64 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu's `wine64` package ships only the loader at /usr/lib/wine/wine64 — the
+# `wine64`/`wineboot` PATH wrappers live in the heavier `wine` metapackage, which
+# would drag in 32-bit i386 multiarch we don't need. Expose the loader under the
+# expected name so `WINE ?= wine64` resolves with no override and no i386.
+RUN ln -s /usr/lib/wine/wine64 /usr/local/bin/wine64
+
+# Pre-create the Wine prefix at build time so the first run is quiet and fast,
+# and silence Wine's debug chatter. Best-effort; a runtime run would init too.
+ENV WINEDEBUG=-all WINEPREFIX=/opt/wineprefix
+RUN wine64 wineboot --init >/dev/null 2>&1 || true
+
+COPY . .
+
+CMD ["make", "win64-smoke"]

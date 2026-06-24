@@ -432,11 +432,44 @@ docker-$(1): docker-bindings-base
 endef
 $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 
-docker-bindings: $(addprefix docker-,$(BINDING_LANGS))
+docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 
 docker-bindings-clean:
-	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) \
+	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \
 	  $(DOCKER_BINDINGS_BASE)
+
+# --- Native Win64 tier (Win64 native tier plan) ----------------------------
+# Cross-compile to a Windows PE and run it under Wine — no Windows host. The
+# capture trampoline (Phase 1) will use the same `nasm -f win64` + mingw-w64
+# link chain the smoke target below proves. Override the tools to run locally
+# (non-Docker) where a Win64 cross-toolchain + Wine are installed.
+#   make win64-smoke     host-side: cross-build + run the substrate smoke test
+#   make docker-win64    same, inside the isolated asmtest-win64 image (x86-64)
+WIN64_CC        ?= x86_64-w64-mingw32-gcc
+WIN64_NASM      ?= nasm
+WIN64_NASMFLAGS ?= -f win64
+WINE            ?= wine64
+WIN64_BUILD     := $(BUILD)/win64
+
+$(WIN64_BUILD):
+	mkdir -p $@
+
+# Phase 0 substrate smoke: a `nasm -f win64` Win64-ABI leaf + a mingw-w64 C
+# driver -> PE -> run under Wine. Proves the toolchain chain end to end.
+.PHONY: win64-smoke
+win64-smoke: | $(WIN64_BUILD)
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) tests/win64/smoke_asm.asm -o $(WIN64_BUILD)/smoke_asm.obj
+	$(WIN64_CC) -O2 -Wall tests/win64/smoke.c $(WIN64_BUILD)/smoke_asm.obj \
+	  -o $(WIN64_BUILD)/smoke.exe
+	$(WINE) $(WIN64_BUILD)/smoke.exe
+
+# Build the win64 image on the cached bindings base, then run its smoke CMD.
+# x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.
+.PHONY: docker-win64
+docker-win64: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-win64
 
 # --- Quality tooling targets (Track D) -------------------------------------
 # Build + run the example suites and the self-tests under ASan + UBSan. The
