@@ -8,6 +8,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Zig binding (Track Z).** The lowest-ceremony wrapper: `bindings/zig/`
+  consumes the C headers directly via `@cImport` — no separate binding layer —
+  and replays the conformance corpus (`make zig-test` → `zig build test`,
+  `build.zig` targets Zig 0.13.x). Added to the Docker bindings image and the
+  `bindings` CI job.
+
 - **Rust binding (Track R).** A no-crates-io crate in `bindings/rust/`:
   `#[repr(C)]` mirrors of `regs_t` and the emulator structs (arch-selected via
   `cfg`) plus `extern "C"` declarations of the binding-ABI entry points, linked

@@ -21,6 +21,8 @@ bindings/conformance/corpus.json
 **/.pytest_cache/
 bindings/rust/target/
 bindings/rust/Cargo.lock
+bindings/zig/.zig-cache/
+bindings/zig/zig-out/
 
 # This image and its setup don't need to be in the context.
 Dockerfile

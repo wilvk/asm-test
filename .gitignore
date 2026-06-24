@@ -23,6 +23,10 @@ __pycache__/
 bindings/rust/target/
 bindings/rust/Cargo.lock
 
+# Zig binding artifacts (Track Z)
+bindings/zig/.zig-cache/
+bindings/zig/zig-out/
+
 # Coverage / analysis artifacts (Track D)
 *.gcov
 *.gcno

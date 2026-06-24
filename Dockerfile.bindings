@@ -27,7 +27,21 @@ RUN apt-get update \
       build-essential ca-certificates pkg-config \
       python3 python3-pytest \
       cargo rustc \
+      curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
+
+# Zig has no apt package: fetch the official release tarball for the build arch
+# (uname -m → x86_64 / aarch64, matching ziglang.org's naming).
+ARG ZIG_VERSION=0.13.0
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    url="https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${arch}-${ZIG_VERSION}.tar.xz"; \
+    curl -fsSL "$url" -o /tmp/zig.tar.xz; \
+    mkdir -p /opt/zig; \
+    tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+    rm /tmp/zig.tar.xz; \
+    ln -s /opt/zig/zig /usr/local/bin/zig; \
+    zig version
 
 WORKDIR /src
 
@@ -41,4 +55,4 @@ RUN make deps DEPS_ARGS=--emu && rm -rf /var/lib/apt/lists/*
 COPY . .
 
 # Default goal: run every wrapper's test over the conformance corpus.
-CMD ["sh", "-c", "make python-test && make cpp-test && make rust-test"]
+CMD ["sh", "-c", "make python-test && make cpp-test && make rust-test && make zig-test"]

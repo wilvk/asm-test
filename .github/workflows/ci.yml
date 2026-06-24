@@ -130,6 +130,17 @@ jobs:
         run: make cpp-test
       - name: Rust binding (cargo preinstalled on GitHub runners)
         run: make rust-test
+      - name: Install Zig
+        run: |
+          ver=0.13.0
+          url="https://ziglang.org/download/${ver}/zig-linux-$(uname -m)-${ver}.tar.xz"
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          sudo mkdir -p /opt/zig
+          sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          sudo ln -s /opt/zig/zig /usr/local/bin/zig
+          zig version
+      - name: Zig binding
+        run: make zig-test
 
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).

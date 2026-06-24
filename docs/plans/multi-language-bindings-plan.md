@@ -265,7 +265,17 @@ tier as the primary Go entry point and the native trampoline as advanced/pinned 
 
 **Effort:** ~4–5 days (cgo pointer-rule care).
 
-### Track Z — Zig *(situational; lowest-ceremony native) — planned*
+### Track Z — Zig *(situational; lowest-ceremony native) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/zig/`](../../bindings/zig/). The
+lowest-ceremony binding, exactly as planned: `@cImport` translates the C headers
+directly — no separate binding layer, no generated code — yielding the structs,
+the binding-ABI functions, and the flag-mask constants;
+[`src/conformance.zig`](../../bindings/zig/src/conformance.zig) replays the
+corpus through them (8/8, verified in the `asmtest-bindings` Docker image).
+[`build.zig`](../../bindings/zig/build.zig) (Zig 0.13.x) links the shared libs
+and takes `-Dincdir=` / `-Dlibdir=`. Deferred: a `build.zig.zon` package export
+and a Tier-2 assertion layer.
 
 | Aspect | Approach |
 |---|---|

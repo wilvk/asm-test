@@ -1,0 +1,97 @@
+//! asm-test Zig binding (Track Z) — conformance corpus, via `@cImport`.
+//!
+//! Zig consumes the C headers directly (no separate binding layer): `@cImport`
+//! translates `asmtest.h` / `asmtest_emu.h`, giving the structs, function
+//! declarations, and integer-constant macros (flag masks). The test drives the
+//! canonical routines through the binding-ABI entry points and reproduces the
+//! conformance corpus (mirrors bindings/conformance/corpus.json). No GC; the
+//! arg arrays are plain stack slices passed by pointer.
+//!
+//! Run via `make zig-test` (or `zig build test` from this dir).
+const std = @import("std");
+
+const c = @cImport({
+    @cInclude("asmtest.h");
+    @cInclude("asmtest_emu.h");
+});
+
+// Canonical routines under test (examples/{add,flags,fp,simd}.s), linked from
+// the fixture lib (make's CORPUS_LIB). Signatures are nominal — only addresses
+// are used.
+extern fn add_signed(c_long, c_long) c_long;
+extern fn sum_via_rbx(c_long, c_long) c_long;
+extern fn clobbers_rbx(c_long, c_long) c_long;
+extern fn set_carry() c_long;
+extern fn clear_carry() c_long;
+extern fn fp_add(f64, f64) f64;
+extern fn vec_add4f() void;
+
+/// Address of a routine as the opaque pointer the trampoline expects.
+fn fnPtr(p: anytype) ?*anyopaque {
+    return @ptrFromInt(@intFromPtr(p));
+}
+
+fn captureInt(f: ?*anyopaque, a0: c_long, a1: c_long) c.regs_t {
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var args = [_]c_long{ a0, a1, 0, 0, 0, 0 };
+    c.asm_call_capture(&r, f, &args);
+    return r;
+}
+
+test "add_signed.basic" {
+    const r = captureInt(fnPtr(&add_signed), 40, 2);
+    try std.testing.expectEqual(@as(c_ulong, 42), r.ret);
+    try std.testing.expect(c.asmtest_check_abi(&r, null, 0) == 0);
+}
+
+test "sum_via_rbx.abi_preserved" {
+    const r = captureInt(fnPtr(&sum_via_rbx), 20, 22);
+    try std.testing.expectEqual(@as(c_ulong, 42), r.ret);
+    try std.testing.expect(c.asmtest_check_abi(&r, null, 0) == 0);
+}
+
+test "clobbers_rbx.abi_violation_detected" {
+    const r = captureInt(fnPtr(&clobbers_rbx), 1, 2);
+    try std.testing.expect(c.asmtest_check_abi(&r, null, 0) != 0);
+}
+
+test "set_carry.cf_set" {
+    const r = captureInt(fnPtr(&set_carry), 0, 0);
+    try std.testing.expect((r.flags & c.ASMTEST_CF) != 0);
+}
+
+test "clear_carry.cf_clear" {
+    const r = captureInt(fnPtr(&clear_carry), 0, 0);
+    try std.testing.expect((r.flags & c.ASMTEST_CF) == 0);
+}
+
+test "fp_add.basic" {
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var iargs = [_]c_long{ 0, 0, 0, 0, 0, 0 };
+    var fargs = [_]f64{ 1.5, 2.25, 0, 0, 0, 0, 0, 0 };
+    c.asm_call_capture_fp(&r, fnPtr(&fp_add), &iargs, &fargs);
+    try std.testing.expectEqual(@as(f64, 3.75), r.fret);
+}
+
+test "vec_add4f.basic" {
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var iargs = [_]c_long{ 0, 0, 0, 0, 0, 0 };
+    var v: [8]c.vec128_t = std.mem.zeroes([8]c.vec128_t);
+    v[0].f32 = .{ 1, 2, 3, 4 };
+    v[1].f32 = .{ 10, 20, 30, 40 };
+    c.asm_call_capture_vec(&r, fnPtr(&vec_add4f), &iargs, &v);
+    try std.testing.expectEqual(@as(f32, 11), r.vec[0].f32[0]);
+    try std.testing.expectEqual(@as(f32, 44), r.vec[0].f32[3]);
+}
+
+// Emulator x86-64 guest runs host-compiled bytes — valid only on an x86-64 host.
+test "emu.add_signed" {
+    if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+    var args = [_]c_long{ 40, 2 };
+    _ = c.emu_call(e, fnPtr(&add_signed), 64, &args, 2, 0, &res);
+    try std.testing.expect(!res.faulted);
+    try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+}

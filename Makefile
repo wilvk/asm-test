@@ -44,7 +44,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
-.PHONY: python-test cpp-test rust-test
+.PHONY: python-test cpp-test rust-test zig-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -406,12 +406,13 @@ docker-clean:
 #   make docker-python     just the Python binding
 #   make docker-cpp        just the C++ binding
 #   make docker-rust       just the Rust binding
+#   make docker-zig        just the Zig binding
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_IMAGE ?= asmtest-bindings
 _docker_brun := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_BINDINGS_IMAGE)
 
 .PHONY: docker-bindings-build docker-bindings docker-python docker-cpp \
-        docker-rust docker-bindings-shell docker-bindings-clean
+        docker-rust docker-zig docker-bindings-shell docker-bindings-clean
 
 docker-bindings-build:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings \
@@ -428,6 +429,9 @@ docker-cpp: docker-bindings-build
 
 docker-rust: docker-bindings-build
 	$(_docker_brun) make rust-test
+
+docker-zig: docker-bindings-build
+	$(_docker_brun) make zig-test
 
 docker-bindings-shell: docker-bindings-build
 	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_BINDINGS_IMAGE) sh
@@ -640,6 +644,17 @@ rust-test: shared-emu $(CORPUS_LIB)
 	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
 	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
 	  $(CARGO) test
+
+# --- Zig binding (Track Z) -------------------------------------------------
+# Zig consumes the C headers directly via @cImport — no separate binding layer.
+# `make zig-test` builds the shared libs + the routine fixture lib, then runs
+# `zig build test`; requires zig + libunicorn. (build.zig targets Zig 0.13.x.)
+ZIG ?= zig
+zig-test: shared-emu $(CORPUS_LIB)
+	cd bindings/zig && \
+	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
+	  $(ZIG) build test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html
