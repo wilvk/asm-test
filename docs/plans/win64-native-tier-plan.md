@@ -287,7 +287,7 @@ runner is untouched.
 |---|---|---|---|
 | `fork`/`waitpid` | per-test isolation + timeout | `CreateProcess` + `WaitForSingleObject` + `TerminateProcess` | **done** |
 | `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` | **done** |
-| `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | planned |
+| `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | **done** |
 | `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler / SEH | planned |
 | `fnmatch` | `--filter` glob | `PathMatchSpec` / portable matcher | planned |
 
@@ -309,9 +309,17 @@ target, verified under Wine and wired into `win64-check` / the CI `win64` job):
   in-process SEH/`longjmp` dance. `make win64-isolate-test` exercises all three
   outcomes (verified under Wine: the crash child reports `0xC0000005` and the
   parent survives).
+- **Parallel `-jN` pool** — `asmtest_win32_run_pool` runs a batch with at most
+  `jobs` children in flight, retiring one slot per iteration via
+  `WaitForMultipleObjects` and refilling it with the next task, each child carrying
+  its own deadline. The Win32 analogue of the runner's forked pool (`poll` over
+  children). `make win64-pool-test` runs a 6-task mix (clean / crash / hang) at
+  `-j2` and confirms each is classified correctly and the pool drains — verified
+  under Wine. The test children install an unhandled-exception filter that exits
+  with the exception code, so a crash is a prompt NTSTATUS exit rather than Wine's
+  slow debugger path.
 
-The remaining primitives — the `WaitForMultipleObjects` parallel `-jN` pool (built
-on the isolation primitive above), the in-process SEH crash-to-failure path for
+The remaining primitives — the in-process SEH crash-to-failure path for
 `--no-fork`, and the `--filter` glob — follow next.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the

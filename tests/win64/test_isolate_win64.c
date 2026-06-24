@@ -10,32 +10,11 @@
  * real PE under Wine.
  */
 #include <stdio.h>
-#include <string.h>
 #include <windows.h>
 
+#include "child_actions.h"
 #include "platform_win32.h"
 
-/* --- child actions ------------------------------------------------------- */
-static int run_child(const char *what) {
-    /* Don't let an unhandled fault pop a Windows Error Reporting dialog; we want
-     * the child to just die with the exception code so the parent can read it. */
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-
-    if (strcmp(what, "ok") == 0)
-        return 7; /* a distinctive clean exit code */
-    if (strcmp(what, "crash") == 0) {
-        volatile int *p = NULL;
-        *p = 1; /* null write -> access violation */
-        return 0;
-    }
-    if (strcmp(what, "hang") == 0) {
-        for (;;)
-            Sleep(1000);
-    }
-    return 0;
-}
-
-/* --- parent harness ------------------------------------------------------ */
 static int fails = 0;
 
 #define CHECK(cond, msg)                                                       \
@@ -50,7 +29,7 @@ static int fails = 0;
 
 int main(int argc, char **argv) {
     if (argc >= 2)
-        return run_child(argv[1]); /* child mode */
+        return asmtest_win64_run_child(argv[1]); /* child mode */
 
     char self[MAX_PATH];
     GetModuleFileNameA(NULL, self, sizeof self);

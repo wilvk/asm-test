@@ -25,6 +25,15 @@ typedef enum {
 asmtest_win32_run_t asmtest_win32_run(const char *cmdline, unsigned timeout_ms,
                                       unsigned long *exit_code);
 
+/* Run `n` test bodies with at most `jobs` in flight at once, each isolated and
+ * deadline-bounded as in asmtest_win32_run. results[i]/exit_codes[i] receive the
+ * outcome of cmdlines[i] (exit_codes may be NULL). The Win32 analogue of the
+ * runner's forked `-jN` pool (poll over children -> WaitForMultipleObjects).
+ * Returns 0 on success, -1 if the wait machinery failed. */
+int asmtest_win32_run_pool(const char *const *cmdlines, int n, int jobs,
+                           unsigned timeout_ms, asmtest_win32_run_t *results,
+                           unsigned long *exit_codes);
+
 #endif /* _WIN32 */
 
 #endif /* ASMTEST_PLATFORM_WIN32_H */
