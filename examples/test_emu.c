@@ -337,3 +337,157 @@ TEST(emu_riscv, trace_records_instruction_stream) {
     ASSERT_UEQ(t.blocks[0], 0);
     emu_riscv_close(e);
 }
+
+/* -------------------------------------------------------------------------
+ * ARM32 (A32) guest: raw machine code run on whatever host this is (Unicorn
+ * emulates ARM32 even on an x86-64 host). Integer args arrive in r0..r3; the
+ * return value is in r0. Bytes (little-endian) from:
+ *   add  r0, r0, r1  -> e0800001      ldr  r0, [r0]  -> e5900000
+ *   add  r0, r0, r2  -> e0800002      bx   lr        -> e12fff1e
+ * ------------------------------------------------------------------------- */
+static const unsigned char ARM_ADD[] = {0x01, 0x00, 0x80, 0xe0,
+                                        0x1e, 0xff, 0x2f, 0xe1};
+static const unsigned char ARM_ADD3[] = {0x01, 0x00, 0x80, 0xe0, 0x02, 0x00,
+                                         0x80, 0xe0, 0x1e, 0xff, 0x2f, 0xe1};
+static const unsigned char ARM_LOAD[] = {0x00, 0x00, 0x90, 0xe5,
+                                         0x1e, 0xff, 0x2f, 0xe1};
+
+TEST(emu_arm, runs_routine_in_isolation) {
+    emu_arm_t *e = emu_arm_open();
+    ASSERT_TRUE(e != NULL);
+    emu_arm_result_t r;
+    long args[] = {20, 22};
+    ASSERT_TRUE(emu_arm_call(e, ARM_ADD, sizeof ARM_ADD, args, 2, 0, &r));
+    ASSERT_REG_EQ(&r.regs, r[0], 42); /* r0 holds the return value */
+    emu_arm_close(e);
+}
+
+TEST(emu_arm, mid_routine_single_step) {
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    long args[] = {1, 2, 100};
+    /* one instruction only: r0 = r0 + r1 = 3; the +r2 has not run yet. */
+    emu_arm_call(e, ARM_ADD3, sizeof ARM_ADD3, args, 3, 1, &r);
+    ASSERT_EQ(r.regs.r[0], 3);
+    emu_arm_close(e);
+}
+
+TEST(emu_arm, fault_injection_catches_bad_load) {
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    long args[] = {(long)0xdead0000UL};
+    bool ok = emu_arm_call(e, ARM_LOAD, sizeof ARM_LOAD, args, 1, 0, &r);
+    ASSERT_FALSE(ok);
+    ASSERT_TRUE(r.faulted);
+    ASSERT_UEQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
+    emu_arm_close(e);
+}
+
+TEST(emu_arm, reads_preloaded_guest_memory) {
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    uint64_t addr = 0x00300000UL;
+    uint32_t value = 0x2468;
+    ASSERT_TRUE(emu_arm_map(e, addr, 0x1000));
+    ASSERT_TRUE(emu_arm_write(e, addr, &value, sizeof value));
+    long args[] = {(long)addr};
+    ASSERT_TRUE(emu_arm_call(e, ARM_LOAD, sizeof ARM_LOAD, args, 1, 0, &r));
+    ASSERT_FALSE(r.faulted);
+    ASSERT_EQ(r.regs.r[0], 0x2468);
+    emu_arm_close(e);
+}
+
+TEST(emu_arm, trace_records_instruction_stream) {
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    uint64_t insns[8], blocks[8];
+    emu_trace_t t = {0};
+    t.insns = insns;
+    t.insns_cap = 8;
+    t.blocks = blocks;
+    t.blocks_cap = 8;
+
+    long args[] = {1, 2, 100};
+    ASSERT_TRUE(emu_arm_call_traced(e, ARM_ADD3, sizeof ARM_ADD3, args, 3, 0,
+                                    &r, &t));
+    ASSERT_EQ(r.regs.r[0], 103); /* (1 + 2) + 100 */
+    /* add, add, bx lr — straight line: 3 instructions at offsets 0/4/8, one
+     * basic block (A32 instructions are 4 bytes, so offsets are exact). */
+    ASSERT_EQ(t.insns_total, (uint64_t)3);
+    ASSERT_EQ(t.insns_len, (size_t)3);
+    ASSERT_UEQ(t.insns[0], 0);
+    ASSERT_UEQ(t.insns[1], 4);
+    ASSERT_UEQ(t.insns[2], 8);
+    ASSERT_EQ(t.blocks_total, (uint64_t)1);
+    ASSERT_EQ(t.blocks_len, (size_t)1);
+    ASSERT_UEQ(t.blocks[0], 0);
+    emu_arm_close(e);
+}
+
+/* -------------------------------------------------------------------------
+ * Windows x64 ("Win64") calling convention on the x86-64 emulator engine.
+ * Same guest CPU as the `emu` suite, but emu_call_win64 marshals args per the
+ * Microsoft x64 ABI: integer args in rcx, rdx, r8, r9, then on the stack above
+ * 32 bytes of shadow space; return in rax. Lets Win64 routines be exercised on
+ * a System V host. Raw x86-64 machine code (the host toolchain emits System V
+ * calls, so the routines are hand-assembled bytes):
+ *   mov rax, rcx -> 48 89 c8     mov rax, [rsp+40] -> 48 8b 44 24 28
+ *   add rax, rdx -> 48 01 d0     mov rax, [rcx]    -> 48 8b 01
+ *   ret          -> c3
+ * ------------------------------------------------------------------------- */
+TEST(emu_win64, runs_routine_in_isolation) {
+    /* arg0 + arg1, taken from rcx and rdx under Win64. */
+    static const unsigned char ADD[] = {0x48, 0x89, 0xc8,  /* mov rax, rcx */
+                                        0x48, 0x01, 0xd0,  /* add rax, rdx */
+                                        0xc3};             /* ret          */
+    emu_t *e = emu_open();
+    ASSERT_TRUE(e != NULL);
+    emu_result_t r;
+    long args[] = {20, 22};
+    ASSERT_TRUE(emu_call_win64(e, ADD, sizeof ADD, args, 2, 0, &r));
+    ASSERT_REG_EQ(&r.regs, rax, 42);
+    emu_close(e);
+}
+
+TEST(emu_win64, convention_selects_argument_registers) {
+    /* `mov rax, rcx; ret` returns whatever is in rcx. Under Win64 rcx is the
+     * 1st argument; under System V it is the 4th. Same bytes, same args — the
+     * result diverges purely by calling convention. */
+    static const unsigned char RET_RCX[] = {0x48, 0x89, 0xc8, 0xc3};
+    emu_t *e = emu_open();
+    emu_result_t w, s;
+    long args[] = {7, 0, 0, 0};
+    ASSERT_TRUE(emu_call_win64(e, RET_RCX, sizeof RET_RCX, args, 4, 0, &w));
+    ASSERT_EQ(w.regs.rax, 7); /* Win64: rcx = arg0 */
+    ASSERT_TRUE(emu_call(e, RET_RCX, sizeof RET_RCX, args, 4, 0, &s));
+    ASSERT_EQ(s.regs.rax, 0); /* System V: rcx = arg3 = 0 */
+    emu_close(e);
+}
+
+TEST(emu_win64, fifth_arg_sits_above_shadow_space) {
+    /* `mov rax, [rsp+40]; ret`: the 5th integer arg lands just above the
+     * 32-byte shadow space ([rsp]=retaddr, [rsp+8..39]=shadow, [rsp+40]=arg5),
+     * not at [rsp+8] — proving the caller reserved the home space. */
+    static const unsigned char ARG5[] = {0x48, 0x8b, 0x44, 0x24, 0x28, 0xc3};
+    emu_t *e = emu_open();
+    emu_result_t r;
+    long args[] = {1, 2, 3, 4, 0x55};
+    ASSERT_TRUE(emu_call_win64(e, ARG5, sizeof ARG5, args, 5, 0, &r));
+    ASSERT_EQ(r.regs.rax, 0x55);
+    emu_close(e);
+}
+
+TEST(emu_win64, fault_injection_catches_bad_load) {
+    /* `mov rax, [rcx]; ret`: dereference arg0 (in rcx); aim it at unmapped. */
+    static const unsigned char LOAD[] = {0x48, 0x8b, 0x01, 0xc3};
+    emu_t *e = emu_open();
+    emu_result_t r;
+    long args[] = {(long)0xdead0000UL};
+    bool ok = emu_call_win64(e, LOAD, sizeof LOAD, args, 1, 0, &r);
+    ASSERT_FALSE(ok);
+    ASSERT_TRUE(r.faulted);
+    ASSERT_UEQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
+    emu_close(e);
+}

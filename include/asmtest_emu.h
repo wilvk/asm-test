@@ -7,8 +7,8 @@
  * instructions, then read back the COMPLETE register file — and turn any
  * invalid memory access into a precise, reported fault instead of a crash.
  *
- * Guests: x86-64, AArch64, and RISC-V (RV64) — the emulated target, not the
- * host; Unicorn emulates each regardless of host arch. Build with the emu
+ * Guests: x86-64, AArch64, RISC-V (RV64), and ARM32 — the emulated target, not
+ * the host; Unicorn emulates each regardless of host arch. Build with the emu
  * objects + -lunicorn; the core framework has no dependency on this.
  */
 #ifndef ASMTEST_EMU_H
@@ -97,6 +97,18 @@ typedef struct {
 bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace);
+
+/* Run x86-64 code under the Microsoft x64 ("Win64") calling convention instead
+ * of System V, on the same emulator engine: integer args go in rcx, rdx, r8,
+ * r9 then on the stack above 32 bytes of caller-reserved shadow space, the
+ * return value is in rax, and rsi/rdi are nonvolatile (callee-saved) rather
+ * than argument registers. Lets Win64 routines be tested on a System V host.
+ * The _traced form records a trace / coverage just like emu_call_traced. */
+bool emu_call_win64(emu_t *e, const void *fn, size_t code_len, const long *args,
+                    int nargs, uint64_t max_insns, emu_result_t *out);
+bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_result_t *out, emu_trace_t *trace);
 
 /* ------------------------------------------------------------------ */
 /* AArch64 guest (emulated regardless of host architecture)            */
@@ -187,5 +199,51 @@ bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
 bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
                            const long *args, int nargs, uint64_t max_insns,
                            emu_riscv_result_t *out, emu_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
+/* ARM32 (AArch32 / A32) guest (emulated regardless of host arch)      */
+/*                                                                     */
+/* Like the AArch64 and RISC-V guests, this runs raw A32 machine code  */
+/* directly, so ARM32 routines emulate on an x86-64 host. Per the      */
+/* AAPCS, integer args go in r0..r3; the return value lands in r0      */
+/* (r0:r1 for 64-bit); lr (r14) holds the sentinel return address and  */
+/* sp (r13) the stack; the routine returns with `bx lr`. Registers are */
+/* 32-bit; cpsr carries the condition flags (N/Z/C/V).                 */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint32_t r[16]; /* r0..r15; r13 = sp, r14 = lr, r15 = pc */
+    uint32_t cpsr;  /* condition flags live in the top bits  */
+} emu_arm_regs_t;
+
+typedef struct {
+    bool ok;
+    int uc_err;
+    bool faulted;
+    uint64_t fault_addr;
+    emu_fault_kind_t fault_kind;
+    emu_arm_regs_t regs;
+} emu_arm_result_t;
+
+typedef struct emu_arm emu_arm_t;
+
+emu_arm_t *emu_arm_open(void);
+void emu_arm_close(emu_arm_t *e);
+bool emu_arm_map(emu_arm_t *e, uint64_t addr, size_t size);
+bool emu_arm_write(emu_arm_t *e, uint64_t addr, const void *data, size_t len);
+bool emu_arm_read(emu_arm_t *e, uint64_t addr, void *data, size_t len);
+
+/* Run raw A32 machine code with integer args in r0..r3. Stops when the
+ * routine's `bx lr` branches to the sentinel lr, or after max_insns. */
+bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
+                  const long *args, int nargs, uint64_t max_insns,
+                  emu_arm_result_t *out);
+
+/* Like emu_arm_call, but also records a trace / coverage into *trace (which
+ * may be NULL). Offsets are byte offsets from the start of the code; A32
+ * instructions are 4 bytes, so they fall on 0, 4, 8, ... See emu_trace_t. */
+bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
+                         const long *args, int nargs, uint64_t max_insns,
+                         emu_arm_result_t *out, emu_trace_t *trace);
 
 #endif /* ASMTEST_EMU_H */

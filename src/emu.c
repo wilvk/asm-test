@@ -1,6 +1,6 @@
 /*
  * emu.c — Unicorn-Engine-backed emulator tier (Phase 4+), with x86-64,
- * AArch64, and RISC-V (RV64) guests.
+ * AArch64, RISC-V (RV64), and ARM32 guests.
  */
 #include "asmtest_emu.h"
 
@@ -174,6 +174,36 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
     uc_reg_read(uc, UC_X86_REG_EFLAGS, &r->rflags);
 }
 
+/* Shared x86-64 run-and-capture: registers and stack are already set up by the
+ * caller (per the chosen ABI); this installs the fault/trace hooks, runs to the
+ * sentinel return address, and reads back the full register file into *out. */
+static bool emu_x86_run(uc_engine *uc, uint64_t max_insns, emu_result_t *out,
+                        emu_trace_t *trace) {
+    fault_rec_t fr = {0};
+    uc_hook hh;
+    uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
+                0);
+    trace_ctx_t tc = {trace, EMU_CODE_BASE};
+    uc_hook hcode, hblock;
+    add_trace_hooks(uc, &tc, &hcode, &hblock);
+
+    uc_err err =
+        uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
+    uc_hook_del(uc, hh);
+    if (trace != NULL) {
+        uc_hook_del(uc, hcode);
+        uc_hook_del(uc, hblock);
+    }
+
+    out->uc_err = (int)err;
+    out->faulted = fr.faulted;
+    out->fault_addr = fr.addr;
+    out->fault_kind = fr.kind;
+    read_all_regs(uc, &out->regs);
+    out->ok = (err == UC_ERR_OK) && !fr.faulted;
+    return out->ok;
+}
+
 bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace) {
@@ -200,34 +230,61 @@ bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
         uc_reg_write(uc, arg_regs[i], &v);
     }
 
-    fault_rec_t fr = {0};
-    uc_hook hh;
-    uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
-                0);
-    trace_ctx_t tc = {trace, EMU_CODE_BASE};
-    uc_hook hcode, hblock;
-    add_trace_hooks(uc, &tc, &hcode, &hblock);
-
-    uc_err err =
-        uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
-    uc_hook_del(uc, hh);
-    if (trace != NULL) {
-        uc_hook_del(uc, hcode);
-        uc_hook_del(uc, hblock);
-    }
-
-    out->uc_err = (int)err;
-    out->faulted = fr.faulted;
-    out->fault_addr = fr.addr;
-    out->fault_kind = fr.kind;
-    read_all_regs(uc, &out->regs);
-    out->ok = (err == UC_ERR_OK) && !fr.faulted;
-    return out->ok;
+    return emu_x86_run(uc, max_insns, out, trace);
 }
 
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out) {
     return emu_call_traced(e, fn, code_len, args, nargs, max_insns, out, NULL);
+}
+
+/* Microsoft x64 ("Win64") calling convention on the same x86-64 engine. Differs
+ * from System V in three ways exercised here: integer args go in rcx, rdx, r8,
+ * r9 (not rdi, rsi, ...); the caller reserves 32 bytes of "shadow space" above
+ * the return address before any stack args (so the 5th arg sits at [rsp+40] on
+ * entry, not [rsp+8]); and rsi/rdi join the nonvolatile set (rbx, rbp, rsi,
+ * rdi, r12-r15) instead of being argument/volatile registers. */
+bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_result_t *out, emu_trace_t *trace) {
+    static const int arg_regs[4] = {UC_X86_REG_RCX, UC_X86_REG_RDX,
+                                    UC_X86_REG_R8, UC_X86_REG_R9};
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+
+    if (uc_mem_write(uc, EMU_CODE_BASE, fn, code_len) != UC_ERR_OK) {
+        out->uc_err = -1;
+        return false;
+    }
+
+    /* Frame from rsp on entry: [rsp]=retaddr, [rsp+8..39]=shadow space,
+     * [rsp+40+8*i]=stack arg (4+i). Pick rsp so it is 8 (mod 16) on entry, as
+     * after a real `call` from a 16-aligned site. */
+    int stack_args = nargs > 4 ? nargs - 4 : 0;
+    uint64_t need = 8 /*retaddr*/ + 32 /*shadow*/ + 8 * (uint64_t)stack_args;
+    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - need;
+    sp -= (sp - 8) % 16; /* move sp down until sp % 16 == 8 */
+
+    uint64_t ret = EMU_RET_MAGIC;
+    uc_mem_write(uc, sp, &ret, sizeof ret);
+    for (int i = 0; i < stack_args; i++) {
+        uint64_t v = (uint64_t)args[4 + i];
+        uc_mem_write(uc, sp + 40 + 8 * (uint64_t)i, &v, sizeof v);
+    }
+    uc_reg_write(uc, UC_X86_REG_RSP, &sp);
+
+    for (int i = 0; i < nargs && i < 4; i++) {
+        uint64_t v = (uint64_t)args[i];
+        uc_reg_write(uc, arg_regs[i], &v);
+    }
+
+    return emu_x86_run(uc, max_insns, out, trace);
+}
+
+bool emu_call_win64(emu_t *e, const void *fn, size_t code_len, const long *args,
+                    int nargs, uint64_t max_insns, emu_result_t *out) {
+    return emu_call_win64_traced(e, fn, code_len, args, nargs, max_insns, out,
+                                 NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -459,4 +516,115 @@ bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
                     emu_riscv_result_t *out) {
     return emu_riscv_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                  NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* ARM32 (A32) guest                                                   */
+/* ------------------------------------------------------------------ */
+
+struct emu_arm {
+    uc_engine *uc;
+};
+
+emu_arm_t *emu_arm_open(void) {
+    emu_arm_t *e = (emu_arm_t *)calloc(1, sizeof *e);
+    if (e == NULL)
+        return NULL;
+    if (uc_open(UC_ARCH_ARM, UC_MODE_ARM, &e->uc) != UC_ERR_OK) {
+        free(e);
+        return NULL;
+    }
+    if (uc_mem_map(e->uc, EMU_CODE_BASE, EMU_CODE_SIZE, UC_PROT_ALL) !=
+            UC_ERR_OK ||
+        uc_mem_map(e->uc, EMU_STACK_BASE, EMU_STACK_SIZE,
+                   UC_PROT_READ | UC_PROT_WRITE) != UC_ERR_OK) {
+        uc_close(e->uc);
+        free(e);
+        return NULL;
+    }
+    return e;
+}
+
+void emu_arm_close(emu_arm_t *e) {
+    if (e == NULL)
+        return;
+    uc_close(e->uc);
+    free(e);
+}
+
+bool emu_arm_map(emu_arm_t *e, uint64_t addr, size_t size) {
+    return uc_mem_map(e->uc, addr, size, UC_PROT_READ | UC_PROT_WRITE) ==
+           UC_ERR_OK;
+}
+
+bool emu_arm_write(emu_arm_t *e, uint64_t addr, const void *data, size_t len) {
+    return uc_mem_write(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+bool emu_arm_read(emu_arm_t *e, uint64_t addr, void *data, size_t len) {
+    return uc_mem_read(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+static void read_all_regs_arm(uc_engine *uc, emu_arm_regs_t *r) {
+    for (int i = 0; i <= 12; i++) /* r0..r12 are consecutive enum values */
+        uc_reg_read(uc, UC_ARM_REG_R0 + i, &r->r[i]);
+    uc_reg_read(uc, UC_ARM_REG_SP, &r->r[13]);
+    uc_reg_read(uc, UC_ARM_REG_LR, &r->r[14]);
+    uc_reg_read(uc, UC_ARM_REG_PC, &r->r[15]);
+    uc_reg_read(uc, UC_ARM_REG_CPSR, &r->cpsr);
+}
+
+bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
+                         const long *args, int nargs, uint64_t max_insns,
+                         emu_arm_result_t *out, emu_trace_t *trace) {
+    static const int arg_regs[4] = {UC_ARM_REG_R0, UC_ARM_REG_R1,
+                                    UC_ARM_REG_R2, UC_ARM_REG_R3};
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+
+    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+        out->uc_err = -1;
+        return false;
+    }
+
+    uint32_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 8-aligned (AAPCS) */
+    uc_reg_write(uc, UC_ARM_REG_SP, &sp);
+    uint32_t lr = EMU_RET_MAGIC; /* `bx lr` branches to lr */
+    uc_reg_write(uc, UC_ARM_REG_LR, &lr);
+
+    for (int i = 0; i < nargs && i < 4; i++) {
+        uint32_t v = (uint32_t)args[i]; /* ARM GP regs are 32-bit */
+        uc_reg_write(uc, arg_regs[i], &v);
+    }
+
+    fault_rec_t fr = {0};
+    uc_hook hh;
+    uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
+                0);
+    trace_ctx_t tc = {trace, EMU_CODE_BASE};
+    uc_hook hcode, hblock;
+    add_trace_hooks(uc, &tc, &hcode, &hblock);
+
+    uc_err err =
+        uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
+    uc_hook_del(uc, hh);
+    if (trace != NULL) {
+        uc_hook_del(uc, hcode);
+        uc_hook_del(uc, hblock);
+    }
+
+    out->uc_err = (int)err;
+    out->faulted = fr.faulted;
+    out->fault_addr = fr.addr;
+    out->fault_kind = fr.kind;
+    read_all_regs_arm(uc, &out->regs);
+    out->ok = (err == UC_ERR_OK) && !fr.faulted;
+    return out->ok;
+}
+
+bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
+                  const long *args, int nargs, uint64_t max_insns,
+                  emu_arm_result_t *out) {
+    return emu_arm_call_traced(e, code, code_len, args, nargs, max_insns, out,
+                               NULL);
 }

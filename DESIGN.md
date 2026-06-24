@@ -254,23 +254,35 @@ add reach.
   distinct count; `insns_total` counts past a short buffer and sets `truncated`.
   `emu_call` / `emu_arm64_call` remain as the no-trace wrappers. Covered by
   `make emu-test`.
-- **Phase 11 — Breadth: _in progress._** Additional calling conventions and
-  targets once the above depth lands.
-  - _Done — RISC-V (RV64) emulator guest._ A third Unicorn guest
-    (`emu_riscv_*`, `UC_ARCH_RISCV` / `UC_MODE_RISCV64`) alongside x86-64 and
-    AArch64, built to the same shape as the AArch64 guest: it takes raw RV64
-    machine code, preloads integer args into `a0..a7` (`x10..x17`), seeds `ra`
-    with the sentinel return address and `sp` with the stack, runs to the
-    routine's `ret`, and reads back the full `x0..x31` + `pc` file (RISC-V has
-    no flags register — comparisons fold into its branches). It shares the
-    fault, instruction-trace, and basic-block-coverage hooks, so RISC-V routines
+- **Phase 11 — Breadth: _done._** Additional calling conventions and targets,
+  all carried by the emulator tier so they run on the existing CI hosts.
+  - _RISC-V (RV64) emulator guest._ A third Unicorn guest (`emu_riscv_*`,
+    `UC_ARCH_RISCV` / `UC_MODE_RISCV64`) alongside x86-64 and AArch64, built to
+    the same shape as the AArch64 guest: it takes raw RV64 machine code,
+    preloads integer args into `a0..a7` (`x10..x17`), seeds `ra` with the
+    sentinel return address and `sp` with the stack, runs to the routine's
+    `ret`, and reads back the full `x0..x31` + `pc` file (RISC-V has no flags
+    register — comparisons fold into its branches). It shares the fault,
+    instruction-trace, and basic-block-coverage hooks, so RISC-V routines
     emulate — and report coverage — on an x86-64 host. One backend quirk handled
     in `emu_riscv_open`: Unicorn's RISC-V core *fetches* the instruction at the
     `until` address before stopping, so the sentinel `EMU_RET_MAGIC` is mapped
     as a read/exec landing page (emulation still stops before executing it).
-    Covered by the `emu_riscv` cases in `make emu-test`.
-  - _Planned._ The Windows x64 ABI (shadow space, distinct callee-saved set) and
-    an ARM32 emulator guest.
+  - _ARM32 (A32) emulator guest._ A fourth guest (`emu_arm_*`, `UC_ARCH_ARM` /
+    `UC_MODE_ARM`) on the same template: integer args in `r0..r3` per AAPCS,
+    return in `r0`, sentinel `lr`, returning via `bx lr`; it reads back the full
+    32-bit `r0..r15` file plus `cpsr`. Unlike RISC-V, its `bx lr` stops cleanly
+    at the sentinel with no landing page needed.
+  - _Windows x64 ("Win64") calling convention._ Rather than a native trampoline
+    (which would need a Windows host), Win64 rides the existing x86-64 emulator
+    engine via `emu_call_win64` / `_traced`: integer args go in `rcx, rdx, r8,
+    r9` then on the stack *above 32 bytes of caller-reserved shadow space* (the
+    5th arg lands at `[rsp+40]`, not `[rsp+8]`), the return is in `rax`, and
+    `rsi`/`rdi` move into the nonvolatile set. So a Win64 routine is testable on
+    a System V host; a contrast test runs identical bytes (`mov rax, rcx`) under
+    both conventions and shows the result diverge.
+  - All covered by `make emu-test` (the `emu_riscv`, `emu_arm`, and `emu_win64`
+    suites).
 
 **Near-term correctness fixes (independent of the phasing above): _done._**
 
