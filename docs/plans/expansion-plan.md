@@ -263,7 +263,8 @@ have landed; the native Win64 trampoline remains deferred (it needs a Windows ho
 
 - **Native Win64 trampoline** — *deferred.* Win64 is emulator-only today; a native
   trampoline would need a Windows host/CI runner. Scope only if Windows support
-  becomes a goal.
+  becomes a goal. See [Track E.1 — Native Win64 trampoline (scoping)](#track-e1--native-win64-trampoline-scoping)
+  below for the full breakdown of what it takes.
 - **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests
   concurrently as a pool of forked children over the existing per-test fork model
   (`run_parallel` in `src/asmtest.c`, using `poll()` over the children's result
@@ -288,6 +289,96 @@ have landed; the native Win64 trampoline remains deferred (it needs a Windows ho
   AArch64 backend — the `.s` sources assemble through the C compiler's built-in
   assembler, so no extra tool is needed; NASM stays x86-64-only by design. Recorded
   in the README "Two assembler backends" bullet.
+
+---
+
+## Track E.1 — Native Win64 trampoline (scoping)
+
+The one Track E item left undone. This section records *what it takes* so the
+decision to pick it up is informed, not so it is recommended — the short version
+is that **the trampoline is the easy part; the hard part is that the whole runner
+is POSIX**, and a native Win64 tier means porting that runner to Win32 and
+standing up a Windows toolchain and CI.
+
+**Context — Win64 already works in the emulator.** `emu_call_win64` /
+`emu_call_win64_traced` (`src/emu.c`) run a routine's bytes under the Microsoft
+x64 ABI on a *System V host*: integer args in `rcx, rdx, r8, r9`, a 32-byte
+shadow space, stack args at `[rsp+40+8*i]`, and `rsi`/`rdi` treated as
+nonvolatile. So the ABI knowledge is already encoded and tested; a native tier
+buys running the real routine on real silicon under the real OS (relevant for
+SEH, TLS, and Windows syscalls) at the cost of a second platform port.
+
+### What's required
+
+**1. A Windows host, toolchain, and CI runner *(the gating dependency)*.** The
+project is POSIX-only across a 4-way `{x86-64, AArch64} × {Linux, macOS}` matrix.
+Native Win64 needs a `windows-latest` runner and a Windows assembler: **MSVC**
+(`cl` + `ml64`/MASM) or **MinGW-w64** (gcc + GAS). NASM already supports
+`-f win64`, so the existing NASM `.asm` path is the cheapest assembler route.
+
+**2. A Win64 capture trampoline.** Mirror the ~8 `asm_call_capture*` variants in
+`src/capture.s` for the Microsoft x64 ABI. Deltas from the System V version
+(all already modeled in `emu.c`):
+
+| | System V (current) | Win64 (needed) |
+|---|---|---|
+| Integer args | rdi, rsi, rdx, rcx, r8, r9 | **rcx, rdx, r8, r9** (4), rest on stack |
+| FP args | xmm0–7 | **xmm0–3**, *positional* with the int regs (slot _i_ is int **or** xmm, never both) |
+| Shadow space | none | **32 bytes** reserved below the return address at every call site |
+| Callee-saved int | rbx, rbp, r12–r15 | adds **rdi, rsi** (args on SysV, preserved here) |
+| Callee-saved FP | none (all xmm volatile) | **xmm6–xmm15** must be saved/restored |
+| Varargs | `al` = # vector regs | FP args **duplicated** into the matching int reg |
+
+So the trampoline saves/seeds/verifies a *larger* register set than the SysV one.
+This part is well understood and moderate effort.
+
+**3. A Win64 `regs_t` + ABI-preservation extension.** `include/asmtest.h` has
+`#if __x86_64__` / `#elif __aarch64__` branches whose field offsets must match
+the trampoline's stores. Win64 needs a **third branch** (same arch, different
+ABI) adding `rdi`/`rsi` and `xmm6–15` to the captured/checked set, new sentinels,
+and matching `asmtest_assert_abi` logic.
+
+**4. Porting the runner to Win32 *(the real cost)*.** `src/asmtest.c` is built on
+POSIX primitives, several of which are *core features*, not conveniences:
+
+- `fork()` / `pipe()` / `waitpid()` → per-test **crash isolation** and the `-jN`
+  pool (`run_parallel`, `poll()`),
+- `sigaction` + `siglongjmp` → **crash-to-failure** (SIGSEGV/SIGBUS/SIGABRT),
+- `alarm()` → **per-test timeout**,
+- `mmap`/`PROT_NONE` → the **guard-page allocator**,
+- `fnmatch` → `--filter`.
+
+On native Windows (MSVC) none of these exist. Either accept **MinGW/MSYS2** (a
+POSIX-ish layer where `fork` is emulated and unreliable and signals are limited —
+degrading the framework's headline isolation feature), or port to Win32 proper:
+`CreateProcess` for isolation, a **vectored exception handler / SEH** for
+crash-to-failure, `CreateTimerQueueTimer` or a watchdog thread for timeouts,
+`VirtualAlloc` + `PAGE_NOACCESS` for guard pages, and `WaitForMultipleObjects`
+for the parallel pool. This port is the bulk of the work.
+
+### Effort
+
+- Trampoline + `regs_t` + header branch: **~2–3 days** (ABI is known/encoded).
+- Win32 runner port (isolation, signals→SEH, timeout, guard pages, parallel):
+  **~1–2 weeks** done properly; the MinGW shortcut is cheaper but compromises
+  isolation.
+- CI + toolchain wiring: **~1 day**.
+
+### Recommended first slice (if pursued)
+
+Lowest-risk wedge that validates the trampoline without the full runner port:
+a **NASM `-f win64` trampoline + a `windows-latest` CI job running a single
+suite with `--no-fork`**. That exercises the Win64 ABI and capture path on real
+hardware; whether the Win32 isolation port is worth doing can be decided from
+there.
+
+### Acceptance criteria (full tier)
+
+- A Win64 routine builds and is callable via `ASM_CALL*` on a Windows runner,
+  with `ASSERT_ABI_PRESERVED` covering the Win64 callee-saved set (incl.
+  `rdi`/`rsi`, `xmm6–15`).
+- `make test` and `make check` are green on `windows-latest` with isolation
+  (fork-equivalent), timeout, and crash containment all working.
 
 ---
 
