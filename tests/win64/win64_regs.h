@@ -15,19 +15,33 @@
 
 #include <stdint.h>
 
+/* A 128-bit vector lane (xmm register), captured low/high qword. */
 typedef struct {
-    uint64_t ret;   /* 0  rax (return value)       */
-    uint64_t rdx;   /* 8  second return register   */
-    uint64_t rbx;   /* 16 callee-saved             */
-    uint64_t rbp;   /* 24 callee-saved             */
-    uint64_t rdi;   /* 32 callee-saved (Win64)     */
-    uint64_t rsi;   /* 40 callee-saved (Win64)     */
-    uint64_t r12;   /* 48 callee-saved             */
-    uint64_t r13;   /* 56 callee-saved             */
-    uint64_t r14;   /* 64 callee-saved             */
-    uint64_t r15;   /* 72 callee-saved             */
-    uint64_t flags; /* 80 RFLAGS                   */
+    uint64_t lo;
+    uint64_t hi;
+} win64_vec128_t;
+
+typedef struct {
+    uint64_t ret;          /* 0  rax (return value)       */
+    uint64_t rdx;          /* 8  second return register   */
+    uint64_t rbx;          /* 16 callee-saved             */
+    uint64_t rbp;          /* 24 callee-saved             */
+    uint64_t rdi;          /* 32 callee-saved (Win64)     */
+    uint64_t rsi;          /* 40 callee-saved (Win64)     */
+    uint64_t r12;          /* 48 callee-saved             */
+    uint64_t r13;          /* 56 callee-saved             */
+    uint64_t r14;          /* 64 callee-saved             */
+    uint64_t r15;          /* 72 callee-saved             */
+    uint64_t flags;        /* 80 RFLAGS                   */
+    double   fret;         /* 88 xmm0 (FP return); valid after _fp/_vec    */
+    win64_vec128_t vec[16];/* 96 xmm0..15; valid after _vec (vec[0] = ret) */
 } win64_regs_t;
+
+/* xmm6..xmm15 are callee-saved on Win64. The _vec trampoline seeds each with a
+ * recognisable sentinel (xmm(6+k) lanes both = 6+k) so the preservation check is
+ * "vec[i].lo == i && vec[i].hi == i" for i in 6..15. */
+#define WIN64_XMM_CALLEE_LO 6
+#define WIN64_XMM_CALLEE_HI 15
 
 /* Sentinels seeded into the callee-saved set before the call: an intact value
  * afterwards means the routine preserved that register (the ABI check). */

@@ -44,3 +44,41 @@ ASM_FUNC win64_ret_arg4
     mov     rax, [rsp+40]
     ret
 ASM_ENDFUNC win64_ret_arg4
+
+; long long win64_sum6(a,b,c,d,e,f) -> a+b+c+d+e+f. Args 1-4 in rcx/rdx/r8/r9;
+; args 5-6 on the stack above the shadow space ([rsp+40], [rsp+48] on entry).
+; Exercises asm_call_capture_args_win64's register + overflow marshalling.
+ASM_FUNC win64_sum6
+    lea     rax, [rcx + rdx]
+    add     rax, r8
+    add     rax, r9
+    add     rax, [rsp+40]
+    add     rax, [rsp+48]
+    ret
+ASM_ENDFUNC win64_sum6
+
+; double win64_addsd(a, b) -> a + b. Win64 passes the first two FP args in
+; xmm0, xmm1; the FP return is in xmm0.
+ASM_FUNC win64_addsd
+    addsd   xmm0, xmm1
+    ret
+ASM_ENDFUNC win64_addsd
+
+; Well-behaved: uses callee-saved xmm6 but saves/restores it. Returns arg0
+; (xmm0) unchanged; the xmm6..15 sentinels must survive.
+ASM_FUNC win64_vec_preserve_xmm6
+    sub     rsp, 16
+    movdqu  [rsp], xmm6
+    movsd   xmm6, xmm0
+    movsd   xmm0, xmm6
+    movdqu  xmm6, [rsp]
+    add     rsp, 16
+    ret
+ASM_ENDFUNC win64_vec_preserve_xmm6
+
+; Misbehaved: clobbers callee-saved xmm6 without restoring it (the FP analogue
+; of win64_clobber_rbx). Returns arg0 (xmm0) unchanged.
+ASM_FUNC win64_vec_clobber_xmm6
+    xorps   xmm6, xmm6
+    ret
+ASM_ENDFUNC win64_vec_clobber_xmm6
