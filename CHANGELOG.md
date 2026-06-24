@@ -22,8 +22,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in an isolated image (`Dockerfile.win64`, `make docker-win64`). A new CI `win64`
   job runs both on every push; the capture suite doubles as the native Win64
   conformance check. This is the capture tier (suite runs `--no-fork`); the Win32
-  runner port is scoped but deferred. See [docs/win64.md](docs/win64.md) and the
-  [implementation plan](docs/plans/win64-native-tier-plan.md).
+  runner port is now underway (Phase 4, below). See [docs/win64.md](docs/win64.md)
+  and the [implementation plan](docs/plans/win64-native-tier-plan.md).
+
+- **Native Win64 tier — runner port (Phase 4).** The framework's process-level
+  guarantees now have Win32 equivalents for the Win64 tier, each in
+  `src/platform_win32.c` (plus the platform-neutral `src/glob_match.c`), compiled
+  only for the Win64 target and **verified under Wine**: per-test isolation +
+  timeout via `CreateProcess` / `WaitForSingleObject` / `TerminateProcess`
+  (`asmtest_win32_run`, classifying OK / CRASH-as-NTSTATUS / TIMEOUT), the `-jN`
+  parallel pool via `WaitForMultipleObjects` (`asmtest_win32_run_pool`), the
+  guard-page allocator via `VirtualAlloc` + `VirtualProtect(PAGE_NOACCESS)`,
+  in-process crash-to-failure via a vectored exception handler +
+  `__builtin_longjmp` (`asmtest_win32_guard`, no SEH unwinding), and a portable
+  `--filter` glob matcher (`*`, `?`, `[...]` classes, `\` escaping) replacing
+  MinGW's missing `fnmatch`. New `make win64-{guard,isolate,pool,filter,seh}-test`
+  targets exercise each under Wine and join `make win64-check` / the CI `win64`
+  job. A thin platform seam (`src/platform.h`, `ASMTEST_FNMATCH`) wires the
+  `--filter` and guard-page paths into `src/asmtest.c` with no POSIX regression;
+  the remaining execution-model re-route (a Win32 `run_one`, the `fork`→re-exec
+  isolation/pool, `main()` dispatch) is in progress, so the capture suite still
+  runs `--no-fork` for now. See [docs/win64.md](docs/win64.md).
 
 - **Packaging scaffolding for all ten bindings.** Each binding now has a
   publish-ready registry manifest and a `make <lang>-package` target that

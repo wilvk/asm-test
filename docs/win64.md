@@ -7,12 +7,16 @@ host. The native tier exercises the real ABI on real hardware — and, crucially
 **without a Windows host**: it cross-compiles to a Windows PE and runs it under
 Wine, or drives the trampoline directly via a compiler ABI attribute.
 
-> Scope: this is the **capture** tier — `call` a routine through the real Win64
-> ABI and snapshot its registers/flags/ABI-preservation. The framework's
-> POSIX runner (per-test fork isolation, timeouts, guard pages) is not ported to
-> Win32; the Win64 suite runs `--no-fork`. See the
+> Scope: the **capture** tier — `call` a routine through the real Win64 ABI and
+> snapshot its registers/flags/ABI-preservation — ships today and runs
+> `--no-fork`. The framework's POSIX runner guarantees (per-test fork isolation,
+> timeouts, guard pages, the `-jN` pool, in-process crash-to-failure) rest on
+> POSIX primitives with no Win32 equivalent; porting them is the **runner port**
+> (Phase 4), now underway — all five primitives are ported and verified under
+> Wine, with the runner's execution model being wired through a platform seam
+> (see [The runner port](#the-runner-port-phase-4) below). See the
 > [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md)
-> for why, and what a full Win32 runner port would take.
+> for the full breakdown.
 
 ## What it captures
 
@@ -78,6 +82,52 @@ make manifest-win64     # -> asmtest_abi_win64.json
 
 emits the machine-readable Win64 `regs_t` layout (`"abi": "win64"`), the analog of
 the System V [manifest](integration.md) bindings mirror.
+
+## The runner port (Phase 4)
+
+The capture tier above runs as a plain `--no-fork` program. The framework's
+*runner* guarantees — per-test crash isolation, timeouts, guard pages, the `-jN`
+parallel pool, and in-process crash-to-failure — lean on POSIX primitives that a
+Win32 personality doesn't provide. Phase 4 ports each to its Win32 equivalent in
+`src/platform_win32.c` (plus the platform-neutral `src/glob_match.c`), compiled
+only for the Win64 target so the working POSIX [runner](runner.md) is untouched:
+
+| POSIX primitive | Runner feature | Win32 port | Test target |
+|---|---|---|---|
+| `fork` / `waitpid` / `alarm` | per-test isolation + timeout | `CreateProcess` + `WaitForSingleObject` + `TerminateProcess` | `make win64-isolate-test` |
+| `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `VirtualProtect(PAGE_NOACCESS)` | `make win64-guard-test` |
+| `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | `make win64-pool-test` |
+| `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler + `__builtin_longjmp` | `make win64-seh-test` |
+| `fnmatch` | `--filter` glob | portable matcher (`src/glob_match.c`) | `make win64-filter-test` |
+
+All five are implemented and **verified under Wine** — each target above builds a
+real PE with MinGW-w64 and runs it under `wine64` — and they join the
+`asmtest-win64` image's `make win64-check` and the CI `win64` job. The two subtle
+ones:
+
+- **Isolated execution.** `asmtest_win32_run` / `_run_pool` spawn a test body in a
+  child and classify it as OK (exit code captured), **CRASH** (an unhandled
+  hardware exception — the child's exit code is the NTSTATUS code, e.g.
+  `0xC0000005`), or **TIMEOUT** (`TerminateProcess` past the deadline). Process
+  isolation gives crash containment without a fragile in-process dance; the pool
+  keeps at most `jobs` children in flight, refilling a slot per
+  `WaitForMultipleObjects` wake.
+- **In-process crash-to-failure.** `asmtest_win32_guard` runs a body under a
+  vectored exception handler that, on a fatal fault, redirects the thread to a
+  landing pad that `__builtin_longjmp`s back — a minimal sp/fp/pc restore with no
+  SEH unwinding, sidestepping the MinGW `longjmp`+unwind hazard. Recovery through
+  frames lacking unwind data is best-effort; the forked path is the unconditional
+  containment.
+
+**Integration status.** A thin platform seam (`src/platform.h`) now backs the
+runner: `src/asmtest.c` routes `--filter` through an `ASMTEST_FNMATCH` shim
+(`fnmatch` on POSIX, `asmtest_glob_match` on Win32) and gates its guard-page
+allocator under `!defined(_WIN32)`, with **no POSIX regression** — the library
+and suites build and run identically on the host. The remaining work is the
+execution-model re-route — a Win32 `run_one`, the `fork`→re-exec isolation/pool,
+`main()` dispatch, and a Win64 example suite on top of the seam — after which the
+runner binary itself does isolation/timeout/containment for the Win64 tier and
+the suite no longer needs `--no-fork`.
 
 ## Caveats
 
