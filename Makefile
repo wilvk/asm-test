@@ -42,6 +42,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: sanitize coverage tidy
+.PHONY: deps
 all: test
 
 # Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
@@ -177,6 +178,16 @@ uninstall:
 	      $(incdir)/asm_nasm.inc
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
+
+# --- Optional dependency bootstrap -----------------------------------------
+# `make deps` installs the OPTIONAL toolchain (nasm, pkg-config, libunicorn,
+# clang-tidy) via the system package manager — the core build needs none of it.
+# scripts/install-deps.sh detects apt-get/dnf/yum/pacman/zypper/apk/brew. Pass
+# DEPS_ARGS to select a subset, e.g. `make deps DEPS_ARGS=--emu` or preview with
+# `make deps DEPS_ARGS=--dry-run`.
+DEPS_ARGS ?=
+deps:
+	sh scripts/install-deps.sh $(DEPS_ARGS)
 
 # --- Quality tooling targets (Track D) -------------------------------------
 # Build + run the example suites and the self-tests under ASan + UBSan. The

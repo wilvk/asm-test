@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install nasm
-        run: sudo apt-get update && sudo apt-get install -y nasm
+        run: make deps DEPS_ARGS=--nasm
 
       - name: Build and run test suites (NASM backend)
         run: make ASM_SYNTAX=nasm test
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install libunicorn
-        run: sudo apt-get update && sudo apt-get install -y libunicorn-dev pkg-config
+        run: make deps DEPS_ARGS=--emu
 
       - name: Build and run emulator suite
         run: make emu-test
@@ -118,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install clang-tidy
-        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+        run: make deps DEPS_ARGS=--tidy
       - name: Run clang-tidy
         run: make tidy
 

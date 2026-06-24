@@ -179,3 +179,16 @@ x86-64 or AArch64, Linux or macOS, with `make` and a C compiler (`cc` — gcc or
 clang), which also assembles the GAS-syntax `.s` sources. The optional NASM
 backend additionally needs `nasm` (x86-64 only). Installing the pkg-config file
 and consuming it needs `pkg-config`. See [DESIGN.md](DESIGN.md).
+
+The core build needs nothing beyond `make` + a C compiler. The **optional**
+tools (`nasm`, `pkg-config`, `libunicorn`, `clang-tidy`) can be installed
+cross-platform with:
+
+```sh
+make deps                       # full dev setup, via the system package manager
+make deps DEPS_ARGS=--emu       # just what `make emu-test` needs
+make deps DEPS_ARGS=--dry-run   # preview the commands without running them
+```
+
+[scripts/install-deps.sh](scripts/install-deps.sh) detects apt-get / dnf / yum /
+pacman / zypper / apk / brew (and uses `sudo` on Linux when not root).
