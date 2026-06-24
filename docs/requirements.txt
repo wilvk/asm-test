@@ -1,0 +1,6 @@
+# Documentation build dependencies (used by Read the Docs and locally).
+# Pinned to known-good majors; bump deliberately.
+sphinx>=7.2,<9
+myst-parser>=2.0,<5
+furo>=2024.1.29
+sphinx-copybutton>=0.5.2

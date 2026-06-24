@@ -13,3 +13,6 @@ asmtest_single.h
 *.gcno
 *.gcda
 *.plist
+
+# Sphinx documentation build output
+docs/_build/
