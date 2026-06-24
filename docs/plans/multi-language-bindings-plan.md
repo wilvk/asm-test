@@ -63,12 +63,44 @@ That gap is closed in **Track 0**.
 
 ---
 
-## Track 0 — Shared substrate *(prerequisite for every language) — planned*
+## Track 0 — Shared substrate *(prerequisite for every language) — in progress*
 
 **Goal.** Build the artifacts and contracts every binding consumes, once, so each
 language track is mechanical.
 
-### 0.1 Shared-library build targets
+**Status: 0.1 and 0.3 landed (the gating wedge); 0.2 / 0.4 / 0.5 still planned.**
+The two sub-items that make any FFI binding *possible* (loadable shared libraries)
+and *correct* (a drift-proof layout contract) are done and verified on x86-64
+macOS:
+
+- **0.1 shared libraries.** `make shared` builds `libasmtest.{so,dylib}` from
+  `-fPIC` objects (framework runtime + capture trampoline, in a separate
+  `build/pic/` tree); `make shared-emu` adds `emu.o` and links `-lunicorn` as a
+  separate `libasmtest_emu.{so,dylib}` so the core binding never pulls in Unicorn.
+  Platform-correct versioned filenames + soname/install-name + dev symlinks
+  (`libasmtest.dylib → libasmtest.1.dylib → libasmtest.1.0.0.dylib`, the ELF
+  `.so.MAJOR` equivalent on Linux). `make install-shared` / `install-shared-emu`
+  place them in `$(libdir)` and install a new `asmtest-emu.pc` (the core
+  `asmtest.pc` already serves the shared core lib). Verified end to end with a
+  `dlopen`/`dlsym` consumer that mirrors `regs_t` from the manifest and calls a
+  routine through the trampoline (→ correct result), and by staging the install
+  into a temp prefix (symlink chain + manifest + resolving `pkg-config`).
+- **0.3 layout contract.** `_Static_assert`s in `asmtest.h` / `asmtest_emu.h` tie
+  each register struct's critical offsets and size to `offsetof`/`sizeof`, so the
+  headers, the trampoline's hard-coded stores, and any binding can't drift apart
+  silently. `make manifest` compiles `scripts/gen-manifest.c` against the real
+  headers and emits `asmtest_abi.json` — a machine-readable layout (sizes, field
+  offsets, host arch, sentinels, flag masks) for every binding's generator to
+  consume instead of hand-transcribing offsets.
+
+Kept `make install` (static + headers) unchanged so the Track B install stays
+toolchain-light; the shared install is opt-in via the new targets. Remaining:
+**0.2** (designate the binding-ABI symbol set + optional non-jumping verdict
+shims), **0.4** (cross-language conformance corpus + expected-results table), and
+**0.5** (per-language CI template). The sub-sections below describe the full
+scope.
+
+### 0.1 Shared-library build targets *(done)*
 
 - `make shared` → `libasmtest.{so,dylib}` from `FRAMEWORK_OBJS` built `-fPIC`
   (framework runtime + capture trampoline). This is the artifact the **trampoline**
@@ -80,7 +112,7 @@ language track is mechanical.
   Mach-O), versioned filenames, and `make install` extended to place them under
   `$(libdir)` next to `libasmtest.a`. Extend `asmtest.pc` with a shared variant.
 
-### 0.2 A stable, generation-friendly "binding ABI"
+### 0.2 A stable, generation-friendly "binding ABI" *(planned)*
 
 - **Designate the contract symbols.** Document which functions/structs/constants
   are the public binding ABI (the capture + emulator entry points, `regs_t`,
@@ -95,7 +127,7 @@ language track is mechanical.
   printing TAP. Tier-1 bindings validate host-side and won't need these, but they
   make a C-side validate call possible for those who want both calls in the library.
 
-### 0.3 Per-architecture layout contract
+### 0.3 Per-architecture layout contract *(done)*
 
 - Emit a **machine-readable layout manifest** (a generated JSON/header listing
   each struct's size, fields, offsets, and the active arch) so bindings can pin
@@ -105,7 +137,7 @@ language track is mechanical.
 - Add `_Static_assert`s in C tying each documented offset to `offsetof`, so the
   manifest and the trampoline's stores can never drift apart unnoticed.
 
-### 0.4 Cross-language conformance corpus
+### 0.4 Cross-language conformance corpus *(planned)*
 
 - A fixed set of canonical routines (from `examples/`) plus a table of **expected
   captures** (return value, flags, callee-saved sentinels, FP/vector lanes, and for
@@ -113,7 +145,7 @@ language track is mechanical.
   same corpus and must reproduce the same results — one source of truth for "did the
   binding wire the ABI up correctly", reused by all tracks.
 
-### 0.5 CI scaffolding
+### 0.5 CI scaffolding *(planned)*
 
 - A reusable CI job template (toolchain install → build the two shared libs → run
   the language's binding tests over the conformance corpus) parameterised per
@@ -123,7 +155,8 @@ language track is mechanical.
 **Acceptance.** `make shared` / `make shared-emu` produce loadable libraries on all
 four native targets; the layout manifest matches `offsetof` under `_Static_assert`;
 the conformance corpus + expected-results table exist and the C reference passes
-them.
+them. *(First two clauses met and verified on x86-64 macOS; the other three native
+targets follow when the 0.5 CI template lands. The third clause is gated on 0.4.)*
 
 **Effort:** ~2–3 days. **Touches:** `Makefile`, `asmtest.pc.in`, headers
 (`_Static_assert` + optional shims), a small manifest generator, CI templates.

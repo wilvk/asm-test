@@ -43,6 +43,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
+.PHONY: shared shared-emu manifest install-shared install-shared-emu
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -65,10 +66,33 @@ AR              ?= ar
 PREFIX          ?= /usr/local
 DESTDIR         ?=
 ASMTEST_VERSION := 1.0.0
+ASMTEST_VER_MAJOR := $(word 1,$(subst ., ,$(ASMTEST_VERSION)))
 incdir := $(DESTDIR)$(PREFIX)/include/asmtest
 libdir := $(DESTDIR)$(PREFIX)/lib
 pcdir  := $(DESTDIR)$(PREFIX)/lib/pkgconfig
 pc_subst := sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(ASMTEST_VERSION)|g'
+
+# --- Shared-library naming (Track 0: multi-language bindings substrate) ------
+# Platform-correct versioned filenames, soname/install-name, and the dev
+# symlink, parameterised by library stem so the core and emulator libs share one
+# definition. $(call shlib_real,libasmtest) is the real linker output;
+# shlib_soname is the embedded name; shlib_dev is the unversioned dev symlink.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+shlib_real    = $(BUILD)/$(1).$(ASMTEST_VERSION).dylib
+shlib_soname  = $(1).$(ASMTEST_VER_MAJOR).dylib
+shlib_compat  = $(BUILD)/$(1).$(ASMTEST_VER_MAJOR).dylib
+shlib_dev     = $(BUILD)/$(1).dylib
+shlib_ldflags = -dynamiclib -install_name $(libdir)/$(call shlib_soname,$(1)) \
+                -current_version $(ASMTEST_VERSION) \
+                -compatibility_version $(ASMTEST_VER_MAJOR)
+else
+shlib_real    = $(BUILD)/$(1).so.$(ASMTEST_VERSION)
+shlib_soname  = $(1).so.$(ASMTEST_VER_MAJOR)
+shlib_compat  = $(BUILD)/$(1).so.$(ASMTEST_VER_MAJOR)
+shlib_dev     = $(BUILD)/$(1).so
+shlib_ldflags = -shared -Wl,-soname,$(call shlib_soname,$(1))
+endif
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -180,6 +204,62 @@ $(BUILD)/libasmtest.a: $(FRAMEWORK_OBJS)
 
 lib: $(BUILD)/libasmtest.a
 
+# --- Shared libraries + ABI manifest (Track 0) -----------------------------
+# Loadable artifacts for FFI bindings (Python/Rust/...) that dlopen()/dlsym()
+# the framework. The static libasmtest.a (Track B) stays the primary C path;
+# these add the position-independent shared objects bindings consume. Build
+# requires nothing the static path doesn't (shared-emu also needs libunicorn).
+#   make shared      libasmtest.{so,dylib} (+ versioned name + dev symlink)
+#   make shared-emu  libasmtest_emu.{so,dylib} (adds emu.o, links -lunicorn)
+#   make manifest    asmtest_abi.json — machine-readable struct layout for the
+#                    active host arch (consumed by every binding's generator)
+PIC_OBJS := $(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o
+
+$(BUILD)/pic:
+	mkdir -p $(BUILD)/pic
+
+# Position-independent objects (separate tree so they never collide with the
+# non-PIC objects the test/static-lib builds use).
+$(BUILD)/pic/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
+$(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -fPIC -c $< -o $@
+
+ifeq ($(ASM_SYNTAX),nasm)
+$(BUILD)/pic/capture.o: src/capture.asm include/asm_nasm.inc | $(BUILD)/pic
+	$(NASM) $(NASMFLAGS) $< -o $@
+else
+$(BUILD)/pic/capture.o: src/capture.s include/asm.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(ASFLAGS) -fPIC -c $< -o $@
+endif
+
+# Core shared lib: real versioned file + soname/dev symlinks beside it.
+shared: $(call shlib_dev,libasmtest)
+$(call shlib_real,libasmtest): $(PIC_OBJS)
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest) $^ -o $@
+$(call shlib_dev,libasmtest): $(call shlib_real,libasmtest)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest)
+	ln -sf $(notdir $(call shlib_compat,libasmtest)) $@
+
+# Emulator shared lib: kept separate so the core binding never pulls in Unicorn.
+shared-emu: $(call shlib_dev,libasmtest_emu)
+$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ $(UNICORN_LIBS) -o $@
+$(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_emu)) $@
+
+# Machine-readable layout manifest: a small program compiled against the real
+# headers prints sizeof/offsetof for the host arch (see scripts/gen-manifest.c).
+manifest: asmtest_abi.json
+asmtest_abi.json: $(BUILD)/gen-manifest
+	./$< > $@
+	@echo "manifest: wrote $@ ($(UNAME_S))"
+$(BUILD)/gen-manifest: scripts/gen-manifest.c include/asmtest.h \
+                       include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $< -o $@
+
 # Generate a local pkg-config file (baked with the current PREFIX/VERSION).
 pc: asmtest.pc
 asmtest.pc: asmtest.pc.in
@@ -205,6 +285,37 @@ uninstall:
 	      $(incdir)/asm_nasm.inc
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
+	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest)) \
+	      $(libdir)/$(call shlib_soname,libasmtest) \
+	      $(libdir)/$(notdir $(call shlib_dev,libasmtest))
+	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest_emu)) \
+	      $(libdir)/$(call shlib_soname,libasmtest_emu) \
+	      $(libdir)/$(notdir $(call shlib_dev,libasmtest_emu)) \
+	      $(pcdir)/asmtest-emu.pc $(incdir)/asmtest_abi.json
+
+# Install the shared libs alongside libasmtest.a (Track 0). Kept separate from
+# `make install` so the static-only install stays toolchain-light; run after it.
+# Copies the real versioned file, recreates the soname + dev symlinks in
+# $(libdir), and installs the JSON layout manifest next to the headers.
+install-shared: shared manifest
+	mkdir -p $(libdir) $(incdir)
+	cp $(call shlib_real,libasmtest) $(libdir)/
+	ln -sf $(notdir $(call shlib_real,libasmtest)) \
+	       $(libdir)/$(call shlib_soname,libasmtest)
+	ln -sf $(call shlib_soname,libasmtest) $(libdir)/$(notdir $(call shlib_dev,libasmtest))
+	cp asmtest_abi.json $(incdir)/
+	@echo "installed shared libasmtest $(ASMTEST_VERSION) to $(libdir)"
+
+# Install the emulator shared lib + its pkg-config (needs libunicorn present).
+install-shared-emu: shared-emu
+	mkdir -p $(libdir) $(pcdir)
+	cp $(call shlib_real,libasmtest_emu) $(libdir)/
+	ln -sf $(notdir $(call shlib_real,libasmtest_emu)) \
+	       $(libdir)/$(call shlib_soname,libasmtest_emu)
+	ln -sf $(call shlib_soname,libasmtest_emu) \
+	       $(libdir)/$(notdir $(call shlib_dev,libasmtest_emu))
+	$(pc_subst) asmtest-emu.pc.in > $(pcdir)/asmtest-emu.pc
+	@echo "installed shared libasmtest_emu $(ASMTEST_VERSION) to $(libdir)"
 
 # --- Optional dependency bootstrap -----------------------------------------
 # `make deps` installs the OPTIONAL toolchain (nasm, pkg-config, libunicorn,
@@ -432,4 +543,4 @@ docs-clean:
 
 clean: docs-clean
 	rm -rf $(BUILD)
-	rm -f asmtest.pc asmtest_single.h
+	rm -f asmtest.pc asmtest-emu.pc asmtest_single.h asmtest_abi.json

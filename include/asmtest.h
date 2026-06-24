@@ -104,6 +104,18 @@ typedef struct {
 #define ASMTEST_SF (1UL << 7)  /* sign     */
 #define ASMTEST_OF (1UL << 11) /* overflow */
 
+/* Layout contract (Track 0): these offsets are hard-coded in src/capture.s and
+ * relied on by every language binding's mirror of regs_t. The asserts make the
+ * header, the trampoline's stores, and the generated manifest unable to drift
+ * apart silently. */
+_Static_assert(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
+_Static_assert(offsetof(regs_t, rdx) == 8, "regs_t.rdx @8");
+_Static_assert(offsetof(regs_t, rbx) == 16, "regs_t.rbx @16");
+_Static_assert(offsetof(regs_t, flags) == 64, "regs_t.flags @64");
+_Static_assert(offsetof(regs_t, fret) == 72, "regs_t.fret @72");
+_Static_assert(offsetof(regs_t, vec) == 80, "regs_t.vec @80");
+_Static_assert(sizeof(regs_t) == 336, "regs_t size");
+
 #elif defined(__aarch64__)
 
 typedef struct {
@@ -141,6 +153,16 @@ typedef struct {
 #define ASMTEST_CF (1UL << 29) /* carry    */
 #define ASMTEST_ZF (1UL << 30) /* zero     */
 #define ASMTEST_NF (1UL << 31) /* negative */
+
+/* Layout contract (Track 0); see the x86-64 branch above. Offsets match the
+ * stores in src/capture.s and the per-arch comments on the fields. */
+_Static_assert(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
+_Static_assert(offsetof(regs_t, x19) == 8, "regs_t.x19 @8");
+_Static_assert(offsetof(regs_t, x29) == 88, "regs_t.x29 @88");
+_Static_assert(offsetof(regs_t, flags) == 96, "regs_t.flags @96");
+_Static_assert(offsetof(regs_t, fret) == 104, "regs_t.fret @104");
+_Static_assert(offsetof(regs_t, vec) == 112, "regs_t.vec @112");
+_Static_assert(sizeof(regs_t) == 624, "regs_t size");
 
 #else
 #error "asm-test supports x86-64 and AArch64 only"

@@ -39,6 +39,12 @@ typedef struct {
     emu_vec128_t xmm[16];
 } emu_x86_regs_t;
 
+/* Layout contract (Track 0): bindings mirror these register structs, and the
+ * generated manifest (scripts/gen-manifest.c) reports their offsets. The
+ * asserts guarantee the header, the manifest, and any binding agree. */
+_Static_assert(offsetof(emu_x86_regs_t, xmm) == 144, "emu_x86_regs_t.xmm @144");
+_Static_assert(sizeof(emu_x86_regs_t) == 400, "emu_x86_regs_t size");
+
 /* Kind of invalid access, mirrors Unicorn's uc_mem_type for faults. */
 typedef enum {
     EMU_FAULT_NONE = 0,
@@ -152,6 +158,9 @@ typedef struct {
     emu_vec128_t v[32]; /* NEON v0..v31; a double return is v[0].f64[0] */
 } emu_arm64_regs_t;
 
+_Static_assert(offsetof(emu_arm64_regs_t, v) == 272, "emu_arm64_regs_t.v @272");
+_Static_assert(sizeof(emu_arm64_regs_t) == 784, "emu_arm64_regs_t size");
+
 typedef struct {
     bool ok;
     int uc_err;
@@ -211,6 +220,9 @@ typedef struct {
     emu_vec128_t f[32]; /* F0..F31 (D ext, 64-bit in f64[0]); fa0 = f[10] */
 } emu_riscv_regs_t;
 
+_Static_assert(offsetof(emu_riscv_regs_t, f) == 264, "emu_riscv_regs_t.f @264");
+_Static_assert(sizeof(emu_riscv_regs_t) == 776, "emu_riscv_regs_t size");
+
 typedef struct {
     bool ok;
     int uc_err;
@@ -267,6 +279,9 @@ typedef struct {
     uint32_t cpsr;  /* condition flags live in the top bits  */
     emu_vec128_t q[16]; /* VFP/NEON q0..q15; d(2k)=q[k].f64[0], d(2k+1)=.f64[1] */
 } emu_arm_regs_t;
+
+_Static_assert(offsetof(emu_arm_regs_t, q) == 72, "emu_arm_regs_t.q @72");
+_Static_assert(sizeof(emu_arm_regs_t) == 328, "emu_arm_regs_t size");
 
 typedef struct {
     bool ok;

@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include/asmtest
+
+Name: asmtest-emu
+Description: asm-test emulator tier (Unicorn-backed) shared library
+URL: https://github.com/wilvk/asm-test
+Version: @VERSION@
+Libs: -L${libdir} -lasmtest_emu -lunicorn
+Cflags: -I${includedir}

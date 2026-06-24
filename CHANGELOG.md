@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Shared libraries + ABI manifest (Track 0).** The first slice of the
+  multi-language bindings substrate. `make shared` builds
+  `libasmtest.{so,dylib}` (framework runtime + capture trampoline, from `-fPIC`
+  objects in a separate `build/pic/` tree) and `make shared-emu` builds
+  `libasmtest_emu.{so,dylib}` (adds `emu.o`, links `-lunicorn`), both with
+  platform-correct versioned filenames, soname/install-name, and dev symlinks;
+  `make install-shared` / `install-shared-emu` install them plus a new
+  `asmtest-emu.pc`. `make manifest` emits `asmtest_abi.json` — a machine-readable
+  struct layout (sizes, field offsets, host arch, sentinels, flag masks) compiled
+  from the real headers via `scripts/gen-manifest.c` — so FFI bindings consume
+  offsets instead of hand-transcribing them. `_Static_assert`s in `asmtest.h` /
+  `asmtest_emu.h` pin `regs_t` and the emulator register structs to `offsetof`,
+  preventing the headers, the trampoline's stores, and the manifest from drifting
+  apart. `make install` (static + headers) is unchanged. See
+  [docs/plans/multi-language-bindings-plan.md](docs/plans/multi-language-bindings-plan.md).
 - **Parallel execution (Track E).** `-jN` / `--jobs=N` runs up to N tests
   concurrently as forked children (a pool over the existing per-test fork model),
   while output stays in registration order regardless of finish order. Per-test

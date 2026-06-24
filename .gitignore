@@ -8,6 +8,10 @@ build/
 asmtest.pc
 asmtest_single.h
 
+# Generated bindings-substrate artifacts (Track 0)
+asmtest-emu.pc
+asmtest_abi.json
+
 # Coverage / analysis artifacts (Track D)
 *.gcov
 *.gcno
