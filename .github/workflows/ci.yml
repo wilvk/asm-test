@@ -121,6 +121,29 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
+  # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
+  # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:
+  # the fast native lane via __attribute__((ms_abi)) on the runner itself, then a
+  # real Win64 PE (mingw-w64 + `nasm -f win64`) run under Wine in an isolated
+  # image. Both replay the same capture suite (return/FP/vector capture, shadow
+  # space, and GP + xmm6..15 ABI-preservation), which doubles as the native
+  # Win64 conformance check.
+  win64:
+    name: win64 (capture trampoline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Win64 capture via the native ms_abi lane
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm
+          make win64-msabi-test
+
+      - name: Win64 capture as a real PE under Wine
+        run: make docker-win64
+
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).
   sanitize:

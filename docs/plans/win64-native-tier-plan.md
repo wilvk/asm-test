@@ -244,23 +244,33 @@ actually linked; the host-side preservation checks live in the test driver for n
 
 ---
 
-## Phase 3 — Trampoline validation slice *(decision gate)*
+## Phase 3 — Trampoline validation slice *(done; decision gate)*
 
-**Goal.** Validate the trampoline + capture path **without** the runner port — the
-"recommended first slice" from Track E.1.
+**Status: done.** The Win64 capture suite (`tests/win64/test_capture_win64.c`,
+all eight variants) runs **without a runner** — it is a plain program, not
+forked — and is green under **both lanes**: the native `ms_abi` lane
+(`make win64-msabi-test`) and a real PE under Wine (`make docker-win64`). Its
+host-side preservation checks cover the full Win64 callee-saved set, GP
+(`rbx`/`rbp`/`rdi`/`rsi`/`r12–15`) **and** `xmm6–15`. **CI wired:** a new `win64`
+job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the
+native lane on the x86-64 runner, then the Wine PE lane in the isolated image —
+no Windows host, on every push.
 
-**Deliverables.** A single Win64 suite (e.g. an `examples/` arith + ABI-preservation
-case) cross-assembled `nasm -f win64`, run **`--no-fork`**: first under Lane A on
-the existing CI for fast feedback, then under Lane B (`make docker-win64` /
-`wine64`) for the real PE path.
+### Decision gate — recommendation: stop here (defer Phase 4)
 
-**Acceptance.** The suite passes green under both lanes; `ASSERT_ABI_PRESERVED`
-covers the full Win64 callee-saved set (incl. `rdi`/`rsi`, `xmm6–15`).
+The shipped `--no-fork` tier already delivers the substantive value: the
+Microsoft x64 ABI, capture, and ABI-preservation are validated on real silicon
+(and as a real PE), drift-proofed by the header `_Static_assert`s and the
+manifest, and CI'd with no Windows host. **Phase 4 (the Win32 runner port) buys
+only the framework's process-level guarantees for the Win64 tier** — per-test
+crash *isolation*, *timeout*, and guard pages — which matter when running
+crash-prone or untrusted routines, not for ABI/capture testing. Given its cost
+(~1–2 weeks, the bulk of the whole tier) versus that narrow marginal benefit, the
+recommendation is to **treat Phase 3 as the shipping milestone and pick up
+Phase 4 only on concrete demand** for isolated Win64 execution. Phases 4–5 below
+remain as scoped, for when that demand arrives.
 
-**Decision gate.** From here, decide whether the Win32 runner port (Phase 4) is
-worth it, or whether `--no-fork` Win64 coverage under Wine is enough.
-
-**Effort.** ~1 day (on top of Phases 1–2).
+**Effort.** ~1 day (on top of Phases 1–2). *(Done.)*
 
 ---
 
@@ -318,16 +328,18 @@ updated to "landed."
 
 ## Suggested sequencing
 
-1. **Phase 0** — substrate (Docker + Wine image, win64 build path). Gates run.
-2. **Phase 1 + 2** — trampoline + layout/manifest/corpus (the ~2–3 day "easy part",
-   exercised fast via Lane A).
-3. **Phase 3** — the validation slice + **decision gate**.
+1. **Phase 0** — substrate (Docker + Wine image, win64 build path). Gates run. *(done)*
+2. **Phase 1 + 2** — trampoline + layout/manifest (the "easy part", exercised fast
+   via Lane A). *(done)*
+3. **Phase 3** — the validation slice + **decision gate**. *(done — gate says stop)*
 4. **Phase 4** — the Win32 runner port, *only if* the gate says the full tier is
-   wanted; this is the bulk of the effort.
-5. **Phase 5** — CI + optional `windows-latest` + docs.
+   wanted; this is the bulk of the effort. *(deferred by the Phase 3 gate.)*
+5. **Phase 5** — CI + optional `windows-latest` + docs. *(CI landed in Phase 3;
+   the `windows-latest` sign-off and a `docs/win64.md` remain optional follow-ons.)*
 
-Phases 0–3 deliver a usable, CI'd `--no-fork` Win64 trampoline tier on the existing
-Linux CI in ~4–5 days. Phase 4 is the optional deep investment.
+**Milestone reached: Phases 0–3 ship a usable, CI'd `--no-fork` Win64 trampoline
+tier on the existing Linux CI — no Windows host.** Phase 4 is the optional deep
+investment, deferred until isolated Win64 execution is actually needed.
 
 ---
 
