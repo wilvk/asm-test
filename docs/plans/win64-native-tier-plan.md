@@ -120,7 +120,21 @@ runs a trivial cross-compiled `.exe` under `wine64` to completion.
 
 ---
 
-## Phase 1 — Win64 capture trampoline
+## Phase 1 — Win64 capture trampoline *(in progress)*
+
+**Status: core variant landed.** `src/capture_win64.asm` implements
+`asm_call_capture_win64` (the Win64 mirror of `asm_call_capture`): seeds the Win64
+callee-saved set with sentinels, marshals 6 integer args (rcx/rdx/r8/r9 + two on
+the stack above the 32-byte shadow space), calls fn, and snapshots ret / rdx /
+callee-saved / RFLAGS into a `win64_regs_t` (`tests/win64/win64_regs.h`, offsets to
+be promoted into `include/asmtest.h` in Phase 2). Verified **both lanes** (7/7):
+`make win64-msabi-test` natively via `__attribute__((ms_abi))` on x86-64 macOS, and
+`make win64-test` as a real PE under Wine in `make docker-win64` — covering return
+capture, stack-arg + shadow-space marshalling, and ABI-violation detection (a
+routine that clobbers `rbx` is caught). The image CMD is now `make win64-check`
+(smoke + capture test). **Remaining variants** (next slices): `_fp`, `_vec`,
+`_fp_n`, `_vec_n`, `_args`, `_sret`, `bigstruct` — including the `xmm6–15`
+callee-saved FP-preservation capture.
 
 **Goal.** Mirror the eight `asm_call_capture*` variants for the Microsoft x64 ABI.
 

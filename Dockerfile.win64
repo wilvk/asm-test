@@ -36,4 +36,4 @@ RUN wine64 wineboot --init >/dev/null 2>&1 || true
 
 COPY . .
 
-CMD ["make", "win64-smoke"]
+CMD ["make", "win64-check"]

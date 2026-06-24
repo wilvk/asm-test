@@ -443,8 +443,11 @@ docker-bindings-clean:
 # capture trampoline (Phase 1) will use the same `nasm -f win64` + mingw-w64
 # link chain the smoke target below proves. Override the tools to run locally
 # (non-Docker) where a Win64 cross-toolchain + Wine are installed.
-#   make win64-smoke     host-side: cross-build + run the substrate smoke test
-#   make docker-win64    same, inside the isolated asmtest-win64 image (x86-64)
+#   make win64-smoke       host-side substrate smoke (PE -> Wine)
+#   make win64-test        host-side capture-trampoline test (PE -> Wine)
+#   make win64-msabi-test  fast native lane (no Wine; clang/gcc ms_abi, x86-64)
+#   make win64-check       smoke + capture test (the image's CMD)
+#   make docker-win64      all of the above inside the asmtest-win64 image (x86-64)
 WIN64_CC        ?= x86_64-w64-mingw32-gcc
 WIN64_NASM      ?= nasm
 WIN64_NASMFLAGS ?= -f win64
@@ -463,7 +466,41 @@ win64-smoke: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/smoke.exe
 	$(WINE) $(WIN64_BUILD)/smoke.exe
 
-# Build the win64 image on the cached bindings base, then run its smoke CMD.
+# Phase 1 capture trampoline (PE/Wine lane): assemble the Win64 trampoline +
+# routines with `nasm -f win64`, link the driver with mingw-w64, run under Wine.
+.PHONY: win64-test
+win64-test: | $(WIN64_BUILD)
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ src/capture_win64.asm \
+	  -o $(WIN64_BUILD)/capture_win64.obj
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ tests/win64/routines_win64.asm \
+	  -o $(WIN64_BUILD)/routines_win64.obj
+	$(WIN64_CC) -O2 -Wall -Itests/win64 tests/win64/test_capture_win64.c \
+	  $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj \
+	  -o $(WIN64_BUILD)/test_capture_win64.exe
+	$(WINE) $(WIN64_BUILD)/test_capture_win64.exe
+
+# Fast native lane (Win64 native tier plan, lane A): no Wine, no PE. The host is
+# System V, so the trampoline is driven via clang/gcc __attribute__((ms_abi)).
+# x86-64 only (ms_abi is an x86-64 attribute).
+WIN64_MSABI_FMT := $(if $(filter Darwin,$(shell uname -s)),macho64,elf64)
+.PHONY: win64-msabi-test
+win64-msabi-test: | $(WIN64_BUILD)
+	$(WIN64_NASM) -f $(WIN64_MSABI_FMT) -Iinclude/ src/capture_win64.asm \
+	  -o $(WIN64_BUILD)/capture_win64.msabi.o
+	$(WIN64_NASM) -f $(WIN64_MSABI_FMT) -Iinclude/ tests/win64/routines_win64.asm \
+	  -o $(WIN64_BUILD)/routines_win64.msabi.o
+	$(CC) -O2 -Wall -Itests/win64 -c tests/win64/test_capture_win64.c \
+	  -o $(WIN64_BUILD)/test_capture_win64.msabi.o
+	$(CC) $(WIN64_BUILD)/test_capture_win64.msabi.o \
+	  $(WIN64_BUILD)/capture_win64.msabi.o $(WIN64_BUILD)/routines_win64.msabi.o \
+	  -o $(WIN64_BUILD)/test_capture_win64.msabi
+	./$(WIN64_BUILD)/test_capture_win64.msabi
+
+# What the asmtest-win64 image runs: the substrate smoke + the capture test.
+.PHONY: win64-check
+win64-check: win64-smoke win64-test
+
+# Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.
 .PHONY: docker-win64
 docker-win64: docker-bindings-base
