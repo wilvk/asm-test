@@ -201,11 +201,13 @@ data. `make python-test` builds the shared libs + manifest + corpus + a routine
 fixture lib and runs pytest; [`tests/test_conformance.py`](../../bindings/python/tests/test_conformance.py)
 replays the same `corpus.json` the C reference emits and reproduces all 8 cases
 (10/10 green on x86-64 macOS), proving the substrate end to end from another
-language. The `bindings-python` CI job runs it on x86-64 + arm64 Linux. A
-`pyproject.toml` packages it; the deferred follow-ons are cffi API-mode, wheels
-bundling the prebuilt libs (`cibuildwheel`/PyPI), and the Tier-2 idiomatic
-assertion layer. The ctypes path consuming the manifest is the layout chosen
-below; the rest of the table is the eventual target.
+language. The CI runs it (see the `bindings` matrix). A `pyproject.toml` packages it. **Tier 2
+landed**: `asmtest.assertions` (`assert_ret`, `assert_abi_preserved`,
+`assert_flag`, `assert_fp`, `assert_vec_f32`, `assert_no_fault`, `assert_reg`, …)
+with `tests/test_assertions.py` covering both the pass paths and that the failure
+paths raise. Deferred: cffi API-mode and wheels (`cibuildwheel`/PyPI). The ctypes
+path consuming the manifest is the layout chosen below; the rest of the table is
+the eventual target.
 
 | Aspect | Approach |
 |---|---|
@@ -234,9 +236,13 @@ pointer-sharing trivial and lifetime-checked. Exposes `capture` / `capture_fp` /
 whose `EmuResult` carries faults as data. `make rust-test` builds the libs + the
 routine fixture and runs `cargo test`;
 [`tests/conformance.rs`](../../bindings/rust/tests/conformance.rs) replays the
-corpus (8/8, verified in the `asmtest-bindings` Docker image). Deferred: a
-`bindgen`-generated `-sys` crate, crates.io packaging, and Tier 2. The table
-below is the eventual target; the shipped Tier 1 is the hand-written FFI above.
+corpus (8/8, verified in the isolated `asmtest-rust` Docker image). **Tier 2
+landed**: assertion methods on `Regs` / `EmuResult` (`assert_ret`,
+`assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_no_fault`,
+`assert_reg`, …) with `tests/assertions.rs` covering the pass paths and
+`#[should_panic]` failure paths. Deferred: a `bindgen`-generated `-sys` crate and
+crates.io packaging. The table below is the eventual target; the shipped Tier 1
+is the hand-written FFI above.
 
 | Aspect | Approach |
 |---|---|

@@ -9,7 +9,6 @@ Driven by ``make python-test``, which sets:
   ASMTEST_CORPUS_JSON  the corpus emitted by `make conformance`
   ASMTEST_CORPUS_LIB   a shared lib exporting the canonical routines as symbols
 """
-import ctypes
 import json
 import os
 from pathlib import Path
@@ -19,7 +18,6 @@ import pytest
 import asmtest
 
 _CORPUS_JSON = os.environ.get("ASMTEST_CORPUS_JSON")
-_CORPUS_LIB = os.environ.get("ASMTEST_CORPUS_LIB")
 
 
 def _load_cases():
@@ -31,21 +29,10 @@ def _load_cases():
 _CASES = _load_cases()
 
 
-@pytest.fixture(scope="session")
-def routines():
-    if not _CORPUS_LIB:
-        pytest.skip("ASMTEST_CORPUS_LIB not set (run via `make python-test`)")
-    return ctypes.CDLL(_CORPUS_LIB)
-
-
-def _addr(routines, name):
-    return ctypes.cast(getattr(routines, name), ctypes.c_void_p).value
-
-
 @pytest.mark.skipif(not _CASES, reason="no corpus (run `make python-test`)")
 @pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
-def test_corpus_case(case, routines):
-    fn = _addr(routines, case["routine"])
+def test_corpus_case(case, routine):
+    fn = routine(case["routine"])
     expect = case["expect"]
 
     if case["tier"] == "capture":

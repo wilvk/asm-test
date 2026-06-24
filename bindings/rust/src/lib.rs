@@ -96,6 +96,38 @@ impl Regs {
     pub fn flag_set(&self, mask: u64) -> bool {
         self.flags & mask != 0
     }
+
+    // --- Tier-2 idiomatic assertions (panic with a clear message) --- //
+
+    /// Assert the integer return value equals `expected`.
+    pub fn assert_ret(&self, expected: u64) {
+        assert!(self.ret == expected,
+            "return value: got {}, want {}", self.ret, expected);
+    }
+
+    /// Assert every callee-saved register was restored.
+    pub fn assert_abi_preserved(&self) {
+        assert!(abi_preserved(self),
+            "ABI not preserved: a callee-saved register was not restored");
+    }
+
+    /// Assert a callee-saved register was *not* restored (the negative case).
+    pub fn assert_abi_clobbered(&self) {
+        assert!(!abi_preserved(self),
+            "expected an ABI violation, but all callee-saved registers were restored");
+    }
+
+    /// Assert condition flag bit(s) `mask` are set (or clear when `set` is false).
+    pub fn assert_flag(&self, mask: u64, set: bool) {
+        let got = self.flag_set(mask);
+        assert!(got == set, "flag {:#x}: got {}, want {}", mask, got, set);
+    }
+
+    /// Assert the scalar double return equals `expected` exactly.
+    pub fn assert_fp(&self, expected: f64) {
+        assert!(self.fret == expected,
+            "FP return: got {}, want {}", self.fret, expected);
+    }
 }
 
 // Condition-flag bit masks (host arch), matching asmtest.h.
@@ -158,6 +190,40 @@ pub struct EmuResult {
 impl Default for EmuResult {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
+    }
+}
+
+impl EmuResult {
+    /// Read an x86-64 guest register by name (rax, rbx, …, r15, rip, rflags).
+    pub fn reg(&self, name: &str) -> u64 {
+        match name {
+            "rax" => self.regs.rax, "rbx" => self.regs.rbx, "rcx" => self.regs.rcx,
+            "rdx" => self.regs.rdx, "rsi" => self.regs.rsi, "rdi" => self.regs.rdi,
+            "rbp" => self.regs.rbp, "rsp" => self.regs.rsp, "r8" => self.regs.r8,
+            "r9" => self.regs.r9, "r10" => self.regs.r10, "r11" => self.regs.r11,
+            "r12" => self.regs.r12, "r13" => self.regs.r13, "r14" => self.regs.r14,
+            "r15" => self.regs.r15, "rip" => self.regs.rip, "rflags" => self.regs.rflags,
+            _ => 0,
+        }
+    }
+
+    // --- Tier-2 idiomatic assertions (panic with a clear message) --- //
+
+    /// Assert the run completed without an invalid memory access.
+    pub fn assert_no_fault(&self) {
+        assert!(!self.faulted,
+            "unexpected fault at {:#x} (kind {})", self.fault_addr, self.fault_kind);
+    }
+
+    /// Assert the run hit an invalid memory access.
+    pub fn assert_fault(&self) {
+        assert!(self.faulted, "expected a fault, but the run completed cleanly");
+    }
+
+    /// Assert an x86-64 guest register equals `expected`.
+    pub fn assert_reg(&self, name: &str, expected: u64) {
+        let got = self.reg(name);
+        assert!(got == expected, "register {}: got {}, want {}", name, got, expected);
     }
 }
 

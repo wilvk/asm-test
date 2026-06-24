@@ -13,6 +13,7 @@ architecture the shared library was built for.
         res = e.call(routine_addr, [40, 2])
         assert not res.faulted and res.reg("rax") == 42
 """
+from . import assertions
 from .core import (
     Context,
     Emulator,
@@ -31,6 +32,7 @@ __all__ = [
     "Emulator",
     "EmuResult",
     "Regs",
+    "assertions",
     "capture",
     "capture_fp",
     "capture_vec",

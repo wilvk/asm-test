@@ -8,6 +8,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Tier-2 idiomatic assertions (Python, Rust).** Optional assertion layers over
+  the Tier-1 result objects, with legible failure messages. Python:
+  `asmtest.assertions` (`assert_ret`, `assert_abi_preserved`, `assert_flag`,
+  `assert_fp`, `assert_vec_f32`, `assert_no_fault`, `assert_reg`, …) +
+  `tests/test_assertions.py`. Rust: `assert_ret` / `assert_abi_preserved` /
+  `assert_flag` / `assert_fp` / `assert_no_fault` / `assert_reg` methods on
+  `Regs` / `EmuResult` + `tests/assertions.rs`. Both cover the pass paths and the
+  failure paths (pytest `raises` / Rust `should_panic`).
+
 - **Node, Java, .NET, Ruby & Lua bindings (Tracks N/J/D/C).** Five more language
   wrappers, all over a new opaque-handle FFI layer (`src/ffi.c` + emu helpers in
   `emu.c`): `asmtest_regs_new` + `asmtest_capture6` / `_fp2` + `asmtest_regs_*`
