@@ -31,8 +31,12 @@ static asmtest_case_t *asmtest_head = NULL;
 static asmtest_case_t *asmtest_tail = NULL;
 static asmtest_hook_t *asmtest_hooks = NULL;
 
+#if !defined(_WIN32)
 sigjmp_buf asmtest_jmp;
 static volatile sig_atomic_t asmtest_in_test = 0;
+#else
+static volatile int asmtest_in_test = 0;
+#endif
 
 static char asmtest_msg[1024];
 static const char *asmtest_loc_file;
@@ -78,6 +82,22 @@ volatile long asmtest_bench_sink;
 /* Failure / skip                                                      */
 /* ------------------------------------------------------------------ */
 
+/* The per-test non-local exit. POSIX uses siglongjmp into the runner's jump
+ * buffer; the Win64 tier uses the __builtin_longjmp recovery armed by the
+ * in-process test facility (src/platform_win32.c), shared with its crash and
+ * timeout paths. Both unwind to run_one's recovery point. */
+#if defined(_WIN32)
+__attribute__((noreturn)) static void asmtest_jump(int reason) {
+    asmtest_win32_test_reason = reason;
+    asmtest_win32_test_disarm();
+    __builtin_longjmp(asmtest_win32_test_recover, 1);
+}
+#else
+__attribute__((noreturn)) static void asmtest_jump(int reason) {
+    siglongjmp(asmtest_jmp, reason);
+}
+#endif
+
 void asmtest_fail(const char *file, int line, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -85,12 +105,12 @@ void asmtest_fail(const char *file, int line, const char *fmt, ...) {
     va_end(ap);
     asmtest_loc_file = file;
     asmtest_loc_line = line;
-    siglongjmp(asmtest_jmp, JMP_FAIL);
+    asmtest_jump(JMP_FAIL);
 }
 
 void asmtest_skip(const char *reason) {
     snprintf(asmtest_msg, sizeof asmtest_msg, "%s", reason ? reason : "");
-    siglongjmp(asmtest_jmp, JMP_SKIP);
+    asmtest_jump(JMP_SKIP);
 }
 
 /* ------------------------------------------------------------------ */
@@ -384,7 +404,13 @@ void asmtest_guarded_free_under(void *p, size_t n) {
 
 /* ------------------------------------------------------------------ */
 /* Large struct-by-value parameter (arch-divergent dispatch)           */
+/*                                                                     */
+/* These framework helpers drive the System V capture trampoline; the  */
+/* Win64 tier uses the asm_call_capture*_win64 entry points instead, so */
+/* they are omitted from the Win64 runner build (they would otherwise   */
+/* pull in unresolved SysV trampoline symbols).                         */
 /* ------------------------------------------------------------------ */
+#if !defined(_WIN32)
 
 #if defined(__x86_64__)
 extern void asm_bigstruct_x86(regs_t *out, void *fn, const long *iargs,
@@ -408,6 +434,8 @@ void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
     asm_bigstruct_x86(out, fn, iargs, niargs, sptr, ssize);
 #endif
 }
+
+#endif /* !_WIN32 (bigstruct dispatch) */
 
 /* ------------------------------------------------------------------ */
 /* Differential / property testing (Phase 7)                           */
@@ -445,6 +473,12 @@ static uint64_t asmtest_seed(void) {
     }
     return seed;
 }
+
+/* The differential helpers and the POSIX signal-based crash/timeout handlers
+ * below drive the System V trampoline / sigaction; the Win64 tier uses the
+ * asm_call_capture*_win64 entry points and the platform_win32.c test facility,
+ * so they are gated out of the Win64 runner build. */
+#if !defined(_WIN32)
 
 void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
@@ -574,6 +608,12 @@ static void install_handlers(void) {
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGALRM, &sa, NULL); /* per-test timeout (see run_one) */
 }
+
+#else /* _WIN32: crashes/timeouts are handled per-test by the test facility */
+
+static void install_handlers(void) {}
+
+#endif /* !_WIN32 */
 
 /* ------------------------------------------------------------------ */
 /* Runner                                                              */

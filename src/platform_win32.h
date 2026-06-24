@@ -53,6 +53,27 @@ typedef struct {
 int asmtest_win32_guard(void (*fn)(void *), void *arg,
                         asmtest_win32_fault_t *fault);
 
+/* Runner per-test in-process facility (the `--no-fork` execution path). Tests
+ * run one at a time, so a single global recovery point suffices. `begin` arms a
+ * vectored exception handler (a hardware fault) and, when timeout_ms > 0, a
+ * watchdog (a hung test); a crash, a timeout, or an assertion failure
+ * (asmtest_fail -> __builtin_longjmp on `asmtest_win32_test_recover`) all unwind
+ * to the runner's `__builtin_setjmp` recovery, leaving `asmtest_win32_test_reason`
+ * set. `disarm` is called by the assertion path before it longjmps; `end` tears
+ * the arming down after the test. */
+enum {
+    ASMTEST_WIN32_REASON_CRASH = 1000001,
+    ASMTEST_WIN32_REASON_TIMEOUT = 1000002
+};
+
+extern void *asmtest_win32_test_recover[5]; /* __builtin_setjmp/longjmp buffer */
+extern volatile int asmtest_win32_test_reason;
+extern asmtest_win32_fault_t asmtest_win32_test_fault;
+
+void asmtest_win32_test_begin(unsigned timeout_ms);
+void asmtest_win32_test_disarm(void);
+void asmtest_win32_test_end(void);
+
 #endif /* _WIN32 */
 
 #endif /* ASMTEST_PLATFORM_WIN32_H */

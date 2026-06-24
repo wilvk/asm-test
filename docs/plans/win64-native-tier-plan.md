@@ -347,12 +347,22 @@ itself builds and runs for the Win64 target.
   Win32 build uses `platform_win32.c`). Verified **no POSIX regression** — the
   library builds and a suite (incl. `--filter`) runs identically on the host.
 
-The remaining (larger) integration is the execution model: a Win32 `run_one`
-(crash-to-failure via `asmtest_win32_guard`, assertion failures via the same
-`__builtin_longjmp` recovery instead of `siglongjmp`), the per-test isolation/pool
+- **In-process test facility + jump routing.** `src/platform_win32.c` adds the
+  runner's per-test recovery facility — `asmtest_win32_test_begin/disarm/end` arm a
+  vectored exception handler (crash) and a watchdog timer (timeout) that both
+  redirect to a landing pad which `__builtin_longjmp`s to a single global recovery
+  point. `src/asmtest.c`'s `asmtest_fail`/`asmtest_skip` now route through a
+  platform `asmtest_jump` (`siglongjmp` on POSIX; the same `__builtin_longjmp`
+  recovery on Win32), and the trampoline-driven differential helpers + the POSIX
+  signal handlers are gated out of the Win64 build. **No POSIX regression** —
+  library + suites build and run identically.
+
+The remaining integration is the execution-model re-route that consumes the above:
+a Win32 `run_one` (wrap the body in `asmtest_win32_test_begin/end`, map the
+recovery `reason` to crash/timeout/skip/fail), the per-test isolation/pool
 re-routed from `fork`+`pipe`+`poll` to the `asmtest_win32_run[_pool]` re-exec
-model, `main()` dispatch, and a small Win64 example suite to run — on top of this
-seam.
+model, `main()` dispatch (force `--no-fork`, gate the parallel path), and a small
+Win64 example suite to run.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as

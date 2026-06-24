@@ -348,4 +348,98 @@ int asmtest_win32_guard(void (*fn)(void *), void *arg,
     return faulted;
 }
 
+/* --- runner per-test facility (single global recovery; tests run serially) --- */
+
+void *asmtest_win32_test_recover[5];
+volatile int asmtest_win32_test_reason;
+asmtest_win32_fault_t asmtest_win32_test_fault;
+
+static volatile LONG rt_armed;
+static PVOID rt_veh;
+static HANDLE rt_timer_queue;
+static HANDLE rt_timer;
+static HANDLE rt_test_thread;
+
+static void rt_landing(void) { __builtin_longjmp(asmtest_win32_test_recover, 1); }
+
+static LONG CALLBACK rt_veh_cb(EXCEPTION_POINTERS *info) {
+    DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (!is_fatal_exc(code))
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (!InterlockedExchange(&rt_armed, 0))
+        return EXCEPTION_CONTINUE_SEARCH; /* already retired (timeout/assert) */
+
+    asmtest_win32_test_fault.code = code;
+    asmtest_win32_test_fault.address =
+        (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
+            ? (void *)info->ExceptionRecord->ExceptionInformation[1]
+            : info->ExceptionRecord->ExceptionAddress;
+    asmtest_win32_test_reason = ASMTEST_WIN32_REASON_CRASH;
+
+    DWORD64 sp = info->ContextRecord->Rsp;
+    sp = (sp & ~(DWORD64)15) - 8;
+    info->ContextRecord->Rsp = sp;
+    info->ContextRecord->Rip = (DWORD64)(ULONG_PTR)rt_landing;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/* Watchdog: on the deadline, hijack the (hung) test thread's context to the
+ * landing pad — the same recovery a fault uses — with a TIMEOUT verdict. */
+static VOID CALLBACK rt_timer_cb(PVOID param, BOOLEAN fired) {
+    (void)param;
+    (void)fired;
+    if (!InterlockedExchange(&rt_armed, 0))
+        return;
+    asmtest_win32_test_reason = ASMTEST_WIN32_REASON_TIMEOUT;
+    if (rt_test_thread == NULL)
+        return;
+    SuspendThread(rt_test_thread);
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_CONTROL;
+    if (GetThreadContext(rt_test_thread, &ctx)) {
+        DWORD64 sp = ctx.Rsp;
+        sp = (sp & ~(DWORD64)15) - 8;
+        ctx.Rsp = sp;
+        ctx.Rip = (DWORD64)(ULONG_PTR)rt_landing;
+        SetThreadContext(rt_test_thread, &ctx);
+    }
+    ResumeThread(rt_test_thread);
+}
+
+void asmtest_win32_test_begin(unsigned timeout_ms) {
+    asmtest_win32_test_reason = 0;
+    rt_timer = NULL;
+    rt_test_thread = NULL;
+    rt_armed = 1;
+    rt_veh = AddVectoredExceptionHandler(1, rt_veh_cb);
+    if (timeout_ms != 0) {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
+                        GetCurrentProcess(), &rt_test_thread, 0, FALSE,
+                        DUPLICATE_SAME_ACCESS);
+        if (rt_timer_queue == NULL)
+            rt_timer_queue = CreateTimerQueue();
+        CreateTimerQueueTimer(&rt_timer, rt_timer_queue, rt_timer_cb, NULL,
+                              timeout_ms, 0, WT_EXECUTEONLYONCE);
+    }
+}
+
+void asmtest_win32_test_disarm(void) { InterlockedExchange(&rt_armed, 0); }
+
+void asmtest_win32_test_end(void) {
+    InterlockedExchange(&rt_armed, 0);
+    if (rt_timer != NULL) {
+        /* INVALID_HANDLE_VALUE: wait for any in-flight callback to finish. */
+        DeleteTimerQueueTimer(rt_timer_queue, rt_timer, INVALID_HANDLE_VALUE);
+        rt_timer = NULL;
+    }
+    if (rt_test_thread != NULL) {
+        CloseHandle(rt_test_thread);
+        rt_test_thread = NULL;
+    }
+    if (rt_veh != NULL) {
+        RemoveVectoredExceptionHandler(rt_veh);
+        rt_veh = NULL;
+    }
+}
+
 #endif /* _WIN32 */
