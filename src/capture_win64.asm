@@ -361,3 +361,308 @@ ASM_FUNC asm_call_capture_vec_win64
     pop     rbp
     ret
 ASM_ENDFUNC asm_call_capture_vec_win64
+
+
+; void asm_call_capture_fp_win64(win64_regs_t *out, void *fn,
+;                                const long long *iargs, const double *fargs);
+;
+; The Win64 mirror of asm_call_capture_fp: like asm_call_capture_win64 but also
+; marshals 4 double args into xmm0..3 and captures the FP return (xmm0) into
+; out->fret. Win64 has no callee-saved xmm to seed at this tier (that is _vec's
+; job), so rbp stays a seeded/checked GP callee-saved as in the core variant.
+;
+; Inbound (Win64): out = rcx, fn = rdx, iargs = r8, fargs = r9.
+ASM_FUNC asm_call_capture_fp_win64
+    push    rbx
+    push    rbp
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 72                 ; same frame as the core variant
+    mov     [rsp+48], rcx           ; stash out
+    mov     [rsp+56], rdx           ; stash fn
+
+    ; Float args: fargs (r9) -> xmm0..3 (load before r9 is reused for iargs).
+    movsd   xmm0, [r9+0]
+    movsd   xmm1, [r9+8]
+    movsd   xmm2, [r9+16]
+    movsd   xmm3, [r9+24]
+
+    ; Integer args: iargs (r8) -> rcx, rdx, r8, r9 + two stack slots.
+    mov     rax, r8                 ; rax = &iargs
+    mov     rcx, [rax+0]
+    mov     rdx, [rax+8]
+    mov     r9,  [rax+24]
+    mov     r10, [rax+32]
+    mov     [rsp+32], r10           ; iargs[4] (5th arg)
+    mov     r10, [rax+40]
+    mov     [rsp+40], r10           ; iargs[5] (6th arg)
+    mov     r8,  [rax+16]
+
+    mov     rbx, 0x1111111111111111
+    mov     rbp, 0x2222222222222222
+    mov     rsi, 0xCCCCCCCCCCCCCCCC
+    mov     rdi, 0xDDDDDDDDDDDDDDDD
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rsp+56]
+    call    r11
+
+    mov     r11, [rsp+48]
+    mov     [r11+0],  rax
+    mov     [r11+8],  rdx
+    mov     [r11+16], rbx
+    mov     [r11+24], rbp
+    mov     [r11+32], rdi
+    mov     [r11+40], rsi
+    mov     [r11+48], r12
+    mov     [r11+56], r13
+    mov     [r11+64], r14
+    mov     [r11+72], r15
+    pushfq
+    pop     rax
+    mov     [r11+80], rax
+    movsd   [r11+88], xmm0          ; fret
+
+    add     rsp, 72
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbp
+    pop     rbx
+    ret
+ASM_ENDFUNC asm_call_capture_fp_win64
+
+
+; void asm_call_capture_fp_n_win64(win64_regs_t *out, void *fn,
+;                                  const long long *iargs, const double *fargs,
+;                                  int nfargs);
+;
+; The Win64 mirror of asm_call_capture_fp_n: arbitrary FP arity — the first 4
+; doubles go in xmm0..3, the rest spill onto the stack above the shadow space.
+; 4 integer args go in rcx/rdx/r8/r9. rbp frames the variable area (reported
+; preserved, not checked). nfargs is the 5th arg, so it arrives on the stack at
+; [rbp+48] (after the saved rbp, return address, and 32-byte shadow space).
+;
+; Inbound (Win64): out = rcx, fn = rdx, iargs = r8, fargs = r9, nfargs @ [rbp+48].
+ASM_FUNC asm_call_capture_fp_n_win64
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 64
+    mov     [rbp-64], rcx           ; out
+    mov     [rbp-72], rdx           ; fn
+    mov     [rbp-80], r8            ; iargs
+    mov     [rbp-88], r9            ; fargs
+    movsxd  rax, dword [rbp+48]     ; nfargs (5th arg, on the stack)
+    mov     [rbp-96], rax
+
+    ; n_stack = max(0, nfargs - 4) -> r10  (Win64 has 4 FP arg registers)
+    mov     r10, rax
+    sub     r10, 4
+    jg      .fpn_have_stack
+    xor     r10, r10
+.fpn_have_stack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 3
+    add     rax, 32                 ; shadow space
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    ; Copy overflow doubles: [rsp+32 + i*8] = fargs[4 + i].
+    mov     r8, [rbp-88]            ; fargs
+    xor     rcx, rcx
+.fpn_copy:
+    cmp     rcx, r10
+    jge     .fpn_copy_done
+    mov     rax, [r8 + 32 + rcx*8]  ; fargs[4 + i] (byte 32 = 4*8)
+    mov     [rsp + 32 + rcx*8], rax
+    inc     rcx
+    jmp     .fpn_copy
+.fpn_copy_done:
+    ; Load FP register args xmm0..3 (only as many as nfargs).
+    mov     r11, [rbp-88]           ; fargs
+    mov     r10, [rbp-96]           ; nfargs
+    cmp     r10, 1
+    jl      .fpn_loadint
+    movsd   xmm0, [r11+0]
+    cmp     r10, 2
+    jl      .fpn_loadint
+    movsd   xmm1, [r11+8]
+    cmp     r10, 3
+    jl      .fpn_loadint
+    movsd   xmm2, [r11+16]
+    cmp     r10, 4
+    jl      .fpn_loadint
+    movsd   xmm3, [r11+24]
+.fpn_loadint:
+    ; Integer args: iargs -> rcx/rdx/r8/r9.
+    mov     rax, [rbp-80]
+    mov     rcx, [rax+0]
+    mov     rdx, [rax+8]
+    mov     r8,  [rax+16]
+    mov     r9,  [rax+24]
+
+    mov     rbx, 0x1111111111111111
+    mov     rsi, 0xCCCCCCCCCCCCCCCC
+    mov     rdi, 0xDDDDDDDDDDDDDDDD
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rbp-72]
+    call    r11
+
+    mov     r11, [rbp-64]
+    mov     [r11+0],  rax
+    mov     [r11+8],  rdx
+    mov     [r11+16], rbx
+    mov     rax, 0x2222222222222222 ; rbp reported preserved, not checked
+    mov     [r11+24], rax
+    mov     [r11+32], rdi
+    mov     [r11+40], rsi
+    mov     [r11+48], r12
+    mov     [r11+56], r13
+    mov     [r11+64], r14
+    mov     [r11+72], r15
+    pushfq
+    pop     rax
+    mov     [r11+80], rax
+    movsd   [r11+88], xmm0          ; fret
+
+    lea     rsp, [rbp-56]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_fp_n_win64
+
+
+; void asm_call_capture_sret_win64(win64_regs_t *out, void *fn, void *result,
+;                                  const long long *args, int nargs);
+;
+; The Win64 mirror of asm_call_capture_sret: fn returns a large struct via a
+; hidden result pointer, which on Win64 is the *first* argument (rcx). The
+; visible integer args therefore shift to rdx/r8/r9 (3 register slots), then the
+; stack. The callee returns the result pointer in rax. rbp frames the variable
+; area (reported preserved, not checked); nargs is the 5th arg at [rbp+48].
+;
+; Inbound (Win64): out = rcx, fn = rdx, result = r8, args = r9, nargs @ [rbp+48].
+ASM_FUNC asm_call_capture_sret_win64
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 64
+    mov     [rbp-64], rcx           ; out
+    mov     [rbp-72], rdx           ; fn
+    mov     [rbp-80], r8            ; result (hidden sret pointer)
+    mov     [rbp-88], r9            ; args
+    movsxd  rax, dword [rbp+48]     ; nargs (5th arg, on the stack)
+    mov     [rbp-96], rax
+
+    ; n_stack = max(0, nargs - 3)  (3 visible register slots: rdx, r8, r9)
+    mov     r10, rax
+    sub     r10, 3
+    jg      .sret_have_stack
+    xor     r10, r10
+.sret_have_stack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 3
+    add     rax, 32                 ; shadow space
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    ; Copy overflow args: [rsp+32 + i*8] = args[3 + i].
+    mov     r8, [rbp-88]            ; args
+    xor     rcx, rcx
+.sret_copy:
+    cmp     rcx, r10
+    jge     .sret_copy_done
+    mov     rax, [r8 + 24 + rcx*8]  ; args[3 + i] (byte 24 = 3*8)
+    mov     [rsp + 32 + rcx*8], rax
+    inc     rcx
+    jmp     .sret_copy
+.sret_copy_done:
+    ; Visible register args -> rdx, r8, r9 (only as many as nargs).
+    mov     r11, [rbp-88]           ; args
+    mov     r10, [rbp-96]           ; nargs
+    cmp     r10, 1
+    jl      .sret_seed
+    mov     rdx, [r11+0]
+    cmp     r10, 2
+    jl      .sret_seed
+    mov     r8,  [r11+8]
+    cmp     r10, 3
+    jl      .sret_seed
+    mov     r9,  [r11+16]
+.sret_seed:
+    mov     rcx, [rbp-80]           ; hidden result pointer -> rcx (1st arg)
+    mov     rbx, 0x1111111111111111
+    mov     rsi, 0xCCCCCCCCCCCCCCCC
+    mov     rdi, 0xDDDDDDDDDDDDDDDD
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rbp-72]
+    call    r11
+
+    mov     r11, [rbp-64]
+    mov     [r11+0],  rax           ; ret (= result pointer per the ABI)
+    mov     [r11+8],  rdx
+    mov     [r11+16], rbx
+    mov     rax, 0x2222222222222222 ; rbp reported preserved, not checked
+    mov     [r11+24], rax
+    mov     [r11+32], rdi
+    mov     [r11+40], rsi
+    mov     [r11+48], r12
+    mov     [r11+56], r13
+    mov     [r11+64], r14
+    mov     [r11+72], r15
+    pushfq
+    pop     rax
+    mov     [r11+80], rax
+
+    lea     rsp, [rbp-56]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_sret_win64

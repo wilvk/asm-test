@@ -82,3 +82,25 @@ ASM_FUNC win64_vec_clobber_xmm6
     xorps   xmm6, xmm6
     ret
 ASM_ENDFUNC win64_vec_clobber_xmm6
+
+; double win64_addsd6(a,b,c,d,e,f) -> a+b+c+d+e+f. Args 1-4 in xmm0..3; args 5-6
+; on the stack above the shadow space ([rsp+40], [rsp+48] on entry). Exercises
+; asm_call_capture_fp_n_win64's FP register + overflow marshalling.
+ASM_FUNC win64_addsd6
+    addsd   xmm0, xmm1
+    addsd   xmm0, xmm2
+    addsd   xmm0, xmm3
+    addsd   xmm0, [rsp+40]
+    addsd   xmm0, [rsp+48]
+    ret
+ASM_ENDFUNC win64_addsd6
+
+; struct { long long a, b; } win64_sret_make(long long x, long long y).
+; Win64 sret: the hidden result pointer is the 1st arg (rcx); the visible args x,
+; y shift to rdx, r8. Writes {x, y} through the pointer and returns it in rax.
+ASM_FUNC win64_sret_make
+    mov     [rcx],   rdx
+    mov     [rcx+8], r8
+    mov     rax, rcx
+    ret
+ASM_ENDFUNC win64_sret_make

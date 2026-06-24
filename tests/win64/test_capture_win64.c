@@ -28,6 +28,16 @@ extern WIN64ABI void asm_call_capture_args_win64(win64_regs_t *out, void *fn,
 extern WIN64ABI void asm_call_capture_vec_win64(win64_regs_t *out, void *fn,
                                                 const long long *iargs,
                                                 const win64_vec128_t *vargs);
+extern WIN64ABI void asm_call_capture_fp_win64(win64_regs_t *out, void *fn,
+                                               const long long *iargs,
+                                               const double *fargs);
+extern WIN64ABI void asm_call_capture_fp_n_win64(win64_regs_t *out, void *fn,
+                                                 const long long *iargs,
+                                                 const double *fargs, int nfargs);
+extern WIN64ABI void asm_call_capture_sret_win64(win64_regs_t *out, void *fn,
+                                                 void *result,
+                                                 const long long *args,
+                                                 int nargs);
 
 /* Routines under test — addresses only; never called through these C types. */
 extern void win64_ret_arg0(void);
@@ -39,6 +49,8 @@ extern void win64_sum6(void);
 extern void win64_addsd(void);
 extern void win64_vec_preserve_xmm6(void);
 extern void win64_vec_clobber_xmm6(void);
+extern void win64_addsd6(void);
+extern void win64_sret_make(void);
 
 static int fails = 0;
 
@@ -128,6 +140,27 @@ int main(void) {
           "win64_vec_clobber_xmm6: FP ABI violation detected (xmm6 not preserved)");
     CHECK(r.vec[7].lo == 7 && r.vec[15].lo == 15,
           "win64_vec_clobber_xmm6: the other xmm sentinels survive");
+
+    /* asm_call_capture_fp_win64: 4 doubles + FP return, GP callee-saved checked. */
+    const double fargs[4] = {1.5, 2.25, 4.0, 8.0};
+    asm_call_capture_fp_win64(&r, (void *)win64_addsd, args, fargs);
+    CHECK(r.fret == 3.75 && abi_preserved(&r),
+          "win64_addsd via _fp: FP return captured, GP callee-saved intact");
+
+    /* asm_call_capture_fp_n_win64: arbitrary FP arity (register + stack). */
+    const double fargs6[6] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0};
+    asm_call_capture_fp_n_win64(&r, (void *)win64_addsd6, args, fargs6, 6);
+    CHECK(r.fret == 63.0,
+          "win64_addsd6 via _fp_n: 4 xmm + 2 stack double args summed");
+
+    /* asm_call_capture_sret_win64: struct return via the hidden rcx pointer. */
+    long long result[2] = {0, 0};
+    const long long sret_args[2] = {1234, 5678};
+    asm_call_capture_sret_win64(&r, (void *)win64_sret_make, result, sret_args, 2);
+    CHECK(result[0] == 1234 && result[1] == 5678,
+          "win64_sret_make via _sret: struct written through hidden pointer");
+    CHECK(r.ret == (uint64_t)(uintptr_t)result,
+          "win64_sret_make via _sret: result pointer returned in rax");
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails,
            fails == 1 ? "" : "s");
