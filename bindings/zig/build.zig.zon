@@ -1,0 +1,18 @@
+// Packaging scaffolding (see docs/packaging.md). The Zig package descriptor.
+// Zig has no central registry: consumers add this package by URL + content hash
+// in their own build.zig.zon, then `@import` it. The framework native library is
+// *linked* (build.zig links libasmtest_emu), so nothing prebuilt is bundled —
+// the consumer builds/installs it (`make install-shared`). `make zig-package`
+// tarballs the binding source (build.zig{,.zon} + src/) for distribution.
+.{
+    .name = "asmtest",
+    .version = "1.0.0",
+    .minimum_zig_version = "0.13.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+    .dependencies = .{},
+}

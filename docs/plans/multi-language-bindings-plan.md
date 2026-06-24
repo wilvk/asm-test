@@ -255,7 +255,20 @@ is the hand-written FFI above.
 
 **Effort:** ~3–4 days.
 
-### Track G — Go *(situational; highest native friction) — planned*
+### Track G — Go *(situational; highest native friction) — Tier 1 + Tier 2 done*
+
+**Status: binding landed** in [`bindings/go/`](../../bindings/go/), via `cgo`.
+The opaque-handle FFI layer (built for the N/J/D/C bindings) sidesteps the native
+friction this track originally anticipated: Go binds the scalar/pointer entry
+points and links the prebuilt shared libs, mirroring **no** struct layout, so the
+moving-stack / cgo-pointer-rule hazards never arise (every handle is
+C-allocated). Exposes `Regs` (capture / ABI / flags / FP), `Emu` + `EmuResult`
+(faults as data), and Tier-2 `Assert*` helpers over a small `TB` interface that
+`*testing.T` satisfies. `make go-test` runs `go test`;
+[`conformance_test.go`](../../bindings/go/conformance_test.go) replays the corpus
+(verified in the isolated `asmtest-go` image; `make go-test` / `docker-go`). The
+emulator case uses the x86-64 guest, so it runs on the x86-64 `bindings` CI job.
+Deferred: a published Go module bundling the native libs per platform.
 
 | Aspect | Approach |
 |---|---|
@@ -266,10 +279,14 @@ is the hand-written FFI above.
 | Packaging | a Go module; build tags + `cgo` `LDFLAGS` to find the libs |
 | Crash safety | lean on the emulator; native crashes kill the test binary |
 
-**Note/risk.** Go is the worst native fit (per the analysis); position the emulator
-tier as the primary Go entry point and the native trampoline as advanced/pinned use.
+**Note/risk.** The analysis called Go the worst native fit (moving stacks + cgo
+pointer rules). The opaque-handle FFI layer made that moot: the binding never
+shares a Go pointer with C, so neither the emulator-first workaround nor
+`runtime.Pinner` was needed. The table above remains the eventual target for a
+*native struct-mirroring* binding; the shipped Tier-1 binding is the cgo + FFI
+layer described in the status note.
 
-**Effort:** ~4–5 days (cgo pointer-rule care).
+**Effort:** ~1 day on the FFI layer (vs. ~4–5 days estimated for the native path).
 
 ### Track Z — Zig *(situational; lowest-ceremony native) — Tier 1 done*
 
@@ -408,9 +425,15 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   host subprocess), so the docs give one consistent crash-safety story.
 - **Pinning matrix.** Maintain a short per-language table of the correct
   buffer-pinning idiom (from Finding 4), referenced from each track.
-- **Packaging.** Each ecosystem ships the prebuilt shared libs per platform
-  (PyPI wheels, crates.io + build script, npm prebuilds, Maven classifiers, NuGet
-  rids, gems, rocks); a binding must not require the end user to `make` the C core.
+- **Packaging.** *Scaffolded — see [docs/packaging.md](../packaging.md).* Each
+  ecosystem ships the prebuilt shared libs per platform (PyPI wheels, crates.io +
+  build script, npm prebuilds, Maven classifiers, NuGet rids, gems, rocks); a
+  binding must not require the end user to `make` the C core. Every binding now
+  has a publish-ready registry manifest and a `make <lang>-package` target that
+  bundles the host's native libs (dlopen bindings) or ships as source (link
+  bindings); the remaining publish work is multi-platform native payloads,
+  registry credentials, and — for the conformance-runner bindings — extracting a
+  reusable library module.
 - **Versioning.** Bindings pin to `ASMTEST_VERSION_NUM`; the manifest carries the
   version so a mismatched lib is detected at load.
 - **Reproducible, isolated per-language testing.** Each wrapper is tested in its
@@ -418,7 +441,7 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   (`Dockerfile.bindings-base`) — so toolchains never mix (npm never lands in the
   Java image, the .NET SDK never in the Lua image, …). `make docker-<lang>`
   builds the base once (cached) then the small per-language image and runs the
-  conformance corpus inside it; `make docker-bindings` does all nine. The CI
+  conformance corpus inside it; `make docker-bindings` does all ten. The CI
   `bindings` job is a matrix that runs `make docker-<lang>` per language. This is
   also how languages with no host toolchain are verified.
 
@@ -430,19 +453,22 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
 2. **Track P (Python)** — proves Track 0 end to end; reference binding.
 3. **Track R (Rust)** — proves auto-generation + the no-GC path.
 4. **Track X (C++)** + **Track Z (Zig)** — cheap, native-friendly, broaden reach.
-5. **Track G (Go)** — once the emulator-first pattern is proven (its safest path).
-6. **Tracks N / J / D / C** — demand-driven, in any order.
+5. **Tracks N / J / D / C** — demand-driven, in any order.
+6. **Track G (Go)** — last; the opaque-handle FFI layer (from N/J/D/C) made its
+   anticipated native friction moot, so it followed the same cgo + FFI pattern.
 
 Tier 2 (idiomatic assertion layers) is a per-language follow-on, picked up after
 that language's Tier-1 binding is green against the conformance corpus.
 
-**Status: Tier 2 has landed for all nine bindings** (Python, Rust, C++, Zig,
-Node, Java, .NET, Ruby, Lua) — assertion helpers with legible failure messages
+**Status: Tier 2 has landed for all ten bindings** (Python, Rust, C++, Zig,
+Node, Java, .NET, Ruby, Lua, Go) — assertion helpers with legible failure messages
 (`assert_ret` / `assert_abi_preserved` / `assert_flag` / `assert_fp` /
 `assert_no_fault` / `assert_reg`, idiomatic to each language: raising/throwing,
 panicking, or error-union), each verified on both the pass paths and the failure
-paths (the assertion actually fails when it should). The remaining deferred work
-is packaging each binding for its registry.
+paths (the assertion actually fails when it should). Packaging each binding for
+its registry is now **scaffolded** (manifests + `make <lang>-package` +
+[docs/packaging.md](../packaging.md)); the remaining deferred work is a
+credentialed, multi-platform publish.
 
 ---
 

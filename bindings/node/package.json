@@ -4,10 +4,18 @@
   "description": "Node.js binding for the asm-test assembly unit-testing framework",
   "license": "MIT",
   "repository": "https://github.com/wilvk/asm-test",
+  "homepage": "https://github.com/wilvk/asm-test",
+  "keywords": ["assembly", "testing", "abi", "emulator", "unicorn", "koffi"],
   "main": "conformance.js",
   "scripts": {
     "test": "node conformance.js"
   },
+  "//": "Packaging scaffolding (see docs/packaging.md): `make node-package` stages the prebuilt libasmtest_emu into native/<plat>/ before `npm pack`, and `files` ships it. A real release adds per-platform prebuilds (prebuildify) and a reusable library module.",
+  "files": [
+    "conformance.js",
+    "README.md",
+    "native/"
+  ],
   "dependencies": {
     "koffi": "^2.8.0"
   },

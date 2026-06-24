@@ -45,7 +45,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
 .PHONY: python-test cpp-test rust-test zig-test
-.PHONY: ruby-test lua-test node-test java-test dotnet-test
+.PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -411,10 +411,10 @@ docker-clean:
 # per-language image, then runs it (its CMD is `make <lang>-test`).
 #   make docker-bindings   build + run every language's image
 #   make docker-python / -cpp / -rust / -zig / -node / -java / -dotnet /
-#        -ruby / -lua    just that language
+#        -ruby / -lua / -go    just that language
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
-BINDING_LANGS := python cpp rust zig node java dotnet ruby lua
+BINDING_LANGS := python cpp rust zig node java dotnet ruby lua go
 
 .PHONY: docker-bindings-base docker-bindings docker-bindings-clean \
         $(addprefix docker-,$(BINDING_LANGS))
@@ -660,19 +660,20 @@ zig-test: shared-emu $(CORPUS_LIB)
 	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
 	  $(ZIG) build test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 
-# --- Community / managed-runtime bindings (Tracks N, J, D, C) ---------------
+# --- Community / managed-runtime bindings (Tracks N, J, D, C, G) ------------
 # Each replays the conformance corpus through the opaque-handle FFI layer (no
 # struct layout): asmtest_corpus_routine for addresses, asmtest_capture6/_fp2 +
 # accessors for capture, asmtest_emu_call2 + accessors for the emulator. They
 # need only the shared emulator lib + the routine fixture lib; their toolchains
 # live in the Docker bindings image (use `make docker-ruby` / `-lua` / `-node` /
-# `-java` / `-dotnet`). Shared env points the loader at the build dir.
+# `-java` / `-dotnet` / `-go`). Shared env points the loader at the build dir.
 RUBY   ?= ruby
 LUAJIT ?= luajit
 NODE   ?= node
 JAVAC  ?= javac
 JAVA   ?= java
 DOTNET ?= dotnet
+GO     ?= go
 bindings_env = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
                ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
                LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
@@ -695,6 +696,111 @@ java-test: shared-emu $(CORPUS_LIB)
 
 dotnet-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
+
+# Go links the shared libs at build time via cgo; CGO_LDFLAGS carries the -L (so
+# a custom BUILD works), and bindings_env's LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
+# resolves them at run time. GOTOOLCHAIN=local + GOPROXY=off keep it offline (no
+# module deps). The emulator case uses the x86-64 guest, so run on an x86-64 host.
+go-test: shared-emu $(CORPUS_LIB)
+	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" \
+	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
+	  $(bindings_env) $(GO) test ./...
+
+# --- Packaging scaffolding (publishable artifacts) -------------------------
+# See docs/packaging.md. `make package-libs` stages the host's shared libs into
+# build/dist/native/<plat>/; each `make <lang>-package` re-stages into that
+# ecosystem's native-payload location and runs its packer, emitting under
+# build/dist/<lang>/. Scaffolding only: a multi-platform release repeats the
+# native staging per target OS/arch (or uses the ecosystem's prebuild tooling),
+# and `make packages` needs every toolchain (prefer one language at a time, or
+# each binding's Docker image).
+PKG_DIST   := $(BUILD)/dist
+PKG_PLAT   := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
+DOTNET_RID ?= $(PKG_PLAT)
+GEM      ?= gem
+NPM      ?= npm
+CARGO    ?= cargo
+JAR      ?= jar
+LUAROCKS ?= luarocks
+PYBUILD  ?= python3 -m build
+# The unversioned names the dlopen bindings look up (libasmtest_emu.dylib, ...).
+pkg_emu_name  := $(notdir $(call shlib_dev,libasmtest_emu))
+pkg_core_name := $(notdir $(call shlib_dev,libasmtest))
+
+.PHONY: packages package-libs python-package rust-package zig-package cpp-package \
+        node-package java-package dotnet-package ruby-package lua-package go-package
+
+package-libs: shared shared-emu
+	mkdir -p $(PKG_DIST)/native/$(PKG_PLAT)
+	cp -f $(call shlib_real,libasmtest)     $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
+	cp -f $(call shlib_real,libasmtest_emu) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
+	@echo "package-libs: staged $(PKG_PLAT) libs in $(PKG_DIST)/native/$(PKG_PLAT)"
+
+# dlopen bindings: bundle the prebuilt libasmtest_emu in the package's payload.
+python-package: shared-emu manifest
+	mkdir -p bindings/python/asmtest/_libs $(PKG_DIST)/python
+	cp -f $(call shlib_real,libasmtest_emu) bindings/python/asmtest/_libs/$(pkg_emu_name)
+	cp -f $(call shlib_real,libasmtest)     bindings/python/asmtest/_libs/$(pkg_core_name)
+	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
+	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python
+
+ruby-package: shared-emu
+	mkdir -p bindings/ruby/native/$(PKG_PLAT) $(PKG_DIST)/ruby
+	cp -f $(call shlib_real,libasmtest_emu) bindings/ruby/native/$(PKG_PLAT)/$(pkg_emu_name)
+	cd bindings/ruby && $(GEM) build asmtest.gemspec
+	mv bindings/ruby/asmtest-$(ASMTEST_VERSION).gem $(PKG_DIST)/ruby/
+
+node-package: shared-emu
+	mkdir -p bindings/node/native/$(PKG_PLAT) $(PKG_DIST)/node
+	cp -f $(call shlib_real,libasmtest_emu) bindings/node/native/$(PKG_PLAT)/$(pkg_emu_name)
+	cd bindings/node && $(NPM) pack --pack-destination $(abspath $(PKG_DIST))/node
+
+java-package: shared-emu
+	mkdir -p bindings/java/src/main/resources/native/$(PKG_PLAT) \
+	         $(BUILD)/java-pkg $(PKG_DIST)/java
+	cp -f $(call shlib_real,libasmtest_emu) \
+	      bindings/java/src/main/resources/native/$(PKG_PLAT)/$(pkg_emu_name)
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-pkg bindings/java/Conformance.java
+	cp -r bindings/java/src/main/resources/native $(BUILD)/java-pkg/
+	cd $(BUILD)/java-pkg && $(JAR) cf $(abspath $(PKG_DIST))/java/asmtest-$(ASMTEST_VERSION).jar .
+
+dotnet-package: shared-emu
+	mkdir -p bindings/dotnet/runtimes/$(DOTNET_RID)/native $(PKG_DIST)/dotnet
+	cp -f $(call shlib_real,libasmtest_emu) \
+	      bindings/dotnet/runtimes/$(DOTNET_RID)/native/$(pkg_emu_name)
+	cp -f bindings/dotnet/asmtest.nuspec $(PKG_DIST)/dotnet/
+	@echo "dotnet-package: staged nuspec + runtimes/$(DOTNET_RID)/native in $(PKG_DIST)/dotnet (nuget pack to publish)"
+
+lua-package: shared-emu
+	mkdir -p bindings/lua/native/$(PKG_PLAT) $(PKG_DIST)/lua
+	cp -f $(call shlib_real,libasmtest_emu) bindings/lua/native/$(PKG_PLAT)/$(pkg_emu_name)
+	cp -f bindings/lua/asmtest-1.0.0-1.rockspec $(PKG_DIST)/lua/
+	@echo "lua-package: staged rockspec + native in $(PKG_DIST)/lua (luarocks pack/upload to publish)"
+
+# link bindings: source distributions (the consumer builds/installs libasmtest).
+rust-package:
+	mkdir -p $(PKG_DIST)/rust
+	cd bindings/rust && CARGO_TARGET_DIR=$(abspath $(BUILD))/rust-pkg \
+	  $(CARGO) package --no-verify --allow-dirty
+	cp $(BUILD)/rust-pkg/package/*.crate $(PKG_DIST)/rust/
+
+zig-package:
+	mkdir -p $(PKG_DIST)/zig
+	tar czf $(PKG_DIST)/zig/asmtest-zig-$(ASMTEST_VERSION).tar.gz \
+	  -C bindings/zig build.zig build.zig.zon src README.md
+
+cpp-package:
+	mkdir -p $(PKG_DIST)/cpp
+	tar czf $(PKG_DIST)/cpp/asmtest-cpp-$(ASMTEST_VERSION).tar.gz \
+	  -C bindings/cpp asmtest.hpp CMakeLists.txt README.md
+
+go-package:
+	@echo "go-package: Go modules publish from the tagged repo (no artifact to build)."
+	@echo "  module: github.com/wilvk/asm-test/bindings/go"
+	@echo "  consumers set CGO_LDFLAGS to link libasmtest_emu (see docs/packaging.md)."
+
+packages: python-package rust-package zig-package cpp-package node-package \
+          java-package dotnet-package ruby-package lua-package go-package
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html
@@ -729,3 +835,7 @@ clean: docs-clean
 	rm -rf $(BUILD)
 	rm -f asmtest.pc asmtest-emu.pc asmtest_single.h asmtest_abi.json
 	rm -f bindings/conformance/corpus.json
+	rm -rf bindings/python/asmtest/_libs bindings/ruby/native bindings/lua/native \
+	       bindings/node/native bindings/java/src/main/resources/native \
+	       bindings/dotnet/runtimes
+	rm -f bindings/ruby/*.gem

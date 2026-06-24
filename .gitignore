@@ -41,3 +41,12 @@ bindings/dotnet/obj/
 
 # Sphinx documentation build output
 docs/_build/
+
+# Packaging native payloads + artifacts staged by `make <lang>-package`
+bindings/python/asmtest/_libs/
+bindings/ruby/native/
+bindings/lua/native/
+bindings/node/native/
+bindings/java/src/main/resources/native/
+bindings/dotnet/runtimes/
+bindings/**/*.gem

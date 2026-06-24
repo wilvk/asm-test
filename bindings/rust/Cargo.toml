@@ -4,9 +4,21 @@ version = "1.0.0"
 edition = "2021"
 description = "Rust binding for the asm-test assembly unit-testing framework"
 repository = "https://github.com/wilvk/asm-test"
+homepage = "https://github.com/wilvk/asm-test"
+documentation = "https://asm-test.readthedocs.io"
+license = "MIT"
+keywords = ["assembly", "testing", "abi", "emulator", "unicorn"]
+categories = ["development-tools::testing", "external-ffi-bindings"]
+readme = "README.md"
 # No external crates: the binding is #[repr(C)] structs + extern "C" decls over
 # the binding ABI, linked against the prebuilt shared libraries (see build.rs).
-# A published crate would add bindgen + a build that locates/builds the libs.
+# A link binding (see docs/packaging.md): nothing prebuilt is bundled — the
+# consumer builds/installs libasmtest (`make install-shared`); build.rs locates
+# it. `make rust-package` runs `cargo package`. A published crate would add
+# bindgen and a build.rs that builds-or-locates the libs across platforms.
+# Keep only the crate sources in the package (the conformance tests need the
+# repo's shared libs to link).
+exclude = ["tests/"]
 
 [lib]
 name = "asmtest"

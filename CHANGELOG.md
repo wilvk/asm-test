@@ -8,15 +8,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Tier-2 idiomatic assertions (all nine bindings).** Optional assertion layers
+- **Packaging scaffolding for all ten bindings.** Each binding now has a
+  publish-ready registry manifest and a `make <lang>-package` target that
+  assembles a distributable bundling the host's prebuilt native libs:
+  `asmtest.gemspec` (RubyGems), `asmtest-1.0.0-1.rockspec` (LuaRocks), `pom.xml`
+  (Maven), `asmtest.nuspec` (NuGet), `CMakeLists.txt` (a `find_package`-able
+  C++ INTERFACE target), `build.zig.zon` (Zig package), plus upgraded
+  `pyproject.toml` (wheel `package-data` over a bundled `asmtest/_libs/`),
+  `Cargo.toml` (crates.io metadata), and `package.json` (npm `files`). `make
+  package-libs` stages the shared libs into `build/dist/native/<plat>/`; the
+  dlopen bindings (Python/Ruby/Lua/Node/Java/.NET) bundle `libasmtest_emu`, while
+  the link bindings (Rust/Zig/C++/Go) ship as source. A new
+  [docs/packaging.md](docs/packaging.md) is the release guide (native-lib split,
+  version pinning, per-language commands, the multi-platform caveat). Scaffolding
+  only — no registry credentials or cross-OS build matrices.
+
+- **Go binding (Track G).** A `cgo` wrapper in `bindings/go/` over the
+  opaque-handle FFI layer — no struct layout mirrored: it declares the
+  binding-ABI entry points (`asmtest_corpus_routine`, `asmtest_capture6`/`_fp2` +
+  `asmtest_regs_*`, `asmtest_check_abi`, `asmtest_emu_call2` + accessors) and
+  links the prebuilt shared libs. Exposes `Regs` (capture / ABI / flags / FP),
+  `Emu` + `EmuResult` (faults as data), and Tier-2 `Assert*` helpers over a small
+  `TB` interface that `*testing.T` satisfies (so the helpers are themselves
+  testable — the suite proves each one bites). `make go-test` runs `go test`;
+  [`conformance_test.go`](bindings/go/conformance_test.go) replays the corpus,
+  built + run in its own `asmtest-go` image (`make docker-go`) and the `bindings`
+  CI matrix. This closes the last language track — **all ten bindings** (Python,
+  Rust, C++, Zig, Node, Java, .NET, Ruby, Lua, Go) now ship Tier 1 + Tier 2.
+
+- **Tier-2 idiomatic assertions (all ten bindings).** Optional assertion layers
   over the Tier-1 result objects, with legible failure messages, idiomatic to
   each language: Python (`asmtest.assertions`, raising `AssertionError`), Rust
   (methods on `Regs`/`EmuResult`, panicking), C++ (`asmtest::assert_*` throwing
   `assertion_error`, for GoogleTest/Catch2), Zig (error-union helpers over
   `std.testing`), Node/Ruby/Lua/Java/.NET (throwing/raising `assert_*` helpers in
-  the conformance runner). Each covers both the pass paths and the failure paths
+  the conformance runner), and Go (`Assert*` helpers failing a `*testing.T`). Each
+  covers both the pass paths and the failure paths
   (the assertion fails when it should — pytest `raises`, Rust `should_panic`, Zig
-  `expectError`, try/catch elsewhere). `assert_ret`, `assert_abi_preserved`,
+  `expectError`, a recording `TB` stub in Go, try/catch elsewhere). `assert_ret`,
+  `assert_abi_preserved`,
   `assert_flag`, `assert_fp`, `assert_no_fault`, `assert_reg`, ….
 
 - **Node, Java, .NET, Ruby & Lua bindings (Tracks N/J/D/C).** Five more language
@@ -31,7 +61,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Isolated per-language Docker images.** Each wrapper is built and tested in
   its **own** image (`bindings/<lang>/Dockerfile` on a shared
   `Dockerfile.bindings-base`), so toolchains never mix. `make docker-<lang>`
-  builds + runs one language; `make docker-bindings` does all nine. The CI
+  builds + runs one language; `make docker-bindings` does all ten. The CI
   `bindings` job is now a per-language matrix running `make docker-<lang>`.
 
 - **Zig binding (Track Z).** The lowest-ceremony wrapper: `bindings/zig/`

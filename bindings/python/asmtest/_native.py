@@ -17,6 +17,8 @@ from pathlib import Path
 
 # bindings/python/asmtest/_native.py -> repo root is three parents up.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+# Native libs + manifest bundled into the wheel by `make python-package`.
+_LIBS = Path(__file__).resolve().parent / "_libs"
 
 
 def _lib_names():
@@ -31,6 +33,7 @@ def find_library():
     env = os.environ.get("ASMTEST_LIB")
     if env:
         cands.append(Path(env))
+    cands += [_LIBS / n for n in _lib_names()]  # bundled in a published wheel
     cands += [_REPO_ROOT / "build" / n for n in _lib_names()]
     cands += [Path(n) for n in _lib_names()]  # fall back to the system search
     errors = []
@@ -51,6 +54,7 @@ def find_manifest():
     env = os.environ.get("ASMTEST_MANIFEST")
     if env:
         cands.append(Path(env))
+    cands += [_LIBS / "asmtest_abi.json"]  # bundled in a published wheel
     cands += [_REPO_ROOT / "asmtest_abi.json", _REPO_ROOT / "build" / "asmtest_abi.json"]
     for c in cands:
         if c.is_file():

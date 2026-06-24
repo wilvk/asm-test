@@ -115,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua]
+        lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua, go]
     steps:
       - uses: actions/checkout@v4
       - name: Test the ${{ matrix.lang }} binding in its isolated image

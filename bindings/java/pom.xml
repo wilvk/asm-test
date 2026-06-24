@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Packaging scaffolding (see docs/packaging.md). A Maven manifest for the
+     asm-test Java binding (Foreign Function & Memory API). `make java-package`
+     stages the prebuilt libasmtest_emu into src/main/resources/native/<os-arch>/
+     before building the JAR, so the artifact bundles the native library the FFM
+     binding loads at run time. A real release stages a payload per classifier
+     (or publishes per-platform classified JARs) and signs for Maven Central. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.wilvk</groupId>
+  <artifactId>asmtest</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <name>asm-test Java binding</name>
+  <description>Run, capture, and emulate assembly routines through asm-test from
+    Java via the Foreign Function and Memory API over the opaque-handle binding
+    ABI. The emulator native lib links libunicorn at run time.</description>
+  <url>https://github.com/wilvk/asm-test</url>
+
+  <licenses>
+    <license>
+      <name>MIT</name>
+    </license>
+  </licenses>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!-- FFM is preview in JDK 21, stable in 22+. The native libs are bundled as
+       resources under src/main/resources/native/<os-arch>/ (staged by
+       `make java-package`); a real release adds the maven-source/javadoc/gpg
+       plugins for Central. -->
+</project>

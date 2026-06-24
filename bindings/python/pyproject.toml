@@ -15,10 +15,10 @@ classifiers = [
     "Intended Audience :: Developers",
 ]
 
-# Pure-ctypes at runtime — no build-time native dependency. A published wheel
-# would bundle the prebuilt libasmtest[_emu] shared libs per platform tag (via
-# cibuildwheel); for now the package locates them next to the repo's build/ dir
-# or via ASMTEST_LIB / ASMTEST_MANIFEST.
+# Pure-ctypes at runtime — no build-time native dependency. `make python-package`
+# stages the prebuilt libasmtest[_emu] + asmtest_abi.json into asmtest/_libs/ so
+# the wheel is self-contained (the loader prefers the bundled libs); a real
+# multi-platform release builds one wheel per platform tag via cibuildwheel.
 dependencies = []
 
 [project.optional-dependencies]
@@ -29,3 +29,7 @@ Homepage = "https://github.com/wilvk/asm-test"
 
 [tool.setuptools]
 packages = ["asmtest"]
+
+# Bundle the native libraries + layout manifest staged into asmtest/_libs/.
+[tool.setuptools.package-data]
+asmtest = ["_libs/*.so", "_libs/*.so.*", "_libs/*.dylib", "_libs/*.json"]

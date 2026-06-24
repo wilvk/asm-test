@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Packaging scaffolding (see docs/packaging.md). A NuGet manifest for the
+     asm-test .NET binding (P/Invoke). `make dotnet-package` stages the prebuilt
+     libasmtest_emu into runtimes/<rid>/native/ before packing, so the package
+     carries the native library the P/Invoke binding loads at run time, in the
+     RID layout the .NET loader resolves automatically. A real release stages a
+     runtimes/<rid>/native/ payload for each RID (linux-x64, osx-arm64, ...). -->
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>AsmTest</id>
+    <version>1.0.0</version>
+    <authors>asm-test contributors</authors>
+    <license type="expression">MIT</license>
+    <projectUrl>https://github.com/wilvk/asm-test</projectUrl>
+    <description>.NET binding for the asm-test assembly unit-testing framework:
+      run, capture, and emulate assembly routines via P/Invoke over the
+      opaque-handle binding ABI. The emulator native lib links libunicorn.</description>
+    <tags>assembly testing abi emulator unicorn pinvoke</tags>
+  </metadata>
+  <files>
+    <!-- Populated by `make dotnet-package` from the staged native payload. One
+         entry per RID in a real release. -->
+    <file src="runtimes/**/native/*" target="runtimes" />
+  </files>
+</package>
