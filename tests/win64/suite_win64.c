@@ -9,11 +9,6 @@
  */
 #include "asmtest.h"
 
-extern void asm_call_capture_win64(regs_t *out, void *fn, const long long *args);
-extern void asm_call_capture_vec_win64(regs_t *out, void *fn,
-                                       const long long *iargs,
-                                       const vec128_t *vargs);
-
 extern void win64_ret_arg0(void);
 extern void win64_sum2(void);
 extern void win64_clobber_rbx(void);
@@ -27,22 +22,19 @@ extern void win64_vec_preserve_xmm6(void);
 
 TEST(win64, ret_arg0) {
     regs_t r;
-    const long long args[6] = {111, 222, 333, 444, 555, 666};
-    asm_call_capture_win64(&r, (void *)win64_ret_arg0, args);
+    ASM_CALL_WIN64_1(&r, win64_ret_arg0, 111);
     WCHECK(r.ret == 111, "ret = %llu, want 111", (unsigned long long)r.ret);
 }
 
 TEST(win64, sum2) {
     regs_t r;
-    const long long args[6] = {10, 20, 0, 0, 0, 0};
-    asm_call_capture_win64(&r, (void *)win64_sum2, args);
+    ASM_CALL_WIN64_2(&r, win64_sum2, 10, 20);
     WCHECK(r.ret == 30, "ret = %llu, want 30", (unsigned long long)r.ret);
 }
 
 TEST(win64, abi_preserved) {
     regs_t r;
-    const long long args[6] = {111, 0, 0, 0, 0, 0};
-    asm_call_capture_win64(&r, (void *)win64_ret_arg0, args);
+    ASM_CALL_WIN64_1(&r, win64_ret_arg0, 111);
     /* The framework's ABI-preservation assertion, now Win64-aware: it covers the
      * full Win64 integer callee-saved set (rbx, rbp, rdi, rsi, r12-r15). */
     ASSERT_ABI_PRESERVED(&r);
@@ -50,8 +42,7 @@ TEST(win64, abi_preserved) {
 
 TEST(win64, detects_clobber) {
     regs_t r;
-    const long long args[6] = {111, 0, 0, 0, 0, 0};
-    asm_call_capture_win64(&r, (void *)win64_clobber_rbx, args);
+    ASM_CALL_WIN64_1(&r, win64_clobber_rbx, 111);
     WCHECK(r.rbx != ASMTEST_SENTINEL_RBX,
            "expected a clobbered rbx to be observable");
 }

@@ -296,6 +296,28 @@ void asm_call_capture_sret(regs_t *out, void *fn, void *result,
 void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize);
 
+#if defined(ASMTEST_ABI_WIN64)
+/* The Microsoft x64 ("Win64") capture entry points (src/capture_win64.asm), the
+ * counterparts of the System V trampoline above. Args are 64-bit `long long`
+ * (Win64 is LLP64). See ASM_CALL_WIN64* below for the convenience wrappers. */
+void asm_call_capture_win64(regs_t *out, void *fn, const long long *args);
+void asm_call_capture_args_win64(regs_t *out, void *fn, const long long *args,
+                                 int nargs);
+void asm_call_capture_fp_win64(regs_t *out, void *fn, const long long *iargs,
+                               const double *fargs);
+void asm_call_capture_fp_n_win64(regs_t *out, void *fn, const long long *iargs,
+                                 const double *fargs, int nfargs);
+void asm_call_capture_vec_win64(regs_t *out, void *fn, const long long *iargs,
+                                const vec128_t *vargs);
+void asm_call_capture_vec_n_win64(regs_t *out, void *fn, const long long *iargs,
+                                  const vec128_t *vargs, int nvargs);
+void asm_call_capture_sret_win64(regs_t *out, void *fn, void *result,
+                                 const long long *args, int nargs);
+void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
+                                      const long long *iargs, int niargs,
+                                      const void *sptr, unsigned long long ssize);
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Differential / property testing (Phase 7)                           */
 /* ------------------------------------------------------------------ */
@@ -528,6 +550,45 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
     asm_call_capture_args(                                                    \
         (out), (void *)(fn), (long[]){__VA_ARGS__},                          \
         (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+
+#if defined(ASMTEST_ABI_WIN64)
+/* The Win64 counterparts of ASM_CALL0..6 / ASM_CALLN. Args are 64-bit (Win64 is
+ * LLP64), so the marshalling arrays are `long long`. */
+#define ASM_CALL_WIN64_0(out, fn)                                             \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){0, 0, 0, 0, 0, 0})
+#define ASM_CALL_WIN64_1(out, fn, a)                                          \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){(long long)(a), 0, 0, 0, 0, 0})
+#define ASM_CALL_WIN64_2(out, fn, a, b)                                       \
+    asm_call_capture_win64(                                                   \
+        (out), (void *)(fn),                                                  \
+        (long long[6]){(long long)(a), (long long)(b), 0, 0, 0, 0})
+#define ASM_CALL_WIN64_3(out, fn, a, b, c)                                    \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){(long long)(a), (long long)(b),     \
+                                          (long long)(c), 0, 0, 0})
+#define ASM_CALL_WIN64_4(out, fn, a, b, c, d)                                 \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){(long long)(a), (long long)(b),     \
+                                          (long long)(c), (long long)(d), 0,  \
+                                          0})
+#define ASM_CALL_WIN64_5(out, fn, a, b, c, d, e)                              \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){(long long)(a), (long long)(b),     \
+                                          (long long)(c), (long long)(d),     \
+                                          (long long)(e), 0})
+#define ASM_CALL_WIN64_6(out, fn, a, b, c, d, e, f)                           \
+    asm_call_capture_win64((out), (void *)(fn),                              \
+                           (long long[6]){(long long)(a), (long long)(b),     \
+                                          (long long)(c), (long long)(d),     \
+                                          (long long)(e), (long long)(f)})
+/* Any number (>=1) of integer args; nargs derived from the list. */
+#define ASM_CALL_WIN64_N(out, fn, ...)                                        \
+    asm_call_capture_args_win64(                                              \
+        (out), (void *)(fn), (long long[]){__VA_ARGS__},                     \
+        (int)(sizeof((long long[]){__VA_ARGS__}) / sizeof(long long)))
+#endif /* ASMTEST_ABI_WIN64 */
 
 /* ASM_SRET: call fn that returns a large struct into *result, with >=1 visible
  * integer args. */
