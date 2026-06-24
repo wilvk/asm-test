@@ -43,10 +43,9 @@ TEST(win64, abi_preserved) {
     regs_t r;
     const long long args[6] = {111, 0, 0, 0, 0, 0};
     asm_call_capture_win64(&r, (void *)win64_ret_arg0, args);
-    WCHECK(r.rbx == ASMTEST_SENTINEL_RBX && r.rbp == ASMTEST_SENTINEL_RBP &&
-               r.rdi == ASMTEST_SENTINEL_RDI && r.rsi == ASMTEST_SENTINEL_RSI &&
-               r.r15 == ASMTEST_SENTINEL_R15,
-           "win64_ret_arg0 did not preserve the Win64 callee-saved set");
+    /* The framework's ABI-preservation assertion, now Win64-aware: it covers the
+     * full Win64 integer callee-saved set (rbx, rbp, rdi, rsi, r12-r15). */
+    ASSERT_ABI_PRESERVED(&r);
 }
 
 TEST(win64, detects_clobber) {

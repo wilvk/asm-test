@@ -448,9 +448,14 @@ investment, deferred until isolated Win64 execution is actually needed.
 
 ## Acceptance criteria (overall)
 
-- A Win64 routine builds and is callable via `ASM_CALL*` on real x86-64 hardware,
-  with `ASSERT_ABI_PRESERVED` covering the Win64 callee-saved set (`rbx, rbp, rdi,
-  rsi, r12–r15`, `xmm6–15`).
+- A Win64 routine builds and is callable on real x86-64 hardware (via the
+  `asm_call_capture*_win64` entry points), with the framework's
+  `ASSERT_ABI_PRESERVED` now Win64-aware — `asmtest_check_abi` covers the full
+  integer callee-saved set (`rbx, rbp, rdi, rsi, r12–r15`) with 64-bit
+  comparisons, exercised by `suite_win64.c` under the runner. *(Remaining:
+  `xmm6–15` FP preservation has no built-in assertion yet — suites check `vec[]`
+  directly; and `ASM_CALL*`-style convenience macros are still System-V-only, so
+  Win64 tests call the `_win64` entry points by hand.)*
 - The native Win64 conformance case in `corpus.json` reproduces under a native
   build; the manifest carries the Win64 layout, pinned by `_Static_assert`.
 - `make docker-win64` runs the Win64 suite under Wine on the existing Linux CI with

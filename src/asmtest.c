@@ -178,11 +178,23 @@ void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
  * validate a capture without the C runner present. The jumping asmtest_assert_*
  * wrappers below delegate here, keeping one source of truth for the checks. */
 int asmtest_check_abi(const regs_t *r, char *msg, size_t n) {
+    /* 64-bit got/want: on Win64 (LLP64) the registers and sentinels are 64-bit
+     * but `unsigned long` is 32-bit, which would truncate the comparison. */
     const struct {
         const char *name;
-        unsigned long got, want;
+        unsigned long long got, want;
     } chk[] = {
-#if defined(__x86_64__)
+#if defined(ASMTEST_ABI_WIN64)
+        /* Win64 adds rdi/rsi to the integer callee-saved set vs System V. */
+        {"rbx", r->rbx, ASMTEST_SENTINEL_RBX},
+        {"rbp", r->rbp, ASMTEST_SENTINEL_RBP},
+        {"rdi", r->rdi, ASMTEST_SENTINEL_RDI},
+        {"rsi", r->rsi, ASMTEST_SENTINEL_RSI},
+        {"r12", r->r12, ASMTEST_SENTINEL_R12},
+        {"r13", r->r13, ASMTEST_SENTINEL_R13},
+        {"r14", r->r14, ASMTEST_SENTINEL_R14},
+        {"r15", r->r15, ASMTEST_SENTINEL_R15},
+#elif defined(__x86_64__)
         {"rbx", r->rbx, ASMTEST_SENTINEL_RBX},
         {"rbp", r->rbp, ASMTEST_SENTINEL_RBP},
         {"r12", r->r12, ASMTEST_SENTINEL_R12},
@@ -207,7 +219,7 @@ int asmtest_check_abi(const regs_t *r, char *msg, size_t n) {
         if (chk[i].got != chk[i].want) {
             if (msg && n)
                 snprintf(msg, n,
-                         "%s not restored (got 0x%lx, expected 0x%lx)",
+                         "%s not restored (got 0x%llx, expected 0x%llx)",
                          chk[i].name, chk[i].got, chk[i].want);
             return 1;
         }
