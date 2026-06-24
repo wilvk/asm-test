@@ -44,8 +44,15 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: sanitize coverage tidy
-.PHONY: deps
+.PHONY: deps usecases usecases-emu
 all: test
+
+# "Unusual use case" demo suites (Track F): self-contained examples that show
+# off a framework feature on a less-obvious target — property-tested bit hacks,
+# a stateful RPN bytecode interpreter, and the emulator used as a security
+# sandbox / cross-ISA equivalence checker. Kept out of the default SUITES (and
+# thus the CI matrix) so they are opt-in via `make usecases` / `usecases-emu`.
+USECASE_SUITES := $(BUILD)/test_bittricks $(BUILD)/test_vm
 
 # Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
 SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative
@@ -139,6 +146,20 @@ $(BUILD)/test_callback: $(FRAMEWORK_OBJS) $(BUILD)/callback.o \
 
 test: $(SUITES)
 	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
+
+# --- "Unusual use case" suites (Track F) -----------------------------------
+# Property-tested branchless bit hacks and a stateful RPN bytecode interpreter.
+# Both build on either backend (GAS or NASM, x86-64); the GAS sources also carry
+# AArch64 bodies. Run with `make usecases` (or `make ASM_SYNTAX=nasm usecases`).
+$(BUILD)/test_bittricks: $(FRAMEWORK_OBJS) $(BUILD)/bittricks.o \
+                         $(BUILD)/test_bittricks.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_vm: $(FRAMEWORK_OBJS) $(BUILD)/vm.o $(BUILD)/test_vm.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+usecases: $(USECASE_SUITES)
+	@set -e; for t in $(USECASE_SUITES); do echo "== $$t =="; ./$$t; done
 
 # Framework self-tests (Track A). The meta-suites are pure C (register/flag/
 # vector cases build a regs_t by hand), linked against the framework runtime;
@@ -368,6 +389,17 @@ $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
 .PHONY: emu-test
 emu-test: $(BUILD)/test_emu
 	./$(BUILD)/test_emu
+
+# Emulator "unusual use case" suite (Track F): the virtual CPU as a security
+# sandbox (precise over-read/over-write fault localization) and a cross-ISA
+# equivalence checker (the same algorithm run on x86-64, AArch64, RISC-V, and
+# ARM32 guests). GAS backend only, like emu-test; requires libunicorn.
+$(BUILD)/test_emu_usecases: $(FRAMEWORK_OBJS) $(BUILD)/emucases.o \
+                            $(BUILD)/emu.o $(BUILD)/test_emu_usecases.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
+
+usecases-emu: $(BUILD)/test_emu_usecases
+	./$(BUILD)/test_emu_usecases
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html
