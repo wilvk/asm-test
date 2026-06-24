@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Node, Java, .NET, Ruby & Lua bindings (Tracks N/J/D/C).** Five more language
+  wrappers, all over a new opaque-handle FFI layer (`src/ffi.c` + emu helpers in
+  `emu.c`): `asmtest_regs_new` + `asmtest_capture6` / `_fp2` + `asmtest_regs_*`
+  accessors for the capture tier, `asmtest_emu_call2` + `asmtest_emu_*` accessors
+  for the emulator, and `asmtest_corpus_routine(name)` for routine addresses — so
+  a dynamic binding needs no C struct layout. Bindings: Node (`koffi`), Java
+  (FFM/Panama), .NET (P/Invoke), Ruby (stdlib `Fiddle`), Lua (LuaJIT `ffi`); each
+  replays the conformance corpus (`make node-test` / `java-test` / `dotnet-test`
+  / `ruby-test` / `lua-test`).
+- **Isolated per-language Docker images.** Each wrapper is built and tested in
+  its **own** image (`bindings/<lang>/Dockerfile` on a shared
+  `Dockerfile.bindings-base`), so toolchains never mix. `make docker-<lang>`
+  builds + runs one language; `make docker-bindings` does all nine. The CI
+  `bindings` job is now a per-language matrix running `make docker-<lang>`.
+
 - **Zig binding (Track Z).** The lowest-ceremony wrapper: `bindings/zig/`
   consumes the C headers directly via `@cImport` — no separate binding layer —
   and replays the conformance corpus (`make zig-test` → `zig build test`,

@@ -312,7 +312,15 @@ examples + a CMake consumption path, not a binding.
 
 **Effort:** ~1–2 days.
 
-### Track N — Node / TypeScript *(defer; demand-driven) — planned*
+### Track N — Node / TypeScript *(demand-driven) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/node/`](../../bindings/node/),
+via [`koffi`](https://koffi.dev). It calls the opaque-handle FFI layer
+(`asmtest_corpus_routine` + `asmtest_capture6`/`_fp2` + `asmtest_regs_*` +
+`asmtest_emu_call2`), so no struct layout is mirrored in JS.
+[`conformance.js`](../../bindings/node/conformance.js) replays the corpus (7/7,
+verified in the isolated `asmtest-node` image; `make node-test` / `docker-node`).
+Deferred: an npm package + a `vitest` Tier-2 layer.
 
 | Aspect | Approach |
 |---|---|
@@ -323,7 +331,15 @@ examples + a CMake consumption path, not a binding.
 
 **Effort:** ~3–4 days.
 
-### Track J — Java / Kotlin *(defer) — planned*
+### Track J — Java / Kotlin *(demand-driven) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/java/`](../../bindings/java/),
+via the Foreign Function & Memory API (Project Panama). Downcall handles target
+the opaque-handle FFI layer — no struct layout mirrored.
+[`Conformance.java`](../../bindings/java/Conformance.java) replays the corpus
+(7/7, verified in the isolated `asmtest-java` image; `make java-test` /
+`docker-java`). FFM is preview in JDK 21 (`--enable-preview`), stable in 22+.
+Deferred: a Maven/Gradle artifact, `jextract`, and a JUnit Tier-2 layer.
 
 | Aspect | Approach |
 |---|---|
@@ -334,7 +350,14 @@ examples + a CMake consumption path, not a binding.
 
 **Effort:** ~4–5 days.
 
-### Track D — C# / .NET *(defer) — planned*
+### Track D — C# / .NET *(demand-driven) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/dotnet/`](../../bindings/dotnet/),
+via P/Invoke (`DllImport`) over the opaque-handle FFI layer — no struct layout
+mirrored. [`Program.cs`](../../bindings/dotnet/Program.cs) replays the corpus
+(7/7, verified in the isolated `asmtest-dotnet` image; `make dotnet-test` /
+`docker-dotnet`). Deferred: a NuGet package with `runtimes/<rid>/native/`
+payloads and an xUnit Tier-2 layer.
 
 | Aspect | Approach |
 |---|---|
@@ -345,7 +368,14 @@ examples + a CMake consumption path, not a binding.
 
 **Effort:** ~3–4 days.
 
-### Track C — Ruby & Lua/LuaJIT *(community tier) — planned*
+### Track C — Ruby & Lua/LuaJIT *(community tier) — Tier 1 done*
+
+**Status: Tier 1 bindings landed** in [`bindings/ruby/`](../../bindings/ruby/)
+(stdlib `Fiddle`, no gem) and [`bindings/lua/`](../../bindings/lua/) (LuaJIT
+`ffi`), both over the opaque-handle FFI layer — no struct layout mirrored. Each
+replays the corpus (7/7, verified in the isolated `asmtest-ruby` / `asmtest-lua`
+images; `make ruby-test` / `lua-test` / `docker-ruby` / `docker-lua`). Deferred:
+a gem / LuaRocks rock and Tier-2 (`minitest` / `busted`) layers.
 
 | Aspect | Approach |
 |---|---|
@@ -377,12 +407,14 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   rids, gems, rocks); a binding must not require the end user to `make` the C core.
 - **Versioning.** Bindings pin to `ASMTEST_VERSION_NUM`; the manifest carries the
   version so a mismatched lib is detected at load.
-- **Reproducible per-language testing.** `Dockerfile.bindings` bundles every
-  wrapper's toolchain (Python + pytest, a C++ compiler, Rust/cargo) plus
-  libunicorn, so each binding can be built and tested on any host — including a
-  language not installed locally. `make docker-bindings` runs them all (or
-  `docker-python` / `docker-cpp` / `docker-rust` individually); CI runs the same
-  tests natively. This is how Rust was verified where no host toolchain existed.
+- **Reproducible, isolated per-language testing.** Each wrapper is tested in its
+  **own** image — `bindings/<lang>/Dockerfile` FROM a shared C+libunicorn base
+  (`Dockerfile.bindings-base`) — so toolchains never mix (npm never lands in the
+  Java image, the .NET SDK never in the Lua image, …). `make docker-<lang>`
+  builds the base once (cached) then the small per-language image and runs the
+  conformance corpus inside it; `make docker-bindings` does all nine. The CI
+  `bindings` job is a matrix that runs `make docker-<lang>` per language. This is
+  also how languages with no host toolchain are verified.
 
 ---
 

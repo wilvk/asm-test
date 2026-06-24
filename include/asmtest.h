@@ -335,6 +335,21 @@ void asmtest_assert_flag(const char *file, int line, const regs_t *r,
 int asmtest_check_abi(const regs_t *r, char *msg, size_t n);
 int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
                        const char *name, char *msg, size_t n);
+
+/* Opaque-handle FFI helpers (binding ABI, shared library only). Dynamic-FFI
+ * bindings (Node, Ruby, Lua, …) use these instead of mirroring regs_t / reading
+ * field offsets: allocate a handle, call with scalar args, read fields by
+ * accessor — the universal FFI subset. See src/ffi.c and the API reference. */
+regs_t *asmtest_regs_new(void);
+void asmtest_regs_free(regs_t *r);
+unsigned long asmtest_regs_ret(const regs_t *r);
+unsigned long asmtest_regs_flags(const regs_t *r);
+double asmtest_regs_fret(const regs_t *r);
+float asmtest_regs_vec_f32(const regs_t *r, int index, int lane);
+int asmtest_regs_flag_set(const regs_t *r, const char *name); /* "CF","ZF",... */
+void asmtest_capture6(regs_t *out, void *fn, long a0, long a1, long a2, long a3,
+                      long a4, long a5);
+void asmtest_capture_fp2(regs_t *out, void *fn, double f0, double f1);
 void asmtest_assert_double_eq(const char *file, int line, double actual,
                               double expected);
 void asmtest_assert_double_near(const char *file, int line, double actual,

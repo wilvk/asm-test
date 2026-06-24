@@ -45,6 +45,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
 .PHONY: python-test cpp-test rust-test zig-test
+.PHONY: ruby-test lua-test node-test java-test dotnet-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -214,7 +215,9 @@ lib: $(BUILD)/libasmtest.a
 #   make shared-emu  libasmtest_emu.{so,dylib} (adds emu.o, links -lunicorn)
 #   make manifest    asmtest_abi.json — machine-readable struct layout for the
 #                    active host arch (consumed by every binding's generator)
-PIC_OBJS := $(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o
+# The capture trampoline + runtime + the opaque-handle FFI helpers (ffi.o, used
+# by the dynamic-language bindings; no Unicorn dependency).
+PIC_OBJS := $(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o $(BUILD)/pic/ffi.o
 
 $(BUILD)/pic:
 	mkdir -p $(BUILD)/pic
@@ -222,6 +225,9 @@ $(BUILD)/pic:
 # Position-independent objects (separate tree so they never collide with the
 # non-PIC objects the test/static-lib builds use).
 $(BUILD)/pic/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
+$(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
@@ -398,46 +404,39 @@ docker-shell: docker-build
 docker-clean:
 	-$(DOCKER) image rm $(DOCKER_IMAGE)
 
-# --- Language wrappers in Docker (Track P/R/X) -----------------------------
-# Test each language binding in one reproducible image (Python + pytest, C++,
-# Rust/cargo, libunicorn) so a wrapper can be verified on any host — including a
-# language not installed locally. See Dockerfile.bindings.
-#   make docker-bindings   build the image, run every wrapper's tests
-#   make docker-python     just the Python binding
-#   make docker-cpp        just the C++ binding
-#   make docker-rust       just the Rust binding
-#   make docker-zig        just the Zig binding
+# --- Language wrappers in Docker (Tracks P/R/X/Z/N/J/D/C) ------------------
+# Each language is tested in its OWN image for isolation (bindings/<lang>/
+# Dockerfile, FROM a shared C+libunicorn base) — toolchains never mix. A
+# docker-<lang> target builds the base (once, cached), then the small
+# per-language image, then runs it (its CMD is `make <lang>-test`).
+#   make docker-bindings   build + run every language's image
+#   make docker-python / -cpp / -rust / -zig / -node / -java / -dotnet /
+#        -ruby / -lua    just that language
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
-DOCKER_BINDINGS_IMAGE ?= asmtest-bindings
-_docker_brun := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_BINDINGS_IMAGE)
+DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
+BINDING_LANGS := python cpp rust zig node java dotnet ruby lua
 
-.PHONY: docker-bindings-build docker-bindings docker-python docker-cpp \
-        docker-rust docker-zig docker-bindings-shell docker-bindings-clean
+.PHONY: docker-bindings-base docker-bindings docker-bindings-clean \
+        $(addprefix docker-,$(BINDING_LANGS))
 
-docker-bindings-build:
-	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings \
-	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_IMAGE) .
+docker-bindings-base:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-base \
+	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_BASE) .
 
-docker-bindings: docker-bindings-build
-	$(_docker_brun)
+# Generate `docker-<lang>`: build the per-language image on the base, then run it.
+define docker_lang_rule
+docker-$(1): docker-bindings-base
+	$$(DOCKER) build $$(_docker_plat) -f bindings/$(1)/Dockerfile \
+	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_BASE) -t asmtest-$(1) .
+	$$(DOCKER) run --rm $$(_docker_plat) asmtest-$(1)
+endef
+$(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 
-docker-python: docker-bindings-build
-	$(_docker_brun) make python-test
-
-docker-cpp: docker-bindings-build
-	$(_docker_brun) make cpp-test
-
-docker-rust: docker-bindings-build
-	$(_docker_brun) make rust-test
-
-docker-zig: docker-bindings-build
-	$(_docker_brun) make zig-test
-
-docker-bindings-shell: docker-bindings-build
-	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_BINDINGS_IMAGE) sh
+docker-bindings: $(addprefix docker-,$(BINDING_LANGS))
 
 docker-bindings-clean:
-	-$(DOCKER) image rm $(DOCKER_BINDINGS_IMAGE)
+	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) \
+	  $(DOCKER_BINDINGS_BASE)
 
 # --- Quality tooling targets (Track D) -------------------------------------
 # Build + run the example suites and the self-tests under ASan + UBSan. The
@@ -600,7 +599,12 @@ CORPUS_LIB     := $(BUILD)/libasmtest_corpus.so
 CORPUS_LDFLAGS := -shared
 endif
 CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/flags.o \
-                       $(BUILD)/pic/fp.o $(BUILD)/pic/simd.o
+                       $(BUILD)/pic/fp.o $(BUILD)/pic/simd.o \
+                       $(BUILD)/pic/corpus_routines.o
+
+# name -> routine-address lookup, so bindings need no per-FFI symbol-address API.
+$(BUILD)/pic/corpus_routines.o: bindings/conformance/corpus_routines.c | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 $(CORPUS_LIB): $(CORPUS_ROUTINE_OBJS)
 	$(CC) $(CFLAGS) $(CORPUS_LDFLAGS) $^ -o $@
@@ -655,6 +659,42 @@ zig-test: shared-emu $(CORPUS_LIB)
 	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
 	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
 	  $(ZIG) build test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
+
+# --- Community / managed-runtime bindings (Tracks N, J, D, C) ---------------
+# Each replays the conformance corpus through the opaque-handle FFI layer (no
+# struct layout): asmtest_corpus_routine for addresses, asmtest_capture6/_fp2 +
+# accessors for capture, asmtest_emu_call2 + accessors for the emulator. They
+# need only the shared emulator lib + the routine fixture lib; their toolchains
+# live in the Docker bindings image (use `make docker-ruby` / `-lua` / `-node` /
+# `-java` / `-dotnet`). Shared env points the loader at the build dir.
+RUBY   ?= ruby
+LUAJIT ?= luajit
+NODE   ?= node
+JAVAC  ?= javac
+JAVA   ?= java
+DOTNET ?= dotnet
+bindings_env = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
+               ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
+               LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+               DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
+
+ruby-test: shared-emu $(CORPUS_LIB)
+	$(bindings_env) $(RUBY) bindings/ruby/conformance.rb
+
+lua-test: shared-emu $(CORPUS_LIB)
+	$(bindings_env) $(LUAJIT) bindings/lua/conformance.lua
+
+node-test: shared-emu $(CORPUS_LIB)
+	$(bindings_env) $(NODE) bindings/node/conformance.js
+
+java-test: shared-emu $(CORPUS_LIB)
+	mkdir -p $(BUILD)/java
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java bindings/java/Conformance.java
+	$(bindings_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
+	  -cp $(BUILD)/java Conformance
+
+dotnet-test: shared-emu $(CORPUS_LIB)
+	$(bindings_env) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html

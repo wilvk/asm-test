@@ -1,0 +1,17 @@
+{
+  "name": "asmtest",
+  "version": "1.0.0",
+  "description": "Node.js binding for the asm-test assembly unit-testing framework",
+  "license": "MIT",
+  "repository": "https://github.com/wilvk/asm-test",
+  "main": "conformance.js",
+  "scripts": {
+    "test": "node conformance.js"
+  },
+  "dependencies": {
+    "koffi": "^2.8.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

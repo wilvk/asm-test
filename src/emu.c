@@ -264,6 +264,15 @@ bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
     return emu_call_traced(e, fn, code_len, args, nargs, max_insns, out, NULL);
 }
 
+/* Scalar-arg convenience for dynamic-FFI bindings (see ffi.c): run `fn` (a
+ * 64-byte code window) with two integer args; returns 1 if it ran, 0 otherwise.
+ * Faults land in *out (read via asmtest_emu_result_faulted / _x86_reg). */
+int asmtest_emu_call2(emu_t *e, const void *fn, long a0, long a1,
+                      emu_result_t *out) {
+    long args[2] = {a0, a1};
+    return emu_call(e, fn, 64, args, 2, 0, out) ? 1 : 0;
+}
+
 bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
                  int niargs, const double *fargs, int nfargs,
                  uint64_t max_insns, emu_result_t *out) {

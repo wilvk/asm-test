@@ -1,0 +1,30 @@
+# Dockerfile.bindings-base — shared base for the per-language binding images.
+#
+# Each language wrapper is tested in its OWN image (bindings/<lang>/Dockerfile,
+# FROM this base) so the toolchains stay isolated — npm never lands in the Java
+# image, the .NET SDK never in the Lua image, etc. This base carries only what
+# every wrapper needs: a C toolchain (to build the shared libs + routine fixture
+# lib) and libunicorn (the emulator tier). `make docker-<lang>` builds this once
+# (cached) and then the small per-language image on top.
+#
+# Build:  docker build -f Dockerfile.bindings-base -t asmtest-bindings-base .
+
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C toolchain (also assembles the GAS .s sources and ships the linker), plus
+# curl/xz so a per-language image can fetch a toolchain tarball (e.g. Zig).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates pkg-config curl xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Install libunicorn from just the Makefile + installer so this layer caches
+# independently of the sources.
+COPY Makefile ./
+COPY scripts/ ./scripts/
+RUN make deps DEPS_ARGS=--emu && rm -rf /var/lib/apt/lists/*

@@ -23,8 +23,12 @@ bindings/rust/target/
 bindings/rust/Cargo.lock
 bindings/zig/.zig-cache/
 bindings/zig/zig-out/
+bindings/node/node_modules/
+bindings/dotnet/bin/
+bindings/dotnet/obj/
 
-# This image and its setup don't need to be in the context.
+# Dockerfiles are read via -f (not from the context) — keep them out of images.
 Dockerfile
-Dockerfile.bindings
+Dockerfile.bindings-base
+bindings/*/Dockerfile
 .dockerignore

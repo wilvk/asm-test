@@ -101,46 +101,25 @@ jobs:
       - name: Build and run emulator suite
         run: make emu-test
 
-  # Language wrappers (Tracks P/R/X): the Python (ctypes), Rust (repr(C) + FFI),
-  # and C++ (header) bindings, each replaying the conformance corpus. Runs on
-  # x86-64 and arm64 Linux so the manifest-driven layout is verified on both.
-  # This is the reusable per-language CI template (bindings plan 0.5): install
-  # the toolchain -> build the shared libs -> run the binding tests. The same
-  # set runs locally in one reproducible image via `make docker-bindings`.
+  # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
+  # container (bindings/<lang>/Dockerfile on a shared C+libunicorn base) so the
+  # toolchains stay isolated — one matrix job per language, each running
+  # `make docker-<lang>`, which builds the per-language image and replays the
+  # conformance corpus inside it. (The host-arch struct layout the bindings rely
+  # on is pinned by the C _Static_asserts, verified on arm64 by the `test`/`emu`
+  # jobs; these wrapper jobs run on x86-64.)
   bindings:
-    name: bindings (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    name: bindings (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-      - name: Install libunicorn (emulator tier)
-        run: make deps DEPS_ARGS=--emu
-      - name: Install pytest
-        run: python -m pip install pytest
-      - name: Python binding
-        run: make python-test
-      - name: C++ binding
-        run: make cpp-test
-      - name: Rust binding (cargo preinstalled on GitHub runners)
-        run: make rust-test
-      - name: Install Zig
-        run: |
-          ver=0.13.0
-          url="https://ziglang.org/download/${ver}/zig-linux-$(uname -m)-${ver}.tar.xz"
-          curl -fsSL "$url" -o /tmp/zig.tar.xz
-          sudo mkdir -p /opt/zig
-          sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
-          sudo ln -s /opt/zig/zig /usr/local/bin/zig
-          zig version
-      - name: Zig binding
-        run: make zig-test
+      - name: Test the ${{ matrix.lang }} binding in its isolated image
+        run: make docker-${{ matrix.lang }}
 
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).

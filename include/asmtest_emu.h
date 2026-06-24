@@ -98,6 +98,18 @@ bool emu_read(emu_t *e, uint64_t addr, void *data, size_t len);
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out);
 
+/* Opaque-handle FFI helpers for dynamic-language bindings (see src/ffi.c and
+ * emu.c): an emu_result_t handle, scalar-arg call, and field accessors, so a
+ * binding needs no struct layout. asmtest_emu_call2 runs `fn` (64-byte window)
+ * with two integer args; faults are read via the accessors. */
+emu_result_t *asmtest_emu_result_new(void);
+void asmtest_emu_result_free(emu_result_t *r);
+int asmtest_emu_result_ok(const emu_result_t *r);
+int asmtest_emu_result_faulted(const emu_result_t *r);
+unsigned long long asmtest_emu_x86_reg(const emu_result_t *r, const char *name);
+int asmtest_emu_call2(emu_t *e, const void *fn, long a0, long a1,
+                      emu_result_t *out);
+
 /* Like emu_call, but also marshals `nfargs` double args into the SysV FP
  * argument registers (xmm0..7) alongside the `niargs` integer args. The scalar
  * double return is out->regs.xmm[0].f64[0]. (x86-64 guest.) */

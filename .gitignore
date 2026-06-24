@@ -27,6 +27,12 @@ bindings/rust/Cargo.lock
 bindings/zig/.zig-cache/
 bindings/zig/zig-out/
 
+# Node / .NET binding artifacts (Tracks N, D)
+bindings/node/node_modules/
+bindings/node/package-lock.json
+bindings/dotnet/bin/
+bindings/dotnet/obj/
+
 # Coverage / analysis artifacts (Track D)
 *.gcov
 *.gcno
