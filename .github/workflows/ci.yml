@@ -72,7 +72,7 @@ jobs:
       - name: Benchmark demo (NASM backend)
         run: make ASM_SYNTAX=nasm bench
 
-  # Optional emulator tier (Unicorn Engine; x86-64 guest).
+  # Optional emulator tier (Unicorn Engine; x86-64, AArch64, and RISC-V guests).
   emu:
     name: emu (ubuntu-latest)
     runs-on: ubuntu-latest

@@ -1,5 +1,6 @@
 /*
- * emu.c — Unicorn-Engine-backed emulator tier (Phase 4), x86-64 guest.
+ * emu.c — Unicorn-Engine-backed emulator tier (Phase 4+), with x86-64,
+ * AArch64, and RISC-V (RV64) guests.
  */
 #include "asmtest_emu.h"
 
@@ -340,5 +341,122 @@ bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
                     const long *args, int nargs, uint64_t max_insns,
                     emu_arm64_result_t *out) {
     return emu_arm64_call_traced(e, code, code_len, args, nargs, max_insns, out,
+                                 NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* RISC-V (RV64) guest                                                 */
+/* ------------------------------------------------------------------ */
+
+struct emu_riscv {
+    uc_engine *uc;
+};
+
+emu_riscv_t *emu_riscv_open(void) {
+    emu_riscv_t *e = (emu_riscv_t *)calloc(1, sizeof *e);
+    if (e == NULL)
+        return NULL;
+    if (uc_open(UC_ARCH_RISCV, UC_MODE_RISCV64, &e->uc) != UC_ERR_OK) {
+        free(e);
+        return NULL;
+    }
+    /* Unlike the x86-64/AArch64 backends, Unicorn's RISC-V core fetches the
+     * instruction at the `until` address before honoring the stop, so an
+     * unmapped EMU_RET_MAGIC would fault on the `ret`. Map a small read/exec
+     * landing page there; uc_emu_start still stops before executing it. */
+    if (uc_mem_map(e->uc, EMU_CODE_BASE, EMU_CODE_SIZE, UC_PROT_ALL) !=
+            UC_ERR_OK ||
+        uc_mem_map(e->uc, EMU_STACK_BASE, EMU_STACK_SIZE,
+                   UC_PROT_READ | UC_PROT_WRITE) != UC_ERR_OK ||
+        uc_mem_map(e->uc, EMU_RET_MAGIC, 0x1000,
+                   UC_PROT_READ | UC_PROT_EXEC) != UC_ERR_OK) {
+        uc_close(e->uc);
+        free(e);
+        return NULL;
+    }
+    return e;
+}
+
+void emu_riscv_close(emu_riscv_t *e) {
+    if (e == NULL)
+        return;
+    uc_close(e->uc);
+    free(e);
+}
+
+bool emu_riscv_map(emu_riscv_t *e, uint64_t addr, size_t size) {
+    return uc_mem_map(e->uc, addr, size, UC_PROT_READ | UC_PROT_WRITE) ==
+           UC_ERR_OK;
+}
+
+bool emu_riscv_write(emu_riscv_t *e, uint64_t addr, const void *data,
+                     size_t len) {
+    return uc_mem_write(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+bool emu_riscv_read(emu_riscv_t *e, uint64_t addr, void *data, size_t len) {
+    return uc_mem_read(e->uc, addr, data, len) == UC_ERR_OK;
+}
+
+static void read_all_regs_riscv(uc_engine *uc, emu_riscv_regs_t *r) {
+    for (int i = 0; i <= 31; i++) /* x0..x31 are consecutive enum values */
+        uc_reg_read(uc, UC_RISCV_REG_X0 + i, &r->x[i]);
+    uc_reg_read(uc, UC_RISCV_REG_PC, &r->pc);
+}
+
+bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_riscv_result_t *out, emu_trace_t *trace) {
+    /* RISC-V integer args: a0..a7 == x10..x17. */
+    static const int arg_regs[8] = {
+        UC_RISCV_REG_X10, UC_RISCV_REG_X11, UC_RISCV_REG_X12, UC_RISCV_REG_X13,
+        UC_RISCV_REG_X14, UC_RISCV_REG_X15, UC_RISCV_REG_X16, UC_RISCV_REG_X17};
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+
+    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+        out->uc_err = -1;
+        return false;
+    }
+
+    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
+    uc_reg_write(uc, UC_RISCV_REG_SP, &sp);
+    uint64_t ra = EMU_RET_MAGIC; /* `ret` is jalr x0, 0(ra) */
+    uc_reg_write(uc, UC_RISCV_REG_RA, &ra);
+
+    for (int i = 0; i < nargs && i < 8; i++) {
+        uint64_t v = (uint64_t)args[i];
+        uc_reg_write(uc, arg_regs[i], &v);
+    }
+
+    fault_rec_t fr = {0};
+    uc_hook hh;
+    uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
+                0);
+    trace_ctx_t tc = {trace, EMU_CODE_BASE};
+    uc_hook hcode, hblock;
+    add_trace_hooks(uc, &tc, &hcode, &hblock);
+
+    uc_err err =
+        uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
+    uc_hook_del(uc, hh);
+    if (trace != NULL) {
+        uc_hook_del(uc, hcode);
+        uc_hook_del(uc, hblock);
+    }
+
+    out->uc_err = (int)err;
+    out->faulted = fr.faulted;
+    out->fault_addr = fr.addr;
+    out->fault_kind = fr.kind;
+    read_all_regs_riscv(uc, &out->regs);
+    out->ok = (err == UC_ERR_OK) && !fr.faulted;
+    return out->ok;
+}
+
+bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
+                    const long *args, int nargs, uint64_t max_insns,
+                    emu_riscv_result_t *out) {
+    return emu_riscv_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                  NULL);
 }

@@ -6,8 +6,8 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 9** (benchmark mode). See
-[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 10–11).
+Phases 0–10 are complete and **Phase 11** (breadth) is in progress. See
+[DESIGN.md](DESIGN.md) for the full plan and roadmap.
 
 **Available now:**
 
@@ -63,13 +63,13 @@ Currently at **Phase 9** (benchmark mode). See
   Intel syntax, x86-64 only) — the Intel-syntax sources live alongside the GAS
   ones and are also exercised in CI.
 - **Emulator tier** (optional, `make emu-test`, needs libunicorn): run a routine
-  inside a virtual CPU (x86-64 or AArch64 guest) to preload arbitrary
-  registers/memory, single-step mid-routine, read back the **full** register
-  file, and catch invalid memory accesses as precise faults — beyond what
-  ABI-boundary inspection can see. ARM64 routines emulate even on an x86-64 host.
-  `emu_call_traced` also records an **instruction trace and basic-block
-  coverage**; accumulating coverage across inputs answers "did the tests
-  exercise every branch?".
+  inside a virtual CPU (x86-64, AArch64, or RISC-V/RV64 guest) to preload
+  arbitrary registers/memory, single-step mid-routine, read back the **full**
+  register file, and catch invalid memory accesses as precise faults — beyond
+  what ABI-boundary inspection can see. AArch64 and RISC-V routines emulate even
+  on an x86-64 host (the guest is independent of the host). `emu_call_traced`
+  also records an **instruction trace and basic-block coverage**; accumulating
+  coverage across inputs answers "did the tests exercise every branch?".
 
 ## Quick start
 

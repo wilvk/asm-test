@@ -7,9 +7,9 @@
  * instructions, then read back the COMPLETE register file — and turn any
  * invalid memory access into a precise, reported fault instead of a crash.
  *
- * x86-64 only for now (the emulated target, not the host — Unicorn emulates
- * x86-64 regardless of host arch). Build with the emu objects + -lunicorn;
- * the core framework has no dependency on this.
+ * Guests: x86-64, AArch64, and RISC-V (RV64) — the emulated target, not the
+ * host; Unicorn emulates each regardless of host arch. Build with the emu
+ * objects + -lunicorn; the core framework has no dependency on this.
  */
 #ifndef ASMTEST_EMU_H
 #define ASMTEST_EMU_H
@@ -140,5 +140,52 @@ bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
 bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
                            const long *args, int nargs, uint64_t max_insns,
                            emu_arm64_result_t *out, emu_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
+/* RISC-V (RV64) guest (emulated regardless of host architecture)      */
+/*                                                                     */
+/* Like the AArch64 guest, this runs raw RV64 machine code directly,   */
+/* so RISC-V routines emulate on an x86-64 or AArch64 host. Integer    */
+/* args go in a0..a7 (x10..x17); the return value lands in a0/a1; ra   */
+/* (x1) holds the sentinel return address and sp (x2) the stack. There */
+/* is no flags register — RISC-V folds comparisons into its branches.  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t x[32]; /* x0..x31; x0 = zero, x1 = ra, x2 = sp, x10..x17 = a0..a7 */
+    uint64_t pc;
+} emu_riscv_regs_t;
+
+typedef struct {
+    bool ok;
+    int uc_err;
+    bool faulted;
+    uint64_t fault_addr;
+    emu_fault_kind_t fault_kind;
+    emu_riscv_regs_t regs;
+} emu_riscv_result_t;
+
+typedef struct emu_riscv emu_riscv_t;
+
+emu_riscv_t *emu_riscv_open(void);
+void emu_riscv_close(emu_riscv_t *e);
+bool emu_riscv_map(emu_riscv_t *e, uint64_t addr, size_t size);
+bool emu_riscv_write(emu_riscv_t *e, uint64_t addr, const void *data,
+                     size_t len);
+bool emu_riscv_read(emu_riscv_t *e, uint64_t addr, void *data, size_t len);
+
+/* Run raw RV64 machine code with integer args in a0..a7. Stops when the
+ * routine's `ret` (jalr x0, 0(ra)) branches to the sentinel ra, or after
+ * max_insns. */
+bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
+                    const long *args, int nargs, uint64_t max_insns,
+                    emu_riscv_result_t *out);
+
+/* Like emu_riscv_call, but also records a trace / coverage into *trace (which
+ * may be NULL). Offsets are byte offsets from the start of the code; base RV64
+ * instructions are 4 bytes, so they fall on 0, 4, 8, ... See emu_trace_t. */
+bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_riscv_result_t *out, emu_trace_t *trace);
 
 #endif /* ASMTEST_EMU_H */

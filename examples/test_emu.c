@@ -250,3 +250,90 @@ TEST(emu_arm64, trace_records_instruction_stream) {
     ASSERT_UEQ(t.blocks[0], 0);
     emu_arm64_close(e);
 }
+
+/* -------------------------------------------------------------------------
+ * RISC-V (RV64) guest: raw machine code run on whatever host this is (Unicorn
+ * emulates RISC-V even on an x86-64 host). Integer args arrive in a0..a7
+ * (x10..x17); the return value is in a0 (x10). Bytes (little-endian) from:
+ *   add  a0, a0, a1  -> 00b50533      ld   a0, 0(a0) -> 00053503
+ *   add  a0, a0, a2  -> 00c50533      ret            -> 00008067
+ * ------------------------------------------------------------------------- */
+static const unsigned char RV_ADD[] = {0x33, 0x05, 0xb5, 0x00,
+                                       0x67, 0x80, 0x00, 0x00};
+static const unsigned char RV_ADD3[] = {0x33, 0x05, 0xb5, 0x00, 0x33, 0x05,
+                                        0xc5, 0x00, 0x67, 0x80, 0x00, 0x00};
+static const unsigned char RV_LOAD[] = {0x03, 0x35, 0x05, 0x00,
+                                        0x67, 0x80, 0x00, 0x00};
+
+TEST(emu_riscv, runs_routine_in_isolation) {
+    emu_riscv_t *e = emu_riscv_open();
+    ASSERT_TRUE(e != NULL);
+    emu_riscv_result_t r;
+    long args[] = {20, 22};
+    ASSERT_TRUE(emu_riscv_call(e, RV_ADD, sizeof RV_ADD, args, 2, 0, &r));
+    ASSERT_REG_EQ(&r.regs, x[10], 42); /* a0 == x10 holds the return value */
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, mid_routine_single_step) {
+    emu_riscv_t *e = emu_riscv_open();
+    emu_riscv_result_t r;
+    long args[] = {1, 2, 100};
+    /* one instruction only: a0 = a0 + a1 = 3; the +a2 has not run yet. */
+    emu_riscv_call(e, RV_ADD3, sizeof RV_ADD3, args, 3, 1, &r);
+    ASSERT_EQ(r.regs.x[10], 3);
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, fault_injection_catches_bad_load) {
+    emu_riscv_t *e = emu_riscv_open();
+    emu_riscv_result_t r;
+    long args[] = {(long)0xdead0000UL};
+    bool ok = emu_riscv_call(e, RV_LOAD, sizeof RV_LOAD, args, 1, 0, &r);
+    ASSERT_FALSE(ok);
+    ASSERT_TRUE(r.faulted);
+    ASSERT_UEQ(r.fault_addr, 0xdead0000UL);
+    ASSERT_EQ(r.fault_kind, EMU_FAULT_READ);
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, reads_preloaded_guest_memory) {
+    emu_riscv_t *e = emu_riscv_open();
+    emu_riscv_result_t r;
+    uint64_t addr = 0x00300000UL;
+    long value = 0x5678;
+    ASSERT_TRUE(emu_riscv_map(e, addr, 0x1000));
+    ASSERT_TRUE(emu_riscv_write(e, addr, &value, sizeof value));
+    long args[] = {(long)addr};
+    ASSERT_TRUE(emu_riscv_call(e, RV_LOAD, sizeof RV_LOAD, args, 1, 0, &r));
+    ASSERT_FALSE(r.faulted);
+    ASSERT_EQ(r.regs.x[10], 0x5678);
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, trace_records_instruction_stream) {
+    emu_riscv_t *e = emu_riscv_open();
+    emu_riscv_result_t r;
+    uint64_t insns[8], blocks[8];
+    emu_trace_t t = {0};
+    t.insns = insns;
+    t.insns_cap = 8;
+    t.blocks = blocks;
+    t.blocks_cap = 8;
+
+    long args[] = {1, 2, 100};
+    ASSERT_TRUE(emu_riscv_call_traced(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0,
+                                      &r, &t));
+    ASSERT_EQ(r.regs.x[10], 103); /* (1 + 2) + 100 */
+    /* add, add, ret — straight line: 3 instructions at offsets 0/4/8, one
+     * basic block (base RV64 instructions are 4 bytes, so offsets are exact). */
+    ASSERT_EQ(t.insns_total, (uint64_t)3);
+    ASSERT_EQ(t.insns_len, (size_t)3);
+    ASSERT_UEQ(t.insns[0], 0);
+    ASSERT_UEQ(t.insns[1], 4);
+    ASSERT_UEQ(t.insns[2], 8);
+    ASSERT_EQ(t.blocks_total, (uint64_t)1);
+    ASSERT_EQ(t.blocks_len, (size_t)1);
+    ASSERT_UEQ(t.blocks[0], 0);
+    emu_riscv_close(e);
+}
