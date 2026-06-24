@@ -105,8 +105,8 @@ asm-test/
   and out-of-bounds writes by the routine under test.
 
 ### 4.6 Build layer
-- Makefile assembles `.s` (default: `clang`/`as`, GAS syntax — `nasm` is not
-  installed on the host), compiles C tests, links one binary per suite.
+- Makefile assembles `.s` (default: `clang`/`as`, GAS syntax), compiles C
+  tests, links one binary per suite.
 - Assembler is a config variable, so a NASM (`-f macho64`) backend is opt-in.
 
 ---
@@ -209,12 +209,22 @@ add reach.
   vary it). Turns fixed-vector assertions into specification conformance over
   thousands of random inputs; pairs naturally with the emulator tier, where a
   looping or faulting routine cannot take down the harness.
-- **Phase 8 — Runner robustness & CLI: _planned._** `fork()` each test into a
-  child with an `alarm()` timeout, so an infinite loop or heap corruption in the
-  routine under test becomes a reported timeout/failure instead of hanging or
-  poisoning later tests (the native path has no equivalent to the emulator's
-  `max_insns`). Add argv handling to `main()`: `--filter` by suite/name glob,
-  `--list`, `--shuffle`/`--seed`, and `--format=junit` for CI ingestion.
+- **Phase 8 — Runner robustness & CLI: _done._** Each test runs in a `fork()`ed
+  child by default with an `alarm()` timeout, so an infinite loop or heap
+  corruption in the routine under test becomes a reported timeout/crash failure
+  instead of hanging or poisoning later tests (the native path's answer to the
+  emulator's `max_insns`). The child ships its outcome (PASS/FAIL/SKIP + message
+  + location) back over a pipe; if it dies before reporting — a SIGABRT-class
+  corruption the in-process signal handler can't catch, a hard kill — the parent
+  synthesizes the result from the `wait()` status (`killed by signal …` /
+  `timed out … (killed)`). `--no-fork` keeps the in-process model (which still
+  catches SIGSEGV/SIGBUS/… and times out hangs via the same alarm, but a
+  SIGABRT-class crash takes the runner down — the reason fork is the default).
+  `main()` takes argv: `--filter` (glob over suite, name, or `suite.name`),
+  `--list`, `--shuffle` with optional `--seed` (Fisher–Yates over the splitmix64
+  RNG; the seed is printed for reproducibility), `--timeout=SEC` (also
+  `ASMTEST_TIMEOUT`), and `--format=junit` (suite-grouped XML for CI ingestion)
+  alongside the default colored TAP. Demoed by `make demo-robust`.
 - **Phase 9 — Benchmark mode: _planned._** A `BENCH(suite, name)` form measuring
   cycles per call via `rdtsc` / `cntvct_el0`, reporting min/median over repeated
   runs. Assembly is usually written for speed; the capture trampoline already
@@ -242,8 +252,9 @@ add reach.
 
 ## 7. Key decisions (revisit as needed)
 
-- **Assembler:** GAS via Apple `clang`/`as` (installed). NASM opt-in; if we
-  standardize on NASM instead, `brew install nasm` and flip the Makefile default.
+- **Assembler:** GAS via Apple `clang`/`as` is the default; NASM (also
+  installed) is opt-in via `ASM_SYNTAX=nasm`. Standardizing on NASM instead
+  means flipping the Makefile default.
 - **Architecture:** x86-64 first (host); AArch64 in Phase 3.
 - **Introspection strategy:** ABI-based register capture first; emulator-based
   deep introspection only after Phases 0–2 prove the value.

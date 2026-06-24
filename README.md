@@ -6,8 +6,8 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 7** (differential / property testing). See
-[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 8–11).
+Currently at **Phase 8** (runner robustness & CLI). See
+[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 9–11).
 
 **Available now:**
 
@@ -43,6 +43,13 @@ Currently at **Phase 7** (differential / property testing). See
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.
+- **Per-test isolation & timeout:** each test runs in a forked child with an
+  `alarm()` timeout, so an infinite loop or a SIGABRT-class corruption becomes a
+  reported timeout/crash failure and the run continues (`--no-fork` opts back
+  into the in-process model). See `make demo-robust`.
+- **Runner CLI:** `--filter=GLOB` (over suite, name, or `suite.name`), `--list`,
+  `--shuffle`/`--seed` for order independence, `--timeout=SEC`, and
+  `--format=junit` for CI ingestion alongside the default colored TAP.
 - **Portable across x86-64 and AArch64, Linux and macOS:** the same sources
   build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`; each
   routine and the capture trampoline carry both an x86-64 and an AArch64 body
@@ -61,8 +68,20 @@ Currently at **Phase 7** (differential / property testing). See
 ```sh
 make test                   # build and run the example suites
 make demo-fail              # see how a failing assertion is reported
+make demo-robust            # see a hang and a crash contained & reported
 make ASM_SYNTAX=nasm test   # same suites via the NASM backend (x86-64)
 make clean
+```
+
+Each suite binary takes a small CLI:
+
+```sh
+./build/test_arith --list                 # list the tests, don't run them
+./build/test_arith --filter='*overflow*'  # run a glob-matched subset
+./build/test_arith --shuffle --seed=123   # run in a reproducible random order
+./build/test_arith --timeout=5            # per-test timeout (seconds; 0 = off)
+./build/test_arith --no-fork              # in-process (no per-test isolation)
+./build/test_arith --format=junit         # JUnit XML instead of TAP, for CI
 ```
 
 ## Writing a test

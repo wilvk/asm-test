@@ -43,6 +43,9 @@ jobs:
       - name: Failure demo (informational; detects intentional failures)
         run: make demo-fail
 
+      - name: Robustness demo (informational; hang/crash containment)
+        run: make demo-robust
+
   # Opt-in NASM backend (Intel syntax, x86-64 only).
   nasm:
     name: nasm (ubuntu-latest)
@@ -59,6 +62,9 @@ jobs:
 
       - name: Failure demo (NASM backend)
         run: make ASM_SYNTAX=nasm demo-fail
+
+      - name: Robustness demo (NASM backend)
+        run: make ASM_SYNTAX=nasm demo-robust
 
   # Optional emulator tier (Unicorn Engine; x86-64 guest).
   emu:

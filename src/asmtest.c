@@ -4,6 +4,8 @@
  */
 #include "asmtest.h"
 
+#include <errno.h>
+#include <fnmatch.h>
 #include <math.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -12,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Linux spells it MAP_ANONYMOUS; macOS/BSD provide MAP_ANON. */
@@ -35,6 +39,10 @@ static volatile sig_atomic_t asmtest_in_test = 0;
 static char asmtest_msg[1024];
 static const char *asmtest_loc_file;
 static int asmtest_loc_line;
+
+/* Per-test wall-clock timeout, enforced via alarm() (0 disables). Set from
+ * --timeout / ASMTEST_TIMEOUT before the run; read by the SIGALRM handler. */
+static int asmtest_timeout_secs = 10;
 
 /* ------------------------------------------------------------------ */
 /* Registration                                                        */
@@ -482,6 +490,8 @@ static const char *sig_name(int sig) {
     case SIGBUS:  return "SIGBUS";
     case SIGFPE:  return "SIGFPE";
     case SIGILL:  return "SIGILL";
+    case SIGABRT: return "SIGABRT";
+    case SIGALRM: return "SIGALRM";
     default:      return "signal";
     }
 }
@@ -493,9 +503,15 @@ static void asmtest_on_signal(int sig) {
         raise(sig);
         return;
     }
-    snprintf(asmtest_msg, sizeof asmtest_msg, "caught fatal signal %d (%s)",
-             sig, sig_name(sig));
-    asmtest_loc_file = "(signal)";
+    if (sig == SIGALRM) {
+        snprintf(asmtest_msg, sizeof asmtest_msg, "timed out after %d s",
+                 asmtest_timeout_secs);
+        asmtest_loc_file = "(timeout)";
+    } else {
+        snprintf(asmtest_msg, sizeof asmtest_msg, "caught fatal signal %d (%s)",
+                 sig, sig_name(sig));
+        asmtest_loc_file = "(signal)";
+    }
     asmtest_loc_line = 0;
     siglongjmp(asmtest_jmp, JMP_FAIL);
 }
@@ -510,6 +526,7 @@ static void install_handlers(void) {
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGALRM, &sa, NULL); /* per-test timeout (see run_one) */
 }
 
 /* ------------------------------------------------------------------ */
@@ -523,12 +540,18 @@ static void run_hooks(const char *suite, int kind) {
     }
 }
 
-/* Run one test through setup -> body -> teardown; returns an ST_* outcome. */
+/* Run one test through setup -> body -> teardown; returns an ST_* outcome.
+ * A per-test alarm() converts an infinite loop into a SIGALRM the handler turns
+ * into a timeout failure (works even in-process). On return the failure/skip
+ * message lives in asmtest_msg / asmtest_loc_*. */
 static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 1;
+    if (asmtest_timeout_secs > 0)
+        alarm((unsigned)asmtest_timeout_secs);
 
     /* setup */
     if (sigsetjmp(asmtest_jmp, 1) != 0) {
+        alarm(0);
         asmtest_in_test = 0;
         return ST_FAIL; /* setup failed/crashed: skip body and teardown */
     }
@@ -550,52 +573,438 @@ static int run_one(asmtest_case_t *tc) {
     else if (outcome != ST_FAIL)
         outcome = ST_FAIL;
 
+    alarm(0);
     asmtest_in_test = 0;
     return outcome;
 }
 
-int main(void) {
+/* ------------------------------------------------------------------ */
+/* Per-test isolation (fork) and result plumbing                       */
+/* ------------------------------------------------------------------ */
+
+/* A finished test's outcome, accumulated by the parent for reporting. */
+typedef struct {
+    const char *suite;
+    const char *name;
+    int outcome; /* ST_PASS / ST_FAIL / ST_SKIP */
+    int line;
+    char file[256];
+    char msg[sizeof asmtest_msg];
+    double secs;
+} test_result_t;
+
+/* The subset of a result a forked child ships back over its pipe. */
+typedef struct {
+    int outcome;
+    int line;
+    char file[256];
+    char msg[sizeof asmtest_msg];
+} wire_result_t;
+
+/* Snapshot the globals left by run_one into a wire record. */
+static void capture_wire(wire_result_t *w, int outcome) {
+    memset(w, 0, sizeof *w);
+    w->outcome = outcome;
+    w->line = asmtest_loc_line;
+    snprintf(w->file, sizeof w->file, "%s",
+             asmtest_loc_file ? asmtest_loc_file : "");
+    snprintf(w->msg, sizeof w->msg, "%s", asmtest_msg);
+}
+
+static void apply_wire(test_result_t *res, const wire_result_t *w) {
+    res->outcome = w->outcome;
+    res->line = w->line;
+    snprintf(res->file, sizeof res->file, "%s", w->file);
+    snprintf(res->msg, sizeof res->msg, "%s", w->msg);
+}
+
+static int write_full(int fd, const void *buf, size_t n) {
+    const char *p = (const char *)buf;
+    while (n) {
+        ssize_t w = write(fd, p, n);
+        if (w < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        p += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+static size_t read_full(int fd, void *buf, size_t n) {
+    char *p = (char *)buf;
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, p + got, n - got);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (r == 0)
+            break; /* EOF: child died before finishing its write */
+        got += (size_t)r;
+    }
+    return got;
+}
+
+/* Run in this process. Crashes that escape the signal handler (e.g. SIGABRT
+ * from heap corruption) take down the whole runner — that's what --fork avoids. */
+static void run_inproc(asmtest_case_t *tc, test_result_t *res) {
+    wire_result_t w;
+    capture_wire(&w, run_one(tc));
+    apply_wire(res, &w);
+}
+
+/* Run in a forked child so a crash, abort, or hard hang is contained: the
+ * child reports its outcome up a pipe; if it dies before reporting, the parent
+ * synthesizes the result from the wait status. */
+static void run_forked(asmtest_case_t *tc, test_result_t *res) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        run_inproc(tc, res);
+        return;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        run_inproc(tc, res);
+        return;
+    }
+    if (pid == 0) {
+        /* Child: run, ship the result, exit without flushing inherited bufs. */
+        close(fds[0]);
+        wire_result_t w;
+        capture_wire(&w, run_one(tc));
+        write_full(fds[1], &w, sizeof w);
+        fflush(stdout); /* preserve anything the test itself printed */
+        fflush(stderr);
+        _exit(0);
+    }
+    /* Parent: read the child's result, then reap it. */
+    close(fds[1]);
+    wire_result_t w;
+    size_t got = read_full(fds[0], &w, sizeof w);
+    close(fds[0]);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+    if (got == sizeof w) {
+        apply_wire(res, &w);
+        return;
+    }
+    /* Child died before reporting: describe it from the wait status. */
+    res->outcome = ST_FAIL;
+    res->line = 0;
+    snprintf(res->file, sizeof res->file, "(child)");
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        if (sig == SIGALRM)
+            snprintf(res->msg, sizeof res->msg,
+                     "timed out after %d s (killed)", asmtest_timeout_secs);
+        else
+            snprintf(res->msg, sizeof res->msg,
+                     "crashed: killed by signal %d (%s)", sig, sig_name(sig));
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        snprintf(res->msg, sizeof res->msg,
+                 "child exited abnormally (status %d)", WEXITSTATUS(status));
+    } else {
+        snprintf(res->msg, sizeof res->msg, "no result reported by child");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* CLI                                                                 */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char *filter; /* fnmatch glob; NULL = all */
+    int do_list;
+    int shuffle;
+    int has_seed;
+    uint64_t seed;
+    int format_junit;
+    int fork_tests; /* per-test fork isolation (default on) */
+    int timeout;    /* seconds; <0 = leave the default in place */
+} options_t;
+
+static void usage(const char *prog) {
+    printf(
+        "usage: %s [options]\n"
+        "  --filter=GLOB        run only tests whose suite, name, or\n"
+        "                       \"suite.name\" matches GLOB (shell wildcards)\n"
+        "  --list               list the matching tests and exit\n"
+        "  --shuffle            run tests in a random order\n"
+        "  --seed=N             seed the shuffle (implies --shuffle; "
+        "reproducible)\n"
+        "  --timeout=SEC        per-test timeout in seconds (0 disables; "
+        "default 10)\n"
+        "  --no-fork            run tests in-process (no per-test isolation)\n"
+        "  --format=tap|junit   output format (default tap)\n"
+        "  -h, --help           show this help\n",
+        prog);
+}
+
+/* If `a` begins with `pre`, point *rest at the remainder and return 1. */
+static int opt_prefix(const char *a, const char *pre, const char **rest) {
+    size_t n = strlen(pre);
+    if (strncmp(a, pre, n) == 0) {
+        *rest = a + n;
+        return 1;
+    }
+    return 0;
+}
+
+/* A test matches the filter if the glob matches its suite, name, or id. */
+static int test_matches(const asmtest_case_t *tc, const char *glob) {
+    char id[256];
+    snprintf(id, sizeof id, "%s.%s", tc->suite, tc->name);
+    return fnmatch(glob, id, 0) == 0 || fnmatch(glob, tc->suite, 0) == 0 ||
+           fnmatch(glob, tc->name, 0) == 0;
+}
+
+static void xml_print_escaped(const char *s) {
+    for (; *s; s++) {
+        switch (*s) {
+        case '&':  fputs("&amp;", stdout); break;
+        case '<':  fputs("&lt;", stdout); break;
+        case '>':  fputs("&gt;", stdout); break;
+        case '"':  fputs("&quot;", stdout); break;
+        case '\n': fputs("&#10;", stdout); break;
+        default:   fputc((unsigned char)*s, stdout);
+        }
+    }
+}
+
+/* Render results as JUnit XML, grouped into <testsuite> by suite name. */
+static void render_junit(const test_result_t *results, int n) {
+    int failures = 0, skipped = 0;
+    for (int i = 0; i < n; i++) {
+        if (results[i].outcome == ST_FAIL)
+            failures++;
+        else if (results[i].outcome == ST_SKIP)
+            skipped++;
+    }
+    printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    printf("<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", n,
+           failures, skipped);
+
+    int *done = (int *)calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+    for (int i = 0; i < n; i++) {
+        if (done[i])
+            continue;
+        const char *suite = results[i].suite;
+        int s_tests = 0, s_fail = 0, s_skip = 0;
+        for (int j = i; j < n; j++) {
+            if (strcmp(results[j].suite, suite) != 0)
+                continue;
+            s_tests++;
+            if (results[j].outcome == ST_FAIL)
+                s_fail++;
+            else if (results[j].outcome == ST_SKIP)
+                s_skip++;
+        }
+        printf("  <testsuite name=\"");
+        xml_print_escaped(suite);
+        printf("\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", s_tests,
+               s_fail, s_skip);
+        for (int j = i; j < n; j++) {
+            if (strcmp(results[j].suite, suite) != 0)
+                continue;
+            done[j] = 1;
+            const test_result_t *r = &results[j];
+            printf("    <testcase classname=\"");
+            xml_print_escaped(suite);
+            printf("\" name=\"");
+            xml_print_escaped(r->name);
+            printf("\" time=\"%.6f\">", r->secs);
+            if (r->outcome == ST_FAIL) {
+                printf("\n      <failure message=\"");
+                xml_print_escaped(r->msg);
+                printf("\">at %s:%d&#10;", r->file, r->line);
+                xml_print_escaped(r->msg);
+                printf("</failure>\n    ");
+            } else if (r->outcome == ST_SKIP) {
+                printf("\n      <skipped message=\"");
+                xml_print_escaped(r->msg);
+                printf("\"/>\n    ");
+            }
+            printf("</testcase>\n");
+        }
+        printf("  </testsuite>\n");
+    }
+    printf("</testsuites>\n");
+    free(done);
+}
+
+static double now_secs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+int main(int argc, char **argv) {
+    options_t opt;
+    memset(&opt, 0, sizeof opt);
+    opt.fork_tests = 1;
+    opt.timeout = -1;
+
+    for (int ai = 1; ai < argc; ai++) {
+        const char *a = argv[ai];
+        const char *v;
+        if (strcmp(a, "--list") == 0) {
+            opt.do_list = 1;
+        } else if (strcmp(a, "--shuffle") == 0) {
+            opt.shuffle = 1;
+        } else if (strcmp(a, "--no-fork") == 0) {
+            opt.fork_tests = 0;
+        } else if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
+            usage(argv[0]);
+            return 0;
+        } else if (opt_prefix(a, "--filter=", &v)) {
+            opt.filter = v;
+        } else if (strcmp(a, "--filter") == 0 && ai + 1 < argc) {
+            opt.filter = argv[++ai];
+        } else if (opt_prefix(a, "--seed=", &v)) {
+            opt.seed = (uint64_t)strtoull(v, NULL, 0);
+            opt.has_seed = opt.shuffle = 1;
+        } else if (strcmp(a, "--seed") == 0 && ai + 1 < argc) {
+            opt.seed = (uint64_t)strtoull(argv[++ai], NULL, 0);
+            opt.has_seed = opt.shuffle = 1;
+        } else if (opt_prefix(a, "--timeout=", &v)) {
+            opt.timeout = atoi(v);
+        } else if (strcmp(a, "--timeout") == 0 && ai + 1 < argc) {
+            opt.timeout = atoi(argv[++ai]);
+        } else if (opt_prefix(a, "--format=", &v)) {
+            if (strcmp(v, "junit") == 0)
+                opt.format_junit = 1;
+            else if (strcmp(v, "tap") == 0)
+                opt.format_junit = 0;
+            else {
+                fprintf(stderr, "unknown --format: %s\n", v);
+                return 2;
+            }
+        } else {
+            fprintf(stderr, "unknown option: %s\n", a);
+            usage(argv[0]);
+            return 2;
+        }
+    }
+
+    /* Timeout precedence: --timeout, else ASMTEST_TIMEOUT, else the default. */
+    if (opt.timeout >= 0) {
+        asmtest_timeout_secs = opt.timeout;
+    } else {
+        const char *e = getenv("ASMTEST_TIMEOUT");
+        if (e && *e)
+            asmtest_timeout_secs = atoi(e);
+    }
+
     install_handlers();
 
-    int use_color = isatty(STDOUT_FILENO);
+    /* Collect the registered tests that pass the filter into an array. */
+    int total = 0;
+    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next)
+        total++;
+    asmtest_case_t **sel =
+        (asmtest_case_t **)malloc((size_t)(total > 0 ? total : 1) * sizeof *sel);
+    int n = 0;
+    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next) {
+        if (opt.filter == NULL || test_matches(tc, opt.filter))
+            sel[n++] = tc;
+    }
+
+    if (opt.do_list) {
+        for (int i = 0; i < n; i++)
+            printf("%s.%s\n", sel[i]->suite, sel[i]->name);
+        free(sel);
+        return 0;
+    }
+
+    if (opt.shuffle) {
+        uint64_t seed = opt.has_seed
+                            ? opt.seed
+                            : ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32));
+        asmtest_rng_t rng = {seed};
+        for (int i = n - 1; i > 0; i--) { /* Fisher-Yates */
+            int j = (int)(asmtest_rng_u64(&rng) % (uint64_t)(i + 1));
+            asmtest_case_t *t = sel[i];
+            sel[i] = sel[j];
+            sel[j] = t;
+        }
+        if (!opt.format_junit)
+            printf("# shuffle seed=0x%llx\n", (unsigned long long)seed);
+    }
+
+    int use_color = !opt.format_junit && isatty(STDOUT_FILENO);
     const char *grn = use_color ? "\033[32m" : "";
     const char *red = use_color ? "\033[31m" : "";
     const char *yel = use_color ? "\033[33m" : "";
     const char *dim = use_color ? "\033[2m" : "";
     const char *rst = use_color ? "\033[0m" : "";
 
-    int total = 0;
-    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next)
-        total++;
+    if (!opt.format_junit) {
+        printf("TAP version 13\n");
+        printf("1..%d\n", n);
+    }
 
-    printf("TAP version 13\n");
-    printf("1..%d\n", total);
+    test_result_t *results =
+        (test_result_t *)malloc((size_t)(n > 0 ? n : 1) * sizeof *results);
+    int passed = 0, failed = 0, skipped = 0;
 
-    int passed = 0, failed = 0, skipped = 0, i = 0;
-    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next) {
-        i++;
-        int outcome = run_one(tc);
-        if (outcome == ST_PASS) {
+    for (int i = 0; i < n; i++) {
+        asmtest_case_t *tc = sel[i];
+        test_result_t *r = &results[i];
+        memset(r, 0, sizeof *r);
+        r->suite = tc->suite;
+        r->name = tc->name;
+
+        double t0 = now_secs();
+        if (opt.fork_tests)
+            run_forked(tc, r);
+        else
+            run_inproc(tc, r);
+        r->secs = now_secs() - t0;
+
+        if (r->outcome == ST_PASS)
             passed++;
-            printf("%sok%s %d - %s.%s\n", grn, rst, i, tc->suite, tc->name);
-        } else if (outcome == ST_SKIP) {
+        else if (r->outcome == ST_SKIP)
             skipped++;
-            printf("%sok%s %d - %s.%s %s# SKIP %s%s\n", yel, rst, i, tc->suite,
-                   tc->name, dim, asmtest_msg, rst);
-        } else {
+        else
             failed++;
-            printf("%snot ok%s %d - %s.%s\n", red, rst, i, tc->suite,
-                   tc->name);
+
+        if (opt.format_junit)
+            continue; /* JUnit is rendered in one pass at the end */
+
+        if (r->outcome == ST_PASS) {
+            printf("%sok%s %d - %s.%s\n", grn, rst, i + 1, r->suite, r->name);
+        } else if (r->outcome == ST_SKIP) {
+            printf("%sok%s %d - %s.%s %s# SKIP %s%s\n", yel, rst, i + 1,
+                   r->suite, r->name, dim, r->msg, rst);
+        } else {
+            printf("%snot ok%s %d - %s.%s\n", red, rst, i + 1, r->suite,
+                   r->name);
             printf("  %s---%s\n", dim, rst);
-            printf("  at:  %s:%d\n", asmtest_loc_file, asmtest_loc_line);
-            printf("  msg: %s\n", asmtest_msg);
+            printf("  at:  %s:%d\n", r->file, r->line);
+            printf("  msg: %s\n", r->msg);
             printf("  %s...%s\n", dim, rst);
         }
     }
 
-    const char *summary_color = failed ? red : grn;
-    printf("%s# %d passed, %d failed, %d skipped, %d total%s\n", summary_color,
-           passed, failed, skipped, total, rst);
+    if (opt.format_junit) {
+        render_junit(results, n);
+    } else {
+        const char *summary_color = failed ? red : grn;
+        printf("%s# %d passed, %d failed, %d skipped, %d total%s\n",
+               summary_color, passed, failed, skipped, n, rst);
+    }
 
+    free(results);
+    free(sel);
     return failed ? 1 : 0;
 }

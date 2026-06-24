@@ -105,6 +105,16 @@ $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \
 demo-fail: $(BUILD)/test_failure_demo
 	-./$(BUILD)/test_failure_demo
 
+# Phase 8 robustness demo: a hang and a crash are contained and reported, while
+# the run continues. A short timeout catches the infinite loop quickly. Exits
+# nonzero (two tests fail by design), so the leading '-' keeps make happy.
+.PHONY: demo-robust
+$(BUILD)/test_robust: $(FRAMEWORK_OBJS) $(BUILD)/robust.o $(BUILD)/test_robust.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+demo-robust: $(BUILD)/test_robust
+	-./$(BUILD)/test_robust --timeout=2
+
 # --- Optional emulator tier (Phase 4; requires libunicorn) -----------------
 # `make emu-test` runs the Unicorn-backed suite. The emulated guest is x86-64
 # and the routine bytes are copied from the built routines, so build this on an
