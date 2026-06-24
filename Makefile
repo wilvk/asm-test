@@ -189,6 +189,66 @@ DEPS_ARGS ?=
 deps:
 	sh scripts/install-deps.sh $(DEPS_ARGS)
 
+# --- Run the Linux CI jobs locally via Docker ------------------------------
+# Covers the Linux half of the matrix; the macOS jobs can't run in a container.
+#   make docker-test       build + run the example suites and self-tests
+#   make docker-nasm       the NASM backend (x86-64 only)
+#   make docker-emu        the emulator tier (libunicorn)
+#   make docker-sanitize   ASan + UBSan
+#   make docker-analyze    clang-tidy
+#   make docker-coverage   gcov of the runner
+#   make docker-ci         the whole x86-64 Linux matrix end to end
+#   make docker-shell      interactive shell in the CI image
+# Emulate the aarch64 runner with DOCKER_PLATFORM=linux/arm64; on arm64 CI only
+# runs the test + emu jobs (NASM is x86-64 only), so use docker-test/docker-emu
+# there rather than docker-ci.
+DOCKER          ?= docker
+DOCKER_IMAGE    ?= asmtest-ci
+DOCKER_BASE     ?= ubuntu:24.04
+DOCKER_PLATFORM ?=
+_docker_plat := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
+_docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
+
+.PHONY: docker-build docker-test docker-nasm docker-emu docker-sanitize \
+        docker-analyze docker-coverage docker-ci docker-shell docker-clean
+
+docker-build:
+	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
+
+docker-test: docker-build
+	$(_docker_run) sh -c 'make test && make check'
+
+docker-nasm: docker-build
+	$(_docker_run) sh -c 'make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check'
+
+docker-emu: docker-build
+	$(_docker_run) make emu-test
+
+docker-sanitize: docker-build
+	$(_docker_run) make sanitize
+
+docker-analyze: docker-build
+	$(_docker_run) make tidy
+
+docker-coverage: docker-build
+	$(_docker_run) make coverage
+
+# Mirror the full Linux matrix in one container, cleaning between phases so the
+# GAS/NASM backends and the sanitizer build don't share stale objects.
+docker-ci: docker-build
+	$(_docker_run) sh -c 'set -e; \
+	  make test && make check; \
+	  make clean && make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check; \
+	  make clean && make emu-test; \
+	  make clean && make sanitize; \
+	  make tidy'
+
+docker-shell: docker-build
+	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_IMAGE) sh
+
+docker-clean:
+	-$(DOCKER) image rm $(DOCKER_IMAGE)
+
 # --- Quality tooling targets (Track D) -------------------------------------
 # Build + run the example suites and the self-tests under ASan + UBSan. The
 # framework catches SIGSEGV/SIGBUS itself (crash containment), so tell ASan not

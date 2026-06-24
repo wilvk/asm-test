@@ -192,3 +192,34 @@ make deps DEPS_ARGS=--dry-run   # preview the commands without running them
 
 [scripts/install-deps.sh](scripts/install-deps.sh) detects apt-get / dnf / yum /
 pacman / zypper / apk / brew (and uses `sudo` on Linux when not root).
+
+## Running the CI locally with Docker
+
+The **Linux** half of the CI matrix can be reproduced in a container (the macOS
+jobs can't — use a Mac or hosted CI for those). The [Dockerfile](Dockerfile)
+installs only `make` + a C compiler, then pulls the optional toolchain through
+`make deps`, and the `docker-*` targets build it and run each job:
+
+```sh
+make docker-test        # example suites + framework self-tests (the `test` job)
+make docker-nasm        # NASM backend (x86-64 only)
+make docker-emu         # emulator tier (libunicorn)
+make docker-sanitize    # ASan + UBSan
+make docker-analyze     # clang-tidy
+make docker-coverage    # gcov of the runner
+make docker-ci          # the whole x86-64 Linux matrix end to end
+make docker-shell       # interactive shell in the CI image
+```
+
+To emulate the `ubuntu-24.04-arm` runner, pass `DOCKER_PLATFORM=linux/arm64`
+(Docker Desktop ships the emulation; on Linux run
+`docker run --privileged tonistiigi/binfmt` once first). On arm64, CI only runs
+the `test` and `emu` jobs:
+
+```sh
+make docker-test DOCKER_PLATFORM=linux/arm64
+make docker-emu  DOCKER_PLATFORM=linux/arm64
+```
+
+Override `DOCKER_BASE` to test another distro/release (e.g.
+`make docker-test DOCKER_BASE=ubuntu:22.04`).
