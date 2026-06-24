@@ -104,3 +104,26 @@ ASM_FUNC win64_sret_make
     mov     rax, rcx
     ret
 ASM_ENDFUNC win64_sret_make
+
+; double win64_vaddsd5(v0..v4) -> sum of the low doubles of 5 vector args. Args
+; 1-4 in xmm0..3; the 5th vector is on the stack above the shadow space, its low
+; double at [rsp+40] on entry. Exercises asm_call_capture_vec_n_win64's overflow.
+ASM_FUNC win64_vaddsd5
+    addsd   xmm0, xmm1
+    addsd   xmm0, xmm2
+    addsd   xmm0, xmm3
+    addsd   xmm0, [rsp+40]
+    ret
+ASM_ENDFUNC win64_vaddsd5
+
+; long long win64_struct_sum(long long a, BigStruct *s) -> a + s.x+s.y+s.z+s.w.
+; Win64 passes the 32-byte struct by reference, so a is in rcx and the struct
+; pointer (to the trampoline's copy) is in rdx. Exercises the bigstruct path.
+ASM_FUNC win64_struct_sum
+    mov     rax, rcx
+    add     rax, [rdx]
+    add     rax, [rdx+8]
+    add     rax, [rdx+16]
+    add     rax, [rdx+24]
+    ret
+ASM_ENDFUNC win64_struct_sum

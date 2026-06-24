@@ -120,9 +120,9 @@ runs a trivial cross-compiled `.exe` under `wine64` to completion.
 
 ---
 
-## Phase 1 — Win64 capture trampoline *(in progress)*
+## Phase 1 — Win64 capture trampoline *(done)*
 
-**Status: six of eight variants landed.** `src/capture_win64.asm` implements:
+**Status: done — all eight variants landed.** `src/capture_win64.asm` implements:
 
 - `asm_call_capture_win64` — the Win64 mirror of `asm_call_capture`: 6 integer
   args (rcx/rdx/r8/r9 + two on the stack above the 32-byte shadow space), return +
@@ -139,19 +139,27 @@ runs a trivial cross-compiled `.exe` under `wine64` to completion.
   in xmm0–3, the rest spilled to the stack; `nfargs` read from its Win64 stack slot.
 - `asm_call_capture_sret_win64` — struct return via the hidden pointer, which on
   Win64 is the *first* arg (rcx), shifting the visible args to rdx/r8/r9 + stack.
+- `asm_call_capture_vec_n_win64` — arbitrary vector arity (vectorcall-style xmm0–3
+  + 128-bit stack overflow), with the same xmm6–15 save/seed/capture/restore as
+  `_vec`.
+- `asm_call_capture_bigstruct_win64` — large struct args. Win64 passes them **by
+  reference** (the trampoline copies the struct and passes a pointer to the copy in
+  the next arg slot), unlike System V's inline memory class — so this is simpler
+  than the SysV path, not harder.
 
 All snapshot into `win64_regs_t` (`tests/win64/win64_regs.h`; offsets promoted into
-`include/asmtest.h` in Phase 2). Verified **both lanes, 18/18**: `make
+`include/asmtest.h` in Phase 2). Verified **both lanes, 21/21**: `make
 win64-msabi-test` natively via `__attribute__((ms_abi))` on x86-64 macOS, and `make
 win64-test` as a real PE under Wine via `make docker-win64` — covering return/FP
-capture, register + stack-arg + shadow-space marshalling, struct return, and
-ABI-violation detection for both an integer (`rbx`) and a vector (`xmm6`) clobber.
-The image CMD is `make win64-check` (smoke + capture test).
+capture, register + stack-arg + shadow-space marshalling, arbitrary int/FP/vector
+arity, struct return and by-reference struct args, and ABI-violation detection for
+both an integer (`rbx`) and a vector (`xmm6`) clobber. The image CMD is `make
+win64-check` (smoke + capture test).
 
-**Remaining variants** (final slice): `_vec_n` (arbitrary vector arity — note the
-Win64 default passes `__m128` by reference, not in xmm, unlike `__vectorcall`; the
-fixed `_vec` uses the vectorcall-style xmm0–3 convention) and `bigstruct` (large
-struct args by value, part-C even on the SysV path).
+**Note on `_vec_n`.** The Win64 *default* convention passes `__m128` by reference,
+not in xmm (only `__vectorcall` uses xmm0–5). `_vec`/`_vec_n` deliberately model
+the vectorcall-style xmm convention — the useful capture model for SIMD routines
+that read their inputs from xmm0–3.
 
 **Goal.** Mirror the eight `asm_call_capture*` variants for the Microsoft x64 ABI.
 

@@ -666,3 +666,316 @@ ASM_FUNC asm_call_capture_sret_win64
     pop     rbp
     ret
 ASM_ENDFUNC asm_call_capture_sret_win64
+
+
+; void asm_call_capture_vec_n_win64(win64_regs_t *out, void *fn,
+;                                   const long long *iargs,
+;                                   const win64_vec128_t *vargs, int nvargs);
+;
+; The Win64 mirror of asm_call_capture_vec_n: arbitrary vector arity using the
+; vectorcall-style xmm convention (matching _vec) — the first 4 vectors go in
+; xmm0..3, the rest spill onto the stack as full 128-bit values above the shadow
+; space. 4 int args in rcx/rdx/r8/r9. Saves/seeds/captures/restores the
+; callee-saved xmm6..15 and captures the whole vector file, as in _vec. rbp
+; frames the variable area; nvargs is the 5th arg at [rbp+48]. The fixed xmm6..15
+; save area lives at [rbp-272 .. rbp-128], addressed via rbp.
+;
+; Inbound (Win64): out = rcx, fn = rdx, iargs = r8, vargs = r9, nvargs @ [rbp+48].
+ASM_FUNC asm_call_capture_vec_n_win64
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 224                ; fixed area: stashes + xmm6..15 save
+    mov     [rbp-64], rcx           ; out
+    mov     [rbp-72], rdx           ; fn
+    mov     [rbp-80], r8            ; iargs
+    mov     [rbp-88], r9            ; vargs
+    movsxd  rax, dword [rbp+48]     ; nvargs (5th arg, on the stack)
+    mov     [rbp-96], rax
+
+    ; Preserve callee-saved xmm6..15 into the fixed area.
+    movdqu  [rbp-272], xmm6
+    movdqu  [rbp-256], xmm7
+    movdqu  [rbp-240], xmm8
+    movdqu  [rbp-224], xmm9
+    movdqu  [rbp-208], xmm10
+    movdqu  [rbp-192], xmm11
+    movdqu  [rbp-176], xmm12
+    movdqu  [rbp-160], xmm13
+    movdqu  [rbp-144], xmm14
+    movdqu  [rbp-128], xmm15
+
+    ; n_stack = max(0, nvargs - 4) -> r10
+    mov     r10, rax
+    sub     r10, 4
+    jg      .vn_have_stack
+    xor     r10, r10
+.vn_have_stack:
+    and     rsp, -16
+    mov     rax, r10
+    shl     rax, 4                  ; n_stack * 16
+    add     rax, 32                 ; shadow space
+    add     rax, 15
+    and     rax, -16
+    sub     rsp, rax
+
+    ; Copy overflow vectors: [rsp+32 + i*16] = vargs[4 + i] (16 bytes).
+    mov     r8, [rbp-88]            ; vargs
+    xor     rcx, rcx
+.vn_copy:
+    cmp     rcx, r10
+    jge     .vn_copy_done
+    mov     rax, rcx
+    shl     rax, 4                  ; i * 16
+    movdqu  xmm4, [r8 + 64 + rax]   ; vargs[4 + i] (byte 64 = 4*16)
+    movdqu  [rsp + 32 + rax], xmm4
+    inc     rcx
+    jmp     .vn_copy
+.vn_copy_done:
+    ; Vector register args xmm0..3 (only as many as nvargs).
+    mov     r11, [rbp-88]           ; vargs
+    mov     r10, [rbp-96]           ; nvargs
+    cmp     r10, 1
+    jl      .vn_loadint
+    movdqu  xmm0, [r11+0]
+    cmp     r10, 2
+    jl      .vn_loadint
+    movdqu  xmm1, [r11+16]
+    cmp     r10, 3
+    jl      .vn_loadint
+    movdqu  xmm2, [r11+32]
+    cmp     r10, 4
+    jl      .vn_loadint
+    movdqu  xmm3, [r11+48]
+.vn_loadint:
+    mov     rax, [rbp-80]           ; iargs
+    mov     rcx, [rax+0]
+    mov     rdx, [rax+8]
+    mov     r8,  [rax+16]
+    mov     r9,  [rax+24]
+
+    mov     rbx, 0x1111111111111111
+    mov     rsi, 0xCCCCCCCCCCCCCCCC
+    mov     rdi, 0xDDDDDDDDDDDDDDDD
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    ; Seed xmm6..15 with sentinels: xmm(6+k) = { 6+k, 6+k }.
+    mov     rax, 6
+    movq    xmm6, rax
+    movlhps xmm6, xmm6
+    mov     rax, 7
+    movq    xmm7, rax
+    movlhps xmm7, xmm7
+    mov     rax, 8
+    movq    xmm8, rax
+    movlhps xmm8, xmm8
+    mov     rax, 9
+    movq    xmm9, rax
+    movlhps xmm9, xmm9
+    mov     rax, 10
+    movq    xmm10, rax
+    movlhps xmm10, xmm10
+    mov     rax, 11
+    movq    xmm11, rax
+    movlhps xmm11, xmm11
+    mov     rax, 12
+    movq    xmm12, rax
+    movlhps xmm12, xmm12
+    mov     rax, 13
+    movq    xmm13, rax
+    movlhps xmm13, xmm13
+    mov     rax, 14
+    movq    xmm14, rax
+    movlhps xmm14, xmm14
+    mov     rax, 15
+    movq    xmm15, rax
+    movlhps xmm15, xmm15
+
+    mov     r11, [rbp-72]
+    call    r11
+
+    mov     r11, [rbp-64]
+    mov     [r11+0],  rax
+    mov     [r11+8],  rdx
+    mov     [r11+16], rbx
+    mov     rax, 0x2222222222222222 ; rbp reported preserved, not checked
+    mov     [r11+24], rax
+    mov     [r11+32], rdi
+    mov     [r11+40], rsi
+    mov     [r11+48], r12
+    mov     [r11+56], r13
+    mov     [r11+64], r14
+    mov     [r11+72], r15
+    pushfq
+    pop     rax
+    mov     [r11+80], rax
+    movsd   [r11+88], xmm0          ; fret
+
+    movdqu  [r11+96],  xmm0
+    movdqu  [r11+112], xmm1
+    movdqu  [r11+128], xmm2
+    movdqu  [r11+144], xmm3
+    movdqu  [r11+160], xmm4
+    movdqu  [r11+176], xmm5
+    movdqu  [r11+192], xmm6
+    movdqu  [r11+208], xmm7
+    movdqu  [r11+224], xmm8
+    movdqu  [r11+240], xmm9
+    movdqu  [r11+256], xmm10
+    movdqu  [r11+272], xmm11
+    movdqu  [r11+288], xmm12
+    movdqu  [r11+304], xmm13
+    movdqu  [r11+320], xmm14
+    movdqu  [r11+336], xmm15
+
+    ; Restore callee-saved xmm6..15 for our caller.
+    movdqu  xmm6,  [rbp-272]
+    movdqu  xmm7,  [rbp-256]
+    movdqu  xmm8,  [rbp-240]
+    movdqu  xmm9,  [rbp-224]
+    movdqu  xmm10, [rbp-208]
+    movdqu  xmm11, [rbp-192]
+    movdqu  xmm12, [rbp-176]
+    movdqu  xmm13, [rbp-160]
+    movdqu  xmm14, [rbp-144]
+    movdqu  xmm15, [rbp-128]
+
+    lea     rsp, [rbp-56]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_vec_n_win64
+
+
+; void asm_call_capture_bigstruct_win64(win64_regs_t *out, void *fn,
+;                                       const long long *iargs, int niargs,
+;                                       const void *sptr, size_t ssize);
+;
+; Win64 passes large structs BY REFERENCE (unlike System V's inline memory
+; class): the caller makes a private copy and passes a pointer to it. This
+; trampoline copies the ssize-byte struct and passes the copy's pointer as the
+; argument right after the niargs plain integer args. niargs must be <= 3 so the
+; struct pointer lands in a register slot (rcx/rdx/r8/r9). rbp frames the copy;
+; reported preserved, not checked.
+;
+; Inbound (Win64): out=rcx, fn=rdx, iargs=r8, niargs=r9d, sptr@[rbp+48],
+;                  ssize@[rbp+56].
+ASM_FUNC asm_call_capture_bigstruct_win64
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 64
+    mov     [rbp-64], rcx           ; out
+    mov     [rbp-72], rdx           ; fn
+    mov     [rbp-80], r8            ; iargs
+    movsxd  rax, r9d
+    mov     [rbp-88], rax           ; niargs
+    mov     rax, [rbp+48]           ; sptr  (5th arg, pointer)
+    mov     [rbp-96], rax
+    mov     rax, [rbp+56]           ; ssize (6th arg)
+    mov     [rbp-104], rax
+
+    ; Reserve 32-byte shadow + round_up(ssize, 16); the struct copy at [rsp+32].
+    add     rax, 15
+    and     rax, -16
+    add     rax, 32
+    and     rsp, -16
+    sub     rsp, rax
+
+    ; Byte-copy the struct: [rsp+32 + i] = sptr[i].
+    mov     r8, [rbp-96]            ; sptr
+    mov     r9, [rbp-104]           ; ssize
+    xor     rcx, rcx
+.bs_copy:
+    cmp     rcx, r9
+    jge     .bs_copy_done
+    mov     al, [r8 + rcx]
+    mov     [rsp + 32 + rcx], al
+    inc     rcx
+    jmp     .bs_copy
+.bs_copy_done:
+    lea     rax, [rsp+32]           ; pointer to the struct copy
+    mov     [rbp-112], rax
+
+    ; Place iargs[0..niargs-1] then the struct pointer at slot `niargs` (<= 3).
+    mov     r11, [rbp-80]           ; iargs
+    mov     r10, [rbp-88]           ; niargs
+    cmp     r10, 1
+    jge     .bs_s0int
+    mov     rcx, [rbp-112]          ; niargs==0: struct ptr -> rcx
+    jmp     .bs_slots_done
+.bs_s0int:
+    mov     rcx, [r11+0]
+    cmp     r10, 2
+    jge     .bs_s1int
+    mov     rdx, [rbp-112]          ; niargs==1: struct ptr -> rdx
+    jmp     .bs_slots_done
+.bs_s1int:
+    mov     rdx, [r11+8]
+    cmp     r10, 3
+    jge     .bs_s2int
+    mov     r8, [rbp-112]           ; niargs==2: struct ptr -> r8
+    jmp     .bs_slots_done
+.bs_s2int:
+    mov     r8, [r11+16]
+    mov     r9, [rbp-112]           ; niargs==3: struct ptr -> r9
+.bs_slots_done:
+    mov     rbx, 0x1111111111111111
+    mov     rsi, 0xCCCCCCCCCCCCCCCC
+    mov     rdi, 0xDDDDDDDDDDDDDDDD
+    mov     r12, 0x3333333333333333
+    mov     r13, 0x4444444444444444
+    mov     r14, 0x5555555555555555
+    mov     r15, 0x6666666666666666
+
+    mov     r11, [rbp-72]
+    call    r11
+
+    mov     r11, [rbp-64]
+    mov     [r11+0],  rax
+    mov     [r11+8],  rdx
+    mov     [r11+16], rbx
+    mov     rax, 0x2222222222222222 ; rbp reported preserved, not checked
+    mov     [r11+24], rax
+    mov     [r11+32], rdi
+    mov     [r11+40], rsi
+    mov     [r11+48], r12
+    mov     [r11+56], r13
+    mov     [r11+64], r14
+    mov     [r11+72], r15
+    pushfq
+    pop     rax
+    mov     [r11+80], rax
+
+    lea     rsp, [rbp-56]
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_bigstruct_win64

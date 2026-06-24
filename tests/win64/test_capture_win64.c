@@ -38,6 +38,16 @@ extern WIN64ABI void asm_call_capture_sret_win64(win64_regs_t *out, void *fn,
                                                  void *result,
                                                  const long long *args,
                                                  int nargs);
+extern WIN64ABI void asm_call_capture_vec_n_win64(win64_regs_t *out, void *fn,
+                                                  const long long *iargs,
+                                                  const win64_vec128_t *vargs,
+                                                  int nvargs);
+extern WIN64ABI void asm_call_capture_bigstruct_win64(win64_regs_t *out,
+                                                      void *fn,
+                                                      const long long *iargs,
+                                                      int niargs,
+                                                      const void *sptr,
+                                                      unsigned long long ssize);
 
 /* Routines under test — addresses only; never called through these C types. */
 extern void win64_ret_arg0(void);
@@ -51,6 +61,8 @@ extern void win64_vec_preserve_xmm6(void);
 extern void win64_vec_clobber_xmm6(void);
 extern void win64_addsd6(void);
 extern void win64_sret_make(void);
+extern void win64_vaddsd5(void);
+extern void win64_struct_sum(void);
 
 static int fails = 0;
 
@@ -161,6 +173,27 @@ int main(void) {
           "win64_sret_make via _sret: struct written through hidden pointer");
     CHECK(r.ret == (uint64_t)(uintptr_t)result,
           "win64_sret_make via _sret: result pointer returned in rax");
+
+    /* asm_call_capture_vec_n_win64: arbitrary vector arity (xmm + stack). */
+    win64_vec128_t vargs5[5];
+    vargs5[0] = lane_from_double(1.0);
+    vargs5[1] = lane_from_double(2.0);
+    vargs5[2] = lane_from_double(4.0);
+    vargs5[3] = lane_from_double(8.0);
+    vargs5[4] = lane_from_double(16.0);
+    asm_call_capture_vec_n_win64(&r, (void *)win64_vaddsd5, args, vargs5, 5);
+    CHECK(r.fret == 31.0,
+          "win64_vaddsd5 via _vec_n: 4 xmm + 1 stack vector arg summed");
+    CHECK(xmm_callee_preserved(&r),
+          "win64_vaddsd5 via _vec_n: xmm6-15 callee-saved intact");
+
+    /* asm_call_capture_bigstruct_win64: large struct passed by reference. */
+    long long big[4] = {1, 2, 3, 4};
+    const long long bs_iargs[1] = {100};
+    asm_call_capture_bigstruct_win64(&r, (void *)win64_struct_sum, bs_iargs, 1,
+                                     big, sizeof big);
+    CHECK(r.ret == 100 + 1 + 2 + 3 + 4,
+          "win64_struct_sum via bigstruct: by-reference 32-byte struct read");
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails,
            fails == 1 ? "" : "s");
