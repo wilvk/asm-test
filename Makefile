@@ -26,8 +26,11 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_struct $(BUILD)/test_structparam \
                   $(BUILD)/test_fpover $(BUILD)/test_refmatch
 
-.PHONY: all test demo-fail clean
+.PHONY: all test check demo-fail clean
 all: test
+
+# Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
+SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -37,6 +40,10 @@ $(BUILD)/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Framework self-tests (Track A) live in tests/; same compile, different dir.
+$(BUILD)/%.o: tests/%.c include/asmtest.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ifeq ($(ASM_SYNTAX),nasm)
@@ -97,6 +104,18 @@ $(BUILD)/test_refmatch: $(FRAMEWORK_OBJS) $(BUILD)/refmatch.o \
 
 test: $(SUITES)
 	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
+
+# Framework self-tests (Track A). The meta-suites are pure C (register/flag/
+# vector cases build a regs_t by hand), linked against the framework runtime;
+# tests/expect.sh drives them and checks exit codes + diagnostics.
+$(BUILD)/tests_positive: $(FRAMEWORK_OBJS) $(BUILD)/positive.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/tests_negative: $(FRAMEWORK_OBJS) $(BUILD)/negative.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+check: $(SELFTESTS)
+	@BUILD=$(BUILD) sh tests/expect.sh
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
 $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \

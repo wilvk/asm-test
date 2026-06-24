@@ -40,6 +40,9 @@ jobs:
       - name: Build and run test suites
         run: make test
 
+      - name: Framework self-tests (meta-tests; assertions/runner/containment)
+        run: make check
+
       - name: Failure demo (informational; detects intentional failures)
         run: make demo-fail
 
@@ -62,6 +65,9 @@ jobs:
 
       - name: Build and run test suites (NASM backend)
         run: make ASM_SYNTAX=nasm test
+
+      - name: Framework self-tests (NASM backend)
+        run: make ASM_SYNTAX=nasm check
 
       - name: Failure demo (NASM backend)
         run: make ASM_SYNTAX=nasm demo-fail
