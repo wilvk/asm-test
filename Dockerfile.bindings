@@ -1,0 +1,44 @@
+# Dockerfile.bindings — test the language wrappers in one reproducible image.
+#
+# Builds an image with every wrapper's toolchain (Python + pytest, a C++
+# compiler, Rust/cargo) plus libunicorn, so the per-language binding tests run
+# the same way on any host — including languages not installed locally. This is
+# how `make docker-python` / `docker-cpp` / `docker-rust` / `docker-bindings`
+# verify the wrappers; CI uses the same recipe.
+#
+# Build:  docker build -f Dockerfile.bindings -t asmtest-bindings .
+# Run:    docker run --rm asmtest-bindings              # -> all wrapper tests
+#         docker run --rm asmtest-bindings make rust-test
+# Or via the Makefile: `make docker-bindings`, `make docker-rust`, ...
+#
+# x86-64 natively; aarch64 via `--platform linux/arm64`. The emulator's x86-64
+# guest cases self-gate to an x86-64 host (as in the C `emu` suite).
+
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Per-language toolchains: C/C++ (build-essential), Python + pytest, Rust/cargo.
+# pkg-config is handy for the C++ consumption path. No crates.io access is needed
+# at build/test time — the Rust binding has no external dependencies.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates pkg-config \
+      python3 python3-pytest \
+      cargo rustc \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Install the optional emulator dependency (libunicorn) first, from just the
+# Makefile + installer, so this slow layer stays cached when sources change.
+COPY Makefile ./
+COPY scripts/ ./scripts/
+RUN make deps DEPS_ARGS=--emu && rm -rf /var/lib/apt/lists/*
+
+# The rest of the tree (build artifacts excluded via .dockerignore).
+COPY . .
+
+# Default goal: run every wrapper's test over the conformance corpus.
+CMD ["sh", "-c", "make python-test && make cpp-test && make rust-test"]

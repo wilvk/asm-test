@@ -16,6 +16,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Portable compile-time assert: C uses _Static_assert, C++ uses static_assert.
+ * Lets the layout guards below compile in both languages (a binding may #include
+ * this header from C++). */
+#ifndef ASMTEST_STATIC_ASSERT
+#  ifdef __cplusplus
+#    define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#  else
+#    define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#  endif
+#endif
+
 /* Framework version (semantic). ASMTEST_VERSION is the dotted string; the
  * numeric form ASMTEST_VERSION_NUM = MAJOR*10000 + MINOR*100 + PATCH allows
  * compile-time comparisons, e.g. #if ASMTEST_VERSION_NUM >= 10100. */
@@ -108,13 +123,13 @@ typedef struct {
  * relied on by every language binding's mirror of regs_t. The asserts make the
  * header, the trampoline's stores, and the generated manifest unable to drift
  * apart silently. */
-_Static_assert(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
-_Static_assert(offsetof(regs_t, rdx) == 8, "regs_t.rdx @8");
-_Static_assert(offsetof(regs_t, rbx) == 16, "regs_t.rbx @16");
-_Static_assert(offsetof(regs_t, flags) == 64, "regs_t.flags @64");
-_Static_assert(offsetof(regs_t, fret) == 72, "regs_t.fret @72");
-_Static_assert(offsetof(regs_t, vec) == 80, "regs_t.vec @80");
-_Static_assert(sizeof(regs_t) == 336, "regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rdx) == 8, "regs_t.rdx @8");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rbx) == 16, "regs_t.rbx @16");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, flags) == 64, "regs_t.flags @64");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, fret) == 72, "regs_t.fret @72");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, vec) == 80, "regs_t.vec @80");
+ASMTEST_STATIC_ASSERT(sizeof(regs_t) == 336, "regs_t size");
 
 #elif defined(__aarch64__)
 
@@ -156,13 +171,13 @@ typedef struct {
 
 /* Layout contract (Track 0); see the x86-64 branch above. Offsets match the
  * stores in src/capture.s and the per-arch comments on the fields. */
-_Static_assert(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
-_Static_assert(offsetof(regs_t, x19) == 8, "regs_t.x19 @8");
-_Static_assert(offsetof(regs_t, x29) == 88, "regs_t.x29 @88");
-_Static_assert(offsetof(regs_t, flags) == 96, "regs_t.flags @96");
-_Static_assert(offsetof(regs_t, fret) == 104, "regs_t.fret @104");
-_Static_assert(offsetof(regs_t, vec) == 112, "regs_t.vec @112");
-_Static_assert(sizeof(regs_t) == 624, "regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, x19) == 8, "regs_t.x19 @8");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, x29) == 88, "regs_t.x29 @88");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, flags) == 96, "regs_t.flags @96");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, fret) == 104, "regs_t.fret @104");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, vec) == 112, "regs_t.vec @112");
+ASMTEST_STATIC_ASSERT(sizeof(regs_t) == 624, "regs_t size");
 
 #else
 #error "asm-test supports x86-64 and AArch64 only"
@@ -593,5 +608,9 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
     asmtest_match_ref2(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
 #define ASSERT_MATCHES_REF3(fn, ref, gen, n)                                  \
     asmtest_match_ref3(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* ASMTEST_H */

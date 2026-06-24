@@ -1,0 +1,13 @@
+[package]
+name = "asm-test"
+version = "1.0.0"
+edition = "2021"
+description = "Rust binding for the asm-test assembly unit-testing framework"
+repository = "https://github.com/wilvk/asm-test"
+# No external crates: the binding is #[repr(C)] structs + extern "C" decls over
+# the binding ABI, linked against the prebuilt shared libraries (see build.rs).
+# A published crate would add bindgen + a build that locates/builds the libs.
+
+[lib]
+name = "asmtest"
+path = "src/lib.rs"

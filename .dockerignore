@@ -7,12 +7,22 @@ build/
 
 # Generated packaging / coverage / analysis artifacts (see .gitignore).
 asmtest.pc
+asmtest-emu.pc
 asmtest_single.h
+asmtest_abi.json
+bindings/conformance/corpus.json
 *.gcov
 *.gcno
 *.gcda
 *.plist
 
+# Binding build artifacts (rebuilt inside the image).
+**/__pycache__/
+**/.pytest_cache/
+bindings/rust/target/
+bindings/rust/Cargo.lock
+
 # This image and its setup don't need to be in the context.
 Dockerfile
+Dockerfile.bindings
 .dockerignore

@@ -1,0 +1,84 @@
+//! Replay the conformance corpus (Track 0.4) from Rust.
+//!
+//! The Rust analog of the C reference runner: drive each canonical routine
+//! through the binding-ABI entry points and reproduce the expected results. The
+//! cases mirror `bindings/conformance/corpus.json` (the C reference emits that
+//! file; these literals must match it). Passing proves the Rust binding wired
+//! the ABI up correctly. Run via `make rust-test`.
+use std::os::raw::c_void;
+
+use asmtest::{self, Vec128, CF};
+
+// Canonical routines under test (examples/{add,flags,fp,simd}.s), linked from
+// the fixture lib via build.rs. Signatures are nominal — we only take addresses.
+extern "C" {
+    fn add_signed(a: i64, b: i64) -> i64;
+    fn sum_via_rbx(a: i64, b: i64) -> i64;
+    fn clobbers_rbx(a: i64, b: i64) -> i64;
+    fn set_carry() -> i64;
+    fn clear_carry() -> i64;
+    fn fp_add(a: f64, b: f64) -> f64;
+    fn vec_add4f();
+}
+
+fn pm(addr: usize) -> *mut c_void {
+    addr as *mut c_void
+}
+
+#[test]
+fn add_signed_basic() {
+    let r = asmtest::capture(pm(add_signed as usize), &[40, 2]);
+    assert_eq!(r.ret, 42);
+    assert!(asmtest::abi_preserved(&r));
+}
+
+#[test]
+fn sum_via_rbx_abi_preserved() {
+    let r = asmtest::capture(pm(sum_via_rbx as usize), &[20, 22]);
+    assert_eq!(r.ret, 42);
+    assert!(asmtest::abi_preserved(&r));
+}
+
+#[test]
+fn clobbers_rbx_abi_violation_detected() {
+    let r = asmtest::capture(pm(clobbers_rbx as usize), &[1, 2]);
+    assert!(!asmtest::abi_preserved(&r), "violation should be reported");
+}
+
+#[test]
+fn set_carry_cf_set() {
+    let r = asmtest::capture(pm(set_carry as usize), &[]);
+    assert!(r.flag_set(CF));
+}
+
+#[test]
+fn clear_carry_cf_clear() {
+    let r = asmtest::capture(pm(clear_carry as usize), &[]);
+    assert!(!r.flag_set(CF));
+}
+
+#[test]
+fn fp_add_basic() {
+    let r = asmtest::capture_fp(pm(fp_add as usize), &[], &[1.5, 2.25]);
+    assert_eq!(r.fret, 3.75);
+}
+
+#[test]
+fn vec_add4f_basic() {
+    let vargs = [
+        Vec128::from_f32(1.0, 2.0, 3.0, 4.0),
+        Vec128::from_f32(10.0, 20.0, 30.0, 40.0),
+    ];
+    let r = asmtest::capture_vec(pm(vec_add4f as usize), &[], &vargs);
+    assert_eq!(r.vec[0].f32(), [11.0, 22.0, 33.0, 44.0]);
+}
+
+// Emulator x86-64 guest runs host-compiled bytes — valid only on an x86-64 host.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn emu_add_signed() {
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+    let res = emu.call(add_signed as usize as *const c_void, &[40, 2]);
+    assert!(!res.faulted);
+    assert_eq!(res.regs.rax, 42);
+}

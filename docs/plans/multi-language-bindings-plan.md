@@ -222,7 +222,21 @@ binding other tracks copy.
 
 **Effort:** ~3–4 days (incl. shaking out Track 0).
 
-### Track R — Rust *(second; proves no-GC + auto-generation) — planned*
+### Track R — Rust *(second; proves no-GC + auto-generation) — Tier 1 done*
+
+**Status: Tier 1 binding landed** in [`bindings/rust/`](../../bindings/rust/). A
+no-crates-io crate: `#[repr(C)]` mirrors of `regs_t` / the emulator structs
+(arch-selected via `cfg`) plus `extern "C"` declarations of the binding-ABI entry
+points, linked against the prebuilt shared libs by `build.rs`. `#[repr(C)]` makes
+the layout match the C structs by construction; the no-GC model makes
+pointer-sharing trivial and lifetime-checked. Exposes `capture` / `capture_fp` /
+`capture_vec` → `Regs`, `abi_preserved` (native verdict shim), and an `Emulator`
+whose `EmuResult` carries faults as data. `make rust-test` builds the libs + the
+routine fixture and runs `cargo test`;
+[`tests/conformance.rs`](../../bindings/rust/tests/conformance.rs) replays the
+corpus (8/8, verified in the `asmtest-bindings` Docker image). Deferred: a
+`bindgen`-generated `-sys` crate, crates.io packaging, and Tier 2. The table
+below is the eventual target; the shipped Tier 1 is the hand-written FFI above.
 
 | Aspect | Approach |
 |---|---|
@@ -264,7 +278,17 @@ tier as the primary Go entry point and the native trampoline as advanced/pinned 
 
 **Effort:** ~2–3 days.
 
-### Track X — C++ *(nearly free) — planned*
+### Track X — C++ *(nearly free) — done*
+
+**Status: done.** The C headers now carry `extern "C"` guards (and a portable
+`ASMTEST_STATIC_ASSERT`), so a C++ TU both compiles and **links** against the
+framework. [`bindings/cpp/asmtest.hpp`](../../bindings/cpp/asmtest.hpp) adds an
+RAII `Emu`, initializer-list `capture` / `capture_fp` / `capture_vec`, vector-lane
+helpers, and `abi_preserved` / `flag_set` predicates;
+[`test_cpp.cpp`](../../bindings/cpp/test_cpp.cpp) drives the framework from C++
+(`make cpp-test`, 6/6; also run in the Docker bindings image). Consumption is via
+the existing `pkg-config` (and CMake's `pkg_check_modules`). Tier-2 GoogleTest/
+Catch2 example suites are an optional follow-on.
 
 | Aspect | Approach |
 |---|---|
@@ -343,6 +367,12 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   rids, gems, rocks); a binding must not require the end user to `make` the C core.
 - **Versioning.** Bindings pin to `ASMTEST_VERSION_NUM`; the manifest carries the
   version so a mismatched lib is detected at load.
+- **Reproducible per-language testing.** `Dockerfile.bindings` bundles every
+  wrapper's toolchain (Python + pytest, a C++ compiler, Rust/cargo) plus
+  libunicorn, so each binding can be built and tested on any host — including a
+  language not installed locally. `make docker-bindings` runs them all (or
+  `docker-python` / `docker-cpp` / `docker-rust` individually); CI runs the same
+  tests natively. This is how Rust was verified where no host toolchain existed.
 
 ---
 

@@ -101,16 +101,16 @@ jobs:
       - name: Build and run emulator suite
         run: make emu-test
 
-  # Track P: the Python binding (pure ctypes; consumes the asmtest_abi.json
-  # layout manifest and replays the conformance corpus). Runs on x86-64 and
-  # arm64 Linux to verify the manifest-driven layout on both, mirroring the emu
-  # job. Doubles as the reusable per-language CI template (bindings plan 0.5):
-  # install the language toolchain -> build the shared libs -> run the binding
-  # tests over the conformance corpus.
-  bindings-python:
-    name: bindings-python (${{ matrix.os }})
+  # Language wrappers (Tracks P/R/X): the Python (ctypes), Rust (repr(C) + FFI),
+  # and C++ (header) bindings, each replaying the conformance corpus. Runs on
+  # x86-64 and arm64 Linux so the manifest-driven layout is verified on both.
+  # This is the reusable per-language CI template (bindings plan 0.5): install
+  # the toolchain -> build the shared libs -> run the binding tests. The same
+  # set runs locally in one reproducible image via `make docker-bindings`.
+  bindings:
+    name: bindings (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -124,8 +124,12 @@ jobs:
         run: make deps DEPS_ARGS=--emu
       - name: Install pytest
         run: python -m pip install pytest
-      - name: Build shared libs + manifest + corpus, run the binding tests
+      - name: Python binding
         run: make python-test
+      - name: C++ binding
+        run: make cpp-test
+      - name: Rust binding (cargo preinstalled on GitHub runners)
+        run: make rust-test
 
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).

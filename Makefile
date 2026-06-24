@@ -44,7 +44,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
-.PHONY: python-test
+.PHONY: python-test cpp-test rust-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -398,6 +398,43 @@ docker-shell: docker-build
 docker-clean:
 	-$(DOCKER) image rm $(DOCKER_IMAGE)
 
+# --- Language wrappers in Docker (Track P/R/X) -----------------------------
+# Test each language binding in one reproducible image (Python + pytest, C++,
+# Rust/cargo, libunicorn) so a wrapper can be verified on any host — including a
+# language not installed locally. See Dockerfile.bindings.
+#   make docker-bindings   build the image, run every wrapper's tests
+#   make docker-python     just the Python binding
+#   make docker-cpp        just the C++ binding
+#   make docker-rust       just the Rust binding
+# Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
+DOCKER_BINDINGS_IMAGE ?= asmtest-bindings
+_docker_brun := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_BINDINGS_IMAGE)
+
+.PHONY: docker-bindings-build docker-bindings docker-python docker-cpp \
+        docker-rust docker-bindings-shell docker-bindings-clean
+
+docker-bindings-build:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings \
+	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_IMAGE) .
+
+docker-bindings: docker-bindings-build
+	$(_docker_brun)
+
+docker-python: docker-bindings-build
+	$(_docker_brun) make python-test
+
+docker-cpp: docker-bindings-build
+	$(_docker_brun) make cpp-test
+
+docker-rust: docker-bindings-build
+	$(_docker_brun) make rust-test
+
+docker-bindings-shell: docker-bindings-build
+	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_BINDINGS_IMAGE) sh
+
+docker-bindings-clean:
+	-$(DOCKER) image rm $(DOCKER_BINDINGS_IMAGE)
+
 # --- Quality tooling targets (Track D) -------------------------------------
 # Build + run the example suites and the self-tests under ASan + UBSan. The
 # framework catches SIGSEGV/SIGBUS itself (crash containment), so tell ASan not
@@ -571,6 +608,38 @@ python-test: shared-emu manifest conformance $(CORPUS_LIB)
 	  ASMTEST_CORPUS_JSON=$(abspath bindings/conformance/corpus.json) \
 	  ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
 	  $(PYTEST) -q
+
+# --- C++ binding (Track X) -------------------------------------------------
+# The C headers are C++-consumable (extern "C" guards); bindings/cpp/asmtest.hpp
+# adds RAII + typed conveniences. The example suite drives the framework from a
+# C++ TU and links the same framework objects as the C suites. `make cpp-test`
+# builds and runs it; requires a C++ compiler and libunicorn (emulator case).
+CXX      ?= c++
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -O0 -g -Iinclude
+
+$(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
+                     include/asmtest.h include/asmtest_emu.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) -DASMTEST_ENABLE_EMU -c $< -o $@
+
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/add.o \
+                   $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
+                   $(BUILD)/test_cpp.o
+	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
+
+cpp-test: $(BUILD)/test_cpp
+	./$(BUILD)/test_cpp
+
+# --- Rust binding (Track R) ------------------------------------------------
+# A no-dependency crate (#[repr(C)] structs + extern "C" over the binding ABI)
+# linked against the shared libs. `make rust-test` builds the shared libs + the
+# routine fixture lib, then runs `cargo test`; requires cargo + libunicorn.
+CARGO ?= cargo
+rust-test: shared-emu $(CORPUS_LIB)
+	cd bindings/rust && \
+	  ASMTEST_LIB_DIR=$(abspath $(BUILD)) \
+	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
+	  $(CARGO) test
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html

@@ -19,6 +19,20 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Portable compile-time assert (this header is standalone — it may be included
+ * without asmtest.h, and from C++). The #ifndef lets both headers define it. */
+#ifndef ASMTEST_STATIC_ASSERT
+#  ifdef __cplusplus
+#    define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#  else
+#    define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#  endif
+#endif
+
 /* One 128-bit vector (XMM) register, viewable as several lane layouts. Mirrors
  * vec128_t from asmtest.h, but kept independent so this header stands alone. */
 typedef union {
@@ -42,8 +56,8 @@ typedef struct {
 /* Layout contract (Track 0): bindings mirror these register structs, and the
  * generated manifest (scripts/gen-manifest.c) reports their offsets. The
  * asserts guarantee the header, the manifest, and any binding agree. */
-_Static_assert(offsetof(emu_x86_regs_t, xmm) == 144, "emu_x86_regs_t.xmm @144");
-_Static_assert(sizeof(emu_x86_regs_t) == 400, "emu_x86_regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(emu_x86_regs_t, xmm) == 144, "emu_x86_regs_t.xmm @144");
+ASMTEST_STATIC_ASSERT(sizeof(emu_x86_regs_t) == 400, "emu_x86_regs_t size");
 
 /* Kind of invalid access, mirrors Unicorn's uc_mem_type for faults. */
 typedef enum {
@@ -158,8 +172,8 @@ typedef struct {
     emu_vec128_t v[32]; /* NEON v0..v31; a double return is v[0].f64[0] */
 } emu_arm64_regs_t;
 
-_Static_assert(offsetof(emu_arm64_regs_t, v) == 272, "emu_arm64_regs_t.v @272");
-_Static_assert(sizeof(emu_arm64_regs_t) == 784, "emu_arm64_regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(emu_arm64_regs_t, v) == 272, "emu_arm64_regs_t.v @272");
+ASMTEST_STATIC_ASSERT(sizeof(emu_arm64_regs_t) == 784, "emu_arm64_regs_t size");
 
 typedef struct {
     bool ok;
@@ -220,8 +234,8 @@ typedef struct {
     emu_vec128_t f[32]; /* F0..F31 (D ext, 64-bit in f64[0]); fa0 = f[10] */
 } emu_riscv_regs_t;
 
-_Static_assert(offsetof(emu_riscv_regs_t, f) == 264, "emu_riscv_regs_t.f @264");
-_Static_assert(sizeof(emu_riscv_regs_t) == 776, "emu_riscv_regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(emu_riscv_regs_t, f) == 264, "emu_riscv_regs_t.f @264");
+ASMTEST_STATIC_ASSERT(sizeof(emu_riscv_regs_t) == 776, "emu_riscv_regs_t size");
 
 typedef struct {
     bool ok;
@@ -280,8 +294,8 @@ typedef struct {
     emu_vec128_t q[16]; /* VFP/NEON q0..q15; d(2k)=q[k].f64[0], d(2k+1)=.f64[1] */
 } emu_arm_regs_t;
 
-_Static_assert(offsetof(emu_arm_regs_t, q) == 72, "emu_arm_regs_t.q @72");
-_Static_assert(sizeof(emu_arm_regs_t) == 328, "emu_arm_regs_t size");
+ASMTEST_STATIC_ASSERT(offsetof(emu_arm_regs_t, q) == 72, "emu_arm_regs_t.q @72");
+ASMTEST_STATIC_ASSERT(sizeof(emu_arm_regs_t) == 328, "emu_arm_regs_t size");
 
 typedef struct {
     bool ok;
@@ -518,5 +532,9 @@ void asmtest_fail(const char *file, int line, const char *fmt, ...)
                          "ASSERT_BLOCKS_AT_LEAST: %zu < %zu", asmtest_bl_,    \
                          (size_t)(n));                                        \
     } while (0)
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* ASMTEST_EMU_H */

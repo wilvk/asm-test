@@ -8,6 +8,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust binding (Track R).** A no-crates-io crate in `bindings/rust/`:
+  `#[repr(C)]` mirrors of `regs_t` and the emulator structs (arch-selected via
+  `cfg`) plus `extern "C"` declarations of the binding-ABI entry points, linked
+  against the prebuilt shared libs by `build.rs`. Exposes `capture` /
+  `capture_fp` / `capture_vec` → `Regs`, `abi_preserved` (native verdict shim),
+  and an `Emulator` whose `EmuResult` carries faults as data. `make rust-test`
+  runs `cargo test`; `tests/conformance.rs` replays the conformance corpus.
+- **C++ binding (Track X).** The C headers now carry `extern "C"` guards (and a
+  portable `ASMTEST_STATIC_ASSERT`), so a C++ TU both compiles and links against
+  the framework. `bindings/cpp/asmtest.hpp` adds an RAII `Emu`, initializer-list
+  `capture*`, vector-lane helpers, and `abi_preserved` / `flag_set` predicates;
+  `make cpp-test` runs an example suite that drives the framework from C++. New
+  `ASMTEST_NO_MAIN` knob omits the runtime's `main()` for embedding.
+- **Docker per-language wrapper testing.** `Dockerfile.bindings` bundles the
+  Python, C++, and Rust toolchains plus libunicorn; `make docker-bindings`
+  (and `docker-python` / `docker-cpp` / `docker-rust`) build and test every
+  wrapper in one reproducible image — verifying a binding on any host, including
+  a language not installed locally. A `bindings` CI job runs the same tests
+  natively on x86-64 and arm64 Linux.
+
 - **Python binding (Track P).** A pure-ctypes package in `bindings/python/`
   (no `cffi`/compile step) loads the shared library and the `asmtest_abi.json`
   manifest and exposes `capture()` / `capture_fp()` / `capture_vec()` (returning
