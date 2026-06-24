@@ -288,7 +288,7 @@ runner is untouched.
 | `fork`/`waitpid` | per-test isolation + timeout | `CreateProcess` + `WaitForSingleObject` + `TerminateProcess` | **done** |
 | `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` | **done** |
 | `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | **done** |
-| `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler / SEH | planned |
+| `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler + `__builtin_longjmp` | **done** |
 | `fnmatch` | `--filter` glob | portable glob matcher | **done** |
 
 **Landed slices** (both in `src/platform_win32.c`, compiled only for the Win64
@@ -323,10 +323,22 @@ target, verified under Wine and wired into `win64-check` / the CI `win64` job):
   (`src/glob_match.c`, platform-neutral) supports `*`, `?`, `[...]` classes (ranges
   + `!`/`^` negation) and `\` escaping — the `fnmatch(…, 0)` subset the runner's
   test-id filtering uses. `make win64-filter-test` (and a native build) cover it.
+- **In-process crash-to-failure (`--no-fork`)** — `asmtest_win32_guard` runs a
+  function under a vectored exception handler that, on a fatal hardware exception,
+  records the fault and redirects the thread (`EXCEPTION_CONTINUE_EXECUTION`) to a
+  landing pad that `__builtin_longjmp`s back to the guard — a minimal sp/fp/pc
+  restore with **no SEH unwinding**, sidestepping the mingw `longjmp`+unwind hazard.
+  `make win64-seh-test` confirms under Wine: a null write is caught as
+  `ACCESS_VIOLATION` (`0xC0000005`), the process survives, and the guard re-arms.
+  (Recovery through frames lacking unwind data is best-effort; the forked path is
+  the unconditional containment.)
 
-The one remaining primitive is the in-process SEH crash-to-failure path for
-`--no-fork` (the rest of the runner uses the process-isolation primitives above).
-After it, the runner itself can be assembled for the Win64 target.
+**All five runner primitives are ported and verified under Wine.** What remains in
+Phase 4 is *integration* — wiring these into `src/asmtest.c` (behind the
+`ASMTEST_ABI_WIN64` target gate) so the runner binary itself builds and runs for
+the Win64 target, replacing the POSIX `fork`/`sigaction`/`alarm`/`mmap`/`fnmatch`
+call sites with the `asmtest_win32_*` equivalents. That is a mechanical (if broad)
+edit on top of the primitive layer above.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as

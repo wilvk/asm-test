@@ -546,11 +546,20 @@ win64-filter-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_glob.exe
 	$(WINE) $(WIN64_BUILD)/test_glob.exe
 
+# Phase 4 slice (Win32 runner port): in-process crash-to-failure via a vectored
+# exception handler + __builtin_longjmp (the --no-fork path). PE/Wine only.
+.PHONY: win64-seh-test
+win64-seh-test: | $(WIN64_BUILD)
+	$(WIN64_CC) -O2 -Wall -Iinclude -Isrc -DASMTEST_ABI_WIN64 \
+	  src/platform_win32.c tests/win64/test_seh_win64.c \
+	  -o $(WIN64_BUILD)/test_seh_win64.exe
+	$(WINE) $(WIN64_BUILD)/test_seh_win64.exe
+
 # What the asmtest-win64 image runs: substrate smoke + capture + the Phase 4
-# runner-port slices (guard pages, isolation, parallel pool, --filter glob).
+# runner-port slices (guard pages, isolation, parallel pool, --filter, in-proc SEH).
 .PHONY: win64-check
 win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
-             win64-pool-test win64-filter-test
+             win64-pool-test win64-filter-test win64-seh-test
 
 # Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.

@@ -275,4 +275,77 @@ int asmtest_win32_run_pool(const char *const *cmdlines, int n, int jobs,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* In-process crash-to-failure (the `--no-fork` path)                  */
+/* ------------------------------------------------------------------ */
+
+/* __builtin_setjmp uses a 5-word buffer. Thread-local so concurrent runners on
+ * different threads each have their own recovery point. */
+static __thread void *tls_recover[5];
+static __thread asmtest_win32_fault_t tls_fault;
+static __thread volatile int tls_armed;
+
+static int is_fatal_exc(DWORD code) {
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_INT_OVERFLOW:
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+        return 1;
+    default:
+        return 0; /* incl. EXCEPTION_STACK_OVERFLOW: not safely recoverable */
+    }
+}
+
+/* Reached via a redirected instruction pointer after a caught fault; jumps back
+ * to the guard's recovery point without SEH unwinding. */
+static void asmtest_win32_landing(void) { __builtin_longjmp(tls_recover, 1); }
+
+static LONG CALLBACK asmtest_win32_veh(EXCEPTION_POINTERS *info) {
+    if (!tls_armed)
+        return EXCEPTION_CONTINUE_SEARCH;
+    DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (!is_fatal_exc(code))
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    tls_fault.code = code;
+    tls_fault.address =
+        (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
+            ? (void *)info->ExceptionRecord->ExceptionInformation[1]
+            : info->ExceptionRecord->ExceptionAddress;
+    tls_armed = 0;
+
+    /* Resume the thread at the landing pad (normal context, not nested in the
+     * exception dispatch) with a 16-aligned stack (rsp ≡ 8 mod 16 at entry). */
+    DWORD64 sp = info->ContextRecord->Rsp;
+    sp = (sp & ~(DWORD64)15) - 8;
+    info->ContextRecord->Rsp = sp;
+    info->ContextRecord->Rip = (DWORD64)(ULONG_PTR)asmtest_win32_landing;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+int asmtest_win32_guard(void (*fn)(void *), void *arg,
+                        asmtest_win32_fault_t *fault) {
+    PVOID handler = AddVectoredExceptionHandler(1, asmtest_win32_veh);
+    int faulted;
+
+    if (__builtin_setjmp(tls_recover) == 0) {
+        tls_armed = 1;
+        fn(arg);
+        tls_armed = 0;
+        faulted = 0;
+    } else {
+        faulted = 1; /* arrived here via the landing pad */
+    }
+
+    if (handler != NULL)
+        RemoveVectoredExceptionHandler(handler);
+    if (faulted && fault != NULL)
+        *fault = tls_fault;
+    return faulted;
+}
+
 #endif /* _WIN32 */
