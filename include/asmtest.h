@@ -89,7 +89,61 @@ typedef union {
     double f64[2];
 } vec128_t;
 
-#if defined(__x86_64__)
+#if defined(ASMTEST_ABI_WIN64)
+
+/* --- Microsoft x64 ("Win64") ABI on x86-64 ---------------------------------
+ * The same architecture as the System V branch below, but a different ABI: the
+ * callee-saved set adds rdi and rsi, and xmm6..15 are callee-saved (captured in
+ * vec[6..15]). Selected by -DASMTEST_ABI_WIN64 for the native Win64 tier
+ * (src/capture_win64.asm). Win64 is LLP64, so the 64-bit fields are
+ * `unsigned long long`, not `long`. Field offsets MUST match the stores in
+ * src/capture_win64.asm. */
+typedef struct {
+    unsigned long long ret;   /* 0  = rax (return value)   */
+    unsigned long long rdx;   /* 8  = second return reg    */
+    unsigned long long rbx;   /* 16 callee-saved           */
+    unsigned long long rbp;   /* 24 callee-saved           */
+    unsigned long long rdi;   /* 32 callee-saved (Win64)   */
+    unsigned long long rsi;   /* 40 callee-saved (Win64)   */
+    unsigned long long r12;   /* 48 callee-saved           */
+    unsigned long long r13;   /* 56 callee-saved           */
+    unsigned long long r14;   /* 64 callee-saved           */
+    unsigned long long r15;   /* 72 callee-saved           */
+    unsigned long long flags; /* 80 = RFLAGS               */
+    double fret;              /* 88 = xmm0 (FP return); valid after _fp/_vec */
+    vec128_t vec[16];         /* 96 = xmm0..15; valid after _vec (vec[0]=ret) */
+} regs_t;
+
+#define ASMTEST_SENTINEL_RBX 0x1111111111111111ULL
+#define ASMTEST_SENTINEL_RBP 0x2222222222222222ULL
+#define ASMTEST_SENTINEL_RSI 0xCCCCCCCCCCCCCCCCULL
+#define ASMTEST_SENTINEL_RDI 0xDDDDDDDDDDDDDDDDULL
+#define ASMTEST_SENTINEL_R12 0x3333333333333333ULL
+#define ASMTEST_SENTINEL_R13 0x4444444444444444ULL
+#define ASMTEST_SENTINEL_R14 0x5555555555555555ULL
+#define ASMTEST_SENTINEL_R15 0x6666666666666666ULL
+
+/* RFLAGS bit masks. */
+#define ASMTEST_CF (1ULL << 0)  /* carry    */
+#define ASMTEST_PF (1ULL << 2)  /* parity   */
+#define ASMTEST_ZF (1ULL << 6)  /* zero     */
+#define ASMTEST_SF (1ULL << 7)  /* sign     */
+#define ASMTEST_OF (1ULL << 11) /* overflow */
+
+/* Layout contract: these offsets are hard-coded in src/capture_win64.asm; the
+ * asserts keep the header, the trampoline's stores, and the manifest in sync. */
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, ret) == 0, "win64 regs_t.ret @0");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rdx) == 8, "win64 regs_t.rdx @8");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rbx) == 16, "win64 regs_t.rbx @16");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rdi) == 32, "win64 regs_t.rdi @32");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, rsi) == 40, "win64 regs_t.rsi @40");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, r12) == 48, "win64 regs_t.r12 @48");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, flags) == 80, "win64 regs_t.flags @80");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, fret) == 88, "win64 regs_t.fret @88");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, vec) == 96, "win64 regs_t.vec @96");
+ASMTEST_STATIC_ASSERT(sizeof(regs_t) == 352, "win64 regs_t size");
+
+#elif defined(__x86_64__)
 
 typedef struct {
     unsigned long ret;   /* 0  = rax (return value)   */
@@ -373,7 +427,9 @@ void asmtest_guarded_free(void *p, size_t n);
 void *asmtest_guarded_alloc_under(size_t n);
 void asmtest_guarded_free_under(void *p, size_t n);
 
-extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
+#if !defined(_WIN32)
+extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Test / fixture definition                                           */

@@ -53,10 +53,17 @@ int main(void) {
     const char *arch = "unknown";
 #endif
 
+#if defined(ASMTEST_ABI_WIN64)
+    const char *abi = "win64";
+#else
+    const char *abi = "sysv";
+#endif
+
     printf("{\n  \"asmtest_abi\": {\n");
     printf("    \"version\": \"%s\",\n", ASMTEST_VERSION);
     printf("    \"version_num\": %d,\n", ASMTEST_VERSION_NUM);
     printf("    \"host_arch\": \"%s\",\n", arch);
+    printf("    \"abi\": \"%s\",\n", abi);
     printf("    \"pointer_bits\": %zu,\n", sizeof(void *) * 8);
     printf("    \"structs\": [");
 
@@ -69,6 +76,10 @@ int main(void) {
 
     BEGIN(regs_t);
     FIELD(regs_t, ret);
+#if defined(ASMTEST_ABI_WIN64)
+    FIELD(regs_t, rdi); /* Win64 adds rdi/rsi to the callee-saved set */
+    FIELD(regs_t, rsi);
+#endif
     FIELD(regs_t, flags);
     FIELD(regs_t, fret);
     FIELD(regs_t, vec);

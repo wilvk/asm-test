@@ -188,7 +188,35 @@ A and Lane B.
 
 ---
 
-## Phase 2 — Win64 `regs_t`, ABI-preservation, manifest, corpus
+## Phase 2 — Win64 `regs_t`, ABI-preservation, manifest, corpus *(done)*
+
+**Status: done.** The Win64 capture layout is now first-class in the header and
+drift-proof:
+
+- **Third `regs_t` branch.** `include/asmtest.h` gains a `#if
+  defined(ASMTEST_ABI_WIN64)` branch (selected before the `__x86_64__` branch):
+  the Win64 layout, with `rdi`/`rsi` added, LLP64-correct `unsigned long long`
+  fields, and `ASMTEST_STATIC_ASSERT` pins on every offset (ret@0 … rdi@32, rsi@40,
+  flags@80, fret@88, vec@96, size 352) tying the header to the stores in
+  `src/capture_win64.asm`. New `ASMTEST_SENTINEL_RDI`/`_RSI` join the set.
+- **Header is the single source of truth.** `tests/win64/win64_regs.h` is deleted;
+  the capture test compiles with `-Iinclude -DASMTEST_ABI_WIN64` and uses `regs_t`
+  / `vec128_t` / `ASMTEST_SENTINEL_*` directly, so the 21-check suite now validates
+  the *header's* layout end to end (still 21/21 both lanes).
+- **Manifest.** `make manifest-win64` builds `scripts/gen-manifest.c` with
+  `-DASMTEST_ABI_WIN64` and emits `asmtest_abi_win64.json` — `"abi": "win64"`,
+  `regs_t` size 352 with the `rdi`/`rsi` fields — the machine-readable layout a
+  binding would mirror. The normal `make manifest` is unchanged (`"abi": "sysv"`,
+  size 336); the static lib still builds.
+
+**Native conformance.** The `win64-check` suite (21 assertions over all eight
+variants, driven by the header layout) *is* the native Win64 conformance — it
+reproduces known captures on real silicon. A formal `corpus.json` row is **not**
+added to `bindings/conformance/conformance.c`: that program is a host-System-V
+build and cannot invoke the native Win64 trampoline (the corpus already carries an
+*emulator* Win64 case). The non-jumping `asmtest_check_abi` Win64 preservation
+logic is deferred to the Phase 4 runner port, where a Win64 framework runtime is
+actually linked; the host-side preservation checks live in the test driver for now.
 
 **Goal.** Give the captured Win64 state a typed home and a drift-proof contract.
 

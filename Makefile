@@ -43,7 +43,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
-.PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
+.PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
@@ -271,6 +271,17 @@ $(BUILD)/gen-manifest: scripts/gen-manifest.c include/asmtest.h \
                        include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $< -o $@
 
+# Win64 variant of the manifest: same generator, built with -DASMTEST_ABI_WIN64
+# so regs_t is the Microsoft x64 layout (the native Win64 tier). Runs on the host
+# (it only prints offsetof/sizeof), emitting the layout bindings would mirror.
+manifest-win64: asmtest_abi_win64.json
+asmtest_abi_win64.json: $(BUILD)/gen-manifest-win64
+	./$< > $@
+	@echo "manifest-win64: wrote $@"
+$(BUILD)/gen-manifest-win64: scripts/gen-manifest.c include/asmtest.h \
+                             include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_ABI_WIN64 $< -o $@
+
 # Generate a local pkg-config file (baked with the current PREFIX/VERSION).
 pc: asmtest.pc
 asmtest.pc: asmtest.pc.in
@@ -468,13 +479,15 @@ win64-smoke: | $(WIN64_BUILD)
 
 # Phase 1 capture trampoline (PE/Wine lane): assemble the Win64 trampoline +
 # routines with `nasm -f win64`, link the driver with mingw-w64, run under Wine.
+# The driver consumes <asmtest.h>'s ASMTEST_ABI_WIN64 regs_t layout.
 .PHONY: win64-test
 win64-test: | $(WIN64_BUILD)
 	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ src/capture_win64.asm \
 	  -o $(WIN64_BUILD)/capture_win64.obj
 	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ tests/win64/routines_win64.asm \
 	  -o $(WIN64_BUILD)/routines_win64.obj
-	$(WIN64_CC) -O2 -Wall -Itests/win64 tests/win64/test_capture_win64.c \
+	$(WIN64_CC) -O2 -Wall -Iinclude -DASMTEST_ABI_WIN64 \
+	  tests/win64/test_capture_win64.c \
 	  $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj \
 	  -o $(WIN64_BUILD)/test_capture_win64.exe
 	$(WINE) $(WIN64_BUILD)/test_capture_win64.exe
@@ -489,7 +502,7 @@ win64-msabi-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/capture_win64.msabi.o
 	$(WIN64_NASM) -f $(WIN64_MSABI_FMT) -Iinclude/ tests/win64/routines_win64.asm \
 	  -o $(WIN64_BUILD)/routines_win64.msabi.o
-	$(CC) -O2 -Wall -Itests/win64 -c tests/win64/test_capture_win64.c \
+	$(CC) -O2 -Wall -Iinclude -DASMTEST_ABI_WIN64 -c tests/win64/test_capture_win64.c \
 	  -o $(WIN64_BUILD)/test_capture_win64.msabi.o
 	$(CC) $(WIN64_BUILD)/test_capture_win64.msabi.o \
 	  $(WIN64_BUILD)/capture_win64.msabi.o $(WIN64_BUILD)/routines_win64.msabi.o \
