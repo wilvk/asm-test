@@ -95,12 +95,23 @@ check is `make demo-fail`, whose failures are observed by a human, not asserted.
 
 ---
 
-## Track B — Packaging & distribution
+## Track B — Packaging & distribution *(done)*
 
 **Goal.** Make `asm-test` consumable by another project without copying sources.
 
 **Why.** A framework's value is reuse; today the friction is high. This is the change
 most likely to grow real-world use.
+
+**Status: done.** `make lib` builds `libasmtest.a`; `make install`/`uninstall` honor
+`PREFIX`/`DESTDIR` and install headers under `include/asmtest/`, the lib, and a
+generated `asmtest.pc` (from `asmtest.pc.in`); `make amalgamate` produces
+`asmtest_single.h` via `scripts/amalgamate.sh`; `ASMTEST_VERSION`/`_NUM` macros land
+in the public header; `CHANGELOG.md` and a README "Using asm-test in your project"
+section document both consumption modes. Verified end to end: an external suite
+(including an asm routine + `ASM_CALL2` capture) builds and passes using only
+`pkg-config --cflags/--libs asmtest`, and both amalgamation TUs (API-only and
+`ASMTEST_IMPLEMENTATION`) compile clean under `-Wall -Wextra`. Remaining: tag the
+`v1.0.0` release.
 
 ### Deliverables
 

@@ -3,3 +3,7 @@
 
 # Build artifacts
 build/
+
+# Generated packaging artifacts (Track B)
+asmtest.pc
+asmtest_single.h

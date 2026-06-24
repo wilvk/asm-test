@@ -127,8 +127,49 @@ TEST(arith, adds_two_positives) {
 The framework provides `main()`, discovers every `TEST(...)`, runs them, and
 exits nonzero if any fail.
 
+## Using asm-test in your project
+
+Two ways to consume the framework. The **static library** is the primary path.
+
+### 1. Static library + pkg-config (recommended)
+
+```sh
+make install                 # to /usr/local by default
+make install PREFIX=$HOME/.local
+make DESTDIR=/tmp/stage install   # staged install (packaging)
+```
+
+This installs the headers (under `…/include/asmtest/`), `libasmtest.a`, and a
+`asmtest.pc` pkg-config file. A consumer then builds against it:
+
+```sh
+cc $(pkg-config --cflags asmtest) -c my_tests.c -o my_tests.o
+cc my_tests.o my_routine.o $(pkg-config --libs asmtest) -o my_tests
+```
+
+where `my_routine.o` is your assembly routine under test, assembled with the
+same `#include "asm.h"` shim (also installed). `make uninstall` reverses it.
+
+### 2. Single-header amalgamation
+
+```sh
+make amalgamate              # writes asmtest_single.h
+```
+
+Include `asmtest_single.h` for the API; in **exactly one** translation unit
+`#define ASMTEST_IMPLEMENTATION` before including it to emit the runtime.
+
+> **Note:** the register/flags capture trampoline is assembly (`capture.s`) and
+> cannot live in a C header, so even with the single header you must assemble +
+> link that trampoline (or just link `libasmtest.a`). The amalgamation covers
+> the C surface only; the optional emulator tier is not included.
+
+The installed header exposes `ASMTEST_VERSION` (`"1.0.0"`) and
+`ASMTEST_VERSION_NUM` for compile-time checks. See [CHANGELOG.md](CHANGELOG.md).
+
 ## Requirements
 
 x86-64 or AArch64, Linux or macOS, with `make` and a C compiler (`cc` — gcc or
 clang), which also assembles the GAS-syntax `.s` sources. The optional NASM
-backend additionally needs `nasm` (x86-64 only). See [DESIGN.md](DESIGN.md).
+backend additionally needs `nasm` (x86-64 only). Installing the pkg-config file
+and consuming it needs `pkg-config`. See [DESIGN.md](DESIGN.md).

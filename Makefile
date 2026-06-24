@@ -27,10 +27,24 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fpover $(BUILD)/test_refmatch
 
 .PHONY: all test check demo-fail clean
+.PHONY: lib install uninstall amalgamate pc
 all: test
 
 # Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
 SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative
+
+# --- Packaging & installation (Track B) ------------------------------------
+# `make lib`        build libasmtest.a (framework runtime + capture trampoline)
+# `make install`    install headers + lib + pkg-config (honors PREFIX/DESTDIR)
+# `make amalgamate` generate the single-header asmtest_single.h
+AR              ?= ar
+PREFIX          ?= /usr/local
+DESTDIR         ?=
+ASMTEST_VERSION := 1.0.0
+incdir := $(DESTDIR)$(PREFIX)/include/asmtest
+libdir := $(DESTDIR)$(PREFIX)/lib
+pcdir  := $(DESTDIR)$(PREFIX)/lib/pkgconfig
+pc_subst := sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(ASMTEST_VERSION)|g'
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -117,6 +131,39 @@ $(BUILD)/tests_negative: $(FRAMEWORK_OBJS) $(BUILD)/negative.o
 check: $(SELFTESTS)
 	@BUILD=$(BUILD) sh tests/expect.sh
 
+# Static library: the framework runtime + the asm capture trampoline. The
+# optional emulator tier (emu.o, -lunicorn) is intentionally left out.
+$(BUILD)/libasmtest.a: $(FRAMEWORK_OBJS)
+	$(AR) rcs $@ $^
+
+lib: $(BUILD)/libasmtest.a
+
+# Generate a local pkg-config file (baked with the current PREFIX/VERSION).
+pc: asmtest.pc
+asmtest.pc: asmtest.pc.in
+	$(pc_subst) $< > $@
+
+# Single-header amalgamation (C surface only; see the file's banner).
+amalgamate: asmtest_single.h
+asmtest_single.h: scripts/amalgamate.sh include/asmtest.h src/asmtest.c
+	sh scripts/amalgamate.sh > $@
+
+# Install headers, the static lib, and a pkg-config file. The .pc is generated
+# here (not via the asmtest.pc target) so it always reflects the PREFIX in use.
+install: lib
+	mkdir -p $(incdir) $(libdir) $(pcdir)
+	cp include/asmtest.h include/asmtest_emu.h include/asm.h \
+	   include/asm_nasm.inc $(incdir)/
+	cp $(BUILD)/libasmtest.a $(libdir)/
+	$(pc_subst) asmtest.pc.in > $(pcdir)/asmtest.pc
+	@echo "installed asmtest $(ASMTEST_VERSION) to $(DESTDIR)$(PREFIX)"
+
+uninstall:
+	rm -f $(incdir)/asmtest.h $(incdir)/asmtest_emu.h $(incdir)/asm.h \
+	      $(incdir)/asm_nasm.inc
+	-rmdir $(incdir) 2>/dev/null || true
+	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
+
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
 $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \
                             $(BUILD)/refmatch.o $(BUILD)/test_failure_demo.o
@@ -166,3 +213,4 @@ emu-test: $(BUILD)/test_emu
 
 clean:
 	rm -rf $(BUILD)
+	rm -f asmtest.pc asmtest_single.h

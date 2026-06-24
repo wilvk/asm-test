@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include/asmtest
+
+Name: asmtest
+Description: C-hosted unit-testing framework for assembly language
+URL: https://github.com/wilvk/asm-test
+Version: @VERSION@
+Libs: -L${libdir} -lasmtest
+Cflags: -I${includedir}
