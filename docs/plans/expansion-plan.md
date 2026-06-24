@@ -258,18 +258,36 @@ flags), possibly a `.clang-tidy`.
 
 ## Track E — Breadth (opportunistic)
 
-Lower priority; pick up individually as interest dictates.
+Lower priority; pick up individually as interest dictates. Four of the five items
+have landed; the native Win64 trampoline remains deferred (it needs a Windows host).
 
-- **Native Win64 trampoline** — Win64 is emulator-only today; a native trampoline would
-  need a Windows host/CI runner. Scope only if Windows support becomes a goal.
-- **Parallel execution** — each test already forks; a `-jN` to run N children
-  concurrently is a natural extension of the existing fork model.
-- **libc-callback routines** — helpers/examples for routines that call back into C or
-  take pointers to complex data, with marshalling helpers.
-- **Valgrind / sanitizer story for the routine under test** — document and example how
-  to run a routine under Valgrind or with the guard-page allocator to catch its bugs.
-- **AArch64 alternative assembler** — NASM is x86-64-only by nature; either document
-  GAS as the sole AArch64 path (current reality) or evaluate another assembler.
+- **Native Win64 trampoline** — *deferred.* Win64 is emulator-only today; a native
+  trampoline would need a Windows host/CI runner. Scope only if Windows support
+  becomes a goal.
+- **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests
+  concurrently as a pool of forked children over the existing per-test fork model
+  (`run_parallel` in `src/asmtest.c`, using `poll()` over the children's result
+  pipes). Output is buffered and rendered in registration order, so TAP/JUnit stays
+  byte-identical to a serial run regardless of finish order; per-test timeout and
+  crash containment are unchanged, and `--no-fork` forces serial. Verified ~9× on
+  8 sleepy tests at `-j8`, and four new `tests/expect.sh` checks pin ordering,
+  failure reporting, crash containment, and bad-`--jobs` rejection.
+- **libc-callback routines** — *done.* `examples/callback.s` / `.asm` +
+  `examples/test_callback.c`: `sum_map(arr, n, fn)` and `count_if(arr, n, pred)`
+  invoke a C function pointer per element, demonstrating an assembly routine that
+  calls back into C with correct callee-saved/stack-alignment discipline (the
+  bug class the example is built to catch). Builds under both GAS and NASM.
+- **Valgrind / sanitizer story for the routine under test** — *done.* `make
+  valgrind` runs the example suites under memcheck (`--no-fork`, `--error-exitcode`)
+  to catch bugs in the routine under test, complementing the always-on guard-page
+  allocator (`asmtest_guarded_alloc` / `_under`); `make docker-valgrind`, the
+  `--valgrind` installer flag, and a README "Debugging a routine under test"
+  section round it out. Distinct from Track D's `make sanitize`, which instruments
+  the framework's own C.
+- **AArch64 alternative assembler** — *done (documented decision).* GAS is the sole
+  AArch64 backend — the `.s` sources assemble through the C compiler's built-in
+  assembler, so no extra tool is needed; NASM stays x86-64-only by design. Recorded
+  in the README "Two assembler backends" bullet.
 
 ---
 

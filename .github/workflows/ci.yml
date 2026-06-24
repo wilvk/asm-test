@@ -109,6 +109,21 @@ jobs:
       - name: Build and run under sanitizers
         run: make sanitize
 
+  # Quality: memcheck the routines under test (Track E). Runs the example suites
+  # under Valgrind (--no-fork) to catch bad loads/stores, uninitialized reads,
+  # and leaks in the assembly routines; gates on --error-exitcode. x86-64 Linux
+  # (Valgrind isn't available on current macOS/arm64 runners).
+  valgrind:
+    name: valgrind (memcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install valgrind
+        run: make deps DEPS_ARGS=--valgrind
+      - name: Memcheck the routines under test
+        run: make valgrind
+
   # Quality: static analysis with clang-tidy (checks curated in .clang-tidy).
   # Informational — reports a baseline without gating (no --warnings-as-errors).
   analyze:

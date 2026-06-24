@@ -11,10 +11,11 @@
 #   pkg-config   install/consume   make install ; pkg-config asmtest
 #   unicorn      emulator tier     make emu-test
 #   clang-tidy   static analysis   make tidy
+#   valgrind     routine memcheck  make valgrind   (Linux/x86-64)
 #
 # Usage:
 #   scripts/install-deps.sh [--all] [--nasm] [--emu] [--pkgconfig] [--tidy]
-#                           [--dry-run] [--help]
+#                           [--valgrind] [--dry-run] [--help]
 #
 # With no selection flag it installs everything above (a full dev setup).
 # Detects (in order): apt-get, dnf, yum, pacman, zypper, apk, brew. On Linux it
@@ -32,11 +33,12 @@ $prog — install asm-test's optional build dependencies cross-platform.
 Usage: scripts/install-deps.sh [options]
 
 Selection (default: all of them):
-  --all          nasm + pkg-config + unicorn + clang-tidy (full dev setup)
+  --all          nasm + pkg-config + unicorn + clang-tidy + valgrind (full setup)
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + pkg-config
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
   --tidy         static analysis       (make tidy)
+  --valgrind     routine memcheck      (make valgrind) — Linux/x86-64
 
 Other:
   --dry-run, -n  print the commands instead of running them
@@ -50,16 +52,18 @@ want_nasm=0
 want_pkgconfig=0
 want_unicorn=0
 want_tidy=0
+want_valgrind=0
 dry_run=0
 selected=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_tidy=1; selected=1 ;;
+        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_tidy=1; want_valgrind=1; selected=1 ;;
         --nasm)       want_nasm=1; selected=1 ;;
         --emu)        want_unicorn=1; want_pkgconfig=1; selected=1 ;;
         --pkgconfig|--pkg-config) want_pkgconfig=1; selected=1 ;;
         --tidy)       want_tidy=1; selected=1 ;;
+        --valgrind)   want_valgrind=1; selected=1 ;;
         --dry-run|-n) dry_run=1 ;;
         --help|-h)    usage; exit 0 ;;
         *) echo "$prog: unknown option: $1" >&2; echo >&2; usage >&2; exit 2 ;;
@@ -69,7 +73,7 @@ done
 
 # No selection flag => full dev setup.
 if [ "$selected" -eq 0 ]; then
-    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_tidy=1
+    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_tidy=1; want_valgrind=1
 fi
 
 # Detect the package manager. Native Linux managers take precedence over a
@@ -88,12 +92,12 @@ fi
 # Per-manager package names for each logical dependency. A few vary by distro
 # release — adjust here if your repo names them differently.
 case "$PM" in
-    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  tidy_pkg=clang-tidy ;;
-    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; tidy_pkg=clang-tools-extra ;;
-    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          tidy_pkg=clang ;;
-    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; tidy_pkg=clang-tools ;;
-    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      tidy_pkg=clang-extra-tools ;;
-    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          tidy_pkg=llvm ;;
+    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
+    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
+    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          tidy_pkg=clang;            valgrind_pkg=valgrind ;;
+    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
+    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      tidy_pkg=clang-extra-tools; valgrind_pkg=valgrind ;;
+    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          tidy_pkg=llvm;             valgrind_pkg= ;; # unsupported on current macOS
 esac
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -107,6 +111,11 @@ skip() { echo "$prog: $1 already present, skipping"; }
 [ "$want_pkgconfig" -eq 1 ] && { { have pkg-config || have pkgconf; } && skip pkg-config || add "$pkgconfig_pkg"; }
 [ "$want_unicorn" -eq 1 ]   && { have_unicorn && skip unicorn || add "$unicorn_pkg"; }
 [ "$want_tidy" -eq 1 ]      && { have clang-tidy && skip clang-tidy || add "$tidy_pkg"; }
+[ "$want_valgrind" -eq 1 ]  && {
+    if have valgrind; then skip valgrind
+    elif [ -z "$valgrind_pkg" ]; then echo "$prog: valgrind unsupported on $PM (skipping)"
+    else add "$valgrind_pkg"; fi
+}
 
 # Strip leading space; bail out early if there's nothing left to do.
 pkgs=$(echo "$pkgs" | sed 's/^ *//')

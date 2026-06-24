@@ -46,7 +46,8 @@ All phases through **Phase 11** (breadth) are complete. See
 - **Per-test isolation & timeout:** each test runs in a forked child with an
   `alarm()` timeout, so an infinite loop or a SIGABRT-class corruption becomes a
   reported timeout/crash failure and the run continues (`--no-fork` opts back
-  into the in-process model). See `make demo-robust`.
+  into the in-process model). See `make demo-robust`. `-jN` runs up to N tests
+  concurrently (extending the fork model); output stays in registration order.
 - **Runner CLI:** `--filter=GLOB` (over suite, name, or `suite.name`), `--list`,
   `--shuffle`/`--seed` for order independence, `--timeout=SEC`, and
   `--format=junit` for CI ingestion alongside the default colored TAP.
@@ -61,7 +62,9 @@ All phases through **Phase 11** (breadth) are complete. See
   selected by `#if`. CI runs the suites on all four target combinations.
 - **Two assembler backends:** GAS (default) or NASM (`make ASM_SYNTAX=nasm`,
   Intel syntax, x86-64 only) — the Intel-syntax sources live alongside the GAS
-  ones and are also exercised in CI.
+  ones and are also exercised in CI. **On AArch64, GAS is the only backend**
+  (NASM is x86-only by design); the `.s` sources assemble there through the C
+  compiler's built-in assembler, so no extra tool is needed.
 - **Emulator tier** (optional, `make emu-test`, needs libunicorn): run a routine
   inside a virtual CPU (x86-64, AArch64, RISC-V/RV64, or ARM32 guest) to preload
   arbitrary registers/memory, single-step mid-routine, read back the **full**
@@ -99,6 +102,7 @@ Each suite binary takes a small CLI:
 ./build/test_arith --shuffle --seed=123   # run in a reproducible random order
 ./build/test_arith --timeout=5            # per-test timeout (seconds; 0 = off)
 ./build/test_arith --no-fork              # in-process (no per-test isolation)
+./build/test_arith -j4                    # run up to 4 tests at once (ordered)
 ./build/test_arith --format=junit         # JUnit XML instead of TAP, for CI
 ./build/test_bench --bench                # time BENCH cases instead of testing
 ```
@@ -132,6 +136,34 @@ TEST(arith, adds_two_positives) {
 
 The framework provides `main()`, discovers every `TEST(...)`, runs them, and
 exits nonzero if any fail.
+
+### Routines that call back into C
+
+A routine can take a function pointer and call back into C — a qsort-style
+comparator, or a map/filter over an array. `examples/callback.s` (with
+`examples/test_callback.c`) shows `sum_map(arr, n, fn)` and `count_if(arr, n,
+pred)` invoking an ordinary C callback per element; the test just passes C
+function pointers and asserts on the result. The routine keeps its live state
+(pointer, counter, callback, accumulator) in callee-saved registers and keeps
+the stack 16-byte aligned at each call — exactly the ABI discipline these
+helpers are built to exercise.
+
+## Debugging a routine under test
+
+Two complementary ways to catch bugs in the **routine** (not just assert on its
+result):
+
+- **Guard-page buffers** — `asmtest_guarded_alloc(n)` returns `n` writable bytes
+  backed by an inaccessible page, so a one-past-the-end write faults *exactly* at
+  the overrun (the framework turns the fault into a reported failure);
+  `asmtest_guarded_alloc_under(n)` puts the guard *before* the buffer to catch
+  underruns (`buf[-1]`). Always on, no extra tooling.
+- **Valgrind / memcheck** — `make valgrind` runs the example suites under
+  Valgrind's memcheck (`--no-fork`, so it follows one process to a clean exit)
+  to catch bad loads/stores, uninitialized reads, and leaks in the routine. A
+  real error fails the build. Linux/x86-64 (Valgrind isn't available on current
+  macOS/arm64); `make deps DEPS_ARGS=--valgrind` installs it. This is distinct
+  from `make sanitize` (ASan + UBSan), which instruments the *framework's* C.
 
 ## Using asm-test in your project
 
@@ -181,8 +213,8 @@ backend additionally needs `nasm` (x86-64 only). Installing the pkg-config file
 and consuming it needs `pkg-config`. See [DESIGN.md](DESIGN.md).
 
 The core build needs nothing beyond `make` + a C compiler. The **optional**
-tools (`nasm`, `pkg-config`, `libunicorn`, `clang-tidy`) can be installed
-cross-platform with:
+tools (`nasm`, `pkg-config`, `libunicorn`, `clang-tidy`, `valgrind`) can be
+installed cross-platform with:
 
 ```sh
 make deps                       # full dev setup, via the system package manager
@@ -204,6 +236,7 @@ installs only `make` + a C compiler, then pulls the optional toolchain through
 make docker-test        # example suites + framework self-tests (the `test` job)
 make docker-nasm        # NASM backend (x86-64 only)
 make docker-emu         # emulator tier (libunicorn)
+make docker-valgrind    # memcheck the routines under test
 make docker-sanitize    # ASan + UBSan
 make docker-analyze     # clang-tidy
 make docker-coverage    # gcov of the runner

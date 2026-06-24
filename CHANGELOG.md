@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Parallel execution (Track E).** `-jN` / `--jobs=N` runs up to N tests
+  concurrently as forked children (a pool over the existing per-test fork model),
+  while output stays in registration order regardless of finish order. Per-test
+  timeout and crash containment are unchanged; `--no-fork` forces serial. New
+  `expect.sh` self-tests pin the ordering, failure reporting, and crash
+  containment under `-j4`.
+- **libc-callback example (Track E).** `examples/callback.s` / `.asm` with
+  `examples/test_callback.c`: `sum_map(arr, n, fn)` and `count_if(arr, n, pred)`
+  call a C function pointer per element, demonstrating an assembly routine
+  calling back into C with correct callee-saved/stack-alignment discipline.
+- **Valgrind story (Track E).** `make valgrind` runs the example suites under
+  memcheck (`--no-fork`) to catch bugs in the routine under test, complementing
+  the always-on guard-page allocator; `make docker-valgrind` and the
+  `--valgrind` flag of `scripts/install-deps.sh` round it out. Documented
+  alongside the guard-page approach in the README.
 - **Emulator FP/SIMD (Track C).** The x86-64 emulator guest marshals `double`
   args (`emu_call_fp`) and 128-bit vector args (`emu_call_vec`) into xmm0..7 and
   captures the whole XMM file (`emu_x86_regs_t.xmm[]`). The AArch64 guest gains

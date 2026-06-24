@@ -37,7 +37,8 @@ FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
                   $(BUILD)/test_struct $(BUILD)/test_structparam \
-                  $(BUILD)/test_fpover $(BUILD)/test_refmatch
+                  $(BUILD)/test_fpover $(BUILD)/test_refmatch \
+                  $(BUILD)/test_callback
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
@@ -131,6 +132,10 @@ $(BUILD)/test_refmatch: $(FRAMEWORK_OBJS) $(BUILD)/refmatch.o \
                         $(BUILD)/test_refmatch.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(BUILD)/test_callback: $(FRAMEWORK_OBJS) $(BUILD)/callback.o \
+                        $(BUILD)/test_callback.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 test: $(SUITES)
 	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
 
@@ -194,6 +199,7 @@ deps:
 #   make docker-test       build + run the example suites and self-tests
 #   make docker-nasm       the NASM backend (x86-64 only)
 #   make docker-emu        the emulator tier (libunicorn)
+#   make docker-valgrind   memcheck the routines under test
 #   make docker-sanitize   ASan + UBSan
 #   make docker-analyze    clang-tidy
 #   make docker-coverage   gcov of the runner
@@ -209,8 +215,9 @@ DOCKER_PLATFORM ?=
 _docker_plat := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 _docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
 
-.PHONY: docker-build docker-test docker-nasm docker-emu docker-sanitize \
-        docker-analyze docker-coverage docker-ci docker-shell docker-clean
+.PHONY: docker-build docker-test docker-nasm docker-emu docker-valgrind \
+        docker-sanitize docker-analyze docker-coverage docker-ci docker-shell \
+        docker-clean
 
 docker-build:
 	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
@@ -223,6 +230,9 @@ docker-nasm: docker-build
 
 docker-emu: docker-build
 	$(_docker_run) make emu-test
+
+docker-valgrind: docker-build
+	$(_docker_run) make valgrind
 
 docker-sanitize: docker-build
 	$(_docker_run) make sanitize
@@ -240,6 +250,7 @@ docker-ci: docker-build
 	  make test && make check; \
 	  make clean && make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check; \
 	  make clean && make emu-test; \
+	  make clean && make valgrind; \
 	  make clean && make sanitize; \
 	  make tidy'
 
@@ -290,6 +301,25 @@ coverage:
 CLANG_TIDY ?= clang-tidy
 tidy:
 	$(CLANG_TIDY) src/asmtest.c -- $(CFLAGS)
+
+# --- Valgrind the routine under test (Track E) -----------------------------
+# Run the example suites under Valgrind's memcheck to catch bugs in the ROUTINE
+# UNDER TEST (bad loads/stores, uninitialized reads, leaks) — distinct from the
+# `sanitize` target, which instruments the framework's own C. Tests run
+# --no-fork so memcheck follows a single process to a clean exit; a real error
+# fails the build via --error-exitcode. Linux/x86-64 (Valgrind isn't available
+# on current macOS/arm64). The guard-page allocator (asmtest_guarded_alloc) is
+# the complementary, always-on way to catch overruns without Valgrind.
+VALGRIND      ?= valgrind
+VALGRIND_OPTS ?= --leak-check=full --errors-for-leak-kinds=definite \
+                 --error-exitcode=1 --quiet
+.PHONY: valgrind
+valgrind: $(SUITES) $(BUILD)/tests_positive
+	@set -e; for t in $(SUITES) $(BUILD)/tests_positive; do \
+	  echo "== valgrind $$t =="; \
+	  $(VALGRIND) $(VALGRIND_OPTS) ./$$t --no-fork >/dev/null; \
+	done
+	@echo "valgrind: clean"
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
 $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \

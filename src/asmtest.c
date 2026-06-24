@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <math.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -28,6 +29,8 @@ enum { JMP_FAIL = 1, JMP_SKIP = 2 };
 
 /* Test outcome. */
 enum { ST_PASS, ST_FAIL, ST_SKIP };
+
+static double now_secs(void); /* monotonic seconds; defined below */
 
 static asmtest_case_t *asmtest_head = NULL;
 static asmtest_case_t *asmtest_tail = NULL;
@@ -672,6 +675,35 @@ static void run_inproc(asmtest_case_t *tc, test_result_t *res) {
     apply_wire(res, &w);
 }
 
+/* Turn a finished child's pipe payload (`got` bytes of `w`) and wait `status`
+ * into a result. A full wire record wins; otherwise the child died before
+ * reporting and we synthesize the outcome from how it was killed. Shared by the
+ * serial (run_forked) and parallel (run_parallel) paths. */
+static void reap_child(test_result_t *res, size_t got, const wire_result_t *w,
+                       int status) {
+    if (got == sizeof *w) {
+        apply_wire(res, w);
+        return;
+    }
+    res->outcome = ST_FAIL;
+    res->line = 0;
+    snprintf(res->file, sizeof res->file, "(child)");
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        if (sig == SIGALRM)
+            snprintf(res->msg, sizeof res->msg,
+                     "timed out after %d s (killed)", asmtest_timeout_secs);
+        else
+            snprintf(res->msg, sizeof res->msg,
+                     "crashed: killed by signal %d (%s)", sig, sig_name(sig));
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        snprintf(res->msg, sizeof res->msg,
+                 "child exited abnormally (status %d)", WEXITSTATUS(status));
+    } else {
+        snprintf(res->msg, sizeof res->msg, "no result reported by child");
+    }
+}
+
 /* Run in a forked child so a crash, abort, or hard hang is contained: the
  * child reports its outcome up a pipe; if it dies before reporting, the parent
  * synthesizes the result from the wait status. */
@@ -708,27 +740,158 @@ static void run_forked(asmtest_case_t *tc, test_result_t *res) {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
         ;
-    if (got == sizeof w) {
-        apply_wire(res, &w);
-        return;
+    reap_child(res, got, &w, status);
+}
+
+/* One in-flight (or free) child in the parallel scheduler. */
+typedef struct {
+    pid_t pid;
+    int fd;  /* read end of the child's result pipe; -1 when the slot is free */
+    int idx; /* index into sel[]/results[] this child is running */
+    double t0;
+} job_slot_t;
+
+/* Spawn the test at sel[idx] into a free slot, recording its pid/pipe/timer.
+ * On a fork/pipe failure, run it in-process synchronously and leave the slot
+ * free (so the result is already finalized). Returns 1 if a child is now
+ * in-flight in *slot, 0 if the test was handled in-process. */
+static int spawn_job(job_slot_t *slot, asmtest_case_t **sel,
+                     test_result_t *results, int idx) {
+    test_result_t *r = &results[idx];
+    r->suite = sel[idx]->suite;
+    r->name = sel[idx]->name;
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        double t0 = now_secs();
+        run_inproc(sel[idx], r);
+        r->secs = now_secs() - t0;
+        return 0;
     }
-    /* Child died before reporting: describe it from the wait status. */
-    res->outcome = ST_FAIL;
-    res->line = 0;
-    snprintf(res->file, sizeof res->file, "(child)");
-    if (WIFSIGNALED(status)) {
-        int sig = WTERMSIG(status);
-        if (sig == SIGALRM)
-            snprintf(res->msg, sizeof res->msg,
-                     "timed out after %d s (killed)", asmtest_timeout_secs);
-        else
-            snprintf(res->msg, sizeof res->msg,
-                     "crashed: killed by signal %d (%s)", sig, sig_name(sig));
-    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-        snprintf(res->msg, sizeof res->msg,
-                 "child exited abnormally (status %d)", WEXITSTATUS(status));
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        double t0 = now_secs();
+        run_inproc(sel[idx], r);
+        r->secs = now_secs() - t0;
+        return 0;
+    }
+    if (pid == 0) {
+        close(fds[0]);
+        wire_result_t w;
+        capture_wire(&w, run_one(sel[idx]));
+        write_full(fds[1], &w, sizeof w);
+        fflush(stdout);
+        fflush(stderr);
+        _exit(0);
+    }
+    close(fds[1]);
+    slot->pid = pid;
+    slot->fd = fds[0];
+    slot->idx = idx;
+    slot->t0 = now_secs();
+    return 1;
+}
+
+/* Run the n selected tests with up to `jobs` forked children in flight at once,
+ * filling results[] in registration order (output is rendered afterward, so it
+ * stays deterministic regardless of completion order). Each child enforces its
+ * own per-test alarm()/signal isolation exactly as the serial path does. */
+static void run_parallel(asmtest_case_t **sel, test_result_t *results, int n,
+                         int jobs) {
+    if (jobs < 1)
+        jobs = 1;
+    if (jobs > n)
+        jobs = n;
+    job_slot_t *slots = (job_slot_t *)malloc((size_t)jobs * sizeof *slots);
+    struct pollfd *pfds = (struct pollfd *)malloc((size_t)jobs * sizeof *pfds);
+    for (int j = 0; j < jobs; j++)
+        slots[j].fd = -1;
+
+    int next = 0; /* next test to launch */
+    int done = 0; /* tests finalized so far */
+
+    while (done < n) {
+        /* Fill every free slot with a pending test. */
+        for (int j = 0; j < jobs && next < n; j++) {
+            if (slots[j].fd != -1)
+                continue;
+            if (!spawn_job(&slots[j], sel, results, next++))
+                done++; /* handled in-process; slot stays free */
+        }
+
+        /* If nothing is in flight, the rest were all handled in-process. */
+        int nready = 0;
+        for (int j = 0; j < jobs; j++) {
+            if (slots[j].fd < 0)
+                continue;
+            pfds[nready].fd = slots[j].fd;
+            pfds[nready].events = POLLIN;
+            pfds[nready].revents = 0;
+            nready++;
+        }
+        if (nready == 0)
+            continue;
+
+        if (poll(pfds, (nfds_t)nready, -1) < 0) {
+            if (errno == EINTR)
+                continue;
+            break; /* unexpected; avoid spinning */
+        }
+
+        /* Reap any slot whose child has data or hung up. */
+        for (int j = 0; j < jobs; j++) {
+            if (slots[j].fd < 0)
+                continue;
+            short re = 0;
+            for (int k = 0; k < nready; k++)
+                if (pfds[k].fd == slots[j].fd)
+                    re = pfds[k].revents;
+            if (!(re & (POLLIN | POLLHUP | POLLERR)))
+                continue;
+
+            wire_result_t w;
+            size_t got = read_full(slots[j].fd, &w, sizeof w);
+            close(slots[j].fd);
+            int status = 0;
+            while (waitpid(slots[j].pid, &status, 0) < 0 && errno == EINTR)
+                ;
+            test_result_t *r = &results[slots[j].idx];
+            reap_child(r, got, &w, status);
+            r->secs = now_secs() - slots[j].t0;
+            slots[j].fd = -1;
+            done++;
+        }
+    }
+
+    free(pfds);
+    free(slots);
+}
+
+/* ANSI color escapes (empty strings when not writing to a TTY). */
+typedef struct {
+    const char *grn, *red, *yel, *dim, *rst;
+} tap_palette_t;
+
+/* Emit one TAP line (plus a YAML block for failures) for result `r`, numbered
+ * `num`. Shared by the serial and parallel paths so output is byte-identical. */
+static void print_tap_result(int num, const test_result_t *r,
+                             const tap_palette_t *p) {
+    if (r->outcome == ST_PASS) {
+        printf("%sok%s %d - %s.%s\n", p->grn, p->rst, num, r->suite, r->name);
+    } else if (r->outcome == ST_SKIP) {
+        printf("%sok%s %d - %s.%s %s# SKIP %s%s\n", p->yel, p->rst, num,
+               r->suite, r->name, p->dim, r->msg, p->rst);
     } else {
-        snprintf(res->msg, sizeof res->msg, "no result reported by child");
+        printf("%snot ok%s %d - %s.%s\n", p->red, p->rst, num, r->suite,
+               r->name);
+        printf("  %s---%s\n", p->dim, p->rst);
+        printf("  at:  %s:%d\n", r->file, r->line);
+        printf("  msg: %s\n", r->msg);
+        printf("  %s...%s\n", p->dim, p->rst);
     }
 }
 
@@ -744,6 +907,7 @@ typedef struct {
     uint64_t seed;
     int format_junit;
     int fork_tests; /* per-test fork isolation (default on) */
+    int jobs;       /* concurrent forked children; 1 = serial (default) */
     int timeout;    /* seconds; <0 = leave the default in place */
     int bench;      /* run benchmarks instead of tests */
     long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
@@ -761,6 +925,8 @@ static void usage(const char *prog) {
         "  --timeout=SEC        per-test timeout in seconds (0 disables; "
         "default 10)\n"
         "  --no-fork            run tests in-process (no per-test isolation)\n"
+        "  -jN, --jobs=N        run up to N tests concurrently (implies fork;\n"
+        "                       default 1 = serial). Output stays in order.\n"
         "  --format=tap|junit   output format (default tap)\n"
         "  --bench              run registered benchmarks (BENCH) instead of "
         "tests\n"
@@ -989,6 +1155,7 @@ int main(int argc, char **argv) {
     options_t opt;
     memset(&opt, 0, sizeof opt);
     opt.fork_tests = 1;
+    opt.jobs = 1;
     opt.timeout = -1;
 
     for (int ai = 1; ai < argc; ai++) {
@@ -1000,6 +1167,22 @@ int main(int argc, char **argv) {
             opt.shuffle = 1;
         } else if (strcmp(a, "--no-fork") == 0) {
             opt.fork_tests = 0;
+        } else if (opt_prefix(a, "--jobs=", &v) || opt_prefix(a, "-j", &v)) {
+            if (*v == '\0' && ai + 1 < argc) /* "-j N" / "--jobs N" form */
+                v = argv[++ai];
+            int j = atoi(v);
+            if (j < 1) {
+                fprintf(stderr, "invalid --jobs: %s\n", v);
+                return 2;
+            }
+            opt.jobs = j;
+        } else if (strcmp(a, "--jobs") == 0 && ai + 1 < argc) {
+            int j = atoi(argv[++ai]);
+            if (j < 1) {
+                fprintf(stderr, "invalid --jobs: %s\n", argv[ai]);
+                return 2;
+            }
+            opt.jobs = j;
         } else if (strcmp(a, "--bench") == 0) {
             opt.bench = 1;
         } else if (opt_prefix(a, "--bench-reps=", &v)) {
@@ -1106,11 +1289,13 @@ int main(int argc, char **argv) {
     }
 
     int use_color = !opt.format_junit && isatty(STDOUT_FILENO);
-    const char *grn = use_color ? "\033[32m" : "";
-    const char *red = use_color ? "\033[31m" : "";
-    const char *yel = use_color ? "\033[33m" : "";
-    const char *dim = use_color ? "\033[2m" : "";
-    const char *rst = use_color ? "\033[0m" : "";
+    tap_palette_t pal = {
+        .grn = use_color ? "\033[32m" : "",
+        .red = use_color ? "\033[31m" : "",
+        .yel = use_color ? "\033[33m" : "",
+        .dim = use_color ? "\033[2m" : "",
+        .rst = use_color ? "\033[0m" : "",
+    };
 
     if (!opt.format_junit) {
         printf("TAP version 13\n");
@@ -1121,19 +1306,32 @@ int main(int argc, char **argv) {
         (test_result_t *)malloc((size_t)(n > 0 ? n : 1) * sizeof *results);
     int passed = 0, failed = 0, skipped = 0;
 
-    for (int i = 0; i < n; i++) {
-        asmtest_case_t *tc = sel[i];
-        test_result_t *r = &results[i];
-        memset(r, 0, sizeof *r);
-        r->suite = tc->suite;
-        r->name = tc->name;
+    /* Parallel needs fork isolation to contain children; --no-fork forces
+     * serial. Run concurrently when -jN>1, otherwise run (and stream) serially.
+     * In both cases results[] is filled in registration order; parallel renders
+     * after the run so output stays deterministic regardless of finish order. */
+    int parallel = opt.fork_tests && opt.jobs > 1 && n > 1;
+    if (parallel) {
+        for (int i = 0; i < n; i++)
+            memset(&results[i], 0, sizeof results[i]);
+        run_parallel(sel, results, n, opt.jobs);
+    }
 
-        double t0 = now_secs();
-        if (opt.fork_tests)
-            run_forked(tc, r);
-        else
-            run_inproc(tc, r);
-        r->secs = now_secs() - t0;
+    for (int i = 0; i < n; i++) {
+        test_result_t *r = &results[i];
+
+        if (!parallel) {
+            asmtest_case_t *tc = sel[i];
+            memset(r, 0, sizeof *r);
+            r->suite = tc->suite;
+            r->name = tc->name;
+            double t0 = now_secs();
+            if (opt.fork_tests)
+                run_forked(tc, r);
+            else
+                run_inproc(tc, r);
+            r->secs = now_secs() - t0;
+        }
 
         if (r->outcome == ST_PASS)
             passed++;
@@ -1145,27 +1343,15 @@ int main(int argc, char **argv) {
         if (opt.format_junit)
             continue; /* JUnit is rendered in one pass at the end */
 
-        if (r->outcome == ST_PASS) {
-            printf("%sok%s %d - %s.%s\n", grn, rst, i + 1, r->suite, r->name);
-        } else if (r->outcome == ST_SKIP) {
-            printf("%sok%s %d - %s.%s %s# SKIP %s%s\n", yel, rst, i + 1,
-                   r->suite, r->name, dim, r->msg, rst);
-        } else {
-            printf("%snot ok%s %d - %s.%s\n", red, rst, i + 1, r->suite,
-                   r->name);
-            printf("  %s---%s\n", dim, rst);
-            printf("  at:  %s:%d\n", r->file, r->line);
-            printf("  msg: %s\n", r->msg);
-            printf("  %s...%s\n", dim, rst);
-        }
+        print_tap_result(i + 1, r, &pal);
     }
 
     if (opt.format_junit) {
         render_junit(results, n);
     } else {
-        const char *summary_color = failed ? red : grn;
+        const char *summary_color = failed ? pal.red : pal.grn;
         printf("%s# %d passed, %d failed, %d skipped, %d total%s\n",
-               summary_color, passed, failed, skipped, n, rst);
+               summary_color, passed, failed, skipped, n, pal.rst);
     }
 
     free(results);

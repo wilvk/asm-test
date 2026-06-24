@@ -136,6 +136,18 @@ ord1=$("$POS" --shuffle --seed=123 2>/dev/null | grep '^ok')
 ord2=$("$POS" --shuffle --seed=123 2>/dev/null | grep '^ok')
 if [ "$ord1" = "$ord2" ]; then ok "--shuffle --seed deterministic"; else bad "--shuffle --seed deterministic"; fi
 
+# --jobs=N runs concurrently but keeps output in registration order: the TAP
+# body (ok/not ok lines) must be byte-identical to a serial run.
+serial=$("$POS" 2>/dev/null | grep '^ok')
+par=$("$POS" -j4 2>/dev/null | grep '^ok')
+if [ "$serial" = "$par" ]; then ok "-j4 output matches serial order"; else bad "-j4 output matches serial order"; fi
+# A parallel run still surfaces failures (nonzero exit) with the right diagnostic.
+expect_fail_msg "-j4 still reports failures" "ASSERT_EQ" "$NEG" --jobs=4
+# A crash in one child doesn't sink the run: it's reported and the run completes.
+expect_fail_msg "-j4 contains a crash" "fatal signal" "$NEG" -j4
+# Invalid job counts are rejected with the bad-CLI exit code.
+expect_exit "--jobs=0 exits 2" 2 "$POS" --jobs=0
+
 # --format=junit emits a testsuites root, and a <failure> for a failing case.
 expect_contains "junit root element"  "<testsuites" "$POS" --format=junit
 expect_contains "junit failure element" "<failure"   "$NEG" --filter=neg.eq --format=junit
