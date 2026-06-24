@@ -6,8 +6,8 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 8** (runner robustness & CLI). See
-[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 9–11).
+Currently at **Phase 9** (benchmark mode). See
+[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 10–11).
 
 **Available now:**
 
@@ -50,6 +50,11 @@ Currently at **Phase 8** (runner robustness & CLI). See
 - **Runner CLI:** `--filter=GLOB` (over suite, name, or `suite.name`), `--list`,
   `--shuffle`/`--seed` for order independence, `--timeout=SEC`, and
   `--format=junit` for CI ingestion alongside the default colored TAP.
+- **Benchmark mode** via `BENCH(suite, name) { ... }`: the body is one measured
+  call; the runner auto-calibrates a repeat count and reports min/median/mean
+  cycles per call (`rdtsc` / `cntvct_el0`, via `asmtest_cycle_counter()`). Run
+  with `--bench` (honors `--filter`/`--list`; `--bench-reps=N` pins the count).
+  `BENCH_USE(x)` keeps a pure-C result from being optimized away. See `make bench`.
 - **Portable across x86-64 and AArch64, Linux and macOS:** the same sources
   build on ELF and Mach-O via the `ASM_FUNC` macros in `include/asm.h`; each
   routine and the capture trampoline carry both an x86-64 and an AArch64 body
@@ -69,6 +74,7 @@ Currently at **Phase 8** (runner robustness & CLI). See
 make test                   # build and run the example suites
 make demo-fail              # see how a failing assertion is reported
 make demo-robust            # see a hang and a crash contained & reported
+make bench                  # time the BENCH cases (cycles/call)
 make ASM_SYNTAX=nasm test   # same suites via the NASM backend (x86-64)
 make clean
 ```
@@ -82,6 +88,7 @@ Each suite binary takes a small CLI:
 ./build/test_arith --timeout=5            # per-test timeout (seconds; 0 = off)
 ./build/test_arith --no-fork              # in-process (no per-test isolation)
 ./build/test_arith --format=junit         # JUnit XML instead of TAP, for CI
+./build/test_bench --bench                # time BENCH cases instead of testing
 ```
 
 ## Writing a test

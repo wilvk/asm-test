@@ -2,6 +2,7 @@
 #
 #   make test                    build and run the example suites (green)
 #   make demo-fail               build and run the intentional-failure demo
+#   make bench                   build and run the Phase 9 benchmark demo
 #   make clean                   remove build artifacts
 #   make ASM_SYNTAX=nasm test    use the NASM (Intel-syntax) backend instead
 #
@@ -114,6 +115,16 @@ $(BUILD)/test_robust: $(FRAMEWORK_OBJS) $(BUILD)/robust.o $(BUILD)/test_robust.o
 
 demo-robust: $(BUILD)/test_robust
 	-./$(BUILD)/test_robust --timeout=2
+
+# Phase 9 benchmark demo: time the BENCH cases (cycles/call, min/median over
+# repeated rounds). Auto-calibrates the inner repeat count per benchmark.
+.PHONY: bench
+$(BUILD)/test_bench: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/bench.o \
+                     $(BUILD)/test_bench.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+bench: $(BUILD)/test_bench
+	./$(BUILD)/test_bench --bench
 
 # --- Optional emulator tier (Phase 4; requires libunicorn) -----------------
 # `make emu-test` runs the Unicorn-backed suite. The emulated guest is x86-64

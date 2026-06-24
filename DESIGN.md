@@ -225,10 +225,20 @@ add reach.
   RNG; the seed is printed for reproducibility), `--timeout=SEC` (also
   `ASMTEST_TIMEOUT`), and `--format=junit` (suite-grouped XML for CI ingestion)
   alongside the default colored TAP. Demoed by `make demo-robust`.
-- **Phase 9 — Benchmark mode: _planned._** A `BENCH(suite, name)` form measuring
-  cycles per call via `rdtsc` / `cntvct_el0`, reporting min/median over repeated
-  runs. Assembly is usually written for speed; the capture trampoline already
-  provides the call path.
+- **Phase 9 — Benchmark mode: _done._** A `BENCH(suite, name) { ... }` form whose
+  body is one measured iteration; the runner auto-calibrates an inner repeat
+  count (doubling until a round spans enough of the counter to be resolvable,
+  capped) and times several rounds, reporting **min/median/mean cycles per call**
+  via `rdtsc` (x86-64) / `cntvct_el0` (AArch64), read by the inline
+  `asmtest_cycle_counter()`. Benchmarks register in their own list and run only
+  under `--bench` (so `make test` is unaffected), honoring `--filter` and
+  `--list`; `--bench-reps=N` pins the repeat count for reproducibility. Each runs
+  in-process under the same signal/timeout guard as a test, so a crashing or hung
+  routine is reported as an error rather than taking the process down.
+  `BENCH_USE(x)` funnels a pure-C result through a volatile sink so it is not
+  optimized away (calls into the routine under test need no help). Demoed by
+  `make bench`. On AArch64 the counter is the virtual timer, whose tick is
+  coarser than a core cycle (reported as `ticks`).
 - **Phase 10 — Emulator coverage & tracing: _planned._** Build on the Phase 4
   emulator (both guests already hook `UC_HOOK_MEM_INVALID`): add `UC_HOOK_CODE`
   instruction tracing and basic-block coverage of the routine under test — "did

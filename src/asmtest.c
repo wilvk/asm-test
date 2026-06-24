@@ -62,6 +62,20 @@ void asmtest_register_hook(asmtest_hook_t *h) {
     asmtest_hooks = h;
 }
 
+static asmtest_bench_t *asmtest_bench_head = NULL;
+static asmtest_bench_t *asmtest_bench_tail = NULL;
+
+void asmtest_register_bench(asmtest_bench_t *b) {
+    b->next = NULL;
+    if (asmtest_bench_head == NULL)
+        asmtest_bench_head = b;
+    else
+        asmtest_bench_tail->next = b;
+    asmtest_bench_tail = b;
+}
+
+volatile long asmtest_bench_sink;
+
 /* ------------------------------------------------------------------ */
 /* Failure / skip                                                      */
 /* ------------------------------------------------------------------ */
@@ -731,6 +745,8 @@ typedef struct {
     int format_junit;
     int fork_tests; /* per-test fork isolation (default on) */
     int timeout;    /* seconds; <0 = leave the default in place */
+    int bench;      /* run benchmarks instead of tests */
+    long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
 } options_t;
 
 static void usage(const char *prog) {
@@ -746,6 +762,10 @@ static void usage(const char *prog) {
         "default 10)\n"
         "  --no-fork            run tests in-process (no per-test isolation)\n"
         "  --format=tap|junit   output format (default tap)\n"
+        "  --bench              run registered benchmarks (BENCH) instead of "
+        "tests\n"
+        "  --bench-reps=N       fixed inner reps per round (default: "
+        "auto-calibrate)\n"
         "  -h, --help           show this help\n",
         prog);
 }
@@ -760,12 +780,17 @@ static int opt_prefix(const char *a, const char *pre, const char **rest) {
     return 0;
 }
 
-/* A test matches the filter if the glob matches its suite, name, or id. */
-static int test_matches(const asmtest_case_t *tc, const char *glob) {
+/* A suite/name pair matches the filter if the glob matches the suite, the
+ * name, or the "suite.name" id. */
+static int id_matches(const char *suite, const char *name, const char *glob) {
     char id[256];
-    snprintf(id, sizeof id, "%s.%s", tc->suite, tc->name);
-    return fnmatch(glob, id, 0) == 0 || fnmatch(glob, tc->suite, 0) == 0 ||
-           fnmatch(glob, tc->name, 0) == 0;
+    snprintf(id, sizeof id, "%s.%s", suite, name);
+    return fnmatch(glob, id, 0) == 0 || fnmatch(glob, suite, 0) == 0 ||
+           fnmatch(glob, name, 0) == 0;
+}
+
+static int test_matches(const asmtest_case_t *tc, const char *glob) {
+    return id_matches(tc->suite, tc->name, glob);
 }
 
 static void xml_print_escaped(const char *s) {
@@ -848,6 +873,118 @@ static double now_secs(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+/* ------------------------------------------------------------------ */
+/* Benchmark mode (Phase 9)                                            */
+/* ------------------------------------------------------------------ */
+
+#if defined(__x86_64__)
+#define ASMTEST_BENCH_UNIT "cyc" /* rdtsc reference cycles */
+#else
+#define ASMTEST_BENCH_UNIT "ticks" /* cntvct_el0 virtual-timer ticks */
+#endif
+
+/* Calibration/measurement constants. Reps are auto-grown until one round spans
+ * at least BENCH_TARGET ticks (so the counter's resolution doesn't dominate),
+ * capped at BENCH_REPS_CAP; then BENCH_ROUNDS rounds are measured. */
+enum {
+    BENCH_TARGET = 50000,    /* per-round counter delta to calibrate toward */
+    BENCH_REPS_CAP = 5000000, /* never loop more than this per round         */
+    BENCH_ROUNDS = 11         /* measured rounds (odd, for a clean median)   */
+};
+
+typedef struct {
+    double min, median, mean;
+    long reps;
+} bench_stats_t;
+
+/* Time `reps` back-to-back calls of body; returns the counter delta. The
+ * indirect call cannot be elided, so the loop is not optimized away. */
+static uint64_t bench_time_reps(void (*body)(void), long reps) {
+    uint64_t t0 = asmtest_cycle_counter();
+    for (long i = 0; i < reps; i++)
+        body();
+    uint64_t t1 = asmtest_cycle_counter();
+    return t1 - t0;
+}
+
+/* Grow reps (doubling) until a round spans BENCH_TARGET ticks or hits the cap. */
+static long bench_calibrate(void (*body)(void)) {
+    long reps = 1;
+    while (reps < BENCH_REPS_CAP) {
+        if (bench_time_reps(body, reps) >= (uint64_t)BENCH_TARGET)
+            break;
+        reps *= 2;
+    }
+    return reps > BENCH_REPS_CAP ? BENCH_REPS_CAP : reps;
+}
+
+static int cmp_double(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+/* Measure `reps` calls per round across BENCH_ROUNDS rounds (plus one discarded
+ * warmup), reducing to min/median/mean cycles per call. */
+static void bench_measure(void (*body)(void), long reps, bench_stats_t *st) {
+    double per[BENCH_ROUNDS];
+    body(); /* warmup: prime caches/branch predictors (and fault early) */
+    for (int r = 0; r < BENCH_ROUNDS; r++)
+        per[r] = (double)bench_time_reps(body, reps) / (double)reps;
+    qsort(per, BENCH_ROUNDS, sizeof per[0], cmp_double);
+    double sum = 0;
+    for (int r = 0; r < BENCH_ROUNDS; r++)
+        sum += per[r];
+    st->min = per[0];
+    st->median = per[BENCH_ROUNDS / 2];
+    st->mean = sum / BENCH_ROUNDS;
+    st->reps = reps;
+}
+
+/* Run the selected benchmarks, printing an aligned table of cycles per call.
+ * Each runs in-process under the same signal/timeout guard as a test, so a
+ * crashing or hung routine is reported as an error rather than taking the
+ * process down. forced_reps > 0 overrides auto-calibration. */
+static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
+                           int use_color) {
+    const char *dim = use_color ? "\033[2m" : "";
+    const char *red = use_color ? "\033[31m" : "";
+    const char *rst = use_color ? "\033[0m" : "";
+
+    int width = 1;
+    for (int i = 0; i < n; i++) {
+        int w = (int)(strlen(sel[i]->suite) + strlen(sel[i]->name) + 1);
+        if (w > width)
+            width = w;
+    }
+
+    printf("%s# benchmarks — %s per call, min/median over %d rounds%s\n", dim,
+           ASMTEST_BENCH_UNIT, BENCH_ROUNDS, rst);
+
+    for (int i = 0; i < n; i++) {
+        asmtest_bench_t *b = sel[i];
+        char id[256];
+        snprintf(id, sizeof id, "%s.%s", b->suite, b->name);
+
+        asmtest_in_test = 1;
+        if (asmtest_timeout_secs > 0)
+            alarm((unsigned)asmtest_timeout_secs);
+        if (sigsetjmp(asmtest_jmp, 1) != 0) {
+            alarm(0);
+            asmtest_in_test = 0;
+            printf("  %-*s  %sERROR: %s%s\n", width, id, red, asmtest_msg, rst);
+            continue;
+        }
+        long reps = forced_reps > 0 ? forced_reps : bench_calibrate(b->fn);
+        bench_stats_t st;
+        bench_measure(b->fn, reps, &st);
+        alarm(0);
+        asmtest_in_test = 0;
+
+        printf("  %-*s  min=%9.2f  median=%9.2f  mean=%9.2f  %s(reps=%ld)%s\n",
+               width, id, st.min, st.median, st.mean, dim, st.reps, rst);
+    }
+}
+
 int main(int argc, char **argv) {
     options_t opt;
     memset(&opt, 0, sizeof opt);
@@ -863,6 +1000,11 @@ int main(int argc, char **argv) {
             opt.shuffle = 1;
         } else if (strcmp(a, "--no-fork") == 0) {
             opt.fork_tests = 0;
+        } else if (strcmp(a, "--bench") == 0) {
+            opt.bench = 1;
+        } else if (opt_prefix(a, "--bench-reps=", &v)) {
+            opt.bench = 1;
+            opt.bench_reps = strtol(v, NULL, 0);
         } else if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
             usage(argv[0]);
             return 0;
@@ -906,6 +1048,28 @@ int main(int argc, char **argv) {
     }
 
     install_handlers();
+
+    /* Benchmark mode: collect, optionally list, then time the BENCH cases. */
+    if (opt.bench) {
+        int btotal = 0;
+        for (asmtest_bench_t *b = asmtest_bench_head; b != NULL; b = b->next)
+            btotal++;
+        asmtest_bench_t **bsel = (asmtest_bench_t **)malloc(
+            (size_t)(btotal > 0 ? btotal : 1) * sizeof *bsel);
+        int bn = 0;
+        for (asmtest_bench_t *b = asmtest_bench_head; b != NULL; b = b->next) {
+            if (opt.filter == NULL || id_matches(b->suite, b->name, opt.filter))
+                bsel[bn++] = b;
+        }
+        if (opt.do_list) {
+            for (int i = 0; i < bn; i++)
+                printf("%s.%s\n", bsel[i]->suite, bsel[i]->name);
+        } else {
+            run_benchmarks(bsel, bn, opt.bench_reps, isatty(STDOUT_FILENO));
+        }
+        free(bsel);
+        return 0;
+    }
 
     /* Collect the registered tests that pass the filter into an array. */
     int total = 0;

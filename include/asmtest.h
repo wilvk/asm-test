@@ -35,6 +35,16 @@ typedef struct asmtest_hook {
     struct asmtest_hook *next;
 } asmtest_hook_t;
 
+/* A benchmark case (Phase 9): like a test, but its body is one measured
+ * iteration and the runner times many of them. Registered separately from
+ * tests and only run under --bench. */
+typedef struct asmtest_bench {
+    const char *suite;
+    const char *name;
+    void (*fn)(void);
+    struct asmtest_bench *next;
+} asmtest_bench_t;
+
 /* ------------------------------------------------------------------ */
 /* Captured CPU state (filled by asm_call_capture in capture.s)        */
 /*                                                                     */
@@ -232,6 +242,28 @@ void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
 
 void asmtest_register(asmtest_case_t *tc);
 void asmtest_register_hook(asmtest_hook_t *h);
+void asmtest_register_bench(asmtest_bench_t *b);
+
+/* A volatile sink: route a computed value through this so the optimizer cannot
+ * discard a benchmark body whose result is otherwise unused. Calls to asm
+ * routines under test already can't be elided, so this is only needed when a
+ * benchmark body does pure-C work. */
+extern volatile long asmtest_bench_sink;
+
+/* Read the platform cycle/tick counter used for benchmarking: rdtsc on x86-64
+ * (reference cycles) and cntvct_el0 on AArch64 (the virtual timer, whose tick
+ * is coarser than a core cycle). Exposed for custom timing in a BENCH body. */
+static inline uint64_t asmtest_cycle_counter(void) {
+#if defined(__x86_64__)
+    uint32_t lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+#elif defined(__aarch64__)
+    uint64_t v;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#endif
+}
 void asmtest_fail(const char *file, int line, const char *fmt, ...)
     __attribute__((noreturn, format(printf, 3, 4)));
 void asmtest_skip(const char *reason) __attribute__((noreturn));
@@ -303,6 +335,24 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
     static void asmtest_teardown_##suite_(void)
 
 #define SKIP(reason) asmtest_skip(reason)
+
+/* BENCH(suite, name) { ... } — define + auto-register a benchmark. The body is
+ * one measured iteration; the runner auto-calibrates an inner repeat count and
+ * times several rounds, reporting min/median cycles per call. Benchmarks run
+ * only under `--bench` (so a normal `make test` is unaffected). Funnel any
+ * pure-C result through BENCH_USE() so it is not optimized away; calls into the
+ * asm routine under test need no such help. */
+#define BENCH(suite_, name_)                                                  \
+    static void asmtest_benchfn_##suite_##_##name_(void);                     \
+    static asmtest_bench_t asmtest_bc_##suite_##_##name_ = {                  \
+        #suite_, #name_, asmtest_benchfn_##suite_##_##name_, 0};              \
+    __attribute__((constructor)) static void                                  \
+    asmtest_regbench_##suite_##_##name_(void) {                               \
+        asmtest_register_bench(&asmtest_bc_##suite_##_##name_);               \
+    }                                                                         \
+    static void asmtest_benchfn_##suite_##_##name_(void)
+
+#define BENCH_USE(x) (asmtest_bench_sink = (long)(x))
 
 /* ------------------------------------------------------------------ */
 /* Capture-call convenience: ASM_CALLn(out, fn, args...)               */
