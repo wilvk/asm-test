@@ -67,6 +67,9 @@ Currently at **Phase 9** (benchmark mode). See
   registers/memory, single-step mid-routine, read back the **full** register
   file, and catch invalid memory accesses as precise faults — beyond what
   ABI-boundary inspection can see. ARM64 routines emulate even on an x86-64 host.
+  `emu_call_traced` also records an **instruction trace and basic-block
+  coverage**; accumulating coverage across inputs answers "did the tests
+  exercise every branch?".
 
 ## Quick start
 

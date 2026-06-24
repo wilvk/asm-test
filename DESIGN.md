@@ -239,10 +239,21 @@ add reach.
   optimized away (calls into the routine under test need no help). Demoed by
   `make bench`. On AArch64 the counter is the virtual timer, whose tick is
   coarser than a core cycle (reported as `ticks`).
-- **Phase 10 — Emulator coverage & tracing: _planned._** Build on the Phase 4
-  emulator (both guests already hook `UC_HOOK_MEM_INVALID`): add `UC_HOOK_CODE`
-  instruction tracing and basic-block coverage of the routine under test — "did
-  the tests exercise every branch?" is uniquely answerable inside the emulator.
+- **Phase 10 — Emulator coverage & tracing: _done._** Building on the Phase 4
+  emulator (both guests already hook `UC_HOOK_MEM_INVALID`), `emu_call_traced` /
+  `emu_arm64_call_traced` take an opt-in `emu_trace_t` and add a `UC_HOOK_CODE`
+  instruction trace (each executed instruction's byte offset from the routine
+  entry, in order) and `UC_HOOK_BLOCK` basic-block coverage (the *distinct*
+  block-start offsets, de-duplicated) into caller-owned buffers — either may be
+  NULL to skip that dimension. Tracing *appends*, so re-running with the same
+  struct unions coverage across inputs: the example `classify` routine has three
+  return paths no single input walks, and the test asserts the union of blocks
+  across `{-5, 0, +7}` exceeds any one input's — "did the tests exercise every
+  branch?" answered inside the emulator. `blocks_total` counts every block entry
+  (a loop re-enters its body block each pass) while `blocks_len` stays the
+  distinct count; `insns_total` counts past a short buffer and sets `truncated`.
+  `emu_call` / `emu_arm64_call` remain as the no-trace wrappers. Covered by
+  `make emu-test`.
 - **Phase 11 — Breadth: _planned._** Additional calling conventions and targets
   once the above depth lands: the Windows x64 ABI (shadow space, distinct
   callee-saved set) and RISC-V / ARM32 emulator guests.

@@ -137,7 +137,8 @@ $(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
-                   $(BUILD)/flags.o $(BUILD)/emu.o $(BUILD)/test_emu.o
+                   $(BUILD)/flags.o $(BUILD)/branch.o $(BUILD)/emu.o \
+                   $(BUILD)/test_emu.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 .PHONY: emu-test

@@ -65,6 +65,40 @@ bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out);
 
 /* ------------------------------------------------------------------ */
+/* Execution trace & basic-block coverage (Phase 10)                   */
+/*                                                                     */
+/* Tracing is opt-in and APPENDS: zero the struct, point insns/blocks  */
+/* at caller-owned buffers (either may stay NULL to skip that          */
+/* dimension), then run via emu_call_traced. Re-running with the same  */
+/* struct accumulates, so the union of basic blocks across many inputs */
+/* answers "did the tests reach every block?". Addresses are recorded  */
+/* as byte offsets from the start of the routine (offset 0 = entry).   */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    /* Ordered instruction trace (UC_HOOK_CODE): each executed instruction's
+     * offset, in execution order, up to insns_cap entries. */
+    uint64_t *insns;
+    size_t insns_cap;
+    size_t insns_len;      /* entries written to insns[] (<= insns_cap)      */
+    uint64_t insns_total;  /* instructions executed (counts past insns_cap)  */
+
+    /* Basic-block coverage (UC_HOOK_BLOCK): the DISTINCT block-start offsets
+     * entered, de-duplicated, up to blocks_cap entries. */
+    uint64_t *blocks;
+    size_t blocks_cap;
+    size_t blocks_len;     /* distinct blocks recorded (<= blocks_cap)       */
+    uint64_t blocks_total; /* block entries; a loop counts each pass         */
+
+    bool truncated;        /* a buffer filled and at least one entry dropped */
+} emu_trace_t;
+
+/* Like emu_call, but also records an execution trace / coverage into *trace
+ * (which may be NULL to behave exactly like emu_call). See emu_trace_t. */
+bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
+                     const long *args, int nargs, uint64_t max_insns,
+                     emu_result_t *out, emu_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
 /* AArch64 guest (emulated regardless of host architecture)            */
 /*                                                                     */
 /* Cross-arch emulation can't copy bytes from a host-native routine, so */
@@ -99,5 +133,12 @@ bool emu_arm64_read(emu_arm64_t *e, uint64_t addr, void *data, size_t len);
 bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
                     const long *args, int nargs, uint64_t max_insns,
                     emu_arm64_result_t *out);
+
+/* Like emu_arm64_call, but also records a trace / coverage into *trace (which
+ * may be NULL). Offsets are byte offsets from the start of the code; AArch64
+ * instructions are 4 bytes, so they fall on 0, 4, 8, ... See emu_trace_t. */
+bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_arm64_result_t *out, emu_trace_t *trace);
 
 #endif /* ASMTEST_EMU_H */

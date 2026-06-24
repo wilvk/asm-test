@@ -54,6 +54,65 @@ static bool on_invalid_mem(uc_engine *uc, uc_mem_type type, uint64_t address,
     return false; /* do not retry: leave the access invalid and stop */
 }
 
+/* Tracing context: where to record, and the base to subtract for offsets.
+ * Shared verbatim by the x86-64 and AArch64 guests (offsets are arch-neutral). */
+typedef struct {
+    emu_trace_t *t;
+    uint64_t base;
+} trace_ctx_t;
+
+/* UC_HOOK_CODE: fires once per executed instruction — the ordered trace. */
+static void on_code(uc_engine *uc, uint64_t address, uint32_t size,
+                    void *user) {
+    (void)uc;
+    (void)size;
+    trace_ctx_t *c = (trace_ctx_t *)user;
+    emu_trace_t *t = c->t;
+    uint64_t off = address - c->base;
+    if (t->insns != NULL) {
+        if (t->insns_len < t->insns_cap)
+            t->insns[t->insns_len++] = off;
+        else
+            t->truncated = true;
+    }
+    t->insns_total++;
+}
+
+/* UC_HOOK_BLOCK: fires at each basic-block entry — the coverage set. blocks[]
+ * holds the DISTINCT starts (loops re-enter the same block; counted only in
+ * blocks_total). The dedup scan is linear, fine for the small block counts of
+ * a routine under test. */
+static void on_block(uc_engine *uc, uint64_t address, uint32_t size,
+                     void *user) {
+    (void)uc;
+    (void)size;
+    trace_ctx_t *c = (trace_ctx_t *)user;
+    emu_trace_t *t = c->t;
+    uint64_t off = address - c->base;
+    t->blocks_total++;
+    if (t->blocks != NULL) {
+        for (size_t i = 0; i < t->blocks_len; i++)
+            if (t->blocks[i] == off)
+                return; /* already covered */
+        if (t->blocks_len < t->blocks_cap)
+            t->blocks[t->blocks_len++] = off;
+        else
+            t->truncated = true;
+    }
+}
+
+/* Add the trace hooks if tracing is requested; returns the two hook handles via
+ * out-params (0 when tracing is off, so deleting them is harmless). */
+static void add_trace_hooks(uc_engine *uc, trace_ctx_t *tc, uc_hook *hcode,
+                            uc_hook *hblock) {
+    *hcode = 0;
+    *hblock = 0;
+    if (tc->t == NULL)
+        return;
+    uc_hook_add(uc, hcode, UC_HOOK_CODE, (void *)on_code, tc, 1, 0);
+    uc_hook_add(uc, hblock, UC_HOOK_BLOCK, (void *)on_block, tc, 1, 0);
+}
+
 emu_t *emu_open(void) {
     emu_t *e = (emu_t *)calloc(1, sizeof *e);
     if (e == NULL)
@@ -114,8 +173,9 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
     uc_reg_read(uc, UC_X86_REG_EFLAGS, &r->rflags);
 }
 
-bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
-              int nargs, uint64_t max_insns, emu_result_t *out) {
+bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
+                     const long *args, int nargs, uint64_t max_insns,
+                     emu_result_t *out, emu_trace_t *trace) {
     static const int arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
                                     UC_X86_REG_RDX, UC_X86_REG_RCX,
                                     UC_X86_REG_R8,  UC_X86_REG_R9};
@@ -143,10 +203,17 @@ bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
                 0);
+    trace_ctx_t tc = {trace, EMU_CODE_BASE};
+    uc_hook hcode, hblock;
+    add_trace_hooks(uc, &tc, &hcode, &hblock);
 
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
     uc_hook_del(uc, hh);
+    if (trace != NULL) {
+        uc_hook_del(uc, hcode);
+        uc_hook_del(uc, hblock);
+    }
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -155,6 +222,11 @@ bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
     read_all_regs(uc, &out->regs);
     out->ok = (err == UC_ERR_OK) && !fr.faulted;
     return out->ok;
+}
+
+bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
+              int nargs, uint64_t max_insns, emu_result_t *out) {
+    return emu_call_traced(e, fn, code_len, args, nargs, max_insns, out, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,9 +287,9 @@ static void read_all_regs_arm64(uc_engine *uc, emu_arm64_regs_t *r) {
     uc_reg_read(uc, UC_ARM64_REG_NZCV, &r->nzcv);
 }
 
-bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
-                    const long *args, int nargs, uint64_t max_insns,
-                    emu_arm64_result_t *out) {
+bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_arm64_result_t *out, emu_trace_t *trace) {
     static const int arg_regs[6] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
                                     UC_ARM64_REG_X2, UC_ARM64_REG_X3,
                                     UC_ARM64_REG_X4, UC_ARM64_REG_X5};
@@ -243,10 +315,17 @@ bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
                 0);
+    trace_ctx_t tc = {trace, EMU_CODE_BASE};
+    uc_hook hcode, hblock;
+    add_trace_hooks(uc, &tc, &hcode, &hblock);
 
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
     uc_hook_del(uc, hh);
+    if (trace != NULL) {
+        uc_hook_del(uc, hcode);
+        uc_hook_del(uc, hblock);
+    }
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -255,4 +334,11 @@ bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
     read_all_regs_arm64(uc, &out->regs);
     out->ok = (err == UC_ERR_OK) && !fr.faulted;
     return out->ok;
+}
+
+bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
+                    const long *args, int nargs, uint64_t max_insns,
+                    emu_arm64_result_t *out) {
+    return emu_arm64_call_traced(e, code, code_len, args, nargs, max_insns, out,
+                                 NULL);
 }
