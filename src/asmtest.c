@@ -460,6 +460,12 @@ long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi) {
     return lo + (long)(asmtest_rng_u64(rng) % span);
 }
 
+/* asmtest_seed + the differential helpers + the POSIX signal-based crash/timeout
+ * handlers below drive the System V trampoline / sigaction; the Win64 tier uses
+ * the asm_call_capture*_win64 entry points and the platform_win32.c test
+ * facility, so they are gated out of the Win64 runner build. */
+#if !defined(_WIN32)
+
 /* The seed in effect for this run: ASMTEST_SEED (decimal or 0x-hex) if set,
  * otherwise a fixed default so failures reproduce. Resolved once and cached. */
 static uint64_t asmtest_seed(void) {
@@ -473,12 +479,6 @@ static uint64_t asmtest_seed(void) {
     }
     return seed;
 }
-
-/* The differential helpers and the POSIX signal-based crash/timeout handlers
- * below drive the System V trampoline / sigaction; the Win64 tier uses the
- * asm_call_capture*_win64 entry points and the platform_win32.c test facility,
- * so they are gated out of the Win64 runner build. */
-#if !defined(_WIN32)
 
 void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
@@ -630,6 +630,7 @@ static void run_hooks(const char *suite, int kind) {
  * A per-test alarm() converts an infinite loop into a SIGALRM the handler turns
  * into a timeout failure (works even in-process). On return the failure/skip
  * message lives in asmtest_msg / asmtest_loc_*. */
+#if !defined(_WIN32)
 static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 1;
     if (asmtest_timeout_secs > 0)
@@ -663,6 +664,49 @@ static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 0;
     return outcome;
 }
+#else
+/* Win64 in-process run_one: the test facility arms a vectored exception handler
+ * (crash) and a watchdog (timeout); a crash, timeout, or assertion failure all
+ * land via __builtin_longjmp at the single recovery point with the reason set. */
+static int run_one(asmtest_case_t *tc) {
+    asmtest_in_test = 1;
+    unsigned timeout_ms =
+        asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u : 0;
+    asmtest_win32_test_begin(timeout_ms);
+
+    int outcome;
+    if (__builtin_setjmp(asmtest_win32_test_recover) == 0) {
+        run_hooks(tc->suite, 0); /* setup */
+        tc->fn();                /* body  */
+        run_hooks(tc->suite, 1); /* teardown */
+        outcome = ST_PASS;
+    } else {
+        int reason = asmtest_win32_test_reason;
+        if (reason == JMP_SKIP) {
+            outcome = ST_SKIP;
+        } else {
+            outcome = ST_FAIL;
+            if (reason == ASMTEST_WIN32_REASON_CRASH) {
+                snprintf(asmtest_msg, sizeof asmtest_msg,
+                         "caught fatal exception 0x%lx",
+                         asmtest_win32_test_fault.code);
+                asmtest_loc_file = "(exception)";
+                asmtest_loc_line = 0;
+            } else if (reason == ASMTEST_WIN32_REASON_TIMEOUT) {
+                snprintf(asmtest_msg, sizeof asmtest_msg, "timed out after %d s",
+                         asmtest_timeout_secs);
+                asmtest_loc_file = "(timeout)";
+                asmtest_loc_line = 0;
+            }
+            /* JMP_FAIL: message already set by asmtest_fail */
+        }
+    }
+
+    asmtest_win32_test_end();
+    asmtest_in_test = 0;
+    return outcome;
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Per-test isolation (fork) and result plumbing                       */
@@ -704,6 +748,7 @@ static void apply_wire(test_result_t *res, const wire_result_t *w) {
     snprintf(res->msg, sizeof res->msg, "%s", w->msg);
 }
 
+#if !defined(_WIN32) /* fork/pipe result plumbing — POSIX isolation path */
 static int write_full(int fd, const void *buf, size_t n) {
     const char *p = (const char *)buf;
     while (n) {
@@ -735,14 +780,19 @@ static size_t read_full(int fd, void *buf, size_t n) {
     }
     return got;
 }
+#endif /* !_WIN32 (fork/pipe plumbing) */
 
-/* Run in this process. Crashes that escape the signal handler (e.g. SIGABRT
- * from heap corruption) take down the whole runner — that's what --fork avoids. */
+/* Run in this process. On POSIX, crashes that escape the signal handler (e.g.
+ * SIGABRT from heap corruption) take down the whole runner — that's what --fork
+ * avoids; on the Win64 tier this is the only path and the test facility's
+ * vectored handler contains the common faults. */
 static void run_inproc(asmtest_case_t *tc, test_result_t *res) {
     wire_result_t w;
     capture_wire(&w, run_one(tc));
     apply_wire(res, &w);
 }
+
+#if !defined(_WIN32) /* fork-based isolation + the parallel pool — POSIX only */
 
 /* Turn a finished child's pipe payload (`got` bytes of `w`) and wait `status`
  * into a result. A full wire record wins; otherwise the child died before
@@ -939,6 +989,7 @@ static void run_parallel(asmtest_case_t **sel, test_result_t *results, int n,
     free(pfds);
     free(slots);
 }
+#endif /* !_WIN32 (fork isolation + parallel pool) */
 
 /* ANSI color escapes (empty strings when not writing to a TTY). */
 typedef struct {
@@ -1102,11 +1153,20 @@ static void render_junit(const test_result_t *results, int n) {
     free(done);
 }
 
+#if defined(_WIN32)
+static double now_secs(void) {
+    LARGE_INTEGER freq, ctr;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&ctr);
+    return (double)ctr.QuadPart / (double)freq.QuadPart;
+}
+#else
 static double now_secs(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Benchmark mode (Phase 9)                                            */
@@ -1131,6 +1191,10 @@ typedef struct {
     double min, median, mean;
     long reps;
 } bench_stats_t;
+
+/* Benchmarks use the POSIX alarm()/sigsetjmp guard for crash/timeout handling;
+ * not ported to the Win64 tier (a stub below reports unsupported). */
+#if !defined(_WIN32)
 
 /* Time `reps` back-to-back calls of body; returns the counter delta. The
  * indirect call cannot be elided, so the loop is not optimized away. */
@@ -1220,6 +1284,19 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
     }
 }
 
+#else /* _WIN32 */
+
+static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
+                           int use_color) {
+    (void)sel;
+    (void)n;
+    (void)forced_reps;
+    (void)use_color;
+    printf("# benchmarks are not supported on the Win64 tier\n");
+}
+
+#endif /* !_WIN32 (benchmarks) */
+
 /* The framework provides main(). Define ASMTEST_NO_MAIN to omit it and supply
  * your own (embedding the runtime, or — as the conformance corpus does — reusing
  * only the capture/verdict/emulator entry points with a separate driver). */
@@ -1230,6 +1307,11 @@ int main(int argc, char **argv) {
     opt.fork_tests = 1;
     opt.jobs = 1;
     opt.timeout = -1;
+#if defined(_WIN32)
+    /* The Win64 tier runs in-process: crash containment and timeout come from the
+     * per-test facility (vectored handler + watchdog), not fork. */
+    opt.fork_tests = 0;
+#endif
 
     for (int ai = 1; ai < argc; ai++) {
         const char *a = argv[ai];
@@ -1321,7 +1403,7 @@ int main(int argc, char **argv) {
             for (int i = 0; i < bn; i++)
                 printf("%s.%s\n", bsel[i]->suite, bsel[i]->name);
         } else {
-            run_benchmarks(bsel, bn, opt.bench_reps, isatty(STDOUT_FILENO));
+            run_benchmarks(bsel, bn, opt.bench_reps, ASMTEST_ISATTY());
         }
         free(bsel);
         return 0;
@@ -1349,7 +1431,7 @@ int main(int argc, char **argv) {
     if (opt.shuffle) {
         uint64_t seed = opt.has_seed
                             ? opt.seed
-                            : ((uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32));
+                            : ((uint64_t)time(NULL) ^ ((uint64_t)ASMTEST_GETPID() << 32));
         asmtest_rng_t rng = {seed};
         for (int i = n - 1; i > 0; i--) { /* Fisher-Yates */
             int j = (int)(asmtest_rng_u64(&rng) % (uint64_t)(i + 1));
@@ -1361,7 +1443,7 @@ int main(int argc, char **argv) {
             printf("# shuffle seed=0x%llx\n", (unsigned long long)seed);
     }
 
-    int use_color = !opt.format_junit && isatty(STDOUT_FILENO);
+    int use_color = !opt.format_junit && ASMTEST_ISATTY();
     tap_palette_t pal = {
         .grn = use_color ? "\033[32m" : "",
         .red = use_color ? "\033[31m" : "",
@@ -1384,11 +1466,13 @@ int main(int argc, char **argv) {
      * In both cases results[] is filled in registration order; parallel renders
      * after the run so output stays deterministic regardless of finish order. */
     int parallel = opt.fork_tests && opt.jobs > 1 && n > 1;
+#if !defined(_WIN32)
     if (parallel) {
         for (int i = 0; i < n; i++)
             memset(&results[i], 0, sizeof results[i]);
         run_parallel(sel, results, n, opt.jobs);
     }
+#endif
 
     for (int i = 0; i < n; i++) {
         test_result_t *r = &results[i];
@@ -1399,9 +1483,11 @@ int main(int argc, char **argv) {
             r->suite = tc->suite;
             r->name = tc->name;
             double t0 = now_secs();
+#if !defined(_WIN32)
             if (opt.fork_tests)
                 run_forked(tc, r);
             else
+#endif
                 run_inproc(tc, r);
             r->secs = now_secs() - t0;
         }

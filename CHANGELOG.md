@@ -39,10 +39,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MinGW's missing `fnmatch`. New `make win64-{guard,isolate,pool,filter,seh}-test`
   targets exercise each under Wine and join `make win64-check` / the CI `win64`
   job. A thin platform seam (`src/platform.h`, `ASMTEST_FNMATCH`) wires the
-  `--filter` and guard-page paths into `src/asmtest.c` with no POSIX regression;
-  the remaining execution-model re-route (a Win32 `run_one`, the `fork`→re-exec
-  isolation/pool, `main()` dispatch) is in progress, so the capture suite still
-  runs `--no-fork` for now. See [docs/win64.md](docs/win64.md).
+  `--filter` and guard-page paths into `src/asmtest.c` with no POSIX regression.
+  The runner itself is then built for Win64: a Win32 `run_one` (the per-test
+  facility's vectored handler + watchdog, mapping the recovery reason to
+  fail/skip/crash/timeout), `main()` running `--no-fork` with the fork/pipe/poll
+  isolation, parallel pool, signal handlers, and SysV-trampoline helpers gated to
+  POSIX. `make win64-runner-test` builds `src/asmtest.c` with MinGW and runs a real
+  `TEST()` suite (`tests/win64/suite_win64.c`) under Wine: the runner discovers and
+  runs the suite, asserts real Win64 captures, and contains a crashing and a
+  hanging test as reported failures while surviving. Still POSIX-only: a
+  forked/`-jN` mode on Win64 and benchmarks. See [docs/win64.md](docs/win64.md).
 
 - **Packaging scaffolding for all ten bindings.** Each binding now has a
   publish-ready registry manifest and a `make <lang>-package` target that

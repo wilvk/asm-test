@@ -555,11 +555,41 @@ win64-seh-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_seh_win64.exe
 	$(WINE) $(WIN64_BUILD)/test_seh_win64.exe
 
+# Phase 4 capstone: the framework runner (src/asmtest.c) itself built for Win64
+# and run under Wine. A real TEST() suite is discovered and run in-process; the
+# runner's in-process facility contains a crashing and a hanging test as reported
+# failures while surviving. Verifies the integrated runner end to end.
+.PHONY: win64-runner-test
+win64-runner-test: | $(WIN64_BUILD)
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ src/capture_win64.asm \
+	  -o $(WIN64_BUILD)/capture_win64.obj
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ tests/win64/routines_win64.asm \
+	  -o $(WIN64_BUILD)/routines_win64.obj
+	$(WIN64_CC) -O2 -Wall -Iinclude -Isrc -DASMTEST_ABI_WIN64 \
+	  -D__USE_MINGW_ANSI_STDIO=1 \
+	  src/asmtest.c src/platform_win32.c src/glob_match.c \
+	  tests/win64/suite_win64.c \
+	  $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj \
+	  -o $(WIN64_BUILD)/suite_win64.exe
+	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --timeout 3 \
+	  > $(WIN64_BUILD)/runner.out 2>&1 || true
+	@cat $(WIN64_BUILD)/runner.out
+	@grep -qE "^ok [0-9]+ - win64.ret_arg0" $(WIN64_BUILD)/runner.out
+	@grep -qE "^ok [0-9]+ - win64.detects_clobber" $(WIN64_BUILD)/runner.out
+	@grep -qE "^ok [0-9]+ - win64.fp_preserved" $(WIN64_BUILD)/runner.out
+	@grep -qE "^not ok [0-9]+ - win64.crash_contained" $(WIN64_BUILD)/runner.out
+	@grep -q "caught fatal exception" $(WIN64_BUILD)/runner.out
+	@grep -qE "^not ok [0-9]+ - win64.hang_timed_out" $(WIN64_BUILD)/runner.out
+	@grep -q "timed out" $(WIN64_BUILD)/runner.out
+	@grep -qE "[0-9]+ passed, [0-9]+ failed" $(WIN64_BUILD)/runner.out
+	@echo "win64 runner: discovered + ran + asserted + contained crash & timeout"
+
 # What the asmtest-win64 image runs: substrate smoke + capture + the Phase 4
-# runner-port slices (guard pages, isolation, parallel pool, --filter, in-proc SEH).
+# runner-port slices (guard pages, isolation, pool, --filter, SEH) + the
+# integrated runner itself.
 .PHONY: win64-check
 win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
-             win64-pool-test win64-filter-test win64-seh-test
+             win64-pool-test win64-filter-test win64-seh-test win64-runner-test
 
 # Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.

@@ -123,11 +123,20 @@ ones:
 runner: `src/asmtest.c` routes `--filter` through an `ASMTEST_FNMATCH` shim
 (`fnmatch` on POSIX, `asmtest_glob_match` on Win32) and gates its guard-page
 allocator under `!defined(_WIN32)`, with **no POSIX regression** — the library
-and suites build and run identically on the host. The remaining work is the
-execution-model re-route — a Win32 `run_one`, the `fork`→re-exec isolation/pool,
-`main()` dispatch, and a Win64 example suite on top of the seam — after which the
-runner binary itself does isolation/timeout/containment for the Win64 tier and
-the suite no longer needs `--no-fork`.
+and suites build and run identically on the host.
+
+The execution-model re-route is **done**: `src/asmtest.c` now builds with MinGW and
+runs as the Win64 runner itself. A Win32 `run_one` wraps each test body in the
+per-test facility (vectored handler + watchdog) and maps the recovery reason to
+fail/skip/crash/timeout; `main()` runs `--no-fork`, with the fork/pipe/poll
+isolation, the parallel pool, the POSIX signal handlers, and the SysV
+trampoline-driven helpers all gated to POSIX. `tests/win64/suite_win64.c` is a real
+`TEST()` suite; `make win64-runner-test` (in `win64-check` / the CI `win64` job)
+builds it with MinGW and runs it under Wine, where the runner discovers and runs
+the suite, asserts real Win64 captures, and **contains a crashing and a hanging
+test as reported failures while surviving**. Still on the POSIX-only side: a
+forked/`-jN` execution mode on Win64 (the isolation primitives exist and are
+tested, but the runner does not yet re-exec per test) and benchmarks.
 
 ## Caveats
 

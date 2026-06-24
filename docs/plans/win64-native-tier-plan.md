@@ -274,7 +274,7 @@ remain as scoped, for when that demand arrives.
 
 ---
 
-## Phase 4 — Win32 runner port *(in progress; past the gate by request)*
+## Phase 4 — Win32 runner port *(done; past the gate by request)*
 
 **Goal.** Bring the framework's isolation guarantees to the Win64 tier. `src/asmtest.c`
 leans on POSIX primitives that don't exist under a Win32 personality; port each to
@@ -357,12 +357,40 @@ itself builds and runs for the Win64 target.
   signal handlers are gated out of the Win64 build. **No POSIX regression** —
   library + suites build and run identically.
 
-The remaining integration is the execution-model re-route that consumes the above:
-a Win32 `run_one` (wrap the body in `asmtest_win32_test_begin/end`, map the
-recovery `reason` to crash/timeout/skip/fail), the per-test isolation/pool
-re-routed from `fork`+`pipe`+`poll` to the `asmtest_win32_run[_pool]` re-exec
-model, `main()` dispatch (force `--no-fork`, gate the parallel path), and a small
-Win64 example suite to run.
+**Execution-model re-route — done.** `src/asmtest.c` now builds and runs as the
+**Win64 runner itself**. A Win32 `run_one` wraps the body in
+`asmtest_win32_test_begin/end` and maps the recovery `reason` to
+fail/skip/crash/timeout; `asmtest_fail`/`asmtest_skip` route through the platform
+`asmtest_jump`; `main()` forces `--no-fork` and the fork/pipe/poll isolation, the
+parallel pool, the POSIX signal handlers, the benchmark timeout, and the SysV
+trampoline-driven helpers are all gated to POSIX, while `now_secs`, `isatty`,
+`getpid`, and `fnmatch` go through the seam. `tests/win64/suite_win64.c` is a real
+`TEST()` suite, and `make win64-runner-test` builds the runner with MinGW and runs
+it under Wine:
+
+```
+1..7
+not ok 1 - win64.hang_timed_out      # msg: timed out after 3 s
+not ok 2 - win64.crash_contained     # msg: caught fatal exception 0xc0000005
+ok 3 - win64.fp_preserved
+ok 4 - win64.detects_clobber
+ok 5 - win64.abi_preserved
+ok 6 - win64.sum2
+ok 7 - win64.ret_arg0
+# 5 passed, 2 failed, 0 skipped, 7 total
+```
+
+The runner discovers + runs the suite in-process, asserts real Win64 captures, and
+**contains a crashing and a hanging test as reported failures while surviving** —
+the vectored-handler crash recovery and the watchdog timeout (a cross-thread
+`SuspendThread`/`SetThreadContext` hijack to the same landing pad) both hold under
+Wine. The target joins `make win64-check` and the CI `win64` job. **No POSIX
+regression** throughout (the library, the example suites, and the property-testing
+suite build and run identically).
+
+Out of scope of the `--no-fork` runner (the forked isolation primitives
+`asmtest_win32_run[_pool]` exist and are tested, but the runner does not yet
+re-exec per test): a forked/`-jN` execution mode on Win64, and benchmarks.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as
