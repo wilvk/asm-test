@@ -274,20 +274,32 @@ remain as scoped, for when that demand arrives.
 
 ---
 
-## Phase 4 — Win32 runner port *(the bulk; only if the gate says go)*
+## Phase 4 — Win32 runner port *(in progress; past the gate by request)*
 
 **Goal.** Bring the framework's isolation guarantees to the Win64 tier. `src/asmtest.c`
 leans on POSIX primitives that don't exist under a Win32 personality; port each to
 its Win32 equivalent (all implemented by Wine, so this is developed/tested under
-Lane B with no Windows host):
+Lane B with no Windows host). Win32 implementations land in a separate
+`src/platform_win32.c` (compiled only for the Win64 target), so the working POSIX
+runner is untouched.
 
-| POSIX (current) | Feature | Win32 port |
-|---|---|---|
-| `fork`/`waitpid`/`poll` | per-test isolation + `-jN` pool | `CreateProcess` + `WaitForMultipleObjects` |
-| `sigaction` + `siglongjmp` | crash-to-failure (SIGSEGV/BUS/FPE/ILL) | vectored exception handler / SEH |
-| `alarm()` | per-test timeout | `CreateTimerQueueTimer` / watchdog thread |
-| `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` |
-| `fnmatch` | `--filter` glob | `PathMatchSpec` / portable matcher |
+| POSIX (current) | Feature | Win32 port | Status |
+|---|---|---|---|
+| `fork`/`waitpid`/`poll` | per-test isolation + `-jN` pool | `CreateProcess` + `WaitForMultipleObjects` | planned |
+| `sigaction` + `siglongjmp` | crash-to-failure (SIGSEGV/BUS/FPE/ILL) | vectored exception handler / SEH | planned |
+| `alarm()` | per-test timeout | `CreateTimerQueueTimer` / watchdog thread | planned |
+| `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` | **done** |
+| `fnmatch` | `--filter` glob | `PathMatchSpec` / portable matcher | planned |
+
+**Landed slice.** The guard-page allocator (`asmtest_guarded_alloc` /
+`_alloc_under`) is ported in `src/platform_win32.c` via
+`VirtualAlloc` + `VirtualProtect(PAGE_NOACCESS)`, verified under Wine
+(`make win64-guard-test`, in `win64-check`) with `VirtualQuery`: the usable region
+is committed `PAGE_READWRITE` and the abutting guard page is `PAGE_NOACCESS`, for
+both the trailing (overrun) and leading (underrun) variants. The remaining
+primitives — the SEH crash-to-failure path, the timer-queue timeout, and the
+`CreateProcess`/`WaitForMultipleObjects` isolation pool — are the larger,
+interdependent core of the port and follow next.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as

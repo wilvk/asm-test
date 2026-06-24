@@ -509,9 +509,19 @@ win64-msabi-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_capture_win64.msabi
 	./$(WIN64_BUILD)/test_capture_win64.msabi
 
-# What the asmtest-win64 image runs: the substrate smoke + the capture test.
+# Phase 4 slice (Win32 runner port): the guard-page allocator ported to
+# VirtualAlloc/PAGE_NOACCESS (src/platform_win32.c), verified under Wine via
+# VirtualQuery. PE/Wine only (it needs <windows.h>), so not in the ms_abi lane.
+.PHONY: win64-guard-test
+win64-guard-test: | $(WIN64_BUILD)
+	$(WIN64_CC) -O2 -Wall -Iinclude -DASMTEST_ABI_WIN64 \
+	  src/platform_win32.c tests/win64/test_guard_win64.c \
+	  -o $(WIN64_BUILD)/test_guard_win64.exe
+	$(WINE) $(WIN64_BUILD)/test_guard_win64.exe
+
+# What the asmtest-win64 image runs: substrate smoke + capture + guard-page test.
 .PHONY: win64-check
-win64-check: win64-smoke win64-test
+win64-check: win64-smoke win64-test win64-guard-test
 
 # Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.
