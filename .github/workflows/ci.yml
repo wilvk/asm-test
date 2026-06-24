@@ -79,8 +79,11 @@ jobs:
         run: make ASM_SYNTAX=nasm bench
 
   # Optional emulator tier (Unicorn Engine; x86-64 [incl. Win64 ABI], AArch64,
-  # RISC-V, and ARM32 guests). The guests are host-independent, so run on both
-  # x86-64 and arm64 hosts to exercise the wrapper on each.
+  # RISC-V, and ARM32 guests). Run on both x86-64 and arm64 hosts to exercise
+  # the wrapper on each: the hand-assembled-byte guests (Win64, FP/SIMD, and the
+  # AArch64/RISC-V/ARM32 cases) are host-independent and run everywhere, while
+  # the x86-64 cases that drive the real host-compiled example routines run only
+  # on an x86-64 host (they self-skip elsewhere — see REQUIRE_X86_HOST).
   emu:
     name: emu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -21,6 +21,22 @@ extern void fill_bytes(void *buf, long val, long n); /* a counted loop  */
  * the routine's own `ret`, so copying past the function end is harmless. */
 #define CODE_WINDOW 64
 
+/* The x86-64 `emu` suite drives the REAL example routines (add_signed,
+ * classify, fill_bytes, ...). Those `extern` symbols are the HOST's compiled
+ * machine code, which is valid x86-64 input for the engine only when the host
+ * itself is x86-64; on another host (e.g. the aarch64 CI runner) the bytes are
+ * a different ISA and the x86-64 engine decodes garbage. Skip those cases
+ * off-x86-64. The hand-assembled-byte tests in this file (the FP/SIMD and
+ * Win64 cases below, plus the AArch64 / RISC-V / ARM32 guests) are real machine
+ * code regardless of host, so they keep running and the wrapper is still
+ * exercised on every host. */
+#if defined(__x86_64__)
+#define REQUIRE_X86_HOST() ((void)0)
+#else
+#define REQUIRE_X86_HOST()                                                     \
+    SKIP("x86-64 emu suite drives host-compiled routines; host is not x86-64")
+#endif
+
 static emu_t *E;
 
 SETUP(emu) {
@@ -33,6 +49,7 @@ TEARDOWN(emu) {
 }
 
 TEST(emu, runs_routine_in_isolation) {
+    REQUIRE_X86_HOST();
     ASSERT_TRUE(E != NULL);
     emu_result_t r;
     long args[] = {20, 22};
@@ -43,6 +60,7 @@ TEST(emu, runs_routine_in_isolation) {
 TEST(emu, full_state_reveals_clobbered_callee_saved) {
     /* On real hardware ASM_CALLn can only check rbx was restored; the emulator
      * shows the value the routine left in it mid-flight. */
+    REQUIRE_X86_HOST();
     emu_result_t r;
     long args[] = {3, 4};
     emu_call(E, (void *)clobbers_rbx, CODE_WINDOW, args, 2, 0, &r);
@@ -51,6 +69,7 @@ TEST(emu, full_state_reveals_clobbered_callee_saved) {
 }
 
 TEST(emu, compliant_routine_restores_rbx) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     long args[] = {3, 4};
     /* sum_via_rbx pushes rbx then pops it; rbx starts at 0, ends at 0. */
@@ -62,6 +81,7 @@ TEST(emu, compliant_routine_restores_rbx) {
 TEST(emu, mid_routine_single_step) {
     /* Run just the first instruction of add_signed (mov rax, rdi) and inspect
      * the intermediate state, before the `add`. */
+    REQUIRE_X86_HOST();
     emu_result_t r;
     long args[] = {5, 9};
     emu_call(E, (void *)add_signed, CODE_WINDOW, args, 2, /*max_insns=*/1, &r);
@@ -70,6 +90,7 @@ TEST(emu, mid_routine_single_step) {
 
 TEST(emu, fault_injection_catches_bad_load) {
     /* load_long dereferences its pointer arg; aim it at unmapped memory. */
+    REQUIRE_X86_HOST();
     emu_result_t r;
     long args[] = {(long)0xdead0000UL};
     bool ok = emu_call(E, (void *)load_long, CODE_WINDOW, args, 1, 0, &r);
@@ -80,6 +101,7 @@ TEST(emu, fault_injection_catches_bad_load) {
 }
 
 TEST(emu, reads_preloaded_guest_memory) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     uint64_t addr = 0x00300000UL;
     long value = 0x1234;
@@ -97,6 +119,7 @@ TEST(emu, reads_preloaded_guest_memory) {
  * across inputs answers "did the tests exercise every branch?".
  * ------------------------------------------------------------------------- */
 TEST(emu, trace_records_instruction_stream) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     uint64_t insns[32], blocks[16];
     emu_trace_t t = {0};
@@ -118,6 +141,7 @@ TEST(emu, trace_records_instruction_stream) {
 }
 
 TEST(emu, coverage_union_exceeds_single_input) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     uint64_t blocks[16];
     emu_trace_t one = {0};
@@ -147,6 +171,7 @@ TEST(emu, loop_reenters_block_and_trace_truncates) {
     /* fill_bytes loops n times: the loop-body block is re-entered each pass
      * (blocks_total > distinct blocks), and a deliberately tiny insns buffer
      * truncates (insns_total > insns_len, truncated flag set). */
+    REQUIRE_X86_HOST();
     uint64_t addr = 0x00300000UL;
     ASSERT_TRUE(emu_map(E, addr, 0x1000));
     emu_result_t r;
@@ -205,6 +230,7 @@ TEST(emu, vector_arg_captures_xmm_file) {
 }
 
 TEST(emu, assertion_macros_reg_and_fault) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     long args[] = {20, 22};
     ASSERT_TRUE(emu_call(E, (void *)add_signed, CODE_WINDOW, args, 2, 0, &r));
@@ -218,6 +244,7 @@ TEST(emu, assertion_macros_reg_and_fault) {
 }
 
 TEST(emu, coverage_report_lists_uncovered_blocks) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     /* universe = union of all three classify paths. */
     uint64_t ublocks[16];
@@ -257,6 +284,7 @@ TEST(emu, coverage_report_lists_uncovered_blocks) {
 }
 
 TEST(emu, lcov_export_emits_records) {
+    REQUIRE_X86_HOST();
     emu_result_t r;
     uint64_t blocks[16];
     emu_trace_t t = {0};

@@ -121,9 +121,15 @@ expect_fail_msg "ASSERT_FEQ (float) fails"   "float" "$NEG" --filter=neg.feq
 
 # ---- crash / timeout / abort containment ----
 # SIGSEGV is contained and reported (both with and without fork). The diagnostic
-# text differs between a normal build (framework "fatal signal") and a sanitizer
-# build (ASan's "AddressSanitizer"/"SEGV"), so accept either.
-CRASH_RE='fatal signal|exited abnormally|AddressSanitizer|SEGV'
+# text differs by build, so accept any of them:
+#   - a normal build: the framework's own "fatal signal" (in-process handler) or,
+#     for a forked child, the parent-synthesized "exited abnormally";
+#   - a sanitizer build: the write through a null pointer is undefined behavior,
+#     which UBSan flags first as a "runtime error" (gcc on Linux), before it can
+#     become a hardware fault that ASan would report as "AddressSanitizer"/"SEGV"
+#     (some clang builds). The fork case still shows "exited abnormally" because
+#     the parent synthesizes it from the child's wait status regardless.
+CRASH_RE='fatal signal|exited abnormally|AddressSanitizer|SEGV|runtime error'
 expect_fail_re "SIGSEGV contained (fork)"    "$CRASH_RE" "$NEG" --filter=neg.crash
 expect_fail_re "SIGSEGV contained (no-fork)" "$CRASH_RE" "$NEG" --filter=neg.crash --no-fork
 # Infinite loop becomes a reported timeout via the per-test alarm.
