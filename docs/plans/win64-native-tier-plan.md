@@ -334,11 +334,25 @@ target, verified under Wine and wired into `win64-check` / the CI `win64` job):
   the unconditional containment.)
 
 **All five runner primitives are ported and verified under Wine.** What remains in
-Phase 4 is *integration* — wiring these into `src/asmtest.c` (behind the
-`ASMTEST_ABI_WIN64` target gate) so the runner binary itself builds and runs for
-the Win64 target, replacing the POSIX `fork`/`sigaction`/`alarm`/`mmap`/`fnmatch`
-call sites with the `asmtest_win32_*` equivalents. That is a mechanical (if broad)
-edit on top of the primitive layer above.
+Phase 4 is *integration* — wiring these into `src/asmtest.c` (behind
+`!defined(_WIN32)` / the `ASMTEST_ABI_WIN64` target gate) so the runner binary
+itself builds and runs for the Win64 target.
+
+**Integration progress.**
+
+- **Platform seam started.** `src/platform.h` isolates the POSIX-vs-Win32 include
+  set and an `ASMTEST_FNMATCH` shim (`fnmatch` on POSIX, `asmtest_glob_match` on
+  Win32). `src/asmtest.c` now includes it, routes `--filter` through `ASMTEST_FNMATCH`,
+  and gates its mmap/mprotect guard-page allocator under `!defined(_WIN32)` (the
+  Win32 build uses `platform_win32.c`). Verified **no POSIX regression** — the
+  library builds and a suite (incl. `--filter`) runs identically on the host.
+
+The remaining (larger) integration is the execution model: a Win32 `run_one`
+(crash-to-failure via `asmtest_win32_guard`, assertion failures via the same
+`__builtin_longjmp` recovery instead of `siglongjmp`), the per-test isolation/pool
+re-routed from `fork`+`pipe`+`poll` to the `asmtest_win32_run[_pool]` re-exec
+model, `main()` dispatch, and a small Win64 example suite to run — on top of this
+seam.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as

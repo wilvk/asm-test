@@ -3,21 +3,16 @@
  * register/flags assertions, guard-page buffers, and main() (Phase 2).
  */
 #include "asmtest.h"
+#include "platform.h" /* POSIX vs Win32 includes + ASMTEST_FNMATCH */
 
 #include <errno.h>
-#include <fnmatch.h>
 #include <math.h>
-#include <poll.h>
-#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
 
 /* Linux spells it MAP_ANONYMOUS; macOS/BSD provide MAP_ANON. */
 #if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
@@ -324,7 +319,11 @@ void asmtest_assert_vec_eq(const char *file, int line, const char *idxexpr,
 
 /* ------------------------------------------------------------------ */
 /* Guard-page buffers                                                  */
+/*                                                                     */
+/* POSIX mmap/mprotect implementation; the Win64 tier uses the         */
+/* VirtualAlloc/PAGE_NOACCESS equivalents in src/platform_win32.c.     */
 /* ------------------------------------------------------------------ */
+#if !defined(_WIN32)
 
 static size_t round_up_page(size_t n, long pg) {
     size_t usable = ((n + (size_t)pg - 1) / (size_t)pg) * (size_t)pg;
@@ -380,6 +379,8 @@ void asmtest_guarded_free_under(void *p, size_t n) {
     unsigned char *base = (unsigned char *)p - (size_t)pg;
     munmap(base, (size_t)pg + usable);
 }
+
+#endif /* !_WIN32 */
 
 /* ------------------------------------------------------------------ */
 /* Large struct-by-value parameter (arch-divergent dispatch)           */
@@ -979,8 +980,8 @@ static int opt_prefix(const char *a, const char *pre, const char **rest) {
 static int id_matches(const char *suite, const char *name, const char *glob) {
     char id[256];
     snprintf(id, sizeof id, "%s.%s", suite, name);
-    return fnmatch(glob, id, 0) == 0 || fnmatch(glob, suite, 0) == 0 ||
-           fnmatch(glob, name, 0) == 0;
+    return ASMTEST_FNMATCH(glob, id) == 0 || ASMTEST_FNMATCH(glob, suite) == 0 ||
+           ASMTEST_FNMATCH(glob, name) == 0;
 }
 
 static int test_matches(const asmtest_case_t *tc, const char *glob) {
