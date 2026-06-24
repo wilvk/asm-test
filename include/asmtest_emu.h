@@ -149,6 +149,7 @@ bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
 typedef struct {
     uint64_t x[31]; /* x0..x30 (x29 = fp, x30 = lr) */
     uint64_t sp, pc, nzcv;
+    emu_vec128_t v[32]; /* NEON v0..v31; a double return is v[0].f64[0] */
 } emu_arm64_regs_t;
 
 typedef struct {
@@ -182,6 +183,18 @@ bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
                            const long *args, int nargs, uint64_t max_insns,
                            emu_arm64_result_t *out, emu_trace_t *trace);
 
+/* Like emu_arm64_call, but also marshals `nfargs` double args into d0..d7 (the
+ * AAPCS64 FP arg registers) alongside the integer args; the double return is
+ * out->regs.v[0].f64[0]. emu_arm64_call_vec marshals `nvargs` 128-bit vectors
+ * into v0..v7 and captures the whole v0..v31 file. */
+bool emu_arm64_call_fp(emu_arm64_t *e, const void *code, size_t code_len,
+                       const long *iargs, int niargs, const double *fargs,
+                       int nfargs, uint64_t max_insns, emu_arm64_result_t *out);
+bool emu_arm64_call_vec(emu_arm64_t *e, const void *code, size_t code_len,
+                        const long *iargs, int niargs,
+                        const emu_vec128_t *vargs, int nvargs,
+                        uint64_t max_insns, emu_arm64_result_t *out);
+
 /* ------------------------------------------------------------------ */
 /* RISC-V (RV64) guest (emulated regardless of host architecture)      */
 /*                                                                     */
@@ -195,6 +208,7 @@ bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
 typedef struct {
     uint64_t x[32]; /* x0..x31; x0 = zero, x1 = ra, x2 = sp, x10..x17 = a0..a7 */
     uint64_t pc;
+    emu_vec128_t f[32]; /* F0..F31 (D ext, 64-bit in f64[0]); fa0 = f[10] */
 } emu_riscv_regs_t;
 
 typedef struct {
@@ -229,6 +243,14 @@ bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
                            const long *args, int nargs, uint64_t max_insns,
                            emu_riscv_result_t *out, emu_trace_t *trace);
 
+/* Like emu_riscv_call, but also marshals `nfargs` double args into fa0..fa7
+ * (f10..f17, the FP arg registers of the D extension) alongside the integer
+ * args; the double return is out->regs.f[10].f64[0] (fa0). The FP unit is
+ * enabled at emu_riscv_open (mstatus.FS). */
+bool emu_riscv_call_fp(emu_riscv_t *e, const void *code, size_t code_len,
+                       const long *iargs, int niargs, const double *fargs,
+                       int nfargs, uint64_t max_insns, emu_riscv_result_t *out);
+
 /* ------------------------------------------------------------------ */
 /* ARM32 (AArch32 / A32) guest (emulated regardless of host arch)      */
 /*                                                                     */
@@ -243,6 +265,7 @@ bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
 typedef struct {
     uint32_t r[16]; /* r0..r15; r13 = sp, r14 = lr, r15 = pc */
     uint32_t cpsr;  /* condition flags live in the top bits  */
+    emu_vec128_t q[16]; /* VFP/NEON q0..q15; d(2k)=q[k].f64[0], d(2k+1)=.f64[1] */
 } emu_arm_regs_t;
 
 typedef struct {
@@ -274,6 +297,14 @@ bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
 bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
                          const long *args, int nargs, uint64_t max_insns,
                          emu_arm_result_t *out, emu_trace_t *trace);
+
+/* Like emu_arm_call, but also marshals `nfargs` double args into d0..d7 (the
+ * AAPCS-VFP FP arg registers) alongside the integer args; the double return is
+ * out->regs.q[0].f64[0] (d0). The VFP unit is enabled at emu_arm_open
+ * (CPACR + FPEXC). */
+bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
+                     const long *iargs, int niargs, const double *fargs,
+                     int nfargs, uint64_t max_insns, emu_arm_result_t *out);
 
 /* ------------------------------------------------------------------ */
 /* Coverage reporting (Track C)                                        */
@@ -315,19 +346,19 @@ void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
 void asmtest_fail(const char *file, int line, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
-/* The run completed without an invalid memory access (and the engine was OK). */
+/* The run completed without an invalid memory access (and the engine was OK).
+ * Field-access only (no typed temporary), so these work for every guest's
+ * result struct — emu_result_t, emu_arm64_result_t, etc. all share the names. */
 #define ASSERT_NO_FAULT(res)                                                  \
     do {                                                                      \
-        const emu_result_t *asmtest_r_ = (res);                              \
-        if (asmtest_r_->faulted)                                             \
+        if ((res)->faulted)                                                  \
             asmtest_fail(__FILE__, __LINE__,                                  \
                          "ASSERT_NO_FAULT: faulted at 0x%llx (kind %d)",      \
-                         (unsigned long long)asmtest_r_->fault_addr,          \
-                         (int)asmtest_r_->fault_kind);                        \
-        else if (asmtest_r_->uc_err != 0)                                    \
+                         (unsigned long long)(res)->fault_addr,               \
+                         (int)(res)->fault_kind);                             \
+        else if ((res)->uc_err != 0)                                         \
             asmtest_fail(__FILE__, __LINE__,                                  \
-                         "ASSERT_NO_FAULT: engine error %d",                  \
-                         asmtest_r_->uc_err);                                 \
+                         "ASSERT_NO_FAULT: engine error %d", (res)->uc_err);  \
     } while (0)
 
 /* The run hit an invalid memory access. */
@@ -341,18 +372,17 @@ void asmtest_fail(const char *file, int line, const char *fmt, ...)
 /* The run faulted with a specific kind (EMU_FAULT_READ/WRITE/FETCH) at addr. */
 #define ASSERT_FAULT_AT(res, want_kind, want_addr)                            \
     do {                                                                      \
-        const emu_result_t *asmtest_r_ = (res);                              \
-        if (!asmtest_r_->faulted)                                            \
+        if (!(res)->faulted)                                                 \
             asmtest_fail(__FILE__, __LINE__,                                  \
                          "ASSERT_FAULT_AT: expected a fault, none occurred"); \
-        else if (asmtest_r_->fault_kind != (want_kind) ||                    \
-                 asmtest_r_->fault_addr != (uint64_t)(want_addr))            \
+        else if ((res)->fault_kind != (want_kind) ||                         \
+                 (res)->fault_addr != (uint64_t)(want_addr))                 \
             asmtest_fail(                                                     \
                 __FILE__, __LINE__,                                          \
                 "ASSERT_FAULT_AT: got kind %d at 0x%llx, want kind %d at "    \
                 "0x%llx",                                                     \
-                (int)asmtest_r_->fault_kind,                                 \
-                (unsigned long long)asmtest_r_->fault_addr, (int)(want_kind), \
+                (int)(res)->fault_kind,                                      \
+                (unsigned long long)(res)->fault_addr, (int)(want_kind),     \
                 (unsigned long long)(uint64_t)(want_addr));                  \
     } while (0)
 
@@ -380,22 +410,27 @@ void asmtest_fail(const char *file, int line, const char *fmt, ...)
                          asmtest_w_);                                         \
     } while (0)
 
-/* Bytewise-compare a captured XMM register to 16 expected bytes. */
-#define ASSERT_EMU_VEC_EQ(res, idx, expect_ptr)                               \
+/* Bytewise-compare a captured 128-bit vector (an emu_vec128_t *, from any
+ * guest's register file) to 16 expected bytes. */
+#define ASSERT_EMU_VEC128_EQ(vec_ptr, expect_ptr)                             \
     do {                                                                      \
-        const unsigned char *asmtest_a_ = (res)->regs.xmm[idx].u8;           \
+        const unsigned char *asmtest_a_ = (vec_ptr)->u8;                     \
         const unsigned char *asmtest_e_ =                                    \
             (const unsigned char *)(expect_ptr);                             \
         for (int asmtest_i_ = 0; asmtest_i_ < 16; asmtest_i_++)              \
             if (asmtest_a_[asmtest_i_] != asmtest_e_[asmtest_i_]) {          \
                 asmtest_fail(__FILE__, __LINE__,                              \
-                             "ASSERT_EMU_VEC_EQ(xmm[%s]): first diff at "     \
-                             "byte %d (0x%02x != 0x%02x)",                    \
-                             #idx, asmtest_i_, asmtest_e_[asmtest_i_],        \
+                             "ASSERT_EMU_VEC128_EQ: first diff at byte %d "   \
+                             "(0x%02x != 0x%02x)",                            \
+                             asmtest_i_, asmtest_e_[asmtest_i_],              \
                              asmtest_a_[asmtest_i_]);                         \
                 break;                                                        \
             }                                                                 \
     } while (0)
+
+/* Bytewise-compare a captured x86 XMM register to 16 expected bytes. */
+#define ASSERT_EMU_VEC_EQ(res, idx, expect_ptr)                               \
+    ASSERT_EMU_VEC128_EQ(&(res)->regs.xmm[idx], (expect_ptr))
 
 /* Basic-block offset `off` was covered by the (accumulated) trace. */
 #define ASSERT_BLOCK_COVERED(trace, off)                                      \

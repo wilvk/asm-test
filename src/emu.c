@@ -392,32 +392,33 @@ static void read_all_regs_arm64(uc_engine *uc, emu_arm64_regs_t *r) {
     uc_reg_read(uc, UC_ARM64_REG_SP, &r->sp);
     uc_reg_read(uc, UC_ARM64_REG_PC, &r->pc);
     uc_reg_read(uc, UC_ARM64_REG_NZCV, &r->nzcv);
+    for (int i = 0; i < 32; i++) /* v0..v31 are consecutive enum values */
+        uc_reg_read(uc, UC_ARM64_REG_V0 + i, r->v[i].u8);
 }
 
-bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
-                           const long *args, int nargs, uint64_t max_insns,
-                           emu_arm64_result_t *out, emu_trace_t *trace) {
+/* Shared AAPCS64 setup: code + flush, sentinel lr, 16-aligned sp, integer args
+ * in x0..x5. Returns false only on a code-write failure. */
+static bool emu_arm64_setup(uc_engine *uc, const void *code, size_t code_len,
+                            const long *iargs, int niargs) {
     static const int arg_regs[6] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
                                     UC_ARM64_REG_X2, UC_ARM64_REG_X3,
                                     UC_ARM64_REG_X4, UC_ARM64_REG_X5};
-    uc_engine *uc = e->uc;
-    memset(out, 0, sizeof *out);
-
-    if (!load_code(uc, code, code_len)) {
-        out->uc_err = -1;
+    if (!load_code(uc, code, code_len))
         return false;
-    }
-
     uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
     uc_reg_write(uc, UC_ARM64_REG_SP, &sp);
     uint64_t lr = EMU_RET_MAGIC; /* `ret` branches to lr */
     uc_reg_write(uc, UC_ARM64_REG_X30, &lr);
-
-    for (int i = 0; i < nargs && i < 6; i++) {
-        uint64_t v = (uint64_t)args[i];
+    for (int i = 0; i < niargs && i < 6; i++) {
+        uint64_t v = (uint64_t)iargs[i];
         uc_reg_write(uc, arg_regs[i], &v);
     }
+    return true;
+}
 
+/* Shared AArch64 run-and-capture (registers/stack already set up). */
+static bool emu_arm64_run(uc_engine *uc, uint64_t max_insns,
+                          emu_arm64_result_t *out, emu_trace_t *trace) {
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -443,11 +444,56 @@ bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
     return out->ok;
 }
 
+bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_arm64_result_t *out, emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm64_setup(uc, code, code_len, args, nargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    return emu_arm64_run(uc, max_insns, out, trace);
+}
+
 bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
                     const long *args, int nargs, uint64_t max_insns,
                     emu_arm64_result_t *out) {
     return emu_arm64_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                  NULL);
+}
+
+bool emu_arm64_call_fp(emu_arm64_t *e, const void *code, size_t code_len,
+                       const long *iargs, int niargs, const double *fargs,
+                       int nfargs, uint64_t max_insns,
+                       emu_arm64_result_t *out) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm64_setup(uc, code, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nfargs && i < 8; i++) {
+        unsigned char x[16] = {0}; /* a double occupies the low 8 bytes of d_i */
+        memcpy(x, &fargs[i], sizeof(double));
+        uc_reg_write(uc, UC_ARM64_REG_V0 + i, x);
+    }
+    return emu_arm64_run(uc, max_insns, out, NULL);
+}
+
+bool emu_arm64_call_vec(emu_arm64_t *e, const void *code, size_t code_len,
+                        const long *iargs, int niargs,
+                        const emu_vec128_t *vargs, int nvargs,
+                        uint64_t max_insns, emu_arm64_result_t *out) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm64_setup(uc, code, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nvargs && i < 8; i++)
+        uc_reg_write(uc, UC_ARM64_REG_V0 + i, (void *)vargs[i].u8);
+    return emu_arm64_run(uc, max_insns, out, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,6 +526,12 @@ emu_riscv_t *emu_riscv_open(void) {
         free(e);
         return NULL;
     }
+    /* Enable the F/D floating-point unit: RISC-V starts with mstatus.FS = Off,
+     * so an FP instruction would trap. Set FS (bits 14:13) to Dirty (11). */
+    uint64_t mstatus = 0;
+    uc_reg_read(e->uc, UC_RISCV_REG_MSTATUS, &mstatus);
+    mstatus |= (uint64_t)0x6000;
+    uc_reg_write(e->uc, UC_RISCV_REG_MSTATUS, &mstatus);
     return e;
 }
 
@@ -508,33 +560,33 @@ static void read_all_regs_riscv(uc_engine *uc, emu_riscv_regs_t *r) {
     for (int i = 0; i <= 31; i++) /* x0..x31 are consecutive enum values */
         uc_reg_read(uc, UC_RISCV_REG_X0 + i, &r->x[i]);
     uc_reg_read(uc, UC_RISCV_REG_PC, &r->pc);
+    for (int i = 0; i < 32; i++) /* f0..f31 (D ext, 64-bit) */
+        uc_reg_read(uc, UC_RISCV_REG_F0 + i, &r->f[i].u64[0]);
 }
 
-bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
-                           const long *args, int nargs, uint64_t max_insns,
-                           emu_riscv_result_t *out, emu_trace_t *trace) {
-    /* RISC-V integer args: a0..a7 == x10..x17. */
+/* Shared RISC-V setup: code + flush, sentinel ra, 16-aligned sp, integer args
+ * in a0..a7 (x10..x17). Returns false only on a code-write failure. */
+static bool emu_riscv_setup(uc_engine *uc, const void *code, size_t code_len,
+                            const long *iargs, int niargs) {
     static const int arg_regs[8] = {
         UC_RISCV_REG_X10, UC_RISCV_REG_X11, UC_RISCV_REG_X12, UC_RISCV_REG_X13,
         UC_RISCV_REG_X14, UC_RISCV_REG_X15, UC_RISCV_REG_X16, UC_RISCV_REG_X17};
-    uc_engine *uc = e->uc;
-    memset(out, 0, sizeof *out);
-
-    if (!load_code(uc, code, code_len)) {
-        out->uc_err = -1;
+    if (!load_code(uc, code, code_len))
         return false;
-    }
-
     uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
     uc_reg_write(uc, UC_RISCV_REG_SP, &sp);
     uint64_t ra = EMU_RET_MAGIC; /* `ret` is jalr x0, 0(ra) */
     uc_reg_write(uc, UC_RISCV_REG_RA, &ra);
-
-    for (int i = 0; i < nargs && i < 8; i++) {
-        uint64_t v = (uint64_t)args[i];
+    for (int i = 0; i < niargs && i < 8; i++) {
+        uint64_t v = (uint64_t)iargs[i];
         uc_reg_write(uc, arg_regs[i], &v);
     }
+    return true;
+}
 
+/* Shared RISC-V run-and-capture (registers/stack already set up). */
+static bool emu_riscv_run(uc_engine *uc, uint64_t max_insns,
+                          emu_riscv_result_t *out, emu_trace_t *trace) {
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -560,11 +612,39 @@ bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
     return out->ok;
 }
 
+bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
+                           const long *args, int nargs, uint64_t max_insns,
+                           emu_riscv_result_t *out, emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_riscv_setup(uc, code, code_len, args, nargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    return emu_riscv_run(uc, max_insns, out, trace);
+}
+
 bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
                     const long *args, int nargs, uint64_t max_insns,
                     emu_riscv_result_t *out) {
     return emu_riscv_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                  NULL);
+}
+
+bool emu_riscv_call_fp(emu_riscv_t *e, const void *code, size_t code_len,
+                       const long *iargs, int niargs, const double *fargs,
+                       int nfargs, uint64_t max_insns,
+                       emu_riscv_result_t *out) {
+    /* FP args go in fa0..fa7 == f10..f17. */
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_riscv_setup(uc, code, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nfargs && i < 8; i++)
+        uc_reg_write(uc, UC_RISCV_REG_F10 + i, &fargs[i]);
+    return emu_riscv_run(uc, max_insns, out, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -591,6 +671,14 @@ emu_arm_t *emu_arm_open(void) {
         free(e);
         return NULL;
     }
+    /* Enable the VFP/NEON unit, off by default on this core: grant CP10/CP11
+     * access (CPACR) and set FPEXC.EN, so a VFP instruction does not trap. */
+    uint32_t cpacr = 0;
+    uc_reg_read(e->uc, UC_ARM_REG_C1_C0_2, &cpacr);
+    cpacr |= 0x00F00000; /* full access to CP10 and CP11 */
+    uc_reg_write(e->uc, UC_ARM_REG_C1_C0_2, &cpacr);
+    uint32_t fpexc = 0x40000000; /* FPEXC.EN */
+    uc_reg_write(e->uc, UC_ARM_REG_FPEXC, &fpexc);
     return e;
 }
 
@@ -621,31 +709,33 @@ static void read_all_regs_arm(uc_engine *uc, emu_arm_regs_t *r) {
     uc_reg_read(uc, UC_ARM_REG_LR, &r->r[14]);
     uc_reg_read(uc, UC_ARM_REG_PC, &r->r[15]);
     uc_reg_read(uc, UC_ARM_REG_CPSR, &r->cpsr);
+    /* d0..d31 (64-bit), packed two-per-q: d(2k) -> q[k].f64[0], d(2k+1) -> .f64[1]. */
+    for (int i = 0; i < 32; i++)
+        uc_reg_read(uc, UC_ARM_REG_D0 + i, &r->q[i / 2].f64[i % 2]);
 }
 
-bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
-                         const long *args, int nargs, uint64_t max_insns,
-                         emu_arm_result_t *out, emu_trace_t *trace) {
+/* Shared AAPCS setup: code + flush, sentinel lr, 8-aligned sp, integer args in
+ * r0..r3 (32-bit). Returns false only on a code-write failure. */
+static bool emu_arm_setup(uc_engine *uc, const void *code, size_t code_len,
+                          const long *iargs, int niargs) {
     static const int arg_regs[4] = {UC_ARM_REG_R0, UC_ARM_REG_R1,
                                     UC_ARM_REG_R2, UC_ARM_REG_R3};
-    uc_engine *uc = e->uc;
-    memset(out, 0, sizeof *out);
-
-    if (!load_code(uc, code, code_len)) {
-        out->uc_err = -1;
+    if (!load_code(uc, code, code_len))
         return false;
-    }
-
     uint32_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 8-aligned (AAPCS) */
     uc_reg_write(uc, UC_ARM_REG_SP, &sp);
     uint32_t lr = EMU_RET_MAGIC; /* `bx lr` branches to lr */
     uc_reg_write(uc, UC_ARM_REG_LR, &lr);
-
-    for (int i = 0; i < nargs && i < 4; i++) {
-        uint32_t v = (uint32_t)args[i]; /* ARM GP regs are 32-bit */
+    for (int i = 0; i < niargs && i < 4; i++) {
+        uint32_t v = (uint32_t)iargs[i]; /* ARM GP regs are 32-bit */
         uc_reg_write(uc, arg_regs[i], &v);
     }
+    return true;
+}
 
+/* Shared ARM32 run-and-capture (registers/stack already set up). */
+static bool emu_arm_run(uc_engine *uc, uint64_t max_insns,
+                        emu_arm_result_t *out, emu_trace_t *trace) {
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -671,11 +761,38 @@ bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
     return out->ok;
 }
 
+bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
+                         const long *args, int nargs, uint64_t max_insns,
+                         emu_arm_result_t *out, emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm_setup(uc, code, code_len, args, nargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    return emu_arm_run(uc, max_insns, out, trace);
+}
+
 bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
                   const long *args, int nargs, uint64_t max_insns,
                   emu_arm_result_t *out) {
     return emu_arm_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                NULL);
+}
+
+bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
+                     const long *iargs, int niargs, const double *fargs,
+                     int nfargs, uint64_t max_insns, emu_arm_result_t *out) {
+    /* AAPCS-VFP: double args go in d0..d7. */
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm_setup(uc, code, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nfargs && i < 8; i++)
+        uc_reg_write(uc, UC_ARM_REG_D0 + i, &fargs[i]);
+    return emu_arm_run(uc, max_insns, out, NULL);
 }
 
 /* ------------------------------------------------------------------ */

@@ -364,6 +364,47 @@ TEST(emu_arm64, trace_records_instruction_stream) {
     emu_arm64_close(e);
 }
 
+/* AArch64 FP/SIMD (Track C follow-up). Bytes (little-endian):
+ *   fadd d0, d0, d1        -> 1E612800   ret -> D65F03C0
+ *   add  v0.4s, v0.4s, v1.4s -> 4EA18400 ret -> D65F03C0 (packed add of 4x s32)
+ */
+TEST(emu_arm64, double_arg_returns_in_d0) {
+    static const unsigned char FADD[] = {0x00, 0x28, 0x61, 0x1E,
+                                         0xC0, 0x03, 0x5F, 0xD6};
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    long iargs[1] = {0};
+    double fargs[] = {1.5, 2.25}; /* d0, d1 */
+    ASSERT_TRUE(
+        emu_arm64_call_fp(e, FADD, sizeof FADD, iargs, 0, fargs, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    ASSERT_DEQ(r.regs.v[0].f64[0], 3.75); /* double return in d0 = v[0] */
+    emu_arm64_close(e);
+}
+
+TEST(emu_arm64, vector_arg_captures_v_file) {
+    static const unsigned char VADD4S[] = {0x00, 0x84, 0xA1, 0x4E,
+                                           0xC0, 0x03, 0x5F, 0xD6};
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    emu_vec128_t a = {0}, b = {0};
+    for (int i = 0; i < 4; i++) {
+        a.u32[i] = (uint32_t)(i + 1);
+        b.u32[i] = (uint32_t)(10 * (i + 1));
+    }
+    emu_vec128_t vargs[2] = {a, b};
+    long iargs[1] = {0};
+    ASSERT_TRUE(emu_arm64_call_vec(e, VADD4S, sizeof VADD4S, iargs, 0, vargs, 2,
+                                   0, &r));
+    ASSERT_NO_FAULT(&r);
+    emu_vec128_t expect = {0};
+    for (int i = 0; i < 4; i++)
+        expect.u32[i] = a.u32[i] + b.u32[i]; /* 11 22 33 44 */
+    ASSERT_EMU_VEC128_EQ(&r.regs.v[0], expect.u8);
+    ASSERT_EQ(r.regs.v[0].u32[3], 44u);
+    emu_arm64_close(e);
+}
+
 /* -------------------------------------------------------------------------
  * RISC-V (RV64) guest: raw machine code run on whatever host this is (Unicorn
  * emulates RISC-V even on an x86-64 host). Integer args arrive in a0..a7
@@ -451,6 +492,24 @@ TEST(emu_riscv, trace_records_instruction_stream) {
     emu_riscv_close(e);
 }
 
+/* RISC-V D-extension FP (Track C follow-up). The FP unit is enabled at
+ * emu_riscv_open (mstatus.FS). Bytes (little-endian):
+ *   fadd.d fa0, fa0, fa1 -> 02B50553   ret -> 00008067
+ */
+TEST(emu_riscv, double_arg_returns_in_fa0) {
+    static const unsigned char FADDD[] = {0x53, 0x05, 0xB5, 0x02,
+                                          0x67, 0x80, 0x00, 0x00};
+    emu_riscv_t *e = emu_riscv_open();
+    emu_riscv_result_t r;
+    long iargs[1] = {0};
+    double fargs[] = {1.5, 2.25}; /* fa0, fa1 */
+    ASSERT_TRUE(
+        emu_riscv_call_fp(e, FADDD, sizeof FADDD, iargs, 0, fargs, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    ASSERT_DEQ(r.regs.f[10].f64[0], 3.75); /* fa0 == f10 */
+    emu_riscv_close(e);
+}
+
 /* -------------------------------------------------------------------------
  * ARM32 (A32) guest: raw machine code run on whatever host this is (Unicorn
  * emulates ARM32 even on an x86-64 host). Integer args arrive in r0..r3; the
@@ -535,6 +594,24 @@ TEST(emu_arm, trace_records_instruction_stream) {
     ASSERT_EQ(t.blocks_total, (uint64_t)1);
     ASSERT_EQ(t.blocks_len, (size_t)1);
     ASSERT_UEQ(t.blocks[0], 0);
+    emu_arm_close(e);
+}
+
+/* ARM32 VFP (Track C follow-up). The VFP unit is enabled at emu_arm_open
+ * (CPACR + FPEXC). Bytes (little-endian):
+ *   vadd.f64 d0, d0, d1 -> EE300B01   bx lr -> E12FFF1E
+ */
+TEST(emu_arm, double_arg_returns_in_d0) {
+    static const unsigned char VADDF64[] = {0x01, 0x0B, 0x30, 0xEE,
+                                            0x1E, 0xFF, 0x2F, 0xE1};
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    long iargs[1] = {0};
+    double fargs[] = {1.5, 2.25}; /* d0, d1 */
+    ASSERT_TRUE(
+        emu_arm_call_fp(e, VADDF64, sizeof VADDF64, iargs, 0, fargs, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    ASSERT_DEQ(r.regs.q[0].f64[0], 3.75); /* d0 == q[0].f64[0] */
     emu_arm_close(e);
 }
 

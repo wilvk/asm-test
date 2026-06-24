@@ -10,7 +10,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Emulator FP/SIMD (Track C).** The x86-64 emulator guest marshals `double`
   args (`emu_call_fp`) and 128-bit vector args (`emu_call_vec`) into xmm0..7 and
-  captures the whole XMM file (`emu_x86_regs_t.xmm[]`).
+  captures the whole XMM file (`emu_x86_regs_t.xmm[]`). The AArch64 guest gains
+  the same (`emu_arm64_call_fp` / `emu_arm64_call_vec`, NEON `v[]`); the RISC-V
+  (`emu_riscv_call_fp`, `f[]`) and ARM32 (`emu_arm_call_fp`, `q[]`) guests gain
+  scalar FP, with their FP units enabled at open (RISC-V `mstatus.FS`, ARM32
+  CPACR + FPEXC). Generic `ASSERT_EMU_VEC128_EQ` works across guests.
 - **Emulator assertions (Track C).** `ASSERT_NO_FAULT`, `ASSERT_FAULT`,
   `ASSERT_FAULT_AT`, `ASSERT_EMU_REG_EQ`, `ASSERT_EMU_FP_EQ`, `ASSERT_EMU_VEC_EQ`,
   and coverage `ASSERT_BLOCK_COVERED` / `ASSERT_BLOCKS_AT_LEAST`.

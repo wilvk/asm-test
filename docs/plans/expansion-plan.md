@@ -169,6 +169,15 @@ engine, which also carries Win64); the same for the AArch64/RISC-V/ARM32 guests
 (NEON `v0..31`, etc.) is a natural follow-up. Source-line mapping (the stretch goal)
 was left out; reporting is offset-level as planned. Covered by `make emu-test`.
 
+**Follow-up landed:** FP/vector marshalling now covers the other guests too —
+`emu_arm64_call_fp` / `emu_arm64_call_vec` (full NEON `v0..31`, captured into
+`emu_arm64_regs_t.v[]`), `emu_riscv_call_fp` (D-extension `f0..31`, FP unit enabled
+at open via `mstatus.FS`), and `emu_arm_call_fp` (VFP `d0..31`/`q0..15`, enabled at
+open via CPACR + FPEXC). A generic `ASSERT_EMU_VEC128_EQ` and field-direct fault
+macros work across every guest's result struct. Four more `emu` tests (now 37
+passing). Vector-arg marshalling beyond AArch64/x86 (RISC-V V extension, ARM NEON
+arg passing) and source-line coverage mapping remain the only open C items.
+
 ### C1 — Wider argument marshalling
 
 - `emu_call` currently takes integer args only (`const long *args`). Add FP/vector
