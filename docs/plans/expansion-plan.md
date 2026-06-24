@@ -396,4 +396,8 @@ there.
 
 - New guest architectures beyond the existing four (diminishing returns vs. effort).
 - A GUI/TUI front-end (TAP + JUnit already integrate with standard tooling).
-- Rewriting in another language; the C + asm core is the point.
+- Rewriting in another language; the C + asm core is the point. (Note: *wrapping*
+  the C core with bindings for other languages — distinct from rewriting it — is a
+  separate, planned effort; see the
+  [Multi-language bindings plan](multi-language-bindings-plan.md) and its
+  [feasibility analysis](../analysis/multi-language-wrappers.md).)
