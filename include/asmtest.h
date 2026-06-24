@@ -308,6 +308,18 @@ void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
 void asmtest_assert_abi(const char *file, int line, const regs_t *r);
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name);
+
+/* Non-jumping verdict shims (Track 0: binding ABI). The ASSERT_* macros report
+ * via asmtest_fail, which longjmp()s into the runner and prints TAP — right for
+ * a C suite, wrong across an FFI boundary, where a binding wants a value to turn
+ * into its own language's assertion. These siblings RETURN the verdict (0 =
+ * pass, nonzero = fail) and, on failure, write a human-readable reason into msg
+ * (up to n bytes, always NUL-terminated when n>0). They never longjmp, never
+ * print, and need no runner — safe to call from a bare dlopen'd library.
+ * asmtest_assert_abi / _flag delegate to these. */
+int asmtest_check_abi(const regs_t *r, char *msg, size_t n);
+int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
+                       const char *name, char *msg, size_t n);
 void asmtest_assert_double_eq(const char *file, int line, double actual,
                               double expected);
 void asmtest_assert_double_near(const char *file, int line, double actual,

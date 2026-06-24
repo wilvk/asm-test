@@ -23,6 +23,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preventing the headers, the trampoline's stores, and the manifest from drifting
   apart. `make install` (static + headers) is unchanged. See
   [docs/plans/multi-language-bindings-plan.md](docs/plans/multi-language-bindings-plan.md).
+- **Binding ABI + conformance corpus (Track 0).** Non-jumping verdict shims
+  `asmtest_check_abi` / `asmtest_check_flag` *return* a verdict + reason instead
+  of `longjmp`-ing into the runner, so an FFI binding can validate a capture with
+  no C runner present (the existing `ASSERT_ABI_PRESERVED` / `ASSERT_FLAG_*` now
+  delegate to them). `ASMTEST_NO_MAIN` builds the runtime without its `main()`
+  for embedding. `make conformance` runs `bindings/conformance/conformance.c` —
+  the C reference for a fixed corpus of canonical routines (int / FP / SIMD /
+  flags / ABI capture + an x86-64 emulator case), checked against expected
+  literals — and emits `corpus.json`, the portable expected-results table every
+  language binding must reproduce. The binding-ABI contract symbols are
+  designated in the API reference.
 - **Parallel execution (Track E).** `-jN` / `--jobs=N` runs up to N tests
   concurrently as forked children (a pool over the existing per-test fork model),
   while output stays in registration order regardless of finish order. Per-test

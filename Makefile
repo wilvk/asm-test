@@ -43,7 +43,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
-.PHONY: shared shared-emu manifest install-shared install-shared-emu
+.PHONY: shared shared-emu manifest install-shared install-shared-emu conformance
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
@@ -512,6 +512,33 @@ $(BUILD)/test_emu_usecases: $(FRAMEWORK_OBJS) $(BUILD)/emucases.o \
 usecases-emu: $(BUILD)/test_emu_usecases
 	./$(BUILD)/test_emu_usecases
 
+# --- Cross-language conformance corpus (Track 0.4) -------------------------
+# The canonical-routine corpus + its C reference runner: the single source of
+# truth every language binding must reproduce. Drives the routines through the
+# binding-ABI entry points (asm_call_capture* + emu_call) and checks each result
+# against the expected literal, then emits the portable table to corpus.json.
+# Links the runtime built -DASMTEST_NO_MAIN (so its main() doesn't collide) plus
+# the emulator; requires libunicorn, like `make emu-test`.
+# Without main(), the runner-only static helpers (install_handlers, run_forked,
+# the JUnit/TAP printers, the CLI parser, ...) are legitimately unused, so quiet
+# that one warning for this build only.
+$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_NO_MAIN -Wno-unused-function -c $< -o $@
+
+$(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
+                        include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
+
+$(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
+                      $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/add.o \
+                      $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
+
+conformance: $(BUILD)/conformance
+	./$(BUILD)/conformance
+	./$(BUILD)/conformance --emit > bindings/conformance/corpus.json
+	@echo "conformance: wrote bindings/conformance/corpus.json"
+
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html
 # `make docs-serve`     build, then serve them on http://localhost:$(DOCS_PORT)
@@ -544,3 +571,4 @@ docs-clean:
 clean: docs-clean
 	rm -rf $(BUILD)
 	rm -f asmtest.pc asmtest-emu.pc asmtest_single.h asmtest_abi.json
+	rm -f bindings/conformance/corpus.json

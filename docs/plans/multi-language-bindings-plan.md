@@ -63,15 +63,16 @@ That gap is closed in **Track 0**.
 
 ---
 
-## Track 0 — Shared substrate *(prerequisite for every language) — in progress*
+## Track 0 — Shared substrate *(prerequisite for every language) — in progress (0.1–0.4 done; 0.5 remains)*
 
 **Goal.** Build the artifacts and contracts every binding consumes, once, so each
 language track is mechanical.
 
-**Status: 0.1 and 0.3 landed (the gating wedge); 0.2 / 0.4 / 0.5 still planned.**
-The two sub-items that make any FFI binding *possible* (loadable shared libraries)
-and *correct* (a drift-proof layout contract) are done and verified on x86-64
-macOS:
+**Status: 0.1 – 0.4 landed; only 0.5 (per-language CI template) remains.** The
+sub-items that make a binding *possible* (loadable shared libraries),
+*correct* (a drift-proof layout contract), *generation-friendly* (a macro-free
+binding-ABI surface with non-jumping verdict shims), and *verifiable* (a shared
+conformance corpus) are done and verified on x86-64 macOS:
 
 - **0.1 shared libraries.** `make shared` builds `libasmtest.{so,dylib}` from
   `-fPIC` objects (framework runtime + capture trampoline, in a separate
@@ -85,20 +86,27 @@ macOS:
   `dlopen`/`dlsym` consumer that mirrors `regs_t` from the manifest and calls a
   routine through the trampoline (→ correct result), and by staging the install
   into a temp prefix (symlink chain + manifest + resolving `pkg-config`).
-- **0.3 layout contract.** `_Static_assert`s in `asmtest.h` / `asmtest_emu.h` tie
-  each register struct's critical offsets and size to `offsetof`/`sizeof`, so the
-  headers, the trampoline's hard-coded stores, and any binding can't drift apart
-  silently. `make manifest` compiles `scripts/gen-manifest.c` against the real
-  headers and emits `asmtest_abi.json` — a machine-readable layout (sizes, field
-  offsets, host arch, sentinels, flag masks) for every binding's generator to
-  consume instead of hand-transcribing offsets.
+- **0.2 binding ABI.** Non-jumping verdict shims `asmtest_check_abi` /
+  `asmtest_check_flag` *return* a verdict + reason instead of `longjmp`-ing into
+  the runner, so a binding can validate a capture across the FFI boundary with no
+  C runner present (the jumping `asmtest_assert_*` now delegate to them). The
+  contract symbol set is designated in the [API reference](../api-reference.md)
+  (Binding ABI section) — every call path already has a non-variadic array form,
+  so a generator needn't emulate cpp expansion. `ASMTEST_NO_MAIN` lets the
+  runtime link without its `main()` for embedding/driver use.
+- **0.4 conformance corpus.** `bindings/conformance/conformance.c` is the C
+  reference: a fixed set of canonical routines with known captures, driven
+  through the binding-ABI entry points and checked against expected literals (8
+  cases across int/FP/SIMD/flags/ABI capture + an x86-64 emulator case). `make
+  conformance` runs it (TAP, nonzero on mismatch) and emits `corpus.json`, the
+  portable expected-results table every language binding must reproduce — one
+  source of truth for "did the binding wire the ABI up correctly".
 
 Kept `make install` (static + headers) unchanged so the Track B install stays
-toolchain-light; the shared install is opt-in via the new targets. Remaining:
-**0.2** (designate the binding-ABI symbol set + optional non-jumping verdict
-shims), **0.4** (cross-language conformance corpus + expected-results table), and
-**0.5** (per-language CI template). The sub-sections below describe the full
-scope.
+toolchain-light; the shared install is opt-in via the new targets. **Remaining:
+0.5** (a reusable per-language CI template) — best landed alongside the first
+language binding (Track P) that needs it. The sub-sections below describe the
+full scope.
 
 ### 0.1 Shared-library build targets *(done)*
 
@@ -112,7 +120,7 @@ scope.
   Mach-O), versioned filenames, and `make install` extended to place them under
   `$(libdir)` next to `libasmtest.a`. Extend `asmtest.pc` with a shared variant.
 
-### 0.2 A stable, generation-friendly "binding ABI" *(planned)*
+### 0.2 A stable, generation-friendly "binding ABI" *(done)*
 
 - **Designate the contract symbols.** Document which functions/structs/constants
   are the public binding ABI (the capture + emulator entry points, `regs_t`,
@@ -137,7 +145,7 @@ scope.
 - Add `_Static_assert`s in C tying each documented offset to `offsetof`, so the
   manifest and the trampoline's stores can never drift apart unnoticed.
 
-### 0.4 Cross-language conformance corpus *(planned)*
+### 0.4 Cross-language conformance corpus *(done)*
 
 - A fixed set of canonical routines (from `examples/`) plus a table of **expected
   captures** (return value, flags, callee-saved sentinels, FP/vector lanes, and for
@@ -155,8 +163,10 @@ scope.
 **Acceptance.** `make shared` / `make shared-emu` produce loadable libraries on all
 four native targets; the layout manifest matches `offsetof` under `_Static_assert`;
 the conformance corpus + expected-results table exist and the C reference passes
-them. *(First two clauses met and verified on x86-64 macOS; the other three native
-targets follow when the 0.5 CI template lands. The third clause is gated on 0.4.)*
+them. *(All three clauses met and verified on x86-64 macOS — `make shared` /
+`shared-emu` / `manifest` build, the `_Static_assert`s hold, and `make
+conformance` passes 8/8 and emits `corpus.json`; the other three native targets
+follow when the 0.5 CI template lands.)*
 
 **Effort:** ~2–3 days. **Touches:** `Makefile`, `asmtest.pc.in`, headers
 (`_Static_assert` + optional shims), a small manifest generator, CI templates.

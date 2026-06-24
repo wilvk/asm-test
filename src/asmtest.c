@@ -158,7 +158,11 @@ void asmtest_assert_mem_eq(const char *file, int line, const char *aexpr,
 /* Register / flag assertions                                          */
 /* ------------------------------------------------------------------ */
 
-void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
+/* Non-jumping verdict shims (Track 0). These RETURN the verdict and write a
+ * reason into msg instead of longjmp-ing into the runner, so an FFI binding can
+ * validate a capture without the C runner present. The jumping asmtest_assert_*
+ * wrappers below delegate here, keeping one source of truth for the checks. */
+int asmtest_check_abi(const regs_t *r, char *msg, size_t n) {
     const struct {
         const char *name;
         unsigned long got, want;
@@ -185,20 +189,44 @@ void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
 #endif
     };
     for (size_t i = 0; i < sizeof chk / sizeof chk[0]; i++) {
-        if (chk[i].got != chk[i].want)
-            asmtest_fail(file, line,
-                         "ASSERT_ABI_PRESERVED: %s not restored "
-                         "(got 0x%lx, expected 0x%lx)",
+        if (chk[i].got != chk[i].want) {
+            if (msg && n)
+                snprintf(msg, n,
+                         "%s not restored (got 0x%lx, expected 0x%lx)",
                          chk[i].name, chk[i].got, chk[i].want);
+            return 1;
+        }
     }
+    if (msg && n)
+        msg[0] = '\0';
+    return 0;
+}
+
+int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
+                       const char *name, char *msg, size_t n) {
+    int set = (r->flags & mask) != 0;
+    if (set != want_set) {
+        if (msg && n)
+            snprintf(msg, n, "FLAG_%s(%s): flags=0x%lx",
+                     want_set ? "SET" : "CLEAR", name, r->flags);
+        return 1;
+    }
+    if (msg && n)
+        msg[0] = '\0';
+    return 0;
+}
+
+void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
+    char msg[128];
+    if (asmtest_check_abi(r, msg, sizeof msg))
+        asmtest_fail(file, line, "ASSERT_ABI_PRESERVED: %s", msg);
 }
 
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name) {
-    int set = (r->flags & mask) != 0;
-    if (set != want_set)
-        asmtest_fail(file, line, "ASSERT_FLAG_%s(%s): flags=0x%lx",
-                     want_set ? "SET" : "CLEAR", name, r->flags);
+    char msg[128];
+    if (asmtest_check_flag(r, mask, want_set, name, msg, sizeof msg))
+        asmtest_fail(file, line, "ASSERT_%s", msg);
 }
 
 /* Distance between two doubles in units in the last place (ULPs). Maps the
@@ -1151,6 +1179,10 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
     }
 }
 
+/* The framework provides main(). Define ASMTEST_NO_MAIN to omit it and supply
+ * your own (embedding the runtime, or — as the conformance corpus does — reusing
+ * only the capture/verdict/emulator entry points with a separate driver). */
+#ifndef ASMTEST_NO_MAIN
 int main(int argc, char **argv) {
     options_t opt;
     memset(&opt, 0, sizeof opt);
@@ -1358,3 +1390,4 @@ int main(int argc, char **argv) {
     free(sel);
     return failed ? 1 : 0;
 }
+#endif /* ASMTEST_NO_MAIN */

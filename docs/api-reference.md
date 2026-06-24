@@ -146,3 +146,44 @@ The emulator tier lives in `asmtest_emu.h`. Its functions
 `ASSERT_EMU_FP_EQ`, `ASSERT_EMU_VEC_EQ`, `ASSERT_BLOCK_COVERED`,
 `ASSERT_BLOCKS_AT_LEAST`) are documented on the [Emulator tier](emulator.md)
 page.
+
+## Binding ABI (multi-language)
+
+The surface below is the **binding ABI** — the symbols a foreign-function
+binding (Python, Rust, …) loads from the shared library and calls directly. It
+is deliberately macro-free: every entry point is a real exported function over
+pointers and arrays, so a code generator parsing the header sees the whole
+contract. The `ASM_CALLn` / `ASSERT_*` conveniences are cpp macros layered on
+top and are **not** part of this surface.
+
+**Build the loadable artifacts** (see [Using asm-test in your
+project](integration.md)):
+
+```sh
+make shared       # libasmtest.{so,dylib}      — runtime + capture trampoline
+make shared-emu   # libasmtest_emu.{so,dylib}  — adds the emulator (-lunicorn)
+make manifest     # asmtest_abi.json           — machine-readable struct layout
+```
+
+**Contract symbols.**
+
+| Group | Symbols | Notes |
+|---|---|---|
+| Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. |
+| Verdict shims | `asmtest_check_abi`, `asmtest_check_flag` | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. |
+| Guard buffers | `asmtest_guarded_alloc`/`_free`, `asmtest_guarded_alloc_under`/`_free_under` | Share a pointer to a guarded buffer with the routine under test. |
+| RNG | `asmtest_rng_u64`, `asmtest_rng_long`, `asmtest_rng_range` | Deterministic splitmix64 source. |
+| Emulator | `emu_open`/`emu_close`/`emu_map`/`emu_read`/`emu_write`, `emu_call`/`_fp`/`_vec`/`_traced`, `emu_call_win64`, and the per-guest `emu_arm64_*` / `emu_riscv_*` / `emu_arm_*` families | Opaque handle + value-struct result; faults surface as data, not crashes. |
+| Layout | `regs_t`, `vec128_t`, `emu_*_regs_t`, `emu_result_t` (and per-guest result structs), `emu_trace_t` | Field offsets are published in `asmtest_abi.json` and pinned by `_Static_assert` in the headers. |
+| Constants | `ASMTEST_SENTINEL_*`, the flag masks (`ASMTEST_CF`/`ZF`/…), `ASMTEST_VERSION`/`_NUM` | Real `#define`s; the manifest also emits the sentinel and flag values so a generator needn't re-read the header for them. |
+
+**Layout manifest.** `asmtest_abi.json` (from `make manifest`) records, for the
+active host arch, each struct's `size`/`align` and field `offset`/`size`, plus
+the sentinels, flag masks, and version. Bindings consume it instead of
+hand-transcribing offsets — a wrong offset silently validates garbage, so this
+is the contract's correctness anchor. The matching `_Static_assert`s in
+`asmtest.h` / `asmtest_emu.h` keep the header, the trampoline's hard-coded
+stores, and the manifest from drifting apart.
+
+The full rollout across languages is tracked in the multi-language bindings
+plan (`docs/plans/multi-language-bindings-plan.md`).
