@@ -285,21 +285,34 @@ runner is untouched.
 
 | POSIX (current) | Feature | Win32 port | Status |
 |---|---|---|---|
-| `fork`/`waitpid`/`poll` | per-test isolation + `-jN` pool | `CreateProcess` + `WaitForMultipleObjects` | planned |
-| `sigaction` + `siglongjmp` | crash-to-failure (SIGSEGV/BUS/FPE/ILL) | vectored exception handler / SEH | planned |
-| `alarm()` | per-test timeout | `CreateTimerQueueTimer` / watchdog thread | planned |
+| `fork`/`waitpid` | per-test isolation + timeout | `CreateProcess` + `WaitForSingleObject` + `TerminateProcess` | **done** |
 | `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` | **done** |
+| `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | planned |
+| `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler / SEH | planned |
 | `fnmatch` | `--filter` glob | `PathMatchSpec` / portable matcher | planned |
 
-**Landed slice.** The guard-page allocator (`asmtest_guarded_alloc` /
-`_alloc_under`) is ported in `src/platform_win32.c` via
-`VirtualAlloc` + `VirtualProtect(PAGE_NOACCESS)`, verified under Wine
-(`make win64-guard-test`, in `win64-check`) with `VirtualQuery`: the usable region
-is committed `PAGE_READWRITE` and the abutting guard page is `PAGE_NOACCESS`, for
-both the trailing (overrun) and leading (underrun) variants. The remaining
-primitives — the SEH crash-to-failure path, the timer-queue timeout, and the
-`CreateProcess`/`WaitForMultipleObjects` isolation pool — are the larger,
-interdependent core of the port and follow next.
+**Landed slices** (both in `src/platform_win32.c`, compiled only for the Win64
+target, verified under Wine and wired into `win64-check` / the CI `win64` job):
+
+- **Guard-page allocator** — `asmtest_guarded_alloc` / `_alloc_under` via
+  `VirtualAlloc` + `VirtualProtect(PAGE_NOACCESS)`. `make win64-guard-test`
+  confirms with `VirtualQuery` that the usable region is committed `PAGE_READWRITE`
+  and the abutting guard page is `PAGE_NOACCESS`, for the trailing (overrun) and
+  leading (underrun) variants.
+- **Isolated execution (crash containment + timeout)** — `asmtest_win32_run`
+  spawns a test body in a child via `CreateProcess`, waits up to a deadline, and
+  classifies the outcome: a clean child is OK (exit code captured), one that dies
+  from an unhandled exception is **CRASH** (its exit code is the NTSTATUS code,
+  e.g. `0xC0000005`), and one that overruns its deadline is **TIMEOUT**
+  (`TerminateProcess`). This is the robust Win32 analogue of the runner's fork +
+  waitpid + alarm — process isolation gives crash containment without the fragile
+  in-process SEH/`longjmp` dance. `make win64-isolate-test` exercises all three
+  outcomes (verified under Wine: the crash child reports `0xC0000005` and the
+  parent survives).
+
+The remaining primitives — the `WaitForMultipleObjects` parallel `-jN` pool (built
+on the isolation primitive above), the in-process SEH crash-to-failure path for
+`--no-fork`, and the `--filter` glob — follow next.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as

@@ -6,11 +6,14 @@
  *
  * Ported so far:
  *   - the guard-page allocator (mmap + mprotect(PROT_NONE) -> VirtualAlloc +
- *     VirtualProtect(PAGE_NOACCESS)).
+ *     VirtualProtect(PAGE_NOACCESS));
+ *   - isolated test execution with crash containment + timeout (fork + waitpid +
+ *     alarm -> CreateProcess + WaitForSingleObject + TerminateProcess).
  *
- * Still POSIX-only in src/asmtest.c (later Phase 4 slices): per-test isolation
- * (fork -> CreateProcess), crash-to-failure (signals -> SEH/vectored handler),
- * timeout (alarm -> timer queue), and the --filter glob (fnmatch).
+ * Still POSIX-only in src/asmtest.c (later Phase 4 slices): the parallel `-jN`
+ * pool (WaitForMultipleObjects over the per-test children), in-process
+ * crash-to-failure for `--no-fork` (signals -> SEH/vectored handler), and the
+ * --filter glob (fnmatch).
  */
 #if defined(_WIN32)
 
@@ -18,6 +21,7 @@
 #include <windows.h>
 
 #include "asmtest.h"
+#include "platform_win32.h"
 
 static size_t win32_page_size(void) {
     SYSTEM_INFO si;
@@ -86,6 +90,56 @@ void asmtest_guarded_free_under(void *p, size_t n) {
     unsigned char *base = (unsigned char *)p - pg;
     (void)n;
     VirtualFree(base, 0, MEM_RELEASE);
+}
+
+/* ------------------------------------------------------------------ */
+/* Isolated execution: crash containment + per-test timeout            */
+/* ------------------------------------------------------------------ */
+
+/* A process that dies from an unhandled hardware exception exits with the
+ * NTSTATUS exception code (e.g. 0xC0000005 for an access violation), which lives
+ * in the error-severity range. Distinguish those from ordinary exit codes. */
+static int is_crash_code(DWORD code) {
+    return code >= 0xC0000000u;
+}
+
+asmtest_win32_run_t asmtest_win32_run(const char *cmdline, unsigned timeout_ms,
+                                      unsigned long *exit_code) {
+    /* CreateProcessA may modify its command-line buffer, so copy it. */
+    char buf[2048];
+    size_t i = 0;
+    for (; cmdline[i] != '\0' && i + 1 < sizeof buf; i++)
+        buf[i] = cmdline[i];
+    buf[i] = '\0';
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof si);
+    si.cb = sizeof si;
+    ZeroMemory(&pi, sizeof pi);
+
+    if (!CreateProcessA(NULL, buf, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+        return ASMTEST_W32_SPAWN_FAIL;
+
+    DWORD waited = WaitForSingleObject(pi.hProcess,
+                                       timeout_ms == 0 ? INFINITE : timeout_ms);
+
+    asmtest_win32_run_t result;
+    if (waited == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, INFINITE); /* reap */
+        result = ASMTEST_W32_TIMEOUT;
+    } else {
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        if (exit_code != NULL)
+            *exit_code = code;
+        result = is_crash_code(code) ? ASMTEST_W32_CRASH : ASMTEST_W32_OK;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return result;
 }
 
 #endif /* _WIN32 */
