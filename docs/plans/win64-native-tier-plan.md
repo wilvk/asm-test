@@ -289,7 +289,7 @@ runner is untouched.
 | `mmap` + `mprotect(PROT_NONE)` | guard-page allocator | `VirtualAlloc` + `PAGE_NOACCESS` | **done** |
 | `poll` over children | the `-jN` parallel pool | `WaitForMultipleObjects` | **done** |
 | `sigaction` + `siglongjmp` | in-process crash-to-failure (`--no-fork`) | vectored exception handler / SEH | planned |
-| `fnmatch` | `--filter` glob | `PathMatchSpec` / portable matcher | planned |
+| `fnmatch` | `--filter` glob | portable glob matcher | **done** |
 
 **Landed slices** (both in `src/platform_win32.c`, compiled only for the Win64
 target, verified under Wine and wired into `win64-check` / the CI `win64` job):
@@ -319,8 +319,14 @@ target, verified under Wine and wired into `win64-check` / the CI `win64` job):
   with the exception code, so a crash is a prompt NTSTATUS exit rather than Wine's
   slow debugger path.
 
-The remaining primitives — the in-process SEH crash-to-failure path for
-`--no-fork`, and the `--filter` glob — follow next.
+- **`--filter` glob** — MinGW has no `fnmatch`, so a small portable matcher
+  (`src/glob_match.c`, platform-neutral) supports `*`, `?`, `[...]` classes (ranges
+  + `!`/`^` negation) and `\` escaping — the `fnmatch(…, 0)` subset the runner's
+  test-id filtering uses. `make win64-filter-test` (and a native build) cover it.
+
+The one remaining primitive is the in-process SEH crash-to-failure path for
+`--no-fork` (the rest of the runner uses the process-isolation primitives above).
+After it, the runner itself can be assembled for the Win64 target.
 
 Keep the POSIX paths; gate the Win32 paths behind the same target macro as the
 `regs_t` branch. The MinGW emulated-`fork` shortcut is **rejected** — it is as
