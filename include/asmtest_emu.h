@@ -306,6 +306,16 @@ bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
                      const long *iargs, int niargs, const double *fargs,
                      int nfargs, uint64_t max_insns, emu_arm_result_t *out);
 
+/* Like emu_arm_call_fp, but marshals `nvargs` 128-bit NEON vectors into q0..q3
+ * (the AAPCS-VFP vector arg registers) alongside the integer args, and captures
+ * the whole q0..q15 file. A vector return is out->regs.q[0]. (RISC-V has no
+ * counterpart: Unicorn exposes no vector registers for its RISC-V guest, so the
+ * V extension cannot be marshalled — see the note in src/emu.c.) */
+bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
+                      const long *iargs, int niargs,
+                      const emu_vec128_t *vargs, int nvargs,
+                      uint64_t max_insns, emu_arm_result_t *out);
+
 /* ------------------------------------------------------------------ */
 /* Coverage reporting (Track C)                                        */
 /*                                                                     */
@@ -332,6 +342,48 @@ size_t emu_coverage_uncovered(const emu_trace_t *covered,
  * framework has no source lines, so block byte-offsets stand in for line
  * numbers (offset-level coverage); `name` fills the SF: source-file field. */
 void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
+
+/* ------------------------------------------------------------------ */
+/* Source-line coverage mapping (Track C)                              */
+/*                                                                     */
+/* The trace records basic-block byte-offsets from the routine entry.  */
+/* To report coverage against SOURCE LINES instead of raw offsets,     */
+/* supply a line map: an ascending table of (offset, line) rows — the  */
+/* shape of a DWARF line program or an assembler listing, produced     */
+/* out-of-band (objdump/readelf/--listing). The framework deliberately */
+/* does not parse DWARF itself, keeping its no-extra-dependency stance; */
+/* it just consumes the normalized map. Row i covers the byte-offsets   */
+/* [entries[i].offset, entries[i+1].offset); the last row extends to    */
+/* the routine's end. A source line counts as covered when a covered    */
+/* basic block begins within its offset range.                          */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    uint64_t offset; /* code byte-offset where this source line begins  */
+    uint32_t line;   /* 1-based source line number                      */
+} emu_line_entry_t;
+
+typedef struct {
+    const emu_line_entry_t *entries; /* ascending by .offset            */
+    size_t count;
+} emu_line_map_t;
+
+/* The line-map row whose offset range contains `off`, or NULL when `off`
+ * precedes the first row or the map is empty. */
+const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map,
+                                        uint64_t off);
+
+/* Human-readable source-line coverage for `covered` resolved through `map`: an
+ * "L/M source lines covered" line plus the sorted uncovered line numbers.
+ * Returns the count of uncovered source lines (0 = every mapped line hit). */
+size_t emu_trace_source_report(const emu_trace_t *covered,
+                               const emu_line_map_t *map, FILE *out);
+
+/* lcov .info export at SOURCE-LINE granularity (cf. emu_trace_lcov, which emits
+ * raw offsets). Every distinct line named by `map` is emitted as DA:line,N
+ * (N=1 when a covered block falls on it, else 0), so the record shows both hit
+ * and missed lines; `source_file` fills the SF: field. */
+void emu_trace_lcov_source(const emu_trace_t *covered, const emu_line_map_t *map,
+                           const char *source_file, FILE *out);
 
 /* ------------------------------------------------------------------ */
 /* Emulator assertions (Track C)                                       */

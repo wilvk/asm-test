@@ -305,6 +305,67 @@ TEST(emu, lcov_export_emits_records) {
     ASSERT_TRUE(strstr(buf, "end_of_record") != NULL);
 }
 
+/* Source-line coverage mapping (Track C leftover): a caller-supplied
+ * (offset -> line) table turns block-offset coverage into source-line coverage,
+ * with hit AND missed lines reported. The map and trace are synthetic so the
+ * asserted line numbers don't depend on any routine's codegen. */
+TEST(emu, source_line_mapping) {
+    /* offsets [0,4) -> line 10, [4,8) -> line 11, [8,..) -> line 12. */
+    static const emu_line_entry_t rows[] = {{0, 10}, {4, 11}, {8, 12}};
+    emu_line_map_t map = {rows, 3};
+
+    /* lookup resolves an offset to the row whose range contains it; the last
+     * row extends to the end. */
+    ASSERT_EQ(emu_line_lookup(&map, 0)->line, 10u);
+    ASSERT_EQ(emu_line_lookup(&map, 3)->line, 10u);
+    ASSERT_EQ(emu_line_lookup(&map, 4)->line, 11u);
+    ASSERT_EQ(emu_line_lookup(&map, 7)->line, 11u);
+    ASSERT_EQ(emu_line_lookup(&map, 8)->line, 12u);
+    ASSERT_EQ(emu_line_lookup(&map, 999)->line, 12u);
+    ASSERT_TRUE(emu_line_lookup(NULL, 0) == NULL);
+
+    /* An offset before the first row maps to nothing. */
+    static const emu_line_entry_t rows2[] = {{4, 11}, {8, 12}};
+    emu_line_map_t map2 = {rows2, 2};
+    ASSERT_TRUE(emu_line_lookup(&map2, 0) == NULL);
+    ASSERT_TRUE(emu_line_lookup(&map2, 3) == NULL);
+
+    /* A covered trace that entered the blocks at offsets 0 and 8 (lines 10 and
+     * 12); line 11 is never reached. */
+    uint64_t cblocks[] = {0, 8};
+    emu_trace_t covered = {0};
+    covered.blocks = cblocks;
+    covered.blocks_cap = 2;
+    covered.blocks_len = 2;
+
+    /* The report names the one uncovered line (11). */
+    FILE *f = tmpfile();
+    ASSERT_TRUE(f != NULL);
+    size_t miss = emu_trace_source_report(&covered, &map, f);
+    ASSERT_EQ(miss, (size_t)1);
+    char buf[256] = {0};
+    rewind(f);
+    (void)!fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    ASSERT_TRUE(strstr(buf, "2/3 lines covered") != NULL);
+    ASSERT_TRUE(strstr(buf, "uncovered lines: 11") != NULL);
+
+    /* lcov_source emits one DA per source line — hit (1) AND missed (0). */
+    FILE *g = tmpfile();
+    ASSERT_TRUE(g != NULL);
+    emu_trace_lcov_source(&covered, &map, "classify.s", g);
+    char lbuf[256] = {0};
+    rewind(g);
+    (void)!fread(lbuf, 1, sizeof lbuf - 1, g);
+    fclose(g);
+    ASSERT_TRUE(strstr(lbuf, "SF:classify.s") != NULL);
+    ASSERT_TRUE(strstr(lbuf, "DA:10,1") != NULL);
+    ASSERT_TRUE(strstr(lbuf, "DA:11,0") != NULL); /* missed line surfaced */
+    ASSERT_TRUE(strstr(lbuf, "DA:12,1") != NULL);
+    ASSERT_TRUE(strstr(lbuf, "LF:3") != NULL);
+    ASSERT_TRUE(strstr(lbuf, "LH:2") != NULL);
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:
@@ -640,6 +701,33 @@ TEST(emu_arm, double_arg_returns_in_d0) {
         emu_arm_call_fp(e, VADDF64, sizeof VADDF64, iargs, 0, fargs, 2, 0, &r));
     ASSERT_NO_FAULT(&r);
     ASSERT_DEQ(r.regs.q[0].f64[0], 3.75); /* d0 == q[0].f64[0] */
+    emu_arm_close(e);
+}
+
+/* ARM32 NEON vector args (Track C leftover): brings ARM32 to x86/AArch64 vector
+ * parity. vadd.i32 q0, q0, q1 adds four packed s32 lanes; bytes (little-endian):
+ *   vadd.i32 q0, q0, q1 -> F2200842   bx lr -> E12FFF1E
+ * Vector args land in q0..q3 (AAPCS-VFP); the whole q0..q15 file is captured. */
+TEST(emu_arm, vector_arg_captures_q_file) {
+    static const unsigned char VADD4S[] = {0x42, 0x08, 0x20, 0xF2,
+                                           0x1E, 0xFF, 0x2F, 0xE1};
+    emu_arm_t *e = emu_arm_open();
+    emu_arm_result_t r;
+    emu_vec128_t a = {0}, b = {0};
+    for (int i = 0; i < 4; i++) {
+        a.u32[i] = (uint32_t)(i + 1);
+        b.u32[i] = (uint32_t)(10 * (i + 1));
+    }
+    emu_vec128_t vargs[2] = {a, b};
+    long iargs[1] = {0};
+    ASSERT_TRUE(emu_arm_call_vec(e, VADD4S, sizeof VADD4S, iargs, 0, vargs, 2, 0,
+                                 &r));
+    ASSERT_NO_FAULT(&r);
+    emu_vec128_t expect = {0};
+    for (int i = 0; i < 4; i++)
+        expect.u32[i] = a.u32[i] + b.u32[i]; /* 11 22 33 44 */
+    ASSERT_EMU_VEC128_EQ(&r.regs.q[0], expect.u8);
+    ASSERT_EQ(r.regs.q[0].u32[3], 44u);
     emu_arm_close(e);
 }
 

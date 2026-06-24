@@ -36,6 +36,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Coverage reporting (Track C).** `emu_trace_report`, `emu_coverage_uncovered`
   (lists the blocks a run missed against a universe trace), `emu_trace_lcov`
   (offset-level lcov export), and the `emu_trace_covered` predicate.
+- **Emulator vector parity & source-line coverage (Track C, leftovers).**
+  `emu_arm_call_vec` marshals 128-bit NEON vectors into ARM32 `q0..q3` and
+  captures the whole `q0..q15` file, matching the x86-64/AArch64 vector path.
+  Source-line coverage: a caller-supplied `emu_line_map_t` (ascending
+  `(offset, line)` rows, produced out-of-band) drives `emu_line_lookup`,
+  `emu_trace_source_report`, and `emu_trace_lcov_source`, which report block
+  coverage against source lines (hit **and** missed) — no DWARF parsing, no new
+  dependency. The RISC-V "V" extension has no counterpart: Unicorn's RISC-V
+  guest exposes no vector registers, so it stays scalar-FP (documented in
+  `src/emu.c` and `docs/emulator.md`). Closes Track C's open C items.
 
 ### Fixed
 

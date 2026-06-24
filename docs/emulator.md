@@ -124,8 +124,8 @@ host-native routine of a different ISA).
 |---|---|---|---|---|
 | **x86-64** (System V) | `emu_open` | `rdi, rsi, rdx, rcx, r8, r9` | `rax` | copies bytes from a built routine |
 | **AArch64** | `emu_arm64_open` | `x0`–`x7` | `x0` | NEON `v[]`; `emu_arm64_call_fp/_vec` |
-| **RISC-V (RV64)** | `emu_riscv_open` | `a0`–`a7` | `a0` | no flags register; scalar FP (`f[]`) |
-| **ARM32 (A32)** | `emu_arm_open` | `r0`–`r3` (AAPCS) | `r0` | full `r0`–`r15` + `cpsr`; scalar FP |
+| **RISC-V (RV64)** | `emu_riscv_open` | `a0`–`a7` | `a0` | no flags register; scalar FP (`f[]`); no vector path (Unicorn exposes no RVV registers) |
+| **ARM32 (A32)** | `emu_arm_open` | `r0`–`r3` (AAPCS) | `r0` | full `r0`–`r15` + `cpsr`; NEON `q[]`; `emu_arm_call_fp/_vec` |
 | **Windows x64** | (x86-64 engine) | `rcx, rdx, r8, r9` | `rax` | `emu_call_win64`; 32-byte shadow space, `rsi`/`rdi` nonvolatile |
 
 ### Windows x64 on a System V host
@@ -189,6 +189,29 @@ Coverage assertions:
 ASSERT_BLOCK_COVERED(&tr, 0x12);     // a specific block offset was entered
 ASSERT_BLOCKS_AT_LEAST(&tr, 3);      // at least N distinct blocks
 ```
+
+### Source-line coverage
+
+Block offsets become **source lines** with a caller-supplied line map — an
+ascending `(offset, line)` table, the shape of a DWARF line program or an
+assembler listing, produced out-of-band (so the framework keeps its
+no-DWARF-parsing, no-extra-dependency stance and just consumes the normalized
+map). Row *i* spans `[offset_i, offset_{i+1})`; a line is covered when a covered
+block begins in its range.
+
+```c
+static const emu_line_entry_t rows[] = {{0, 10}, {4, 11}, {8, 12}};
+emu_line_map_t map = {rows, 3};
+
+emu_trace_source_report(&covered, &map, stdout);          // "2/3 lines covered" + missed lines
+emu_trace_lcov_source(&covered, &map, "classify.s", out); // DA:line,1 for hit, DA:line,0 for missed
+```
+
+| Function | Purpose |
+|---|---|
+| `emu_line_lookup(&map, off)` | the line-map row whose range contains an offset |
+| `emu_trace_source_report(covered, &map, out)` | "L/M source lines covered" + uncovered line numbers |
+| `emu_trace_lcov_source(covered, &map, file, out)` | line-level lcov export (shows hit **and** missed lines) |
 
 ## When to reach for the emulator
 

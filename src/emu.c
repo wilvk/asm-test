@@ -803,6 +803,32 @@ bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
     return emu_arm_run(uc, max_insns, out, NULL);
 }
 
+bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
+                      const long *iargs, int niargs,
+                      const emu_vec128_t *vargs, int nvargs,
+                      uint64_t max_insns, emu_arm_result_t *out) {
+    /* AAPCS-VFP: 128-bit vector args go in q0..q3 (q0..q15 are consecutive
+     * Unicorn register ids). The whole q file is captured by read_all_regs_arm,
+     * which reads d0..d31 back into q[0..15]. */
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_arm_setup(uc, code, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nvargs && i < 4; i++)
+        uc_reg_write(uc, UC_ARM_REG_Q0 + i, (void *)vargs[i].u8);
+    return emu_arm_run(uc, max_insns, out, NULL);
+}
+
+/* RISC-V has no emu_riscv_call_vec: the RISC-V "V" (vector) extension would be
+ * the analogue, but Unicorn's RISC-V guest exposes no vector registers
+ * (UC_RISCV_REG_V0.. do not exist) and no vtype/vl CSRs, so there is no
+ * register interface to marshal vector args into or capture them from. Vector
+ * marshalling is therefore implemented for the x86-64 (xmm), AArch64 (NEON v),
+ * and ARM32 (NEON q) guests only; RISC-V stays scalar-FP (emu_riscv_call_fp).
+ * See docs/emulator.md and docs/plans/expansion-plan.md (Track C). */
+
 /* ------------------------------------------------------------------ */
 /* Coverage reporting (Track C)                                        */
 /* ------------------------------------------------------------------ */
@@ -897,4 +923,119 @@ void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out) {
     free(s);
     fprintf(out, "LF:%zu\nLH:%zu\n", n, n);
     fprintf(out, "end_of_record\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Source-line coverage mapping (Track C)                              */
+/* ------------------------------------------------------------------ */
+
+const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map,
+                                        uint64_t off) {
+    if (map == NULL || map->entries == NULL || map->count == 0)
+        return NULL;
+    const emu_line_entry_t *hit = NULL;
+    /* Rows are ascending by offset, so the last row with offset <= off owns it;
+     * once a row starts past off, every later row does too. */
+    for (size_t i = 0; i < map->count; i++) {
+        if (map->entries[i].offset <= off)
+            hit = &map->entries[i];
+        else
+            break;
+    }
+    return hit;
+}
+
+/* One source line plus whether a covered block landed on it. */
+typedef struct {
+    uint32_t line;
+    int hit;
+} line_cov_t;
+
+static int cmp_line_cov(const void *a, const void *b) {
+    uint32_t x = ((const line_cov_t *)a)->line, y = ((const line_cov_t *)b)->line;
+    return (x > y) - (x < y);
+}
+
+/* Collect the distinct source lines named by `map`, flagging each line a
+ * covered block-start offset resolves to. Returns a malloc'd, line-sorted array
+ * (caller frees) with the count in *n; NULL on an empty map / oom. */
+static line_cov_t *source_coverage(const emu_trace_t *covered,
+                                   const emu_line_map_t *map, size_t *n) {
+    *n = 0;
+    if (map == NULL || map->entries == NULL || map->count == 0)
+        return NULL;
+    line_cov_t *lc = (line_cov_t *)malloc(map->count * sizeof *lc);
+    if (lc == NULL)
+        return NULL;
+    size_t m = 0;
+    for (size_t i = 0; i < map->count; i++) { /* distinct lines */
+        uint32_t ln = map->entries[i].line;
+        size_t j;
+        for (j = 0; j < m; j++)
+            if (lc[j].line == ln)
+                break;
+        if (j == m) {
+            lc[m].line = ln;
+            lc[m].hit = 0;
+            m++;
+        }
+    }
+    if (covered != NULL && covered->blocks != NULL) { /* mark hits */
+        for (size_t b = 0; b < covered->blocks_len; b++) {
+            const emu_line_entry_t *en = emu_line_lookup(map, covered->blocks[b]);
+            if (en == NULL)
+                continue;
+            for (size_t j = 0; j < m; j++)
+                if (lc[j].line == en->line) {
+                    lc[j].hit = 1;
+                    break;
+                }
+        }
+    }
+    qsort(lc, m, sizeof *lc, cmp_line_cov);
+    *n = m;
+    return lc;
+}
+
+size_t emu_trace_source_report(const emu_trace_t *covered,
+                               const emu_line_map_t *map, FILE *out) {
+    size_t n;
+    line_cov_t *lc = source_coverage(covered, map, &n);
+    if (lc == NULL)
+        return 0;
+    size_t hit = 0;
+    for (size_t i = 0; i < n; i++)
+        if (lc[i].hit)
+            hit++;
+    if (out != NULL) {
+        fprintf(out, "source coverage: %zu/%zu lines covered\n", hit, n);
+        if (hit < n) {
+            fprintf(out, "  uncovered lines:");
+            for (size_t i = 0; i < n; i++)
+                if (!lc[i].hit)
+                    fprintf(out, " %u", lc[i].line);
+            fprintf(out, "\n");
+        }
+    }
+    free(lc);
+    return n - hit;
+}
+
+void emu_trace_lcov_source(const emu_trace_t *covered, const emu_line_map_t *map,
+                           const char *source_file, FILE *out) {
+    if (out == NULL)
+        return;
+    size_t n;
+    line_cov_t *lc = source_coverage(covered, map, &n);
+    fprintf(out, "TN:\n");
+    fprintf(out, "SF:%s\n", source_file != NULL ? source_file : "routine");
+    size_t hit = 0;
+    for (size_t i = 0; i < n; i++) {
+        fprintf(out, "DA:%u,%d\n", lc[i].line, lc[i].hit ? 1 : 0);
+        if (lc[i].hit)
+            hit++;
+    }
+    fprintf(out, "LF:%zu\nLH:%zu\n", n, hit);
+    fprintf(out, "end_of_record\n");
+    free(lc);
 }

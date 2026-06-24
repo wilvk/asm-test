@@ -175,8 +175,30 @@ was left out; reporting is offset-level as planned. Covered by `make emu-test`.
 at open via `mstatus.FS`), and `emu_arm_call_fp` (VFP `d0..31`/`q0..15`, enabled at
 open via CPACR + FPEXC). A generic `ASSERT_EMU_VEC128_EQ` and field-direct fault
 macros work across every guest's result struct. Four more `emu` tests (now 37
-passing). Vector-arg marshalling beyond AArch64/x86 (RISC-V V extension, ARM NEON
-arg passing) and source-line coverage mapping remain the only open C items.
+passing).
+
+**Leftovers landed (Track C closed).** The two remaining open C items are now
+resolved:
+
+- **ARM NEON vector-arg marshalling** — `emu_arm_call_vec` marshals 128-bit
+  vectors into `q0..q3` (AAPCS-VFP) and captures the whole `q0..q15` file,
+  bringing ARM32 to the x86-64/AArch64 vector parity. (`emu_arm.vector_arg_
+  captures_q_file`.)
+- **Source-line coverage mapping** — `emu_line_map_t` + `emu_line_lookup`,
+  `emu_trace_source_report`, and `emu_trace_lcov_source` translate block
+  byte-offsets into source-line coverage (hit **and** missed lines) via a
+  caller-supplied, ascending `(offset, line)` map. The map is produced
+  out-of-band (objdump/readelf/listing/DWARF), so the framework keeps its
+  no-extra-dependency, no-DWARF-parsing stance — the offset-level `emu_trace_
+  lcov` remains the zero-config baseline. (`emu.source_line_mapping`.)
+- **RISC-V "V" (vector) extension** — *not feasible, documented decision.*
+  Unicorn's RISC-V guest exposes no vector registers (`UC_RISCV_REG_V0..` do not
+  exist) and no `vtype`/`vl` CSRs, so there is no register interface to marshal
+  vector args into or capture them from; RISC-V stays scalar-FP
+  (`emu_riscv_call_fp`). Recorded in `src/emu.c` and `docs/emulator.md`. Would
+  become feasible only if a future Unicorn exposes the RVV register file.
+
+Two more `emu` tests (now **39** passing). Track C has no open C items.
 
 ### C1 — Wider argument marshalling
 
