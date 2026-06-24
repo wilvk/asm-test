@@ -58,4 +58,19 @@ _\name:
 
 #endif
 
+/* Mark the stack non-executable (ELF/Linux). Without a .note.GNU-stack section
+ * the linker warns "missing .note.GNU-stack section implies executable stack"
+ * and may map an executable stack. Emitted once per translation unit (asm.h has
+ * an include guard); ASM_FUNC re-selects .text for the code that follows. The
+ * section type prefix is %progbits on ARM, @progbits elsewhere — mirroring the
+ * %function/@function split above. Not applicable to Mach-O (macOS). */
+#if !defined(__APPLE__)
+# if defined(__aarch64__) || defined(__arm__)
+    .section .note.GNU-stack,"",%progbits
+# else
+    .section .note.GNU-stack,"",@progbits
+# endif
+    .text
+#endif
+
 #endif /* ASMTEST_ASM_H */

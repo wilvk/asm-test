@@ -28,4 +28,12 @@ SYM(%1):
 %macro ASM_ENDFUNC 1
 %endmacro
 
+; Mark the stack non-executable on ELF (Linux), matching the GAS asm.h: avoids
+; the linker's "missing .note.GNU-stack ... executable stack" warning. Emitted
+; once (this file is %include-guarded); ASM_FUNC re-selects .text afterwards.
+%ifidn __OUTPUT_FORMAT__, elf64
+    section .note.GNU-stack noalloc noexec nowrite progbits
+    section .text
+%endif
+
 %endif ; ASMTEST_ASM_NASM_INC
