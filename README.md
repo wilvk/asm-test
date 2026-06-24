@@ -72,7 +72,12 @@ All phases through **Phase 11** (breadth) are complete. See
   coverage**; accumulating coverage across inputs answers "did the tests
   exercise every branch?". The x86-64 engine also runs the **Windows x64 ABI**
   via `emu_call_win64` (args in `rcx/rdx/r8/r9`, 32-byte shadow space, `rsi`/`rdi`
-  callee-saved) — so Win64 routines are testable on a System V host.
+  callee-saved) — so Win64 routines are testable on a System V host. The x86-64
+  guest also marshals `double` args (`emu_call_fp`) and 128-bit vector args
+  (`emu_call_vec`) and captures the XMM file, with emulator assertions
+  (`ASSERT_NO_FAULT`, `ASSERT_FAULT_AT`, `ASSERT_EMU_REG_EQ`, `ASSERT_EMU_FP_EQ`,
+  `ASSERT_EMU_VEC_EQ`) and coverage reporting (`emu_trace_report`,
+  `emu_coverage_uncovered`, an lcov export, and `ASSERT_BLOCK_COVERED`).
 
 ## Quick start
 

@@ -4,6 +4,7 @@
  */
 #include "asmtest_emu.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unicorn/unicorn.h>
@@ -114,6 +115,17 @@ static void add_trace_hooks(uc_engine *uc, trace_ctx_t *tc, uc_hook *hcode,
     uc_hook_add(uc, hblock, UC_HOOK_BLOCK, (void *)on_block, tc, 1, 0);
 }
 
+/* Load a routine's bytes at EMU_CODE_BASE and flush Unicorn's translation-block
+ * cache for it. The flush matters when an emulator handle is reused for a
+ * different routine at the same address: without it, Unicorn would re-run the
+ * previously translated (now stale) code instead of the bytes just written. */
+static bool load_code(uc_engine *uc, const void *code, size_t code_len) {
+    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK)
+        return false;
+    uc_ctl_flush_tb(uc);
+    return true;
+}
+
 emu_t *emu_open(void) {
     emu_t *e = (emu_t *)calloc(1, sizeof *e);
     if (e == NULL)
@@ -172,6 +184,29 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
     uc_reg_read(uc, UC_X86_REG_R15, &r->r15);
     uc_reg_read(uc, UC_X86_REG_RIP, &r->rip);
     uc_reg_read(uc, UC_X86_REG_EFLAGS, &r->rflags);
+    for (int i = 0; i < 16; i++) /* xmm0..15 are consecutive enum values */
+        uc_reg_read(uc, UC_X86_REG_XMM0 + i, r->xmm[i].u8);
+}
+
+/* Shared System V setup: copy the routine in, plant the sentinel return address
+ * on a 16-aligned-after-call stack, and load the integer args into the GP
+ * argument registers. Returns false only if the code write fails. */
+static bool emu_x86_setup_sysv(uc_engine *uc, const void *fn, size_t code_len,
+                               const long *iargs, int niargs) {
+    static const int arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
+                                    UC_X86_REG_RDX, UC_X86_REG_RCX,
+                                    UC_X86_REG_R8,  UC_X86_REG_R9};
+    if (!load_code(uc, fn, code_len))
+        return false;
+    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 8;
+    uint64_t ret = EMU_RET_MAGIC;
+    uc_mem_write(uc, sp, &ret, sizeof ret);
+    uc_reg_write(uc, UC_X86_REG_RSP, &sp);
+    for (int i = 0; i < niargs && i < 6; i++) {
+        uint64_t v = (uint64_t)iargs[i];
+        uc_reg_write(uc, arg_regs[i], &v);
+    }
+    return true;
 }
 
 /* Shared x86-64 run-and-capture: registers and stack are already set up by the
@@ -207,35 +242,49 @@ static bool emu_x86_run(uc_engine *uc, uint64_t max_insns, emu_result_t *out,
 bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace) {
-    static const int arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
-                                    UC_X86_REG_RDX, UC_X86_REG_RCX,
-                                    UC_X86_REG_R8,  UC_X86_REG_R9};
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-
-    if (uc_mem_write(uc, EMU_CODE_BASE, fn, code_len) != UC_ERR_OK) {
+    if (!emu_x86_setup_sysv(uc, fn, code_len, args, nargs)) {
         out->uc_err = -1;
         return false;
     }
-
-    /* Stack: place a sentinel return address so `ret` lands on EMU_RET_MAGIC,
-     * where emulation stops. rsp ends up 8 (mod 16), as after a real call. */
-    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 8;
-    uint64_t ret = EMU_RET_MAGIC;
-    uc_mem_write(uc, sp, &ret, sizeof ret);
-    uc_reg_write(uc, UC_X86_REG_RSP, &sp);
-
-    for (int i = 0; i < nargs && i < 6; i++) {
-        uint64_t v = (uint64_t)args[i];
-        uc_reg_write(uc, arg_regs[i], &v);
-    }
-
     return emu_x86_run(uc, max_insns, out, trace);
 }
 
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out) {
     return emu_call_traced(e, fn, code_len, args, nargs, max_insns, out, NULL);
+}
+
+bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
+                 int niargs, const double *fargs, int nfargs,
+                 uint64_t max_insns, emu_result_t *out) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_x86_setup_sysv(uc, fn, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nfargs && i < 8; i++) {
+        unsigned char x[16] = {0}; /* a double occupies the low 8 bytes of xmmN */
+        memcpy(x, &fargs[i], sizeof(double));
+        uc_reg_write(uc, UC_X86_REG_XMM0 + i, x);
+    }
+    return emu_x86_run(uc, max_insns, out, NULL);
+}
+
+bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
+                  int niargs, const emu_vec128_t *vargs, int nvargs,
+                  uint64_t max_insns, emu_result_t *out) {
+    uc_engine *uc = e->uc;
+    memset(out, 0, sizeof *out);
+    if (!emu_x86_setup_sysv(uc, fn, code_len, iargs, niargs)) {
+        out->uc_err = -1;
+        return false;
+    }
+    for (int i = 0; i < nvargs && i < 8; i++)
+        uc_reg_write(uc, UC_X86_REG_XMM0 + i, (void *)vargs[i].u8);
+    return emu_x86_run(uc, max_insns, out, NULL);
 }
 
 /* Microsoft x64 ("Win64") calling convention on the same x86-64 engine. Differs
@@ -252,7 +301,7 @@ bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
 
-    if (uc_mem_write(uc, EMU_CODE_BASE, fn, code_len) != UC_ERR_OK) {
+    if (!load_code(uc, fn, code_len)) {
         out->uc_err = -1;
         return false;
     }
@@ -354,7 +403,7 @@ bool emu_arm64_call_traced(emu_arm64_t *e, const void *code, size_t code_len,
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
 
-    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+    if (!load_code(uc, code, code_len)) {
         out->uc_err = -1;
         return false;
     }
@@ -471,7 +520,7 @@ bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
 
-    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+    if (!load_code(uc, code, code_len)) {
         out->uc_err = -1;
         return false;
     }
@@ -582,7 +631,7 @@ bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
 
-    if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK) {
+    if (!load_code(uc, code, code_len)) {
         out->uc_err = -1;
         return false;
     }
@@ -627,4 +676,100 @@ bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
                   emu_arm_result_t *out) {
     return emu_arm_call_traced(e, code, code_len, args, nargs, max_insns, out,
                                NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Coverage reporting (Track C)                                        */
+/* ------------------------------------------------------------------ */
+
+bool emu_trace_covered(const emu_trace_t *t, uint64_t off) {
+    if (t == NULL || t->blocks == NULL)
+        return false;
+    for (size_t i = 0; i < t->blocks_len; i++)
+        if (t->blocks[i] == off)
+            return true;
+    return false;
+}
+
+static int cmp_u64(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* Copy a trace's distinct block offsets into a freshly malloc'd, ascending
+ * array (caller frees). *n receives the count; returns NULL on empty/oom. */
+static uint64_t *sorted_blocks(const emu_trace_t *t, size_t *n) {
+    *n = (t != NULL && t->blocks != NULL) ? t->blocks_len : 0;
+    if (*n == 0)
+        return NULL;
+    uint64_t *s = (uint64_t *)malloc(*n * sizeof *s);
+    if (s == NULL) {
+        *n = 0;
+        return NULL;
+    }
+    memcpy(s, t->blocks, *n * sizeof *s);
+    qsort(s, *n, sizeof *s, cmp_u64);
+    return s;
+}
+
+void emu_trace_report(const emu_trace_t *t, FILE *out) {
+    if (t == NULL || out == NULL)
+        return;
+    fprintf(out,
+            "coverage: %zu distinct blocks, %llu block entries, "
+            "%llu instructions%s\n",
+            t->blocks_len, (unsigned long long)t->blocks_total,
+            (unsigned long long)t->insns_total,
+            t->truncated ? " (truncated)" : "");
+    size_t n;
+    uint64_t *s = sorted_blocks(t, &n);
+    if (s == NULL)
+        return;
+    fprintf(out, "  blocks:");
+    for (size_t i = 0; i < n; i++)
+        fprintf(out, " 0x%llx", (unsigned long long)s[i]);
+    fprintf(out, "\n");
+    free(s);
+}
+
+size_t emu_coverage_uncovered(const emu_trace_t *covered,
+                              const emu_trace_t *universe, FILE *out) {
+    if (universe == NULL || universe->blocks == NULL)
+        return 0;
+    size_t total = universe->blocks_len;
+    uint64_t *miss = (uint64_t *)malloc((total ? total : 1) * sizeof *miss);
+    if (miss == NULL)
+        return 0;
+    size_t nmiss = 0;
+    for (size_t i = 0; i < total; i++)
+        if (!emu_trace_covered(covered, universe->blocks[i]))
+            miss[nmiss++] = universe->blocks[i];
+    qsort(miss, nmiss, sizeof *miss, cmp_u64);
+    if (out != NULL) {
+        fprintf(out, "coverage: %zu/%zu blocks covered\n", total - nmiss,
+                total);
+        if (nmiss > 0) {
+            fprintf(out, "  uncovered:");
+            for (size_t i = 0; i < nmiss; i++)
+                fprintf(out, " 0x%llx", (unsigned long long)miss[i]);
+            fprintf(out, "\n");
+        }
+    }
+    free(miss);
+    return nmiss;
+}
+
+void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out) {
+    if (t == NULL || out == NULL)
+        return;
+    /* No debug info, so block byte-offsets stand in for source lines. */
+    fprintf(out, "TN:\n");
+    fprintf(out, "SF:%s\n", name != NULL ? name : "routine");
+    size_t n;
+    uint64_t *s = sorted_blocks(t, &n);
+    for (size_t i = 0; i < n; i++)
+        fprintf(out, "DA:%llu,1\n", (unsigned long long)s[i]);
+    free(s);
+    fprintf(out, "LF:%zu\nLH:%zu\n", n, n);
+    fprintf(out, "end_of_record\n");
 }

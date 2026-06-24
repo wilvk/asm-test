@@ -146,11 +146,28 @@ section document both consumption modes. Verified end to end: an external suite
 
 ---
 
-## Track C — Emulator tier parity & coverage reporting
+## Track C — Emulator tier parity & coverage reporting *(done)*
 
 **Goal.** Raise the Unicorn emulator tier to the native tier's ergonomics, and make the
 coverage data it already collects *useful*. This plays to the project's unique
 strength: cross-arch, mid-routine introspection no ABI-boundary tool can match.
+
+**Status: done.** C1: the x86-64 guest now marshals double args (`emu_call_fp`) and
+128-bit vector args (`emu_call_vec`) into xmm0..7 and captures the whole XMM file
+(`emu_x86_regs_t.xmm[16]`, via `emu_vec128_t`). C2: an assertion layer in
+`asmtest_emu.h` — `ASSERT_NO_FAULT` / `ASSERT_FAULT` / `ASSERT_FAULT_AT`,
+`ASSERT_EMU_REG_EQ`, `ASSERT_EMU_FP_EQ`, `ASSERT_EMU_VEC_EQ`, and coverage
+`ASSERT_BLOCK_COVERED` / `ASSERT_BLOCKS_AT_LEAST`. C3: `emu_trace_report`,
+`emu_coverage_uncovered` (prints the blocks a run missed against a universe trace),
+and an offset-level `emu_trace_lcov` export, plus the `emu_trace_covered` predicate.
+Five new `emu` tests cover FP, SIMD, the macros, the uncovered-block report, and lcov.
+Fixed a latent bug surfaced by reusing an emulator handle across routines: Unicorn's
+translation-block cache wasn't flushed after writing new code, so a second routine
+re-ran the first's stale translation — now `load_code` flushes on every load, for all
+guests. **Scope note:** FP/vector marshalling landed for the x86-64 guest (the primary
+engine, which also carries Win64); the same for the AArch64/RISC-V/ARM32 guests
+(NEON `v0..31`, etc.) is a natural follow-up. Source-line mapping (the stretch goal)
+was left out; reporting is offset-level as planned. Covered by `make emu-test`.
 
 ### C1 — Wider argument marshalling
 

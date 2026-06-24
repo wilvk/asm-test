@@ -6,6 +6,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Emulator FP/SIMD (Track C).** The x86-64 emulator guest marshals `double`
+  args (`emu_call_fp`) and 128-bit vector args (`emu_call_vec`) into xmm0..7 and
+  captures the whole XMM file (`emu_x86_regs_t.xmm[]`).
+- **Emulator assertions (Track C).** `ASSERT_NO_FAULT`, `ASSERT_FAULT`,
+  `ASSERT_FAULT_AT`, `ASSERT_EMU_REG_EQ`, `ASSERT_EMU_FP_EQ`, `ASSERT_EMU_VEC_EQ`,
+  and coverage `ASSERT_BLOCK_COVERED` / `ASSERT_BLOCKS_AT_LEAST`.
+- **Coverage reporting (Track C).** `emu_trace_report`, `emu_coverage_uncovered`
+  (lists the blocks a run missed against a universe trace), `emu_trace_lcov`
+  (offset-level lcov export), and the `emu_trace_covered` predicate.
+
+### Fixed
+
+- **Emulator handle reuse.** Unicorn's translation-block cache is now flushed
+  when new code is loaded, so reusing an `emu_t`/guest handle for a different
+  routine no longer re-runs the previous routine's stale translation.
+
 ## [1.0.0] — 2026-06-24
 
 First tagged release. Captures the complete Phase 0–11 framework plus the

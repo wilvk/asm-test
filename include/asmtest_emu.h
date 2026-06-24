@@ -17,12 +17,26 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
-/* Full x86-64 general-purpose register file plus rip/rflags. */
+/* One 128-bit vector (XMM) register, viewable as several lane layouts. Mirrors
+ * vec128_t from asmtest.h, but kept independent so this header stands alone. */
+typedef union {
+    uint8_t u8[16];
+    uint32_t u32[4];
+    uint64_t u64[2];
+    float f32[4];
+    double f64[2];
+} emu_vec128_t;
+
+/* Full x86-64 general-purpose register file plus rip/rflags and the XMM file.
+ * xmm[] is filled on every run; for a routine returning a double the result is
+ * xmm[0].f64[0], and a 128-bit vector return is xmm[0]. */
 typedef struct {
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp;
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
     uint64_t rip, rflags;
+    emu_vec128_t xmm[16];
 } emu_x86_regs_t;
 
 /* Kind of invalid access, mirrors Unicorn's uc_mem_type for faults. */
@@ -63,6 +77,21 @@ bool emu_read(emu_t *e, uint64_t addr, void *data, size_t len);
  */
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
               int nargs, uint64_t max_insns, emu_result_t *out);
+
+/* Like emu_call, but also marshals `nfargs` double args into the SysV FP
+ * argument registers (xmm0..7) alongside the `niargs` integer args. The scalar
+ * double return is out->regs.xmm[0].f64[0]. (x86-64 guest.) */
+bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
+                 int niargs, const double *fargs, int nfargs,
+                 uint64_t max_insns, emu_result_t *out);
+
+/* Like emu_call, but marshals `nvargs` full 128-bit vector args into the vector
+ * argument registers (xmm0..7) alongside the `niargs` integer args. The whole
+ * XMM file is captured into out->regs.xmm[]; a vector return is xmm[0].
+ * (x86-64 guest.) */
+bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
+                  int niargs, const emu_vec128_t *vargs, int nvargs,
+                  uint64_t max_insns, emu_result_t *out);
 
 /* ------------------------------------------------------------------ */
 /* Execution trace & basic-block coverage (Phase 10)                   */
@@ -245,5 +274,147 @@ bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
 bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
                          const long *args, int nargs, uint64_t max_insns,
                          emu_arm_result_t *out, emu_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
+/* Coverage reporting (Track C)                                        */
+/*                                                                     */
+/* Helpers over an accumulated emu_trace_t (see emu_call_traced). All  */
+/* are arch-neutral: a trace records block byte-offsets from the       */
+/* routine entry, whatever the guest.                                  */
+/* ------------------------------------------------------------------ */
+
+/* True if basic-block offset `off` appears in the trace's distinct block set. */
+bool emu_trace_covered(const emu_trace_t *t, uint64_t off);
+
+/* Print a human-readable coverage summary for `t` to `out`: distinct blocks,
+ * total block entries (loops re-count), instruction count, and the sorted
+ * covered offsets. */
+void emu_trace_report(const emu_trace_t *t, FILE *out);
+
+/* Print the block offsets present in `universe` (e.g. a trace accumulated over
+ * all inputs) but absent from `covered`, plus an "X/Y covered" line, to `out`.
+ * Returns the number of uncovered blocks (0 = full coverage of the universe). */
+size_t emu_coverage_uncovered(const emu_trace_t *covered,
+                              const emu_trace_t *universe, FILE *out);
+
+/* Emit an lcov-style .info record for `t` to `out`. Without debug info the
+ * framework has no source lines, so block byte-offsets stand in for line
+ * numbers (offset-level coverage); `name` fills the SF: source-file field. */
+void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
+
+/* ------------------------------------------------------------------ */
+/* Emulator assertions (Track C)                                       */
+/*                                                                     */
+/* These build on the core runner's asmtest_fail (declared in          */
+/* asmtest.h), so include "asmtest.h" before using them — as the emu   */
+/* test suite does. They turn the raw emu_result_t / emu_trace_t       */
+/* structs into one-line assertions, matching the native tier's        */
+/* ASSERT_* ergonomics.                                                */
+/* ------------------------------------------------------------------ */
+
+void asmtest_fail(const char *file, int line, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+/* The run completed without an invalid memory access (and the engine was OK). */
+#define ASSERT_NO_FAULT(res)                                                  \
+    do {                                                                      \
+        const emu_result_t *asmtest_r_ = (res);                              \
+        if (asmtest_r_->faulted)                                             \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_NO_FAULT: faulted at 0x%llx (kind %d)",      \
+                         (unsigned long long)asmtest_r_->fault_addr,          \
+                         (int)asmtest_r_->fault_kind);                        \
+        else if (asmtest_r_->uc_err != 0)                                    \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_NO_FAULT: engine error %d",                  \
+                         asmtest_r_->uc_err);                                 \
+    } while (0)
+
+/* The run hit an invalid memory access. */
+#define ASSERT_FAULT(res)                                                     \
+    do {                                                                      \
+        if (!(res)->faulted)                                                 \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_FAULT: expected a fault, none occurred");    \
+    } while (0)
+
+/* The run faulted with a specific kind (EMU_FAULT_READ/WRITE/FETCH) at addr. */
+#define ASSERT_FAULT_AT(res, want_kind, want_addr)                            \
+    do {                                                                      \
+        const emu_result_t *asmtest_r_ = (res);                              \
+        if (!asmtest_r_->faulted)                                            \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_FAULT_AT: expected a fault, none occurred"); \
+        else if (asmtest_r_->fault_kind != (want_kind) ||                    \
+                 asmtest_r_->fault_addr != (uint64_t)(want_addr))            \
+            asmtest_fail(                                                     \
+                __FILE__, __LINE__,                                          \
+                "ASSERT_FAULT_AT: got kind %d at 0x%llx, want kind %d at "    \
+                "0x%llx",                                                     \
+                (int)asmtest_r_->fault_kind,                                 \
+                (unsigned long long)asmtest_r_->fault_addr, (int)(want_kind), \
+                (unsigned long long)(uint64_t)(want_addr));                  \
+    } while (0)
+
+/* Compare a captured register field unsigned: ASSERT_EMU_REG_EQ(&r, rax, 42)
+ * (x86) or ASSERT_EMU_REG_EQ(&r, x[0], 42) (other guests' result structs). */
+#define ASSERT_EMU_REG_EQ(res, field, val)                                    \
+    do {                                                                      \
+        unsigned long long asmtest_g_ =                                       \
+            (unsigned long long)(res)->regs.field;                            \
+        unsigned long long asmtest_w_ = (unsigned long long)(val);            \
+        if (asmtest_g_ != asmtest_w_)                                        \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_EMU_REG_EQ(%s): 0x%llx vs 0x%llx", #field,   \
+                         asmtest_g_, asmtest_w_);                             \
+    } while (0)
+
+/* The scalar double return (xmm[0].f64[0]) equals `expected` exactly. */
+#define ASSERT_EMU_FP_EQ(res, expected)                                       \
+    do {                                                                      \
+        double asmtest_g_ = (res)->regs.xmm[0].f64[0];                       \
+        double asmtest_w_ = (expected);                                      \
+        if (!(asmtest_g_ == asmtest_w_))                                     \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_EMU_FP_EQ: %.17g vs %.17g", asmtest_g_,      \
+                         asmtest_w_);                                         \
+    } while (0)
+
+/* Bytewise-compare a captured XMM register to 16 expected bytes. */
+#define ASSERT_EMU_VEC_EQ(res, idx, expect_ptr)                               \
+    do {                                                                      \
+        const unsigned char *asmtest_a_ = (res)->regs.xmm[idx].u8;           \
+        const unsigned char *asmtest_e_ =                                    \
+            (const unsigned char *)(expect_ptr);                             \
+        for (int asmtest_i_ = 0; asmtest_i_ < 16; asmtest_i_++)              \
+            if (asmtest_a_[asmtest_i_] != asmtest_e_[asmtest_i_]) {          \
+                asmtest_fail(__FILE__, __LINE__,                              \
+                             "ASSERT_EMU_VEC_EQ(xmm[%s]): first diff at "     \
+                             "byte %d (0x%02x != 0x%02x)",                    \
+                             #idx, asmtest_i_, asmtest_e_[asmtest_i_],        \
+                             asmtest_a_[asmtest_i_]);                         \
+                break;                                                        \
+            }                                                                 \
+    } while (0)
+
+/* Basic-block offset `off` was covered by the (accumulated) trace. */
+#define ASSERT_BLOCK_COVERED(trace, off)                                      \
+    do {                                                                      \
+        if (!emu_trace_covered((trace), (uint64_t)(off)))                    \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_BLOCK_COVERED: block offset 0x%llx not "     \
+                         "covered",                                           \
+                         (unsigned long long)(uint64_t)(off));               \
+    } while (0)
+
+/* At least `n` distinct basic blocks were covered. */
+#define ASSERT_BLOCKS_AT_LEAST(trace, n)                                      \
+    do {                                                                      \
+        size_t asmtest_bl_ = (trace)->blocks_len;                            \
+        if (asmtest_bl_ < (size_t)(n))                                       \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_BLOCKS_AT_LEAST: %zu < %zu", asmtest_bl_,    \
+                         (size_t)(n));                                        \
+    } while (0)
 
 #endif /* ASMTEST_EMU_H */

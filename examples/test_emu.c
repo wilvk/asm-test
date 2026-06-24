@@ -8,6 +8,8 @@
 #include "asmtest.h"
 #include "asmtest_emu.h"
 
+#include <string.h>
+
 extern long add_signed(long a, long b);
 extern long sum_via_rbx(long a, long b);
 extern long clobbers_rbx(long a, long b);
@@ -162,6 +164,117 @@ TEST(emu, loop_reenters_block_and_trace_truncates) {
     ASSERT_EQ(t.insns_len, (size_t)2);
     ASSERT_TRUE(t.insns_total > t.insns_len);
     ASSERT_TRUE(t.blocks_total > t.blocks_len); /* loop re-entry */
+}
+
+/* -------------------------------------------------------------------------
+ * Track C: FP / SIMD argument marshalling + capture, the emulator assertion
+ * macros, and coverage reporting (x86-64 guest; reuses the `emu` suite's E).
+ * The host toolchain emits System V calls, so the FP/SIMD routines are
+ * hand-assembled bytes:
+ *   addsd xmm0, xmm1 -> F2 0F 58 C1   ret -> C3   (scalar double add)
+ *   paddd xmm0, xmm1 -> 66 0F FE C1   ret -> C3   (packed add of 4x int32)
+ * ------------------------------------------------------------------------- */
+TEST(emu, double_arg_returns_in_xmm0) {
+    static const unsigned char ADDSD[] = {0xF2, 0x0F, 0x58, 0xC1, 0xc3};
+    emu_result_t r;
+    long iargs[1] = {0};
+    double fargs[] = {1.5, 2.25}; /* xmm0, xmm1 */
+    ASSERT_TRUE(emu_call_fp(E, ADDSD, sizeof ADDSD, iargs, 0, fargs, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    ASSERT_EMU_FP_EQ(&r, 3.75); /* result in xmm0.f64[0], no manual struct read */
+}
+
+TEST(emu, vector_arg_captures_xmm_file) {
+    static const unsigned char PADDD[] = {0x66, 0x0F, 0xFE, 0xC1, 0xc3};
+    emu_result_t r;
+    emu_vec128_t a = {0}, b = {0};
+    for (int i = 0; i < 4; i++) {
+        a.u32[i] = (uint32_t)(i + 1);   /* 1 2 3 4   */
+        b.u32[i] = (uint32_t)(10 * (i + 1)); /* 10 20 30 40 */
+    }
+    emu_vec128_t vargs[2] = {a, b};
+    long iargs[1] = {0};
+    ASSERT_TRUE(emu_call_vec(E, PADDD, sizeof PADDD, iargs, 0, vargs, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    emu_vec128_t expect = {0};
+    for (int i = 0; i < 4; i++)
+        expect.u32[i] = a.u32[i] + b.u32[i]; /* 11 22 33 44 */
+    ASSERT_EMU_VEC_EQ(&r, 0, expect.u8);
+    ASSERT_EQ(r.regs.xmm[0].u32[0], 11u);
+    ASSERT_EQ(r.regs.xmm[0].u32[3], 44u);
+}
+
+TEST(emu, assertion_macros_reg_and_fault) {
+    emu_result_t r;
+    long args[] = {20, 22};
+    ASSERT_TRUE(emu_call(E, (void *)add_signed, CODE_WINDOW, args, 2, 0, &r));
+    ASSERT_NO_FAULT(&r);
+    ASSERT_EMU_REG_EQ(&r, rax, 42);
+    /* A bad load faults at a known address and kind. */
+    long bad[] = {(long)0xdead0000UL};
+    emu_call(E, (void *)load_long, CODE_WINDOW, bad, 1, 0, &r);
+    ASSERT_FAULT(&r);
+    ASSERT_FAULT_AT(&r, EMU_FAULT_READ, 0xdead0000UL);
+}
+
+TEST(emu, coverage_report_lists_uncovered_blocks) {
+    emu_result_t r;
+    /* universe = union of all three classify paths. */
+    uint64_t ublocks[16];
+    emu_trace_t universe = {0};
+    universe.blocks = ublocks;
+    universe.blocks_cap = 16;
+    long inputs[] = {-5, 0, 7};
+    for (int i = 0; i < 3; i++) {
+        long a[] = {inputs[i]};
+        emu_call_traced(E, (void *)classify, CODE_WINDOW, a, 1, 0, &r,
+                        &universe);
+    }
+    /* covered = just the positive path. */
+    uint64_t cblocks[16];
+    emu_trace_t covered = {0};
+    covered.blocks = cblocks;
+    covered.blocks_cap = 16;
+    long pos[] = {7};
+    emu_call_traced(E, (void *)classify, CODE_WINDOW, pos, 1, 0, &r, &covered);
+
+    /* The union exceeds any single input — expressed as one macro. */
+    ASSERT_BLOCKS_AT_LEAST(&universe, covered.blocks_len + 1);
+    ASSERT_BLOCK_COVERED(&universe, 0); /* entry block always reached */
+    ASSERT_BLOCK_COVERED(&covered, 0);
+
+    /* The report names the blocks a single input did not reach. */
+    FILE *f = tmpfile();
+    ASSERT_TRUE(f != NULL);
+    size_t nmiss = emu_coverage_uncovered(&covered, &universe, f);
+    ASSERT_TRUE(nmiss > 0);
+    char buf[512] = {0};
+    rewind(f);
+    (void)!fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    ASSERT_TRUE(strstr(buf, "blocks covered") != NULL);
+    ASSERT_TRUE(strstr(buf, "uncovered:") != NULL);
+}
+
+TEST(emu, lcov_export_emits_records) {
+    emu_result_t r;
+    uint64_t blocks[16];
+    emu_trace_t t = {0};
+    t.blocks = blocks;
+    t.blocks_cap = 16;
+    long a[] = {7};
+    emu_call_traced(E, (void *)classify, CODE_WINDOW, a, 1, 0, &r, &t);
+
+    FILE *f = tmpfile();
+    ASSERT_TRUE(f != NULL);
+    emu_trace_lcov(&t, "classify", f);
+    char buf[512] = {0};
+    rewind(f);
+    (void)!fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    ASSERT_TRUE(strstr(buf, "SF:classify") != NULL);
+    ASSERT_TRUE(strstr(buf, "DA:0,1") != NULL); /* entry block at offset 0 */
+    ASSERT_TRUE(strstr(buf, "end_of_record") != NULL);
 }
 
 /* -------------------------------------------------------------------------
