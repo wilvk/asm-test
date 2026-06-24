@@ -280,16 +280,20 @@ flags), possibly a `.clang-tidy`.
 
 ## Track E — Breadth (opportunistic)
 
-Lower priority; pick up individually as interest dictates. Four of the five items
-have landed; the native Win64 trampoline remains deferred (it needs a Win64
-toolchain — a Windows host, or Docker + Wine on the existing Linux CI).
+Lower priority; pick up individually as interest dictates. All five items have a
+landed slice; the native Win64 **capture** tier shipped (the Win32 runner port is
+the only deferred remainder).
 
-- **Native Win64 trampoline** — *deferred.* Win64 is emulator-only today; a native
-  trampoline needs a Win64 toolchain and a host to run it — a `windows-latest`
-  runner, or **Docker + Wine** on the existing Linux CI (no Windows host). Scope
-  only if a native Win64 tier becomes a goal. See [Track E.1 — Native Win64
-  trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for the
-  full breakdown of what it takes, including the Docker + Wine option.
+- **Native Win64 trampoline** — *capture tier landed; runner port deferred.* The
+  Microsoft x64 capture trampoline (all eight `asm_call_capture*` variants) runs on
+  real x86-64 silicon with **no Windows host** — natively via `__attribute__((ms_abi))`
+  and as a real PE under **Docker + Wine** — with a first-class `regs_t` layout,
+  manifest, and a CI `win64` job. The POSIX runner is *not* ported to Win32 (the
+  suite runs `--no-fork`); that remains scoped for on-demand pickup. See the
+  [Native Win64 tier implementation plan](win64-native-tier-plan.md) for the full
+  build, [docs/win64.md](../win64.md) for usage, and [Track E.1 — Native Win64
+  trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for what
+  the remaining runner port takes.
 - **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests
   concurrently as a pool of forked children over the existing per-test fork model
   (`run_parallel` in `src/asmtest.c`, using `poll()` over the children's result

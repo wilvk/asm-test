@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Native Win64 tier (capture).** A Microsoft x64 (“Win64”) capture trampoline
+  (`src/capture_win64.asm`) mirrors all eight System V `asm_call_capture*`
+  variants on real x86-64 silicon — integer/FP/vector args, the 32-byte shadow
+  space, struct return and by-reference struct args, and ABI-preservation over the
+  *larger* Win64 callee-saved set (`rdi`/`rsi` plus the callee-saved `xmm6–15`).
+  The captured state has a first-class `regs_t` layout in `include/asmtest.h`
+  (selected by `-DASMTEST_ABI_WIN64`, LLP64-correct, with `_Static_assert` offset
+  pins) and a machine-readable manifest (`make manifest-win64` →
+  `asmtest_abi_win64.json`). It runs **with no Windows host**, two ways: the
+  native lane via GCC/Clang `__attribute__((ms_abi))` (`make win64-msabi-test`),
+  and a real Windows PE built with `nasm -f win64` + MinGW-w64 and run under Wine
+  in an isolated image (`Dockerfile.win64`, `make docker-win64`). A new CI `win64`
+  job runs both on every push; the capture suite doubles as the native Win64
+  conformance check. This is the capture tier (suite runs `--no-fork`); the Win32
+  runner port is scoped but deferred. See [docs/win64.md](docs/win64.md) and the
+  [implementation plan](docs/plans/win64-native-tier-plan.md).
+
 - **Packaging scaffolding for all ten bindings.** Each binding now has a
   publish-ready registry manifest and a `make <lang>-package` target that
   assembles a distributable bundling the host's prebuilt native libs:

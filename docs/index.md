@@ -88,6 +88,7 @@ property-testing
 runner
 benchmarks
 emulator
+win64
 ```
 
 ```{toctree}
