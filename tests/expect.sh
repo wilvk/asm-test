@@ -76,6 +76,25 @@ expect_fail_msg() {
     fi
 }
 
+# expect_fail_re DESC ERE CMD [args...] : nonzero exit AND output matches the
+# extended regex. Used for crash-containment checks, where the diagnostic text
+# differs by build: a normal build reports the framework's "fatal signal" (or,
+# for a forked child, "exited abnormally"), while a sanitizer build has ASan
+# intercept the fault and print its own "AddressSanitizer"/"SEGV" report.
+expect_fail_re() {
+    desc=$1
+    re=$2
+    shift 2
+    run "$@"
+    if [ "$rc" -eq 0 ]; then
+        bad "$desc" "expected nonzero exit, got 0"
+    elif printf '%s\n' "$out" | grep -Eq "$re"; then
+        ok "$desc"
+    else
+        bad "$desc" "nonzero exit OK but output matched none of: $re"
+    fi
+}
+
 echo "# asm-test framework self-tests (expect.sh)"
 
 # ---- positive suite: a clean run exits 0 ----
@@ -101,9 +120,12 @@ expect_fail_msg "ASSERT_*NEAR (double) fails" "ulps"  "$NEG" --filter=neg.fp_nea
 expect_fail_msg "ASSERT_FEQ (float) fails"   "float" "$NEG" --filter=neg.feq
 
 # ---- crash / timeout / abort containment ----
-# SIGSEGV is caught in-process and reported (both with and without fork).
-expect_fail_msg "SIGSEGV contained (fork)"    "fatal signal" "$NEG" --filter=neg.crash
-expect_fail_msg "SIGSEGV contained (no-fork)" "fatal signal" "$NEG" --filter=neg.crash --no-fork
+# SIGSEGV is contained and reported (both with and without fork). The diagnostic
+# text differs between a normal build (framework "fatal signal") and a sanitizer
+# build (ASan's "AddressSanitizer"/"SEGV"), so accept either.
+CRASH_RE='fatal signal|exited abnormally|AddressSanitizer|SEGV'
+expect_fail_re "SIGSEGV contained (fork)"    "$CRASH_RE" "$NEG" --filter=neg.crash
+expect_fail_re "SIGSEGV contained (no-fork)" "$CRASH_RE" "$NEG" --filter=neg.crash --no-fork
 # Infinite loop becomes a reported timeout via the per-test alarm.
 expect_fail_msg "infinite loop times out"     "timed out" "$NEG" --filter=neg.timeout --timeout=1
 # abort() (SIGABRT, uncaught) is contained by fork: parent synthesizes from wait status.
@@ -144,7 +166,7 @@ if [ "$serial" = "$par" ]; then ok "-j4 output matches serial order"; else bad "
 # A parallel run still surfaces failures (nonzero exit) with the right diagnostic.
 expect_fail_msg "-j4 still reports failures" "ASSERT_EQ" "$NEG" --jobs=4
 # A crash in one child doesn't sink the run: it's reported and the run completes.
-expect_fail_msg "-j4 contains a crash" "fatal signal" "$NEG" -j4
+expect_fail_re "-j4 contains a crash" "$CRASH_RE" "$NEG" -j4
 # Invalid job counts are rejected with the bad-CLI exit code.
 expect_exit "--jobs=0 exits 2" 2 "$POS" --jobs=0
 

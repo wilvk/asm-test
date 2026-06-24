@@ -122,7 +122,15 @@ static void add_trace_hooks(uc_engine *uc, trace_ctx_t *tc, uc_hook *hcode,
 static bool load_code(uc_engine *uc, const void *code, size_t code_len) {
     if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK)
         return false;
+    /* Drop any cached translation for the code region so a reused handle
+     * re-decodes the freshly written bytes. uc_ctl_flush_tb is newer
+     * (Unicorn >= 2.1); fall back to uc_ctl_remove_cache (since 2.0.0) so we
+     * build against the older libunicorn shipped by some distros. */
+#if defined(uc_ctl_flush_tb)
     uc_ctl_flush_tb(uc);
+#elif defined(uc_ctl_remove_cache)
+    uc_ctl_remove_cache(uc, EMU_CODE_BASE, EMU_CODE_BASE + EMU_CODE_SIZE);
+#endif
     return true;
 }
 
