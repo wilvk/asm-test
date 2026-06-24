@@ -125,6 +125,34 @@ public class Conformance {
         emuResFree.invoke(res);
         emuClose.invoke(e);
 
+        // --- Tier-2 idiomatic assertions: AssertionError with a message --- //
+        MemorySegment r2 = (MemorySegment) regsNew.invoke();
+        boolean t2pass = true;
+        try {
+            capture6.invoke(r2, routine.apply("add_signed"), 40L, 2L, 0L, 0L, 0L, 0L);
+            if ((long) regsRet.invoke(r2) != 42)
+                throw new AssertionError("ret: got " + (long) regsRet.invoke(r2) + ", want 42");
+            if ((int) checkAbi.invoke(r2, NULL, 0L) != 0)
+                throw new AssertionError("ABI not preserved");
+            captureFp2.invoke(r2, routine.apply("fp_add"), 1.5, 2.25);
+            if ((double) regsFret.invoke(r2) != 3.75)
+                throw new AssertionError("fp return");
+        } catch (AssertionError ae) {
+            t2pass = false;
+        }
+        check("tier2.assertions_pass", t2pass);
+
+        boolean t2teeth = false;
+        try {
+            capture6.invoke(r2, routine.apply("add_signed"), 40L, 2L, 0L, 0L, 0L, 0L);
+            if ((long) regsRet.invoke(r2) != 99)
+                throw new AssertionError("ret: got " + (long) regsRet.invoke(r2) + ", want 99");
+        } catch (AssertionError ae) {
+            t2teeth = true;
+        }
+        check("tier2.assertions_have_teeth", t2teeth);
+        regsFree.invoke(r2);
+
         System.out.printf("# %d passed, %d failed, %d total%n", total - fails, fails, total);
         System.exit(fails == 0 ? 0 : 1);
     }

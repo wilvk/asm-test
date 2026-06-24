@@ -95,3 +95,30 @@ test "emu.add_signed" {
     try std.testing.expect(!res.faulted);
     try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
 }
+
+// --- Tier-2 idiomatic assertions (error-union helpers over std.testing) --- //
+fn assertRet(r: *const c.regs_t, expected: u64) !void {
+    try std.testing.expectEqual(@as(c_ulong, expected), r.ret);
+}
+fn assertAbiPreserved(r: *c.regs_t) !void {
+    try std.testing.expect(c.asmtest_check_abi(r, null, 0) == 0);
+}
+fn assertFp(r: *const c.regs_t, expected: f64) !void {
+    try std.testing.expectEqual(expected, r.fret);
+}
+
+test "tier2.assertions pass" {
+    var r = captureInt(fnPtr(&add_signed), 40, 2);
+    try assertRet(&r, 42);
+    try assertAbiPreserved(&r);
+    var rf: c.regs_t = std.mem.zeroes(c.regs_t);
+    var iargs = [_]c_long{ 0, 0, 0, 0, 0, 0 };
+    var fargs = [_]f64{ 1.5, 2.25, 0, 0, 0, 0, 0, 0 };
+    c.asm_call_capture_fp(&rf, fnPtr(&fp_add), &iargs, &fargs);
+    try assertFp(&rf, 3.75);
+}
+
+test "tier2.assertions have teeth" {
+    var r = captureInt(fnPtr(&add_signed), 40, 2);
+    try std.testing.expectError(error.TestExpectedEqual, assertRet(&r, 99));
+}

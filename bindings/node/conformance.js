@@ -39,6 +39,20 @@ const emuReg = L.func('uint64_t asmtest_emu_x86_reg(void *, const char *)');
 
 const routine = (name) => corpusRoutine(name);
 
+// Tier-2 idiomatic assertions: throw with a clear message on failure.
+class AsmtestError extends Error {}
+function assertRet(r, e) {
+  const got = Number(regsRet(r));
+  if (got !== e) throw new AsmtestError(`ret: got ${got}, want ${e}`);
+}
+function assertAbiPreserved(r) {
+  if (checkAbi(r, null, 0) !== 0) throw new AsmtestError('ABI not preserved');
+}
+function assertFp(r, e) {
+  const got = regsFret(r);
+  if (got !== e) throw new AsmtestError(`fp: got ${got}, want ${e}`);
+}
+
 let fails = 0;
 let total = 0;
 function check(name, ok) {
@@ -98,6 +112,34 @@ withRegs((r) => {
   emuResFree(res);
   emuClose(e);
 }
+
+// Tier-2 idiomatic assertions: pass paths succeed, failure paths bite.
+let t2pass = true;
+try {
+  withRegs((r) => {
+    capture6(r, routine('add_signed'), 40, 2, 0, 0, 0, 0);
+    assertRet(r, 42);
+    assertAbiPreserved(r);
+  });
+  withRegs((r) => {
+    captureFp2(r, routine('fp_add'), 1.5, 2.25);
+    assertFp(r, 3.75);
+  });
+} catch (_e) {
+  t2pass = false;
+}
+check('tier2.assertions_pass', t2pass);
+
+let t2teeth = false;
+try {
+  withRegs((r) => {
+    capture6(r, routine('add_signed'), 40, 2, 0, 0, 0, 0);
+    assertRet(r, 99); // wrong on purpose
+  });
+} catch (e) {
+  t2teeth = e instanceof AsmtestError;
+}
+check('tier2.assertions_have_teeth', t2teeth);
 
 console.log(`# ${total - fails} passed, ${fails} failed, ${total} total`);
 process.exit(fails === 0 ? 0 : 1);

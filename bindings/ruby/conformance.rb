@@ -47,13 +47,32 @@ EmuReg        = func(L, "asmtest_emu_x86_reg", [VOIDP, VOIDP], LL)
 def routine(name) = CorpusRoutine.call(name)
 
 $fail = 0
+$total = 0
 def check(name, ok)
+  $total += 1
   if ok
     puts "ok - #{name}"
   else
     $fail += 1
     puts "not ok - #{name}"
   end
+end
+
+# Tier-2 idiomatic assertions: raise with a clear message on failure.
+class AsmtestError < StandardError; end
+def assert_ret(r, e)
+  got = RegsRet.call(r)
+  raise AsmtestError, "ret: got #{got}, want #{e}" unless got == e
+end
+def assert_abi_preserved(r)
+  raise AsmtestError, "ABI not preserved" unless CheckAbi.call(r, nil, 0) == 0
+end
+def assert_flag(r, name, set = true)
+  raise AsmtestError, "flag #{name}" unless (RegsFlagSet.call(r, name) == 1) == set
+end
+def assert_fp(r, e)
+  got = RegsFret.call(r)
+  raise AsmtestError, "fp: got #{got}, want #{e}" unless got == e
 end
 
 def with_regs
@@ -103,6 +122,33 @@ check("emu.add_signed", EmuFaulted.call(res) == 0 && EmuReg.call(res, "rax") == 
 EmuResFree.call(res)
 EmuClose.call(e)
 
-total = 7
-puts "# #{total - $fail} passed, #{$fail} failed, #{total} total"
+# ---- Tier-2 idiomatic assertions: pass paths succeed, failure paths bite ----
+tier2_pass = begin
+  with_regs do |r|
+    Capture6.call(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
+    assert_ret(r, 42)
+    assert_abi_preserved(r)
+  end
+  with_regs do |r|
+    CaptureFp2.call(r, routine("fp_add"), 1.5, 2.25)
+    assert_fp(r, 3.75)
+  end
+  true
+rescue AsmtestError
+  false
+end
+check("tier2.assertions_pass", tier2_pass)
+
+tier2_teeth = begin
+  with_regs do |r|
+    Capture6.call(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
+    assert_ret(r, 99) # wrong on purpose
+  end
+  false
+rescue AsmtestError
+  true
+end
+check("tier2.assertions_have_teeth", tier2_teeth)
+
+puts "# #{$total - $fail} passed, #{$fail} failed, #{$total} total"
 exit($fail == 0 ? 0 : 1)

@@ -27,6 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace asmtest {
@@ -108,6 +110,34 @@ inline bool abi_preserved(const regs_t &r) {
 /// True if condition flag bit(s) `mask` (ASMTEST_CF, …) are set.
 inline bool flag_set(const regs_t &r, unsigned long mask) {
     return (r.flags & mask) != 0;
+}
+
+// --- Tier-2 idiomatic assertions ------------------------------------------- //
+// Throw on failure with a clear message — usable from GoogleTest/Catch2/doctest
+// (or any C++ test runner) where an exception is the natural failure signal.
+
+/// Thrown by the assert_* helpers below.
+struct assertion_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+inline void assert_ret(const regs_t &r, unsigned long expected) {
+    if (r.ret != expected)
+        throw assertion_error("ret: got " + std::to_string(r.ret) + ", want " +
+                              std::to_string(expected));
+}
+inline void assert_abi_preserved(const regs_t &r) {
+    if (!abi_preserved(r))
+        throw assertion_error("ABI not preserved: a callee-saved register was "
+                              "not restored");
+}
+inline void assert_flag(const regs_t &r, unsigned long mask, bool set = true) {
+    if (flag_set(r, mask) != set)
+        throw assertion_error("condition flag mismatch");
+}
+inline void assert_fp(const regs_t &r, double expected) {
+    if (r.fret != expected)
+        throw assertion_error("FP return mismatch");
 }
 
 #ifdef ASMTEST_ENABLE_EMU

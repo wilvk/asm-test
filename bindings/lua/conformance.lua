@@ -35,6 +35,19 @@ local C = ffi.load(corpus_path)
 
 local function routine(name) return C.asmtest_corpus_routine(name) end
 
+-- Tier-2 idiomatic assertions: error() with a clear message on failure.
+local function assertRet(r, e)
+  local got = tonumber(L.asmtest_regs_ret(r))
+  if got ~= e then error(string.format("ret: got %d, want %d", got, e)) end
+end
+local function assertAbiPreserved(r)
+  if L.asmtest_check_abi(r, nil, 0) ~= 0 then error("ABI not preserved") end
+end
+local function assertFp(r, e)
+  local got = L.asmtest_regs_fret(r)
+  if got ~= e then error("fp: got " .. tostring(got) .. ", want " .. tostring(e)) end
+end
+
 local fails = 0
 local total = 0
 local function check(name, ok)
@@ -92,6 +105,28 @@ do
   L.asmtest_emu_result_free(res)
   L.emu_close(e)
 end
+
+-- Tier-2 idiomatic assertions: pass paths succeed, failure paths bite.
+local t2pass = pcall(function()
+  withRegs(function(r)
+    L.asmtest_capture6(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
+    assertRet(r, 42)
+    assertAbiPreserved(r)
+  end)
+  withRegs(function(r)
+    L.asmtest_capture_fp2(r, routine("fp_add"), 1.5, 2.25)
+    assertFp(r, 3.75)
+  end)
+end)
+check("tier2.assertions_pass", t2pass)
+
+local t2teeth = not pcall(function()
+  withRegs(function(r)
+    L.asmtest_capture6(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
+    assertRet(r, 99) -- wrong on purpose
+  end)
+end)
+check("tier2.assertions_have_teeth", t2teeth)
 
 print(string.format("# %d passed, %d failed, %d total", total - fails, fails, total))
 os.exit(fails == 0 and 0 or 1)

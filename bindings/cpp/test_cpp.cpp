@@ -43,6 +43,24 @@ TEST(cpp, fp_return) {
     ASSERT_FP_EQ(&r, 3.75);
 }
 
+// Tier-2 assert_* helpers: the pass paths succeed and the failure path throws.
+TEST(cpp, tier2_assertions) {
+    regs_t r = capture(reinterpret_cast<void *>(add_signed), {40, 2});
+    assert_ret(r, 42);
+    assert_abi_preserved(r);
+    assert_flag(r, ASMTEST_CF, false);
+    regs_t fr = capture_fp(reinterpret_cast<void *>(fp_add), {}, {1.5, 2.25});
+    assert_fp(fr, 3.75);
+
+    bool threw = false;
+    try {
+        assert_ret(r, 99); // wrong on purpose
+    } catch (const asmtest::assertion_error &) {
+        threw = true;
+    }
+    ASSERT_TRUE(threw);
+}
+
 TEST(cpp, vector_lanes) {
     regs_t r = capture_vec(reinterpret_cast<void *>(vec_add4f), {},
                            {vec_f32(1, 2, 3, 4), vec_f32(10, 20, 30, 40)});

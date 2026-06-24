@@ -436,6 +436,14 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
 Tier 2 (idiomatic assertion layers) is a per-language follow-on, picked up after
 that language's Tier-1 binding is green against the conformance corpus.
 
+**Status: Tier 2 has landed for all nine bindings** (Python, Rust, C++, Zig,
+Node, Java, .NET, Ruby, Lua) — assertion helpers with legible failure messages
+(`assert_ret` / `assert_abi_preserved` / `assert_flag` / `assert_fp` /
+`assert_no_fault` / `assert_reg`, idiomatic to each language: raising/throwing,
+panicking, or error-union), each verified on both the pass paths and the failure
+paths (the assertion actually fails when it should). The remaining deferred work
+is packaging each binding for its registry.
+
 ---
 
 ## Acceptance criteria (overall)

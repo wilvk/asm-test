@@ -37,9 +37,31 @@ static class Native
     [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
 }
 
+sealed class AsmtestException : Exception
+{
+    public AsmtestException(string message) : base(message) { }
+}
+
 static class Conformance
 {
     static int fails = 0, total = 0;
+
+    // Tier-2 idiomatic assertions: throw with a clear message on failure.
+    static void AssertRet(IntPtr r, ulong e)
+    {
+        var got = Native.asmtest_regs_ret(r);
+        if (got != e) throw new AsmtestException($"ret: got {got}, want {e}");
+    }
+    static void AssertAbiPreserved(IntPtr r)
+    {
+        if (Native.asmtest_check_abi(r, IntPtr.Zero, 0) != 0)
+            throw new AsmtestException("ABI not preserved");
+    }
+    static void AssertFp(IntPtr r, double e)
+    {
+        var got = Native.asmtest_regs_fret(r);
+        if (got != e) throw new AsmtestException($"fp: got {got}, want {e}");
+    }
 
     static void Check(string name, bool ok)
     {
@@ -85,6 +107,30 @@ static class Conformance
             && Native.asmtest_emu_x86_reg(res, "rax") == 42);
         Native.asmtest_emu_result_free(res);
         Native.emu_close(e);
+
+        // Tier-2 idiomatic assertions: pass paths succeed, failure paths bite.
+        IntPtr r2 = Native.asmtest_regs_new();
+        bool t2pass = true;
+        try
+        {
+            Native.asmtest_capture6(r2, Routine("add_signed"), 40, 2, 0, 0, 0, 0);
+            AssertRet(r2, 42);
+            AssertAbiPreserved(r2);
+            Native.asmtest_capture_fp2(r2, Routine("fp_add"), 1.5, 2.25);
+            AssertFp(r2, 3.75);
+        }
+        catch (AsmtestException) { t2pass = false; }
+        Check("tier2.assertions_pass", t2pass);
+
+        bool t2teeth = false;
+        try
+        {
+            Native.asmtest_capture6(r2, Routine("add_signed"), 40, 2, 0, 0, 0, 0);
+            AssertRet(r2, 99); // wrong on purpose
+        }
+        catch (AsmtestException) { t2teeth = true; }
+        Check("tier2.assertions_have_teeth", t2teeth);
+        Native.asmtest_regs_free(r2);
 
         Console.WriteLine($"# {total - fails} passed, {fails} failed, {total} total");
         return fails == 0 ? 0 : 1;

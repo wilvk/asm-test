@@ -8,14 +8,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Tier-2 idiomatic assertions (Python, Rust).** Optional assertion layers over
-  the Tier-1 result objects, with legible failure messages. Python:
-  `asmtest.assertions` (`assert_ret`, `assert_abi_preserved`, `assert_flag`,
-  `assert_fp`, `assert_vec_f32`, `assert_no_fault`, `assert_reg`, …) +
-  `tests/test_assertions.py`. Rust: `assert_ret` / `assert_abi_preserved` /
-  `assert_flag` / `assert_fp` / `assert_no_fault` / `assert_reg` methods on
-  `Regs` / `EmuResult` + `tests/assertions.rs`. Both cover the pass paths and the
-  failure paths (pytest `raises` / Rust `should_panic`).
+- **Tier-2 idiomatic assertions (all nine bindings).** Optional assertion layers
+  over the Tier-1 result objects, with legible failure messages, idiomatic to
+  each language: Python (`asmtest.assertions`, raising `AssertionError`), Rust
+  (methods on `Regs`/`EmuResult`, panicking), C++ (`asmtest::assert_*` throwing
+  `assertion_error`, for GoogleTest/Catch2), Zig (error-union helpers over
+  `std.testing`), Node/Ruby/Lua/Java/.NET (throwing/raising `assert_*` helpers in
+  the conformance runner). Each covers both the pass paths and the failure paths
+  (the assertion fails when it should — pytest `raises`, Rust `should_panic`, Zig
+  `expectError`, try/catch elsewhere). `assert_ret`, `assert_abi_preserved`,
+  `assert_flag`, `assert_fp`, `assert_no_fault`, `assert_reg`, ….
 
 - **Node, Java, .NET, Ruby & Lua bindings (Tracks N/J/D/C).** Five more language
   wrappers, all over a new opaque-handle FFI layer (`src/ffi.c` + emu helpers in
