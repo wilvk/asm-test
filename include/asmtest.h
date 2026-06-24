@@ -390,6 +390,15 @@ int asmtest_check_abi(const regs_t *r, char *msg, size_t n);
 int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
                        const char *name, char *msg, size_t n);
 
+#if defined(ASMTEST_ABI_WIN64)
+/* Win64-only: the callee-saved vector registers xmm6-15 (System V has none).
+ * Valid after a _vec/_vec_n capture, which fills vec[6..15]; the trampoline seeds
+ * xmm(6+k) with both lanes == 6+k, so this verifies vec[i] == {i, i}. Verdict
+ * shim + jumping wrapper, matching asmtest_check_abi / _assert_abi. */
+int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n);
+void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r);
+#endif
+
 /* Opaque-handle FFI helpers (binding ABI, shared library only). Dynamic-FFI
  * bindings (Node, Ruby, Lua, …) use these instead of mirroring regs_t / reading
  * field offsets: allocate a handle, call with scalar args, read fields by
@@ -630,6 +639,13 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 
 /* Verify the routine restored all callee-saved registers (ABI compliance). */
 #define ASSERT_ABI_PRESERVED(r) asmtest_assert_abi(__FILE__, __LINE__, (r))
+
+#if defined(ASMTEST_ABI_WIN64)
+/* Win64: verify the callee-saved vector registers xmm6-15 were restored (after a
+ * _vec/_vec_n capture). Complements ASSERT_ABI_PRESERVED's integer check. */
+#define ASSERT_ABI_PRESERVED_VEC(r)                                            \
+    asmtest_assert_abi_vec(__FILE__, __LINE__, (r))
+#endif
 
 /* Compare a named register/struct field unsigned: ASSERT_REG_EQ(&r, rax, 42)
  * (x86) or ASSERT_REG_EQ(&r, x[0], 42) (AArch64 emu). */

@@ -449,12 +449,12 @@ investment, deferred until isolated Win64 execution is actually needed.
 ## Acceptance criteria (overall)
 
 - A Win64 routine builds and is callable on real x86-64 hardware (via the
-  `asm_call_capture*_win64` entry points), with the framework's
-  `ASSERT_ABI_PRESERVED` now Win64-aware — `asmtest_check_abi` covers the full
-  integer callee-saved set (`rbx, rbp, rdi, rsi, r12–r15`) with 64-bit
-  comparisons, exercised by `suite_win64.c` under the runner. *(Remaining:
-  `xmm6–15` FP preservation has no built-in assertion yet — suites check `vec[]`
-  directly; and `ASM_CALL*`-style convenience macros are still System-V-only, so
+  `asm_call_capture*_win64` entry points), with the framework's ABI-preservation
+  assertions now Win64-aware: `ASSERT_ABI_PRESERVED` covers the full integer
+  callee-saved set (`rbx, rbp, rdi, rsi, r12–r15`, 64-bit comparisons), and the new
+  `ASSERT_ABI_PRESERVED_VEC` covers the callee-saved vector set (`xmm6–15`) after a
+  `_vec` capture — both exercised by `suite_win64.c` under the runner. *(Remaining
+  ergonomics: `ASM_CALL*`-style convenience macros are still System-V-only, so
   Win64 tests call the `_win64` entry points by hand.)*
 - The native Win64 conformance case in `corpus.json` reproduces under a native
   build; the manifest carries the Win64 layout, pinned by `_Static_assert`.

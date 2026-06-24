@@ -249,6 +249,33 @@ void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
         asmtest_fail(file, line, "ASSERT_ABI_PRESERVED: %s", msg);
 }
 
+#if defined(ASMTEST_ABI_WIN64)
+/* xmm6-15 are callee-saved on Win64; the _vec trampolines seed xmm(6+k) with both
+ * lanes == 6+k, so a restored register reads back vec[i] == {i, i}. */
+int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
+    for (unsigned i = 6; i <= 15; i++) {
+        if (r->vec[i].u64[0] != (uint64_t)i || r->vec[i].u64[1] != (uint64_t)i) {
+            if (msg && n)
+                snprintf(msg, n,
+                         "xmm%u not restored (got {0x%llx, 0x%llx}, "
+                         "expected {0x%x, 0x%x})",
+                         i, (unsigned long long)r->vec[i].u64[0],
+                         (unsigned long long)r->vec[i].u64[1], i, i);
+            return 1;
+        }
+    }
+    if (msg && n)
+        msg[0] = '\0';
+    return 0;
+}
+
+void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r) {
+    char msg[128];
+    if (asmtest_check_abi_vec(r, msg, sizeof msg))
+        asmtest_fail(file, line, "ASSERT_ABI_PRESERVED_VEC: %s", msg);
+}
+#endif
+
 void asmtest_assert_flag(const char *file, int line, const regs_t *r,
                          unsigned long mask, int want_set, const char *name) {
     char msg[128];
