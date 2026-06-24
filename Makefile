@@ -23,7 +23,7 @@ FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
                   $(BUILD)/test_struct $(BUILD)/test_structparam \
-                  $(BUILD)/test_fpover
+                  $(BUILD)/test_fpover $(BUILD)/test_refmatch
 
 .PHONY: all test demo-fail clean
 all: test
@@ -90,12 +90,16 @@ $(BUILD)/test_structparam: $(FRAMEWORK_OBJS) $(BUILD)/structparam.o \
 $(BUILD)/test_fpover: $(FRAMEWORK_OBJS) $(BUILD)/fpover.o $(BUILD)/test_fpover.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(BUILD)/test_refmatch: $(FRAMEWORK_OBJS) $(BUILD)/refmatch.o \
+                        $(BUILD)/test_refmatch.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 test: $(SUITES)
 	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
 
 # Expected to exit nonzero; the leading '-' keeps make from erroring out.
 $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \
-                            $(BUILD)/test_failure_demo.o
+                            $(BUILD)/refmatch.o $(BUILD)/test_failure_demo.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 demo-fail: $(BUILD)/test_failure_demo

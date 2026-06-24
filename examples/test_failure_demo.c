@@ -8,6 +8,15 @@
 extern long sum_via_rbx(long a, long b);
 extern long clobbers_rbx(long a, long b);
 extern double fp_add(double a, double b);
+extern long imax_wrong(long a, long b); /* returns the minimum (a bug) */
+
+static long ref_imax(long a, long b) { return a > b ? a : b; }
+static int gen_pair(asmtest_rng_t *rng, long *a, int cap) {
+    (void)cap;
+    a[0] = asmtest_rng_range(rng, -1000, 1000);
+    a[1] = asmtest_rng_range(rng, -1000, 1000);
+    return 2;
+}
 
 TEST(demo, compliant_routine_passes) {
     regs_t r;
@@ -53,4 +62,10 @@ TEST(demo, fp_exact_mismatch) {
     regs_t r;
     ASM_FCALL2(&r, fp_add, 0.1, 0.2);
     ASSERT_FP_EQ(&r, 0.3);
+}
+
+TEST(demo, ref_mismatch_reports_input) {
+    /* Differential testing finds the first random input where the routine and
+     * its C model disagree, and reports that input (and the seed to replay). */
+    ASSERT_MATCHES_REF2(imax_wrong, ref_imax, gen_pair, 10000);
 }

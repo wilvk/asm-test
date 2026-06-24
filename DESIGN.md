@@ -196,12 +196,19 @@ add reach.
   `asm_call_capture_vec_n` (`ASM_FCALLN` / `ASM_VCALLN`), which marshal the first
   8 into registers and the rest onto the stack per the ABI. All on both arches
   and both assemblers.
-- **Phase 7 — Differential / property testing: _planned._** Let a test supply
-  both the routine and a C reference, then fuzz inputs and assert equivalence:
-  `ASSERT_MATCHES_REF(fn, ref, gen, n)`. Turns fixed-vector assertions into
-  specification conformance over thousands of random inputs; pairs naturally
-  with the emulator tier, where a looping or faulting routine cannot take down
-  the harness.
+- **Phase 7 — Differential / property testing: _done._** A test supplies both
+  the routine and a C reference model, and the framework fuzzes random inputs
+  and asserts equivalence: `ASSERT_MATCHES_REF{1,2,3}(fn, ref, gen, n)` (one per
+  integer arity — C cannot dispatch on a function pointer's arity). A seedable
+  splitmix64 RNG (`asmtest_rng_t`, `asmtest_rng_long/range`) drives per-test
+  generators (`int gen(asmtest_rng_t*, long*, int)`) that produce each input
+  tuple; the asm routine is called through the real ABI (`asm_call_capture_args`)
+  and compared against the C model. On the first mismatch the offending input,
+  both results, and the seed are reported; the seed is fixed by default (so
+  failures reproduce) and overridable via the `ASMTEST_SEED` env var (so CI can
+  vary it). Turns fixed-vector assertions into specification conformance over
+  thousands of random inputs; pairs naturally with the emulator tier, where a
+  looping or faulting routine cannot take down the harness.
 - **Phase 8 — Runner robustness & CLI: _planned._** `fork()` each test into a
   child with an `alarm()` timeout, so an infinite loop or heap corruption in the
   routine under test becomes a reported timeout/failure instead of hanging or

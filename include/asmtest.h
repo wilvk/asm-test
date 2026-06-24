@@ -185,6 +185,48 @@ void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize);
 
 /* ------------------------------------------------------------------ */
+/* Differential / property testing (Phase 7)                           */
+/* ------------------------------------------------------------------ */
+
+/* A deterministic, seedable pseudo-random source (splitmix64). The seed comes
+ * from the ASMTEST_SEED environment variable when set (decimal or 0x-hex),
+ * otherwise a fixed default — so a failing input reproduces run to run, and CI
+ * can vary it. The seed in effect is reported in any mismatch message. */
+typedef struct {
+    uint64_t s;
+} asmtest_rng_t;
+
+uint64_t asmtest_rng_u64(asmtest_rng_t *rng);     /* next 64 random bits      */
+long asmtest_rng_long(asmtest_rng_t *rng);        /* a random long (any value)*/
+long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi); /* in [lo,hi]    */
+
+/* An input generator: fill args[0..arity-1] with one random input tuple and
+ * return the arity. `cap` is the number of writable slots in `args` (>= 8). The
+ * arity must be constant across calls and match the ASSERT_MATCHES_REF* variant
+ * it is paired with. */
+typedef int (*asmtest_gen_fn)(asmtest_rng_t *rng, long *args, int cap);
+
+/* C reference models, by arity, returning the expected result for a tuple. */
+typedef long (*asmtest_ref1_fn)(long);
+typedef long (*asmtest_ref2_fn)(long, long);
+typedef long (*asmtest_ref3_fn)(long, long, long);
+
+/* Differential engines: draw `trials` random inputs from `gen`, call the asm
+ * routine `fn` through the real ABI (asm_call_capture_args) and the C model
+ * `ref`, and fail on the first input whose results differ — reporting that
+ * input, both results, and the seed. One per arity (C cannot dispatch on a
+ * function pointer's arity); use the matching ASSERT_MATCHES_REF{1,2,3}. */
+void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
+                        int trials);
+void asmtest_match_ref2(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref2_fn ref, asmtest_gen_fn gen,
+                        int trials);
+void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref3_fn ref, asmtest_gen_fn gen,
+                        int trials);
+
+/* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
 
@@ -443,5 +485,18 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here */
 #define ASSERT_VEC_EQ(r, idx, expect_ptr)                                     \
     asmtest_assert_vec_eq(__FILE__, __LINE__, #idx, (r)->vec[idx].u8,         \
                           (const unsigned char *)(expect_ptr))
+
+/* Differential / property assertions: assert the asm routine `fn` matches the
+ * C reference `ref` over `n` random input tuples drawn from generator `gen`.
+ * Pick the variant whose number matches the routine's integer arity:
+ *   ASSERT_MATCHES_REF2(imax, ref_imax, gen_pair, 10000);
+ * On a mismatch the failing input, both results, and the seed are reported, so
+ * the case reproduces (set ASMTEST_SEED to replay a CI-randomized run). */
+#define ASSERT_MATCHES_REF1(fn, ref, gen, n)                                  \
+    asmtest_match_ref1(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
+#define ASSERT_MATCHES_REF2(fn, ref, gen, n)                                  \
+    asmtest_match_ref2(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
+#define ASSERT_MATCHES_REF3(fn, ref, gen, n)                                  \
+    asmtest_match_ref3(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
 
 #endif /* ASMTEST_H */

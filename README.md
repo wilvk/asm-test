@@ -6,8 +6,8 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Currently at **Phase 6** (full ABI call model). See [DESIGN.md](DESIGN.md) for
-the full plan and roadmap (Phases 7–11).
+Currently at **Phase 7** (differential / property testing). See
+[DESIGN.md](DESIGN.md) for the full plan and roadmap (Phases 8–11).
 
 **Available now:**
 
@@ -34,6 +34,12 @@ the full plan and roadmap (Phases 7–11).
   args and captures the whole vector file (`regs.vec[]`, return in `vec[0]`),
   with `ASSERT_VEC_EQ` plus lane assertions `ASSERT_DEQ/DNEAR` / `ASSERT_FEQ/FNEAR`.
   `ASM_VCALLN` passes any number of vectors, spilling the 9th+ onto the stack.
+- **Differential / property testing** via
+  `ASSERT_MATCHES_REF{1,2,3}(fn, ref, gen, n)`: supply a C reference model and a
+  generator, and the framework fuzzes `n` random inputs (from a seedable
+  splitmix64 RNG) calling the routine through the real ABI, then reports the
+  first input where it disagrees with the model. The seed is fixed by default so
+  failures reproduce, and overridable with `ASMTEST_SEED` so CI can vary it.
 - **Guard-page buffers** (`asmtest_guarded_alloc`) so a one-past-the-end write
   faults, plus crash handling that turns a fatal signal (SIGSEGV/SIGBUS/…) in a
   buggy routine into a reported failure instead of killing the runner.

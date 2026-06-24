@@ -356,6 +356,123 @@ void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
 }
 
 /* ------------------------------------------------------------------ */
+/* Differential / property testing (Phase 7)                           */
+/* ------------------------------------------------------------------ */
+
+uint64_t asmtest_rng_u64(asmtest_rng_t *rng) {
+    /* splitmix64: fast, well-distributed, and trivially seedable. */
+    uint64_t z = (rng->s += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+long asmtest_rng_long(asmtest_rng_t *rng) {
+    return (long)asmtest_rng_u64(rng);
+}
+
+long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi) {
+    if (hi <= lo)
+        return lo;
+    uint64_t span = (uint64_t)(hi - lo) + 1; /* inclusive of both endpoints */
+    return lo + (long)(asmtest_rng_u64(rng) % span);
+}
+
+/* The seed in effect for this run: ASMTEST_SEED (decimal or 0x-hex) if set,
+ * otherwise a fixed default so failures reproduce. Resolved once and cached. */
+static uint64_t asmtest_seed(void) {
+    static int init = 0;
+    static uint64_t seed = 0x243F6A8885A308D3ULL; /* default (digits of pi) */
+    if (!init) {
+        const char *e = getenv("ASMTEST_SEED");
+        if (e && *e)
+            seed = (uint64_t)strtoull(e, NULL, 0);
+        init = 1;
+    }
+    return seed;
+}
+
+void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
+                        int trials) {
+    asmtest_rng_t rng = {asmtest_seed()};
+    for (int t = 0; t < trials; t++) {
+        long a[8] = {0};
+        int n = gen(&rng, a, 8);
+        if (n != 1)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF1(%s): generator returned arity %d, "
+                         "expected 1",
+                         fnexpr, n);
+        long expected = ref(a[0]);
+        regs_t r;
+        asm_call_capture_args(&r, fn, a, 1);
+        long actual = (long)r.ret;
+        if (actual != expected)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF1(%s): trial %d input [%ld]: got "
+                         "%ld (0x%lx), reference %ld (0x%lx) [seed=0x%llx]",
+                         fnexpr, t, a[0], actual, (unsigned long)actual,
+                         expected, (unsigned long)expected,
+                         (unsigned long long)asmtest_seed());
+    }
+}
+
+void asmtest_match_ref2(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref2_fn ref, asmtest_gen_fn gen,
+                        int trials) {
+    asmtest_rng_t rng = {asmtest_seed()};
+    for (int t = 0; t < trials; t++) {
+        long a[8] = {0};
+        int n = gen(&rng, a, 8);
+        if (n != 2)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF2(%s): generator returned arity %d, "
+                         "expected 2",
+                         fnexpr, n);
+        long expected = ref(a[0], a[1]);
+        regs_t r;
+        asm_call_capture_args(&r, fn, a, 2);
+        long actual = (long)r.ret;
+        if (actual != expected)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF2(%s): trial %d input [%ld, %ld]: "
+                         "got %ld (0x%lx), reference %ld (0x%lx) [seed=0x%llx]",
+                         fnexpr, t, a[0], a[1], actual, (unsigned long)actual,
+                         expected, (unsigned long)expected,
+                         (unsigned long long)asmtest_seed());
+    }
+}
+
+void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref3_fn ref, asmtest_gen_fn gen,
+                        int trials) {
+    asmtest_rng_t rng = {asmtest_seed()};
+    for (int t = 0; t < trials; t++) {
+        long a[8] = {0};
+        int n = gen(&rng, a, 8);
+        if (n != 3)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF3(%s): generator returned arity %d, "
+                         "expected 3",
+                         fnexpr, n);
+        long expected = ref(a[0], a[1], a[2]);
+        regs_t r;
+        asm_call_capture_args(&r, fn, a, 3);
+        long actual = (long)r.ret;
+        if (actual != expected)
+            asmtest_fail(file, line,
+                         "ASSERT_MATCHES_REF3(%s): trial %d input [%ld, %ld, "
+                         "%ld]: got %ld (0x%lx), reference %ld (0x%lx) "
+                         "[seed=0x%llx]",
+                         fnexpr, t, a[0], a[1], a[2], actual,
+                         (unsigned long)actual, expected,
+                         (unsigned long)expected,
+                         (unsigned long long)asmtest_seed());
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Crash handling: turn fatal signals into test failures               */
 /* ------------------------------------------------------------------ */
 
