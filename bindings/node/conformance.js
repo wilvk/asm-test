@@ -11,7 +11,7 @@ const asmtest = require('./asmtest');
 const {
   corpusRoutine: routine, Regs, Emu, AsmtestError,
   assemble, Arch, Syntax,
-  assertRet, assertAbiPreserved, assertFp,
+  assertRet, assertAbiPreserved, assertFp, assertVecF32,
 } = asmtest;
 
 let fails = 0;
@@ -51,6 +51,11 @@ withRegs((r) => {
 withRegs((r) => {
   r.captureFp2(routine('fp_add'), 1.5, 2.25);
   check('fp_add.basic', r.fret() === 3.75);
+});
+withRegs((r) => {
+  r.captureVecF32(routine('vec_add4f'), [[1, 2, 3, 4], [10, 20, 30, 40]]);
+  const v = r.vecF32(0);
+  check('vec_add4f.basic', v[0] === 11 && v[1] === 22 && v[2] === 33 && v[3] === 44);
 });
 
 // --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
@@ -96,6 +101,10 @@ try {
   withRegs((r) => {
     r.captureFp2(routine('fp_add'), 1.5, 2.25);
     assertFp(r, 3.75);
+  });
+  withRegs((r) => {
+    r.captureVecF32(routine('vec_add4f'), [[1, 2, 3, 4], [10, 20, 30, 40]]);
+    assertVecF32(r, 0, [11, 22, 33, 44]);
   });
 } catch (_e) {
   t2pass = false;

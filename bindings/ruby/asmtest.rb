@@ -26,6 +26,7 @@ module Asmtest
   LONG  = Fiddle::TYPE_LONG
   INT   = Fiddle::TYPE_INT
   DBL   = Fiddle::TYPE_DOUBLE
+  FLT   = Fiddle::TYPE_FLOAT
   LL    = Fiddle::TYPE_LONG_LONG
   SZ    = Fiddle::TYPE_SIZE_T
   VOID  = Fiddle::TYPE_VOID
@@ -49,8 +50,10 @@ module Asmtest
     regs_free:      func(L, "asmtest_regs_free", [VOIDP], VOID),
     capture6:       func(L, "asmtest_capture6", [VOIDP, VOIDP, LONG, LONG, LONG, LONG, LONG, LONG], VOID),
     capture_fp2:    func(L, "asmtest_capture_fp2", [VOIDP, VOIDP, DBL, DBL], VOID),
+    capture_vec_f32: func(L, "asmtest_capture_vec_f32", [VOIDP, VOIDP, VOIDP, INT], VOID),
     regs_ret:       func(L, "asmtest_regs_ret", [VOIDP], LONG),
     regs_fret:      func(L, "asmtest_regs_fret", [VOIDP], DBL),
+    regs_vec_f32:   func(L, "asmtest_regs_vec_f32", [VOIDP, INT, INT], FLT),
     regs_flag_set:  func(L, "asmtest_regs_flag_set", [VOIDP, VOIDP], INT),
     check_abi:      func(L, "asmtest_check_abi", [VOIDP, VOIDP, SZ], INT),
     emu_open:       func(L, "emu_open", [], VOIDP),
@@ -114,12 +117,25 @@ module Asmtest
       FN[:capture_fp2].call(@h, fn, f0, f1)
     end
 
+    # Call fn with up to eight 128-bit vector args, capturing the vector register
+    # file. +vectors+ is an array of four-float32-lane arrays; the vector return
+    # is read back with vec_f32(0).
+    def capture_vec_f32(fn, vectors)
+      lanes = vectors.flat_map { |v| (0..3).map { |i| (v[i] || 0).to_f } }
+      FN[:capture_vec_f32].call(@h, fn, lanes.pack("f*"), vectors.length)
+    end
+
     def ret
       FN[:regs_ret].call(@h) # integer return (rax / x0)
     end
 
     def fret
       FN[:regs_fret].call(@h) # scalar FP return (xmm0 / d0)
+    end
+
+    # The four float32 lanes of vector register +index+ (0 = the vector return).
+    def vec_f32(index = 0)
+      (0..3).map { |lane| FN[:regs_vec_f32].call(@h, index, lane) }
     end
 
     def flag_set?(name)
@@ -219,6 +235,13 @@ module Asmtest
   def self.assert_fp(r, want)
     got = r.fret
     raise Error, "fp: got #{got}, want #{want}" unless got == want
+  end
+
+  def self.assert_vec_f32(r, index, want)
+    got = r.vec_f32(index)
+    want.each_with_index do |w, i|
+      raise Error, "vec[#{index}] lane #{i}: got #{got[i]}, want #{w}" unless got[i] == w
+    end
   end
 
   def self.assert_no_fault(res)

@@ -18,8 +18,10 @@ void *asmtest_regs_new(void);
 void  asmtest_regs_free(void *r);
 void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
 void  asmtest_capture_fp2(void *out, void *fn, double f0, double f1);
+void  asmtest_capture_vec_f32(void *out, void *fn, float *lanes, int nvec);
 unsigned long asmtest_regs_ret(void *r);
 double asmtest_regs_fret(void *r);
+float asmtest_regs_vec_f32(void *r, int index, int lane);
 int   asmtest_regs_flag_set(void *r, const char *name);
 int   asmtest_check_abi(void *r, char *msg, size_t n);
 void *emu_open(void);
@@ -61,8 +63,26 @@ function Regs:capture6(fn, a0, a1, a2, a3, a4, a5)
 end
 -- Call fn with two double args, capturing the FP return.
 function Regs:capture_fp2(fn, f0, f1) L.asmtest_capture_fp2(self.h, fn, f0, f1) end
+-- Call fn with up to eight 128-bit vector args, capturing the vector register
+-- file. `vectors` is a table of four-float32-lane tables; the vector return is
+-- read back with :vec_f32(0).
+function Regs:capture_vec_f32(fn, vectors)
+  local n = #vectors
+  local lanes = ffi.new("float[?]", n * 4)
+  for i = 1, n do
+    for l = 1, 4 do lanes[(i - 1) * 4 + (l - 1)] = vectors[i][l] or 0 end
+  end
+  L.asmtest_capture_vec_f32(self.h, fn, lanes, n)
+end
 function Regs:ret() return tonumber(L.asmtest_regs_ret(self.h)) end       -- rax / x0
 function Regs:fret() return L.asmtest_regs_fret(self.h) end               -- xmm0 / d0
+-- The four float32 lanes of vector register `index` (0 = the vector return).
+function Regs:vec_f32(index)
+  index = index or 0
+  local out = {}
+  for lane = 0, 3 do out[lane + 1] = L.asmtest_regs_vec_f32(self.h, index, lane) end
+  return out
+end
 function Regs:flag_set(name) return L.asmtest_regs_flag_set(self.h, name) == 1 end
 function Regs:abi_preserved() return L.asmtest_check_abi(self.h, nil, 0) == 0 end
 function Regs:free() if self.h then L.asmtest_regs_free(self.h); self.h = nil end end
@@ -139,6 +159,14 @@ end
 function M.assert_fp(r, want)
   local got = r:fret()
   if got ~= want then error("fp: got " .. tostring(got) .. ", want " .. tostring(want)) end
+end
+function M.assert_vec_f32(r, index, want)
+  local got = r:vec_f32(index)
+  for i = 1, #want do
+    if got[i] ~= want[i] then
+      error(string.format("vec[%d] lane %d: got %s, want %s", index, i - 1, tostring(got[i]), tostring(want[i])))
+    end
+  end
 end
 function M.assert_no_fault(res)
   if res:faulted() then error("unexpected fault") end

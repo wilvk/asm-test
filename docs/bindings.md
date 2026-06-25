@@ -83,25 +83,26 @@ To use the in-line assembler, point the binding at `libasmtest_emu_asm` instead
 (which also needs **libkeystone**). The `make <lang>-asm-test` targets do this
 for you — e.g. `make python-asm-test`, `make dotnet-asm-test`, `make go-asm-test`
 build the assembler lib and set `ASMTEST_LIB` accordingly. Because it is
-optional, every binding has an `asm_available()` / `AsmAvailable` probe: against
-the plain `libasmtest_emu` it returns false and the assembler calls self-skip.
+optional, the dynamic-FFI bindings have a runtime `asm_available()` /
+`AsmAvailable` probe: against the plain `libasmtest_emu` it returns false and the
+assembler calls self-skip. The statically compiled bindings (C++ and Zig) gate
+the assembler at **build time** instead — `-DASMTEST_ENABLE_ASM` for C++,
+`-Dasm=true` for Zig — so it compiles out entirely against a Keystone-free build.
 
 ## Capabilities at a glance
 
 Every binding exposes the same surface. Here each capability is mapped to the
 three featured bindings' idiom; the other seven mirror these (see their READMEs).
-Rows marked *(Python only)* are extras the reference binding layers on top of the
-shared opaque-handle surface.
 
 | Capability | Python | .NET | Go |
 |---|---|---|---|
 | Resolve a built-in corpus routine | load your own lib (`ctypes.CDLL`) | `Corpus.Routine("name")` | `asmtest.CorpusRoutine("name")` |
 | Integer capture (≤6 args) | `capture(fn, *args)` | `r.Capture6(fn, …)` | `r.Capture6(fn, …)` |
 | Float/double capture | `capture_fp(fn, fargs=…)` | `r.CaptureFp2(fn, a, b)` | `r.CaptureFP2(fn, a, b)` |
-| Vector / SIMD capture | `capture_vec(fn, vargs=…)` *(Python only)* | — | — |
+| Vector / SIMD capture | `capture_vec(fn, vargs=…)` | `r.CaptureVecF32(fn, vecs)` | `r.CaptureVecF32(fn, vecs)` |
 | Integer return value | `r.ret` | `r.Ret` | `r.Ret()` |
 | FP return value | `r.fret` | `r.FRet` | `r.FRet()` |
-| Vector return lanes | `r.vec_f32(i)` / `r.vec_f64(i)` *(Python only)* | — | — |
+| Vector return lanes | `r.vec_f32(i)` / `r.vec_f64(i)` | `r.VecF32(i)` | `r.VecF32(i)` |
 | Condition flag (CF/ZF/…) | `r.flag_set("CF")` | `r.FlagSet("CF")` | `r.FlagSet("CF")` |
 | ABI (callee-saved) preserved | `r.abi_preserved` | `r.AbiPreserved` | `r.ABIPreserved()` |
 | Run under the emulator | `e.call(fn, [args])` | `e.Call2(fn, a, b)` | `e.Call2(fn, a, b, res)` |
@@ -112,9 +113,10 @@ shared opaque-handle surface.
 | Assemble text → bytes (multi-arch) | `asmtest.assemble(src, Arch.ARM64)` | `Emu.Assemble(src, AsmArch.Arm64)` | `asmtest.Assemble(src, ArchArm64, …)` |
 
 Every binding also ships **Tier-2 assertions** over these results — `assert_ret`,
-`assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_no_fault`,
-`assert_reg`, and friends (`Asm.Assert.*` in .NET, `asmtest.Assert*` in Go). The
-examples below put each capability to work end-to-end.
+`assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_vec_f32`,
+`assert_no_fault`, `assert_reg`, and friends (`Asm.Assert.*` in .NET,
+`asmtest.Assert*` in Go). The examples below put each capability to work
+end-to-end.
 
 ## Python
 

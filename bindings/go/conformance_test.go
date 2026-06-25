@@ -63,6 +63,13 @@ func TestFP(t *testing.T) {
 	AssertFP(t, r, 3.75)
 }
 
+func TestVec(t *testing.T) {
+	r := NewRegs()
+	defer r.Free()
+	r.CaptureVecF32(CorpusRoutine("vec_add4f"), [][4]float32{{1, 2, 3, 4}, {10, 20, 30, 40}})
+	AssertVecF32(t, r, 0, [4]float32{11, 22, 33, 44})
+}
+
 // --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
 
 func TestEmu(t *testing.T) {

@@ -43,8 +43,11 @@ namespace Asmtest
             IntPtr o, IntPtr fn, long a0, long a1, long a2, long a3, long a4, long a5);
         [DllImport(EMU)] public static extern void asmtest_capture_fp2(
             IntPtr o, IntPtr fn, double f0, double f1);
+        [DllImport(EMU)] public static extern void asmtest_capture_vec_f32(
+            IntPtr o, IntPtr fn, float[] lanes, int nvec);
         [DllImport(EMU)] public static extern ulong asmtest_regs_ret(IntPtr r);
         [DllImport(EMU)] public static extern double asmtest_regs_fret(IntPtr r);
+        [DllImport(EMU)] public static extern float asmtest_regs_vec_f32(IntPtr r, int index, int lane);
         [DllImport(EMU)] public static extern int asmtest_regs_flag_set(IntPtr r, string name);
         [DllImport(EMU)] public static extern int asmtest_check_abi(IntPtr r, IntPtr msg, nuint n);
         [DllImport(EMU)] public static extern IntPtr emu_open();
@@ -124,11 +127,33 @@ namespace Asmtest
         public void CaptureFp2(IntPtr fn, double f0, double f1)
             => Native.asmtest_capture_fp2(_h, fn, f0, f1);
 
+        /// <summary>
+        /// Call <paramref name="fn"/> with up to eight 128-bit vector args (each four
+        /// float32 lanes), capturing the vector register file. Read the vector return
+        /// with <see cref="VecF32"/>(0).
+        /// </summary>
+        public void CaptureVecF32(IntPtr fn, float[][] vectors)
+        {
+            var flat = new float[vectors.Length * 4];
+            for (int i = 0; i < vectors.Length; i++)
+                for (int l = 0; l < 4; l++)
+                    flat[i * 4 + l] = vectors[i][l];
+            Native.asmtest_capture_vec_f32(_h, fn, flat, vectors.Length);
+        }
+
         /// <summary>The integer return value (rax / x0).</summary>
         public ulong Ret => Native.asmtest_regs_ret(_h);
 
         /// <summary>The scalar FP return value (xmm0 / d0).</summary>
         public double FRet => Native.asmtest_regs_fret(_h);
+
+        /// <summary>The four float32 lanes of vector register <paramref name="index"/> (0 = the vector return).</summary>
+        public float[] VecF32(int index = 0)
+        {
+            var o = new float[4];
+            for (int l = 0; l < 4; l++) o[l] = Native.asmtest_regs_vec_f32(_h, index, l);
+            return o;
+        }
 
         /// <summary>Whether a named condition flag (e.g. "CF", "ZF") is set.</summary>
         public bool FlagSet(string name) => Native.asmtest_regs_flag_set(_h, name) == 1;
@@ -246,6 +271,13 @@ namespace Asmtest
         public static void Fp(Regs r, double want)
         {
             if (r.FRet != want) throw new AsmtestException($"fp: got {r.FRet}, want {want}");
+        }
+        public static void VecF32(Regs r, int index, float[] want)
+        {
+            var got = r.VecF32(index);
+            for (int i = 0; i < want.Length; i++)
+                if (got[i] != want[i])
+                    throw new AsmtestException($"vec[{index}] lane {i}: got {got[i]}, want {want[i]}");
         }
         public static void NoFault(EmuResult res)
         {

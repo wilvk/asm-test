@@ -43,6 +43,10 @@ public class Conformance {
 
             r.captureFp2(routine("fp_add"), 1.5, 2.25);
             check("fp_add.basic", r.fret() == 3.75);
+
+            r.captureVecF32(routine("vec_add4f"), new float[][] {{1, 2, 3, 4}, {10, 20, 30, 40}});
+            float[] v = r.vecF32(0);
+            check("vec_add4f.basic", v[0] == 11 && v[1] == 22 && v[2] == 33 && v[3] == 44);
         }
 
         // --- Tier 1: corpus replay (emulator, x86-64 guest) --------------- //
@@ -84,6 +88,8 @@ public class Conformance {
             Asmtest.assertAbiPreserved(r);
             r.captureFp2(routine("fp_add"), 1.5, 2.25);
             Asmtest.assertFp(r, 3.75);
+            r.captureVecF32(routine("vec_add4f"), new float[][] {{1, 2, 3, 4}, {10, 20, 30, 40}});
+            Asmtest.assertVecF32(r, 0, new float[] {11, 22, 33, 44});
         } catch (Asmtest.AsmtestException ae) {
             t2pass = false;
         }

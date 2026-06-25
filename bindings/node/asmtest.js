@@ -29,8 +29,10 @@ const fn = {
   regsFree: L.func('void asmtest_regs_free(void *)'),
   capture6: L.func('void asmtest_capture6(void *, void *, long, long, long, long, long, long)'),
   captureFp2: L.func('void asmtest_capture_fp2(void *, void *, double, double)'),
+  captureVecF32: L.func('void asmtest_capture_vec_f32(void *, void *, float *, int)'),
   regsRet: L.func('unsigned long asmtest_regs_ret(void *)'),
   regsFret: L.func('double asmtest_regs_fret(void *)'),
+  regsVecF32: L.func('float asmtest_regs_vec_f32(void *, int, int)'),
   regsFlagSet: L.func('int asmtest_regs_flag_set(void *, const char *)'),
   checkAbi: L.func('int asmtest_check_abi(void *, void *, size_t)'),
   emuOpen: L.func('void *emu_open()'),
@@ -75,10 +77,22 @@ class Regs {
   }
   /** Call fn with two double args, capturing the FP return. */
   captureFp2(routine, f0, f1) { fn.captureFp2(this._h, routine, f0, f1); }
+  /**
+   * Call fn with up to eight 128-bit vector args, capturing the vector register
+   * file. `vectors` is an array of four-float32-lane arrays; the vector return
+   * is read back with vecF32(0).
+   */
+  captureVecF32(routine, vectors) {
+    const lanes = [];
+    for (const v of vectors) for (let i = 0; i < 4; i++) lanes.push(v[i] || 0);
+    fn.captureVecF32(this._h, routine, Float32Array.from(lanes), vectors.length);
+  }
   /** The integer return value (rax / x0). */
   ret() { return Number(fn.regsRet(this._h)); }
   /** The scalar FP return value (xmm0 / d0). */
   fret() { return fn.regsFret(this._h); }
+  /** The four float32 lanes of vector register `index` (0 = the vector return). */
+  vecF32(index = 0) { return [0, 1, 2, 3].map((lane) => fn.regsVecF32(this._h, index, lane)); }
   /** Whether a named condition flag (e.g. "CF") is set. */
   flagSet(name) { return fn.regsFlagSet(this._h, name) === 1; }
   /** Whether the callee-saved registers were restored (verdict shim). */
@@ -163,6 +177,12 @@ function assertFp(r, want) {
   const got = r.fret();
   if (got !== want) throw new AsmtestError(`fp: got ${got}, want ${want}`);
 }
+function assertVecF32(r, index, want) {
+  const got = r.vecF32(index);
+  for (let i = 0; i < want.length; i++) {
+    if (got[i] !== want[i]) throw new AsmtestError(`vec[${index}] lane ${i}: got ${got[i]}, want ${want[i]}`);
+  }
+}
 function assertNoFault(res) {
   if (res.faulted()) throw new AsmtestError('unexpected fault');
 }
@@ -179,5 +199,5 @@ module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, AsmtestError,
   assemble, asmError, Arch, Syntax,
-  assertRet, assertAbiPreserved, assertFlag, assertFp, assertNoFault, assertEmuReg,
+  assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32, assertNoFault, assertEmuReg,
 };

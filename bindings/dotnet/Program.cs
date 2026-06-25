@@ -42,6 +42,11 @@ static class Conformance
 
             r.CaptureFp2(Routine("fp_add"), 1.5, 2.25);
             Check("fp_add.basic", r.FRet == 3.75);
+
+            r.CaptureVecF32(Routine("vec_add4f"),
+                new float[][] { new float[] { 1, 2, 3, 4 }, new float[] { 10, 20, 30, 40 } });
+            var v = r.VecF32(0);
+            Check("vec_add4f.basic", v[0] == 11 && v[1] == 22 && v[2] == 33 && v[3] == 44);
         }
 
         // --- Tier 1: corpus replay (emulator, x86-64 guest) ----------------- //
@@ -84,6 +89,9 @@ static class Conformance
             Assert.AbiPreserved(r);
             r.CaptureFp2(Routine("fp_add"), 1.5, 2.25);
             Assert.Fp(r, 3.75);
+            r.CaptureVecF32(Routine("vec_add4f"),
+                new float[][] { new float[] { 1, 2, 3, 4 }, new float[] { 10, 20, 30, 40 } });
+            Assert.VecF32(r, 0, new float[] { 11, 22, 33, 44 });
         }
         catch (AsmtestException) { t2pass = false; }
         Check("tier2.assertions_pass", t2pass);

@@ -26,6 +26,7 @@ import java.lang.invoke.MethodHandle;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -54,9 +55,9 @@ public final class Asmtest {
     private static final SymbolLookup CORPUS;
 
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
-        CAPTURE_FP2, REGS_RET, REGS_FRET, REGS_FLAG_SET, CHECK_ABI, EMU_OPEN, EMU_CLOSE,
-        EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6, ASM_BYTES, ASM_LAST_ERROR,
-        EMU_FAULTED, EMU_REG;
+        CAPTURE_FP2, CAPTURE_VEC_F32, REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
+        CHECK_ABI, EMU_OPEN, EMU_CLOSE, EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6,
+        ASM_BYTES, ASM_LAST_ERROR, EMU_FAULTED, EMU_REG;
 
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
@@ -75,8 +76,12 @@ public final class Asmtest {
             ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG));
         CAPTURE_FP2 = h(emu, "asmtest_capture_fp2",
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE));
+        CAPTURE_VEC_F32 = h(emu, "asmtest_capture_vec_f32",
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
         REGS_RET = h(emu, "asmtest_regs_ret", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
         REGS_FRET = h(emu, "asmtest_regs_fret", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS));
+        REGS_VEC_F32 = h(emu, "asmtest_regs_vec_f32",
+            FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, JAVA_INT, JAVA_INT));
         REGS_FLAG_SET = h(emu, "asmtest_regs_flag_set",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
         CHECK_ABI = h(emu, "asmtest_check_abi",
@@ -173,11 +178,30 @@ public final class Asmtest {
         public void captureFp2(MemorySegment fn, double f0, double f1) {
             try { CAPTURE_FP2.invoke(h, fn, f0, f1); } catch (Throwable t) { throw rethrow(t); }
         }
+        /** Call fn with up to eight 128-bit vector args (each four float32 lanes),
+         *  capturing the vector register file. Read the vector return with vecF32(0). */
+        public void captureVecF32(MemorySegment fn, float[][] vectors) {
+            int nvec = vectors.length;
+            try {
+                MemorySegment lanes = ARENA.allocate(JAVA_FLOAT.byteSize() * 4 * Math.max(nvec, 1));
+                for (int i = 0; i < nvec; i++) {
+                    for (int l = 0; l < 4; l++) lanes.setAtIndex(JAVA_FLOAT, (long) i * 4 + l, vectors[i][l]);
+                }
+                CAPTURE_VEC_F32.invoke(h, fn, lanes, nvec);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
         public long ret() {
             try { return (long) REGS_RET.invoke(h); } catch (Throwable t) { throw rethrow(t); }
         }
         public double fret() {
             try { return (double) REGS_FRET.invoke(h); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** The four float32 lanes of vector register {@code index} (0 = the vector return). */
+        public float[] vecF32(int index) {
+            float[] out = new float[4];
+            try { for (int l = 0; l < 4; l++) out[l] = (float) REGS_VEC_F32.invoke(h, index, l); }
+            catch (Throwable t) { throw rethrow(t); }
+            return out;
         }
         public boolean flagSet(String name) {
             try { return (int) REGS_FLAG_SET.invoke(h, str(name)) == 1; } catch (Throwable t) { throw rethrow(t); }
@@ -266,6 +290,13 @@ public final class Asmtest {
     public static void assertFp(Regs r, double want) {
         double got = r.fret();
         if (got != want) throw new AsmtestException("fp: got " + got + ", want " + want);
+    }
+    public static void assertVecF32(Regs r, int index, float[] want) {
+        float[] got = r.vecF32(index);
+        for (int i = 0; i < want.length; i++) {
+            if (got[i] != want[i])
+                throw new AsmtestException("vec[" + index + "] lane " + i + ": got " + got[i] + ", want " + want[i]);
+        }
     }
     public static void assertNoFault(EmuResult res) {
         if (res.faulted()) throw new AsmtestException("unexpected fault");

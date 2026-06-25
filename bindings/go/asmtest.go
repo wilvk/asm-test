@@ -33,8 +33,10 @@ extern void *asmtest_regs_new(void);
 extern void  asmtest_regs_free(void *r);
 extern void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
 extern void  asmtest_capture_fp2(void *out, void *fn, double f0, double f1);
+extern void  asmtest_capture_vec_f32(void *out, void *fn, float *lanes, int nvec);
 extern unsigned long asmtest_regs_ret(void *r);
 extern double asmtest_regs_fret(void *r);
+extern float asmtest_regs_vec_f32(void *r, int index, int lane);
 extern int   asmtest_regs_flag_set(void *r, const char *name);
 extern int   asmtest_check_abi(void *r, char *msg, size_t n);
 extern void *emu_open(void);
@@ -125,6 +127,31 @@ func (r *Regs) Capture6(fn Routine, args ...int64) {
 // CaptureFP2 calls fn with two double args, capturing the FP return.
 func (r *Regs) CaptureFP2(fn Routine, f0, f1 float64) {
 	C.asmtest_capture_fp2(r.h, fn, C.double(f0), C.double(f1))
+}
+
+// CaptureVecF32 calls fn with up to eight 128-bit vector args (each four float32
+// lanes), capturing the vector register file. The vector return is read back
+// with VecF32(0).
+func (r *Regs) CaptureVecF32(fn Routine, vectors [][4]float32) {
+	flat := make([]float32, 0, len(vectors)*4)
+	for _, v := range vectors {
+		flat = append(flat, v[0], v[1], v[2], v[3])
+	}
+	var p *C.float
+	if len(flat) > 0 {
+		p = (*C.float)(unsafe.Pointer(&flat[0]))
+	}
+	C.asmtest_capture_vec_f32(r.h, fn, p, C.int(len(vectors)))
+}
+
+// VecF32 returns the four float32 lanes of vector register index (0 = the
+// vector return).
+func (r *Regs) VecF32(index int) [4]float32 {
+	var out [4]float32
+	for lane := 0; lane < 4; lane++ {
+		out[lane] = float32(C.asmtest_regs_vec_f32(r.h, C.int(index), C.int(lane)))
+	}
+	return out
 }
 
 // Ret returns the integer return value (rax / x0).
@@ -299,6 +326,14 @@ func AssertFP(t TB, r *Regs, want float64) {
 	t.Helper()
 	if got := r.FRet(); got != want {
 		t.Fatalf("fp: got %v, want %v", got, want)
+	}
+}
+
+// AssertVecF32 fails t unless the four lanes of vector register index equal want.
+func AssertVecF32(t TB, r *Regs, index int, want [4]float32) {
+	t.Helper()
+	if got := r.VecF32(index); got != want {
+		t.Fatalf("vec[%d]: got %v, want %v", index, got, want)
 	}
 }
 

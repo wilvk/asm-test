@@ -85,6 +85,29 @@ void asmtest_capture_fp2(regs_t *out, void *fn, double f0, double f1) {
     asm_call_capture_fp(out, fn, iargs, fargs);
 }
 
+/* Vector capture for the opaque-handle bindings, completing the trampoline
+ * surface alongside capture6 (int) and capture_fp2 (fp). `lanes` is a flat array
+ * of 4*nvec float32s — nvec vector args, each four lanes, packed contiguously and
+ * little-endian — so a binding marshals only a scalar array, never a vec128_t
+ * (the struct-layout bindings call asm_call_capture_vec directly instead). The
+ * whole vector register file is captured into out->vec[]; the vector return is
+ * out->vec[0], read back lane by lane with asmtest_regs_vec_f32. nvec is clamped
+ * to [0, 8] (the number of vector argument registers). */
+void asmtest_capture_vec_f32(regs_t *out, void *fn, const float *lanes,
+                             int nvec) {
+    long iargs[6] = {0, 0, 0, 0, 0, 0};
+    vec128_t vargs[8];
+    memset(vargs, 0, sizeof(vargs));
+    if (nvec < 0)
+        nvec = 0;
+    if (nvec > 8)
+        nvec = 8;
+    for (int i = 0; i < nvec; i++)
+        for (int lane = 0; lane < 4; lane++)
+            vargs[i].f32[lane] = lanes[i * 4 + lane];
+    asm_call_capture_vec(out, fn, iargs, vargs);
+}
+
 /* ---- emu_result_t opaque handle + accessors (no Unicorn dependency) ---- */
 emu_result_t *asmtest_emu_result_new(void) {
     return (emu_result_t *)calloc(1, sizeof(emu_result_t));

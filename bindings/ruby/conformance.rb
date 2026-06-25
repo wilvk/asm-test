@@ -58,6 +58,10 @@ with_regs do |r|
   r.capture_fp2(routine("fp_add"), 1.5, 2.25)
   check("fp_add.basic", r.fret == 3.75)
 end
+with_regs do |r|
+  r.capture_vec_f32(routine("vec_add4f"), [[1, 2, 3, 4], [10, 20, 30, 40]])
+  check("vec_add4f.basic", r.vec_f32(0) == [11, 22, 33, 44])
+end
 
 # --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
 e = Asmtest::Emu.new
@@ -104,6 +108,10 @@ tier2_pass = begin
   with_regs do |r|
     r.capture_fp2(routine("fp_add"), 1.5, 2.25)
     Asmtest.assert_fp(r, 3.75)
+  end
+  with_regs do |r|
+    r.capture_vec_f32(routine("vec_add4f"), [[1, 2, 3, 4], [10, 20, 30, 40]])
+    Asmtest.assert_vec_f32(r, 0, [11, 22, 33, 44])
   end
   true
 rescue Asmtest::Error
