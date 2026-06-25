@@ -101,6 +101,28 @@ jobs:
       - name: Build and run emulator suite
         run: make emu-test
 
+  # Optional in-line assembler tier (Keystone): assemble routines from strings
+  # and run them through the emulator. Keystone produces real machine code for
+  # the named guest, so every case is host-independent — run on both x86-64 and
+  # arm64. Needs both libkeystone and libunicorn (the --asm dep set pulls both);
+  # RISC-V self-skips where the packaged Keystone lacks that backend.
+  asm:
+    name: asm (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libkeystone + libunicorn
+        run: make deps DEPS_ARGS=--asm
+
+      - name: Build and run in-line assembler suite
+        run: make asm-test
+
   # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
   # container (bindings/<lang>/Dockerfile on a shared C+libunicorn base) so the
   # toolchains stay isolated — one matrix job per language, each running

@@ -349,10 +349,10 @@ install-shared-emu: shared-emu
 
 # --- Optional dependency bootstrap -----------------------------------------
 # `make deps` installs the OPTIONAL toolchain (nasm, pkg-config, libunicorn,
-# clang-tidy) via the system package manager — the core build needs none of it.
-# scripts/install-deps.sh detects apt-get/dnf/yum/pacman/zypper/apk/brew. Pass
-# DEPS_ARGS to select a subset, e.g. `make deps DEPS_ARGS=--emu` or preview with
-# `make deps DEPS_ARGS=--dry-run`.
+# libkeystone, clang-tidy) via the system package manager — the core build needs
+# none of it. scripts/install-deps.sh detects apt-get/dnf/yum/pacman/zypper/apk/
+# brew. Pass DEPS_ARGS to select a subset, e.g. `make deps DEPS_ARGS=--emu`,
+# `make deps DEPS_ARGS=--asm`, or preview with `make deps DEPS_ARGS=--dry-run`.
 DEPS_ARGS ?=
 deps:
 	sh scripts/install-deps.sh $(DEPS_ARGS)
@@ -362,6 +362,7 @@ deps:
 #   make docker-test       build + run the example suites and self-tests
 #   make docker-nasm       the NASM backend (x86-64 only)
 #   make docker-emu        the emulator tier (libunicorn)
+#   make docker-asm        the in-line assembler tier (libkeystone + libunicorn)
 #   make docker-valgrind   memcheck the routines under test
 #   make docker-sanitize   ASan + UBSan
 #   make docker-analyze    clang-tidy
@@ -378,9 +379,9 @@ DOCKER_PLATFORM ?=
 _docker_plat := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 _docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
 
-.PHONY: docker-build docker-test docker-nasm docker-emu docker-valgrind \
-        docker-sanitize docker-analyze docker-coverage docker-ci docker-shell \
-        docker-clean
+.PHONY: docker-build docker-test docker-nasm docker-emu docker-asm \
+        docker-valgrind docker-sanitize docker-analyze docker-coverage \
+        docker-ci docker-shell docker-clean
 
 docker-build:
 	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
@@ -393,6 +394,9 @@ docker-nasm: docker-build
 
 docker-emu: docker-build
 	$(_docker_run) make emu-test
+
+docker-asm: docker-build
+	$(_docker_run) make asm-test
 
 docker-valgrind: docker-build
 	$(_docker_run) make valgrind
@@ -413,6 +417,7 @@ docker-ci: docker-build
 	  make test && make check; \
 	  make clean && make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check; \
 	  make clean && make emu-test; \
+	  make clean && make asm-test; \
 	  make clean && make valgrind; \
 	  make clean && make sanitize; \
 	  make tidy'
