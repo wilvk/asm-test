@@ -91,6 +91,7 @@ make demo-fail              # see how a failing assertion is reported
 make demo-robust            # see a hang and a crash contained & reported
 make bench                  # time the BENCH cases (cycles/call)
 make ASM_SYNTAX=nasm test   # same suites via the NASM backend (x86-64)
+make asm-test               # run routines from in-line assembly strings (Keystone)
 make clean
 ```
 
@@ -147,6 +148,38 @@ function pointers and asserts on the result. The routine keeps its live state
 (pointer, counter, callback, accumulator) in callee-saved registers and keeps
 the stack 16-byte aligned at each call — exactly the ABI discipline these
 helpers are built to exercise.
+
+### Pass assembly as a string (in-line)
+
+The usual path assembles `.s`/`.asm` files ahead of time and links them as
+symbols. The optional **in-line assembler tier** (Keystone) lets you instead
+hand the emulator a routine as an *assembly string* and run it — handy for
+generated snippets, quick experiments, or table-driven cases:
+
+```c
+#include "asmtest.h"
+#include "asmtest_assemble.h"
+
+TEST(inline_asm, adds_two) {
+    emu_t *e = emu_open();
+    emu_result_t r;
+    long args[] = {40, 2};
+    /* assemble at the emulator's load base, then run it */
+    ASSERT_TRUE(emu_call_asm(e, "mov rax, rdi; add rax, rsi; ret", args, 2, 0, &r));
+    ASSERT_FALSE(r.faulted);
+    ASSERT_EQ(r.regs.rax, 42);
+    emu_close(e);
+}
+```
+
+`emu_call_asm` (x86-64, Intel syntax by default) has siblings for the other
+guests — `emu_arm64_call_asm`, `emu_arm_call_asm`, and `emu_riscv_call_asm`
+(RISC-V where the linked Keystone supports it). For just the bytes, call
+`asmtest_assemble(arch, syntax, source, addr, &out)` and free with
+`asmtest_asm_free`; a bad string is reported as data (`out.ok == false`, message
+in `out.err`), never a crash. Build and run with `make asm-test` (needs
+`libkeystone` alongside `libunicorn`; `make deps DEPS_ARGS=--asm` installs them).
+See [docs/plans/inline-asm-keystone-plan.md](docs/plans/inline-asm-keystone-plan.md).
 
 ## Debugging a routine under test
 
@@ -236,6 +269,7 @@ installs only `make` + a C compiler, then pulls the optional toolchain through
 make docker-test        # example suites + framework self-tests (the `test` job)
 make docker-nasm        # NASM backend (x86-64 only)
 make docker-emu         # emulator tier (libunicorn)
+make docker-asm         # in-line assembler tier (libkeystone + libunicorn)
 make docker-valgrind    # memcheck the routines under test
 make docker-sanitize    # ASan + UBSan
 make docker-analyze     # clang-tidy

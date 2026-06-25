@@ -70,7 +70,7 @@ exposed in the public emu header and shared by both sides.
 
 ---
 
-## Phase 1 — Assembler core (Keystone only) — **planned**
+## Phase 1 — Assembler core (Keystone only) — **done**
 
 New `include/asmtest_assemble.h`:
 
@@ -102,7 +102,7 @@ void asmtest_asm_free(asm_result_t *r);
 selectable. (The repo's `.s` corpus is GAS/AT&T, but in-line strings follow the
 Keystone/kstool convention; AT&T stays one enum away.)
 
-## Phase 2 — Emu bridge wrappers — **planned**
+## Phase 2 — Emu bridge wrappers — **done**
 
 Move `EMU_CODE_BASE` into [include/asmtest_emu.h](../../include/asmtest_emu.h) as a
 public `#define` (out of emu.c). Add to `src/assemble.c`:
@@ -123,7 +123,7 @@ matching existing `_call`. On assemble failure: return `false` with the Keystone
 message surfaced (via the result's `uc_err`/an error field, matching how the emu
 side already reports setup failure).
 
-## Phase 3 — Build wiring (mirror Unicorn exactly) — **planned**
+## Phase 3 — Build wiring (mirror Unicorn exactly) — **done**
 
 In [Makefile](../../Makefile), beside the `UNICORN_*` block:
 
@@ -136,7 +136,7 @@ In [Makefile](../../Makefile), beside the `UNICORN_*` block:
   `emu.o` + `assemble.o`, linking `$(UNICORN_LIBS) $(KEYSTONE_LIBS)`.
 - New `docker-asm` target alongside `docker-emu`.
 
-## Phase 4 — Dependency provisioning — **planned**
+## Phase 4 — Dependency provisioning — **done**
 
 In [scripts/install-deps.sh](../../scripts/install-deps.sh): add `want_keystone`, a
 `--asm` flag (and include it in `--all`), a `have_keystone()` pkg-config probe, and
@@ -145,7 +145,7 @@ per-manager package names (`apt-get: libkeystone-dev`, `pacman: keystone`,
 rather than failing. Update the `--asm` line in the usage banner and the
 `make deps` comments in the Makefile.
 
-## Phase 5 — Tests — **planned**
+## Phase 5 — Tests — **done**
 
 New `examples/test_asm.c` (TAP, modeled on
 [examples/test_emu.c](../../examples/test_emu.c)):
@@ -164,7 +164,7 @@ Wire `test_asm` into `make asm-test`, the Docker matrix, and CI
 ([.github/workflows](../../.github/workflows)) gated like the emu jobs (skip where
 Keystone is absent, exactly as emu skips without Unicorn).
 
-## Phase 6 — Bindings — **planned**
+## Phase 6 — Bindings — **done**
 
 Expose the in-line entry point through each binding, following the existing
 DllImport/FFI pattern in [bindings/](../../bindings) (see
@@ -184,7 +184,7 @@ library module structure):
 - Keep it additive: the corpus replay stays the primary conformance path; the
   in-line case is one extra check per binding, skipped where Keystone is absent.
 
-## Phase 7 — Docs — **planned**
+## Phase 7 — Docs — **done**
 
 - [README.md](../../README.md): a "Pass assembly as a string (in-line)" subsection
   under the emulator tier, with an x86-64 example.

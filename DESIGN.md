@@ -168,6 +168,17 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   a built routine; the AArch64 path (`emu_arm64_*`) takes raw machine code, so
   ARM64 routines emulate even on an x86-64 host. Has its own CI job.
 
+- **In-line assembler tier: _done._** A [Keystone Engine](https://www.keystone-engine.org/)
+  wrapper (`src/assemble.c`, `include/asmtest_assemble.h`, built with
+  `-lkeystone`) turns an assembly *string* into machine code for the emulator's
+  guests, then `emu_*_call_asm` runs it via the Phase 4 engine — assembling at the
+  emulator's load base so PC-relative and branch targets resolve. It is the
+  assembler counterpart to the Unicorn disassembler: the emulator already consumes
+  raw `(code, code_len)` buffers, so this is a text→bytes front end. Optional and
+  pkg-config gated like the emulator; `make asm-test`, a CI `asm` job, and a
+  `CallAsm` entry point in every binding. See
+  [the implementation plan](docs/plans/inline-asm-keystone-plan.md).
+
 The phases below are **planned**, ordered to deepen the framework's core
 promise — calling assembly through the real ABI and inspecting the result —
 before broadening reach. The current testable surface is narrow: a routine's
