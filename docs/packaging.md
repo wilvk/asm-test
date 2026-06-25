@@ -4,10 +4,12 @@ This page is the release guide for the ten language bindings. It documents, per
 ecosystem, the **package manifest**, how the **prebuilt native libraries** are
 bundled, and the **command** that assembles a publishable artifact. Everything
 here is *scaffolding*: the manifests and the `make <lang>-package` targets exist
-and assemble an artifact for the **host** platform; a real multi-platform release
-repeats the native staging on each target OS/arch (or uses each ecosystem's
-standard prebuild tooling) and uploads to the registry with credentials. No
-registry credentials or cross-OS build matrices live in this repo.
+and assemble an artifact for the **host** platform. The **cross-platform native
+payloads** that a multi-platform release needs are now built in CI — the
+[`payloads` matrix](#ci-builds-the-cross-platform-native-payloads) runs the native
+staging on each target OS/arch and uploads the result — but wiring those payloads
+into each ecosystem's package and uploading to the registry with credentials
+stays out of this repo.
 
 ## The native-library split
 
@@ -57,6 +59,30 @@ unversioned `libasmtest.{so,dylib}` and `libasmtest_emu.{so,dylib}` the dlopen
 bindings look up. Each `make <lang>-package` below re-stages into that language's
 payload location and runs its packer, emitting under `build/dist/<lang>/`.
 
+## CI builds the cross-platform native payloads
+
+`make package-libs` stages only the **build host's** slot, so a release built on
+one machine would ship a single-platform payload. The CI `payloads` matrix closes
+that gap with no Windows/extra hardware beyond the runners the `test` job already
+uses:
+
+- **`payloads (<os>)`** runs `make deps DEPS_ARGS=--emu` then `make package-libs`
+  on each of `ubuntu-latest` (linux-x86_64), `ubuntu-24.04-arm` (linux-aarch64),
+  and `macos-latest` (darwin-arm64), uploading each `build/dist/native/<plat>/`
+  as a `native-payload-<os>` artifact. The scarce/slow Intel-macOS corner
+  (`darwin-x86_64`) builds nightly + on dispatch in `payloads (macos-13, nightly)`,
+  mirroring how `test-macos-x86` gates that runner off the per-push path.
+- **`payloads (collect + verify)`** downloads every `native-payload-*` artifact,
+  merges them into one `build/dist/native/` tree, runs `make package-libs-verify`
+  to assert each platform slot carries **both** the core and the emulator lib, and
+  re-uploads the combined tree as a single `native-all` artifact. A real publish
+  job downloads `native-all` and feeds each `<plat>/` into the matching binding
+  package (or each ecosystem's prebuild tool) before pushing to the registry.
+
+```sh
+make package-libs-verify   # check a collected build/dist/native/ tree locally
+```
+
 ## Per-language
 
 ```sh
@@ -81,10 +107,13 @@ already present.
 
 The scaffolding stops short of a credentialed, multi-platform release:
 
-1. **Cross-platform native libs.** `make package-libs` builds only the host's
-   libs. Populate the other `native/<plat>/` (or `runtimes/<rid>/native/`) slots
-   by running the staging on each OS/arch, or wire each ecosystem's prebuild tool
-   (`cibuildwheel`, `prebuildify`, Maven classifiers, NuGet RIDs).
+1. **Cross-platform native libs.** *Built in CI* — the `payloads` matrix above
+   stages `make package-libs` on every target OS/arch and the collect job emits a
+   verified `native-all` artifact spanning all four platforms. What remains is the
+   *publish-side* wiring: a release job that downloads `native-all` and drops each
+   `<plat>/` into the matching `native/<plat>/` (or `runtimes/<rid>/native/`) slot,
+   or hands the payloads to each ecosystem's prebuild tool (`cibuildwheel`,
+   `prebuildify`, Maven classifiers, NuGet RIDs).
 2. **Wiring the library modules into each packer.** Every binding now ships a
    reusable library module — `asmtest.js`, `asmtest.rb`, `asmtest.lua`,
    `Asmtest.java`, and `Asmtest.cs` join the already-library-shaped Python, Rust,

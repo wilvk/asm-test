@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CI builds the cross-platform native payloads for the bindings.** `make
+  package-libs` only ever staged the *build host's* shared libs, so a release
+  shipped a single-platform payload. A new `payloads` CI matrix runs the native
+  staging on each `{x86-64, AArch64} × {Linux, macOS}` runner (the Intel-macOS
+  corner nightly, as `test-macos-x86` does) and uploads each
+  `build/dist/native/<os>-<arch>/` as an artifact; a `payloads (collect + verify)`
+  job merges them into one tree, runs the new `make package-libs-verify` to assert
+  every platform slot carries both the core and the `libasmtest_emu` lib, and
+  re-uploads the combined set as a single `native-all` artifact a publish step
+  would consume. This is the "multi-platform native payloads" step the packaging
+  scaffolding stopped short of — no registry credentials or extra hardware needed.
+  See [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md).
+
 - **The full emulator surface reaches every binding.** A review found four core
   emulator capabilities that no binding could reach (the FFI lacked an
   opaque-handle wrapper), plus an assembler tier the corpus did not anchor. All

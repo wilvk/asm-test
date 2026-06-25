@@ -79,6 +79,8 @@ help:
 	@echo '  install         install headers + static lib + pkg-config'
 	@echo '  deps            bootstrap the optional toolchain (DEPS_ARGS=...)'
 	@echo '  packages        build every language package (needs all toolchains)'
+	@echo '  package-libs    stage the host shared libs into build/dist/native/<plat>'
+	@echo '  package-libs-verify  check a collected native tree has both libs per platform'
 	@echo ''
 	@echo 'Quality (Track D/E):'
 	@echo '  sanitize        build + run under ASan + UBSan'
@@ -1137,8 +1139,9 @@ PYBUILD  ?= python3 -m build
 pkg_emu_name  := $(notdir $(call shlib_dev,libasmtest_emu))
 pkg_core_name := $(notdir $(call shlib_dev,libasmtest))
 
-.PHONY: packages package-libs python-package rust-package zig-package cpp-package \
-        node-package java-package dotnet-package ruby-package lua-package go-package
+.PHONY: packages package-libs package-libs-verify python-package rust-package \
+        zig-package cpp-package node-package java-package dotnet-package \
+        ruby-package lua-package go-package
 
 package-libs: shared shared-emu
 	mkdir -p $(PKG_DIST)/native/$(PKG_PLAT)
@@ -1211,6 +1214,32 @@ go-package:
 
 packages: python-package rust-package zig-package cpp-package node-package \
           java-package dotnet-package ruby-package lua-package go-package
+
+# Verify a (possibly multi-platform) build/dist/native/ tree carries a complete
+# native set: every <plat> subdir must hold BOTH the core lib and the
+# libasmtest_emu superset the dlopen bindings load. `make package-libs` stages
+# only the build host's slot; the CI `payloads` matrix runs it on each OS/arch
+# and the collect job merges the artifacts into one tree, then runs this target
+# so a release never ships a payload missing a platform or a lib. Exits nonzero
+# if any platform slot is incomplete.
+package-libs-verify:
+	@dir=$(PKG_DIST)/native; \
+	test -d "$$dir" || { echo "package-libs-verify: no $$dir — run 'make package-libs' first"; exit 1; }; \
+	plats=$$(cd "$$dir" && ls -d */ 2>/dev/null | tr -d /); \
+	test -n "$$plats" || { echo "package-libs-verify: $$dir has no platform subdirs"; exit 1; }; \
+	rc=0; n=0; \
+	for p in $$plats; do \
+	  n=$$((n+1)); pd="$$dir/$$p"; \
+	  core=$$(ls "$$pd"/libasmtest.* 2>/dev/null | head -1); \
+	  emu=$$(ls "$$pd"/libasmtest_emu.* 2>/dev/null | head -1); \
+	  if [ -n "$$core" ] && [ -n "$$emu" ]; then \
+	    echo "  ok   $$p   ($$(basename "$$core"), $$(basename "$$emu"))"; \
+	  else \
+	    echo "  MISS $$p   core=$${core:-<none>} emu=$${emu:-<none>}"; rc=1; \
+	  fi; \
+	done; \
+	echo "package-libs-verify: $$n platform(s) in $$dir"; \
+	exit $$rc
 
 # --- Documentation (Sphinx → Read the Docs) --------------------------------
 # `make docs`           build the HTML docs into docs/_build/html

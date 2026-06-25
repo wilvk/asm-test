@@ -344,3 +344,93 @@ jobs:
           name: asmtest-coverage
           path: asmtest.c.gcov
           if-no-files-found: error
+
+  # Release payloads: build the prebuilt native libraries per OS/arch and upload
+  # each as an artifact, so a publish step ships a *cross-platform* native set
+  # without a registry credential or a per-ecosystem prebuild tool living in this
+  # repo. `make package-libs` stages the build host's slot (libasmtest + the
+  # libasmtest_emu superset the dlopen bindings load) into build/dist/native/
+  # <os>-<arch>/; this matrix runs it on the same {x86-64, AArch64} x {Linux,
+  # macOS} platforms the `test` job covers. The scarce/slow Intel macOS corner
+  # builds nightly in `package-libs-macos-x86`; `package-libs-collect` merges every
+  # leg's artifact into one tree and verifies each platform carries both libs.
+  # This is the "multi-platform native payloads" step the packaging scaffolding
+  # stopped short of (see docs/packaging.md) — credentialed publish stays out.
+  package-libs:
+    name: payloads (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libunicorn
+        run: make deps DEPS_ARGS=--emu
+
+      - name: Stage the host's native payload
+        run: make package-libs
+
+      - name: Upload native payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-payload-${{ matrix.os }}
+          path: build/dist/native/
+          if-no-files-found: error
+
+  # The Intel macOS (darwin-x86_64) payload, nightly + on manual dispatch, exactly
+  # as the `test-macos-x86` job gates that scarce/slow corner off the per-push path.
+  package-libs-macos-x86:
+    name: payloads (macos-13, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-13
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libunicorn
+        run: make deps DEPS_ARGS=--emu
+
+      - name: Stage the host's native payload
+        run: make package-libs
+
+      - name: Upload native payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-payload-macos-13
+          path: build/dist/native/
+          if-no-files-found: error
+
+  # Gather every per-OS/arch payload into one build/dist/native/ tree and verify
+  # the cross-platform set is complete (each platform carries the core + emu lib),
+  # then re-upload it as a single `native-all` artifact a release would consume.
+  # `needs` the optional Intel-macOS leg too, but the `if` keys only off the main
+  # matrix so this still runs on push (where that leg is skipped) — the download
+  # pattern simply collects whatever payload artifacts the run produced.
+  package-libs-collect:
+    name: payloads (collect + verify)
+    needs: [package-libs, package-libs-macos-x86]
+    if: ${{ !cancelled() && needs.package-libs.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every per-OS/arch payload
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-payload-*
+          path: build/dist/native/
+          merge-multiple: true
+
+      - name: Verify the cross-platform native set
+        run: make package-libs-verify
+
+      - name: Upload the combined cross-platform payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-all
+          path: build/dist/native/
+          if-no-files-found: error
