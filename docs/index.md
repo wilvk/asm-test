@@ -152,5 +152,6 @@ api-reference
 :hidden:
 
 design
+glossary
 changelog
 ```
