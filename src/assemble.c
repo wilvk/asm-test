@@ -187,3 +187,11 @@ bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs
     asmtest_asm_free(&r);
     return ok;
 }
+
+/* Opaque-handle FFI shim (see asmtest_assemble.h): scalar two-arg x86-64 entry
+ * for dynamic-language bindings, mirroring emu.c's asmtest_emu_call2. */
+int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
+                         emu_result_t *out) {
+    long args[2] = {a0, a1};
+    return emu_call_asm(e, src, args, 2, 0, out) ? 1 : 0;
+}

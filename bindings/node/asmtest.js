@@ -38,6 +38,7 @@ const fn = {
   emuResNew: L.func('void *asmtest_emu_result_new()'),
   emuResFree: L.func('void asmtest_emu_result_free(void *)'),
   emuCall2: L.func('int asmtest_emu_call2(void *, void *, long, long, void *)'),
+  emuCallAsm: L.func('int asmtest_emu_call_asm(void *, const char *, long, long, void *)'),
   emuFaulted: L.func('int asmtest_emu_result_faulted(void *)'),
   emuReg: L.func('uint64_t asmtest_emu_x86_reg(void *, const char *)'),
 };
@@ -87,6 +88,16 @@ class Emu {
     const res = new EmuResult();
     fn.emuCall2(this._h, routine, a0, a1, res._h);
     return res;
+  }
+  /**
+   * Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two
+   * integer args. Returns { res, ok }; ok is false if it failed to assemble.
+   * Needs the Keystone-backed native lib.
+   */
+  callAsm(src, a0, a1) {
+    const res = new EmuResult();
+    const ok = fn.emuCallAsm(this._h, src, a0, a1, res._h) !== 0;
+    return { res, ok };
   }
   close() { if (this._h) { fn.emuClose(this._h); this._h = null; } }
 }

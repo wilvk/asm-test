@@ -50,6 +50,7 @@ module Asmtest
     emu_res_new:    func(L, "asmtest_emu_result_new", [], VOIDP),
     emu_res_free:   func(L, "asmtest_emu_result_free", [VOIDP], VOID),
     emu_call2:      func(L, "asmtest_emu_call2", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
+    emu_call_asm:   func(L, "asmtest_emu_call_asm", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
     emu_reg:        func(L, "asmtest_emu_x86_reg", [VOIDP, VOIDP], LL),
   }.freeze
@@ -131,6 +132,15 @@ module Asmtest
       res = EmuResult.new
       FN[:emu_call2].call(@h, fn, a0, a1, res.h)
       res
+    end
+
+    # Assemble x86-64 +src+ (Intel syntax) via Keystone and run it with two
+    # integer args; returns [EmuResult, ok] where ok is false if it didn't
+    # assemble. Needs the Keystone-backed native lib.
+    def call_asm(src, a0, a1)
+      res = EmuResult.new
+      ok = FN[:emu_call_asm].call(@h, src, a0, a1, res.h) != 0
+      [res, ok]
     end
 
     def close

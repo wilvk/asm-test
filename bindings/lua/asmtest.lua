@@ -27,6 +27,7 @@ void  emu_close(void *e);
 void *asmtest_emu_result_new(void);
 void  asmtest_emu_result_free(void *r);
 int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
+int   asmtest_emu_call_asm(void *e, const char *src, long a0, long a1, void *out);
 int   asmtest_emu_result_faulted(void *r);
 unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
 ]])
@@ -77,6 +78,14 @@ function Emu:call2(fn, a0, a1)
   local res = new_result()
   L.asmtest_emu_call2(self.h, fn, a0, a1, res.h)
   return res
+end
+-- Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two integer
+-- args; returns res, ok (ok is false if it failed to assemble). Needs the
+-- Keystone-backed native lib.
+function Emu:call_asm(src, a0, a1)
+  local res = new_result()
+  local ok = L.asmtest_emu_call_asm(self.h, src, a0, a1, res.h) ~= 0
+  return res, ok
 end
 function Emu:close() if self.h then L.emu_close(self.h); self.h = nil end end
 

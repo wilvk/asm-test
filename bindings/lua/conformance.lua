@@ -65,6 +65,11 @@ do
   local res = e:call2(routine("add_signed"), 40, 2)
   check("emu.add_signed", not res:faulted() and res:reg("rax") == 42)
   res:free()
+
+  -- in-line assembly (Keystone) replays add_signed
+  local ares, ok = e:call_asm("mov rax, rdi; add rax, rsi; ret", 40, 2)
+  check("asm.add_signed", ok and not ares:faulted() and ares:reg("rax") == 42)
+  ares:free()
   e:close()
 end
 

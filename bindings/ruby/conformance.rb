@@ -64,6 +64,11 @@ e = Asmtest::Emu.new
 res = e.call2(routine("add_signed"), 40, 2)
 check("emu.add_signed", !res.faulted? && res.reg("rax") == 42)
 res.free
+
+# --- Tier 1: in-line assembly (Keystone) replays add_signed ----------------
+res, asm_ok = e.call_asm("mov rax, rdi; add rax, rsi; ret", 40, 2)
+check("asm.add_signed", asm_ok && !res.faulted? && res.reg("rax") == 42)
+res.free
 e.close
 
 # --- Tier 2: idiomatic assertions pass on good input -----------------------

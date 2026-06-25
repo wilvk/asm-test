@@ -89,6 +89,13 @@ bool emu_riscv_call_asm(emu_riscv_t *e, const char *src, const long *args,
 bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs,
                       uint64_t max_insns, emu_arm_result_t *out);
 
+/* Opaque-handle FFI shim for dynamic-language bindings (mirrors
+ * asmtest_emu_call2 in asmtest_emu.h): assemble x86-64 `src` and run it with
+ * two integer args, results in the *out handle (read via the asmtest_emu_*
+ * accessors). Returns 1 if it assembled and ran, 0 otherwise. */
+int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
+                         emu_result_t *out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
