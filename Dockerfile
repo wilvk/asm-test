@@ -19,10 +19,11 @@ FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Base toolchain only. The C compiler also assembles the GAS .s sources and
-# ships gcov, so this is all the core build (make test/check) needs.
+# Base toolchain. The C compiler also assembles the GAS .s sources and ships
+# gcov; cmake + git are here for the Keystone source build (no distro package).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates cmake git \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -30,11 +31,13 @@ WORKDIR /src
 # Install the OPTIONAL toolchain first, from just the Makefile + installer, so
 # this (slow) layer stays cached when only sources change. `make deps` runs as
 # root here and so skips sudo. DEPS_ARGS lets you trim it, e.g.
-# `docker build --build-arg DEPS_ARGS=--emu .`.
+# `docker build --build-arg DEPS_ARGS=--emu .`. Keystone has no apt package, so
+# when asm is in scope (--asm/--all) it is built from source (cached layer).
 ARG DEPS_ARGS=--all
 COPY Makefile ./
 COPY scripts/ ./scripts/
 RUN make deps DEPS_ARGS=$DEPS_ARGS && rm -rf /var/lib/apt/lists/*
+RUN case "$DEPS_ARGS" in *--asm*|*--all*) sh scripts/build-keystone.sh ;; esac
 
 # Now the rest of the tree (build artifacts excluded via .dockerignore).
 COPY . .

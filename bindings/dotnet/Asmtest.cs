@@ -37,8 +37,6 @@ namespace Asmtest
         [DllImport(EMU)] public static extern void asmtest_emu_result_free(IntPtr r);
         [DllImport(EMU)] public static extern int asmtest_emu_call2(
             IntPtr e, IntPtr fn, long a0, long a1, IntPtr o);
-        [DllImport(EMU)] public static extern int asmtest_emu_call_asm(
-            IntPtr e, string src, long a0, long a1, IntPtr o);
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
     }
@@ -102,19 +100,6 @@ namespace Asmtest
         {
             var res = new EmuResult();
             Native.asmtest_emu_call2(_h, fn, a0, a1, res.Handle);
-            return res;
-        }
-
-        /// <summary>
-        /// Assemble x86-64 <paramref name="src"/> (Intel syntax) and run it with two
-        /// integer args. <paramref name="ok"/> is false if the string failed to
-        /// assemble (the result then holds no run). Needs the Keystone-backed
-        /// native lib (built with the in-line assembler tier).
-        /// </summary>
-        public EmuResult CallAsm(string src, long a0, long a1, out bool ok)
-        {
-            var res = new EmuResult();
-            ok = Native.asmtest_emu_call_asm(_h, src, a0, a1, res.Handle) != 0;
             return res;
         }
 

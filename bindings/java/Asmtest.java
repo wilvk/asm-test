@@ -42,7 +42,7 @@ public final class Asmtest {
 
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
         CAPTURE_FP2, REGS_RET, REGS_FRET, REGS_FLAG_SET, CHECK_ABI, EMU_OPEN, EMU_CLOSE,
-        EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM, EMU_FAULTED, EMU_REG;
+        EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_FAULTED, EMU_REG;
 
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
@@ -72,8 +72,6 @@ public final class Asmtest {
         EMU_RES_NEW = h(emu, "asmtest_emu_result_new", FunctionDescriptor.of(ADDRESS));
         EMU_RES_FREE = h(emu, "asmtest_emu_result_free", FunctionDescriptor.ofVoid(ADDRESS));
         EMU_CALL2 = h(emu, "asmtest_emu_call2", FunctionDescriptor.of(
-            JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
-        EMU_CALL_ASM = h(emu, "asmtest_emu_call_asm", FunctionDescriptor.of(
             JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
         EMU_FAULTED = h(emu, "asmtest_emu_result_faulted", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         EMU_REG = h(emu, "asmtest_emu_x86_reg", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS));
@@ -161,19 +159,6 @@ public final class Asmtest {
         public EmuResult call2(MemorySegment fn, long a0, long a1) {
             EmuResult res = new EmuResult();
             try { EMU_CALL2.invoke(h, fn, a0, a1, res.h); } catch (Throwable t) { throw rethrow(t); }
-            return res;
-        }
-        /**
-         * Assemble x86-64 {@code src} (Intel syntax) via Keystone and run it with
-         * two integer args; returns an EmuResult. Throws AsmtestException if the
-         * string failed to assemble. Needs the Keystone-backed native lib.
-         */
-        public EmuResult callAsm(String src, long a0, long a1) {
-            EmuResult res = new EmuResult();
-            int ok;
-            try { ok = (int) EMU_CALL_ASM.invoke(h, str(src), a0, a1, res.h); }
-            catch (Throwable t) { throw rethrow(t); }
-            if (ok == 0) { res.close(); throw new AsmtestException("in-line assembly failed: " + src); }
             return res;
         }
         @Override public void close() {

@@ -175,8 +175,11 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   emulator's load base so PC-relative and branch targets resolve. It is the
   assembler counterpart to the Unicorn disassembler: the emulator already consumes
   raw `(code, code_len)` buffers, so this is a text→bytes front end. Optional and
-  pkg-config gated like the emulator; `make asm-test`, a CI `asm` job, and a
-  `CallAsm` entry point in every binding. See
+  pkg-config gated, and deliberately kept out of `libasmtest_emu` so the
+  Unicorn-only bindings are unaffected; `make asm-test` and a CI `asm` job
+  (Keystone has no distro package, so it is source-built via
+  `scripts/build-keystone.sh`). A `CallAsm` binding entry point is a planned
+  follow-up. See
   [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 The phases below are **planned**, ordered to deepen the framework's core

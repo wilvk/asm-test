@@ -17,11 +17,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   / `emu_arm64_call_asm` / `emu_riscv_call_asm` / `emu_arm_call_asm` assemble at
   the emulator's load base (so PC-relative and branch targets resolve) and run
   through the matching `emu_*_call` in one call. Optional and pkg-config gated
-  like the emulator tier: `make asm-test` (links `libkeystone` + `libunicorn`),
-  `make deps DEPS_ARGS=--asm`, `make docker-asm`, and a CI `asm` job on both
-  x86-64 and arm64. The bindings expose it as `CallAsm` (an opaque-handle shim,
-  `asmtest_emu_call_asm`, carried by `libasmtest_emu`), with a conformance case
-  per language. See the
+  like the emulator tier, and kept **separate from `libasmtest_emu`** so the
+  Unicorn-only binding images are unaffected: `make asm-test` (links `libkeystone`
+  + `libunicorn`), `make docker-asm`, and a CI `asm` job on both x86-64 and arm64.
+  Keystone has no Linux distro package, so `make deps DEPS_ARGS=--asm` points at
+  `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
+  use). An opaque-handle FFI shim (`asmtest_emu_call_asm`) is in place for a
+  follow-up that exposes `CallAsm` through the language bindings. See the
   [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 - **Native Win64 tier (capture).** A Microsoft x64 (“Win64”) capture trampoline

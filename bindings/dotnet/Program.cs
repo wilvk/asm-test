@@ -49,11 +49,6 @@ static class Conformance
         using (var res = e.Call2(Routine("add_signed"), 40, 2))
             Check("emu.add_signed", !res.Faulted && res.Reg("rax") == 42);
 
-        // --- Tier 1: in-line assembly (Keystone) replays add_signed --------- //
-        using (var e = new Emu())
-        using (var res = e.CallAsm("mov rax, rdi; add rax, rsi; ret", 40, 2, out bool asmOk))
-            Check("asm.add_signed", asmOk && !res.Faulted && res.Reg("rax") == 42);
-
         // --- Tier 2: idiomatic assertions pass on good input ---------------- //
         bool t2pass = true;
         try

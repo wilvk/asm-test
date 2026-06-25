@@ -179,8 +179,11 @@ guests — `emu_arm64_call_asm`, `emu_arm_call_asm`, and `emu_riscv_call_asm`
 `asmtest_assemble(arch, syntax, source, addr, &out)` and free with
 `asmtest_asm_free`; a bad string is reported as data (`out.ok == false`, message
 in `out.err`), never a crash. Build and run with `make asm-test` (needs
-`libkeystone` alongside `libunicorn`; `make deps DEPS_ARGS=--asm` installs them).
-See [docs/plans/inline-asm-keystone-plan.md](docs/plans/inline-asm-keystone-plan.md).
+`libkeystone` alongside `libunicorn`). Keystone has no Linux distro package, so
+`make deps DEPS_ARGS=--asm` installs `libunicorn` and points at
+[scripts/build-keystone.sh](scripts/build-keystone.sh) for a pinned source build
+(macOS gets it from Homebrew). See
+[docs/plans/inline-asm-keystone-plan.md](docs/plans/inline-asm-keystone-plan.md).
 
 ## Debugging a routine under test
 

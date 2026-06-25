@@ -258,13 +258,12 @@ $(call shlib_dev,libasmtest): $(call shlib_real,libasmtest)
 	ln -sf $(notdir $(call shlib_compat,libasmtest)) $@
 
 # Emulator shared lib: kept separate so the core binding never pulls in Unicorn.
-# Also carries the in-line assembler (assemble.o) so bindings get emu_call_asm;
-# that adds a Keystone link alongside Unicorn.
+# Deliberately Keystone-free: the in-line assembler (assemble.o, -lkeystone)
+# stays out of here so the binding images — which carry only libunicorn — keep
+# building. In-line assembly is exercised by `make asm-test` (below).
 shared-emu: $(call shlib_dev,libasmtest_emu)
-$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o \
-                                   $(BUILD)/pic/assemble.o
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ \
-	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ $(UNICORN_LIBS) -o $@
 $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_emu)) $@

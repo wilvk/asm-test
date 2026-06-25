@@ -117,8 +117,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libkeystone + libunicorn
-        run: make deps DEPS_ARGS=--asm
+      - name: Install libunicorn + pkg-config
+        run: make deps DEPS_ARGS=--emu
+
+      - name: Build and install Keystone from source
+        run: ./scripts/build-keystone.sh   # no distro package; pinned source build
 
       - name: Build and run in-line assembler suite
         run: make asm-test

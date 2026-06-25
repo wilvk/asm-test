@@ -95,11 +95,12 @@ fi
 # Per-manager package names for each logical dependency. A few vary by distro
 # release — adjust here if your repo names them differently.
 # keystone_pkg is only set where a distro ships the Keystone *assembler* engine
-# under an unambiguous name (note: on some repos "keystone" is OpenStack's
-# identity service, NOT this). Where it's empty, --asm prints a build-from-source
-# note instead of installing the wrong package.
+# under an unambiguous name — essentially just Homebrew. There is no Ubuntu/Debian
+# package (no `libkeystone-dev`), and on some repos "keystone" is OpenStack's
+# identity service, NOT this. Where it's empty, --asm points at
+# scripts/build-keystone.sh (a pinned source build) instead of guessing.
 case "$PM" in
-    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  keystone_pkg=libkeystone-dev; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
+    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  keystone_pkg=; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
     dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; keystone_pkg=; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
     pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          keystone_pkg=; tidy_pkg=clang;            valgrind_pkg=valgrind ;;
     zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; keystone_pkg=; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
@@ -121,8 +122,8 @@ skip() { echo "$prog: $1 already present, skipping"; }
 [ "$want_keystone" -eq 1 ]  && {
     if have_keystone; then skip keystone
     elif [ -z "$keystone_pkg" ]; then
-        echo "$prog: keystone has no $PM package; build from source:" >&2
-        echo "  https://github.com/keystone-engine/keystone (then re-run make asm-test)" >&2
+        echo "$prog: keystone has no $PM package; build it from source with:" >&2
+        echo "  scripts/build-keystone.sh   (then re-run make asm-test)" >&2
     else add "$keystone_pkg"; fi
 }
 [ "$want_tidy" -eq 1 ]      && { have clang-tidy && skip clang-tidy || add "$tidy_pkg"; }
