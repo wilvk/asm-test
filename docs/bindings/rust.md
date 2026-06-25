@@ -62,6 +62,107 @@ if asmtest::asm_available() {
 }
 ```
 
+## Function reference
+
+The full crate surface, with an example and its options. A routine reference is a
+raw pointer (`add_signed as *mut c_void` for capture, `as *const c_void` for the
+emulator); the byte-array paths take `&[u8]` machine code. `Regs`, `EmuResult`,
+and `EmuX86Regs` are `#[repr(C)]` mirrors, so you read their fields directly;
+`Emulator`, `Trace`, `Guest`, and `GuestResult` are RAII handles freed on `Drop`.
+
+### Capture tier — free functions + `Regs`
+
+```rust
+let r = asmtest::capture(fn_ptr, &[40, 2]);                 // up to 6 integer args
+let r = asmtest::capture_fp(fn_ptr, &[1], &[1.5, 2.25]);    // ints + up to 8 doubles
+let v = asmtest::Vec128::from_f32(1.0, 2.0, 3.0, 4.0);      // pack a 128-bit vector
+let r = asmtest::capture_vec(fn_ptr, &[], &[v]);            // up to 8 vectors
+
+r.ret;                       // u64 integer return (rax)
+r.fret;                      // f64 scalar return (xmm0)
+r.flags;                     // raw flags word
+r.flag_set(asmtest::CF);     // bool: flag bit set? (masks CF/PF/ZF/SF/OF)
+r.vec[0].f32();              // [f32; 4] lanes of vector register 0
+r.vec[0].f64();              // [f64; 2] lanes
+asmtest::abi_preserved(&r);  // every callee-saved register restored (verdict shim)
+```
+
+* `capture(f, args)` / `capture_fp(f, iargs, fargs)` / `capture_vec(f, iargs,
+  vargs)` — args past the register count are ignored (6 int / 8 fp / 8 vec).
+* `Vec128` has `zero()`, `from_f32(a,b,c,d)`, and the `f32()` / `f64()` lane
+  readers, plus the raw union views (`u8_`, `u32_`, `u64_`, `f32_`, `f64_`).
+* The flag masks `CF`/`PF`/`ZF`/`SF`/`OF` are `pub const u64` for the host arch.
+
+### Emulator tier — `Emulator` / `EmuResult`
+
+```rust
+let emu = asmtest::Emulator::new().unwrap();                // None if emu_open fails
+let res = emu.call(fn_ptr, &[40, 2]);                       // routine addr, copies 64 bytes
+let res = emu.call_bytes(&code, &[40, 2]);                  // raw bytes, up to 6 int args
+let res = emu.call_fp(&code, &[1], &[1.5]);                 // doubles -> xmm0..7
+let res = emu.call_vec(&code, &[], &[v]);                   // 128-bit vecs -> xmm0..7
+let res = emu.call_win64(&code, &[1, 2, 3, 4]);            // Microsoft x64 (rcx,rdx,r8,r9)
+
+res.faulted;                 // bool: invalid access (not a crash)
+res.fault_addr;              // u64: where (valid when faulted)
+res.fault_kind;              // FAULT_NONE / FAULT_READ / FAULT_WRITE / FAULT_FETCH
+res.reg("rax");              // any GP register by name, plus "rip" / "rflags"
+res.regs.rax;                // …or the field directly (EmuX86Regs)
+res.regs.xmm[0].f64()[0];    // scalar FP return; .f32()[lane] for a vector return
+```
+
+`call` takes a routine **address** (copies 64 bytes); `call_bytes` / `call_fp` /
+`call_vec` / `call_win64` / `call_traced` take `&[u8]` and run it whole.
+
+### Execution trace / coverage — `Trace`
+
+```rust
+let t = asmtest::Trace::new();                  // 4096 insn / 4096 block buffers
+let res = emu.call_traced(&code, &[1, 2], &t);  // record while running
+t.covered(0x0);                                 // bool: basic block at byte-offset entered?
+```
+
+### Cross-arch guests — `Guest` / `GuestResult`
+
+```rust
+use asmtest::GuestArch;
+let g = asmtest::Guest::new(GuestArch::Arm64).unwrap();   // Arm64 | Riscv | Arm
+let res = g.call(&code, &[40, 2]);                        // raw bytes, guest ABI regs
+let res = g.call_traced(&code, &[1], &t);                 // AArch64 only
+res.faulted();               // faults are data here too
+res.reg("x0");               // by name: x0/sp/pc/nzcv, a0/x10/ra/sp, r0/lr/pc/cpsr
+```
+
+### In-line assembler (optional)
+
+```rust
+use asmtest::{AsmArch, AsmSyntax};
+asmtest::asm_available();                                  // assembler compiled in?
+let res = emu.call_asm("mov rax, rdi; ret", &[42], AsmSyntax::Intel, 0)?;  // x86-64 + run
+let bytes = asmtest::assemble("ret", AsmArch::Arm64, AsmSyntax::Intel, 0x0010_0000)?;
+asmtest::asm_error();                                     // last Keystone diagnostic ("" on success)
+```
+
+* `Emulator::call_asm(src, args, syntax, max_insns) -> Result<EmuResult, String>`
+  — assemble x86-64 `src` and run it (≤6 int args). `max_insns: 0` runs to `ret`;
+  `Err` carries the Keystone diagnostic.
+* `assemble(src, arch, syntax, addr) -> Result<Vec<u8>, String>` — assemble-only,
+  any `AsmArch` (`X86_64`/`Arm64`/`Riscv64`/`Arm32`); `addr` is the base load
+  address. `AsmSyntax` is `Intel`/`Att`/`Nasm`/`Masm`/`Gas`.
+
+### Tier-2 assertions (methods that panic on failure)
+
+```rust
+r.assert_ret(42);                  // r.ret == 42
+r.assert_abi_preserved();          // callee-saved restored
+r.assert_abi_clobbered();          // the negative case
+r.assert_flag(asmtest::CF, true);  // flag set/clear (by mask)
+r.assert_fp(3.75);                 // r.fret == 3.75
+res.assert_no_fault();             // emulator run clean
+res.assert_fault();                // emulator run faulted
+res.assert_reg("rax", 42);         // guest register equals expected
+```
+
 ## Crash safety
 
 The native capture path runs the routine in-process; a buggy routine can abort the

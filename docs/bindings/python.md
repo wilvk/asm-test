@@ -112,6 +112,175 @@ The in-line assembler adds `asmtest.asm_available()`, `Emulator.call_asm(…)`, 
 multi-arch `asmtest.assemble(…)` (x86-64/arm64/riscv64/arm32), the `Arch` /
 `Syntax` enums, and the `AsmtestError` raised on a Keystone failure.
 
+## Function reference
+
+Every public entry point in the `asmtest` package, with a worked example and its
+options. A *routine reference* (`fn`) is an `int` address or a `ctypes` function
+pointer for the capture tier and `Emulator`; the cross-arch guests and the
+raw-bytes paths take a `bytes` object of machine code instead.
+
+### Module setup
+
+```python
+ctx = asmtest.load()        # process-wide Context (created lazily on first use)
+ctx.version                 # native lib version string, e.g. "1.0.0"
+ctx.arch                    # host arch the shared lib was built for, e.g. "x86_64"
+ctx.has_emu                 # bool: emulator tier present (libasmtest_emu)
+ctx.has_asm                 # bool: in-line assembler present (libasmtest_emu_asm)
+ctx.flags                   # {"CF": mask, "ZF": mask, …} for this arch
+ctx.size("regs_t")          # struct size from the manifest
+ctx.offset("regs_t", "ret") # field offset from the manifest
+```
+
+`load()` returns the shared [`Context`]; you rarely call it directly — every other
+function calls it for you. Use it to introspect the build (`has_emu`/`has_asm`
+gate optional tiers) or read manifest layout.
+
+### Capture tier
+
+```python
+r = asmtest.capture(fn, 40, 2)            # up to 6 integer args -> Regs
+r = asmtest.capture_fp(fn, iargs=[1], fargs=[1.5, 2.25])  # ints + up to 8 doubles
+r = asmtest.capture_vec(fn, vargs=[asmtest.vec_f32(1,2,3,4)])  # up to 8 128-bit vecs
+v = asmtest.vec_f32(1.0, 2.0, 3.0, 4.0)   # pack 4 float32 lanes -> 16-byte arg
+v = asmtest.vec_f64(1.0, 2.0)             # pack 2 float64 lanes -> 16-byte arg
+```
+
+* `capture(fn, *args)` — calls `fn` through the integer System V ABI. Extra args
+  past six are ignored (the trampoline has six integer slots).
+* `capture_fp(fn, iargs=(), fargs=())` — `iargs` go in the GP registers, `fargs`
+  (up to 8 `double`s) in xmm0..7. The scalar double return is `r.fret`.
+* `capture_vec(fn, iargs=(), vargs=())` — each `vargs` entry is exactly 16 bytes
+  (use the packers, or any `bytes`); a `ValueError` is raised otherwise. The
+  vector return is `r.vec_f32(0)` / `r.vec_f64(0)`.
+
+### `Regs` — a capture snapshot
+
+```python
+r.ret              # integer return value (rax), as unsigned
+r.fret             # scalar double return (xmm0)
+r.flags            # raw flags word
+r.flag_set("CF")   # bool: is condition flag CF/PF/ZF/SF/OF set?
+r.abi_preserved    # bool: every callee-saved register restored (native verdict shim)
+r.vec_f32(0)       # [l0,l1,l2,l3]  four float32 lanes of vector register 0
+r.vec_f64(0)       # [l0,l1]        two float64 lanes of vector register 0
+r.vec_bytes(0)     # raw 16 bytes of vector register 0
+```
+
+`vec_*` take a vector-register index (default `0`, the return lane). `flag_set`
+resolves the name against the host arch's mask from the manifest, so no flag
+constants are needed.
+
+### Emulator tier
+
+```python
+with asmtest.Emulator() as e:                     # Unicorn x86-64 guest
+    res = e.call(fn, [40, 2])                      # int args -> EmuResult
+    res = e.call_fp(fn, iargs=[1], fargs=[1.5])    # doubles into xmm0..7
+    res = e.call_vec(fn, vargs=[asmtest.vec_f32(1,2,3,4)])  # 128-bit vecs
+    res = e.call_win64(fn, [1, 2, 3, 4])           # Microsoft x64 convention (rcx,rdx,r8,r9)
+    res = e.call(rawbytes, [1, 2])                 # `fn` may be raw machine-code bytes
+```
+
+Shared options on every `Emulator.call*`:
+
+* `args` / `iargs` / `fargs` / `vargs` — argument lists (same shapes as the
+  capture tier).
+* `code_len=64` — how many bytes of `fn` to copy into the guest when `fn` is an
+  address (ignored when `fn` is `bytes`, which is run whole).
+* `max_insns=0` — instruction budget; `0` runs to `ret`. A nonzero cap stops a
+  runaway loop and is how you bound untrusted code.
+
+### `EmuResult` — an emulator outcome (faults are data)
+
+```python
+res.ok                 # bool: ran and returned cleanly
+res.faulted            # bool: hit an invalid memory access (not a crash)
+res.fault_addr         # guest address of the fault (meaningful when faulted)
+res.fault_kind         # 0 none / 1 read / 2 write / 3 fetch
+res.reg("rax")         # any GP register, plus "rip" / "rflags"
+res.xmm_f64(0, 0)      # lane (0..1) of xmm register 0 as double (scalar FP return)
+res.xmm_f32(0, 0)      # lane (0..3) of xmm register 0 as float32 (vector return)
+res.ran                # bool: the FFI call itself dispatched
+```
+
+### Execution trace / coverage
+
+```python
+with asmtest.Emulator() as e, asmtest.Trace(insns_cap=4096, blocks_cap=4096) as t:
+    res = e.call_traced(fn, [1, 2], trace=t)   # record while running
+    t.covered(0x0)        # bool: was the basic block at this byte-offset entered?
+    t.insns_total         # instructions executed (counts past the buffer cap)
+    t.blocks_len          # number of distinct basic blocks recorded
+```
+
+* `Trace(insns_cap=4096, blocks_cap=4096)` — buffer capacities; entries past a
+  cap are dropped and counted (`insns_total` still grows).
+* `Emulator.call_traced(fn, args=(), trace=None, code_len=64, max_insns=0)` —
+  like `call`, plus a `trace` to record into (`None` runs untraced).
+
+### Cross-arch guests (AArch64 / RISC-V / ARM32)
+
+These run **raw machine-code bytes** on any host, so they need no host routine.
+
+```python
+with asmtest.GuestEmulator("arm64") as g:         # "arm64" | "riscv" | "arm"
+    res = g.call(code, [40, 2])                    # ints in x0..x5 / a0..a7 / r0..r3
+    res = g.call_fp(code, fargs=[1.5, 2.25])       # doubles in the FP arg regs
+    res = g.call_vec(code, vargs=[asmtest.vec_f64(1,2)])  # arm64/arm only (RISC-V has none)
+    res = g.call_traced(code, [1], trace=t)        # same Trace recorder
+    res.reg("x0")          # register by name: x0../sp/pc/nzcv, a0../x10/ra/sp, r0../lr/pc/cpsr
+    res.fault_addr; res.fault_kind                 # faults are data here too
+    res.vec_f64(0, 0)      # FP/vector lane (v/q/f register file)
+```
+
+`GuestEmulator(arch)` raises `ValueError` for an unknown arch and `RuntimeError`
+if the emulator tier is absent. `call_vec` on the RISC-V guest raises (no vector
+file). Every `call*` takes the same `max_insns=0` budget.
+
+### In-line assembler (optional — `libasmtest_emu_asm`)
+
+```python
+asmtest.asm_available()                            # bool: assembler compiled in
+with asmtest.Emulator() as e:
+    res = e.call_asm("mov rax, rdi; ret", [42])    # assemble x86-64 + run -> EmuResult
+    res = e.call_asm("mov %rdi,%rax; ret", [42],
+                     syntax=asmtest.Syntax.ATT, max_insns=8)
+code = asmtest.assemble("ret", asmtest.Arch.ARM64) # text -> bytes, any arch
+asmtest.asm_error()                                # last Keystone diagnostic ("" on success)
+```
+
+* `Emulator.call_asm(src, args=(), syntax=0, max_insns=0)` — assemble x86-64
+  `src` and run it; up to six integer `args`. `syntax` is `Syntax.INTEL` (0) or
+  `Syntax.ATT` (1). Raises `AsmtestError` (carrying the Keystone diagnostic) on a
+  bad string, or if the assembler isn't in the build.
+* `assemble(src, arch=Arch.X86_64, syntax=Syntax.INTEL, addr=0x00100000)` —
+  assemble-only, returning the machine-code `bytes`. `arch` is one of
+  `Arch.X86_64 | ARM64 | RISCV64 | ARM32`; `addr` is the base load address (matters
+  for PC-relative encodings). Works for guests the x86 emulator can't run.
+* `Arch` / `Syntax` are integer-code enums; `AsmtestError` is the raised type.
+
+### Tier-2 assertions (`asmtest.assertions`)
+
+Thin wrappers that raise `AssertionError` with a legible message, so a `pytest`
+suite reads naturally.
+
+```python
+from asmtest.assertions import (
+    assert_ret, assert_abi_preserved, assert_abi_clobbered, assert_flag,
+    assert_fp, assert_vec_f32, assert_no_fault, assert_fault, assert_reg,
+)
+assert_ret(r, 42)                       # r.ret == 42
+assert_abi_preserved(r)                 # all callee-saved restored
+assert_abi_clobbered(r)                 # the negative case (expect a violation)
+assert_flag(r, "CF", set=True)          # flag set (set=False to require clear)
+assert_fp(r, 3.75)                      # r.fret == 3.75 exactly
+assert_vec_f32(r, [1, 2, 3, 4], index=0)# the four float32 lanes of vector `index`
+assert_no_fault(res)                    # emulator run completed cleanly
+assert_fault(res)                       # emulator run faulted
+assert_reg(res, "rax", 42)              # a guest register equals expected
+```
+
 ## Run the tests
 
 ```sh

@@ -60,6 +60,105 @@ e.call_asm(src, {10, 20, 12}, ASM_SYNTAX_ATT, /*max_insns=*/0);
 std::vector<std::uint8_t> a64 = assemble("ret", ASM_ARM64);
 ```
 
+## Function reference
+
+Every member of `namespace asmtest`, with an example and its options. The capture
+helpers are always available (`#include "asmtest.hpp"`); the `Emu` family needs
+`-DASMTEST_ENABLE_EMU`, and `call_asm` / `assemble` need `-DASMTEST_ENABLE_ASM`.
+Results are the plain C value-structs, so you read their fields directly
+(`r.ret`, `res.regs.rax`, `res.regs.xmm[0].f64[0]`). A routine reference is a
+`void *`; the emulator's `call_bytes`-family takes a `(code, len)` pair.
+
+### Capture tier — free functions
+
+```cpp
+regs_t r = capture((void*)fn, {40, 2});               // up to 6 integer args
+regs_t r = capture_fp((void*)fn, {1}, {1.5, 2.25});   // ints + up to 8 doubles
+vec128_t v = vec_f32(1, 2, 3, 4);                     // pack a 128-bit vector arg
+regs_t r = capture_vec((void*)fn, {}, {v});           // up to 8 vectors
+
+r.ret;                       // integer return (rax)
+r.fret;                      // scalar double return (xmm0)
+r.vec[0].f32[0];             // a lane of vector register 0 (.f32[]/.f64[]/.u8[]…)
+flag_set(r, ASMTEST_CF);     // condition flag bit set? (ASMTEST_CF/PF/ZF/SF/OF)
+abi_preserved(r);            // every callee-saved register restored (verdict shim)
+```
+
+* `capture` / `capture_fp` / `capture_vec` take `std::initializer_list` args;
+  extras past the register count are dropped, missing ones default to 0.
+* `flag_set(r, mask)` / `abi_preserved(r)` are predicates over a `regs_t`.
+
+### Emulator tier — `Emu` (define `ASMTEST_ENABLE_EMU`)
+
+```cpp
+Emu e;                                          // RAII x86-64 guest (move-only)
+emu_result_t r = e.call((void*)fn, {40, 2});    // routine addr; opts: max_insns=0, code_len=64
+emu_result_t r = e.call_bytes(code, len, {40, 2});          // raw bytes, up to 6 int args
+emu_result_t r = e.call_fp(code, len, {1}, {1.5});          // doubles -> xmm0..7
+emu_result_t r = e.call_vec(code, len, {}, {v});            // 128-bit vecs -> xmm0..7
+emu_result_t r = e.call_win64(code, len, {1, 2, 3, 4});     // Microsoft x64 (rcx,rdx,r8,r9)
+
+r.faulted;                   // invalid access? (data, not a crash)
+r.fault_addr;                // where (valid when faulted)
+r.fault_kind;                // EMU_FAULT_NONE / READ / WRITE / FETCH
+r.regs.rax;                  // any GP register, plus r.regs.rip / r.regs.rflags
+r.regs.xmm[0].f64[0];        // scalar FP return; .f32[lane] for a vector return
+```
+
+* `call(fn, args, max_insns=0, code_len=64)` is the only address path (copies
+  `code_len` bytes). The `call_bytes`-family takes raw `(code, len)`.
+* Every method takes a trailing `max_insns` budget (`0` = run to `ret`).
+
+### Execution trace / coverage — `Trace`
+
+```cpp
+Trace t(/*insns_cap=*/4096, /*blocks_cap=*/4096);
+emu_result_t r = e.call_traced(code, len, t.get(), {1, 2});  // record while running
+t.covered(0x0);              // basic block at byte-offset entered?
+t.insns_total();             // instructions executed (counts past the cap)
+t.blocks_len();              // distinct basic blocks recorded
+```
+
+`t.get()` hands the underlying `emu_trace_t*` to `Emu::call_traced` (or a guest's).
+
+### Cross-arch guests (raw bytes, any host)
+
+```cpp
+Arm64Emu g;                                            // also RiscvEmu, ArmEmu
+emu_arm64_result_t r = g.call(code, len, {40, 2});     // ints in x0..x5
+emu_arm64_result_t r = g.call_traced(code, len, t.get(), {1});  // arm64 only
+r.regs.x[0];                 // arm64 x0..x30; r.regs.sp / pc / nzcv; r.regs.v[0].f64[0]
+// RiscvEmu: r.regs.x[10] (a0) / r.regs.pc / r.regs.f[0].f64[0]
+// ArmEmu:   r.regs.r[0] / r.regs.r[13] (sp) / r.regs.q[0].f64[0]
+```
+
+Each guest is move-disabled RAII over its `emu_<arch>_t`; `call` takes the same
+`(code, len, args, max_insns=0)` shape.
+
+### In-line assembler (define `ASMTEST_ENABLE_ASM`)
+
+```cpp
+emu_result_t r = e.call_asm("mov rax, rdi; ret", {42});        // x86-64 + run
+e.call_asm(src, {10, 20}, ASM_SYNTAX_ATT, /*max_insns=*/8);    // syntax + insn cap
+std::vector<std::uint8_t> bytes = assemble("ret", ASM_ARM64);  // text -> bytes, any arch
+```
+
+* `Emu::call_asm(src, args={}, syntax=ASM_SYNTAX_INTEL, max_insns=0)` — assemble
+  x86-64 `src` and run (≤6 int args). Throws `asmtest::asm_error` (Keystone
+  diagnostic) on a bad string.
+* `assemble(src, arch=ASM_X86_64, syntax=ASM_SYNTAX_INTEL, addr=EMU_CODE_BASE)` —
+  assemble-only; `arch` is `ASM_X86_64`/`ASM_ARM64`/`ASM_RISCV64`/`ASM_ARM32`,
+  `syntax` one of `ASM_SYNTAX_INTEL`/`ATT`/`NASM`/`MASM`/`GAS`.
+
+### Tier-2 assertions (throw `asmtest::assertion_error`)
+
+```cpp
+assert_ret(r, 42);                 // r.ret == 42
+assert_abi_preserved(r);           // callee-saved restored
+assert_flag(r, ASMTEST_CF, true);  // flag set/clear (by mask)
+assert_fp(r, 3.75);                // r.fret == 3.75
+```
+
 ## Consuming it
 
 Link the framework like any C consumer — via pkg-config:
