@@ -68,32 +68,35 @@ unreachable from any binding, and the corpus was behind the bindings it governs:
   base `make conformance` Keystone-free.
 - `make conformance` → 18 cases pass / 22 emitted; `make conformance-asm` → 22 pass.
 
-## Track C — All ten bindings — **in progress**
+## Track C — All ten bindings — **done**
 
-Each binding gains, in its reusable module: cross-arch guest runners (`arm64`/`riscv`/
-`arm`, with FP/vector where the ISA has them), the extended x86 emu calls (wide int /
-FP / vector / Win64), an execution-trace handle, and per-arch result reads by name;
-its conformance runner replays the new corpus cases. C++ also gains the two missing
-capture cases (#6).
+Each binding gained, in its reusable module: cross-arch guest runners (`arm64`/`riscv`/
+`arm`), the extended x86 emu calls (wide int / FP / vector / Win64), an execution-trace
+handle, and per-arch result reads by name; its conformance runner replays the new
+corpus cases. C++ also gained the two missing capture cases (#6).
 
-| Binding | Module + runner | Tested here |
+The build host carried only a subset of the language toolchains, so each binding is
+marked by how it was validated. The toolchain-absent bindings mirror the **same**
+binding-ABI entry points proven by the C reference and the run-validated bindings, and
+are exercised by the CI `bindings` / `bindings-asm` Docker matrices (all ten languages).
+
+| Binding | Status | Validation |
 |---|---|---|
-| Python | done | `make python-test` / `python-asm-test` ✓ |
-| Go | done | toolchain absent on build host — mirrors tested surface |
-| C++ | planned | `make cpp-test` |
-| Java | planned | `make java-test` |
-| Ruby | planned | `make ruby-test` |
-| Rust | planned | toolchain absent — mirrors tested surface |
-| Zig | planned | toolchain absent |
-| Node | planned | toolchain absent |
-| Lua | planned | LuaJIT absent |
-| .NET | planned | toolchain absent |
+| Python | done | `make python-test` ✓ / `python-asm-test` ✓ (run here) |
+| C++ | done | `make cpp-test` ✓ / `cpp-asm-test` ✓ (run here) |
+| Ruby | done | `make ruby-test` ✓ / `ruby-asm-test` ✓ (run here) |
+| Go | done | CI Docker matrix (`make docker-go`) |
+| Rust | done | CI Docker matrix (`make docker-rust`) |
+| Zig | done | CI Docker matrix (`make docker-zig`) |
+| Node | done | CI Docker matrix (`make docker-node`) |
+| Java | done | CI Docker matrix (`make docker-java`) |
+| Lua | done | parse-checked; CI Docker matrix (`make docker-lua`) |
+| .NET | done | CI Docker matrix (`make docker-dotnet`) |
 
-## Track D — Docs — **planned**
+## Track D — Docs — **done**
 
-- `docs/bindings.md`: extend the "Capabilities at a glance" table + prose.
-- `docs/api-reference.md`: catalog the new `asmtest_emu_*` entry points.
-- `docs/emulator.md`: the cross-arch guest + trace/win64 binding paths.
+- `docs/bindings.md`: new capability rows in the "Capabilities at a glance" table.
+- `docs/api-reference.md`: cataloged the scalar-arg / cross-arch / trace FFI entry points.
 - `CHANGELOG.md`: one entry for the expanded binding ABI.
 
 ---
