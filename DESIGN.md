@@ -177,7 +177,7 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   raw `(code, code_len)` buffers, so this is a text→bytes front end. Optional and
   pkg-config gated like the emulator; `make asm-test`, a CI `asm` job, and a
   `CallAsm` entry point in every binding. See
-  [the implementation plan](docs/plans/inline-asm-keystone-plan.md).
+  [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 The phases below are **planned**, ordered to deepen the framework's core
 promise — calling assembly through the real ABI and inspecting the result —
