@@ -233,6 +233,10 @@ $(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
 $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -fPIC -c $< -o $@
 
+$(BUILD)/pic/assemble.o: src/assemble.c include/asmtest_assemble.h \
+                         include/asmtest_emu.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
+
 ifeq ($(ASM_SYNTAX),nasm)
 $(BUILD)/pic/capture.o: src/capture.asm include/asm_nasm.inc | $(BUILD)/pic
 	$(NASM) $(NASMFLAGS) $< -o $@
@@ -254,9 +258,13 @@ $(call shlib_dev,libasmtest): $(call shlib_real,libasmtest)
 	ln -sf $(notdir $(call shlib_compat,libasmtest)) $@
 
 # Emulator shared lib: kept separate so the core binding never pulls in Unicorn.
+# Also carries the in-line assembler (assemble.o) so bindings get emu_call_asm;
+# that adds a Keystone link alongside Unicorn.
 shared-emu: $(call shlib_dev,libasmtest_emu)
-$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ $(UNICORN_LIBS) -o $@
+$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o \
+                                   $(BUILD)/pic/assemble.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ \
+	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_emu)) $@
@@ -706,6 +714,26 @@ $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
 .PHONY: emu-test
 emu-test: $(BUILD)/test_emu
 	./$(BUILD)/test_emu
+
+# --- Optional in-line assembler (Phase: Keystone; requires libkeystone) -----
+# `make asm-test` assembles routines from strings (asmtest_assemble) and runs
+# them through the emulator tier (emu_call_asm), so it needs BOTH libkeystone
+# and libunicorn. Released Keystone has no RISC-V backend; that guest reports a
+# clean "unsupported" error rather than failing the build.
+KEYSTONE_CFLAGS ?= $(shell pkg-config --cflags keystone 2>/dev/null)
+KEYSTONE_LIBS   ?= $(shell pkg-config --libs keystone 2>/dev/null || echo -lkeystone)
+
+$(BUILD)/assemble.o: src/assemble.c include/asmtest_assemble.h \
+                     include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $(KEYSTONE_CFLAGS) -c $< -o $@
+
+$(BUILD)/test_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
+                   $(BUILD)/test_asm.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+
+.PHONY: asm-test
+asm-test: $(BUILD)/test_asm
+	./$(BUILD)/test_asm
 
 # Emulator "unusual use case" suite (Track F): the virtual CPU as a security
 # sandbox (precise over-read/over-write fault localization) and a cross-ISA
