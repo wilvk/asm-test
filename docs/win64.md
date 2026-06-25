@@ -38,7 +38,34 @@ The captured state lands in the Win64 layout of `regs_t`, selected by
 `-DASMTEST_ABI_WIN64` (see [ABI capture](abi-capture.md)). The
 **ABI-preservation** check covers the Win64 callee-saved set, which is *larger*
 than System V's: it adds `rdi`/`rsi` to the integer side and treats **`xmm6–15`
-as callee-saved** on the vector side.
+as callee-saved** on the vector side. `ASSERT_ABI_PRESERVED(&r)` verifies the
+integer set; `ASSERT_ABI_PRESERVED_VEC(&r)` verifies the `xmm6–15` set after a
+`_vec`/`_vec_n` capture (both macros are compiled in only under
+`-DASMTEST_ABI_WIN64`).
+
+### Calling and asserting from C
+
+The `asm_call_capture_*_win64` entry points are the binding-ABI surface; in a C
+suite use the `ASM_CALL_WIN64_*` convenience macros, the Win64 counterparts of
+[`ASM_CALL0`…`ASM_CALLN`](abi-capture.md). They marshal `long long` arguments
+(Win64 is LLP64, so an integer slot is 64-bit) and are also gated on
+`-DASMTEST_ABI_WIN64`:
+
+| Macro | Calls with |
+|---|---|
+| `ASM_CALL_WIN64_0`…`ASM_CALL_WIN64_6(&r, fn, …)` | 0–6 integer register args |
+| `ASM_CALL_WIN64_N(&r, fn, …)` | Any number of integer args (overflow on the stack) |
+
+```c
+regs_t r;
+ASM_CALL_WIN64_2(&r, add_signed, 2, 3);
+ASSERT_EQ(r.ret, 5);
+ASSERT_ABI_PRESERVED(&r);        // rbx, rbp, rdi, rsi, r12–r15 restored
+```
+
+For the FP, vector, struct-return, and big-struct paths, call the matching
+`asm_call_capture_fp_win64` / `_vec_win64` / `_sret_win64` / `_bigstruct_win64`
+entry points directly (see the table above).
 
 ### Win64 vs. System V
 

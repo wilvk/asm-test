@@ -171,6 +171,7 @@ make manifest     # asmtest_abi.json           — machine-readable struct layou
 |---|---|---|
 | Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. |
 | Verdict shims | `asmtest_check_abi`, `asmtest_check_flag` | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. |
+| Opaque-handle accessors | `asmtest_regs_new`/`_free`, `asmtest_regs_ret`/`_flags`/`_fret`/`_vec_f32`/`_flag_set`, `asmtest_capture6`/`asmtest_capture_fp2`; emulator: `asmtest_emu_result_new`/`_free`/`_ok`/`_faulted`, `asmtest_emu_x86_reg` | For dynamic-FFI bindings (Node, Ruby, Lua, …) that can't mirror `regs_t` offsets: allocate a handle, call with scalar args, read fields by accessor — the universal FFI subset. |
 | Guard buffers | `asmtest_guarded_alloc`/`_free`, `asmtest_guarded_alloc_under`/`_free_under` | Share a pointer to a guarded buffer with the routine under test. |
 | RNG | `asmtest_rng_u64`, `asmtest_rng_long`, `asmtest_rng_range` | Deterministic splitmix64 source. |
 | Emulator | `emu_open`/`emu_close`/`emu_map`/`emu_read`/`emu_write`, `emu_call`/`_fp`/`_vec`/`_traced`, `emu_call_win64`, and the per-guest `emu_arm64_*` / `emu_riscv_*` / `emu_arm_*` families | Opaque handle + value-struct result; faults surface as data, not crashes. |

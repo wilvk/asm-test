@@ -60,11 +60,11 @@ registers and flags.
 TEST(suite, name) { /* body */ }
 ```
 
-`TEST(suite, name)` expands to a function plus a registration record placed in a
-dedicated linker section. At startup the provided `main()` walks every
-registered case, so **there is no list to maintain** — adding a `TEST(...)` is
-all it takes. A failed assertion aborts only *that* test (via `longjmp` back into
-the runner); the rest of the suite continues.
+`TEST(suite, name)` expands to a function plus a `constructor` that links the
+case into a global registry as the binary starts. At startup the provided
+`main()` walks every registered case, so **there is no list to maintain** —
+adding a `TEST(...)` is all it takes. A failed assertion aborts only *that* test
+(via `longjmp` back into the runner); the rest of the suite continues.
 
 ## Fixtures: `SETUP` and `TEARDOWN`
 

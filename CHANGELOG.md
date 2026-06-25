@@ -22,8 +22,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in an isolated image (`Dockerfile.win64`, `make docker-win64`). A new CI `win64`
   job runs both on every push; the capture suite doubles as the native Win64
   conformance check. This is the capture tier (suite runs `--no-fork`); the Win32
-  runner port is now underway (Phase 4, below). See [docs/win64.md](docs/win64.md)
-  and the [implementation plan](docs/plans/win64-native-tier-plan.md).
+  runner port is now underway (Phase 4, below). See
+  [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md)
+  and the [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md).
 
 - **Native Win64 tier — runner port (Phase 4).** The framework's process-level
   guarantees now have Win32 equivalents for the Win64 tier, each in
@@ -48,7 +49,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TEST()` suite (`tests/win64/suite_win64.c`) under Wine: the runner discovers and
   runs the suite, asserts real Win64 captures, and contains a crashing and a
   hanging test as reported failures while surviving. Still POSIX-only: a
-  forked/`-jN` mode on Win64 and benchmarks. See [docs/win64.md](docs/win64.md).
+  forked/`-jN` mode on Win64 and benchmarks. See
+  [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md).
 
 - **Packaging scaffolding for all ten bindings.** Each binding now has a
   publish-ready registry manifest and a `make <lang>-package` target that
@@ -61,7 +63,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   package-libs` stages the shared libs into `build/dist/native/<plat>/`; the
   dlopen bindings (Python/Ruby/Lua/Node/Java/.NET) bundle `libasmtest_emu`, while
   the link bindings (Rust/Zig/C++/Go) ship as source. A new
-  [docs/packaging.md](docs/packaging.md) is the release guide (native-lib split,
+  [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md) is the release guide (native-lib split,
   version pinning, per-language commands, the multi-platform caveat). Scaffolding
   only — no registry credentials or cross-OS build matrices.
 
@@ -73,7 +75,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Emu` + `EmuResult` (faults as data), and Tier-2 `Assert*` helpers over a small
   `TB` interface that `*testing.T` satisfies (so the helpers are themselves
   testable — the suite proves each one bites). `make go-test` runs `go test`;
-  [`conformance_test.go`](bindings/go/conformance_test.go) replays the corpus,
+  [`conformance_test.go`](https://github.com/wilvk/asm-test/blob/main/bindings/go/conformance_test.go) replays the corpus,
   built + run in its own `asmtest-go` image (`make docker-go`) and the `bindings`
   CI matrix. This closes the last language track — **all ten bindings** (Python,
   Rust, C++, Zig, Node, Java, .NET, Ruby, Lua, Go) now ship Tier 1 + Tier 2.
@@ -159,7 +161,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `asmtest_emu.h` pin `regs_t` and the emulator register structs to `offsetof`,
   preventing the headers, the trampoline's stores, and the manifest from drifting
   apart. `make install` (static + headers) is unchanged. See
-  [docs/plans/multi-language-bindings-plan.md](docs/plans/multi-language-bindings-plan.md).
+  [docs/plans/multi-language-bindings-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/multi-language-bindings-plan.md).
 - **Binding ABI + conformance corpus (Track 0).** Non-jumping verdict shims
   `asmtest_check_abi` / `asmtest_check_flag` *return* a verdict + reason instead
   of `longjmp`-ing into the runner, so an FFI binding can validate a capture with
