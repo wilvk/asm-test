@@ -471,9 +471,38 @@ $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 
 docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 
+# --- In-line-asm binding images (bindings base + Keystone) ------------------
+# Like docker-<lang>, but built on a Keystone-carrying base so the image can run
+# `make <lang>-asm-test` — the optional CallAsm / assemble path — end to end
+# (binding -> asmtest_emu_call_asm6 / asmtest_asm_bytes -> Keystone -> emulator),
+# the same check the native `bindings-asm` CI matrix runs. Kept off the normal
+# docker-<lang> images so those stay Keystone-free. `make docker-bindings-asm`
+# runs every language; `make docker-<lang>-asm` runs one.
+DOCKER_BINDINGS_ASM_BASE ?= asmtest-bindings-asm-base
+
+.PHONY: docker-bindings-asm-base docker-bindings-asm \
+        $(addsuffix -asm,$(addprefix docker-,$(BINDING_LANGS)))
+
+docker-bindings-asm-base: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-asm-base \
+	  --build-arg BASE=$(DOCKER_BINDINGS_BASE) -t $(DOCKER_BINDINGS_ASM_BASE) .
+
+# Generate `docker-<lang>-asm`: build the per-language image on the Keystone base
+# and run its in-line-asm conformance, overriding the image's default CMD.
+define docker_lang_asm_rule
+docker-$(1)-asm: docker-bindings-asm-base
+	$$(DOCKER) build $$(_docker_plat) -f bindings/$(1)/Dockerfile \
+	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_ASM_BASE) -t asmtest-$(1)-asm .
+	$$(DOCKER) run --rm $$(_docker_plat) asmtest-$(1)-asm make $(1)-asm-test
+endef
+$(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_asm_rule,$(L))))
+
+docker-bindings-asm: $(addsuffix -asm,$(addprefix docker-,$(BINDING_LANGS)))
+
 docker-bindings-clean:
-	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \
-	  $(DOCKER_BINDINGS_BASE)
+	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) \
+	  $(addsuffix -asm,$(addprefix asmtest-,$(BINDING_LANGS))) asmtest-win64 \
+	  $(DOCKER_BINDINGS_BASE) $(DOCKER_BINDINGS_ASM_BASE)
 
 # --- Native Win64 tier (Win64 native tier plan) ----------------------------
 # Cross-compile to a Windows PE and run it under Wine — no Windows host. The

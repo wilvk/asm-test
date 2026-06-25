@@ -1,0 +1,28 @@
+# Dockerfile.bindings-asm-base — bindings base + Keystone (the in-line assembler).
+#
+# Same as Dockerfile.bindings-base, plus the Keystone engine, so a per-language
+# image built FROM this can run `make <lang>-asm-test` (the optional CallAsm /
+# assemble path) end to end — not just the Keystone-free `make <lang>-test`.
+# Kept as a SEPARATE base so the normal binding images stay Keystone-free and
+# small; only the `docker-<lang>-asm` targets pay for Keystone.
+#
+# Build:  docker build -f Dockerfile.bindings-asm-base \
+#           --build-arg BASE=asmtest-bindings-base -t asmtest-bindings-asm-base .
+
+ARG BASE=asmtest-bindings-base
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# cmake + git + python3 for the Keystone source build (no apt package);
+# build-essential in the base already provides g++ and make. Keystone's bundled
+# LLVM CMake requires a Python interpreter to configure — the main CI image got
+# one transitively via clang-tidy, but this minimal base must ask for it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake git python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Build + install Keystone with the same pinned script the CI bindings-asm job
+# uses, so libkeystone + headers are on the default search path for
+# `make shared-emu-asm`. scripts/ is already present from the base layer.
+RUN ./scripts/build-keystone.sh
