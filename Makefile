@@ -861,24 +861,39 @@ python-test: shared-emu manifest conformance $(CORPUS_LIB)
 CXX      ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O0 -g -Iinclude
 
+# Keystone-free build (the default bindings image carries no Keystone): emulator
+# conveniences only. test_cpp.cpp's in-line-asm case is #ifdef ASMTEST_ENABLE_ASM,
+# so it compiles out here and asmtest.hpp never pulls in asmtest_assemble.h.
 $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
-                     include/asmtest.h include/asmtest_emu.h \
-                     include/asmtest_assemble.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) \
-	       -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM -c $< -o $@
+                     include/asmtest.h include/asmtest_emu.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) -DASMTEST_ENABLE_EMU -c $< -o $@
 
-$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
-                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                   $(BUILD)/simd.o $(BUILD)/test_cpp.o
-	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/add.o \
+                   $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
+                   $(BUILD)/test_cpp.o
+	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp
 	./$(BUILD)/test_cpp
 
-# The C++ test always links the assembler (Keystone), so its asm cases run as
-# part of cpp-test; this alias keeps the bindings-asm matrix uniform.
+# Asm-enabled build (needs Keystone): -DASMTEST_ENABLE_ASM + assemble.o +
+# -lkeystone so the inline_assembler case compiles and runs. A SEPARATE object
+# and binary from cpp-test so the Keystone-free `make cpp-test` / `docker-cpp`
+# stay buildable without Keystone; the bindings-asm matrix runs this one.
+$(BUILD)/test_cpp_asm.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
+                         include/asmtest.h include/asmtest_emu.h \
+                         include/asmtest_assemble.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) \
+	       -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM -c $< -o $@
+
+$(BUILD)/test_cpp_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
+                       $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
+                       $(BUILD)/simd.o $(BUILD)/test_cpp_asm.o
+	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+
 .PHONY: cpp-asm-test
-cpp-asm-test: cpp-test
+cpp-asm-test: $(BUILD)/test_cpp_asm
+	./$(BUILD)/test_cpp_asm
 
 # --- Rust binding (Track R) ------------------------------------------------
 # A no-dependency crate (#[repr(C)] structs + extern "C" over the binding ABI)
