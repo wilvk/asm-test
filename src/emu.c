@@ -9,8 +9,8 @@
 #include <string.h>
 #include <unicorn/unicorn.h>
 
-/* Guest memory layout (arbitrary, just needs to be mapped and non-overlapping). */
-#define EMU_CODE_BASE  0x00100000UL
+/* Guest memory layout (arbitrary, just needs to be mapped and non-overlapping).
+ * EMU_CODE_BASE is published in asmtest_emu.h (the assembler shares it). */
 #define EMU_CODE_SIZE  0x00010000UL /* 64 KiB of code space  */
 #define EMU_STACK_BASE 0x00200000UL
 #define EMU_STACK_SIZE 0x00010000UL /* 64 KiB stack          */

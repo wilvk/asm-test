@@ -33,6 +33,12 @@ extern "C" {
 #  endif
 #endif
 
+/* Guest load base: every guest maps its code region here and starts execution
+ * at this address. Exposed so the in-line assembler (asmtest_assemble.h) can
+ * assemble at the same address the bytes run at, keeping PC-relative and branch
+ * targets correct. The size/stack/sentinel constants stay private to emu.c. */
+#define EMU_CODE_BASE 0x00100000UL
+
 /* One 128-bit vector (XMM) register, viewable as several lane layouts. Mirrors
  * vec128_t from asmtest.h, but kept independent so this header stands alone. */
 typedef union {

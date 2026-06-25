@@ -112,3 +112,78 @@ void asmtest_asm_free(asm_result_t *r) {
     free(r->bytes);
     memset(r, 0, sizeof *r);
 }
+
+/* ---- Emu bridge: assemble + run (Phase 2) -------------------------------- */
+/* These call the Unicorn-side emu_*_call (declared in asmtest_emu.h) but this
+ * translation unit links only Keystone; the final binary links both. Each
+ * assembles at EMU_CODE_BASE — the address the emulator loads and runs the
+ * bytes at — so PC-relative and branch targets resolve correctly. */
+
+/* Assemble `src` for `arch` at the guest load base. On failure prints the
+ * Keystone diagnostic to stderr and returns false (the result, already cleared
+ * by asmtest_assemble, is still safe to asmtest_asm_free). */
+static bool assemble_at_base(asm_arch_t arch, const char *src,
+                             asm_result_t *r) {
+    if (asmtest_assemble(arch, ASM_SYNTAX_INTEL, src, EMU_CODE_BASE, r))
+        return true;
+    fprintf(stderr, "asm-test: in-line assembly failed: %s\n", r->err);
+    return false;
+}
+
+bool emu_call_asm(emu_t *e, const char *src, const long *args, int nargs,
+                  uint64_t max_insns, emu_result_t *out) {
+    memset(out, 0, sizeof *out);
+    asm_result_t r;
+    if (!assemble_at_base(ASM_X86_64, src, &r)) {
+        out->uc_err = -1;
+        asmtest_asm_free(&r);
+        return false;
+    }
+    bool ok = emu_call(e, r.bytes, r.len, args, nargs, max_insns, out);
+    asmtest_asm_free(&r);
+    return ok;
+}
+
+bool emu_arm64_call_asm(emu_arm64_t *e, const char *src, const long *args,
+                        int nargs, uint64_t max_insns,
+                        emu_arm64_result_t *out) {
+    memset(out, 0, sizeof *out);
+    asm_result_t r;
+    if (!assemble_at_base(ASM_ARM64, src, &r)) {
+        out->uc_err = -1;
+        asmtest_asm_free(&r);
+        return false;
+    }
+    bool ok = emu_arm64_call(e, r.bytes, r.len, args, nargs, max_insns, out);
+    asmtest_asm_free(&r);
+    return ok;
+}
+
+bool emu_riscv_call_asm(emu_riscv_t *e, const char *src, const long *args,
+                        int nargs, uint64_t max_insns,
+                        emu_riscv_result_t *out) {
+    memset(out, 0, sizeof *out);
+    asm_result_t r;
+    if (!assemble_at_base(ASM_RISCV64, src, &r)) {
+        out->uc_err = -1;
+        asmtest_asm_free(&r);
+        return false;
+    }
+    bool ok = emu_riscv_call(e, r.bytes, r.len, args, nargs, max_insns, out);
+    asmtest_asm_free(&r);
+    return ok;
+}
+
+bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs,
+                      uint64_t max_insns, emu_arm_result_t *out) {
+    memset(out, 0, sizeof *out);
+    asm_result_t r;
+    if (!assemble_at_base(ASM_ARM32, src, &r)) {
+        out->uc_err = -1;
+        asmtest_asm_free(&r);
+        return false;
+    }
+    bool ok = emu_arm_call(e, r.bytes, r.len, args, nargs, max_insns, out);
+    asmtest_asm_free(&r);
+    return ok;
+}
