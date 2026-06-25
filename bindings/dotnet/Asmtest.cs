@@ -73,6 +73,40 @@ namespace Asmtest
         [DllImport(EMU)] public static extern double asmtest_emu_x86_xmm_f64(IntPtr r, int index, int lane);
         [DllImport(EMU)] public static extern float asmtest_emu_x86_xmm_f32(IntPtr r, int index, int lane);
 
+        // Extended x86 emulator calls (array form: explicit code + length, so raw
+        // machine-code bytes run directly). The bool return is unused.
+        [DllImport(EMU)] public static extern int emu_call(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern int emu_call_fp(IntPtr e, byte[] code, nuint len, long[] ia, int ni, double[] fa, int nf, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern int emu_call_vec(IntPtr e, byte[] code, nuint len, long[] ia, int ni, float[] va, int nv, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern int emu_call_win64(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern int emu_call_traced(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o, IntPtr trace);
+
+        // Opaque execution-trace handle.
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_trace_new(nuint ic, nuint bc);
+        [DllImport(EMU)] public static extern void asmtest_emu_trace_free(IntPtr t);
+        [DllImport(EMU)] public static extern int asmtest_emu_trace_covered(IntPtr t, ulong off);
+
+        // Cross-arch guests (raw bytes, any host) + per-arch result accessors.
+        [DllImport(EMU)] public static extern IntPtr emu_arm64_open();
+        [DllImport(EMU)] public static extern void emu_arm64_close(IntPtr e);
+        [DllImport(EMU)] public static extern int emu_arm64_call(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern int emu_arm64_call_traced(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o, IntPtr trace);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_arm64_result_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_arm64_result_free(IntPtr r);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_arm64_reg(IntPtr r, string name);
+        [DllImport(EMU)] public static extern IntPtr emu_riscv_open();
+        [DllImport(EMU)] public static extern void emu_riscv_close(IntPtr e);
+        [DllImport(EMU)] public static extern int emu_riscv_call(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_riscv_result_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_riscv_result_free(IntPtr r);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_riscv_reg(IntPtr r, string name);
+        [DllImport(EMU)] public static extern IntPtr emu_arm_open();
+        [DllImport(EMU)] public static extern void emu_arm_close(IntPtr e);
+        [DllImport(EMU)] public static extern int emu_arm_call(IntPtr e, byte[] code, nuint len, long[] args, int nargs, ulong mi, IntPtr o);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_arm_result_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_arm_result_free(IntPtr r);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_arm_reg(IntPtr r, string name);
+
         /// <summary>The Keystone diagnostic from the most recent assemble (thread-local; "" on success).</summary>
         public static string AsmError()
         {
@@ -185,6 +219,53 @@ namespace Asmtest
             return res;
         }
 
+        /// <summary>Run raw x86-64 machine-code <paramref name="code"/> with up to six integer args.</summary>
+        public EmuResult CallBytes(byte[] code, params long[] args)
+        {
+            var res = new EmuResult();
+            Native.emu_call(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle);
+            return res;
+        }
+
+        /// <summary>Run raw bytes marshalling doubles into the FP arg registers (scalar return = XmmF64(0, 0)).</summary>
+        public EmuResult CallFp(byte[] code, long[] iargs, double[] fargs)
+        {
+            var res = new EmuResult();
+            iargs ??= Array.Empty<long>();
+            fargs ??= Array.Empty<double>();
+            Native.emu_call_fp(_h, code, (nuint)code.Length, iargs, iargs.Length, fargs, fargs.Length, 0, res.Handle);
+            return res;
+        }
+
+        /// <summary>Run raw bytes marshalling 128-bit vectors (each four float32 lanes) into xmm0..7.</summary>
+        public EmuResult CallVec(byte[] code, long[] iargs, float[][] vargs)
+        {
+            var res = new EmuResult();
+            iargs ??= Array.Empty<long>();
+            var flat = new float[vargs.Length * 4];
+            for (int i = 0; i < vargs.Length; i++)
+                for (int l = 0; l < 4; l++) flat[i * 4 + l] = vargs[i][l];
+            Native.emu_call_vec(_h, code, (nuint)code.Length, iargs, iargs.Length, flat, vargs.Length, 0, res.Handle);
+            return res;
+        }
+
+        /// <summary>Run raw bytes under the Microsoft x64 (Win64) convention (args in rcx, rdx, r8, r9).</summary>
+        public EmuResult CallWin64(byte[] code, params long[] args)
+        {
+            var res = new EmuResult();
+            Native.emu_call_win64(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle);
+            return res;
+        }
+
+        /// <summary>Like <see cref="CallBytes"/>, but record an execution trace / coverage into <paramref name="trace"/>.</summary>
+        public EmuResult CallTraced(byte[] code, long[] args, Trace trace)
+        {
+            var res = new EmuResult();
+            args ??= Array.Empty<long>();
+            Native.emu_call_traced(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle, trace.Handle);
+            return res;
+        }
+
         /// <summary>Whether the loaded native lib carries the in-line assembler (Keystone).</summary>
         public static bool AsmAvailable => Native.AsmAvailable;
 
@@ -268,6 +349,116 @@ namespace Asmtest
         }
     }
 
+    /// <summary>An opaque execution-trace / basic-block coverage recorder. Dispose to free.</summary>
+    public sealed class Trace : IDisposable
+    {
+        IntPtr _h;
+        public Trace(nuint insnsCap = 4096, nuint blocksCap = 4096)
+            => _h = Native.asmtest_emu_trace_new(insnsCap, blocksCap);
+        internal IntPtr Handle => _h;
+        /// <summary>True if the basic block at byte-offset <paramref name="off"/> was entered.</summary>
+        public bool Covered(ulong off) => Native.asmtest_emu_trace_covered(_h, off) != 0;
+        public void Dispose()
+        {
+            if (_h != IntPtr.Zero) { Native.asmtest_emu_trace_free(_h); _h = IntPtr.Zero; }
+        }
+    }
+
+    /// <summary>A cross-arch guest ISA.</summary>
+    public enum GuestArch { Arm64, RiscV, Arm }
+
+    /// <summary>A cross-arch run's outcome; registers are read by name. Dispose to free.</summary>
+    public sealed class GuestResult : IDisposable
+    {
+        IntPtr _h;
+        readonly GuestArch _arch;
+        internal GuestResult(GuestArch arch)
+        {
+            _arch = arch;
+            _h = arch switch
+            {
+                GuestArch.Arm64 => Native.asmtest_emu_arm64_result_new(),
+                GuestArch.RiscV => Native.asmtest_emu_riscv_result_new(),
+                GuestArch.Arm => Native.asmtest_emu_arm_result_new(),
+                _ => IntPtr.Zero,
+            };
+        }
+        internal IntPtr Handle => _h;
+        public bool Faulted => Native.asmtest_emu_result_faulted(_h) != 0;
+        /// <summary>Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0").</summary>
+        public ulong Reg(string name) => _arch switch
+        {
+            GuestArch.Arm64 => Native.asmtest_emu_arm64_reg(_h, name),
+            GuestArch.RiscV => Native.asmtest_emu_riscv_reg(_h, name),
+            GuestArch.Arm => Native.asmtest_emu_arm_reg(_h, name),
+            _ => 0,
+        };
+        public void Dispose()
+        {
+            if (_h == IntPtr.Zero) return;
+            switch (_arch)
+            {
+                case GuestArch.Arm64: Native.asmtest_emu_arm64_result_free(_h); break;
+                case GuestArch.RiscV: Native.asmtest_emu_riscv_result_free(_h); break;
+                case GuestArch.Arm: Native.asmtest_emu_arm_result_free(_h); break;
+            }
+            _h = IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
+    /// A cross-arch Unicorn guest (arm64/riscv/arm) running raw machine-code bytes
+    /// — emulated regardless of host arch. Dispose to close.
+    /// </summary>
+    public sealed class Guest : IDisposable
+    {
+        IntPtr _h;
+        readonly GuestArch _arch;
+        public Guest(GuestArch arch)
+        {
+            _arch = arch;
+            _h = arch switch
+            {
+                GuestArch.Arm64 => Native.emu_arm64_open(),
+                GuestArch.RiscV => Native.emu_riscv_open(),
+                GuestArch.Arm => Native.emu_arm_open(),
+                _ => IntPtr.Zero,
+            };
+        }
+        /// <summary>Run raw bytes with integer args in the guest ABI registers.</summary>
+        public GuestResult Call(byte[] code, params long[] args)
+        {
+            var res = new GuestResult(_arch);
+            switch (_arch)
+            {
+                case GuestArch.Arm64: Native.emu_arm64_call(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle); break;
+                case GuestArch.RiscV: Native.emu_riscv_call(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle); break;
+                case GuestArch.Arm: Native.emu_arm_call(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle); break;
+            }
+            return res;
+        }
+        /// <summary>Like <see cref="Call"/>, but record an execution trace / coverage (arm64).</summary>
+        public GuestResult CallTraced(byte[] code, long[] args, Trace trace)
+        {
+            if (_arch != GuestArch.Arm64) throw new AsmtestException("traced guest run only wired for arm64");
+            var res = new GuestResult(_arch);
+            args ??= Array.Empty<long>();
+            Native.emu_arm64_call_traced(_h, code, (nuint)code.Length, args, args.Length, 0, res.Handle, trace.Handle);
+            return res;
+        }
+        public void Dispose()
+        {
+            if (_h == IntPtr.Zero) return;
+            switch (_arch)
+            {
+                case GuestArch.Arm64: Native.emu_arm64_close(_h); break;
+                case GuestArch.RiscV: Native.emu_riscv_close(_h); break;
+                case GuestArch.Arm: Native.emu_arm_close(_h); break;
+            }
+            _h = IntPtr.Zero;
+        }
+    }
+
     /// <summary>
     /// Tier-2 idiomatic assertions: throw <see cref="AsmtestException"/> with a
     /// clear message on failure, so a test runner (xUnit/NUnit) reports it.
@@ -310,6 +501,15 @@ namespace Asmtest
         {
             if (res.Reg(name) != want)
                 throw new AsmtestException($"emu {name}: got {res.Reg(name)}, want {want}");
+        }
+        public static void GuestReg(GuestResult res, string name, ulong want)
+        {
+            if (res.Reg(name) != want)
+                throw new AsmtestException($"guest {name}: got {res.Reg(name)}, want {want}");
+        }
+        public static void Covered(Trace trace, ulong off)
+        {
+            if (!trace.Covered(off)) throw new AsmtestException($"block {off}: expected covered");
         }
     }
 }

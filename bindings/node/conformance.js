@@ -9,7 +9,7 @@
 'use strict';
 const asmtest = require('./asmtest');
 const {
-  corpusRoutine: routine, Regs, Emu, AsmtestError, FaultKind,
+  corpusRoutine: routine, Regs, Emu, Trace, Guest, AsmtestError, FaultKind,
   assemble, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFp, assertVecF32, assertFault,
 } = asmtest;
@@ -78,6 +78,49 @@ withRegs((r) => {
   check('emu.int_to_double',
     !xres.faulted() && xres.xmmF64(0, 0) === 42 && (xres.reg('rflags') & 0x2) !== 0);
   xres.free();
+
+  // --- cross-arch emulator guests (raw bytes, any host) ---
+  for (const [arch, code, regname] of [
+    ['arm64', [0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6], 'x0'],
+    ['riscv', [0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00], 'a0'],
+    ['arm', [0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1], 'r0'],
+  ]) {
+    const g = new Guest(arch);
+    const gres = g.call(Buffer.from(code), [40, 2]);
+    check(`emu_${arch}.add`, !gres.faulted() && gres.reg(regname) === 42);
+    gres.free();
+    g.close();
+  }
+
+  // --- extended x86-64 emulator calls (raw bytes) ---
+  const wide = e.callBytes(Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3]), [10, 20, 12]);
+  check('emu.wide_int', !wide.faulted() && wide.reg('rax') === 42);
+  wide.free();
+  const fpr = e.callFp(Buffer.from([0xF2, 0x0F, 0x58, 0xC1, 0xC3]), { fargs: [1.5, 2.25] });
+  check('emu.fp_add', !fpr.faulted() && fpr.xmmF64(0, 0) === 3.75);
+  fpr.free();
+  const vecr = e.callVec(Buffer.from([0x0F, 0x58, 0xC1, 0xC3]), { vargs: [[1, 2, 3, 4], [10, 20, 30, 40]] });
+  check('emu.vec_add4f', !vecr.faulted() && vecr.xmmF32(0, 0) === 11 && vecr.xmmF32(0, 3) === 44);
+  vecr.free();
+  const winr = e.callWin64(Buffer.from([0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3]), [40, 2]);
+  check('emu.win64_add', !winr.faulted() && winr.reg('rax') === 42);
+  winr.free();
+
+  // --- execution trace / coverage (cross-arch arm64) ---
+  {
+    const g = new Guest('arm64');
+    const tr = new Trace();
+    const sel = Buffer.from([
+      0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+      0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+    ]);
+    const tres = g.callTraced(sel, [0], tr);
+    check('emu_arm64.trace_sel',
+      !tres.faulted() && tres.reg('x0') === 42 && tr.covered(0) && tr.covered(12) && !tr.covered(4));
+    tres.free();
+    tr.free();
+    g.close();
+  }
 
   // in-line assembly (Keystone) replays add_signed, only if the lib has it
   if (e.asmAvailable()) {

@@ -62,7 +62,60 @@ const fn = {
   emuReg: L.func('uint64_t asmtest_emu_x86_reg(void *, const char *)'),
   emuXmmF64: L.func('double asmtest_emu_x86_xmm_f64(void *, int, int)'),
   emuXmmF32: L.func('float asmtest_emu_x86_xmm_f32(void *, int, int)'),
+  // Extended x86 emulator calls (array form: explicit code + length). All pointer
+  // args go in as Buffers (void *), so raw machine-code bytes run directly.
+  emuCall: L.func('int emu_call(void *, void *, size_t, void *, int, uint64_t, void *)'),
+  emuCallFp: L.func('int emu_call_fp(void *, void *, size_t, void *, int, void *, int, uint64_t, void *)'),
+  emuCallVec: L.func('int emu_call_vec(void *, void *, size_t, void *, int, void *, int, uint64_t, void *)'),
+  emuCallWin64: L.func('int emu_call_win64(void *, void *, size_t, void *, int, uint64_t, void *)'),
+  emuCallTraced: L.func('int emu_call_traced(void *, void *, size_t, void *, int, uint64_t, void *, void *)'),
+  // Opaque trace handle.
+  traceNew: L.func('void *asmtest_emu_trace_new(size_t, size_t)'),
+  traceFree: L.func('void asmtest_emu_trace_free(void *)'),
+  traceCovered: L.func('int asmtest_emu_trace_covered(void *, uint64_t)'),
+  // Cross-arch guests (raw bytes, any host) + per-arch result accessors.
+  arm64Open: L.func('void *emu_arm64_open()'),
+  arm64Close: L.func('void emu_arm64_close(void *)'),
+  arm64Call: L.func('int emu_arm64_call(void *, void *, size_t, void *, int, uint64_t, void *)'),
+  arm64CallTraced: L.func('int emu_arm64_call_traced(void *, void *, size_t, void *, int, uint64_t, void *, void *)'),
+  arm64ResNew: L.func('void *asmtest_emu_arm64_result_new()'),
+  arm64ResFree: L.func('void asmtest_emu_arm64_result_free(void *)'),
+  arm64Reg: L.func('uint64_t asmtest_emu_arm64_reg(void *, const char *)'),
+  riscvOpen: L.func('void *emu_riscv_open()'),
+  riscvClose: L.func('void emu_riscv_close(void *)'),
+  riscvCall: L.func('int emu_riscv_call(void *, void *, size_t, void *, int, uint64_t, void *)'),
+  riscvResNew: L.func('void *asmtest_emu_riscv_result_new()'),
+  riscvResFree: L.func('void asmtest_emu_riscv_result_free(void *)'),
+  riscvReg: L.func('uint64_t asmtest_emu_riscv_reg(void *, const char *)'),
+  armOpen: L.func('void *emu_arm_open()'),
+  armClose: L.func('void emu_arm_close(void *)'),
+  armCall: L.func('int emu_arm_call(void *, void *, size_t, void *, int, uint64_t, void *)'),
+  armResNew: L.func('void *asmtest_emu_arm_result_new()'),
+  armResFree: L.func('void asmtest_emu_arm_result_free(void *)'),
+  armReg: L.func('uint64_t asmtest_emu_arm_reg(void *, const char *)'),
 };
+
+// Pack helpers: marshal JS numbers into native arrays as Buffers (koffi passes a
+// Buffer straight through as a `void *`), or null when empty.
+function packLongs(args) {
+  if (!args || !args.length) return null;
+  const b = Buffer.alloc(8 * args.length);
+  for (let i = 0; i < args.length; i++) b.writeBigInt64LE(BigInt(args[i]), i * 8);
+  return b;
+}
+function packDoubles(f) {
+  if (!f || !f.length) return null;
+  const b = Buffer.alloc(8 * f.length);
+  for (let i = 0; i < f.length; i++) b.writeDoubleLE(f[i], i * 8);
+  return b;
+}
+function packVecs(vargs) {
+  if (!vargs || !vargs.length) return null;
+  const b = Buffer.alloc(16 * vargs.length);
+  for (let i = 0; i < vargs.length; i++)
+    for (let l = 0; l < 4; l++) b.writeFloatLE(vargs[i][l] || 0, i * 16 + l * 4);
+  return b;
+}
 
 /** Invalid-access kind reported by EmuResult.faultKind() (mirrors emu_fault_kind_t). */
 const FaultKind = { None: 0, Read: 1, Write: 2, Fetch: 3 };
@@ -133,6 +186,44 @@ class Emu {
     fn.emuCall2(this._h, routine, a0, a1, res._h);
     return res;
   }
+  /** Run raw x86-64 machine-code bytes (a Buffer/array) with up to six int args. */
+  callBytes(code, args = []) {
+    const res = new EmuResult();
+    const buf = Buffer.from(code);
+    fn.emuCall(this._h, buf, buf.length, packLongs(args), args.length, 0, res._h);
+    return res;
+  }
+  /** Run raw bytes marshalling doubles into the FP arg registers (scalar return =
+   *  res.xmmF64(0, 0)). */
+  callFp(code, { iargs = [], fargs = [] } = {}) {
+    const res = new EmuResult();
+    const buf = Buffer.from(code);
+    fn.emuCallFp(this._h, buf, buf.length, packLongs(iargs), iargs.length,
+      packDoubles(fargs), fargs.length, 0, res._h);
+    return res;
+  }
+  /** Run raw bytes marshalling 128-bit vectors (arrays of four float32 lanes). */
+  callVec(code, { iargs = [], vargs = [] } = {}) {
+    const res = new EmuResult();
+    const buf = Buffer.from(code);
+    fn.emuCallVec(this._h, buf, buf.length, packLongs(iargs), iargs.length,
+      packVecs(vargs), vargs.length, 0, res._h);
+    return res;
+  }
+  /** Run raw bytes under the Microsoft x64 (Win64) convention. */
+  callWin64(code, args = []) {
+    const res = new EmuResult();
+    const buf = Buffer.from(code);
+    fn.emuCallWin64(this._h, buf, buf.length, packLongs(args), args.length, 0, res._h);
+    return res;
+  }
+  /** Like callBytes, but record an execution trace / coverage into `trace`. */
+  callTraced(code, args, trace) {
+    const res = new EmuResult();
+    const buf = Buffer.from(code);
+    fn.emuCallTraced(this._h, buf, buf.length, packLongs(args), args.length, 0, res._h, trace._h);
+    return res;
+  }
   /** Whether the loaded native lib carries the in-line assembler (Keystone). */
   asmAvailable() { return fn.emuCallAsm6 !== null; }
   /**
@@ -174,6 +265,45 @@ function assemble(src, arch = 0, syntax = 0, addr = 0x00100000) {
   return buf.subarray(0, n);
 }
 
+/** An opaque execution-trace / basic-block coverage recorder. */
+class Trace {
+  constructor(insnsCap = 4096, blocksCap = 4096) { this._h = fn.traceNew(insnsCap, blocksCap); }
+  /** True if the basic block at byte-offset `off` was entered. */
+  covered(off) { return fn.traceCovered(this._h, off) !== 0; }
+  free() { if (this._h) { fn.traceFree(this._h); this._h = null; } }
+}
+
+/** A cross-arch run's outcome; registers are read by name. Call free() when done. */
+class GuestResult {
+  constructor(arch) { this.arch = arch; this._h = fn[`${arch}ResNew`](); }
+  faulted() { return fn.emuFaulted(this._h) !== 0; }
+  /** Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0"). */
+  reg(name) { return Number(fn[`${this.arch}Reg`](this._h, name)); }
+  free() { if (this._h) { fn[`${this.arch}ResFree`](this._h); this._h = null; } }
+}
+
+/** A cross-arch Unicorn guest ('arm64'/'riscv'/'arm') running raw machine-code
+ *  bytes — emulated regardless of host arch. Call close() when done. */
+class Guest {
+  constructor(arch) { this.arch = arch; this._h = fn[`${arch}Open`](); }
+  /** Run raw bytes with integer args in the guest ABI registers. */
+  call(code, args = []) {
+    const res = new GuestResult(this.arch);
+    const buf = Buffer.from(code);
+    fn[`${this.arch}Call`](this._h, buf, buf.length, packLongs(args), args.length, 0, res._h);
+    return res;
+  }
+  /** Like call, but record an execution trace / coverage into `trace` (arm64). */
+  callTraced(code, args, trace) {
+    if (this.arch !== 'arm64') throw new AsmtestError('traced guest run only wired for arm64');
+    const res = new GuestResult(this.arch);
+    const buf = Buffer.from(code);
+    fn.arm64CallTraced(this._h, buf, buf.length, packLongs(args), args.length, 0, res._h, trace._h);
+    return res;
+  }
+  close() { if (this._h) { fn[`${this.arch}Close`](this._h); this._h = null; } }
+}
+
 /** Thrown by the assert* helpers on a failed check. */
 class AsmtestError extends Error {}
 
@@ -208,6 +338,13 @@ function assertEmuReg(res, name, want) {
   const got = res.reg(name);
   if (got !== want) throw new AsmtestError(`emu ${name}: got ${got}, want ${want}`);
 }
+function assertGuestReg(res, name, want) {
+  const got = res.reg(name);
+  if (got !== want) throw new AsmtestError(`guest ${name}: got ${got}, want ${want}`);
+}
+function assertCovered(trace, off) {
+  if (!trace.covered(off)) throw new AsmtestError(`block ${off}: expected covered`);
+}
 
 // Architecture / syntax codes for assemble() (mirror asm_arch_t / asm_syntax_t).
 const Arch = { X86_64: 0, ARM64: 1, RISCV64: 2, ARM32: 3 };
@@ -215,8 +352,8 @@ const Syntax = { INTEL: 0, ATT: 1 };
 
 module.exports = {
   corpusRoutine,
-  Regs, Emu, EmuResult, AsmtestError, FaultKind,
+  Regs, Emu, EmuResult, Trace, Guest, GuestResult, AsmtestError, FaultKind,
   assemble, asmError, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
-  assertNoFault, assertFault, assertEmuReg,
+  assertNoFault, assertFault, assertEmuReg, assertGuestReg, assertCovered,
 };

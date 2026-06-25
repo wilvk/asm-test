@@ -38,6 +38,33 @@ int   asmtest_emu_result_fault_kind(void *r);
 unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
 double asmtest_emu_x86_xmm_f64(void *r, int index, int lane);
 float  asmtest_emu_x86_xmm_f32(void *r, int index, int lane);
+
+/* Extended x86 emulator calls (array form: explicit code + length). */
+int emu_call(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
+int emu_call_fp(void *e, const void *code, size_t len, const long *ia, int ni, const double *fa, int nf, uint64_t mi, void *out);
+int emu_call_vec(void *e, const void *code, size_t len, const long *ia, int ni, const void *va, int nv, uint64_t mi, void *out);
+int emu_call_win64(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
+int emu_call_traced(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out, void *trace);
+
+/* Opaque execution-trace handle. */
+void *asmtest_emu_trace_new(size_t ic, size_t bc);
+void  asmtest_emu_trace_free(void *t);
+int   asmtest_emu_trace_covered(void *t, uint64_t off);
+
+/* Cross-arch guests (raw bytes, any host) + per-arch result accessors. */
+void *emu_arm64_open(void); void emu_arm64_close(void *e);
+int   emu_arm64_call(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
+int   emu_arm64_call_traced(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out, void *trace);
+void *asmtest_emu_arm64_result_new(void); void asmtest_emu_arm64_result_free(void *r);
+unsigned long long asmtest_emu_arm64_reg(void *r, const char *name);
+void *emu_riscv_open(void); void emu_riscv_close(void *e);
+int   emu_riscv_call(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
+void *asmtest_emu_riscv_result_new(void); void asmtest_emu_riscv_result_free(void *r);
+unsigned long long asmtest_emu_riscv_reg(void *r, const char *name);
+void *emu_arm_open(void); void emu_arm_close(void *e);
+int   emu_arm_call(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
+void *asmtest_emu_arm_result_new(void); void asmtest_emu_arm_result_free(void *r);
+unsigned long long asmtest_emu_arm_reg(void *r, const char *name);
 ]])
 
 local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB to libasmtest_emu.{so,dylib}")
@@ -120,6 +147,60 @@ function Emu:call2(fn, a0, a1)
   L.asmtest_emu_call2(self.h, fn, a0, a1, res.h)
   return res
 end
+-- Marshal a Lua array of integers into a native long[] (nil, 0 when empty).
+local function longs(args)
+  local n = #args
+  if n == 0 then return nil, 0 end
+  return ffi.new("long[?]", n, args), n
+end
+-- Run raw x86-64 machine-code bytes (a Lua string) with up to six integer args.
+function Emu:call_bytes(code, args)
+  args = args or {}
+  local res = new_result()
+  local a, n = longs(args)
+  L.emu_call(self.h, code, #code, a, n, 0, res.h)
+  return res
+end
+-- Run raw bytes marshalling doubles into the FP arg registers (scalar return =
+-- res:xmm_f64(0, 0)). opts.fargs is a Lua array of doubles.
+function Emu:call_fp(code, opts)
+  opts = opts or {}
+  local fargs = opts.fargs or {}
+  local res = new_result()
+  local fa = #fargs > 0 and ffi.new("double[?]", #fargs, fargs) or nil
+  L.emu_call_fp(self.h, code, #code, nil, 0, fa, #fargs, 0, res.h)
+  return res
+end
+-- Run raw bytes marshalling 128-bit vectors (opts.vargs = array of four-lane arrays).
+function Emu:call_vec(code, opts)
+  opts = opts or {}
+  local vargs = opts.vargs or {}
+  local nv = #vargs
+  local res = new_result()
+  local va = nil
+  if nv > 0 then
+    va = ffi.new("float[?]", nv * 4)
+    for i = 1, nv do for l = 1, 4 do va[(i - 1) * 4 + (l - 1)] = vargs[i][l] or 0 end end
+  end
+  L.emu_call_vec(self.h, code, #code, nil, 0, va, nv, 0, res.h)
+  return res
+end
+-- Run raw bytes under the Microsoft x64 (Win64) convention.
+function Emu:call_win64(code, args)
+  args = args or {}
+  local res = new_result()
+  local a, n = longs(args)
+  L.emu_call_win64(self.h, code, #code, a, n, 0, res.h)
+  return res
+end
+-- Like :call_bytes, but record an execution trace / coverage into `trace`.
+function Emu:call_traced(code, args, trace)
+  args = args or {}
+  local res = new_result()
+  local a, n = longs(args)
+  L.emu_call_traced(self.h, code, #code, a, n, 0, res.h, trace.h)
+  return res
+end
 -- Whether the loaded native lib carries the in-line assembler.
 function Emu:asm_available() return HAS_ASM end
 -- The Keystone diagnostic from the most recent assemble ("" on success).
@@ -141,6 +222,55 @@ function Emu:call_asm(src, args, opts)
   return res
 end
 function Emu:close() if self.h then L.emu_close(self.h); self.h = nil end end
+
+-- An opaque execution-trace / basic-block coverage recorder. Call :free() when done.
+local Trace = {}
+Trace.__index = Trace
+function M.Trace(insns_cap, blocks_cap)
+  return setmetatable({ h = L.asmtest_emu_trace_new(insns_cap or 4096, blocks_cap or 4096) }, Trace)
+end
+-- True if the basic block at byte-offset `off` (from the routine entry) was entered.
+function Trace:covered(off) return L.asmtest_emu_trace_covered(self.h, off) ~= 0 end
+function Trace:free() if self.h then L.asmtest_emu_trace_free(self.h); self.h = nil end end
+
+-- A cross-arch run's outcome; registers are read by name. Call :free() when done.
+local GuestResult = {}
+GuestResult.__index = GuestResult
+local function new_guest_result(arch)
+  return setmetatable({ h = L["asmtest_emu_" .. arch .. "_result_new"](), arch = arch }, GuestResult)
+end
+function GuestResult:faulted() return L.asmtest_emu_result_faulted(self.h) ~= 0 end
+-- Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0").
+function GuestResult:reg(name) return tonumber(L["asmtest_emu_" .. self.arch .. "_reg"](self.h, name)) end
+function GuestResult:free()
+  if self.h then L["asmtest_emu_" .. self.arch .. "_result_free"](self.h); self.h = nil end
+end
+
+-- A cross-arch Unicorn guest ("arm64"/"riscv"/"arm") running raw machine-code
+-- bytes — emulated regardless of host arch. Call :close() when done.
+local Guest = {}
+Guest.__index = Guest
+function M.Guest(arch)
+  return setmetatable({ h = L["emu_" .. arch .. "_open"](), arch = arch }, Guest)
+end
+-- Run raw bytes (a Lua string) with integer args in the guest ABI registers.
+function Guest:call(code, args)
+  args = args or {}
+  local res = new_guest_result(self.arch)
+  local a, n = longs(args)
+  L["emu_" .. self.arch .. "_call"](self.h, code, #code, a, n, 0, res.h)
+  return res
+end
+-- Like :call, but record an execution trace / coverage into `trace` (arm64).
+function Guest:call_traced(code, args, trace)
+  assert(self.arch == "arm64", "traced guest run only wired for arm64")
+  args = args or {}
+  local res = new_guest_result(self.arch)
+  local a, n = longs(args)
+  L.emu_arm64_call_traced(self.h, code, #code, a, n, 0, res.h, trace.h)
+  return res
+end
+function Guest:close() if self.h then L["emu_" .. self.arch .. "_close"](self.h); self.h = nil end end
 
 -- Architecture / syntax codes for M.assemble (mirror asm_arch_t / asm_syntax_t).
 M.Arch = { X86_64 = 0, ARM64 = 1, RISCV64 = 2, ARM32 = 3 }
@@ -192,6 +322,13 @@ end
 function M.assert_emu_reg(res, name, want)
   local got = res:reg(name)
   if got ~= want then error(string.format("emu %s: got %d, want %d", name, got, want)) end
+end
+function M.assert_guest_reg(res, name, want)
+  local got = res:reg(name)
+  if got ~= want then error(string.format("guest %s: got %d, want %d", name, got, want)) end
+end
+function M.assert_covered(trace, off)
+  if not trace:covered(off) then error(string.format("block %d: expected covered", off)) end
 end
 
 return M

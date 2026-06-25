@@ -127,6 +127,12 @@ page, linked above).
 | Where/why a fault hit | `res.fault_addr` / `res.fault_kind` | `res.FaultAddr` / `res.FaultKind` | `res.FaultAddr()` / `res.FaultKind()` |
 | Read a guest register (GP + `rip`/`rflags`) | `res.reg("rax")` | `res.Reg("rax")` | `res.X86Reg("rax")` |
 | Read a guest XMM lane | `res.xmm_f64(0, 0)` | `res.XmmF64(0, 0)` | `res.XmmF64(0, 0)` |
+| Emulate raw bytes (≤6 int args) | `e.call(code, args)` | `e.CallBytes(code, args)` | `e.CallBytes(code, args, res)` |
+| Emulate with FP / vector args | `e.call_fp(code, fargs=…)` | `e.CallFp(code, …)` | `e.CallFP(code, …, res)` |
+| Win64 calling convention | `e.call_win64(code, args)` | `e.CallWin64(code, args)` | `e.CallWin64(code, args, res)` |
+| Cross-arch guest (arm64/riscv/arm) | `GuestEmulator("arm64").call(code, args)` | `new Guest(GuestArch.Arm64).Call(code, args)` | `NewGuest("arm64").Call(code, args, res)` |
+| Read a cross-arch guest register | `res.reg("x0")` | `res.Reg("x0")` | `res.Reg("x0")` |
+| Execution trace / block coverage | `e.call_traced(code, [], trace)` → `trace.covered(off)` | `e.CallTraced(code, [], trace)` → `trace.Covered(off)` | `e.CallTraced(…, trace, res)` → `trace.Covered(off)` |
 | In-line assembler present? | `asmtest.asm_available()` | `Emu.AsmAvailable` | `asmtest.AsmAvailable()` |
 | Run assembly *text* | `e.call_asm(src, [args])` | `e.CallAsm(src, args)` | `e.CallAsm(src, args, …, res)` |
 | Assemble text → bytes (multi-arch) | `asmtest.assemble(src, Arch.ARM64)` | `Emu.Assemble(src, AsmArch.Arm64)` | `asmtest.Assemble(src, ArchArm64, …)` |

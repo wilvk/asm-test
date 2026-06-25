@@ -68,6 +68,44 @@ static class Conformance
             Check("emu.int_to_double", !res.Faulted && res.XmmF64(0, 0) == 42.0
                 && (res.Reg("rflags") & 0x2UL) != 0);
 
+        // --- Tier 1: cross-arch emulator guests (raw bytes, any host) ------- //
+        foreach (var (arch, code, regname) in new (GuestArch, byte[], string)[]
+        {
+            (GuestArch.Arm64, new byte[] { 0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6 }, "x0"),
+            (GuestArch.RiscV, new byte[] { 0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00 }, "a0"),
+            (GuestArch.Arm, new byte[] { 0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1 }, "r0"),
+        })
+        {
+            using var g = new Guest(arch);
+            using var res = g.Call(code, 40, 2);
+            Check($"emu_{arch.ToString().ToLower()}.add", !res.Faulted && res.Reg(regname) == 42);
+        }
+
+        // --- Tier 1: extended x86-64 emulator calls (raw bytes) ------------- //
+        using (var e = new Emu())
+        {
+            using (var res = e.CallBytes(new byte[] { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3 }, 10, 20, 12))
+                Check("emu.wide_int", !res.Faulted && res.Reg("rax") == 42);
+            using (var res = e.CallFp(new byte[] { 0xF2, 0x0F, 0x58, 0xC1, 0xC3 }, null, new double[] { 1.5, 2.25 }))
+                Check("emu.fp_add", !res.Faulted && res.XmmF64(0, 0) == 3.75);
+            using (var res = e.CallVec(new byte[] { 0x0F, 0x58, 0xC1, 0xC3 }, null,
+                       new float[][] { new float[] { 1, 2, 3, 4 }, new float[] { 10, 20, 30, 40 } }))
+                Check("emu.vec_add4f", !res.Faulted && res.XmmF32(0, 0) == 11 && res.XmmF32(0, 3) == 44);
+            using (var res = e.CallWin64(new byte[] { 0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3 }, 40, 2))
+                Check("emu.win64_add", !res.Faulted && res.Reg("rax") == 42);
+        }
+
+        // --- Tier 1: execution trace / coverage (cross-arch arm64) ---------- //
+        using (var g = new Guest(GuestArch.Arm64))
+        using (var tr = new Trace())
+        {
+            byte[] sel = { 0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+                           0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6 };
+            using var res = g.CallTraced(sel, new long[] { 0 }, tr);
+            Check("emu_arm64.trace_sel", !res.Faulted && res.Reg("x0") == 42
+                && tr.Covered(0) && tr.Covered(12) && !tr.Covered(4));
+        }
+
         // --- Tier 1: in-line assembly (Keystone) replays add_signed --------- //
         // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
         if (Emu.AsmAvailable)

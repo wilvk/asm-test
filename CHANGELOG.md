@@ -8,6 +8,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The full emulator surface reaches every binding.** A review found four core
+  emulator capabilities that no binding could reach (the FFI lacked an
+  opaque-handle wrapper), plus an assembler tier the corpus did not anchor. All
+  are now exposed across all **ten** bindings, driven by a widened binding ABI in
+  [`src/ffi.c`](https://github.com/wilvk/asm-test/blob/main/src/ffi.c) / `src/emu.c`:
+  - **Cross-arch emulator guests** — run raw AArch64 / RISC-V / ARM32 machine-code
+    bytes on any host (`Guest`/`GuestEmulator` + per-arch register reads through
+    `asmtest_emu_{arm64,riscv,arm}_reg`), not just the x86-64 guest.
+  - **Emulator FP / vector args and >2 integer args** — `call_fp` / `call_vec` /
+    `call_bytes` over raw bytes, beyond the old two-integer `call2`.
+  - **Execution trace / basic-block coverage** — an opaque `Trace` handle
+    (`asmtest_emu_trace_*`) recorded by `call_traced`, with `covered(off)`.
+  - **Win64 calling convention** — `call_win64`, to test a Win64 routine on a
+    System V host.
+  Anchored in the shared conformance corpus: new `emu_bytes` / `emu_trace` cases
+  (cross-arch int, x86 wide/FP/vector, Win64, two-block coverage) run on every host
+  via checked-in pre-assembled byte literals, and the assembler tier is now emitted
+  into `corpus.json` and executed by a new `make conformance-asm` build. The C++
+  binding also gains the previously missing `sum_via_rbx` / `clear_carry` cases.
+  See the
+  [binding-parity plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/binding-parity-plan.md).
+
 - **In-line assembler tier (Keystone).** Pass a routine as an *assembly string*
   and run it, instead of only as pre-assembled object code. `asmtest_assemble()`
   (in the new `include/asmtest_assemble.h`) turns text into machine code for the
