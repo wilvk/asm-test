@@ -60,11 +60,22 @@ def test_corpus_case(case, routine):
     elif case["tier"] == "emu":
         with asmtest.Emulator() as e:
             res = e.call(fn, case.get("args", []))
-        assert res.ran
-        if "faulted" in expect:
-            assert res.faulted is expect["faulted"]
+        want_fault = expect.get("faulted", False)
+        # A clean run completes (ran); a fault stops it short — but as data.
+        assert res.ran is (not want_fault)
+        assert res.faulted is want_fault
+        if "fault_addr" in expect:
+            assert res.fault_addr == expect["fault_addr"]
+        if "fault_kind" in expect:
+            assert res.fault_kind == expect["fault_kind"]
         for reg_name, reg_val in expect.get("reg", {}).items():
             assert res.reg(reg_name) == reg_val
+        # Lane 0 of the named XMM registers (the FP/vector file).
+        for idx, val in expect.get("xmm_f64", {}).items():
+            assert res.xmm_f64(int(idx), 0) == val
+        # The widened GP read reaches rip/rflags on every run: x86 always keeps
+        # rflags bit 1 set, so a nonzero mask proves the field resolved.
+        assert res.reg("rflags") & 0x2
 
     else:
         pytest.fail(f"unknown tier: {case['tier']}")

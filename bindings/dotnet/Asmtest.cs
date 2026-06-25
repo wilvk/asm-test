@@ -67,7 +67,11 @@ namespace Asmtest
             int arch, int syntax, string src, ulong addr, byte[] buf, int cap);
         [DllImport(EMU)] static extern IntPtr asmtest_asm_last_error();
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_result_fault_addr(IntPtr r);
+        [DllImport(EMU)] public static extern int asmtest_emu_result_fault_kind(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
+        [DllImport(EMU)] public static extern double asmtest_emu_x86_xmm_f64(IntPtr r, int index, int lane);
+        [DllImport(EMU)] public static extern float asmtest_emu_x86_xmm_f32(IntPtr r, int index, int lane);
 
         /// <summary>The Keystone diagnostic from the most recent assemble (thread-local; "" on success).</summary>
         public static string AsmError()
@@ -231,6 +235,9 @@ namespace Asmtest
     }
 
     /// <summary>An emulator run's outcome — faults surfaced as data, not a crash.</summary>
+    /// <summary>Invalid-access kind reported by <see cref="EmuResult.FaultKind"/> (mirrors emu_fault_kind_t).</summary>
+    public enum FaultKind { None = 0, Read = 1, Write = 2, Fetch = 3 }
+
     public sealed class EmuResult : IDisposable
     {
         IntPtr _h;
@@ -240,8 +247,20 @@ namespace Asmtest
         /// <summary>Whether the routine took an invalid-memory fault.</summary>
         public bool Faulted => Native.asmtest_emu_result_faulted(_h) != 0;
 
-        /// <summary>Read an x86-64 guest register by name (e.g. "rax").</summary>
+        /// <summary>Faulting guest address; only meaningful when <see cref="Faulted"/>.</summary>
+        public ulong FaultAddr => Native.asmtest_emu_result_fault_addr(_h);
+
+        /// <summary>Why the access was invalid; only meaningful when <see cref="Faulted"/>.</summary>
+        public FaultKind FaultKind => (FaultKind)Native.asmtest_emu_result_fault_kind(_h);
+
+        /// <summary>Read an x86-64 guest register by name — GP plus "rip" / "rflags".</summary>
         public ulong Reg(string name) => Native.asmtest_emu_x86_reg(_h, name);
+
+        /// <summary>Lane (0..1) of guest XMM register <paramref name="index"/> as a double (scalar return = XmmF64(0, 0)).</summary>
+        public double XmmF64(int index, int lane) => Native.asmtest_emu_x86_xmm_f64(_h, index, lane);
+
+        /// <summary>Lane (0..3) of guest XMM register <paramref name="index"/> as a float.</summary>
+        public float XmmF32(int index, int lane) => Native.asmtest_emu_x86_xmm_f32(_h, index, lane);
 
         public void Dispose()
         {
@@ -282,6 +301,10 @@ namespace Asmtest
         public static void NoFault(EmuResult res)
         {
             if (res.Faulted) throw new AsmtestException("unexpected fault");
+        }
+        public static void Fault(EmuResult res)
+        {
+            if (!res.Faulted) throw new AsmtestException("expected a fault, but the run completed cleanly");
         }
         public static void EmuReg(EmuResult res, string name, ulong want)
         {

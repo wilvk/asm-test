@@ -194,11 +194,27 @@ class EmuResult:
         return struct.unpack_from("<i", self._raw, off)[0]
 
     def reg(self, name):
-        """Read an x86-64 guest register (rax, rbx, …) from the result."""
+        """Read an x86-64 guest register from the result — the GP file plus
+        ``rip`` / ``rflags`` (e.g. ``rax``, ``rip``, ``rflags``)."""
         base = load().offset("emu_result_t", "regs") + load().offset(
             "emu_x86_regs_t", name
         )
         return struct.unpack_from("<Q", self._raw, base)[0]
+
+    def xmm_f64(self, index=0, lane=0):
+        """Lane (0..1) of guest XMM register ``index`` as a double — the FP/vector
+        side of the file (a scalar double return is ``xmm_f64(0, 0)``)."""
+        base = load().offset("emu_result_t", "regs") + load().offset(
+            "emu_x86_regs_t", "xmm"
+        )
+        return struct.unpack_from("<d", self._raw, base + index * 16 + lane * 8)[0]
+
+    def xmm_f32(self, index=0, lane=0):
+        """Lane (0..3) of guest XMM register ``index`` as a float32."""
+        base = load().offset("emu_result_t", "regs") + load().offset(
+            "emu_x86_regs_t", "xmm"
+        )
+        return struct.unpack_from("<f", self._raw, base + index * 16 + lane * 4)[0]
 
 
 class Emulator:

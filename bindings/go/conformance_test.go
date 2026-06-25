@@ -82,6 +82,41 @@ func TestEmu(t *testing.T) {
 	AssertEmuReg(t, res, "rax", 42)
 }
 
+// read_fault dereferences an unmapped guest address: the fault is data — where
+// (FaultAddr) and why (FaultKind) — not a crash.
+func TestEmuFault(t *testing.T) {
+	const faultAddr = 0x00DEAD00
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.Call2(CorpusRoutine("read_fault"), faultAddr, 0, res)
+	AssertFault(t, res)
+	if got := res.FaultAddr(); got != faultAddr {
+		t.Fatalf("fault_addr: got %#x, want %#x", got, faultAddr)
+	}
+	if got := res.FaultKind(); got != FaultRead {
+		t.Fatalf("fault_kind: got %d, want %d (read)", got, FaultRead)
+	}
+}
+
+// int_to_double lands (double)42 in xmm0, so the emulator's XMM file is readable
+// beyond the GP registers; a clean run also keeps rflags live (bit 1 always set).
+func TestEmuXmmAndRflags(t *testing.T) {
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.Call2(CorpusRoutine("int_to_double"), 42, 0, res)
+	AssertNoFault(t, res)
+	if got := res.XmmF64(0, 0); got != 42.0 {
+		t.Fatalf("xmm0.f64[0]: got %v, want 42", got)
+	}
+	if res.X86Reg("rflags")&0x2 == 0 {
+		t.Fatal("rflags: reserved bit 1 should be set (extended register read)")
+	}
+}
+
 // --- Tier 1: in-line assembly (Keystone), only when the lib carries it ------
 
 func TestInlineAsm(t *testing.T) {

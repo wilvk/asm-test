@@ -112,7 +112,11 @@ emu_result_t *asmtest_emu_result_new(void);
 void asmtest_emu_result_free(emu_result_t *r);
 int asmtest_emu_result_ok(const emu_result_t *r);
 int asmtest_emu_result_faulted(const emu_result_t *r);
+unsigned long long asmtest_emu_result_fault_addr(const emu_result_t *r);
+int asmtest_emu_result_fault_kind(const emu_result_t *r);
 unsigned long long asmtest_emu_x86_reg(const emu_result_t *r, const char *name);
+double asmtest_emu_x86_xmm_f64(const emu_result_t *r, int index, int lane);
+float asmtest_emu_x86_xmm_f32(const emu_result_t *r, int index, int lane);
 int asmtest_emu_call2(emu_t *e, const void *fn, long a0, long a1,
                       emu_result_t *out);
 

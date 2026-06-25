@@ -27,8 +27,9 @@ test "add" {
 ```
 
 The emulator (`c.emu_open` / `c.emu_call` / `c.emu_close`) returns a
-`c.emu_result_t` whose `faulted` / `fault_addr` surface invalid accesses as data
-rather than crashing — prefer it for untrusted routines.
+`c.emu_result_t` whose `faulted` / `fault_addr` / `fault_kind` (`c.EMU_FAULT_READ`
+…) surface invalid accesses as data rather than crashing — where and why a fault
+hit, not just that one did. Prefer it for untrusted routines.
 
 ## In-line assembler (optional)
 

@@ -8,7 +8,8 @@ its `ffi`.
 and `ffi.load` opens the shared libraries, so no C struct layout is mirrored:
 `asmtest_corpus_routine` for addresses, `asmtest_capture6` / `_fp2` +
 `asmtest_regs_*` for capture, and `asmtest_emu_call2` + accessors for the
-emulator (faults as data).
+emulator (faults as data: `:faulted()`, plus `:fault_addr()` / `:fault_kind()` —
+against the `FaultKind` table — for where and why one hit).
 
 ## Run
 

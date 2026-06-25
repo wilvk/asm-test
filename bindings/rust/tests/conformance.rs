@@ -19,6 +19,8 @@ extern "C" {
     fn clear_carry() -> i64;
     fn fp_add(a: f64, b: f64) -> f64;
     fn vec_add4f();
+    fn read_fault(p: *const i64) -> i64;
+    fn int_to_double(n: i64) -> f64;
 }
 
 fn pm(addr: usize) -> *mut c_void {
@@ -81,6 +83,31 @@ fn emu_add_signed() {
     let res = emu.call(add_signed as usize as *const c_void, &[40, 2]);
     assert!(!res.faulted);
     assert_eq!(res.regs.rax, 42);
+}
+
+// read_fault dereferences an unmapped address: the fault is data — where
+// (fault_addr) and why (fault_kind) — not a crash.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn emu_read_fault() {
+    const FAULT_ADDR: u64 = 0x00DEAD00;
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+    let res = emu.call(read_fault as usize as *const c_void, &[FAULT_ADDR as i64]);
+    res.assert_fault();
+    assert_eq!(res.fault_addr, FAULT_ADDR);
+    assert_eq!(res.fault_kind, asmtest::FAULT_READ);
+}
+
+// int_to_double lands (double)42 in xmm0, so the XMM file is readable beyond the
+// GP registers; a clean run also keeps rflags live (x86 holds bit 1 set).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn emu_xmm_and_rflags() {
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+    let res = emu.call(int_to_double as usize as *const c_void, &[42]);
+    assert!(!res.faulted);
+    assert_eq!(res.regs.xmm[0].f64()[0], 42.0);
+    assert_ne!(res.regs.rflags & 0x2, 0);
 }
 
 // In-line assembler (Keystone): only when the loaded lib carries it (run via

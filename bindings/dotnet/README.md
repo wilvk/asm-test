@@ -7,7 +7,8 @@ Run, **capture**, **emulate**, and **assemble** assembly routines through the
 The entry points are the opaque-handle FFI layer (`src/ffi.c`), so no C struct
 layout is mirrored: `asmtest_corpus_routine` for routine addresses,
 `asmtest_capture6` / `_fp2` + `asmtest_regs_*` accessors for capture, and
-`asmtest_emu_call2` + accessors for the emulator (faults as data).
+`asmtest_emu_call2` + accessors for the emulator (faults as data: `Faulted`, plus
+`FaultAddr` / `FaultKind` — a `FaultKind` enum — for where and why one hit).
 
 ## Run
 

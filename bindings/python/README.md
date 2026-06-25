@@ -42,6 +42,11 @@ with asmtest.Emulator() as e:
     res = e.call(routine_addr, [40, 2])
     assert not res.faulted
     assert res.reg("rax") == 42
+
+    bad = e.call(deref_addr, [0xDEAD00])     # dereferences an unmapped address
+    assert bad.faulted
+    assert bad.fault_addr == 0xDEAD00        # where it hit, and why:
+    assert bad.fault_kind == 1               # 1 read, 2 write, 3 fetch
 ```
 
 A routine reference is either an integer address or a ctypes function pointer

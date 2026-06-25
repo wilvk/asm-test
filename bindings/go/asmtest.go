@@ -45,7 +45,11 @@ extern void *asmtest_emu_result_new(void);
 extern void  asmtest_emu_result_free(void *r);
 extern int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
 extern int   asmtest_emu_result_faulted(void *r);
+extern unsigned long long asmtest_emu_result_fault_addr(void *r);
+extern int   asmtest_emu_result_fault_kind(void *r);
 extern unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
+extern double asmtest_emu_x86_xmm_f64(void *r, int index, int lane);
+extern float  asmtest_emu_x86_xmm_f32(void *r, int index, int lane);
 
 // In-line assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
 // which the default build does not link. Resolve them at run time from the lib the
@@ -281,11 +285,42 @@ func (r *EmuResult) Free() {
 // Faulted reports whether the routine took an invalid-memory fault.
 func (r *EmuResult) Faulted() bool { return C.asmtest_emu_result_faulted(r.h) != 0 }
 
-// X86Reg reads an x86-64 guest register by name (e.g. "rax").
+// FaultKind classifies an invalid access; only meaningful when Faulted.
+type FaultKind int
+
+const (
+	FaultNone  FaultKind = iota // 0: no fault
+	FaultRead                   // 1: invalid read
+	FaultWrite                  // 2: invalid write
+	FaultFetch                  // 3: invalid instruction fetch
+)
+
+// FaultAddr is the faulting guest address; only meaningful when Faulted.
+func (r *EmuResult) FaultAddr() uint64 { return uint64(C.asmtest_emu_result_fault_addr(r.h)) }
+
+// FaultKind reports why the access was invalid (read/write/fetch); only
+// meaningful when Faulted.
+func (r *EmuResult) FaultKind() FaultKind {
+	return FaultKind(C.asmtest_emu_result_fault_kind(r.h))
+}
+
+// X86Reg reads an x86-64 guest register by name — the GP file plus "rip" and
+// "rflags" (e.g. "rax", "rip", "rflags").
 func (r *EmuResult) X86Reg(name string) uint64 {
 	cs := C.CString(name)
 	defer C.free(unsafe.Pointer(cs))
 	return uint64(C.asmtest_emu_x86_reg(r.h, cs))
+}
+
+// XmmF64 reads lane (0..1) of guest XMM register index (0..15) as a double — the
+// FP/vector side of the file (a scalar double return is XmmF64(0, 0)).
+func (r *EmuResult) XmmF64(index, lane int) float64 {
+	return float64(C.asmtest_emu_x86_xmm_f64(r.h, C.int(index), C.int(lane)))
+}
+
+// XmmF32 reads lane (0..3) of guest XMM register index (0..15) as a float32.
+func (r *EmuResult) XmmF32(index, lane int) float32 {
+	return float32(C.asmtest_emu_x86_xmm_f32(r.h, C.int(index), C.int(lane)))
 }
 
 // TB is the subset of *testing.T the Tier-2 assertion helpers use. Declaring our
@@ -342,6 +377,14 @@ func AssertNoFault(t TB, r *EmuResult) {
 	t.Helper()
 	if r.Faulted() {
 		t.Fatalf("unexpected fault")
+	}
+}
+
+// AssertFault fails t unless the run faulted (a fault is data, not a crash).
+func AssertFault(t TB, r *EmuResult) {
+	t.Helper()
+	if !r.Faulted() {
+		t.Fatalf("expected a fault, but the run completed cleanly")
 	}
 }
 

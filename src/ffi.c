@@ -122,16 +122,44 @@ int asmtest_emu_result_faulted(const emu_result_t *r) {
     return r->faulted ? 1 : 0;
 }
 
-/* x86-64 guest register by name (rax..r15). The 16 GP fields are contiguous. */
+/* Faulting guest address — only meaningful when asmtest_emu_result_faulted. */
+unsigned long long asmtest_emu_result_fault_addr(const emu_result_t *r) {
+    return (unsigned long long)r->fault_addr;
+}
+
+/* Kind of invalid access as an int (emu_fault_kind_t): 0 none, 1 read, 2 write,
+ * 3 fetch — so a binding reports where and why a fault hit, not just that it did. */
+int asmtest_emu_result_fault_kind(const emu_result_t *r) {
+    return (int)r->fault_kind;
+}
+
+/* x86-64 guest register by name. The 16 GP fields plus rip/rflags are laid out
+ * contiguously in emu_x86_regs_t, so the whole 64-bit file reads as one array —
+ * a binding can pull the instruction pointer and flags, not only rax..r15. */
 unsigned long long asmtest_emu_x86_reg(const emu_result_t *r, const char *name) {
-    static const char *const n[16] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+    static const char *const n[18] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi",
                                       "rbp", "rsp", "r8",  "r9",  "r10", "r11",
-                                      "r12", "r13", "r14", "r15"};
+                                      "r12", "r13", "r14", "r15", "rip", "rflags"};
     const uint64_t *p = &r->regs.rax;
     if (!name)
         return 0;
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < 18; i++)
         if (!strcmp(name, n[i]))
             return (unsigned long long)p[i];
     return 0;
+}
+
+/* A guest XMM lane after the run — the FP/vector side of the register file, which
+ * the GP-only asmtest_emu_x86_reg can't reach. A scalar double return lands in
+ * xmm[0].f64[0]; a 128-bit vector return in xmm[0]. index selects the register
+ * (0..15), lane the element. Out-of-range reads return 0. */
+double asmtest_emu_x86_xmm_f64(const emu_result_t *r, int index, int lane) {
+    if (index < 0 || index > 15 || lane < 0 || lane > 1)
+        return 0.0;
+    return r->regs.xmm[index].f64[lane];
+}
+float asmtest_emu_x86_xmm_f32(const emu_result_t *r, int index, int lane) {
+    if (index < 0 || index > 15 || lane < 0 || lane > 3)
+        return 0.0f;
+    return r->regs.xmm[index].f32[lane];
 }

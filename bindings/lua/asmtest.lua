@@ -33,7 +33,11 @@ int   asmtest_emu_call_asm6(void *e, const char *src, int syntax, long a0, long 
 int   asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr, uint8_t *buf, int cap);
 const char *asmtest_asm_last_error(void);
 int   asmtest_emu_result_faulted(void *r);
+unsigned long long asmtest_emu_result_fault_addr(void *r);
+int   asmtest_emu_result_fault_kind(void *r);
 unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
+double asmtest_emu_x86_xmm_f64(void *r, int index, int lane);
+float  asmtest_emu_x86_xmm_f32(void *r, int index, int lane);
 ]])
 
 local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB to libasmtest_emu.{so,dylib}")
@@ -92,8 +96,19 @@ local EmuResult = {}
 EmuResult.__index = EmuResult
 local function new_result() return setmetatable({ h = L.asmtest_emu_result_new() }, EmuResult) end
 function EmuResult:faulted() return L.asmtest_emu_result_faulted(self.h) ~= 0 end
-function EmuResult:reg(name) return tonumber(L.asmtest_emu_x86_reg(self.h, name)) end  -- x86-64 guest reg
+-- Faulting guest address; only meaningful when :faulted().
+function EmuResult:fault_addr() return tonumber(L.asmtest_emu_result_fault_addr(self.h)) end
+-- Why the access was invalid (an M.FaultKind value); only meaningful when :faulted().
+function EmuResult:fault_kind() return L.asmtest_emu_result_fault_kind(self.h) end
+function EmuResult:reg(name) return tonumber(L.asmtest_emu_x86_reg(self.h, name)) end  -- GP reg + rip/rflags
+-- Lane (0..1) of guest XMM register index as a double (scalar return = :xmm_f64(0, 0)).
+function EmuResult:xmm_f64(index, lane) return tonumber(L.asmtest_emu_x86_xmm_f64(self.h, index or 0, lane or 0)) end
+-- Lane (0..3) of guest XMM register index as a float32.
+function EmuResult:xmm_f32(index, lane) return tonumber(L.asmtest_emu_x86_xmm_f32(self.h, index or 0, lane or 0)) end
 function EmuResult:free() if self.h then L.asmtest_emu_result_free(self.h); self.h = nil end end
+
+-- Invalid-access kind reported by EmuResult:fault_kind() (mirrors emu_fault_kind_t).
+M.FaultKind = { NONE = 0, READ = 1, WRITE = 2, FETCH = 3 }
 
 -- An open emulator (x86-64 Unicorn guest). Call :close() when done.
 local Emu = {}
@@ -170,6 +185,9 @@ function M.assert_vec_f32(r, index, want)
 end
 function M.assert_no_fault(res)
   if res:faulted() then error("unexpected fault") end
+end
+function M.assert_fault(res)
+  if not res:faulted() then error("expected a fault, but the run completed cleanly") end
 end
 function M.assert_emu_reg(res, name, want)
   local got = res:reg(name)

@@ -106,16 +106,18 @@ three featured bindings' idiom; the other seven mirror these (see their READMEs)
 | Condition flag (CF/ZF/…) | `r.flag_set("CF")` | `r.FlagSet("CF")` | `r.FlagSet("CF")` |
 | ABI (callee-saved) preserved | `r.abi_preserved` | `r.AbiPreserved` | `r.ABIPreserved()` |
 | Run under the emulator | `e.call(fn, [args])` | `e.Call2(fn, a, b)` | `e.Call2(fn, a, b, res)` |
-| Fault is data, not a crash | `res.faulted` / `res.fault_addr` | `res.Faulted` | `res.Faulted()` |
-| Read a guest register | `res.reg("rax")` | `res.Reg("rax")` | `res.X86Reg("rax")` |
+| Fault is data, not a crash | `res.faulted` | `res.Faulted` | `res.Faulted()` |
+| Where/why a fault hit | `res.fault_addr` / `res.fault_kind` | `res.FaultAddr` / `res.FaultKind` | `res.FaultAddr()` / `res.FaultKind()` |
+| Read a guest register (GP + `rip`/`rflags`) | `res.reg("rax")` | `res.Reg("rax")` | `res.X86Reg("rax")` |
+| Read a guest XMM lane | `res.xmm_f64(0, 0)` | `res.XmmF64(0, 0)` | `res.XmmF64(0, 0)` |
 | In-line assembler present? | `asmtest.asm_available()` | `Emu.AsmAvailable` | `asmtest.AsmAvailable()` |
 | Run assembly *text* | `e.call_asm(src, [args])` | `e.CallAsm(src, args)` | `e.CallAsm(src, args, …, res)` |
 | Assemble text → bytes (multi-arch) | `asmtest.assemble(src, Arch.ARM64)` | `Emu.Assemble(src, AsmArch.Arm64)` | `asmtest.Assemble(src, ArchArm64, …)` |
 
 Every binding also ships **Tier-2 assertions** over these results — `assert_ret`,
 `assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_vec_f32`,
-`assert_no_fault`, `assert_reg`, and friends (`Asm.Assert.*` in .NET,
-`asmtest.Assert*` in Go). The examples below put each capability to work
+`assert_no_fault`, `assert_fault`, `assert_reg`, and friends (`Asm.Assert.*` in
+.NET, `asmtest.Assert*` in Go). The examples below put each capability to work
 end-to-end.
 
 ## Python

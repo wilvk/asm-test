@@ -16,6 +16,8 @@ long set_carry(void);
 long clobbers_rbx(long, long);
 double fp_add(double, double);
 void vec_add4f(void);  // vec128 in/out; only its address is needed
+long read_fault(const long *);  // loads *p; faults if p is unmapped
+double int_to_double(long);     // (double)n into xmm0 from an integer arg
 }
 
 using namespace asmtest;
@@ -78,6 +80,28 @@ TEST(cpp, emulator_raii) {
     ASSERT_NO_FAULT(&res);
     ASSERT_EMU_REG_EQ(&res, rax, 42);
 }  // e closes the handle here
+
+// read_fault dereferences an unmapped address: the fault is data — where
+// (fault_addr) and why (fault_kind) — not a crash.
+TEST(cpp, emulator_fault_is_data) {
+    constexpr unsigned long kFaultAddr = 0x00DEAD00UL;
+    Emu e;
+    long addr = static_cast<long>(kFaultAddr);
+    emu_result_t res = e.call(reinterpret_cast<void *>(read_fault), {addr});
+    ASSERT_TRUE(res.faulted);
+    ASSERT_EQ(res.fault_addr, kFaultAddr);
+    ASSERT_EQ(res.fault_kind, EMU_FAULT_READ);
+}
+
+// int_to_double lands (double)42 in xmm0, so the XMM file is readable beyond the
+// GP registers; a clean run also keeps rflags live (x86 holds bit 1 set).
+TEST(cpp, emulator_xmm_and_rflags) {
+    Emu e;
+    emu_result_t res = e.call(reinterpret_cast<void *>(int_to_double), {42});
+    ASSERT_FALSE(res.faulted);
+    ASSERT_EQ(res.regs.xmm[0].f64[0], 42.0);
+    ASSERT_TRUE((res.regs.rflags & 0x2u) != 0);
+}
 
 #ifdef ASMTEST_ENABLE_ASM
 // In-line assembler (Keystone): assemble source text and run it on the guest.

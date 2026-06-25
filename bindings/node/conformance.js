@@ -9,9 +9,9 @@
 'use strict';
 const asmtest = require('./asmtest');
 const {
-  corpusRoutine: routine, Regs, Emu, AsmtestError,
+  corpusRoutine: routine, Regs, Emu, AsmtestError, FaultKind,
   assemble, Arch, Syntax,
-  assertRet, assertAbiPreserved, assertFp, assertVecF32,
+  assertRet, assertAbiPreserved, assertFp, assertVecF32, assertFault,
 } = asmtest;
 
 let fails = 0;
@@ -65,6 +65,20 @@ withRegs((r) => {
   check('emu.add_signed', !res.faulted() && res.reg('rax') === 42);
   res.free();
 
+  // read_fault dereferences an unmapped address: the fault is data — where
+  // (faultAddr) and why (faultKind) — not a crash.
+  const fres = e.call2(routine('read_fault'), 0x00DEAD00, 0);
+  check('emu.read_fault',
+    fres.faulted() && fres.faultAddr() === 0x00DEAD00 && fres.faultKind() === FaultKind.Read);
+  fres.free();
+
+  // int_to_double lands (double)42 in xmm0 (the XMM file, beyond the GP regs);
+  // a clean run also keeps rflags live (x86 holds bit 1 set).
+  const xres = e.call2(routine('int_to_double'), 42, 0);
+  check('emu.int_to_double',
+    !xres.faulted() && xres.xmmF64(0, 0) === 42 && (xres.reg('rflags') & 0x2) !== 0);
+  xres.free();
+
   // in-line assembly (Keystone) replays add_signed, only if the lib has it
   if (e.asmAvailable()) {
     const ares = e.callAsm('mov rax, rdi; add rax, rsi; ret', [40, 2]);
@@ -106,6 +120,13 @@ try {
     r.captureVecF32(routine('vec_add4f'), [[1, 2, 3, 4], [10, 20, 30, 40]]);
     assertVecF32(r, 0, [11, 22, 33, 44]);
   });
+  {
+    const e = new Emu();
+    const fres = e.call2(routine('read_fault'), 0x00DEAD00, 0);
+    assertFault(fres);
+    fres.free();
+    e.close();
+  }
 } catch (_e) {
   t2pass = false;
 }

@@ -41,7 +41,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fpover $(BUILD)/test_refmatch \
                   $(BUILD)/test_callback
 
-.PHONY: all test check demo-fail clean
+.PHONY: all help test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu shared-emu-asm manifest manifest-win64 install-shared install-shared-emu conformance
 .PHONY: python-test cpp-test rust-test zig-test
@@ -49,6 +49,59 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
 all: test
+
+# Self-documenting target list. `make` / `make all` still runs the test suites;
+# `make help` prints the common targets grouped by area (a curated summary — see
+# the section banners below for the full set and the knobs each accepts).
+help:
+	@echo 'asm-test — make targets (default: test). Knobs: ASM_SYNTAX=nasm, SAN=1, COV=1, PREFIX=...'
+	@echo ''
+	@echo 'Core:'
+	@echo '  test            build + run the example suites (default)'
+	@echo '  check           run the framework self-tests (tests/expect.sh)'
+	@echo '  usecases        "unusual use case" suites (bit tricks, RPN VM)'
+	@echo '  demo-fail       intentional-failure demo (exits nonzero by design)'
+	@echo '  demo-robust     crash/hang containment demo'
+	@echo '  bench           run the benchmark (BENCH) cases'
+	@echo '  clean           remove build artifacts'
+	@echo ''
+	@echo 'Optional tiers (need libunicorn / libkeystone):'
+	@echo '  emu-test        Unicorn-backed emulator suite'
+	@echo '  asm-test        in-line assembler (Keystone) suite'
+	@echo '  usecases-emu    emulator-as-sandbox / cross-ISA suite'
+	@echo ''
+	@echo 'Packaging & install:'
+	@echo '  lib             build the static libasmtest.a'
+	@echo '  shared          build the core shared lib'
+	@echo '  shared-emu      build the emulator shared lib'
+	@echo '  manifest        emit asmtest_abi.json (ABI layout)'
+	@echo '  amalgamate      generate the single-header asmtest_single.h'
+	@echo '  install         install headers + static lib + pkg-config'
+	@echo '  deps            bootstrap the optional toolchain (DEPS_ARGS=...)'
+	@echo '  packages        build every language package (needs all toolchains)'
+	@echo ''
+	@echo 'Quality (Track D/E):'
+	@echo '  sanitize        build + run under ASan + UBSan'
+	@echo '  coverage        gcov of the runner'
+	@echo '  tidy            clang-tidy static analysis'
+	@echo '  valgrind        memcheck the routines under test (Linux/x86-64)'
+	@echo ''
+	@echo 'Language bindings (per-language; need libunicorn):'
+	@echo '  python-test cpp-test rust-test zig-test node-test'
+	@echo '  java-test dotnet-test ruby-test lua-test go-test'
+	@echo '  conformance     regenerate the cross-language corpus.json'
+	@echo ''
+	@echo 'Docker (Linux CI lanes):'
+	@echo '  docker-test docker-ci      example/self-test matrix in a container'
+	@echo '  docker-bindings            build + run every language image'
+	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
+	@echo ''
+	@echo 'Native Win64 (cross-compile + Wine):'
+	@echo '  win64-check     substrate smoke + capture + runner-port slices'
+	@echo '  win64-msabi-test  fast native lane (no Wine; x86-64)'
+	@echo ''
+	@echo 'Docs (Sphinx):'
+	@echo '  docs docs-serve docs-linkcheck docs-clean'
 
 # "Unusual use case" demo suites (Track F): self-contained examples that show
 # off a framework feature on a less-obvious target — property-tested bit hacks,
@@ -812,7 +865,8 @@ $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
 
 $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
                       $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/add.o \
-                      $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o
+                      $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
+                      $(BUILD)/fault.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 conformance: $(BUILD)/conformance
@@ -836,7 +890,7 @@ CORPUS_LDFLAGS := -shared
 endif
 CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/flags.o \
                        $(BUILD)/pic/fp.o $(BUILD)/pic/simd.o \
-                       $(BUILD)/pic/corpus_routines.o
+                       $(BUILD)/pic/fault.o $(BUILD)/pic/corpus_routines.o
 
 # name -> routine-address lookup, so bindings need no per-FFI symbol-address API.
 $(BUILD)/pic/corpus_routines.o: bindings/conformance/corpus_routines.c | $(BUILD)/pic
@@ -870,7 +924,7 @@ $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
 
 $(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/add.o \
                    $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
-                   $(BUILD)/test_cpp.o
+                   $(BUILD)/fault.o $(BUILD)/test_cpp.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp
@@ -888,7 +942,7 @@ $(BUILD)/test_cpp_asm.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
 
 $(BUILD)/test_cpp_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
                        $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                       $(BUILD)/simd.o $(BUILD)/test_cpp_asm.o
+                       $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp_asm.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 
 .PHONY: cpp-asm-test

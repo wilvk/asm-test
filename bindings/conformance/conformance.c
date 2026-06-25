@@ -39,6 +39,12 @@ extern long sum_via_rbx(long, long);  /* ABI-compliant: saves/restores rbx */
 extern long clobbers_rbx(long, long); /* ABI violation: trashes rbx        */
 extern double fp_add(double, double);
 /* vec_add4f: lane-wise add of four float32s; vec128 in, vec128 out (xmm0/v0). */
+extern long read_fault(const long *); /* loads *p; faults if p is unmapped */
+extern double int_to_double(long);    /* (double)n into xmm0 from an integer arg */
+
+/* Unmapped guest address the fault case dereferences (clear of the emulator's
+ * code/stack maps), so the fault lands at a recognizable fault_addr. */
+#define CORPUS_FAULT_ADDR 0x00DEAD00UL
 
 #if defined(__x86_64__)
 #define CORPUS_ARCH "x86_64"
@@ -162,6 +168,29 @@ static int run_corpus(void) {
             bool ran = emu_call(e, (void *)add_signed, 64, args, 2, 0, &res);
             int ok = ran && !res.faulted && res.regs.rax == 42;
             check("emu.add_signed", ok, ok ? NULL : "emu result mismatch");
+
+            /* read_fault dereferences an unmapped address: the run does not
+             * complete cleanly, but the fault is data — where (fault_addr) and
+             * why (fault_kind == read), not a crash. */
+            emu_result_t fres;
+            memset(&fres, 0, sizeof fres);
+            long fargs[1] = {(long)CORPUS_FAULT_ADDR};
+            emu_call(e, (void *)read_fault, 64, fargs, 1, 0, &fres);
+            int fok = fres.faulted && fres.fault_addr == CORPUS_FAULT_ADDR &&
+                      fres.fault_kind == EMU_FAULT_READ;
+            check("emu.read_fault", fok, fok ? NULL : "fault not reported as data");
+
+            /* int_to_double(42) lands (double)42 in xmm0 — the guest XMM file,
+             * beyond the GP registers — and a clean run keeps rip/rflags live
+             * (x86 always holds rflags bit 1 set), so the widened register reads
+             * resolve the FP/vector lanes and rip/rflags, not just rax..r15. */
+            emu_result_t xres;
+            memset(&xres, 0, sizeof xres);
+            long xargs[1] = {42};
+            emu_call(e, (void *)int_to_double, 64, xargs, 1, 0, &xres);
+            int xok = !xres.faulted && xres.regs.xmm[0].f64[0] == 42.0 &&
+                      xres.regs.rip != 0 && (xres.regs.rflags & 0x2u) != 0;
+            check("emu.int_to_double", xok, xok ? NULL : "xmm/rip/rflags read mismatch");
             emu_close(e);
         }
     }
@@ -209,7 +238,17 @@ static void emit_corpus(void) {
     printf(",\n      {\"name\": \"emu.add_signed\", \"tier\": \"emu\", "
            "\"guest\": \"x86_64\", \"routine\": \"add_signed\", "
            "\"args\": [40, 2], "
-           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}}");
+           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu.read_fault\", \"tier\": \"emu\", "
+           "\"guest\": \"x86_64\", \"routine\": \"read_fault\", "
+           "\"args\": [%lu], "
+           "\"expect\": {\"faulted\": true, \"fault_addr\": %lu, "
+           "\"fault_kind\": %d}},\n",
+           CORPUS_FAULT_ADDR, CORPUS_FAULT_ADDR, EMU_FAULT_READ);
+    printf("      {\"name\": \"emu.int_to_double\", \"tier\": \"emu\", "
+           "\"guest\": \"x86_64\", \"routine\": \"int_to_double\", "
+           "\"args\": [42], "
+           "\"expect\": {\"faulted\": false, \"xmm_f64\": {\"0\": 42.0}}}");
 #endif
     printf("\n    ]\n");
     printf("  }\n}\n");

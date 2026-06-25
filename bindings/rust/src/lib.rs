@@ -43,6 +43,10 @@ impl Vec128 {
     pub fn f32(&self) -> [f32; 4] {
         unsafe { self.f32_ }
     }
+    /// Read the two float64 lanes (a scalar double return is `f64()[0]`).
+    pub fn f64(&self) -> [f64; 2] {
+        unsafe { self.f64_ }
+    }
 }
 
 // --- regs_t (capture snapshot), per architecture --------------------------- //
@@ -175,6 +179,12 @@ pub struct EmuX86Regs {
     pub rflags: u64,
     pub xmm: [Vec128; 16],
 }
+
+/// `fault_kind` values (mirror `emu_fault_kind_t`): why an access was invalid.
+pub const FAULT_NONE: c_int = 0;
+pub const FAULT_READ: c_int = 1;
+pub const FAULT_WRITE: c_int = 2;
+pub const FAULT_FETCH: c_int = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

@@ -7,12 +7,13 @@ Run, **capture**, **emulate**, and **assemble** assembly routines through the
 prebuilt shared libraries, so no C struct layout is mirrored in Go:
 `asmtest_corpus_routine` for addresses, `asmtest_capture6` / `_fp2` +
 `asmtest_regs_*` for capture (with `asmtest_check_abi` as the ABI-preservation
-verdict), and `asmtest_emu_call2` + accessors for the emulator (faults as data).
+verdict), and `asmtest_emu_call2` + accessors for the emulator (faults as data:
+`EmuResult.Faulted()`, plus `FaultAddr()` / `FaultKind()` for where and why).
 The result handles are all C-allocated, so they are exempt from cgo's
 pointer-passing rules.
 
 Tier-2 idiomatic assertions (`AssertRet`, `AssertABIPreserved`, `AssertFlag`,
-`AssertFP`, `AssertNoFault`, `AssertEmuReg`) take a small `TB` interface that
+`AssertFP`, `AssertNoFault`, `AssertFault`, `AssertEmuReg`) take a small `TB` interface that
 `*testing.T` satisfies, so they fail a test with a legible message — and are
 themselves testable (the suite proves each one bites on bad input).
 

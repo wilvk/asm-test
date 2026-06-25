@@ -57,8 +57,15 @@ const fn = {
     catch { return null; }
   })(),
   emuFaulted: L.func('int asmtest_emu_result_faulted(void *)'),
+  emuFaultAddr: L.func('uint64_t asmtest_emu_result_fault_addr(void *)'),
+  emuFaultKind: L.func('int asmtest_emu_result_fault_kind(void *)'),
   emuReg: L.func('uint64_t asmtest_emu_x86_reg(void *, const char *)'),
+  emuXmmF64: L.func('double asmtest_emu_x86_xmm_f64(void *, int, int)'),
+  emuXmmF32: L.func('float asmtest_emu_x86_xmm_f32(void *, int, int)'),
 };
+
+/** Invalid-access kind reported by EmuResult.faultKind() (mirrors emu_fault_kind_t). */
+const FaultKind = { None: 0, Read: 1, Write: 2, Fetch: 3 };
 
 /** Resolve a canonical corpus routine (e.g. "add_signed") to its address. */
 function corpusRoutine(name) {
@@ -104,8 +111,16 @@ class Regs {
 class EmuResult {
   constructor() { this._h = fn.emuResNew(); }
   faulted() { return fn.emuFaulted(this._h) !== 0; }
-  /** Read an x86-64 guest register by name (e.g. "rax"). */
+  /** Faulting guest address; only meaningful when faulted(). */
+  faultAddr() { return Number(fn.emuFaultAddr(this._h)); }
+  /** Why the access was invalid (a FaultKind value); only meaningful when faulted(). */
+  faultKind() { return fn.emuFaultKind(this._h); }
+  /** Read an x86-64 guest register by name — GP plus "rip" / "rflags". */
   reg(name) { return Number(fn.emuReg(this._h, name)); }
+  /** Lane (0..1) of guest XMM register `index` as a double (scalar return = xmmF64(0, 0)). */
+  xmmF64(index = 0, lane = 0) { return fn.emuXmmF64(this._h, index, lane); }
+  /** Lane (0..3) of guest XMM register `index` as a float32. */
+  xmmF32(index = 0, lane = 0) { return fn.emuXmmF32(this._h, index, lane); }
   free() { if (this._h) { fn.emuResFree(this._h); this._h = null; } }
 }
 
@@ -186,6 +201,9 @@ function assertVecF32(r, index, want) {
 function assertNoFault(res) {
   if (res.faulted()) throw new AsmtestError('unexpected fault');
 }
+function assertFault(res) {
+  if (!res.faulted()) throw new AsmtestError('expected a fault, but the run completed cleanly');
+}
 function assertEmuReg(res, name, want) {
   const got = res.reg(name);
   if (got !== want) throw new AsmtestError(`emu ${name}: got ${got}, want ${want}`);
@@ -197,7 +215,8 @@ const Syntax = { INTEL: 0, ATT: 1 };
 
 module.exports = {
   corpusRoutine,
-  Regs, Emu, EmuResult, AsmtestError,
+  Regs, Emu, EmuResult, AsmtestError, FaultKind,
   assemble, asmError, Arch, Syntax,
-  assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32, assertNoFault, assertEmuReg,
+  assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
+  assertNoFault, assertFault, assertEmuReg,
 };

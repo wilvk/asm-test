@@ -55,6 +55,22 @@ public class Conformance {
             check("emu.add_signed", !res.faulted() && res.reg("rax") == 42);
         }
 
+        // read_fault dereferences an unmapped address: the fault is data — where
+        // (faultAddr) and why (faultKind) — not a crash.
+        try (Asmtest.Emu e = new Asmtest.Emu();
+             Asmtest.EmuResult res = e.call2(routine("read_fault"), 0x00DEAD00L, 0L)) {
+            check("emu.read_fault", res.faulted() && res.faultAddr() == 0x00DEAD00L
+                && res.faultKind() == Asmtest.FaultKind.READ);
+        }
+
+        // int_to_double lands (double)42 in xmm0 (the XMM file, beyond the GP regs);
+        // a clean run also keeps rflags live (x86 holds bit 1 set).
+        try (Asmtest.Emu e = new Asmtest.Emu();
+             Asmtest.EmuResult res = e.call2(routine("int_to_double"), 42L, 0L)) {
+            check("emu.int_to_double", !res.faulted() && res.xmmF64(0, 0) == 42.0
+                && (res.reg("rflags") & 0x2L) != 0);
+        }
+
         // --- Tier 1: in-line assembly (Keystone) replays add_signed ------- //
         // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
         try (Asmtest.Emu e = new Asmtest.Emu()) {
@@ -90,6 +106,10 @@ public class Conformance {
             Asmtest.assertFp(r, 3.75);
             r.captureVecF32(routine("vec_add4f"), new float[][] {{1, 2, 3, 4}, {10, 20, 30, 40}});
             Asmtest.assertVecF32(r, 0, new float[] {11, 22, 33, 44});
+            try (Asmtest.Emu e = new Asmtest.Emu();
+                 Asmtest.EmuResult res = e.call2(routine("read_fault"), 0x00DEAD00L, 0L)) {
+                Asmtest.assertFault(res);
+            }
         } catch (Asmtest.AsmtestException ae) {
             t2pass = false;
         }

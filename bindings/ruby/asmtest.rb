@@ -67,8 +67,20 @@ module Asmtest
     asm_bytes:      func_opt(L, "asmtest_asm_bytes", [INT, INT, VOIDP, LL, VOIDP, INT], INT),
     asm_last_error: func_opt(L, "asmtest_asm_last_error", [], VOIDP),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
+    emu_fault_addr: func(L, "asmtest_emu_result_fault_addr", [VOIDP], LL),
+    emu_fault_kind: func(L, "asmtest_emu_result_fault_kind", [VOIDP], INT),
     emu_reg:        func(L, "asmtest_emu_x86_reg", [VOIDP, VOIDP], LL),
+    emu_xmm_f64:    func(L, "asmtest_emu_x86_xmm_f64", [VOIDP, INT, INT], DBL),
+    emu_xmm_f32:    func(L, "asmtest_emu_x86_xmm_f32", [VOIDP, INT, INT], FLT),
   }.freeze
+
+  # Invalid-access kind reported by EmuResult#fault_kind (mirrors emu_fault_kind_t).
+  module FaultKind
+    NONE = 0
+    READ = 1
+    WRITE = 2
+    FETCH = 3
+  end
 
   # Architecture / syntax codes for Asmtest.assemble (mirror the C enums).
   ARCH   = { x86_64: 0, arm64: 1, riscv64: 2, arm32: 3 }.freeze
@@ -164,8 +176,28 @@ module Asmtest
       FN[:emu_faulted].call(@h) != 0
     end
 
+    # Faulting guest address; only meaningful when #faulted?.
+    def fault_addr
+      FN[:emu_fault_addr].call(@h)
+    end
+
+    # Why the access was invalid (a FaultKind value); only meaningful when #faulted?.
+    def fault_kind
+      FN[:emu_fault_kind].call(@h)
+    end
+
     def reg(name)
-      FN[:emu_reg].call(@h, name) # x86-64 guest register by name
+      FN[:emu_reg].call(@h, name) # GP register plus "rip" / "rflags" by name
+    end
+
+    # Lane (0..1) of guest XMM register +index+ as a double (scalar return = xmm_f64(0, 0)).
+    def xmm_f64(index = 0, lane = 0)
+      FN[:emu_xmm_f64].call(@h, index, lane)
+    end
+
+    # Lane (0..3) of guest XMM register +index+ as a float32.
+    def xmm_f32(index = 0, lane = 0)
+      FN[:emu_xmm_f32].call(@h, index, lane)
     end
 
     def free
@@ -246,6 +278,10 @@ module Asmtest
 
   def self.assert_no_fault(res)
     raise Error, "unexpected fault" if res.faulted?
+  end
+
+  def self.assert_fault(res)
+    raise Error, "expected a fault, but the run completed cleanly" unless res.faulted?
   end
 
   def self.assert_emu_reg(res, name, want)

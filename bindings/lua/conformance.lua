@@ -71,6 +71,22 @@ do
   check("emu.add_signed", not res:faulted() and res:reg("rax") == 42)
   res:free()
 
+  -- read_fault dereferences an unmapped address: the fault is data — where
+  -- (fault_addr) and why (fault_kind) — not a crash.
+  local fres = e:call2(routine("read_fault"), 0x00DEAD00, 0)
+  check("emu.read_fault",
+    fres:faulted() and fres:fault_addr() == 0x00DEAD00 and
+    fres:fault_kind() == asmtest.FaultKind.READ)
+  fres:free()
+
+  -- int_to_double lands (double)42 in xmm0 (the XMM file, beyond the GP regs);
+  -- a clean run also keeps rflags live (x86 holds bit 1 set).
+  local xres = e:call2(routine("int_to_double"), 42, 0)
+  check("emu.int_to_double",
+    not xres:faulted() and xres:xmm_f64(0, 0) == 42.0 and
+    math.floor(xres:reg("rflags") / 2) % 2 == 1) -- rflags reserved bit 1 always set
+  xres:free()
+
   -- in-line assembly (Keystone) replays add_signed, only if the lib has it
   if e:asm_available() then
     local ares = e:call_asm("mov rax, rdi; add rax, rsi; ret", {40, 2})
@@ -109,6 +125,11 @@ local t2pass = pcall(function()
     r:capture_vec_f32(routine("vec_add4f"), {{1, 2, 3, 4}, {10, 20, 30, 40}})
     asmtest.assert_vec_f32(r, 0, {11, 22, 33, 44})
   end)
+  local fe = asmtest.Emu()
+  local ff = fe:call2(routine("read_fault"), 0x00DEAD00, 0)
+  asmtest.assert_fault(ff)
+  ff:free()
+  fe:close()
 end)
 check("tier2.assertions_pass", t2pass)
 

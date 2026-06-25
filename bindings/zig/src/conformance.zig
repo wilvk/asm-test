@@ -27,6 +27,8 @@ extern fn set_carry() c_long;
 extern fn clear_carry() c_long;
 extern fn fp_add(f64, f64) f64;
 extern fn vec_add4f() void;
+extern fn read_fault(?*const c_long) c_long; // loads *p; faults if p is unmapped
+extern fn int_to_double(c_long) f64; // (double)n into xmm0 from an integer arg
 
 /// Address of a routine as the opaque pointer the trampoline expects.
 fn fnPtr(p: anytype) ?*anyopaque {
@@ -96,6 +98,35 @@ test "emu.add_signed" {
     _ = c.emu_call(e, fnPtr(&add_signed), 64, &args, 2, 0, &res);
     try std.testing.expect(!res.faulted);
     try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+}
+
+// read_fault dereferences an unmapped address: the fault is data — where
+// (fault_addr) and why (fault_kind) — not a crash.
+test "emu.read_fault" {
+    if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
+    const fault_addr: c_long = 0x00DEAD00;
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+    var args = [_]c_long{ fault_addr, 0 };
+    _ = c.emu_call(e, fnPtr(&read_fault), 64, &args, 1, 0, &res);
+    try std.testing.expect(res.faulted);
+    try std.testing.expectEqual(@as(u64, @intCast(fault_addr)), res.fault_addr);
+    try std.testing.expectEqual(@as(c_int, c.EMU_FAULT_READ), @as(c_int, @intCast(res.fault_kind)));
+}
+
+// int_to_double lands (double)42 in xmm0, so the XMM file is readable beyond the
+// GP registers; a clean run also keeps rflags live (x86 holds bit 1 set).
+test "emu.int_to_double" {
+    if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+    var args = [_]c_long{ 42, 0 };
+    _ = c.emu_call(e, fnPtr(&int_to_double), 64, &args, 1, 0, &res);
+    try std.testing.expect(!res.faulted);
+    try std.testing.expectEqual(@as(f64, 42.0), res.regs.xmm[0].f64[0]);
+    try std.testing.expect((res.regs.rflags & 0x2) != 0);
 }
 
 // In-line assembler (Keystone): compiled in only when linked against the

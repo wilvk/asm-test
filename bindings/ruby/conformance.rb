@@ -69,6 +69,21 @@ res = e.call2(routine("add_signed"), 40, 2)
 check("emu.add_signed", !res.faulted? && res.reg("rax") == 42)
 res.free
 
+# read_fault dereferences an unmapped address: the fault is data — where
+# (fault_addr) and why (fault_kind) — not a crash.
+fres = e.call2(routine("read_fault"), 0x00DEAD00, 0)
+check("emu.read_fault",
+      fres.faulted? && fres.fault_addr == 0x00DEAD00 &&
+        fres.fault_kind == Asmtest::FaultKind::READ)
+fres.free
+
+# int_to_double lands (double)42 in xmm0 (the XMM file, beyond the GP regs);
+# a clean run also keeps rflags live (x86 holds bit 1 set).
+xres = e.call2(routine("int_to_double"), 42, 0)
+check("emu.int_to_double",
+      !xres.faulted? && xres.xmm_f64(0, 0) == 42.0 && (xres.reg("rflags") & 0x2) != 0)
+xres.free
+
 # --- Tier 1: in-line assembly (Keystone) replays add_signed ----------------
 # Only when the loaded lib carries the assembler (libasmtest_emu_asm); against
 # the plain libasmtest_emu it is simply absent.
@@ -113,6 +128,11 @@ tier2_pass = begin
     r.capture_vec_f32(routine("vec_add4f"), [[1, 2, 3, 4], [10, 20, 30, 40]])
     Asmtest.assert_vec_f32(r, 0, [11, 22, 33, 44])
   end
+  fe = Asmtest::Emu.new
+  ff = fe.call2(routine("read_fault"), 0x00DEAD00, 0)
+  Asmtest.assert_fault(ff)
+  ff.free
+  fe.close
   true
 rescue Asmtest::Error
   false

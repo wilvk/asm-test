@@ -35,7 +35,8 @@ assert!(!res.faulted && res.regs.rax == 42);   // faults are data, not a crash
 
 `capture` / `capture_fp` / `capture_vec` return a `Regs` snapshot (`ret`,
 `flags`, `fret`, `vec` lanes, `flag_set(mask)`); `Emulator::call` returns an
-`EmuResult` whose `faulted` / `fault_addr` surface invalid accesses.
+`EmuResult` whose `faulted` / `fault_addr` / `fault_kind` (cf. `FAULT_READ` …)
+surface invalid accesses — where and why, not just that one hit.
 
 ## In-line assembler (optional)
 

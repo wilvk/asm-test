@@ -57,7 +57,8 @@ public final class Asmtest {
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
         CAPTURE_FP2, CAPTURE_VEC_F32, REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
         CHECK_ABI, EMU_OPEN, EMU_CLOSE, EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6,
-        ASM_BYTES, ASM_LAST_ERROR, EMU_FAULTED, EMU_REG;
+        ASM_BYTES, ASM_LAST_ERROR, EMU_FAULTED, EMU_FAULT_ADDR, EMU_FAULT_KIND, EMU_REG,
+        EMU_XMM_F64, EMU_XMM_F32;
 
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
@@ -99,7 +100,11 @@ public final class Asmtest {
             JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT));
         ASM_LAST_ERROR = hOpt(emu, "asmtest_asm_last_error", FunctionDescriptor.of(ADDRESS));
         EMU_FAULTED = h(emu, "asmtest_emu_result_faulted", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        EMU_FAULT_ADDR = h(emu, "asmtest_emu_result_fault_addr", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        EMU_FAULT_KIND = h(emu, "asmtest_emu_result_fault_kind", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         EMU_REG = h(emu, "asmtest_emu_x86_reg", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS));
+        EMU_XMM_F64 = h(emu, "asmtest_emu_x86_xmm_f64", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS, JAVA_INT, JAVA_INT));
+        EMU_XMM_F32 = h(emu, "asmtest_emu_x86_xmm_f32", FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, JAVA_INT, JAVA_INT));
     }
 
     private static MethodHandle h(SymbolLookup lk, String name, FunctionDescriptor fd) {
@@ -215,6 +220,15 @@ public final class Asmtest {
     }
 
     /** An emulator run's outcome — faults surfaced as data, not a crash. */
+    /** Invalid-access kind reported by {@link EmuResult#faultKind()} (mirrors emu_fault_kind_t). */
+    public enum FaultKind {
+        NONE, READ, WRITE, FETCH;
+        static FaultKind of(int v) {
+            FaultKind[] vs = values();
+            return (v >= 0 && v < vs.length) ? vs[v] : NONE;
+        }
+    }
+
     public static final class EmuResult implements AutoCloseable {
         private MemorySegment h;
         EmuResult() {
@@ -223,9 +237,25 @@ public final class Asmtest {
         public boolean faulted() {
             try { return (int) EMU_FAULTED.invoke(h) != 0; } catch (Throwable t) { throw rethrow(t); }
         }
-        /** Read an x86-64 guest register by name (e.g. "rax"). */
+        /** Faulting guest address; only meaningful when {@link #faulted()}. */
+        public long faultAddr() {
+            try { return (long) EMU_FAULT_ADDR.invoke(h); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Why the access was invalid (a {@link FaultKind}); only meaningful when {@link #faulted()}. */
+        public FaultKind faultKind() {
+            try { return FaultKind.of((int) EMU_FAULT_KIND.invoke(h)); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Read an x86-64 guest register by name — GP plus "rip" / "rflags". */
         public long reg(String name) {
             try { return (long) EMU_REG.invoke(h, str(name)); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Lane (0..1) of guest XMM register {@code index} as a double (scalar return = xmmF64(0, 0)). */
+        public double xmmF64(int index, int lane) {
+            try { return (double) EMU_XMM_F64.invoke(h, index, lane); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Lane (0..3) of guest XMM register {@code index} as a float. */
+        public float xmmF32(int index, int lane) {
+            try { return (float) EMU_XMM_F32.invoke(h, index, lane); } catch (Throwable t) { throw rethrow(t); }
         }
         @Override public void close() {
             try { if (h != null) EMU_RES_FREE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }
@@ -300,6 +330,9 @@ public final class Asmtest {
     }
     public static void assertNoFault(EmuResult res) {
         if (res.faulted()) throw new AsmtestException("unexpected fault");
+    }
+    public static void assertFault(EmuResult res) {
+        if (!res.faulted()) throw new AsmtestException("expected a fault, but the run completed cleanly");
     }
     public static void assertEmuReg(EmuResult res, String name, long want) {
         long got = res.reg(name);

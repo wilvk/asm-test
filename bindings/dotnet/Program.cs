@@ -54,6 +54,20 @@ static class Conformance
         using (var res = e.Call2(Routine("add_signed"), 40, 2))
             Check("emu.add_signed", !res.Faulted && res.Reg("rax") == 42);
 
+        // read_fault dereferences an unmapped address: the fault is data — where
+        // (FaultAddr) and why (FaultKind) — not a crash.
+        using (var e = new Emu())
+        using (var res = e.Call2(Routine("read_fault"), 0x00DEAD00, 0))
+            Check("emu.read_fault", res.Faulted && res.FaultAddr == 0x00DEAD00UL
+                && res.FaultKind == FaultKind.Read);
+
+        // int_to_double lands (double)42 in xmm0 (the XMM file, beyond the GP regs);
+        // a clean run also keeps rflags live (x86 holds bit 1 set).
+        using (var e = new Emu())
+        using (var res = e.Call2(Routine("int_to_double"), 42, 0))
+            Check("emu.int_to_double", !res.Faulted && res.XmmF64(0, 0) == 42.0
+                && (res.Reg("rflags") & 0x2UL) != 0);
+
         // --- Tier 1: in-line assembly (Keystone) replays add_signed --------- //
         // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
         if (Emu.AsmAvailable)
@@ -92,6 +106,9 @@ static class Conformance
             r.CaptureVecF32(Routine("vec_add4f"),
                 new float[][] { new float[] { 1, 2, 3, 4 }, new float[] { 10, 20, 30, 40 } });
             Assert.VecF32(r, 0, new float[] { 11, 22, 33, 44 });
+            using (var e = new Emu())
+            using (var res = e.Call2(Routine("read_fault"), 0x00DEAD00, 0))
+                Assert.Fault(res);
         }
         catch (AsmtestException) { t2pass = false; }
         Check("tier2.assertions_pass", t2pass);

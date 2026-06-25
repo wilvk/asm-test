@@ -29,7 +29,8 @@ TEST(mymath, add) {
   (`abi_preserved` uses the native non-jumping verdict shim).
 - `asmtest::Emu` — an RAII guard over `emu_t` (define `ASMTEST_ENABLE_EMU` and
   link the emulator). `Emu::call(...)` returns an `emu_result_t` whose faults are
-  data.
+  data: `faulted`, plus `fault_addr` / `fault_kind` (`EMU_FAULT_READ` …) for
+  where and why one hit.
 
 ## In-line assembler (optional)
 

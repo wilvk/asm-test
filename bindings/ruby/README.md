@@ -7,7 +7,9 @@ Run, **capture**, **emulate**, and **assemble** assembly routines through the
 It uses the opaque-handle FFI layer (`src/ffi.c`), so no C struct layout is
 mirrored in Ruby: `asmtest_corpus_routine` returns a routine address,
 `asmtest_capture6` / `_fp2` + `asmtest_regs_*` accessors cover the capture tier,
-and `asmtest_emu_call2` + accessors cover the emulator (faults as data).
+and `asmtest_emu_call2` + accessors cover the emulator (faults as data:
+`faulted?`, plus `fault_addr` / `fault_kind` — cf. `Asmtest::FaultKind` — for
+where and why one hit).
 
 ## Run
 

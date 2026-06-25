@@ -15,6 +15,8 @@ extern long set_carry(void);
 extern long clear_carry(void);
 extern double fp_add(double, double);
 extern void vec_add4f(void);
+extern long read_fault(const long *);
+extern double int_to_double(long);
 
 void *asmtest_corpus_routine(const char *name) {
     if (!name)
@@ -33,5 +35,9 @@ void *asmtest_corpus_routine(const char *name) {
         return (void *)fp_add;
     if (!strcmp(name, "vec_add4f"))
         return (void *)vec_add4f;
+    if (!strcmp(name, "read_fault"))
+        return (void *)read_fault;
+    if (!strcmp(name, "int_to_double"))
+        return (void *)int_to_double;
     return (void *)0;
 }
