@@ -40,10 +40,20 @@ typedef enum {
 /* Input assembly syntax. Only meaningful for x86 (ASM_X86_64); ignored for the
  * other guests. In-line strings default to Intel (the Keystone/kstool
  * convention); ASM_SYNTAX_ATT selects the GAS/AT&T syntax the repo's .s corpus
- * is written in. */
+ * is written in. ASM_SYNTAX_NASM and ASM_SYNTAX_MASM are the further
+ * Intel-family dialects, and ASM_SYNTAX_GAS the AT&T-family GNU-assembler
+ * dialect; each maps to the matching Keystone x86 option. The enum values are
+ * part of the binding ABI (passed as ints across the FFI), so only append.
+ *
+ * Note: NASM uses ';' for end-of-line comments, so a multi-statement NASM
+ * source must separate its statements with newlines, not ';' — the Intel /
+ * AT&T / MASM / GAS dialects accept ';' as a separator as before. */
 typedef enum {
     ASM_SYNTAX_INTEL,
     ASM_SYNTAX_ATT,
+    ASM_SYNTAX_NASM,
+    ASM_SYNTAX_MASM,
+    ASM_SYNTAX_GAS,
 } asm_syntax_t;
 
 /* Result of one assemble. On success, `bytes` holds `len` bytes of machine code

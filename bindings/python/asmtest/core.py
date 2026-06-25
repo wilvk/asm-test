@@ -325,7 +325,8 @@ class Emulator:
         return EmuResult(out, bool(ran))
 
     def call_asm(self, src, args=(), syntax=0, max_insns=0):
-        """Assemble x86-64 `src` in `syntax` (0=Intel, 1=AT&T) via Keystone and
+        """Assemble x86-64 `src` in `syntax` (0=Intel, 1=AT&T, 2=NASM, 3=MASM,
+        4=GAS; see :class:`Syntax`) via Keystone and
         run it with the integer `args` (up to six), stopping after `max_insns`
         instructions (0 = run to ``ret``). Returns an :class:`EmuResult`; raises
         :class:`AsmtestError` carrying the Keystone diagnostic if it fails to
@@ -572,7 +573,7 @@ class Arch:
 
 
 class Syntax:
-    INTEL, ATT = 0, 1
+    INTEL, ATT, NASM, MASM, GAS = 0, 1, 2, 3, 4
 
 
 def asm_available():

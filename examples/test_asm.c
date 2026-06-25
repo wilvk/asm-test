@@ -45,6 +45,35 @@ TEST(assemble, x86_att_matches_intel) {
     asmtest_asm_free(&att);
 }
 
+TEST(assemble, x86_nasm_masm_gas_match_intel) {
+    /* The same routine through each x86 dialect must yield identical bytes.
+     * NASM treats ';' as a comment, so its statements are newline-separated;
+     * MASM (Intel-family) and GAS (AT&T-family) accept ';' as before. */
+    asm_result_t intel, nasm, masm, gas;
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL,
+                                 "mov rax, rdi; add rax, rsi; ret",
+                                 EMU_CODE_BASE, &intel));
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_NASM,
+                                 "mov rax, rdi\nadd rax, rsi\nret",
+                                 EMU_CODE_BASE, &nasm));
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_MASM,
+                                 "mov rax, rdi; add rax, rsi; ret",
+                                 EMU_CODE_BASE, &masm));
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_GAS,
+                                 "movq %rdi, %rax; addq %rsi, %rax; ret",
+                                 EMU_CODE_BASE, &gas));
+    ASSERT_EQ(nasm.len, intel.len);
+    ASSERT_MEM_EQ(nasm.bytes, intel.bytes, intel.len);
+    ASSERT_EQ(masm.len, intel.len);
+    ASSERT_MEM_EQ(masm.bytes, intel.bytes, intel.len);
+    ASSERT_EQ(gas.len, intel.len);
+    ASSERT_MEM_EQ(gas.bytes, intel.bytes, intel.len);
+    asmtest_asm_free(&intel);
+    asmtest_asm_free(&nasm);
+    asmtest_asm_free(&masm);
+    asmtest_asm_free(&gas);
+}
+
 TEST(assemble, bad_mnemonic_reported_as_data) {
     asm_result_t r;
     ASSERT_FALSE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL, "frobnicate rax",

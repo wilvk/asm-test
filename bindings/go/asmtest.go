@@ -332,6 +332,9 @@ const (
 const (
 	SyntaxIntel AsmSyntax = 0
 	SyntaxAtt   AsmSyntax = 1
+	SyntaxNasm  AsmSyntax = 2
+	SyntaxMasm  AsmSyntax = 3
+	SyntaxGas   AsmSyntax = 4
 )
 
 // AsmAvailable reports whether the loaded native lib carries the in-line

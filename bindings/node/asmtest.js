@@ -227,7 +227,8 @@ class Emu {
   /** Whether the loaded native lib carries the in-line assembler (Keystone). */
   asmAvailable() { return fn.emuCallAsm6 !== null; }
   /**
-   * Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T) via Keystone and
+   * Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T, 2=NASM, 3=MASM,
+   * 4=GAS; see `Syntax`) via Keystone and
    * run it with the integer `args` (up to six), stopping after `opts.maxInsns`
    * instructions (0 = run to `ret`). Returns the EmuResult; throws AsmtestError
    * carrying the Keystone diagnostic if the string fails to assemble. Only when
@@ -348,7 +349,7 @@ function assertCovered(trace, off) {
 
 // Architecture / syntax codes for assemble() (mirror asm_arch_t / asm_syntax_t).
 const Arch = { X86_64: 0, ARM64: 1, RISCV64: 2, ARM32: 3 };
-const Syntax = { INTEL: 0, ATT: 1 };
+const Syntax = { INTEL: 0, ATT: 1, NASM: 2, MASM: 3, GAS: 4 };
 
 module.exports = {
   corpusRoutine,

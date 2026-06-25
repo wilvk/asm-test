@@ -133,7 +133,7 @@ namespace Asmtest
     public enum AsmArch { X86_64 = 0, Arm64 = 1, RiscV64 = 2, Arm32 = 3 }
 
     /// <summary>Input assembly syntax (x86 only); mirrors asm_syntax_t.</summary>
-    public enum AsmSyntax { Intel = 0, Att = 1 }
+    public enum AsmSyntax { Intel = 0, Att = 1, Nasm = 2, Masm = 3, Gas = 4 }
 
     /// <summary>Thrown by the <see cref="Assert"/> helpers on a failed check.</summary>
     public sealed class AsmtestException : Exception

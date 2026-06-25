@@ -205,7 +205,8 @@ end
 function Emu:asm_available() return HAS_ASM end
 -- The Keystone diagnostic from the most recent assemble ("" on success).
 function M.asm_error() return HAS_ASM and ffi.string(L.asmtest_asm_last_error()) or "" end
--- Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T) via Keystone and run
+-- Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T, 2=NASM, 3=MASM,
+-- 4=GAS; see M.Syntax) via Keystone and run
 -- it with the integer `args` (a table of up to six), stopping after
 -- `opts.max_insns` instructions (0 = run to `ret`). Returns the EmuResult;
 -- error()s with the Keystone diagnostic if it fails to assemble. Only when
@@ -274,7 +275,7 @@ function Guest:close() if self.h then L["emu_" .. self.arch .. "_close"](self.h)
 
 -- Architecture / syntax codes for M.assemble (mirror asm_arch_t / asm_syntax_t).
 M.Arch = { X86_64 = 0, ARM64 = 1, RISCV64 = 2, ARM32 = 3 }
-M.Syntax = { INTEL = 0, ATT = 1 }
+M.Syntax = { INTEL = 0, ATT = 1, NASM = 2, MASM = 3, GAS = 4 }
 -- Assemble `src` for `arch`/`syntax` at load address `addr` and return the
 -- machine-code bytes (a Lua string). Multi-arch (unlike :call_asm, which runs on
 -- the x86-64 guest). error()s with the Keystone diagnostic on failure.

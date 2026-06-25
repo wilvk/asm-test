@@ -115,7 +115,7 @@ module Asmtest
 
   # Architecture / syntax codes for Asmtest.assemble (mirror the C enums).
   ARCH   = { x86_64: 0, arm64: 1, riscv64: 2, arm32: 3 }.freeze
-  SYNTAX = { intel: 0, att: 1 }.freeze
+  SYNTAX = { intel: 0, att: 1, nasm: 2, masm: 3, gas: 4 }.freeze
 
   # The Keystone diagnostic from the most recent assemble ("" on success).
   def self.asm_error
@@ -305,7 +305,8 @@ module Asmtest
       !FN[:emu_call_asm6].nil?
     end
 
-    # Assemble x86-64 +src+ in +syntax+ (0=Intel, 1=AT&T) via Keystone and run it
+    # Assemble x86-64 +src+ in +syntax+ (0=Intel, 1=AT&T, 2=NASM, 3=MASM, 4=GAS;
+    # see SYNTAX) via Keystone and run it
     # with the integer +args+ (up to six), stopping after +max_insns+ instructions
     # (0 = run to +ret+). Returns the EmuResult; raises Error carrying the Keystone
     # diagnostic if it fails to assemble. Only when #asm_available? — needs the

@@ -46,7 +46,7 @@ public final class Asmtest {
 
     /** Input assembly syntax (x86 only); mirrors asm_syntax_t. */
     public enum AsmSyntax {
-        INTEL(0), ATT(1);
+        INTEL(0), ATT(1), NASM(2), MASM(3), GAS(4);
         final int v; AsmSyntax(int v) { this.v = v; }
     }
 

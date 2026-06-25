@@ -433,6 +433,9 @@ pub enum AsmArch {
 pub enum AsmSyntax {
     Intel = 0,
     Att = 1,
+    Nasm = 2,
+    Masm = 3,
+    Gas = 4,
 }
 
 /// Whether the loaded native lib carries the in-line assembler (Keystone).

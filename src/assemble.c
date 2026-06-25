@@ -48,6 +48,33 @@ static bool ks_target(asm_arch_t arch, ks_arch *ks_a, int *ks_mode,
     return false;
 }
 
+/* Map an asm_syntax_t to Keystone's KS_OPT_SYNTAX value (x86 only). Keystone
+ * already defaults to Intel, so the caller only sets an option for the others:
+ * NASM/MASM are Intel-family dialects, GAS the AT&T-family GNU-assembler one. */
+static int ks_syntax_opt(asm_syntax_t syntax) {
+    switch (syntax) {
+    case ASM_SYNTAX_ATT:
+        return KS_OPT_SYNTAX_ATT;
+    case ASM_SYNTAX_NASM:
+        return KS_OPT_SYNTAX_NASM;
+    case ASM_SYNTAX_MASM:
+        return KS_OPT_SYNTAX_MASM;
+    case ASM_SYNTAX_GAS:
+        return KS_OPT_SYNTAX_GAS;
+    case ASM_SYNTAX_INTEL:
+    default:
+        return KS_OPT_SYNTAX_INTEL;
+    }
+}
+
+/* Normalize a binding-supplied syntax int (passed across the FFI as a plain
+ * int) to an asm_syntax_t, defaulting any out-of-range value to Intel. */
+static asm_syntax_t syntax_from_int(int syntax) {
+    if (syntax >= ASM_SYNTAX_INTEL && syntax <= ASM_SYNTAX_GAS)
+        return (asm_syntax_t)syntax;
+    return ASM_SYNTAX_INTEL;
+}
+
 /* Last assemble diagnostic for the calling thread, surfaced to bindings through
  * asmtest_asm_last_error(). Thread-local so a multithreaded host's concurrent
  * assembles don't clobber each other's error. */
@@ -90,9 +117,10 @@ bool asmtest_assemble(asm_arch_t arch, asm_syntax_t syntax, const char *source,
     if (ks_open(ks_a, ks_mode, &ks) != KS_ERR_OK)
         return fail(out, "ks_open failed (unsupported arch/mode)");
 
-    /* Syntax is an x86-only knob; Keystone defaults x86 to Intel. */
-    if (arch == ASM_X86_64 && syntax == ASM_SYNTAX_ATT)
-        ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_ATT);
+    /* Syntax is an x86-only knob; Keystone defaults x86 to Intel, so only the
+     * non-Intel dialects need an explicit option. */
+    if (arch == ASM_X86_64 && syntax != ASM_SYNTAX_INTEL)
+        ks_option(ks, KS_OPT_SYNTAX, ks_syntax_opt(syntax));
 
     unsigned char *enc = NULL;
     size_t enc_size = 0, stat_count = 0;
@@ -219,8 +247,7 @@ int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
                           long a1, long a2, long a3, long a4, long a5, int nargs,
                           uint64_t max_insns, emu_result_t *out) {
     long args[6] = {a0, a1, a2, a3, a4, a5};
-    asm_syntax_t syn = syntax == ASM_SYNTAX_ATT ? ASM_SYNTAX_ATT
-                                                : ASM_SYNTAX_INTEL;
+    asm_syntax_t syn = syntax_from_int(syntax);
     if (nargs < 0)
         nargs = 0;
     if (nargs > 6)
@@ -252,8 +279,7 @@ int asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr,
         set_last_err("unknown architecture");
         return 0;
     }
-    asm_syntax_t syn = syntax == ASM_SYNTAX_ATT ? ASM_SYNTAX_ATT
-                                                : ASM_SYNTAX_INTEL;
+    asm_syntax_t syn = syntax_from_int(syntax);
     asm_result_t r;
     if (!asmtest_assemble((asm_arch_t)arch, syn, src, addr, &r)) {
         asmtest_asm_free(&r);
