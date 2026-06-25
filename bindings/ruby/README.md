@@ -16,11 +16,14 @@ make ruby-test        # from the repo root (needs the shared libs + Ruby)
 make docker-ruby      # or in an isolated container
 ```
 
-`make ruby-test` builds `libasmtest_emu` + the routine fixture lib, then runs
-[`conformance.rb`](conformance.rb) (the corpus replayed in Ruby), pointing
+The reusable module is [`asmtest.rb`](asmtest.rb) — it keeps all Fiddle FFI
+inside and exposes `Asmtest::Regs` / `Emu` / `EmuResult` plus the `Asmtest.assert_*`
+helpers. [`conformance.rb`](conformance.rb) is a thin consumer that
+`require_relative`s it and replays the corpus. `make ruby-test` builds
+`libasmtest_emu` + the routine fixture lib, then runs `conformance.rb`, pointing
 `ASMTEST_LIB` / `ASMTEST_CORPUS_LIB` at them.
 
 ## Deferred
 
-A packaged gem and an RSpec/minitest Tier-2 assertion layer are future work;
-this is the Tier-1 binding that proves the Fiddle path.
+A published gem (and RSpec/minitest integration of the `assert_*` helpers) is
+future work; the reusable module with Tier-2 assertions ships today.

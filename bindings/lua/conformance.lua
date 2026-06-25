@@ -1,52 +1,18 @@
--- conformance.lua — asm-test Lua binding (Track C), via LuaJIT's `ffi`.
+-- conformance.lua — asm-test Lua binding (Track C): the conformance runner.
 --
--- LuaJIT consumes the binding ABI almost verbatim: `ffi.cdef` declares the
--- opaque-handle FFI helpers, `ffi.load` opens the shared libraries, and calls
--- go straight through. Replays the conformance corpus; exits nonzero on a
--- mismatch.
+-- A thin consumer of the reusable library module (asmtest.lua): it replays the
+-- cross-language conformance corpus through the Regs / Emu / assert_* API and
+-- never touches `ffi` itself. Exits nonzero on a mismatch.
 --
 --   ASMTEST_LIB         libasmtest_emu.{so,dylib}
 --   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib}
-local ffi = require("ffi")
 
-ffi.cdef([[
-void *asmtest_corpus_routine(const char *name);
-void *asmtest_regs_new(void);
-void  asmtest_regs_free(void *r);
-void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
-void  asmtest_capture_fp2(void *out, void *fn, double f0, double f1);
-unsigned long asmtest_regs_ret(void *r);
-double asmtest_regs_fret(void *r);
-int   asmtest_regs_flag_set(void *r, const char *name);
-int   asmtest_check_abi(void *r, char *msg, size_t n);
-void *emu_open(void);
-void  emu_close(void *e);
-void *asmtest_emu_result_new(void);
-void  asmtest_emu_result_free(void *r);
-int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
-int   asmtest_emu_result_faulted(void *r);
-unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
-]])
+-- Find asmtest.lua next to this script, regardless of the current directory.
+local here = (arg and arg[0] and arg[0]:match("^(.*)[/\\][^/\\]*$")) or "."
+package.path = here .. "/?.lua;" .. package.path
+local asmtest = require("asmtest")
 
-local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB")
-local corpus_path = assert(os.getenv("ASMTEST_CORPUS_LIB"), "set ASMTEST_CORPUS_LIB")
-local L = ffi.load(emu_path)
-local C = ffi.load(corpus_path)
-
-local function routine(name) return C.asmtest_corpus_routine(name) end
-
--- Tier-2 idiomatic assertions: error() with a clear message on failure.
-local function assertRet(r, e)
-  local got = tonumber(L.asmtest_regs_ret(r))
-  if got ~= e then error(string.format("ret: got %d, want %d", got, e)) end
-end
-local function assertAbiPreserved(r)
-  if L.asmtest_check_abi(r, nil, 0) ~= 0 then error("ABI not preserved") end
-end
-local function assertFp(r, e)
-  local got = L.asmtest_regs_fret(r)
-  if got ~= e then error("fp: got " .. tostring(got) .. ", want " .. tostring(e)) end
-end
+local function routine(name) return asmtest.corpus_routine(name) end
 
 local fails = 0
 local total = 0
@@ -61,69 +27,66 @@ local function check(name, ok)
 end
 
 local function withRegs(f)
-  local r = L.asmtest_regs_new()
+  local r = asmtest.Regs()
   local ok, err = pcall(f, r)
-  L.asmtest_regs_free(r)
+  r:free()
   if not ok then error(err) end
 end
 
+-- --- Tier 1: corpus replay (capture trampoline) ----------------------------
 withRegs(function(r)
-  L.asmtest_capture6(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
-  check("add_signed.basic", tonumber(L.asmtest_regs_ret(r)) == 42 and L.asmtest_check_abi(r, nil, 0) == 0)
+  r:capture6(routine("add_signed"), 40, 2)
+  check("add_signed.basic", r:ret() == 42 and r:abi_preserved())
+end)
+withRegs(function(r)
+  r:capture6(routine("sum_via_rbx"), 20, 22)
+  check("sum_via_rbx.abi_preserved", r:ret() == 42 and r:abi_preserved())
+end)
+withRegs(function(r)
+  r:capture6(routine("clobbers_rbx"), 1, 2)
+  check("clobbers_rbx.abi_violation_detected", not r:abi_preserved())
+end)
+withRegs(function(r)
+  r:capture6(routine("set_carry"))
+  check("set_carry.cf_set", r:flag_set("CF"))
+end)
+withRegs(function(r)
+  r:capture6(routine("clear_carry"))
+  check("clear_carry.cf_clear", not r:flag_set("CF"))
+end)
+withRegs(function(r)
+  r:capture_fp2(routine("fp_add"), 1.5, 2.25)
+  check("fp_add.basic", r:fret() == 3.75)
 end)
 
-withRegs(function(r)
-  L.asmtest_capture6(r, routine("sum_via_rbx"), 20, 22, 0, 0, 0, 0)
-  check("sum_via_rbx.abi_preserved", tonumber(L.asmtest_regs_ret(r)) == 42 and L.asmtest_check_abi(r, nil, 0) == 0)
-end)
-
-withRegs(function(r)
-  L.asmtest_capture6(r, routine("clobbers_rbx"), 1, 2, 0, 0, 0, 0)
-  check("clobbers_rbx.abi_violation_detected", L.asmtest_check_abi(r, nil, 0) ~= 0)
-end)
-
-withRegs(function(r)
-  L.asmtest_capture6(r, routine("set_carry"), 0, 0, 0, 0, 0, 0)
-  check("set_carry.cf_set", L.asmtest_regs_flag_set(r, "CF") == 1)
-end)
-
-withRegs(function(r)
-  L.asmtest_capture6(r, routine("clear_carry"), 0, 0, 0, 0, 0, 0)
-  check("clear_carry.cf_clear", L.asmtest_regs_flag_set(r, "CF") == 0)
-end)
-
-withRegs(function(r)
-  L.asmtest_capture_fp2(r, routine("fp_add"), 1.5, 2.25)
-  check("fp_add.basic", L.asmtest_regs_fret(r) == 3.75)
-end)
-
+-- --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
 do
-  local e = L.emu_open()
-  local res = L.asmtest_emu_result_new()
-  L.asmtest_emu_call2(e, routine("add_signed"), 40, 2, res)
-  check("emu.add_signed", L.asmtest_emu_result_faulted(res) == 0 and tonumber(L.asmtest_emu_x86_reg(res, "rax")) == 42)
-  L.asmtest_emu_result_free(res)
-  L.emu_close(e)
+  local e = asmtest.Emu()
+  local res = e:call2(routine("add_signed"), 40, 2)
+  check("emu.add_signed", not res:faulted() and res:reg("rax") == 42)
+  res:free()
+  e:close()
 end
 
--- Tier-2 idiomatic assertions: pass paths succeed, failure paths bite.
+-- --- Tier 2: idiomatic assertions pass on good input -----------------------
 local t2pass = pcall(function()
   withRegs(function(r)
-    L.asmtest_capture6(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
-    assertRet(r, 42)
-    assertAbiPreserved(r)
+    r:capture6(routine("add_signed"), 40, 2)
+    asmtest.assert_ret(r, 42)
+    asmtest.assert_abi_preserved(r)
   end)
   withRegs(function(r)
-    L.asmtest_capture_fp2(r, routine("fp_add"), 1.5, 2.25)
-    assertFp(r, 3.75)
+    r:capture_fp2(routine("fp_add"), 1.5, 2.25)
+    asmtest.assert_fp(r, 3.75)
   end)
 end)
 check("tier2.assertions_pass", t2pass)
 
+-- --- Tier 2: the assertions actually fail when they should -----------------
 local t2teeth = not pcall(function()
   withRegs(function(r)
-    L.asmtest_capture6(r, routine("add_signed"), 40, 2, 0, 0, 0, 0)
-    assertRet(r, 99) -- wrong on purpose
+    r:capture6(routine("add_signed"), 40, 2)
+    asmtest.assert_ret(r, 99) -- wrong on purpose
   end)
 end)
 check("tier2.assertions_have_teeth", t2teeth)

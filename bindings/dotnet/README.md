@@ -16,13 +16,18 @@ make dotnet-test      # from the repo root (needs the shared libs + .NET SDK)
 make docker-dotnet    # or in an isolated container
 ```
 
+The reusable module is [`Asmtest.cs`](Asmtest.cs) — it keeps all P/Invoke
+(`DllImport`) inside and exposes the `Regs` / `Emu` / `EmuResult` classes plus an
+`Assert` helper, so calling code never declares a native entry point.
+[`Program.cs`](Program.cs) is a thin consumer that replays the corpus through it.
 `make dotnet-test` builds `libasmtest_emu` + the routine fixture lib, then
-`dotnet run`s the console app ([Program.cs](Program.cs), the corpus replayed in
-C#). The native libs are resolved by the loader via `LD_LIBRARY_PATH` (set by the
-target) — `DllImport("asmtest_emu")` / `("asmtest_corpus")` find them by soname.
+`dotnet run`s the app. The native libs are resolved by the loader via
+`LD_LIBRARY_PATH` (set by the target) — `DllImport("asmtest_emu")` /
+`("asmtest_corpus")` find them by soname.
 
 ## Deferred
 
-A NuGet package with `runtimes/<rid>/native/` payloads, a `LibraryImport` source
-generator, and an xUnit/NUnit Tier-2 assertion layer are future work; this is the
-Tier-1 binding that proves the P/Invoke path.
+A published NuGet package with `runtimes/<rid>/native/` payloads, a
+`LibraryImport` source generator, and xUnit/NUnit integration of the `Assert`
+helpers are future work; the reusable library module with Tier-2 assertions ships
+today.

@@ -85,11 +85,12 @@ The scaffolding stops short of a credentialed, multi-platform release:
    libs. Populate the other `native/<plat>/` (or `runtimes/<rid>/native/`) slots
    by running the staging on each OS/arch, or wire each ecosystem's prebuild tool
    (`cibuildwheel`, `prebuildify`, Maven classifiers, NuGet RIDs).
-2. **A reusable library module** for the conformance-runner bindings (Node, Java,
-   .NET, Ruby, Lua). Their package manifest and native layout are scaffolded
-   here, but the published artifact should expose a small library module rather
-   than the conformance runner; extracting it is the one remaining per-binding
-   step. The library-shaped bindings (Python, Rust, Zig, C++, Go) already publish
-   their module as-is.
+2. **Wiring the library modules into each packer.** Every binding now ships a
+   reusable library module — `asmtest.js`, `asmtest.rb`, `asmtest.lua`,
+   `Asmtest.java`, and `Asmtest.cs` join the already-library-shaped Python, Rust,
+   Zig, C++, and Go modules, each consumed by its own conformance runner (see
+   [Language bindings](bindings.md)). What remains is pointing each `make
+   <lang>-package` target at the module rather than the conformance runner, so the
+   published artifact exposes the library.
 3. **Registry credentials + a release workflow** (out of scope here; the publish
    commands above are the building blocks).

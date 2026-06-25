@@ -851,7 +851,8 @@ node-test: shared-emu $(CORPUS_LIB)
 
 java-test: shared-emu $(CORPUS_LIB)
 	mkdir -p $(BUILD)/java
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java bindings/java/Conformance.java
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java \
+	  bindings/java/Asmtest.java bindings/java/Conformance.java
 	$(bindings_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
 	  -cp $(BUILD)/java Conformance
 

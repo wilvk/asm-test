@@ -16,12 +16,16 @@ make node-test        # from the repo root (needs the shared libs + Node + koffi
 make docker-node      # or in an isolated container (koffi preinstalled)
 ```
 
-`make node-test` builds `libasmtest_emu` + the routine fixture lib, then runs
-[`conformance.js`](conformance.js) (the corpus replayed in Node) with
-`ASMTEST_LIB` / `ASMTEST_CORPUS_LIB` set. Install koffi locally with
-`npm install` (see [package.json](package.json)).
+The reusable module is [`asmtest.js`](asmtest.js) — it keeps all koffi FFI
+inside and exposes the `Regs` / `Emu` / `EmuResult` classes plus the Tier-2
+`assert*` helpers. [`conformance.js`](conformance.js) is a thin consumer that
+`require`s it and replays the corpus. `make node-test` builds `libasmtest_emu` +
+the routine fixture lib, then runs `conformance.js` with `ASMTEST_LIB` /
+`ASMTEST_CORPUS_LIB` set. Install koffi locally with `npm install` (see
+[package.json](package.json)).
 
 ## Deferred
 
-An npm package with prebuilt binaries and a `vitest`/`jest` Tier-2 assertion
-layer are future work; this is the Tier-1 binding that proves the koffi path.
+A published npm package with prebuilt binaries (and `vitest`/`jest` integration
+of the `assert*` helpers) is future work; the reusable module with Tier-2
+assertions ships today.

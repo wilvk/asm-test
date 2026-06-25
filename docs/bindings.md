@@ -91,49 +91,42 @@ in `asmtest.assertions` (`assert_ret`, `assert_abi_preserved`, `assert_flag`,
 
 ## .NET
 
-The [.NET binding](https://github.com/wilvk/asm-test/blob/main/bindings/dotnet/Program.cs)
-drives the opaque-handle FFI layer through **P/Invoke** (`DllImport`). The
-reusable pattern: declare the entry points, load your routine library with
-`NativeLibrary`, and assert with any runner (xUnit shown). Fields are read
-through accessors, so no struct layout is mirrored.
+The .NET binding ships a reusable library module,
+[`Asmtest.cs`](https://github.com/wilvk/asm-test/blob/main/bindings/dotnet/Asmtest.cs),
+that keeps all P/Invoke (`DllImport`) inside and exposes the `Regs` / `Emu` /
+`EmuResult` types plus an `Assert` helper — so your test code never declares a
+native entry point. Add `Asmtest.cs` to your test project (until the NuGet
+package ships), load your routine library with `NativeLibrary`, and assert with
+any runner (xUnit shown):
 
 ```csharp
 using System;
 using System.Runtime.InteropServices;
 using Xunit;
-
-static class Native {
-    const string EMU = "asmtest_emu";
-    [DllImport(EMU)] public static extern IntPtr asmtest_regs_new();
-    [DllImport(EMU)] public static extern void   asmtest_regs_free(IntPtr r);
-    [DllImport(EMU)] public static extern void   asmtest_capture6(IntPtr o, IntPtr fn,
-                         long a0, long a1, long a2, long a3, long a4, long a5);
-    [DllImport(EMU)] public static extern void   asmtest_capture_fp2(IntPtr o, IntPtr fn, double f0, double f1);
-    [DllImport(EMU)] public static extern ulong  asmtest_regs_ret(IntPtr r);
-    [DllImport(EMU)] public static extern double asmtest_regs_fret(IntPtr r);
-    [DllImport(EMU)] public static extern int    asmtest_regs_flag_set(IntPtr r, string name);
-    [DllImport(EMU)] public static extern int    asmtest_check_abi(IntPtr r, IntPtr msg, nuint n);
-}
+using Asm = Asmtest;   // alias so Asm.Assert doesn't collide with Xunit.Assert
 
 public class MyRoutineTests {
     static readonly IntPtr Lib = NativeLibrary.Load("./libmyroutines.so");
     static IntPtr Fn(string name) => NativeLibrary.GetExport(Lib, name);
 
     [Fact] public void AddSigned() {
-        IntPtr r = Native.asmtest_regs_new();
-        try {
-            Native.asmtest_capture6(r, Fn("add_signed"), 40, 2, 0, 0, 0, 0);
-            Assert.Equal(42UL, Native.asmtest_regs_ret(r));
-            Assert.Equal(0, Native.asmtest_check_abi(r, IntPtr.Zero, 0)); // 0 == ABI preserved
-        } finally { Native.asmtest_regs_free(r); }
+        using var r = new Asm.Regs();
+        r.Capture6(Fn("add_signed"), 40, 2);    // call through the real ABI
+        Asm.Assert.Ret(r, 42);
+        Asm.Assert.AbiPreserved(r);              // callee-saved registers restored
     }
 
     [Fact] public void FpAdd() {
-        IntPtr r = Native.asmtest_regs_new();
-        try {
-            Native.asmtest_capture_fp2(r, Fn("fp_add"), 1.5, 2.25);
-            Assert.Equal(3.75, Native.asmtest_regs_fret(r));
-        } finally { Native.asmtest_regs_free(r); }
+        using var r = new Asm.Regs();
+        r.CaptureFp2(Fn("fp_add"), 1.5, 2.25);
+        Asm.Assert.Fp(r, 3.75);
+    }
+
+    [Fact] public void UnderEmulator() {         // faults become data, never a crash
+        using var e = new Asm.Emu();
+        using var res = e.Call2(Fn("add_signed"), 40, 2);
+        Asm.Assert.NoFault(res);
+        Asm.Assert.EmuReg(res, "rax", 42);
     }
 }
 ```
@@ -145,11 +138,8 @@ export LD_LIBRARY_PATH=$PWD/build      # DYLD_LIBRARY_PATH on macOS
 dotnet test
 ```
 
-For the emulator tier the same source shows the handle dance:
-`emu_open()` → `asmtest_emu_call2(e, fn, a0, a1, res)` →
-`asmtest_emu_result_faulted(res)` / `asmtest_emu_x86_reg(res, "rax")`. The
-shipped `Program.cs` resolves built-in fixtures via `asmtest_corpus_routine`;
-swap in `NativeLibrary` (as above) to test your own routines.
+The wrapper's `Corpus.Routine(name)` resolves the built-in fixtures;
+`NativeLibrary` (as above) resolves your own routines.
 
 ## Go
 
@@ -207,19 +197,38 @@ relative to its source, so importing it pulls those in; you add only
 `-lmyroutines` for your routines. Run the emulator case on an x86-64 target (the
 guest is x86-64).
 
-## Binding maturity
+## Every binding has a reusable module
 
-- **Python** is the reference binding: packaged (`pyproject.toml` / wheel),
-  `pytest` fixtures, and both Tier-1 and Tier-2 layers. The most turnkey for a
-  real project today.
-- **.NET and Go** are Tier-1 + Tier-2 bindings that prove the P/Invoke and `cgo`
-  paths. They work and ship idiomatic assertions, but are not yet published
-  packages with per-platform native libraries bundled — that staging is tracked
-  in [Packaging the bindings](packaging.md). The patterns above are exactly how
-  the repo wires `make dotnet-test` and `make go-test`.
+All ten bindings now expose a **reusable library module** that keeps the FFI
+inside and presents an idiomatic surface — capture/emulator handles plus Tier-2
+assertions — with a thin conformance runner consuming it (the same corpus, in
+each language). So none of them require FFI declarations in your own test code:
 
-All three deliberately avoid mirroring `regs_t`: Python reads field offsets from
-the layout manifest, while .NET and Go call the opaque-handle accessors. That
+| Language | Module | FFI mechanism | Consumer |
+|---|---|---|---|
+| Python | `asmtest/` package | `ctypes` | `pytest` suite |
+| Go | `asmtest.go` | `cgo` | `conformance_test.go` |
+| Rust | `src/` crate | `extern` + build script | `tests/` |
+| C++ | `asmtest.hpp` | direct `#include` | `test_cpp.cpp` |
+| Zig | `src/` module | `@cImport` | build step |
+| Node | `asmtest.js` | `koffi` | `conformance.js` |
+| Ruby | `asmtest.rb` | `Fiddle` | `conformance.rb` |
+| Lua | `asmtest.lua` | LuaJIT `ffi` | `conformance.lua` |
+| Java | `Asmtest.java` | FFM (Panama) | `Conformance.java` |
+| .NET | `Asmtest.cs` | P/Invoke | `Program.cs` |
+
+Every module deliberately avoids mirroring `regs_t`: Python reads field offsets
+from the layout manifest, and the rest call the opaque-handle accessors. That
 binding-ABI surface — the array-form capture entry points, the verdict shims, and
 the opaque-handle accessors — is catalogued in the
 [API reference](api-reference.md).
+
+## Maturity
+
+**Python** is the reference binding: packaged (`pyproject.toml` / wheel),
+`pytest` fixtures, and both tiers — the most turnkey today. The others ship the
+same reusable module and Tier-2 assertions but are **not yet published packages**
+with per-platform native libraries bundled; that staging is tracked in
+[Packaging the bindings](packaging.md). Today you consume them as shown above
+(referencing the module and pointing at the built shared libs) — exactly how the
+repo wires `make <lang>-test`.

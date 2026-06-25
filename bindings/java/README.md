@@ -17,14 +17,16 @@ make java-test        # from the repo root (needs the shared libs + JDK 21)
 make docker-java      # or in an isolated container
 ```
 
-`make java-test` builds `libasmtest_emu` + the routine fixture lib, compiles
-[`Conformance.java`](Conformance.java), and runs it (the corpus replayed in
-Java). FFM is a **preview** API in JDK 21, so it compiles with `--release 21
+The reusable module is [`Asmtest.java`](Asmtest.java) — it keeps all FFM downcall
+handles inside and exposes the `Regs` / `Emu` / `EmuResult` classes plus the
+`assert*` helpers. [`Conformance.java`](Conformance.java) is a thin consumer that
+replays the corpus through it. `make java-test` builds `libasmtest_emu` + the
+routine fixture lib, compiles both sources, and runs the conformance class. FFM
+is a **preview** API in JDK 21, so it compiles with `--release 21
 --enable-preview` and runs with `--enable-preview --enable-native-access=ALL-UNNAMED`
 (stable in JDK 22+; drop the preview flags there).
 
 ## Deferred
 
-A Maven/Gradle artifact, `jextract`-generated bindings, and a JUnit Tier-2
-assertion layer are future work; this is the Tier-1 binding that proves the FFM
-path.
+A published Maven/Gradle artifact (and JUnit integration of the `assert*`
+helpers) is future work; the reusable module with Tier-2 assertions ships today.

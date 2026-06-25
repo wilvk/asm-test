@@ -17,11 +17,14 @@ make lua-test         # from the repo root (needs the shared libs + LuaJIT)
 make docker-lua       # or in an isolated container
 ```
 
-`make lua-test` builds `libasmtest_emu` + the routine fixture lib, then runs
-[`conformance.lua`](conformance.lua) (the corpus replayed in Lua) with
-`ASMTEST_LIB` / `ASMTEST_CORPUS_LIB` set.
+The reusable module is [`asmtest.lua`](asmtest.lua) — it keeps all `ffi` inside
+and returns a table with the `Regs` / `Emu` / `EmuResult` objects plus the
+`assert_*` helpers. [`conformance.lua`](conformance.lua) is a thin consumer that
+`require`s it and replays the corpus. `make lua-test` builds `libasmtest_emu` +
+the routine fixture lib, then runs `conformance.lua` with `ASMTEST_LIB` /
+`ASMTEST_CORPUS_LIB` set.
 
 ## Deferred
 
-A LuaRocks rock and a `busted` Tier-2 assertion layer are future work; this is
-the Tier-1 binding that proves the LuaJIT `ffi` path.
+A published LuaRocks rock (and `busted` integration of the `assert_*` helpers) is
+future work; the reusable module with Tier-2 assertions ships today.
