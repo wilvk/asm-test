@@ -105,8 +105,9 @@ comparison and roadmap.
   [Assertion reference](assertions.md).
 - Consuming the framework from another project? See
   [Using asm-test in your project](integration.md).
-- Driving it from another language? See [Language bindings](bindings.md) for
-  Python, .NET, and Go examples.
+- Driving it from another language? See [Language bindings](bindings.md) for the
+  shared overview, then the per-language page (Python, .NET, Go, Rust, C++, Zig,
+  Node, Java, Ruby, Lua).
 
 ```{toctree}
 :maxdepth: 2
@@ -140,10 +141,17 @@ win64
 
 portability
 integration
-bindings
 packaging
 ci
 api-reference
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Language bindings
+:hidden:
+
+bindings
 ```
 
 ```{toctree}
