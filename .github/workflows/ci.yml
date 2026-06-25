@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Intel macOS is scarce/slow, so the x86-64 Mach-O tier doesn't run per-push;
+  # the `test-macos-x86` job below picks it up nightly (and on manual dispatch).
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC daily
+  workflow_dispatch:
 
 # Cancel an in-progress run for the same ref when a new commit is pushed,
 # so queued runs (e.g. a slow Intel macOS job) don't pile up.
@@ -15,19 +20,17 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Intel macos-13 runners are scarce/slow; don't let them gate the build.
-    # Linux already validates the portable build end to end.
-    continue-on-error: ${{ matrix.os == 'macos-13' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        # Cover {x86-64, AArch64} x {Linux/ELF, macOS/Mach-O}.
+        # Cover {x86-64, AArch64} x {Linux/ELF, macOS/Mach-O}. The x86-64 macOS
+        # corner (macos-13) is scarce/slow, so it runs nightly in the
+        # `test-macos-x86` job below rather than gating every push.
         #   ubuntu-latest     x86-64  Linux  (gcc, ELF @function)
         #   ubuntu-24.04-arm  aarch64 Linux  (gcc, ELF %function)
         #   macos-latest      aarch64 macOS  (clang, Mach-O)
-        #   macos-13          x86-64  macOS  (clang, Mach-O) — scarce, non-blocking
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +54,70 @@ jobs:
 
       - name: Benchmark demo (informational; cycles/call)
         run: make bench
+
+  # x86-64 macOS / Mach-O tier (clang). The Intel `macos-13` runners are
+  # scarce and slow, so this corner of the {arch} x {OS} matrix runs nightly
+  # (and on manual `workflow_dispatch`) instead of gating every push — the
+  # per-push `test` job already covers arm64 macOS/Mach-O plus both Linux/ELF
+  # arches. Mirrors the `test` job's steps exactly.
+  test-macos-x86:
+    name: test (macos-13, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-13
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          cc --version
+          make --version | head -1
+          uname -m
+
+      - name: Build and run test suites
+        run: make test
+
+      - name: Framework self-tests (meta-tests; assertions/runner/containment)
+        run: make check
+
+      - name: Failure demo (informational; detects intentional failures)
+        run: make demo-fail
+
+      - name: Robustness demo (informational; hang/crash containment)
+        run: make demo-robust
+
+      - name: Benchmark demo (informational; cycles/call)
+        run: make bench
+
+  # x86-64 macOS / Mach-O on every push, without an Intel runner: the
+  # Apple-Silicon `macos-latest` runner cross-builds the x86-64 slice with
+  # `-arch x86_64` (a real x86-64 Mach-O, linked by the macOS linker) and the
+  # kernel runs it under Rosetta 2 — exercising the genuine x86-64 Darwin ABI +
+  # dyld load path that Unicorn can't see. This is the fast gating signal; the
+  # nightly `test-macos-x86` job is the native-hardware backstop in case Rosetta
+  # ever diverges. `bench` is omitted here (timings are meaningless under binary
+  # translation); `test` + `check` carry the correctness coverage.
+  test-macos-x86-rosetta:
+    name: test (macos x86_64 / Rosetta)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Rosetta 2
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Toolchain versions (x86_64 cross)
+        run: |
+          cc -arch x86_64 --version
+          make --version | head -1
+          echo "host $(uname -m) -> target x86_64 (executed via Rosetta 2)"
+
+      - name: Build and run test suites (x86_64 Mach-O under Rosetta)
+        run: make CC="cc -arch x86_64" test
+
+      - name: Framework self-tests (meta-tests; assertions/runner/containment)
+        run: make CC="cc -arch x86_64" check
 
   # Opt-in NASM backend (Intel syntax, x86-64 only).
   nasm:
@@ -146,25 +213,48 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
-  # In-line-asm binding check: the one binding job that carries Keystone. It runs
-  # the Ruby conformance against libasmtest_emu_asm (emu + assembler), so the
+  # In-line-asm binding checks: the only binding jobs that carry Keystone. Each
+  # runs its conformance against libasmtest_emu_asm (emu + assembler), so the
   # CallAsm path — binding -> asmtest_emu_call_asm shim -> Keystone -> emulator —
-  # is exercised end to end. The other bindings keep their CallAsm case but it
-  # self-skips against the Keystone-free libasmtest_emu in their own images, so
-  # none of them pay the Keystone build. Native (the runner ships Ruby), not
-  # Docker, so no per-language image rebuilds the assembler.
+  # runs end to end. Native (not Docker): only these five jobs build Keystone, so
+  # the 10 normal `bindings` images stay Keystone-free and never pay for it. The
+  # same bindings self-skip CallAsm there (against the plain libasmtest_emu).
   bindings-asm:
-    name: bindings-asm (ruby)
+    name: bindings-asm (${{ matrix.lang }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [ruby, lua, node, java, dotnet]
     steps:
       - uses: actions/checkout@v4
+
+      # Per-language runtime (Ruby ships on the runner).
+      - if: matrix.lang == 'lua'
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - if: matrix.lang == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - if: matrix.lang == 'node'
+        run: cd bindings/node && npm install
+      - if: matrix.lang == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - if: matrix.lang == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
       - name: Build and install Keystone from source
         run: ./scripts/build-keystone.sh
-      - name: Run the Ruby in-line-asm conformance (libasmtest_emu_asm)
-        run: make ruby-asm-test
+      - name: Run the ${{ matrix.lang }} in-line-asm conformance (libasmtest_emu_asm)
+        run: make ${{ matrix.lang }}-asm-test
 
   # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
   # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:

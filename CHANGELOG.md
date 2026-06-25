@@ -24,10 +24,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
   use). The five dlopen bindings (.NET, Ruby, Lua, Node, Java) expose it as
   `CallAsm` via an opaque-handle shim (`asmtest_emu_call_asm`) bound *optionally*:
-  it runs against the combined `libasmtest_emu_asm` lib and self-skips against the
-  Keystone-free `libasmtest_emu`, so the binding images pay no Keystone cost. A
-  native `bindings-asm` CI job exercises the path end to end (Ruby,
-  `make ruby-asm-test`). See the
+  it runs against the combined `libasmtest_emu_asm` lib (`make shared-emu-asm`)
+  and self-skips against the Keystone-free `libasmtest_emu`, so the binding images
+  pay no Keystone cost. A native `bindings-asm` CI matrix exercises the path end
+  to end for **all five** (`make <lang>-asm-test`); .NET gets a
+  `NativeLibrary.SetDllImportResolver` so it honours `ASMTEST_LIB` like the other
+  bindings. RISC-V in-line assembly self-skips until a Keystone release ships a
+  RISC-V backend (none does yet). See the
   [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 - **Native Win64 tier (capture).** A Microsoft x64 (“Win64”) capture trampoline

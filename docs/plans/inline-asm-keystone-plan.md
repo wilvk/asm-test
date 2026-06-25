@@ -187,12 +187,14 @@ the case (never a missing-symbol crash). Each conformance replays the x86-64
 > **How it avoids the Keystone-in-images cost.** Instead of baking Keystone into
 > all ~10 (Unicorn-only) binding images, the assembler lives in a **separate**
 > `make shared-emu-asm` lib (`libasmtest_emu_asm` = emu + assemble.o + Keystone).
-> One native CI job, `bindings-asm`, source-builds Keystone and runs the Ruby
-> conformance with `ASMTEST_LIB` pointed at that lib (`make ruby-asm-test`), so
-> the `CallAsm` path is exercised end to end — binding → shim → Keystone →
-> emulator — while every normal binding image stays Keystone-free and its
-> `CallAsm` case self-skips. `.NET` resolves its lib by name (`asmtest_emu`) so it
-> always self-skips and gates on `NativeLibrary.TryGetExport`.
+> A native `bindings-asm` CI matrix (ruby, lua, node, java, dotnet) source-builds
+> Keystone and runs each `make <lang>-asm-test` with `ASMTEST_LIB` pointed at that
+> lib, so every binding's `CallAsm` path is exercised end to end — binding → shim
+> → Keystone → emulator. Only these five jobs build Keystone; the 10 normal
+> `bindings` images stay Keystone-free and `CallAsm` self-skips there. `.NET`
+> resolves its native lib by name, so it gets a `NativeLibrary.SetDllImportResolver`
+> that honours `ASMTEST_LIB` (selecting `libasmtest_emu` vs `libasmtest_emu_asm`),
+> matching how the env-driven bindings already pick their lib.
 
 ## Phase 7 — Docs — **done**
 

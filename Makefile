@@ -919,6 +919,28 @@ java-test: shared-emu $(CORPUS_LIB)
 dotnet-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
 
+# In-line-asm binding checks (siblings of ruby-asm-test): each drives its
+# conformance against libasmtest_emu_asm so the optional CallAsm case actually
+# runs (binding -> asmtest_emu_call_asm shim -> Keystone -> emulator) rather than
+# self-skipping against the Keystone-free libasmtest_emu. The CI `bindings-asm`
+# matrix runs these; they need Keystone.
+.PHONY: lua-asm-test node-asm-test java-asm-test dotnet-asm-test
+lua-asm-test: shared-emu-asm $(CORPUS_LIB)
+	$(bindings_env_asm) $(LUAJIT) bindings/lua/conformance.lua
+
+node-asm-test: shared-emu-asm $(CORPUS_LIB)
+	$(bindings_env_asm) $(NODE) bindings/node/conformance.js
+
+java-asm-test: shared-emu-asm $(CORPUS_LIB)
+	mkdir -p $(BUILD)/java
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java \
+	  bindings/java/Asmtest.java bindings/java/Conformance.java
+	$(bindings_env_asm) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
+	  -cp $(BUILD)/java Conformance
+
+dotnet-asm-test: shared-emu-asm $(CORPUS_LIB)
+	$(bindings_env_asm) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
+
 # Go links the shared libs at build time via cgo; CGO_LDFLAGS carries the -L (so
 # a custom BUILD works), and bindings_env's LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
 # resolves them at run time. GOTOOLCHAIN=local + GOPROXY=off keep it offline (no

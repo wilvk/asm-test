@@ -20,6 +20,22 @@ namespace Asmtest
         const string EMU = "asmtest_emu";
         const string COR = "asmtest_corpus";
 
+        // Resolve the two logical libs from the environment, matching the other
+        // bindings: ASMTEST_LIB selects which "asmtest_emu" to load — the plain
+        // libasmtest_emu or the emu+assembler libasmtest_emu_asm (so CallAsm runs
+        // against the latter) — and ASMTEST_CORPUS_LIB selects the fixtures lib.
+        // Falls back to default name-based resolution when unset.
+        static Native()
+        {
+            NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, asm, paths) =>
+            {
+                string env = name == EMU ? "ASMTEST_LIB"
+                           : name == COR ? "ASMTEST_CORPUS_LIB" : null;
+                var p = env is null ? null : Environment.GetEnvironmentVariable(env);
+                return string.IsNullOrEmpty(p) ? IntPtr.Zero : NativeLibrary.Load(p);
+            });
+        }
+
         [DllImport(COR)] public static extern IntPtr asmtest_corpus_routine(string name);
         [DllImport(EMU)] public static extern IntPtr asmtest_regs_new();
         [DllImport(EMU)] public static extern void asmtest_regs_free(IntPtr r);
@@ -45,12 +61,17 @@ namespace Asmtest
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
 
-        // Whether the loaded "asmtest_emu" library exports the in-line assembler.
+        // Whether the "asmtest_emu" library that will be loaded (ASMTEST_LIB, or
+        // the default by name) exports the in-line assembler.
         public static readonly bool AsmAvailable = ProbeAsm();
         static bool ProbeAsm()
         {
-            try { return NativeLibrary.TryGetExport(NativeLibrary.Load(EMU),
-                                                    "asmtest_emu_call_asm", out _); }
+            try
+            {
+                var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
+                var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
+                return NativeLibrary.TryGetExport(h, "asmtest_emu_call_asm", out _);
+            }
             catch { return false; }
         }
     }
