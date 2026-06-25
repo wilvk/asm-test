@@ -31,6 +31,7 @@ class Context:
         self.sentinels = {k: int(x, 16) for k, x in m["sentinels"].items()}
         self._structs = {s["name"]: s for s in m["structs"]}
         self.has_emu = _native.has_emu(self.lib)
+        self.has_asm = _native.has_asm(self.lib)
 
     def size(self, struct_name):
         return self._structs[struct_name]["size"]
@@ -226,6 +227,31 @@ class Emulator:
         )
         return EmuResult(out, bool(ran))
 
+    def call_asm(self, src, args=(), syntax=0, max_insns=0):
+        """Assemble x86-64 `src` in `syntax` (0=Intel, 1=AT&T) via Keystone and
+        run it with the integer `args` (up to six), stopping after `max_insns`
+        instructions (0 = run to ``ret``). Returns an :class:`EmuResult`; raises
+        :class:`AsmtestError` carrying the Keystone diagnostic if it fails to
+        assemble. Only when the loaded lib has the assembler (libasmtest_emu_asm).
+        """
+        c = load()
+        if not c.has_asm:
+            raise AsmtestError("in-line assembler not in this build")
+        out = C.create_string_buffer(c.size("emu_result_t"))
+        a = [0, 0, 0, 0, 0, 0]
+        args = list(args)
+        n = min(len(args), 6)
+        for i in range(n):
+            a[i] = int(args[i])
+        ok = c.lib.asmtest_emu_call_asm6(
+            self._h, src.encode(), int(syntax),
+            a[0], a[1], a[2], a[3], a[4], a[5], n, int(max_insns),
+            C.cast(out, C.c_void_p),
+        )
+        if not ok:
+            raise AsmtestError("in-line assembly failed: " + asm_error())
+        return EmuResult(out, True)
+
     def close(self):
         if self._h:
             load().lib.emu_close(self._h)
@@ -236,3 +262,56 @@ class Emulator:
 
     def __exit__(self, *exc):
         self.close()
+
+
+# ------------------------------------------------------------------ #
+# In-line assembler (Keystone) — optional                            #
+# ------------------------------------------------------------------ #
+class AsmtestError(RuntimeError):
+    """Raised when an in-line assembly string fails to assemble."""
+
+
+# Architecture / syntax codes for :func:`assemble` (mirror asm_arch_t / asm_syntax_t).
+class Arch:
+    X86_64, ARM64, RISCV64, ARM32 = 0, 1, 2, 3
+
+
+class Syntax:
+    INTEL, ATT = 0, 1
+
+
+def asm_available():
+    """Whether the loaded native lib carries the in-line assembler (Keystone)."""
+    return load().has_asm
+
+
+def asm_error():
+    """The Keystone diagnostic from the most recent assemble (thread-local; "" on success)."""
+    c = load()
+    if not c.has_asm:
+        return ""
+    p = c.lib.asmtest_asm_last_error()
+    return p.decode() if p else ""
+
+
+def assemble(src, arch=Arch.X86_64, syntax=Syntax.INTEL, addr=0x00100000):
+    """Assemble `src` for `arch`/`syntax` at load address `addr`, returning the
+    machine-code bytes. Multi-arch (unlike :meth:`Emulator.call_asm`, which runs
+    on the x86-64 guest). Raises :class:`AsmtestError` on a Keystone error.
+    """
+    c = load()
+    if not c.has_asm:
+        raise AsmtestError("in-line assembler not in this build")
+    cap = 256
+    buf = C.create_string_buffer(cap)
+    n = c.lib.asmtest_asm_bytes(
+        int(arch), int(syntax), src.encode(), int(addr), C.cast(buf, C.c_void_p), cap
+    )
+    if n == 0:
+        raise AsmtestError("assemble failed: " + asm_error())
+    if n > cap:
+        buf = C.create_string_buffer(n)
+        n = c.lib.asmtest_asm_bytes(
+            int(arch), int(syntax), src.encode(), int(addr), C.cast(buf, C.c_void_p), n
+        )
+    return buf.raw[:n]

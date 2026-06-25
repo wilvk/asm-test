@@ -22,16 +22,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   + `libunicorn`), `make docker-asm`, and a CI `asm` job on both x86-64 and arm64.
   Keystone has no Linux distro package, so `make deps DEPS_ARGS=--asm` points at
   `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
-  use). The five dlopen bindings (.NET, Ruby, Lua, Node, Java) expose it as
-  `CallAsm` via an opaque-handle shim (`asmtest_emu_call_asm`) bound *optionally*:
-  it runs against the combined `libasmtest_emu_asm` lib (`make shared-emu-asm`)
-  and self-skips against the Keystone-free `libasmtest_emu`, so the binding images
-  pay no Keystone cost. A native `bindings-asm` CI matrix exercises the path end
-  to end for **all five** (`make <lang>-asm-test`); .NET gets a
-  `NativeLibrary.SetDllImportResolver` so it honours `ASMTEST_LIB` like the other
-  bindings. RISC-V in-line assembly self-skips until a Keystone release ships a
+  use). RISC-V in-line assembly self-skips until a Keystone release ships a
   RISC-V backend (none does yet). See the
   [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
+
+- **In-line assembler reaches every binding, with a widened shim.** All **ten**
+  bindings now expose the assembler — the original five (.NET, Ruby, Lua, Node,
+  Java) plus Python, Go, Rust, C++, and Zig — bound *optionally* so they self-skip
+  against the Keystone-free `libasmtest_emu` and pay no cost in the normal binding
+  images. The dlopen bindings probe the symbol; Go and Rust resolve it through the
+  libc dynamic loader (they statically link the plain lib); C++ and Zig link the
+  assembler lib directly. The opaque-handle shim is widened from the original
+  Intel-only, two-integer-arg, error-blind `asmtest_emu_call_asm`: the new
+  `asmtest_emu_call_asm6` takes **Intel *or* AT&T syntax**, **up to six** integer
+  args, and an **instruction cap** (`max_insns`); `asmtest_asm_last_error()`
+  surfaces the **Keystone diagnostic** so a failed assemble reports *why* instead
+  of a bare false; and `asmtest_asm_bytes()` exposes **multi-arch text→bytes**
+  (x86-64/AArch64/RISC-V/ARM32) so a binding can assemble guests its x86-only
+  emulator handle can't run. Each binding presents this as a `callAsm`/`assemble`
+  pair with a **uniform failure contract** — an assemble error raises/returns the
+  diagnostic (it is never a silent miss). The `bindings-asm` CI matrix grows from
+  five to **all ten** (`make <lang>-asm-test`), each case now also covering the
+  failure path and a multi-arch assemble; the C `make asm-test` suite adds
+  `asmtest_emu_call_asm6` / `asmtest_asm_last_error` / `asmtest_asm_bytes`
+  coverage. The original `asmtest_emu_call_asm` stays as a thin compatibility
+  wrapper.
 
 - **Native Win64 tier (capture).** A Microsoft x64 (“Win64”) capture trampoline
   (`src/capture_win64.asm`) mirrors all eight System V `asm_call_capture*`

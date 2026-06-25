@@ -58,10 +58,39 @@ module Asmtest
     emu_res_new:    func(L, "asmtest_emu_result_new", [], VOIDP),
     emu_res_free:   func(L, "asmtest_emu_result_free", [VOIDP], VOID),
     emu_call2:      func(L, "asmtest_emu_call2", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
-    emu_call_asm:   func_opt(L, "asmtest_emu_call_asm", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
+    # Optional (emu+asm lib only): widened run shim (six scalars + syntax + cap),
+    # multi-arch text->bytes, and the thread-local diagnostic.
+    emu_call_asm6:  func_opt(L, "asmtest_emu_call_asm6", [VOIDP, VOIDP, INT, LONG, LONG, LONG, LONG, LONG, LONG, INT, LL, VOIDP], INT),
+    asm_bytes:      func_opt(L, "asmtest_asm_bytes", [INT, INT, VOIDP, LL, VOIDP, INT], INT),
+    asm_last_error: func_opt(L, "asmtest_asm_last_error", [], VOIDP),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
     emu_reg:        func(L, "asmtest_emu_x86_reg", [VOIDP, VOIDP], LL),
   }.freeze
+
+  # Architecture / syntax codes for Asmtest.assemble (mirror the C enums).
+  ARCH   = { x86_64: 0, arm64: 1, riscv64: 2, arm32: 3 }.freeze
+  SYNTAX = { intel: 0, att: 1 }.freeze
+
+  # The Keystone diagnostic from the most recent assemble ("" on success).
+  def self.asm_error
+    FN[:asm_last_error] ? FN[:asm_last_error].call.to_s : ""
+  end
+
+  # Assemble +src+ for +arch+/+syntax+ at load address +addr+ and return the
+  # machine-code bytes (a binary String). Multi-arch (unlike Emu#call_asm, which
+  # runs on the x86-64 guest). Raises Error with the Keystone diagnostic on failure.
+  def self.assemble(src, arch: 0, syntax: 0, addr: 0x00100000)
+    raise Error, "in-line assembler not in this build" unless FN[:asm_bytes]
+    cap = 256
+    buf = ("\x00".b * cap)
+    n = FN[:asm_bytes].call(arch, syntax, src, addr, buf, cap)
+    raise Error, "assemble failed: #{asm_error}" if n.zero?
+    if n > cap
+      buf = ("\x00".b * n)
+      n = FN[:asm_bytes].call(arch, syntax, src, addr, buf, n)
+    end
+    buf[0, n]
+  end
 
   # Resolve a canonical corpus routine (e.g. "add_signed") to its address.
   def self.corpus_routine(name)
@@ -144,17 +173,27 @@ module Asmtest
 
     # Whether the loaded native lib has the in-line assembler (Keystone).
     def asm_available?
-      !FN[:emu_call_asm].nil?
+      !FN[:emu_call_asm6].nil?
     end
 
-    # Assemble x86-64 +src+ (Intel syntax) via Keystone and run it with two
-    # integer args; returns [EmuResult, ok] (ok is false if it didn't assemble).
-    # Only when #asm_available? — needs the emu+asm native lib.
-    def call_asm(src, a0, a1)
+    # Assemble x86-64 +src+ in +syntax+ (0=Intel, 1=AT&T) via Keystone and run it
+    # with the integer +args+ (up to six), stopping after +max_insns+ instructions
+    # (0 = run to +ret+). Returns the EmuResult; raises Error carrying the Keystone
+    # diagnostic if it fails to assemble. Only when #asm_available? — needs the
+    # emu+asm native lib.
+    def call_asm(src, args = [], syntax: 0, max_insns: 0)
       raise Error, "in-line assembler not in this build" unless asm_available?
+      a = Array.new(6, 0)
+      nargs = [args.length, 6].min
+      nargs.times { |i| a[i] = args[i] }
       res = EmuResult.new
-      ok = FN[:emu_call_asm].call(@h, src, a0, a1, res.h) != 0
-      [res, ok]
+      ok = FN[:emu_call_asm6].call(@h, src, syntax, a[0], a[1], a[2], a[3], a[4], a[5],
+                                   nargs, max_insns, res.h) != 0
+      unless ok
+        res.free
+        raise Error, "in-line assembly failed: #{Asmtest.asm_error}"
+      end
+      res
     end
 
     def close

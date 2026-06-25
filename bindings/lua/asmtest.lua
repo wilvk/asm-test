@@ -27,7 +27,9 @@ void  emu_close(void *e);
 void *asmtest_emu_result_new(void);
 void  asmtest_emu_result_free(void *r);
 int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
-int   asmtest_emu_call_asm(void *e, const char *src, long a0, long a1, void *out);
+int   asmtest_emu_call_asm6(void *e, const char *src, int syntax, long a0, long a1, long a2, long a3, long a4, long a5, int nargs, uint64_t max_insns, void *out);
+int   asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr, uint8_t *buf, int cap);
+const char *asmtest_asm_last_error(void);
 int   asmtest_emu_result_faulted(void *r);
 unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
 ]])
@@ -39,7 +41,7 @@ local C = corpus_path and ffi.load(corpus_path) or nil
 
 -- The in-line assembler (Keystone) is present only in the emu+asm lib; probe for
 -- its symbol so the binding degrades cleanly against the plain libasmtest_emu.
-local HAS_ASM = pcall(function() return L.asmtest_emu_call_asm end)
+local HAS_ASM = pcall(function() return L.asmtest_emu_call_asm6 end)
 
 local M = {}
 
@@ -85,15 +87,42 @@ function Emu:call2(fn, a0, a1)
 end
 -- Whether the loaded native lib carries the in-line assembler.
 function Emu:asm_available() return HAS_ASM end
--- Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two integer
--- args; returns res, ok. Only when :asm_available() — needs the emu+asm lib.
-function Emu:call_asm(src, a0, a1)
+-- The Keystone diagnostic from the most recent assemble ("" on success).
+function M.asm_error() return HAS_ASM and ffi.string(L.asmtest_asm_last_error()) or "" end
+-- Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T) via Keystone and run
+-- it with the integer `args` (a table of up to six), stopping after
+-- `opts.max_insns` instructions (0 = run to `ret`). Returns the EmuResult;
+-- error()s with the Keystone diagnostic if it fails to assemble. Only when
+-- :asm_available() — needs the emu+asm lib.
+function Emu:call_asm(src, args, opts)
   assert(HAS_ASM, "in-line assembler not in this build")
+  args, opts = args or {}, opts or {}
+  local a = {}
+  for i = 1, 6 do a[i] = args[i] or 0 end
   local res = new_result()
-  local ok = L.asmtest_emu_call_asm(self.h, src, a0, a1, res.h) ~= 0
-  return res, ok
+  local ok = L.asmtest_emu_call_asm6(self.h, src, opts.syntax or 0,
+    a[1], a[2], a[3], a[4], a[5], a[6], math.min(#args, 6), opts.max_insns or 0, res.h) ~= 0
+  if not ok then res:free(); error("in-line assembly failed: " .. M.asm_error()) end
+  return res
 end
 function Emu:close() if self.h then L.emu_close(self.h); self.h = nil end end
+
+-- Architecture / syntax codes for M.assemble (mirror asm_arch_t / asm_syntax_t).
+M.Arch = { X86_64 = 0, ARM64 = 1, RISCV64 = 2, ARM32 = 3 }
+M.Syntax = { INTEL = 0, ATT = 1 }
+-- Assemble `src` for `arch`/`syntax` at load address `addr` and return the
+-- machine-code bytes (a Lua string). Multi-arch (unlike :call_asm, which runs on
+-- the x86-64 guest). error()s with the Keystone diagnostic on failure.
+function M.assemble(src, arch, syntax, addr)
+  assert(HAS_ASM, "in-line assembler not in this build")
+  arch, syntax, addr = arch or 0, syntax or 0, addr or 0x00100000
+  local cap = 256
+  local buf = ffi.new("uint8_t[?]", cap)
+  local n = L.asmtest_asm_bytes(arch, syntax, src, addr, buf, cap)
+  if n == 0 then error("assemble failed: " .. M.asm_error()) end
+  if n > cap then buf = ffi.new("uint8_t[?]", n); n = L.asmtest_asm_bytes(arch, syntax, src, addr, buf, n) end
+  return ffi.string(buf, n)
+end
 
 -- ---- Tier-2 idiomatic assertions: error() with a clear message on failure ----
 function M.assert_ret(r, want)

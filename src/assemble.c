@@ -48,10 +48,29 @@ static bool ks_target(asm_arch_t arch, ks_arch *ks_a, int *ks_mode,
     return false;
 }
 
+/* Last assemble diagnostic for the calling thread, surfaced to bindings through
+ * asmtest_asm_last_error(). Thread-local so a multithreaded host's concurrent
+ * assembles don't clobber each other's error. */
+#if defined(_MSC_VER)
+#define ASM_TLS __declspec(thread)
+#else
+#define ASM_TLS __thread
+#endif
+static ASM_TLS char g_asm_err[sizeof(((asm_result_t *)0)->err)];
+
+static void set_last_err(const char *msg) {
+    snprintf(g_asm_err, sizeof g_asm_err, "%s", msg ? msg : "");
+}
+
+const char *asmtest_asm_last_error(void) {
+    return g_asm_err;
+}
+
 /* Record a failure into *out (bytes already NULL/zero) and return false. */
 static bool fail(asm_result_t *out, const char *msg) {
     out->ok = false;
     snprintf(out->err, sizeof out->err, "%s", msg ? msg : "assemble failed");
+    set_last_err(out->err);
     return false;
 }
 
@@ -83,6 +102,7 @@ bool asmtest_assemble(asm_arch_t arch, asm_syntax_t syntax, const char *source,
                  ks_strerror(ks_errno(ks)), stat_count,
                  stat_count == 1 ? "" : "s");
         out->ok = false;
+        set_last_err(out->err);
         ks_free(enc); /* NULL-safe; nothing allocated on the error path */
         ks_close(ks);
         return false;
@@ -100,6 +120,7 @@ bool asmtest_assemble(asm_arch_t arch, asm_syntax_t syntax, const char *source,
     out->len = enc_size;
     out->stat_count = stat_count;
     out->ok = true;
+    set_last_err(""); /* clear any stale diagnostic on success */
 
     ks_free(enc);
     ks_close(ks);
@@ -119,12 +140,14 @@ void asmtest_asm_free(asm_result_t *r) {
  * assembles at EMU_CODE_BASE — the address the emulator loads and runs the
  * bytes at — so PC-relative and branch targets resolve correctly. */
 
-/* Assemble `src` for `arch` at the guest load base. On failure prints the
- * Keystone diagnostic to stderr and returns false (the result, already cleared
- * by asmtest_assemble, is still safe to asmtest_asm_free). */
-static bool assemble_at_base(asm_arch_t arch, const char *src,
-                             asm_result_t *r) {
-    if (asmtest_assemble(arch, ASM_SYNTAX_INTEL, src, EMU_CODE_BASE, r))
+/* Assemble `src` for `arch`/`syntax` at the guest load base. On failure prints
+ * the Keystone diagnostic to stderr (the array-API bridges below echo failures
+ * there) and returns false; the result, already cleared by asmtest_assemble, is
+ * still safe to asmtest_asm_free. The thread-local last-error is set either way,
+ * so a quiet caller can read it via asmtest_asm_last_error() instead. */
+static bool assemble_at_base(asm_arch_t arch, asm_syntax_t syntax,
+                             const char *src, asm_result_t *r) {
+    if (asmtest_assemble(arch, syntax, src, EMU_CODE_BASE, r))
         return true;
     fprintf(stderr, "asm-test: in-line assembly failed: %s\n", r->err);
     return false;
@@ -134,7 +157,7 @@ bool emu_call_asm(emu_t *e, const char *src, const long *args, int nargs,
                   uint64_t max_insns, emu_result_t *out) {
     memset(out, 0, sizeof *out);
     asm_result_t r;
-    if (!assemble_at_base(ASM_X86_64, src, &r)) {
+    if (!assemble_at_base(ASM_X86_64, ASM_SYNTAX_INTEL, src, &r)) {
         out->uc_err = -1;
         asmtest_asm_free(&r);
         return false;
@@ -149,7 +172,7 @@ bool emu_arm64_call_asm(emu_arm64_t *e, const char *src, const long *args,
                         emu_arm64_result_t *out) {
     memset(out, 0, sizeof *out);
     asm_result_t r;
-    if (!assemble_at_base(ASM_ARM64, src, &r)) {
+    if (!assemble_at_base(ASM_ARM64, ASM_SYNTAX_INTEL, src, &r)) {
         out->uc_err = -1;
         asmtest_asm_free(&r);
         return false;
@@ -164,7 +187,7 @@ bool emu_riscv_call_asm(emu_riscv_t *e, const char *src, const long *args,
                         emu_riscv_result_t *out) {
     memset(out, 0, sizeof *out);
     asm_result_t r;
-    if (!assemble_at_base(ASM_RISCV64, src, &r)) {
+    if (!assemble_at_base(ASM_RISCV64, ASM_SYNTAX_INTEL, src, &r)) {
         out->uc_err = -1;
         asmtest_asm_free(&r);
         return false;
@@ -178,7 +201,7 @@ bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs
                       uint64_t max_insns, emu_arm_result_t *out) {
     memset(out, 0, sizeof *out);
     asm_result_t r;
-    if (!assemble_at_base(ASM_ARM32, src, &r)) {
+    if (!assemble_at_base(ASM_ARM32, ASM_SYNTAX_INTEL, src, &r)) {
         out->uc_err = -1;
         asmtest_asm_free(&r);
         return false;
@@ -188,10 +211,59 @@ bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs
     return ok;
 }
 
-/* Opaque-handle FFI shim (see asmtest_assemble.h): scalar two-arg x86-64 entry
- * for dynamic-language bindings, mirroring emu.c's asmtest_emu_call2. */
+/* Widened opaque-handle FFI shim (see asmtest_assemble.h): assemble x86-64 `src`
+ * in `syntax` and run it with the first `nargs` scalar args, capped at
+ * `max_insns`. Six scalars (like asmtest_capture6) so dynamic FFIs marshal no
+ * array. Quiet on failure — the binding reports asmtest_asm_last_error(). */
+int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
+                          long a1, long a2, long a3, long a4, long a5, int nargs,
+                          uint64_t max_insns, emu_result_t *out) {
+    long args[6] = {a0, a1, a2, a3, a4, a5};
+    asm_syntax_t syn = syntax == ASM_SYNTAX_ATT ? ASM_SYNTAX_ATT
+                                                : ASM_SYNTAX_INTEL;
+    if (nargs < 0)
+        nargs = 0;
+    if (nargs > 6)
+        nargs = 6;
+    memset(out, 0, sizeof *out);
+    asm_result_t r;
+    if (!asmtest_assemble(ASM_X86_64, syn, src, EMU_CODE_BASE, &r)) {
+        out->uc_err = -1;
+        asmtest_asm_free(&r);
+        return 0;
+    }
+    bool ok = emu_call(e, r.bytes, r.len, args, nargs, max_insns, out);
+    asmtest_asm_free(&r);
+    return ok ? 1 : 0;
+}
+
+/* Intel-only, two-arg compatibility wrapper over the widened shim. */
 int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
                          emu_result_t *out) {
-    long args[2] = {a0, a1};
-    return emu_call_asm(e, src, args, 2, 0, out) ? 1 : 0;
+    return asmtest_emu_call_asm6(e, src, ASM_SYNTAX_INTEL, a0, a1, 0, 0, 0, 0, 2,
+                                 0, out);
+}
+
+/* Assemble-only FFI shim (see asmtest_assemble.h): multi-arch text -> bytes for
+ * bindings, returning the machine-code length and copying up to `cap` bytes. */
+int asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr,
+                      uint8_t *buf, int cap) {
+    if (arch < ASM_X86_64 || arch > ASM_ARM32) {
+        set_last_err("unknown architecture");
+        return 0;
+    }
+    asm_syntax_t syn = syntax == ASM_SYNTAX_ATT ? ASM_SYNTAX_ATT
+                                                : ASM_SYNTAX_INTEL;
+    asm_result_t r;
+    if (!asmtest_assemble((asm_arch_t)arch, syn, src, addr, &r)) {
+        asmtest_asm_free(&r);
+        return 0;
+    }
+    int len = (int)r.len;
+    if (buf != NULL && cap > 0) {
+        int n = len < cap ? len : cap;
+        memcpy(buf, r.bytes, (size_t)n);
+    }
+    asmtest_asm_free(&r);
+    return len;
 }

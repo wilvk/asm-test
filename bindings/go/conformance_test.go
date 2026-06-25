@@ -75,6 +75,49 @@ func TestEmu(t *testing.T) {
 	AssertEmuReg(t, res, "rax", 42)
 }
 
+// --- Tier 1: in-line assembly (Keystone), only when the lib carries it ------
+
+func TestInlineAsm(t *testing.T) {
+	if !AsmAvailable() {
+		t.Skip("in-line assembler not in this build (run via `make go-asm-test`)")
+	}
+	e := NewEmu()
+	defer e.Close()
+
+	res := NewEmuResult()
+	defer res.Free()
+	if err := e.CallAsm("mov rax, rdi; add rax, rsi; ret", []int64{40, 2}, SyntaxIntel, 0, res); err != nil {
+		t.Fatalf("CallAsm: %v", err)
+	}
+	AssertNoFault(t, res)
+	AssertEmuReg(t, res, "rax", 42)
+
+	// Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+	att := NewEmuResult()
+	defer att.Free()
+	if err := e.CallAsm("mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+		[]int64{10, 20, 12}, SyntaxAtt, 0, att); err != nil {
+		t.Fatalf("CallAsm (AT&T): %v", err)
+	}
+	AssertEmuReg(t, att, "rax", 42)
+
+	// Failure path: a bad string returns an error carrying the diagnostic.
+	bad := NewEmuResult()
+	defer bad.Free()
+	if err := e.CallAsm("mov rax, nonsense_token", nil, SyntaxIntel, 0, bad); err == nil {
+		t.Fatal("CallAsm: expected an error on un-assemblable source")
+	}
+
+	// Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+	a64, err := Assemble("ret", ArchArm64, SyntaxIntel, 0x00100000)
+	if err != nil {
+		t.Fatalf("Assemble arm64: %v", err)
+	}
+	if len(a64) != 4 || a64[0] != 0xC0 || a64[3] != 0xD6 {
+		t.Fatalf("arm64 `ret`: got % x", a64)
+	}
+}
+
 // --- Tier 2: idiomatic assertions pass on good input -----------------------
 
 func TestTier2Pass(t *testing.T) {

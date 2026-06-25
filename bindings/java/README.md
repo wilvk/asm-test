@@ -1,6 +1,6 @@
 # asm-test — Java binding
 
-Run, **capture**, and **emulate** assembly routines through the
+Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from Java, via the
 **Foreign Function & Memory API** (Project Panama, `java.lang.foreign`) — no JNI,
 no native glue.
@@ -25,6 +25,28 @@ routine fixture lib, compiles both sources, and runs the conformance class. FFM
 is a **preview** API in JDK 21, so it compiles with `--release 21
 --enable-preview` and runs with `--enable-preview --enable-native-access=ALL-UNNAMED`
 (stable in JDK 22+; drop the preview flags there).
+
+## In-line assembler (optional)
+
+Pass a routine as an **assembly string**. Present only in the Keystone-carrying
+`libasmtest_emu_asm` (`make java-asm-test` points `ASMTEST_LIB` at it);
+`Emu#asmAvailable()` is false against the plain lib.
+
+```java
+try (Asmtest.Emu e = new Asmtest.Emu()) {
+    if (e.asmAvailable()) {
+        // Intel, up to six args; throws AsmtestException (with the Keystone
+        // diagnostic) if the string fails to assemble.
+        try (Asmtest.EmuResult res = e.callAsm("mov rax, rdi; add rax, rsi; ret", 40L, 2L)) {
+            // res.reg("rax") == 42
+        }
+        // AT&T syntax + an instruction cap:
+        e.callAsm(src, new long[] {10, 20, 12}, Asmtest.AsmSyntax.ATT, 0).close();
+        // Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32):
+        byte[] a64 = Asmtest.assemble("ret", Asmtest.AsmArch.ARM64);
+    }
+}
+```
 
 ## Deferred
 

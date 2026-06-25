@@ -31,6 +31,28 @@ TEST(mymath, add) {
   link the emulator). `Emu::call(...)` returns an `emu_result_t` whose faults are
   data.
 
+## In-line assembler (optional)
+
+Define `ASMTEST_ENABLE_ASM` (alongside `ASMTEST_ENABLE_EMU`) and link
+`assemble.o` + `keystone` to pass a routine as an **assembly string**. Unlike the
+dlopen bindings, the C++ header links the assembler directly, so it is always
+available once those objects are linked (the `make cpp-test` suite does so).
+
+```cpp
+#define ASMTEST_ENABLE_EMU
+#define ASMTEST_ENABLE_ASM
+#include "asmtest.hpp"
+using namespace asmtest;
+
+Emu e;
+// Intel, up to six args; throws asmtest::asm_error (with the Keystone diagnostic).
+emu_result_t r = e.call_asm("mov rax, rdi; add rax, rsi; ret", {40, 2});
+// AT&T syntax + an instruction cap:
+e.call_asm(src, {10, 20, 12}, ASM_SYNTAX_ATT, /*max_insns=*/0);
+// Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32):
+std::vector<std::uint8_t> a64 = assemble("ret", ASM_ARM64);
+```
+
 ## Consuming it
 
 Link the framework like any C consumer — via pkg-config:

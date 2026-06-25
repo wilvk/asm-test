@@ -1,6 +1,6 @@
 # asm-test — Rust binding
 
-Run, **capture**, and **emulate** assembly routines through the
+Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from Rust, with results
 as plain typed structs and faults as data.
 
@@ -36,6 +36,28 @@ assert!(!res.faulted && res.regs.rax == 42);   // faults are data, not a crash
 `capture` / `capture_fp` / `capture_vec` return a `Regs` snapshot (`ret`,
 `flags`, `fret`, `vec` lanes, `flag_set(mask)`); `Emulator::call` returns an
 `EmuResult` whose `faulted` / `fault_addr` surface invalid accesses.
+
+## In-line assembler (optional)
+
+Pass a routine as an **assembly string**. The assembler lives only in the
+Keystone-carrying `libasmtest_emu_asm`; the dependency-free crate links the plain
+lib and resolves it at run time via the libc loader, so `asm_available()` is true
+only when `ASMTEST_LIB` points at the assembler lib (`make rust-asm-test`).
+
+```rust
+use asmtest::{AsmArch, AsmSyntax};
+if asmtest::asm_available() {
+    let emu = asmtest::Emulator::new().unwrap();
+    // Intel, up to six args; Err(String) carries the Keystone diagnostic.
+    let res = emu
+        .call_asm("mov rax, rdi; add rax, rsi; ret", &[40, 2], AsmSyntax::Intel, 0)
+        .unwrap();
+    assert_eq!(res.regs.rax, 42);
+    // Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32).
+    let a64 = asmtest::assemble("ret", AsmArch::Arm64, AsmSyntax::Intel, 0x0010_0000).unwrap();
+    assert_eq!(a64, vec![0xC0, 0x03, 0x5F, 0xD6]);
+}
+```
 
 ## Crash safety
 

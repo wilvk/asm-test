@@ -58,6 +58,21 @@ public class Conformance {
                 try (Asmtest.EmuResult res = e.callAsm("mov rax, rdi; add rax, rsi; ret", 40L, 2L)) {
                     check("asm.add_signed", !res.faulted() && res.reg("rax") == 42);
                 }
+                // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+                try (Asmtest.EmuResult res = e.callAsm(
+                        "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+                        new long[] {10, 20, 12}, Asmtest.AsmSyntax.ATT, 0)) {
+                    check("asm.att_3arg", !res.faulted() && res.reg("rax") == 42);
+                }
+                // Failure path: a bad string throws with the Keystone diagnostic.
+                boolean threw = false;
+                try (Asmtest.Emu e2 = new Asmtest.Emu()) { e2.callAsm("mov rax, nonsense_token"); }
+                catch (Asmtest.AsmtestException ex) { threw = ex.getMessage().length() > "in-line assembly failed: ".length(); }
+                check("asm.bad_source_throws", threw);
+                // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+                byte[] a64 = Asmtest.assemble("ret", Asmtest.AsmArch.ARM64);
+                check("asm.arm64_bytes", a64.length == 4
+                        && (a64[0] & 0xFF) == 0xC0 && (a64[3] & 0xFF) == 0xD6);
             }
         }
 

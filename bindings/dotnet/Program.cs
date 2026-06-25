@@ -52,9 +52,27 @@ static class Conformance
         // --- Tier 1: in-line assembly (Keystone) replays add_signed --------- //
         // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
         if (Emu.AsmAvailable)
+        {
             using (var e = new Emu())
-            using (var res = e.CallAsm("mov rax, rdi; add rax, rsi; ret", 40, 2, out bool asmOk))
-                Check("asm.add_signed", asmOk && !res.Faulted && res.Reg("rax") == 42);
+            using (var res = e.CallAsm("mov rax, rdi; add rax, rsi; ret", new long[] { 40, 2 }))
+                Check("asm.add_signed", !res.Faulted && res.Reg("rax") == 42);
+
+            // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+            using (var e = new Emu())
+            using (var res = e.CallAsm("mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+                                       new long[] { 10, 20, 12 }, AsmSyntax.Att))
+                Check("asm.att_3arg", !res.Faulted && res.Reg("rax") == 42);
+
+            // Failure path: a bad string throws with the Keystone diagnostic, not a silent miss.
+            bool threw = false;
+            try { using var e = new Emu(); e.CallAsm("mov rax, nonsense_token"); }
+            catch (AsmtestException ex) { threw = ex.Message.Length > "in-line assembly failed: ".Length; }
+            Check("asm.bad_source_throws", threw);
+
+            // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+            byte[] a64 = Emu.Assemble("ret", AsmArch.Arm64);
+            Check("asm.arm64_bytes", a64.Length == 4 && a64[0] == 0xC0 && a64[3] == 0xD6);
+        }
 
         // --- Tier 2: idiomatic assertions pass on good input ---------------- //
         bool t2pass = true;

@@ -68,9 +68,23 @@ do
 
   -- in-line assembly (Keystone) replays add_signed, only if the lib has it
   if e:asm_available() then
-    local ares, ok = e:call_asm("mov rax, rdi; add rax, rsi; ret", 40, 2)
-    check("asm.add_signed", ok and not ares:faulted() and ares:reg("rax") == 42)
+    local ares = e:call_asm("mov rax, rdi; add rax, rsi; ret", {40, 2})
+    check("asm.add_signed", not ares:faulted() and ares:reg("rax") == 42)
     ares:free()
+
+    -- Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+    local att = e:call_asm("mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+      {10, 20, 12}, { syntax = asmtest.Syntax.ATT })
+    check("asm.att_3arg", not att:faulted() and att:reg("rax") == 42)
+    att:free()
+
+    -- Failure path: a bad string error()s with the Keystone diagnostic.
+    local threw = not pcall(function() e:call_asm("mov rax, nonsense_token"):free() end)
+    check("asm.bad_source_throws", threw)
+
+    -- Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+    local a64 = asmtest.assemble("ret", asmtest.Arch.ARM64)
+    check("asm.arm64_bytes", #a64 == 4 and a64:byte(1) == 0xC0 and a64:byte(4) == 0xD6)
   end
   e:close()
 end

@@ -18,6 +18,12 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=asmtest_emu");
     // The canonical routines under test, as a fixture lib (make's CORPUS_LIB).
     println!("cargo:rustc-link-lib=dylib=asmtest_corpus");
+    // The optional in-line assembler is resolved with the libc dynamic loader
+    // (dlopen/dlsym); on Linux that needs -ldl (a no-op stub on glibc >= 2.34,
+    // and unneeded on macOS where dl lives in libSystem).
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-link-lib=dylib=dl");
+    }
     // Find the .so at run time without an install step.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
 

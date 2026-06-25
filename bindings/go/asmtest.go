@@ -21,8 +21,10 @@ package asmtest
 
 /*
 #cgo LDFLAGS: -L${SRCDIR}/../../build -lasmtest_emu -lasmtest_corpus
+#cgo linux LDFLAGS: -ldl
 #include <stdlib.h>
 #include <stddef.h>
+#include <dlfcn.h>
 
 // Opaque-handle FFI surface, declared here (not via the C headers) so no struct
 // layout is mirrored on the Go side.
@@ -42,10 +44,45 @@ extern void  asmtest_emu_result_free(void *r);
 extern int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
 extern int   asmtest_emu_result_faulted(void *r);
 extern unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
+
+// In-line assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
+// which the default build does not link. Resolve them at run time from the lib the
+// binding loads (ASMTEST_LIB): dlopen it RTLD_GLOBAL, then dlsym. Against the plain
+// libasmtest_emu these stay NULL and CallAsm/Assemble self-skip — matching how the
+// dlopen-based bindings (Ruby, Node, ...) degrade.
+typedef int (*asmtest_call_asm6_fn)(void *, const char *, int, long, long, long, long, long, long, int, unsigned long long, void *);
+typedef int (*asmtest_asm_bytes_fn)(int, int, const char *, unsigned long long, unsigned char *, int);
+typedef const char *(*asmtest_asm_err_fn)(void);
+
+static asmtest_call_asm6_fn p_call_asm6;
+static asmtest_asm_bytes_fn p_asm_bytes;
+static asmtest_asm_err_fn   p_asm_err;
+
+static void asmtest_resolve_asm(void) {
+    const char *lib = getenv("ASMTEST_LIB");
+    if (lib) dlopen(lib, RTLD_NOW | RTLD_GLOBAL);
+    p_call_asm6 = (asmtest_call_asm6_fn)dlsym(RTLD_DEFAULT, "asmtest_emu_call_asm6");
+    p_asm_bytes = (asmtest_asm_bytes_fn)dlsym(RTLD_DEFAULT, "asmtest_asm_bytes");
+    p_asm_err   = (asmtest_asm_err_fn)dlsym(RTLD_DEFAULT, "asmtest_asm_last_error");
+}
+static int asmtest_has_asm(void) { return p_call_asm6 != NULL; }
+static int asmtest_go_call_asm6(void *e, const char *src, int syn, long a0, long a1, long a2, long a3, long a4, long a5, int n, unsigned long long mi, void *out) {
+    return p_call_asm6 ? p_call_asm6(e, src, syn, a0, a1, a2, a3, a4, a5, n, mi, out) : 0;
+}
+static int asmtest_go_asm_bytes(int arch, int syn, const char *src, unsigned long long addr, unsigned char *buf, int cap) {
+    return p_asm_bytes ? p_asm_bytes(arch, syn, src, addr, buf, cap) : 0;
+}
+static const char *asmtest_go_asm_err(void) { return p_asm_err ? p_asm_err() : ""; }
 */
 import "C"
 
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
+
+// Resolve the optional in-line assembler the first time the package loads.
+func init() { C.asmtest_resolve_asm() }
 
 // Routine is an opaque pointer to a routine under test. Every handle the binding
 // passes back to C is C-allocated, so it is exempt from cgo's pointer-passing
@@ -124,6 +161,79 @@ func (e *Emu) Close() {
 // Call2 runs fn in the emulator with two integer args, filling out.
 func (e *Emu) Call2(fn Routine, a0, a1 int64, out *EmuResult) {
 	C.asmtest_emu_call2(e.h, fn, C.long(a0), C.long(a1), out.h)
+}
+
+// AsmArch / AsmSyntax select the target for Assemble (mirror asm_arch_t /
+// asm_syntax_t). CallAsm always runs on the x86-64 guest, so it takes only a
+// syntax.
+type AsmArch int
+
+// AsmSyntax is the input assembly syntax (x86 only).
+type AsmSyntax int
+
+const (
+	ArchX8664   AsmArch = 0
+	ArchArm64   AsmArch = 1
+	ArchRiscv64 AsmArch = 2
+	ArchArm32   AsmArch = 3
+)
+
+const (
+	SyntaxIntel AsmSyntax = 0
+	SyntaxAtt   AsmSyntax = 1
+)
+
+// AsmAvailable reports whether the loaded native lib carries the in-line
+// assembler (Keystone) — i.e. ASMTEST_LIB points at libasmtest_emu_asm.
+func AsmAvailable() bool { return C.asmtest_has_asm() != 0 }
+
+// AsmError returns the Keystone diagnostic from the most recent assemble on this
+// thread ("" on success).
+func AsmError() string { return C.GoString(C.asmtest_go_asm_err()) }
+
+// CallAsm assembles x86-64 src in syntax via Keystone and runs it with the
+// integer args (up to six), stopping after maxInsns instructions (0 = run to
+// ret), filling out. Returns an error carrying the Keystone diagnostic if src
+// fails to assemble. Only meaningful when AsmAvailable.
+func (e *Emu) CallAsm(src string, args []int64, syntax AsmSyntax, maxInsns uint64, out *EmuResult) error {
+	if C.asmtest_has_asm() == 0 {
+		return fmt.Errorf("in-line assembler not in this build")
+	}
+	cs := C.CString(src)
+	defer C.free(unsafe.Pointer(cs))
+	var a [6]int64
+	n := copy(a[:], args)
+	ok := C.asmtest_go_call_asm6(e.h, cs, C.int(syntax),
+		C.long(a[0]), C.long(a[1]), C.long(a[2]),
+		C.long(a[3]), C.long(a[4]), C.long(a[5]),
+		C.int(n), C.ulonglong(maxInsns), out.h)
+	if ok == 0 {
+		return fmt.Errorf("in-line assembly failed: %s", AsmError())
+	}
+	return nil
+}
+
+// Assemble assembles src for arch/syntax at load address addr and returns the
+// machine-code bytes. Multi-arch (unlike CallAsm, which runs on the x86-64
+// guest). Returns an error carrying the Keystone diagnostic on failure.
+func Assemble(src string, arch AsmArch, syntax AsmSyntax, addr uint64) ([]byte, error) {
+	if C.asmtest_has_asm() == 0 {
+		return nil, fmt.Errorf("in-line assembler not in this build")
+	}
+	cs := C.CString(src)
+	defer C.free(unsafe.Pointer(cs))
+	buf := make([]byte, 256)
+	n := int(C.asmtest_go_asm_bytes(C.int(arch), C.int(syntax), cs,
+		C.ulonglong(addr), (*C.uchar)(unsafe.Pointer(&buf[0])), C.int(len(buf))))
+	if n == 0 {
+		return nil, fmt.Errorf("assemble failed: %s", AsmError())
+	}
+	if n > len(buf) {
+		buf = make([]byte, n)
+		n = int(C.asmtest_go_asm_bytes(C.int(arch), C.int(syntax), cs,
+			C.ulonglong(addr), (*C.uchar)(unsafe.Pointer(&buf[0])), C.int(n)))
+	}
+	return buf[:n], nil
 }
 
 // EmuResult carries an emulator run's outcome — faults surfaced as data rather

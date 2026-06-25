@@ -40,8 +40,18 @@ const fn = {
   emuCall2: L.func('int asmtest_emu_call2(void *, void *, long, long, void *)'),
   // Optional: the in-line assembler (Keystone) is only in the emu+asm lib. koffi
   // throws here if the symbol is absent, so degrade to null against plain emu.
-  emuCallAsm: (() => {
-    try { return L.func('int asmtest_emu_call_asm(void *, const char *, long, long, void *)'); }
+  // The widened run shim takes six scalar args + syntax + an instruction cap;
+  // asmBytes is multi-arch text->bytes; asmLastError carries the diagnostic.
+  emuCallAsm6: (() => {
+    try { return L.func('int asmtest_emu_call_asm6(void *, const char *, int, long, long, long, long, long, long, int, uint64_t, void *)'); }
+    catch { return null; }
+  })(),
+  asmBytes: (() => {
+    try { return L.func('int asmtest_asm_bytes(int, int, const char *, uint64_t, _Out_ uint8_t *, int)'); }
+    catch { return null; }
+  })(),
+  asmLastError: (() => {
+    try { return L.func('const char *asmtest_asm_last_error()'); }
     catch { return null; }
   })(),
   emuFaulted: L.func('int asmtest_emu_result_faulted(void *)'),
@@ -95,19 +105,44 @@ class Emu {
     return res;
   }
   /** Whether the loaded native lib carries the in-line assembler (Keystone). */
-  asmAvailable() { return fn.emuCallAsm !== null; }
+  asmAvailable() { return fn.emuCallAsm6 !== null; }
   /**
-   * Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two
-   * integer args. Returns { res, ok }. Only when asmAvailable() — needs the
-   * emu+asm native lib.
+   * Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T) via Keystone and
+   * run it with the integer `args` (up to six), stopping after `opts.maxInsns`
+   * instructions (0 = run to `ret`). Returns the EmuResult; throws AsmtestError
+   * carrying the Keystone diagnostic if the string fails to assemble. Only when
+   * asmAvailable() — needs the emu+asm native lib.
    */
-  callAsm(src, a0, a1) {
-    if (!fn.emuCallAsm) throw new Error('in-line assembler not in this build');
+  callAsm(src, args = [], { syntax = 0, maxInsns = 0 } = {}) {
+    if (!fn.emuCallAsm6) throw new AsmtestError('in-line assembler not in this build');
+    const a = [0, 0, 0, 0, 0, 0];
+    const nargs = Math.min(args.length, 6);
+    for (let i = 0; i < nargs; i++) a[i] = args[i];
     const res = new EmuResult();
-    const ok = fn.emuCallAsm(this._h, src, a0, a1, res._h) !== 0;
-    return { res, ok };
+    const ok = fn.emuCallAsm6(this._h, src, syntax,
+      a[0], a[1], a[2], a[3], a[4], a[5], nargs, maxInsns, res._h) !== 0;
+    if (!ok) { res.free(); throw new AsmtestError('in-line assembly failed: ' + asmError()); }
+    return res;
   }
   close() { if (this._h) { fn.emuClose(this._h); this._h = null; } }
+}
+
+/** The Keystone diagnostic from the most recent assemble (thread-local; '' on success). */
+function asmError() { return fn.asmLastError ? fn.asmLastError() : ''; }
+
+/**
+ * Assemble `src` for `arch` (0=x86-64,1=arm64,2=riscv64,3=arm32) / `syntax`
+ * (0=Intel,1=AT&T) at load address `addr`, returning the machine-code bytes as
+ * a Buffer. Multi-arch (unlike Emu#callAsm, which runs on the x86-64 guest).
+ * Throws AsmtestError with the Keystone diagnostic on failure.
+ */
+function assemble(src, arch = 0, syntax = 0, addr = 0x00100000) {
+  if (!fn.asmBytes) throw new AsmtestError('in-line assembler not in this build');
+  let buf = Buffer.alloc(256);
+  let n = fn.asmBytes(arch, syntax, src, addr, buf, buf.length);
+  if (n === 0) throw new AsmtestError('assemble failed: ' + asmError());
+  if (n > buf.length) { buf = Buffer.alloc(n); fn.asmBytes(arch, syntax, src, addr, buf, n); }
+  return buf.subarray(0, n);
 }
 
 /** Thrown by the assert* helpers on a failed check. */
@@ -136,8 +171,13 @@ function assertEmuReg(res, name, want) {
   if (got !== want) throw new AsmtestError(`emu ${name}: got ${got}, want ${want}`);
 }
 
+// Architecture / syntax codes for assemble() (mirror asm_arch_t / asm_syntax_t).
+const Arch = { X86_64: 0, ARM64: 1, RISCV64: 2, ARM32: 3 };
+const Syntax = { INTEL: 0, ATT: 1 };
+
 module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, AsmtestError,
+  assemble, asmError, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertNoFault, assertEmuReg,
 };

@@ -55,11 +55,23 @@ namespace Asmtest
             IntPtr e, IntPtr fn, long a0, long a1, IntPtr o);
         // Optional: present only in the emu+asm native lib (Keystone). Guard
         // every call with AsmAvailable so a plain libasmtest_emu never hits a
-        // missing entry point.
-        [DllImport(EMU)] public static extern int asmtest_emu_call_asm(
-            IntPtr e, string src, long a0, long a1, IntPtr o);
+        // missing entry point. The widened shim takes six scalar args + syntax
+        // + an instruction cap; the assemble-only shim is multi-arch.
+        [DllImport(EMU)] public static extern int asmtest_emu_call_asm6(
+            IntPtr e, string src, int syntax, long a0, long a1, long a2, long a3,
+            long a4, long a5, int nargs, ulong maxInsns, IntPtr o);
+        [DllImport(EMU)] public static extern int asmtest_asm_bytes(
+            int arch, int syntax, string src, ulong addr, byte[] buf, int cap);
+        [DllImport(EMU)] static extern IntPtr asmtest_asm_last_error();
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
+
+        /// <summary>The Keystone diagnostic from the most recent assemble (thread-local; "" on success).</summary>
+        public static string AsmError()
+        {
+            var p = asmtest_asm_last_error();
+            return p == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(p);
+        }
 
         // Whether the "asmtest_emu" library that will be loaded (ASMTEST_LIB, or
         // the default by name) exports the in-line assembler.
@@ -70,11 +82,17 @@ namespace Asmtest
             {
                 var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
                 var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
-                return NativeLibrary.TryGetExport(h, "asmtest_emu_call_asm", out _);
+                return NativeLibrary.TryGetExport(h, "asmtest_emu_call_asm6", out _);
             }
             catch { return false; }
         }
     }
+
+    /// <summary>Target architecture for <see cref="Emu.Assemble"/> (mirrors asm_arch_t).</summary>
+    public enum AsmArch { X86_64 = 0, Arm64 = 1, RiscV64 = 2, Arm32 = 3 }
+
+    /// <summary>Input assembly syntax (x86 only); mirrors asm_syntax_t.</summary>
+    public enum AsmSyntax { Intel = 0, Att = 1 }
 
     /// <summary>Thrown by the <see cref="Assert"/> helpers on a failed check.</summary>
     public sealed class AsmtestException : Exception
@@ -142,16 +160,43 @@ namespace Asmtest
         public static bool AsmAvailable => Native.AsmAvailable;
 
         /// <summary>
-        /// Assemble x86-64 <paramref name="src"/> (Intel syntax) and run it with two
-        /// integer args. <paramref name="ok"/> is false if it failed to assemble. Only
-        /// when <see cref="AsmAvailable"/> — needs the Keystone-backed native lib.
+        /// Assemble x86-64 <paramref name="src"/> in <paramref name="syntax"/> and run it
+        /// with up to six integer <paramref name="args"/>, stopping after
+        /// <paramref name="maxInsns"/> instructions (0 = run to <c>ret</c>). Returns the
+        /// run's <see cref="EmuResult"/>; throws <see cref="AsmtestException"/> carrying
+        /// the Keystone diagnostic if the string fails to assemble. Only when
+        /// <see cref="AsmAvailable"/> — needs the Keystone-backed native lib.
         /// </summary>
-        public EmuResult CallAsm(string src, long a0, long a1, out bool ok)
+        public EmuResult CallAsm(string src, long[] args = null,
+                                 AsmSyntax syntax = AsmSyntax.Intel, ulong maxInsns = 0)
         {
             if (!Native.AsmAvailable) throw new AsmtestException("in-line assembler not in this build");
+            args ??= Array.Empty<long>();
+            long A(int i) => i < args.Length ? args[i] : 0;
+            int nargs = Math.Min(args.Length, 6);
             var res = new EmuResult();
-            ok = Native.asmtest_emu_call_asm(_h, src, a0, a1, res.Handle) != 0;
+            int ok = Native.asmtest_emu_call_asm6(_h, src, (int)syntax,
+                A(0), A(1), A(2), A(3), A(4), A(5), nargs, maxInsns, res.Handle);
+            if (ok == 0) { res.Dispose(); throw new AsmtestException("in-line assembly failed: " + Native.AsmError()); }
             return res;
+        }
+
+        /// <summary>
+        /// Assemble <paramref name="src"/> for <paramref name="arch"/> /
+        /// <paramref name="syntax"/> at load address <paramref name="addr"/> and return
+        /// the machine-code bytes. Multi-arch (unlike <see cref="CallAsm"/>, which runs
+        /// on the x86-64 guest). Throws <see cref="AsmtestException"/> on a Keystone error.
+        /// </summary>
+        public static byte[] Assemble(string src, AsmArch arch = AsmArch.X86_64,
+                                      AsmSyntax syntax = AsmSyntax.Intel, ulong addr = 0x00100000)
+        {
+            if (!Native.AsmAvailable) throw new AsmtestException("in-line assembler not in this build");
+            var buf = new byte[256];
+            int n = Native.asmtest_asm_bytes((int)arch, (int)syntax, src, addr, buf, buf.Length);
+            if (n == 0) throw new AsmtestException("assemble failed: " + Native.AsmError());
+            if (n > buf.Length) { buf = new byte[n]; Native.asmtest_asm_bytes((int)arch, (int)syntax, src, addr, buf, n); }
+            Array.Resize(ref buf, n);
+            return buf;
         }
 
         public void Dispose()

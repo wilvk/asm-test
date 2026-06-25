@@ -82,3 +82,43 @@ fn emu_add_signed() {
     assert!(!res.faulted);
     assert_eq!(res.regs.rax, 42);
 }
+
+// In-line assembler (Keystone): only when the loaded lib carries it (run via
+// `make rust-asm-test`, which points ASMTEST_LIB at libasmtest_emu_asm).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn inline_assembler() {
+    use asmtest::{AsmArch, AsmSyntax};
+    if !asmtest::asm_available() {
+        eprintln!("skip: in-line assembler not in this build");
+        return;
+    }
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+
+    let res = emu
+        .call_asm("mov rax, rdi; add rax, rsi; ret", &[40, 2], AsmSyntax::Intel, 0)
+        .expect("assemble+run");
+    assert!(!res.faulted);
+    assert_eq!(res.regs.rax, 42);
+
+    // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+    let att = emu
+        .call_asm(
+            "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+            &[10, 20, 12],
+            AsmSyntax::Att,
+            0,
+        )
+        .expect("assemble+run (AT&T)");
+    assert_eq!(att.regs.rax, 42);
+
+    // Failure path: a bad string is an Err carrying the diagnostic.
+    assert!(emu
+        .call_asm("mov rax, nonsense_token", &[], AsmSyntax::Intel, 0)
+        .is_err());
+
+    // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+    let a64 = asmtest::assemble("ret", AsmArch::Arm64, AsmSyntax::Intel, 0x0010_0000)
+        .expect("assemble arm64");
+    assert_eq!(a64, vec![0xC0, 0x03, 0x5F, 0xD6]);
+}

@@ -69,9 +69,28 @@ res.free
 # Only when the loaded lib carries the assembler (libasmtest_emu_asm); against
 # the plain libasmtest_emu it is simply absent.
 if e.asm_available?
-  ares, asm_ok = e.call_asm("mov rax, rdi; add rax, rsi; ret", 40, 2)
-  check("asm.add_signed", asm_ok && !ares.faulted? && ares.reg("rax") == 42)
+  ares = e.call_asm("mov rax, rdi; add rax, rsi; ret", [40, 2])
+  check("asm.add_signed", !ares.faulted? && ares.reg("rax") == 42)
   ares.free
+
+  # Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+  att = e.call_asm("mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+                   [10, 20, 12], syntax: Asmtest::SYNTAX[:att])
+  check("asm.att_3arg", !att.faulted? && att.reg("rax") == 42)
+  att.free
+
+  # Failure path: a bad string raises with the Keystone diagnostic.
+  threw = begin
+    e.call_asm("mov rax, nonsense_token").free
+    false
+  rescue Asmtest::Error => ex
+    ex.message.length > "in-line assembly failed: ".length
+  end
+  check("asm.bad_source_throws", threw)
+
+  # Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+  a64 = Asmtest.assemble("ret", arch: Asmtest::ARCH[:arm64])
+  check("asm.arm64_bytes", a64.bytesize == 4 && a64.bytes[0] == 0xC0 && a64.bytes[3] == 0xD6)
 end
 e.close
 

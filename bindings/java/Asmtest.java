@@ -24,6 +24,7 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
@@ -36,13 +37,26 @@ public final class Asmtest {
         public AsmtestException(String message) { super(message); }
     }
 
+    /** Target architecture for {@link Emu#assemble} (mirrors asm_arch_t). */
+    public enum AsmArch {
+        X86_64(0), ARM64(1), RISCV64(2), ARM32(3);
+        final int v; AsmArch(int v) { this.v = v; }
+    }
+
+    /** Input assembly syntax (x86 only); mirrors asm_syntax_t. */
+    public enum AsmSyntax {
+        INTEL(0), ATT(1);
+        final int v; AsmSyntax(int v) { this.v = v; }
+    }
+
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
     private static final SymbolLookup CORPUS;
 
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
         CAPTURE_FP2, REGS_RET, REGS_FRET, REGS_FLAG_SET, CHECK_ABI, EMU_OPEN, EMU_CLOSE,
-        EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM, EMU_FAULTED, EMU_REG;
+        EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6, ASM_BYTES, ASM_LAST_ERROR,
+        EMU_FAULTED, EMU_REG;
 
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
@@ -73,8 +87,12 @@ public final class Asmtest {
         EMU_RES_FREE = h(emu, "asmtest_emu_result_free", FunctionDescriptor.ofVoid(ADDRESS));
         EMU_CALL2 = h(emu, "asmtest_emu_call2", FunctionDescriptor.of(
             JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
-        EMU_CALL_ASM = hOpt(emu, "asmtest_emu_call_asm", FunctionDescriptor.of(
-            JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
+        EMU_CALL_ASM6 = hOpt(emu, "asmtest_emu_call_asm6", FunctionDescriptor.of(
+            JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_LONG,
+            JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_LONG, ADDRESS));
+        ASM_BYTES = hOpt(emu, "asmtest_asm_bytes", FunctionDescriptor.of(
+            JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT));
+        ASM_LAST_ERROR = hOpt(emu, "asmtest_asm_last_error", FunctionDescriptor.of(ADDRESS));
         EMU_FAULTED = h(emu, "asmtest_emu_result_faulted", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         EMU_REG = h(emu, "asmtest_emu_x86_reg", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS));
     }
@@ -104,6 +122,39 @@ public final class Asmtest {
         try {
             return (MemorySegment) CORPUS_ROUTINE.invoke(str(name));
         } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The Keystone diagnostic from the most recent assemble (thread-local; "" on success). */
+    public static String asmError() {
+        if (ASM_LAST_ERROR == null) return "";
+        try {
+            MemorySegment p = (MemorySegment) ASM_LAST_ERROR.invoke();
+            return p.equals(MemorySegment.NULL) ? "" : p.reinterpret(256).getUtf8String(0);
+        } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /**
+     * Assemble {@code src} for {@code arch}/{@code syntax} at load address
+     * {@code addr} and return the machine-code bytes. Multi-arch (unlike
+     * {@link Emu#callAsm}, which runs on the x86-64 guest). Throws
+     * AsmtestException with the Keystone diagnostic on failure.
+     */
+    public static byte[] assemble(String src, AsmArch arch, AsmSyntax syntax, long addr) {
+        if (ASM_BYTES == null) throw new AsmtestException("in-line assembler not in this build");
+        try {
+            MemorySegment buf = ARENA.allocate(256);
+            int n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(src), addr, buf, 256);
+            if (n == 0) throw new AsmtestException("assemble failed: " + asmError());
+            if (n > 256) { buf = ARENA.allocate(n); n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(src), addr, buf, n); }
+            byte[] out = new byte[n];
+            MemorySegment.copy(buf, JAVA_BYTE, 0, out, 0, n);
+            return out;
+        } catch (AsmtestException ae) { throw ae; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+    /** Convenience: Intel syntax at the emulator load base. */
+    public static byte[] assemble(String src, AsmArch arch) {
+        return assemble(src, arch, AsmSyntax.INTEL, 0x00100000L);
     }
 
     /** A captured register/flags snapshot. Use try-with-resources to free it. */
@@ -170,20 +221,31 @@ public final class Asmtest {
             return res;
         }
         /** Whether the loaded native lib carries the in-line assembler (Keystone). */
-        public boolean asmAvailable() { return EMU_CALL_ASM != null; }
+        public boolean asmAvailable() { return EMU_CALL_ASM6 != null; }
         /**
-         * Assemble x86-64 {@code src} (Intel syntax) via Keystone and run it with
-         * two integer args; returns an EmuResult. Only when {@link #asmAvailable()};
-         * throws AsmtestException if the string fails to assemble.
+         * Assemble x86-64 {@code src} in {@code syntax} via Keystone and run it with
+         * the first {@code args} (up to six) integer args, stopping after
+         * {@code maxInsns} instructions (0 = run to {@code ret}). Returns an
+         * EmuResult. Only when {@link #asmAvailable()}; throws AsmtestException
+         * carrying the Keystone diagnostic if the string fails to assemble.
          */
-        public EmuResult callAsm(String src, long a0, long a1) {
-            if (EMU_CALL_ASM == null) throw new AsmtestException("in-line assembler not in this build");
+        public EmuResult callAsm(String src, long[] args, AsmSyntax syntax, long maxInsns) {
+            if (EMU_CALL_ASM6 == null) throw new AsmtestException("in-line assembler not in this build");
+            long[] a = new long[6];
+            int nargs = Math.min(args == null ? 0 : args.length, 6);
+            for (int i = 0; i < nargs; i++) a[i] = args[i];
             EmuResult res = new EmuResult();
             int ok;
-            try { ok = (int) EMU_CALL_ASM.invoke(h, str(src), a0, a1, res.h); }
-            catch (Throwable t) { throw rethrow(t); }
-            if (ok == 0) { res.close(); throw new AsmtestException("in-line assembly failed: " + src); }
+            try {
+                ok = (int) EMU_CALL_ASM6.invoke(h, str(src), syntax.v,
+                    a[0], a[1], a[2], a[3], a[4], a[5], nargs, maxInsns, res.h);
+            } catch (Throwable t) { throw rethrow(t); }
+            if (ok == 0) { res.close(); throw new AsmtestException("in-line assembly failed: " + asmError()); }
             return res;
+        }
+        /** Convenience: Intel syntax, run to ret, with the given integer args. */
+        public EmuResult callAsm(String src, long... args) {
+            return callAsm(src, args, AsmSyntax.INTEL, 0);
         }
         @Override public void close() {
             try { if (h != null) EMU_CLOSE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }

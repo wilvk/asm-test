@@ -1,6 +1,6 @@
 # asm-test — .NET binding
 
-Run, **capture**, and **emulate** assembly routines through the
+Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from C# / .NET, via
 **P/Invoke** (`DllImport`).
 
@@ -24,6 +24,26 @@ The reusable module is [`Asmtest.cs`](Asmtest.cs) — it keeps all P/Invoke
 `dotnet run`s the app. The native libs are resolved by the loader via
 `LD_LIBRARY_PATH` (set by the target) — `DllImport("asmtest_emu")` /
 `("asmtest_corpus")` find them by soname.
+
+## In-line assembler (optional)
+
+Pass a routine as an **assembly string**. Present only in the Keystone-carrying
+`libasmtest_emu_asm` (`make dotnet-asm-test` points `ASMTEST_LIB` at it);
+`Emu.AsmAvailable` is false against the plain lib.
+
+```csharp
+if (Emu.AsmAvailable)
+{
+    using var e = new Emu();
+    // Intel, up to six args; throws AsmtestException (with the Keystone
+    // diagnostic) if the string fails to assemble.
+    using var res = e.CallAsm("mov rax, rdi; add rax, rsi; ret", new long[] { 40, 2 });
+    // res.Reg("rax") == 42. AT&T + an instruction cap:
+    e.CallAsm(src, new long[] { 10, 20, 12 }, AsmSyntax.Att, maxInsns: 0);
+    // Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32):
+    byte[] a64 = Emu.Assemble("ret", AsmArch.Arm64);
+}
+```
 
 ## Deferred
 

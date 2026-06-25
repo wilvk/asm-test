@@ -115,6 +115,76 @@ TEST(asm_run, arm32_add_returns_42) {
     emu_arm_close(e);
 }
 
+/* ---- Opaque-handle FFI shims (the surface the language bindings drive) ----- */
+
+TEST(ffi_shim, call_asm6_syntax_and_args) {
+    emu_t *e = emu_open();
+    emu_result_t out;
+
+    /* Intel, two args (the back-compat path), through the widened shim. */
+    ASSERT_TRUE(asmtest_emu_call_asm6(e, "mov rax, rdi; add rax, rsi; ret",
+                                      ASM_SYNTAX_INTEL, 40, 2, 0, 0, 0, 0, 2, 0,
+                                      &out));
+    ASSERT_EQ(out.regs.rax, 42);
+
+    /* AT&T syntax + a third arg: rdi + rsi + rdx. */
+    ASSERT_TRUE(asmtest_emu_call_asm6(
+        e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret", ASM_SYNTAX_ATT,
+        10, 20, 12, 0, 0, 0, 3, 0, &out));
+    ASSERT_EQ(out.regs.rax, 42);
+
+    /* max_insns caps execution mid-routine: stop after the first mov (rax=rdi)
+     * before the add runs, so rax is the first arg, not the sum. */
+    ASSERT_TRUE(asmtest_emu_call_asm6(e, "mov rax, rdi; add rax, rsi; ret",
+                                      ASM_SYNTAX_INTEL, 40, 2, 0, 0, 0, 0, 2, 1,
+                                      &out));
+    ASSERT_EQ(out.regs.rax, 40);
+    emu_close(e);
+}
+
+TEST(ffi_shim, last_error_set_then_cleared) {
+    emu_t *e = emu_open();
+    emu_result_t out;
+
+    /* A bad string returns 0 and leaves a non-empty thread-local diagnostic. */
+    ASSERT_FALSE(asmtest_emu_call_asm6(e, "frobnicate rax", ASM_SYNTAX_INTEL, 0,
+                                       0, 0, 0, 0, 0, 0, 0, &out));
+    ASSERT_TRUE(asmtest_asm_last_error()[0] != '\0');
+
+    /* A subsequent success clears it back to "". */
+    ASSERT_TRUE(asmtest_emu_call_asm6(e, "mov rax, rdi; ret", ASM_SYNTAX_INTEL,
+                                      7, 0, 0, 0, 0, 0, 1, 0, &out));
+    ASSERT_EQ(out.regs.rax, 7);
+    ASSERT_TRUE(asmtest_asm_last_error()[0] == '\0');
+    emu_close(e);
+}
+
+TEST(ffi_shim, asm_bytes_multi_arch) {
+    uint8_t buf[16];
+
+    /* x86-64 add_signed bytes, matching the assembler-core test above. */
+    static const uint8_t x86[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0xc3};
+    int n = asmtest_asm_bytes(ASM_X86_64, ASM_SYNTAX_INTEL,
+                              "mov rax, rdi; add rax, rsi; ret", EMU_CODE_BASE,
+                              buf, (int)sizeof buf);
+    ASSERT_EQ((size_t)n, sizeof x86);
+    ASSERT_MEM_EQ(buf, x86, sizeof x86);
+
+    /* AArch64 `ret` is C0 03 5F D6 — a guest the x86 emulator can't run, but the
+     * assemble-only shim still produces its bytes. */
+    static const uint8_t a64[] = {0xc0, 0x03, 0x5f, 0xd6};
+    n = asmtest_asm_bytes(ASM_ARM64, ASM_SYNTAX_INTEL, "ret", EMU_CODE_BASE, buf,
+                          (int)sizeof buf);
+    ASSERT_EQ((size_t)n, sizeof a64);
+    ASSERT_MEM_EQ(buf, a64, sizeof a64);
+
+    /* An out-of-range arch is a reported failure (0), not a crash. */
+    ASSERT_EQ(asmtest_asm_bytes(99, ASM_SYNTAX_INTEL, "ret", 0, buf,
+                                (int)sizeof buf),
+              0);
+    ASSERT_TRUE(asmtest_asm_last_error()[0] != '\0');
+}
+
 TEST(asm_run, riscv_add_or_unsupported) {
     /* RISC-V depends on the linked Keystone supporting it (released builds do
      * not). Either it assembles and runs (a0 == 42), or it reports a clean

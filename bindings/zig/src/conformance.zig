@@ -9,10 +9,12 @@
 //!
 //! Run via `make zig-test` (or `zig build test` from this dir).
 const std = @import("std");
+const build_options = @import("build_options");
 
 const c = @cImport({
     @cInclude("asmtest.h");
     @cInclude("asmtest_emu.h");
+    @cInclude("asmtest_assemble.h");
 });
 
 // Canonical routines under test (examples/{add,flags,fp,simd}.s), linked from
@@ -94,6 +96,46 @@ test "emu.add_signed" {
     _ = c.emu_call(e, fnPtr(&add_signed), 64, &args, 2, 0, &res);
     try std.testing.expect(!res.faulted);
     try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+}
+
+// In-line assembler (Keystone): compiled in only when linked against the
+// assembler-carrying lib (build with -Dasm=true, i.e. `make zig-asm-test`).
+test "asm.inline_assembler" {
+    if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
+    if (build_options.with_asm) {
+        const e = c.emu_open();
+        defer c.emu_close(e);
+
+        // Intel, two args.
+        var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        try std.testing.expect(c.asmtest_emu_call_asm6(
+            e, "mov rax, rdi; add rax, rsi; ret", c.ASM_SYNTAX_INTEL,
+            40, 2, 0, 0, 0, 0, 2, 0, &res) != 0);
+        try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+
+        // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+        var att: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        try std.testing.expect(c.asmtest_emu_call_asm6(
+            e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret", c.ASM_SYNTAX_ATT,
+            10, 20, 12, 0, 0, 0, 3, 0, &att) != 0);
+        try std.testing.expectEqual(@as(c_ulong, 42), att.regs.rax);
+
+        // Failure path: ok == 0 and a non-empty Keystone diagnostic.
+        var bad: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        try std.testing.expect(c.asmtest_emu_call_asm6(
+            e, "mov rax, nonsense_token", c.ASM_SYNTAX_INTEL,
+            0, 0, 0, 0, 0, 0, 0, 0, &bad) == 0);
+        try std.testing.expect(c.asmtest_asm_last_error()[0] != 0);
+
+        // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+        var buf: [16]u8 = undefined;
+        const n = c.asmtest_asm_bytes(c.ASM_ARM64, c.ASM_SYNTAX_INTEL, "ret", 0x00100000, &buf, buf.len);
+        try std.testing.expectEqual(@as(c_int, 4), n);
+        try std.testing.expectEqual(@as(u8, 0xC0), buf[0]);
+        try std.testing.expectEqual(@as(u8, 0xD6), buf[3]);
+    } else {
+        return error.SkipZigTest;
+    }
 }
 
 // --- Tier-2 idiomatic assertions (error-union helpers over std.testing) --- //

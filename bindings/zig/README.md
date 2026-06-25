@@ -1,6 +1,6 @@
 # asm-test — Zig binding
 
-Run, **capture**, and **emulate** assembly routines through the
+Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from Zig.
 
 The lowest-ceremony binding: Zig consumes the C headers **directly** via
@@ -29,6 +29,25 @@ test "add" {
 The emulator (`c.emu_open` / `c.emu_call` / `c.emu_close`) returns a
 `c.emu_result_t` whose `faulted` / `fault_addr` surface invalid accesses as data
 rather than crashing — prefer it for untrusted routines.
+
+## In-line assembler (optional)
+
+Add `@cInclude("asmtest_assemble.h")` to the `@cImport` and pass a routine as an
+**assembly string**. The assembler lives in `libasmtest_emu_asm`; `zig build test
+-Dasm=true` (`make zig-asm-test`) links it and compiles the asm test in, so the
+default build stays Keystone-free.
+
+```zig
+var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+// Intel, up to six args + an instruction cap; returns 0 on a bad string, with
+// the Keystone diagnostic from c.asmtest_asm_last_error().
+_ = c.asmtest_emu_call_asm6(e, "mov rax, rdi; add rax, rsi; ret",
+    c.ASM_SYNTAX_INTEL, 40, 2, 0, 0, 0, 0, 2, 0, &res);   // res.regs.rax == 42
+
+// Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32):
+var buf: [16]u8 = undefined;
+const n = c.asmtest_asm_bytes(c.ASM_ARM64, c.ASM_SYNTAX_INTEL, "ret", 0x00100000, &buf, buf.len);
+```
 
 ## Build the shared libraries
 

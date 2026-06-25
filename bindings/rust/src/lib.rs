@@ -335,3 +335,172 @@ impl Drop for Emulator {
         unsafe { emu_close(self.h) };
     }
 }
+
+// --- In-line assembler (Keystone) — optional ------------------------------- //
+//
+// The assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
+// which the default build does not link. To keep this crate dependency-free *and*
+// link-clean against the plain libasmtest_emu, resolve them at run time with the
+// libc dynamic loader: dlopen the lib named by `ASMTEST_LIB`, then dlsym. Against
+// a Keystone-free lib the pointers stay `None` and the helpers report
+// unavailability — matching the dlopen-based bindings (Ruby, Node, ...).
+
+use std::ffi::{CStr, CString};
+use std::sync::OnceLock;
+
+extern "C" {
+    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+const RTLD_NOW: c_int = 2; // same value on Linux and macOS
+
+type CallAsm6Fn = unsafe extern "C" fn(
+    *mut emu_t, *const c_char, c_int, c_long, c_long, c_long, c_long, c_long,
+    c_long, c_int, u64, *mut EmuResult,
+) -> c_int;
+type AsmBytesFn =
+    unsafe extern "C" fn(c_int, c_int, *const c_char, u64, *mut u8, c_int) -> c_int;
+type AsmErrFn = unsafe extern "C" fn() -> *const c_char;
+
+struct AsmFns {
+    call_asm6: Option<CallAsm6Fn>,
+    asm_bytes: Option<AsmBytesFn>,
+    asm_err: Option<AsmErrFn>,
+}
+// The function pointers come from the process's own libraries and outlive any
+// call; sharing them across threads is sound.
+unsafe impl Sync for AsmFns {}
+unsafe impl Send for AsmFns {}
+
+fn asm_fns() -> &'static AsmFns {
+    static FNS: OnceLock<AsmFns> = OnceLock::new();
+    // dlopen/dlsym/transmute each carry their own `unsafe` block — a closure does
+    // not inherit an enclosing one, so the unsafety is marked at each call.
+    FNS.get_or_init(|| {
+        let handle = match std::env::var("ASMTEST_LIB") {
+            Ok(p) => match CString::new(p) {
+                Ok(c) => unsafe { dlopen(c.as_ptr(), RTLD_NOW) },
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        };
+        if handle.is_null() {
+            return AsmFns { call_asm6: None, asm_bytes: None, asm_err: None };
+        }
+        let sym = |name: &str| -> *mut c_void {
+            match CString::new(name) {
+                Ok(c) => unsafe { dlsym(handle, c.as_ptr()) },
+                Err(_) => std::ptr::null_mut(),
+            }
+        };
+        let s1 = sym("asmtest_emu_call_asm6");
+        let s2 = sym("asmtest_asm_bytes");
+        let s3 = sym("asmtest_asm_last_error");
+        unsafe {
+            AsmFns {
+                call_asm6: if s1.is_null() { None } else { Some(std::mem::transmute::<_, CallAsm6Fn>(s1)) },
+                asm_bytes: if s2.is_null() { None } else { Some(std::mem::transmute::<_, AsmBytesFn>(s2)) },
+                asm_err: if s3.is_null() { None } else { Some(std::mem::transmute::<_, AsmErrFn>(s3)) },
+            }
+        }
+    })
+}
+
+/// Target architecture for [`assemble`] (mirrors `asm_arch_t`).
+#[repr(i32)]
+#[derive(Clone, Copy)]
+pub enum AsmArch {
+    X86_64 = 0,
+    Arm64 = 1,
+    Riscv64 = 2,
+    Arm32 = 3,
+}
+
+/// Input assembly syntax (x86 only); mirrors `asm_syntax_t`.
+#[repr(i32)]
+#[derive(Clone, Copy)]
+pub enum AsmSyntax {
+    Intel = 0,
+    Att = 1,
+}
+
+/// Whether the loaded native lib carries the in-line assembler (Keystone).
+pub fn asm_available() -> bool {
+    asm_fns().call_asm6.is_some()
+}
+
+/// The Keystone diagnostic from the most recent assemble on this thread
+/// (`""` on success, or when the assembler is absent).
+pub fn asm_error() -> String {
+    match asm_fns().asm_err {
+        Some(f) => unsafe { CStr::from_ptr(f()).to_string_lossy().into_owned() },
+        None => String::new(),
+    }
+}
+
+impl Emulator {
+    /// Assemble x86-64 `src` in `syntax` via Keystone and run it with the integer
+    /// `args` (up to six), stopping after `max_insns` instructions (0 = run to
+    /// `ret`). Returns the run's [`EmuResult`], or an `Err` carrying the Keystone
+    /// diagnostic if `src` fails to assemble.
+    pub fn call_asm(
+        &self,
+        src: &str,
+        args: &[i64],
+        syntax: AsmSyntax,
+        max_insns: u64,
+    ) -> Result<EmuResult, String> {
+        let f = asm_fns()
+            .call_asm6
+            .ok_or("in-line assembler not in this build")?;
+        let c = CString::new(src).map_err(|e| e.to_string())?;
+        let mut a = [0 as c_long; 6];
+        let n = args.len().min(6);
+        for (i, v) in args.iter().take(6).enumerate() {
+            a[i] = *v as c_long;
+        }
+        let mut out = EmuResult::default();
+        let ok = unsafe {
+            f(self.h, c.as_ptr(), syntax as c_int, a[0], a[1], a[2], a[3], a[4],
+              a[5], n as c_int, max_insns, &mut out)
+        };
+        if ok == 0 {
+            return Err(format!("in-line assembly failed: {}", asm_error()));
+        }
+        Ok(out)
+    }
+}
+
+/// Assemble `src` for `arch`/`syntax` at load address `addr` and return the
+/// machine-code bytes. Multi-arch (unlike [`Emulator::call_asm`], which runs on
+/// the x86-64 guest). `Err` carries the Keystone diagnostic on failure.
+pub fn assemble(
+    src: &str,
+    arch: AsmArch,
+    syntax: AsmSyntax,
+    addr: u64,
+) -> Result<Vec<u8>, String> {
+    let f = asm_fns()
+        .asm_bytes
+        .ok_or("in-line assembler not in this build")?;
+    let c = CString::new(src).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; 256];
+    let n = unsafe {
+        f(arch as c_int, syntax as c_int, c.as_ptr(), addr, buf.as_mut_ptr(),
+          buf.len() as c_int)
+    };
+    if n == 0 {
+        return Err(format!("assemble failed: {}", asm_error()));
+    }
+    let mut n = n as usize;
+    if n > buf.len() {
+        buf = vec![0u8; n];
+        n = unsafe {
+            f(arch as c_int, syntax as c_int, c.as_ptr(), addr, buf.as_mut_ptr(),
+              n as c_int)
+        } as usize;
+    }
+    buf.truncate(n);
+    Ok(buf)
+}

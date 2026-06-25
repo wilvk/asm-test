@@ -22,6 +22,9 @@
 #ifdef ASMTEST_ENABLE_EMU
 #include "asmtest_emu.h"
 #endif
+#ifdef ASMTEST_ENABLE_ASM
+#include "asmtest_assemble.h"  // in-line assembler (Keystone); pulls in asmtest_emu.h
+#endif
 
 #include <array>
 #include <cstddef>
@@ -140,6 +143,13 @@ inline void assert_fp(const regs_t &r, double expected) {
         throw assertion_error("FP return mismatch");
 }
 
+#ifdef ASMTEST_ENABLE_ASM
+/// Thrown by the assembler helpers when a string fails to assemble.
+struct asm_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+#endif  // ASMTEST_ENABLE_ASM
+
 #ifdef ASMTEST_ENABLE_EMU
 // --- Emulator tier --------------------------------------------------------- //
 
@@ -179,10 +189,62 @@ class Emu {
         return res;
     }
 
+#ifdef ASMTEST_ENABLE_ASM
+    /// Assemble x86-64 `src` in `syntax` via Keystone and run it with up to six
+    /// integer args, stopping after `max_insns` instructions (0 = run to `ret`).
+    /// Returns the run's result; throws asm_error with the Keystone diagnostic
+    /// if `src` fails to assemble.
+    emu_result_t call_asm(const char *src,
+                          std::initializer_list<long> args = {},
+                          asm_syntax_t syntax = ASM_SYNTAX_INTEL,
+                          std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long a[6] = {0, 0, 0, 0, 0, 0};
+        int n = 0;
+        for (long v : args) {
+            if (n == 6)
+                break;
+            a[n++] = v;
+        }
+        int ok = asmtest_emu_call_asm6(e_, src, static_cast<int>(syntax),
+                                       a[0], a[1], a[2], a[3], a[4], a[5], n,
+                                       max_insns, &res);
+        if (!ok)
+            throw asm_error(std::string("in-line assembly failed: ") +
+                            asmtest_asm_last_error());
+        return res;
+    }
+#endif  // ASMTEST_ENABLE_ASM
+
   private:
     emu_t *e_;
 };
 #endif  // ASMTEST_ENABLE_EMU
+
+#ifdef ASMTEST_ENABLE_ASM
+/// Assemble `src` for `arch`/`syntax` at load address `addr` and return the
+/// machine-code bytes. Multi-arch (unlike Emu::call_asm, which runs on the
+/// x86-64 guest). Throws asm_error with the Keystone diagnostic on failure.
+inline std::vector<std::uint8_t> assemble(const char *src,
+                                          asm_arch_t arch = ASM_X86_64,
+                                          asm_syntax_t syntax = ASM_SYNTAX_INTEL,
+                                          std::uint64_t addr = EMU_CODE_BASE) {
+    std::vector<std::uint8_t> buf(256);
+    int n = asmtest_asm_bytes(static_cast<int>(arch), static_cast<int>(syntax),
+                              src, addr, buf.data(),
+                              static_cast<int>(buf.size()));
+    if (n == 0)
+        throw asm_error(std::string("assemble failed: ") +
+                        asmtest_asm_last_error());
+    if (static_cast<std::size_t>(n) > buf.size()) {
+        buf.resize(n);
+        n = asmtest_asm_bytes(static_cast<int>(arch), static_cast<int>(syntax),
+                              src, addr, buf.data(), n);
+    }
+    buf.resize(n);
+    return buf;
+}
+#endif  // ASMTEST_ENABLE_ASM
 
 }  // namespace asmtest
 

@@ -78,4 +78,33 @@ TEST(cpp, emulator_raii) {
     ASSERT_NO_FAULT(&res);
     ASSERT_EMU_REG_EQ(&res, rax, 42);
 }  // e closes the handle here
+
+#ifdef ASMTEST_ENABLE_ASM
+// In-line assembler (Keystone): assemble source text and run it on the guest.
+TEST(cpp, inline_assembler) {
+    Emu e;
+    emu_result_t res = e.call_asm("mov rax, rdi; add rax, rsi; ret", {40, 2});
+    ASSERT_NO_FAULT(&res);
+    ASSERT_EMU_REG_EQ(&res, rax, 42);
+
+    // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+    emu_result_t att = e.call_asm(
+        "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+        {10, 20, 12}, ASM_SYNTAX_ATT);
+    ASSERT_EMU_REG_EQ(&att, rax, 42);
+
+    // Failure path: a bad string throws asm_error with the Keystone diagnostic.
+    bool threw = false;
+    try {
+        e.call_asm("mov rax, nonsense_token");
+    } catch (const asmtest::asm_error &ex) {
+        threw = std::string(ex.what()).size() > sizeof("in-line assembly failed: ") - 1;
+    }
+    ASSERT_TRUE(threw);
+
+    // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+    std::vector<std::uint8_t> a64 = assemble("ret", ASM_ARM64);
+    ASSERT_TRUE(a64.size() == 4 && a64[0] == 0xC0 && a64[3] == 0xD6);
+}
+#endif  // ASMTEST_ENABLE_ASM
 #endif

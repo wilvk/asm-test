@@ -10,6 +10,7 @@
 const asmtest = require('./asmtest');
 const {
   corpusRoutine: routine, Regs, Emu, AsmtestError,
+  assemble, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFp,
 } = asmtest;
 
@@ -61,9 +62,25 @@ withRegs((r) => {
 
   // in-line assembly (Keystone) replays add_signed, only if the lib has it
   if (e.asmAvailable()) {
-    const { res: ares, ok } = e.callAsm('mov rax, rdi; add rax, rsi; ret', 40, 2);
-    check('asm.add_signed', ok && !ares.faulted() && ares.reg('rax') === 42);
+    const ares = e.callAsm('mov rax, rdi; add rax, rsi; ret', [40, 2]);
+    check('asm.add_signed', !ares.faulted() && ares.reg('rax') === 42);
     ares.free();
+
+    // Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx).
+    const att = e.callAsm('mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret',
+      [10, 20, 12], { syntax: Syntax.ATT });
+    check('asm.att_3arg', !att.faulted() && att.reg('rax') === 42);
+    att.free();
+
+    // Failure path: a bad string throws with the Keystone diagnostic.
+    let threw = false;
+    try { e.callAsm('mov rax, nonsense_token').free(); }
+    catch (err) { threw = err instanceof AsmtestError && err.message.length > 'in-line assembly failed: '.length; }
+    check('asm.bad_source_throws', threw);
+
+    // Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6.
+    const a64 = assemble('ret', Arch.ARM64);
+    check('asm.arm64_bytes', a64.length === 4 && a64[0] === 0xC0 && a64[3] === 0xD6);
   }
   e.close();
 }

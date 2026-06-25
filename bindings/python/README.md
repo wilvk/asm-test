@@ -1,6 +1,6 @@
 # asm-test — Python binding
 
-Run, **capture**, and **emulate** assembly routines through the
+Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from Python, and let
 `pytest` validate the results. This is the reference binding for the
 [multi-language bindings plan](../../docs/plans/multi-language-bindings-plan.md)
@@ -46,6 +46,25 @@ with asmtest.Emulator() as e:
 
 A routine reference is either an integer address or a ctypes function pointer
 (e.g. `ctypes.CDLL("mylib.so").my_routine`).
+
+## In-line assembler (optional)
+
+Pass a routine as an **assembly string** instead of an address. Present only in
+the Keystone-carrying `libasmtest_emu_asm` (`make python-asm-test` points
+`ASMTEST_LIB` at it); `asmtest.asm_available()` is false against the plain lib.
+
+```python
+if asmtest.asm_available():
+    with asmtest.Emulator() as e:
+        res = e.call_asm("mov rax, rdi; add rax, rsi; ret", [40, 2])   # Intel, up to 6 args
+        assert res.reg("rax") == 42
+        # AT&T syntax + an instruction cap; raises asmtest.AsmtestError (carrying
+        # the Keystone diagnostic) if the string fails to assemble.
+        e.call_asm(src, [10, 20, 12], syntax=asmtest.Syntax.ATT, max_insns=0)
+    # Multi-arch text -> bytes (x86-64/arm64/riscv64/arm32), even guests the x86
+    # emulator can't run; raises on a Keystone error.
+    a64 = asmtest.assemble("ret", asmtest.Arch.ARM64)
+```
 
 ## Crash safety
 

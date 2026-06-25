@@ -15,10 +15,16 @@ architecture the shared library was built for.
 """
 from . import assertions
 from .core import (
+    Arch,
+    AsmtestError,
     Context,
     Emulator,
     EmuResult,
     Regs,
+    Syntax,
+    asm_available,
+    asm_error,
+    assemble,
     capture,
     capture_fp,
     capture_vec,
@@ -28,10 +34,16 @@ from .core import (
 )
 
 __all__ = [
+    "Arch",
+    "AsmtestError",
     "Context",
     "Emulator",
     "EmuResult",
     "Regs",
+    "Syntax",
+    "asm_available",
+    "asm_error",
+    "assemble",
     "assertions",
     "capture",
     "capture_fp",

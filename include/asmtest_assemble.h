@@ -92,9 +92,39 @@ bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs
 /* Opaque-handle FFI shim for dynamic-language bindings (mirrors
  * asmtest_emu_call2 in asmtest_emu.h): assemble x86-64 `src` and run it with
  * two integer args, results in the *out handle (read via the asmtest_emu_*
- * accessors). Returns 1 if it assembled and ran, 0 otherwise. */
+ * accessors). Returns 1 if it assembled and ran, 0 otherwise. Thin Intel-only,
+ * two-arg wrapper over asmtest_emu_call_asm6 — kept for source compatibility;
+ * new bindings should call the widened shim below. */
 int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
                          emu_result_t *out);
+
+/* Widened opaque-handle FFI shim. Assemble x86-64 `src` in `syntax`
+ * (ASM_SYNTAX_INTEL or ASM_SYNTAX_ATT, as the int 0/1) and run it with the
+ * first `nargs` (0..6) of the scalar args, stopping after `max_insns`
+ * instructions (0 = run to `ret`). Results land in *out (read via the
+ * asmtest_emu_* accessors). Returns 1 if it assembled and ran, 0 otherwise; on
+ * failure the Keystone diagnostic is available from asmtest_asm_last_error().
+ * Mirrors asmtest_capture6's six-scalar shape so dynamic FFIs marshal no
+ * array. */
+int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
+                          long a1, long a2, long a3, long a4, long a5, int nargs,
+                          uint64_t max_insns, emu_result_t *out);
+
+/* The Keystone diagnostic from the most recent assemble on the calling thread
+ * ("" when the last one succeeded, or none has run). Lets a binding report
+ * *why* a string failed to assemble without a by-value struct return. The
+ * storage is thread-local; copy it if you need it past the next assemble. */
+const char *asmtest_asm_last_error(void);
+
+/* Assemble-only FFI shim (no emulator): assemble `src` for `arch`
+ * (asm_arch_t as the int 0..3) in `syntax` (0/1) at load address `addr`,
+ * copying up to `cap` bytes of machine code into `buf`. Returns the full byte
+ * length (which may exceed `cap`, so a caller can size a buffer and retry), or
+ * 0 on failure (diagnostic via asmtest_asm_last_error). Unlike the run shims
+ * this is multi-arch — a binding can assemble AArch64/RISC-V/ARM32 even though
+ * its emulator handle is the x86-64 guest. */
+int asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr,
+                      uint8_t *buf, int cap);
 
 #ifdef __cplusplus
 } /* extern "C" */

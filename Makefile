@@ -833,16 +833,23 @@ CXX      ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O0 -g -Iinclude
 
 $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
-                     include/asmtest.h include/asmtest_emu.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) -DASMTEST_ENABLE_EMU -c $< -o $@
+                     include/asmtest.h include/asmtest_emu.h \
+                     include/asmtest_assemble.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) \
+	       -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM -c $< -o $@
 
-$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/add.o \
-                   $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
-                   $(BUILD)/test_cpp.o
-	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
+                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
+                   $(BUILD)/simd.o $(BUILD)/test_cpp.o
+	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp
 	./$(BUILD)/test_cpp
+
+# The C++ test always links the assembler (Keystone), so its asm cases run as
+# part of cpp-test; this alias keeps the bindings-asm matrix uniform.
+.PHONY: cpp-asm-test
+cpp-asm-test: cpp-test
 
 # --- Rust binding (Track R) ------------------------------------------------
 # A no-dependency crate (#[repr(C)] structs + extern "C" over the binding ABI)
@@ -924,9 +931,43 @@ dotnet-test: shared-emu $(CORPUS_LIB)
 # runs (binding -> asmtest_emu_call_asm shim -> Keystone -> emulator) rather than
 # self-skipping against the Keystone-free libasmtest_emu. The CI `bindings-asm`
 # matrix runs these; they need Keystone.
-.PHONY: lua-asm-test node-asm-test java-asm-test dotnet-asm-test
+.PHONY: lua-asm-test node-asm-test java-asm-test dotnet-asm-test \
+        python-asm-test go-asm-test rust-asm-test zig-asm-test
 lua-asm-test: shared-emu-asm $(CORPUS_LIB)
 	$(bindings_env_asm) $(LUAJIT) bindings/lua/conformance.lua
+
+# Python drives the same optional CallAsm/assemble surface; point ASMTEST_LIB at
+# the emu+asm lib so asm_available() is true and the asm tests run (vs. skip).
+python-asm-test: shared-emu-asm manifest conformance $(CORPUS_LIB)
+	cd bindings/python && \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+	  ASMTEST_MANIFEST=$(abspath asmtest_abi.json) \
+	  ASMTEST_CORPUS_JSON=$(abspath bindings/conformance/corpus.json) \
+	  ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
+	  $(PYTEST) -q
+
+# Go/Rust resolve the assembler at run time (they statically link the plain
+# libasmtest_emu), so these mirror their base tests but add the emu+asm lib and
+# point ASMTEST_LIB at it (the binding dlopen()s that to find the asm symbols).
+go-asm-test: shared-emu shared-emu-asm $(CORPUS_LIB)
+	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" \
+	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
+	  $(bindings_env_asm) $(GO) test ./...
+
+rust-asm-test: shared-emu shared-emu-asm $(CORPUS_LIB)
+	cd bindings/rust && \
+	  ASMTEST_LIB_DIR=$(abspath $(BUILD)) \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
+	  $(CARGO) test
+
+# Zig links the assembler lib directly (-Dasm=true compiles its asm test in).
+zig-asm-test: shared-emu-asm $(CORPUS_LIB)
+	cd bindings/zig && \
+	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
+	  $(ZIG) build test -Dasm=true -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 
 node-asm-test: shared-emu-asm $(CORPUS_LIB)
 	$(bindings_env_asm) $(NODE) bindings/node/conformance.js

@@ -84,11 +84,37 @@ def declare(lib):
         lib.emu_call.argtypes = [v, v, C.c_size_t, v, C.c_int, C.c_uint64, v]
         lib.emu_call.restype = C.c_bool
 
+    # In-line assembler (Keystone) is optional again — only libasmtest_emu_asm
+    # exports it. The widened run shim takes six scalar args + syntax + a cap;
+    # asmtest_asm_bytes is multi-arch text->bytes; the last-error accessor
+    # carries the Keystone diagnostic.
+    if has_asm(lib):
+        lib.asmtest_emu_call_asm6.argtypes = [
+            v, C.c_char_p, C.c_int, C.c_long, C.c_long, C.c_long, C.c_long,
+            C.c_long, C.c_long, C.c_int, C.c_uint64, v,
+        ]
+        lib.asmtest_emu_call_asm6.restype = C.c_int
+        lib.asmtest_asm_bytes.argtypes = [
+            C.c_int, C.c_int, C.c_char_p, C.c_uint64, v, C.c_int,
+        ]
+        lib.asmtest_asm_bytes.restype = C.c_int
+        lib.asmtest_asm_last_error.argtypes = []
+        lib.asmtest_asm_last_error.restype = C.c_char_p
+
 
 def has_emu(lib):
     """True if the loaded library exports the emulator entry points."""
     try:
         lib.emu_open  # ctypes resolves the symbol lazily via dlsym
+        return True
+    except AttributeError:
+        return False
+
+
+def has_asm(lib):
+    """True if the loaded library exports the in-line assembler (Keystone)."""
+    try:
+        lib.asmtest_emu_call_asm6
         return True
     except AttributeError:
         return False
