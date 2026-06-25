@@ -28,6 +28,46 @@ TEST(arith, preserves_callee_saved_and_clears_carry) {
 The framework provides `main()`, discovers every `TEST(...)`, runs each one in a
 forked child with a timeout, and prints a colored summary.
 
+## How it fits together
+
+You write the assembly routines and the C tests; the Makefile assembles,
+compiles, and links them into one binary per suite; the framework's runner
+discovers the tests and drives each routine through the **real calling
+convention** — either natively (a capture trampoline on the real CPU) or, opting
+in, inside a virtual CPU (the [emulator tier](emulator.md)) — then asserts on the
+result and reports.
+
+```mermaid
+flowchart TB
+    subgraph Author["You write"]
+        ASM["Assembly routines<br/>examples/foo.s · foo.asm"]
+        CT["C test cases<br/>TEST(...) + ASSERT_*"]
+    end
+    subgraph Build["Build (Makefile)"]
+        AS["Assemble .s via cc (GAS)<br/>or nasm (Intel syntax)"]
+        CC["Compile C tests +<br/>libasmtest runtime"]
+        LD["Link one binary per suite<br/>build/test_foo"]
+    end
+    subgraph Run["Run the suite binary"]
+        MAIN["Framework main()<br/>discover + filter + order tests"]
+        ENG{"Execution engine"}
+        NAT["Native tier — capture trampoline<br/>real CPU, real ABI"]
+        EMU["Emulator tier (optional)<br/>Unicorn virtual CPU"]
+        REP["Assert on return / registers /<br/>flags / memory / faults"]
+        OUT["Colored TAP or JUnit XML<br/>+ nonzero exit on any failure"]
+    end
+    ASM --> AS
+    CT --> CC
+    AS --> LD
+    CC --> LD
+    LD --> MAIN --> ENG
+    ENG -->|"ASM_CALLn"| NAT
+    ENG -->|"emu_call"| EMU
+    NAT --> REP
+    EMU --> REP
+    REP --> OUT
+```
+
 ## Why asm-test
 
 Existing tools either run a whole binary per case and only see *exit status and

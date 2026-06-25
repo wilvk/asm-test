@@ -15,6 +15,32 @@ the `asmtest_abi.json` manifest; .NET and Go go through the opaque-handle
 accessors (`asmtest_regs_*`, `asmtest_emu_*`), so no `regs_t` layout is mirrored
 on their side.
 
+The whole substrate hangs off one flat C-ABI surface, kept honest by the layout
+manifest and a shared conformance corpus — the single source of truth every
+binding must reproduce:
+
+```mermaid
+flowchart TB
+    subgraph Native["C core (this repo)"]
+        H["Headers: asmtest.h / asmtest_emu.h<br/>regs_t + emu result structs<br/>_Static_assert layout guards"]
+        LIB["libasmtest_emu (shared)<br/>binding ABI: capture entry points,<br/>verdict shims, opaque-handle accessors"]
+        GEN["gen-manifest.c"]
+        JSON["asmtest_abi.json<br/>struct sizes + field offsets"]
+        H --> LIB
+        H --> GEN --> JSON
+    end
+    subgraph Modules["Per-language modules — FFI kept inside"]
+        PY["Python (ctypes)"]
+        OTHERS["Go cgo · Rust · C++ · Zig · Node koffi ·<br/>Ruby Fiddle · Lua ffi · Java FFM · .NET P/Invoke"]
+    end
+    JSON -->|"struct layout"| PY
+    LIB --> PY
+    LIB -->|"opaque-handle accessors"| OTHERS
+    PY --> CORP
+    OTHERS --> CORP
+    CORP["Conformance corpus<br/>canonical routines + expected captures<br/>SINGLE SOURCE OF TRUTH"] --> V{"every binding reproduces<br/>the same results?"}
+```
+
 ## One-time setup
 
 From the repository root, build the native library the bindings load:

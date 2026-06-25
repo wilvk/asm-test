@@ -4,3 +4,4 @@ sphinx>=7.2,<9
 myst-parser>=2.0,<5
 furo>=2024.1.29
 sphinx-copybutton>=0.5.2
+sphinxcontrib-mermaid>=0.9.2  # render ```mermaid architecture diagrams

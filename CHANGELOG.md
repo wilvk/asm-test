@@ -38,11 +38,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in an isolated image (`Dockerfile.win64`, `make docker-win64`). A new CI `win64`
   job runs both on every push; the capture suite doubles as the native Win64
   conformance check. This is the capture tier (suite runs `--no-fork`); the Win32
-  runner port is now underway (Phase 4, below). See
+  runner port is now underway (see below). See
   [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md)
   and the [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md).
 
-- **Native Win64 tier — runner port (Phase 4).** The framework's process-level
+- **Native Win64 tier — runner port.** The framework's process-level
   guarantees now have Win32 equivalents for the Win64 tier, each in
   `src/platform_win32.c` (plus the platform-neutral `src/glob_match.c`), compiled
   only for the Win64 target and **verified under Wine**: per-test isolation +
@@ -236,7 +236,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.0.0] — 2026-06-24
 
-First tagged release. Captures the complete Phase 0–11 framework plus the
+First tagged release. Captures the complete framework plus the
 Track A self-test suite and Track B packaging.
 
 ### Added

@@ -107,6 +107,30 @@ TEST(arith, avx512_path) {
 3. Results stream out as colored TAP (or JUnit XML with `--format=junit`).
 4. The process exits nonzero if any test failed.
 
+Each test moves through the same lifecycle. An assertion failure, a `SKIP`, or a
+fatal signal all leave the body the same way — a non-local jump back into the
+runner — and the suite continues with the next test:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Registered
+    Registered --> Selected : main() filters / shuffles the registry
+    Selected --> Setup : run next test (forked child by default)
+    Setup --> Body : SETUP(suite)
+    Body --> Passed : all assertions held
+    Body --> Failed : ASSERT_* failed, siglongjmp
+    Body --> Skipped : SKIP(reason), siglongjmp
+    Body --> Crashed : SIGSEGV / SIGBUS or alarm() timeout
+    Passed --> Teardown
+    Failed --> Teardown
+    Skipped --> Teardown
+    Crashed --> Teardown : parent rebuilds verdict from wait() status
+    Teardown --> Report : TEARDOWN(suite)
+    Report --> Selected : more tests remain
+    Report --> Summary : registry exhausted
+    Summary --> [*] : exit nonzero if any test failed
+```
+
 See [The test runner](runner.md) for filtering, ordering, parallelism, and
 timeouts.
 

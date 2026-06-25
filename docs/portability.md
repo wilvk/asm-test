@@ -14,6 +14,24 @@ how to choose a backend.
 CI runs the suites on all four combinations (`ubuntu-latest`,
 `ubuntu-24.04-arm`, `macos-latest`, `macos-13`).
 
+One source set reaches every target two ways: a **native** build for the host
+architecture (through either assembler backend), and the **emulator** guests,
+which run on any host:
+
+```mermaid
+flowchart TB
+    SRC["One source set<br/>foo.s (GAS) + foo.asm (NASM)<br/>ASM_FUNC abstracts ELF vs Mach-O"]
+    SRC --> NATIVE["Native build — host architecture"]
+    SRC --> EMUG["Emulator guests — any host"]
+    NATIVE --> X86["x86-64"]
+    NATIVE --> ARM["AArch64"]
+    X86 --> X86OS["Linux · macOS"]
+    ARM --> ARMOS["Linux · macOS (Apple Silicon)"]
+    X86OS --> BK["Backend: GAS (default) or NASM"]
+    ARMOS --> BKA["Backend: GAS only (NASM is x86-only)"]
+    EMUG --> EG["x86-64 SysV · x86-64 Win64 ·<br/>AArch64 · RISC-V RV64 · ARM32"]
+```
+
 ## One source, two object formats
 
 The `ASM_FUNC` / `ASM_ENDFUNC` macros in `include/asm.h` abstract the ELF vs

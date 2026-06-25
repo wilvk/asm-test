@@ -11,10 +11,10 @@ Wine, or drives the trampoline directly via a compiler ABI attribute.
 > snapshot its registers/flags/ABI-preservation — ships today and runs
 > `--no-fork`. The framework's POSIX runner guarantees (per-test fork isolation,
 > timeouts, guard pages, the `-jN` pool, in-process crash-to-failure) rest on
-> POSIX primitives with no Win32 equivalent; porting them is the **runner port**
-> (Phase 4), now underway — all five primitives are ported and verified under
+> POSIX primitives with no Win32 equivalent; porting them is the **runner port**,
+> now underway — all five primitives are ported and verified under
 > Wine, with the runner's execution model being wired through a platform seam
-> (see [The runner port](#the-runner-port-phase-4) below). See the
+> (see [The runner port](#the-runner-port) below). See the
 > [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md)
 > for the full breakdown.
 
@@ -110,12 +110,12 @@ make manifest-win64     # -> asmtest_abi_win64.json
 emits the machine-readable Win64 `regs_t` layout (`"abi": "win64"`), the analog of
 the System V [manifest](integration.md) bindings mirror.
 
-## The runner port (Phase 4)
+## The runner port
 
 The capture tier above runs as a plain `--no-fork` program. The framework's
 *runner* guarantees — per-test crash isolation, timeouts, guard pages, the `-jN`
 parallel pool, and in-process crash-to-failure — lean on POSIX primitives that a
-Win32 personality doesn't provide. Phase 4 ports each to its Win32 equivalent in
+Win32 personality doesn't provide. The runner port maps each to its Win32 equivalent in
 `src/platform_win32.c` (plus the platform-neutral `src/glob_match.c`), compiled
 only for the Win64 target so the working POSIX [runner](runner.md) is untouched:
 
