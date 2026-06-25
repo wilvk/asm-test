@@ -299,23 +299,41 @@ void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
 #if defined(ASMTEST_ABI_WIN64)
 /* The Microsoft x64 ("Win64") capture entry points (src/capture_win64.asm), the
  * counterparts of the System V trampoline above. Args are 64-bit `long long`
- * (Win64 is LLP64). See ASM_CALL_WIN64* below for the convenience wrappers. */
-void asm_call_capture_win64(regs_t *out, void *fn, const long long *args);
-void asm_call_capture_args_win64(regs_t *out, void *fn, const long long *args,
-                                 int nargs);
-void asm_call_capture_fp_win64(regs_t *out, void *fn, const long long *iargs,
-                               const double *fargs);
-void asm_call_capture_fp_n_win64(regs_t *out, void *fn, const long long *iargs,
-                                 const double *fargs, int nfargs);
-void asm_call_capture_vec_win64(regs_t *out, void *fn, const long long *iargs,
-                                const vec128_t *vargs);
-void asm_call_capture_vec_n_win64(regs_t *out, void *fn, const long long *iargs,
-                                  const vec128_t *vargs, int nvargs);
-void asm_call_capture_sret_win64(regs_t *out, void *fn, void *result,
-                                 const long long *args, int nargs);
-void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
-                                      const long long *iargs, int niargs,
-                                      const void *sptr, unsigned long long ssize);
+ * (Win64 is LLP64). See ASM_CALL_WIN64* below for the convenience wrappers.
+ *
+ * ASMTEST_WIN64ABI tags them with the Win64 calling convention. On a real Win64
+ * target (mingw) that is already the default, so it is empty; on a System V host
+ * exercising the trampoline via the ms_abi lane it is __attribute__((ms_abi)),
+ * so both the prototypes here and the calls in ASM_CALL_WIN64* use the Win64 ABI
+ * (and these declarations agree with a System V caller's own ms_abi externs). */
+#if defined(_WIN32)
+#  define ASMTEST_WIN64ABI /* native Win64 target: ms_abi is already the default */
+#else
+#  define ASMTEST_WIN64ABI __attribute__((ms_abi))
+#endif
+ASMTEST_WIN64ABI void asm_call_capture_win64(regs_t *out, void *fn,
+                                             const long long *args);
+ASMTEST_WIN64ABI void asm_call_capture_args_win64(regs_t *out, void *fn,
+                                                  const long long *args, int nargs);
+ASMTEST_WIN64ABI void asm_call_capture_fp_win64(regs_t *out, void *fn,
+                                                const long long *iargs,
+                                                const double *fargs);
+ASMTEST_WIN64ABI void asm_call_capture_fp_n_win64(regs_t *out, void *fn,
+                                                  const long long *iargs,
+                                                  const double *fargs, int nfargs);
+ASMTEST_WIN64ABI void asm_call_capture_vec_win64(regs_t *out, void *fn,
+                                                 const long long *iargs,
+                                                 const vec128_t *vargs);
+ASMTEST_WIN64ABI void asm_call_capture_vec_n_win64(regs_t *out, void *fn,
+                                                   const long long *iargs,
+                                                   const vec128_t *vargs, int nvargs);
+ASMTEST_WIN64ABI void asm_call_capture_sret_win64(regs_t *out, void *fn,
+                                                  void *result,
+                                                  const long long *args, int nargs);
+ASMTEST_WIN64ABI void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
+                                                       const long long *iargs,
+                                                       int niargs, const void *sptr,
+                                                       unsigned long long ssize);
 #endif
 
 /* ------------------------------------------------------------------ */
