@@ -64,6 +64,15 @@ e = Asmtest::Emu.new
 res = e.call2(routine("add_signed"), 40, 2)
 check("emu.add_signed", !res.faulted? && res.reg("rax") == 42)
 res.free
+
+# --- Tier 1: in-line assembly (Keystone) replays add_signed ----------------
+# Only when the loaded lib carries the assembler (libasmtest_emu_asm); against
+# the plain libasmtest_emu it is simply absent.
+if e.asm_available?
+  ares, asm_ok = e.call_asm("mov rax, rdi; add rax, rsi; ret", 40, 2)
+  check("asm.add_signed", asm_ok && !ares.faulted? && ares.reg("rax") == 42)
+  ares.free
+end
 e.close
 
 # --- Tier 2: idiomatic assertions pass on good input -----------------------

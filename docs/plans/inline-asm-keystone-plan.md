@@ -172,25 +172,27 @@ Wire `test_asm` into `make asm-test`, the Docker matrix, and CI
 ([.github/workflows](../../.github/workflows)) gated like the emu jobs (skip where
 Keystone is absent, exactly as emu skips without Unicorn).
 
-## Phase 6 — Bindings — **deferred (follow-up)**
+## Phase 6 — Bindings — **done**
 
-The **C ABI shim is in place**: `asmtest_emu_call_asm(emu, src, a0, a1, out)`
-(in [src/assemble.c](../../src/assemble.c), like the existing `asmtest_emu_call2`)
-so a binding passes a string and reads back the same `emu_result_t`. The
-per-language `CallAsm` wrappers were prototyped (and verified in Ruby) but
-**reverted** for now — see below.
+A C ABI shim `asmtest_emu_call_asm(emu, src, a0, a1, out)`
+([src/assemble.c](../../src/assemble.c), like `asmtest_emu_call2`) — a binding
+passes a string and reads back the same `emu_result_t`. Each of the five
+dlopen bindings (.NET, Ruby, Lua, Node, Java) gains a `CallAsm` method and a
+conformance case, **bound optionally**: the entry point is present only in the
+combined `libasmtest_emu_asm` lib, so against the plain Keystone-free
+`libasmtest_emu` the binding reports `asm_available? == false` and simply omits
+the case (never a missing-symbol crash). Each conformance replays the x86-64
+`add_signed` string and checks `rax == 42`.
 
-> **Why deferred.** Binding `CallAsm` needs Keystone in the *binding* runtime.
-> But each binding is tested in its own Unicorn-only image
-> ([Dockerfile.bindings-base](../../Dockerfile.bindings-base)), and Keystone has
-> no apt package — so wiring it in either (a) forces a multi-minute Keystone
-> source build into all ~10 binding images (each rebuilt per CI job), or (b) makes
-> `CallAsm` always self-skip there (no real coverage). Neither is worth coupling
-> right now. The clean path, when taken: build a Keystone-enabled **bindings base
-> image once and share it across jobs** (GHCR push, or `buildx` `type=gha` cache),
-> then add `CallAsm` (loading the separate in-line-asm lib) with one conformance
-> case per language. Until then, in-line assembly is a first-class **C** feature
-> (`make asm-test`), fully covered by the CI `asm` job.
+> **How it avoids the Keystone-in-images cost.** Instead of baking Keystone into
+> all ~10 (Unicorn-only) binding images, the assembler lives in a **separate**
+> `make shared-emu-asm` lib (`libasmtest_emu_asm` = emu + assemble.o + Keystone).
+> One native CI job, `bindings-asm`, source-builds Keystone and runs the Ruby
+> conformance with `ASMTEST_LIB` pointed at that lib (`make ruby-asm-test`), so
+> the `CallAsm` path is exercised end to end — binding → shim → Keystone →
+> emulator — while every normal binding image stays Keystone-free and its
+> `CallAsm` case self-skips. `.NET` resolves its lib by name (`asmtest_emu`) so it
+> always self-skips and gates on `NativeLibrary.TryGetExport`.
 
 ## Phase 7 — Docs — **done**
 

@@ -43,7 +43,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
-.PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance
+.PHONY: shared shared-emu shared-emu-asm manifest manifest-win64 install-shared install-shared-emu conformance
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
@@ -267,6 +267,20 @@ $(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o
 $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_emu)) $@
+
+# Emulator + in-line assembler shared lib: libasmtest_emu plus assemble.o, so it
+# also exports asmtest_emu_call_asm for the bindings' optional CallAsm. A SEPARATE
+# lib (not libasmtest_emu) so only a consumer that wants in-line asm pays the
+# Keystone dependency — a binding points ASMTEST_LIB here to test CallAsm, and at
+# the plain libasmtest_emu otherwise (where CallAsm self-skips). Needs libkeystone.
+shared-emu-asm: $(call shlib_dev,libasmtest_emu_asm)
+$(call shlib_real,libasmtest_emu_asm): $(PIC_OBJS) $(BUILD)/pic/emu.o \
+                                       $(BUILD)/pic/assemble.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu_asm) $^ \
+	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+$(call shlib_dev,libasmtest_emu_asm): $(call shlib_real,libasmtest_emu_asm)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu_asm)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_emu_asm)) $@
 
 # Machine-readable layout manifest: a small program compiled against the real
 # headers prints sizeof/offsetof for the host arch (see scripts/gen-manifest.c).
@@ -872,8 +886,22 @@ bindings_env = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
                LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
                DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
 
+# Same, but ASMTEST_LIB points at the emu+assembler lib so the binding's optional
+# CallAsm resolves and its in-line-asm conformance case actually runs (vs. skips
+# against the plain libasmtest_emu). Used by the `asm` binding check; needs Keystone.
+bindings_env_asm = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+               ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
+               LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
+               DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
+
 ruby-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(RUBY) bindings/ruby/conformance.rb
+
+# In-line-asm binding check: drive the Ruby conformance against libasmtest_emu_asm
+# so its CallAsm case runs end to end (binding -> shim -> Keystone -> emulator).
+.PHONY: ruby-asm-test
+ruby-asm-test: shared-emu-asm $(CORPUS_LIB)
+	$(bindings_env_asm) $(RUBY) bindings/ruby/conformance.rb
 
 lua-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(LUAJIT) bindings/lua/conformance.lua

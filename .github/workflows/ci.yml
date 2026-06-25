@@ -146,6 +146,26 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
+  # In-line-asm binding check: the one binding job that carries Keystone. It runs
+  # the Ruby conformance against libasmtest_emu_asm (emu + assembler), so the
+  # CallAsm path — binding -> asmtest_emu_call_asm shim -> Keystone -> emulator —
+  # is exercised end to end. The other bindings keep their CallAsm case but it
+  # self-skips against the Keystone-free libasmtest_emu in their own images, so
+  # none of them pay the Keystone build. Native (the runner ships Ruby), not
+  # Docker, so no per-language image rebuilds the assembler.
+  bindings-asm:
+    name: bindings-asm (ruby)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libunicorn + pkg-config
+        run: make deps DEPS_ARGS=--emu
+      - name: Build and install Keystone from source
+        run: ./scripts/build-keystone.sh
+      - name: Run the Ruby in-line-asm conformance (libasmtest_emu_asm)
+        run: make ruby-asm-test
+
   # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
   # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:
   # the fast native lane via __attribute__((ms_abi)) on the runner itself, then a

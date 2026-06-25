@@ -37,8 +37,22 @@ namespace Asmtest
         [DllImport(EMU)] public static extern void asmtest_emu_result_free(IntPtr r);
         [DllImport(EMU)] public static extern int asmtest_emu_call2(
             IntPtr e, IntPtr fn, long a0, long a1, IntPtr o);
+        // Optional: present only in the emu+asm native lib (Keystone). Guard
+        // every call with AsmAvailable so a plain libasmtest_emu never hits a
+        // missing entry point.
+        [DllImport(EMU)] public static extern int asmtest_emu_call_asm(
+            IntPtr e, string src, long a0, long a1, IntPtr o);
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_x86_reg(IntPtr r, string name);
+
+        // Whether the loaded "asmtest_emu" library exports the in-line assembler.
+        public static readonly bool AsmAvailable = ProbeAsm();
+        static bool ProbeAsm()
+        {
+            try { return NativeLibrary.TryGetExport(NativeLibrary.Load(EMU),
+                                                    "asmtest_emu_call_asm", out _); }
+            catch { return false; }
+        }
     }
 
     /// <summary>Thrown by the <see cref="Assert"/> helpers on a failed check.</summary>
@@ -100,6 +114,22 @@ namespace Asmtest
         {
             var res = new EmuResult();
             Native.asmtest_emu_call2(_h, fn, a0, a1, res.Handle);
+            return res;
+        }
+
+        /// <summary>Whether the loaded native lib carries the in-line assembler (Keystone).</summary>
+        public static bool AsmAvailable => Native.AsmAvailable;
+
+        /// <summary>
+        /// Assemble x86-64 <paramref name="src"/> (Intel syntax) and run it with two
+        /// integer args. <paramref name="ok"/> is false if it failed to assemble. Only
+        /// when <see cref="AsmAvailable"/> — needs the Keystone-backed native lib.
+        /// </summary>
+        public EmuResult CallAsm(string src, long a0, long a1, out bool ok)
+        {
+            if (!Native.AsmAvailable) throw new AsmtestException("in-line assembler not in this build");
+            var res = new EmuResult();
+            ok = Native.asmtest_emu_call_asm(_h, src, a0, a1, res.Handle) != 0;
             return res;
         }
 

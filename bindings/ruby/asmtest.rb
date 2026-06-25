@@ -34,6 +34,14 @@ module Asmtest
     Fiddle::Function.new(lib[name], args, ret)
   end
 
+  # Like func, but returns nil if the symbol is absent — for optional entry
+  # points such as the in-line assembler (present only in the emu+asm lib).
+  def self.func_opt(lib, name, args, ret)
+    func(lib, name, args, ret)
+  rescue Fiddle::DLError
+    nil
+  end
+
   # All native entry points, bound once and kept private to the module.
   FN = {
     corpus_routine: (C && func(C, "asmtest_corpus_routine", [VOIDP], VOIDP)),
@@ -50,6 +58,7 @@ module Asmtest
     emu_res_new:    func(L, "asmtest_emu_result_new", [], VOIDP),
     emu_res_free:   func(L, "asmtest_emu_result_free", [VOIDP], VOID),
     emu_call2:      func(L, "asmtest_emu_call2", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
+    emu_call_asm:   func_opt(L, "asmtest_emu_call_asm", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
     emu_reg:        func(L, "asmtest_emu_x86_reg", [VOIDP, VOIDP], LL),
   }.freeze
@@ -131,6 +140,21 @@ module Asmtest
       res = EmuResult.new
       FN[:emu_call2].call(@h, fn, a0, a1, res.h)
       res
+    end
+
+    # Whether the loaded native lib has the in-line assembler (Keystone).
+    def asm_available?
+      !FN[:emu_call_asm].nil?
+    end
+
+    # Assemble x86-64 +src+ (Intel syntax) via Keystone and run it with two
+    # integer args; returns [EmuResult, ok] (ok is false if it didn't assemble).
+    # Only when #asm_available? — needs the emu+asm native lib.
+    def call_asm(src, a0, a1)
+      raise Error, "in-line assembler not in this build" unless asm_available?
+      res = EmuResult.new
+      ok = FN[:emu_call_asm].call(@h, src, a0, a1, res.h) != 0
+      [res, ok]
     end
 
     def close

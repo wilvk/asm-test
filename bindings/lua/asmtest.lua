@@ -27,6 +27,7 @@ void  emu_close(void *e);
 void *asmtest_emu_result_new(void);
 void  asmtest_emu_result_free(void *r);
 int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
+int   asmtest_emu_call_asm(void *e, const char *src, long a0, long a1, void *out);
 int   asmtest_emu_result_faulted(void *r);
 unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
 ]])
@@ -35,6 +36,10 @@ local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB to libasmtest
 local corpus_path = os.getenv("ASMTEST_CORPUS_LIB")
 local L = ffi.load(emu_path)
 local C = corpus_path and ffi.load(corpus_path) or nil
+
+-- The in-line assembler (Keystone) is present only in the emu+asm lib; probe for
+-- its symbol so the binding degrades cleanly against the plain libasmtest_emu.
+local HAS_ASM = pcall(function() return L.asmtest_emu_call_asm end)
 
 local M = {}
 
@@ -77,6 +82,16 @@ function Emu:call2(fn, a0, a1)
   local res = new_result()
   L.asmtest_emu_call2(self.h, fn, a0, a1, res.h)
   return res
+end
+-- Whether the loaded native lib carries the in-line assembler.
+function Emu:asm_available() return HAS_ASM end
+-- Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two integer
+-- args; returns res, ok. Only when :asm_available() — needs the emu+asm lib.
+function Emu:call_asm(src, a0, a1)
+  assert(HAS_ASM, "in-line assembler not in this build")
+  local res = new_result()
+  local ok = L.asmtest_emu_call_asm(self.h, src, a0, a1, res.h) ~= 0
+  return res, ok
 end
 function Emu:close() if self.h then L.emu_close(self.h); self.h = nil end end
 

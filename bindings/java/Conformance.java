@@ -51,6 +51,16 @@ public class Conformance {
             check("emu.add_signed", !res.faulted() && res.reg("rax") == 42);
         }
 
+        // --- Tier 1: in-line assembly (Keystone) replays add_signed ------- //
+        // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
+        try (Asmtest.Emu e = new Asmtest.Emu()) {
+            if (e.asmAvailable()) {
+                try (Asmtest.EmuResult res = e.callAsm("mov rax, rdi; add rax, rsi; ret", 40L, 2L)) {
+                    check("asm.add_signed", !res.faulted() && res.reg("rax") == 42);
+                }
+            }
+        }
+
         // --- Tier 2: idiomatic assertions pass on good input -------------- //
         boolean t2pass = true;
         try (Asmtest.Regs r = new Asmtest.Regs()) {

@@ -58,6 +58,13 @@ withRegs((r) => {
   const res = e.call2(routine('add_signed'), 40, 2);
   check('emu.add_signed', !res.faulted() && res.reg('rax') === 42);
   res.free();
+
+  // in-line assembly (Keystone) replays add_signed, only if the lib has it
+  if (e.asmAvailable()) {
+    const { res: ares, ok } = e.callAsm('mov rax, rdi; add rax, rsi; ret', 40, 2);
+    check('asm.add_signed', ok && !ares.faulted() && ares.reg('rax') === 42);
+    ares.free();
+  }
   e.close();
 }
 

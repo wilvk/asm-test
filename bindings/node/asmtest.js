@@ -38,6 +38,12 @@ const fn = {
   emuResNew: L.func('void *asmtest_emu_result_new()'),
   emuResFree: L.func('void asmtest_emu_result_free(void *)'),
   emuCall2: L.func('int asmtest_emu_call2(void *, void *, long, long, void *)'),
+  // Optional: the in-line assembler (Keystone) is only in the emu+asm lib. koffi
+  // throws here if the symbol is absent, so degrade to null against plain emu.
+  emuCallAsm: (() => {
+    try { return L.func('int asmtest_emu_call_asm(void *, const char *, long, long, void *)'); }
+    catch { return null; }
+  })(),
   emuFaulted: L.func('int asmtest_emu_result_faulted(void *)'),
   emuReg: L.func('uint64_t asmtest_emu_x86_reg(void *, const char *)'),
 };
@@ -87,6 +93,19 @@ class Emu {
     const res = new EmuResult();
     fn.emuCall2(this._h, routine, a0, a1, res._h);
     return res;
+  }
+  /** Whether the loaded native lib carries the in-line assembler (Keystone). */
+  asmAvailable() { return fn.emuCallAsm !== null; }
+  /**
+   * Assemble x86-64 `src` (Intel syntax) via Keystone and run it with two
+   * integer args. Returns { res, ok }. Only when asmAvailable() — needs the
+   * emu+asm native lib.
+   */
+  callAsm(src, a0, a1) {
+    if (!fn.emuCallAsm) throw new Error('in-line assembler not in this build');
+    const res = new EmuResult();
+    const ok = fn.emuCallAsm(this._h, src, a0, a1, res._h) !== 0;
+    return { res, ok };
   }
   close() { if (this._h) { fn.emuClose(this._h); this._h = null; } }
 }

@@ -22,8 +22,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   + `libunicorn`), `make docker-asm`, and a CI `asm` job on both x86-64 and arm64.
   Keystone has no Linux distro package, so `make deps DEPS_ARGS=--asm` points at
   `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
-  use). An opaque-handle FFI shim (`asmtest_emu_call_asm`) is in place for a
-  follow-up that exposes `CallAsm` through the language bindings. See the
+  use). The five dlopen bindings (.NET, Ruby, Lua, Node, Java) expose it as
+  `CallAsm` via an opaque-handle shim (`asmtest_emu_call_asm`) bound *optionally*:
+  it runs against the combined `libasmtest_emu_asm` lib and self-skips against the
+  Keystone-free `libasmtest_emu`, so the binding images pay no Keystone cost. A
+  native `bindings-asm` CI job exercises the path end to end (Ruby,
+  `make ruby-asm-test`). See the
   [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 - **Native Win64 tier (capture).** A Microsoft x64 (“Win64”) capture trampoline

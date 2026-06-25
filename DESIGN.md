@@ -178,8 +178,9 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   pkg-config gated, and deliberately kept out of `libasmtest_emu` so the
   Unicorn-only bindings are unaffected; `make asm-test` and a CI `asm` job
   (Keystone has no distro package, so it is source-built via
-  `scripts/build-keystone.sh`). A `CallAsm` binding entry point is a planned
-  follow-up. See
+  `scripts/build-keystone.sh`). The five dlopen bindings expose it as an optional
+  `CallAsm` (running against a separate `libasmtest_emu_asm`, self-skipping
+  otherwise), exercised by the native `bindings-asm` CI job. See
   [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
 
 The phases below are **planned**, ordered to deepen the framework's core
