@@ -117,6 +117,109 @@ func TestEmuXmmAndRflags(t *testing.T) {
 	}
 }
 
+// --- Tier 1: cross-arch emulator guests (raw bytes, any host) --------------
+
+// Each guest runs a tiny `add` routine assembled for its ISA (checked-in bytes),
+// emulated regardless of the host arch. Mirrors the C reference's emu_<arch>.add.
+func TestCrossArchEmu(t *testing.T) {
+	cases := []struct {
+		arch string
+		code []byte
+		reg  string
+	}{
+		{"arm64", []byte{0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6}, "x0"},
+		{"riscv", []byte{0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00}, "a0"},
+		{"arm", []byte{0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1}, "r0"},
+	}
+	for _, c := range cases {
+		t.Run(c.arch, func(t *testing.T) {
+			g := NewGuest(c.arch)
+			defer g.Close()
+			res := NewGuestResult(c.arch)
+			defer res.Free()
+			g.Call(c.code, []int64{40, 2}, res)
+			if res.Faulted() {
+				t.Fatalf("%s add: unexpected fault", c.arch)
+			}
+			AssertGuestReg(t, res, c.reg, 42)
+		})
+	}
+}
+
+// --- Tier 1: extended x86-64 emulator calls (raw bytes) --------------------
+
+func TestEmuWideInt(t *testing.T) {
+	// mov rax,rdi; add rax,rsi; add rax,rdx; ret — three args via CallBytes.
+	code := []byte{0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3}
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.CallBytes(code, []int64{10, 20, 12}, res)
+	AssertEmuReg(t, res, "rax", 42)
+}
+
+func TestEmuFP(t *testing.T) {
+	code := []byte{0xF2, 0x0F, 0x58, 0xC1, 0xC3} // addsd xmm0,xmm1; ret
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.CallFP(code, nil, []float64{1.5, 2.25}, res)
+	if got := res.XmmF64(0, 0); got != 3.75 {
+		t.Fatalf("xmm0: got %v, want 3.75", got)
+	}
+}
+
+func TestEmuVec(t *testing.T) {
+	code := []byte{0x0F, 0x58, 0xC1, 0xC3} // addps xmm0,xmm1; ret
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.CallVec(code, nil, [][4]float32{{1, 2, 3, 4}, {10, 20, 30, 40}}, res)
+	want := [4]float32{11, 22, 33, 44}
+	for i := 0; i < 4; i++ {
+		if got := res.XmmF32(0, i); got != want[i] {
+			t.Fatalf("xmm0 lane %d: got %v, want %v", i, got, want[i])
+		}
+	}
+}
+
+func TestEmuWin64(t *testing.T) {
+	code := []byte{0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3} // mov rax,rcx; add rax,rdx; ret
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	e.CallWin64(code, []int64{40, 2}, res)
+	AssertEmuReg(t, res, "rax", 42)
+}
+
+// --- Tier 1: execution trace / coverage (cross-arch arm64) -----------------
+
+// A two-block select (x0==0 ? 42 : 99). With x0=0 the entry block (offset 0) and
+// the .zero block (offset 12) are entered, the x0!=0 block (offset 4) is not.
+func TestEmuTrace(t *testing.T) {
+	code := []byte{
+		0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+		0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+	}
+	g := NewGuest("arm64")
+	defer g.Close()
+	res := NewGuestResult("arm64")
+	defer res.Free()
+	tr := NewTrace(64, 64)
+	defer tr.Free()
+	g.CallTraced(code, []int64{0}, tr, res)
+	AssertGuestReg(t, res, "x0", 42)
+	AssertCovered(t, tr, 0)
+	AssertCovered(t, tr, 12)
+	if tr.Covered(4) {
+		t.Fatal("block 4 should not be covered for x0=0")
+	}
+}
+
 // --- Tier 1: in-line assembly (Keystone), only when the lib carries it ------
 
 func TestInlineAsm(t *testing.T) {

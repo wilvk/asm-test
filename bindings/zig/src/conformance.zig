@@ -169,6 +169,107 @@ test "asm.inline_assembler" {
     }
 }
 
+// Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,
+// emulated regardless of the host arch — checked-in `add` routines per ISA.
+test "cross-arch emu guests" {
+    {
+        const code = [_]u8{ 0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6 };
+        const e = c.emu_arm64_open();
+        defer c.emu_arm64_close(e);
+        var res: c.emu_arm64_result_t = std.mem.zeroes(c.emu_arm64_result_t);
+        var args = [_]c_long{ 40, 2 };
+        _ = c.emu_arm64_call(e, &code, code.len, &args, 2, 0, &res);
+        try std.testing.expect(!res.faulted);
+        try std.testing.expectEqual(@as(c_ulong, 42), res.regs.x[0]);
+    }
+    {
+        const code = [_]u8{ 0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00 };
+        const e = c.emu_riscv_open();
+        defer c.emu_riscv_close(e);
+        var res: c.emu_riscv_result_t = std.mem.zeroes(c.emu_riscv_result_t);
+        var args = [_]c_long{ 40, 2 };
+        _ = c.emu_riscv_call(e, &code, code.len, &args, 2, 0, &res);
+        try std.testing.expect(!res.faulted);
+        try std.testing.expectEqual(@as(c_ulong, 42), res.regs.x[10]); // a0 == x10
+    }
+    {
+        const code = [_]u8{ 0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1 };
+        const e = c.emu_arm_open();
+        defer c.emu_arm_close(e);
+        var res: c.emu_arm_result_t = std.mem.zeroes(c.emu_arm_result_t);
+        var args = [_]c_long{ 40, 2 };
+        _ = c.emu_arm_call(e, &code, code.len, &args, 2, 0, &res);
+        try std.testing.expect(!res.faulted);
+        try std.testing.expectEqual(@as(u32, 42), res.regs.r[0]);
+    }
+}
+
+// Extended x86-64 emulator calls over raw bytes: wide integer args, FP args,
+// vector args, and the Win64 convention (host-portable via Unicorn).
+test "extended x86 emu calls" {
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    {
+        const code = [_]u8{ 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3 };
+        var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        var args = [_]c_long{ 10, 20, 12 };
+        _ = c.emu_call(e, &code, code.len, &args, 3, 0, &res);
+        try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+    }
+    {
+        const code = [_]u8{ 0xF2, 0x0F, 0x58, 0xC1, 0xC3 }; // addsd xmm0,xmm1; ret
+        var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        var ia = [_]c_long{0};
+        var fa = [_]f64{ 1.5, 2.25 };
+        _ = c.emu_call_fp(e, &code, code.len, &ia, 0, &fa, 2, 0, &res);
+        try std.testing.expectEqual(@as(f64, 3.75), res.regs.xmm[0].f64[0]);
+    }
+    {
+        const code = [_]u8{ 0x0F, 0x58, 0xC1, 0xC3 }; // addps xmm0,xmm1; ret
+        var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        var ia = [_]c_long{0};
+        var va: [2]c.emu_vec128_t = std.mem.zeroes([2]c.emu_vec128_t);
+        va[0].f32 = .{ 1, 2, 3, 4 };
+        va[1].f32 = .{ 10, 20, 30, 40 };
+        _ = c.emu_call_vec(e, &code, code.len, &ia, 0, &va, 2, 0, &res);
+        try std.testing.expectEqual(@as(f32, 11), res.regs.xmm[0].f32[0]);
+        try std.testing.expectEqual(@as(f32, 44), res.regs.xmm[0].f32[3]);
+    }
+    {
+        const code = [_]u8{ 0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3 }; // mov rax,rcx; add rax,rdx; ret
+        var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+        var args = [_]c_long{ 40, 2 };
+        _ = c.emu_call_win64(e, &code, code.len, &args, 2, 0, &res);
+        try std.testing.expectEqual(@as(c_ulong, 42), res.regs.rax);
+    }
+}
+
+// Execution trace / coverage: a two-block arm64 select; with x0=0 the entry block
+// (offset 0) and the .zero block (offset 12) are entered, not offset 4.
+test "execution trace coverage" {
+    const sel = [_]u8{
+        0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03,
+        0x5F, 0xD6, 0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+    };
+    const e = c.emu_arm64_open();
+    defer c.emu_arm64_close(e);
+    var ib: [64]u64 = undefined;
+    var bb: [64]u64 = undefined;
+    var tr: c.emu_trace_t = std.mem.zeroes(c.emu_trace_t);
+    tr.insns = &ib;
+    tr.insns_cap = ib.len;
+    tr.blocks = &bb;
+    tr.blocks_cap = bb.len;
+    var res: c.emu_arm64_result_t = std.mem.zeroes(c.emu_arm64_result_t);
+    var args = [_]c_long{0};
+    _ = c.emu_arm64_call_traced(e, &sel, sel.len, &args, 1, 0, &res, &tr);
+    try std.testing.expect(!res.faulted);
+    try std.testing.expectEqual(@as(c_ulong, 42), res.regs.x[0]);
+    try std.testing.expect(c.emu_trace_covered(&tr, 0));
+    try std.testing.expect(c.emu_trace_covered(&tr, 12));
+    try std.testing.expect(!c.emu_trace_covered(&tr, 4));
+}
+
 // --- Tier-2 idiomatic assertions (error-union helpers over std.testing) --- //
 fn assertRet(r: *const c.regs_t, expected: u64) !void {
     try std.testing.expectEqual(@as(c_ulong, expected), r.ret);

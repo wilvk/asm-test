@@ -231,15 +231,96 @@ class Emulator:
         if not self._h:
             raise RuntimeError("emu_open failed")
 
+    @staticmethod
+    def _code(fn, code_len):
+        """Resolve a routine reference to (keepalive, addr, length). `fn` may be a
+        ctypes function / int address (a 64-byte code window is read) or a `bytes`
+        object of raw machine code (run directly — the cross-arch guests and the
+        raw-bytes corpus cases use this)."""
+        if isinstance(fn, (bytes, bytearray)):
+            b = bytes(fn)
+            buf = C.create_string_buffer(b)  # len(b)+1 bytes, NUL-terminated
+            return buf, C.cast(buf, C.c_void_p).value, len(b)
+        return None, _addr(fn), code_len
+
     def call(self, fn, args=(), code_len=64, max_insns=0):
         """Copy `code_len` bytes of `fn` and run with integer args in regs."""
         c = load()
+        keep, addr, clen = self._code(fn, code_len)
         out = C.create_string_buffer(c.size("emu_result_t"))
         args = list(args)
         ran = c.lib.emu_call(
-            self._h, C.c_void_p(_addr(fn)), C.c_size_t(code_len),
+            self._h, C.c_void_p(addr), C.c_size_t(clen),
             C.cast(_longs(args, max(len(args), 1)), C.c_void_p),
             C.c_int(len(args)), C.c_uint64(max_insns), C.cast(out, C.c_void_p),
+        )
+        return EmuResult(out, bool(ran))
+
+    def call_fp(self, fn, iargs=(), fargs=(), code_len=64, max_insns=0):
+        """Run `fn` marshalling up to 8 doubles into the FP arg registers
+        (xmm0..7); the scalar double return is ``res.xmm_f64(0, 0)``."""
+        c = load()
+        keep, addr, clen = self._code(fn, code_len)
+        out = C.create_string_buffer(c.size("emu_result_t"))
+        iargs, fargs = list(iargs), list(fargs)
+        fa = (C.c_double * 8)()
+        for i, val in enumerate(fargs[:8]):
+            fa[i] = float(val)
+        ran = c.lib.emu_call_fp(
+            self._h, C.c_void_p(addr), C.c_size_t(clen),
+            C.cast(_longs(iargs, max(len(iargs), 1)), C.c_void_p), C.c_int(len(iargs)),
+            C.cast(fa, C.c_void_p), C.c_int(len(fargs)),
+            C.c_uint64(max_insns), C.cast(out, C.c_void_p),
+        )
+        return EmuResult(out, bool(ran))
+
+    def call_vec(self, fn, iargs=(), vargs=(), code_len=64, max_insns=0):
+        """Run `fn` marshalling up to 8 128-bit vectors (16-byte `bytes` each)
+        into xmm0..7; a vector return is ``res.xmm_f32(0, lane)``."""
+        c = load()
+        keep, addr, clen = self._code(fn, code_len)
+        out = C.create_string_buffer(c.size("emu_result_t"))
+        iargs, vargs = list(iargs), list(vargs)
+        vb = (C.c_ubyte * (8 * 16))()
+        for i, vec in enumerate(vargs[:8]):
+            raw = bytes(vec)
+            if len(raw) != 16:
+                raise ValueError("each vector arg must be exactly 16 bytes")
+            vb[i * 16 : i * 16 + 16] = raw
+        ran = c.lib.emu_call_vec(
+            self._h, C.c_void_p(addr), C.c_size_t(clen),
+            C.cast(_longs(iargs, max(len(iargs), 1)), C.c_void_p), C.c_int(len(iargs)),
+            C.cast(vb, C.c_void_p), C.c_int(len(vargs)),
+            C.c_uint64(max_insns), C.cast(out, C.c_void_p),
+        )
+        return EmuResult(out, bool(ran))
+
+    def call_win64(self, fn, args=(), code_len=64, max_insns=0):
+        """Run `fn` under the Microsoft x64 (Win64) convention — integer args in
+        rcx, rdx, r8, r9 — so a Win64 routine can be tested on a System V host."""
+        c = load()
+        keep, addr, clen = self._code(fn, code_len)
+        out = C.create_string_buffer(c.size("emu_result_t"))
+        args = list(args)
+        ran = c.lib.emu_call_win64(
+            self._h, C.c_void_p(addr), C.c_size_t(clen),
+            C.cast(_longs(args, max(len(args), 1)), C.c_void_p),
+            C.c_int(len(args)), C.c_uint64(max_insns), C.cast(out, C.c_void_p),
+        )
+        return EmuResult(out, bool(ran))
+
+    def call_traced(self, fn, args=(), trace=None, code_len=64, max_insns=0):
+        """Like :meth:`call`, but record an execution trace / basic-block coverage
+        into `trace` (a :class:`Trace`)."""
+        c = load()
+        keep, addr, clen = self._code(fn, code_len)
+        out = C.create_string_buffer(c.size("emu_result_t"))
+        args = list(args)
+        th = trace.handle if trace is not None else None
+        ran = c.lib.emu_call_traced(
+            self._h, C.c_void_p(addr), C.c_size_t(clen),
+            C.cast(_longs(args, max(len(args), 1)), C.c_void_p),
+            C.c_int(len(args)), C.c_uint64(max_insns), C.cast(out, C.c_void_p), th,
         )
         return EmuResult(out, bool(ran))
 
@@ -271,6 +352,204 @@ class Emulator:
     def close(self):
         if self._h:
             load().lib.emu_close(self._h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+# ------------------------------------------------------------------ #
+# Execution trace / coverage                                         #
+# ------------------------------------------------------------------ #
+class Trace:
+    """An opaque execution-trace / basic-block coverage recorder. Pass it to
+    :meth:`Emulator.call_traced` (or :meth:`GuestEmulator.call_traced`) to record,
+    then ask which block byte-offsets were entered. Use as a context manager."""
+
+    def __init__(self, insns_cap=4096, blocks_cap=4096):
+        self._h = load().lib.asmtest_emu_trace_new(insns_cap, blocks_cap)
+        if not self._h:
+            raise RuntimeError("asmtest_emu_trace_new failed")
+
+    @property
+    def handle(self):
+        return self._h
+
+    def covered(self, off):
+        """True if the basic block at byte-offset `off` (from the routine entry)
+        was entered."""
+        return bool(load().lib.asmtest_emu_trace_covered(self._h, C.c_uint64(off)))
+
+    @property
+    def insns_total(self):
+        return load().lib.asmtest_emu_trace_insns_total(self._h)
+
+    @property
+    def blocks_len(self):
+        return load().lib.asmtest_emu_trace_blocks_len(self._h)
+
+    def free(self):
+        if self._h:
+            load().lib.asmtest_emu_trace_free(self._h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.free()
+
+
+# ------------------------------------------------------------------ #
+# Cross-arch emulator guests (AArch64 / RISC-V / ARM32)              #
+# ------------------------------------------------------------------ #
+# These guests run *raw machine-code bytes* (there is no host routine to copy),
+# so they emulate regardless of the host architecture. Results are read by
+# register name through the opaque per-arch accessors.
+_GUEST_VEC_F64 = {
+    "arm64": "asmtest_emu_arm64_vec_f64",
+    "arm": "asmtest_emu_arm_q_f64",
+    "riscv": "asmtest_emu_riscv_f_f64",
+}
+
+
+class GuestResult:
+    """A cross-arch guest run's outcome. Faults are data; registers are read by
+    name (``"x0"``/``"sp"`` for arm64, ``"a0"``/``"x10"`` for riscv, ``"r0"`` for
+    arm)."""
+
+    def __init__(self, handle, arch):
+        self._h = handle
+        self.arch = arch
+
+    @property
+    def faulted(self):
+        return bool(load().lib.asmtest_emu_result_faulted(self._h))
+
+    @property
+    def fault_addr(self):
+        return load().lib.asmtest_emu_result_fault_addr(self._h)
+
+    @property
+    def fault_kind(self):
+        return load().lib.asmtest_emu_result_fault_kind(self._h)
+
+    def reg(self, name):
+        fn = getattr(load().lib, f"asmtest_emu_{self.arch}_reg")
+        return fn(self._h, name.encode())
+
+    def vec_f64(self, index=0, lane=0):
+        fn = getattr(load().lib, _GUEST_VEC_F64[self.arch])
+        return fn(self._h, C.c_int(index), C.c_int(lane))
+
+    def free(self):
+        if self._h:
+            getattr(load().lib, f"asmtest_emu_{self.arch}_result_free")(self._h)
+            self._h = None
+
+
+class GuestEmulator:
+    """A cross-arch Unicorn guest — ``"arm64"``, ``"riscv"``, or ``"arm"`` — that
+    runs raw machine-code bytes on any host. Use as a context manager."""
+
+    _ARCHS = ("arm64", "riscv", "arm")
+
+    def __init__(self, arch):
+        if arch not in self._ARCHS:
+            raise ValueError(f"unknown guest arch: {arch!r} (use {self._ARCHS})")
+        c = load()
+        if not c.has_emu:
+            raise RuntimeError(
+                "emulator tier unavailable: load libasmtest_emu "
+                "(build it with `make shared-emu`)"
+            )
+        self.arch = arch
+        self._open = getattr(c.lib, f"emu_{arch}_open")
+        self._h = self._open()
+        if not self._h:
+            raise RuntimeError(f"emu_{arch}_open failed")
+
+    def _new_result(self):
+        return getattr(load().lib, f"asmtest_emu_{self.arch}_result_new")()
+
+    def call(self, code, args=(), max_insns=0):
+        """Run raw machine-code `code` (bytes) with integer args in the ABI arg
+        registers (x0..x5 / a0..a7 / r0..r3). Returns a :class:`GuestResult`."""
+        c = load()
+        b = bytes(code)
+        buf = C.create_string_buffer(b)
+        res = self._new_result()
+        args = list(args)
+        getattr(c.lib, f"emu_{self.arch}_call")(
+            self._h, C.cast(buf, C.c_void_p), C.c_size_t(len(b)),
+            C.cast(_longs(args, max(len(args), 1)), C.c_void_p),
+            C.c_int(len(args)), C.c_uint64(max_insns), res,
+        )
+        return GuestResult(res, self.arch)
+
+    def call_fp(self, code, iargs=(), fargs=(), max_insns=0):
+        """Run `code` marshalling doubles into the guest FP arg registers; the
+        scalar double return is ``res.vec_f64(0, 0)``."""
+        c = load()
+        b = bytes(code)
+        buf = C.create_string_buffer(b)
+        res = self._new_result()
+        iargs, fargs = list(iargs), list(fargs)
+        fa = (C.c_double * 8)()
+        for i, val in enumerate(fargs[:8]):
+            fa[i] = float(val)
+        getattr(c.lib, f"emu_{self.arch}_call_fp")(
+            self._h, C.cast(buf, C.c_void_p), C.c_size_t(len(b)),
+            C.cast(_longs(iargs, max(len(iargs), 1)), C.c_void_p), C.c_int(len(iargs)),
+            C.cast(fa, C.c_void_p), C.c_int(len(fargs)), C.c_uint64(max_insns), res,
+        )
+        return GuestResult(res, self.arch)
+
+    def call_vec(self, code, iargs=(), vargs=(), max_insns=0):
+        """Run `code` marshalling 128-bit vectors into the guest vector arg
+        registers (arm64 / arm only; RISC-V has no Unicorn vector file)."""
+        if self.arch == "riscv":
+            raise RuntimeError("the RISC-V guest has no vector register file")
+        c = load()
+        b = bytes(code)
+        buf = C.create_string_buffer(b)
+        res = self._new_result()
+        iargs, vargs = list(iargs), list(vargs)
+        vb = (C.c_ubyte * (8 * 16))()
+        for i, vec in enumerate(vargs[:8]):
+            raw = bytes(vec)
+            if len(raw) != 16:
+                raise ValueError("each vector arg must be exactly 16 bytes")
+            vb[i * 16 : i * 16 + 16] = raw
+        getattr(c.lib, f"emu_{self.arch}_call_vec")(
+            self._h, C.cast(buf, C.c_void_p), C.c_size_t(len(b)),
+            C.cast(_longs(iargs, max(len(iargs), 1)), C.c_void_p), C.c_int(len(iargs)),
+            C.cast(vb, C.c_void_p), C.c_int(len(vargs)), C.c_uint64(max_insns), res,
+        )
+        return GuestResult(res, self.arch)
+
+    def call_traced(self, code, args=(), trace=None, max_insns=0):
+        """Like :meth:`call`, but record an execution trace / coverage into
+        `trace` (a :class:`Trace`)."""
+        c = load()
+        b = bytes(code)
+        buf = C.create_string_buffer(b)
+        res = self._new_result()
+        args = list(args)
+        th = trace.handle if trace is not None else None
+        getattr(c.lib, f"emu_{self.arch}_call_traced")(
+            self._h, C.cast(buf, C.c_void_p), C.c_size_t(len(b)),
+            C.cast(_longs(args, max(len(args), 1)), C.c_void_p),
+            C.c_int(len(args)), C.c_uint64(max_insns), res, th,
+        )
+        return GuestResult(res, self.arch)
+
+    def close(self):
+        if self._h:
+            getattr(load().lib, f"emu_{self.arch}_close")(self._h)
             self._h = None
 
     def __enter__(self):

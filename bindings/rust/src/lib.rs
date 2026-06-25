@@ -514,3 +514,265 @@ pub fn assemble(
     buf.truncate(n);
     Ok(buf)
 }
+
+// --- Extended x86 emu calls + cross-arch guests + trace -------------------- //
+//
+// The cross-arch guests (AArch64 / RISC-V / ARM32) run raw machine-code bytes,
+// so they emulate on any host. Their per-arch result struct is read through the
+// opaque accessors (no extra struct layout mirrored here); the x86-64 extended
+// calls reuse the typed `EmuResult` above.
+
+extern "C" {
+    fn emu_call_fp(e: *mut emu_t, f: *const c_void, len: usize, ia: *const c_long,
+                   ni: c_int, fa: *const f64, nf: c_int, mi: u64, out: *mut EmuResult) -> bool;
+    fn emu_call_vec(e: *mut emu_t, f: *const c_void, len: usize, ia: *const c_long,
+                    ni: c_int, va: *const Vec128, nv: c_int, mi: u64, out: *mut EmuResult) -> bool;
+    fn emu_call_win64(e: *mut emu_t, f: *const c_void, len: usize, args: *const c_long,
+                      nargs: c_int, mi: u64, out: *mut EmuResult) -> bool;
+    fn emu_call_traced(e: *mut emu_t, f: *const c_void, len: usize, args: *const c_long,
+                       nargs: c_int, mi: u64, out: *mut EmuResult, trace: *mut c_void) -> bool;
+
+    fn asmtest_emu_result_faulted(r: *const c_void) -> c_int;
+    fn asmtest_emu_trace_new(ic: usize, bc: usize) -> *mut c_void;
+    fn asmtest_emu_trace_free(t: *mut c_void);
+    fn asmtest_emu_trace_covered(t: *const c_void, off: u64) -> c_int;
+
+    fn emu_arm64_open() -> *mut c_void;
+    fn emu_arm64_close(e: *mut c_void);
+    fn emu_arm64_call(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                      nargs: c_int, mi: u64, out: *mut c_void) -> bool;
+    fn emu_arm64_call_traced(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                             nargs: c_int, mi: u64, out: *mut c_void, trace: *mut c_void) -> bool;
+    fn asmtest_emu_arm64_result_new() -> *mut c_void;
+    fn asmtest_emu_arm64_result_free(r: *mut c_void);
+    fn asmtest_emu_arm64_reg(r: *const c_void, name: *const c_char) -> u64;
+
+    fn emu_riscv_open() -> *mut c_void;
+    fn emu_riscv_close(e: *mut c_void);
+    fn emu_riscv_call(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                      nargs: c_int, mi: u64, out: *mut c_void) -> bool;
+    fn asmtest_emu_riscv_result_new() -> *mut c_void;
+    fn asmtest_emu_riscv_result_free(r: *mut c_void);
+    fn asmtest_emu_riscv_reg(r: *const c_void, name: *const c_char) -> u64;
+
+    fn emu_arm_open() -> *mut c_void;
+    fn emu_arm_close(e: *mut c_void);
+    fn emu_arm_call(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                    nargs: c_int, mi: u64, out: *mut c_void) -> bool;
+    fn asmtest_emu_arm_result_new() -> *mut c_void;
+    fn asmtest_emu_arm_result_free(r: *mut c_void);
+    fn asmtest_emu_arm_reg(r: *const c_void, name: *const c_char) -> u64;
+}
+
+impl Emulator {
+    /// Run raw x86-64 machine-code `code` with up to six integer args.
+    pub fn call_bytes(&self, code: &[u8], args: &[i64]) -> EmuResult {
+        let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+        let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+        let mut out = EmuResult::default();
+        unsafe {
+            emu_call(self.h, code.as_ptr() as *const c_void, code.len(), ptr,
+                     args.len() as c_int, 0, &mut out);
+        }
+        out
+    }
+
+    /// Run raw bytes marshalling doubles into the FP arg registers; the scalar
+    /// double return is `res.regs.xmm[0].f64()[0]`.
+    pub fn call_fp(&self, code: &[u8], iargs: &[i64], fargs: &[f64]) -> EmuResult {
+        let ia: Vec<c_long> = iargs.iter().map(|x| *x as c_long).collect();
+        let ip = if ia.is_empty() { std::ptr::null() } else { ia.as_ptr() };
+        let fp = if fargs.is_empty() { std::ptr::null() } else { fargs.as_ptr() };
+        let mut out = EmuResult::default();
+        unsafe {
+            emu_call_fp(self.h, code.as_ptr() as *const c_void, code.len(), ip,
+                        iargs.len() as c_int, fp, fargs.len() as c_int, 0, &mut out);
+        }
+        out
+    }
+
+    /// Run raw bytes marshalling 128-bit vectors into xmm0..7.
+    pub fn call_vec(&self, code: &[u8], iargs: &[i64], vargs: &[Vec128]) -> EmuResult {
+        let ia: Vec<c_long> = iargs.iter().map(|x| *x as c_long).collect();
+        let ip = if ia.is_empty() { std::ptr::null() } else { ia.as_ptr() };
+        let vp = if vargs.is_empty() { std::ptr::null() } else { vargs.as_ptr() };
+        let mut out = EmuResult::default();
+        unsafe {
+            emu_call_vec(self.h, code.as_ptr() as *const c_void, code.len(), ip,
+                         iargs.len() as c_int, vp, vargs.len() as c_int, 0, &mut out);
+        }
+        out
+    }
+
+    /// Run raw bytes under the Microsoft x64 (Win64) convention.
+    pub fn call_win64(&self, code: &[u8], args: &[i64]) -> EmuResult {
+        let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+        let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+        let mut out = EmuResult::default();
+        unsafe {
+            emu_call_win64(self.h, code.as_ptr() as *const c_void, code.len(), ptr,
+                           args.len() as c_int, 0, &mut out);
+        }
+        out
+    }
+
+    /// Like [`Emulator::call_bytes`], but record an execution trace / coverage.
+    pub fn call_traced(&self, code: &[u8], args: &[i64], trace: &Trace) -> EmuResult {
+        let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+        let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+        let mut out = EmuResult::default();
+        unsafe {
+            emu_call_traced(self.h, code.as_ptr() as *const c_void, code.len(), ptr,
+                            args.len() as c_int, 0, &mut out, trace.h);
+        }
+        out
+    }
+}
+
+/// An opaque execution-trace / basic-block coverage recorder.
+pub struct Trace {
+    h: *mut c_void,
+}
+
+impl Trace {
+    pub fn new() -> Self {
+        Trace { h: unsafe { asmtest_emu_trace_new(4096, 4096) } }
+    }
+    /// True if the basic block at byte-offset `off` (from the routine entry) was entered.
+    pub fn covered(&self, off: u64) -> bool {
+        unsafe { asmtest_emu_trace_covered(self.h, off) != 0 }
+    }
+}
+
+impl Default for Trace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Trace {
+    fn drop(&mut self) {
+        unsafe { asmtest_emu_trace_free(self.h) };
+    }
+}
+
+/// A cross-arch guest ISA.
+#[derive(Clone, Copy, PartialEq)]
+pub enum GuestArch {
+    Arm64,
+    Riscv,
+    Arm,
+}
+
+/// A cross-arch run's outcome; registers are read by name. Dropping it frees the
+/// underlying handle.
+pub struct GuestResult {
+    h: *mut c_void,
+    arch: GuestArch,
+}
+
+impl GuestResult {
+    pub fn faulted(&self) -> bool {
+        unsafe { asmtest_emu_result_faulted(self.h) != 0 }
+    }
+    /// Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0").
+    pub fn reg(&self, name: &str) -> u64 {
+        let c = match CString::new(name) {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        unsafe {
+            match self.arch {
+                GuestArch::Arm64 => asmtest_emu_arm64_reg(self.h, c.as_ptr()),
+                GuestArch::Riscv => asmtest_emu_riscv_reg(self.h, c.as_ptr()),
+                GuestArch::Arm => asmtest_emu_arm_reg(self.h, c.as_ptr()),
+            }
+        }
+    }
+}
+
+impl Drop for GuestResult {
+    fn drop(&mut self) {
+        unsafe {
+            match self.arch {
+                GuestArch::Arm64 => asmtest_emu_arm64_result_free(self.h),
+                GuestArch::Riscv => asmtest_emu_riscv_result_free(self.h),
+                GuestArch::Arm => asmtest_emu_arm_result_free(self.h),
+            }
+        }
+    }
+}
+
+/// A cross-arch Unicorn guest running raw machine-code bytes — emulated on any
+/// host. Dropping it closes the handle.
+pub struct Guest {
+    h: *mut c_void,
+    arch: GuestArch,
+}
+
+impl Guest {
+    pub fn new(arch: GuestArch) -> Option<Self> {
+        let h = unsafe {
+            match arch {
+                GuestArch::Arm64 => emu_arm64_open(),
+                GuestArch::Riscv => emu_riscv_open(),
+                GuestArch::Arm => emu_arm_open(),
+            }
+        };
+        if h.is_null() {
+            None
+        } else {
+            Some(Guest { h, arch })
+        }
+    }
+
+    fn new_result(&self) -> *mut c_void {
+        unsafe {
+            match self.arch {
+                GuestArch::Arm64 => asmtest_emu_arm64_result_new(),
+                GuestArch::Riscv => asmtest_emu_riscv_result_new(),
+                GuestArch::Arm => asmtest_emu_arm_result_new(),
+            }
+        }
+    }
+
+    /// Run raw machine-code `code` with integer args in the guest ABI registers.
+    pub fn call(&self, code: &[u8], args: &[i64]) -> GuestResult {
+        let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+        let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+        let out = self.new_result();
+        unsafe {
+            let cp = code.as_ptr() as *const c_void;
+            match self.arch {
+                GuestArch::Arm64 => emu_arm64_call(self.h, cp, code.len(), ptr, args.len() as c_int, 0, out),
+                GuestArch::Riscv => emu_riscv_call(self.h, cp, code.len(), ptr, args.len() as c_int, 0, out),
+                GuestArch::Arm => emu_arm_call(self.h, cp, code.len(), ptr, args.len() as c_int, 0, out),
+            };
+        }
+        GuestResult { h: out, arch: self.arch }
+    }
+
+    /// Like [`Guest::call`], but record an execution trace / coverage (AArch64).
+    pub fn call_traced(&self, code: &[u8], args: &[i64], trace: &Trace) -> GuestResult {
+        let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+        let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+        let out = self.new_result();
+        unsafe {
+            emu_arm64_call_traced(self.h, code.as_ptr() as *const c_void, code.len(), ptr,
+                                  args.len() as c_int, 0, out, trace.h);
+        }
+        GuestResult { h: out, arch: self.arch }
+    }
+}
+
+impl Drop for Guest {
+    fn drop(&mut self) {
+        unsafe {
+            match self.arch {
+                GuestArch::Arm64 => emu_arm64_close(self.h),
+                GuestArch::Riscv => emu_riscv_close(self.h),
+                GuestArch::Arm => emu_arm_close(self.h),
+            }
+        }
+    }
+}

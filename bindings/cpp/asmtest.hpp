@@ -189,6 +189,88 @@ class Emu {
         return res;
     }
 
+    /// Run raw machine-code `code` (length `len`) with up to six integer args —
+    /// more than the two of `call`. Faults are data.
+    emu_result_t call_bytes(const void *code, std::size_t len,
+                            std::initializer_list<long> args = {},
+                            std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_call(e_, code, len, a, static_cast<int>(args.size()), max_insns,
+                 &res);
+        return res;
+    }
+
+    /// Run raw bytes marshalling doubles into the FP arg registers (xmm0..7);
+    /// the scalar double return is res.regs.xmm[0].f64[0].
+    emu_result_t call_fp(const void *code, std::size_t len,
+                         std::initializer_list<long> iargs,
+                         std::initializer_list<double> fargs,
+                         std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long ia[6];
+        detail::fill6(ia, iargs);
+        double fa[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        double *p = fa;
+        for (double v : fargs) {
+            if (p == fa + 8)
+                break;
+            *p++ = v;
+        }
+        emu_call_fp(e_, code, len, ia, static_cast<int>(iargs.size()), fa,
+                    static_cast<int>(fargs.size()), max_insns, &res);
+        return res;
+    }
+
+    /// Run raw bytes marshalling 128-bit vectors into xmm0..7; a vector return is
+    /// res.regs.xmm[0].
+    emu_result_t call_vec(const void *code, std::size_t len,
+                          std::initializer_list<long> iargs,
+                          std::initializer_list<vec128_t> vargs,
+                          std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long ia[6];
+        detail::fill6(ia, iargs);
+        std::array<emu_vec128_t, 8> va{};
+        std::size_t i = 0;
+        for (const vec128_t &v : vargs) {
+            if (i == va.size())
+                break;
+            for (int l = 0; l < 4; ++l)
+                va[i].f32[l] = v.f32[l];
+            ++i;
+        }
+        emu_call_vec(e_, code, len, ia, static_cast<int>(iargs.size()),
+                     va.data(), static_cast<int>(vargs.size()), max_insns, &res);
+        return res;
+    }
+
+    /// Run raw bytes under the Microsoft x64 (Win64) convention — integer args in
+    /// rcx, rdx, r8, r9 — so a Win64 routine can be tested on a System V host.
+    emu_result_t call_win64(const void *code, std::size_t len,
+                            std::initializer_list<long> args = {},
+                            std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_call_win64(e_, code, len, a, static_cast<int>(args.size()),
+                       max_insns, &res);
+        return res;
+    }
+
+    /// Like call_bytes, but record an execution trace / coverage into `tr`.
+    emu_result_t call_traced(const void *code, std::size_t len, emu_trace_t *tr,
+                             std::initializer_list<long> args = {},
+                             std::uint64_t max_insns = 0) {
+        emu_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_call_traced(e_, code, len, a, static_cast<int>(args.size()),
+                        max_insns, &res, tr);
+        return res;
+    }
+
 #ifdef ASMTEST_ENABLE_ASM
     /// Assemble x86-64 `src` in `syntax` via Keystone and run it with up to six
     /// integer args, stopping after `max_insns` instructions (0 = run to `ret`).
@@ -218,6 +300,129 @@ class Emu {
 
   private:
     emu_t *e_;
+};
+
+// --- Execution trace / coverage -------------------------------------------- //
+
+/// RAII execution-trace / basic-block coverage recorder. Pass get() to
+/// Emu::call_traced or a guest's call_traced, then ask which block byte-offsets
+/// were entered.
+class Trace {
+  public:
+    explicit Trace(std::size_t insns_cap = 4096, std::size_t blocks_cap = 4096)
+        : insns_(insns_cap), blocks_(blocks_cap), t_{} {
+        t_.insns = insns_.data();
+        t_.insns_cap = insns_cap;
+        t_.blocks = blocks_.data();
+        t_.blocks_cap = blocks_cap;
+    }
+    Trace(const Trace &) = delete;
+    Trace &operator=(const Trace &) = delete;
+
+    emu_trace_t *get() { return &t_; }
+    bool covered(std::uint64_t off) const { return emu_trace_covered(&t_, off); }
+    std::uint64_t insns_total() const { return t_.insns_total; }
+    std::size_t blocks_len() const { return t_.blocks_len; }
+
+  private:
+    std::vector<std::uint64_t> insns_, blocks_;
+    emu_trace_t t_;
+};
+
+// --- Cross-arch emulator guests (raw bytes, any host) ---------------------- //
+// Each runs raw machine-code bytes through its ISA's Unicorn guest and returns
+// the typed per-arch result (read res.regs.x[0] / .a-regs / .r[0] directly).
+
+/// AArch64 guest. Move-disabled RAII over emu_arm64_t.
+class Arm64Emu {
+  public:
+    Arm64Emu() : e_(emu_arm64_open()) {}
+    ~Arm64Emu() {
+        if (e_)
+            emu_arm64_close(e_);
+    }
+    Arm64Emu(const Arm64Emu &) = delete;
+    Arm64Emu &operator=(const Arm64Emu &) = delete;
+    explicit operator bool() const { return e_ != nullptr; }
+
+    emu_arm64_result_t call(const void *code, std::size_t len,
+                            std::initializer_list<long> args = {},
+                            std::uint64_t max_insns = 0) {
+        emu_arm64_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_arm64_call(e_, code, len, a, static_cast<int>(args.size()),
+                       max_insns, &res);
+        return res;
+    }
+    emu_arm64_result_t call_traced(const void *code, std::size_t len,
+                                   emu_trace_t *tr,
+                                   std::initializer_list<long> args = {},
+                                   std::uint64_t max_insns = 0) {
+        emu_arm64_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_arm64_call_traced(e_, code, len, a, static_cast<int>(args.size()),
+                              max_insns, &res, tr);
+        return res;
+    }
+
+  private:
+    emu_arm64_t *e_;
+};
+
+/// RISC-V (RV64) guest.
+class RiscvEmu {
+  public:
+    RiscvEmu() : e_(emu_riscv_open()) {}
+    ~RiscvEmu() {
+        if (e_)
+            emu_riscv_close(e_);
+    }
+    RiscvEmu(const RiscvEmu &) = delete;
+    RiscvEmu &operator=(const RiscvEmu &) = delete;
+    explicit operator bool() const { return e_ != nullptr; }
+
+    emu_riscv_result_t call(const void *code, std::size_t len,
+                            std::initializer_list<long> args = {},
+                            std::uint64_t max_insns = 0) {
+        emu_riscv_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_riscv_call(e_, code, len, a, static_cast<int>(args.size()),
+                       max_insns, &res);
+        return res;
+    }
+
+  private:
+    emu_riscv_t *e_;
+};
+
+/// ARM32 (A32) guest.
+class ArmEmu {
+  public:
+    ArmEmu() : e_(emu_arm_open()) {}
+    ~ArmEmu() {
+        if (e_)
+            emu_arm_close(e_);
+    }
+    ArmEmu(const ArmEmu &) = delete;
+    ArmEmu &operator=(const ArmEmu &) = delete;
+    explicit operator bool() const { return e_ != nullptr; }
+
+    emu_arm_result_t call(const void *code, std::size_t len,
+                          std::initializer_list<long> args = {},
+                          std::uint64_t max_insns = 0) {
+        emu_arm_result_t res{};
+        long a[6];
+        detail::fill6(a, args);
+        emu_arm_call(e_, code, len, a, static_cast<int>(args.size()), max_insns,
+                     &res);
+        return res;
+    }
+
+  private:
+    emu_arm_t *e_;
 };
 #endif  // ASMTEST_ENABLE_EMU
 

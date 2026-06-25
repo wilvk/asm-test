@@ -149,3 +149,65 @@ fn inline_assembler() {
         .expect("assemble arm64");
     assert_eq!(a64, vec![0xC0, 0x03, 0x5F, 0xD6]);
 }
+
+// Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,
+// emulated regardless of the host arch — checked-in `add` routines per ISA.
+#[test]
+fn cross_arch_guests() {
+    use asmtest::{Guest, GuestArch};
+    let cases: [(GuestArch, Vec<u8>, &str); 3] = [
+        (GuestArch::Arm64, vec![0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6], "x0"),
+        (GuestArch::Riscv, vec![0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00], "a0"),
+        (GuestArch::Arm, vec![0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1], "r0"),
+    ];
+    for (arch, code, reg) in cases {
+        let g = Guest::new(arch).expect("open guest");
+        let res = g.call(&code, &[40, 2]);
+        assert!(!res.faulted());
+        assert_eq!(res.reg(reg), 42);
+    }
+}
+
+// Extended x86-64 emulator calls over raw bytes: wide integer args, FP args,
+// vector args, and the Win64 convention.
+#[test]
+fn emu_extended_x86() {
+    let emu = asmtest::Emulator::new().expect("emu_open");
+    let wide = emu.call_bytes(
+        &[0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3],
+        &[10, 20, 12],
+    );
+    assert_eq!(wide.regs.rax, 42);
+
+    let fp = emu.call_fp(&[0xF2, 0x0F, 0x58, 0xC1, 0xC3], &[], &[1.5, 2.25]);
+    assert_eq!(fp.regs.xmm[0].f64()[0], 3.75);
+
+    let vec = emu.call_vec(
+        &[0x0F, 0x58, 0xC1, 0xC3],
+        &[],
+        &[Vec128::from_f32(1.0, 2.0, 3.0, 4.0), Vec128::from_f32(10.0, 20.0, 30.0, 40.0)],
+    );
+    assert_eq!(vec.regs.xmm[0].f32(), [11.0, 22.0, 33.0, 44.0]);
+
+    let win = emu.call_win64(&[0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3], &[40, 2]);
+    assert_eq!(win.regs.rax, 42);
+}
+
+// Execution trace / coverage: a two-block arm64 select; with x0=0 the entry block
+// (offset 0) and the .zero block (offset 12) are entered, not offset 4.
+#[test]
+fn emu_trace_coverage() {
+    use asmtest::{Guest, GuestArch, Trace};
+    let sel = [
+        0x60u8, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+        0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+    ];
+    let g = Guest::new(GuestArch::Arm64).expect("open guest");
+    let tr = Trace::new();
+    let res = g.call_traced(&sel, &[0], &tr);
+    assert!(!res.faulted());
+    assert_eq!(res.reg("x0"), 42);
+    assert!(tr.covered(0));
+    assert!(tr.covered(12));
+    assert!(!tr.covered(4));
+}

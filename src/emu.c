@@ -273,6 +273,77 @@ int asmtest_emu_call2(emu_t *e, const void *fn, long a0, long a1,
     return emu_call(e, fn, 64, args, 2, 0, out) ? 1 : 0;
 }
 
+/* Like asmtest_emu_call2, but up to six integer args (nargs selects how many,
+ * clamped to [0,6]) and an optional max_insns cap — so a binding can drive the
+ * emulator with the full SysV integer-arg set, not just two. */
+int asmtest_emu_call6(emu_t *e, const void *fn, long a0, long a1, long a2,
+                      long a3, long a4, long a5, int nargs, uint64_t max_insns,
+                      emu_result_t *out) {
+    long args[6] = {a0, a1, a2, a3, a4, a5};
+    if (nargs < 0)
+        nargs = 0;
+    if (nargs > 6)
+        nargs = 6;
+    return emu_call(e, fn, 64, args, nargs, max_insns, out) ? 1 : 0;
+}
+
+/* Two double args marshalled into xmm0/xmm1 (the SysV FP arg registers); the
+ * scalar double return lands in xmm[0].f64[0] (read via asmtest_emu_x86_xmm_f64).
+ * The FP analog of asmtest_emu_call2. */
+int asmtest_emu_call_fp2(emu_t *e, const void *fn, double f0, double f1,
+                         emu_result_t *out) {
+    long iargs[6] = {0, 0, 0, 0, 0, 0};
+    double fargs[2] = {f0, f1};
+    return emu_call_fp(e, fn, 64, iargs, 0, fargs, 2, 0, out) ? 1 : 0;
+}
+
+/* nvec 128-bit vector args as a flat 4*nvec float32 array (mirrors
+ * asmtest_capture_vec_f32) marshalled into xmm0..7; the whole XMM file is
+ * captured into the result (a vector return is xmm[0]). nvec is clamped [0,8]. */
+int asmtest_emu_call_vec_f32(emu_t *e, const void *fn, const float *lanes,
+                             int nvec, emu_result_t *out) {
+    long iargs[6] = {0, 0, 0, 0, 0, 0};
+    emu_vec128_t vargs[8];
+    memset(vargs, 0, sizeof vargs);
+    if (nvec < 0)
+        nvec = 0;
+    if (nvec > 8)
+        nvec = 8;
+    for (int i = 0; i < nvec; i++)
+        for (int lane = 0; lane < 4; lane++)
+            vargs[i].f32[lane] = lanes[i * 4 + lane];
+    return emu_call_vec(e, fn, 64, iargs, 0, vargs, nvec, 0, out) ? 1 : 0;
+}
+
+/* Run `fn` under the Microsoft x64 (Win64) convention with up to four integer
+ * args in rcx, rdx, r8, r9 (nargs clamped [0,4]); the return is rax. Lets a
+ * binding test a Win64 routine on a System V host. */
+int asmtest_emu_call_win64_6(emu_t *e, const void *fn, long a0, long a1, long a2,
+                             long a3, int nargs, uint64_t max_insns,
+                             emu_result_t *out) {
+    long args[4] = {a0, a1, a2, a3};
+    if (nargs < 0)
+        nargs = 0;
+    if (nargs > 4)
+        nargs = 4;
+    return emu_call_win64(e, fn, 64, args, nargs, max_insns, out) ? 1 : 0;
+}
+
+/* Like asmtest_emu_call6, but records an execution trace / basic-block coverage
+ * into `trace` (an opaque handle from asmtest_emu_trace_new; may be NULL to
+ * behave exactly like asmtest_emu_call6). */
+int asmtest_emu_call6_traced(emu_t *e, const void *fn, long a0, long a1, long a2,
+                             long a3, long a4, long a5, int nargs,
+                             uint64_t max_insns, emu_result_t *out,
+                             emu_trace_t *trace) {
+    long args[6] = {a0, a1, a2, a3, a4, a5};
+    if (nargs < 0)
+        nargs = 0;
+    if (nargs > 6)
+        nargs = 6;
+    return emu_call_traced(e, fn, 64, args, nargs, max_insns, out, trace) ? 1 : 0;
+}
+
 bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
                  int niargs, const double *fargs, int nfargs,
                  uint64_t max_insns, emu_result_t *out) {

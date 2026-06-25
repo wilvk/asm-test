@@ -43,7 +43,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all help test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
-.PHONY: shared shared-emu shared-emu-asm manifest manifest-win64 install-shared install-shared-emu conformance
+.PHONY: shared shared-emu shared-emu-asm manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
@@ -806,6 +806,13 @@ UNICORN_LIBS   ?= $(shell pkg-config --libs unicorn 2>/dev/null || echo -lunicor
 $(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
+# The opaque-handle FFI accessor layer (regs/emu-result/trace handles + readers).
+# Pulled into the conformance reference so it drives the exact binding-ABI surface
+# a foreign binding uses. No Unicorn dependency, but built with its include path
+# so the emu struct decls resolve identically to the shared-lib build.
+$(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
+
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
                    $(BUILD)/flags.o $(BUILD)/branch.o $(BUILD)/emu.o \
                    $(BUILD)/test_emu.o
@@ -864,15 +871,35 @@ $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
-                      $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/add.o \
-                      $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
-                      $(BUILD)/fault.o
+                      $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
+                      $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
+                      $(BUILD)/simd.o $(BUILD)/fault.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 conformance: $(BUILD)/conformance
 	./$(BUILD)/conformance
 	./$(BUILD)/conformance --emit > bindings/conformance/corpus.json
 	@echo "conformance: wrote bindings/conformance/corpus.json"
+
+# In-line-assembler variant: the same reference runner built -DASMTEST_ENABLE_ASM
+# and linked against the assembler (assemble.o, -lkeystone), so the optional asm
+# tier (asm.add_signed / asm.att_3arg / asm.bad_source / asm.arm64_bytes) is
+# compiled in and actually executes — the C-side anchor for the asm cases the
+# bindings test. Does not re-emit corpus.json (the asm cases are emitted there
+# unconditionally by the base `conformance` target).
+$(BUILD)/conformance_asm.o: bindings/conformance/conformance.c include/asmtest.h \
+                            include/asmtest_emu.h include/asmtest_assemble.h | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) -DASMTEST_ENABLE_ASM \
+	      -c $< -o $@
+
+$(BUILD)/conformance_asm: $(BUILD)/conformance_asm.o $(BUILD)/asmtest_nomain.o \
+                          $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
+                          $(BUILD)/assemble.o $(BUILD)/add.o $(BUILD)/flags.o \
+                          $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+
+conformance-asm: $(BUILD)/conformance_asm
+	./$(BUILD)/conformance_asm
 
 # --- Python binding (Track P) ----------------------------------------------
 # A pure-ctypes binding that loads the shared lib + manifest and replays the

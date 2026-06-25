@@ -83,6 +83,69 @@ def declare(lib):
         lib.emu_close.argtypes = [v]
         lib.emu_call.argtypes = [v, v, C.c_size_t, v, C.c_int, C.c_uint64, v]
         lib.emu_call.restype = C.c_bool
+        _declare_emu_ext(lib, v)
+
+
+def _declare_emu_ext(lib, v):
+    """Declare the extended emulator surface: x86 FP/vector/Win64/traced calls,
+    the cross-arch guests (AArch64 / RISC-V / ARM32, which run raw bytes on any
+    host), and the opaque trace + per-arch result accessors."""
+    u64, i, sz, dbl = C.c_uint64, C.c_int, C.c_size_t, C.c_double
+
+    # x86-64 guest, array-form core calls (Python marshals the arg arrays).
+    lib.emu_call_fp.argtypes = [v, v, sz, v, i, v, i, u64, v]
+    lib.emu_call_fp.restype = C.c_bool
+    lib.emu_call_vec.argtypes = [v, v, sz, v, i, v, i, u64, v]
+    lib.emu_call_vec.restype = C.c_bool
+    lib.emu_call_win64.argtypes = [v, v, sz, v, i, u64, v]
+    lib.emu_call_win64.restype = C.c_bool
+    lib.emu_call_traced.argtypes = [v, v, sz, v, i, u64, v, v]
+    lib.emu_call_traced.restype = C.c_bool
+
+    # Cross-arch guests: open/close + raw-bytes call (+ FP / vector / traced).
+    for arch in ("arm64", "riscv", "arm"):
+        getattr(lib, f"emu_{arch}_open").restype = v
+        getattr(lib, f"emu_{arch}_close").argtypes = [v]
+        getattr(lib, f"emu_{arch}_call").argtypes = [v, v, sz, v, i, u64, v]
+        getattr(lib, f"emu_{arch}_call").restype = C.c_bool
+        getattr(lib, f"emu_{arch}_call_fp").argtypes = [v, v, sz, v, i, v, i, u64, v]
+        getattr(lib, f"emu_{arch}_call_fp").restype = C.c_bool
+        getattr(lib, f"emu_{arch}_call_traced").argtypes = [v, v, sz, v, i, u64, v, v]
+        getattr(lib, f"emu_{arch}_call_traced").restype = C.c_bool
+    for arch in ("arm64", "arm"):  # RISC-V has no Unicorn vector file
+        getattr(lib, f"emu_{arch}_call_vec").argtypes = [v, v, sz, v, i, v, i, u64, v]
+        getattr(lib, f"emu_{arch}_call_vec").restype = C.c_bool
+
+    # Opaque per-arch result handles + register accessors (read by name).
+    for arch in ("arm64", "riscv", "arm"):
+        getattr(lib, f"asmtest_emu_{arch}_result_new").restype = v
+        getattr(lib, f"asmtest_emu_{arch}_result_free").argtypes = [v]
+        getattr(lib, f"asmtest_emu_{arch}_reg").argtypes = [v, C.c_char_p]
+        getattr(lib, f"asmtest_emu_{arch}_reg").restype = C.c_uint64
+    lib.asmtest_emu_arm64_vec_f64.argtypes = [v, i, i]
+    lib.asmtest_emu_arm64_vec_f64.restype = dbl
+    lib.asmtest_emu_arm64_vec_f32.argtypes = [v, i, i]
+    lib.asmtest_emu_arm64_vec_f32.restype = C.c_float
+    lib.asmtest_emu_arm_q_f64.argtypes = [v, i, i]
+    lib.asmtest_emu_arm_q_f64.restype = dbl
+    lib.asmtest_emu_riscv_f_f64.argtypes = [v, i, i]
+    lib.asmtest_emu_riscv_f_f64.restype = dbl
+    # Fault/ok reads share one layout, so they take any result handle.
+    for fn, rt in (("faulted", C.c_int), ("fault_addr", C.c_uint64),
+                   ("fault_kind", C.c_int), ("ok", C.c_int)):
+        getattr(lib, f"asmtest_emu_result_{fn}").argtypes = [v]
+        getattr(lib, f"asmtest_emu_result_{fn}").restype = rt
+
+    # Opaque execution-trace handle.
+    lib.asmtest_emu_trace_new.argtypes = [sz, sz]
+    lib.asmtest_emu_trace_new.restype = v
+    lib.asmtest_emu_trace_free.argtypes = [v]
+    lib.asmtest_emu_trace_covered.argtypes = [v, C.c_uint64]
+    lib.asmtest_emu_trace_covered.restype = C.c_int
+    lib.asmtest_emu_trace_insns_total.argtypes = [v]
+    lib.asmtest_emu_trace_insns_total.restype = C.c_uint64
+    lib.asmtest_emu_trace_blocks_len.argtypes = [v]
+    lib.asmtest_emu_trace_blocks_len.restype = C.c_uint64
 
     # In-line assembler (Keystone) is optional again — only libasmtest_emu_asm
     # exports it. The widened run shim takes six scalar args + syntax + a cap;

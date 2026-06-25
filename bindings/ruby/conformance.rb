@@ -84,6 +84,56 @@ check("emu.int_to_double",
       !xres.faulted? && xres.xmm_f64(0, 0) == 42.0 && (xres.reg("rflags") & 0x2) != 0)
 xres.free
 
+# Pack bytes (0..255) into a binary machine-code String.
+def code(*bytes)
+  bytes.pack("C*")
+end
+
+# --- Tier 1: cross-arch emulator guests (raw bytes, any host) --------------
+{
+  "arm64" => [code(0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6), "x0"],
+  "riscv" => [code(0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00), "a0"],
+  "arm"   => [code(0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1), "r0"],
+}.each do |arch, (bytes, regname)|
+  g = Asmtest::Guest.new(arch)
+  res = g.call(bytes, [40, 2])
+  check("emu_#{arch}.add", !res.faulted? && res.reg(regname) == 42)
+  res.free
+  g.close
+end
+
+# --- Tier 1: extended x86-64 emulator calls (raw bytes) --------------------
+ex = Asmtest::Emu.new
+wide = ex.call_bytes(code(0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3), [10, 20, 12])
+check("emu.wide_int", !wide.faulted? && wide.reg("rax") == 42)
+wide.free
+
+fp = ex.call_fp(code(0xF2, 0x0F, 0x58, 0xC1, 0xC3), fargs: [1.5, 2.25])
+check("emu.fp_add", !fp.faulted? && fp.xmm_f64(0, 0) == 3.75)
+fp.free
+
+vec = ex.call_vec(code(0x0F, 0x58, 0xC1, 0xC3), vargs: [[1, 2, 3, 4], [10, 20, 30, 40]])
+check("emu.vec_add4f", !vec.faulted? && vec.xmm_f32(0, 0) == 11 && vec.xmm_f32(0, 3) == 44)
+vec.free
+
+win = ex.call_win64(code(0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3), [40, 2])
+check("emu.win64_add", !win.faulted? && win.reg("rax") == 42)
+win.free
+ex.close
+
+# --- Tier 1: execution trace / coverage (cross-arch arm64) -----------------
+gt = Asmtest::Guest.new("arm64")
+tr = Asmtest::Trace.new
+sel = code(0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
+           0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6)
+tres = gt.call_traced(sel, [0], tr)
+check("emu_arm64.trace_sel",
+      !tres.faulted? && tres.reg("x0") == 42 &&
+        tr.covered?(0) && tr.covered?(12) && !tr.covered?(4))
+tres.free
+tr.free
+gt.close
+
 # --- Tier 1: in-line assembly (Keystone) replays add_signed ----------------
 # Only when the loaded lib carries the assembler (libasmtest_emu_asm); against
 # the plain libasmtest_emu it is simply absent.

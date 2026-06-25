@@ -120,6 +120,23 @@ float asmtest_emu_x86_xmm_f32(const emu_result_t *r, int index, int lane);
 int asmtest_emu_call2(emu_t *e, const void *fn, long a0, long a1,
                       emu_result_t *out);
 
+/* Wider/typed scalar-arg emu wrappers for dynamic-FFI bindings (see emu.c).
+ * asmtest_emu_call6 takes up to six integer args (nargs in [0,6]) and a
+ * max_insns cap; _call_fp2 marshals two doubles into xmm0/xmm1 (return in
+ * xmm[0].f64[0]); _call_vec_f32 marshals nvec 128-bit vectors from a flat
+ * 4*nvec float32 array; _call_win64_6 uses the Win64 convention (rcx,rdx,r8,r9).
+ * Each runs `fn` as a 64-byte code window and returns 1 if it ran, 0 otherwise. */
+int asmtest_emu_call6(emu_t *e, const void *fn, long a0, long a1, long a2,
+                      long a3, long a4, long a5, int nargs, uint64_t max_insns,
+                      emu_result_t *out);
+int asmtest_emu_call_fp2(emu_t *e, const void *fn, double f0, double f1,
+                         emu_result_t *out);
+int asmtest_emu_call_vec_f32(emu_t *e, const void *fn, const float *lanes,
+                             int nvec, emu_result_t *out);
+int asmtest_emu_call_win64_6(emu_t *e, const void *fn, long a0, long a1, long a2,
+                             long a3, int nargs, uint64_t max_insns,
+                             emu_result_t *out);
+
 /* Like emu_call, but also marshals `nfargs` double args into the SysV FP
  * argument registers (xmm0..7) alongside the `niargs` integer args. The scalar
  * double return is out->regs.xmm[0].f64[0]. (x86-64 guest.) */
@@ -168,6 +185,27 @@ typedef struct {
 bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace);
+
+/* Opaque execution-trace handle for dynamic-FFI bindings (see ffi.c): wraps an
+ * emu_trace_t and its two caller-owned buffers, so a binding need not lay out the
+ * struct. Pass the handle to asmtest_emu_call6_traced to record into it; read
+ * coverage back via the accessors. asmtest_emu_trace_covered tests whether a
+ * basic-block byte-offset was entered. */
+emu_trace_t *asmtest_emu_trace_new(size_t insns_cap, size_t blocks_cap);
+void asmtest_emu_trace_free(emu_trace_t *t);
+unsigned long long asmtest_emu_trace_insns_total(const emu_trace_t *t);
+unsigned long long asmtest_emu_trace_blocks_len(const emu_trace_t *t);
+unsigned long long asmtest_emu_trace_blocks_total(const emu_trace_t *t);
+int asmtest_emu_trace_truncated(const emu_trace_t *t);
+unsigned long long asmtest_emu_trace_block_at(const emu_trace_t *t, size_t i);
+int asmtest_emu_trace_covered(const emu_trace_t *t, unsigned long long off);
+
+/* Like asmtest_emu_call6, but records an execution trace / coverage into the
+ * opaque `trace` handle (may be NULL). */
+int asmtest_emu_call6_traced(emu_t *e, const void *fn, long a0, long a1, long a2,
+                             long a3, long a4, long a5, int nargs,
+                             uint64_t max_insns, emu_result_t *out,
+                             emu_trace_t *trace);
 
 /* Run x86-64 code under the Microsoft x64 ("Win64") calling convention instead
  * of System V, on the same emulator engine: integer args go in rcx, rdx, r8,
@@ -366,6 +404,38 @@ bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
                       const long *iargs, int niargs,
                       const emu_vec128_t *vargs, int nvargs,
                       uint64_t max_insns, emu_arm_result_t *out);
+
+/* ------------------------------------------------------------------ */
+/* Cross-arch emu result handles + register accessors (dynamic-FFI)    */
+/*                                                                     */
+/* The AArch64 / RISC-V / ARM32 guests run raw machine code (emu_<arch>_call,    */
+/* which already takes pointers + scalars, so a binding calls it directly) and   */
+/* write a per-arch result struct. These opaque handles + register accessors let */
+/* a dynamic-FFI binding read that struct without mirroring its layout. The      */
+/* leading fields match emu_result_t, so the asmtest_emu_result_{ok,faulted,     */
+/* fault_addr,fault_kind} accessors read any of these via the opaque pointer.    */
+/* ------------------------------------------------------------------ */
+emu_arm64_result_t *asmtest_emu_arm64_result_new(void);
+void asmtest_emu_arm64_result_free(emu_arm64_result_t *r);
+unsigned long long asmtest_emu_arm64_reg(const emu_arm64_result_t *r,
+                                         const char *name);
+double asmtest_emu_arm64_vec_f64(const emu_arm64_result_t *r, int index,
+                                 int lane);
+float asmtest_emu_arm64_vec_f32(const emu_arm64_result_t *r, int index,
+                                int lane);
+
+emu_riscv_result_t *asmtest_emu_riscv_result_new(void);
+void asmtest_emu_riscv_result_free(emu_riscv_result_t *r);
+unsigned long long asmtest_emu_riscv_reg(const emu_riscv_result_t *r,
+                                         const char *name);
+double asmtest_emu_riscv_f_f64(const emu_riscv_result_t *r, int index, int lane);
+
+emu_arm_result_t *asmtest_emu_arm_result_new(void);
+void asmtest_emu_arm_result_free(emu_arm_result_t *r);
+unsigned long long asmtest_emu_arm_reg(const emu_arm_result_t *r,
+                                       const char *name);
+double asmtest_emu_arm_q_f64(const emu_arm_result_t *r, int index, int lane);
+float asmtest_emu_arm_q_f32(const emu_arm_result_t *r, int index, int lane);
 
 /* ------------------------------------------------------------------ */
 /* Coverage reporting (Track C)                                        */

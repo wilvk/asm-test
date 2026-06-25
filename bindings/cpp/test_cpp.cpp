@@ -12,7 +12,9 @@
 // Routines under test (examples/{add,flags,fp,simd}.s), C symbols.
 extern "C" {
 long add_signed(long, long);
+long sum_via_rbx(long, long);   // ABI-compliant: saves/restores rbx
 long set_carry(void);
+long clear_carry(void);
 long clobbers_rbx(long, long);
 double fp_add(double, double);
 void vec_add4f(void);  // vec128 in/out; only its address is needed
@@ -28,6 +30,13 @@ TEST(cpp, capture_int_and_abi) {
     ASSERT_TRUE(abi_preserved(r));
 }
 
+TEST(cpp, abi_preserved_via_rbx) {
+    // sum_via_rbx saves/restores rbx around its use: a clean ABI-preserving run.
+    regs_t r = capture(reinterpret_cast<void *>(sum_via_rbx), {20, 22});
+    ASSERT_EQ(r.ret, 42);
+    ASSERT_TRUE(abi_preserved(r));
+}
+
 TEST(cpp, abi_violation_is_observable) {
     regs_t r = capture(reinterpret_cast<void *>(clobbers_rbx), {1, 2});
     // The verdict predicate reports the violation rather than aborting.
@@ -38,6 +47,11 @@ TEST(cpp, flags) {
     regs_t r = capture(reinterpret_cast<void *>(set_carry), {});
     ASSERT_TRUE(flag_set(r, ASMTEST_CF));
     ASSERT_FLAG_SET(&r, CF);  // the C macro works in C++ too
+}
+
+TEST(cpp, flags_clear) {
+    regs_t r = capture(reinterpret_cast<void *>(clear_carry), {});
+    ASSERT_FALSE(flag_set(r, ASMTEST_CF));
 }
 
 TEST(cpp, fp_return) {
@@ -101,6 +115,72 @@ TEST(cpp, emulator_xmm_and_rflags) {
     ASSERT_FALSE(res.faulted);
     ASSERT_EQ(res.regs.xmm[0].f64[0], 42.0);
     ASSERT_TRUE((res.regs.rflags & 0x2u) != 0);
+}
+
+// Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,
+// emulated regardless of the host arch — checked-in `add` routines per ISA.
+TEST(cpp, cross_arch_guests) {
+    const unsigned char arm64_add[] = {0x00, 0x00, 0x01, 0x8B,
+                                       0xC0, 0x03, 0x5F, 0xD6};
+    Arm64Emu a64;
+    emu_arm64_result_t r64 = a64.call(arm64_add, sizeof arm64_add, {40, 2});
+    ASSERT_FALSE(r64.faulted);
+    ASSERT_EQ(r64.regs.x[0], 42u);
+
+    const unsigned char riscv_add[] = {0x33, 0x05, 0xB5, 0x00,
+                                       0x67, 0x80, 0x00, 0x00};
+    RiscvEmu rv;
+    emu_riscv_result_t rrv = rv.call(riscv_add, sizeof riscv_add, {40, 2});
+    ASSERT_FALSE(rrv.faulted);
+    ASSERT_EQ(rrv.regs.x[10], 42u);  // a0 == x10
+
+    const unsigned char arm_add[] = {0x01, 0x00, 0x80, 0xE0,
+                                     0x1E, 0xFF, 0x2F, 0xE1};
+    ArmEmu a32;
+    emu_arm_result_t r32 = a32.call(arm_add, sizeof arm_add, {40, 2});
+    ASSERT_FALSE(r32.faulted);
+    ASSERT_EQ(r32.regs.r[0], 42u);
+}
+
+// Extended x86-64 emulator calls over raw bytes: wide integer args, FP args,
+// vector args, and the Win64 convention.
+TEST(cpp, emu_extended_x86) {
+    Emu e;
+    const unsigned char wide[] = {0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0,
+                                  0x48, 0x01, 0xD0, 0xC3};  // rdi+rsi+rdx
+    emu_result_t rw = e.call_bytes(wide, sizeof wide, {10, 20, 12});
+    ASSERT_EQ(rw.regs.rax, 42u);
+
+    const unsigned char fp[] = {0xF2, 0x0F, 0x58, 0xC1, 0xC3};  // addsd xmm0,xmm1
+    emu_result_t rf = e.call_fp(fp, sizeof fp, {}, {1.5, 2.25});
+    ASSERT_EQ(rf.regs.xmm[0].f64[0], 3.75);
+
+    const unsigned char vec[] = {0x0F, 0x58, 0xC1, 0xC3};  // addps xmm0,xmm1
+    emu_result_t rv = e.call_vec(vec, sizeof vec, {},
+                                 {vec_f32(1, 2, 3, 4), vec_f32(10, 20, 30, 40)});
+    ASSERT_FEQ(rv.regs.xmm[0].f32[0], 11.0f);
+    ASSERT_FEQ(rv.regs.xmm[0].f32[3], 44.0f);
+
+    const unsigned char win[] = {0x48, 0x89, 0xC8, 0x48,
+                                 0x01, 0xD0, 0xC3};  // mov rax,rcx; add rax,rdx
+    emu_result_t rwin = e.call_win64(win, sizeof win, {40, 2});
+    ASSERT_EQ(rwin.regs.rax, 42u);
+}
+
+// Execution trace / coverage: a two-block arm64 select; with x0=0 the entry
+// block (offset 0) and the .zero block (offset 12) are entered, not offset 4.
+TEST(cpp, emu_trace_coverage) {
+    const unsigned char sel[] = {0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2,
+                                 0xC0, 0x03, 0x5F, 0xD6, 0x40, 0x05, 0x80, 0xD2,
+                                 0xC0, 0x03, 0x5F, 0xD6};
+    Arm64Emu a64;
+    Trace tr;
+    emu_arm64_result_t r = a64.call_traced(sel, sizeof sel, tr.get(), {0});
+    ASSERT_FALSE(r.faulted);
+    ASSERT_EQ(r.regs.x[0], 42u);
+    ASSERT_TRUE(tr.covered(0));
+    ASSERT_TRUE(tr.covered(12));
+    ASSERT_FALSE(tr.covered(4));
 }
 
 #ifdef ASMTEST_ENABLE_ASM

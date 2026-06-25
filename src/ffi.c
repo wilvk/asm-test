@@ -163,3 +163,180 @@ float asmtest_emu_x86_xmm_f32(const emu_result_t *r, int index, int lane) {
         return 0.0f;
     return r->regs.xmm[index].f32[lane];
 }
+
+/* ---- execution-trace opaque handle + accessors (no Unicorn dependency) ----
+ * emu_trace_t exposes caller-owned buffers (see asmtest_emu.h); a dynamic-FFI
+ * binding can't lay those out, so this wraps the struct and its two buffers in
+ * one handle. Pass the handle to asmtest_emu_call6_traced to record into it, then
+ * read coverage back through the accessors. */
+emu_trace_t *asmtest_emu_trace_new(size_t insns_cap, size_t blocks_cap) {
+    emu_trace_t *t = (emu_trace_t *)calloc(1, sizeof *t);
+    if (!t)
+        return NULL;
+    if (insns_cap) {
+        t->insns = (uint64_t *)calloc(insns_cap, sizeof(uint64_t));
+        if (t->insns)
+            t->insns_cap = insns_cap;
+    }
+    if (blocks_cap) {
+        t->blocks = (uint64_t *)calloc(blocks_cap, sizeof(uint64_t));
+        if (t->blocks)
+            t->blocks_cap = blocks_cap;
+    }
+    return t;
+}
+void asmtest_emu_trace_free(emu_trace_t *t) {
+    if (!t)
+        return;
+    free(t->insns);
+    free(t->blocks);
+    free(t);
+}
+/* Instructions executed (counts past the insns buffer cap). */
+unsigned long long asmtest_emu_trace_insns_total(const emu_trace_t *t) {
+    return (unsigned long long)t->insns_total;
+}
+/* Distinct basic blocks recorded (<= blocks_cap). */
+unsigned long long asmtest_emu_trace_blocks_len(const emu_trace_t *t) {
+    return (unsigned long long)t->blocks_len;
+}
+/* Block entries total — a loop re-counts each pass. */
+unsigned long long asmtest_emu_trace_blocks_total(const emu_trace_t *t) {
+    return (unsigned long long)t->blocks_total;
+}
+/* True if a buffer filled and at least one entry was dropped. */
+int asmtest_emu_trace_truncated(const emu_trace_t *t) {
+    return t->truncated ? 1 : 0;
+}
+/* The i-th distinct block-start offset (byte offset from the routine entry). */
+unsigned long long asmtest_emu_trace_block_at(const emu_trace_t *t, size_t i) {
+    return (i < t->blocks_len) ? (unsigned long long)t->blocks[i] : 0;
+}
+/* True if basic-block offset `off` is in the distinct block set. Scans inline so
+ * this stays free of the emulator object (emu_trace_covered lives in emu.c). */
+int asmtest_emu_trace_covered(const emu_trace_t *t, unsigned long long off) {
+    for (size_t i = 0; i < t->blocks_len; i++)
+        if (t->blocks[i] == (uint64_t)off)
+            return 1;
+    return 0;
+}
+
+/* ---- cross-arch emu result handles + register accessors ----
+ * The AArch64 / RISC-V / ARM32 guests run raw machine-code bytes (emu_arm64_call,
+ * emu_riscv_call, emu_arm_call) and write a per-arch result struct. Their leading
+ * fields (ok/uc_err/faulted/fault_addr/fault_kind) are laid out identically to
+ * emu_result_t, so the asmtest_emu_result_{ok,faulted,fault_addr,fault_kind}
+ * accessors above read any of these via the opaque pointer; only the register
+ * files differ, and those reads live here. */
+
+/* AArch64: x0..x30, plus sp / pc / nzcv; the NEON file is v0..v31. */
+emu_arm64_result_t *asmtest_emu_arm64_result_new(void) {
+    return (emu_arm64_result_t *)calloc(1, sizeof(emu_arm64_result_t));
+}
+void asmtest_emu_arm64_result_free(emu_arm64_result_t *r) {
+    free(r);
+}
+unsigned long long asmtest_emu_arm64_reg(const emu_arm64_result_t *r,
+                                         const char *name) {
+    if (!name)
+        return 0;
+    if (!strcmp(name, "sp"))
+        return (unsigned long long)r->regs.sp;
+    if (!strcmp(name, "pc"))
+        return (unsigned long long)r->regs.pc;
+    if (!strcmp(name, "nzcv"))
+        return (unsigned long long)r->regs.nzcv;
+    if (name[0] == 'x') {
+        int i = atoi(name + 1);
+        if (i >= 0 && i <= 30)
+            return (unsigned long long)r->regs.x[i];
+    }
+    return 0;
+}
+double asmtest_emu_arm64_vec_f64(const emu_arm64_result_t *r, int index,
+                                 int lane) {
+    if (index < 0 || index > 31 || lane < 0 || lane > 1)
+        return 0.0;
+    return r->regs.v[index].f64[lane];
+}
+float asmtest_emu_arm64_vec_f32(const emu_arm64_result_t *r, int index,
+                                int lane) {
+    if (index < 0 || index > 31 || lane < 0 || lane > 3)
+        return 0.0f;
+    return r->regs.v[index].f32[lane];
+}
+
+/* RISC-V (RV64): x0..x31 and pc, with the a0..a7 / ra / sp ABI aliases; the FP
+ * file (D extension) is f0..f31, fa0 = f[10]. */
+emu_riscv_result_t *asmtest_emu_riscv_result_new(void) {
+    return (emu_riscv_result_t *)calloc(1, sizeof(emu_riscv_result_t));
+}
+void asmtest_emu_riscv_result_free(emu_riscv_result_t *r) {
+    free(r);
+}
+unsigned long long asmtest_emu_riscv_reg(const emu_riscv_result_t *r,
+                                         const char *name) {
+    if (!name)
+        return 0;
+    if (!strcmp(name, "pc"))
+        return (unsigned long long)r->regs.pc;
+    if (!strcmp(name, "ra"))
+        return (unsigned long long)r->regs.x[1];
+    if (!strcmp(name, "sp"))
+        return (unsigned long long)r->regs.x[2];
+    if (name[0] == 'a') { /* a0..a7 -> x10..x17 */
+        int i = atoi(name + 1);
+        if (i >= 0 && i <= 7)
+            return (unsigned long long)r->regs.x[10 + i];
+    }
+    if (name[0] == 'x') {
+        int i = atoi(name + 1);
+        if (i >= 0 && i <= 31)
+            return (unsigned long long)r->regs.x[i];
+    }
+    return 0;
+}
+double asmtest_emu_riscv_f_f64(const emu_riscv_result_t *r, int index,
+                               int lane) {
+    if (index < 0 || index > 31 || lane < 0 || lane > 1)
+        return 0.0;
+    return r->regs.f[index].f64[lane];
+}
+
+/* ARM32 (AArch32): r0..r15 (sp = r13, lr = r14, pc = r15) and the 32-bit cpsr;
+ * the VFP/NEON file is q0..q15. */
+emu_arm_result_t *asmtest_emu_arm_result_new(void) {
+    return (emu_arm_result_t *)calloc(1, sizeof(emu_arm_result_t));
+}
+void asmtest_emu_arm_result_free(emu_arm_result_t *r) {
+    free(r);
+}
+unsigned long long asmtest_emu_arm_reg(const emu_arm_result_t *r,
+                                       const char *name) {
+    if (!name)
+        return 0;
+    if (!strcmp(name, "cpsr"))
+        return (unsigned long long)r->regs.cpsr;
+    if (!strcmp(name, "sp"))
+        return (unsigned long long)r->regs.r[13];
+    if (!strcmp(name, "lr"))
+        return (unsigned long long)r->regs.r[14];
+    if (!strcmp(name, "pc"))
+        return (unsigned long long)r->regs.r[15];
+    if (name[0] == 'r') {
+        int i = atoi(name + 1);
+        if (i >= 0 && i <= 15)
+            return (unsigned long long)r->regs.r[i];
+    }
+    return 0;
+}
+double asmtest_emu_arm_q_f64(const emu_arm_result_t *r, int index, int lane) {
+    if (index < 0 || index > 15 || lane < 0 || lane > 1)
+        return 0.0;
+    return r->regs.q[index].f64[lane];
+}
+float asmtest_emu_arm_q_f32(const emu_arm_result_t *r, int index, int lane) {
+    if (index < 0 || index > 15 || lane < 0 || lane > 3)
+        return 0.0f;
+    return r->regs.q[index].f32[lane];
+}

@@ -60,6 +60,15 @@ public final class Asmtest {
         ASM_BYTES, ASM_LAST_ERROR, EMU_FAULTED, EMU_FAULT_ADDR, EMU_FAULT_KIND, EMU_REG,
         EMU_XMM_F64, EMU_XMM_F32;
 
+    // Extended x86 emulator calls (raw bytes), the cross-arch guests, and the
+    // opaque trace handle — the surface that reaches the new corpus tiers.
+    private static final MethodHandle EMU_CALL, EMU_CALL_FP, EMU_CALL_VEC,
+        EMU_CALL_WIN64, EMU_CALL_TRACED, TRACE_NEW, TRACE_FREE, TRACE_COVERED,
+        ARM64_OPEN, ARM64_CLOSE, ARM64_CALL, ARM64_CALL_TRACED, ARM64_RES_NEW,
+        ARM64_RES_FREE, ARM64_REG, RISCV_OPEN, RISCV_CLOSE, RISCV_CALL,
+        RISCV_RES_NEW, RISCV_RES_FREE, RISCV_REG, ARM_OPEN, ARM_CLOSE, ARM_CALL,
+        ARM_RES_NEW, ARM_RES_FREE, ARM_REG;
+
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
         if (emuPath == null) {
@@ -105,6 +114,74 @@ public final class Asmtest {
         EMU_REG = h(emu, "asmtest_emu_x86_reg", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS));
         EMU_XMM_F64 = h(emu, "asmtest_emu_x86_xmm_f64", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS, JAVA_INT, JAVA_INT));
         EMU_XMM_F32 = h(emu, "asmtest_emu_x86_xmm_f32", FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, JAVA_INT, JAVA_INT));
+
+        // Extended x86 emulator calls (array form, so raw bytes run directly).
+        // Declared void: each writes its result via the out-handle, which the
+        // accessors read; the C bool return is unused.
+        FunctionDescriptor callFd = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, JAVA_LONG, ADDRESS);
+        FunctionDescriptor fpFd = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, JAVA_LONG, ADDRESS);
+        FunctionDescriptor tracedFd = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS);
+        EMU_CALL = h(emu, "emu_call", callFd);
+        EMU_CALL_FP = h(emu, "emu_call_fp", fpFd);
+        EMU_CALL_VEC = h(emu, "emu_call_vec", fpFd);  // same shape (vectors as ADDRESS)
+        EMU_CALL_WIN64 = h(emu, "emu_call_win64", callFd);
+        EMU_CALL_TRACED = h(emu, "emu_call_traced", tracedFd);
+
+        // Opaque trace handle.
+        TRACE_NEW = h(emu, "asmtest_emu_trace_new", FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG));
+        TRACE_FREE = h(emu, "asmtest_emu_trace_free", FunctionDescriptor.ofVoid(ADDRESS));
+        TRACE_COVERED = h(emu, "asmtest_emu_trace_covered", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+
+        // Cross-arch guests (raw bytes, any host).
+        FunctionDescriptor regFd = FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS);
+        ARM64_OPEN = h(emu, "emu_arm64_open", FunctionDescriptor.of(ADDRESS));
+        ARM64_CLOSE = h(emu, "emu_arm64_close", FunctionDescriptor.ofVoid(ADDRESS));
+        ARM64_CALL = h(emu, "emu_arm64_call", callFd);
+        ARM64_CALL_TRACED = h(emu, "emu_arm64_call_traced", tracedFd);
+        ARM64_RES_NEW = h(emu, "asmtest_emu_arm64_result_new", FunctionDescriptor.of(ADDRESS));
+        ARM64_RES_FREE = h(emu, "asmtest_emu_arm64_result_free", FunctionDescriptor.ofVoid(ADDRESS));
+        ARM64_REG = h(emu, "asmtest_emu_arm64_reg", regFd);
+        RISCV_OPEN = h(emu, "emu_riscv_open", FunctionDescriptor.of(ADDRESS));
+        RISCV_CLOSE = h(emu, "emu_riscv_close", FunctionDescriptor.ofVoid(ADDRESS));
+        RISCV_CALL = h(emu, "emu_riscv_call", callFd);
+        RISCV_RES_NEW = h(emu, "asmtest_emu_riscv_result_new", FunctionDescriptor.of(ADDRESS));
+        RISCV_RES_FREE = h(emu, "asmtest_emu_riscv_result_free", FunctionDescriptor.ofVoid(ADDRESS));
+        RISCV_REG = h(emu, "asmtest_emu_riscv_reg", regFd);
+        ARM_OPEN = h(emu, "emu_arm_open", FunctionDescriptor.of(ADDRESS));
+        ARM_CLOSE = h(emu, "emu_arm_close", FunctionDescriptor.ofVoid(ADDRESS));
+        ARM_CALL = h(emu, "emu_arm_call", callFd);
+        ARM_RES_NEW = h(emu, "asmtest_emu_arm_result_new", FunctionDescriptor.of(ADDRESS));
+        ARM_RES_FREE = h(emu, "asmtest_emu_arm_result_free", FunctionDescriptor.ofVoid(ADDRESS));
+        ARM_REG = h(emu, "asmtest_emu_arm_reg", regFd);
+    }
+
+    // ---- helpers for marshalling Java arrays into native memory ---- //
+    private static MemorySegment bytesSeg(byte[] b) {
+        MemorySegment seg = ARENA.allocate(Math.max(b.length, 1));
+        MemorySegment.copy(b, 0, seg, JAVA_BYTE, 0, b.length);
+        return seg;
+    }
+    private static MemorySegment longsSeg(long[] a) {
+        if (a == null || a.length == 0) return MemorySegment.NULL;
+        MemorySegment seg = ARENA.allocate(JAVA_LONG.byteSize() * a.length);
+        for (int i = 0; i < a.length; i++) seg.setAtIndex(JAVA_LONG, i, a[i]);
+        return seg;
+    }
+    private static MemorySegment doublesSeg(double[] a) {
+        if (a == null || a.length == 0) return MemorySegment.NULL;
+        MemorySegment seg = ARENA.allocate(JAVA_DOUBLE.byteSize() * a.length);
+        for (int i = 0; i < a.length; i++) seg.setAtIndex(JAVA_DOUBLE, i, a[i]);
+        return seg;
+    }
+    private static MemorySegment vecsSeg(float[][] vectors) {
+        if (vectors.length == 0) return MemorySegment.NULL;
+        MemorySegment seg = ARENA.allocate(JAVA_FLOAT.byteSize() * 4 * vectors.length);
+        for (int i = 0; i < vectors.length; i++)
+            for (int l = 0; l < 4; l++) seg.setAtIndex(JAVA_FLOAT, (long) i * 4 + l, vectors[i][l]);
+        return seg;
     }
 
     private static MethodHandle h(SymbolLookup lk, String name, FunctionDescriptor fd) {
@@ -274,6 +351,45 @@ public final class Asmtest {
             try { EMU_CALL2.invoke(h, fn, a0, a1, res.h); } catch (Throwable t) { throw rethrow(t); }
             return res;
         }
+        /** Run raw x86-64 machine-code bytes with up to six integer args. */
+        public EmuResult callBytes(byte[] code, long... args) {
+            EmuResult res = new EmuResult();
+            try { EMU_CALL.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        /** Run raw bytes marshalling doubles into the FP arg registers (scalar
+         *  return = res.xmmF64(0, 0)). */
+        public EmuResult callFp(byte[] code, long[] iargs, double[] fargs) {
+            EmuResult res = new EmuResult();
+            int ni = iargs == null ? 0 : iargs.length, nf = fargs == null ? 0 : fargs.length;
+            try { EMU_CALL_FP.invoke(h, bytesSeg(code), (long) code.length, longsSeg(iargs), ni, doublesSeg(fargs), nf, 0L, res.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        /** Run raw bytes marshalling 128-bit vectors into xmm0..7. */
+        public EmuResult callVec(byte[] code, long[] iargs, float[][] vargs) {
+            EmuResult res = new EmuResult();
+            int ni = iargs == null ? 0 : iargs.length;
+            try { EMU_CALL_VEC.invoke(h, bytesSeg(code), (long) code.length, longsSeg(iargs), ni, vecsSeg(vargs), vargs.length, 0L, res.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        /** Run raw bytes under the Microsoft x64 (Win64) convention. */
+        public EmuResult callWin64(byte[] code, long... args) {
+            EmuResult res = new EmuResult();
+            try { EMU_CALL_WIN64.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        /** Like callBytes, but record an execution trace / coverage into tr. */
+        public EmuResult callTraced(byte[] code, long[] args, Trace tr) {
+            EmuResult res = new EmuResult();
+            int n = args == null ? 0 : args.length;
+            try { EMU_CALL_TRACED.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), n, 0L, res.h, tr.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
         /** Whether the loaded native lib carries the in-line assembler (Keystone). */
         public boolean asmAvailable() { return EMU_CALL_ASM6 != null; }
         /**
@@ -337,5 +453,106 @@ public final class Asmtest {
     public static void assertEmuReg(EmuResult res, String name, long want) {
         long got = res.reg(name);
         if (got != want) throw new AsmtestException("emu " + name + ": got " + got + ", want " + want);
+    }
+    public static void assertGuestReg(GuestResult res, String name, long want) {
+        long got = res.reg(name);
+        if (got != want) throw new AsmtestException("guest " + name + ": got " + got + ", want " + want);
+    }
+    public static void assertCovered(Trace tr, long off) {
+        if (!tr.covered(off)) throw new AsmtestException("block " + off + ": expected covered");
+    }
+
+    // ---- Execution trace / coverage ---- //
+
+    /** An opaque execution-trace / basic-block coverage recorder. */
+    public static final class Trace implements AutoCloseable {
+        MemorySegment h;
+        public Trace() { this(4096, 4096); }
+        public Trace(long insnsCap, long blocksCap) {
+            try { h = (MemorySegment) TRACE_NEW.invoke(insnsCap, blocksCap); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** True if the basic block at byte-offset {@code off} was entered. */
+        public boolean covered(long off) {
+            try { return (int) TRACE_COVERED.invoke(h, off) != 0; } catch (Throwable t) { throw rethrow(t); }
+        }
+        @Override public void close() {
+            try { if (h != null) TRACE_FREE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }
+        }
+    }
+
+    // ---- Cross-arch emulator guests (raw bytes, any host) ---- //
+
+    /** A cross-arch run's outcome; registers are read by name. */
+    public static final class GuestResult implements AutoCloseable {
+        private MemorySegment h;
+        private final String arch;
+        GuestResult(String arch) {
+            this.arch = arch;
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_RES_NEW; case "riscv" -> RISCV_RES_NEW;
+                case "arm" -> ARM_RES_NEW; default -> throw new AsmtestException("unknown guest: " + arch);
+            };
+            try { h = (MemorySegment) mh.invoke(); } catch (Throwable t) { throw rethrow(t); }
+        }
+        public boolean faulted() {
+            try { return (int) EMU_FAULTED.invoke(h) != 0; } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0"). */
+        public long reg(String name) {
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_REG; case "riscv" -> RISCV_REG; case "arm" -> ARM_REG;
+                default -> throw new AsmtestException("unknown guest: " + arch);
+            };
+            try { return (long) mh.invoke(h, str(name)); } catch (Throwable t) { throw rethrow(t); }
+        }
+        @Override public void close() {
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_RES_FREE; case "riscv" -> RISCV_RES_FREE; case "arm" -> ARM_RES_FREE;
+                default -> null;
+            };
+            try { if (h != null && mh != null) mh.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }
+        }
+    }
+
+    /** A cross-arch Unicorn guest ("arm64"/"riscv"/"arm") running raw bytes on any
+     *  host. Use try-with-resources to close. */
+    public static final class Guest implements AutoCloseable {
+        private MemorySegment h;
+        private final String arch;
+        public Guest(String arch) {
+            this.arch = arch;
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_OPEN; case "riscv" -> RISCV_OPEN;
+                case "arm" -> ARM_OPEN; default -> throw new AsmtestException("unknown guest: " + arch);
+            };
+            try { h = (MemorySegment) mh.invoke(); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Run raw machine-code bytes with integer args in the guest ABI registers. */
+        public GuestResult call(byte[] code, long... args) {
+            GuestResult res = new GuestResult(arch);
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_CALL; case "riscv" -> RISCV_CALL; case "arm" -> ARM_CALL;
+                default -> throw new AsmtestException("unknown guest: " + arch);
+            };
+            try { mh.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        /** Like call, but record an execution trace / coverage into tr (arm64). */
+        public GuestResult callTraced(byte[] code, long[] args, Trace tr) {
+            if (!arch.equals("arm64")) throw new AsmtestException("traced guest run only wired for arm64");
+            GuestResult res = new GuestResult(arch);
+            int n = args == null ? 0 : args.length;
+            try { ARM64_CALL_TRACED.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), n, 0L, res.h, tr.h); }
+            catch (Throwable t) { throw rethrow(t); }
+            return res;
+        }
+        @Override public void close() {
+            MethodHandle mh = switch (arch) {
+                case "arm64" -> ARM64_CLOSE; case "riscv" -> RISCV_CLOSE; case "arm" -> ARM_CLOSE;
+                default -> null;
+            };
+            try { if (h != null && mh != null) mh.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }
+        }
     }
 }

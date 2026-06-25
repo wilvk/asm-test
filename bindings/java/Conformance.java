@@ -23,6 +23,13 @@ public class Conformance {
 
     static MemorySegment routine(String name) { return Asmtest.corpusRoutine(name); }
 
+    /** Pack ints (0..255) into a machine-code byte array (Java bytes are signed). */
+    static byte[] code(int... b) {
+        byte[] o = new byte[b.length];
+        for (int i = 0; i < b.length; i++) o[i] = (byte) b[i];
+        return o;
+    }
+
     public static void main(String[] argv) {
         // --- Tier 1: corpus replay (capture trampoline) ------------------- //
         try (Asmtest.Regs r = new Asmtest.Regs()) {
@@ -69,6 +76,50 @@ public class Conformance {
              Asmtest.EmuResult res = e.call2(routine("int_to_double"), 42L, 0L)) {
             check("emu.int_to_double", !res.faulted() && res.xmmF64(0, 0) == 42.0
                 && (res.reg("rflags") & 0x2L) != 0);
+        }
+
+        // --- Tier 1: cross-arch emulator guests (raw bytes, any host) ----- //
+        try (Asmtest.Guest g = new Asmtest.Guest("arm64");
+             Asmtest.GuestResult res = g.call(code(0x00, 0x00, 0x01, 0x8B, 0xC0, 0x03, 0x5F, 0xD6), 40L, 2L)) {
+            check("emu_arm64.add", !res.faulted() && res.reg("x0") == 42);
+        }
+        try (Asmtest.Guest g = new Asmtest.Guest("riscv");
+             Asmtest.GuestResult res = g.call(code(0x33, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00), 40L, 2L)) {
+            check("emu_riscv.add", !res.faulted() && res.reg("a0") == 42);
+        }
+        try (Asmtest.Guest g = new Asmtest.Guest("arm");
+             Asmtest.GuestResult res = g.call(code(0x01, 0x00, 0x80, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1), 40L, 2L)) {
+            check("emu_arm.add", !res.faulted() && res.reg("r0") == 42);
+        }
+
+        // --- Tier 1: extended x86-64 emulator calls (raw bytes) ----------- //
+        try (Asmtest.Emu e = new Asmtest.Emu()) {
+            try (Asmtest.EmuResult res = e.callBytes(
+                    code(0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x01, 0xD0, 0xC3), 10L, 20L, 12L)) {
+                check("emu.wide_int", !res.faulted() && res.reg("rax") == 42);
+            }
+            try (Asmtest.EmuResult res = e.callFp(
+                    code(0xF2, 0x0F, 0x58, 0xC1, 0xC3), new long[0], new double[] {1.5, 2.25})) {
+                check("emu.fp_add", !res.faulted() && res.xmmF64(0, 0) == 3.75);
+            }
+            try (Asmtest.EmuResult res = e.callVec(
+                    code(0x0F, 0x58, 0xC1, 0xC3), new long[0], new float[][] {{1, 2, 3, 4}, {10, 20, 30, 40}})) {
+                check("emu.vec_add4f", !res.faulted() && res.xmmF32(0, 0) == 11 && res.xmmF32(0, 3) == 44);
+            }
+            try (Asmtest.EmuResult res = e.callWin64(
+                    code(0x48, 0x89, 0xC8, 0x48, 0x01, 0xD0, 0xC3), 40L, 2L)) {
+                check("emu.win64_add", !res.faulted() && res.reg("rax") == 42);
+            }
+        }
+
+        // --- Tier 1: execution trace / coverage (cross-arch arm64) -------- //
+        try (Asmtest.Guest g = new Asmtest.Guest("arm64"); Asmtest.Trace tr = new Asmtest.Trace()) {
+            byte[] sel = code(0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03,
+                              0x5F, 0xD6, 0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6);
+            try (Asmtest.GuestResult res = g.callTraced(sel, new long[] {0}, tr)) {
+                check("emu_arm64.trace_sel", !res.faulted() && res.reg("x0") == 42
+                    && tr.covered(0) && tr.covered(12) && !tr.covered(4));
+            }
         }
 
         // --- Tier 1: in-line assembly (Keystone) replays add_signed ------- //

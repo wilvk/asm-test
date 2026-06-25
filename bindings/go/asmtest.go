@@ -51,6 +51,50 @@ extern unsigned long long asmtest_emu_x86_reg(void *r, const char *name);
 extern double asmtest_emu_x86_xmm_f64(void *r, int index, int lane);
 extern float  asmtest_emu_x86_xmm_f32(void *r, int index, int lane);
 
+// Extended x86-64 emulator calls (array form: explicit code + length, so raw
+// machine-code bytes run directly): wide integer args, FP args, vector args, the
+// Win64 convention, and trace recording.
+extern int emu_call(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out);
+extern int emu_call_fp(void *e, void *code, size_t len, long *ia, int ni, double *fa, int nf, unsigned long long mi, void *out);
+extern int emu_call_vec(void *e, void *code, size_t len, long *ia, int ni, void *va, int nv, unsigned long long mi, void *out);
+extern int emu_call_win64(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out);
+extern int emu_call_traced(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out, void *trace);
+
+// Cross-arch guests (raw bytes, emulated regardless of host): AArch64, RISC-V,
+// ARM32. Each opens its own engine and writes a per-arch result struct, read by
+// the opaque accessors below.
+extern void *emu_arm64_open(void); extern void emu_arm64_close(void *e);
+extern int emu_arm64_call(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out);
+extern int emu_arm64_call_fp(void *e, void *code, size_t len, long *ia, int ni, double *fa, int nf, unsigned long long mi, void *out);
+extern int emu_arm64_call_vec(void *e, void *code, size_t len, long *ia, int ni, void *va, int nv, unsigned long long mi, void *out);
+extern int emu_arm64_call_traced(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out, void *trace);
+extern void *emu_riscv_open(void); extern void emu_riscv_close(void *e);
+extern int emu_riscv_call(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out);
+extern int emu_riscv_call_fp(void *e, void *code, size_t len, long *ia, int ni, double *fa, int nf, unsigned long long mi, void *out);
+extern int emu_riscv_call_traced(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out, void *trace);
+extern void *emu_arm_open(void); extern void emu_arm_close(void *e);
+extern int emu_arm_call(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out);
+extern int emu_arm_call_fp(void *e, void *code, size_t len, long *ia, int ni, double *fa, int nf, unsigned long long mi, void *out);
+extern int emu_arm_call_vec(void *e, void *code, size_t len, long *ia, int ni, void *va, int nv, unsigned long long mi, void *out);
+extern int emu_arm_call_traced(void *e, void *code, size_t len, long *args, int nargs, unsigned long long mi, void *out, void *trace);
+
+// Per-arch opaque result handles + register accessors.
+extern void *asmtest_emu_arm64_result_new(void); extern void asmtest_emu_arm64_result_free(void *r);
+extern unsigned long long asmtest_emu_arm64_reg(void *r, const char *name);
+extern double asmtest_emu_arm64_vec_f64(void *r, int index, int lane);
+extern void *asmtest_emu_riscv_result_new(void); extern void asmtest_emu_riscv_result_free(void *r);
+extern unsigned long long asmtest_emu_riscv_reg(void *r, const char *name);
+extern double asmtest_emu_riscv_f_f64(void *r, int index, int lane);
+extern void *asmtest_emu_arm_result_new(void); extern void asmtest_emu_arm_result_free(void *r);
+extern unsigned long long asmtest_emu_arm_reg(void *r, const char *name);
+extern double asmtest_emu_arm_q_f64(void *r, int index, int lane);
+
+// Opaque execution-trace handle.
+extern void *asmtest_emu_trace_new(size_t ic, size_t bc); extern void asmtest_emu_trace_free(void *t);
+extern int asmtest_emu_trace_covered(void *t, unsigned long long off);
+extern unsigned long long asmtest_emu_trace_insns_total(void *t);
+extern unsigned long long asmtest_emu_trace_blocks_len(void *t);
+
 // In-line assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
 // which the default build does not link. Resolve them at run time from the lib the
 // binding loads (ASMTEST_LIB): dlopen it RTLD_GLOBAL, then dlsym. Against the plain
@@ -192,6 +236,82 @@ func (e *Emu) Close() {
 // Call2 runs fn in the emulator with two integer args, filling out.
 func (e *Emu) Call2(fn Routine, a0, a1 int64, out *EmuResult) {
 	C.asmtest_emu_call2(e.h, fn, C.long(a0), C.long(a1), out.h)
+}
+
+// --- helpers for passing Go slices to C (no Go pointers inside the slices) --- //
+
+func clongPtr(a []int64) *C.long {
+	if len(a) == 0 {
+		return nil
+	}
+	return (*C.long)(unsafe.Pointer(&a[0]))
+}
+
+func cbytePtr(b []byte) unsafe.Pointer {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Pointer(&b[0])
+}
+
+func cdoublePtr(f []float64) *C.double {
+	if len(f) == 0 {
+		return nil
+	}
+	return (*C.double)(unsafe.Pointer(&f[0]))
+}
+
+// flattenVecs lays out vectors as contiguous 16-byte (four float32) lanes, the
+// emu_vec128_t array layout the marshalling expects.
+func flattenVecs(vargs [][4]float32) []float32 {
+	flat := make([]float32, 0, len(vargs)*4)
+	for _, v := range vargs {
+		flat = append(flat, v[0], v[1], v[2], v[3])
+	}
+	return flat
+}
+
+func cvecPtr(flat []float32) unsafe.Pointer {
+	if len(flat) == 0 {
+		return nil
+	}
+	return unsafe.Pointer(&flat[0])
+}
+
+// CallBytes runs raw x86-64 machine-code bytes with up to six integer args (more
+// than Call2), filling out.
+func (e *Emu) CallBytes(code []byte, args []int64, out *EmuResult) {
+	C.emu_call(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(args),
+		C.int(len(args)), 0, out.h)
+}
+
+// CallFP runs raw x86-64 bytes marshalling doubles into the FP arg registers
+// (xmm0..7); the scalar double return is out.XmmF64(0, 0).
+func (e *Emu) CallFP(code []byte, iargs []int64, fargs []float64, out *EmuResult) {
+	C.emu_call_fp(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(iargs),
+		C.int(len(iargs)), cdoublePtr(fargs), C.int(len(fargs)), 0, out.h)
+}
+
+// CallVec runs raw x86-64 bytes marshalling 128-bit vectors into xmm0..7; a
+// vector return is read with out.XmmF32(0, lane).
+func (e *Emu) CallVec(code []byte, iargs []int64, vargs [][4]float32, out *EmuResult) {
+	flat := flattenVecs(vargs)
+	C.emu_call_vec(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(iargs),
+		C.int(len(iargs)), cvecPtr(flat), C.int(len(vargs)), 0, out.h)
+}
+
+// CallWin64 runs raw x86-64 bytes under the Microsoft x64 convention (integer
+// args in rcx, rdx, r8, r9), so a Win64 routine can be tested on a System V host.
+func (e *Emu) CallWin64(code []byte, args []int64, out *EmuResult) {
+	C.emu_call_win64(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(args),
+		C.int(len(args)), 0, out.h)
+}
+
+// CallTraced runs raw x86-64 bytes recording an execution trace / coverage into
+// tr, filling out.
+func (e *Emu) CallTraced(code []byte, args []int64, tr *Trace, out *EmuResult) {
+	C.emu_call_traced(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(args),
+		C.int(len(args)), 0, out.h, tr.h)
 }
 
 // AsmArch / AsmSyntax select the target for Assemble (mirror asm_arch_t /
@@ -393,5 +513,229 @@ func AssertEmuReg(t TB, r *EmuResult, name string, want uint64) {
 	t.Helper()
 	if got := r.X86Reg(name); got != want {
 		t.Fatalf("emu %s: got %d, want %d", name, got, want)
+	}
+}
+
+// ------------------------------------------------------------------ //
+// Execution trace / coverage                                          //
+// ------------------------------------------------------------------ //
+
+// Trace is an opaque execution-trace / basic-block coverage recorder. Pass it to
+// (*Emu).CallTraced or (*Guest).CallTraced; release it with Free.
+type Trace struct{ h unsafe.Pointer }
+
+// NewTrace allocates a trace handle with the given instruction / block buffer
+// capacities.
+func NewTrace(insnsCap, blocksCap int) *Trace {
+	return &Trace{h: C.asmtest_emu_trace_new(C.size_t(insnsCap), C.size_t(blocksCap))}
+}
+
+// Free releases the handle. Safe to call more than once.
+func (t *Trace) Free() {
+	if t.h != nil {
+		C.asmtest_emu_trace_free(t.h)
+		t.h = nil
+	}
+}
+
+// Covered reports whether the basic block at byte-offset off (from the routine
+// entry) was entered.
+func (t *Trace) Covered(off uint64) bool {
+	return C.asmtest_emu_trace_covered(t.h, C.ulonglong(off)) != 0
+}
+
+// InsnsTotal is the number of instructions executed (counts past the buffer cap).
+func (t *Trace) InsnsTotal() uint64 { return uint64(C.asmtest_emu_trace_insns_total(t.h)) }
+
+// BlocksLen is the number of distinct basic blocks recorded.
+func (t *Trace) BlocksLen() uint64 { return uint64(C.asmtest_emu_trace_blocks_len(t.h)) }
+
+// ------------------------------------------------------------------ //
+// Cross-arch emulator guests (AArch64 / RISC-V / ARM32)               //
+// ------------------------------------------------------------------ //
+
+// Guest is a cross-arch Unicorn guest ("arm64", "riscv", or "arm") that runs raw
+// machine-code bytes — emulated regardless of host architecture. Close it with
+// Close.
+type Guest struct {
+	h    unsafe.Pointer
+	arch string
+}
+
+// NewGuest opens a guest emulator for arch ("arm64", "riscv", "arm"); nil on an
+// unknown arch.
+func NewGuest(arch string) *Guest {
+	var h unsafe.Pointer
+	switch arch {
+	case "arm64":
+		h = C.emu_arm64_open()
+	case "riscv":
+		h = C.emu_riscv_open()
+	case "arm":
+		h = C.emu_arm_open()
+	default:
+		return nil
+	}
+	return &Guest{h: h, arch: arch}
+}
+
+// Close releases the guest. Safe to call more than once.
+func (g *Guest) Close() {
+	if g.h == nil {
+		return
+	}
+	switch g.arch {
+	case "arm64":
+		C.emu_arm64_close(g.h)
+	case "riscv":
+		C.emu_riscv_close(g.h)
+	case "arm":
+		C.emu_arm_close(g.h)
+	}
+	g.h = nil
+}
+
+// Call runs raw machine-code bytes with integer args in the guest ABI arg
+// registers, filling res.
+func (g *Guest) Call(code []byte, args []int64, res *GuestResult) {
+	cb, n := cbytePtr(code), C.size_t(len(code))
+	la, ln := clongPtr(args), C.int(len(args))
+	switch g.arch {
+	case "arm64":
+		C.emu_arm64_call(g.h, cb, n, la, ln, 0, res.h)
+	case "riscv":
+		C.emu_riscv_call(g.h, cb, n, la, ln, 0, res.h)
+	case "arm":
+		C.emu_arm_call(g.h, cb, n, la, ln, 0, res.h)
+	}
+}
+
+// CallFP runs raw bytes marshalling doubles into the guest FP arg registers; the
+// scalar double return is res.VecF64(0, 0).
+func (g *Guest) CallFP(code []byte, iargs []int64, fargs []float64, res *GuestResult) {
+	cb, n := cbytePtr(code), C.size_t(len(code))
+	la, ln := clongPtr(iargs), C.int(len(iargs))
+	fa, fn := cdoublePtr(fargs), C.int(len(fargs))
+	switch g.arch {
+	case "arm64":
+		C.emu_arm64_call_fp(g.h, cb, n, la, ln, fa, fn, 0, res.h)
+	case "riscv":
+		C.emu_riscv_call_fp(g.h, cb, n, la, ln, fa, fn, 0, res.h)
+	case "arm":
+		C.emu_arm_call_fp(g.h, cb, n, la, ln, fa, fn, 0, res.h)
+	}
+}
+
+// CallVec runs raw bytes marshalling 128-bit vectors into the guest vector arg
+// registers (arm64 / arm only; the RISC-V guest has no vector file).
+func (g *Guest) CallVec(code []byte, iargs []int64, vargs [][4]float32, res *GuestResult) {
+	flat := flattenVecs(vargs)
+	cb, n := cbytePtr(code), C.size_t(len(code))
+	la, ln := clongPtr(iargs), C.int(len(iargs))
+	va, vn := cvecPtr(flat), C.int(len(vargs))
+	switch g.arch {
+	case "arm64":
+		C.emu_arm64_call_vec(g.h, cb, n, la, ln, va, vn, 0, res.h)
+	case "arm":
+		C.emu_arm_call_vec(g.h, cb, n, la, ln, va, vn, 0, res.h)
+	}
+}
+
+// CallTraced runs raw bytes recording an execution trace / coverage into tr.
+func (g *Guest) CallTraced(code []byte, args []int64, tr *Trace, res *GuestResult) {
+	cb, n := cbytePtr(code), C.size_t(len(code))
+	la, ln := clongPtr(args), C.int(len(args))
+	switch g.arch {
+	case "arm64":
+		C.emu_arm64_call_traced(g.h, cb, n, la, ln, 0, res.h, tr.h)
+	case "riscv":
+		C.emu_riscv_call_traced(g.h, cb, n, la, ln, 0, res.h, tr.h)
+	case "arm":
+		C.emu_arm_call_traced(g.h, cb, n, la, ln, 0, res.h, tr.h)
+	}
+}
+
+// GuestResult carries a cross-arch run's outcome; registers are read by name.
+// Release it with Free.
+type GuestResult struct {
+	h    unsafe.Pointer
+	arch string
+}
+
+// NewGuestResult allocates a per-arch result handle for arch.
+func NewGuestResult(arch string) *GuestResult {
+	var h unsafe.Pointer
+	switch arch {
+	case "arm64":
+		h = C.asmtest_emu_arm64_result_new()
+	case "riscv":
+		h = C.asmtest_emu_riscv_result_new()
+	case "arm":
+		h = C.asmtest_emu_arm_result_new()
+	}
+	return &GuestResult{h: h, arch: arch}
+}
+
+// Free releases the handle. Safe to call more than once.
+func (r *GuestResult) Free() {
+	if r.h == nil {
+		return
+	}
+	switch r.arch {
+	case "arm64":
+		C.asmtest_emu_arm64_result_free(r.h)
+	case "riscv":
+		C.asmtest_emu_riscv_result_free(r.h)
+	case "arm":
+		C.asmtest_emu_arm_result_free(r.h)
+	}
+	r.h = nil
+}
+
+// Faulted reports whether the guest run took an invalid-memory fault.
+func (r *GuestResult) Faulted() bool { return C.asmtest_emu_result_faulted(r.h) != 0 }
+
+// Reg reads a guest register by name (e.g. "x0"/"sp" for arm64, "a0"/"x10" for
+// riscv, "r0" for arm).
+func (r *GuestResult) Reg(name string) uint64 {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	switch r.arch {
+	case "arm64":
+		return uint64(C.asmtest_emu_arm64_reg(r.h, cs))
+	case "riscv":
+		return uint64(C.asmtest_emu_riscv_reg(r.h, cs))
+	case "arm":
+		return uint64(C.asmtest_emu_arm_reg(r.h, cs))
+	}
+	return 0
+}
+
+// VecF64 reads lane (0..1) of guest vector register index as a double.
+func (r *GuestResult) VecF64(index, lane int) float64 {
+	switch r.arch {
+	case "arm64":
+		return float64(C.asmtest_emu_arm64_vec_f64(r.h, C.int(index), C.int(lane)))
+	case "arm":
+		return float64(C.asmtest_emu_arm_q_f64(r.h, C.int(index), C.int(lane)))
+	case "riscv":
+		return float64(C.asmtest_emu_riscv_f_f64(r.h, C.int(index), C.int(lane)))
+	}
+	return 0
+}
+
+// AssertGuestReg fails t unless the named guest register equals want.
+func AssertGuestReg(t TB, r *GuestResult, name string, want uint64) {
+	t.Helper()
+	if got := r.Reg(name); got != want {
+		t.Fatalf("guest %s: got %d, want %d", name, got, want)
+	}
+}
+
+// AssertCovered fails t unless the basic block at byte-offset off was entered.
+func AssertCovered(t TB, tr *Trace, off uint64) {
+	t.Helper()
+	if !tr.Covered(off) {
+		t.Fatalf("block %d: expected covered", off)
 	}
 }

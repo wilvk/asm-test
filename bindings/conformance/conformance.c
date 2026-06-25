@@ -26,8 +26,16 @@
 #include <string.h>
 
 #include "asmtest.h"
-#if defined(__x86_64__)
+/* Always available: the cross-arch and raw-bytes emulator cases below run on any
+ * host (Unicorn emulates every guest regardless of host arch). Only the
+ * host-native x86 emu cases stay gated to an x86-64 host. */
 #include "asmtest_emu.h"
+/* The in-line assembler tier is optional (needs Keystone). Compiled in only for
+ * the `conformance-asm` build (-DASMTEST_ENABLE_ASM, links the assembler lib);
+ * the assembler cases are emitted into corpus.json unconditionally so corpus-
+ * driven bindings know to replay (or skip) them. */
+#ifdef ASMTEST_ENABLE_ASM
+#include "asmtest_assemble.h"
 #endif
 
 /* Canonical routines under test (examples/{add,flags,fp,simd}.s). Portable
@@ -196,6 +204,187 @@ static int run_corpus(void) {
     }
 #endif
 
+    /* ------------------------------------------------------------------ */
+    /* Cross-arch & raw-bytes emulator tier — driven through the opaque-   */
+    /* handle FFI surface (asmtest_emu_*), exactly as a foreign binding    */
+    /* does. These guests run raw machine-code bytes, so they emulate on   */
+    /* ANY host (x86-64 or AArch64), unlike the host-native cases above.   */
+    /* The bytes were assembled once and are checked in as literals, so    */
+    /* the base build needs no Keystone (and RISC-V, absent from many      */
+    /* Keystone builds, still runs under Unicorn).                         */
+    /* ------------------------------------------------------------------ */
+
+    /* AArch64 `add x0, x0, x1; ret`, args (40, 2) -> x0 == 42. */
+    {
+        static const unsigned char code[] = {0x00, 0x00, 0x01, 0x8B,
+                                              0xC0, 0x03, 0x5F, 0xD6};
+        emu_arm64_t *e = emu_arm64_open();
+        emu_arm64_result_t *r = asmtest_emu_arm64_result_new();
+        long args[2] = {40, 2};
+        int ran = e && r && emu_arm64_call(e, code, sizeof code, args, 2, 0, r);
+        check("emu_arm64.add",
+              ran && !asmtest_emu_result_faulted((emu_result_t *)r) &&
+                  asmtest_emu_arm64_reg(r, "x0") == 42,
+              "arm64 add mismatch");
+        asmtest_emu_arm64_result_free(r);
+        if (e)
+            emu_arm64_close(e);
+    }
+
+    /* RISC-V (RV64) `add a0, a0, a1; ret`, args (40, 2) -> a0 (x10) == 42. */
+    {
+        static const unsigned char code[] = {0x33, 0x05, 0xB5, 0x00,
+                                              0x67, 0x80, 0x00, 0x00};
+        emu_riscv_t *e = emu_riscv_open();
+        emu_riscv_result_t *r = asmtest_emu_riscv_result_new();
+        long args[2] = {40, 2};
+        int ran = e && r && emu_riscv_call(e, code, sizeof code, args, 2, 0, r);
+        check("emu_riscv.add",
+              ran && !asmtest_emu_result_faulted((emu_result_t *)r) &&
+                  asmtest_emu_riscv_reg(r, "a0") == 42,
+              "riscv add mismatch");
+        asmtest_emu_riscv_result_free(r);
+        if (e)
+            emu_riscv_close(e);
+    }
+
+    /* ARM32 (A32) `add r0, r0, r1; bx lr`, args (40, 2) -> r0 == 42. */
+    {
+        static const unsigned char code[] = {0x01, 0x00, 0x80, 0xE0,
+                                              0x1E, 0xFF, 0x2F, 0xE1};
+        emu_arm_t *e = emu_arm_open();
+        emu_arm_result_t *r = asmtest_emu_arm_result_new();
+        long args[2] = {40, 2};
+        int ran = e && r && emu_arm_call(e, code, sizeof code, args, 2, 0, r);
+        check("emu_arm.add",
+              ran && !asmtest_emu_result_faulted((emu_result_t *)r) &&
+                  asmtest_emu_arm_reg(r, "r0") == 42,
+              "arm add mismatch");
+        asmtest_emu_arm_result_free(r);
+        if (e)
+            emu_arm_close(e);
+    }
+
+    /* x86-64 raw bytes under the emulator (host-portable via Unicorn): the new
+     * scalar-arg wrappers for wide integer args, FP args, vector args, and the
+     * Win64 convention. Each code window is padded to 64 bytes (the wrappers
+     * copy a fixed 64-byte window). */
+    {
+        emu_t *e = emu_open();
+        emu_result_t *r = asmtest_emu_result_new();
+        if (!e || !r) {
+            check("emu.wide_int", 0, "emu_open failed");
+        } else {
+            /* `mov rax,rdi; add rax,rsi; add rax,rdx; ret`, three args via the
+             * 6-arg wrapper -> rax == 42 (more than the 2 args of call2). */
+            static const unsigned char wi[64] = {0x48, 0x89, 0xF8, 0x48, 0x01,
+                                                 0xF0, 0x48, 0x01, 0xD0, 0xC3};
+            asmtest_emu_call6(e, wi, 10, 20, 12, 0, 0, 0, 3, 0, r);
+            check("emu.wide_int", asmtest_emu_x86_reg(r, "rax") == 42,
+                  "wide-int mismatch");
+
+            /* `addsd xmm0, xmm1; ret`, two doubles via the FP wrapper -> 3.75. */
+            static const unsigned char fb[64] = {0xF2, 0x0F, 0x58, 0xC1, 0xC3};
+            asmtest_emu_call_fp2(e, fb, 1.5, 2.25, r);
+            check("emu.fp_add", asmtest_emu_x86_xmm_f64(r, 0, 0) == 3.75,
+                  "emu fp mismatch");
+
+            /* `addps xmm0, xmm1; ret`, two vectors via the vector wrapper. */
+            static const unsigned char vb[64] = {0x0F, 0x58, 0xC1, 0xC3};
+            float lanes[8] = {1, 2, 3, 4, 10, 20, 30, 40};
+            asmtest_emu_call_vec_f32(e, vb, lanes, 2, r);
+            check("emu.vec_add4f",
+                  asmtest_emu_x86_xmm_f32(r, 0, 0) == 11 &&
+                      asmtest_emu_x86_xmm_f32(r, 0, 1) == 22 &&
+                      asmtest_emu_x86_xmm_f32(r, 0, 2) == 33 &&
+                      asmtest_emu_x86_xmm_f32(r, 0, 3) == 44,
+                  "emu vec mismatch");
+
+            /* Win64 convention: `mov rax,rcx; add rax,rdx; ret`, args in rcx/rdx
+             * -> rax == 42 (a Win64 routine tested on a System V host). */
+            static const unsigned char wb[64] = {0x48, 0x89, 0xC8, 0x48,
+                                                 0x01, 0xD0, 0xC3};
+            asmtest_emu_call_win64_6(e, wb, 40, 2, 0, 0, 2, 0, r);
+            check("emu.win64_add", asmtest_emu_x86_reg(r, "rax") == 42,
+                  "win64 mismatch");
+        }
+        asmtest_emu_result_free(r);
+        if (e)
+            emu_close(e);
+    }
+
+    /* AArch64 trace / basic-block coverage: a two-block select routine
+     * `x0 == 0 ? 42 : 99`. With x0 = 0 the entry block (offset 0) and the
+     * .zero block (offset 12) are entered, while the x0 != 0 block (offset 4)
+     * is not — coverage reported as data through the opaque trace handle. */
+    {
+        static const unsigned char code[] = {
+            0x60, 0x00, 0x00, 0xB4, 0x60, 0x0C, 0x80, 0xD2, 0xC0, 0x03,
+            0x5F, 0xD6, 0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6};
+        emu_arm64_t *e = emu_arm64_open();
+        emu_arm64_result_t *r = asmtest_emu_arm64_result_new();
+        emu_trace_t *tr = asmtest_emu_trace_new(64, 64);
+        long args[1] = {0};
+        int ran = e && r && tr &&
+                  emu_arm64_call_traced(e, code, sizeof code, args, 1, 0, r, tr);
+        int ok = ran && !asmtest_emu_result_faulted((emu_result_t *)r) &&
+                 asmtest_emu_arm64_reg(r, "x0") == 42 &&
+                 asmtest_emu_trace_covered(tr, 0) &&
+                 asmtest_emu_trace_covered(tr, 12) &&
+                 !asmtest_emu_trace_covered(tr, 4);
+        check("emu_arm64.trace_sel", ok, "arm64 trace/coverage mismatch");
+        asmtest_emu_trace_free(tr);
+        asmtest_emu_arm64_result_free(r);
+        if (e)
+            emu_arm64_close(e);
+    }
+
+#ifdef ASMTEST_ENABLE_ASM
+    /* ------------------------------------------------------------------ */
+    /* In-line assembler tier (Keystone) — assemble source text, then run  */
+    /* it on the emulator or emit raw bytes. Compiled only for the         */
+    /* conformance-asm build; the bindings test this same surface.         */
+    /* ------------------------------------------------------------------ */
+    {
+        emu_t *e = emu_open();
+        if (!e) {
+            check("asm.add_signed", 0, "emu_open failed");
+        } else {
+            emu_result_t res;
+            memset(&res, 0, sizeof res);
+            int ok = asmtest_emu_call_asm6(e, "mov rax, rdi; add rax, rsi; ret",
+                                           ASM_SYNTAX_INTEL, 40, 2, 0, 0, 0, 0,
+                                           2, 0, &res);
+            check("asm.add_signed", ok && !res.faulted && res.regs.rax == 42,
+                  "asm add_signed mismatch");
+
+            /* Widened shim: AT&T syntax + a third arg (rdi+rsi+rdx). */
+            memset(&res, 0, sizeof res);
+            ok = asmtest_emu_call_asm6(
+                e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+                ASM_SYNTAX_ATT, 10, 20, 12, 0, 0, 0, 3, 0, &res);
+            check("asm.att_3arg", ok && res.regs.rax == 42, "asm att_3arg mismatch");
+
+            /* Failure path: a bad string fails (0) and leaves a diagnostic. */
+            memset(&res, 0, sizeof res);
+            int bad = asmtest_emu_call_asm6(e, "mov rax, nonsense_token",
+                                            ASM_SYNTAX_INTEL, 0, 0, 0, 0, 0, 0,
+                                            0, 0, &res);
+            check("asm.bad_source",
+                  bad == 0 && asmtest_asm_last_error()[0] != 0,
+                  "asm bad source should fail with a diagnostic");
+            emu_close(e);
+        }
+
+        /* Multi-arch assemble-to-bytes: AArch64 `ret` is C0 03 5F D6. */
+        unsigned char buf[16];
+        int n = asmtest_asm_bytes(ASM_ARM64, ASM_SYNTAX_INTEL, "ret",
+                                  0x00100000, buf, sizeof buf);
+        check("asm.arm64_bytes", n == 4 && buf[0] == 0xC0 && buf[3] == 0xD6,
+              "asm arm64 bytes mismatch");
+    }
+#endif /* ASMTEST_ENABLE_ASM */
+
     return g_fail;
 }
 
@@ -250,6 +439,69 @@ static void emit_corpus(void) {
            "\"args\": [42], "
            "\"expect\": {\"faulted\": false, \"xmm_f64\": {\"0\": 42.0}}}");
 #endif
+
+    /* Cross-arch & raw-bytes emulator tier (host-portable: emitted on every
+     * host). `code` is the routine's machine-code bytes; `guest` picks the
+     * emulator engine. These anchor the binding parity for the cross-arch
+     * guests, the wide/FP/vector/Win64 emu calls, and trace coverage. */
+    printf(",\n      {\"name\": \"emu_arm64.add\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"arm64\", \"call\": \"int\", "
+           "\"code\": [0, 0, 1, 139, 192, 3, 95, 214], \"args\": [40, 2], "
+           "\"expect\": {\"reg\": {\"x0\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu_riscv.add\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"riscv\", \"call\": \"int\", "
+           "\"code\": [51, 5, 181, 0, 103, 128, 0, 0], \"args\": [40, 2], "
+           "\"expect\": {\"reg\": {\"a0\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu_arm.add\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"arm\", \"call\": \"int\", "
+           "\"code\": [1, 0, 128, 224, 30, 255, 47, 225], \"args\": [40, 2], "
+           "\"expect\": {\"reg\": {\"r0\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu.wide_int\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"x86_64\", \"call\": \"int\", "
+           "\"code\": [72, 137, 248, 72, 1, 240, 72, 1, 208, 195], "
+           "\"args\": [10, 20, 12], "
+           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu.fp_add\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"x86_64\", \"call\": \"fp\", "
+           "\"code\": [242, 15, 88, 193, 195], \"fargs\": [1.5, 2.25], "
+           "\"expect\": {\"xmm_f64\": {\"0\": 3.75}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu.vec_add4f\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"x86_64\", \"call\": \"vec\", "
+           "\"code\": [15, 88, 193, 195], "
+           "\"vargs\": [[1, 2, 3, 4], [10, 20, 30, 40]], "
+           "\"expect\": {\"vret_f32\": [11, 22, 33, 44], \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu.win64_add\", \"tier\": \"emu_bytes\", "
+           "\"guest\": \"x86_64_win64\", \"call\": \"int\", "
+           "\"code\": [72, 137, 200, 72, 1, 208, 195], \"args\": [40, 2], "
+           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"emu_arm64.trace_sel\", \"tier\": \"emu_trace\", "
+           "\"guest\": \"arm64\", \"call\": \"int\", "
+           "\"code\": [96, 0, 0, 180, 96, 12, 128, 210, 192, 3, 95, 214, "
+           "64, 5, 128, 210, 192, 3, 95, 214], \"args\": [0], "
+           "\"expect\": {\"reg\": {\"x0\": 42}, \"covered\": [0, 12], "
+           "\"uncovered\": [4], \"faulted\": false}},\n");
+
+    /* In-line assembler tier — emitted unconditionally so a binding can replay
+     * (or self-skip when its loaded lib has no assembler). `call` selects the
+     * shape: run assembled text on the emulator, expect an assemble error, or
+     * assemble-to-bytes for any arch. */
+    printf("      {\"name\": \"asm.add_signed\", \"tier\": \"asm\", "
+           "\"call\": \"run\", \"syntax\": \"intel\", "
+           "\"src\": \"mov rax, rdi; add rax, rsi; ret\", \"args\": [40, 2], "
+           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"asm.att_3arg\", \"tier\": \"asm\", "
+           "\"call\": \"run\", \"syntax\": \"att\", "
+           "\"src\": \"mov %%rdi, %%rax; add %%rsi, %%rax; add %%rdx, %%rax; "
+           "ret\", \"args\": [10, 20, 12], "
+           "\"expect\": {\"reg\": {\"rax\": 42}, \"faulted\": false}},\n");
+    printf("      {\"name\": \"asm.bad_source\", \"tier\": \"asm\", "
+           "\"call\": \"error\", \"syntax\": \"intel\", "
+           "\"src\": \"mov rax, nonsense_token\", "
+           "\"expect\": {\"error\": true}},\n");
+    printf("      {\"name\": \"asm.arm64_bytes\", \"tier\": \"asm\", "
+           "\"call\": \"assemble\", \"arch\": \"arm64\", \"src\": \"ret\", "
+           "\"expect\": {\"bytes\": [192, 3, 95, 214]}}");
+
     printf("\n    ]\n");
     printf("  }\n}\n");
 }
