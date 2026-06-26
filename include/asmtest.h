@@ -239,6 +239,12 @@ typedef struct {
 #define ASMTEST_ZF (1UL << 30) /* zero     */
 #define ASMTEST_NF (1UL << 31) /* negative */
 
+/* x86 flag-name aliases for the portable subset, so a cross-arch routine (e.g.
+ * examples/checked.s) and its test can assert OF/SF/CF/ZF uniformly: the AArch64
+ * overflow flag is V (≡ x86 OF) and the sign flag is N (≡ x86 SF). */
+#define ASMTEST_OF ASMTEST_VF
+#define ASMTEST_SF ASMTEST_NF
+
 /* Layout contract (Track 0); see the x86-64 branch above. Offsets match the
  * stores in src/capture.s and the per-arch comments on the fields. */
 ASMTEST_STATIC_ASSERT(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
