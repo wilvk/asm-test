@@ -16,7 +16,21 @@ module Asmtest
   # Raised by the assert_* helpers on a failed check.
   class Error < StandardError; end
 
-  emu_path = ENV["ASMTEST_LIB"] or raise "set ASMTEST_LIB to libasmtest_emu.{so,dylib}"
+  # Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
+  # otherwise fall back to the native payload bundled in the gem at
+  # native/<os>-<arch>/ next to this file (how the gem ships it).
+  def self.resolve_emu_lib
+    return ENV["ASMTEST_LIB"] unless ENV["ASMTEST_LIB"].to_s.empty?
+    os  = RbConfig::CONFIG["host_os"] =~ /darwin/ ? "darwin" : "linux"
+    cpu = RbConfig::CONFIG["host_cpu"] =~ /arm|aarch64/ ? "arm64" : "x86_64"
+    ext = os == "darwin" ? "dylib" : "so"
+    bundled = File.expand_path("native/#{os}-#{cpu}/libasmtest_emu.#{ext}", __dir__)
+    return bundled if File.exist?(bundled)
+    raise "set ASMTEST_LIB to libasmtest_emu.#{ext} " \
+          "(no bundled native/#{os}-#{cpu}/ in this gem)"
+  end
+
+  emu_path = resolve_emu_lib
   corpus_path = ENV["ASMTEST_CORPUS_LIB"]
 
   L = Fiddle.dlopen(emu_path)

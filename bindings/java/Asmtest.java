@@ -79,11 +79,35 @@ public final class Asmtest {
         FUZZ_NEW, FUZZ_FREE, FUZZ_BLOCKS, FUZZ_CORPUS, MUT_NEW, MUT_FREE, MUT_KILLED,
         MUT_SURVIVED, CAPTURE_VEC256, CPU_AVX2;
 
-    static {
-        String emuPath = System.getenv("ASMTEST_LIB");
-        if (emuPath == null) {
-            throw new IllegalStateException("set ASMTEST_LIB to libasmtest_emu.{so,dylib}");
+    // Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
+    // otherwise fall back to the native payload bundled in the jar at
+    // /native/<os>-<arch>/. A jar resource can't be dlopen()ed in place, so it is
+    // extracted to a temp file (deleted on exit) and that path is loaded.
+    private static String resolveEmuLib() {
+        String env = System.getenv("ASMTEST_LIB");
+        if (env != null && !env.isEmpty()) return env;
+        boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
+        String os = mac ? "darwin" : "linux";
+        String a = System.getProperty("os.arch", "").toLowerCase();
+        String arch = (a.contains("aarch64") || a.contains("arm64")) ? "arm64" : "x86_64";
+        String ext = mac ? "dylib" : "so";
+        String res = "/native/" + os + "-" + arch + "/libasmtest_emu." + ext;
+        try (java.io.InputStream in = Asmtest.class.getResourceAsStream(res)) {
+            if (in == null)
+                throw new IllegalStateException("set ASMTEST_LIB to libasmtest_emu." + ext
+                    + " (no bundled " + res + " in this jar)");
+            java.io.File tmp = java.io.File.createTempFile("libasmtest_emu", "." + ext);
+            tmp.deleteOnExit();
+            java.nio.file.Files.copy(in, tmp.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return tmp.getAbsolutePath();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("failed to extract bundled libasmtest_emu", e);
         }
+    }
+
+    static {
+        String emuPath = resolveEmuLib();
         SymbolLookup emu = SymbolLookup.libraryLookup(emuPath, ARENA);
         String corpusPath = System.getenv("ASMTEST_CORPUS_LIB");
         CORPUS = corpusPath != null ? SymbolLookup.libraryLookup(corpusPath, ARENA) : null;

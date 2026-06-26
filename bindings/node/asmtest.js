@@ -12,12 +12,25 @@
 //   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib} (the canonical fixtures)
 'use strict';
 const koffi = require('koffi');
+const path = require('path');
+const fs = require('fs');
 
-const emuPath = process.env.ASMTEST_LIB;
-const corpusPath = process.env.ASMTEST_CORPUS_LIB;
-if (!emuPath) {
-  throw new Error('set ASMTEST_LIB to libasmtest_emu.{so,dylib}');
+// Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
+// otherwise fall back to the native payload bundled in the published package at
+// native/<os>-<arch>/ next to this module (how the npm package ships it).
+function resolveEmuLib() {
+  if (process.env.ASMTEST_LIB) return process.env.ASMTEST_LIB;
+  const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64'; // node 'x64' -> x86_64
+  const ext = process.platform === 'darwin' ? 'dylib' : 'so';
+  const bundled = path.join(__dirname, 'native', `${os}-${arch}`, `libasmtest_emu.${ext}`);
+  if (fs.existsSync(bundled)) return bundled;
+  throw new Error(`set ASMTEST_LIB to libasmtest_emu.${ext} `
+    + `(no bundled native/${os}-${arch}/ in this package)`);
 }
+
+const emuPath = resolveEmuLib();
+const corpusPath = process.env.ASMTEST_CORPUS_LIB;
 
 const L = koffi.load(emuPath);
 const C = corpusPath ? koffi.load(corpusPath) : null;

@@ -95,7 +95,24 @@ void asm_call_capture_vec256(void *vec, void *fn, const long *iargs, const void 
 int  asmtest_cpu_has_avx2(void);
 ]])
 
-local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB to libasmtest_emu.{so,dylib}")
+-- Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
+-- otherwise fall back to the native payload bundled in the rock at
+-- native/<os>-<arch>/ next to this module (how the rock ships it).
+local function resolve_emu_lib()
+  local p = os.getenv("ASMTEST_LIB")
+  if p and p ~= "" then return p end
+  local os_name = ffi.os == "OSX" and "darwin" or "linux"
+  local arch = ffi.arch == "arm64" and "arm64" or "x86_64" -- LuaJIT 'x64' -> x86_64
+  local ext = ffi.os == "OSX" and "dylib" or "so"
+  local dir = (debug.getinfo(1, "S").source:sub(2):match("(.*/)")) or "./"
+  local bundled = dir .. "native/" .. os_name .. "-" .. arch .. "/libasmtest_emu." .. ext
+  local f = io.open(bundled, "r")
+  if f then f:close(); return bundled end
+  error("set ASMTEST_LIB to libasmtest_emu." .. ext ..
+        " (no bundled native/" .. os_name .. "-" .. arch .. "/ in this rock)")
+end
+
+local emu_path = resolve_emu_lib()
 local corpus_path = os.getenv("ASMTEST_CORPUS_LIB")
 local L = ffi.load(emu_path)
 local C = corpus_path and ffi.load(corpus_path) or nil
