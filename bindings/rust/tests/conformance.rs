@@ -23,6 +23,11 @@ extern "C" {
     fn int_to_double(n: i64) -> f64;
 }
 
+#[cfg(target_arch = "x86_64")]
+extern "C" {
+    fn vec_add4d(); // AVX2 256-bit (Track D); x86-64 only
+}
+
 fn pm(addr: usize) -> *mut c_void {
     addr as *mut c_void
 }
@@ -210,4 +215,56 @@ fn emu_trace_coverage() {
     assert!(tr.covered(0));
     assert!(tr.covered(12));
     assert!(!tr.covered(4));
+}
+
+// Track F: mid-execution guards (byte-literal routines).
+#[test]
+fn guards_watchpoint_and_reg_invariant() {
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+    let two_writes = [0x48u8, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3];
+    assert!(emu.map(0x400000, 0x1000));
+    let mut w = asmtest::EmuWatch::default();
+    emu.watch_writes(0x400000, 8, 1, &mut w); // EMU_WATCH_ONLY
+    emu.call_bytes(&two_writes, &[0x400000]);
+    emu.watch_clear();
+    assert!(w.violated && w.addr == 0x400800 && w.rip_off == 3);
+
+    let clobber = [0x48u8, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3];
+    let mut g = asmtest::EmuRegGuard::default();
+    assert!(emu.guard_reg("rbx", 0, &mut g));
+    emu.call_bytes(&clobber, &[]);
+    emu.guard_reg_clear();
+    assert!(g.violated && g.got == 0x99);
+
+    let mut g2 = asmtest::EmuRegGuard::default();
+    assert!(!emu.guard_reg("nope", 0, &mut g2));
+}
+
+// Track E: coverage-guided fuzzing + mutation testing over classify3.
+#[test]
+fn fuzz_and_mutation() {
+    let classify3 = [
+        0x31u8, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+        0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3,
+    ];
+    let emu = asmtest::Emulator::new().expect("emu_open failed");
+    let fixed = emu.fuzz_cover(&classify3, 5, 5, 1);
+    let guided = emu.fuzz_cover(&classify3, -50, 50, 2000);
+    assert!(guided.blocks_reached > fixed.blocks_reached);
+    let weak = emu.mutation_test(&classify3, &[5]);
+    let strong = emu.mutation_test(&classify3, &[-7, 0, 9]);
+    assert!(weak.survived > 0 && strong.survived < weak.survived);
+}
+
+// Track D: AVX2 256-bit capture (self-skips off-AVX2).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn vec256_avx2() {
+    if !asmtest::cpu_has_avx2() {
+        return; // self-skip where AVX2 is unavailable
+    }
+    let a = asmtest::Vec256::from_f64([1.0, 2.0, 3.0, 4.0]);
+    let b = asmtest::Vec256::from_f64([10.0, 20.0, 30.0, 40.0]);
+    let out = asmtest::capture_vec256(pm(vec_add4d as usize), &[a, b]);
+    assert_eq!(out[0].f64(), [11.0, 22.0, 33.0, 44.0]);
 }

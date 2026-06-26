@@ -239,6 +239,69 @@ impl EmuResult {
 
 type emu_t = c_void;
 
+/// A memory-write watchpoint result (Track F). `#[repr(C)]` matches emu_watch_t.
+#[repr(C)]
+#[derive(Default)]
+pub struct EmuWatch {
+    pub violated: bool,
+    pub addr: u64,
+    pub size: u32,
+    pub rip_off: u64,
+}
+
+/// A register-invariant guard result (Track F); matches emu_reg_guard_t.
+#[repr(C)]
+#[derive(Default)]
+pub struct EmuRegGuard {
+    pub violated: bool,
+    pub got: u64,
+    pub rip_off: u64,
+}
+
+/// Coverage-guided search result (Track E); matches emu_fuzz_stat_t.
+#[repr(C)]
+#[derive(Default)]
+pub struct EmuFuzzStat {
+    pub blocks_reached: u64,
+    pub corpus_len: u64,
+    pub iterations: u64,
+}
+
+/// Mutation-test result (Track E); matches emu_mutation_stat_t.
+#[repr(C)]
+#[derive(Default)]
+pub struct EmuMutationStat {
+    pub mutants: usize,
+    pub killed: usize,
+    pub survived: usize,
+}
+
+/// A 256-bit (AVX2) vector value (Track D), 32 contiguous bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Vec256 {
+    pub bytes: [u8; 32],
+}
+
+impl Vec256 {
+    /// Pack four f64 lanes into a 256-bit vector.
+    pub fn from_f64(lanes: [f64; 4]) -> Self {
+        let mut v = Vec256 { bytes: [0; 32] };
+        for (i, x) in lanes.iter().enumerate() {
+            v.bytes[i * 8..i * 8 + 8].copy_from_slice(&x.to_le_bytes());
+        }
+        v
+    }
+    /// The four f64 lanes of the vector.
+    pub fn f64(&self) -> [f64; 4] {
+        let mut out = [0.0; 4];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f64::from_le_bytes(self.bytes[i * 8..i * 8 + 8].try_into().unwrap());
+        }
+        out
+    }
+}
+
 extern "C" {
     fn asm_call_capture(out: *mut Regs, f: *mut c_void, args: *const c_long);
     fn asm_call_capture_fp(
@@ -266,6 +329,22 @@ extern "C" {
         max_insns: u64,
         out: *mut EmuResult,
     ) -> bool;
+
+    // Mid-execution guards (Track F).
+    fn emu_map(e: *mut emu_t, addr: u64, size: usize) -> bool;
+    fn emu_watch_writes(e: *mut emu_t, addr: u64, size: usize, mode: c_int, out: *mut EmuWatch);
+    fn emu_watch_clear(e: *mut emu_t);
+    fn emu_guard_reg(e: *mut emu_t, name: *const c_char, want: u64, out: *mut EmuRegGuard) -> bool;
+    fn emu_guard_reg_clear(e: *mut emu_t);
+    // Coverage-guided fuzzing + mutation testing (Track E).
+    #[allow(clippy::too_many_arguments)]
+    fn emu_fuzz_cover1(e: *mut emu_t, code: *const c_void, len: usize, lo: c_long, hi: c_long,
+                       iters: u64, seed: u64, uni: *mut c_void, st: *mut EmuFuzzStat) -> bool;
+    fn emu_mutation_test1(e: *mut emu_t, code: *const c_void, len: usize, inputs: *const c_long,
+                          n: usize, maxm: u64, seed: u64, st: *mut EmuMutationStat) -> usize;
+    // AVX2 256-bit capture (Track D).
+    fn asm_call_capture_vec256(out: *mut Vec256, f: *mut c_void, iargs: *const c_long, vargs: *const Vec256);
+    fn asmtest_cpu_has_avx2() -> c_int;
 }
 
 fn args6(args: &[i64]) -> [c_long; 6] {
@@ -338,6 +417,74 @@ impl Emulator {
         }
         out
     }
+
+    /// Map a guest RW region [addr, addr+size) the routine can use (Track F).
+    pub fn map(&self, addr: u64, size: usize) -> bool {
+        unsafe { emu_map(self.h, addr, size) }
+    }
+
+    /// Arm a memory-write watchpoint over [addr, addr+size) (Track F): `mode` 1 =
+    /// only (flag a write that escapes it), 0 = never (one that touches it). The
+    /// guard persists across calls pointing at `out`, so `out` must outlive the
+    /// run (keep it in a stable location until `watch_clear`).
+    pub fn watch_writes(&self, addr: u64, size: usize, mode: i32, out: &mut EmuWatch) {
+        unsafe { emu_watch_writes(self.h, addr, size, mode, out) };
+    }
+    pub fn watch_clear(&self) {
+        unsafe { emu_watch_clear(self.h) }
+    }
+
+    /// Arm a register invariant (Track F), recorded into `out` (which must outlive
+    /// the run). Returns false for an unknown register name.
+    pub fn guard_reg(&self, name: &str, want: u64, out: &mut EmuRegGuard) -> bool {
+        let cs = CString::new(name).unwrap();
+        unsafe { emu_guard_reg(self.h, cs.as_ptr(), want, out) }
+    }
+    pub fn guard_reg_clear(&self) {
+        unsafe { emu_guard_reg_clear(self.h) }
+    }
+
+    /// Coverage-guided input search over one-int-arg `code` (Track E).
+    pub fn fuzz_cover(&self, code: &[u8], lo: i64, hi: i64, iters: u64) -> EmuFuzzStat {
+        let mut st = EmuFuzzStat::default();
+        unsafe {
+            let uni = asmtest_emu_trace_new(0, 256);
+            emu_fuzz_cover1(self.h, code.as_ptr() as *const c_void, code.len(),
+                lo as c_long, hi as c_long, iters, 0xC0FFEE, uni, &mut st);
+            asmtest_emu_trace_free(uni);
+        }
+        st
+    }
+
+    /// Bit-flip mutation testing of `code` against an input set (Track E).
+    pub fn mutation_test(&self, code: &[u8], inputs: &[i64]) -> EmuMutationStat {
+        let iv: Vec<c_long> = inputs.iter().map(|x| *x as c_long).collect();
+        let ptr = if iv.is_empty() { std::ptr::null() } else { iv.as_ptr() };
+        let mut st = EmuMutationStat::default();
+        unsafe {
+            emu_mutation_test1(self.h, code.as_ptr() as *const c_void, code.len(),
+                ptr, inputs.len(), 0, 0xABCD, &mut st);
+        }
+        st
+    }
+}
+
+/// True if the host CPU + OS support AVX2 (gate [`capture_vec256`]).
+pub fn cpu_has_avx2() -> bool {
+    unsafe { asmtest_cpu_has_avx2() != 0 }
+}
+
+/// AVX2 256-bit capture (Track D): run `f` with `vargs` (each a [`Vec256`]) and
+/// return the ymm file as 16 [`Vec256`] (out[0] = the vector return).
+pub fn capture_vec256(f: *mut c_void, vargs: &[Vec256]) -> [Vec256; 16] {
+    let mut va = [Vec256 { bytes: [0; 32] }; 8];
+    for (i, v) in vargs.iter().take(8).enumerate() {
+        va[i] = *v;
+    }
+    let ia = [0 as c_long; 6];
+    let mut out = [Vec256 { bytes: [0; 32] }; 16];
+    unsafe { asm_call_capture_vec256(out.as_mut_ptr(), f, ia.as_ptr(), va.as_ptr()) };
+    out
 }
 
 impl Drop for Emulator {
