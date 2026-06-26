@@ -1,0 +1,222 @@
+# Release (dry-run): assemble each binding's package from the cross-platform
+# native payload, install it FRESH (no ASMTEST_LIB) and run a smoke test that the
+# bundled native lib resolves, then dry-run the registry publish. Nothing is
+# pushed to a live registry unless the matching token secret is present — the
+# real-publish steps are gated `if: ${{ secrets.* != '' }}`, so this runs end to
+# end on a fork with no credentials. See docs/packaging.md.
+name: release (dry-run)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- Cross-platform native payloads -> a single `native-all` artifact ----- #
+  # Mirrors the ci.yml `payloads` matrix: stage build/dist/native/<os>-<arch>/ on
+  # each runner, then collect + verify into one tree the package jobs download.
+  native:
+    name: native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libunicorn
+        run: make deps DEPS_ARGS=--emu
+      - name: Stage the host's native payload
+        run: make package-libs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-payload-${{ matrix.os }}
+          path: build/dist/native/
+          if-no-files-found: error
+
+  native-all:
+    name: native (collect + verify)
+    needs: [native]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download every per-OS/arch payload
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-payload-*
+          path: payloads
+      - name: Merge into one build/dist/native/ tree
+        run: |
+          mkdir -p build/dist/native
+          cp -R payloads/*/* build/dist/native/
+          make package-libs-verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-all
+          path: build/dist/native/
+          if-no-files-found: error
+
+  # ---- Per-binding: package -> install fresh -> smoke -> dry-run publish ----- #
+  # Each job downloads native-all into build/dist/native/, builds the package
+  # (which bundles every platform slot present), then installs it into a throwaway
+  # project on this runner (linux-x86_64) and loads the library with ASMTEST_LIB
+  # UNSET, so it must resolve the bundled native lib. The smoke call needs no
+  # corpus fixture (a CPUID / probe), so it exercises the load path alone.
+  python:
+    name: python (wheel)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Build wheel from the collected payload
+        run: pip install build twine && make python-package
+      - name: twine check (dry-run validate)
+        run: twine check build/dist/python/*.whl
+      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+        run: |
+          python -m venv /tmp/venv && . /tmp/venv/bin/activate
+          pip install build/dist/python/*.whl
+          cd /tmp && python -c "import asmtest; print('python ok: avx2=' + str(asmtest.cpu_has_avx2()))"
+      - name: Publish to PyPI (only with a token)
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.PYPI_TOKEN != '' }}
+        env: { TWINE_USERNAME: __token__, TWINE_PASSWORD: "${{ secrets.PYPI_TOKEN }}" }
+        run: twine upload build/dist/python/*.whl
+
+  node:
+    name: node (npm)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Build the npm tarball
+        run: make node-package
+      - name: npm publish --dry-run
+        run: cd bindings/node && npm publish --dry-run
+      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+        run: |
+          mkdir -p /tmp/t && cd /tmp/t && npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/build/dist/node/asmtest-*.tgz
+          node -e "const a=require('asmtest'); console.log('node ok: avx2='+a.cpuHasAvx2())"
+      - name: Publish to npm (only with a token)
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != '' }}
+        run: cd bindings/node && echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc && npm publish
+
+  ruby:
+    name: ruby (gem)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with: { ruby-version: "3.2" }
+      - run: make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Build the gem
+        run: make ruby-package
+      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+        run: |
+          gem install --local --no-document build/dist/ruby/asmtest-*.gem
+          cd /tmp && ruby -e "require 'asmtest'; puts 'ruby ok: avx2=' + Asmtest.cpu_has_avx2?.to_s"
+      - name: Publish to RubyGems (only with a token)
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.RUBYGEMS_API_KEY != '' }}
+        env: { GEM_HOST_API_KEY: "${{ secrets.RUBYGEMS_API_KEY }}" }
+        run: gem push build/dist/ruby/asmtest-*.gem
+
+  lua:
+    name: lua (rock)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LuaJIT + deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y luajit
+          make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Stage the rock payload
+        run: make lua-package
+      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+        run: |
+          mkdir -p /tmp/t && cp bindings/lua/asmtest.lua /tmp/t/ && cp -R bindings/lua/native /tmp/t/
+          cd / && luajit -e "package.path='/tmp/t/?.lua;'..package.path; local a=require('asmtest'); print('lua ok: avx2='..tostring(a.cpu_has_avx2()))"
+
+  java:
+    name: java (jar)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - run: make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Build the jar
+        run: make java-package
+      - name: Install fresh + smoke (extract bundled native from jar, no ASMTEST_LIB)
+        run: |
+          printf 'public class Smoke { public static void main(String[] a){ System.out.println("java ok: disasAvailable=" + Asmtest.disasAvailable()); }}' > /tmp/Smoke.java
+          javac --release 21 --enable-preview -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
+          java --enable-preview --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
+
+  dotnet:
+    name: dotnet (nupkg)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0" }
+      - run: make deps DEPS_ARGS=--emu
+      - uses: actions/download-artifact@v4
+        with: { name: native-all, path: build/dist/native }
+      - name: Build the nupkg (AsmTest.dll + runtimes/<rid>/native)
+        run: make dotnet-package
+      - name: Install fresh + smoke (bundled native via RID, no ASMTEST_LIB)
+        run: |
+          cd /tmp && dotnet new console -o app && cd app
+          dotnet nuget add source "$GITHUB_WORKSPACE/build/dist/dotnet" -n local
+          dotnet add app.csproj package AsmTest --version 1.0.0
+          printf 'using Asmtest; class P { static void Main(){ System.Console.WriteLine("dotnet ok: disasAvailable=" + Emu.DisasAvailable); } }' > Program.cs
+          dotnet run
+
+  # ---- Link binding (source dist): cargo's own dry-run publish --------------- #
+  rust:
+    name: rust (crate)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: make deps DEPS_ARGS=--emu
+      - name: cargo publish --dry-run
+        run: cd bindings/rust && cargo publish --dry-run --allow-dirty

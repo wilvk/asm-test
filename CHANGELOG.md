@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Publishable packages (Track A): library-exposing artifacts, self-locating
+  native libs, and a dry-run release workflow.** The packaging scaffolding now
+  produces artifacts a registry could ship. Each `make <lang>-package` exposes the
+  reusable **library module** rather than the conformance test runner (the Ruby
+  gem ships `asmtest.rb`, npm `asmtest.js`, the rock `asmtest.lua`, the JAR the
+  `Asmtest` classes, and the NuGet package `AsmTest.dll` via a new SDK-style
+  `asmtest-lib.csproj` / `dotnet pack`), and bundles one native slot per platform
+  present in `build/dist/native/` (the host slot locally; all four when a release
+  has the CI `native-all`). The **dlopen bindings self-locate their bundled native
+  lib** when `ASMTEST_LIB` is unset — Node/Ruby/Lua/Java fall back to
+  `native/<os>-<arch>/` next to the module (Java extracts the jar resource to a
+  temp file; .NET resolves via the `runtimes/<rid>/native/` RID layout; Python
+  already used `_libs/`) — so an installed package works out of the box. A new
+  [`release.yml`](https://github.com/wilvk/asm-test/blob/main/.github/workflows/release.yml)
+  builds the cross-platform `native-all`, then per binding **packages → installs
+  the artifact fresh → smoke-tests the bundled-native load (`ASMTEST_LIB` unset) →
+  dry-run publishes** (`twine check`, `npm publish --dry-run`, `cargo publish
+  --dry-run`); the live push is gated behind per-ecosystem token secrets, so it
+  runs end to end with no credentials. Every package + fresh-install + bundled-load
+  smoke was verified in the per-language Docker images. Track A of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md);
+  see [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md).
+
 - **Binding parity, round 2: the new emulator/capture capabilities reach all ten
   bindings.** The Track F mid-execution guards, Track E coverage-guided fuzzing /
   mutation testing, and Track D AVX2 256-bit capture were C-core-only; they now

@@ -1290,15 +1290,14 @@ java-package: package-libs
 	cp -r bindings/java/src/main/resources/native $(BUILD)/java-pkg/
 	cd $(BUILD)/java-pkg && $(JAR) cf $(abspath $(PKG_DIST))/java/asmtest-$(ASMTEST_VERSION).jar .
 
-# .NET: build the library assembly (AsmTest.dll) from Asmtest.cs via the classlib
-# project, and stage it + a runtimes/<rid>/native/ slot per platform (mapping the
-# <os>-<arch> payload name to the .NET RID the loader resolves). nuget pack the
-# staged nuspec to publish.
+# .NET: stage a runtimes/<rid>/native/ slot per platform (mapping the <os>-<arch>
+# payload name to the .NET RID the loader resolves), then `dotnet pack` the
+# classlib project (asmtest-lib.csproj) — it compiles the AsmTest.dll library from
+# Asmtest.cs and packs it + those native assets into a real nupkg the consumer
+# restores (the loader picks runtimes/<rid>/native/ at run time).
 dotnet-package: package-libs
-	rm -rf bindings/dotnet/runtimes bindings/dotnet/lib
-	mkdir -p bindings/dotnet/lib/net8.0 $(PKG_DIST)/dotnet
-	$(DOTNET) build bindings/dotnet/asmtest-lib.csproj -c Release -o $(BUILD)/dotnet-lib
-	cp -f $(BUILD)/dotnet-lib/AsmTest.dll bindings/dotnet/lib/net8.0/
+	rm -rf bindings/dotnet/runtimes
+	mkdir -p $(PKG_DIST)/dotnet
 	@for pd in $(PKG_DIST)/native/*/; do \
 	  [ -d "$$pd" ] || continue; p=$$(basename "$$pd"); \
 	  rid=$$(echo "$$p" | sed -e 's/^darwin-/osx-/' -e 's/-x86_64$$/-x64/' -e 's/-aarch64$$/-arm64/'); \
@@ -1306,8 +1305,9 @@ dotnet-package: package-libs
 	  cp -f "$$pd"libasmtest_emu.* bindings/dotnet/runtimes/$$rid/native/; \
 	  echo "  bundled $$p -> runtimes/$$rid/native"; \
 	done
-	cp -f bindings/dotnet/asmtest.nuspec $(PKG_DIST)/dotnet/
-	@echo "dotnet-package: built AsmTest.dll + staged lib/net8.0 + runtimes/<rid>/native + nuspec (nuget pack to publish)"
+	$(DOTNET) pack bindings/dotnet/asmtest-lib.csproj -c Release \
+	  -o $(abspath $(PKG_DIST))/dotnet
+	@echo "dotnet-package: packed AsmTest nupkg (lib/net8.0/AsmTest.dll + runtimes/<rid>/native) in $(PKG_DIST)/dotnet"
 
 lua-package: package-libs
 	rm -rf bindings/lua/native && mkdir -p $(PKG_DIST)/lua

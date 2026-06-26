@@ -1,10 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The *library* build of the .NET binding: compiles the reusable module
-       (Asmtest.cs) into AsmTest.dll for the NuGet package, excluding the
-       conformance runner (Program.cs, which is the dev test entry point built by
-       asmtest.csproj). `make dotnet-package` builds this and stages the DLL into
-       lib/<tfm>/ alongside the runtimes/<rid>/native/ payload. -->
+  <!-- The *library* build of the .NET binding AND its NuGet package: compiles the
+       reusable module (Asmtest.cs) into AsmTest.dll, excluding the conformance
+       runner (Program.cs, the dev test entry point built by asmtest.csproj).
+       `make dotnet-package` stages the prebuilt libasmtest_emu into
+       runtimes/<rid>/native/ (from build/dist/native/) and then `dotnet pack`
+       here emits AsmTest.<version>.nupkg carrying lib/<tfm>/AsmTest.dll + those
+       native assets, in the RID layout the .NET loader resolves automatically. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>AsmTest</AssemblyName>
@@ -14,10 +16,25 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <!-- NuGet metadata -->
+    <IsPackable>true</IsPackable>
+    <PackageId>AsmTest</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>asm-test contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/wilvk/asm-test</PackageProjectUrl>
+    <Description>.NET binding for the asm-test assembly unit-testing framework:
+      run, capture, and emulate assembly routines via P/Invoke over the
+      opaque-handle binding ABI. The emulator native lib links libunicorn.</Description>
+    <PackageTags>assembly;testing;abi;emulator;unicorn;pinvoke</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Asmtest.cs" />
+    <!-- Native payload staged by `make dotnet-package` into runtimes/<rid>/native/;
+         packed into the nupkg so the .NET loader resolves it per RID at run time. -->
+    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/" Condition="Exists('runtimes')" />
   </ItemGroup>
 
 </Project>

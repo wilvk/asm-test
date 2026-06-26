@@ -94,7 +94,7 @@ make zig-package       # source tarball -> build/dist/zig/
 make cpp-package       # header + CMake tarball -> build/dist/cpp/
 make node-package      # npm tarball -> build/dist/node/   (npm pack)
 make java-package      # jar -> build/dist/java/           (javac + jar)
-make dotnet-package    # AsmTest.dll + runtimes/<rid>/native + nuspec (nuget pack to publish)
+make dotnet-package    # nupkg (AsmTest.dll + runtimes/<rid>/native) -> build/dist/dotnet/  (dotnet pack)
 make ruby-package      # gem -> build/dist/ruby/           (gem build)
 make lua-package       # rock source -> build/dist/lua/    (luarocks pack/make)
 make go-package        # module check (Go modules publish from the tagged repo)
@@ -127,5 +127,12 @@ The scaffolding stops short of a credentialed, multi-platform release:
    (built from `Asmtest.cs` by `asmtest-lib.csproj`) — joining the
    already-library-shaped Python wheel, Rust crate, C++ header, and Go module. Each
    binding's `conformance.*` test runner is no longer shipped.
-3. **Registry credentials + a release workflow** (out of scope here; the publish
-   commands above are the building blocks).
+3. **A release workflow.** *Dry-run done* — [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+   builds the cross-platform `native-all`, then for each binding packages it,
+   **installs the artifact fresh and runs a smoke test** that the bundled native
+   lib resolves with `ASMTEST_LIB` unset (so an installed package works
+   out of the box), and dry-run publishes (`twine check`, `npm publish --dry-run`,
+   `cargo publish --dry-run`). It runs end to end on a fork with no credentials.
+   What remains: the **live publish** is gated `if: …env.<TOKEN> != ''` per
+   ecosystem — add `PYPI_TOKEN` / `NPM_TOKEN` / `RUBYGEMS_API_KEY` (and the rest)
+   as repo secrets and tag a release to push for real.
