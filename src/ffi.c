@@ -257,6 +257,38 @@ unsigned long long asmtest_emu_reg_guard_rip_off(const emu_reg_guard_t *g) {
     return g ? (unsigned long long)g->rip_off : 0;
 }
 
+/* ---- coverage-guided fuzzing + mutation stat handles (Track E) ----
+ * The drivers (emu_fuzz_cover1 / emu_mutation_test1, in fuzz.o) fill a caller
+ * stat struct; a binding allocates the handle, passes it to the driver (with a
+ * trace handle for the coverage union), then reads the totals. */
+emu_fuzz_stat_t *asmtest_emu_fuzz_stat_new(void) {
+    return (emu_fuzz_stat_t *)calloc(1, sizeof(emu_fuzz_stat_t));
+}
+void asmtest_emu_fuzz_stat_free(emu_fuzz_stat_t *s) { free(s); }
+unsigned long long asmtest_emu_fuzz_blocks_reached(const emu_fuzz_stat_t *s) {
+    return s ? (unsigned long long)s->blocks_reached : 0;
+}
+unsigned long long asmtest_emu_fuzz_corpus_len(const emu_fuzz_stat_t *s) {
+    return s ? (unsigned long long)s->corpus_len : 0;
+}
+unsigned long long asmtest_emu_fuzz_iterations(const emu_fuzz_stat_t *s) {
+    return s ? (unsigned long long)s->iterations : 0;
+}
+
+emu_mutation_stat_t *asmtest_emu_mutation_stat_new(void) {
+    return (emu_mutation_stat_t *)calloc(1, sizeof(emu_mutation_stat_t));
+}
+void asmtest_emu_mutation_stat_free(emu_mutation_stat_t *s) { free(s); }
+unsigned long long asmtest_emu_mutation_mutants(const emu_mutation_stat_t *s) {
+    return s ? (unsigned long long)s->mutants : 0;
+}
+unsigned long long asmtest_emu_mutation_killed(const emu_mutation_stat_t *s) {
+    return s ? (unsigned long long)s->killed : 0;
+}
+unsigned long long asmtest_emu_mutation_survived(const emu_mutation_stat_t *s) {
+    return s ? (unsigned long long)s->survived : 0;
+}
+
 /* ---- cross-arch emu result handles + register accessors ----
  * The AArch64 / RISC-V / ARM32 guests run raw machine-code bytes (emu_arm64_call,
  * emu_riscv_call, emu_arm_call) and write a per-arch result struct. Their leading

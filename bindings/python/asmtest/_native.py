@@ -73,6 +73,11 @@ def declare(lib):
     lib.asm_call_capture_fp.restype = None
     lib.asm_call_capture_vec.argtypes = [v, v, v, v]
     lib.asm_call_capture_vec.restype = None
+    # AVX2 256-bit capture (Track D) + the CPUID feature probes that gate it.
+    lib.asm_call_capture_vec256.argtypes = [v, v, v, v]
+    lib.asm_call_capture_vec256.restype = None
+    lib.asmtest_cpu_has_avx2.restype = C.c_int
+    lib.asmtest_cpu_has_avx512f.restype = C.c_int
     # Non-jumping verdict shim (Track 0.2): returns 0 when ABI-preserved.
     lib.asmtest_check_abi.argtypes = [v, C.c_char_p, C.c_size_t]
     lib.asmtest_check_abi.restype = C.c_int
@@ -170,6 +175,22 @@ def _declare_emu_ext(lib, v):
     lib.asmtest_emu_reg_guard_violated.restype = i
     for nm in ("asmtest_emu_watch_addr", "asmtest_emu_watch_rip_off",
                "asmtest_emu_reg_guard_got", "asmtest_emu_reg_guard_rip_off"):
+        getattr(lib, nm).argtypes = [v]
+        getattr(lib, nm).restype = u64
+
+    # Coverage-guided fuzzing + mutation testing (Track E): drivers take plain
+    # pointers/scalars; the totals land in opaque stat handles.
+    lib.emu_fuzz_cover1.argtypes = [v, v, sz, C.c_long, C.c_long, u64, u64, v, v]
+    lib.emu_fuzz_cover1.restype = C.c_bool
+    lib.emu_mutation_test1.argtypes = [v, v, sz, v, sz, u64, u64, v]
+    lib.emu_mutation_test1.restype = sz
+    lib.asmtest_emu_fuzz_stat_new.restype = v
+    lib.asmtest_emu_fuzz_stat_free.argtypes = [v]
+    lib.asmtest_emu_mutation_stat_new.restype = v
+    lib.asmtest_emu_mutation_stat_free.argtypes = [v]
+    for nm in ("asmtest_emu_fuzz_blocks_reached", "asmtest_emu_fuzz_corpus_len",
+               "asmtest_emu_fuzz_iterations", "asmtest_emu_mutation_mutants",
+               "asmtest_emu_mutation_killed", "asmtest_emu_mutation_survived"):
         getattr(lib, nm).argtypes = [v]
         getattr(lib, nm).restype = u64
 

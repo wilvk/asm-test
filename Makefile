@@ -288,6 +288,11 @@ $(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
 $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -fPIC -c $< -o $@
 
+# Coverage-guided fuzzing + mutation testing (Track E) in the emu shared lib, so
+# bindings can reach it. No Unicorn include (calls emu_* from pic/emu.o).
+$(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
 $(BUILD)/pic/assemble.o: src/assemble.c include/asmtest_assemble.h \
                          include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
@@ -317,7 +322,8 @@ $(call shlib_dev,libasmtest): $(call shlib_real,libasmtest)
 # stays out of here so the binding images — which carry only libunicorn — keep
 # building. In-line assembly is exercised by `make asm-test` (below).
 shared-emu: $(call shlib_dev,libasmtest_emu)
-$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o
+$(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o \
+                                   $(BUILD)/pic/fuzz.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ $(UNICORN_LIBS) -o $@
 $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
@@ -330,6 +336,7 @@ $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 # the plain libasmtest_emu otherwise (where CallAsm self-skips). Needs libkeystone.
 shared-emu-asm: $(call shlib_dev,libasmtest_emu_asm)
 $(call shlib_real,libasmtest_emu_asm): $(PIC_OBJS) $(BUILD)/pic/emu.o \
+                                       $(BUILD)/pic/fuzz.o \
                                        $(BUILD)/pic/assemble.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu_asm) $^ \
 	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@

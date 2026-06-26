@@ -12,10 +12,17 @@ Two ways to run an assembly routine, mirroring the C framework's two tiers:
 All struct fields are read at offsets taken from the layout manifest, so the
 binding is correct for whatever architecture the shared library was built for.
 """
+import collections
 import ctypes as C
 import struct
 
 from . import _native
+
+#: Coverage-guided search result (Track E): distinct blocks reached, the
+#: coverage-expanding input corpus size, and candidate inputs tried.
+FuzzStat = collections.namedtuple("FuzzStat", "blocks_reached corpus_len iterations")
+#: Mutation-test result (Track E): mutants run, killed (detected), survived (gap).
+MutationStat = collections.namedtuple("MutationStat", "mutants killed survived")
 
 
 class Context:
@@ -163,6 +170,37 @@ def vec_f32(a, b, c, d):
 def vec_f64(a, b):
     """Pack two float64 lanes into a 16-byte vector arg."""
     return struct.pack("<2d", a, b)
+
+
+def cpu_has_avx2():
+    """True if the host CPU and OS support AVX2 (gate :func:`capture_vec256`)."""
+    return bool(load().lib.asmtest_cpu_has_avx2())
+
+
+def vec256_f64(a, b, c, d):
+    """Pack four float64 lanes into a 32-byte 256-bit (AVX2) vector arg."""
+    return struct.pack("<4d", a, b, c, d)
+
+
+def capture_vec256(fn, vargs=()):
+    """AVX2 256-bit capture (Track D): marshal up to 8 ``vec256_t`` args (32-byte
+    ``bytes`` each) into ymm0..7 and capture the whole ymm file. Returns a list
+    of 16 32-byte ``bytes`` (``out[0]`` = the vector return). x86-64 + AVX2 only
+    — gate on :func:`cpu_has_avx2`."""
+    c = load()
+    out = (C.c_ubyte * (16 * 32))()
+    vb = (C.c_ubyte * (8 * 32))()
+    for i, vec in enumerate(list(vargs)[:8]):
+        raw = bytes(vec)
+        if len(raw) != 32:
+            raise ValueError("each 256-bit vector arg must be exactly 32 bytes")
+        vb[i * 32 : i * 32 + 32] = raw
+    c.lib.asm_call_capture_vec256(
+        C.cast(out, C.c_void_p), C.c_void_p(_addr(fn)),
+        C.cast(_longs([], 6), C.c_void_p), C.cast(vb, C.c_void_p),
+    )
+    raw = bytes(out)
+    return [raw[i * 32 : i * 32 + 32] for i in range(16)]
 
 
 # ------------------------------------------------------------------ #
@@ -383,6 +421,43 @@ class Emulator:
     def guard_reg_clear(self):
         """Disarm the register invariant."""
         load().lib.emu_guard_reg_clear(self._h)
+
+    def fuzz_cover(self, code, lo, hi, iters, seed=0xC0FFEE, blocks_cap=256):
+        """Coverage-guided input search (Track E) over a one-int-arg routine
+        (``code`` is raw bytes): keep inputs that grow the block-coverage union,
+        drawing candidates fresh or by mutating the corpus. Returns a
+        :class:`FuzzStat`. Reaches blocks a few fixed vectors miss."""
+        c = load()
+        keep, addr, clen = self._code(code, 64)
+        uni = c.lib.asmtest_emu_trace_new(0, blocks_cap)
+        st = c.lib.asmtest_emu_fuzz_stat_new()
+        c.lib.emu_fuzz_cover1(
+            self._h, C.c_void_p(addr), C.c_size_t(clen), C.c_long(lo),
+            C.c_long(hi), C.c_uint64(iters), C.c_uint64(seed), uni, st)
+        out = FuzzStat(c.lib.asmtest_emu_fuzz_blocks_reached(st),
+                       c.lib.asmtest_emu_fuzz_corpus_len(st),
+                       c.lib.asmtest_emu_fuzz_iterations(st))
+        c.lib.asmtest_emu_fuzz_stat_free(st)
+        c.lib.asmtest_emu_trace_free(uni)
+        return out
+
+    def mutation_test(self, code, inputs, max_mutants=0, seed=0xABCD):
+        """Bit-flip mutation testing (Track E) of a one-int-arg routine against
+        an input set: run each mutant + the original, count those an input
+        distinguishes (killed) vs not (survived = test-gap). Returns a
+        :class:`MutationStat`; a stronger input set kills more."""
+        c = load()
+        keep, addr, clen = self._code(code, 64)
+        inp = (C.c_long * max(len(inputs), 1))(*[int(x) for x in inputs])
+        st = c.lib.asmtest_emu_mutation_stat_new()
+        c.lib.emu_mutation_test1(
+            self._h, C.c_void_p(addr), C.c_size_t(clen), C.cast(inp, C.c_void_p),
+            C.c_size_t(len(inputs)), C.c_uint64(max_mutants), C.c_uint64(seed), st)
+        out = MutationStat(c.lib.asmtest_emu_mutation_mutants(st),
+                           c.lib.asmtest_emu_mutation_killed(st),
+                           c.lib.asmtest_emu_mutation_survived(st))
+        c.lib.asmtest_emu_mutation_stat_free(st)
+        return out
 
     def close(self):
         if self._h:

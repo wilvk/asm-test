@@ -660,6 +660,22 @@ size_t emu_mutation_test1(emu_t *e, const void *code, size_t code_len,
                           uint64_t max_mutants, uint64_t seed,
                           emu_mutation_stat_t *stat);
 
+/* Opaque-handle FFI for the fuzz/mutation stat structs (a binding allocates the
+ * handle, passes it to emu_fuzz_cover1 / emu_mutation_test1, then reads the
+ * totals). The drivers themselves take plain pointers/scalars, so a binding
+ * calls them directly with this handle + a trace handle. */
+emu_fuzz_stat_t *asmtest_emu_fuzz_stat_new(void);
+void asmtest_emu_fuzz_stat_free(emu_fuzz_stat_t *s);
+unsigned long long asmtest_emu_fuzz_blocks_reached(const emu_fuzz_stat_t *s);
+unsigned long long asmtest_emu_fuzz_corpus_len(const emu_fuzz_stat_t *s);
+unsigned long long asmtest_emu_fuzz_iterations(const emu_fuzz_stat_t *s);
+
+emu_mutation_stat_t *asmtest_emu_mutation_stat_new(void);
+void asmtest_emu_mutation_stat_free(emu_mutation_stat_t *s);
+unsigned long long asmtest_emu_mutation_mutants(const emu_mutation_stat_t *s);
+unsigned long long asmtest_emu_mutation_killed(const emu_mutation_stat_t *s);
+unsigned long long asmtest_emu_mutation_survived(const emu_mutation_stat_t *s);
+
 /* ------------------------------------------------------------------ */
 /* Source-line coverage mapping (Track C)                              */
 /*                                                                     */
