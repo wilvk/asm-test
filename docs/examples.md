@@ -276,8 +276,10 @@ make demo-robust                   # fork-isolated, short timeout
 
 ## By audience
 
-The use cases above combine differently depending on what you're building. These
-four suites are each written for a specific audience and ship in the repository.
+The use cases above combine differently depending on what you're building. Each
+subsection below opens with a shipped suite, then gives **real-world patterns**:
+concrete, named kernels these audiences actually write. In the patterns the
+framework code is exact — the `extern` routine under test is yours.
 
 ### SIMD / crypto / codec / DSP / math-kernel authors
 
@@ -316,6 +318,78 @@ Pair this with the [differential engine](#differential-property-testing): keep a
 plain-C scalar kernel as the reference model and fuzz the vectorised routine
 against it — the standard way to catch a tail-handling or saturation bug.
 
+**Real-world patterns.**
+
+*Codec / image — per-byte saturating add* (the pixel-clamp in a video or image
+filter, `paddusb` / `uqadd`). The saturation edge (`0xFF + anything`) is the
+classic bug; fuzz random 16-byte vectors against a clamping C model and check all
+16 lanes:
+
+```c
+extern void qadd_u8x16(void);   /* vec128 qadd_u8x16(vec128 a, vec128 b), per-byte saturating */
+
+TEST(codec, saturating_add_matches_model) {
+    asmtest_rng_t rng = {0xC0DEC};
+    for (int t = 0; t < 5000; t++) {
+        vec128_t a, b, want;
+        for (int i = 0; i < 16; i++) {
+            a.u8[i] = (uint8_t)asmtest_rng_range(&rng, 0, 255);
+            b.u8[i] = (uint8_t)asmtest_rng_range(&rng, 0, 255);
+            unsigned s = (unsigned)a.u8[i] + b.u8[i];
+            want.u8[i] = s > 0xFF ? 0xFF : (uint8_t)s;       /* C model: clamp at 0xFF */
+        }
+        regs_t r;
+        ASM_VCALL2(&r, qadd_u8x16, a, b);
+        ASSERT_VEC_EQ(&r, 0, want.u8);                       /* all 16 lanes, edge included */
+    }
+}
+```
+
+*DSP / fixed-point — Q15 multiply* (`(a*b + 0x4000) >> 15`, the multiply-accumulate
+at the heart of an FIR filter). It's integer-domain, so the property engine drives
+it directly — the rounding bias is exactly where these go wrong:
+
+```c
+extern long qmul_q15(long a, long b);
+static long ref_qmul_q15(long a, long b) { return (a * b + 0x4000) >> 15; }
+static int gen_q15(asmtest_rng_t *rng, long *v, int cap) {
+    (void)cap;
+    v[0] = asmtest_rng_range(rng, -32768, 32767);
+    v[1] = asmtest_rng_range(rng, -32768, 32767);
+    return 2;
+}
+TEST(dsp, qmul_q15_matches_model) {
+    ASSERT_MATCHES_REF2(qmul_q15, ref_qmul_q15, gen_q15, 50000);
+}
+```
+
+*Crypto — constant-time equality, proven branch-free.* Correctness is the easy
+half; the property that matters is that **no basic block depends on the secret**.
+Because the emulator's coverage *unions* across runs, feed inputs that differ at
+different positions into one trace — if the block set never grows, there is no
+data-dependent branch:
+
+```c
+#include "asmtest_emu.h"
+extern long ct_eq(const void *a, const void *b, long n);   /* 1 if equal, branch-free */
+
+TEST(crypto, ct_eq_has_no_secret_dependent_branch) {
+    uint64_t blocks[32];
+    emu_trace_t tr = {0};
+    tr.blocks = blocks; tr.blocks_cap = 32;
+    /* Run ct_eq for equal / differ-at-first-byte / differ-at-last-byte, all into
+     * the SAME trace (inputs preloaded into guest memory, pointers as args). */
+    size_t baseline = 0;
+    for (int variant = 0; variant < 3; variant++) {
+        emu_result_t r;
+        /* ...emu_map/emu_write the two buffers for this variant, then: */
+        emu_call_traced(E, (void *)ct_eq, CODE_WINDOW, args, 3, 0, &r, &tr);
+        if (variant == 0) baseline = tr.blocks_len;          /* the constant-time block set */
+    }
+    ASSERT_EQ(tr.blocks_len, baseline);     /* coverage didn't grow -> no branch on the data */
+}
+```
+
 ### Compiler / runtime / libc authors
 
 **You need:** to validate hand-written primitives across ISAs and prove they
@@ -347,6 +421,58 @@ TEST(emu_crossisa, add3_agrees_across_isas) {
 For the ABI discipline itself, `ASSERT_ABI_PRESERVED` on a captured `regs_t` is
 the primitive — see [Correctness, registers and ABI](#correctness-registers-and-abi).
 Run the cross-ISA suite with `make usecases-emu` (needs libunicorn).
+
+**Real-world patterns.**
+
+*libc — a SIMD `strlen` that must not over-read.* A vectorised `strlen` loads 16
+bytes at a time; the real-world bug is reading past the page that holds the
+string. Put the terminating NUL as the **last byte before an unmapped page** in
+the emulator: a correct routine stops there and runs clean, an over-reading one
+faults at the exact boundary — the bug a guard malloc on real hardware only
+catches probabilistically.
+
+```c
+#include "asmtest_emu.h"
+extern long my_strlen(const char *s);
+
+#define PAGE_BASE 0x00300000UL
+#define PAGE_SIZE 0x1000UL
+
+TEST(libc, strlen_stops_at_the_page_boundary) {
+    char s[64] = "the quick brown fox";          /* NUL within the page */
+    size_t off = PAGE_SIZE - sizeof s;           /* place it flush against the page end */
+    emu_write(E, PAGE_BASE + off, s, sizeof s);
+
+    emu_result_t r;
+    long args[] = {(long)(PAGE_BASE + off)};
+    ASSERT_TRUE(emu_call(E, (void *)my_strlen, CODE_WINDOW, args, 1, 0, &r));
+    ASSERT_NO_FAULT(&r);                          /* a 16-byte over-read past the NUL would fault */
+    ASSERT_EQ(r.regs.rax, 19);                    /* strlen("the quick brown fox") */
+}
+```
+
+*Runtime — checked arithmetic* (`__builtin_add_overflow`, compiler-rt `__addvdi3`).
+The whole point is the overflow flag, which only register/flag capture sees:
+
+```c
+extern long checked_add(long a, long b);         /* sum in rax, OF set on signed overflow */
+
+TEST(runtime, add_sets_overflow_flag_at_the_limit) {
+    regs_t r;
+    ASM_CALL2(&r, checked_add, 0x7fffffffffffffffL, 1);   /* LONG_MAX + 1 */
+    ASSERT_FLAG_SET(&r, OF);
+    ASM_CALL2(&r, checked_add, 2, 3);
+    ASSERT_FLAG_CLEAR(&r, OF);
+    ASSERT_EQ(r.ret, 5);
+}
+```
+
+*Compiler intrinsic — a `popcount` / `clz` lowering, validated across ISAs.* When
+you hand-write the lowering for `__builtin_popcountll` per target, the cross-ISA
+equivalence check above is exactly the proof you want: assemble the x86-64,
+AArch64, and RISC-V forms and assert all agree with a scalar C model over fuzzed
+words — see [Verifying branchless bit hacks](#verifying-branchless-bit-hacks) for
+the `popcount64` suite that does this.
 
 ### Reverse engineers / security researchers
 
