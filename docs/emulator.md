@@ -348,6 +348,50 @@ ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on 
 single-step path) to stop after N instructions, then inspect `out->regs` with
 `ASSERT_EMU_REG_EQ` — a condition asserted at instruction N.
 
+## Coverage-guided fuzzing & mutation testing
+
+The emulator records the exact signal a coverage-guided fuzzer consumes
+(basic-block coverage) and can run *mutated* routines safely contained. Two
+helpers close those loops for a one-int-arg routine; both are seedable (so runs
+reproduce) and run everything inside the emulator, so a pathological input or a
+broken mutant cannot crash the host.
+
+**Coverage-guided generation** keeps inputs that grow the block-coverage union,
+drawing new candidates fresh *or by mutating a corpus member* (the feedback) — so
+it reaches blocks a handful of fixed vectors miss:
+
+```c
+uint64_t blocks[16];
+emu_trace_t uni = {0};
+uni.blocks = blocks; uni.blocks_cap = 16;     // accumulates across the search
+emu_fuzz_stat_t st;
+emu_fuzz_cover1(e, code, len, -50, 50, /*iters*/2000, /*seed*/0xC0FFEE, &uni, &st);
+// classify(x): a fixed vector {5} reaches 3 blocks; the guided search reaches 5
+// (it finds the negative path), with a 3-input corpus.
+```
+
+**Mutation testing** flips bits of the routine, runs each mutant and the original
+on an input set, and counts mutants the set fails to distinguish — *surviving
+mutants are a test-gap signal*, and a stronger input set kills more:
+
+```c
+emu_mutation_stat_t s;
+long weak[]   = {5};                 // only the positive path
+long strong[] = {-7, 0, 9};          // all three paths
+emu_mutation_test1(e, code, len, weak,   1, /*all bits*/0, 0xABCD, &s); // 100 survive / 92 killed
+emu_mutation_test1(e, code, len, strong, 3, 0,            0xABCD, &s); //  16 survive / 176 killed
+// the weak suite lets 100 of 192 mutants slip; the strong suite leaves only the
+// ~16 equivalent mutants (bit-flips that change no observable behavior).
+```
+
+| Function | Purpose |
+|---|---|
+| `emu_fuzz_cover1(e, code, len, lo, hi, iters, seed, &uni, &stat)` | coverage-guided input search; `stat.blocks_reached` / `corpus_len` |
+| `emu_mutation_test1(e, code, len, inputs, n, max_mutants, seed, &stat)` | mutation test; returns survivor count, fills killed/survived |
+
+The original routine is the oracle (its result must be a function of its
+argument); `max_mutants = 0` runs every single-bit flip, else a seeded sample.
+
 ## When to reach for the emulator
 
 | Use the emulator when you need… | Otherwise use… |
@@ -358,6 +402,7 @@ single-step path) to stop after N instructions, then inspect `out->regs` with
 | The Windows x64 ABI on a Unix host | — |
 | Branch / basic-block coverage | — |
 | A mid-execution write/register invariant (not just the result) | — |
+| Coverage-guided fuzzing or mutation testing of a routine | [property testing](property-testing.md) (native, fixed generator) |
 
 The emulator pairs naturally with [property testing](property-testing.md): a
 looping or faulting fuzz input is contained by the instruction cap and fault

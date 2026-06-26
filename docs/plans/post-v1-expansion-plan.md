@@ -201,7 +201,7 @@ state captured. This is a concrete capability gap, not a long-tail architecture.
 
 ---
 
-## Track E — Coverage-guided fuzzing & mutation testing *(planned)*
+## Track E — Coverage-guided fuzzing & mutation testing — **done**
 
 **Goal.** Close the loop between the emulator's basic-block coverage and the
 property-testing generator: let coverage *drive* input generation, and add mutation
@@ -213,6 +213,23 @@ coverage-guided fuzzer consumes — but it only ever feeds a report
 *mutants* of a routine. Wiring coverage back into generation (Phase 7's
 `ASSERT_MATCHES_REF` RNG) and adding instruction-level mutation reuses two systems
 already built and differentiates the framework further.
+
+**Landed.** A new dependency-free `src/fuzz.c` (its own TU, like `disasm.c`) that
+drives the emulator with the framework's seedable splitmix64 RNG:
+- `emu_fuzz_cover1` — coverage-guided generation: keeps inputs that grow the
+  block-coverage union, drawing candidates fresh or by mutating a corpus member
+  (the feedback). On the host-independent `classify` example it reaches 5 blocks
+  vs a fixed positive vector's 3.
+- `emu_mutation_test1` — bit-flip mutation testing, run inside the emulator (a
+  broken mutant is contained by the instruction cap + fault hooks); the original
+  is the oracle. A weak suite over `classify` leaves 100/192 mutants alive; a
+  path-covering suite leaves ~16 (equivalent mutants) — a stronger input set
+  demonstrably kills more.
+
+Used byte-flip mutation rather than the Keystone path (deliverable #2's stated
+alternative), keeping `fuzz.o` emulator-only with no assembler dependency. The
+optional libFuzzer/AFL shim (#3) is left for concrete demand. Acceptance met by
+two host-independent example tests in `examples/test_emu.c`.
 
 ### Deliverables
 
@@ -282,7 +299,8 @@ caught at the offending store with its instruction text, no host crash.
 3. **Track D** (wide vectors) — closes a concrete modern gap in the capture model.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
-5. **Track E** (fuzzing/mutation) — the deepest engineering; C and F have landed.
+5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now
+   drives generation and a mutation tester scores the suite.
 6. **Track B** (Win64 isolation) — opportunistic, on concrete demand for isolated
    Win64 execution (its Phase 3 gate already deemed `--no-fork` a shipping milestone).
 

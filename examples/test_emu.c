@@ -534,6 +534,64 @@ TEST(emu, reg_invariant_catches_clobber_and_holds) {
     ASSERT_FALSE(emu_guard_reg(E, "nope", 0, &g3));
 }
 
+/* ---- Coverage-guided fuzzing & mutation testing (Track E) ---------------
+ * A hand-assembled classify(x) -> {-1,0,+1} with three branch paths, run as
+ * raw x86-64 bytes (host-independent). Three blocks/paths: negative (the js
+ * target at 0x12), zero (the jz target at 0x11), positive (fall-through). */
+static const uint8_t CLASSIFY3[] = {
+    0x31, 0xc0,                   /* 0x00  xor eax, eax       */
+    0x48, 0x85, 0xff,             /* 0x02  test rdi, rdi      */
+    0x78, 0x0b,                   /* 0x05  js   0x12 (neg)    */
+    0x48, 0x85, 0xff,             /* 0x07  test rdi, rdi      */
+    0x74, 0x05,                   /* 0x0a  jz   0x11 (zero)   */
+    0xb8, 0x01, 0x00, 0x00, 0x00, /* 0x0c  mov eax, 1  (pos)  */
+    0xc3,                         /* 0x11  ret                */
+    0xb8, 0xff, 0xff, 0xff, 0xff, /* 0x12  mov eax, -1 (neg)  */
+    0xc3,                         /* 0x17  ret                */
+};
+
+TEST(emu, fuzz_coverage_beats_fixed_vector) {
+    emu_result_t r;
+    /* A single fixed vector (x = 5, the positive path) reaches some blocks. */
+    uint64_t fb[16];
+    emu_trace_t fixed = {0};
+    fixed.blocks = fb;
+    fixed.blocks_cap = 16;
+    long pos[] = {5};
+    emu_call_traced(E, CLASSIFY3, sizeof CLASSIFY3, pos, 1, 0, &r, &fixed);
+
+    /* A coverage-guided search over [-50,50] reaches strictly more (it finds
+     * the negative path a single positive vector never executes). */
+    uint64_t gb[16];
+    emu_trace_t uni = {0};
+    uni.blocks = gb;
+    uni.blocks_cap = 16;
+    emu_fuzz_stat_t st;
+    ASSERT_TRUE(emu_fuzz_cover1(E, CLASSIFY3, sizeof CLASSIFY3, -50, 50, 2000,
+                                0xC0FFEEULL, &uni, &st));
+    ASSERT_UEQ(st.blocks_reached, uni.blocks_len);
+    ASSERT_TRUE(uni.blocks_len > fixed.blocks_len); /* guided > fixed */
+    ASSERT_TRUE(st.corpus_len >= 2); /* several coverage-expanding inputs */
+}
+
+TEST(emu, mutation_strong_suite_kills_more) {
+    /* A weak suite (only the positive path) lets mutations to the other paths
+     * survive; a strong suite that covers all three kills more of them. The
+     * same full single-bit-flip mutant set is run against both. */
+    long weak[] = {5};
+    long strong[] = {-7, 0, 9};
+    emu_mutation_stat_t ws, ss;
+    size_t weak_surv = emu_mutation_test1(E, CLASSIFY3, sizeof CLASSIFY3, weak,
+                                          1, 0, 0xABCDULL, &ws);
+    size_t strong_surv = emu_mutation_test1(E, CLASSIFY3, sizeof CLASSIFY3,
+                                            strong, 3, 0, 0xABCDULL, &ss);
+
+    ASSERT_UEQ(ws.mutants, ss.mutants);      /* identical mutant set */
+    ASSERT_TRUE(weak_surv > 0);              /* the weak suite misses some */
+    ASSERT_TRUE(strong_surv < weak_surv);    /* the strong suite kills more */
+    ASSERT_TRUE(ss.killed > ws.killed);
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:

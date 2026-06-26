@@ -826,6 +826,11 @@ $(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
 $(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
+# Coverage-guided fuzzing + mutation testing (Track E). Drives the emulator
+# (emu_call/_traced) with the framework's RNG; no extra dependency, its own TU.
+$(BUILD)/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # The opaque-handle FFI accessor layer (regs/emu-result/trace handles + readers).
 # Pulled into the conformance reference so it drives the exact binding-ABI surface
 # a foreign binding uses. No Unicorn dependency, but built with its include path
@@ -835,7 +840,7 @@ $(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
 
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
                    $(BUILD)/flags.o $(BUILD)/branch.o $(BUILD)/emu.o \
-                   $(BUILD)/disasm.o $(BUILD)/test_emu.o
+                   $(BUILD)/disasm.o $(BUILD)/fuzz.o $(BUILD)/test_emu.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
 
 .PHONY: emu-test

@@ -596,6 +596,54 @@ void emu_watch_describe(const emu_watch_t *w, emu_arch_t arch,
                         uint64_t base_addr, char *buf, size_t buflen);
 
 /* ------------------------------------------------------------------ */
+/* Coverage-guided fuzzing & mutation testing (x86-64 guest, Track E)  */
+/*                                                                     */
+/* Close the loop between the emulator's basic-block coverage and       */
+/* input generation, and prove a test's input set actually catches a    */
+/* perturbed routine. Both run the routine INSIDE the emulator, so a     */
+/* pathological input or a broken mutant (an infinite loop, a wild       */
+/* branch) is contained by the instruction cap and fault hooks rather    */
+/* than crashing the host. Inputs are one integer arg (the canonical     */
+/* property-test shape); the seedable splitmix64 RNG makes runs           */
+/* reproducible. Defined in src/fuzz.c (no extra dependency).            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t blocks_reached; /* distinct blocks in the accumulated union     */
+    uint64_t corpus_len;     /* inputs kept, each of which grew coverage      */
+    uint64_t iterations;     /* candidate inputs tried                        */
+} emu_fuzz_stat_t;
+
+/* Coverage-guided search for a 1-int-arg x86-64 routine: draw up to `iters`
+ * candidate inputs in [lo,hi] (seeded by `seed`) — fresh, or by mutating a
+ * corpus member (the feedback that makes it "guided") — running each through
+ * emu_call_traced so coverage ACCUMULATES into `uni` (zero the struct and point
+ * uni->blocks at a buffer first). An input that enters a new block is kept in
+ * the corpus. Fills *stat; reaches blocks a handful of fixed vectors miss. */
+bool emu_fuzz_cover1(emu_t *e, const void *code, size_t code_len, long lo,
+                     long hi, uint64_t iters, uint64_t seed, emu_trace_t *uni,
+                     emu_fuzz_stat_t *stat);
+
+typedef struct {
+    size_t mutants;  /* mutants generated and run                            */
+    size_t killed;   /* an input distinguished the mutant from the original  */
+    size_t survived; /* NO input did — a test-gap (or an equivalent mutant)  */
+} emu_mutation_stat_t;
+
+/* Mutation-test a 1-int-arg x86-64 routine against an input set: flip bits of
+ * `code` (every single-bit flip when max_mutants==0, else `max_mutants` sampled
+ * by `seed`), run the mutant and the original on each input, and classify the
+ * mutant as killed (some input distinguishes it — the suite would catch the
+ * change) or survived (none does). The original routine is the oracle; the
+ * emulator contains a broken mutant. Survivors are the signal — a stronger
+ * input set kills more. Returns the survivor count; fills *stat. The routine's
+ * result must be a function of its argument (the differential-testing premise). */
+size_t emu_mutation_test1(emu_t *e, const void *code, size_t code_len,
+                          const long *inputs, size_t ninputs,
+                          uint64_t max_mutants, uint64_t seed,
+                          emu_mutation_stat_t *stat);
+
+/* ------------------------------------------------------------------ */
 /* Source-line coverage mapping (Track C)                              */
 /*                                                                     */
 /* The trace records basic-block byte-offsets from the routine entry.  */

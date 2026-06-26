@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Coverage-guided fuzzing & mutation testing in the emulator.** The emulator
+  already recorded basic-block coverage but only ever fed a report; it now feeds
+  *input generation*, and a mutation tester proves an input set actually catches
+  a perturbed routine. Both run a one-int-arg routine **inside** the emulator
+  (the instruction cap + fault hooks contain a pathological input or a broken
+  mutant), are seedable for reproducibility, and live in a new dependency-free
+  [`src/fuzz.c`](https://github.com/wilvk/asm-test/blob/main/src/fuzz.c):
+  - `emu_fuzz_cover1` — **coverage-guided generation**: keeps inputs that grow
+    the block-coverage union, drawing candidates fresh or by mutating a corpus
+    member (the feedback), so it reaches blocks fixed vectors miss (for the
+    `classify` example, 5 blocks vs a positive vector's 3).
+  - `emu_mutation_test1` — **mutation testing**: flips bits of the routine, runs
+    each mutant and the original on an input set, and counts mutants the set
+    fails to distinguish (survivors = test-gap). A weak suite over `classify`
+    leaves 100 of 192 mutants alive; a path-covering suite leaves only the ~16
+    equivalent mutants — a stronger input set demonstrably kills more.
+  Reuses the framework's seedable splitmix64 RNG (`asmtest.h`) and the
+  emulator's coverage trace; no new dependency. Track E of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#coverage-guided-fuzzing--mutation-testing).
+
 - **Mid-execution guards in the emulator (watchpoints + register invariants).**
   Assert properties *while* a routine runs, not just on its result — introspection
   no ABI-boundary tool can do. Armed on the emu handle and persisting across
