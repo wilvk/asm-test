@@ -76,6 +76,7 @@ TEST(guard, in_bounds_write_ok) {
 
 ---
 
+(differential-property-testing)=
 ## Differential / property testing
 
 **Best for:** optimized routines where hand-picked inputs miss the bug. Write the
