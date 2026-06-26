@@ -216,23 +216,24 @@ is BSD-3-Clause, no copyleft.) Consequences:
   `.so` regardless.
 
 So this is no longer a "does GPL apply?" question — it does — only a mechanical
-checklist to clear before any `if: secrets.* != ''` real-publish step:
+checklist — **all mechanical items now done** (see
+[docs/releasing.md](../releasing.md)); only the human sign-off remains:
 
-- [ ] **SPDX** reflects the *binary*, not just the source:
-  `MIT AND GPL-2.0[-only|-or-later] AND BSD-3-Clause`. Confirm GPL-2.0 **-only**
-  vs **-or-later** for Unicorn and Keystone and use the exact id.
-- [ ] **Verbatim license text** for every conveyed component at its vendored
-  version, in `THIRD-PARTY-LICENSES/` (D3 captures it from the pinned checkout).
-- [ ] **Corresponding source** for the GPL components *and* for asm-test's
-  derivative `libasmtest_emu_full`: a written offer in `NOTICE` naming the exact
-  upstream tag + commit, plus our own `build-*.sh` + CMake flags (the "scripts
-  used to control compilation") — and **archive that source** rather than rely on
-  upstream tags persisting for the GPL's 3-year window.
-- [ ] **Unmodified build confirmed** — `build-*.sh` apply no patch (if they ever
-  do, ship the modified source).
-- [ ] **No further restrictions** — each registry's terms can't restrict the GPL
-  components beyond GPL.
-- [ ] **Registry metadata updated** from bare `MIT` to the compound SPDX above.
+- [x] **SPDX** reflects the *binary*: `MIT AND GPL-2.0-only AND BSD-3-Clause` in
+  every manifest. GPL-2.0-**only** confirmed.
+- [x] **Verbatim license text** for every conveyed component, in
+  `THIRD-PARTY-LICENSES/` — the pinned texts live in [licenses/](../../licenses/)
+  and `scripts/collect-licenses.sh` bundles them version-matched.
+- [x] **Corresponding source** — `scripts/fetch-corresponding-source.sh` assembles
+  the upstream source at the versions shipped and the release job attaches it; a
+  GPL §3(b) **written offer** is in every `NOTICE`.
+- [x] **Unmodified build confirmed** — `build-*.sh` apply no patch (they clone a
+  tag and build).
+- [x] **No further restrictions** — the compound SPDX + bundled GPL terms impose
+  none beyond GPL.
+- [x] **Registry metadata updated** from bare `MIT` to the compound SPDX.
+- [ ] **Human sign-off** — confirm it is acceptable to distribute
+  effectively-GPL packages under the project's name (the only non-code item).
 
 **No prebuilt MIT fallback exists** (the `core` variant was removed). If shipping
 an effectively-GPL package is unacceptable, the publish must be **blocked** — the
