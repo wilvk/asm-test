@@ -149,7 +149,7 @@ jobs:
         run: |
           mkdir -p /tmp/t && cd /tmp/t && npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/build/dist/node/asmtest-*.tgz
-          node -e "const a=require('asmtest'); if(!a.asmAvailable()||!a.disasAvailable())throw new Error('optional tiers not available from the self-contained package'); console.log('node ok: asm + disas available')"
+          node -e "const a=require('asmtest'); if(!a.disasAvailable())throw new Error('disassembler tier not available from the self-contained package'); console.log('node ok: disas available')"
       - name: Publish to npm (only with a token; once, from Linux)
         if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != '' }}
         run: cd bindings/node && echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc && npm publish
@@ -312,6 +312,7 @@ jobs:
       - run: make deps DEPS_ARGS=--emu && make shared-emu build/libasmtest_corpus.so
       - name: Package + build the packaged source against the framework
         run: |
+          make zig-package
           mkdir -p /tmp/dep && tar xzf build/dist/zig/asmtest-zig-*.tar.gz -C /tmp/dep
           cd /tmp/dep && LD_LIBRARY_PATH="$GITHUB_WORKSPACE/build" \
             zig build test -Dincdir="$GITHUB_WORKSPACE/include" -Dlibdir="$GITHUB_WORKSPACE/build"

@@ -1275,8 +1275,13 @@ package-libs: shared shared-emu-full
 python-package: package-libs manifest
 	rm -rf bindings/python/asmtest/_libs bindings/python/build bindings/python/*.egg-info
 	mkdir -p bindings/python/asmtest/_libs $(PKG_DIST)/python
-	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)  bindings/python/asmtest/_libs/
-	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name) bindings/python/asmtest/_libs/
+	# Stage the RAW (system-linked) superset + core libs, NOT the pre-vendored
+	# build/dist copies: the wheel's deps are vendored by auditwheel (Linux) /
+	# delocate (macOS) at repair time, and those tools resolve the lib's
+	# dependencies from the system — they choke on a lib already rewritten to
+	# @loader_path. The THIRD-PARTY-LICENSES notices still ride along.
+	cp -f $(call shlib_real,libasmtest_emu_full) bindings/python/asmtest/_libs/$(pkg_emu_name)
+	cp -f $(call shlib_real,libasmtest)          bindings/python/asmtest/_libs/$(pkg_core_name)
 	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
 	cp -Rf $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES bindings/python/asmtest/_libs/ 2>/dev/null || true
 	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python

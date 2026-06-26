@@ -80,30 +80,78 @@ public final class Asmtest {
         MUT_SURVIVED, CAPTURE_VEC256, CPU_AVX2;
 
     // Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
-    // otherwise fall back to the native payload bundled in the jar at
-    // /native/<os>-<arch>/. A jar resource can't be dlopen()ed in place, so it is
-    // extracted to a temp file (deleted on exit) and that path is loaded.
+    // otherwise extract the bundled native payload for this platform from the jar.
+    // The payload is self-contained — libasmtest_emu plus the vendored Unicorn/
+    // Keystone/Capstone, whose @loader_path (macOS) / $ORIGIN (Linux) rpath points
+    // at their own directory — so the WHOLE native/<os>-<arch>/ dir is extracted to
+    // one temp dir and libasmtest_emu is loaded from there. Extracting only the emu
+    // lib would leave its vendored deps unresolved.
     private static String resolveEmuLib() {
         String env = System.getenv("ASMTEST_LIB");
         if (env != null && !env.isEmpty()) return env;
         boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
         String os = mac ? "darwin" : "linux";
         String a = System.getProperty("os.arch", "").toLowerCase();
-        String arch = (a.contains("aarch64") || a.contains("arm64")) ? "arm64" : "x86_64";
+        boolean arm = a.contains("aarch64") || a.contains("arm64");
+        // The payload dirs follow `uname -m`: macOS arm is "arm64", Linux is "aarch64".
+        String arch = arm ? (mac ? "arm64" : "aarch64") : "x86_64";
         String ext = mac ? "dylib" : "so";
-        String res = "/native/" + os + "-" + arch + "/libasmtest_emu." + ext;
-        try (java.io.InputStream in = Asmtest.class.getResourceAsStream(res)) {
-            if (in == null)
-                throw new IllegalStateException("set ASMTEST_LIB to libasmtest_emu." + ext
-                    + " (no bundled " + res + " in this jar)");
-            java.io.File tmp = java.io.File.createTempFile("libasmtest_emu", "." + ext);
-            tmp.deleteOnExit();
-            java.nio.file.Files.copy(in, tmp.toPath(),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            return tmp.getAbsolutePath();
+        String dir = "native/" + os + "-" + arch;
+        String emuName = "libasmtest_emu." + ext;
+        try {
+            java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("asmtest-native");
+            tmpDir.toFile().deleteOnExit();
+            int n = extractResourceDir(dir, tmpDir);
+            java.nio.file.Path emu = tmpDir.resolve(emuName);
+            if (n == 0 || !java.nio.file.Files.exists(emu))
+                throw new IllegalStateException("set ASMTEST_LIB to " + emuName
+                    + " (no bundled " + dir + "/ in this jar)");
+            emu.toFile().deleteOnExit();
+            return emu.toAbsolutePath().toString();
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("failed to extract bundled libasmtest_emu", e);
+            throw new IllegalStateException("failed to extract bundled native payload", e);
         }
+    }
+
+    // Extract every file directly under the jar resource dir `dir` into `tmpDir`,
+    // co-locating libasmtest_emu with its vendored deps. Works from a jar (enumerate
+    // the zip) or from exploded classes on disk (copy the dir). The THIRD-PARTY-
+    // LICENSES subdir is skipped (top-level files only). Returns the count extracted.
+    private static int extractResourceDir(String dir, java.nio.file.Path tmpDir)
+            throws java.io.IOException {
+        java.net.URL loc = Asmtest.class.getProtectionDomain().getCodeSource().getLocation();
+        java.io.File src;
+        try { src = new java.io.File(loc.toURI()); }
+        catch (java.net.URISyntaxException e) { src = new java.io.File(loc.getPath()); }
+        int n = 0;
+        if (src.isFile()) { // a jar
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(src)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> en = zip.entries();
+                while (en.hasMoreElements()) {
+                    java.util.zip.ZipEntry e = en.nextElement();
+                    String name = e.getName();
+                    if (e.isDirectory() || !name.startsWith(dir + "/")) continue;
+                    String base = name.substring(dir.length() + 1);
+                    if (base.isEmpty() || base.contains("/")) continue; // top-level files only
+                    try (java.io.InputStream in = zip.getInputStream(e)) {
+                        java.nio.file.Files.copy(in, tmpDir.resolve(base),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    tmpDir.resolve(base).toFile().deleteOnExit();
+                    n++;
+                }
+            }
+        } else { // exploded classes directory
+            java.io.File[] files = new java.io.File(src, dir).listFiles();
+            if (files != null) for (java.io.File f : files) {
+                if (!f.isFile()) continue;
+                java.nio.file.Files.copy(f.toPath(), tmpDir.resolve(f.getName()),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                tmpDir.resolve(f.getName()).toFile().deleteOnExit();
+                n++;
+            }
+        }
+        return n;
     }
 
     static {
