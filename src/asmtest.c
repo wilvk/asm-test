@@ -889,6 +889,144 @@ static void run_inproc(asmtest_case_t *tc, test_result_t *res) {
     apply_wire(res, &w);
 }
 
+#if defined(_WIN32)
+/* ---- Win64 per-test isolation via process re-exec (Track B) ---------------
+ * There is no fork(): the parent re-execs THIS exe with --asmtest-child=<global
+ * registration index>; the child runs that one test in-process (run_one, which
+ * arms the vectored-handler best-effort guard) and writes its wire_result_t to a
+ * temp file; the parent maps the file — or the child's death/overrun — into a
+ * result, the same containment reap_child gives on POSIX. asmtest_win32_run /
+ * _run_pool (src/platform_win32.c) supply the isolation, deadline, and -jN pool.
+ * The global index is stable because re-exec re-runs the same registering
+ * constructors in the same order. */
+
+/* Set when this process IS a re-exec'd child (runs exactly one test). */
+static int asmtest_child_index = -1;
+static const char *asmtest_child_out = NULL;
+
+static asmtest_case_t *asmtest_case_at(int gindex) {
+    int i = 0;
+    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next, i++)
+        if (i == gindex)
+            return tc;
+    return NULL;
+}
+
+/* A child writes its one result here; the parent reads it back. */
+static void child_out_path(char *buf, size_t cap, int gindex) {
+    char dir[MAX_PATH];
+    DWORD d = GetTempPathA((DWORD)sizeof dir, dir);
+    if (d == 0 || d >= sizeof dir)
+        snprintf(dir, sizeof dir, ".\\");
+    snprintf(buf, cap, "%sasmtest_%lu_%d.bin", dir,
+             (unsigned long)GetCurrentProcessId(), gindex);
+}
+
+/* Child command line: this exe, the test's global index, the out path, and
+ * --timeout=0 — the PARENT's deadline (asmtest_win32_run) is the timeout, so the
+ * child needs no watchdog of its own. */
+static void child_cmdline(char *buf, size_t cap, const char *exe, int gindex,
+                          const char *out) {
+    snprintf(buf, cap,
+             "\"%s\" --asmtest-child=%d --asmtest-child-out=\"%s\" --timeout=0",
+             exe, gindex, out);
+}
+
+static int read_wire_file(const char *path, wire_result_t *w) {
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+        return 0;
+    size_t got = fread(w, 1, sizeof *w, f);
+    fclose(f);
+    return got == sizeof *w;
+}
+
+/* Map one isolated run (the asmtest_win32_run verdict + the wire file) into a
+ * result; synthesize crash/timeout when the child died before reporting. */
+static void apply_isolated(test_result_t *res, asmtest_win32_run_t verdict,
+                           unsigned long exit_code, const char *out) {
+    wire_result_t w;
+    int have = (verdict == ASMTEST_W32_OK) && read_wire_file(out, &w);
+    remove(out);
+    if (have) {
+        apply_wire(res, &w);
+        return;
+    }
+    res->outcome = ST_FAIL;
+    res->line = 0;
+    snprintf(res->file, sizeof res->file, "(child)");
+    if (verdict == ASMTEST_W32_TIMEOUT)
+        snprintf(res->msg, sizeof res->msg, "timed out after %d s (killed)",
+                 asmtest_timeout_secs);
+    else if (verdict == ASMTEST_W32_CRASH)
+        snprintf(res->msg, sizeof res->msg, "crashed: fatal exception 0x%lx",
+                 exit_code);
+    else if (verdict == ASMTEST_W32_SPAWN_FAIL)
+        snprintf(res->msg, sizeof res->msg, "failed to spawn child process");
+    else
+        snprintf(res->msg, sizeof res->msg, "no result reported by child");
+}
+
+static unsigned isolation_timeout_ms(void) {
+    return asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u : 0;
+}
+
+/* Serial isolation: re-exec one child, wait, map. */
+static void run_isolated_win32(int gindex, test_result_t *res) {
+    char exe[MAX_PATH], out[MAX_PATH], cmd[MAX_PATH * 2];
+    if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof exe) == 0) {
+        run_inproc(asmtest_case_at(gindex), res); /* fallback: in-process */
+        return;
+    }
+    child_out_path(out, sizeof out, gindex);
+    remove(out);
+    child_cmdline(cmd, sizeof cmd, exe, gindex, out);
+    unsigned long code = 0;
+    asmtest_win32_run_t v =
+        asmtest_win32_run(cmd, isolation_timeout_ms(), &code);
+    apply_isolated(res, v, code, out);
+}
+
+/* Parallel isolation: the -jN pool (WaitForMultipleObjects) over re-exec'd
+ * children. Results fill in registration order; returns 0 on success, -1 if the
+ * exe path or the pool machinery was unavailable (caller falls back to serial). */
+static int run_parallel_win32(asmtest_case_t **sel, const int *gidx,
+                              test_result_t *results, int n, int jobs) {
+    char exe[MAX_PATH];
+    if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof exe) == 0)
+        return -1;
+    char **cmds = (char **)calloc((size_t)n, sizeof *cmds);
+    char **outs = (char **)calloc((size_t)n, sizeof *outs);
+    asmtest_win32_run_t *verds =
+        (asmtest_win32_run_t *)calloc((size_t)n, sizeof *verds);
+    unsigned long *codes = (unsigned long *)calloc((size_t)n, sizeof *codes);
+    if (!cmds || !outs || !verds || !codes) {
+        free(cmds); free(outs); free(verds); free(codes);
+        return -1;
+    }
+    for (int i = 0; i < n; i++) {
+        outs[i] = (char *)malloc(MAX_PATH);
+        cmds[i] = (char *)malloc(MAX_PATH * 2);
+        child_out_path(outs[i], MAX_PATH, gidx[i]);
+        remove(outs[i]);
+        child_cmdline(cmds[i], MAX_PATH * 2, exe, gidx[i], outs[i]);
+    }
+    int rc = asmtest_win32_run_pool((const char *const *)cmds, n, jobs,
+                                    isolation_timeout_ms(), verds, codes);
+    for (int i = 0; i < n; i++) {
+        if (rc == 0) {
+            results[i].suite = sel[i]->suite;
+            results[i].name = sel[i]->name;
+            apply_isolated(&results[i], verds[i], codes[i], outs[i]);
+        }
+        free(outs[i]);
+        free(cmds[i]);
+    }
+    free(cmds); free(outs); free(verds); free(codes);
+    return rc;
+}
+#endif /* _WIN32 (re-exec isolation) */
+
 #if !defined(_WIN32) /* fork-based isolation + the parallel pool — POSIX only */
 
 /* Turn a finished child's pipe payload (`got` bytes of `w`) and wait `status`
@@ -1289,9 +1427,10 @@ typedef struct {
     long reps;
 } bench_stats_t;
 
-/* Benchmarks use the POSIX alarm()/sigsetjmp guard for crash/timeout handling;
- * not ported to the Win64 tier (a stub below reports unsupported). */
-#if !defined(_WIN32)
+/* Portable across the POSIX tiers and Win64: the timing loop is just the cycle
+ * counter (rdtsc / cntvct_el0) around an indirect call. A crashing BENCH body is
+ * guarded by the installed handlers on POSIX; on Win64 a BENCH is trusted (no
+ * per-bench process isolation), like the routine being measured. */
 
 /* Time `reps` back-to-back calls of body; returns the counter delta. The
  * indirect call cannot be elided, so the loop is not optimized away. */
@@ -1362,6 +1501,9 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
         snprintf(id, sizeof id, "%s.%s", b->suite, b->name);
 
         asmtest_in_test = 1;
+#if !defined(_WIN32)
+        /* Contain a crashing/hung BENCH the same way a test is (POSIX). On Win64
+         * a BENCH runs unguarded — it is trusted, like the routine it measures. */
         if (asmtest_timeout_secs > 0)
             alarm((unsigned)asmtest_timeout_secs);
         if (sigsetjmp(asmtest_jmp, 1) != 0) {
@@ -1370,10 +1512,13 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
             printf("  %-*s  %sERROR: %s%s\n", width, id, red, asmtest_msg, rst);
             continue;
         }
+#endif
         long reps = forced_reps > 0 ? forced_reps : bench_calibrate(b->fn);
         bench_stats_t st;
         bench_measure(b->fn, reps, &st);
+#if !defined(_WIN32)
         alarm(0);
+#endif
         asmtest_in_test = 0;
 
         printf("  %-*s  min=%9.2f  median=%9.2f  mean=%9.2f  %s(reps=%ld)%s\n",
@@ -1381,18 +1526,6 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
     }
 }
 
-#else /* _WIN32 */
-
-static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
-                           int use_color) {
-    (void)sel;
-    (void)n;
-    (void)forced_reps;
-    (void)use_color;
-    printf("# benchmarks are not supported on the Win64 tier\n");
-}
-
-#endif /* !_WIN32 (benchmarks) */
 
 /* The framework provides main(). Define ASMTEST_NO_MAIN to omit it and supply
  * your own (embedding the runtime, or — as the conformance corpus does — reusing
@@ -1404,11 +1537,10 @@ int main(int argc, char **argv) {
     opt.fork_tests = 1;
     opt.jobs = 1;
     opt.timeout = -1;
-#if defined(_WIN32)
-    /* The Win64 tier runs in-process: crash containment and timeout come from the
-     * per-test facility (vectored handler + watchdog), not fork. */
-    opt.fork_tests = 0;
-#endif
+    /* Win64 isolates per test by re-exec (Track B), matching POSIX's fork
+     * default; --no-fork opts into the in-process facility (vectored handler +
+     * watchdog). Both contain a crash/hang; isolation adds the process-death
+     * backstop for faults the in-process guard can't unwind. */
 
     for (int ai = 1; ai < argc; ai++) {
         const char *a = argv[ai];
@@ -1419,6 +1551,12 @@ int main(int argc, char **argv) {
             opt.shuffle = 1;
         } else if (strcmp(a, "--no-fork") == 0) {
             opt.fork_tests = 0;
+#if defined(_WIN32)
+        } else if (opt_prefix(a, "--asmtest-child=", &v)) {
+            asmtest_child_index = atoi(v); /* internal: re-exec child selector */
+        } else if (opt_prefix(a, "--asmtest-child-out=", &v)) {
+            asmtest_child_out = v;
+#endif
         } else if (opt_prefix(a, "--jobs=", &v) || opt_prefix(a, "-j", &v)) {
             if (*v == '\0' && ai + 1 < argc) /* "-j N" / "--jobs N" form */
                 v = argv[++ai];
@@ -1484,6 +1622,33 @@ int main(int argc, char **argv) {
 
     install_handlers();
 
+#if defined(_WIN32)
+    /* Re-exec child (Track B): run exactly one test by global index, write its
+     * wire record for the parent, and exit. The verdict travels in the file, so
+     * exit 0 — the parent reads pass/fail/skip there (a crash/hang is detected by
+     * the parent from the process death / deadline). */
+    if (asmtest_child_index >= 0) {
+        asmtest_case_t *tc = asmtest_case_at(asmtest_child_index);
+        wire_result_t w;
+        if (tc != NULL) {
+            capture_wire(&w, run_one(tc));
+        } else {
+            memset(&w, 0, sizeof w);
+            w.outcome = ST_FAIL;
+            snprintf(w.msg, sizeof w.msg, "bad child index %d",
+                     asmtest_child_index);
+        }
+        if (asmtest_child_out != NULL) {
+            FILE *f = fopen(asmtest_child_out, "wb");
+            if (f != NULL) {
+                fwrite(&w, 1, sizeof w, f);
+                fclose(f);
+            }
+        }
+        return 0;
+    }
+#endif
+
     /* Benchmark mode: collect, optionally list, then time the BENCH cases. */
     if (opt.bench) {
         int btotal = 0;
@@ -1512,16 +1677,23 @@ int main(int argc, char **argv) {
         total++;
     asmtest_case_t **sel =
         (asmtest_case_t **)malloc((size_t)(total > 0 ? total : 1) * sizeof *sel);
-    int n = 0;
-    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next) {
-        if (opt.filter == NULL || test_matches(tc, opt.filter))
+    /* Global registration index of each selected test, kept in lockstep with
+     * sel[] (through the shuffle) so the Win64 re-exec child can select the same
+     * test by index. Built everywhere; only read on the _WIN32 isolation path. */
+    int *gidx = (int *)malloc((size_t)(total > 0 ? total : 1) * sizeof *gidx);
+    int n = 0, gi = 0;
+    for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next, gi++) {
+        if (opt.filter == NULL || test_matches(tc, opt.filter)) {
+            gidx[n] = gi;
             sel[n++] = tc;
+        }
     }
 
     if (opt.do_list) {
         for (int i = 0; i < n; i++)
             printf("%s.%s\n", sel[i]->suite, sel[i]->name);
         free(sel);
+        free(gidx);
         return 0;
     }
 
@@ -1530,11 +1702,14 @@ int main(int argc, char **argv) {
                             ? opt.seed
                             : ((uint64_t)time(NULL) ^ ((uint64_t)ASMTEST_GETPID() << 32));
         asmtest_rng_t rng = {seed};
-        for (int i = n - 1; i > 0; i--) { /* Fisher-Yates */
+        for (int i = n - 1; i > 0; i--) { /* Fisher-Yates (sel + gidx together) */
             int j = (int)(asmtest_rng_u64(&rng) % (uint64_t)(i + 1));
             asmtest_case_t *t = sel[i];
             sel[i] = sel[j];
             sel[j] = t;
+            int g = gidx[i];
+            gidx[i] = gidx[j];
+            gidx[j] = g;
         }
         if (!opt.format_junit)
             printf("# shuffle seed=0x%llx\n", (unsigned long long)seed);
@@ -1563,13 +1738,16 @@ int main(int argc, char **argv) {
      * In both cases results[] is filled in registration order; parallel renders
      * after the run so output stays deterministic regardless of finish order. */
     int parallel = opt.fork_tests && opt.jobs > 1 && n > 1;
-#if !defined(_WIN32)
     if (parallel) {
         for (int i = 0; i < n; i++)
             memset(&results[i], 0, sizeof results[i]);
+#if defined(_WIN32)
+        if (run_parallel_win32(sel, gidx, results, n, opt.jobs) != 0)
+            parallel = 0; /* pool unavailable: fall back to the serial path */
+#else
         run_parallel(sel, results, n, opt.jobs);
-    }
 #endif
+    }
 
     for (int i = 0; i < n; i++) {
         test_result_t *r = &results[i];
@@ -1580,7 +1758,11 @@ int main(int argc, char **argv) {
             r->suite = tc->suite;
             r->name = tc->name;
             double t0 = now_secs();
-#if !defined(_WIN32)
+#if defined(_WIN32)
+            if (opt.fork_tests)
+                run_isolated_win32(gidx[i], r); /* re-exec per test */
+            else
+#else
             if (opt.fork_tests)
                 run_forked(tc, r);
             else
@@ -1612,6 +1794,7 @@ int main(int argc, char **argv) {
 
     free(results);
     free(sel);
+    free(gidx);
     return failed ? 1 : 0;
 }
 #endif /* ASMTEST_NO_MAIN */

@@ -665,10 +665,15 @@ win64-seh-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_seh_win64.exe
 	$(WINE) $(WIN64_BUILD)/test_seh_win64.exe
 
-# Phase 4 capstone: the framework runner (src/asmtest.c) itself built for Win64
-# and run under Wine. A real TEST() suite is discovered and run in-process; the
-# runner's in-process facility contains a crashing and a hanging test as reported
-# failures while surviving. Verifies the integrated runner end to end.
+# Phase 4 capstone + Track B: the framework runner (src/asmtest.c) built for
+# Win64 and run under Wine across ALL execution modes — per-test re-exec
+# isolation (the default, Track B), the -jN pool, in-process --no-fork, and
+# --bench. A real TEST() suite is discovered and run; a crashing and a hanging
+# test are contained as reported failures while the run survives. Isolation
+# contains the crash in a child process (caught there, or backstopped by the
+# child's death) and the hang via the parent's deadline; --no-fork uses the
+# in-process vectored handler + watchdog. Verifies the integrated runner end to
+# end on every path.
 .PHONY: win64-runner-test
 win64-runner-test: | $(WIN64_BUILD)
 	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ src/capture_win64.asm \
@@ -681,6 +686,7 @@ win64-runner-test: | $(WIN64_BUILD)
 	  tests/win64/suite_win64.c \
 	  $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj \
 	  -o $(WIN64_BUILD)/suite_win64.exe
+	@echo "# Track B: per-test re-exec isolation (default)"
 	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --timeout 3 \
 	  > $(WIN64_BUILD)/runner.out 2>&1 || true
 	@cat $(WIN64_BUILD)/runner.out
@@ -691,8 +697,29 @@ win64-runner-test: | $(WIN64_BUILD)
 	@grep -q "caught fatal exception" $(WIN64_BUILD)/runner.out
 	@grep -qE "^not ok [0-9]+ - win64.hang_timed_out" $(WIN64_BUILD)/runner.out
 	@grep -q "timed out" $(WIN64_BUILD)/runner.out
-	@grep -qE "[0-9]+ passed, [0-9]+ failed" $(WIN64_BUILD)/runner.out
-	@echo "win64 runner: discovered + ran + asserted + contained crash & timeout"
+	@grep -qE "5 passed, 2 failed" $(WIN64_BUILD)/runner.out
+	@echo "# Track B: -jN parallel pool over isolated children"
+	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --timeout 3 -j3 \
+	  > $(WIN64_BUILD)/runner_j.out 2>&1 || true
+	@cat $(WIN64_BUILD)/runner_j.out
+	@grep -q "caught fatal exception" $(WIN64_BUILD)/runner_j.out
+	@grep -q "timed out" $(WIN64_BUILD)/runner_j.out
+	@grep -qE "^ok [0-9]+ - win64.ret_arg0" $(WIN64_BUILD)/runner_j.out
+	@grep -qE "5 passed, 2 failed" $(WIN64_BUILD)/runner_j.out
+	@echo "# in-process --no-fork (vectored handler + watchdog)"
+	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --timeout 3 --no-fork \
+	  > $(WIN64_BUILD)/runner_nf.out 2>&1 || true
+	@cat $(WIN64_BUILD)/runner_nf.out
+	@grep -q "caught fatal exception" $(WIN64_BUILD)/runner_nf.out
+	@grep -q "timed out" $(WIN64_BUILD)/runner_nf.out
+	@grep -qE "5 passed, 2 failed" $(WIN64_BUILD)/runner_nf.out
+	@echo "# Track B: --bench (rdtsc) on Win64"
+	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --bench \
+	  --filter='win64.ret_arg0' > $(WIN64_BUILD)/runner_bench.out 2>&1 || true
+	@cat $(WIN64_BUILD)/runner_bench.out
+	@grep -q "benchmarks" $(WIN64_BUILD)/runner_bench.out
+	@grep -qE "win64.ret_arg0 +min=" $(WIN64_BUILD)/runner_bench.out
+	@echo "win64 runner: isolation + -jN pool + --no-fork + --bench all verified"
 
 # What the asmtest-win64 image runs: substrate smoke + capture + the Phase 4
 # runner-port slices (guard pages, isolation, pool, --filter, SEH) + the

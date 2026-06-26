@@ -152,24 +152,37 @@ runner: `src/asmtest.c` routes `--filter` through an `ASMTEST_FNMATCH` shim
 allocator under `!defined(_WIN32)`, with **no POSIX regression** — the library
 and suites build and run identically on the host.
 
-The execution-model re-route is **done**: `src/asmtest.c` now builds with MinGW and
-runs as the Win64 runner itself. A Win32 `run_one` wraps each test body in the
-per-test facility (vectored handler + watchdog) and maps the recovery reason to
-fail/skip/crash/timeout; `main()` runs `--no-fork`, with the fork/pipe/poll
-isolation, the parallel pool, the POSIX signal handlers, and the SysV
-trampoline-driven helpers all gated to POSIX. `tests/win64/suite_win64.c` is a real
-`TEST()` suite; `make win64-runner-test` (in `win64-check` / the CI `win64` job)
-builds it with MinGW and runs it under Wine, where the runner discovers and runs
-the suite, asserts real Win64 captures, and **contains a crashing and a hanging
-test as reported failures while surviving**. Still on the POSIX-only side: a
-forked/`-jN` execution mode on Win64 (the isolation primitives exist and are
-tested, but the runner does not yet re-exec per test) and benchmarks.
+The execution-model re-route is **done**, and (Track B) the Win64 runner now
+reaches **full parity** with the POSIX runner across every execution mode:
+
+- **Per-test isolation by default.** With no flag, `main()` runs each test in an
+  isolated child by **re-exec** — there is no `fork()`, so the parent re-execs
+  this same `.exe` with a hidden `--asmtest-child=<index>`; the child runs that
+  one test and writes its result to a temp file the parent reads back. A crash is
+  contained in the child (caught there by the vectored handler, or — if it can't
+  unwind — backstopped by the child's death, reported as `crashed: fatal
+  exception 0x…`); a hang is killed by the parent's deadline (`asmtest_win32_run`).
+- **`-jN` parallel pool.** `asmtest_win32_run_pool` (`WaitForMultipleObjects`)
+  runs up to `N` isolated children at once; output stays in registration order.
+- **In-process `--no-fork`.** Opts into the single-process facility (vectored
+  handler + watchdog) — the same path the Phase 3 gate shipped, now selectable.
+- **`--bench`.** Benchmark mode (cycles/call via `rdtsc`) runs on Win64 too
+  (a BENCH body is trusted, so it runs without per-bench process isolation).
+
+`tests/win64/suite_win64.c` is a real `TEST()` + `BENCH()` suite; `make
+win64-runner-test` (in `win64-check` / the CI `win64` job) builds it with MinGW
+and exercises **all four modes** under Wine — discovering the suite, asserting
+real Win64 captures, and containing a crashing and a hanging test as reported
+failures while surviving. An optional `windows-latest` CI job runs the same suite
+on a **genuine Windows host with no Wine** for authoritative real-OS sign-off.
 
 ## Caveats
 
 - **Wine ≠ Windows at the edges.** For pure computation and ABI/capture testing
-  Wine is faithful, but it is not a Windows host. For authoritative real-OS
-  sign-off, add a `windows-latest` CI job running the same `nasm -f win64` suite.
+  Wine is faithful, but it is not a Windows host. The optional `windows-latest`
+  CI job (Track B) provides the authoritative real-OS sign-off, running the same
+  `nasm -f win64` runner suite — isolation, `-jN`, `--no-fork`, and `--bench` —
+  natively with no Wine.
 - **x86-64 only.** On an AArch64 host the native lane does not apply; Win64-x64
   there stays [emulator](emulator.md)-only (Unicorn), matching the existing
   optional-emulator stance.

@@ -73,3 +73,11 @@ TEST(win64, hang_timed_out) {
     for (;;) {
     } /* infinite loop -> caught by the runner's per-test watchdog timeout */
 }
+
+/* Benchmark mode on the Win64 tier (Track B): the body is one measured call
+ * through the Win64 capture trampoline, timed via rdtsc. */
+BENCH(win64, ret_arg0) {
+    regs_t r;
+    ASM_CALL_WIN64_1(&r, win64_ret_arg0, 7);
+    BENCH_USE(r.ret);
+}

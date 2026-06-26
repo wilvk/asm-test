@@ -289,6 +289,30 @@ jobs:
       - name: Win64 capture as a real PE under Wine
         run: make docker-win64
 
+  # Optional real-Windows sign-off (Track B): the SAME integrated Win64 runner
+  # suite the `win64` job runs under Wine, here on a genuine Windows host with NO
+  # Wine — the authoritative check behind the Wine-fidelity caveat in
+  # docs/win64.md. Builds the PE with MSYS2 mingw gcc + nasm and runs it natively
+  # (WINE= makes the targets invoke the .exe directly), exercising all four
+  # execution modes: per-test re-exec isolation, the -jN pool, in-process
+  # --no-fork, and --bench. Kept thin — Wine carries the bulk in `win64`.
+  windows:
+    name: win64 (real Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make nasm coreutils mingw-w64-x86_64-gcc
+      - name: Build + run the Win64 runner suite natively (no Wine)
+        run: make win64-runner-test WIN64_CC=gcc WINE=
+
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).
   sanitize:

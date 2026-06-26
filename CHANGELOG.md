@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Win64 runner parity — per-test isolation, `-jN`, and benchmarks.** The Win64
+  tier ran every test in one process (`--no-fork`); the POSIX runner's fork-based
+  per-test isolation, `-jN` pool, and benchmark mode were gated off. All three
+  now work on Win64. With no `fork()`, the runner **re-execs itself per test** —
+  a hidden `--asmtest-child=<index>` runs exactly one test and writes its result
+  to a temp file the parent reads back — driven through the existing
+  `asmtest_win32_run` / `_run_pool` primitives (`CreateProcess` +
+  `WaitForSingleObject` / `WaitForMultipleObjects`). Isolation is now the
+  **default** (matching POSIX); `--no-fork` selects the in-process facility. A
+  crash is contained in the child (caught there, or backstopped by the child's
+  death); a hang is killed by the parent's deadline. `--bench` (rdtsc cycles per
+  call) runs on Win64 too (a `BENCH` body is trusted, so it runs unguarded).
+  `tests/win64/suite_win64.c` gained a `BENCH`, and `make win64-runner-test`
+  exercises **all four modes** (isolation, `-jN`, `--no-fork`, `--bench`) under
+  Wine; an optional `windows-latest` CI job signs the same suite off on a genuine
+  Windows host with no Wine. Track B of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  See [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md#the-runner-port).
+
 - **Wide-vector capture — AVX2 256-bit (`ymm`).** Vector capture was strictly
   128-bit (`vec128_t` / `ASM_VCALLn`); a routine's `ymm` result couldn't be
   inspected past its low 128 bits. New `vec256_t` (the 256-bit analog union) and

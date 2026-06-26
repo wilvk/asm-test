@@ -80,7 +80,7 @@ the per-language `Dockerfile`s, the registry manifests, [docs/packaging.md](../p
 
 ---
 
-## Track B — Win64 isolation, parallelism & sign-off *(planned)*
+## Track B — Win64 isolation, parallelism & sign-off — **done**
 
 **Goal.** Bring the Win64 tier up to the POSIX runner's guarantees and add
 authoritative real-OS confirmation.
@@ -90,6 +90,20 @@ and an in-process runner under Wine, but deferred forked/`-jN` execution and
 benchmarks behind its Phase 3 decision gate. The primitives (`asmtest_win32_run`,
 `asmtest_win32_run_pool`) already exist and are tested; what remains is wiring a
 re-exec-per-test model into the runner and an optional `windows-latest` job.
+
+**Landed.** With no `fork()`, the runner **re-execs itself per test** — a hidden
+`--asmtest-child=<global index>` runs one test in-process and writes its
+`wire_result_t` to a temp file the parent reads back, driven through
+`asmtest_win32_run` / `_run_pool`. Isolation is now the **default** on Win64
+(matching POSIX); `--no-fork` selects the in-process facility. A crash is
+contained in the child (caught there, or backstopped by its death); a hang is
+killed by the parent's deadline; the `-jN` pool runs isolated children
+concurrently with output in registration order. `--bench` (rdtsc) now runs on
+Win64 (a `BENCH` is trusted, run unguarded). `make win64-runner-test` exercises
+**all four modes under Wine** (verified here), and an optional `windows-latest`
+CI job signs the same suite off natively with no Wine. The effort was well under
+the ~1 week estimate because the primitives already existed — the work was the
+re-exec child mode + result plumbing + dispatch wiring.
 
 ### Deliverables
 
@@ -320,8 +334,8 @@ caught at the offending store with its instruction text, no host crash.
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now
    drives generation and a mutation tester scores the suite.
-6. **Track B** (Win64 isolation) — opportunistic, on concrete demand for isolated
-   Win64 execution (its Phase 3 gate already deemed `--no-fork` a shipping milestone).
+6. **Track B** (Win64 isolation) — **done.** Re-exec per-test isolation, `-jN`,
+   and `--bench` on Win64, verified under Wine; optional `windows-latest` sign-off.
 
 ## Out of scope (for now)
 
