@@ -105,6 +105,8 @@ comparison and roadmap.
   [Assertion reference](assertions.md).
 - Want to see it in action by use case? See [Examples](examples.md) — correctness
   & ABI capture, differential testing, benchmarking, and crash/hang containment.
+- Want the full capability list and what's available across architectures, OSes,
+  and languages? See [Features & support matrix](features.md).
 - Consuming the framework from another project? See
   [Using asm-test in your project](integration.md).
 - Driving it from another language? See [Language bindings](bindings.md) for the
@@ -142,6 +144,7 @@ win64
 :caption: Reference
 :hidden:
 
+features
 portability
 integration
 packaging
