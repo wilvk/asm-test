@@ -170,6 +170,26 @@ namespace Asmtest
             catch { return false; }
         }
 
+        // Whether the "asmtest_corpus" fixtures lib can be loaded. It carries the
+        // conformance example routines (add_signed, fp_add, ...), is selected via
+        // ASMTEST_CORPUS_LIB, and is NOT bundled in the nupkg (it is dev/test
+        // fixtures, not framework functionality — like Ruby/Node, which only
+        // dlopen it when ASMTEST_CORPUS_LIB is set). Probe so Corpus.Routine can
+        // raise a clear, actionable error instead of a raw DllNotFoundException.
+        public static readonly bool CorpusAvailable = ProbeCorpus();
+        static bool ProbeCorpus()
+        {
+            try
+            {
+                var p = Environment.GetEnvironmentVariable("ASMTEST_CORPUS_LIB");
+                var h = string.IsNullOrEmpty(p)
+                    ? NativeLibrary.Load(COR, typeof(Native).Assembly, null)
+                    : NativeLibrary.Load(p);
+                return NativeLibrary.TryGetExport(h, "asmtest_corpus_routine", out _);
+            }
+            catch { return false; }
+        }
+
         // Whether the loaded lib carries the disassembler (Capstone) — only
         // libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm do not.
         public static readonly bool DisasAvailable = ProbeDisas();
@@ -210,9 +230,25 @@ namespace Asmtest
     }
 
     /// <summary>Resolves a canonical corpus routine (e.g. "add_signed") to its address.</summary>
+    /// <remarks>
+    /// The corpus is the conformance <em>fixtures</em> lib (libasmtest_corpus), not part
+    /// of the framework, so it is not bundled in the NuGet package. Set
+    /// <c>ASMTEST_CORPUS_LIB</c> to a built <c>libasmtest_corpus.{so,dylib}</c> to use it;
+    /// check <see cref="Available"/> first.
+    /// </remarks>
     public static class Corpus
     {
-        public static IntPtr Routine(string name) => Native.asmtest_corpus_routine(name);
+        /// <summary>Whether the corpus fixtures lib is loadable (see <c>ASMTEST_CORPUS_LIB</c>).</summary>
+        public static bool Available => Native.CorpusAvailable;
+
+        public static IntPtr Routine(string name)
+        {
+            if (!Native.CorpusAvailable)
+                throw new AsmtestException(
+                    "corpus fixtures lib not available — set ASMTEST_CORPUS_LIB to a built " +
+                    "libasmtest_corpus.{so,dylib} (it is not bundled in the NuGet package)");
+            return Native.asmtest_corpus_routine(name);
+        }
     }
 
     /// <summary>

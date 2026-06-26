@@ -46,6 +46,24 @@ if (Emu.AsmAvailable)
 }
 ```
 
+## Corpus fixtures (optional)
+
+`Corpus.Routine("add_signed")` resolves a canonical conformance routine to its
+address. Those routines live in the **fixtures** lib (`libasmtest_corpus`), which
+is *not* bundled in the NuGet package (it is dev/test fixtures, not framework
+code). Point `ASMTEST_CORPUS_LIB` at a built `libasmtest_corpus.{so,dylib}` to use
+it; guard with `Corpus.Available`. Without it, `Corpus.Routine` throws a clear
+`AsmtestException` (not a raw `DllNotFoundException`) — matching the Ruby/Node
+bindings, which likewise only load the corpus when `ASMTEST_CORPUS_LIB` is set.
+
+```csharp
+if (Corpus.Available)
+{
+    IntPtr fn = Corpus.Routine("add_signed");
+    // ... capture/emulate through fn
+}
+```
+
 ## Deferred
 
 A published NuGet package with `runtimes/<rid>/native/` payloads, a
