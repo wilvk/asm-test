@@ -1341,7 +1341,7 @@ dotnet-package: native-payload-check
 	  echo "  bundled $$p -> runtimes/$$rid/native (lib + vendored deps + licenses)"; \
 	done
 	$(DOTNET) pack bindings/dotnet/asmtest-lib.csproj -c Release \
-	  -o $(abspath $(PKG_DIST))/dotnet
+	  -p:PackageOutputPath=$(abspath $(PKG_DIST))/dotnet
 	@echo "dotnet-package: packed AsmTest nupkg (lib/net8.0/AsmTest.dll + runtimes/<rid>/native) in $(PKG_DIST)/dotnet"
 
 lua-package: native-payload-check

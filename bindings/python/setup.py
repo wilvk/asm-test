@@ -33,6 +33,12 @@ class bdist_wheel(_bdist_wheel):
         # Keep the wheel Python- and ABI-agnostic (pure ctypes, no extension),
         # but platform-specific: py3-none-<platform>.
         _python, _abi, plat = _bdist_wheel.get_tag(self)
+        # A universal2 macOS interpreter tags the wheel ..._universal2, but the
+        # bundled lib is single-arch (built for this runner) — retag to the host
+        # arch so delocate doesn't demand a slice (x86_64) that isn't present.
+        if "universal2" in plat:
+            import platform
+            plat = plat.replace("universal2", platform.machine())
         return "py3", "none", plat
 
 
