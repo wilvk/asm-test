@@ -34,27 +34,32 @@ notice="$dest/NOTICE"
 
 modver() { pkg-config --modversion "$1" 2>/dev/null || echo unknown; }
 
-emit() { # emit <name> <pkgconfig-name> <spdx> <upstream-url>
-    name="$1"; pc="$2"; spdx="$3"; url="$4"
+emit() { # emit <name> <pkgconfig-name> <spdx> <upstream-url> <repo-license-glob>
+    name="$1"; pc="$2"; spdx="$3"; url="$4"; glob="$5"
     ver=$(modver "$pc")
-    # Prefer a license captured at build time under share/licenses/<dep>-<ver>/.
-    srcdir=""
-    for cand in "$PREFIX/share/licenses/$pc-$ver" "$PREFIX/share/licenses/$pc"; do
-        [ -d "$cand" ] && { srcdir="$cand"; break; }
-    done
-    if [ -n "$srcdir" ]; then
-        mkdir -p "$dest/$pc-$ver"
-        cp "$srcdir"/* "$dest/$pc-$ver/" 2>/dev/null || true
+    destdir="$dest/$pc-$ver"
+    mkdir -p "$destdir"
+    copied=0
+    # The verbatim upstream license text, checked into licenses/ at the pinned
+    # version — always present, so the notice is never missing a text.
+    for f in $root/$glob; do [ -f "$f" ] && cp "$f" "$destdir/" && copied=1; done
+    # A build-time capture (scripts/build-{keystone,capstone}.sh) augments with the
+    # exact-version text when the dep was source-built on this host.
+    if [ -d "$PREFIX/share/licenses/$pc-$ver" ]; then
+        cp "$PREFIX/share/licenses/$pc-$ver"/* "$destdir/" 2>/dev/null && copied=1
+    fi
+    if [ "$copied" -eq 1 ]; then
         have="bundled in $pc-$ver/"
     else
+        rmdir "$destdir" 2>/dev/null || true
         have="LICENSE TEXT MISSING — fetch from $url before publishing"
     fi
     printf '  - %-9s %-10s  %-13s  %s\n' "$name" "$ver" "$spdx" "$have" >> "$notice"
 }
 
-emit Unicorn  unicorn  GPL-2.0-only  https://github.com/unicorn-engine/unicorn
-emit Keystone keystone GPL-2.0-only  https://github.com/keystone-engine/keystone
-emit Capstone capstone BSD-3-Clause  https://github.com/capstone-engine/capstone
+emit Unicorn  unicorn  GPL-2.0-only  https://github.com/unicorn-engine/unicorn  "licenses/Unicorn-*"
+emit Keystone keystone GPL-2.0-only  https://github.com/keystone-engine/keystone "licenses/Keystone-*"
+emit Capstone capstone BSD-3-Clause  https://github.com/capstone-engine/capstone "licenses/Capstone-*"
 
 {
     echo
