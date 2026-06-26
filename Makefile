@@ -1238,52 +1238,79 @@ PYBUILD  ?= python3 -m build
 pkg_emu_name  := $(notdir $(call shlib_dev,libasmtest_emu))
 pkg_core_name := $(notdir $(call shlib_dev,libasmtest))
 
-.PHONY: packages package-libs package-libs-verify python-package rust-package \
-        zig-package cpp-package node-package java-package dotnet-package \
-        ruby-package lua-package go-package
+.PHONY: packages package-libs package-libs-verify native-payload-check \
+        python-package rust-package zig-package cpp-package node-package \
+        java-package dotnet-package ruby-package lua-package go-package
 
-package-libs: shared shared-emu
+# The dlopen packers consume build/dist/native/ (staged by `make package-libs`
+# locally, or the CI payloads matrix downloaded into it) rather than depending on
+# package-libs directly — so a release job can package the collected
+# multi-platform tree without rebuilding the host slot (which would need the full
+# Unicorn + Keystone + Capstone toolchain). This guard fails fast if the tree is
+# absent.
+native-payload-check:
+	@ls -d $(PKG_DIST)/native/*/ >/dev/null 2>&1 || { \
+	  echo "native-payload-check: no payload in $(PKG_DIST)/native — run 'make package-libs' first"; exit 1; }
+
+# package-libs stages the build host's native payload into build/dist/native/<plat>/.
+# The dlopen bindings load libasmtest_emu by a fixed name, so the FULL superset lib
+# (libasmtest_emu_full: emu + Keystone assembler + Capstone disassembler) is staged
+# INTO that slot (D1) and scripts/package-native.sh then vendors its three native
+# deps beside it (rpath -> $$ORIGIN/@loader_path) and assembles THIRD-PARTY-LICENSES,
+# so a fresh install runs both optional tiers with no system libs. Needs libunicorn
+# + libkeystone + libcapstone at build time (make deps DEPS_ARGS=--asm plus the
+# build-{keystone,capstone}.sh source builds).
+package-libs: shared shared-emu-full
 	mkdir -p $(PKG_DIST)/native/$(PKG_PLAT)
-	cp -f $(call shlib_real,libasmtest)     $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
-	cp -f $(call shlib_real,libasmtest_emu) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
-	@echo "package-libs: staged $(PKG_PLAT) libs in $(PKG_DIST)/native/$(PKG_PLAT)"
+	cp -f $(call shlib_real,libasmtest)          $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
+	cp -f $(call shlib_real,libasmtest_emu_full) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
+	sh scripts/package-native.sh $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_emu_name)
+	@echo "package-libs: staged $(PKG_PLAT) full payload in $(PKG_DIST)/native/$(PKG_PLAT)"
 
-# dlopen bindings: bundle the prebuilt libasmtest_emu in the package's payload.
-# Python's wheel is per-platform (cibuildwheel builds one per tag in CI), so it
-# bundles only the host slot, flat in asmtest/_libs/ (where _native.py looks).
+# dlopen bindings: bundle the prebuilt libasmtest_emu (the superset) + its vendored
+# native deps + THIRD-PARTY-LICENSES in the package's payload. Python's wheel is
+# per-platform (cibuildwheel builds one per tag in CI), so it bundles only the host
+# slot, flat in asmtest/_libs/ (where _native.py looks); auditwheel/delocate vendor
+# the deps at repair time, and the notices ride along.
 python-package: package-libs manifest
 	rm -rf bindings/python/asmtest/_libs bindings/python/build bindings/python/*.egg-info
 	mkdir -p bindings/python/asmtest/_libs $(PKG_DIST)/python
 	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)  bindings/python/asmtest/_libs/
 	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name) bindings/python/asmtest/_libs/
 	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
+	cp -Rf $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES bindings/python/asmtest/_libs/ 2>/dev/null || true
 	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python
 
 # Each dlopen packer ships the reusable library module (asmtest.rb / asmtest.js /
 # asmtest.lua / Asmtest.java / AsmTest.dll), NOT the conformance runner, and
 # bundles one native slot per platform present in build/dist/native/ (staged by
 # package-libs locally; the CI payloads matrix collects all four). emu_lib_slots
-# copies the emulator lib from each <plat> slot into a per-platform dir.
+# copies the whole runtime payload from each <plat> slot — libasmtest_emu, the
+# vendored Unicorn/Keystone/Capstone, and THIRD-PARTY-LICENSES — into a per-platform
+# dir (the rpath patching staged at package-libs time keeps the deps resolvable).
 define emu_lib_slots
 	@for pd in $(PKG_DIST)/native/*/; do \
 	  [ -d "$$pd" ] || continue; p=$$(basename "$$pd"); \
-	  mkdir -p "$(1)/$$p"; cp -f "$$pd"libasmtest_emu.* "$(1)/$$p/"; \
-	  echo "  bundled $$p"; \
+	  mkdir -p "$(1)/$$p"; \
+	  cp -f "$$pd"lib*.so* "$(1)/$$p/" 2>/dev/null || true; \
+	  cp -f "$$pd"lib*.dylib "$(1)/$$p/" 2>/dev/null || true; \
+	  cp -Rf "$$pd"THIRD-PARTY-LICENSES "$(1)/$$p/" 2>/dev/null || true; \
+	  echo "  bundled $$p (lib + vendored deps + licenses)"; \
 	done
 endef
 
-ruby-package: package-libs
+ruby-package: native-payload-check
 	rm -rf bindings/ruby/native && mkdir -p $(PKG_DIST)/ruby
 	$(call emu_lib_slots,bindings/ruby/native)
 	cd bindings/ruby && $(GEM) build asmtest.gemspec
 	mv bindings/ruby/asmtest-$(ASMTEST_VERSION).gem $(PKG_DIST)/ruby/
 
-node-package: package-libs
+node-package: native-payload-check
 	rm -rf bindings/node/native && mkdir -p $(PKG_DIST)/node
 	$(call emu_lib_slots,bindings/node/native)
 	cd bindings/node && $(NPM) pack --pack-destination $(abspath $(PKG_DIST))/node
 
-java-package: package-libs
+java-package: native-payload-check
 	rm -rf bindings/java/src/main/resources/native
 	mkdir -p $(BUILD)/java-pkg $(PKG_DIST)/java
 	$(call emu_lib_slots,bindings/java/src/main/resources/native)
@@ -1296,21 +1323,23 @@ java-package: package-libs
 # classlib project (asmtest-lib.csproj) — it compiles the AsmTest.dll library from
 # Asmtest.cs and packs it + those native assets into a real nupkg the consumer
 # restores (the loader picks runtimes/<rid>/native/ at run time).
-dotnet-package: package-libs
+dotnet-package: native-payload-check
 	rm -rf bindings/dotnet/runtimes
 	mkdir -p $(PKG_DIST)/dotnet
 	@for pd in $(PKG_DIST)/native/*/; do \
 	  [ -d "$$pd" ] || continue; p=$$(basename "$$pd"); \
 	  rid=$$(echo "$$p" | sed -e 's/^darwin-/osx-/' -e 's/-x86_64$$/-x64/' -e 's/-aarch64$$/-arm64/'); \
 	  mkdir -p bindings/dotnet/runtimes/$$rid/native; \
-	  cp -f "$$pd"libasmtest_emu.* bindings/dotnet/runtimes/$$rid/native/; \
-	  echo "  bundled $$p -> runtimes/$$rid/native"; \
+	  cp -f "$$pd"lib*.so* bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
+	  cp -f "$$pd"lib*.dylib bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
+	  cp -Rf "$$pd"THIRD-PARTY-LICENSES bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
+	  echo "  bundled $$p -> runtimes/$$rid/native (lib + vendored deps + licenses)"; \
 	done
 	$(DOTNET) pack bindings/dotnet/asmtest-lib.csproj -c Release \
 	  -o $(abspath $(PKG_DIST))/dotnet
 	@echo "dotnet-package: packed AsmTest nupkg (lib/net8.0/AsmTest.dll + runtimes/<rid>/native) in $(PKG_DIST)/dotnet"
 
-lua-package: package-libs
+lua-package: native-payload-check
 	rm -rf bindings/lua/native && mkdir -p $(PKG_DIST)/lua
 	$(call emu_lib_slots,bindings/lua/native)
 	cp -f bindings/lua/asmtest-1.0.0-1.rockspec $(PKG_DIST)/lua/
@@ -1338,16 +1367,20 @@ go-package:
 	@echo "  module: github.com/wilvk/asm-test/bindings/go"
 	@echo "  consumers set CGO_LDFLAGS to link libasmtest_emu (see docs/packaging.md)."
 
-packages: python-package rust-package zig-package cpp-package node-package \
+packages: package-libs python-package rust-package zig-package cpp-package node-package \
           java-package dotnet-package ruby-package lua-package go-package
 
 # Verify a (possibly multi-platform) build/dist/native/ tree carries a complete
-# native set: every <plat> subdir must hold BOTH the core lib and the
-# libasmtest_emu superset the dlopen bindings load. `make package-libs` stages
-# only the build host's slot; the CI `payloads` matrix runs it on each OS/arch
-# and the collect job merges the artifacts into one tree, then runs this target
-# so a release never ships a payload missing a platform or a lib. Exits nonzero
-# if any platform slot is incomplete.
+# fully-featured set: every <plat> subdir must hold the core lib, the libasmtest_emu
+# superset the dlopen bindings load, the three vendored native deps
+# (Unicorn/Keystone/Capstone) that make it self-contained, and a THIRD-PARTY-LICENSES
+# dir. `make package-libs` stages only the build host's slot; the CI `payloads`
+# matrix runs it on each OS/arch and the collect job merges the artifacts into one
+# tree, then runs this target so a release never ships a payload missing a platform,
+# a lib, a vendored dep, or its notices. File-existence only (it runs on the collect
+# host, which is one platform — the per-slot symbol assertion happens at
+# package-libs time via scripts/package-native.sh). Exits nonzero if any slot is
+# incomplete.
 package-libs-verify:
 	@dir=$(PKG_DIST)/native; \
 	test -d "$$dir" || { echo "package-libs-verify: no $$dir — run 'make package-libs' first"; exit 1; }; \
@@ -1355,13 +1388,19 @@ package-libs-verify:
 	test -n "$$plats" || { echo "package-libs-verify: $$dir has no platform subdirs"; exit 1; }; \
 	rc=0; n=0; \
 	for p in $$plats; do \
-	  n=$$((n+1)); pd="$$dir/$$p"; \
-	  core=$$(ls "$$pd"/libasmtest.* 2>/dev/null | head -1); \
-	  emu=$$(ls "$$pd"/libasmtest_emu.* 2>/dev/null | head -1); \
-	  if [ -n "$$core" ] && [ -n "$$emu" ]; then \
-	    echo "  ok   $$p   ($$(basename "$$core"), $$(basename "$$emu"))"; \
+	  n=$$((n+1)); pd="$$dir/$$p"; miss=""; \
+	  core=$$(ls "$$pd"/libasmtest.so* "$$pd"/libasmtest.*.dylib "$$pd"/libasmtest.dylib 2>/dev/null | head -1); \
+	  emu=$$(ls "$$pd"/libasmtest_emu.so* "$$pd"/libasmtest_emu.dylib 2>/dev/null | grep -v _emu_ | head -1); \
+	  [ -n "$$core" ] || miss="$$miss core"; \
+	  [ -n "$$emu" ] || miss="$$miss emu"; \
+	  for d in unicorn keystone capstone; do \
+	    ls "$$pd"/lib$$d.* >/dev/null 2>&1 || miss="$$miss $$d"; \
+	  done; \
+	  [ -d "$$pd/THIRD-PARTY-LICENSES" ] || miss="$$miss licenses"; \
+	  if [ -z "$$miss" ]; then \
+	    echo "  ok   $$p   (core, emu, unicorn, keystone, capstone, licenses)"; \
 	  else \
-	    echo "  MISS $$p   core=$${core:-<none>} emu=$${emu:-<none>}"; rc=1; \
+	    echo "  MISS $$p  missing:$$miss"; rc=1; \
 	  fi; \
 	done; \
 	echo "package-libs-verify: $$n platform(s) in $$dir"; \

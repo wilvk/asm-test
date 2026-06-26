@@ -20,9 +20,16 @@ package ships:
 
 - **dlopen bindings** — Python, Ruby, Lua, Node, Java, .NET. They open the shared
   library at run time (`ctypes`, `Fiddle`, LuaJIT `ffi`, `koffi`, FFM, P/Invoke),
-  so their package **bundles the prebuilt `libasmtest_emu`** (the emulator
-  superset, which also carries the capture trampoline + opaque-handle FFI layer).
-  Each ecosystem has a conventional native-payload location:
+  so their package **bundles the prebuilt `libasmtest_emu`** under that fixed name.
+  The staged lib is the **superset `libasmtest_emu_full`** (capture trampoline +
+  opaque-handle FFI + emulator + the Keystone in-line assembler + the Capstone
+  disassembler), so a fresh install has **both optional tiers working out of the
+  box** — `asm_available()` and `disas_available()` return true. Alongside it the
+  payload vendors the three native dependencies (**Unicorn, Keystone, Capstone**)
+  with the lib's runtime search path rewritten to its own directory (`$ORIGIN` on
+  Linux, `@loader_path` on macOS), plus a **`THIRD-PARTY-LICENSES/`** notice — so
+  the package is **self-contained** (no system libunicorn/libkeystone/libcapstone
+  needed). Each ecosystem has a conventional native-payload location:
 
   | Language | Native payload location | Registry |
   |---|---|---|
@@ -33,9 +40,25 @@ package ships:
   | Java | `src/main/resources/native/<os>-<arch>/` (JAR) | Maven Central |
   | .NET | `runtimes/<rid>/native/` (NuGet) | NuGet |
 
-  These packages depend on **libunicorn** at run time (the emulator lib links it);
-  a capture-only variant could instead bundle `libasmtest`. The `libasmtest_emu`
-  copy is loaded by absolute path, so its install-name/soname does not matter.
+  The `libasmtest_emu` copy is loaded by absolute path, so its install-name/soname
+  does not matter; the vendored deps load via its rewritten `$ORIGIN`/`@loader_path`
+  rpath. Building the payload therefore needs the full native toolchain at
+  *package* time (`make deps DEPS_ARGS=--asm` plus `scripts/build-keystone.sh` +
+  `scripts/build-capstone.sh`); the per-binding `make <lang>-package` targets just
+  consume the staged `build/dist/native/` tree and do not rebuild it.
+
+  **Licensing.** asm-test's own source is MIT, but because the payload conveys the
+  GPL-2.0 engines (Unicorn, Keystone) as binaries dynamically linked into
+  `libasmtest_emu`, **each package as distributed is effectively GPL-2.0** (MIT is
+  GPL-compatible; Capstone is BSD-3-Clause). Every dlopen package therefore
+  declares a compound SPDX expression (`MIT AND GPL-2.0-only AND BSD-3-Clause`) and
+  ships `THIRD-PARTY-LICENSES/` with each dependency's verbatim license at the
+  exact version vendored (captured by the build scripts into
+  `$PREFIX/share/licenses/<dep>-<ver>/`) plus a `NOTICE` recording versions. Before
+  a real publish, complete the GPL compliance checklist in
+  [the implementation plan](plans/fully-featured-packages-plan.md): confirm
+  GPL-2.0-only vs -or-later, archive the corresponding source, and surface the
+  written offer.
 
 - **link bindings** — Rust, Zig, C++, Go. The native library is linked (or the
   build script builds/locates it), so the package is **source** and the consumer

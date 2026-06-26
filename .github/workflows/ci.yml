@@ -162,8 +162,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libunicorn
+      - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
+
+      - name: Build and install Capstone from source (disassembler tier)
+        run: ./scripts/build-capstone.sh   # pinned source build; no distro package used
 
       - name: Build and run emulator suite
         run: make emu-test
@@ -261,9 +264,9 @@ jobs:
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
-      - name: Build and install Keystone from source
-        run: ./scripts/build-keystone.sh
-      - name: Run the ${{ matrix.lang }} in-line-asm conformance (libasmtest_emu_asm)
+      - name: Build and install Keystone + Capstone from source
+        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+      - name: Run the ${{ matrix.lang }} in-line-asm + disas conformance (libasmtest_emu_full)
         run: make ${{ matrix.lang }}-asm-test
 
   # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
@@ -391,10 +394,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libunicorn
-        run: make deps DEPS_ARGS=--emu
+      - name: Install build deps (unicorn, pkg-config) + patchelf
+        run: |
+          make deps DEPS_ARGS=--asm
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
 
-      - name: Stage the host's native payload
+      - name: Build Keystone + Capstone from source (pinned optional tiers)
+        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+
+      - name: Stage the host's native payload (superset + vendored deps + licenses)
         run: make package-libs
 
       - name: Upload native payload
@@ -414,10 +422,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libunicorn
-        run: make deps DEPS_ARGS=--emu
+      - name: Install build deps (unicorn, pkg-config) + patchelf
+        run: |
+          make deps DEPS_ARGS=--asm
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
 
-      - name: Stage the host's native payload
+      - name: Build Keystone + Capstone from source (pinned optional tiers)
+        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+
+      - name: Stage the host's native payload (superset + vendored deps + licenses)
         run: make package-libs
 
       - name: Upload native payload

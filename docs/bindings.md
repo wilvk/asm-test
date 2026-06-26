@@ -84,17 +84,21 @@ make manifest      # asmtest_abi.json — required by the Python binding only
 ### The optional native tiers
 
 The in-line assembler (Keystone) and the disassembler (Capstone) are *optional*
-add-ons, kept out of the base build so it needs neither dependency. They ship in
-their own libraries:
+add-ons, kept out of the base build so it needs neither dependency. **The published
+packages bundle them out of the box** — `make <lang>-package` stages the superset
+lib (below) into the `libasmtest_emu` slot and vendors the native deps, so a fresh
+`pip install` / `gem install` / `npm install` has both tiers working with no system
+libs (see [Packaging the bindings](packaging.md)). The build targets:
 
 ```sh
 make shared-emu-asm   # libasmtest_emu_asm.{so,dylib}  — base + the Keystone assembler
 make shared-emu-full  # libasmtest_emu_full.{so,dylib} — base + BOTH tiers (Keystone + Capstone)
 ```
 
-`libasmtest_emu_full` is the **one lib carrying both optional tiers**: point a
-binding at it to get the assembler *and* the disassembler from a single load (no
-combinatorial lib matrix). The lean `libasmtest_emu` stays Unicorn-only.
+`libasmtest_emu_full` is the **one lib carrying both optional tiers** (and what the
+packages ship): point a binding at it to get the assembler *and* the disassembler
+from a single load (no combinatorial lib matrix). The lean `libasmtest_emu` stays
+Unicorn-only — it's the dev build, where the tiers self-skip.
 
 Your *routine under test* is any System V ABI function in a shared library.
 Assemble yours with the

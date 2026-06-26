@@ -19,7 +19,10 @@ description = {
       links libunicorn at run time.
    ]],
    homepage = "https://github.com/wilvk/asm-test",
-   license = "MIT",
+   -- asm-test is MIT, but the bundled native payload conveys Unicorn + Keystone
+   -- (GPL-2.0) and Capstone (BSD-3-Clause), so the rock as distributed is
+   -- effectively GPL-2.0. See native/<plat>/THIRD-PARTY-LICENSES.
+   license = "MIT AND GPL-2.0-only AND BSD-3-Clause",
 }
 
 supported_platforms = { "linux", "macosx" }

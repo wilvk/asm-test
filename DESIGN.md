@@ -185,6 +185,12 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   for multi-arch text→bytes), self-skipping against the Keystone-free
   `libasmtest_emu`, exercised by the native `bindings-asm` CI matrix. See
   [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
+  The Capstone disassembler counterpart is built the same way from a pinned source
+  release (`scripts/build-capstone.sh`). The **published packages are fully
+  featured**: each bundles the superset `libasmtest_emu_full` plus vendored
+  Unicorn/Keystone/Capstone (so the tiers work with no system libs), which makes
+  the distributed package effectively GPL-2.0 — see
+  [the fully-featured-packages plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/fully-featured-packages-plan.md).
 
 The phases below are **planned**, ordered to deepen the framework's core
 promise — calling assembly through the real ABI and inspecting the result —

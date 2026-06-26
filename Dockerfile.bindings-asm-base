@@ -18,14 +18,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 # build-essential in the base already provides g++ and make. Keystone's bundled
 # LLVM CMake requires a Python interpreter to configure — the main CI image got
 # one transitively via clang-tidy, but this minimal base must ask for it.
-# libcapstone-dev adds the Capstone disassembler so `make shared-emu-full` (the
-# one lib carrying both optional native tiers) links here — the *-asm-test
-# binding checks now drive libasmtest_emu_full, exercising disas with CallAsm.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends cmake git python3 libcapstone-dev \
+ && apt-get install -y --no-install-recommends cmake git python3 \
  && rm -rf /var/lib/apt/lists/*
 
-# Build + install Keystone with the same pinned script the CI bindings-asm job
-# uses, so libkeystone + headers are on the default search path for
-# `make shared-emu-asm`. scripts/ is already present from the base layer.
-RUN ./scripts/build-keystone.sh
+# Build + install Keystone AND Capstone with the same pinned scripts the CI
+# bindings-asm job uses, so libkeystone + libcapstone + headers are on the
+# default search path for `make shared-emu-full` (the one lib carrying both
+# optional native tiers) — the *-asm-test binding checks drive libasmtest_emu_full,
+# exercising disas with CallAsm. Capstone is source-built (not libcapstone-dev) so
+# the version matches what a published package vendors. scripts/ is already
+# present from the base layer.
+RUN ./scripts/build-keystone.sh && ./scripts/build-capstone.sh

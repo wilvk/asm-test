@@ -28,9 +28,13 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install libunicorn
-        run: make deps DEPS_ARGS=--emu
-      - name: Stage the host's native payload
+      - name: Install build deps (unicorn, pkg-config) + patchelf
+        run: |
+          make deps DEPS_ARGS=--asm
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
+      - name: Build Keystone + Capstone from source (pinned optional tiers)
+        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+      - name: Stage the host's native payload (superset + vendored deps + licenses)
         run: make package-libs
       - uses: actions/upload-artifact@v4
         with:
@@ -88,8 +92,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: make deps DEPS_ARGS=--emu
-      - name: Build the platform-tagged wheel
+      - name: Install build deps + patchelf, build Keystone + Capstone from source
+        run: |
+          make deps DEPS_ARGS=--asm
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
+          ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+      - name: Build the platform-tagged wheel (superset + vendored deps)
         run: pip install build twine auditwheel delocate && make python-package
       - name: Repair -> manylinux / macOS (vendor libunicorn)
         run: |
@@ -106,7 +114,7 @@ jobs:
         run: |
           python -m venv /tmp/venv && . /tmp/venv/bin/activate
           pip install wheelhouse/*.whl
-          cd /tmp && python -c "import asmtest; print('python ok: avx2=' + str(asmtest.cpu_has_avx2()))"
+          cd /tmp && python -c "import asmtest; assert asmtest.asm_available() and asmtest.disas_available(), 'optional tiers not available from the self-contained wheel'; print('python ok: asm + disas available')"
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}
@@ -131,18 +139,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - run: make deps DEPS_ARGS=--emu
       - uses: actions/download-artifact@v4
         with: { name: native-all, path: build/dist/native }
       - name: Build the npm tarball
         run: make node-package
       - name: npm publish --dry-run
         run: cd bindings/node && npm publish --dry-run
-      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
         run: |
           mkdir -p /tmp/t && cd /tmp/t && npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/build/dist/node/asmtest-*.tgz
-          node -e "const a=require('asmtest'); console.log('node ok: avx2='+a.cpuHasAvx2())"
+          node -e "const a=require('asmtest'); if(!a.asmAvailable()||!a.disasAvailable())throw new Error('optional tiers not available from the self-contained package'); console.log('node ok: asm + disas available')"
       - name: Publish to npm (only with a token; once, from Linux)
         if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != '' }}
         run: cd bindings/node && echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc && npm publish
@@ -162,15 +169,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with: { ruby-version: "3.2" }
-      - run: make deps DEPS_ARGS=--emu
       - uses: actions/download-artifact@v4
         with: { name: native-all, path: build/dist/native }
       - name: Build the gem
         run: make ruby-package
-      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
         run: |
           gem install --local --no-document build/dist/ruby/asmtest-*.gem
-          cd /tmp && ruby -e "require 'asmtest'; puts 'ruby ok: avx2=' + Asmtest.cpu_has_avx2?.to_s"
+          cd /tmp && ruby -e "require 'asmtest'; raise 'disassembler tier not available from the self-contained gem' unless Asmtest.disas_available?; puts 'ruby ok: disas available'"
       - name: Publish to RubyGems (only with a token; once, from Linux)
         if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.RUBYGEMS_API_KEY != '' }}
         env: { GEM_HOST_API_KEY: "${{ secrets.RUBYGEMS_API_KEY }}" }
@@ -187,18 +193,17 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install LuaJIT + deps
+      - name: Install LuaJIT
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install luajit; else sudo apt-get update && sudo apt-get install -y luajit; fi
-          make deps DEPS_ARGS=--emu
       - uses: actions/download-artifact@v4
         with: { name: native-all, path: build/dist/native }
       - name: Stage the rock payload
         run: make lua-package
-      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
         run: |
           mkdir -p /tmp/t && cp bindings/lua/asmtest.lua /tmp/t/ && cp -R bindings/lua/native /tmp/t/
-          cd / && luajit -e "package.path='/tmp/t/?.lua;'..package.path; local a=require('asmtest'); print('lua ok: avx2='..tostring(a.cpu_has_avx2()))"
+          cd / && luajit -e "package.path='/tmp/t/?.lua;'..package.path; local a=require('asmtest'); assert(a.disas_available(), 'disassembler tier not available from the self-contained rock'); print('lua ok: disas available')"
 
   java:
     name: java (${{ matrix.os }})
@@ -213,14 +218,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "21" }
-      - run: make deps DEPS_ARGS=--emu
       - uses: actions/download-artifact@v4
         with: { name: native-all, path: build/dist/native }
       - name: Build the jar
         run: make java-package
-      - name: Install fresh + smoke (extract bundled native from jar, no ASMTEST_LIB)
+      - name: Install fresh + smoke (self-contained native from jar, no ASMTEST_LIB, no system deps)
         run: |
-          printf 'public class Smoke { public static void main(String[] a){ System.out.println("java ok: disasAvailable=" + Asmtest.disasAvailable()); }}' > /tmp/Smoke.java
+          printf 'public class Smoke { public static void main(String[] a){ if(!Asmtest.disasAvailable()) throw new RuntimeException("disassembler tier not available from the self-contained jar"); System.out.println("java ok: disas available"); }}' > /tmp/Smoke.java
           javac --release 21 --enable-preview -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
           java --enable-preview --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
 
@@ -237,17 +241,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: "8.0" }
-      - run: make deps DEPS_ARGS=--emu
       - uses: actions/download-artifact@v4
         with: { name: native-all, path: build/dist/native }
       - name: Build the nupkg (AsmTest.dll + runtimes/<rid>/native)
         run: make dotnet-package
-      - name: Install fresh + smoke (bundled native via RID, no ASMTEST_LIB)
+      - name: Install fresh + smoke (self-contained native via RID, no ASMTEST_LIB, no system deps)
         run: |
           cd /tmp && dotnet new console -o app && cd app
           dotnet nuget add source "$GITHUB_WORKSPACE/build/dist/dotnet" -n local
           dotnet add app.csproj package AsmTest --version 1.0.0
-          printf 'using Asmtest; class P { static void Main(){ System.Console.WriteLine("dotnet ok: disasAvailable=" + Emu.DisasAvailable); } }' > Program.cs
+          printf 'using Asmtest; class P { static void Main(){ if(!Emu.DisasAvailable) throw new System.Exception("disassembler tier not available from the self-contained nupkg"); System.Console.WriteLine("dotnet ok: disas available"); } }' > Program.cs
           dotnet run
 
   # ---- Link bindings (source dists) ----------------------------------------- #

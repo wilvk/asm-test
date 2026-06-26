@@ -12,11 +12,15 @@ Gem::Specification.new do |s|
                   "from Ruby via the stdlib Fiddle FFI over the opaque-handle ABI."
   s.authors     = ["asm-test contributors"]
   s.homepage    = "https://github.com/wilvk/asm-test"
-  s.license     = "MIT"
+  # asm-test's own code is MIT, but the bundled native payload conveys the
+  # Unicorn + Keystone engines (GPL-2.0) and Capstone (BSD-3-Clause), so the gem
+  # as distributed is effectively GPL-2.0. See native/<plat>/THIRD-PARTY-LICENSES.
+  s.licenses    = ["MIT", "GPL-2.0-only", "BSD-3-Clause"]
   s.required_ruby_version = ">= 2.6"
 
   # The reusable library module + README + whatever native payloads have been
-  # staged (conformance.rb is the dev test runner and is not shipped).
+  # staged — the superset libasmtest_emu, the vendored Unicorn/Keystone/Capstone,
+  # and THIRD-PARTY-LICENSES (conformance.rb is the dev test runner, not shipped).
   s.files = ["asmtest.rb", "README.md"] + Dir["native/**/*"]
   s.require_paths = ["."]
 

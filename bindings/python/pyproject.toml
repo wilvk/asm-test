@@ -13,6 +13,12 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Testing",
     "Intended Audience :: Developers",
+    # asm-test is MIT, but the bundled native payload conveys Unicorn + Keystone
+    # (GPL-2.0) and Capstone (BSD-3-Clause), so the wheel as distributed is
+    # effectively GPL-2.0. See asmtest/_libs/THIRD-PARTY-LICENSES/.
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "License :: OSI Approved :: BSD License",
 ]
 
 # Pure-ctypes at runtime — no build-time native dependency. `make python-package`
@@ -32,6 +38,10 @@ Homepage = "https://github.com/wilvk/asm-test"
 [tool.setuptools]
 packages = ["asmtest"]
 
-# Bundle the native libraries + layout manifest staged into asmtest/_libs/.
+# Bundle the native libraries + layout manifest + third-party license notices
+# staged into asmtest/_libs/ (auditwheel/delocate vendor the deps at repair time).
 [tool.setuptools.package-data]
-asmtest = ["_libs/*.so", "_libs/*.so.*", "_libs/*.dylib", "_libs/*.json"]
+asmtest = [
+    "_libs/*.so", "_libs/*.so.*", "_libs/*.dylib", "_libs/*.json",
+    "_libs/THIRD-PARTY-LICENSES/*", "_libs/THIRD-PARTY-LICENSES/**/*",
+]

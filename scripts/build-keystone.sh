@@ -39,6 +39,14 @@ cmake -DCMAKE_BUILD_TYPE=Release \
 make "-j$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 $SUDO make install
 
+# Record the license at the exact version built, so packaging can vendor a
+# version-matched THIRD-PARTY-LICENSES notice (mirrors build-capstone.sh).
+licdir="$PREFIX/share/licenses/keystone-$VERSION"
+$SUDO mkdir -p "$licdir"
+for f in COPYING COPYING.LIB LICENSE.TXT EXCEPTIONS-CLIENT; do
+    [ -f "$work/keystone/$f" ] && $SUDO cp "$work/keystone/$f" "$licdir/"
+done
+
 # Refresh the loader cache so the freshly installed lib is found (Linux).
 command -v ldconfig >/dev/null 2>&1 && $SUDO ldconfig || true
 

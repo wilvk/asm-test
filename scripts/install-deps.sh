@@ -100,13 +100,18 @@ fi
 # package (no `libkeystone-dev`), and on some repos "keystone" is OpenStack's
 # identity service, NOT this. Where it's empty, --asm points at
 # scripts/build-keystone.sh (a pinned source build) instead of guessing.
+#
+# capstone_pkg is intentionally left empty everywhere: although Capstone *is*
+# packaged widely, the optional tiers pin a specific source release (the way
+# Keystone must) so a published package vendors a known, version-matched binary +
+# license. Where it's empty, --emu/--asm point at scripts/build-capstone.sh.
 case "$PM" in
-    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  capstone_pkg=libcapstone-dev;  keystone_pkg=; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
-    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; capstone_pkg=capstone-devel; keystone_pkg=; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
-    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          capstone_pkg=capstone;         keystone_pkg=; tidy_pkg=clang;            valgrind_pkg=valgrind ;;
-    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; capstone_pkg=libcapstone-devel; keystone_pkg=; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
-    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      capstone_pkg=capstone-dev;     keystone_pkg=; tidy_pkg=clang-extra-tools; valgrind_pkg=valgrind ;;
-    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          capstone_pkg=capstone;         keystone_pkg=keystone; tidy_pkg=llvm;     valgrind_pkg= ;; # valgrind unsupported on current macOS
+    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  capstone_pkg=;  keystone_pkg=; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
+    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; capstone_pkg=; keystone_pkg=; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
+    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=; tidy_pkg=clang;            valgrind_pkg=valgrind ;;
+    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; capstone_pkg=; keystone_pkg=; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
+    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      capstone_pkg=;     keystone_pkg=; tidy_pkg=clang-extra-tools; valgrind_pkg=valgrind ;;
+    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=keystone; tidy_pkg=llvm;     valgrind_pkg= ;; # valgrind unsupported on current macOS
 esac
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -121,7 +126,13 @@ skip() { echo "$prog: $1 already present, skipping"; }
 [ "$want_nasm" -eq 1 ]      && { have nasm && skip nasm || add "$nasm_pkg"; }
 [ "$want_pkgconfig" -eq 1 ] && { { have pkg-config || have pkgconf; } && skip pkg-config || add "$pkgconfig_pkg"; }
 [ "$want_unicorn" -eq 1 ]   && { have_unicorn && skip unicorn || add "$unicorn_pkg"; }
-[ "$want_capstone" -eq 1 ]  && { have_capstone && skip capstone || add "$capstone_pkg"; }
+[ "$want_capstone" -eq 1 ]  && {
+    if have_capstone; then skip capstone
+    elif [ -z "$capstone_pkg" ]; then
+        echo "$prog: capstone is built from a pinned source release; build it with:" >&2
+        echo "  scripts/build-capstone.sh   (then re-run make emu-test / *-asm-test)" >&2
+    else add "$capstone_pkg"; fi
+}
 [ "$want_keystone" -eq 1 ]  && {
     if have_keystone; then skip keystone
     elif [ -z "$keystone_pkg" ]; then

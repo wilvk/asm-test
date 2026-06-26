@@ -23,6 +23,19 @@ built from source with the optional tiers compiled out (see non-goals).
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
+>
+> **Status: implemented (2026-06-26).** All phases landed. Capstone source build
+> (`scripts/build-capstone.sh`) + license capture in both build scripts; top-level
+> MIT `LICENSE`; `package-libs` stages the superset into the emu slot and
+> `scripts/package-native.sh` vendors the three deps (rpath → `$ORIGIN`/`@loader_path`)
+> + assembles `THIRD-PARTY-LICENSES` via `scripts/collect-licenses.sh`;
+> `package-libs-verify` checks the full set; the dlopen packers were decoupled from
+> `package-libs` (they consume the staged/downloaded tree); manifests declare the
+> compound SPDX; CI (`ci.yml` + `release.yml`) builds Keystone+Capstone from source,
+> uses `--asm` + patchelf, and the release smokes assert the tiers with no system
+> deps. Validated locally end-to-end on macOS (superset link, vendoring, gem build).
+> The only remaining work is the **pre-publish GPL compliance checklist** below,
+> which gates publishing, not the build.
 
 ---
 
