@@ -9,6 +9,7 @@
 //!
 //! Run via `make zig-test` (or `zig build test` from this dir).
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 const c = @cImport({
@@ -29,6 +30,7 @@ extern fn fp_add(f64, f64) f64;
 extern fn vec_add4f() void;
 extern fn read_fault(?*const c_long) c_long; // loads *p; faults if p is unmapped
 extern fn int_to_double(c_long) f64; // (double)n into xmm0 from an integer arg
+extern fn vec_add4d() void; // AVX2 256-bit (Track D); x86-64 only
 
 /// Address of a routine as the opaque pointer the trampoline expects.
 fn fnPtr(p: anytype) ?*anyopaque {
@@ -295,4 +297,72 @@ test "tier2.assertions pass" {
 test "tier2.assertions have teeth" {
     var r = captureInt(fnPtr(&add_signed), 40, 2);
     try std.testing.expectError(error.TestExpectedEqual, assertRet(&r, 99));
+}
+
+// Track F: mid-execution guards (byte-literal routines).
+test "guards.watchpoint and reg invariant" {
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
+    const two_writes = [_]u8{ 0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3 };
+    try std.testing.expect(c.emu_map(e, 0x400000, 0x1000));
+    var w: c.emu_watch_t = std.mem.zeroes(c.emu_watch_t);
+    c.emu_watch_writes(e, 0x400000, 8, 1, &w); // EMU_WATCH_ONLY
+    var args = [_]c_long{0x400000};
+    _ = c.emu_call(e, &two_writes, two_writes.len, &args, 1, 0, &res);
+    c.emu_watch_clear(e);
+    try std.testing.expect(w.violated and w.addr == 0x400800 and w.rip_off == 3);
+
+    const clobber = [_]u8{ 0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3 };
+    var g: c.emu_reg_guard_t = std.mem.zeroes(c.emu_reg_guard_t);
+    try std.testing.expect(c.emu_guard_reg(e, "rbx", 0, &g));
+    var noargs = [_]c_long{0};
+    _ = c.emu_call(e, &clobber, clobber.len, &noargs, 0, 0, &res);
+    c.emu_guard_reg_clear(e);
+    try std.testing.expect(g.violated and g.got == 0x99);
+}
+
+// Track E: coverage-guided fuzzing + mutation testing over classify3.
+test "fuzz and mutation" {
+    const e = c.emu_open();
+    defer c.emu_close(e);
+    const classify3 = [_]u8{
+        0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+        0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3,
+    };
+    const uni = c.asmtest_emu_trace_new(0, 256);
+    defer c.asmtest_emu_trace_free(uni);
+    var fixed: c.emu_fuzz_stat_t = std.mem.zeroes(c.emu_fuzz_stat_t);
+    _ = c.emu_fuzz_cover1(e, &classify3, classify3.len, 5, 5, 1, 0xC0FFEE, uni, &fixed);
+    const uni2 = c.asmtest_emu_trace_new(0, 256);
+    defer c.asmtest_emu_trace_free(uni2);
+    var guided: c.emu_fuzz_stat_t = std.mem.zeroes(c.emu_fuzz_stat_t);
+    _ = c.emu_fuzz_cover1(e, &classify3, classify3.len, -50, 50, 2000, 0xC0FFEE, uni2, &guided);
+    try std.testing.expect(guided.blocks_reached > fixed.blocks_reached);
+
+    var w_in = [_]c_long{5};
+    var s_in = [_]c_long{ -7, 0, 9 };
+    var weak: c.emu_mutation_stat_t = std.mem.zeroes(c.emu_mutation_stat_t);
+    var strong: c.emu_mutation_stat_t = std.mem.zeroes(c.emu_mutation_stat_t);
+    _ = c.emu_mutation_test1(e, &classify3, classify3.len, &w_in, 1, 0, 0xABCD, &weak);
+    _ = c.emu_mutation_test1(e, &classify3, classify3.len, &s_in, 3, 0, 0xABCD, &strong);
+    try std.testing.expect(weak.survived > 0 and strong.survived < weak.survived);
+}
+
+// Track D: AVX2 256-bit capture (x86-64 + AVX2; comptime-gated, runtime self-skip).
+test "vec256.add4d (AVX2)" {
+    if (comptime builtin.cpu.arch == .x86_64) {
+        if (c.asmtest_cpu_has_avx2() == 0) return error.SkipZigTest;
+        var a: c.vec256_t = std.mem.zeroes(c.vec256_t);
+        var b: c.vec256_t = std.mem.zeroes(c.vec256_t);
+        a.f64[0] = 1; a.f64[1] = 2; a.f64[2] = 3; a.f64[3] = 4;
+        b.f64[0] = 10; b.f64[1] = 20; b.f64[2] = 30; b.f64[3] = 40;
+        var varr = [_]c.vec256_t{ a, b };
+        var out: [16]c.vec256_t = std.mem.zeroes([16]c.vec256_t);
+        var ia = [_]c_long{ 0, 0, 0, 0, 0, 0 };
+        c.asm_call_capture_vec256(&out, fnPtr(&vec_add4d), &ia, &varr);
+        try std.testing.expect(out[0].f64[0] == 11 and out[0].f64[3] == 44);
+    } else {
+        return error.SkipZigTest;
+    }
 }
