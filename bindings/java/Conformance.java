@@ -147,6 +147,17 @@ public class Conformance {
             }
         }
 
+        // Disassembler (Capstone): decode known x86-64 bytes to text. Only when
+        // the loaded lib carries Capstone (libasmtest_emu_full); else it skips.
+        if (Asmtest.disasAvailable()) {
+            byte[] code = {0x48, 0x31, (byte) 0xC0, (byte) 0xC3}; // xor rax,rax;ret
+            check("disas.xor_rax", Asmtest.disas(code, 0).equals("xor rax, rax"));
+            check("disas.ret", Asmtest.disas(code, 3).equals("ret"));
+            check("disas.nop", Asmtest.disas(new byte[] {(byte) 0x90}, 0).equals("nop"));
+        } else {
+            System.out.println("ok - disas.xor_rax # SKIP no disassembler (lean lib)");
+        }
+
         // --- Tier 2: idiomatic assertions pass on good input -------------- //
         boolean t2pass = true;
         try (Asmtest.Regs r = new Asmtest.Regs()) {

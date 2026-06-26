@@ -10,7 +10,7 @@
 const asmtest = require('./asmtest');
 const {
   corpusRoutine: routine, Regs, Emu, Trace, Guest, AsmtestError, FaultKind,
-  assemble, Arch, Syntax,
+  assemble, disas, disasAvailable, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFp, assertVecF32, assertFault,
 } = asmtest;
 
@@ -145,6 +145,18 @@ withRegs((r) => {
     check('asm.arm64_bytes', a64.length === 4 && a64[0] === 0xC0 && a64[3] === 0xD6);
   }
   e.close();
+}
+
+// --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
+// Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
+// libasmtest_emu / _emu_asm report disasAvailable() false and this skips.
+if (disasAvailable()) {
+  const code = Buffer.from([0x48, 0x31, 0xC0, 0xC3]); // xor rax, rax ; ret
+  check('disas.xor_rax', disas(code, 0) === 'xor rax, rax');
+  check('disas.ret', disas(code, 3) === 'ret');
+  check('disas.nop', disas(Buffer.from([0x90])) === 'nop');
+} else {
+  console.log('ok - disas.xor_rax # SKIP no disassembler (lean lib)');
 }
 
 // --- Tier 2: idiomatic assertions pass on good input -----------------------

@@ -171,6 +171,27 @@ test "asm.inline_assembler" {
     }
 }
 
+// Disassembler (Capstone): decode known x86-64 bytes back to instruction text.
+// Built only with -Dasm=true (the full lib, which links Capstone); the symbol is
+// gated under build_options.with_asm so the plain `zig-test` build never refers
+// to it. `make zig-asm-test`.
+test "disas.x86" {
+    if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
+    if (build_options.with_asm) {
+        if (!c.emu_disas_available()) return error.SkipZigTest;
+        const code = [_]u8{ 0x48, 0x31, 0xC0, 0xC3 }; // xor rax, rax ; ret
+        var buf: [160]u8 = undefined;
+        const n0 = c.emu_disas(c.EMU_ARCH_X86_64, &code, code.len, 0x00100000, 0, &buf, buf.len);
+        try std.testing.expect(n0 != 0);
+        try std.testing.expectEqualStrings("xor rax, rax", std.mem.sliceTo(&buf, 0));
+        const n3 = c.emu_disas(c.EMU_ARCH_X86_64, &code, code.len, 0x00100000, 3, &buf, buf.len);
+        try std.testing.expect(n3 != 0);
+        try std.testing.expectEqualStrings("ret", std.mem.sliceTo(&buf, 0));
+    } else {
+        return error.SkipZigTest;
+    }
+}
+
 // Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,
 // emulated regardless of the host arch — checked-in `add` routines per ISA.
 test "cross-arch emu guests" {

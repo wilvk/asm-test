@@ -129,10 +129,16 @@ extern int asmtest_cpu_has_avx2(void);
 typedef int (*asmtest_call_asm6_fn)(void *, const char *, int, long, long, long, long, long, long, int, unsigned long long, void *);
 typedef int (*asmtest_asm_bytes_fn)(int, int, const char *, unsigned long long, unsigned char *, int);
 typedef const char *(*asmtest_asm_err_fn)(void);
+// The disassembler (Capstone) is optional too — only libasmtest_emu_full carries
+// it. Same dlsym-or-NULL degrade as the assembler above.
+typedef unsigned long (*asmtest_disas_fn)(int, const unsigned char *, unsigned long, unsigned long long, unsigned long long, char *, unsigned long);
+typedef int (*asmtest_disas_avail_fn)(void);
 
 static asmtest_call_asm6_fn p_call_asm6;
 static asmtest_asm_bytes_fn p_asm_bytes;
 static asmtest_asm_err_fn   p_asm_err;
+static asmtest_disas_fn       p_disas;
+static asmtest_disas_avail_fn p_disas_avail;
 
 static void asmtest_resolve_asm(void) {
     const char *lib = getenv("ASMTEST_LIB");
@@ -140,6 +146,8 @@ static void asmtest_resolve_asm(void) {
     p_call_asm6 = (asmtest_call_asm6_fn)dlsym(RTLD_DEFAULT, "asmtest_emu_call_asm6");
     p_asm_bytes = (asmtest_asm_bytes_fn)dlsym(RTLD_DEFAULT, "asmtest_asm_bytes");
     p_asm_err   = (asmtest_asm_err_fn)dlsym(RTLD_DEFAULT, "asmtest_asm_last_error");
+    p_disas       = (asmtest_disas_fn)dlsym(RTLD_DEFAULT, "emu_disas");
+    p_disas_avail = (asmtest_disas_avail_fn)dlsym(RTLD_DEFAULT, "emu_disas_available");
 }
 static int asmtest_has_asm(void) { return p_call_asm6 != NULL; }
 static int asmtest_go_call_asm6(void *e, const char *src, int syn, long a0, long a1, long a2, long a3, long a4, long a5, int n, unsigned long long mi, void *out) {
@@ -149,6 +157,10 @@ static int asmtest_go_asm_bytes(int arch, int syn, const char *src, unsigned lon
     return p_asm_bytes ? p_asm_bytes(arch, syn, src, addr, buf, cap) : 0;
 }
 static const char *asmtest_go_asm_err(void) { return p_asm_err ? p_asm_err() : ""; }
+static int asmtest_has_disas(void) { return p_disas != NULL && p_disas_avail && p_disas_avail() != 0; }
+static unsigned long asmtest_go_disas(int arch, const unsigned char *code, unsigned long len, unsigned long long base, unsigned long long off, char *buf, unsigned long cap) {
+    return p_disas ? p_disas(arch, code, len, base, off, buf, cap) : 0;
+}
 */
 import "C"
 
@@ -525,6 +537,29 @@ func Assemble(src string, arch AsmArch, syntax AsmSyntax, addr uint64) ([]byte, 
 			C.ulonglong(addr), (*C.uchar)(unsafe.Pointer(&buf[0])), C.int(n)))
 	}
 	return buf[:n], nil
+}
+
+// DisasAvailable reports whether the loaded native lib carries the disassembler
+// (Capstone) — i.e. ASMTEST_LIB points at libasmtest_emu_full. The lean
+// libasmtest_emu / _emu_asm return false.
+func DisasAvailable() bool { return C.asmtest_has_disas() != 0 }
+
+// Disas disassembles the one instruction at byte off of code for arch (reuse the
+// AsmArch codes: ArchX8664=0, ArchArm64=1, ...). base is the address the bytes
+// run at (EMU_CODE_BASE) so PC-relative operands resolve. Returns "mnemonic
+// operands", or "" with no disassembler / on a decode miss.
+func Disas(code []byte, off uint64, arch AsmArch, base uint64) string {
+	if C.asmtest_has_disas() == 0 || len(code) == 0 {
+		return ""
+	}
+	buf := make([]byte, 160)
+	n := C.asmtest_go_disas(C.int(arch), (*C.uchar)(unsafe.Pointer(&code[0])),
+		C.ulong(len(code)), C.ulonglong(base), C.ulonglong(off),
+		(*C.char)(unsafe.Pointer(&buf[0])), C.ulong(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
 }
 
 // EmuResult carries an emulator run's outcome — faults surfaced as data rather

@@ -150,6 +150,18 @@ do
   e:close()
 end
 
+-- --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
+-- Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
+-- libasmtest_emu / _emu_asm report disas_available() false and this skips.
+if asmtest.disas_available() then
+  local code = string.char(0x48, 0x31, 0xC0, 0xC3) -- xor rax, rax ; ret
+  check("disas.xor_rax", asmtest.disas(code, 0) == "xor rax, rax")
+  check("disas.ret", asmtest.disas(code, 3) == "ret")
+  check("disas.nop", asmtest.disas(string.char(0x90)) == "nop")
+else
+  print("ok - disas.xor_rax # SKIP no disassembler (lean lib)")
+end
+
 -- --- Tier 2: idiomatic assertions pass on good input -----------------------
 local t2pass = pcall(function()
   withRegs(function(r)

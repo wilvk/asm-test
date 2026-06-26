@@ -32,6 +32,8 @@ int   asmtest_emu_call2(void *e, void *fn, long a0, long a1, void *out);
 int   asmtest_emu_call_asm6(void *e, const char *src, int syntax, long a0, long a1, long a2, long a3, long a4, long a5, int nargs, uint64_t max_insns, void *out);
 int   asmtest_asm_bytes(int arch, int syntax, const char *src, uint64_t addr, uint8_t *buf, int cap);
 const char *asmtest_asm_last_error(void);
+size_t emu_disas(int arch, const uint8_t *code, size_t code_len, uint64_t base_addr, uint64_t off, char *buf, size_t buflen);
+bool   emu_disas_available(void);
 int   asmtest_emu_result_faulted(void *r);
 unsigned long long asmtest_emu_result_fault_addr(void *r);
 int   asmtest_emu_result_fault_kind(void *r);
@@ -101,6 +103,10 @@ local C = corpus_path and ffi.load(corpus_path) or nil
 -- The in-line assembler (Keystone) is present only in the emu+asm lib; probe for
 -- its symbol so the binding degrades cleanly against the plain libasmtest_emu.
 local HAS_ASM = pcall(function() return L.asmtest_emu_call_asm6 end)
+
+-- The disassembler (Capstone) is present only in the emu+full lib; probe its
+-- symbol so the binding degrades cleanly against the plain libasmtest_emu.
+local HAS_DISAS = pcall(function() return L.emu_disas end)
 
 local M = {}
 
@@ -295,6 +301,20 @@ end
 function Emu:asm_available() return HAS_ASM end
 -- The Keystone diagnostic from the most recent assemble ("" on success).
 function M.asm_error() return HAS_ASM and ffi.string(L.asmtest_asm_last_error()) or "" end
+
+-- Whether the loaded native lib carries the disassembler (Capstone). True only
+-- for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false.
+function M.disas_available() return HAS_DISAS and L.emu_disas_available() end
+-- Disassemble the one instruction at byte `off` of `code` (a byte string) for
+-- `arch` (0=x86-64, 1=arm64, 2=riscv64, 3=arm32; mirrors emu_arch_t). `base` is
+-- the address the bytes run at (EMU_CODE_BASE) so PC-relative operands resolve.
+-- Returns "mnemonic operands", or "" with no disassembler / on a decode miss.
+function M.disas(code, off, arch, base)
+  if not M.disas_available() then return "" end
+  local buf = ffi.new("char[?]", 160)
+  local n = L.emu_disas(arch or 0, code, #code, base or 0x00100000, off or 0, buf, 160)
+  return n ~= 0 and ffi.string(buf) or ""
+end
 -- Assemble x86-64 `src` in `opts.syntax` (0=Intel, 1=AT&T, 2=NASM, 3=MASM,
 -- 4=GAS; see M.Syntax) via Keystone and run
 -- it with the integer `args` (a table of up to six), stopping after

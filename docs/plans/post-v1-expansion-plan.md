@@ -325,7 +325,8 @@ caught at the offending store with its instruction text, no host crash.
 ## Suggested sequencing
 
 1. **Track C** (disassembly) — **done.** Cheap, transformed every diagnostic, and
-   Tracks E/F can build on it.
+   Tracks E/F can build on it. Now also bound across all ten languages via the
+   single `libasmtest_emu_full` (Keystone + Capstone) — `disas`/`disas_available`.
 2. **Track A** (publish) — if reach is the priority, this is the single biggest
    adoption lever; it has no dependency on the others.
 3. **Track D** (wide vectors) — **AVX2 done** (native 256-bit capture); AVX-512,

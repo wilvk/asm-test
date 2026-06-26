@@ -39,6 +39,7 @@ class Context:
         self._structs = {s["name"]: s for s in m["structs"]}
         self.has_emu = _native.has_emu(self.lib)
         self.has_asm = _native.has_asm(self.lib)
+        self.has_disas = _native.has_disas(self.lib)
 
     def size(self, struct_name):
         return self._structs[struct_name]["size"]
@@ -808,3 +809,32 @@ def assemble(src, arch=Arch.X86_64, syntax=Syntax.INTEL, addr=0x00100000):
             int(arch), int(syntax), src.encode(), int(addr), C.cast(buf, C.c_void_p), n
         )
     return buf.raw[:n]
+
+
+def disas_available():
+    """Whether the loaded native lib carries the disassembler (Capstone).
+
+    True only for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm
+    return False, so a caller can self-skip a disassembly check.
+    """
+    c = load()
+    return c.has_disas and bool(c.lib.emu_disas_available())
+
+
+def disas(code, off=0, arch=Arch.X86_64, base=0x00100000):
+    """Disassemble the one instruction at byte `off` of `code` for `arch`.
+
+    `arch` mirrors emu_arch_t (== :class:`Arch`); `base` is the address the
+    bytes run at (EMU_CODE_BASE), so PC-relative operands read correctly.
+    Returns "mnemonic operands" text, or "" when no disassembler is present
+    (lean lib) or the bytes do not decode. Pair it with an emulator fault's
+    rip offset to name the offending instruction.
+    """
+    c = load()
+    if not c.has_disas or not c.lib.emu_disas_available():
+        return ""
+    cap = 160
+    buf = C.create_string_buffer(cap)
+    n = c.lib.emu_disas(int(arch), bytes(code), len(code), int(base), int(off),
+                        buf, cap)
+    return buf.value.decode() if n else ""

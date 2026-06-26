@@ -131,6 +131,18 @@ static class Conformance
             Check("asm.arm64_bytes", a64.Length == 4 && a64[0] == 0xC0 && a64[3] == 0xD6);
         }
 
+        // --- Tier 1: disassembly (Capstone) decodes known bytes to text ----- //
+        // Only when the loaded lib carries Capstone (libasmtest_emu_full); the
+        // lean libasmtest_emu / _emu_asm report DisasAvailable == false.
+        if (Emu.DisasAvailable)
+        {
+            byte[] code = { 0x48, 0x31, 0xC0, 0xC3 }; // xor rax, rax ; ret
+            Check("disas.xor_rax", Emu.Disas(code, 0) == "xor rax, rax");
+            Check("disas.ret", Emu.Disas(code, 3) == "ret");
+            Check("disas.nop", Emu.Disas(new byte[] { 0x90 }) == "nop");
+        }
+        else { Console.WriteLine("ok - disas.xor_rax # SKIP no disassembler (lean lib)"); }
+
         // --- Tier 2: idiomatic assertions pass on good input ---------------- //
         bool t2pass = true;
         try

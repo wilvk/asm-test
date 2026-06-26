@@ -66,6 +66,12 @@ namespace Asmtest
         [DllImport(EMU)] public static extern int asmtest_asm_bytes(
             int arch, int syntax, string src, ulong addr, byte[] buf, int cap);
         [DllImport(EMU)] static extern IntPtr asmtest_asm_last_error();
+        // Optional: the disassembler (Capstone), present only in libasmtest_emu_full.
+        [DllImport(EMU)] public static extern UIntPtr emu_disas(
+            int arch, byte[] code, UIntPtr codeLen, ulong baseAddr, ulong off,
+            byte[] buf, UIntPtr bufLen);
+        [DllImport(EMU)] [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool emu_disas_available();
         [DllImport(EMU)] public static extern int asmtest_emu_result_faulted(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_result_fault_addr(IntPtr r);
         [DllImport(EMU)] public static extern int asmtest_emu_result_fault_kind(IntPtr r);
@@ -154,6 +160,26 @@ namespace Asmtest
                 var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
                 var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
                 return NativeLibrary.TryGetExport(h, "asmtest_emu_call_asm6", out _);
+            }
+            catch { return false; }
+        }
+
+        // Whether the loaded lib carries the disassembler (Capstone) — only
+        // libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm do not.
+        public static readonly bool DisasAvailable = ProbeDisas();
+        static bool ProbeDisas()
+        {
+            try
+            {
+                var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
+                var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
+                // Symbol-presence only — resolver-free, like ProbeAsm. Calling the
+                // emu_disas_available() DllImport here would need the DllImport
+                // resolver, which the static ctor registers AFTER these field
+                // initializers run; the runtime Capstone check lives in
+                // Emu.DisasAvailable (read later, with the resolver up).
+                return NativeLibrary.TryGetExport(h, "emu_disas", out _)
+                    && NativeLibrary.TryGetExport(h, "emu_disas_available", out _);
             }
             catch { return false; }
         }
@@ -337,6 +363,30 @@ namespace Asmtest
             if (n > buf.Length) { buf = new byte[n]; Native.asmtest_asm_bytes((int)arch, (int)syntax, src, addr, buf, n); }
             Array.Resize(ref buf, n);
             return buf;
+        }
+
+        /// <summary>Whether the loaded native lib carries the disassembler (Capstone) —
+        /// only libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm do not.
+        /// Combines the symbol-presence probe with the runtime Capstone check (safe
+        /// to call here: the DllImport resolver is registered by now).</summary>
+        public static bool DisasAvailable => Native.DisasAvailable && Native.emu_disas_available();
+
+        /// <summary>
+        /// Disassemble the one instruction at byte <paramref name="off"/> of
+        /// <paramref name="code"/> for <paramref name="arch"/>. <paramref name="baseAddr"/>
+        /// is the address the bytes run at (EMU_CODE_BASE) so PC-relative operands resolve.
+        /// Returns "mnemonic operands", or "" with no disassembler / on a decode miss.
+        /// </summary>
+        public static string Disas(byte[] code, ulong off = 0, AsmArch arch = AsmArch.X86_64,
+                                   ulong baseAddr = 0x00100000)
+        {
+            if (!DisasAvailable) return "";
+            var buf = new byte[160];
+            nuint n = (nuint)Native.emu_disas((int)arch, code, (UIntPtr)code.Length, baseAddr, off,
+                                              buf, (UIntPtr)buf.Length);
+            if (n == 0) return "";
+            int z = Array.IndexOf(buf, (byte)0);
+            return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
         }
 
         // --- Mid-execution guards (Track F) --- //

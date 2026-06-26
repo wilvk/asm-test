@@ -519,11 +519,16 @@ type CallAsm6Fn = unsafe extern "C" fn(
 type AsmBytesFn =
     unsafe extern "C" fn(c_int, c_int, *const c_char, u64, *mut u8, c_int) -> c_int;
 type AsmErrFn = unsafe extern "C" fn() -> *const c_char;
+type DisasFn =
+    unsafe extern "C" fn(c_int, *const u8, usize, u64, u64, *mut c_char, usize) -> usize;
+type DisasAvailFn = unsafe extern "C" fn() -> bool;
 
 struct AsmFns {
     call_asm6: Option<CallAsm6Fn>,
     asm_bytes: Option<AsmBytesFn>,
     asm_err: Option<AsmErrFn>,
+    disas: Option<DisasFn>,
+    disas_avail: Option<DisasAvailFn>,
 }
 // The function pointers come from the process's own libraries and outlive any
 // call; sharing them across threads is sound.
@@ -543,7 +548,10 @@ fn asm_fns() -> &'static AsmFns {
             Err(_) => std::ptr::null_mut(),
         };
         if handle.is_null() {
-            return AsmFns { call_asm6: None, asm_bytes: None, asm_err: None };
+            return AsmFns {
+                call_asm6: None, asm_bytes: None, asm_err: None,
+                disas: None, disas_avail: None,
+            };
         }
         let sym = |name: &str| -> *mut c_void {
             match CString::new(name) {
@@ -554,11 +562,15 @@ fn asm_fns() -> &'static AsmFns {
         let s1 = sym("asmtest_emu_call_asm6");
         let s2 = sym("asmtest_asm_bytes");
         let s3 = sym("asmtest_asm_last_error");
+        let s4 = sym("emu_disas");
+        let s5 = sym("emu_disas_available");
         unsafe {
             AsmFns {
                 call_asm6: if s1.is_null() { None } else { Some(std::mem::transmute::<_, CallAsm6Fn>(s1)) },
                 asm_bytes: if s2.is_null() { None } else { Some(std::mem::transmute::<_, AsmBytesFn>(s2)) },
                 asm_err: if s3.is_null() { None } else { Some(std::mem::transmute::<_, AsmErrFn>(s3)) },
+                disas: if s4.is_null() { None } else { Some(std::mem::transmute::<_, DisasFn>(s4)) },
+                disas_avail: if s5.is_null() { None } else { Some(std::mem::transmute::<_, DisasAvailFn>(s5)) },
             }
         }
     })
@@ -596,6 +608,39 @@ pub fn asm_error() -> String {
     match asm_fns().asm_err {
         Some(f) => unsafe { CStr::from_ptr(f()).to_string_lossy().into_owned() },
         None => String::new(),
+    }
+}
+
+/// Whether the loaded native lib carries the disassembler (Capstone) — true only
+/// for `libasmtest_emu_full`; the lean `libasmtest_emu` / `_emu_asm` return false.
+pub fn disas_available() -> bool {
+    match asm_fns().disas_avail {
+        Some(f) => unsafe { f() },
+        None => false,
+    }
+}
+
+/// Disassemble the one instruction at byte `off` of `code` for `arch` (reuse the
+/// [`AsmArch`] codes). `base` is the address the bytes run at (`EMU_CODE_BASE`)
+/// so PC-relative operands resolve. Returns `"mnemonic operands"`, or `""` with
+/// no disassembler present or on a decode miss.
+pub fn disas(code: &[u8], off: u64, arch: AsmArch, base: u64) -> String {
+    let f = match asm_fns().disas {
+        Some(f) if disas_available() => f,
+        _ => return String::new(),
+    };
+    let mut buf = [0u8; 160];
+    let n = unsafe {
+        f(arch as c_int, code.as_ptr(), code.len(), base, off,
+          buf.as_mut_ptr() as *mut c_char, buf.len())
+    };
+    if n == 0 {
+        return String::new();
+    }
+    unsafe {
+        CStr::from_ptr(buf.as_ptr() as *const c_char)
+            .to_string_lossy()
+            .into_owned()
     }
 }
 

@@ -36,7 +36,7 @@ Selection (default: all of them):
   --all          nasm + pkg-config + unicorn + capstone + keystone + clang-tidy + valgrind
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + capstone + pkg-config
-  --asm          in-line assembler     (make asm-test) — keystone + unicorn + pkg-config
+  --asm          optional native tiers (make *-asm-test) — keystone + capstone + unicorn + pkg-config
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
   --tidy         static analysis       (make tidy)
   --valgrind     routine memcheck      (make valgrind) — Linux/x86-64
@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
         --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_tidy=1; want_valgrind=1; selected=1 ;;
         --nasm)       want_nasm=1; selected=1 ;;
         --emu)        want_unicorn=1; want_capstone=1; want_pkgconfig=1; selected=1 ;;
-        --asm)        want_keystone=1; want_unicorn=1; want_pkgconfig=1; selected=1 ;;
+        --asm)        want_keystone=1; want_capstone=1; want_unicorn=1; want_pkgconfig=1; selected=1 ;;
         --pkgconfig|--pkg-config) want_pkgconfig=1; selected=1 ;;
         --tidy)       want_tidy=1; selected=1 ;;
         --valgrind)   want_valgrind=1; selected=1 ;;

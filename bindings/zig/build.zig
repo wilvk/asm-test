@@ -15,10 +15,11 @@ pub fn build(b: *std.Build) void {
         "../../include";
     const libdir = b.option([]const u8, "libdir", "asm-test build dir") orelse
         "../../build";
-    // Link the Keystone-carrying lib (libasmtest_emu_asm) and enable the in-line
-    // assembler test. `make zig-asm-test` passes -Dasm=true; the default build
-    // links the plain libasmtest_emu and compiles the asm test out.
-    const with_asm = b.option(bool, "asm", "link the in-line assembler (Keystone)") orelse false;
+    // Link the full optional-tiers lib (libasmtest_emu_full: Keystone + Capstone)
+    // and enable the in-line-assembler AND disassembler tests. `make zig-asm-test`
+    // passes -Dasm=true; the default build links the plain libasmtest_emu and
+    // compiles those cases out.
+    const with_asm = b.option(bool, "asm", "link the optional native tiers (Keystone + Capstone)") orelse false;
 
     const tests = b.addTest(.{
         .root_source_file = b.path("src/conformance.zig"),
@@ -28,7 +29,7 @@ pub fn build(b: *std.Build) void {
     tests.linkLibC();
     tests.addIncludePath(.{ .cwd_relative = incdir });
     tests.addLibraryPath(.{ .cwd_relative = libdir });
-    tests.linkSystemLibrary(if (with_asm) "asmtest_emu_asm" else "asmtest_emu");
+    tests.linkSystemLibrary(if (with_asm) "asmtest_emu_full" else "asmtest_emu");
     tests.linkSystemLibrary("asmtest_corpus");
     tests.addRPath(.{ .cwd_relative = libdir });
 

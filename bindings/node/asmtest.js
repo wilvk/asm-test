@@ -56,6 +56,16 @@ const fn = {
     try { return L.func('const char *asmtest_asm_last_error()'); }
     catch { return null; }
   })(),
+  // Optional: the disassembler (Capstone) is only in the emu+full lib. emuDisas
+  // decodes one instruction at `off` into a text buffer; the probe self-skips.
+  emuDisas: (() => {
+    try { return L.func('size_t emu_disas(int, const uint8_t *, size_t, uint64_t, uint64_t, _Out_ char *, size_t)'); }
+    catch { return null; }
+  })(),
+  emuDisasAvailable: (() => {
+    try { return L.func('bool emu_disas_available()'); }
+    catch { return null; }
+  })(),
   emuFaulted: L.func('int asmtest_emu_result_faulted(void *)'),
   emuFaultAddr: L.func('uint64_t asmtest_emu_result_fault_addr(void *)'),
   emuFaultKind: L.func('int asmtest_emu_result_fault_kind(void *)'),
@@ -368,6 +378,25 @@ function assemble(src, arch = 0, syntax = 0, addr = 0x00100000) {
   return buf.subarray(0, n);
 }
 
+/** Whether the loaded native lib carries the disassembler (Capstone). True only
+ * for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false. */
+function disasAvailable() { return fn.emuDisas !== null && fn.emuDisasAvailable(); }
+
+/**
+ * Disassemble the one instruction at byte `off` of `code` (a Buffer / byte
+ * array) for `arch` (0=x86-64,1=arm64,2=riscv64,3=arm32; mirrors emu_arch_t).
+ * `base` is the address the bytes run at (EMU_CODE_BASE) so PC-relative operands
+ * resolve. Returns 'mnemonic operands', or '' with no disassembler / decode miss.
+ */
+function disas(code, off = 0, arch = 0, base = 0x00100000) {
+  if (!disasAvailable()) return '';
+  const buf = Buffer.alloc(160);
+  const n = fn.emuDisas(arch, Buffer.from(code), code.length, base, off, buf, buf.length);
+  if (n === 0) return '';
+  const z = buf.indexOf(0);
+  return buf.toString('utf8', 0, z < 0 ? buf.length : z);
+}
+
 /** An opaque execution-trace / basic-block coverage recorder. */
 class Trace {
   constructor(insnsCap = 4096, blocksCap = 4096) { this._h = fn.traceNew(insnsCap, blocksCap); }
@@ -457,7 +486,7 @@ module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, Trace, Guest, GuestResult, AsmtestError, FaultKind,
   Watch, RegGuard, cpuHasAvx2, captureVec256,
-  assemble, asmError, Arch, Syntax,
+  assemble, asmError, disas, disasAvailable, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
   assertNoFault, assertFault, assertEmuReg, assertGuestReg, assertCovered,
 };

@@ -26,8 +26,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where AVX2 is absent. Done by hand (a binding-FFI codegen PoC was evaluated and
   reverted — it only covers the mechanical ~20%); each binding's conformance
   runner gained native checks over the same byte-literal routines, verified on
-  the host (Python/C++/Ruby) or the Docker matrix (the other seven). Track C
-  disassembly is **not** bound (it would pull Capstone into the binding lib).
+  the host (Python/C++/Ruby) or the Docker matrix (the other seven).
+
+- **Track C disassembly reaches all ten bindings (via a single "full" lib).**
+  Capstone disassembly was C-core-only — binding it naïvely would pull Capstone
+  into every binding lib, or spawn a combinatorial lib matrix. Instead one
+  `libasmtest_emu_full` carries *both* optional native tiers (Keystone assembler
+  **and** Capstone disassembler) on top of the emulator (`make shared-emu-full`);
+  the lean `libasmtest_emu` stays Unicorn-only, and a binding points `ASMTEST_LIB`
+  at the full lib when it wants disassembly (and gets the assembler for free).
+  Every binding gained `disas` / `disas_available` in its own idiom — **Python**
+  (`ctypes`), **C++** (header, gated `ASMTEST_ENABLE_DISAS`), **Ruby** (`Fiddle`),
+  **Lua** (LuaJIT `ffi`), **Node** (`koffi`), **Go** (`cgo` dlsym), **Rust**
+  (`dlsym` + `extern`), **Zig** (`@cImport`, free), **Java** (FFM/Panama),
+  **.NET** (P/Invoke) — wrapping `emu_disas` (decode one instruction at an offset
+  to `"mnemonic operands"`) with a probe that self-skips against the lean lib.
+  The per-binding `*-asm-test` checks now drive `libasmtest_emu_full`, so a single
+  run exercises CallAsm **and** disas; the `bindings-asm` base image and
+  `install-deps --asm` gained Capstone. Each binding's conformance decodes known
+  x86-64 bytes (`xor rax, rax` / `ret` / `nop`), verified on the host
+  (Python/C++/Ruby) and the Docker matrix (the other seven). Track C of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
 
 - **Win64 runner parity — per-test isolation, `-jN`, and benchmarks.** The Win64
   tier ran every test in one process (`--no-fork`); the POSIX runner's fork-based

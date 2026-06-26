@@ -211,6 +211,19 @@ def _declare_emu_ext(lib, v):
         lib.asmtest_asm_last_error.argtypes = []
         lib.asmtest_asm_last_error.restype = C.c_char_p
 
+    # Disassembler (Capstone) is optional too — only libasmtest_emu_full carries
+    # it. emu_disas decodes one instruction at `off` into a text buffer and
+    # returns its byte length; emu_disas_available() reports whether Capstone is
+    # linked at all (a Capstone build can still self-skip an arch it lacks).
+    if has_disas(lib):
+        lib.emu_disas_available.argtypes = []
+        lib.emu_disas_available.restype = C.c_bool
+        lib.emu_disas.argtypes = [
+            C.c_int, C.c_char_p, C.c_size_t, C.c_uint64, C.c_uint64,
+            C.c_char_p, C.c_size_t,
+        ]
+        lib.emu_disas.restype = C.c_size_t
+
 
 def has_emu(lib):
     """True if the loaded library exports the emulator entry points."""
@@ -225,6 +238,15 @@ def has_asm(lib):
     """True if the loaded library exports the in-line assembler (Keystone)."""
     try:
         lib.asmtest_emu_call_asm6
+        return True
+    except AttributeError:
+        return False
+
+
+def has_disas(lib):
+    """True if the loaded library exports the disassembler (Capstone)."""
+    try:
+        lib.emu_disas
         return True
     except AttributeError:
         return False

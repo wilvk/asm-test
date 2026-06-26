@@ -87,7 +87,9 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **Coverage-guided fuzzing** (`emu_fuzz_cover1`) and **mutation testing**
   (`emu_mutation_test1`), contained inside the emulator.
 - **Fault/trace disassembly** (optional, Capstone): annotate offsets with the
-  instruction text (`emu_disas`, `emu_fault_describe`, `…_disasm`).
+  instruction text (`emu_disas`, `emu_fault_describe`, `…_disasm`). `emu_disas`
+  is exposed through every language binding (`disas`/`disas_available`), via
+  `libasmtest_emu_full`. ([Bindings overview](bindings.md))
 
 ### In-line assembler (optional, Keystone)
 
@@ -173,17 +175,18 @@ in which extra paths exist.
 All ten bindings are at **full capability parity** — integer/FP/vector capture
 (incl. AVX2 256-bit), the x86-64 emulator plus all cross-arch guests
 (arm64/riscv/arm) and Win64, execution trace/coverage, mid-execution guards,
-coverage-guided fuzzing and mutation testing, the optional in-line assembler, and
-Tier-2 assertions. They differ in FFI mechanism, how the in-line assembler is
-gated, and packaging maturity.
+coverage-guided fuzzing and mutation testing, the optional in-line assembler
+**and disassembler** (both from one `libasmtest_emu_full`), and Tier-2
+assertions. They differ in FFI mechanism, how the optional tiers are gated, and
+packaging maturity.
 
-| Language | FFI mechanism | In-line asm gating | Published package |
+| Language | FFI mechanism | Optional-tier gating | Published package |
 |---|---|---|---|
-| Python | `ctypes` | runtime probe (`asm_available()`) | ✓ (wheel / `pyproject.toml`) |
-| .NET | P/Invoke | runtime probe (`AsmAvailable`) | not yet⁴ |
+| Python | `ctypes` | runtime probe (`asm_available()` / `disas_available()`) | ✓ (wheel / `pyproject.toml`) |
+| .NET | P/Invoke | runtime probe (`AsmAvailable` / `DisasAvailable`) | not yet⁴ |
 | Go | `cgo` | runtime probe | not yet⁴ |
 | Rust | `extern` + build script | runtime probe | not yet⁴ |
-| C++ | direct `#include` | **build-time** (`-DASMTEST_ENABLE_ASM`) | not yet⁴ |
+| C++ | direct `#include` | **build-time** (`-DASMTEST_ENABLE_ASM` / `_DISAS`) | not yet⁴ |
 | Zig | `@cImport` | **build-time** (`-Dasm=true`) | not yet⁴ |
 | Node.js | `koffi` | runtime probe | not yet⁴ |
 | Java | FFM (Panama) | runtime probe | not yet⁴ |

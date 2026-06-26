@@ -66,6 +66,10 @@ module Asmtest
     emu_call_asm6:  func_opt(L, "asmtest_emu_call_asm6", [VOIDP, VOIDP, INT, LONG, LONG, LONG, LONG, LONG, LONG, INT, LL, VOIDP], INT),
     asm_bytes:      func_opt(L, "asmtest_asm_bytes", [INT, INT, VOIDP, LL, VOIDP, INT], INT),
     asm_last_error: func_opt(L, "asmtest_asm_last_error", [], VOIDP),
+    # Optional (emu+full lib only): the Capstone disassembler — decode one
+    # instruction at +off+ into a text buffer; the availability probe self-skips.
+    emu_disas:       func_opt(L, "emu_disas", [INT, VOIDP, LL, LL, LL, VOIDP, LL], LL),
+    emu_disas_avail: func_opt(L, "emu_disas_available", [], INT),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
     emu_fault_addr: func(L, "asmtest_emu_result_fault_addr", [VOIDP], LL),
     emu_fault_kind: func(L, "asmtest_emu_result_fault_kind", [VOIDP], INT),
@@ -165,6 +169,23 @@ module Asmtest
       n = FN[:asm_bytes].call(arch, syntax, src, addr, buf, n)
     end
     buf[0, n]
+  end
+
+  # Whether the loaded native lib carries the disassembler (Capstone). True only
+  # for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false.
+  def self.disas_available?
+    !FN[:emu_disas].nil? && FN[:emu_disas_avail].call != 0
+  end
+
+  # Disassemble the one instruction at byte +off+ of +code+ (a binary String) for
+  # +arch+ (0=x86-64, 1=arm64, 2=riscv64, 3=arm32; mirrors emu_arch_t). +base+ is
+  # the address the bytes run at (EMU_CODE_BASE) so PC-relative operands resolve.
+  # Returns "mnemonic operands", or "" with no disassembler / on a decode miss.
+  def self.disas(code, off = 0, arch: 0, base: 0x00100000)
+    return "" unless disas_available?
+    buf = ("\x00".b * 160)
+    n = FN[:emu_disas].call(arch, code, code.bytesize, base, off, buf, 160)
+    n.zero? ? "" : buf.unpack1("Z*")
   end
 
   # Resolve a canonical corpus routine (e.g. "add_signed") to its address.

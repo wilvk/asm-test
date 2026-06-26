@@ -58,7 +58,8 @@ public final class Asmtest {
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
         CAPTURE_FP2, CAPTURE_VEC_F32, REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
         CHECK_ABI, EMU_OPEN, EMU_CLOSE, EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6,
-        ASM_BYTES, ASM_LAST_ERROR, EMU_FAULTED, EMU_FAULT_ADDR, EMU_FAULT_KIND, EMU_REG,
+        ASM_BYTES, ASM_LAST_ERROR, EMU_DISAS, EMU_DISAS_AVAIL,
+        EMU_FAULTED, EMU_FAULT_ADDR, EMU_FAULT_KIND, EMU_REG,
         EMU_XMM_F64, EMU_XMM_F32;
 
     // Extended x86 emulator calls (raw bytes), the cross-arch guests, and the
@@ -117,6 +118,10 @@ public final class Asmtest {
         ASM_BYTES = hOpt(emu, "asmtest_asm_bytes", FunctionDescriptor.of(
             JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT));
         ASM_LAST_ERROR = hOpt(emu, "asmtest_asm_last_error", FunctionDescriptor.of(ADDRESS));
+        // Optional (emu+full lib only): the Capstone disassembler.
+        EMU_DISAS = hOpt(emu, "emu_disas", FunctionDescriptor.of(
+            JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG));
+        EMU_DISAS_AVAIL = hOpt(emu, "emu_disas_available", FunctionDescriptor.of(JAVA_BOOLEAN));
         EMU_FAULTED = h(emu, "asmtest_emu_result_faulted", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         EMU_FAULT_ADDR = h(emu, "asmtest_emu_result_fault_addr", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
         EMU_FAULT_KIND = h(emu, "asmtest_emu_result_fault_kind", FunctionDescriptor.of(JAVA_INT, ADDRESS));
@@ -281,6 +286,35 @@ public final class Asmtest {
     /** Convenience: Intel syntax at the emulator load base. */
     public static byte[] assemble(String src, AsmArch arch) {
         return assemble(src, arch, AsmSyntax.INTEL, 0x00100000L);
+    }
+
+    /** Whether the loaded native lib carries the disassembler (Capstone). True
+     *  only for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false. */
+    public static boolean disasAvailable() {
+        if (EMU_DISAS == null || EMU_DISAS_AVAIL == null) return false;
+        try { return (boolean) EMU_DISAS_AVAIL.invoke(); }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /**
+     * Disassemble the one instruction at byte {@code off} of {@code code} for
+     * {@code arch} (reuse {@link AsmArch}). {@code base} is the address the bytes
+     * run at (EMU_CODE_BASE) so PC-relative operands resolve. Returns "mnemonic
+     * operands", or "" with no disassembler present or on a decode miss.
+     */
+    public static String disas(byte[] code, long off, AsmArch arch, long base) {
+        if (!disasAvailable()) return "";
+        try {
+            MemorySegment in = ARENA.allocate(Math.max(code.length, 1));
+            MemorySegment.copy(code, 0, in, JAVA_BYTE, 0, code.length);
+            MemorySegment buf = ARENA.allocate(160);
+            long n = (long) EMU_DISAS.invoke(arch.v, in, (long) code.length, base, off, buf, 160L);
+            return n == 0 ? "" : buf.getUtf8String(0);
+        } catch (Throwable t) { throw rethrow(t); }
+    }
+    /** Convenience: x86-64 at the emulator load base. */
+    public static String disas(byte[] code, long off) {
+        return disas(code, off, AsmArch.X86_64, 0x00100000L);
     }
 
     /** A captured register/flags snapshot. Use try-with-resources to free it. */

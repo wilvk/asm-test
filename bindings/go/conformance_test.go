@@ -263,6 +263,25 @@ func TestInlineAsm(t *testing.T) {
 	}
 }
 
+// TestDisas exercises the disassembler tier (Capstone): decode known x86-64
+// bytes back to text. Self-skips unless ASMTEST_LIB points at libasmtest_emu_full
+// (`make go-asm-test`); the lean libasmtest_emu reports DisasAvailable() false.
+func TestDisas(t *testing.T) {
+	if !DisasAvailable() {
+		t.Skip("disassembler not in this build (run via `make go-asm-test`)")
+	}
+	code := []byte{0x48, 0x31, 0xC0, 0xC3} // xor rax, rax ; ret
+	if got := Disas(code, 0, ArchX8664, 0x00100000); got != "xor rax, rax" {
+		t.Fatalf("disas @0: got %q", got)
+	}
+	if got := Disas(code, 3, ArchX8664, 0x00100000); got != "ret" {
+		t.Fatalf("disas @3: got %q", got)
+	}
+	if got := Disas([]byte{0x90}, 0, ArchX8664, 0x00100000); got != "nop" {
+		t.Fatalf("disas nop: got %q", got)
+	}
+}
+
 // --- Tier 2: idiomatic assertions pass on good input -----------------------
 
 func TestTier2Pass(t *testing.T) {

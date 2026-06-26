@@ -269,4 +269,16 @@ TEST(cpp, inline_assembler) {
     ASSERT_TRUE(a64.size() == 4 && a64[0] == 0xC0 && a64[3] == 0xD6);
 }
 #endif  // ASMTEST_ENABLE_ASM
+
+#ifdef ASMTEST_ENABLE_DISAS
+// Disassembler (Capstone): decode known x86-64 bytes back to instruction text.
+TEST(cpp, disassembler) {
+    if (!asmtest::disas_available())
+        SKIP("Capstone not in this build");
+    std::vector<std::uint8_t> code = {0x48, 0x31, 0xC0, 0xC3};  // xor rax,rax;ret
+    ASSERT_TRUE(asmtest::disas(code, 0) == "xor rax, rax");
+    ASSERT_TRUE(asmtest::disas(code, 3) == "ret");
+    ASSERT_TRUE(asmtest::disas({0x90}) == "nop");
+}
+#endif  // ASMTEST_ENABLE_DISAS
 #endif

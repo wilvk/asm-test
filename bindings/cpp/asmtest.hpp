@@ -517,6 +517,29 @@ inline std::vector<std::uint8_t> assemble(const char *src,
 }
 #endif  // ASMTEST_ENABLE_ASM
 
+#ifdef ASMTEST_ENABLE_DISAS
+/// Whether this build carries the Capstone disassembler. False on a
+/// Capstone-less lib (the call still links but self-skips).
+inline bool disas_available() { return emu_disas_available(); }
+
+/// Disassemble the one instruction at byte `off` of `code` for `arch`. `base`
+/// is the address the bytes run at (EMU_CODE_BASE) so PC-relative operands
+/// resolve. Returns "mnemonic operands", or "" with no disassembler present or
+/// on a decode miss. Pair it with an emulator fault's rip offset to name the
+/// offending instruction.
+inline std::string disas(const std::vector<std::uint8_t> &code,
+                         std::uint64_t off = 0,
+                         emu_arch_t arch = EMU_ARCH_X86_64,
+                         std::uint64_t base = EMU_CODE_BASE) {
+    if (!emu_disas_available())
+        return std::string();
+    char buf[160];
+    std::size_t n = emu_disas(arch, code.data(), code.size(), base, off, buf,
+                              sizeof(buf));
+    return n ? std::string(buf) : std::string();
+}
+#endif  // ASMTEST_ENABLE_DISAS
+
 }  // namespace asmtest
 
 #endif  // ASMTEST_HPP

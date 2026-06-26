@@ -155,6 +155,22 @@ fn inline_assembler() {
     assert_eq!(a64, vec![0xC0, 0x03, 0x5F, 0xD6]);
 }
 
+// Disassembler (Capstone): only when the loaded lib carries it (run via
+// `make rust-asm-test`, which points ASMTEST_LIB at libasmtest_emu_full).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn disassembler() {
+    use asmtest::AsmArch;
+    if !asmtest::disas_available() {
+        eprintln!("skip: disassembler not in this build");
+        return;
+    }
+    let code = [0x48u8, 0x31, 0xC0, 0xC3]; // xor rax, rax ; ret
+    assert_eq!(asmtest::disas(&code, 0, AsmArch::X86_64, 0x0010_0000), "xor rax, rax");
+    assert_eq!(asmtest::disas(&code, 3, AsmArch::X86_64, 0x0010_0000), "ret");
+    assert_eq!(asmtest::disas(&[0x90], 0, AsmArch::X86_64, 0x0010_0000), "nop");
+}
+
 // Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,
 // emulated regardless of the host arch — checked-in `add` routines per ISA.
 #[test]

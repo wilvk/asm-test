@@ -196,3 +196,18 @@ def _run_asm(case, expect):
         assert list(got) == list(expect["bytes"])
     else:
         pytest.fail(f"unknown asm call: {call}")
+
+
+def test_disas():
+    """The disassembler tier (Capstone): decode known x86-64 bytes to text.
+
+    Self-skips unless the loaded lib carries Capstone — only
+    libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm return
+    disas_available() == False. `make python-asm-test` points ASMTEST_LIB at
+    the full lib, so this runs there."""
+    if not asmtest.disas_available():
+        pytest.skip("disassembler not in this build")
+    code = bytes([0x48, 0x31, 0xC0, 0xC3])  # xor rax, rax ; ret
+    assert asmtest.disas(code, 0) == "xor rax, rax"  # 3-byte insn at off 0
+    assert asmtest.disas(code, 3) == "ret"  # next insn at off 3
+    assert asmtest.disas(b"\x90", 0) == "nop"

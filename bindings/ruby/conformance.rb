@@ -163,6 +163,18 @@ if e.asm_available?
 end
 e.close
 
+# --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
+# Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
+# libasmtest_emu / _emu_asm report disas_available? == false and this skips.
+if Asmtest.disas_available?
+  code = [0x48, 0x31, 0xC0, 0xC3].pack("C*") # xor rax, rax ; ret
+  check("disas.xor_rax", Asmtest.disas(code, 0) == "xor rax, rax")
+  check("disas.ret", Asmtest.disas(code, 3) == "ret")
+  check("disas.nop", Asmtest.disas([0x90].pack("C*")) == "nop")
+else
+  puts "ok - disas.xor_rax # SKIP no disassembler (lean lib)"
+end
+
 # --- Tier 2: idiomatic assertions pass on good input -----------------------
 tier2_pass = begin
   with_regs do |r|
