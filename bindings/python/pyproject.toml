@@ -17,8 +17,10 @@ classifiers = [
 
 # Pure-ctypes at runtime — no build-time native dependency. `make python-package`
 # stages the prebuilt libasmtest[_emu] + asmtest_abi.json into asmtest/_libs/ so
-# the wheel is self-contained (the loader prefers the bundled libs); a real
-# multi-platform release builds one wheel per platform tag via cibuildwheel.
+# the wheel is self-contained (the loader prefers the bundled libs). setup.py
+# tags it py3-none-<platform> (platlib); the release workflow then repairs it per
+# platform — auditwheel -> manylinux (Linux), delocate (macOS) — vendoring
+# libunicorn so the published wheel needs no system libs.
 dependencies = []
 
 [project.optional-dependencies]

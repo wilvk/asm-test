@@ -26,8 +26,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the artifact fresh → smoke-tests the bundled-native load (`ASMTEST_LIB` unset) →
   dry-run publishes** (`twine check`, `npm publish --dry-run`, `cargo publish
   --dry-run`); the live push is gated behind per-ecosystem token secrets, so it
-  runs end to end with no credentials. Every package + fresh-install + bundled-load
-  smoke was verified in the per-language Docker images. Track A of the
+  runs end to end with no credentials. Python wheels are built **per platform**: a
+  `setup.py` tags the wheel `py3-none-<platform>` (platlib, since it bundles a
+  native lib), and the workflow **repairs** each into a self-contained
+  manylinux / macOS wheel — `auditwheel` / `delocate` vendoring libunicorn — so
+  `pip install` pulls no system libs. Every package + fresh-install + bundled-load
+  smoke was verified in the per-language Docker images (the manylinux wheel checked
+  to load with system libunicorn removed). Track A of the
   [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md);
   see [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md).
 

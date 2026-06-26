@@ -67,11 +67,21 @@ jobs:
   # project on this runner (linux-x86_64) and loads the library with ASMTEST_LIB
   # UNSET, so it must resolve the bundled native lib. The smoke call needs no
   # corpus fixture (a CPUID / probe), so it exercises the load path alone.
+  # Python wheels are PER-PLATFORM (a wheel per tag), unlike the other dlopen
+  # packages that bundle every platform in one artifact — so this builds its own
+  # platform's native and a py3-none-<plat> wheel on each runner, then REPAIRS it
+  # into a self-contained manylinux / macOS wheel that vendors libunicorn
+  # (auditwheel on Linux, delocate on macOS — setup.py marks the wheel platlib so
+  # they accept it). Install + smoke load the repaired wheel with ASMTEST_LIB
+  # unset. (Independent of native-all, which serves the multi-platform packages.)
   python:
-    name: python (wheel)
-    needs: [native-all]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     env:
       PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
     steps:
@@ -79,21 +89,32 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: make deps DEPS_ARGS=--emu
-      - uses: actions/download-artifact@v4
-        with: { name: native-all, path: build/dist/native }
-      - name: Build wheel from the collected payload
-        run: pip install build twine && make python-package
-      - name: twine check (dry-run validate)
-        run: twine check build/dist/python/*.whl
-      - name: Install fresh + smoke (bundled native, no ASMTEST_LIB)
+      - name: Build the platform-tagged wheel
+        run: pip install build twine auditwheel delocate && make python-package
+      - name: Repair -> manylinux / macOS (vendor libunicorn)
+        run: |
+          mkdir -p wheelhouse
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m auditwheel repair build/dist/python/*.whl -w wheelhouse
+          else
+            delocate-wheel -w wheelhouse build/dist/python/*.whl
+          fi
+          ls wheelhouse
+      - name: twine check
+        run: twine check wheelhouse/*.whl
+      - name: Install repaired wheel fresh + smoke (no ASMTEST_LIB)
         run: |
           python -m venv /tmp/venv && . /tmp/venv/bin/activate
-          pip install build/dist/python/*.whl
+          pip install wheelhouse/*.whl
           cd /tmp && python -c "import asmtest; print('python ok: avx2=' + str(asmtest.cpu_has_avx2()))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: wheelhouse/*.whl
       - name: Publish to PyPI (only with a token)
         if: ${{ startsWith(github.ref, 'refs/tags/') && env.PYPI_TOKEN != '' }}
         env: { TWINE_USERNAME: __token__, TWINE_PASSWORD: "${{ secrets.PYPI_TOKEN }}" }
-        run: twine upload build/dist/python/*.whl
+        run: twine upload wheelhouse/*.whl
 
   node:
     name: node (npm)

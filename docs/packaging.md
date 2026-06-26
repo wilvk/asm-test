@@ -88,7 +88,7 @@ make package-libs-verify   # check a collected build/dist/native/ tree locally
 ## Per-language
 
 ```sh
-make python-package    # wheel  -> build/dist/python/   (needs `pip install build`)
+make python-package    # py3-none-<plat> wheel -> build/dist/python/  (needs `pip install build`)
 make rust-package      # crate  -> bindings/rust/target/package/  (cargo package)
 make zig-package       # source tarball -> build/dist/zig/
 make cpp-package       # header + CMake tarball -> build/dist/cpp/
@@ -133,6 +133,10 @@ The scaffolding stops short of a credentialed, multi-platform release:
    lib resolves with `ASMTEST_LIB` unset (so an installed package works
    out of the box), and dry-run publishes (`twine check`, `npm publish --dry-run`,
    `cargo publish --dry-run`). It runs end to end on a fork with no credentials.
-   What remains: the **live publish** is gated `if: …env.<TOKEN> != ''` per
-   ecosystem — add `PYPI_TOKEN` / `NPM_TOKEN` / `RUBYGEMS_API_KEY` (and the rest)
-   as repo secrets and tag a release to push for real.
+   Python is special-cased: a **per-platform matrix** builds the
+   `py3-none-<plat>` wheel on each runner and **repairs** it into a self-contained
+   manylinux / macOS wheel (`auditwheel` / `delocate`, vendoring libunicorn), so a
+   `pip install` needs no system libs. What remains: the **live publish** is gated
+   `if: …env.<TOKEN> != ''` per ecosystem — add `PYPI_TOKEN` / `NPM_TOKEN` /
+   `RUBYGEMS_API_KEY` (and the rest) as repo secrets and tag a release to push for
+   real.

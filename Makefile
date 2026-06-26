@@ -1252,6 +1252,7 @@ package-libs: shared shared-emu
 # Python's wheel is per-platform (cibuildwheel builds one per tag in CI), so it
 # bundles only the host slot, flat in asmtest/_libs/ (where _native.py looks).
 python-package: package-libs manifest
+	rm -rf bindings/python/asmtest/_libs bindings/python/build bindings/python/*.egg-info
 	mkdir -p bindings/python/asmtest/_libs $(PKG_DIST)/python
 	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)  bindings/python/asmtest/_libs/
 	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name) bindings/python/asmtest/_libs/
