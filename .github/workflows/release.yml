@@ -230,7 +230,10 @@ jobs:
           printf 'using Asmtest; class P { static void Main(){ System.Console.WriteLine("dotnet ok: disasAvailable=" + Emu.DisasAvailable); } }' > Program.cs
           dotnet run
 
-  # ---- Link binding (source dist): cargo's own dry-run publish --------------- #
+  # ---- Link bindings (source dists) ----------------------------------------- #
+  # These ship source, not a prebuilt binary: the consumer links/builds the
+  # framework itself. There is no registry payload to install, so the release
+  # check is that the published source is consumable — it builds / vets / packs.
   rust:
     name: rust (crate)
     needs: [native-all]
@@ -241,3 +244,51 @@ jobs:
       - run: make deps DEPS_ARGS=--emu
       - name: cargo publish --dry-run
         run: cd bindings/rust && cargo publish --dry-run --allow-dirty
+
+  go:
+    name: go (module)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "stable" }
+      - run: make deps DEPS_ARGS=--emu && make shared-emu
+      # Go modules publish from the tagged repo (proxy.golang.org fetches on
+      # demand); the release check is that the cgo module vets + builds.
+      - name: go vet + build
+        run: cd bindings/go && CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go vet ./... && CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go build ./...
+
+  cpp:
+    name: cpp (header + cmake)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: make deps DEPS_ARGS=--emu && make shared-emu
+      - name: Package the header tarball
+        run: make cpp-package
+      - name: A consumer compiles + links + runs against the packaged header
+        run: |
+          mkdir -p /tmp/dep && tar xzf build/dist/cpp/asmtest-cpp-*.tar.gz -C /tmp/dep
+          printf '#define ASMTEST_ENABLE_EMU\n#include "asmtest.hpp"\nint main(){ asmtest::Emu e; (void)e; return 0; }\n' > /tmp/consumer.cpp
+          g++ -std=c++17 -I/tmp/dep -Iinclude /tmp/consumer.cpp -L build -lasmtest_emu -o /tmp/consumer
+          LD_LIBRARY_PATH=build /tmp/consumer && echo "cpp ok: packaged header consumable"
+
+  zig:
+    name: zig (package)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with: { version: "0.13.0" }
+      - run: make deps DEPS_ARGS=--emu && make shared-emu build/libasmtest_corpus.so
+      - name: Package + build the packaged source against the framework
+        run: |
+          mkdir -p /tmp/dep && tar xzf build/dist/zig/asmtest-zig-*.tar.gz -C /tmp/dep
+          cd /tmp/dep && LD_LIBRARY_PATH="$GITHUB_WORKSPACE/build" \
+            zig build test -Dincdir="$GITHUB_WORKSPACE/include" -Dlibdir="$GITHUB_WORKSPACE/build"
