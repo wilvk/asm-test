@@ -127,3 +127,12 @@ ASM_FUNC win64_struct_sum
     add     rax, [rdx+24]
     ret
 ASM_ENDFUNC win64_struct_sum
+
+; __m256 win64_vaddpd_ymm(__m256 a, __m256 b) -> a + b (4 packed doubles).
+; The AVX2 analog of win64_addsd: the trampoline puts the two 256-bit vector
+; args in ymm0/ymm1 and the full-width sum returns in ymm0. AVX2 only — reached
+; solely through asm_call_capture_vec256_win64 under a cpu-has-avx2 gate.
+ASM_FUNC win64_vaddpd_ymm
+    vaddpd  ymm0, ymm0, ymm1
+    ret
+ASM_ENDFUNC win64_vaddpd_ymm

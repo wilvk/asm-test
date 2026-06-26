@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
+  topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft
+  x64 ABI couldn't be inspected past its low 128 bits. New
+  `asm_call_capture_vec256_win64` is the Win64 analog of the SysV
+  `asm_call_capture_vec256`: it marshals four 256-bit args into `ymm0..3`, calls
+  the routine, and captures the whole `ymm0..15` file into a `vec256_t[16]`,
+  saving/restoring the callee-saved low 128 of `xmm6..15` (the upper 128 is
+  volatile per the ABI) and `vzeroupper`-ing on exit. A `win64_vaddpd_ymm` routine
+  + a `test_capture_win64` case assert the full 256-bit return (all four doubles,
+  exercising the upper-128 lanes the 128-bit path can't see), self-skipping
+  off-AVX2 via a local CPUID/XCR0 probe. Verified on **both** Win64 lanes — the
+  native `ms_abi` lane and the PE/Wine lane (Wine runs PE instructions on the host
+  CPU, so it is real AVX2). Track D of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md)
+  (the "Win64 wide path" follow-on); AVX-512 (`zmm`) and AArch64 SVE remain staged,
+  hardware-gated on a runner that can execute those instructions.
+
 - **Publishable packages (Track A): library-exposing artifacts, self-locating
   native libs, and a dry-run release workflow.** The packaging scaffolding now
   produces artifacts a registry could ship. Each `make <lang>-package` exposes the

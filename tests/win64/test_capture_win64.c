@@ -14,10 +14,26 @@
  *     trampoline is declared __attribute__((ms_abi)) to be called the Win64 way.
  *   - PE/Wine lane (mingw-w64): the target is already Win64, so no attribute.
  */
+#include <cpuid.h>
 #include <stdint.h>
 #include <stdio.h>
 
 #include "asmtest.h"
+
+/* The Win64 capture test links neither asmtest.o nor libunicorn, so it carries
+ * its own AVX2 probe (CPUID feature bits + XCR0 YMM-state enable) to gate the
+ * 256-bit case — Wine runs PE instructions on the host CPU, so this reflects the
+ * real silicon. Mirrors asmtest_cpu_has_avx2() in src/asmtest.c. */
+static int has_avx2(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
+    if (!(c & (1u << 27)) || !(c & (1u << 28))) return 0; /* OSXSAVE + AVX */
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return 0;
+    if (!(b & (1u << 5))) return 0;                        /* AVX2 (leaf 7 EBX) */
+    unsigned xcr0_lo, xcr0_hi;
+    __asm__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+    return (xcr0_lo & 0x6) == 0x6;                         /* XMM + YMM state on */
+}
 
 #if defined(_WIN32)
 #  define WIN64ABI /* mingw target is already Microsoft x64 */
@@ -52,6 +68,9 @@ extern WIN64ABI void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
                                                       int niargs,
                                                       const void *sptr,
                                                       unsigned long long ssize);
+extern WIN64ABI void asm_call_capture_vec256_win64(vec256_t *vec, void *fn,
+                                                   const long long *iargs,
+                                                   const vec256_t *vargs);
 
 /* Routines under test — addresses only; never called through these C types. */
 extern void win64_ret_arg0(void);
@@ -67,6 +86,7 @@ extern void win64_addsd6(void);
 extern void win64_sret_make(void);
 extern void win64_vaddsd5(void);
 extern void win64_struct_sum(void);
+extern void win64_vaddpd_ymm(void);
 
 static int fails = 0;
 
@@ -191,6 +211,23 @@ int main(void) {
           "win64_vaddsd5 via _vec_n: 4 xmm + 1 stack vector arg summed");
     CHECK(xmm_callee_preserved(&r),
           "win64_vaddsd5 via _vec_n: xmm6-15 callee-saved intact");
+
+    /* asm_call_capture_vec256_win64: AVX2 256-bit (ymm) capture under Win64,
+     * the wide-vector analog of the SysV asm_call_capture_vec256. Self-skips on
+     * a non-AVX2 host. Checks the full 256-bit return (all four doubles, so the
+     * upper 128 lanes the 128-bit path can't see are exercised). */
+    if (has_avx2()) {
+        vec256_t v256[2] = {{{0}}};
+        v256[0].f64[0] = 1; v256[0].f64[1] = 2; v256[0].f64[2] = 3; v256[0].f64[3] = 4;
+        v256[1].f64[0] = 10; v256[1].f64[1] = 20; v256[1].f64[2] = 30; v256[1].f64[3] = 40;
+        vec256_t out256[16] = {{{0}}};
+        asm_call_capture_vec256_win64(out256, (void *)win64_vaddpd_ymm, args, v256);
+        CHECK(out256[0].f64[0] == 11 && out256[0].f64[1] == 22 &&
+              out256[0].f64[2] == 33 && out256[0].f64[3] == 44,
+              "win64_vaddpd_ymm via _vec256: full 256-bit ymm0 sum (incl upper 128)");
+    } else {
+        printf("ok   - win64_vaddpd_ymm via _vec256 # SKIP no AVX2\n");
+    }
 
     /* asm_call_capture_bigstruct_win64: large struct passed by reference. */
     long long big[4] = {1, 2, 3, 4};

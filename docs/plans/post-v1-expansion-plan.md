@@ -193,7 +193,7 @@ a small surface and an already-familiar optional-dependency pattern.
 
 ---
 
-## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 done; AVX-512/SVE staged**
+## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 (SysV + Win64) done; AVX-512/SVE staged**
 
 **Goal.** Capture vector state wider than 128 bits, so AVX2 / AVX-512 (`ymm`/`zmm`)
 and AArch64 SVE routines are testable to their full register width.
@@ -214,12 +214,22 @@ an unsupported instruction. Trampoline in **both** backends (`capture.s` GAS +
 `vec_add4d` AVX2 example asserts the full 256-bit result (upper-128 lane included) on
 both — **verified on a real AVX2 host**.
 
-**Staged follow-ons:** AVX-512 (`zmm`) native capture (no AVX-512 silicon to verify on
-here — the `_avx512f` probe + type groundwork are in place), AArch64 **SVE**, a **Win64**
-wide path, and **vec256 binding parity**. The **emulator** wide path is the *documented
-self-skip* case (deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not
-execute** AVX (`UC_ERR_INSN_INVALID`, even with an AVX-capable CPU model set), so
-wide-vector capture is native-only until Unicorn ships AVX execution.
+**Done since:** the **Win64 wide path** — `asm_call_capture_vec256_win64` mirrors the
+SysV trampoline under the Microsoft x64 ABI (loads `ymm0..3`, captures `ymm0..15`,
+saves/restores the callee-saved low 128 of `xmm6..15`, `vzeroupper` on exit), verified
+on both the native `ms_abi` lane and the PE/Wine lane (real AVX2 — Wine runs PE
+instructions on the host CPU); and **vec256 binding parity** (round 2, `capture_vec256`
+across all ten bindings).
+
+**Still staged:** AVX-512 (`zmm`) native capture and AArch64 **SVE**. Both are
+**hardware-gated and unverifiable on the current host** — there is no AVX-512 silicon
+(qemu-user `-cpu max` doesn't expose the AVX-512 `XCR0` state either, so it can't stand
+in), and SVE needs an AArch64+SVE target. The `_avx512f` probe + type groundwork are in
+place; the work waits on an AVX-512 / SVE runner so the trampoline can be *executed*, not
+just assembled. The **emulator** wide path is the *documented self-skip* case
+(deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not execute** AVX
+(`UC_ERR_INSN_INVALID`, even with an AVX-capable CPU model set), so wide-vector capture
+is native-only until Unicorn ships AVX execution.
 
 ### Deliverables
 
@@ -349,8 +359,9 @@ caught at the offending store with its instruction text, no host crash.
    installs, and smoke-tests every binding end to end (Linux + macOS), with only
    the credentialed go-live (register names + add token secrets + tag) left — the
    single biggest adoption lever, no dependency on the others.
-3. **Track D** (wide vectors) — **AVX2 done** (native 256-bit capture); AVX-512,
-   SVE, Win64-wide, and binding parity staged.
+3. **Track D** (wide vectors) — **AVX2 done** (256-bit capture on SysV **and**
+   Win64, plus binding parity); AVX-512 (`zmm`) and SVE staged, hardware-gated on
+   an AVX-512 / SVE runner to execute (not just assemble) the trampoline.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now
