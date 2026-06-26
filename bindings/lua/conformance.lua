@@ -182,5 +182,44 @@ local t2teeth = not pcall(function()
 end)
 check("tier2.assertions_have_teeth", t2teeth)
 
+-- Track F: mid-execution guards (byte-literal routines).
+do
+  local e = asmtest.Emu()
+  local two_writes = string.char(0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3)
+  e:map(0x400000, 0x1000)
+  local w = e:watch_writes(0x400000, 8, "only")
+  e:call_bytes(two_writes, { 0x400000 })
+  e:watch_clear()
+  check("guard.watch_escape", w:violated() and w:addr() == 0x400800 and w:rip_off() == 3)
+  w:free()
+  local clobber = string.char(0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3)
+  local g = e:guard_reg("rbx", 0)
+  e:call_bytes(clobber, {})
+  e:guard_reg_clear()
+  check("guard.reg_invariant", g:violated() and g:got() == 0x99)
+  g:free()
+end
+
+-- Track E: coverage-guided fuzzing + mutation testing over classify3.
+do
+  local e = asmtest.Emu()
+  local classify3 = string.char(0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+    0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3)
+  local fixed = e:fuzz_cover(classify3, 5, 5, 1)
+  local guided = e:fuzz_cover(classify3, -50, 50, 2000)
+  check("fuzz.coverage_beats_fixed", guided > fixed)
+  local _, weak_s = e:mutation_test(classify3, { 5 })
+  local _, strong_s = e:mutation_test(classify3, { -7, 0, 9 })
+  check("mutation.strong_kills_more", weak_s > 0 and strong_s < weak_s)
+end
+
+-- Track D: AVX2 256-bit capture (self-skips off-AVX2).
+if asmtest.cpu_has_avx2() then
+  local lanes = asmtest.capture_vec256(routine("vec_add4d"), { { 1, 2, 3, 4 }, { 10, 20, 30, 40 } })
+  check("vec256.add4d", lanes[1] == 11 and lanes[2] == 22 and lanes[3] == 33 and lanes[4] == 44)
+else
+  print("ok - vec256.add4d # SKIP no AVX2")
+end
+
 print(string.format("# %d passed, %d failed, %d total", total - fails, fails, total))
 os.exit(fails == 0 and 0 or 1)

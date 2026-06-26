@@ -65,6 +65,32 @@ void *emu_arm_open(void); void emu_arm_close(void *e);
 int   emu_arm_call(void *e, const void *code, size_t len, const long *args, int nargs, uint64_t mi, void *out);
 void *asmtest_emu_arm_result_new(void); void asmtest_emu_arm_result_free(void *r);
 unsigned long long asmtest_emu_arm_reg(void *r, const char *name);
+
+// Mid-execution guards (Track F)
+int  emu_map(void *e, uint64_t addr, size_t size);
+void emu_watch_writes(void *e, uint64_t addr, size_t size, int mode, void *w);
+void emu_watch_clear(void *e);
+int  emu_guard_reg(void *e, const char *name, uint64_t want, void *g);
+void emu_guard_reg_clear(void *e);
+void *asmtest_emu_watch_new(void); void asmtest_emu_watch_free(void *w);
+int asmtest_emu_watch_violated(void *w);
+unsigned long long asmtest_emu_watch_addr(void *w);
+unsigned long long asmtest_emu_watch_rip_off(void *w);
+void *asmtest_emu_reg_guard_new(void); void asmtest_emu_reg_guard_free(void *g);
+int asmtest_emu_reg_guard_violated(void *g);
+unsigned long long asmtest_emu_reg_guard_got(void *g);
+// Coverage-guided fuzzing + mutation testing (Track E)
+int emu_fuzz_cover1(void *e, const void *code, size_t len, long lo, long hi, uint64_t iters, uint64_t seed, void *uni, void *st);
+size_t emu_mutation_test1(void *e, const void *code, size_t len, const long *in, size_t n, uint64_t maxm, uint64_t seed, void *st);
+void *asmtest_emu_fuzz_stat_new(void); void asmtest_emu_fuzz_stat_free(void *s);
+unsigned long long asmtest_emu_fuzz_blocks_reached(void *s);
+unsigned long long asmtest_emu_fuzz_corpus_len(void *s);
+void *asmtest_emu_mutation_stat_new(void); void asmtest_emu_mutation_stat_free(void *s);
+unsigned long long asmtest_emu_mutation_killed(void *s);
+unsigned long long asmtest_emu_mutation_survived(void *s);
+// AVX2 256-bit capture (Track D)
+void asm_call_capture_vec256(void *vec, void *fn, const long *iargs, const void *vargs);
+int  asmtest_cpu_has_avx2(void);
 ]])
 
 local emu_path = assert(os.getenv("ASMTEST_LIB"), "set ASMTEST_LIB to libasmtest_emu.{so,dylib}")
@@ -138,6 +164,20 @@ function EmuResult:free() if self.h then L.asmtest_emu_result_free(self.h); self
 M.FaultKind = { NONE = 0, READ = 1, WRITE = 2, FETCH = 3 }
 
 -- An open emulator (x86-64 Unicorn guest). Call :close() when done.
+-- Mid-execution guard result handles (Track F).
+local Watch = {}
+Watch.__index = Watch
+function Watch:violated() return L.asmtest_emu_watch_violated(self.h) ~= 0 end
+function Watch:addr() return tonumber(L.asmtest_emu_watch_addr(self.h)) end
+function Watch:rip_off() return tonumber(L.asmtest_emu_watch_rip_off(self.h)) end
+function Watch:free() if self.h then L.asmtest_emu_watch_free(self.h); self.h = nil end end
+
+local RegGuard = {}
+RegGuard.__index = RegGuard
+function RegGuard:violated() return L.asmtest_emu_reg_guard_violated(self.h) ~= 0 end
+function RegGuard:got() return tonumber(L.asmtest_emu_reg_guard_got(self.h)) end
+function RegGuard:free() if self.h then L.asmtest_emu_reg_guard_free(self.h); self.h = nil end end
+
 local Emu = {}
 Emu.__index = Emu
 function M.Emu() return setmetatable({ h = L.emu_open() }, Emu) end
@@ -200,6 +240,56 @@ function Emu:call_traced(code, args, trace)
   local a, n = longs(args)
   L.emu_call_traced(self.h, code, #code, a, n, 0, res.h, trace.h)
   return res
+end
+-- Mid-execution guards (Track F).
+function Emu:map(addr, size) return L.emu_map(self.h, addr, size) ~= 0 end
+function Emu:watch_writes(addr, size, mode)
+  local w = setmetatable({ h = L.asmtest_emu_watch_new() }, Watch)
+  L.emu_watch_writes(self.h, addr, size, mode == "never" and 0 or 1, w.h)
+  return w
+end
+function Emu:watch_clear() L.emu_watch_clear(self.h) end
+function Emu:guard_reg(name, want)
+  local g = setmetatable({ h = L.asmtest_emu_reg_guard_new() }, RegGuard)
+  if L.emu_guard_reg(self.h, name, want, g.h) == 0 then
+    g:free(); error("unknown register: " .. name)
+  end
+  return g
+end
+function Emu:guard_reg_clear() L.emu_guard_reg_clear(self.h) end
+-- Coverage-guided fuzzing + mutation testing (Track E).
+function Emu:fuzz_cover(code, lo, hi, iters, seed)
+  local uni = L.asmtest_emu_trace_new(0, 256)
+  local st = L.asmtest_emu_fuzz_stat_new()
+  L.emu_fuzz_cover1(self.h, code, #code, lo, hi, iters, seed or 0xC0FFEE, uni, st)
+  local blocks = tonumber(L.asmtest_emu_fuzz_blocks_reached(st))
+  local corpus = tonumber(L.asmtest_emu_fuzz_corpus_len(st))
+  L.asmtest_emu_fuzz_stat_free(st); L.asmtest_emu_trace_free(uni)
+  return blocks, corpus
+end
+function Emu:mutation_test(code, inputs, maxm, seed)
+  local a, n = longs(inputs)
+  local st = L.asmtest_emu_mutation_stat_new()
+  L.emu_mutation_test1(self.h, code, #code, a, n, maxm or 0, seed or 0xABCD, st)
+  local killed = tonumber(L.asmtest_emu_mutation_killed(st))
+  local survived = tonumber(L.asmtest_emu_mutation_survived(st))
+  L.asmtest_emu_mutation_stat_free(st)
+  return killed, survived
+end
+-- AVX2 256-bit capture (Track D): vargs = array of four-double arrays; returns
+-- the 4 f64 lanes of ymm0 (the vector return). Gate on M.cpu_has_avx2().
+function M.cpu_has_avx2() return L.asmtest_cpu_has_avx2() ~= 0 end
+function M.capture_vec256(fn, vargs)
+  local out = ffi.new("uint8_t[?]", 16 * 32)
+  local va = ffi.new("uint8_t[?]", 8 * 32)
+  local dv = ffi.cast("double *", va)
+  for i = 1, math.min(#vargs, 8) do
+    for l = 1, 4 do dv[(i - 1) * 4 + (l - 1)] = vargs[i][l] or 0 end
+  end
+  local ia = ffi.new("long[6]")
+  L.asm_call_capture_vec256(out, fn, ia, va)
+  local dout = ffi.cast("double *", out)
+  return { dout[0], dout[1], dout[2], dout[3] }
 end
 -- Whether the loaded native lib carries the in-line assembler.
 function Emu:asm_available() return HAS_ASM end
