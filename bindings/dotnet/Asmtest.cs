@@ -158,7 +158,13 @@ namespace Asmtest
             try
             {
                 var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
-                var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
+                // Load in the binding assembly's context (its deps.json) so the
+                // NuGet RID-native asset (runtimes/<rid>/native/libasmtest_emu) is
+                // found — a bare NativeLibrary.Load(EMU) uses only the OS default
+                // search and would miss the bundled lib.
+                var h = string.IsNullOrEmpty(p)
+                    ? NativeLibrary.Load(EMU, typeof(Native).Assembly, null)
+                    : NativeLibrary.Load(p);
                 return NativeLibrary.TryGetExport(h, "asmtest_emu_call_asm6", out _);
             }
             catch { return false; }
@@ -172,7 +178,13 @@ namespace Asmtest
             try
             {
                 var p = Environment.GetEnvironmentVariable("ASMTEST_LIB");
-                var h = string.IsNullOrEmpty(p) ? NativeLibrary.Load(EMU) : NativeLibrary.Load(p);
+                // Load in the binding assembly's context (its deps.json) so the
+                // NuGet RID-native asset (runtimes/<rid>/native/libasmtest_emu) is
+                // found — a bare NativeLibrary.Load(EMU) uses only the OS default
+                // search and would miss the bundled lib.
+                var h = string.IsNullOrEmpty(p)
+                    ? NativeLibrary.Load(EMU, typeof(Native).Assembly, null)
+                    : NativeLibrary.Load(p);
                 // Symbol-presence only — resolver-free, like ProbeAsm. Calling the
                 // emu_disas_available() DllImport here would need the DllImport
                 // resolver, which the static ctor registers AFTER these field
