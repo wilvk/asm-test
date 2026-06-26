@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Binding parity, round 2: the new emulator/capture capabilities reach all ten
+  bindings.** The Track F mid-execution guards, Track E coverage-guided fuzzing /
+  mutation testing, and Track D AVX2 256-bit capture were C-core-only; they now
+  have a binding ABI and a wrapper in every language. The C side adds
+  opaque-handle FFI in [`src/ffi.c`](https://github.com/wilvk/asm-test/blob/main/src/ffi.c)
+  (`emu_watch_t` / `emu_reg_guard_t` and the fuzz/mutation stat structs — alloc +
+  by-field accessors; the arming/driver functions take plain pointers, so a
+  binding calls them directly), and `fuzz.o` now ships in the emulator shared
+  lib so `emu_fuzz_cover1` / `emu_mutation_test1` are reachable. Each binding
+  gained the ergonomic surface in its own idiom — **Python** (`ctypes`),
+  **C++** (header structs), **Ruby** (`Fiddle`), **Lua** (LuaJIT `ffi`),
+  **Node** (`koffi`), **Go** (`cgo`), **Rust** (`#[repr(C)]` + `extern`),
+  **Zig** (`@cImport`), **Java** (FFM/Panama), **.NET** (P/Invoke) — e.g.
+  `Emulator.watch_writes` / `guard_reg` / `fuzz_cover` / `mutation_test` and a
+  `capture_vec256` + `cpu_has_avx2` gate, with the vector path self-skipping
+  where AVX2 is absent. Done by hand (a binding-FFI codegen PoC was evaluated and
+  reverted — it only covers the mechanical ~20%); each binding's conformance
+  runner gained native checks over the same byte-literal routines, verified on
+  the host (Python/C++/Ruby) or the Docker matrix (the other seven). Track C
+  disassembly is **not** bound (it would pull Capstone into the binding lib).
+
 - **Win64 runner parity — per-test isolation, `-jN`, and benchmarks.** The Win64
   tier ran every test in one process (`--no-fork`); the POSIX runner's fork-based
   per-test isolation, `-jN` pool, and benchmark mode were gated off. All three

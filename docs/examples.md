@@ -273,6 +273,156 @@ make demo-robust                   # fork-isolated, short timeout
 
 ---
 
+## By audience
+
+The use cases above combine differently depending on what you're building. These
+four suites are each written for a specific audience and ship in the repository.
+
+### SIMD / crypto / codec / DSP / math-kernel authors
+
+**You need:** to trust hand-vectorised kernels lane by lane, and to prove the
+fast path equals a scalar reference. `ASM_VCALLn` marshals 128-bit vectors into
+the vector registers and captures the whole vector file; on x86-64 `ASM_VCALL256n`
+does the same for 256-bit AVX2 and self-skips a host without it. See
+[Floating-point & SIMD](floating-point-simd.md).
+
+```c
+extern void vec_add4f(void);            /* vec128 vec_add4f(vec128 a, vec128 b) */
+
+TEST(simd, adds_four_floats_lanewise) {
+    regs_t r;
+    vec128_t a = {.f32 = {1.0f, 2.0f, 3.0f, 4.0f}};
+    vec128_t b = {.f32 = {10.0f, 20.0f, 30.0f, 40.0f}};
+    ASM_VCALL2(&r, vec_add4f, a, b);
+    ASSERT_FEQ(r.vec[0].f32[0], 11.0f);     /* return is r.vec[0] */
+    ASSERT_FEQ(r.vec[0].f32[3], 44.0f);     /* the 4th lane needs all 128 bits */
+    ASSERT_ABI_PRESERVED(&r);               /* callee-saved GP regs untouched */
+}
+
+#if defined(__x86_64__)
+extern void vec_add4d(void);            /* vec256 vec_add4d(vec256, vec256), AVX2 */
+TEST(simd, avx2_adds_four_doubles_256bit) {
+    vec256_t a = {.f64 = {1.0, 2.0, 3.0, 4.0}};
+    vec256_t b = {.f64 = {10.0, 20.0, 30.0, 40.0}};
+    vec256_t out[16];
+    ASM_VCALL256_2(out, vec_add4d, a, b);   /* self-skips without AVX2 */
+    ASSERT_DEQ(out[0].f64[3], 44.0);
+}
+#endif
+```
+
+Pair this with the [differential engine](#differential-property-testing): keep a
+plain-C scalar kernel as the reference model and fuzz the vectorised routine
+against it — the standard way to catch a tail-handling or saturation bug.
+
+### Compiler / runtime / libc authors
+
+**You need:** to validate hand-written primitives across ISAs and prove they
+honour the ABI. The emulator tier runs *the same algorithm* as raw machine code
+on four guest CPUs — x86-64, AArch64, RISC-V, ARM32 — regardless of the host, and
+asserts they all agree (one algorithm, four ISAs). See [the emulator tier](emulator.md).
+
+```c
+#include "asmtest_emu.h"
+
+extern long add3(long, long, long);     /* a + b + c, native x86-64 */
+/* Raw `a+b+c; ret` for each guest (add x0,x0,x1 / add x0,x0,x2 / ret, etc.) */
+static const unsigned char A64_ADD3[] = {0x00,0x00,0x01,0x8b, 0x00,0x00,0x02,0x8b, 0xc0,0x03,0x5f,0xd6};
+
+TEST(emu_crossisa, add3_agrees_across_isas) {
+    long args[] = {11, 22, 33};
+    long want = 11 + 22 + 33;           /* the C reference */
+
+    emu_arm64_t *e64 = emu_arm64_open();
+    emu_arm64_result_t r64;
+    ASSERT_TRUE(emu_arm64_call(e64, A64_ADD3, sizeof A64_ADD3, args, 3, 0, &r64));
+    ASSERT_NO_FAULT(&r64);
+    ASSERT_EQ(r64.regs.x[0], want);     /* AArch64 result in x0 */
+    emu_arm64_close(e64);
+    /* ...RISC-V (result in a0/x[10]) and ARM32 (r0) guests assert the same. */
+}
+```
+
+For the ABI discipline itself, `ASSERT_ABI_PRESERVED` on a captured `regs_t` is
+the primitive — see [Correctness, registers and ABI](#correctness-registers-and-abi).
+Run the cross-ISA suite with `make usecases-emu` (needs libunicorn).
+
+### Reverse engineers / security researchers
+
+**You need:** to run an untrusted snippet without it touching your process, and to
+turn an out-of-bounds access into a *precise, reported* fault rather than a crash
+or silent garbage. The emulator maps exactly the memory you grant and pins a
+fault to the exact byte and kind (READ vs WRITE):
+
+```c
+#include "asmtest_emu.h"
+extern long sum_longs(const long *p, long n);   /* counted load loop */
+
+#define PAGE_BASE 0x00300000UL
+#define PAGE_SIZE 0x1000UL
+#define PAGE_END  (PAGE_BASE + PAGE_SIZE)
+
+static emu_t *E;
+SETUP(emu_sandbox)    { E = emu_open(); emu_map(E, PAGE_BASE, PAGE_SIZE); }
+TEARDOWN(emu_sandbox) { emu_close(E); E = NULL; }
+
+TEST(emu_sandbox, over_read_faults_at_exact_page_boundary) {
+    emu_result_t r;
+    long args[] = {(long)PAGE_BASE, 512 + 1};        /* one long past the page */
+    ASSERT_FALSE(emu_call(E, (void *)sum_longs, 64, args, 2, 0, &r));
+    ASSERT_FAULT_AT(&r, EMU_FAULT_READ, PAGE_END);   /* exact kind + address */
+}
+```
+
+The disassembly helpers (`emu_fault_describe`, `emu_trace_disasm`) annotate those
+fault/trace/coverage offsets with the actual instruction text via Capstone, so
+`0x2f` reads back as `0x2f  cmp rax, 0`. Run with `make usecases-emu`.
+
+### Teaching / learning assembly
+
+**You need:** a tight, test-driven feedback loop while learning. The
+[quick start](quickstart.md) walks the minimal `square` routine; a richer
+teaching example is a small **RPN interpreter written in assembly** — a stateful
+routine where three things are worth proving, each mapping to a framework
+feature:
+
+```c
+extern long vm_eval(const signed char *code, long n);
+#define ADD ((signed char)-1)
+#define MUL ((signed char)-3)
+
+/* 1. correctness over representative programs */
+TEST(vm, evaluates_a_nested_expression) {
+    signed char prog[] = {3, 4, ADD, 5, MUL};   /* (3 + 4) * 5 */
+    ASSERT_EQ(vm_eval(prog, 5), 35);
+}
+
+/* 2. ABI discipline across the interpreter loop */
+TEST(vm, preserves_callee_saved_registers) {
+    static const signed char prog[] = {3, 4, ADD, 5, MUL};
+    regs_t r;
+    ASM_CALL2(&r, vm_eval, prog, 5);
+    ASSERT_EQ((long)r.ret, 35);
+    ASSERT_ABI_PRESERVED(&r);                   /* live state restored on return */
+}
+
+/* 3. the cursor never runs off the end — guard page turns an over-read into a
+   reported fault, so a clean pass is positive evidence it stops at code[n] */
+TEST(vm, never_reads_past_the_program) {
+    const signed char src[] = {6, 7, ADD};      /* 13 */
+    size_t n = sizeof src;
+    signed char *prog = asmtest_guarded_alloc(n);
+    memcpy(prog, src, n);
+    ASSERT_EQ(vm_eval(prog, (long)n), 13);
+    asmtest_guarded_free(prog, n);
+}
+```
+
+Learners get an immediate, specific report — file, line, expression, expected vs
+actual — instead of a silent wrong answer, which is what makes the loop fast.
+
+---
+
 ## Where next
 
 - [Quick start](quickstart.md) — build a suite of your own from scratch.

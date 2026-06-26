@@ -133,6 +133,11 @@ page, linked above).
 | Cross-arch guest (arm64/riscv/arm) | `GuestEmulator("arm64").call(code, args)` | `new Guest(GuestArch.Arm64).Call(code, args)` | `NewGuest("arm64").Call(code, args, res)` |
 | Read a cross-arch guest register | `res.reg("x0")` | `res.Reg("x0")` | `res.Reg("x0")` |
 | Execution trace / block coverage | `e.call_traced(code, [], trace)` → `trace.covered(off)` | `e.CallTraced(code, [], trace)` → `trace.Covered(off)` | `e.CallTraced(…, trace, res)` → `trace.Covered(off)` |
+| Memory-write watchpoint (Track F) | `w = e.watch_writes(addr, n, EMU_WATCH_ONLY)` → `w.violated` | `e.WatchWrites(addr, n, 1)` → `w.Violated` | `e.WatchWrites(addr, n, "only")` → `w.Violated()` |
+| Register invariant (Track F) | `g = e.guard_reg("rbx", 0)` → `g.violated` | `e.GuardReg("rbx", 0)` → `g.Violated` | `e.GuardReg("rbx", 0)` → `g.Violated()` |
+| Coverage-guided fuzzing (Track E) | `e.fuzz_cover(code, lo, hi, n)` | `e.FuzzCover(code, lo, hi, n)` | `e.FuzzCover(code, lo, hi, n)` |
+| Mutation testing (Track E) | `e.mutation_test(code, inputs)` | `e.MutationTest(code, inputs)` | `e.MutationTest(code, inputs)` |
+| AVX2 256-bit capture (Track D) | `capture_vec256(fn, vargs)` (gate `cpu_has_avx2()`) | `Avx.CaptureVec256(fn, vargs)` | `CaptureVec256(fn, vargs)` |
 | In-line assembler present? | `asmtest.asm_available()` | `Emu.AsmAvailable` | `asmtest.AsmAvailable()` |
 | Run assembly *text* | `e.call_asm(src, [args])` | `e.CallAsm(src, args)` | `e.CallAsm(src, args, …, res)` |
 | Assemble text → bytes (multi-arch) | `asmtest.assemble(src, Arch.ARM64)` | `Emu.Assemble(src, AsmArch.Arm64)` | `asmtest.Assemble(src, ArchArm64, …)` |
