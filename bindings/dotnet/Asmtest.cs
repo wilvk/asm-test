@@ -107,6 +107,36 @@ namespace Asmtest
         [DllImport(EMU)] public static extern void asmtest_emu_arm_result_free(IntPtr r);
         [DllImport(EMU)] public static extern ulong asmtest_emu_arm_reg(IntPtr r, string name);
 
+        // Mid-execution guards (Track F).
+        [DllImport(EMU)][return: MarshalAs(UnmanagedType.I1)] public static extern bool emu_map(IntPtr e, ulong addr, nuint size);
+        [DllImport(EMU)] public static extern void emu_watch_writes(IntPtr e, ulong addr, nuint size, int mode, IntPtr w);
+        [DllImport(EMU)] public static extern void emu_watch_clear(IntPtr e);
+        [DllImport(EMU)][return: MarshalAs(UnmanagedType.I1)] public static extern bool emu_guard_reg(IntPtr e, string name, ulong want, IntPtr g);
+        [DllImport(EMU)] public static extern void emu_guard_reg_clear(IntPtr e);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_watch_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_watch_free(IntPtr w);
+        [DllImport(EMU)] public static extern int asmtest_emu_watch_violated(IntPtr w);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_watch_addr(IntPtr w);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_watch_rip_off(IntPtr w);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_reg_guard_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_reg_guard_free(IntPtr g);
+        [DllImport(EMU)] public static extern int asmtest_emu_reg_guard_violated(IntPtr g);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_reg_guard_got(IntPtr g);
+        // Coverage-guided fuzzing + mutation testing (Track E).
+        [DllImport(EMU)][return: MarshalAs(UnmanagedType.I1)] public static extern bool emu_fuzz_cover1(IntPtr e, byte[] code, nuint len, long lo, long hi, ulong iters, ulong seed, IntPtr uni, IntPtr st);
+        [DllImport(EMU)] public static extern nuint emu_mutation_test1(IntPtr e, byte[] code, nuint len, long[] inputs, nuint n, ulong maxm, ulong seed, IntPtr st);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_fuzz_stat_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_fuzz_stat_free(IntPtr s);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_fuzz_blocks_reached(IntPtr s);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_fuzz_corpus_len(IntPtr s);
+        [DllImport(EMU)] public static extern IntPtr asmtest_emu_mutation_stat_new();
+        [DllImport(EMU)] public static extern void asmtest_emu_mutation_stat_free(IntPtr s);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_mutation_killed(IntPtr s);
+        [DllImport(EMU)] public static extern ulong asmtest_emu_mutation_survived(IntPtr s);
+        // AVX2 256-bit capture (Track D).
+        [DllImport(EMU)] public static extern void asm_call_capture_vec256([Out] byte[] vec, IntPtr fn, long[] iargs, byte[] vargs);
+        [DllImport(EMU)] public static extern int asmtest_cpu_has_avx2();
+
         /// <summary>The Keystone diagnostic from the most recent assemble (thread-local; "" on success).</summary>
         public static string AsmError()
         {
@@ -309,9 +339,99 @@ namespace Asmtest
             return buf;
         }
 
+        // --- Mid-execution guards (Track F) --- //
+        /// <summary>Map a guest RW region [addr, addr+size) the routine can use.</summary>
+        public bool Map(ulong addr, nuint size) => Native.emu_map(_h, addr, size);
+
+        /// <summary>Arm a memory-write watchpoint over [addr, addr+size): mode 1 =
+        /// only (flag a write that escapes it), 0 = never (one that touches it).</summary>
+        public Watch WatchWrites(ulong addr, nuint size, int mode)
+        {
+            var w = new Watch();
+            Native.emu_watch_writes(_h, addr, size, mode, w.Handle);
+            return w;
+        }
+        public void WatchClear() => Native.emu_watch_clear(_h);
+
+        /// <summary>Arm a register invariant; null for an unknown register name.</summary>
+        public RegGuard GuardReg(string name, ulong want)
+        {
+            var g = new RegGuard();
+            if (!Native.emu_guard_reg(_h, name, want, g.Handle)) { g.Dispose(); return null; }
+            return g;
+        }
+        public void GuardRegClear() => Native.emu_guard_reg_clear(_h);
+
+        // --- Coverage-guided fuzzing + mutation testing (Track E) --- //
+        /// <summary>Coverage-guided input search over one-int-arg code; (blocks, corpus).</summary>
+        public (ulong Blocks, ulong Corpus) FuzzCover(byte[] code, long lo, long hi, ulong iters)
+        {
+            var uni = Native.asmtest_emu_trace_new(0, 256);
+            var st = Native.asmtest_emu_fuzz_stat_new();
+            Native.emu_fuzz_cover1(_h, code, (nuint)code.Length, lo, hi, iters, 0xC0FFEE, uni, st);
+            var outv = (Native.asmtest_emu_fuzz_blocks_reached(st), Native.asmtest_emu_fuzz_corpus_len(st));
+            Native.asmtest_emu_fuzz_stat_free(st);
+            Native.asmtest_emu_trace_free(uni);
+            return outv;
+        }
+        /// <summary>Bit-flip mutation testing of code against inputs; (killed, survived).</summary>
+        public (ulong Killed, ulong Survived) MutationTest(byte[] code, long[] inputs)
+        {
+            var st = Native.asmtest_emu_mutation_stat_new();
+            Native.emu_mutation_test1(_h, code, (nuint)code.Length, inputs, (nuint)inputs.Length, 0, 0xABCD, st);
+            var outv = (Native.asmtest_emu_mutation_killed(st), Native.asmtest_emu_mutation_survived(st));
+            Native.asmtest_emu_mutation_stat_free(st);
+            return outv;
+        }
+
         public void Dispose()
         {
             if (_h != IntPtr.Zero) { Native.emu_close(_h); _h = IntPtr.Zero; }
+        }
+    }
+
+    /// <summary>A memory-write watchpoint result (Track F). Dispose when done.</summary>
+    public sealed class Watch : IDisposable
+    {
+        IntPtr _h;
+        public Watch() => _h = Native.asmtest_emu_watch_new();
+        public IntPtr Handle => _h;
+        public bool Violated => Native.asmtest_emu_watch_violated(_h) != 0;
+        public ulong Addr => Native.asmtest_emu_watch_addr(_h);
+        public ulong RipOff => Native.asmtest_emu_watch_rip_off(_h);
+        public void Dispose() { if (_h != IntPtr.Zero) { Native.asmtest_emu_watch_free(_h); _h = IntPtr.Zero; } }
+    }
+
+    /// <summary>A register-invariant guard result (Track F). Dispose when done.</summary>
+    public sealed class RegGuard : IDisposable
+    {
+        IntPtr _h;
+        public RegGuard() => _h = Native.asmtest_emu_reg_guard_new();
+        public IntPtr Handle => _h;
+        public bool Violated => Native.asmtest_emu_reg_guard_violated(_h) != 0;
+        public ulong Got => Native.asmtest_emu_reg_guard_got(_h);
+        public void Dispose() { if (_h != IntPtr.Zero) { Native.asmtest_emu_reg_guard_free(_h); _h = IntPtr.Zero; } }
+    }
+
+    /// <summary>AVX2 256-bit capture (Track D) + the CPUID probe that gates it.</summary>
+    public static class Avx
+    {
+        /// <summary>True if the host CPU + OS support AVX2.</summary>
+        public static bool CpuHasAvx2() => Native.asmtest_cpu_has_avx2() != 0;
+
+        /// <summary>Run <paramref name="fn"/> with 256-bit vector args (each four
+        /// f64 lanes) and return the four f64 lanes of ymm0 (the vector return).</summary>
+        public static double[] CaptureVec256(IntPtr fn, double[][] vargs)
+        {
+            var outv = new byte[16 * 32];
+            var va = new byte[8 * 32];
+            for (int i = 0; i < Math.Min(vargs.Length, 8); i++)
+                for (int l = 0; l < 4; l++)
+                    BitConverter.GetBytes(vargs[i][l]).CopyTo(va, i * 32 + l * 8);
+            Native.asm_call_capture_vec256(outv, fn, new long[6], va);
+            var ret = new double[4];
+            for (int l = 0; l < 4; l++) ret[l] = BitConverter.ToDouble(outv, l * 8);
+            return ret;
         }
     }
 

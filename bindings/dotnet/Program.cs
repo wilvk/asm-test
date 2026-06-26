@@ -162,6 +162,46 @@ static class Conformance
         catch (AsmtestException) { t2teeth = true; }
         Check("tier2.assertions_have_teeth", t2teeth);
 
+        // Track F: mid-execution guards (byte-literal routines).
+        using (var e = new Emu())
+        {
+            byte[] twoWrites = { 0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3 };
+            e.Map(0x400000UL, (nuint)0x1000);
+            var w = e.WatchWrites(0x400000UL, (nuint)8, 1);
+            e.CallBytes(twoWrites, 0x400000).Dispose();
+            e.WatchClear();
+            Check("guard.watch_escape", w.Violated && w.Addr == 0x400800UL && w.RipOff == 3);
+            w.Dispose();
+            byte[] clobber = { 0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3 };
+            var g = e.GuardReg("rbx", 0);
+            e.CallBytes(clobber).Dispose();
+            e.GuardRegClear();
+            Check("guard.reg_invariant", g != null && g.Violated && g.Got == 0x99);
+            g?.Dispose();
+        }
+
+        // Track E: coverage-guided fuzzing + mutation testing over classify3.
+        using (var e = new Emu())
+        {
+            byte[] classify3 = { 0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+                0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3 };
+            var fixedS = e.FuzzCover(classify3, 5, 5, 1);
+            var guided = e.FuzzCover(classify3, -50, 50, 2000);
+            Check("fuzz.coverage_beats_fixed", guided.Blocks > fixedS.Blocks);
+            var weak = e.MutationTest(classify3, new long[] { 5 });
+            var strong = e.MutationTest(classify3, new long[] { -7, 0, 9 });
+            Check("mutation.strong_kills_more", weak.Survived > 0 && strong.Survived < weak.Survived);
+        }
+
+        // Track D: AVX2 256-bit capture (self-skips off-AVX2).
+        if (Avx.CpuHasAvx2())
+        {
+            var outv = Avx.CaptureVec256(Routine("vec_add4d"),
+                new[] { new double[] { 1, 2, 3, 4 }, new double[] { 10, 20, 30, 40 } });
+            Check("vec256.add4d", outv[0] == 11 && outv[1] == 22 && outv[2] == 33 && outv[3] == 44);
+        }
+        else { Console.WriteLine("ok - vec256.add4d # SKIP no AVX2"); }
+
         Console.WriteLine($"# {total - fails} passed, {fails} failed, {total} total");
         return fails == 0 ? 0 : 1;
     }

@@ -103,6 +103,8 @@ comparison and roadmap.
   [Quick start](quickstart.md).
 - Writing your first suite? See [Writing tests](writing-tests.md) and the
   [Assertion reference](assertions.md).
+- Want to see it in action by use case? See [Examples](examples.md) — correctness
+  & ABI capture, differential testing, benchmarking, and crash/hang containment.
 - Consuming the framework from another project? See
   [Using asm-test in your project](integration.md).
 - Driving it from another language? See [Language bindings](bindings.md) for the
@@ -117,6 +119,7 @@ comparison and roadmap.
 installation
 quickstart
 writing-tests
+examples
 ```
 
 ```{toctree}
