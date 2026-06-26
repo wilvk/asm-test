@@ -105,6 +105,22 @@ inline regs_t capture_vec(void *fn, std::initializer_list<long> iargs,
     return r;
 }
 
+/// AVX2 256-bit capture (Track D): marshal up to 8 `vec256_t` args into ymm0..7
+/// and capture the whole ymm file into `out` (out[0] = the vector return).
+/// x86-64 + AVX2 only — gate on `asmtest_cpu_has_avx2()`.
+inline void capture_vec256(void *fn, std::initializer_list<vec256_t> vargs,
+                           vec256_t out[16]) {
+    long ia[6] = {0, 0, 0, 0, 0, 0};
+    std::array<vec256_t, 8> va{};
+    std::size_t i = 0;
+    for (const vec256_t &v : vargs) {
+        if (i == va.size())
+            break;
+        va[i++] = v;
+    }
+    asm_call_capture_vec256(out, fn, ia, va.data());
+}
+
 /// All callee-saved registers restored — via the native non-jumping verdict shim.
 inline bool abi_preserved(const regs_t &r) {
     return asmtest_check_abi(&r, nullptr, 0) == 0;
@@ -269,6 +285,56 @@ class Emu {
         emu_call_traced(e_, code, len, a, static_cast<int>(args.size()),
                         max_insns, &res, tr);
         return res;
+    }
+
+    // --- Mid-execution guards (Track F) --- //
+
+    /// Map a guest RW region [addr, addr+size) the routine can use.
+    bool map(std::uint64_t addr, std::size_t size) {
+        return emu_map(e_, addr, size);
+    }
+
+    /// Arm a memory-write watchpoint over [addr, addr+size): EMU_WATCH_ONLY flags
+    /// a write that escapes it, EMU_WATCH_NEVER one that touches it. Read
+    /// `out.violated` / `out.addr` / `out.rip_off` after a call.
+    void watch_writes(std::uint64_t addr, std::size_t size,
+                      emu_watch_mode_t mode, emu_watch_t &out) {
+        emu_watch_writes(e_, addr, size, mode, &out);
+    }
+    void watch_clear() { emu_watch_clear(e_); }
+
+    /// Arm a register invariant: GP register `name` ("rbx", …) must hold `want`
+    /// at every basic-block entry. Returns false for an unknown register name.
+    bool guard_reg(const char *name, std::uint64_t want, emu_reg_guard_t &out) {
+        return emu_guard_reg(e_, name, want, &out);
+    }
+    void guard_reg_clear() { emu_guard_reg_clear(e_); }
+
+    // --- Coverage-guided fuzzing + mutation testing (Track E) --- //
+
+    /// Coverage-guided input search over a one-int-arg routine `code`.
+    emu_fuzz_stat_t fuzz_cover(const void *code, std::size_t len, long lo,
+                               long hi, std::uint64_t iters,
+                               std::uint64_t seed = 0xC0FFEEULL) {
+        emu_fuzz_stat_t st{};
+        std::vector<std::uint64_t> blocks(256);
+        emu_trace_t uni{};
+        uni.blocks = blocks.data();
+        uni.blocks_cap = blocks.size();
+        emu_fuzz_cover1(e_, code, len, lo, hi, iters, seed, &uni, &st);
+        return st;
+    }
+
+    /// Bit-flip mutation testing of `code` against an input set (survivors = gap).
+    emu_mutation_stat_t mutation_test(const void *code, std::size_t len,
+                                      std::initializer_list<long> inputs,
+                                      std::uint64_t max_mutants = 0,
+                                      std::uint64_t seed = 0xABCDULL) {
+        emu_mutation_stat_t st{};
+        std::vector<long> in(inputs);
+        emu_mutation_test1(e_, code, len, in.data(), in.size(), max_mutants,
+                           seed, &st);
+        return st;
     }
 
 #ifdef ASMTEST_ENABLE_ASM

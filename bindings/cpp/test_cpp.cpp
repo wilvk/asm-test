@@ -18,6 +18,7 @@ long clear_carry(void);
 long clobbers_rbx(long, long);
 double fp_add(double, double);
 void vec_add4f(void);  // vec128 in/out; only its address is needed
+void vec_add4d(void);  // vec256 in/out (AVX2); only its address is needed
 long read_fault(const long *);  // loads *p; faults if p is unmapped
 double int_to_double(long);     // (double)n into xmm0 from an integer arg
 }
@@ -115,6 +116,63 @@ TEST(cpp, emulator_xmm_and_rflags) {
     ASSERT_FALSE(res.faulted);
     ASSERT_EQ(res.regs.xmm[0].f64[0], 42.0);
     ASSERT_TRUE((res.regs.rflags & 0x2u) != 0);
+}
+
+// Mid-execution guards (Track F): hand-assembled byte routines, host-independent.
+TEST(cpp, guards_watchpoint_and_reg_invariant) {
+    Emu e;
+    const unsigned char two_writes[] = {0x48, 0x89, 0x07, 0x48, 0x89, 0x87,
+                                        0x00, 0x08, 0x00, 0x00, 0xC3};
+    constexpr std::uint64_t base = 0x400000;
+    ASSERT_TRUE(e.map(base, 0x1000));
+    emu_watch_t w{};
+    e.watch_writes(base, 8, EMU_WATCH_ONLY, w);
+    e.call_bytes(two_writes, sizeof two_writes, {static_cast<long>(base)});
+    e.watch_clear();
+    ASSERT_TRUE(w.violated);
+    ASSERT_EQ(w.addr, base + 0x800);
+    ASSERT_EQ(w.rip_off, 3u);
+
+    const unsigned char clobber[] = {0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00,
+                                     0xEB, 0x00, 0xC3};  // mov rbx,0x99;jmp+0;ret
+    emu_reg_guard_t g{};
+    ASSERT_TRUE(e.guard_reg("rbx", 0, g));
+    e.call_bytes(clobber, sizeof clobber, {});
+    e.guard_reg_clear();
+    ASSERT_TRUE(g.violated);
+    ASSERT_EQ(g.got, 0x99u);
+    emu_reg_guard_t g2{};
+    ASSERT_FALSE(e.guard_reg("nope", 0, g2));
+}
+
+// Coverage-guided fuzzing + mutation testing (Track E) over classify3.
+TEST(cpp, fuzz_and_mutation) {
+    Emu e;
+    const unsigned char classify3[] = {
+        0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+        0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3};
+    emu_fuzz_stat_t fixed = e.fuzz_cover(classify3, sizeof classify3, 5, 5, 1);
+    emu_fuzz_stat_t guided =
+        e.fuzz_cover(classify3, sizeof classify3, -50, 50, 2000);
+    ASSERT_TRUE(guided.blocks_reached > fixed.blocks_reached);
+
+    emu_mutation_stat_t weak = e.mutation_test(classify3, sizeof classify3, {5});
+    emu_mutation_stat_t strong =
+        e.mutation_test(classify3, sizeof classify3, {-7, 0, 9});
+    ASSERT_TRUE(weak.survived > 0);
+    ASSERT_TRUE(strong.survived < weak.survived);
+}
+
+// AVX2 256-bit capture (Track D): self-skips where the host lacks AVX2.
+TEST(cpp, vec256_avx2) {
+    if (!asmtest_cpu_has_avx2())
+        SKIP("AVX2 not available on this host");
+    vec256_t a{}, b{}, out[16]{};
+    a.f64[0] = 1; a.f64[1] = 2; a.f64[2] = 3; a.f64[3] = 4;
+    b.f64[0] = 10; b.f64[1] = 20; b.f64[2] = 30; b.f64[3] = 40;
+    capture_vec256(reinterpret_cast<void *>(vec_add4d), {a, b}, out);
+    ASSERT_EQ(out[0].f64[0], 11.0);
+    ASSERT_EQ(out[0].f64[3], 44.0);  // upper-128 lane — proves full 256-bit
 }
 
 // Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,

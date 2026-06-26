@@ -1008,9 +1008,9 @@ $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
                      include/asmtest.h include/asmtest_emu.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) -DASMTEST_ENABLE_EMU -c $< -o $@
 
-$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/add.o \
-                   $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
-                   $(BUILD)/fault.o $(BUILD)/test_cpp.o
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
+                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
+                   $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp
