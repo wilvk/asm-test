@@ -23,10 +23,13 @@ BSD-3-Clause). The mechanical compliance is **done**:
   the `corresponding-source` job
   ([scripts/fetch-corresponding-source.sh](../scripts/fetch-corresponding-source.sh)).
 
-The one remaining item is a **human decision**, not code: confirm it is acceptable
-to distribute effectively-GPL packages under the project's name. If not, ship only
-the capture-only MIT path (a link binding built with the tiers off) — there is no
-prebuilt MIT package.
+The human decision — whether it is acceptable to distribute effectively-GPL
+packages under the project's name — has been **confirmed (2026-06-26): approved**.
+(The MIT-clean alternative, had it been declined, would have been the capture-only
+link-binding path built with the tiers off — there is no prebuilt MIT package.)
+
+So the GPL gate is **cleared**. What remains to publish is purely operational: add
+the registry secrets below and push a version tag.
 
 ## Required secrets (per registry)
 

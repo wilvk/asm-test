@@ -232,8 +232,8 @@ checklist — **all mechanical items now done** (see
 - [x] **No further restrictions** — the compound SPDX + bundled GPL terms impose
   none beyond GPL.
 - [x] **Registry metadata updated** from bare `MIT` to the compound SPDX.
-- [ ] **Human sign-off** — confirm it is acceptable to distribute
-  effectively-GPL packages under the project's name (the only non-code item).
+- [x] **Human sign-off** — confirmed 2026-06-26: distributing the effectively-GPL
+  packages under the project's name is **approved**.
 
 **No prebuilt MIT fallback exists** (the `core` variant was removed). If shipping
 an effectively-GPL package is unacceptable, the publish must be **blocked** — the
