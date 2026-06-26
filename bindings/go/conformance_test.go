@@ -304,3 +304,67 @@ func TestTier2HaveTeeth(t *testing.T) {
 		t.Fatal("AssertRet did not fail on a wrong return value")
 	}
 }
+
+// Track F: mid-execution guards (byte-literal routines).
+func TestGuards(t *testing.T) {
+	e := NewEmu()
+	defer e.Close()
+	res := NewEmuResult()
+	defer res.Free()
+	twoWrites := []byte{0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3}
+	if !e.Map(0x400000, 0x1000) {
+		t.Fatal("Map failed")
+	}
+	w := e.WatchWrites(0x400000, 8, "only")
+	defer w.Free()
+	e.CallBytes(twoWrites, []int64{0x400000}, res)
+	e.WatchClear()
+	if !w.Violated() || w.Addr() != 0x400800 || w.RipOff() != 3 {
+		t.Fatalf("watch: violated=%v addr=%#x rip=%d", w.Violated(), w.Addr(), w.RipOff())
+	}
+	clobber := []byte{0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3}
+	g, ok := e.GuardReg("rbx", 0)
+	if !ok {
+		t.Fatal("GuardReg rbx failed")
+	}
+	defer g.Free()
+	e.CallBytes(clobber, nil, res)
+	e.GuardRegClear()
+	if !g.Violated() || g.Got() != 0x99 {
+		t.Fatalf("regguard: violated=%v got=%#x", g.Violated(), g.Got())
+	}
+	if _, ok := e.GuardReg("nope", 0); ok {
+		t.Fatal("GuardReg accepted an unknown register")
+	}
+}
+
+// Track E: coverage-guided fuzzing + mutation testing over classify3.
+func TestFuzzMutation(t *testing.T) {
+	classify3 := []byte{
+		0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+		0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3}
+	e := NewEmu()
+	defer e.Close()
+	fixed, _ := e.FuzzCover(classify3, 5, 5, 1)
+	guided, _ := e.FuzzCover(classify3, -50, 50, 2000)
+	if guided <= fixed {
+		t.Fatalf("fuzz: guided %d <= fixed %d", guided, fixed)
+	}
+	_, weakS := e.MutationTest(classify3, []int64{5})
+	_, strongS := e.MutationTest(classify3, []int64{-7, 0, 9})
+	if weakS == 0 || strongS >= weakS {
+		t.Fatalf("mutation: weak survived %d, strong survived %d", weakS, strongS)
+	}
+}
+
+// Track D: AVX2 256-bit capture (self-skips off-AVX2).
+func TestVec256(t *testing.T) {
+	if !CPUHasAVX2() {
+		t.Skip("AVX2 not available on this host")
+	}
+	out := CaptureVec256(CorpusRoutine("vec_add4d"),
+		[][4]float64{{1, 2, 3, 4}, {10, 20, 30, 40}})
+	if want := [4]float64{11, 22, 33, 44}; out != want {
+		t.Fatalf("vec256: got %v, want %v", out, want)
+	}
+}

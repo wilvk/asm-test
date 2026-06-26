@@ -95,6 +95,32 @@ extern int asmtest_emu_trace_covered(void *t, unsigned long long off);
 extern unsigned long long asmtest_emu_trace_insns_total(void *t);
 extern unsigned long long asmtest_emu_trace_blocks_len(void *t);
 
+// Mid-execution guards (Track F).
+extern int  emu_map(void *e, unsigned long long addr, size_t size);
+extern void emu_watch_writes(void *e, unsigned long long addr, size_t size, int mode, void *w);
+extern void emu_watch_clear(void *e);
+extern int  emu_guard_reg(void *e, const char *name, unsigned long long want, void *g);
+extern void emu_guard_reg_clear(void *e);
+extern void *asmtest_emu_watch_new(void); extern void asmtest_emu_watch_free(void *w);
+extern int asmtest_emu_watch_violated(void *w);
+extern unsigned long long asmtest_emu_watch_addr(void *w);
+extern unsigned long long asmtest_emu_watch_rip_off(void *w);
+extern void *asmtest_emu_reg_guard_new(void); extern void asmtest_emu_reg_guard_free(void *g);
+extern int asmtest_emu_reg_guard_violated(void *g);
+extern unsigned long long asmtest_emu_reg_guard_got(void *g);
+// Coverage-guided fuzzing + mutation testing (Track E).
+extern int emu_fuzz_cover1(void *e, void *code, size_t len, long lo, long hi, unsigned long long iters, unsigned long long seed, void *uni, void *st);
+extern size_t emu_mutation_test1(void *e, void *code, size_t len, long *in, size_t n, unsigned long long maxm, unsigned long long seed, void *st);
+extern void *asmtest_emu_fuzz_stat_new(void); extern void asmtest_emu_fuzz_stat_free(void *s);
+extern unsigned long long asmtest_emu_fuzz_blocks_reached(void *s);
+extern unsigned long long asmtest_emu_fuzz_corpus_len(void *s);
+extern void *asmtest_emu_mutation_stat_new(void); extern void asmtest_emu_mutation_stat_free(void *s);
+extern unsigned long long asmtest_emu_mutation_killed(void *s);
+extern unsigned long long asmtest_emu_mutation_survived(void *s);
+// AVX2 256-bit capture (Track D).
+extern void asm_call_capture_vec256(void *vec, void *fn, long *iargs, void *vargs);
+extern int asmtest_cpu_has_avx2(void);
+
 // In-line assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
 // which the default build does not link. Resolve them at run time from the lib the
 // binding loads (ASMTEST_LIB): dlopen it RTLD_GLOBAL, then dlsym. Against the plain
@@ -236,6 +262,117 @@ func (e *Emu) Close() {
 // Call2 runs fn in the emulator with two integer args, filling out.
 func (e *Emu) Call2(fn Routine, a0, a1 int64, out *EmuResult) {
 	C.asmtest_emu_call2(e.h, fn, C.long(a0), C.long(a1), out.h)
+}
+
+// --- Mid-execution guards (Track F) --- //
+
+// Watch is a memory-write watchpoint result. Free it when done.
+type Watch struct{ h unsafe.Pointer }
+
+func (w *Watch) Violated() bool { return C.asmtest_emu_watch_violated(w.h) != 0 }
+func (w *Watch) Addr() uint64   { return uint64(C.asmtest_emu_watch_addr(w.h)) }
+func (w *Watch) RipOff() uint64 { return uint64(C.asmtest_emu_watch_rip_off(w.h)) }
+func (w *Watch) Free() {
+	if w.h != nil {
+		C.asmtest_emu_watch_free(w.h)
+		w.h = nil
+	}
+}
+
+// RegGuard is a register-invariant guard result. Free it when done.
+type RegGuard struct{ h unsafe.Pointer }
+
+func (g *RegGuard) Violated() bool { return C.asmtest_emu_reg_guard_violated(g.h) != 0 }
+func (g *RegGuard) Got() uint64    { return uint64(C.asmtest_emu_reg_guard_got(g.h)) }
+func (g *RegGuard) Free() {
+	if g.h != nil {
+		C.asmtest_emu_reg_guard_free(g.h)
+		g.h = nil
+	}
+}
+
+// Map maps a guest RW region [addr, addr+size) the routine can use.
+func (e *Emu) Map(addr uint64, size int) bool {
+	return C.emu_map(e.h, C.ulonglong(addr), C.size_t(size)) != 0
+}
+
+// WatchWrites arms a memory-write watchpoint over [addr, addr+size): mode "only"
+// flags a write that escapes it, "never" one that touches it.
+func (e *Emu) WatchWrites(addr uint64, size int, mode string) *Watch {
+	w := &Watch{h: C.asmtest_emu_watch_new()}
+	m := C.int(1)
+	if mode == "never" {
+		m = 0
+	}
+	C.emu_watch_writes(e.h, C.ulonglong(addr), C.size_t(size), m, w.h)
+	return w
+}
+
+// WatchClear disarms the memory-write watchpoint.
+func (e *Emu) WatchClear() { C.emu_watch_clear(e.h) }
+
+// GuardReg arms a register invariant; ok is false for an unknown register name.
+func (e *Emu) GuardReg(name string, want uint64) (g *RegGuard, ok bool) {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	g = &RegGuard{h: C.asmtest_emu_reg_guard_new()}
+	if C.emu_guard_reg(e.h, cs, C.ulonglong(want), g.h) == 0 {
+		g.Free()
+		return nil, false
+	}
+	return g, true
+}
+
+// GuardRegClear disarms the register invariant.
+func (e *Emu) GuardRegClear() { C.emu_guard_reg_clear(e.h) }
+
+// --- Coverage-guided fuzzing + mutation testing (Track E) --- //
+
+// FuzzCover runs a coverage-guided input search over one-int-arg code; returns
+// the distinct blocks reached and the coverage-expanding corpus size.
+func (e *Emu) FuzzCover(code []byte, lo, hi int64, iters uint64) (blocks, corpus uint64) {
+	uni := C.asmtest_emu_trace_new(0, 256)
+	st := C.asmtest_emu_fuzz_stat_new()
+	C.emu_fuzz_cover1(e.h, cbytePtr(code), C.size_t(len(code)), C.long(lo), C.long(hi),
+		C.ulonglong(iters), C.ulonglong(0xC0FFEE), uni, st)
+	blocks = uint64(C.asmtest_emu_fuzz_blocks_reached(st))
+	corpus = uint64(C.asmtest_emu_fuzz_corpus_len(st))
+	C.asmtest_emu_fuzz_stat_free(st)
+	C.asmtest_emu_trace_free(uni)
+	return
+}
+
+// MutationTest bit-flips code against an input set; returns killed, survived.
+func (e *Emu) MutationTest(code []byte, inputs []int64) (killed, survived uint64) {
+	st := C.asmtest_emu_mutation_stat_new()
+	C.emu_mutation_test1(e.h, cbytePtr(code), C.size_t(len(code)), clongPtr(inputs),
+		C.size_t(len(inputs)), C.ulonglong(0), C.ulonglong(0xABCD), st)
+	killed = uint64(C.asmtest_emu_mutation_killed(st))
+	survived = uint64(C.asmtest_emu_mutation_survived(st))
+	C.asmtest_emu_mutation_stat_free(st)
+	return
+}
+
+// --- AVX2 256-bit capture (Track D) --- //
+
+// CPUHasAVX2 reports whether the host supports AVX2 (gate CaptureVec256).
+func CPUHasAVX2() bool { return C.asmtest_cpu_has_avx2() != 0 }
+
+// CaptureVec256 runs an AVX2 routine with 256-bit vector args (each [4]float64)
+// and returns the 4 f64 lanes of ymm0 (the vector return). x86-64 + AVX2 only.
+func CaptureVec256(fn Routine, vargs [][4]float64) [4]float64 {
+	out := make([]byte, 16*32)
+	va := make([]float64, 8*4)
+	for i, v := range vargs {
+		if i >= 8 {
+			break
+		}
+		copy(va[i*4:], v[:])
+	}
+	ia := make([]int64, 6)
+	C.asm_call_capture_vec256(unsafe.Pointer(&out[0]), fn, clongPtr(ia),
+		unsafe.Pointer(&va[0]))
+	return *(*[4]float64)(unsafe.Pointer(&out[0]))
 }
 
 // --- helpers for passing Go slices to C (no Go pointers inside the slices) --- //
