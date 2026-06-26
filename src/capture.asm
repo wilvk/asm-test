@@ -223,6 +223,77 @@ ASM_FUNC asm_call_capture_vec
     ret
 ASM_ENDFUNC asm_call_capture_vec
 
+; void asm_call_capture_vec256(vec256_t *vec, void *fn, const long iargs[6],
+;                              const vec256_t vargs[8]);
+;   vec -> rdi, fn -> rsi, iargs -> rdx, vargs -> rcx
+; AVX2: marshals 8 full 256-bit vectors into ymm0-7 and captures ymm0-15 into
+; vec[0..15] (32 bytes each; vec[0] = return). x86-64 + AVX2 only — gated by the
+; C wrapper / ASM_VCALL256* on asmtest_cpu_has_avx2(). Captures the vector file
+; only (the 128-bit path covers GP/flags). vzeroupper on exit.
+ASM_FUNC asm_call_capture_vec256
+    push    rbx
+    push    rbp
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 24
+    mov     [rsp + 0], rdi          ; save vec out ptr
+    mov     [rsp + 8], rsi          ; save fn
+
+    ; Vector args: vargs (rcx) -> ymm0..ymm7
+    vmovdqu ymm0, [rcx + 0]
+    vmovdqu ymm1, [rcx + 32]
+    vmovdqu ymm2, [rcx + 64]
+    vmovdqu ymm3, [rcx + 96]
+    vmovdqu ymm4, [rcx + 128]
+    vmovdqu ymm5, [rcx + 160]
+    vmovdqu ymm6, [rcx + 192]
+    vmovdqu ymm7, [rcx + 224]
+
+    ; Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9
+    mov     rax, rdx
+    mov     rdi, [rax + 0]
+    mov     rsi, [rax + 8]
+    mov     rcx, [rax + 24]
+    mov     r8,  [rax + 32]
+    mov     r9,  [rax + 40]
+    mov     rdx, [rax + 16]
+
+    mov     r11, [rsp + 8]
+    mov     eax, 8                  ; variadic ABI: 8 vector registers
+    call    r11
+
+    mov     r11, [rsp + 0]          ; vec out ptr
+    ; Full ymm file: ymm0..15 -> vec[0..15] (32 bytes each)
+    vmovdqu [r11 + 0],   ymm0
+    vmovdqu [r11 + 32],  ymm1
+    vmovdqu [r11 + 64],  ymm2
+    vmovdqu [r11 + 96],  ymm3
+    vmovdqu [r11 + 128], ymm4
+    vmovdqu [r11 + 160], ymm5
+    vmovdqu [r11 + 192], ymm6
+    vmovdqu [r11 + 224], ymm7
+    vmovdqu [r11 + 256], ymm8
+    vmovdqu [r11 + 288], ymm9
+    vmovdqu [r11 + 320], ymm10
+    vmovdqu [r11 + 352], ymm11
+    vmovdqu [r11 + 384], ymm12
+    vmovdqu [r11 + 416], ymm13
+    vmovdqu [r11 + 448], ymm14
+    vmovdqu [r11 + 480], ymm15
+    vzeroupper
+
+    add     rsp, 24
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbp
+    pop     rbx
+    ret
+ASM_ENDFUNC asm_call_capture_vec256
+
 ; void asm_call_capture_fp_n(regs_t *out, void *fn, const long iargs[6],
 ;                            const double *fargs, int nfargs);
 ;   out -> rdi, fn -> rsi, iargs -> rdx, fargs -> rcx, nfargs -> r8

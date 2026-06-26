@@ -1039,6 +1039,91 @@ ASM_FUNC asm_call_capture_vec_n
 ASM_ENDFUNC asm_call_capture_vec_n
 
 /*
+ * void asm_call_capture_vec256(vec256_t *vec, void *fn, const long iargs[6],
+ *                              const vec256_t vargs[8]);
+ * The AVX2 analog of asm_call_capture_vec: marshal 8 full 256-bit vector args
+ * into ymm0..7 and capture the ymm file (ymm0..15) into vec[0..15] (32 bytes
+ * each; vec[0] = return). x86-64 + AVX2 only — the C wrapper / ASM_VCALL256*
+ * macros gate it on asmtest_cpu_has_avx2(), so a non-AVX2 host never reaches the
+ * VEX-encoded body. Captures the vector file only (the 128-bit path covers GP /
+ * flags). vzeroupper on exit avoids the SSE/AVX transition penalty for any
+ * legacy-SSE code that runs afterwards.
+ */
+ASM_FUNC asm_call_capture_vec256
+
+#if defined(__x86_64__)
+/* vec -> %rdi, fn -> %rsi, iargs -> %rdx, vargs -> %rcx */
+    pushq   %rbx
+    pushq   %rbp
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $24, %rsp
+    movq    %rdi, 0(%rsp)          /* save vec out ptr */
+    movq    %rsi, 8(%rsp)          /* save fn */
+
+    /* Vector args: vargs (rcx) -> ymm0..ymm7 (full 256 bits). */
+    vmovdqu 0(%rcx),   %ymm0
+    vmovdqu 32(%rcx),  %ymm1
+    vmovdqu 64(%rcx),  %ymm2
+    vmovdqu 96(%rcx),  %ymm3
+    vmovdqu 128(%rcx), %ymm4
+    vmovdqu 160(%rcx), %ymm5
+    vmovdqu 192(%rcx), %ymm6
+    vmovdqu 224(%rcx), %ymm7
+
+    /* Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9. */
+    movq    %rdx, %rax
+    movq    0(%rax),  %rdi
+    movq    8(%rax),  %rsi
+    movq    24(%rax), %rcx
+    movq    32(%rax), %r8
+    movq    40(%rax), %r9
+    movq    16(%rax), %rdx
+
+    movq    8(%rsp), %r11
+    movl    $8, %eax               /* variadic ABI: 8 vector registers */
+    call    *%r11
+
+    movq    0(%rsp), %r11          /* vec out ptr */
+    /* Full ymm file: ymm0..15 -> vec[0..15] (32 bytes each). */
+    vmovdqu %ymm0,  0(%r11)
+    vmovdqu %ymm1,  32(%r11)
+    vmovdqu %ymm2,  64(%r11)
+    vmovdqu %ymm3,  96(%r11)
+    vmovdqu %ymm4,  128(%r11)
+    vmovdqu %ymm5,  160(%r11)
+    vmovdqu %ymm6,  192(%r11)
+    vmovdqu %ymm7,  224(%r11)
+    vmovdqu %ymm8,  256(%r11)
+    vmovdqu %ymm9,  288(%r11)
+    vmovdqu %ymm10, 320(%r11)
+    vmovdqu %ymm11, 352(%r11)
+    vmovdqu %ymm12, 384(%r11)
+    vmovdqu %ymm13, 416(%r11)
+    vmovdqu %ymm14, 448(%r11)
+    vmovdqu %ymm15, 480(%r11)
+    vzeroupper
+
+    addq    $24, %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbp
+    popq    %rbx
+    ret
+
+#else
+/* AVX is x86-only; a stub so the symbol resolves on other arches. Never called:
+ * asmtest_cpu_has_avx2() is false off x86, so the macros self-skip. */
+    ret
+#endif
+
+ASM_ENDFUNC asm_call_capture_vec256
+
+/*
  * void asm_call_capture_args(regs_t *out, void *fn, const long *args,
  *                            int nargs);
  * Passes `nargs` integer args: the first 6 (x86-64) / 8 (AArch64) in registers,

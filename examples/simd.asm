@@ -7,3 +7,10 @@ ASM_FUNC vec_add4f
     addps   xmm0, xmm1          ; xmm0 = xmm0 + xmm1, packed single
     ret
 ASM_ENDFUNC vec_add4f
+
+; vec256 vec_add4d(vec256 a, vec256 b); four 64-bit doubles, AVX2
+;   a -> ymm0, b -> ymm1, result -> ymm0
+ASM_FUNC vec_add4d
+    vaddpd  ymm0, ymm0, ymm1    ; ymm0 = ymm0 + ymm1, packed double
+    ret
+ASM_ENDFUNC vec_add4d

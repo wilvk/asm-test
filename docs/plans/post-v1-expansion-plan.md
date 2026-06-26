@@ -161,7 +161,7 @@ a small surface and an already-familiar optional-dependency pattern.
 
 ---
 
-## Track D — Wide-vector capture (AVX/AVX-512, SVE) *(planned)*
+## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 done; AVX-512/SVE staged**
 
 **Goal.** Capture vector state wider than 128 bits, so AVX2 / AVX-512 (`ymm`/`zmm`)
 and AArch64 SVE routines are testable to their full register width.
@@ -170,6 +170,24 @@ and AArch64 SVE routines are testable to their full register width.
 `q0..31`, `ASM_VCALLn` ([asmtest.h](../../include/asmtest.h)). Modern SIMD lives at
 256/512 bits and in scalable vectors; those routines currently can't have their full
 state captured. This is a concrete capability gap, not a long-tail architecture.
+
+**Landed (AVX2, the acceptance).** The **fixed-width** type model (decided over a sized
+`vecN_t`, since SVE is a deferred stretch and fixed-width reuses the shipped `vec128_t`
+→ manifest → binding idiom): `vec256_t` + `asm_call_capture_vec256` marshal `ymm0..7`
+and capture the `ymm` file into a `vec256_t[16]`, with `ASM_VCALL256n` /
+`ASSERT_VEC256_EQ` and a CPUID probe (`asmtest_cpu_has_avx2` / `_avx512f`, checking the
+feature bit **and** OS `XCR0` enablement) so the path self-skips rather than executing
+an unsupported instruction. Trampoline in **both** backends (`capture.s` GAS +
+`capture.asm` NASM, `vzeroupper` on exit), manifest + `_Static_assert` pinned, and a
+`vec_add4d` AVX2 example asserts the full 256-bit result (upper-128 lane included) on
+both — **verified on a real AVX2 host**.
+
+**Staged follow-ons:** AVX-512 (`zmm`) native capture (no AVX-512 silicon to verify on
+here — the `_avx512f` probe + type groundwork are in place), AArch64 **SVE**, a **Win64**
+wide path, and **vec256 binding parity**. The **emulator** wide path is the *documented
+self-skip* case (deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not
+execute** AVX (`UC_ERR_INSN_INVALID`, even with an AVX-capable CPU model set), so
+wide-vector capture is native-only until Unicorn ships AVX execution.
 
 ### Deliverables
 
@@ -296,7 +314,8 @@ caught at the offending store with its instruction text, no host crash.
    Tracks E/F can build on it.
 2. **Track A** (publish) — if reach is the priority, this is the single biggest
    adoption lever; it has no dependency on the others.
-3. **Track D** (wide vectors) — closes a concrete modern gap in the capture model.
+3. **Track D** (wide vectors) — **AVX2 done** (native 256-bit capture); AVX-512,
+   SVE, Win64-wide, and binding parity staged.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now

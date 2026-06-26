@@ -89,6 +89,22 @@ typedef union {
     double f64[2];
 } vec128_t;
 
+/* One 256-bit vector register (AVX2 YMM), same lane-view idiom as vec128_t at
+ * twice the width — captured by asm_call_capture_vec256 (x86-64 + AVX2). The
+ * low 128 bits alias the matching xmm/vec128_t, so a 256-bit capture subsumes
+ * the 128-bit view (vec256.u8[0..15]). */
+typedef union {
+    unsigned char u8[32];
+    uint32_t u32[8];
+    uint64_t u64[4];
+    float f32[8];
+    double f64[4];
+} vec256_t;
+
+/* Layout pin: asm_call_capture_vec256 stores each ymm as 32 contiguous bytes,
+ * so a vec256_t[16] is the 512-byte ymm file the trampoline writes. */
+ASMTEST_STATIC_ASSERT(sizeof(vec256_t) == 32, "vec256_t is 32 bytes");
+
 #if defined(ASMTEST_ABI_WIN64)
 
 /* --- Microsoft x64 ("Win64") ABI on x86-64 ---------------------------------
@@ -252,6 +268,21 @@ void asm_call_capture_fp(regs_t *out, void *fn, const long *iargs,
  * 6 slots, vargs has 8. */
 void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
                           const vec128_t *vargs);
+
+/* Runtime CPU feature probes (x86-64; false on other hosts). A wide-vector path
+ * gates on these and SELF-SKIPS where the feature is absent, instead of
+ * executing an unsupported instruction and faulting. */
+int asmtest_cpu_has_avx2(void);
+int asmtest_cpu_has_avx512f(void);
+
+/* The AVX2 analog of asm_call_capture_vec: marshal 8 full 256-bit vector args
+ * into ymm0-7 and capture the whole ymm file (ymm0..15) into vec[0..15] (a
+ * caller-provided array of 16; vec[0] = the vector return). x86-64 + AVX2 only —
+ * guard the call with asmtest_cpu_has_avx2(), or use the ASM_VCALL256* macros,
+ * which self-skip. Captures the vector file only; use the 128-bit path for the
+ * GP/flags capture. */
+void asm_call_capture_vec256(vec256_t *vec, void *fn, const long *iargs,
+                             const vec256_t *vargs);
 
 /* Like asm_call_capture_fp, but with an arbitrary number of double args: the
  * first 8 go in the FP argument registers (xmm0-7 / d0-7), the rest spill onto
@@ -465,6 +496,11 @@ void asmtest_assert_vec_eq(const char *file, int line, const char *idxexpr,
                            const unsigned char *actual,
                            const unsigned char *expected);
 
+/* 32-byte (256-bit) variant, for vec256_t lanes captured by the AVX2 path. */
+void asmtest_assert_vec256_eq(const char *file, int line, const char *idxexpr,
+                              const unsigned char *actual,
+                              const unsigned char *expected);
+
 /* Allocate n writable bytes followed by an inaccessible guard page, so a
  * one-past-the-end access faults (and is reported as a test failure). Free
  * with the same n that was passed to alloc. */
@@ -656,6 +692,24 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
         (out), (void *)(fn), (long[6]){0}, (vec128_t[]){__VA_ARGS__},         \
         (int)(sizeof((vec128_t[]){__VA_ARGS__}) / sizeof(vec128_t)))
 
+/* ASM_VCALL256n: like ASM_VCALLn but with 256-bit (AVX2 ymm) args; `out` is a
+ * vec256_t[16] receiving the ymm file (out[0] = return). SELF-SKIPS the test
+ * (SKIP) when AVX2 is unavailable, so the same suite runs on any host. */
+#define ASM_VCALL256_1(out, fn, v0)                                           \
+    do {                                                                      \
+        if (!asmtest_cpu_has_avx2())                                          \
+            SKIP("AVX2 not available on this host");                          \
+        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},            \
+                                (vec256_t[8]){(v0)});                         \
+    } while (0)
+#define ASM_VCALL256_2(out, fn, v0, v1)                                       \
+    do {                                                                      \
+        if (!asmtest_cpu_has_avx2())                                          \
+            SKIP("AVX2 not available on this host");                          \
+        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},            \
+                                (vec256_t[8]){(v0), (v1)});                    \
+    } while (0)
+
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
@@ -761,6 +815,14 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 #define ASSERT_VEC_EQ(r, idx, expect_ptr)                                     \
     asmtest_assert_vec_eq(__FILE__, __LINE__, #idx, (r)->vec[idx].u8,         \
                           (const unsigned char *)(expect_ptr))
+
+/* 256-bit variant: `vec` is the vec256_t[16] array filled by
+ * asm_call_capture_vec256, so the lane is vec[idx] (not r->vec[idx]):
+ * ASSERT_VEC256_EQ(out, 0, expected.u8). Lane scalars use ASSERT_DEQ/FEQ as
+ * usual, e.g. ASSERT_DEQ(out[0].f64[3], 4.0). */
+#define ASSERT_VEC256_EQ(vec, idx, expect_ptr)                                \
+    asmtest_assert_vec256_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,         \
+                             (const unsigned char *)(expect_ptr))
 
 /* Differential / property assertions: assert the asm routine `fn` matches the
  * C reference `ref` over `n` random input tuples drawn from generator `gen`.

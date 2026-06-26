@@ -96,6 +96,38 @@ ASSERT_DEQ(r.vec[0].f64[0], 4.0);
 ASSERT_DNEAR(r.vec[0].f64[1], 6.0, 2);
 ```
 
+### Wide vectors — AVX2 (256-bit)
+
+For routines that operate on 256-bit `ymm` registers, `ASM_VCALL256n` marshals
+`vec256_t` arguments (the 256-bit analog of `vec128_t`) into `ymm0..7` and
+captures the whole `ymm` file into a caller-provided `vec256_t out[16]`
+(`out[0]` is the return). It is **x86-64 + AVX2 only** and **self-skips** the
+test (via `SKIP`) on a host without AVX2 — gate a direct call with
+`asmtest_cpu_has_avx2()`:
+
+```c
+TEST(simd, avx2_add4d) {
+    vec256_t a = {.f64 = {1, 2, 3, 4}};
+    vec256_t b = {.f64 = {10, 20, 30, 40}};
+    vec256_t out[16];
+    ASM_VCALL256_2(out, vec_add4d, a, b);     // skips cleanly if no AVX2
+    ASSERT_DEQ(out[0].f64[3], 44.0);          // the 4th lane is the upper 128 bits
+    vec256_t want = {.f64 = {11, 22, 33, 44}};
+    ASSERT_VEC256_EQ(out, 0, want.u8);        // full 32-byte compare
+}
+```
+
+The lane scalars use the same `ASSERT_DEQ`/`FEQ` macros; `ASSERT_VEC256_EQ(out,
+idx, expect)` is the 32-byte whole-register compare. Lane counts double versus
+`vec128_t` — `f64[0..3]`, `f32[0..7]`, `u64[0..3]`.
+
+> **AVX-512 (`zmm`), SVE, and the emulator.** The `asmtest_cpu_has_avx512f()`
+> probe is in place, but native 512-bit capture, AArch64 SVE, and a Win64 wide
+> path are not yet wired. The [emulator tier](emulator.md) exposes the YMM/ZMM
+> registers but its bundled Unicorn does not *execute* AVX instructions
+> (`UC_ERR_INSN_INVALID`), so wide-vector capture is **native-only** for now;
+> the emulator path self-skips until Unicorn ships AVX execution.
+
 ## Mixed integer and FP arguments
 
 A routine taking both integer and `double` arguments is handled by the FP capture

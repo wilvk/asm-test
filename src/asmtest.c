@@ -376,6 +376,64 @@ void asmtest_assert_vec_eq(const char *file, int line, const char *idxexpr,
                  idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
 }
 
+void asmtest_assert_vec256_eq(const char *file, int line, const char *idxexpr,
+                              const unsigned char *actual,
+                              const unsigned char *expected) {
+    size_t i = 0;
+    while (i < 32 && actual[i] == expected[i])
+        i++;
+    if (i == 32)
+        return;
+    char expect_hex[128], actual_hex[128];
+    hexdump_window(expect_hex, sizeof expect_hex, expected, 0, 32);
+    hexdump_window(actual_hex, sizeof actual_hex, actual, 0, 32);
+    asmtest_fail(file, line,
+                 "ASSERT_VEC256_EQ(vec[%s]): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       expect: %s\n"
+                 "       actual: %s",
+                 idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
+}
+
+/* CPU feature probes (x86-64). AVX/AVX2/AVX-512 each need both the CPUID
+ * feature bit AND OS enablement of the wider register state (OSXSAVE + the
+ * matching XCR0 bits), so a kernel that doesn't save the state can't be used. */
+#if defined(__x86_64__)
+#include <cpuid.h>
+static int xcr0_has(unsigned mask) {
+    unsigned eax, edx;
+    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
+    return (eax & mask) == mask;
+}
+int asmtest_cpu_has_avx2(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d))
+        return 0;
+    if (!(c & (1u << 27)) || !(c & (1u << 28))) /* OSXSAVE + AVX */
+        return 0;
+    if (!xcr0_has(0x6)) /* XMM + YMM state enabled by the OS */
+        return 0;
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d))
+        return 0;
+    return (b & (1u << 5)) != 0; /* AVX2 */
+}
+int asmtest_cpu_has_avx512f(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d))
+        return 0;
+    if (!(c & (1u << 27))) /* OSXSAVE */
+        return 0;
+    if (!xcr0_has(0xe6)) /* opmask + ZMM_Hi256 + Hi16_ZMM (+ YMM/XMM) */
+        return 0;
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d))
+        return 0;
+    return (b & (1u << 16)) != 0; /* AVX-512F */
+}
+#else
+int asmtest_cpu_has_avx2(void) { return 0; }
+int asmtest_cpu_has_avx512f(void) { return 0; }
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Guard-page buffers                                                  */
 /*                                                                     */

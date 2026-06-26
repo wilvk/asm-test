@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Wide-vector capture — AVX2 256-bit (`ymm`).** Vector capture was strictly
+  128-bit (`vec128_t` / `ASM_VCALLn`); a routine's `ymm` result couldn't be
+  inspected past its low 128 bits. New `vec256_t` (the 256-bit analog union) and
+  `asm_call_capture_vec256` marshal `ymm0..7` args and capture the whole `ymm`
+  file into a `vec256_t[16]` (`out[0]` = return), with `ASM_VCALL256n` /
+  `ASSERT_VEC256_EQ` and the existing `ASSERT_DEQ`/`FEQ` over the doubled lane
+  counts. A runtime **CPUID probe** (`asmtest_cpu_has_avx2` /
+  `asmtest_cpu_has_avx512f`, checking both the feature bit and OS `XCR0`
+  enablement) makes the path **self-skip** (`SKIP`) on a host without the
+  feature instead of executing an unsupported instruction. The trampoline is in
+  both backends ([`src/capture.s`](https://github.com/wilvk/asm-test/blob/main/src/capture.s)
+  GAS + `src/capture.asm` NASM, `vzeroupper` on exit), `vec256_t` is pinned in
+  the manifest and by a `_Static_assert`, and an `vec_add4d` AVX2 example +
+  `test_simd` case assert the full 256-bit result (including the upper-128 lane)
+  on both backends. Track D of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md);
+  AVX-512 (`zmm`), AArch64 SVE, a Win64 wide path, and binding parity are staged
+  follow-ons — and the emulator wide path self-skips because its bundled Unicorn
+  exposes YMM/ZMM but does not execute AVX (`UC_ERR_INSN_INVALID`). See
+  [docs/floating-point-simd.md](https://github.com/wilvk/asm-test/blob/main/docs/floating-point-simd.md#wide-vectors--avx2-256-bit).
+
 - **Coverage-guided fuzzing & mutation testing in the emulator.** The emulator
   already recorded basic-block coverage but only ever fed a report; it now feeds
   *input generation*, and a mutation tester proves an input set actually catches

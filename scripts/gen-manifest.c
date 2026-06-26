@@ -74,6 +74,12 @@ int main(void) {
     FIELD(vec128_t, f64);
     end_struct();
 
+    BEGIN(vec256_t); /* AVX2 wide-vector capture (asm_call_capture_vec256) */
+    FIELD(vec256_t, u8);
+    FIELD(vec256_t, u64);
+    FIELD(vec256_t, f64);
+    end_struct();
+
     BEGIN(regs_t);
     FIELD(regs_t, ret);
 #if defined(ASMTEST_ABI_WIN64)
