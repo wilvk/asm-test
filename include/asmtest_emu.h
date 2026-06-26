@@ -595,6 +595,23 @@ void emu_watch_describe(const emu_watch_t *w, emu_arch_t arch,
                         const uint8_t *code, size_t code_len,
                         uint64_t base_addr, char *buf, size_t buflen);
 
+/* Opaque-handle FFI for the guard results (a dynamic binding can't lay out the
+ * structs): allocate a handle, arm the guard with emu_watch_writes /
+ * emu_guard_reg pointing at it, run an emu_call, then read the recorded
+ * violation by field. The handle is a heap emu_watch_t / emu_reg_guard_t. */
+emu_watch_t *asmtest_emu_watch_new(void);
+void asmtest_emu_watch_free(emu_watch_t *w);
+int asmtest_emu_watch_violated(const emu_watch_t *w);
+unsigned long long asmtest_emu_watch_addr(const emu_watch_t *w);
+unsigned asmtest_emu_watch_size(const emu_watch_t *w);
+unsigned long long asmtest_emu_watch_rip_off(const emu_watch_t *w);
+
+emu_reg_guard_t *asmtest_emu_reg_guard_new(void);
+void asmtest_emu_reg_guard_free(emu_reg_guard_t *g);
+int asmtest_emu_reg_guard_violated(const emu_reg_guard_t *g);
+unsigned long long asmtest_emu_reg_guard_got(const emu_reg_guard_t *g);
+unsigned long long asmtest_emu_reg_guard_rip_off(const emu_reg_guard_t *g);
+
 /* ------------------------------------------------------------------ */
 /* Coverage-guided fuzzing & mutation testing (x86-64 guest, Track E)  */
 /*                                                                     */

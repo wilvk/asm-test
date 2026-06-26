@@ -147,6 +147,32 @@ def _declare_emu_ext(lib, v):
     lib.asmtest_emu_trace_blocks_len.argtypes = [v]
     lib.asmtest_emu_trace_blocks_len.restype = C.c_uint64
 
+    # Mid-execution guards (Track F): arm on the handle (the arming functions take
+    # plain pointers/scalars, so they are called directly); the violation lands in
+    # an opaque emu_watch_t / emu_reg_guard_t read through the accessors.
+    u32 = C.c_uint
+    lib.emu_map.argtypes = [v, u64, sz]
+    lib.emu_map.restype = C.c_bool
+    lib.emu_watch_writes.argtypes = [v, u64, sz, i, v]
+    lib.emu_watch_clear.argtypes = [v]
+    lib.emu_guard_reg.argtypes = [v, C.c_char_p, u64, v]
+    lib.emu_guard_reg.restype = C.c_bool
+    lib.emu_guard_reg_clear.argtypes = [v]
+    lib.asmtest_emu_watch_new.restype = v
+    lib.asmtest_emu_watch_free.argtypes = [v]
+    lib.asmtest_emu_watch_violated.argtypes = [v]
+    lib.asmtest_emu_watch_violated.restype = i
+    lib.asmtest_emu_watch_size.argtypes = [v]
+    lib.asmtest_emu_watch_size.restype = u32
+    lib.asmtest_emu_reg_guard_new.restype = v
+    lib.asmtest_emu_reg_guard_free.argtypes = [v]
+    lib.asmtest_emu_reg_guard_violated.argtypes = [v]
+    lib.asmtest_emu_reg_guard_violated.restype = i
+    for nm in ("asmtest_emu_watch_addr", "asmtest_emu_watch_rip_off",
+               "asmtest_emu_reg_guard_got", "asmtest_emu_reg_guard_rip_off"):
+        getattr(lib, nm).argtypes = [v]
+        getattr(lib, nm).restype = u64
+
     # In-line assembler (Keystone) is optional again — only libasmtest_emu_asm
     # exports it. The widened run shim takes six scalar args + syntax + a cap;
     # asmtest_asm_bytes is multi-arch text->bytes; the last-error accessor

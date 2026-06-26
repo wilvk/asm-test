@@ -350,6 +350,40 @@ class Emulator:
             raise AsmtestError("in-line assembly failed: " + asm_error())
         return EmuResult(out, True)
 
+    def map(self, addr, size):
+        """Map a guest RW region [addr, addr+size) the routine can use."""
+        return bool(load().lib.emu_map(self._h, C.c_uint64(addr), C.c_size_t(size)))
+
+    def watch_writes(self, addr, size, mode):
+        """Arm a memory-write watchpoint over [addr, addr+size) for subsequent
+        calls (Track F): ``EMU_WATCH_ONLY`` flags a write that escapes the region,
+        ``EMU_WATCH_NEVER`` one that touches it. Returns a :class:`Watch`; read its
+        ``violated`` / ``addr`` / ``rip_off`` after a call. x86-64 guest."""
+        w = Watch()
+        load().lib.emu_watch_writes(self._h, C.c_uint64(addr), C.c_size_t(size),
+                                    C.c_int(mode), w.handle)
+        return w
+
+    def watch_clear(self):
+        """Disarm the memory-write watchpoint."""
+        load().lib.emu_watch_clear(self._h)
+
+    def guard_reg(self, name, want):
+        """Arm a register invariant: x86 GP register `name` ("rbx", "rsp", …) must
+        hold `want` at every basic-block entry (Track F) — catching mid-routine
+        corruption even when restored by return. Returns a :class:`RegGuard`;
+        raises ``ValueError`` for an unknown register name."""
+        g = RegGuard()
+        if not load().lib.emu_guard_reg(self._h, name.encode(),
+                                        C.c_uint64(want), g.handle):
+            g.free()
+            raise ValueError(f"unknown register: {name}")
+        return g
+
+    def guard_reg_clear(self):
+        """Disarm the register invariant."""
+        load().lib.emu_guard_reg_clear(self._h)
+
     def close(self):
         if self._h:
             load().lib.emu_close(self._h)
@@ -395,6 +429,94 @@ class Trace:
     def free(self):
         if self._h:
             load().lib.asmtest_emu_trace_free(self._h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.free()
+
+
+# ------------------------------------------------------------------ #
+# Mid-execution guards (Track F)                                     #
+# ------------------------------------------------------------------ #
+# Watchpoint modes for Emulator.watch_writes (must match emu_watch_mode_t).
+EMU_WATCH_NEVER = 0  # a write that TOUCHES the region is a violation
+EMU_WATCH_ONLY = 1   # a write that ESCAPES the region is a violation
+
+
+class Watch:
+    """A memory-write watchpoint result (Track F). Arm it via
+    :meth:`Emulator.watch_writes`; after a call, ``violated`` is true if a guarded
+    write fired, with ``addr`` / ``size`` / ``rip_off`` of the offending store."""
+
+    def __init__(self):
+        self._h = load().lib.asmtest_emu_watch_new()
+        if not self._h:
+            raise RuntimeError("asmtest_emu_watch_new failed")
+
+    @property
+    def handle(self):
+        return self._h
+
+    @property
+    def violated(self):
+        return bool(load().lib.asmtest_emu_watch_violated(self._h))
+
+    @property
+    def addr(self):
+        return load().lib.asmtest_emu_watch_addr(self._h)
+
+    @property
+    def size(self):
+        return load().lib.asmtest_emu_watch_size(self._h)
+
+    @property
+    def rip_off(self):
+        return load().lib.asmtest_emu_watch_rip_off(self._h)
+
+    def free(self):
+        if self._h:
+            load().lib.asmtest_emu_watch_free(self._h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.free()
+
+
+class RegGuard:
+    """A register-invariant guard result (Track F). Arm it via
+    :meth:`Emulator.guard_reg`; ``violated`` is true if the register ever broke its
+    value at a basic-block entry, with ``got`` / ``rip_off`` of the breach."""
+
+    def __init__(self):
+        self._h = load().lib.asmtest_emu_reg_guard_new()
+        if not self._h:
+            raise RuntimeError("asmtest_emu_reg_guard_new failed")
+
+    @property
+    def handle(self):
+        return self._h
+
+    @property
+    def violated(self):
+        return bool(load().lib.asmtest_emu_reg_guard_violated(self._h))
+
+    @property
+    def got(self):
+        return load().lib.asmtest_emu_reg_guard_got(self._h)
+
+    @property
+    def rip_off(self):
+        return load().lib.asmtest_emu_reg_guard_rip_off(self._h)
+
+    def free(self):
+        if self._h:
+            load().lib.asmtest_emu_reg_guard_free(self._h)
             self._h = None
 
     def __enter__(self):

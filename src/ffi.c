@@ -221,6 +221,42 @@ int asmtest_emu_trace_covered(const emu_trace_t *t, unsigned long long off) {
     return 0;
 }
 
+/* ---- mid-execution guard result handles + accessors (Track F) ----
+ * A binding allocates a handle, arms the guard with emu_watch_writes /
+ * emu_guard_reg (both take pointers + scalars, so a binding calls them
+ * directly), runs an emu_call, then reads the recorded violation by field. The
+ * arming/driving lives in emu.c; these are plain struct-field reads. */
+emu_watch_t *asmtest_emu_watch_new(void) {
+    return (emu_watch_t *)calloc(1, sizeof(emu_watch_t));
+}
+void asmtest_emu_watch_free(emu_watch_t *w) { free(w); }
+int asmtest_emu_watch_violated(const emu_watch_t *w) {
+    return (w && w->violated) ? 1 : 0;
+}
+unsigned long long asmtest_emu_watch_addr(const emu_watch_t *w) {
+    return w ? (unsigned long long)w->addr : 0;
+}
+unsigned asmtest_emu_watch_size(const emu_watch_t *w) {
+    return w ? (unsigned)w->size : 0;
+}
+unsigned long long asmtest_emu_watch_rip_off(const emu_watch_t *w) {
+    return w ? (unsigned long long)w->rip_off : 0;
+}
+
+emu_reg_guard_t *asmtest_emu_reg_guard_new(void) {
+    return (emu_reg_guard_t *)calloc(1, sizeof(emu_reg_guard_t));
+}
+void asmtest_emu_reg_guard_free(emu_reg_guard_t *g) { free(g); }
+int asmtest_emu_reg_guard_violated(const emu_reg_guard_t *g) {
+    return (g && g->violated) ? 1 : 0;
+}
+unsigned long long asmtest_emu_reg_guard_got(const emu_reg_guard_t *g) {
+    return g ? (unsigned long long)g->got : 0;
+}
+unsigned long long asmtest_emu_reg_guard_rip_off(const emu_reg_guard_t *g) {
+    return g ? (unsigned long long)g->rip_off : 0;
+}
+
 /* ---- cross-arch emu result handles + register accessors ----
  * The AArch64 / RISC-V / ARM32 guests run raw machine-code bytes (emu_arm64_call,
  * emu_riscv_call, emu_arm_call) and write a per-arch result struct. Their leading
