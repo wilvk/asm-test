@@ -202,11 +202,12 @@ the opaque-handle accessors — is catalogued in the
 
 **Python** is the reference binding: packaged (`pyproject.toml` / wheel), `pytest`
 fixtures, and both tiers — the most turnkey today. The others ship the same
-reusable module and Tier-2 assertions but are **not yet published packages** with
-per-platform native libraries bundled; that staging is tracked in
-[Packaging the bindings](packaging.md). Today you consume them as shown on each
-language's page (referencing the module and pointing at the built shared libs) —
-exactly how the repo wires `make <lang>-test`.
+reusable module and Tier-2 assertions, and their packages now build, bundle the
+native lib, and **install + smoke-test in the release dry-run** (Linux + macOS) —
+they are simply **not published to registries yet** (only the credentialed
+go-live remains; see [Packaging the bindings](packaging.md)). Today you consume
+them as shown on each language's page (referencing the module and pointing at the
+built shared libs) — exactly how the repo wires `make <lang>-test`.
 
 ```{toctree}
 :maxdepth: 1

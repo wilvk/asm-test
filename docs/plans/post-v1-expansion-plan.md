@@ -36,7 +36,7 @@ value-to-effort; all are independent and can land in any order.
 
 | # | Part | Gap | Symptom |
 |---|---|---|---|
-| 1 | Reach | Bindings are packaged but **unpublished** | No `pip install` / `cargo add` / `npm i`; only registry *manifests* exist. Adoption still means building the C core. |
+| 1 | Reach | Bindings are packaged but **unpublished** | No `pip install` / `cargo add` / `npm i` yet. The release pipeline is dry-run-complete (packages build, install, and smoke-test in CI); only the credentialed go-live remains, so adoption still means building the C core for now. |
 | 2 | Reach | Win64 tier is `--no-fork` only | No per-test isolation / `-jN` / benchmarks on Win64; no authoritative `windows-latest` sign-off. |
 | 3 | Depth | Diagnostics are **raw byte offsets** | A fault, trace, or uncovered block prints `@0x2f`, not the instruction. The emulator's natural disassembler companion (Capstone) is unused. |
 | 4 | Depth | Vectors are **128-bit only** | `vec128_t` / `ASM_VCALLn` cover `xmm`/`q` (128-bit); AVX/AVX-512 (`ymm`/`zmm`) and SVE routines cannot have their full vector state captured. |
@@ -47,7 +47,7 @@ value-to-effort; all are independent and can land in any order.
 
 # Part 1 — Reach (finish the deferred work)
 
-## Track A — Publish the bindings *(planned)*
+## Track A — Publish the bindings — **dry-run complete; credentialed go-live remains**
 
 **Goal.** Turn the ten packaging-*scaffolded* bindings into ones a user installs from
 their language's registry, with the native libraries bundled — the multi-language
@@ -56,6 +56,24 @@ analog of the existing `pkg-config` adoption story.
 **Why.** This is the largest gap between "built" and "adoptable." The framework is
 done; nobody can `pip install asmtest`. [docs/packaging.md](../packaging.md) already
 scopes the remainder: credentials and cross-OS native-payload build matrices.
+
+**Status.** The whole release pipeline exists and is dry-run-proven end to end in
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml):
+
+- Each `make <lang>-package` exposes the **library module** (not the test runner)
+  and bundles the native payload; the dlopen bindings **self-locate** it (no
+  `ASMTEST_LIB`), so an installed package works out of the box.
+- The release workflow builds cross-platform `native-all`, then per binding
+  **packages → installs fresh → smoke-tests the bundled-native load → dry-run
+  publishes**; the dlopen bindings install-test on Linux **and** macOS. Python is
+  per-platform (manylinux / macOS wheels, libunicorn vendored via auditwheel /
+  delocate); the link bindings (Go/C++/Zig/Rust) are validated as consumable.
+- **What remains is only the credentialed go-live** (not code): register the
+  package names, add the per-ecosystem token secrets, and tag a release — the
+  gated publish steps (`if: …env.<TOKEN> != ''`, pinned to the Linux leg) light
+  up automatically. Per-ecosystem registry quirks (PyPI Trusted Publishing,
+  Maven Central signing, broader manylinux/python-version coverage) are tuned at
+  that point.
 
 ### Deliverables
 
@@ -327,8 +345,10 @@ caught at the offending store with its instruction text, no host crash.
 1. **Track C** (disassembly) — **done.** Cheap, transformed every diagnostic, and
    Tracks E/F can build on it. Now also bound across all ten languages via the
    single `libasmtest_emu_full` (Keystone + Capstone) — `disas`/`disas_available`.
-2. **Track A** (publish) — if reach is the priority, this is the single biggest
-   adoption lever; it has no dependency on the others.
+2. **Track A** (publish) — **dry-run complete.** The release pipeline packages,
+   installs, and smoke-tests every binding end to end (Linux + macOS), with only
+   the credentialed go-live (register names + add token secrets + tag) left — the
+   single biggest adoption lever, no dependency on the others.
 3. **Track D** (wide vectors) — **AVX2 done** (native 256-bit capture); AVX-512,
    SVE, Win64-wide, and binding parity staged.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
