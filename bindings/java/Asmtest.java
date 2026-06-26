@@ -24,6 +24,7 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BOOLEAN;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -68,6 +69,14 @@ public final class Asmtest {
         ARM64_RES_FREE, ARM64_REG, RISCV_OPEN, RISCV_CLOSE, RISCV_CALL,
         RISCV_RES_NEW, RISCV_RES_FREE, RISCV_REG, ARM_OPEN, ARM_CLOSE, ARM_CALL,
         ARM_RES_NEW, ARM_RES_FREE, ARM_REG;
+
+    // Round 2: mid-execution guards (Track F), fuzzing/mutation (Track E), and
+    // AVX2 256-bit capture (Track D).
+    private static final MethodHandle EMU_MAP, WATCH_WRITES, WATCH_CLEAR, GUARD_REG,
+        GUARD_REG_CLEAR, WATCH_NEW, WATCH_FREE, WATCH_VIOLATED, WATCH_ADDR, WATCH_RIP,
+        RGUARD_NEW, RGUARD_FREE, RGUARD_VIOLATED, RGUARD_GOT, FUZZ_COVER1, MUTATION_TEST1,
+        FUZZ_NEW, FUZZ_FREE, FUZZ_BLOCKS, FUZZ_CORPUS, MUT_NEW, MUT_FREE, MUT_KILLED,
+        MUT_SURVIVED, CAPTURE_VEC256, CPU_AVX2;
 
     static {
         String emuPath = System.getenv("ASMTEST_LIB");
@@ -156,6 +165,36 @@ public final class Asmtest {
         ARM_RES_NEW = h(emu, "asmtest_emu_arm_result_new", FunctionDescriptor.of(ADDRESS));
         ARM_RES_FREE = h(emu, "asmtest_emu_arm_result_free", FunctionDescriptor.ofVoid(ADDRESS));
         ARM_REG = h(emu, "asmtest_emu_arm_reg", regFd);
+
+        // Mid-execution guards (Track F).
+        EMU_MAP = h(emu, "emu_map", FunctionDescriptor.of(JAVA_BOOLEAN, ADDRESS, JAVA_LONG, JAVA_LONG));
+        WATCH_WRITES = h(emu, "emu_watch_writes", FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_INT, ADDRESS));
+        WATCH_CLEAR = h(emu, "emu_watch_clear", FunctionDescriptor.ofVoid(ADDRESS));
+        GUARD_REG = h(emu, "emu_guard_reg", FunctionDescriptor.of(JAVA_BOOLEAN, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS));
+        GUARD_REG_CLEAR = h(emu, "emu_guard_reg_clear", FunctionDescriptor.ofVoid(ADDRESS));
+        WATCH_NEW = h(emu, "asmtest_emu_watch_new", FunctionDescriptor.of(ADDRESS));
+        WATCH_FREE = h(emu, "asmtest_emu_watch_free", FunctionDescriptor.ofVoid(ADDRESS));
+        WATCH_VIOLATED = h(emu, "asmtest_emu_watch_violated", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        WATCH_ADDR = h(emu, "asmtest_emu_watch_addr", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        WATCH_RIP = h(emu, "asmtest_emu_watch_rip_off", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        RGUARD_NEW = h(emu, "asmtest_emu_reg_guard_new", FunctionDescriptor.of(ADDRESS));
+        RGUARD_FREE = h(emu, "asmtest_emu_reg_guard_free", FunctionDescriptor.ofVoid(ADDRESS));
+        RGUARD_VIOLATED = h(emu, "asmtest_emu_reg_guard_violated", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        RGUARD_GOT = h(emu, "asmtest_emu_reg_guard_got", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        // Coverage-guided fuzzing + mutation testing (Track E).
+        FUZZ_COVER1 = h(emu, "emu_fuzz_cover1", FunctionDescriptor.of(JAVA_BOOLEAN, ADDRESS, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS));
+        MUTATION_TEST1 = h(emu, "emu_mutation_test1", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS));
+        FUZZ_NEW = h(emu, "asmtest_emu_fuzz_stat_new", FunctionDescriptor.of(ADDRESS));
+        FUZZ_FREE = h(emu, "asmtest_emu_fuzz_stat_free", FunctionDescriptor.ofVoid(ADDRESS));
+        FUZZ_BLOCKS = h(emu, "asmtest_emu_fuzz_blocks_reached", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        FUZZ_CORPUS = h(emu, "asmtest_emu_fuzz_corpus_len", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        MUT_NEW = h(emu, "asmtest_emu_mutation_stat_new", FunctionDescriptor.of(ADDRESS));
+        MUT_FREE = h(emu, "asmtest_emu_mutation_stat_free", FunctionDescriptor.ofVoid(ADDRESS));
+        MUT_KILLED = h(emu, "asmtest_emu_mutation_killed", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        MUT_SURVIVED = h(emu, "asmtest_emu_mutation_survived", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        // AVX2 256-bit capture (Track D).
+        CAPTURE_VEC256 = h(emu, "asm_call_capture_vec256", FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+        CPU_AVX2 = h(emu, "asmtest_cpu_has_avx2", FunctionDescriptor.of(JAVA_INT));
     }
 
     // ---- helpers for marshalling Java arrays into native memory ---- //
@@ -417,9 +456,97 @@ public final class Asmtest {
         public EmuResult callAsm(String src, long... args) {
             return callAsm(src, args, AsmSyntax.INTEL, 0);
         }
+
+        // --- Mid-execution guards (Track F) --- //
+        /** Map a guest RW region [addr, addr+size) the routine can use. */
+        public boolean map(long addr, long size) {
+            try { return (boolean) EMU_MAP.invoke(h, addr, size); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Arm a memory-write watchpoint over [addr, addr+size): mode 1 = only
+         *  (flag a write that escapes it), 0 = never (one that touches it). */
+        public Watch watchWrites(long addr, long size, int mode) {
+            Watch w = new Watch();
+            try { WATCH_WRITES.invoke(h, addr, size, mode, w.h); } catch (Throwable t) { throw rethrow(t); }
+            return w;
+        }
+        public void watchClear() { try { WATCH_CLEAR.invoke(h); } catch (Throwable t) { throw rethrow(t); } }
+        /** Arm a register invariant; null for an unknown register name. */
+        public RegGuard guardReg(String name, long want) {
+            RegGuard g = new RegGuard();
+            try {
+                if (!(boolean) GUARD_REG.invoke(h, str(name), want, g.h)) { g.close(); return null; }
+            } catch (Throwable t) { throw rethrow(t); }
+            return g;
+        }
+        public void guardRegClear() { try { GUARD_REG_CLEAR.invoke(h); } catch (Throwable t) { throw rethrow(t); } }
+
+        // --- Coverage-guided fuzzing + mutation testing (Track E) --- //
+        /** Coverage-guided input search over one-int-arg code; {blocks, corpus}. */
+        public long[] fuzzCover(byte[] code, long lo, long hi, long iters) {
+            try {
+                MemorySegment uni = (MemorySegment) TRACE_NEW.invoke(0L, 256L);
+                MemorySegment st = (MemorySegment) FUZZ_NEW.invoke();
+                FUZZ_COVER1.invoke(h, bytesSeg(code), (long) code.length, lo, hi, iters, 0xC0FFEEL, uni, st);
+                long[] out = { (long) FUZZ_BLOCKS.invoke(st), (long) FUZZ_CORPUS.invoke(st) };
+                FUZZ_FREE.invoke(st); TRACE_FREE.invoke(uni);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Bit-flip mutation testing of code against inputs; {killed, survived}. */
+        public long[] mutationTest(byte[] code, long[] inputs) {
+            try {
+                MemorySegment st = (MemorySegment) MUT_NEW.invoke();
+                MUTATION_TEST1.invoke(h, bytesSeg(code), (long) code.length, longsSeg(inputs), (long) inputs.length, 0L, 0xABCDL, st);
+                long[] out = { (long) MUT_KILLED.invoke(st), (long) MUT_SURVIVED.invoke(st) };
+                MUT_FREE.invoke(st);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
         @Override public void close() {
             try { if (h != null) EMU_CLOSE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; }
         }
+    }
+
+    /** A memory-write watchpoint result (Track F). */
+    public static final class Watch implements AutoCloseable {
+        private MemorySegment h;
+        Watch() { try { h = (MemorySegment) WATCH_NEW.invoke(); } catch (Throwable t) { throw rethrow(t); } }
+        public boolean violated() { try { return (int) WATCH_VIOLATED.invoke(h) != 0; } catch (Throwable t) { throw rethrow(t); } }
+        public long addr() { try { return (long) WATCH_ADDR.invoke(h); } catch (Throwable t) { throw rethrow(t); } }
+        public long ripOff() { try { return (long) WATCH_RIP.invoke(h); } catch (Throwable t) { throw rethrow(t); } }
+        @Override public void close() { try { if (h != null) WATCH_FREE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; } }
+    }
+
+    /** A register-invariant guard result (Track F). */
+    public static final class RegGuard implements AutoCloseable {
+        private MemorySegment h;
+        RegGuard() { try { h = (MemorySegment) RGUARD_NEW.invoke(); } catch (Throwable t) { throw rethrow(t); } }
+        public boolean violated() { try { return (int) RGUARD_VIOLATED.invoke(h) != 0; } catch (Throwable t) { throw rethrow(t); } }
+        public long got() { try { return (long) RGUARD_GOT.invoke(h); } catch (Throwable t) { throw rethrow(t); } }
+        @Override public void close() { try { if (h != null) RGUARD_FREE.invoke(h); } catch (Throwable t) { throw rethrow(t); } finally { h = null; } }
+    }
+
+    /** True if the host CPU + OS support AVX2 (gate {@link #captureVec256}). */
+    public static boolean cpuHasAvx2() {
+        try { return (int) CPU_AVX2.invoke() != 0; } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** AVX2 256-bit capture (Track D): {@code vargs} is an array of four-double
+     *  lanes; returns the four f64 lanes of ymm0 (the vector return). */
+    public static double[] captureVec256(MemorySegment fn, double[][] vargs) {
+        try {
+            MemorySegment out = ARENA.allocate(16L * 32);
+            MemorySegment va = ARENA.allocate(8L * 32);
+            for (int i = 0; i < Math.min(vargs.length, 8); i++)
+                for (int l = 0; l < 4; l++)
+                    va.setAtIndex(JAVA_DOUBLE, (long) i * 4 + l, vargs[i][l]);
+            MemorySegment ia = ARENA.allocate(6L * 8);
+            CAPTURE_VEC256.invoke(out, fn, ia, va);
+            double[] ret = new double[4];
+            for (int l = 0; l < 4; l++) ret[l] = out.getAtIndex(JAVA_DOUBLE, l);
+            return ret;
+        } catch (Throwable t) { throw rethrow(t); }
     }
 
     // ---- Tier-2 idiomatic assertions: throw AsmtestException on failure ---- //

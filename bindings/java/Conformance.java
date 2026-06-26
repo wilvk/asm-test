@@ -176,6 +176,44 @@ public class Conformance {
         }
         check("tier2.assertions_have_teeth", t2teeth);
 
+        // Track F: mid-execution guards (byte-literal routines).
+        try (Asmtest.Emu e = new Asmtest.Emu()) {
+            byte[] twoWrites = code(0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3);
+            e.map(0x400000L, 0x1000L);
+            Asmtest.Watch w = e.watchWrites(0x400000L, 8, 1);
+            e.callBytes(twoWrites, 0x400000L).close();
+            e.watchClear();
+            check("guard.watch_escape", w.violated() && w.addr() == 0x400800L && w.ripOff() == 3);
+            w.close();
+            byte[] clobber = code(0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3);
+            Asmtest.RegGuard g = e.guardReg("rbx", 0);
+            e.callBytes(clobber).close();
+            e.guardRegClear();
+            check("guard.reg_invariant", g != null && g.violated() && g.got() == 0x99);
+            if (g != null) g.close();
+        }
+
+        // Track E: coverage-guided fuzzing + mutation testing over classify3.
+        try (Asmtest.Emu e = new Asmtest.Emu()) {
+            byte[] classify3 = code(0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+                0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3);
+            long[] fixed = e.fuzzCover(classify3, 5, 5, 1);
+            long[] guided = e.fuzzCover(classify3, -50, 50, 2000);
+            check("fuzz.coverage_beats_fixed", guided[0] > fixed[0]);
+            long[] weak = e.mutationTest(classify3, new long[] {5});
+            long[] strong = e.mutationTest(classify3, new long[] {-7, 0, 9});
+            check("mutation.strong_kills_more", weak[1] > 0 && strong[1] < weak[1]);
+        }
+
+        // Track D: AVX2 256-bit capture (self-skips off-AVX2).
+        if (Asmtest.cpuHasAvx2()) {
+            double[] out = Asmtest.captureVec256(routine("vec_add4d"),
+                new double[][] {{1, 2, 3, 4}, {10, 20, 30, 40}});
+            check("vec256.add4d", out[0] == 11 && out[1] == 22 && out[2] == 33 && out[3] == 44);
+        } else {
+            System.out.println("ok - vec256.add4d # SKIP no AVX2");
+        }
+
         System.out.printf("# %d passed, %d failed, %d total%n", total - fails, fails, total);
         System.exit(fails == 0 ? 0 : 1);
     }
