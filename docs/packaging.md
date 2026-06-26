@@ -133,10 +133,20 @@ The scaffolding stops short of a credentialed, multi-platform release:
    lib resolves with `ASMTEST_LIB` unset (so an installed package works
    out of the box), and dry-run publishes (`twine check`, `npm publish --dry-run`,
    `cargo publish --dry-run`). It runs end to end on a fork with no credentials.
-   Python is special-cased: a **per-platform matrix** builds the
-   `py3-none-<plat>` wheel on each runner and **repairs** it into a self-contained
-   manylinux / macOS wheel (`auditwheel` / `delocate`, vendoring libunicorn), so a
-   `pip install` needs no system libs. What remains: the **live publish** is gated
-   `if: …env.<TOKEN> != ''` per ecosystem — add `PYPI_TOKEN` / `NPM_TOKEN` /
+   Coverage:
+   - **dlopen bindings** (Python, Node, Ruby, Lua, Java, .NET) install-test on a
+     `[ubuntu, macos]` matrix, so the bundled-native resolution is exercised on
+     both `linux-x86_64` and `darwin-arm64`.
+   - **Python** is per-platform: a matrix builds the `py3-none-<plat>` wheel on
+     each runner and **repairs** it into a self-contained manylinux / macOS wheel
+     (`auditwheel` / `delocate`, vendoring libunicorn), so `pip install` needs no
+     system libs.
+   - **link bindings** (Go, C++, Zig, Rust) ship source, so the check is that the
+     published source is *consumable* — the cgo module vets+builds, a C++ consumer
+     compiles+links+runs against the packaged header, the Zig package builds, and
+     `cargo publish --dry-run` packs the crate.
+
+   What remains: the **live publish** is gated `if: …env.<TOKEN> != ''` per
+   ecosystem (and runs once, from the Linux leg) — add `PYPI_TOKEN` / `NPM_TOKEN` /
    `RUBYGEMS_API_KEY` (and the rest) as repo secrets and tag a release to push for
    real.
