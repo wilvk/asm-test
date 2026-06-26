@@ -93,6 +93,35 @@ const fn = {
   armResNew: L.func('void *asmtest_emu_arm_result_new()'),
   armResFree: L.func('void asmtest_emu_arm_result_free(void *)'),
   armReg: L.func('uint64_t asmtest_emu_arm_reg(void *, const char *)'),
+  // Mid-execution guards (Track F)
+  emuMap: L.func('int emu_map(void *, uint64_t, size_t)'),
+  watchWrites: L.func('void emu_watch_writes(void *, uint64_t, size_t, int, void *)'),
+  watchClear: L.func('void emu_watch_clear(void *)'),
+  guardReg: L.func('int emu_guard_reg(void *, const char *, uint64_t, void *)'),
+  guardRegClear: L.func('void emu_guard_reg_clear(void *)'),
+  watchNew: L.func('void *asmtest_emu_watch_new()'),
+  watchFree: L.func('void asmtest_emu_watch_free(void *)'),
+  watchViolated: L.func('int asmtest_emu_watch_violated(void *)'),
+  watchAddr: L.func('uint64_t asmtest_emu_watch_addr(void *)'),
+  watchRip: L.func('uint64_t asmtest_emu_watch_rip_off(void *)'),
+  rguardNew: L.func('void *asmtest_emu_reg_guard_new()'),
+  rguardFree: L.func('void asmtest_emu_reg_guard_free(void *)'),
+  rguardViolated: L.func('int asmtest_emu_reg_guard_violated(void *)'),
+  rguardGot: L.func('uint64_t asmtest_emu_reg_guard_got(void *)'),
+  // Coverage-guided fuzzing + mutation testing (Track E)
+  fuzzCover1: L.func('int emu_fuzz_cover1(void *, void *, size_t, long, long, uint64_t, uint64_t, void *, void *)'),
+  mutationTest1: L.func('size_t emu_mutation_test1(void *, void *, size_t, void *, size_t, uint64_t, uint64_t, void *)'),
+  fuzzNew: L.func('void *asmtest_emu_fuzz_stat_new()'),
+  fuzzFree: L.func('void asmtest_emu_fuzz_stat_free(void *)'),
+  fuzzBlocks: L.func('uint64_t asmtest_emu_fuzz_blocks_reached(void *)'),
+  fuzzCorpus: L.func('uint64_t asmtest_emu_fuzz_corpus_len(void *)'),
+  mutNew: L.func('void *asmtest_emu_mutation_stat_new()'),
+  mutFree: L.func('void asmtest_emu_mutation_stat_free(void *)'),
+  mutKilled: L.func('uint64_t asmtest_emu_mutation_killed(void *)'),
+  mutSurvived: L.func('uint64_t asmtest_emu_mutation_survived(void *)'),
+  // AVX2 256-bit capture (Track D)
+  captureVec256: L.func('void asm_call_capture_vec256(void *, void *, void *, void *)'),
+  cpuAvx2: L.func('int asmtest_cpu_has_avx2()'),
 };
 
 // Pack helpers: marshal JS numbers into native arrays as Buffers (koffi passes a
@@ -245,7 +274,80 @@ class Emu {
     if (!ok) { res.free(); throw new AsmtestError('in-line assembly failed: ' + asmError()); }
     return res;
   }
+  // --- Mid-execution guards (Track F) ---
+  /** Map a guest RW region [addr, addr+size) the routine can use. */
+  map(addr, size) { return fn.emuMap(this._h, addr, size) !== 0; }
+  /** Arm a memory-write watchpoint over [addr,addr+size): mode 'only' (flag a
+   * write that escapes it) or 'never' (one that touches it). Returns a Watch. */
+  watchWrites(addr, size, mode = 'only') {
+    const w = new Watch();
+    fn.watchWrites(this._h, addr, size, mode === 'never' ? 0 : 1, w._h);
+    return w;
+  }
+  watchClear() { fn.watchClear(this._h); }
+  /** Arm a register invariant: GP `name` must hold `want` at every block entry.
+   * Returns a RegGuard; throws for an unknown register name. */
+  guardReg(name, want) {
+    const g = new RegGuard();
+    if (fn.guardReg(this._h, name, want, g._h) === 0) {
+      g.free(); throw new AsmtestError('unknown register: ' + name);
+    }
+    return g;
+  }
+  guardRegClear() { fn.guardRegClear(this._h); }
+  // --- Coverage-guided fuzzing + mutation testing (Track E) ---
+  /** Coverage-guided input search over one-int-arg `code`; {blocks, corpus}. */
+  fuzzCover(code, lo, hi, iters, seed = 0xC0FFEE) {
+    const buf = Buffer.from(code);
+    const uni = fn.traceNew(0, 256), st = fn.fuzzNew();
+    fn.fuzzCover1(this._h, buf, buf.length, lo, hi, iters, seed, uni, st);
+    const out = { blocks: Number(fn.fuzzBlocks(st)), corpus: Number(fn.fuzzCorpus(st)) };
+    fn.fuzzFree(st); fn.traceFree(uni);
+    return out;
+  }
+  /** Bit-flip mutation testing of `code` against `inputs`; {killed, survived}. */
+  mutationTest(code, inputs, maxMutants = 0, seed = 0xABCD) {
+    const buf = Buffer.from(code);
+    const st = fn.mutNew();
+    fn.mutationTest1(this._h, buf, buf.length, packLongs(inputs), inputs.length, maxMutants, seed, st);
+    const out = { killed: Number(fn.mutKilled(st)), survived: Number(fn.mutSurvived(st)) };
+    fn.mutFree(st);
+    return out;
+  }
   close() { if (this._h) { fn.emuClose(this._h); this._h = null; } }
+}
+
+/** A memory-write watchpoint result (Track F). */
+class Watch {
+  constructor() { this._h = fn.watchNew(); }
+  get violated() { return fn.watchViolated(this._h) !== 0; }
+  get addr() { return Number(fn.watchAddr(this._h)); }
+  get ripOff() { return Number(fn.watchRip(this._h)); }
+  free() { if (this._h) { fn.watchFree(this._h); this._h = null; } }
+}
+
+/** A register-invariant guard result (Track F). */
+class RegGuard {
+  constructor() { this._h = fn.rguardNew(); }
+  get violated() { return fn.rguardViolated(this._h) !== 0; }
+  get got() { return Number(fn.rguardGot(this._h)); }
+  free() { if (this._h) { fn.rguardFree(this._h); this._h = null; } }
+}
+
+/** True if the host CPU + OS support AVX2 (gate captureVec256). */
+function cpuHasAvx2() { return fn.cpuAvx2() !== 0; }
+
+/** AVX2 256-bit capture (Track D): `vargs` = array of [4 doubles]; returns the
+ * 4 f64 lanes of ymm0 (the vector return). x86-64 + AVX2 only. */
+function captureVec256(fnAddr, vargs) {
+  const out = Buffer.alloc(16 * 32);
+  const va = Buffer.alloc(8 * 32);
+  vargs.slice(0, 8).forEach((v, i) => {
+    for (let l = 0; l < 4; l++) va.writeDoubleLE(v[l] || 0, i * 32 + l * 8);
+  });
+  const ia = Buffer.alloc(6 * 8);
+  fn.captureVec256(out, fnAddr, ia, va);
+  return [0, 8, 16, 24].map((o) => out.readDoubleLE(o));
 }
 
 /** The Keystone diagnostic from the most recent assemble (thread-local; '' on success). */
@@ -354,6 +456,7 @@ const Syntax = { INTEL: 0, ATT: 1, NASM: 2, MASM: 3, GAS: 4 };
 module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, Trace, Guest, GuestResult, AsmtestError, FaultKind,
+  Watch, RegGuard, cpuHasAvx2, captureVec256,
   assemble, asmError, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
   assertNoFault, assertFault, assertEmuReg, assertGuestReg, assertCovered,

@@ -187,5 +187,46 @@ try {
 }
 check('tier2.assertions_have_teeth', t2teeth);
 
+// Track F: mid-execution guards (byte-literal routines).
+{
+  const e = new Emu();
+  const twoWrites = Buffer.from([0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3]);
+  e.map(0x400000, 0x1000);
+  const w = e.watchWrites(0x400000, 8, 'only');
+  e.callBytes(twoWrites, [0x400000]);
+  e.watchClear();
+  check('guard.watch_escape', w.violated && w.addr === 0x400800 && w.ripOff === 3);
+  w.free();
+  const clobber = Buffer.from([0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3]);
+  const g = e.guardReg('rbx', 0);
+  e.callBytes(clobber, []);
+  e.guardRegClear();
+  check('guard.reg_invariant', g.violated && g.got === 0x99);
+  g.free();
+  e.close();
+}
+
+// Track E: coverage-guided fuzzing + mutation testing over classify3.
+{
+  const e = new Emu();
+  const classify3 = Buffer.from([0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+    0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3]);
+  const fixed = e.fuzzCover(classify3, 5, 5, 1);
+  const guided = e.fuzzCover(classify3, -50, 50, 2000);
+  check('fuzz.coverage_beats_fixed', guided.blocks > fixed.blocks);
+  const weak = e.mutationTest(classify3, [5]);
+  const strong = e.mutationTest(classify3, [-7, 0, 9]);
+  check('mutation.strong_kills_more', weak.survived > 0 && strong.survived < weak.survived);
+  e.close();
+}
+
+// Track D: AVX2 256-bit capture (self-skips off-AVX2).
+if (asmtest.cpuHasAvx2()) {
+  const out = asmtest.captureVec256(routine('vec_add4d'), [[1, 2, 3, 4], [10, 20, 30, 40]]);
+  check('vec256.add4d', out[0] === 11 && out[1] === 22 && out[2] === 33 && out[3] === 44);
+} else {
+  console.log('ok - vec256.add4d # SKIP no AVX2');
+}
+
 console.log(`# ${total - fails} passed, ${fails} failed, ${total} total`);
 process.exit(fails === 0 ? 0 : 1);
