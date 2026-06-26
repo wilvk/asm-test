@@ -273,10 +273,11 @@ hypothetical.
   `build-capstone.sh` copy the pinned checkout's license file into
   `${PREFIX}/share/licenses/<dep>-<VERSION>/` before cleanup, so "same version as
   used" is guaranteed by construction.
-- **`install-deps.sh`** — stop pointing `--asm` / `--emu` / `--all` at the distro
-  `capstone_pkg`; mirror the Keystone branch (direct the user to
-  `scripts/build-capstone.sh` when pkg-config can't find Capstone). Update the
-  usage/`--help` and header comment.
+- **`install-deps.sh`** — **drop the per-manager `capstone_pkg` entries entirely**
+  (source-only, no distro fast-path — open question #3) so Capstone exactly
+  mirrors Keystone's empty package slot: `--asm` / `--emu` / `--all` direct the
+  user to `scripts/build-capstone.sh` when pkg-config can't find Capstone. Update
+  the usage/`--help` and header comment.
 - **`Dockerfile.bindings-asm-base`** — replace the `libcapstone-dev` apt install
   with `./scripts/build-capstone.sh` next to the existing `build-keystone.sh`
   line (it already has `cmake`, `git`, `python3`, `g++`, `make`).
@@ -429,12 +430,13 @@ notice — or if `core` ever ships an emu/GPL symbol.
    `0.9.2`. (`6.x` adds guests but is newer; revisit only if a guest needs it.)
 2. **Variants — RESOLVED: `full` (default) + `core`, no `lite`.** The two split on
    the GPL boundary; the emu-only middle package is dropped.
-3. **Keep a distro-package fast path in `install-deps.sh`?** Keystone has no distro
-   package, so strict parity is "source only." Capstone packages widely, so an
-   opt-in `--capstone-from-pkg` could skip the compile for the **dev/test loop
-   only** — it must **never** feed `package-libs`, since the vendored payload (and
-   its captured license) has to be the pinned `5.0.1`, not whatever the distro
-   ships. Default to source (the ask); decide whether the dev-only override earns
-   its keep.
+3. **Capstone install path — RESOLVED: source-only, no distro fast-path.** Parity
+   with Keystone (which has no distro package at all), zero dev/release version
+   skew (everyone tests the pinned `5.0.1` that ships), and the repeated cost is
+   already absorbed by the script's `pkg-config` early-exit + prefix caching. A
+   `--capstone-from-pkg` override would save only a comparatively cheap one-time
+   Capstone compile — and only in environments that need Capstone but *not*
+   Keystone, whose unavoidable LLVM-backed build dominates whenever the asm tier
+   is in play. Not worth a second code path.
 4. **`core` package name** — `asmtest-core` everywhere, or per-registry idioms
    (e.g. npm `@asmtest/core`)? Pick one and apply uniformly.
