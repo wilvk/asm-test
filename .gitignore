@@ -52,3 +52,6 @@ bindings/java/src/main/resources/native/
 bindings/dotnet/runtimes/
 bindings/dotnet/lib/
 bindings/**/*.gem
+
+# macOS Finder metadata
+.DS_Store
