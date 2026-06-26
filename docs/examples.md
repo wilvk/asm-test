@@ -516,9 +516,62 @@ TEST(emu_sandbox, over_read_faults_at_exact_page_boundary) {
 }
 ```
 
-The disassembly helpers (`emu_fault_describe`, `emu_trace_disasm`) annotate those
-fault/trace/coverage offsets with the actual instruction text via Capstone, so
-`0x2f` reads back as `0x2f  cmp rax, 0`. Run with `make usecases-emu`.
+The over-read sandbox above runs with `make usecases-emu`.
+
+**Disassembly — turn recorded offsets into instructions.** Faults, traces, and
+coverage are recorded as byte offsets from the routine entry; with
+[Capstone](https://www.capstone-engine.org/) linked, the `*_disasm` helpers
+annotate them with the instruction at that offset (and self-skip to bare offsets
+without it). The x86-64 engine and Capstone decode bytes regardless of the host
+ISA, so these hand-assembled examples run anywhere.
+
+A read fault, described with the offending instruction:
+
+```c
+#include "asmtest_emu.h"
+
+TEST(disas, fault_names_the_instruction) {
+    static const uint8_t code[] = {0x48, 0x8b, 0x07, 0xc3};   /* mov rax, [rdi] ; ret */
+    emu_result_t r;
+    long args[] = {(long)0xdead0000UL};                       /* unmapped pointer */
+    emu_call(E, code, sizeof code, args, 1, 0, &r);
+    ASSERT_FAULT_AT(&r, EMU_FAULT_READ, 0xdead0000UL);
+
+    char text[160];
+    emu_fault_describe(&r, EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE,
+                       text, sizeof text);
+    /* with Capstone:
+       "read fault accessing 0xdead0000: mov rax, qword ptr [rdi]  (@0x0)" */
+    ASSERT_TRUE(strstr(text, "read fault") != NULL);
+    if (emu_disas_available())
+        ASSERT_TRUE(strstr(text, "mov") != NULL);             /* names the load */
+}
+```
+
+Decoding one instruction at an offset, and an annotated coverage report:
+
+```c
+static const uint8_t code[] = {0x48, 0x31, 0xc0, 0xc3};       /* xor rax, rax ; ret */
+
+char text[64];
+size_t n = emu_disas(EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE, 0,
+                     text, sizeof text);
+//  text -> "xor rax, rax";  n == 3 (its byte length).  offset 3 -> "ret"
+
+emu_trace_report_disasm(&tr, EMU_ARCH_X86_64, code, sizeof code, stdout);
+//  coverage: 2 distinct blocks, ...
+//    blocks:
+//      0x0   xor rax, rax
+//      0x3   ret
+```
+
+`emu_disas_available()` reports whether this build links Capstone (every helper
+degrades to bare offsets when it doesn't, so the same call works either way), and
+`emu_disas` is exposed through every language binding (`disas` / `disas_available`).
+These live in the `test_emu` suite — run `make emu-test`; see the emulator's
+[disassembly section](emulator.md#disassembly-in-diagnostics-capstone) for the
+full helper set (`emu_disas`, `emu_fault_describe`, `emu_trace_disasm`,
+`emu_trace_report_disasm`, `emu_coverage_uncovered_disasm`).
 
 ### Teaching / learning assembly
 
