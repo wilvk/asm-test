@@ -169,10 +169,11 @@ payload slot, so the notice can never drift from the binary actually shipped.
 `package-libs-verify` asserts the notice's recorded version matches
 `pkg-config --modversion` for each vendored dep.
 
-Each ecosystem's own license metadata stays **MIT** (asm-test's license); the
-vendored libs are declared as third-party notices, not as the package's license —
-except where a registry needs the *effective* distribution terms surfaced (see
-the GPL risk below).
+asm-test's *source* license stays **MIT**, but each `full`/`lite` package's
+registry metadata must declare the **effective binary terms** (a compound SPDX
+expression), because the package conveys the GPL `.so` — see the licensing
+determination below. The vendored libs' verbatim texts ship as third-party
+notices alongside that declaration.
 
 ### D4 — Two variants, `full` as the default
 
@@ -188,6 +189,61 @@ publish `asmtest` (full) as the headline package. The `lite` name is per-registr
 (npm/PyPI/gem/LuaRocks/Maven/NuGet) — pick one suffix (`-lite`) and apply it
 uniformly. Bindings need no code change: both variants stage the same fixed lib
 name; only contents differ.
+
+---
+
+## Licensing determination & compliance checklist
+
+**Determination (recorded, not open):** `libasmtest_emu` and
+`libasmtest_emu_full` are **works based on** Unicorn — and, for the full lib,
+Keystone — under GPL-2.0. This is **direct dynamic linking, not arm's-length
+use**:
+[`emu.c`](https://github.com/wilvk/asm-test/blob/main/src/emu.c) includes
+`<unicorn/unicorn.h>` and calls `uc_open` / `uc_hook_add` / `uc_reg_read` …
+throughout, linked `-lunicorn`;
+[`assemble.c`](https://github.com/wilvk/asm-test/blob/main/src/assemble.c)
+includes `<keystone/keystone.h>` and calls `ks_*`, linked `-lkeystone`. There is
+**no mere-aggregation argument** for these `.so`s. (Capstone —
+[`disasm.c`](https://github.com/wilvk/asm-test/blob/main/src/disasm.c), `cs_*` —
+is BSD-3-Clause, no copyleft.) Consequences:
+
+- As **binaries**, `libasmtest_emu.{so,dylib}` and `_full` are **effectively
+  GPL-2.0** (MIT is GPL-compatible, so asm-test's own object code may be conveyed
+  under GPL — no conflict, just a relabel).
+- Any package that **bundles** one of these `.so`s — i.e. **every `full` and
+  `lite` package** — conveys a GPL work and must ship under GPL-2.0-compatible
+  terms with full compliance.
+- The capture-only **`core`** lib (`libasmtest`: `asmtest.o` + `capture.o` +
+  `ffi.o`, no Unicorn —
+  [`ffi.c`](https://github.com/wilvk/asm-test/blob/main/src/ffi.c) notes "Nothing
+  here depends on Unicorn") is the **only MIT-only distributable**. The
+  language-binding *source* has a defensible "separate work via a stable ABI"
+  argument, but that is **moot for package compliance**, because the package
+  conveys the GPL `.so` regardless.
+
+So this is no longer a "does GPL apply?" question — it does — only a mechanical
+checklist to clear before any `if: secrets.* != ''` real-publish step:
+
+- [ ] **SPDX per variant** reflects the *binary*, not just the source:
+  `full` = `MIT AND GPL-2.0[-only|-or-later] AND BSD-3-Clause`;
+  `lite` = `MIT AND GPL-2.0[…]`; `core` (if shipped) = `MIT`. Confirm GPL-2.0
+  **-only** vs **-or-later** for Unicorn and Keystone and use the exact id.
+- [ ] **Verbatim license text** for every conveyed component at its vendored
+  version in `THIRD-PARTY-LICENSES/` (D3 captures it from the pinned checkout).
+- [ ] **Corresponding source** for the GPL components *and* for asm-test's
+  derivative `libasmtest_emu`/`_full`: a written offer in `NOTICE` naming the
+  exact upstream tag + commit, plus our own `build-*.sh` + CMake flags (the
+  "scripts used to control compilation") — and **archive that source** rather
+  than rely on upstream tags persisting for the GPL's 3-year window.
+- [ ] **Unmodified build confirmed** — `build-*.sh` apply no patch (if they ever
+  do, ship the modified source).
+- [ ] **No further restrictions** — each registry's terms can't restrict the GPL
+  components beyond GPL.
+- [ ] **Registry metadata updated** from bare `MIT` to the per-variant SPDX above.
+
+If surfacing `full`/`lite` as effectively-GPL is unacceptable, the **`core`
+variant is the only MIT-clean path** (open question #4) — at the cost of the
+emulator.
 
 ---
 
@@ -299,16 +355,17 @@ or drops a notice.
 
 ## Risks & mitigations
 
-- **GPL-2.0 redistribution (the big one).** The default `full` package bundles
-  Unicorn **and** Keystone binaries (both GPL-2.0); even `lite` bundles Unicorn.
-  Distributing GPL-2.0 binaries obliges us to offer corresponding source and
-  include the license. *Mitigation:* the pinned `build-*.sh` scripts already name
-  the exact upstream source (tag + repo) — record that in `NOTICE` as the
-  written offer, ship the verbatim `COPYING`, and **confirm GPL-2.0 permits this
-  mere-aggregation/dlopen arrangement with MIT code before flipping any
-  `if: secrets.* != ''` real-publish step.** This gate is mandatory, not advisory.
-  If it doesn't clear cleanly, the GPL-free capture-only variant (`libasmtest`,
-  no Unicorn) becomes the fallback default.
+- **GPL-2.0 redistribution (the big one).** The emu/full `.so`s are works based
+  on Unicorn (and Keystone) via direct linking — **settled, not contested** (see
+  the [licensing determination](#licensing-determination--compliance-checklist)).
+  So `full` *and* `lite` are effectively GPL-2.0 as distributed. *Mitigation:* the
+  determination converts this from an open legal question into a mechanical
+  checklist (verbatim texts, archived corresponding source + written offer,
+  per-variant SPDX, no further restrictions) that **must clear before any
+  `if: secrets.* != ''` real-publish step** — mandatory, not advisory. The only
+  genuinely-open sub-question (is the binding *source* aggregated or combined?) is
+  moot for compliance. If shipping effectively-GPL packages is unacceptable, the
+  GPL-free capture-only `core` variant (no Unicorn) is the only MIT-clean path.
 - **Payload size.** Full lib + three vendored deps (Unicorn's tables are large)
   materially grows the default package. *Mitigation:* that is exactly why `lite`
   exists — size-sensitive consumers take `asmtest-lite`; the turnkey path stays
@@ -349,14 +406,20 @@ or drops a notice.
 
 ## Open questions
 
-1. **Pin which Capstone release?** `5.0.1` is the safe default; `6.x` adds guests
-   but is newer. Pick at Phase 0 and pin it the way Keystone pins `0.9.2`.
-2. **Keep a distro-package fast path in `install-deps.sh`?** Keystone has none, so
-   strict parity is "source only." Capstone packages widely, so an opt-in
-   `--capstone-from-pkg` could save dev-loop build time. Default to source (the
-   ask); decide whether to keep the override.
+1. **Capstone release — RESOLVED: `5.0.1`,** pinned the way Keystone pins
+   `0.9.2`. (`6.x` adds guests but is newer; revisit only if a guest needs it.)
+2. **Keep a distro-package fast path in `install-deps.sh`?** Keystone has no
+   distro package, so strict parity is "source only." Capstone packages widely, so
+   an opt-in `--capstone-from-pkg` could skip the compile for the **dev/test loop
+   only** — it must **never** feed `package-libs`, since the vendored payload (and
+   its captured license) has to be the pinned `5.0.1`, not whatever the distro
+   ships. Default to source (the ask); decide whether the dev-only override earns
+   its keep.
 3. **`lite` package name** — `asmtest-lite` everywhere, or per-registry idioms
    (e.g. npm `@asmtest/lite`)? Pick one and apply uniformly.
-4. **A third, GPL-free `core` variant?** Capture-only (`libasmtest`, no Unicorn)
-   would be MIT-only — the answer for consumers who can't take any GPL. Worth
-   shipping alongside, or only if the GPL risk gate forces it?
+4. **Ship the GPL-free `core` variant?** Capture-only (`libasmtest`, no Unicorn)
+   is the **only MIT-only distributable** (per the determination), but it is
+   *narrower*, not lighter: native **same-arch** capture + ABI assertions only —
+   no emulator, so no cross-arch, faults-as-data, traces/coverage/fuzz, asm, or
+   disas. Ship it alongside `full`/`lite` for the can't-take-GPL audience, or hold
+   it as the fallback the GPL gate would force?
