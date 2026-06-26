@@ -148,6 +148,7 @@ features
 portability
 integration
 packaging
+releasing
 ci
 api-reference
 ```
