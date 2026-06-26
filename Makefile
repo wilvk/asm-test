@@ -1375,6 +1375,35 @@ go-package:
 packages: package-libs python-package rust-package zig-package cpp-package node-package \
           java-package dotnet-package ruby-package lua-package go-package
 
+# One-shot LOCAL packaging: `make <lang>-package-full` runs every step needed to
+# emit a complete package on this host — it builds + stages the host's native
+# payload (package-libs: the superset emu lib + vendored Unicorn/Keystone/Capstone
+# + THIRD-PARTY-LICENSES) first, then runs the packer. The plain `<lang>-package`
+# targets stay payload-consumers (gated by native-payload-check) so a CI release
+# host can package a downloaded multi-platform `native-all` tree without the full
+# toolchain; the `-full` aliases are the convenience entrypoint for a single-box
+# local build. Needs libunicorn + libkeystone + libcapstone (make deps).
+#
+# dlopen packagers need the staged payload, so their -full alias prepends
+# package-libs. python-package already depends on package-libs, so its alias just
+# forwards. The link/source packagers (rust/zig/cpp/go) bundle no native payload,
+# so their -full alias is the plain target — provided for a uniform interface.
+.PHONY: python-package-full ruby-package-full node-package-full java-package-full \
+        dotnet-package-full lua-package-full rust-package-full zig-package-full \
+        cpp-package-full go-package-full
+
+ruby-package-full:   package-libs ; $(MAKE) ruby-package
+node-package-full:   package-libs ; $(MAKE) node-package
+java-package-full:   package-libs ; $(MAKE) java-package
+dotnet-package-full: package-libs ; $(MAKE) dotnet-package
+lua-package-full:    package-libs ; $(MAKE) lua-package
+
+python-package-full: python-package
+rust-package-full:   rust-package
+zig-package-full:    zig-package
+cpp-package-full:    cpp-package
+go-package-full:     go-package
+
 # Verify a (possibly multi-platform) build/dist/native/ tree carries a complete
 # fully-featured set: every <plat> subdir must hold the core lib, the libasmtest_emu
 # superset the dlopen bindings load, the three vendored native deps

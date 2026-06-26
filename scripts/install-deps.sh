@@ -33,11 +33,12 @@ $prog — install asm-test's optional build dependencies cross-platform.
 Usage: scripts/install-deps.sh [options]
 
 Selection (default: all of them):
-  --all          nasm + pkg-config + unicorn + capstone + keystone + clang-tidy + valgrind
+  --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + clang-tidy + valgrind
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + capstone + pkg-config
-  --asm          optional native tiers (make *-asm-test) — keystone + capstone + unicorn + pkg-config
+  --asm          optional native tiers (make *-asm-test) — keystone + capstone + unicorn + pkg-config + patchelf
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
+  --patchelf     dlopen packaging      (make package-libs) — rpath-patch vendored deps (Linux)
   --tidy         static analysis       (make tidy)
   --valgrind     routine memcheck      (make valgrind) — Linux/x86-64
 
@@ -54,6 +55,7 @@ want_pkgconfig=0
 want_unicorn=0
 want_capstone=0
 want_keystone=0
+want_patchelf=0
 want_tidy=0
 want_valgrind=0
 dry_run=0
@@ -61,11 +63,12 @@ selected=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_tidy=1; want_valgrind=1; selected=1 ;;
+        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_valgrind=1; selected=1 ;;
         --nasm)       want_nasm=1; selected=1 ;;
         --emu)        want_unicorn=1; want_capstone=1; want_pkgconfig=1; selected=1 ;;
-        --asm)        want_keystone=1; want_capstone=1; want_unicorn=1; want_pkgconfig=1; selected=1 ;;
+        --asm)        want_keystone=1; want_capstone=1; want_unicorn=1; want_pkgconfig=1; want_patchelf=1; selected=1 ;;
         --pkgconfig|--pkg-config) want_pkgconfig=1; selected=1 ;;
+        --patchelf)   want_patchelf=1; selected=1 ;;
         --tidy)       want_tidy=1; selected=1 ;;
         --valgrind)   want_valgrind=1; selected=1 ;;
         --dry-run|-n) dry_run=1 ;;
@@ -77,7 +80,7 @@ done
 
 # No selection flag => full dev setup.
 if [ "$selected" -eq 0 ]; then
-    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_tidy=1; want_valgrind=1
+    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_valgrind=1
 fi
 
 # Detect the package manager. Native Linux managers take precedence over a
@@ -106,12 +109,12 @@ fi
 # Keystone must) so a published package vendors a known, version-matched binary +
 # license. Where it's empty, --emu/--asm point at scripts/build-capstone.sh.
 case "$PM" in
-    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  capstone_pkg=;  keystone_pkg=; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
-    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; capstone_pkg=; keystone_pkg=; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
-    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=; tidy_pkg=clang;            valgrind_pkg=valgrind ;;
-    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; capstone_pkg=; keystone_pkg=; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
-    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      capstone_pkg=;     keystone_pkg=; tidy_pkg=clang-extra-tools; valgrind_pkg=valgrind ;;
-    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=keystone; tidy_pkg=llvm;     valgrind_pkg= ;; # valgrind unsupported on current macOS
+    apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  capstone_pkg=;  keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
+    dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; capstone_pkg=; keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
+    pacman)  nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang;            valgrind_pkg=valgrind ;;
+    zypper)  nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=libunicorn-devel; capstone_pkg=; keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-tools;      valgrind_pkg=valgrind ;;
+    apk)     nasm_pkg=nasm; pkgconfig_pkg=pkgconf;     unicorn_pkg=unicorn-dev;      capstone_pkg=;     keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-extra-tools; valgrind_pkg=valgrind ;;
+    brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=keystone; patchelf_pkg=; tidy_pkg=llvm;     valgrind_pkg= ;; # valgrind unsupported on current macOS; macOS vendors deps via install_name_tool (Xcode CLT), not patchelf
 esac
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -139,6 +142,11 @@ skip() { echo "$prog: $1 already present, skipping"; }
         echo "$prog: keystone has no $PM package; build it from source with:" >&2
         echo "  scripts/build-keystone.sh   (then re-run make asm-test)" >&2
     else add "$keystone_pkg"; fi
+}
+[ "$want_patchelf" -eq 1 ]  && {
+    if have patchelf; then skip patchelf
+    elif [ -z "$patchelf_pkg" ]; then echo "$prog: patchelf not needed on $PM (macOS vendors deps via install_name_tool); skipping"
+    else add "$patchelf_pkg"; fi
 }
 [ "$want_tidy" -eq 1 ]      && { have clang-tidy && skip clang-tidy || add "$tidy_pkg"; }
 [ "$want_valgrind" -eq 1 ]  && {

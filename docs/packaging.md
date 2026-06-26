@@ -123,6 +123,28 @@ make lua-package       # rock source -> build/dist/lua/    (luarocks pack/make)
 make go-package        # module check (Go modules publish from the tagged repo)
 ```
 
+The plain `<lang>-package` targets above are **payload-consumers**: the dlopen
+ones (python/ruby/node/java/dotnet/lua) expect `build/dist/native/` to already be
+staged (by `make package-libs` locally, or a CI-downloaded `native-all` tree) and
+fail fast via `native-payload-check` if it is not. This keeps a release host able
+to package a downloaded multi-platform tree without the full toolchain.
+
+For a **one-shot local build**, use the `-full` aliases — each runs every step
+needed to emit a complete package on this host, staging the native payload first:
+
+```sh
+make dotnet-package-full   # = package-libs (build + stage + vendor deps) then dotnet-package
+make ruby-package-full     # likewise for ruby/node/java/lua
+make python-package-full   # python-package already stages, so this just forwards
+```
+
+The dlopen `-full` aliases run `package-libs`, so they need the full native
+toolchain — **libunicorn + libkeystone + libcapstone** (headers and libs) plus
+**patchelf** (Linux) / `install_name_tool` (macOS) for dep vendoring. Bootstrap
+it with `make deps DEPS_ARGS=--asm` (and `apt-get install patchelf` on Linux).
+The link/source `-full` aliases (rust/zig/cpp/go) just forward to the plain
+target — those packages bundle no native payload.
+
 `make packages` runs them all, so it needs every toolchain installed — like
 `make docker-bindings` for the test side, prefer building one language at a time,
 or use each binding's Docker image (`make docker-<lang>`), where the toolchain is

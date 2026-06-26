@@ -18,8 +18,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # build-essential in the base already provides g++ and make. Keystone's bundled
 # LLVM CMake requires a Python interpreter to configure — the main CI image got
 # one transitively via clang-tidy, but this minimal base must ask for it.
+# patchelf is what `make package-libs` uses to rewrite the vendored deps' rpath to
+# $ORIGIN, so an image built FROM this can also stage a full dlopen payload.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends cmake git python3 \
+ && apt-get install -y --no-install-recommends cmake git python3 patchelf \
  && rm -rf /var/lib/apt/lists/*
 
 # Build + install Keystone AND Capstone with the same pinned scripts the CI
