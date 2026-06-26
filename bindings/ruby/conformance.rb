@@ -201,5 +201,43 @@ rescue Asmtest::Error
 end
 check("tier2.assertions_have_teeth", tier2_teeth)
 
+# --- Track F: mid-execution guards (byte-literal routines) -----------------
+ge = Asmtest::Emu.new
+two_writes = code(0x48, 0x89, 0x07, 0x48, 0x89, 0x87, 0x00, 0x08, 0x00, 0x00, 0xC3)
+ge.map(0x400000, 0x1000)
+w = ge.watch_writes(0x400000, 8, :only)
+ge.call_bytes(two_writes, [0x400000])
+ge.watch_clear
+check("guard.watch_escape", w.violated? && w.addr == 0x400800 && w.rip_off == 3)
+w.free
+clobber = code(0x48, 0xC7, 0xC3, 0x99, 0x00, 0x00, 0x00, 0xEB, 0x00, 0xC3)
+g = ge.guard_reg("rbx", 0)
+ge.call_bytes(clobber, [])
+ge.guard_reg_clear
+check("guard.reg_invariant", g.violated? && g.got == 0x99)
+g.free
+ge.close
+
+# --- Track E: coverage-guided fuzzing + mutation testing -------------------
+fze = Asmtest::Emu.new
+classify3 = code(0x31, 0xC0, 0x48, 0x85, 0xFF, 0x78, 0x0B, 0x48, 0x85, 0xFF, 0x74, 0x05,
+                 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3)
+fixed_blocks, = fze.fuzz_cover(classify3, 5, 5, 1)
+guided_blocks, = fze.fuzz_cover(classify3, -50, 50, 2000)
+check("fuzz.coverage_beats_fixed", guided_blocks > fixed_blocks)
+_, weak_s = fze.mutation_test(classify3, [5])
+_, strong_s = fze.mutation_test(classify3, [-7, 0, 9])
+check("mutation.strong_kills_more", weak_s.positive? && strong_s < weak_s)
+fze.close
+
+# --- Track D: AVX2 256-bit capture (self-skips off-AVX2) --------------------
+if Asmtest.cpu_has_avx2?
+  out = Asmtest.capture_vec256(routine("vec_add4d"),
+                               [[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]])
+  check("vec256.add4d", out[0].unpack("d4") == [11.0, 22.0, 33.0, 44.0])
+else
+  puts "ok - vec256.add4d # SKIP no AVX2"
+end
+
 puts "# #{$total - $fail} passed, #{$fail} failed, #{$total} total"
 exit($fail == 0 ? 0 : 1)

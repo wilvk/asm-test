@@ -103,6 +103,35 @@ module Asmtest
     arm_res_new:     func(L, "asmtest_emu_arm_result_new", [], VOIDP),
     arm_res_free:    func(L, "asmtest_emu_arm_result_free", [VOIDP], VOID),
     arm_reg:         func(L, "asmtest_emu_arm_reg", [VOIDP, VOIDP], LL),
+    # Mid-execution guards (Track F): arm directly; results via opaque handles.
+    emu_map:         func(L, "emu_map", [VOIDP, LL, SZ], INT),
+    watch_writes:    func(L, "emu_watch_writes", [VOIDP, LL, SZ, INT, VOIDP], VOID),
+    watch_clear:     func(L, "emu_watch_clear", [VOIDP], VOID),
+    guard_reg:       func(L, "emu_guard_reg", [VOIDP, VOIDP, LL, VOIDP], INT),
+    guard_reg_clear: func(L, "emu_guard_reg_clear", [VOIDP], VOID),
+    watch_new:       func(L, "asmtest_emu_watch_new", [], VOIDP),
+    watch_free:      func(L, "asmtest_emu_watch_free", [VOIDP], VOID),
+    watch_violated:  func(L, "asmtest_emu_watch_violated", [VOIDP], INT),
+    watch_addr:      func(L, "asmtest_emu_watch_addr", [VOIDP], LL),
+    watch_rip:       func(L, "asmtest_emu_watch_rip_off", [VOIDP], LL),
+    rguard_new:      func(L, "asmtest_emu_reg_guard_new", [], VOIDP),
+    rguard_free:     func(L, "asmtest_emu_reg_guard_free", [VOIDP], VOID),
+    rguard_violated: func(L, "asmtest_emu_reg_guard_violated", [VOIDP], INT),
+    rguard_got:      func(L, "asmtest_emu_reg_guard_got", [VOIDP], LL),
+    # Coverage-guided fuzzing + mutation testing (Track E).
+    fuzz_cover1:     func(L, "emu_fuzz_cover1", [VOIDP, VOIDP, SZ, LONG, LONG, LL, LL, VOIDP, VOIDP], INT),
+    mutation_test1:  func(L, "emu_mutation_test1", [VOIDP, VOIDP, SZ, VOIDP, SZ, LL, LL, VOIDP], SZ),
+    fuzz_new:        func(L, "asmtest_emu_fuzz_stat_new", [], VOIDP),
+    fuzz_free:       func(L, "asmtest_emu_fuzz_stat_free", [VOIDP], VOID),
+    fuzz_blocks:     func(L, "asmtest_emu_fuzz_blocks_reached", [VOIDP], LL),
+    fuzz_corpus:     func(L, "asmtest_emu_fuzz_corpus_len", [VOIDP], LL),
+    mut_new:         func(L, "asmtest_emu_mutation_stat_new", [], VOIDP),
+    mut_free:        func(L, "asmtest_emu_mutation_stat_free", [VOIDP], VOID),
+    mut_killed:      func(L, "asmtest_emu_mutation_killed", [VOIDP], LL),
+    mut_survived:    func(L, "asmtest_emu_mutation_survived", [VOIDP], LL),
+    # AVX2 256-bit capture (Track D) + the CPUID probe that gates it.
+    capture_vec256:  func(L, "asm_call_capture_vec256", [VOIDP, VOIDP, VOIDP, VOIDP], VOID),
+    cpu_avx2:        func(L, "asmtest_cpu_has_avx2", [], INT),
   }.freeze
 
   # Invalid-access kind reported by EmuResult#fault_kind (mirrors emu_fault_kind_t).
@@ -326,10 +355,104 @@ module Asmtest
       res
     end
 
+    # --- Mid-execution guards (Track F) ---
+
+    # Map a guest RW region [addr, addr+size) the routine can use.
+    def map(addr, size)
+      FN[:emu_map].call(@h, addr, size) != 0
+    end
+
+    # Arm a memory-write watchpoint over [addr, addr+size): +:only+ flags a write
+    # that escapes it, +:never+ one that touches it. Returns a Watch.
+    def watch_writes(addr, size, mode)
+      w = Watch.new
+      FN[:watch_writes].call(@h, addr, size, mode == :never ? 0 : 1, w.h)
+      w
+    end
+
+    def watch_clear
+      FN[:watch_clear].call(@h)
+    end
+
+    # Arm a register invariant: GP register +name+ must hold +want+ at every
+    # basic-block entry. Returns a RegGuard; raises for an unknown register name.
+    def guard_reg(name, want)
+      g = RegGuard.new
+      if FN[:guard_reg].call(@h, name, want, g.h) == 0
+        g.free
+        raise Error, "unknown register: #{name}"
+      end
+      g
+    end
+
+    def guard_reg_clear
+      FN[:guard_reg_clear].call(@h)
+    end
+
+    # --- Coverage-guided fuzzing + mutation testing (Track E) ---
+
+    # Coverage-guided input search over one-int-arg +code+; [blocks_reached, corpus_len].
+    def fuzz_cover(code, lo, hi, iters, seed: 0xC0FFEE)
+      uni = Trace.new(0, 256)
+      st = FN[:fuzz_new].call
+      FN[:fuzz_cover1].call(@h, code, code.bytesize, lo, hi, iters, seed, uni.h, st)
+      out = [FN[:fuzz_blocks].call(st), FN[:fuzz_corpus].call(st)]
+      FN[:fuzz_free].call(st)
+      uni.free
+      out
+    end
+
+    # Bit-flip mutation testing of +code+ against +inputs+; [killed, survived].
+    def mutation_test(code, inputs, max_mutants: 0, seed: 0xABCD)
+      st = FN[:mut_new].call
+      FN[:mutation_test1].call(@h, code, code.bytesize, Asmtest.pack_longs(inputs),
+                               inputs.length, max_mutants, seed, st)
+      out = [FN[:mut_killed].call(st), FN[:mut_survived].call(st)]
+      FN[:mut_free].call(st)
+      out
+    end
+
     def close
       FN[:emu_close].call(@h) if @h
       @h = nil
     end
+  end
+
+  # A memory-write watchpoint result (Track F).
+  class Watch
+    attr_reader :h
+    def initialize; @h = FN[:watch_new].call; end
+    def violated?; FN[:watch_violated].call(@h) != 0; end
+    def addr; FN[:watch_addr].call(@h); end
+    def rip_off; FN[:watch_rip].call(@h); end
+    def free; FN[:watch_free].call(@h) if @h; @h = nil; end
+  end
+
+  # A register-invariant guard result (Track F).
+  class RegGuard
+    attr_reader :h
+    def initialize; @h = FN[:rguard_new].call; end
+    def violated?; FN[:rguard_violated].call(@h) != 0; end
+    def got; FN[:rguard_got].call(@h); end
+    def free; FN[:rguard_free].call(@h) if @h; @h = nil; end
+  end
+
+  # True if the host CPU + OS support AVX2 (gate .capture_vec256).
+  def self.cpu_has_avx2?
+    FN[:cpu_avx2].call != 0
+  end
+
+  # AVX2 256-bit capture (Track D): +vargs+ is an array of [4 doubles]; returns
+  # the 16 ymm registers as 32-byte binary Strings (out[0] = the vector return).
+  def self.capture_vec256(fn, vargs)
+    out = ("\0".b * (16 * 32))
+    va = ("\0".b * (8 * 32))
+    vargs.first(8).each_with_index do |v, i|
+      va[i * 32, 32] = v.map(&:to_f).pack("d4")
+    end
+    ia = ("\0".b * (6 * 8)) # the trampoline reads six integer-arg slots
+    FN[:capture_vec256].call(out, fn, ia, va)
+    (0...16).map { |i| out[i * 32, 32] }
   end
 
   # An opaque execution-trace / basic-block coverage recorder.

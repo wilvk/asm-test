@@ -17,6 +17,9 @@ extern double fp_add(double, double);
 extern void vec_add4f(void);
 extern long read_fault(const long *);
 extern double int_to_double(long);
+#if defined(__x86_64__)
+extern void vec_add4d(void); /* AVX2 256-bit (Track D); x86-64 only */
+#endif
 
 void *asmtest_corpus_routine(const char *name) {
     if (!name)
@@ -35,6 +38,10 @@ void *asmtest_corpus_routine(const char *name) {
         return (void *)fp_add;
     if (!strcmp(name, "vec_add4f"))
         return (void *)vec_add4f;
+#if defined(__x86_64__)
+    if (!strcmp(name, "vec_add4d"))
+        return (void *)vec_add4d;
+#endif
     if (!strcmp(name, "read_fault"))
         return (void *)read_fault;
     if (!strcmp(name, "int_to_double"))
