@@ -2,14 +2,16 @@
 
 This page is the release guide for the ten language bindings. It documents, per
 ecosystem, the **package manifest**, how the **prebuilt native libraries** are
-bundled, and the **command** that assembles a publishable artifact. Everything
-here is *scaffolding*: the manifests and the `make <lang>-package` targets exist
-and assemble an artifact for the **host** platform. The **cross-platform native
-payloads** that a multi-platform release needs are now built in CI — the
-[`payloads` matrix](#ci-builds-the-cross-platform-native-payloads) runs the native
-staging on each target OS/arch and uploads the result — but wiring those payloads
-into each ecosystem's package and uploading to the registry with credentials
-stays out of this repo.
+bundled, and the **command** that assembles a publishable artifact. Each `make
+<lang>-package` target assembles a real artifact that **exposes the library
+module** (not the conformance runner) and **bundles every native slot present in
+`build/dist/native/`** — the host slot locally, or all four when a release has
+downloaded the CI `native-all` payload. The **cross-platform native payloads** a
+multi-platform release needs are built in CI by the
+[`payloads` matrix](#ci-builds-the-cross-platform-native-payloads), which runs the
+native staging on each target OS/arch and uploads the result. What still stays out
+of this repo: the credentialed release workflow that downloads those payloads and
+uploads each package to its registry.
 
 ## The native-library split
 
@@ -92,7 +94,7 @@ make zig-package       # source tarball -> build/dist/zig/
 make cpp-package       # header + CMake tarball -> build/dist/cpp/
 make node-package      # npm tarball -> build/dist/node/   (npm pack)
 make java-package      # jar -> build/dist/java/           (javac + jar)
-make dotnet-package    # nupkg -> build/dist/dotnet/       (dotnet pack)
+make dotnet-package    # AsmTest.dll + runtimes/<rid>/native + nuspec (nuget pack to publish)
 make ruby-package      # gem -> build/dist/ruby/           (gem build)
 make lua-package       # rock source -> build/dist/lua/    (luarocks pack/make)
 make go-package        # module check (Go modules publish from the tagged repo)
@@ -109,17 +111,21 @@ The scaffolding stops short of a credentialed, multi-platform release:
 
 1. **Cross-platform native libs.** *Built in CI* — the `payloads` matrix above
    stages `make package-libs` on every target OS/arch and the collect job emits a
-   verified `native-all` artifact spanning all four platforms. What remains is the
-   *publish-side* wiring: a release job that downloads `native-all` and drops each
-   `<plat>/` into the matching `native/<plat>/` (or `runtimes/<rid>/native/`) slot,
-   or hands the payloads to each ecosystem's prebuild tool (`cibuildwheel`,
-   `prebuildify`, Maven classifiers, NuGet RIDs).
-2. **Wiring the library modules into each packer.** Every binding now ships a
-   reusable library module — `asmtest.js`, `asmtest.rb`, `asmtest.lua`,
-   `Asmtest.java`, and `Asmtest.cs` join the already-library-shaped Python, Rust,
-   Zig, C++, and Go modules, each consumed by its own conformance runner (see
-   [Language bindings](bindings.md)). What remains is pointing each `make
-   <lang>-package` target at the module rather than the conformance runner, so the
-   published artifact exposes the library.
+   verified `native-all` artifact spanning all four platforms. Each `make
+   <lang>-package` now **consumes the collected tree**: the dlopen packers bundle
+   one native slot per platform present in `build/dist/native/` (so locally they
+   ship the host slot; in a release that downloads `native-all`, all four). What
+   remains is the *publish-side* wiring: a release job that downloads `native-all`
+   into `build/dist/native/` and runs the packers (or hands the payloads to each
+   ecosystem's prebuild tool — `cibuildwheel`, `prebuildify`, Maven classifiers,
+   NuGet RIDs).
+2. **Wiring the library modules into each packer.** *Done* — every `make
+   <lang>-package` now exposes the reusable **library module**, not the
+   conformance runner: the Ruby gem ships `asmtest.rb`, the npm package `asmtest.js`
+   (its `main`), the rock `asmtest.lua`, the JAR the `Asmtest` classes (compiled
+   from `Asmtest.java`), and the NuGet package the `AsmTest.dll` library assembly
+   (built from `Asmtest.cs` by `asmtest-lib.csproj`) — joining the
+   already-library-shaped Python wheel, Rust crate, C++ header, and Go module. Each
+   binding's `conformance.*` test runner is no longer shipped.
 3. **Registry credentials + a release workflow** (out of scope here; the publish
    commands above are the building blocks).

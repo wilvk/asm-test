@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The *library* build of the .NET binding: compiles the reusable module
+       (Asmtest.cs) into AsmTest.dll for the NuGet package, excluding the
+       conformance runner (Program.cs, which is the dev test entry point built by
+       asmtest.csproj). `make dotnet-package` builds this and stages the DLL into
+       lib/<tfm>/ alongside the runtimes/<rid>/native/ payload. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>AsmTest</AssemblyName>
+    <RootNamespace>Asmtest</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Asmtest.cs" />
+  </ItemGroup>
+
+</Project>

@@ -6,13 +6,13 @@
   "repository": "https://github.com/wilvk/asm-test",
   "homepage": "https://github.com/wilvk/asm-test",
   "keywords": ["assembly", "testing", "abi", "emulator", "unicorn", "koffi"],
-  "main": "conformance.js",
+  "main": "asmtest.js",
   "scripts": {
     "test": "node conformance.js"
   },
-  "//": "Packaging scaffolding (see docs/packaging.md): `make node-package` stages the prebuilt libasmtest_emu into native/<plat>/ before `npm pack`, and `files` ships it. A real release adds per-platform prebuilds (prebuildify) and a reusable library module.",
+  "//": "Packaging (see docs/packaging.md): the published package exposes the reusable library module (asmtest.js, `main`); conformance.js is the dev test runner and is NOT shipped. `make node-package` stages the prebuilt libasmtest_emu into native/<plat>/ from build/dist/native/ before `npm pack`, and `files` ships it. A real release adds per-platform prebuilds (prebuildify).",
   "files": [
-    "conformance.js",
+    "asmtest.js",
     "README.md",
     "native/"
   ],

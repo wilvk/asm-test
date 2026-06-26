@@ -1,8 +1,9 @@
-# Packaging scaffolding (see docs/packaging.md). A RubyGems manifest for the
-# asm-test Ruby binding. `make ruby-package` stages the prebuilt libasmtest_emu
-# into native/<plat>/ before `gem build`, so the gem bundles the native library
-# the stdlib-Fiddle binding dlopen()s at run time. A real release stages a
-# native/<plat>/ payload for each target platform (or ships per-platform gems).
+# RubyGems manifest for the asm-test Ruby binding. The gem exposes the reusable
+# library module (asmtest.rb) — `require "asmtest"` — not the conformance test
+# runner. `make ruby-package` stages the prebuilt libasmtest_emu into
+# native/<plat>/ from build/dist/native/ before `gem build`, so the gem bundles
+# the native library the stdlib-Fiddle binding dlopen()s at run time, one slot
+# per platform present in the collected payload (see docs/packaging.md).
 Gem::Specification.new do |s|
   s.name        = "asmtest"
   s.version     = "1.0.0"
@@ -14,8 +15,9 @@ Gem::Specification.new do |s|
   s.license     = "MIT"
   s.required_ruby_version = ">= 2.6"
 
-  # The binding source + README + whatever native payloads have been staged.
-  s.files = ["conformance.rb", "README.md"] + Dir["native/**/*"]
+  # The reusable library module + README + whatever native payloads have been
+  # staged (conformance.rb is the dev test runner and is not shipped).
+  s.files = ["asmtest.rb", "README.md"] + Dir["native/**/*"]
   s.require_paths = ["."]
 
   # The emulator native lib links libunicorn at run time.

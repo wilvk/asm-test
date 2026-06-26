@@ -1,8 +1,9 @@
--- Packaging scaffolding (see docs/packaging.md). A LuaRocks manifest for the
--- asm-test Lua binding (LuaJIT). `make lua-package` stages the prebuilt
--- libasmtest_emu into native/<plat>/ before packing, so the rock installs the
--- native library the LuaJIT `ffi` binding loads at run time. A real release
--- builds the native/<plat>/ payload for each target platform.
+-- LuaRocks manifest for the asm-test Lua binding (LuaJIT). The rock exposes the
+-- reusable library module (asmtest.lua) — `require("asmtest")` — not the
+-- conformance test runner. `make lua-package` stages the prebuilt libasmtest_emu
+-- into native/<plat>/ from build/dist/native/ before packing, so the rock
+-- installs the native library the LuaJIT `ffi` binding loads at run time, one
+-- slot per platform present in the collected payload (see docs/packaging.md).
 package = "asmtest"
 version = "1.0.0-1"
 
@@ -33,7 +34,7 @@ dependencies = {
 build = {
    type = "builtin",
    modules = {
-      asmtest = "conformance.lua",
+      asmtest = "asmtest.lua",
    },
    install = {
       lib = {},  -- populated by `make lua-package` from native/<plat>/

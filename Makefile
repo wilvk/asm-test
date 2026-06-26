@@ -1249,43 +1249,69 @@ package-libs: shared shared-emu
 	@echo "package-libs: staged $(PKG_PLAT) libs in $(PKG_DIST)/native/$(PKG_PLAT)"
 
 # dlopen bindings: bundle the prebuilt libasmtest_emu in the package's payload.
-python-package: shared-emu manifest
+# Python's wheel is per-platform (cibuildwheel builds one per tag in CI), so it
+# bundles only the host slot, flat in asmtest/_libs/ (where _native.py looks).
+python-package: package-libs manifest
 	mkdir -p bindings/python/asmtest/_libs $(PKG_DIST)/python
-	cp -f $(call shlib_real,libasmtest_emu) bindings/python/asmtest/_libs/$(pkg_emu_name)
-	cp -f $(call shlib_real,libasmtest)     bindings/python/asmtest/_libs/$(pkg_core_name)
+	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)  bindings/python/asmtest/_libs/
+	cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name) bindings/python/asmtest/_libs/
 	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
 	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python
 
-ruby-package: shared-emu
-	mkdir -p bindings/ruby/native/$(PKG_PLAT) $(PKG_DIST)/ruby
-	cp -f $(call shlib_real,libasmtest_emu) bindings/ruby/native/$(PKG_PLAT)/$(pkg_emu_name)
+# Each dlopen packer ships the reusable library module (asmtest.rb / asmtest.js /
+# asmtest.lua / Asmtest.java / AsmTest.dll), NOT the conformance runner, and
+# bundles one native slot per platform present in build/dist/native/ (staged by
+# package-libs locally; the CI payloads matrix collects all four). emu_lib_slots
+# copies the emulator lib from each <plat> slot into a per-platform dir.
+define emu_lib_slots
+	@for pd in $(PKG_DIST)/native/*/; do \
+	  [ -d "$$pd" ] || continue; p=$$(basename "$$pd"); \
+	  mkdir -p "$(1)/$$p"; cp -f "$$pd"libasmtest_emu.* "$(1)/$$p/"; \
+	  echo "  bundled $$p"; \
+	done
+endef
+
+ruby-package: package-libs
+	rm -rf bindings/ruby/native && mkdir -p $(PKG_DIST)/ruby
+	$(call emu_lib_slots,bindings/ruby/native)
 	cd bindings/ruby && $(GEM) build asmtest.gemspec
 	mv bindings/ruby/asmtest-$(ASMTEST_VERSION).gem $(PKG_DIST)/ruby/
 
-node-package: shared-emu
-	mkdir -p bindings/node/native/$(PKG_PLAT) $(PKG_DIST)/node
-	cp -f $(call shlib_real,libasmtest_emu) bindings/node/native/$(PKG_PLAT)/$(pkg_emu_name)
+node-package: package-libs
+	rm -rf bindings/node/native && mkdir -p $(PKG_DIST)/node
+	$(call emu_lib_slots,bindings/node/native)
 	cd bindings/node && $(NPM) pack --pack-destination $(abspath $(PKG_DIST))/node
 
-java-package: shared-emu
-	mkdir -p bindings/java/src/main/resources/native/$(PKG_PLAT) \
-	         $(BUILD)/java-pkg $(PKG_DIST)/java
-	cp -f $(call shlib_real,libasmtest_emu) \
-	      bindings/java/src/main/resources/native/$(PKG_PLAT)/$(pkg_emu_name)
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-pkg bindings/java/Conformance.java
+java-package: package-libs
+	rm -rf bindings/java/src/main/resources/native
+	mkdir -p $(BUILD)/java-pkg $(PKG_DIST)/java
+	$(call emu_lib_slots,bindings/java/src/main/resources/native)
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-pkg bindings/java/Asmtest.java
 	cp -r bindings/java/src/main/resources/native $(BUILD)/java-pkg/
 	cd $(BUILD)/java-pkg && $(JAR) cf $(abspath $(PKG_DIST))/java/asmtest-$(ASMTEST_VERSION).jar .
 
-dotnet-package: shared-emu
-	mkdir -p bindings/dotnet/runtimes/$(DOTNET_RID)/native $(PKG_DIST)/dotnet
-	cp -f $(call shlib_real,libasmtest_emu) \
-	      bindings/dotnet/runtimes/$(DOTNET_RID)/native/$(pkg_emu_name)
+# .NET: build the library assembly (AsmTest.dll) from Asmtest.cs via the classlib
+# project, and stage it + a runtimes/<rid>/native/ slot per platform (mapping the
+# <os>-<arch> payload name to the .NET RID the loader resolves). nuget pack the
+# staged nuspec to publish.
+dotnet-package: package-libs
+	rm -rf bindings/dotnet/runtimes bindings/dotnet/lib
+	mkdir -p bindings/dotnet/lib/net8.0 $(PKG_DIST)/dotnet
+	$(DOTNET) build bindings/dotnet/asmtest-lib.csproj -c Release -o $(BUILD)/dotnet-lib
+	cp -f $(BUILD)/dotnet-lib/AsmTest.dll bindings/dotnet/lib/net8.0/
+	@for pd in $(PKG_DIST)/native/*/; do \
+	  [ -d "$$pd" ] || continue; p=$$(basename "$$pd"); \
+	  rid=$$(echo "$$p" | sed -e 's/^darwin-/osx-/' -e 's/-x86_64$$/-x64/' -e 's/-aarch64$$/-arm64/'); \
+	  mkdir -p bindings/dotnet/runtimes/$$rid/native; \
+	  cp -f "$$pd"libasmtest_emu.* bindings/dotnet/runtimes/$$rid/native/; \
+	  echo "  bundled $$p -> runtimes/$$rid/native"; \
+	done
 	cp -f bindings/dotnet/asmtest.nuspec $(PKG_DIST)/dotnet/
-	@echo "dotnet-package: staged nuspec + runtimes/$(DOTNET_RID)/native in $(PKG_DIST)/dotnet (nuget pack to publish)"
+	@echo "dotnet-package: built AsmTest.dll + staged lib/net8.0 + runtimes/<rid>/native + nuspec (nuget pack to publish)"
 
-lua-package: shared-emu
-	mkdir -p bindings/lua/native/$(PKG_PLAT) $(PKG_DIST)/lua
-	cp -f $(call shlib_real,libasmtest_emu) bindings/lua/native/$(PKG_PLAT)/$(pkg_emu_name)
+lua-package: package-libs
+	rm -rf bindings/lua/native && mkdir -p $(PKG_DIST)/lua
+	$(call emu_lib_slots,bindings/lua/native)
 	cp -f bindings/lua/asmtest-1.0.0-1.rockspec $(PKG_DIST)/lua/
 	@echo "lua-package: staged rockspec + native in $(PKG_DIST)/lua (luarocks pack/upload to publish)"
 

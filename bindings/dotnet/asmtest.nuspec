@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Packaging scaffolding (see docs/packaging.md). A NuGet manifest for the
-     asm-test .NET binding (P/Invoke). `make dotnet-package` stages the prebuilt
-     libasmtest_emu into runtimes/<rid>/native/ before packing, so the package
-     carries the native library the P/Invoke binding loads at run time, in the
-     RID layout the .NET loader resolves automatically. A real release stages a
-     runtimes/<rid>/native/ payload for each RID (linux-x64, osx-arm64, ...). -->
+<!-- NuGet manifest for the asm-test .NET binding (P/Invoke). The package exposes
+     the reusable library assembly AsmTest.dll (built from Asmtest.cs by
+     asmtest-lib.csproj) — NOT the conformance runner — plus the prebuilt
+     libasmtest_emu in the runtimes/<rid>/native/ layout the .NET loader resolves
+     automatically. `make dotnet-package` builds the lib and stages a
+     runtimes/<rid>/native/ slot per platform present in build/dist/native/ (see
+     docs/packaging.md). -->
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
   <metadata>
     <id>AsmTest</id>
@@ -18,8 +19,10 @@
     <tags>assembly testing abi emulator unicorn pinvoke</tags>
   </metadata>
   <files>
-    <!-- Populated by `make dotnet-package` from the staged native payload. One
-         entry per RID in a real release. -->
+    <!-- The reusable library assembly (asmtest-lib.csproj -> AsmTest.dll). -->
+    <file src="lib/**/*.dll" target="lib" />
+    <!-- The native payload, populated by `make dotnet-package` from
+         build/dist/native/. One runtimes/<rid>/native/ entry per platform. -->
     <file src="runtimes/**/native/*" target="runtimes" />
   </files>
 </package>
