@@ -164,8 +164,12 @@ page, linked above).
 Every binding also ships **Tier-2 assertions** over these results — `assert_ret`,
 `assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_vec_f32`,
 `assert_no_fault`, `assert_fault`, `assert_reg`, and friends (`Asm.Assert.*` in
-.NET, `asmtest.Assert*` in Go). Each language's page puts every capability to work
-end-to-end.
+.NET, `asmtest.Assert*` in Go). Each language's page works the core tiers
+end-to-end — capture, the emulator, cross-arch guests, and the in-line assembler.
+The newer additions above (AVX2 256-bit capture, mid-execution guards,
+coverage-guided fuzzing / mutation testing, and the disassembler) are mapped in
+this table and catalogued in the [API reference](api-reference.md); the
+[Python reference page](bindings/python.md) documents each in full.
 
 ## Every binding has a reusable module
 

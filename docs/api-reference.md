@@ -160,21 +160,31 @@ top and are **not** part of this surface.
 project](integration.md)):
 
 ```sh
-make shared       # libasmtest.{so,dylib}      — runtime + capture trampoline
-make shared-emu   # libasmtest_emu.{so,dylib}  — adds the emulator (-lunicorn)
-make manifest     # asmtest_abi.json           — machine-readable struct layout
+make shared        # libasmtest.{so,dylib}          — runtime + capture trampoline
+make shared-emu    # libasmtest_emu.{so,dylib}      — adds the emulator (-lunicorn)
+make shared-emu-full # libasmtest_emu_full.{so,dylib} — adds the in-line assembler
+                     #   (Keystone) and the disassembler (Capstone)
+make manifest      # asmtest_abi.json               — machine-readable struct layout
 ```
+
+The fuzzing/mutation and guard entry points are part of the emulator tier
+(`libasmtest_emu`, Unicorn). The **disassembler** (and the in-line assembler)
+need the extra optional tiers in `libasmtest_emu_full`; against the lean
+`libasmtest_emu` the disassembler and assembler self-skip.
 
 **Contract symbols.**
 
 | Group | Symbols | Notes |
 |---|---|---|
-| Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. |
+| Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_vec256` (AVX2), `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. `_vec256` captures the ymm file; gate on `asmtest_cpu_has_avx2`. |
 | Verdict shims | `asmtest_check_abi`, `asmtest_check_flag` | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. |
 | Opaque-handle accessors | `asmtest_regs_new`/`_free`, `asmtest_regs_ret`/`_flags`/`_fret`/`_vec_f32`/`_flag_set`, `asmtest_capture6`/`asmtest_capture_fp2`/`asmtest_capture_vec_f32`; emulator: `asmtest_emu_result_new`/`_free`/`_ok`/`_faulted`/`_fault_addr`/`_fault_kind`, `asmtest_emu_x86_reg` (GP + `rip`/`rflags`), `asmtest_emu_x86_xmm_f64`/`_f32` | For dynamic-FFI bindings (Node, Ruby, Lua, …) that can't mirror `regs_t` offsets: allocate a handle, call with scalar args, read fields by accessor — the universal FFI subset. |
 | Scalar-arg emu wrappers | `asmtest_emu_call2`, `asmtest_emu_call6` (≤6 int args), `asmtest_emu_call_fp2`, `asmtest_emu_call_vec_f32`, `asmtest_emu_call_win64_6`, `asmtest_emu_call6_traced` | Drive the emulator over a 64-byte code window with scalar args — FP, vector, Win64, and traced runs — without marshalling C argument arrays. |
 | Cross-arch emu accessors | `asmtest_emu_{arm64,riscv,arm}_result_new`/`_free`, `asmtest_emu_{arm64,riscv,arm}_reg` (register by name), `asmtest_emu_arm64_vec_f64`/`_f32`, `asmtest_emu_riscv_f_f64`, `asmtest_emu_arm_q_f64`/`_f32` | Read a non-x86 guest's per-arch result struct without mirroring its layout; the shared `asmtest_emu_result_*` fault/ok accessors apply to every guest result. |
 | Trace handle | `asmtest_emu_trace_new`/`_free`, `asmtest_emu_trace_covered`, `_insns_total`/`_blocks_len`/`_blocks_total`/`_truncated`/`_block_at` | Opaque wrapper over `emu_trace_t` + its buffers, so a dynamic-FFI binding records execution trace / basic-block coverage. |
+| Mid-execution guards | `emu_watch_writes`/`emu_watch_clear`, `emu_guard_reg`/`emu_guard_reg_clear`; opaque handles `asmtest_emu_watch_new`/`_free`/`_violated`/`_addr`/`_size`/`_rip_off`, `asmtest_emu_reg_guard_new`/`_free`/`_violated`/`_got`/`_rip_off` | Arm a write-watchpoint or block-entry register invariant on the handle, run a call, then read the recorded violation by accessor (x86-64 guest, Track F). |
+| Coverage-guided fuzzing / mutation | `emu_fuzz_cover1`, `emu_mutation_test1`; opaque stats `asmtest_emu_fuzz_stat_new`/`_free`/`_blocks_reached`/`_corpus_len`/`_iterations`, `asmtest_emu_mutation_stat_new`/`_free`/`_mutants`/`_killed`/`_survived` | Run a one-int-arg routine's coverage-guided input search or bit-flip mutation set inside the emulator; read the result counts by accessor (Track E). |
+| Disassembly | `emu_disas`, `emu_disas_available` | Decode the one instruction at a code offset into text (Capstone). Writes into a caller buffer — no opaque handle — and self-skips to empty when absent. Needs `libasmtest_emu_full` (Track C). |
 | Guard buffers | `asmtest_guarded_alloc`/`_free`, `asmtest_guarded_alloc_under`/`_free_under` | Share a pointer to a guarded buffer with the routine under test. |
 | RNG | `asmtest_rng_u64`, `asmtest_rng_long`, `asmtest_rng_range` | Deterministic splitmix64 source. |
 | Emulator | `emu_open`/`emu_close`/`emu_map`/`emu_read`/`emu_write`, `emu_call`/`_fp`/`_vec`/`_traced`, `emu_call_win64`, and the per-guest `emu_arm64_*` / `emu_riscv_*` / `emu_arm_*` families | Opaque handle + value-struct result; faults surface as data, not crashes. |

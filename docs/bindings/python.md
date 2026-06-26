@@ -142,6 +142,7 @@ gate optional tiers) or read manifest layout.
 r = asmtest.capture(fn, 40, 2)            # up to 6 integer args -> Regs
 r = asmtest.capture_fp(fn, iargs=[1], fargs=[1.5, 2.25])  # ints + up to 8 doubles
 r = asmtest.capture_vec(fn, vargs=[asmtest.vec_f32(1,2,3,4)])  # up to 8 128-bit vecs
+out = asmtest.capture_vec256(fn, vargs=[v256])  # AVX2: 32-byte vecs, if cpu_has_avx2()
 v = asmtest.vec_f32(1.0, 2.0, 3.0, 4.0)   # pack 4 float32 lanes -> 16-byte arg
 v = asmtest.vec_f64(1.0, 2.0)             # pack 2 float64 lanes -> 16-byte arg
 ```
@@ -153,6 +154,9 @@ v = asmtest.vec_f64(1.0, 2.0)             # pack 2 float64 lanes -> 16-byte arg
 * `capture_vec(fn, iargs=(), vargs=())` — each `vargs` entry is exactly 16 bytes
   (use the packers, or any `bytes`); a `ValueError` is raised otherwise. The
   vector return is `r.vec_f32(0)` / `r.vec_f64(0)`.
+* `capture_vec256(fn, vargs=())` — AVX2 256-bit capture (Track D): each `vargs`
+  entry is exactly 32 `bytes` into ymm0..7; returns a list of 16 × 32-byte lanes
+  (`out[0]` is the return). x86-64 + AVX2 only — gate on `asmtest.cpu_has_avx2()`.
 
 ### `Regs` — a capture snapshot
 
@@ -219,6 +223,50 @@ with asmtest.Emulator() as e, asmtest.Trace(insns_cap=4096, blocks_cap=4096) as 
 * `Emulator.call_traced(fn, args=(), trace=None, code_len=64, max_insns=0)` —
   like `call`, plus a `trace` to record into (`None` runs untraced).
 
+### Mid-execution guards (Track F)
+
+Assert a property *while* a routine runs, not just on its result (x86-64 guest).
+A guard is armed on the handle and persists across calls until cleared.
+
+```python
+with asmtest.Emulator() as e:
+    w = e.watch_writes(0x400000, 8, asmtest.EMU_WATCH_ONLY)  # writes must stay in [base, base+8)
+    e.call(fn, [arg]); e.watch_clear()
+    w.violated            # bool: a write escaped the region (w.addr / w.rip_off locate it)
+
+    g = e.guard_reg("rbx", 0)          # rbx must read 0 at every basic-block entry
+    e.call(fn, [arg]); e.guard_reg_clear()
+    g.violated            # bool: corrupted mid-routine, even if restored before return
+```
+
+* `watch_writes(addr, size, mode)` — `EMU_WATCH_ONLY` flags a write that escapes
+  the region; `EMU_WATCH_NEVER` one that touches it. `watch_clear()` disarms.
+* `guard_reg(name, want)` / `guard_reg_clear()` — a callee-saved / stack-pointer
+  invariant that catches corruption even when restored by return; raises
+  `ValueError` for an unknown register name.
+
+### Coverage-guided fuzzing & mutation testing (Track E)
+
+Both drive a one-int-arg routine (raw `bytes`) entirely inside the emulator, so a
+pathological input or a broken mutant cannot crash the host; both are seeded, so
+runs reproduce.
+
+```python
+with asmtest.Emulator() as e:
+    fz = e.fuzz_cover(code, -50, 50, iters=2000)   # keep inputs that grow block coverage
+    fz.blocks_reached; fz.corpus_len               # reach + the coverage-expanding corpus
+
+    mt = e.mutation_test(code, [-7, 0, 9])         # flip bits; run each mutant + the original
+    mt.mutants; mt.killed; mt.survived             # survivors == a test-gap signal
+```
+
+* `fuzz_cover(code, lo, hi, iters, seed=0xC0FFEE, blocks_cap=256)` — draws inputs
+  in `[lo, hi]`, keeping those that expand the basic-block union; returns a
+  `FuzzStat`. Reaches blocks a handful of fixed vectors miss.
+* `mutation_test(code, inputs, max_mutants=0, seed=0xABCD)` — runs every
+  single-bit flip (`max_mutants=0`) or a seeded sample; returns a `MutationStat`
+  (a stronger input set kills more). See `tests/test_fuzz.py`.
+
 ### Cross-arch guests (AArch64 / RISC-V / ARM32)
 
 These run **raw machine-code bytes** on any host, so they need no host routine.
@@ -259,6 +307,28 @@ asmtest.asm_error()                                # last Keystone diagnostic ("
   `Arch.X86_64 | ARM64 | RISCV64 | ARM32`; `addr` is the base load address (matters
   for PC-relative encodings). Works for guests the x86 emulator can't run.
 * `Arch` / `Syntax` are integer-code enums; `AsmtestError` is the raised type.
+* Both optional tiers ship together in `libasmtest_emu_full` — point `ASMTEST_LIB`
+  there to get the assembler *and* the disassembler (below) from one load.
+
+### Disassembler (optional — `libasmtest_emu_full`)
+
+Turn an emulator fault/trace/coverage **offset** into the instruction text at it
+(Capstone). It self-skips to `""` against the lean lib, so the same call is safe
+either way — branch on `disas_available()`.
+
+```python
+asmtest.disas_available()                          # bool: disassembler compiled in
+asmtest.disas(b"\x48\x31\xc0", 0)                  # -> "xor rax, rax"
+asmtest.disas(code, off, arch=asmtest.Arch.ARM64, base=0x00100000)
+```
+
+* `disas(code, off=0, arch=Arch.X86_64, base=0x00100000)` — decode the one
+  instruction at byte `off`; `base` is the load address, so PC-relative operands
+  resolve. Returns `"mnemonic operands"`, or `""` with no disassembler / when the
+  bytes do not decode. Pair it with a fault's `res.reg("rip")` (minus the load
+  base) to name the offending instruction.
+* Needs the Capstone-carrying `libasmtest_emu_full`; build it with
+  `make shared-emu-full` and point `ASMTEST_LIB` at it.
 
 ### Tier-2 assertions (`asmtest.assertions`)
 
