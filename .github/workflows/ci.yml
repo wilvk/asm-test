@@ -32,7 +32,7 @@ jobs:
         #   macos-latest      aarch64 macOS  (clang, Mach-O)
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain versions
         run: |
@@ -66,7 +66,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain versions
         run: |
@@ -102,7 +102,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ensure Rosetta 2
         run: softwareupdate --install-rosetta --agree-to-license
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install nasm
         run: make deps DEPS_ARGS=--nasm
@@ -160,7 +160,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -185,7 +185,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -212,7 +212,7 @@ jobs:
       matrix:
         lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua, go]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
@@ -231,30 +231,30 @@ jobs:
       matrix:
         lang: [ruby, lua, node, java, dotnet, python, cpp, go, rust, zig]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Per-language runtime (Ruby, Python, C++ and Rust ship on the runner).
       - if: matrix.lang == 'lua'
         run: sudo apt-get update && sudo apt-get install -y luajit
       - if: matrix.lang == 'node'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
       - if: matrix.lang == 'node'
         run: cd bindings/node && npm install
       - if: matrix.lang == 'java'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
       - if: matrix.lang == 'dotnet'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
       - if: matrix.lang == 'python'
         run: python3 -m pip install --user pytest
       - if: matrix.lang == 'go'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.22'
       - if: matrix.lang == 'zig'
@@ -281,7 +281,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Win64 capture via the native ms_abi lane
         run: |
@@ -307,7 +307,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -323,7 +323,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run under sanitizers
         run: make sanitize
 
@@ -336,7 +336,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install valgrind
         run: make deps DEPS_ARGS=--valgrind
       - name: Memcheck the routines under test
@@ -349,7 +349,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install clang-tidy
         run: make deps DEPS_ARGS=--tidy
       - name: Run clang-tidy
@@ -362,11 +362,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Generate coverage
         run: make coverage
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: asmtest-coverage
           path: asmtest.c.gcov
@@ -392,7 +392,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps (unicorn, pkg-config) + patchelf
         run: |
@@ -406,7 +406,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: native-payload-${{ matrix.os }}
           path: build/dist/native/
@@ -420,7 +420,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps (unicorn, pkg-config) + patchelf
         run: |
@@ -434,7 +434,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: native-payload-macos-13
           path: build/dist/native/
@@ -453,10 +453,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download every per-OS/arch payload
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: native-payload-*
           path: build/dist/native/
@@ -466,7 +466,7 @@ jobs:
         run: make package-libs-verify
 
       - name: Upload the combined cross-platform payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: native-all
           path: build/dist/native/

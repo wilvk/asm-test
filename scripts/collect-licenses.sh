@@ -63,11 +63,24 @@ emit Capstone capstone BSD-3-Clause  https://github.com/capstone-engine/capstone
 
 {
     echo
-    echo "Because this package conveys the GPL-2.0 engines (Unicorn, Keystone) as"
+    echo "Because this package conveys the GPL-2.0 engines Unicorn and Keystone as"
     echo "binaries dynamically linked into libasmtest_emu, the package as distributed"
-    echo "is effectively GPL-2.0 (MIT is GPL-compatible). Corresponding source for"
-    echo "each engine is the pinned upstream tag the build scripts clone; see"
-    echo "scripts/build-keystone.sh and scripts/build-capstone.sh."
+    echo "is effectively GPL-2.0 (MIT is GPL-compatible; Capstone is BSD-3-Clause)."
+    echo
+    echo "WRITTEN OFFER (GPL-2.0 section 3b)"
+    echo "----------------------------------"
+    echo "For three (3) years from the date you received this package, the asm-test"
+    echo "maintainers offer to give any third party, for no more than the cost of"
+    echo "physically performing source distribution, the complete corresponding"
+    echo "machine-readable source code for the GPL-2.0 components listed above, at the"
+    echo "exact versions shown. Request it by opening an issue at"
+    echo "https://github.com/wilvk/asm-test . The same source is attached to the"
+    echo "matching GitHub release as corresponding-source-*.tar.gz (assembled by"
+    echo "scripts/fetch-corresponding-source.sh) and is the upstream release tagged"
+    echo "with the version shown for each component:"
+    echo "  Unicorn   https://github.com/unicorn-engine/unicorn"
+    echo "  Keystone  https://github.com/keystone-engine/keystone"
+    echo "  Capstone  https://github.com/capstone-engine/capstone"
 } >> "$notice"
 
 echo "$prog: wrote $dest (see NOTICE)"
