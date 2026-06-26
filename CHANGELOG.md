@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Mid-execution guards in the emulator (watchpoints + register invariants).**
+  Assert properties *while* a routine runs, not just on its result — introspection
+  no ABI-boundary tool can do. Armed on the emu handle and persisting across
+  `emu_call_*` until cleared, recording the first violation as data (no host
+  crash), x86-64 guest. **Memory-write watchpoints** (`emu_watch_writes` with
+  `EMU_WATCH_ONLY` / `EMU_WATCH_NEVER`, `ASSERT_NO_WRITE_VIOLATION` /
+  `ASSERT_WRITE_VIOLATION`) catch a *logical* scribble into mapped memory that
+  does **not** fault — where a guard page sees nothing — and name the offending
+  store (`emu_watch_describe` reuses the Track C disassembler:
+  `write to 0x400800 (8 bytes): mov qword ptr [rdi + 0x800], rax  (@0x3)`).
+  **Register invariants** (`emu_guard_reg`, `ASSERT_REG_INVARIANT`) assert a
+  register holds a value at every basic-block entry — a callee-saved / stack-pointer
+  guard that catches mid-routine corruption **even when the value is restored by
+  return** (which ABI capture cannot see). Step-bounded assertions need no new
+  API: run with `max_insns=N` and inspect `out->regs`. New hooks
+  (`UC_HOOK_MEM_WRITE`, a second `UC_HOOK_BLOCK`) in
+  [`src/emu.c`](https://github.com/wilvk/asm-test/blob/main/src/emu.c); types,
+  arming functions, and assertions in
+  [`include/asmtest_emu.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_emu.h).
+  Track F of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#mid-execution-guards).
+
 - **Disassembly in emulator diagnostics (Capstone).** The emulator records
   faults, traces, and coverage as raw byte offsets — `@0x2f`, never the
   instruction. With [Capstone](https://www.capstone-engine.org/) linked (the

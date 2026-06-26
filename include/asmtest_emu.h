@@ -535,6 +535,67 @@ void emu_fault_describe(const emu_result_t *r, emu_arch_t arch,
                         uint64_t base_addr, char *buf, size_t buflen);
 
 /* ------------------------------------------------------------------ */
+/* Mid-execution guards (x86-64 guest, Track F)                        */
+/*                                                                     */
+/* Assert properties WHILE a routine runs, not just on its result —    */
+/* the introspection no ABI-boundary tool can do. A guard is armed on   */
+/* the emu handle and persists across emu_call_* until cleared (so it   */
+/* can span a sweep of inputs); each run resets the result, then        */
+/* records the FIRST violation as data instead of crashing the host.    */
+/* Step-bounded assertions (#3) need no new API: run with max_insns=N   */
+/* (the single-step path) and inspect out->regs with ASSERT_EMU_REG_EQ. */
+/* ------------------------------------------------------------------ */
+
+/* What counts as a write-watchpoint violation over a region [addr,addr+size):
+ * NEVER — a write that touches the region (a forbidden zone, e.g. a guard band
+ * past a buffer); ONLY — a write that escapes it (confinement: the routine must
+ * only scribble inside its declared output buffer). */
+typedef enum {
+    EMU_WATCH_NEVER,
+    EMU_WATCH_ONLY,
+} emu_watch_mode_t;
+
+/* First write that violated the armed watchpoint. `rip_off` is the offending
+ * store's offset from EMU_CODE_BASE (feed it to emu_disas / emu_watch_describe
+ * for the instruction text). `violated` is false when the watchpoint held. */
+typedef struct {
+    bool violated;
+    uint64_t addr;    /* data address of the offending write   */
+    uint32_t size;    /* its width in bytes                    */
+    uint64_t rip_off; /* offset of the store that did it       */
+} emu_watch_t;
+
+/* First basic-block entry at which a guarded register broke its invariant. */
+typedef struct {
+    bool violated;
+    uint64_t got;     /* the register's value at the breach    */
+    uint64_t rip_off; /* that block's offset from EMU_CODE_BASE */
+} emu_reg_guard_t;
+
+/* Arm a memory-write watchpoint over [addr, addr+size) for subsequent
+ * emu_call_* on this handle; the first violating write lands in *out (pass
+ * out=NULL, or emu_watch_clear, to disarm). x86-64 guest. */
+void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
+                      emu_watch_mode_t mode, emu_watch_t *out);
+void emu_watch_clear(emu_t *e);
+
+/* Arm a register invariant: assert x86 GP register `regname` ("rbx", "rsp", …)
+ * holds `want` at every basic-block entry — a callee-saved or stack-pointer
+ * guard that catches mid-routine corruption even when the value is restored by
+ * return (which ABI capture cannot see). Returns false for an unknown register
+ * name. The first breach lands in *out. */
+bool emu_guard_reg(emu_t *e, const char *regname, uint64_t want,
+                   emu_reg_guard_t *out);
+void emu_guard_reg_clear(emu_t *e);
+
+/* Format a one-line description of a watchpoint violation into buf, including
+ * the offending store's disassembly when Capstone is present (pairs with the
+ * disassembly tier; in src/disasm.c). "no violation" when *w did not fire. */
+void emu_watch_describe(const emu_watch_t *w, emu_arch_t arch,
+                        const uint8_t *code, size_t code_len,
+                        uint64_t base_addr, char *buf, size_t buflen);
+
+/* ------------------------------------------------------------------ */
 /* Source-line coverage mapping (Track C)                              */
 /*                                                                     */
 /* The trace records basic-block byte-offsets from the routine entry.  */
@@ -693,6 +754,41 @@ void asmtest_fail(const char *file, int line, const char *fmt, ...)
             asmtest_fail(__FILE__, __LINE__,                                  \
                          "ASSERT_BLOCKS_AT_LEAST: %zu < %zu", asmtest_bl_,    \
                          (size_t)(n));                                        \
+    } while (0)
+
+/* Mid-execution guard assertions (Track F): check the emu_watch_t /            */
+/* emu_reg_guard_t a guarded run filled. The failure names the offending        */
+/* store's / block's offset; pair with emu_watch_describe for the instruction.  */
+
+/* No guarded write violated the armed watchpoint (emu_watch_writes). */
+#define ASSERT_NO_WRITE_VIOLATION(w)                                           \
+    do {                                                                      \
+        if ((w)->violated)                                                   \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_NO_WRITE_VIOLATION: write to 0x%llx (%u "    \
+                         "bytes) at insn @0x%llx",                            \
+                         (unsigned long long)(w)->addr, (unsigned)(w)->size,  \
+                         (unsigned long long)(w)->rip_off);                   \
+    } while (0)
+
+/* A guarded write DID violate the watchpoint (expect a scribble). */
+#define ASSERT_WRITE_VIOLATION(w)                                              \
+    do {                                                                      \
+        if (!(w)->violated)                                                  \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_WRITE_VIOLATION: expected a guarded write, "  \
+                         "none occurred");                                    \
+    } while (0)
+
+/* The register invariant (emu_guard_reg) held at every basic-block entry. */
+#define ASSERT_REG_INVARIANT(g)                                                \
+    do {                                                                      \
+        if ((g)->violated)                                                   \
+            asmtest_fail(__FILE__, __LINE__,                                  \
+                         "ASSERT_REG_INVARIANT: broke invariant (got 0x%llx) " \
+                         "at block @0x%llx",                                  \
+                         (unsigned long long)(g)->got,                        \
+                         (unsigned long long)(g)->rip_off);                   \
     } while (0)
 
 #ifdef __cplusplus

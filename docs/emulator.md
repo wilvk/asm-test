@@ -294,6 +294,60 @@ the core library stays Capstone-free. Install it with
 `capstone`). RISC-V disassembly additionally needs Capstone ≥ 5; older builds
 self-skip that guest.
 
+## Mid-execution guards
+
+Assert properties **while** a routine runs, not just on its result — the
+introspection no ABI-boundary tool can do. A guard is armed on the handle and
+persists across `emu_call_*` until cleared (so it can span a sweep of inputs);
+each run resets the result, then records the **first** violation as data instead
+of crashing the host. x86-64 guest.
+
+**Memory-write watchpoints** catch a *logical* scribble that does **not** fault —
+a write to mapped memory the routine had no business touching (where a guard page
+would see nothing). `EMU_WATCH_ONLY` confines writes to a region; `EMU_WATCH_NEVER`
+forbids a region:
+
+```c
+emu_map(e, 0x400000, 0x1000);
+emu_watch_t w;
+emu_watch_writes(e, 0x400000, 8, EMU_WATCH_ONLY, &w);  // must only write [base, base+8)
+emu_call(e, fn, len, args, 1, 0, &r);
+emu_watch_clear(e);
+ASSERT_NO_WRITE_VIOLATION(&w);                         // or ASSERT_WRITE_VIOLATION(&w)
+
+char buf[160];                                          // pairs with the disassembly tier:
+emu_watch_describe(&w, EMU_ARCH_X86_64, fn, len, EMU_CODE_BASE, buf, sizeof buf);
+//   "write to 0x400800 (8 bytes): mov qword ptr [rdi + 0x800], rax  (@0x3)"
+```
+
+**Register invariants** assert a register holds a value at every basic-block
+entry — a callee-saved or stack-pointer guard that catches mid-routine corruption
+**even when the value is restored by return** (which ABI capture cannot see):
+
+```c
+emu_reg_guard_t g;
+emu_guard_reg(e, "rbx", 0, &g);   // rbx must stay 0 at every block entry
+emu_call(e, fn, len, args, 0, 0, &r);
+emu_guard_reg_clear(e);
+ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on breach
+```
+
+| Function | Purpose |
+|---|---|
+| `emu_watch_writes(e, addr, size, mode, &w)` / `emu_watch_clear(e)` | arm/disarm a write watchpoint |
+| `emu_guard_reg(e, "rbx", want, &g)` / `emu_guard_reg_clear(e)` | arm/disarm a block-entry register invariant |
+| `emu_watch_describe(&w, arch, code, len, base, buf, n)` | a violation line with the offending store disassembled |
+| `ASSERT_NO_WRITE_VIOLATION` / `ASSERT_WRITE_VIOLATION` / `ASSERT_REG_INVARIANT` | the matching assertions |
+
+> The engine **retains register state across calls** on a handle (only the
+> argument registers and `rsp` are reset each call), so a register invariant sees
+> whatever a previous call left behind — arm it on a fresh `emu_open` handle, or
+> account for the carried-over value.
+
+**Step-bounded assertions** need no new API: run with `max_insns=N` (the
+single-step path) to stop after N instructions, then inspect `out->regs` with
+`ASSERT_EMU_REG_EQ` — a condition asserted at instruction N.
+
 ## When to reach for the emulator
 
 | Use the emulator when you need… | Otherwise use… |
@@ -303,6 +357,7 @@ self-skip that guest.
 | A non-host architecture (ARM/RISC-V) on this host | native build for the host arch |
 | The Windows x64 ABI on a Unix host | — |
 | Branch / basic-block coverage | — |
+| A mid-execution write/register invariant (not just the result) | — |
 
 The emulator pairs naturally with [property testing](property-testing.md): a
 looping or faulting fuzz input is contained by the instruction cap and fault

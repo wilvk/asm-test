@@ -444,6 +444,96 @@ TEST(emu, disas_report_annotates_blocks) {
         ASSERT_TRUE(strstr(tbuf, "xor") != NULL); /* first insn annotated */
 }
 
+/* ---- Mid-execution guards (Track F) -------------------------------------
+ * Hand-assembled x86-64, host-independent. The guarded writes land in MAPPED
+ * memory, so they do not fault — the watchpoint catches a *logical* violation
+ * that ABI-boundary or guard-page checks cannot see, and names the store. */
+
+/* mov [rdi], rax ; mov [rdi+0x800], rax ; ret */
+static const uint8_t TWO_WRITES[] = {0x48, 0x89, 0x07, 0x48, 0x89, 0x87,
+                                     0x00, 0x08, 0x00, 0x00, 0xc3};
+#define WATCH_BASE 0x400000UL
+
+TEST(emu, watchpoint_only_flags_escaping_write) {
+    ASSERT_TRUE(emu_map(E, WATCH_BASE, 0x1000)); /* both writes land in it */
+    emu_result_t r;
+    long args[] = {(long)WATCH_BASE};
+
+    emu_watch_t w;
+    emu_watch_writes(E, WATCH_BASE, 8, EMU_WATCH_ONLY, &w); /* confine to [base,+8) */
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    emu_watch_clear(E);
+
+    ASSERT_NO_FAULT(&r);        /* region is mapped: no fault... */
+    ASSERT_WRITE_VIOLATION(&w); /* ...but the 2nd store escaped [base,+8) */
+    ASSERT_UEQ(w.addr, WATCH_BASE + 0x800);
+    ASSERT_UEQ(w.rip_off, 3); /* offset of the escaping store */
+
+    char buf[160];
+    emu_watch_describe(&w, EMU_ARCH_X86_64, TWO_WRITES, sizeof TWO_WRITES,
+                       EMU_CODE_BASE, buf, sizeof buf);
+    ASSERT_TRUE(strstr(buf, "0x400800") != NULL);
+    if (emu_disas_available())
+        ASSERT_TRUE(strstr(buf, "mov") != NULL); /* names the store */
+}
+
+TEST(emu, watchpoint_never_flags_forbidden_zone_then_clears) {
+    ASSERT_TRUE(emu_map(E, WATCH_BASE, 0x1000));
+    emu_result_t r;
+    long args[] = {(long)WATCH_BASE};
+
+    /* NEVER: writing into the guard band at base+0x800 is forbidden. */
+    emu_watch_t w;
+    emu_watch_writes(E, WATCH_BASE + 0x800, 8, EMU_WATCH_NEVER, &w);
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    ASSERT_WRITE_VIOLATION(&w);
+    ASSERT_UEQ(w.addr, WATCH_BASE + 0x800);
+
+    /* Cleared, then re-armed over the whole region: nothing escapes. */
+    emu_watch_clear(E);
+    emu_watch_t w2;
+    emu_watch_writes(E, WATCH_BASE, 0x1000, EMU_WATCH_ONLY, &w2);
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    emu_watch_clear(E);
+    ASSERT_NO_WRITE_VIOLATION(&w2);
+}
+
+/* mov rbx,0x99 ; jmp +0 ; ret — clobbers rbx, then the jump target (a fresh
+ * basic block, the ret) sees the clobbered value. A return-time ABI check could
+ * miss this; the block-entry invariant does not. */
+static const uint8_t CLOBBER_RBX[] = {0x48, 0xc7, 0xc3, 0x99, 0x00,
+                                      0x00, 0x00, 0xeb, 0x00, 0xc3};
+
+TEST(emu, reg_invariant_catches_clobber_and_holds) {
+    emu_result_t r;
+    long args[] = {0};
+
+    /* Fresh handle: rbx starts at 0. A routine that never touches rbx keeps the
+     * invariant across both of its blocks. (Run this first: the engine RETAINS
+     * register state across calls on a handle, so the clobber below would leave
+     * rbx = 0x99 behind.) */
+    static const uint8_t XOR_JMP_RET[] = {0x31, 0xc0, 0xeb, 0x00, 0xc3};
+    emu_reg_guard_t g2;
+    ASSERT_TRUE(emu_guard_reg(E, "rbx", 0, &g2));
+    emu_call(E, XOR_JMP_RET, sizeof XOR_JMP_RET, args, 0, 0, &r);
+    emu_guard_reg_clear(E);
+    ASSERT_REG_INVARIANT(&g2);
+
+    /* rbx must stay 0 — broken at the ret's block entry (rbx == 0x99 there),
+     * which a return-time ABI check, seeing rbx restored or not, can miss. */
+    emu_reg_guard_t g;
+    ASSERT_TRUE(emu_guard_reg(E, "rbx", 0, &g));
+    emu_call(E, CLOBBER_RBX, sizeof CLOBBER_RBX, args, 0, 0, &r);
+    emu_guard_reg_clear(E);
+    ASSERT_TRUE(g.violated);
+    ASSERT_UEQ(g.got, 0x99);
+    ASSERT_UEQ(g.rip_off, 9); /* the ret's block, after the clobber */
+
+    /* An unknown register name is rejected. */
+    emu_reg_guard_t g3;
+    ASSERT_FALSE(emu_guard_reg(E, "nope", 0, &g3));
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:

@@ -236,7 +236,7 @@ layer), `src/assemble.c`, `examples/`.
 
 ---
 
-## Track F — Emulator invariant & watchpoint assertions *(planned)*
+## Track F — Emulator invariant & watchpoint assertions — **done**
 
 **Goal.** Assert properties *during* a routine's execution, not just on its result —
 the introspection no ABI-boundary tool can do.
@@ -245,23 +245,31 @@ the introspection no ABI-boundary tool can do.
 only post-run state and faults-as-data. Mid-execution guards play directly to its
 unique strength and are a small surface on top of existing infrastructure.
 
-### Deliverables
+**Landed.** Guards are armed on the emu handle (`struct emu` gained `watch` / `reg`
+contexts) and persist across `emu_call_*` until cleared, each recording the first
+violation as data via a new `UC_HOOK_MEM_WRITE` / second `UC_HOOK_BLOCK` hook in
+`emu_x86_run` (x86-64 guest):
 
-1. **Memory-region guards** — `ASSERT_NEVER_WRITES(region)` /
-   `ASSERT_ONLY_WRITES(region)`: a write outside (or inside) a declared range is
-   surfaced as data, with the offending instruction (pairs with Track C).
-2. **Register invariants** — assert a register holds an invariant at every block
-   entry (e.g. a stack-pointer or callee-saved guard mid-routine).
-3. **Step-bounded assertions** — leverage the existing single-step path to assert a
-   condition at instruction N.
+1. **Memory-write watchpoints** — `emu_watch_writes(e, addr, size, mode, &w)` with
+   `EMU_WATCH_ONLY` / `EMU_WATCH_NEVER`; `ASSERT_NO_WRITE_VIOLATION` /
+   `ASSERT_WRITE_VIOLATION`. Catches a *logical* write into mapped memory that does
+   not fault, naming the offending store via `emu_watch_describe` (reuses the
+   Track C disassembler — pairs as planned).
+2. **Register invariants** — `emu_guard_reg(e, "rbx", want, &g)` /
+   `ASSERT_REG_INVARIANT`, checked at every basic-block entry; catches mid-routine
+   corruption even when restored by return.
+3. **Step-bounded** — no new API: `max_insns=N` (the single-step path) +
+   `ASSERT_EMU_REG_EQ` on `out->regs` asserts a condition at instruction N
+   (documented).
 
-### Acceptance criteria
-
-- A routine that scribbles past a buffer is caught at the offending store with its
-  instruction text, without a host crash.
+Three host-independent example tests in `examples/test_emu.c`; surfaced the real
+property that the engine **retains register state across calls** on a handle (only
+args + `rsp` reset). Acceptance met: a routine writing past its confined region is
+caught at the offending store with its instruction text, no host crash.
 
 **Effort:** ~3–4 days. **Touches:** `src/emu.c`, `include/asmtest_emu.h`,
-`examples/test_emu.c`.
+`src/disasm.c` (the describe helper, kept Capstone-side), `examples/test_emu.c`,
+[docs/emulator.md](../emulator.md).
 
 ---
 
@@ -272,8 +280,9 @@ unique strength and are a small surface on top of existing infrastructure.
 2. **Track A** (publish) — if reach is the priority, this is the single biggest
    adoption lever; it has no dependency on the others.
 3. **Track D** (wide vectors) — closes a concrete modern gap in the capture model.
-4. **Track F** (invariants) — small, compounds with Track C.
-5. **Track E** (fuzzing/mutation) — the deepest engineering; do it once C and F land.
+4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
+   offending store is disassembled).
+5. **Track E** (fuzzing/mutation) — the deepest engineering; C and F have landed.
 6. **Track B** (Win64 isolation) — opportunistic, on concrete demand for isolated
    Win64 execution (its Phase 3 gate already deemed `--no-fork` a shipping milestone).
 

@@ -16,8 +16,28 @@
 #define EMU_STACK_SIZE 0x00010000UL /* 64 KiB stack          */
 #define EMU_RET_MAGIC  0x00f00000UL /* return target; unmapped, only a stop addr */
 
+/* A memory-write watchpoint armed on the handle (emu_watch_writes): subsequent
+ * runs flag the first valid write that violates the [lo,hi) region per `mode`. */
+typedef struct {
+    bool armed;
+    uint64_t lo, hi; /* the guarded region [lo, hi)                     */
+    emu_watch_mode_t mode;
+    emu_watch_t *out; /* caller's result (NULL == disarmed)             */
+} watch_ctx_t;
+
+/* A register invariant armed on the handle (emu_guard_reg): subsequent runs flag
+ * the first basic-block entry at which `uc_reg` no longer holds `want`. */
+typedef struct {
+    bool armed;
+    int uc_reg; /* UC_X86_REG_*                                          */
+    uint64_t want;
+    emu_reg_guard_t *out;
+} reg_guard_ctx_t;
+
 struct emu {
     uc_engine *uc;
+    watch_ctx_t watch; /* mid-execution memory-write guard (emu_watch_*)  */
+    reg_guard_ctx_t reg; /* mid-execution register invariant (emu_guard_*) */
 };
 
 typedef struct {
@@ -113,6 +133,48 @@ static void add_trace_hooks(uc_engine *uc, trace_ctx_t *tc, uc_hook *hcode,
         return;
     uc_hook_add(uc, hcode, UC_HOOK_CODE, (void *)on_code, tc, 1, 0);
     uc_hook_add(uc, hblock, UC_HOOK_BLOCK, (void *)on_block, tc, 1, 0);
+}
+
+/* UC_HOOK_MEM_WRITE: every VALID write. Flags the first one that violates the
+ * armed watchpoint — a write touching a NEVER region, or escaping an ONLY
+ * region — recording its data address, width, and the offending store's offset.
+ * (A write to UNMAPPED memory faults instead, via on_invalid_mem.) */
+static void on_mem_write(uc_engine *uc, uc_mem_type type, uint64_t addr,
+                         int size, int64_t value, void *user) {
+    (void)type;
+    (void)value;
+    watch_ctx_t *w = (watch_ctx_t *)user;
+    if (w->out == NULL || w->out->violated)
+        return;
+    uint64_t end = addr + (uint64_t)size;
+    bool touches = addr < w->hi && end > w->lo;       /* overlaps [lo,hi)  */
+    bool contained = addr >= w->lo && end <= w->hi;   /* fully inside      */
+    bool bad = (w->mode == EMU_WATCH_NEVER) ? touches : !contained;
+    if (!bad)
+        return;
+    uint64_t rip = 0;
+    uc_reg_read(uc, UC_X86_REG_RIP, &rip);
+    w->out->violated = true;
+    w->out->addr = addr;
+    w->out->size = (uint32_t)size;
+    w->out->rip_off = rip - EMU_CODE_BASE;
+}
+
+/* UC_HOOK_BLOCK companion: checks the armed register invariant at each block
+ * entry, recording the first breach (the value seen + that block's offset). */
+static void on_block_guard(uc_engine *uc, uint64_t address, uint32_t size,
+                           void *user) {
+    (void)size;
+    reg_guard_ctx_t *g = (reg_guard_ctx_t *)user;
+    if (g->out == NULL || g->out->violated)
+        return;
+    uint64_t v = 0;
+    uc_reg_read(uc, g->uc_reg, &v);
+    if (v != g->want) {
+        g->out->violated = true;
+        g->out->got = v;
+        g->out->rip_off = address - EMU_CODE_BASE;
+    }
 }
 
 /* Load a routine's bytes at EMU_CODE_BASE and flush Unicorn's translation-block
@@ -220,8 +282,9 @@ static bool emu_x86_setup_sysv(uc_engine *uc, const void *fn, size_t code_len,
 /* Shared x86-64 run-and-capture: registers and stack are already set up by the
  * caller (per the chosen ABI); this installs the fault/trace hooks, runs to the
  * sentinel return address, and reads back the full register file into *out. */
-static bool emu_x86_run(uc_engine *uc, uint64_t max_insns, emu_result_t *out,
+static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
                         emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -230,6 +293,20 @@ static bool emu_x86_run(uc_engine *uc, uint64_t max_insns, emu_result_t *out,
     uc_hook hcode, hblock;
     add_trace_hooks(uc, &tc, &hcode, &hblock);
 
+    /* Mid-execution guards armed on the handle (emu_watch_writes/emu_guard_reg);
+     * each resets its result for this run, then records the first violation. */
+    uc_hook hwrite = 0, hguard = 0;
+    if (e->watch.armed && e->watch.out != NULL) {
+        e->watch.out->violated = false;
+        uc_hook_add(uc, &hwrite, UC_HOOK_MEM_WRITE, (void *)on_mem_write,
+                    &e->watch, 1, 0);
+    }
+    if (e->reg.armed && e->reg.out != NULL) {
+        e->reg.out->violated = false;
+        uc_hook_add(uc, &hguard, UC_HOOK_BLOCK, (void *)on_block_guard, &e->reg,
+                    1, 0);
+    }
+
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
     uc_hook_del(uc, hh);
@@ -237,6 +314,10 @@ static bool emu_x86_run(uc_engine *uc, uint64_t max_insns, emu_result_t *out,
         uc_hook_del(uc, hcode);
         uc_hook_del(uc, hblock);
     }
+    if (hwrite)
+        uc_hook_del(uc, hwrite);
+    if (hguard)
+        uc_hook_del(uc, hguard);
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -256,7 +337,7 @@ bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
         out->uc_err = -1;
         return false;
     }
-    return emu_x86_run(uc, max_insns, out, trace);
+    return emu_x86_run(e, max_insns, out, trace);
 }
 
 bool emu_call(emu_t *e, const void *fn, size_t code_len, const long *args,
@@ -358,7 +439,7 @@ bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
         memcpy(x, &fargs[i], sizeof(double));
         uc_reg_write(uc, UC_X86_REG_XMM0 + i, x);
     }
-    return emu_x86_run(uc, max_insns, out, NULL);
+    return emu_x86_run(e, max_insns, out, NULL);
 }
 
 bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
@@ -372,7 +453,7 @@ bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
     }
     for (int i = 0; i < nvargs && i < 8; i++)
         uc_reg_write(uc, UC_X86_REG_XMM0 + i, (void *)vargs[i].u8);
-    return emu_x86_run(uc, max_insns, out, NULL);
+    return emu_x86_run(e, max_insns, out, NULL);
 }
 
 /* Microsoft x64 ("Win64") calling convention on the same x86-64 engine. Differs
@@ -415,13 +496,97 @@ bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
         uc_reg_write(uc, arg_regs[i], &v);
     }
 
-    return emu_x86_run(uc, max_insns, out, trace);
+    return emu_x86_run(e, max_insns, out, trace);
 }
 
 bool emu_call_win64(emu_t *e, const void *fn, size_t code_len, const long *args,
                     int nargs, uint64_t max_insns, emu_result_t *out) {
     return emu_call_win64_traced(e, fn, code_len, args, nargs, max_insns, out,
                                  NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Mid-execution guards (x86-64 guest, Track F)                        */
+/*                                                                     */
+/* Watchpoints and register invariants are armed ON THE HANDLE and     */
+/* persist across emu_call_* until cleared, so the same guard can span  */
+/* a sweep of inputs. Each run resets its result, then records the      */
+/* FIRST violation as data (no host crash) — the introspection no       */
+/* ABI-boundary tool can do. Pair the recorded offset with             */
+/* emu_watch_describe (disasm.c) for the offending instruction's text.  */
+/* ------------------------------------------------------------------ */
+
+/* Map an x86-64 integer register name ("rax".."r15", "rsp"/"rbp"/"rip") to its
+ * UC_X86_REG_* id; -1 for an unknown name. */
+static int x86_uc_reg(const char *name) {
+    static const struct {
+        const char *n;
+        int r;
+    } map[] = {
+        {"rax", UC_X86_REG_RAX}, {"rbx", UC_X86_REG_RBX},
+        {"rcx", UC_X86_REG_RCX}, {"rdx", UC_X86_REG_RDX},
+        {"rsi", UC_X86_REG_RSI}, {"rdi", UC_X86_REG_RDI},
+        {"rbp", UC_X86_REG_RBP}, {"rsp", UC_X86_REG_RSP},
+        {"r8", UC_X86_REG_R8},   {"r9", UC_X86_REG_R9},
+        {"r10", UC_X86_REG_R10}, {"r11", UC_X86_REG_R11},
+        {"r12", UC_X86_REG_R12}, {"r13", UC_X86_REG_R13},
+        {"r14", UC_X86_REG_R14}, {"r15", UC_X86_REG_R15},
+        {"rip", UC_X86_REG_RIP},
+    };
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (strcmp(name, map[i].n) == 0)
+            return map[i].r;
+    return -1;
+}
+
+void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
+                      emu_watch_mode_t mode, emu_watch_t *out) {
+    if (e == NULL)
+        return;
+    e->watch.armed = true;
+    e->watch.lo = addr;
+    e->watch.hi = addr + size;
+    e->watch.mode = mode;
+    e->watch.out = out;
+    if (out != NULL) {
+        out->violated = false;
+        out->addr = 0;
+        out->size = 0;
+        out->rip_off = 0;
+    }
+}
+
+void emu_watch_clear(emu_t *e) {
+    if (e == NULL)
+        return;
+    e->watch.armed = false;
+    e->watch.out = NULL;
+}
+
+bool emu_guard_reg(emu_t *e, const char *regname, uint64_t want,
+                   emu_reg_guard_t *out) {
+    if (e == NULL || regname == NULL)
+        return false;
+    int r = x86_uc_reg(regname);
+    if (r < 0)
+        return false;
+    e->reg.armed = true;
+    e->reg.uc_reg = r;
+    e->reg.want = want;
+    e->reg.out = out;
+    if (out != NULL) {
+        out->violated = false;
+        out->got = 0;
+        out->rip_off = 0;
+    }
+    return true;
+}
+
+void emu_guard_reg_clear(emu_t *e) {
+    if (e == NULL)
+        return;
+    e->reg.armed = false;
+    e->reg.out = NULL;
 }
 
 /* ------------------------------------------------------------------ */

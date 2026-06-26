@@ -243,3 +243,29 @@ void emu_fault_describe(const emu_result_t *r, emu_arch_t arch,
         snprintf(buf, buflen, "%s fault accessing 0x%llx  (@0x%llx)", kind,
                  (unsigned long long)r->fault_addr, (unsigned long long)off);
 }
+
+void emu_watch_describe(const emu_watch_t *w, emu_arch_t arch,
+                        const uint8_t *code, size_t code_len,
+                        uint64_t base_addr, char *buf, size_t buflen) {
+    if (buf == NULL || buflen == 0)
+        return;
+    buf[0] = '\0';
+    if (w == NULL) {
+        snprintf(buf, buflen, "no watch");
+        return;
+    }
+    if (!w->violated) {
+        snprintf(buf, buflen, "no violation");
+        return;
+    }
+    char text[128];
+    emu_disas(arch, code, code_len, base_addr, w->rip_off, text, sizeof text);
+    if (text[0] != '\0')
+        snprintf(buf, buflen, "write to 0x%llx (%u bytes): %s  (@0x%llx)",
+                 (unsigned long long)w->addr, (unsigned)w->size, text,
+                 (unsigned long long)w->rip_off);
+    else
+        snprintf(buf, buflen, "write to 0x%llx (%u bytes)  (@0x%llx)",
+                 (unsigned long long)w->addr, (unsigned)w->size,
+                 (unsigned long long)w->rip_off);
+}
