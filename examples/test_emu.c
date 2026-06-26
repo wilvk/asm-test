@@ -366,6 +366,84 @@ TEST(emu, source_line_mapping) {
     ASSERT_TRUE(strstr(lbuf, "LH:2") != NULL);
 }
 
+/* ---- Disassembly in diagnostics (Capstone, optional) --------------------
+ * Hand-assembled x86-64 byte literals, so these run on every host (the x86-64
+ * engine decodes them regardless of the host ISA) and exercise the disassembly
+ * path in BOTH build configs: with Capstone the diagnostics carry instruction
+ * text; without it they degrade to offsets — asserted by branching on
+ * emu_disas_available(). */
+
+TEST(emu, disas_decodes_known_instructions) {
+    static const uint8_t code[] = {0x48, 0x31, 0xc0, 0xc3}; /* xor rax,rax;ret */
+    char buf[64];
+    size_t n = emu_disas(EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE, 0,
+                         buf, sizeof buf);
+    if (emu_disas_available()) {
+        ASSERT_UEQ(n, 3); /* xor rax, rax is 3 bytes */
+        ASSERT_TRUE(strstr(buf, "xor") != NULL);
+        n = emu_disas(EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE, 3, buf,
+                      sizeof buf);
+        ASSERT_UEQ(n, 1); /* ret */
+        ASSERT_STREQ(buf, "ret");
+    } else {
+        ASSERT_UEQ(n, 0);      /* no Capstone -> no decode */
+        ASSERT_STREQ(buf, ""); /* buf cleared so the caller falls back to off */
+    }
+}
+
+TEST(emu, fault_describe_names_offending_instruction) {
+    static const uint8_t code[] = {0x48, 0x8b, 0x07, 0xc3}; /* mov rax,[rdi];ret */
+    emu_result_t r;
+    long args[] = {(long)0xdead0000UL}; /* unmapped pointer */
+    emu_call_traced(E, code, sizeof code, args, 1, 0, &r, NULL);
+    ASSERT_FAULT_AT(&r, EMU_FAULT_READ, 0xdead0000UL);
+
+    char buf[160];
+    emu_fault_describe(&r, EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE,
+                       buf, sizeof buf);
+    ASSERT_TRUE(strstr(buf, "read fault") != NULL);
+    ASSERT_TRUE(strstr(buf, "0xdead0000") != NULL);
+    ASSERT_TRUE(strstr(buf, "@0x0") != NULL); /* faulting insn at offset 0 */
+    if (emu_disas_available())
+        ASSERT_TRUE(strstr(buf, "mov") != NULL); /* names the load */
+}
+
+TEST(emu, disas_report_annotates_blocks) {
+    /* Synthetic trace over known bytes: offsets 0 (xor) and 3 (ret). */
+    static const uint8_t code[] = {0x48, 0x31, 0xc0, 0xc3};
+    uint64_t offs[] = {0, 3};
+    emu_trace_t t = {0};
+    t.blocks = offs;
+    t.blocks_cap = t.blocks_len = t.blocks_total = 2;
+    t.insns = offs;
+    t.insns_cap = t.insns_len = t.insns_total = 2;
+
+    /* Coverage summary, annotated. */
+    FILE *f = tmpfile();
+    ASSERT_TRUE(f != NULL);
+    emu_trace_report_disasm(&t, EMU_ARCH_X86_64, code, sizeof code, f);
+    char buf[512] = {0};
+    rewind(f);
+    (void)!fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    ASSERT_TRUE(strstr(buf, "distinct blocks") != NULL);
+    ASSERT_TRUE(strstr(buf, "0x3") != NULL); /* the block offset */
+    if (emu_disas_available())
+        ASSERT_TRUE(strstr(buf, "ret") != NULL); /* annotated instruction */
+
+    /* Ordered instruction trace, annotated. */
+    FILE *g = tmpfile();
+    ASSERT_TRUE(g != NULL);
+    emu_trace_disasm(&t, EMU_ARCH_X86_64, code, sizeof code, g);
+    char tbuf[512] = {0};
+    rewind(g);
+    (void)!fread(tbuf, 1, sizeof tbuf - 1, g);
+    fclose(g);
+    ASSERT_TRUE(strstr(tbuf, "trace: 2 instructions") != NULL);
+    if (emu_disas_available())
+        ASSERT_TRUE(strstr(tbuf, "xor") != NULL); /* first insn annotated */
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:

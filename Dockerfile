@@ -11,8 +11,9 @@
 # Or drive it through the Makefile: `make docker-test`, `make docker-emu`, ...
 #
 # The base layer installs only `make` + a C compiler (build-essential); every
-# optional tool (nasm, pkg-config, libunicorn, clang-tidy) comes from the
-# cross-platform installer via `make deps`, so this image dogfoods that script.
+# optional tool (nasm, pkg-config, libunicorn, libcapstone, clang-tidy) comes
+# from the cross-platform installer via `make deps`, so this image dogfoods that
+# script.
 
 ARG BASE=ubuntu:24.04
 FROM ${BASE}

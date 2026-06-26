@@ -114,12 +114,24 @@ re-exec-per-test model into the runner and an optional `windows-latest` job.
 
 # Part 2 — Depth (new introspection capability)
 
-## Track C — Disassembly in diagnostics (Capstone) *(planned, recommended first)*
+## Track C — Disassembly in diagnostics (Capstone) — **done**
 
 **Goal.** Make every emulator diagnostic show the **instruction**, not a raw byte
 offset. Add [Capstone](https://www.capstone-engine.org/) — the disassembler
 counterpart to the Keystone assembler already integrated — as an optional companion
 to Unicorn.
+
+**Landed.** `src/disasm.c` (its own translation unit, like `assemble.o`, so the core
+build stays Capstone-free) adds `emu_disas` (one instruction at an offset, PC-relative
+targets resolved), `emu_fault_describe` (fault line naming the offending instruction),
+and `emu_trace_disasm` / `emu_trace_report_disasm` / `emu_coverage_uncovered_disasm`
+(the reporters, with each block/insn annotated). All four guests; `emu_arch_t` selects
+the guest. **Auto-detected** via `pkg-config` and gated by `-DASMTEST_HAVE_CAPSTONE`:
+every helper degrades to bare offsets when Capstone is absent
+(`emu_disas_available()`), so the same call works either way. `make deps
+DEPS_ARGS=--emu` now installs `libcapstone-dev`, so the CI `emu` job exercises the
+annotated path on every matrix OS with no `ci.yml` change. RISC-V needs Capstone ≥ 5
+and self-skips otherwise. Tracks E/F can now build on readable diagnostics.
 
 **Why first.** Highest leverage-to-effort in Part 2. Today a fault, an instruction
 trace, and an uncovered-block report all print byte offsets only
@@ -255,8 +267,8 @@ unique strength and are a small surface on top of existing infrastructure.
 
 ## Suggested sequencing
 
-1. **Track C** (disassembly) — cheap, transforms every diagnostic, and Tracks E/F
-   build on it.
+1. **Track C** (disassembly) — **done.** Cheap, transformed every diagnostic, and
+   Tracks E/F can build on it.
 2. **Track A** (publish) — if reach is the priority, this is the single biggest
    adoption lever; it has no dependency on the others.
 3. **Track D** (wide vectors) — closes a concrete modern gap in the capture model.

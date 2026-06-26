@@ -805,8 +805,26 @@ bench: $(BUILD)/test_bench
 UNICORN_CFLAGS ?= $(shell pkg-config --cflags unicorn 2>/dev/null)
 UNICORN_LIBS   ?= $(shell pkg-config --libs unicorn 2>/dev/null || echo -lunicorn)
 
+# Optional disassembler (Capstone) for emulator diagnostics — the counterpart to
+# the Keystone assembler. Unlike Keystone it ships as a distro/brew package, so
+# it is AUTO-DETECTED here: when pkg-config finds it, disasm.o is built with
+# -DASMTEST_HAVE_CAPSTONE and linked against it; when absent the same disasm.o
+# compiles Capstone-free and the diagnostics degrade to bare byte offsets. It is
+# kept out of emu.o / the shared libs (PIC_OBJS), so only a binary that wants
+# disassembly pays the dependency — the core build stays Capstone-free.
+CAPSTONE_CFLAGS ?= $(shell pkg-config --cflags capstone 2>/dev/null)
+CAPSTONE_LIBS   ?= $(shell pkg-config --libs capstone 2>/dev/null)
+ifeq ($(shell pkg-config --exists capstone 2>/dev/null && echo 1),1)
+CAPSTONE_DEF := -DASMTEST_HAVE_CAPSTONE
+endif
+
 $(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
+
+# Disassembly helpers (emu_disas + the *_disasm reports). No Unicorn dependency;
+# includes only asmtest_emu.h + (optionally) Capstone.
+$(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
 # The opaque-handle FFI accessor layer (regs/emu-result/trace handles + readers).
 # Pulled into the conformance reference so it drives the exact binding-ABI surface
@@ -817,8 +835,8 @@ $(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
 
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
                    $(BUILD)/flags.o $(BUILD)/branch.o $(BUILD)/emu.o \
-                   $(BUILD)/test_emu.o
-	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
+                   $(BUILD)/disasm.o $(BUILD)/test_emu.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
 
 .PHONY: emu-test
 emu-test: $(BUILD)/test_emu

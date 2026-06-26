@@ -465,6 +465,76 @@ size_t emu_coverage_uncovered(const emu_trace_t *covered,
 void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
 
 /* ------------------------------------------------------------------ */
+/* Disassembly in diagnostics (optional, Capstone)                     */
+/*                                                                     */
+/* Faults, traces, and coverage are recorded as byte offsets from the  */
+/* routine entry. When the build links Capstone — the disassembler     */
+/* counterpart to the Keystone assembler in src/assemble.c — these      */
+/* helpers annotate an offset with the instruction at it, turning       */
+/* `uncovered: 0x2f` into `uncovered: 0x2f  cmp rax, 0`. Optional and   */
+/* self-skipping: built without Capstone, emu_disas_available() is      */
+/* false and every helper degrades to the plain offset form, so the     */
+/* same call works either way and the core build (emu.o,                */
+/* libasmtest_emu) stays Capstone-free.                                 */
+/* ------------------------------------------------------------------ */
+
+/* Guest architecture for the disassembler, mirroring the emulator's guest set
+ * (and asm_arch_t's ordering): pass the arch of the guest whose code you ran
+ * (the x86-64 guest -> EMU_ARCH_X86_64, the AArch64 guest -> EMU_ARCH_ARM64). */
+typedef enum {
+    EMU_ARCH_X86_64,
+    EMU_ARCH_ARM64,
+    EMU_ARCH_RISCV64,
+    EMU_ARCH_ARM32,
+} emu_arch_t;
+
+/* True iff this build links Capstone, so the helpers below produce instruction
+ * text rather than degrading to bare offsets. (RISC-V additionally needs a
+ * Capstone >= 5 build; emu_disas self-skips that guest on older Capstone.) */
+bool emu_disas_available(void);
+
+/* Disassemble the single instruction at code[off] for `arch`, formatting
+ * "<mnemonic> <operands>" into buf (always NUL-terminated, truncated to
+ * buflen). `base_addr` is the address the bytes run at (EMU_CODE_BASE), so
+ * PC-relative operands resolve to absolute targets. Returns the instruction's
+ * byte length, or 0 when Capstone is absent or the bytes do not decode — in
+ * which case buf is set to "" so the caller can fall back to the offset. */
+size_t emu_disas(emu_arch_t arch, const uint8_t *code, size_t code_len,
+                 uint64_t base_addr, uint64_t off, char *buf, size_t buflen);
+
+/* Print the ordered instruction trace (emu_trace_t.insns, in execution order)
+ * with each entry disassembled — a readable execution listing, complementing
+ * the coverage summary from emu_trace_report_disasm. Without Capstone (or with
+ * code NULL) prints the bare offsets. */
+void emu_trace_disasm(const emu_trace_t *t, emu_arch_t arch,
+                      const uint8_t *code, size_t code_len, FILE *out);
+
+/* Disassembling counterparts to emu_trace_report / emu_coverage_uncovered:
+ * the same summary line, but each listed block offset is annotated with its
+ * first instruction when Capstone is present and `code`/`code_len` (the routine
+ * bytes passed to emu_*_call_traced) are supplied for guest `arch`. Without
+ * Capstone, or with code NULL, they fall through to the offset-only form (and
+ * emu_coverage_uncovered_disasm returns the same uncovered count). */
+void emu_trace_report_disasm(const emu_trace_t *t, emu_arch_t arch,
+                             const uint8_t *code, size_t code_len, FILE *out);
+size_t emu_coverage_uncovered_disasm(const emu_trace_t *covered,
+                                     const emu_trace_t *universe,
+                                     emu_arch_t arch, const uint8_t *code,
+                                     size_t code_len, FILE *out);
+
+/* Format a one-line description of `r`'s fault into buf (always NUL-terminated):
+ *   "write fault accessing 0xdead0000: mov [rbx], rax  (@0x12)"   (Capstone)
+ *   "write fault accessing 0xdead0000  (@0x12)"                   (no Capstone)
+ * The faulting instruction is the one at rip; `code`/`code_len` are its bytes
+ * and `base_addr` the address they run at (EMU_CODE_BASE), so @0xNN is the
+ * faulting instruction's offset. Writes "no fault" for a clean result. x86-64
+ * guest (reads emu_result_t.regs.rip); pairs with ASSERT_NO_FAULT for a richer
+ * failure line. */
+void emu_fault_describe(const emu_result_t *r, emu_arch_t arch,
+                        const uint8_t *code, size_t code_len,
+                        uint64_t base_addr, char *buf, size_t buflen);
+
+/* ------------------------------------------------------------------ */
 /* Source-line coverage mapping (Track C)                              */
 /*                                                                     */
 /* The trace records basic-block byte-offsets from the routine entry.  */

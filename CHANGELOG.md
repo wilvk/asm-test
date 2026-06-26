@@ -8,6 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Disassembly in emulator diagnostics (Capstone).** The emulator records
+  faults, traces, and coverage as raw byte offsets — `@0x2f`, never the
+  instruction. With [Capstone](https://www.capstone-engine.org/) linked (the
+  disassembler counterpart to the Keystone in-line assembler) those offsets now
+  carry the instruction at them, across all four guests (x86-64, AArch64,
+  RISC-V, ARM32). New helpers in
+  [`include/asmtest_emu.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_emu.h)
+  / `src/disasm.c`: `emu_disas` (one instruction at an offset, with PC-relative
+  targets resolved to absolute), `emu_fault_describe` (a fault line that names
+  the offending instruction — `read fault accessing 0xdead0000: mov rax, qword
+  ptr [rdi]  (@0x0)`), and disassembling counterparts to the reporters —
+  `emu_trace_disasm`, `emu_trace_report_disasm`, `emu_coverage_uncovered_disasm`
+  (turning `uncovered: 0x2f` into `uncovered: 0x2f  cmp rax, 0`). Optional and
+  **auto-detected** (`pkg-config --exists capstone`): every helper degrades to
+  bare offsets when Capstone is absent (`emu_disas_available()` reports which),
+  so the same call works either way and the core library / shared libs / binding
+  images stay Capstone-free — only `build/test_emu` links it, exactly as the
+  assembler tier keeps Keystone in its own object. `make deps DEPS_ARGS=--emu`
+  now installs `libcapstone-dev`, so the CI `emu` job exercises the annotated
+  diagnostics on every matrix OS. RISC-V disassembly needs Capstone ≥ 5 and
+  self-skips on older builds. This is Track C of the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#disassembly-in-diagnostics-capstone).
+
 - **CI builds the cross-platform native payloads for the bindings.** `make
   package-libs` only ever staged the *build host's* shared libs, so a release
   shipped a single-platform payload. A new `payloads` CI matrix runs the native
