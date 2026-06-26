@@ -1,9 +1,11 @@
 # Examples
 
 This page is a tour of what asm-test is *best at*, organised by use case. Every
-example here is a real, buildable suite that ships in the repository — the
-snippets are lifted from the files under [`examples/`](https://github.com/wilvk/asm-test/tree/main/examples),
-so you can run each one as you read.
+example in the use-case tour below is a real, buildable suite that ships in the
+repository — the snippets are lifted from the files under
+[`examples/`](https://github.com/wilvk/asm-test/tree/main/examples), so you can
+run each one as you read. (The later [by-audience](#by-audience) section adds a
+few illustrative patterns too; those are marked.)
 
 Each suite is the pair `examples/foo.s` (the routine under test, with an Intel
 `foo.asm` alongside it) and `examples/test_foo.c` (the `TEST(...)` cases). The
@@ -277,9 +279,10 @@ make demo-robust                   # fork-isolated, short timeout
 ## By audience
 
 The use cases above combine differently depending on what you're building. Each
-subsection below opens with a shipped suite, then gives **real-world patterns**:
-concrete, named kernels these audiences actually write. In the patterns the
-framework code is exact — the `extern` routine under test is yours.
+subsection below opens with a shipped suite, then gives **real-world patterns** —
+concrete, named kernels these audiences write. Several ship as their own suites
+(called out with a file reference and a run command); the rest are illustrative,
+with the framework code exact and the `extern` routine under test left to you.
 
 ### SIMD / crypto / codec / DSP / math-kernel authors
 
@@ -345,6 +348,9 @@ TEST(codec, saturating_add_matches_model) {
 }
 ```
 
+Ships as [`examples/qadd.s`](https://github.com/wilvk/asm-test/blob/main/examples/qadd.s)
+(`paddusb` / `uqadd`) + `test_qadd.c`; run `./build/test_qadd`.
+
 *DSP / fixed-point — Q15 multiply* (`(a*b + 0x4000) >> 15`, the multiply-accumulate
 at the heart of an FIR filter). It's integer-domain, so the property engine drives
 it directly — the rounding bias is exactly where these go wrong:
@@ -363,8 +369,13 @@ TEST(dsp, qmul_q15_matches_model) {
 }
 ```
 
-*Crypto — constant-time equality, proven branch-free.* Correctness is the easy
-half; the property that matters is that **no basic block depends on the secret**.
+Ships as [`examples/qmul.s`](https://github.com/wilvk/asm-test/blob/main/examples/qmul.s)
++ `test_qmul.c`; run `./build/test_qmul`.
+
+*Crypto — constant-time equality, proven branch-free* (illustrative — the
+constant-time proof needs the emulator, and the routine under test is yours).
+Correctness is the easy half; the property that matters is that **no basic block
+depends on the secret**.
 Because the emulator's coverage *unions* across runs, feed inputs that differ at
 different positions into one trace — if the block set never grows, there is no
 data-dependent branch:
@@ -424,12 +435,13 @@ Run the cross-ISA suite with `make usecases-emu` (needs libunicorn).
 
 **Real-world patterns.**
 
-*libc — a SIMD `strlen` that must not over-read.* A vectorised `strlen` loads 16
-bytes at a time; the real-world bug is reading past the page that holds the
-string. Put the terminating NUL as the **last byte before an unmapped page** in
-the emulator: a correct routine stops there and runs clean, an over-reading one
-faults at the exact boundary — the bug a guard malloc on real hardware only
-catches probabilistically.
+*libc — a SIMD `strlen` that must not over-read* (illustrative — the routine
+under test is yours). A vectorised `strlen` loads 16 bytes at a time; the
+real-world bug is reading past the page that holds the string. Put the
+terminating NUL as the **last byte before an unmapped page** in the emulator: a
+correct routine stops there and runs clean, an over-reading one faults at the
+exact boundary — the bug a guard malloc on real hardware only catches
+probabilistically.
 
 ```c
 #include "asmtest_emu.h"
@@ -466,6 +478,9 @@ TEST(runtime, add_sets_overflow_flag_at_the_limit) {
     ASSERT_EQ(r.ret, 5);
 }
 ```
+
+Ships as [`examples/checked.s`](https://github.com/wilvk/asm-test/blob/main/examples/checked.s)
+(`add` → OF / `adds` → V) + `test_checked.c`; run `./build/test_checked`.
 
 *Compiler intrinsic — a `popcount` / `clz` lowering, validated across ISAs.* When
 you hand-write the lowering for `__builtin_popcountll` per target, the cross-ISA

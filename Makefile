@@ -39,7 +39,8 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
                   $(BUILD)/test_struct $(BUILD)/test_structparam \
                   $(BUILD)/test_fpover $(BUILD)/test_refmatch \
-                  $(BUILD)/test_callback
+                  $(BUILD)/test_callback $(BUILD)/test_qmul \
+                  $(BUILD)/test_checked $(BUILD)/test_qadd
 
 .PHONY: all help test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
@@ -223,6 +224,19 @@ $(BUILD)/test_refmatch: $(FRAMEWORK_OBJS) $(BUILD)/refmatch.o \
 
 $(BUILD)/test_callback: $(FRAMEWORK_OBJS) $(BUILD)/callback.o \
                         $(BUILD)/test_callback.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# Real-world kernels for the by-audience examples (see docs/examples.md):
+# a DSP Q15 multiply, a runtime checked-add (overflow flag), and a codec
+# per-byte saturating add. Portable GAS sources with AArch64 bodies, plus NASM
+# counterparts for the x86-64 Intel-syntax lane.
+$(BUILD)/test_qmul: $(FRAMEWORK_OBJS) $(BUILD)/qmul.o $(BUILD)/test_qmul.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_checked: $(FRAMEWORK_OBJS) $(BUILD)/checked.o $(BUILD)/test_checked.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_qadd: $(FRAMEWORK_OBJS) $(BUILD)/qadd.o $(BUILD)/test_qadd.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 test: $(SUITES)
@@ -1046,13 +1060,15 @@ cpp-test: $(BUILD)/test_cpp
 $(BUILD)/test_cpp_asm.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
                          include/asmtest.h include/asmtest_emu.h \
                          include/asmtest_assemble.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) \
-	       -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) $(CAPSTONE_CFLAGS) \
+	       $(CAPSTONE_DEF) -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM \
+	       -DASMTEST_ENABLE_DISAS -c $< -o $@
 
-$(BUILD)/test_cpp_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
-                       $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                       $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp_asm.o
-	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
+$(BUILD)/test_cpp_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
+                       $(BUILD)/assemble.o $(BUILD)/disasm.o $(BUILD)/add.o \
+                       $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
+                       $(BUILD)/fault.o $(BUILD)/test_cpp_asm.o
+	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
 
 .PHONY: cpp-asm-test
 cpp-asm-test: $(BUILD)/test_cpp_asm
@@ -1101,9 +1117,12 @@ bindings_env = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
                DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
 
 # Same, but ASMTEST_LIB points at the emu+assembler lib so the binding's optional
-# CallAsm resolves and its in-line-asm conformance case actually runs (vs. skips
-# against the plain libasmtest_emu). Used by the `asm` binding check; needs Keystone.
-bindings_env_asm = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+# CallAsm/disas resolve and their conformance cases actually run (vs. skip
+# against the plain libasmtest_emu). Points at libasmtest_emu_full — the one lib
+# carrying BOTH optional native tiers (Keystone assembler + Capstone
+# disassembler) — so a single `*-asm-test` run exercises asm and disas together.
+# Used by the `bindings-asm` matrix; needs Keystone + Capstone.
+bindings_env_asm = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
                ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
                LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
                DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
@@ -1114,7 +1133,7 @@ ruby-test: shared-emu $(CORPUS_LIB)
 # In-line-asm binding check: drive the Ruby conformance against libasmtest_emu_asm
 # so its CallAsm case runs end to end (binding -> shim -> Keystone -> emulator).
 .PHONY: ruby-asm-test
-ruby-asm-test: shared-emu-asm $(CORPUS_LIB)
+ruby-asm-test: shared-emu-full $(CORPUS_LIB)
 	$(bindings_env_asm) $(RUBY) bindings/ruby/conformance.rb
 
 lua-test: shared-emu $(CORPUS_LIB)
@@ -1133,21 +1152,21 @@ java-test: shared-emu $(CORPUS_LIB)
 dotnet-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
 
-# In-line-asm binding checks (siblings of ruby-asm-test): each drives its
-# conformance against libasmtest_emu_asm so the optional CallAsm case actually
-# runs (binding -> asmtest_emu_call_asm shim -> Keystone -> emulator) rather than
-# self-skipping against the Keystone-free libasmtest_emu. The CI `bindings-asm`
-# matrix runs these; they need Keystone.
+# Optional-tiers binding checks (siblings of ruby-asm-test): each drives its
+# conformance against libasmtest_emu_full so the optional CallAsm AND disas cases
+# actually run (binding -> shim -> Keystone/Capstone -> emulator) rather than
+# self-skipping against the lean libasmtest_emu. The CI `bindings-asm` matrix
+# runs these; they need Keystone + Capstone.
 .PHONY: lua-asm-test node-asm-test java-asm-test dotnet-asm-test \
         python-asm-test go-asm-test rust-asm-test zig-asm-test
-lua-asm-test: shared-emu-asm $(CORPUS_LIB)
+lua-asm-test: shared-emu-full $(CORPUS_LIB)
 	$(bindings_env_asm) $(LUAJIT) bindings/lua/conformance.lua
 
 # Python drives the same optional CallAsm/assemble surface; point ASMTEST_LIB at
 # the emu+asm lib so asm_available() is true and the asm tests run (vs. skip).
-python-asm-test: shared-emu-asm manifest conformance $(CORPUS_LIB)
+python-asm-test: shared-emu-full manifest conformance $(CORPUS_LIB)
 	cd bindings/python && \
-	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
 	  ASMTEST_MANIFEST=$(abspath asmtest_abi.json) \
 	  ASMTEST_CORPUS_JSON=$(abspath bindings/conformance/corpus.json) \
 	  ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
@@ -1156,37 +1175,37 @@ python-asm-test: shared-emu-asm manifest conformance $(CORPUS_LIB)
 # Go/Rust resolve the assembler at run time (they statically link the plain
 # libasmtest_emu), so these mirror their base tests but add the emu+asm lib and
 # point ASMTEST_LIB at it (the binding dlopen()s that to find the asm symbols).
-go-asm-test: shared-emu shared-emu-asm $(CORPUS_LIB)
+go-asm-test: shared-emu shared-emu-full $(CORPUS_LIB)
 	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" \
 	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
 	  $(bindings_env_asm) $(GO) test ./...
 
-rust-asm-test: shared-emu shared-emu-asm $(CORPUS_LIB)
+rust-asm-test: shared-emu shared-emu-full $(CORPUS_LIB)
 	cd bindings/rust && \
 	  ASMTEST_LIB_DIR=$(abspath $(BUILD)) \
-	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_asm)) \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
 	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
 	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
 	  $(CARGO) test
 
 # Zig links the assembler lib directly (-Dasm=true compiles its asm test in).
-zig-asm-test: shared-emu-asm $(CORPUS_LIB)
+zig-asm-test: shared-emu-full $(CORPUS_LIB)
 	cd bindings/zig && \
 	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
 	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
 	  $(ZIG) build test -Dasm=true -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 
-node-asm-test: shared-emu-asm $(CORPUS_LIB)
+node-asm-test: shared-emu-full $(CORPUS_LIB)
 	$(bindings_env_asm) $(NODE) bindings/node/conformance.js
 
-java-asm-test: shared-emu-asm $(CORPUS_LIB)
+java-asm-test: shared-emu-full $(CORPUS_LIB)
 	mkdir -p $(BUILD)/java
 	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java \
 	  bindings/java/Asmtest.java bindings/java/Conformance.java
 	$(bindings_env_asm) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
 	  -cp $(BUILD)/java Conformance
 
-dotnet-asm-test: shared-emu-asm $(CORPUS_LIB)
+dotnet-asm-test: shared-emu-full $(CORPUS_LIB)
 	$(bindings_env_asm) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
 
 # Go links the shared libs at build time via cgo; CGO_LDFLAGS carries the -L (so
