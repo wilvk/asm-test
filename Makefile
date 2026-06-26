@@ -293,6 +293,12 @@ $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
 $(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
+# Disassembly (Track C) for the "full" shared lib. Gated on Capstone exactly like
+# the test-binary disasm.o (degrades to offsets when absent); only libasmtest_emu_full
+# carries it, so the base emu lib stays Capstone-free.
+$(BUILD)/pic/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
+
 $(BUILD)/pic/assemble.o: src/assemble.c include/asmtest_assemble.h \
                          include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
@@ -343,6 +349,23 @@ $(call shlib_real,libasmtest_emu_asm): $(PIC_OBJS) $(BUILD)/pic/emu.o \
 $(call shlib_dev,libasmtest_emu_asm): $(call shlib_real,libasmtest_emu_asm)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu_asm)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_emu_asm)) $@
+
+# The "full" emulator shared lib: libasmtest_emu plus BOTH optional native tiers —
+# the Keystone in-line assembler (assemble.o) and the Capstone disassembler
+# (disasm.o, Track C). ONE lib for everything optional, so binding disassembly
+# does not spawn a per-dependency lib matrix (emu, emu+asm, emu+disasm, …): the
+# lean libasmtest_emu stays dependency-light, and a binding points ASMTEST_LIB
+# here when it wants disasm (and gets asm for free). Needs libkeystone + libcapstone.
+shared-emu-full: $(call shlib_dev,libasmtest_emu_full)
+$(call shlib_real,libasmtest_emu_full): $(PIC_OBJS) $(BUILD)/pic/emu.o \
+                                        $(BUILD)/pic/fuzz.o \
+                                        $(BUILD)/pic/assemble.o \
+                                        $(BUILD)/pic/disasm.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu_full) $^ \
+	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
+$(call shlib_dev,libasmtest_emu_full): $(call shlib_real,libasmtest_emu_full)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu_full)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_emu_full)) $@
 
 # Machine-readable layout manifest: a small program compiled against the real
 # headers prints sizeof/offsetof for the host arch (see scripts/gen-manifest.c).
