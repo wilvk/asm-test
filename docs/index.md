@@ -136,6 +136,7 @@ property-testing
 runner
 benchmarks
 emulator
+disassembly
 win64
 ```
 

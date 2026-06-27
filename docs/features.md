@@ -89,7 +89,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **Fault/trace disassembly** (optional, Capstone): annotate offsets with the
   instruction text (`emu_disas`, `emu_fault_describe`, `…_disasm`). `emu_disas`
   is exposed through every language binding (`disas`/`disas_available`), via
-  `libasmtest_emu_full`. ([Bindings overview](bindings.md))
+  `libasmtest_emu_full`. ([Disassembly](disassembly.md))
 
 ### In-line assembler (optional, Keystone)
 

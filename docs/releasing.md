@@ -14,14 +14,15 @@ package is **effectively GPL-2.0** (asm-test's own source stays MIT; Capstone is
 BSD-3-Clause). The mechanical compliance is **done**:
 
 - ✅ Verbatim license texts bundled per package (`THIRD-PARTY-LICENSES/`), at the
-  version shipped — see [licenses/](../licenses/) and
-  [scripts/collect-licenses.sh](../scripts/collect-licenses.sh).
+  version shipped — see
+  [licenses/](https://github.com/wilvk/asm-test/tree/main/licenses) and
+  [scripts/collect-licenses.sh](https://github.com/wilvk/asm-test/blob/main/scripts/collect-licenses.sh).
 - ✅ Compound SPDX (`MIT AND GPL-2.0-only AND BSD-3-Clause`) in every manifest.
 - ✅ **GPL-2.0-only** confirmed (not -or-later).
 - ✅ A GPL §3(b) **written offer** in every package's `NOTICE`.
 - ✅ **Corresponding source** auto-assembled and attached to the GitHub release by
   the `corresponding-source` job
-  ([scripts/fetch-corresponding-source.sh](../scripts/fetch-corresponding-source.sh)).
+  ([scripts/fetch-corresponding-source.sh](https://github.com/wilvk/asm-test/blob/main/scripts/fetch-corresponding-source.sh)).
 
 The human decision — whether it is acceptable to distribute effectively-GPL
 packages under the project's name — has been **confirmed (2026-06-26): approved**.
@@ -46,9 +47,9 @@ others still publish.
 
 ## Cutting a release
 
-1. Bump `ASMTEST_VERSION` in the [Makefile](../Makefile) and the version field in
+1. Bump `ASMTEST_VERSION` in the [Makefile](https://github.com/wilvk/asm-test/blob/main/Makefile) and the version field in
    every package manifest (they must match; the ABI manifest is checked at load).
-2. Update [CHANGELOG.md](../CHANGELOG.md).
+2. Update [CHANGELOG.md](https://github.com/wilvk/asm-test/blob/main/CHANGELOG.md).
 3. Tag and push:
    ```sh
    git tag v1.0.0 && git push origin v1.0.0

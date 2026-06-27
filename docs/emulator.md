@@ -255,44 +255,13 @@ emu_trace_lcov_source(&covered, &map, "classify.s", out); // DA:line,1 for hit, 
 ### Disassembly in diagnostics (Capstone)
 
 Faults, traces, and coverage are recorded as **byte offsets** from the routine
-entry. When the build links [Capstone](https://www.capstone-engine.org/) — the
-disassembler counterpart to the **Keystone** assembler used by the in-line
-assembler tier — those offsets gain the **instruction** at them, across all four
-guests. Pass the guest arch (`EMU_ARCH_X86_64` / `_ARM64` / `_RISCV64` /
-`_ARM32`) and the routine's bytes:
+entry. When the build links Capstone, helpers such as `emu_disas`,
+`emu_fault_describe`, and `emu_trace_report_disasm` annotate those offsets with
+the instruction text. The disassembler is optional and self-skipping, so the same
+calls degrade to offset-only output when Capstone is absent.
 
-```c
-char text[128];
-emu_disas(EMU_ARCH_X86_64, code, code_len, EMU_CODE_BASE, off, text, sizeof text);
-//   off 0x7  ->  "jl 0x10000e"   (PC-relative target resolved to absolute)
-
-emu_fault_describe(&r, EMU_ARCH_X86_64, code, code_len, EMU_CODE_BASE, text, sizeof text);
-//   "read fault accessing 0xdead0000: mov rax, qword ptr [rdi]  (@0x0)"
-
-emu_trace_report_disasm(&tr, EMU_ARCH_X86_64, code, code_len, stdout);
-//   coverage: 3 distinct blocks, ...
-//     blocks:
-//       0x0   xor rax, rax
-//       0x7   jl 0x10000e
-//       0x9   ret
-```
-
-| Function | Purpose |
-|---|---|
-| `emu_disas(arch, code, len, base, off, buf, n)` | disassemble one instruction at an offset (returns its byte length) |
-| `emu_fault_describe(&r, arch, code, len, base, buf, n)` | one-line fault description with the offending instruction |
-| `emu_trace_disasm(&tr, arch, code, len, out)` | the ordered instruction trace, annotated |
-| `emu_trace_report_disasm(&tr, arch, code, len, out)` | `emu_trace_report` with each block's first instruction |
-| `emu_coverage_uncovered_disasm(cov, uni, arch, code, len, out)` | `emu_coverage_uncovered` with each uncovered block annotated |
-| `emu_disas_available()` | true iff this build links Capstone |
-
-Optional and self-skipping, exactly like the emulator and assembler tiers: it is
-**auto-detected** (`pkg-config --exists capstone`) and the helpers all **degrade
-to bare offsets** when Capstone is absent, so the same call works either way and
-the core library stays Capstone-free. Install it with
-`make deps DEPS_ARGS=--emu` (or your package manager's `libcapstone-dev` /
-`capstone`). RISC-V disassembly additionally needs Capstone ≥ 5; older builds
-self-skip that guest.
+See [Disassembly](disassembly.md) for the build steps, examples, and API
+reference.
 
 ## Mid-execution guards
 
