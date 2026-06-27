@@ -171,7 +171,8 @@ The `_traced` variants take an opt-in `emu_trace_t` and record, into
 caller-owned buffers, an **instruction trace** (each executed instruction's byte
 offset from the routine entry, in order) and **basic-block coverage** (the
 *distinct* block-start offsets). Either buffer may be `NULL` to skip that
-dimension.
+dimension. For the focused guide to trace buffers, coverage comparison,
+source-line maps, and lcov export, see [Execution traces and coverage](traces.md).
 
 ```c
 uint64_t blocks[64];

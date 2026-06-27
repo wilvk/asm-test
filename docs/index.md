@@ -93,7 +93,8 @@ comparison and roadmap.
 - **Benchmark mode** reporting cycles per call.
 - An optional **emulator tier** (Unicorn) that runs a routine inside a virtual
   CPU — x86-64, AArch64, RISC-V, ARM32, and the Windows x64 ABI — to read the
-  *full* register file, catch precise faults, and measure branch coverage.
+  *full* register file, catch precise faults, and record
+  [execution traces and coverage](traces.md).
 - **Portability** across x86-64 and AArch64, Linux and macOS, with GAS and NASM
   assembler backends.
 
@@ -136,6 +137,7 @@ property-testing
 runner
 benchmarks
 emulator
+traces
 disassembly
 win64
 ```

@@ -81,7 +81,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **FP & vector** marshalling/capture (`emu_call_fp` / `emu_call_vec`).
 - **Execution trace & basic-block coverage** (`emu_call_traced`), with union
   across inputs, lcov export, and **source-line coverage** via a caller-supplied
-  line map.
+  line map. ([Traces](traces.md))
 - **Mid-execution guards**: memory-write watchpoints and block-entry register
   invariants (catch corruption even when restored before return).
 - **Coverage-guided fuzzing** (`emu_fuzz_cover1`) and **mutation testing**
@@ -224,5 +224,7 @@ Capstone) and the in-line assembler libs with `make shared-emu-asm` (Keystone).
 
 - [Examples](examples.md) — these features in action, by use case and audience.
 - [Emulator tier](emulator.md) — the full guest API and diagnostics.
+- [Execution traces and coverage](traces.md) — trace buffers, coverage unions,
+  source-line maps, and lcov export.
 - [Bindings](bindings.md) — the per-language capability map and setup.
 - [Portability](portability.md) — the architecture/OS/assembler details.
