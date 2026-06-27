@@ -405,6 +405,10 @@ Implementation notes:
   whose containing block may fall within a registered region.
 - Record `pc - base` into `trace->insns` and increment `insns_total`.
 - Preserve the existing truncation semantics.
+- Keep Capstone as the backend-neutral annotation path: DynamoRIO observes the
+  native PCs/offsets, while Capstone renders the recorded offsets back to
+  readable instruction text from the registered or generated code bytes. Do not
+  tie public trace diagnostics to DynamoRIO's internal decoder.
 
 **Caveat.** This mode can be expensive, especially inside language runtimes.
 Expose it as opt-in and document it as diagnostic rather than the default
@@ -498,6 +502,7 @@ manual region calls in the test body.
   - marker regions;
   - generated host-native assembly;
   - block vs instruction mode;
+  - optional Capstone annotation of native trace offsets;
   - language wrapper examples;
   - known limitations.
 - Update `docs/features.md` with a third execution tier column: native runtime
@@ -509,6 +514,9 @@ manual region calls in the test body.
 - Keep the core and `libasmtest_emu` DynamoRIO-free.
 - Add a separate `libasmtest_drtrace` or two-library distribution
   (`libasmtest_drapp` plus `libasmtest_drclient`).
+- Reuse the existing optional Capstone reporting/disassembly layer for native
+  traces where possible, so Unicorn and DynamoRIO traces share report formats
+  and no DynamoRIO-only decoder API leaks into language bindings.
 - If static DynamoRIO support is added, keep it as a separate experimental
   artifact because DynamoRIO documents reduced library isolation in static mode.
 
