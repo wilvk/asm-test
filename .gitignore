@@ -34,6 +34,9 @@ bindings/node/package-lock.json
 bindings/dotnet/bin/
 bindings/dotnet/obj/
 
+# Java binding artifacts (Maven)
+bindings/java/target/
+
 # Coverage / analysis artifacts (Track D)
 *.gcov
 *.gcno
