@@ -83,44 +83,26 @@ typedef struct {
     uint64_t base;
 } trace_ctx_t;
 
-/* UC_HOOK_CODE: fires once per executed instruction — the ordered trace. */
+/* UC_HOOK_CODE: fires once per executed instruction — the ordered trace.
+ * The append/truncate logic is the engine-neutral trace_append_insn (trace.c),
+ * shared with the DynamoRIO and hardware-trace backends. */
 static void on_code(uc_engine *uc, uint64_t address, uint32_t size,
                     void *user) {
     (void)uc;
     (void)size;
     trace_ctx_t *c = (trace_ctx_t *)user;
-    emu_trace_t *t = c->t;
-    uint64_t off = address - c->base;
-    if (t->insns != NULL) {
-        if (t->insns_len < t->insns_cap)
-            t->insns[t->insns_len++] = off;
-        else
-            t->truncated = true;
-    }
-    t->insns_total++;
+    trace_append_insn(c->t, address - c->base);
 }
 
-/* UC_HOOK_BLOCK: fires at each basic-block entry — the coverage set. blocks[]
- * holds the DISTINCT starts (loops re-enter the same block; counted only in
- * blocks_total). The dedup scan is linear, fine for the small block counts of
- * a routine under test. */
+/* UC_HOOK_BLOCK: fires at each basic-block entry — the coverage set. The
+ * distinct-block dedup + truncate logic is the engine-neutral
+ * trace_append_block (trace.c). */
 static void on_block(uc_engine *uc, uint64_t address, uint32_t size,
                      void *user) {
     (void)uc;
     (void)size;
     trace_ctx_t *c = (trace_ctx_t *)user;
-    emu_trace_t *t = c->t;
-    uint64_t off = address - c->base;
-    t->blocks_total++;
-    if (t->blocks != NULL) {
-        for (size_t i = 0; i < t->blocks_len; i++)
-            if (t->blocks[i] == off)
-                return; /* already covered */
-        if (t->blocks_len < t->blocks_cap)
-            t->blocks[t->blocks_len++] = off;
-        else
-            t->truncated = true;
-    }
+    trace_append_block(c->t, address - c->base);
 }
 
 /* Add the trace hooks if tracing is requested; returns the two hook handles via
@@ -1075,212 +1057,12 @@ bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
  * See docs/emulator.md and docs/plans/expansion-plan.md (Track C). */
 
 /* ------------------------------------------------------------------ */
-/* Coverage reporting (Track C)                                        */
+/* Coverage reporting & source-line mapping (Track C)                  */
+/*                                                                     */
+/* emu_trace_covered, emu_trace_report, emu_coverage_uncovered,        */
+/* emu_trace_lcov, emu_line_lookup, emu_trace_source_report, and       */
+/* emu_trace_lcov_source were extracted into the engine-neutral         */
+/* src/trace.c (declared in asmtest_trace.h) so the DynamoRIO and       */
+/* hardware-trace backends reuse them without linking the Unicorn       */
+/* emulator object. They operate purely on the recorded trace.          */
 /* ------------------------------------------------------------------ */
-
-bool emu_trace_covered(const emu_trace_t *t, uint64_t off) {
-    if (t == NULL || t->blocks == NULL)
-        return false;
-    for (size_t i = 0; i < t->blocks_len; i++)
-        if (t->blocks[i] == off)
-            return true;
-    return false;
-}
-
-static int cmp_u64(const void *a, const void *b) {
-    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
-    return (x > y) - (x < y);
-}
-
-/* Copy a trace's distinct block offsets into a freshly malloc'd, ascending
- * array (caller frees). *n receives the count; returns NULL on empty/oom. */
-static uint64_t *sorted_blocks(const emu_trace_t *t, size_t *n) {
-    *n = (t != NULL && t->blocks != NULL) ? t->blocks_len : 0;
-    if (*n == 0)
-        return NULL;
-    uint64_t *s = (uint64_t *)malloc(*n * sizeof *s);
-    if (s == NULL) {
-        *n = 0;
-        return NULL;
-    }
-    memcpy(s, t->blocks, *n * sizeof *s);
-    qsort(s, *n, sizeof *s, cmp_u64);
-    return s;
-}
-
-void emu_trace_report(const emu_trace_t *t, FILE *out) {
-    if (t == NULL || out == NULL)
-        return;
-    fprintf(out,
-            "coverage: %zu distinct blocks, %llu block entries, "
-            "%llu instructions%s\n",
-            t->blocks_len, (unsigned long long)t->blocks_total,
-            (unsigned long long)t->insns_total,
-            t->truncated ? " (truncated)" : "");
-    size_t n;
-    uint64_t *s = sorted_blocks(t, &n);
-    if (s == NULL)
-        return;
-    fprintf(out, "  blocks:");
-    for (size_t i = 0; i < n; i++)
-        fprintf(out, " 0x%llx", (unsigned long long)s[i]);
-    fprintf(out, "\n");
-    free(s);
-}
-
-size_t emu_coverage_uncovered(const emu_trace_t *covered,
-                              const emu_trace_t *universe, FILE *out) {
-    if (universe == NULL || universe->blocks == NULL)
-        return 0;
-    size_t total = universe->blocks_len;
-    uint64_t *miss = (uint64_t *)malloc((total ? total : 1) * sizeof *miss);
-    if (miss == NULL)
-        return 0;
-    size_t nmiss = 0;
-    for (size_t i = 0; i < total; i++)
-        if (!emu_trace_covered(covered, universe->blocks[i]))
-            miss[nmiss++] = universe->blocks[i];
-    qsort(miss, nmiss, sizeof *miss, cmp_u64);
-    if (out != NULL) {
-        fprintf(out, "coverage: %zu/%zu blocks covered\n", total - nmiss,
-                total);
-        if (nmiss > 0) {
-            fprintf(out, "  uncovered:");
-            for (size_t i = 0; i < nmiss; i++)
-                fprintf(out, " 0x%llx", (unsigned long long)miss[i]);
-            fprintf(out, "\n");
-        }
-    }
-    free(miss);
-    return nmiss;
-}
-
-void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out) {
-    if (t == NULL || out == NULL)
-        return;
-    /* No debug info, so block byte-offsets stand in for source lines. */
-    fprintf(out, "TN:\n");
-    fprintf(out, "SF:%s\n", name != NULL ? name : "routine");
-    size_t n;
-    uint64_t *s = sorted_blocks(t, &n);
-    for (size_t i = 0; i < n; i++)
-        fprintf(out, "DA:%llu,1\n", (unsigned long long)s[i]);
-    free(s);
-    fprintf(out, "LF:%zu\nLH:%zu\n", n, n);
-    fprintf(out, "end_of_record\n");
-}
-
-/* ------------------------------------------------------------------ */
-/* Source-line coverage mapping (Track C)                              */
-/* ------------------------------------------------------------------ */
-
-const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map,
-                                        uint64_t off) {
-    if (map == NULL || map->entries == NULL || map->count == 0)
-        return NULL;
-    const emu_line_entry_t *hit = NULL;
-    /* Rows are ascending by offset, so the last row with offset <= off owns it;
-     * once a row starts past off, every later row does too. */
-    for (size_t i = 0; i < map->count; i++) {
-        if (map->entries[i].offset <= off)
-            hit = &map->entries[i];
-        else
-            break;
-    }
-    return hit;
-}
-
-/* One source line plus whether a covered block landed on it. */
-typedef struct {
-    uint32_t line;
-    int hit;
-} line_cov_t;
-
-static int cmp_line_cov(const void *a, const void *b) {
-    uint32_t x = ((const line_cov_t *)a)->line, y = ((const line_cov_t *)b)->line;
-    return (x > y) - (x < y);
-}
-
-/* Collect the distinct source lines named by `map`, flagging each line a
- * covered block-start offset resolves to. Returns a malloc'd, line-sorted array
- * (caller frees) with the count in *n; NULL on an empty map / oom. */
-static line_cov_t *source_coverage(const emu_trace_t *covered,
-                                   const emu_line_map_t *map, size_t *n) {
-    *n = 0;
-    if (map == NULL || map->entries == NULL || map->count == 0)
-        return NULL;
-    line_cov_t *lc = (line_cov_t *)malloc(map->count * sizeof *lc);
-    if (lc == NULL)
-        return NULL;
-    size_t m = 0;
-    for (size_t i = 0; i < map->count; i++) { /* distinct lines */
-        uint32_t ln = map->entries[i].line;
-        size_t j;
-        for (j = 0; j < m; j++)
-            if (lc[j].line == ln)
-                break;
-        if (j == m) {
-            lc[m].line = ln;
-            lc[m].hit = 0;
-            m++;
-        }
-    }
-    if (covered != NULL && covered->blocks != NULL) { /* mark hits */
-        for (size_t b = 0; b < covered->blocks_len; b++) {
-            const emu_line_entry_t *en = emu_line_lookup(map, covered->blocks[b]);
-            if (en == NULL)
-                continue;
-            for (size_t j = 0; j < m; j++)
-                if (lc[j].line == en->line) {
-                    lc[j].hit = 1;
-                    break;
-                }
-        }
-    }
-    qsort(lc, m, sizeof *lc, cmp_line_cov);
-    *n = m;
-    return lc;
-}
-
-size_t emu_trace_source_report(const emu_trace_t *covered,
-                               const emu_line_map_t *map, FILE *out) {
-    size_t n;
-    line_cov_t *lc = source_coverage(covered, map, &n);
-    if (lc == NULL)
-        return 0;
-    size_t hit = 0;
-    for (size_t i = 0; i < n; i++)
-        if (lc[i].hit)
-            hit++;
-    if (out != NULL) {
-        fprintf(out, "source coverage: %zu/%zu lines covered\n", hit, n);
-        if (hit < n) {
-            fprintf(out, "  uncovered lines:");
-            for (size_t i = 0; i < n; i++)
-                if (!lc[i].hit)
-                    fprintf(out, " %u", lc[i].line);
-            fprintf(out, "\n");
-        }
-    }
-    free(lc);
-    return n - hit;
-}
-
-void emu_trace_lcov_source(const emu_trace_t *covered, const emu_line_map_t *map,
-                           const char *source_file, FILE *out) {
-    if (out == NULL)
-        return;
-    size_t n;
-    line_cov_t *lc = source_coverage(covered, map, &n);
-    fprintf(out, "TN:\n");
-    fprintf(out, "SF:%s\n", source_file != NULL ? source_file : "routine");
-    size_t hit = 0;
-    for (size_t i = 0; i < n; i++) {
-        fprintf(out, "DA:%u,%d\n", lc[i].line, lc[i].hit ? 1 : 0);
-        if (lc[i].hit)
-            hit++;
-    }
-    fprintf(out, "LF:%zu\nLH:%zu\n", n, hit);
-    fprintf(out, "end_of_record\n");
-    free(lc);
-}

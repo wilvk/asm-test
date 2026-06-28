@@ -1,0 +1,44 @@
+# Dockerfile.drtrace — containerized test lane for the optional DynamoRIO
+# in-process native-trace tier and its Python language wrapper.
+#
+# Unlike the other binding images (Dockerfile.bindings-base), this one installs
+# DynamoRIO — a prebuilt release tarball — because the native-trace tier needs it
+# at build time (the CMake-built client) and runtime (dlopen'd libdynamorio). It
+# then runs BOTH the C smoke harness (`make drtrace-test`) and the Python
+# language-wrapper suite (`make drtrace-python-test`) inside the container.
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine, so it runs on Intel and
+# AMD alike (the hardware-trace tier, by contrast, needs bare-metal Intel PT and
+# cannot run in a container — see docs/native-tracing.md).
+#
+# Build + run:  make docker-drtrace
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C/C++ toolchain + CMake (the DR client is CMake-built), Python + pytest (the
+# wrapper test), and curl to fetch the DynamoRIO release.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils \
+      python3 python3-pytest \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin a DynamoRIO release. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Run the C smoke harness and the Python wrapper suite. Both self-skip cleanly if
+# DynamoRIO were somehow absent, but here it is installed, so they execute.
+CMD set -eux; \
+    make drtrace-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make drtrace-python-test DYNAMORIO_HOME=$DYNAMORIO_HOME

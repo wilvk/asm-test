@@ -1,5 +1,11 @@
 # Execution traces and coverage
 
+> This page covers the **emulator** trace model (Unicorn). The same
+> `asmtest_trace_t` shape is filled by two **native** backends — in-process
+> DynamoRIO and hardware trace (Intel PT / ARM CoreSight) — described in
+> [Native runtime tracing](native-tracing.md). The trace substrate, coverage
+> helpers, and the Capstone annotation layer are backend-neutral and shared.
+
 The emulator tier can record what a routine executed while it ran. A traced call
 captures two related views:
 

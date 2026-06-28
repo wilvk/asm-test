@@ -49,6 +49,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
 .PHONY: deps usecases usecases-emu
+.PHONY: drtrace-test drtrace-client shared-drtrace hwtrace-test shared-hwtrace
 all: test
 
 # Self-documenting target list. `make` / `make all` still runs the test suites;
@@ -70,6 +71,10 @@ help:
 	@echo '  emu-test        Unicorn-backed emulator suite'
 	@echo '  asm-test        in-line assembler (Keystone) suite'
 	@echo '  usecases-emu    emulator-as-sandbox / cross-ISA suite'
+	@echo ''
+	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
+	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
+	@echo '  hwtrace-test    hardware trace: Intel PT / ARM CoreSight (bare metal)'
 	@echo ''
 	@echo 'Packaging & install:'
 	@echo '  lib             build the static libasmtest.a'
@@ -100,6 +105,7 @@ help:
 	@echo '  docker-test docker-ci      example/self-test matrix in a container'
 	@echo '  docker-bindings            build + run every language image'
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
+	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
 	@echo ''
 	@echo 'Native Win64 (cross-compile + Wine):'
 	@echo '  win64-check     substrate smoke + capture + runner-port slices'
@@ -298,9 +304,12 @@ lib: $(BUILD)/libasmtest.a
 #   make shared-emu  libasmtest_emu.{so,dylib} (adds emu.o, links -lunicorn)
 #   make manifest    asmtest_abi.json — machine-readable struct layout for the
 #                    active host arch (consumed by every binding's generator)
-# The capture trampoline + runtime + the opaque-handle FFI helpers (ffi.o, used
-# by the dynamic-language bindings; no Unicorn dependency).
-PIC_OBJS := $(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o $(BUILD)/pic/ffi.o
+# The capture trampoline + runtime + the opaque-handle FFI helpers (ffi.o) + the
+# engine-neutral trace substrate (trace.o: the trace allocate/report/coverage
+# helpers + handle accessors, used by the dynamic-language bindings; no Unicorn
+# dependency).
+PIC_OBJS := $(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o $(BUILD)/pic/ffi.o \
+            $(BUILD)/pic/trace.o
 
 $(BUILD)/pic:
 	mkdir -p $(BUILD)/pic
@@ -311,6 +320,12 @@ $(BUILD)/pic/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
+# Engine-neutral trace substrate (trace allocate/report/coverage + FFI handle
+# accessors). No Unicorn/Capstone dependency; shared by the core lib, the
+# emulator superset, and the optional native/hardware trace tiers.
+$(BUILD)/pic/trace.o: src/trace.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
@@ -324,7 +339,7 @@ $(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUIL
 # Disassembly (Track C) for the emu shared lib (the superset). Gated on Capstone
 # exactly like the test-binary disasm.o (degrades to offsets when absent);
 # libasmtest_emu links it in, so disas_available() is true out of the box.
-$(BUILD)/pic/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)/pic
+$(BUILD)/pic/disasm.o: src/disasm.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
 
 $(BUILD)/pic/assemble.o: src/assemble.c include/asmtest_assemble.h \
@@ -405,15 +420,15 @@ asmtest_single.h: scripts/amalgamate.sh include/asmtest.h src/asmtest.c
 # here (not via the asmtest.pc target) so it always reflects the PREFIX in use.
 install: lib
 	mkdir -p $(incdir) $(libdir) $(pcdir)
-	cp include/asmtest.h include/asmtest_emu.h include/asm.h \
-	   include/asm_nasm.inc $(incdir)/
+	cp include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h \
+	   include/asm.h include/asm_nasm.inc $(incdir)/
 	cp $(BUILD)/libasmtest.a $(libdir)/
 	$(pc_subst) asmtest.pc.in > $(pcdir)/asmtest.pc
 	@echo "installed asmtest $(ASMTEST_VERSION) to $(DESTDIR)$(PREFIX)"
 
 uninstall:
-	rm -f $(incdir)/asmtest.h $(incdir)/asmtest_emu.h $(incdir)/asm.h \
-	      $(incdir)/asm_nasm.inc
+	rm -f $(incdir)/asmtest.h $(incdir)/asmtest_emu.h \
+	      $(incdir)/asmtest_trace.h $(incdir)/asm.h $(incdir)/asm_nasm.inc
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
 	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest)) \
@@ -590,6 +605,19 @@ endef
 $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 
 docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
+
+# Native-trace lane: a container with DynamoRIO installed that builds the tier and
+# runs BOTH the C smoke harness and the Python language-wrapper suite. Separate
+# from the binding images (it carries DynamoRIO, ~hundreds of MB, that the others
+# don't need). Linux x86-64 only; the hardware-trace tier needs bare metal and is
+# not containerizable. Override DR_VERSION to bump the pinned DynamoRIO.
+DR_VERSION ?= 11.91.20630
+.PHONY: docker-drtrace
+docker-drtrace:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.drtrace \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-drtrace .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-drtrace
 
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND
@@ -885,29 +913,35 @@ ifeq ($(shell pkg-config --exists capstone 2>/dev/null && echo 1),1)
 CAPSTONE_DEF := -DASMTEST_HAVE_CAPSTONE
 endif
 
-$(BUILD)/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)
+# Engine-neutral trace substrate (see src/trace.c). No Unicorn/Capstone
+# dependency; linked by every binary that links emu.o or ffi.o.
+$(BUILD)/trace.o: src/trace.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/emu.o: src/emu.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 # Disassembly helpers (emu_disas + the *_disasm reports). No Unicorn dependency;
 # includes only asmtest_emu.h + (optionally) Capstone.
-$(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)
+$(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
 # Coverage-guided fuzzing + mutation testing (Track E). Drives the emulator
 # (emu_call/_traced) with the framework's RNG; no extra dependency, its own TU.
-$(BUILD)/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
+$(BUILD)/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # The opaque-handle FFI accessor layer (regs/emu-result/trace handles + readers).
 # Pulled into the conformance reference so it drives the exact binding-ABI surface
 # a foreign binding uses. No Unicorn dependency, but built with its include path
 # so the emu struct decls resolve identically to the shared-lib build.
-$(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
+$(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
                    $(BUILD)/flags.o $(BUILD)/branch.o $(BUILD)/emu.o \
-                   $(BUILD)/disasm.o $(BUILD)/fuzz.o $(BUILD)/test_emu.o
+                   $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/fuzz.o \
+                   $(BUILD)/test_emu.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
 
 .PHONY: emu-test
@@ -926,8 +960,8 @@ $(BUILD)/assemble.o: src/assemble.c include/asmtest_assemble.h \
                      include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(KEYSTONE_CFLAGS) -c $< -o $@
 
-$(BUILD)/test_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/assemble.o \
-                   $(BUILD)/test_asm.o
+$(BUILD)/test_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/trace.o \
+                   $(BUILD)/assemble.o $(BUILD)/test_asm.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 
 .PHONY: asm-test
@@ -939,11 +973,182 @@ asm-test: $(BUILD)/test_asm
 # equivalence checker (the same algorithm run on x86-64, AArch64, RISC-V, and
 # ARM32 guests). GAS backend only, like emu-test; requires libunicorn.
 $(BUILD)/test_emu_usecases: $(FRAMEWORK_OBJS) $(BUILD)/emucases.o \
-                            $(BUILD)/emu.o $(BUILD)/test_emu_usecases.o
+                            $(BUILD)/emu.o $(BUILD)/trace.o \
+                            $(BUILD)/test_emu_usecases.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 usecases-emu: $(BUILD)/test_emu_usecases
 	./$(BUILD)/test_emu_usecases
+
+# --- Optional DynamoRIO in-process native-trace tier -----------------------
+# `make drtrace-test` traces code running NATIVELY in-process via DynamoRIO's
+# Application Interface (the emulator tier traces isolated guest bytes instead).
+# Two artifacts: the app library (drtrace_app.o / libasmtest_drapp) and the DR
+# client (libasmtest_drclient.so, built by CMake — the lone CMake-driven
+# sub-build, since DynamoRIO ships no pkg-config and needs find_package).
+#
+# Gated on DynamoRIO, located via two NEW knobs (every other optional dep uses
+# pkg-config; DynamoRIO can't, so this new shape is deliberate):
+#   DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>   runtime root (libdynamorio)
+#   DYNAMORIO_DIR=$(DYNAMORIO_HOME)/cmake           find_package config dir
+# When absent, drtrace-test self-skips with a clear message; drtrace_app.o still
+# compiles (its dr_app_* calls are #ifdef'd out, returning ASMTEST_DR_ENODR).
+DYNAMORIO_HOME ?=
+DYNAMORIO_DIR  ?= $(DYNAMORIO_HOME)/cmake
+DR_LIBDIR      := $(DYNAMORIO_HOME)/lib64/release
+DR_DLLIB       := $(DR_LIBDIR)/libdynamorio.so
+ifneq ($(wildcard $(DR_DLLIB)),)
+DR_AVAILABLE := 1
+endif
+# The app library dlopen()s libdynamorio at runtime (its constructor reads
+# DYNAMORIO_OPTIONS, which must be set first), so it links libdl, NOT libdynamorio.
+
+# Keystone lets the host-native exec path assemble text (asm_exec_native);
+# without it that one entry point returns ASMTEST_DR_ENOSYS and the rest works.
+ifeq ($(shell pkg-config --exists keystone 2>/dev/null && echo 1),1)
+DRAPP_KS_DEF     := -DASMTEST_HAVE_KEYSTONE
+DRAPP_KS_OBJ     := $(BUILD)/assemble.o
+DRAPP_KS_PIC_OBJ := $(BUILD)/pic/assemble.o
+DRAPP_KS_LIBS    := $(KEYSTONE_LIBS)
+endif
+
+# App-side library object (lifecycle + markers + W^X exec memory). No DR headers
+# or link dependency (it dlopen()s libdynamorio and declares dr_app_* via dlsym),
+# so it always compiles regardless of whether DynamoRIO is installed.
+$(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
+                        include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -c $< -o $@
+
+# DynamoRIO client (.so) via CMake. Real target shape: shells out to cmake.
+.PHONY: drtrace-client
+drtrace-client: $(BUILD)/libasmtest_drclient.so
+$(BUILD)/libasmtest_drclient.so: src/drtrace_client.c drclient/CMakeLists.txt | $(BUILD)
+ifndef DR_AVAILABLE
+	@echo "drtrace-client: DynamoRIO not found (set DYNAMORIO_HOME); skipping"
+else
+	@mkdir -p $(BUILD)/drclient
+	cd $(BUILD)/drclient && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
+	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) $(abspath drclient) >/dev/null
+	cmake --build $(BUILD)/drclient >/dev/null
+	@echo "drtrace-client: built $@"
+endif
+
+# App-side shared library (libasmtest_drapp) for the language bindings.
+shared-drtrace: $(call shlib_dev,libasmtest_drapp)
+$(call shlib_real,libasmtest_drapp): $(BUILD)/pic/drtrace_app.o \
+                                     $(BUILD)/pic/trace.o $(DRAPP_KS_PIC_OBJ)
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_drapp) $^ \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+$(call shlib_dev,libasmtest_drapp): $(call shlib_real,libasmtest_drapp)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_drapp)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_drapp)) $@
+
+$(BUILD)/pic/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
+                            include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
+
+# Standalone smoke harness (run directly: --no-fork, single job). -rdynamic puts
+# the marker symbols in the executable's dynamic symbol table so the DR client can
+# resolve their PCs with dr_get_proc_address (the shared libasmtest_drapp exports
+# them by default visibility; an executable needs --export-dynamic).
+$(BUILD)/test_drtrace: $(BUILD)/drtrace_app.o $(BUILD)/trace.o \
+                       $(DRAPP_KS_OBJ) $(BUILD)/test_drtrace.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+
+.PHONY: drtrace-test
+drtrace-test:
+ifndef DR_AVAILABLE
+	@echo "== drtrace-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/test_drtrace
+	@echo "== drtrace-test =="
+	ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    ./$(BUILD)/test_drtrace
+endif
+
+# --- Optional hardware-assisted native-trace tier (Intel PT / CoreSight) ---
+# `make hwtrace-test` records native coverage with near-zero capture overhead via
+# the CPU's branch-trace unit (Intel PT / ARM CoreSight) + a software decoder
+# (libipt / OpenCSD) that replays the registered bytes. It self-skips (the common
+# case) unless on a bare-metal Intel-PT host (or CoreSight board) with the PMU
+# present and perf_event privilege lowered — never on AMD, VMs, or standard CI.
+#
+# Decoders auto-detect via pkg-config, mirroring CAPSTONE_*: when found, the
+# backend is built -DASMTEST_HAVE_LIBIPT / -DASMTEST_HAVE_OPENCSD and linked; when
+# absent the same objects compile decoder-free and asmtest_hwtrace_available()
+# reports the decoder missing so the tier self-skips.
+LIBIPT_CFLAGS  ?= $(shell pkg-config --cflags libipt 2>/dev/null)
+LIBIPT_LIBS    ?= $(shell pkg-config --libs libipt 2>/dev/null)
+ifeq ($(shell pkg-config --exists libipt 2>/dev/null && echo 1),1)
+LIBIPT_DEF := -DASMTEST_HAVE_LIBIPT
+endif
+OPENCSD_CFLAGS ?= $(shell pkg-config --cflags opencsd 2>/dev/null)
+OPENCSD_LIBS   ?= $(shell pkg-config --libs opencsd 2>/dev/null)
+ifeq ($(shell pkg-config --exists opencsd 2>/dev/null && echo 1),1)
+OPENCSD_DEF := -DASMTEST_HAVE_OPENCSD
+endif
+
+$(BUILD)/hwtrace.o: src/hwtrace.c include/asmtest_hwtrace.h \
+                    include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pt_backend.o: src/pt_backend.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) $(LIBIPT_DEF) $(LIBIPT_CFLAGS) -c $< -o $@
+$(BUILD)/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -c $< -o $@
+
+HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
+                $(BUILD)/trace.o
+
+$(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) -o $@
+
+.PHONY: hwtrace-test
+hwtrace-test: $(BUILD)/test_hwtrace
+	@echo "== hwtrace-test =="
+	./$(BUILD)/test_hwtrace
+
+# Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
+# the app lib + DR client, then runs the pytest suite with the lib paths wired up.
+# Self-skips when DynamoRIO is absent. Runs on a dev box (DYNAMORIO_HOME=...) and
+# is the body of the `make docker-drtrace` container lane.
+.PHONY: drtrace-python-test
+drtrace-python-test:
+ifndef DR_AVAILABLE
+	@echo "== drtrace-python-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+else
+	@$(MAKE) shared-drtrace drtrace-client
+	@echo "== drtrace-python-test =="
+	cd bindings/python && \
+	  ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
+	  ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+	  ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	  python3 -m pytest tests/test_drtrace.py -v
+endif
+
+# PIC variants + the standalone shared lib (never linked by core/superset).
+$(BUILD)/pic/hwtrace.o: src/hwtrace.c include/asmtest_hwtrace.h \
+                        include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/pt_backend.o: src/pt_backend.c include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(LIBIPT_DEF) $(LIBIPT_CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -fPIC -c $< -o $@
+
+shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
+$(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
+                                       $(BUILD)/pic/pt_backend.o \
+                                       $(BUILD)/pic/cs_backend.o \
+                                       $(BUILD)/pic/trace.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
+	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) -o $@
+$(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_hwtrace)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_hwtrace)) $@
 
 # --- Cross-language conformance corpus (Track 0.4) -------------------------
 # The canonical-routine corpus + its C reference runner: the single source of
@@ -964,8 +1169,8 @@ $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
 
 $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
                       $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
-                      $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                      $(BUILD)/simd.o $(BUILD)/fault.o
+                      $(BUILD)/trace.o $(BUILD)/add.o $(BUILD)/flags.o \
+                      $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 conformance: $(BUILD)/conformance
@@ -986,8 +1191,9 @@ $(BUILD)/conformance_asm.o: bindings/conformance/conformance.c include/asmtest.h
 
 $(BUILD)/conformance_asm: $(BUILD)/conformance_asm.o $(BUILD)/asmtest_nomain.o \
                           $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
-                          $(BUILD)/assemble.o $(BUILD)/add.o $(BUILD)/flags.o \
-                          $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o
+                          $(BUILD)/trace.o $(BUILD)/assemble.o $(BUILD)/add.o \
+                          $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
+                          $(BUILD)/fault.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 
 conformance-asm: $(BUILD)/conformance_asm

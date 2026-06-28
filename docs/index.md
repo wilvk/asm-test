@@ -138,6 +138,7 @@ runner
 benchmarks
 emulator
 traces
+native-tracing
 disassembly
 win64
 ```

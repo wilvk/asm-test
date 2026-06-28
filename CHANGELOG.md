@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Native runtime tracing (two optional tiers).** A third execution tier that
+  traces code running *natively, in-process*, complementing the Unicorn emulator
+  trace. Both fill the same engine-neutral `asmtest_trace_t` shape (now extracted
+  into `include/asmtest_trace.h` + `src/trace.c`, shared by all backends) and the
+  Capstone annotation layer renders any backend's offsets. ([Native runtime
+  tracing](docs/native-tracing.md))
+  - **DynamoRIO in-process tier** (`asmtest_drtrace.h`, `libasmtest_drapp` +
+    CMake-built `libasmtest_drclient.so`): `dr_app_*` in-process attach with an
+    enforced lifecycle state machine, begin/end region markers, basic-block and
+    instruction coverage, and host-native W^X executable-memory allocation
+    (`asmtest_exec_alloc` / `asmtest_asm_exec_native`). Uses DynamoRIO's BSD core
+    API only — no drmgr/drwrap, so no LGPL-2.1 obligation. Python wrapper
+    `asmtest.drtrace` (`NativeTrace`/`NativeCode`). Targets `drtrace-test`,
+    `shared-drtrace`, `drtrace-client`, `drtrace-python-test`, `docker-drtrace`
+    (a container lane with DynamoRIO installed). Gated on `DYNAMORIO_HOME`;
+    self-skips when absent. Linux x86-64.
+  - **Hardware-trace tier** (`asmtest_hwtrace.h`, `libasmtest_hwtrace`): Intel PT
+    capture via `perf_event_open` + libipt decode with branch-boundary block
+    normalization; ARM CoreSight (OpenCSD) scaffold. `asmtest_hwtrace_available()`
+    encodes the full detect-and-skip chain. Targets `hwtrace-test`,
+    `shared-hwtrace`; auto-detects libipt/OpenCSD via pkg-config. Bare-metal only;
+    self-skips on AMD/VMs/CI (the common case).
+
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft
   x64 ABI couldn't be inspected past its low 128 bits. New

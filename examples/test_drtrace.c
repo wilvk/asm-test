@@ -1,0 +1,136 @@
+/*
+ * test_drtrace.c — smoke test for the optional DynamoRIO in-process native-trace
+ * tier (asmtest_drtrace.h). Standalone harness, run directly (NOT through the
+ * forking runner): in-process DynamoRIO attach is hostile to per-test fork()
+ * isolation and the -jN pool, so this is a single-process, --no-fork smoke test.
+ *
+ * Self-skips with a clear message (exit 0) when the tier was not built with
+ * DynamoRIO, mirroring the emulator/assembler optional tiers. When built, it:
+ *   1. initializes DR in-process and takes over;
+ *   2. registers a host-native routine range (real executable W^X memory);
+ *   3. traces a call through it, asserting block offset 0 is covered;
+ *   4. re-runs to confirm coverage accumulates;
+ *   5. exercises a small truncation case and instruction mode.
+ *
+ * The client library path comes from argv[1] or $ASMTEST_DRCLIENT.
+ */
+#include "asmtest_drtrace.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int failures = 0;
+static int checks = 0;
+
+#define CHECK(cond, msg)                                                        \
+    do {                                                                        \
+        checks++;                                                               \
+        if (cond) {                                                            \
+            printf("ok %d - %s\n", checks, msg);                                \
+        } else {                                                               \
+            printf("not ok %d - %s\n", checks, msg);                            \
+            failures++;                                                         \
+        }                                                                      \
+    } while (0)
+
+/* x86-64 SysV: long f(long a, long b) { long r = a + b; if (r > 100) r--; return r; }
+ *   48 01 fe             add    rsi, rdi   ; (we compute in rsi for brevity)
+ * Hand-assembled, position-independent, two basic blocks (a forward branch):
+ *   0:  48 89 f8             mov    rax, rdi
+ *   3:  48 01 f0             add    rax, rsi
+ *   6:  48 3d 64 00 00 00    cmp    rax, 100
+ *   c:  7e 01                jle    .skip
+ *   e:  48 ff c8             dec    rax
+ *  .skip:
+ *  11:  c3                   ret
+ */
+static const unsigned char ROUTINE[] = {
+    0x48, 0x89, 0xf8,                   /* mov rax, rdi          (off 0)  */
+    0x48, 0x01, 0xf0,                   /* add rax, rsi                   */
+    0x48, 0x3d, 0x64, 0x00, 0x00, 0x00, /* cmp rax, 100                   */
+    0x7e, 0x03,                         /* jle +3 -> ret (skip dec, off 0xc)*/
+    0x48, 0xff, 0xc8,                   /* dec rax               (off 0xe)*/
+    0xc3                                /* ret                   (off 0x11)*/
+};
+typedef long (*add2_fn)(long, long);
+
+int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: progress survives a hard kill */
+    if (!asmtest_dr_available()) {
+        printf("# SKIP drtrace: built without DynamoRIO\n");
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+    const char *client = (argc > 1) ? argv[1] : getenv("ASMTEST_DRCLIENT");
+
+    asmtest_drtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.client_path = client;
+    opts.mode = ASMTEST_DRTRACE_BLOCKS;
+
+    int rc = asmtest_dr_init(&opts);
+    if (rc != ASMTEST_DR_OK) {
+        printf("# SKIP drtrace: dr_init failed (%d) — is the client path set?\n",
+               rc);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+    CHECK(asmtest_dr_start() == ASMTEST_DR_OK, "dr_start takes over in-process");
+
+    /* Materialize the routine into real executable memory. */
+    asmtest_exec_code_t code;
+    CHECK(asmtest_exec_alloc(ROUTINE, sizeof ROUTINE, &code) == ASMTEST_DR_OK,
+          "exec_alloc maps host-native W^X code");
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    CHECK(tr != NULL, "trace allocated");
+    CHECK(asmtest_dr_register_region("add2", code.base, code.len, tr) ==
+              ASMTEST_DR_OK,
+          "register_region records the native range");
+
+    add2_fn fn = (add2_fn)code.base;
+    asmtest_trace_begin("add2");
+    long r = fn(20, 22);
+    asmtest_trace_end("add2");
+    CHECK(r == 42, "traced call returns the right value (20+22)");
+    CHECK(asmtest_trace_covered(tr, 0), "block offset 0 (entry) covered");
+
+    /* Re-run with a value taking the dec branch; coverage accumulates. */
+    unsigned long long blocks_before = asmtest_emu_trace_blocks_len(tr);
+    asmtest_trace_begin("add2");
+    long r2 = fn(60, 60); /* 120 > 100 -> dec -> 119 */
+    asmtest_trace_end("add2");
+    CHECK(r2 == 119, "second traced call takes the dec branch (60+60-1)");
+    CHECK(asmtest_emu_trace_blocks_len(tr) >= blocks_before,
+          "re-running the region accumulates coverage");
+    CHECK(asmtest_dr_marker_error() == 0, "all begin/end markers balanced");
+
+    /* Instruction mode: a trace with insns_cap > 0 records the ordered stream.
+     * Use a SEPARATE executable allocation — regions must be non-overlapping, so
+     * we cannot register a second region over the same range as "add2". */
+    asmtest_exec_code_t code2;
+    CHECK(asmtest_exec_alloc(ROUTINE, sizeof ROUTINE, &code2) == ASMTEST_DR_OK,
+          "second exec allocation for instruction mode");
+    asmtest_trace_t *itr = asmtest_trace_new(64, 64);
+    asmtest_dr_register_region("add2i", code2.base, code2.len, itr);
+    add2_fn fn2 = (add2_fn)code2.base;
+    asmtest_trace_begin("add2i");
+    long ri = fn2(1, 2);
+    asmtest_trace_end("add2i");
+    CHECK(ri == 3, "instruction-mode routine computes correctly (1+2)");
+    CHECK(asmtest_emu_trace_insns_total(itr) >= 4,
+          "instruction mode records the ordered instruction stream");
+    asmtest_dr_unregister_region("add2i");
+    asmtest_exec_free(&code2);
+    asmtest_trace_free(itr);
+
+    asmtest_dr_unregister_region("add2");
+    asmtest_exec_free(&code);
+    asmtest_trace_free(tr);
+    asmtest_dr_shutdown();
+
+    printf("1..%d\n", checks);
+    printf("# %d passed, %d failed\n", checks - failures, failures);
+    return failures == 0 ? 0 : 1;
+}

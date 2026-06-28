@@ -28,6 +28,28 @@ Throughout this plan, **native-trace Phase N** means a phase of the
 
 ---
 
+## Implementation status
+
+Phase 1 is **implemented** for **Intel PT**: the `perf_event_open` AUX capture
+(`src/hwtrace.c`), the libipt instruction decode + branch-boundary block
+normalization (`src/pt_backend.c`), the full `asmtest_hwtrace_available()` gating
+chain, and the `hwtrace-test` / `shared-hwtrace` targets all ship behind
+`asmtest_hwtrace.h`. **ARM CoreSight** is a documented scaffold
+(`src/cs_backend.c`): `asmtest_cs_decoder_present()` returns 0 so it self-skips
+until completed on a real AArch64 board.
+
+**Validation caveat.** The libipt API usage is verified against upstream
+`intel-pt.h`, and the gating/self-skip path is exercised on every host — but the
+live PT **capture** cannot run on AMD CPUs, VMs, or standard CI (no `intel_pt`
+PMU), exactly as this plan predicts. On those hosts `make hwtrace-test` self-skips
+with the specific reason. Capture is validated only on bare-metal Intel PT with
+`perf_event_paranoid` lowered. User-facing docs:
+[native-tracing.md](../native-tracing.md#hardware-trace-tier-intel-pt--arm-coresight).
+
+Phase 2 (attach-to-foreign-JIT) remains **planned, forward-look**.
+
+---
+
 ## Phase 1 - Hardware-assisted trace backends (Intel PT, ARM CoreSight) *(planned)*
 
 **Goal.** Record native block and instruction coverage with near-zero *capture*

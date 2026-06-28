@@ -22,6 +22,36 @@ tier (Phases 0–8) plus the shared trace substrate all backends reuse.
 
 ---
 
+## Implementation status (landed)
+
+Phases 0–5 are **implemented and validated** on Linux x86-64 (against a prebuilt
+DynamoRIO release), shipping as `libasmtest_drapp` + `libasmtest_drclient` with the
+`drtrace-test` / `shared-drtrace` / `drtrace-client` Make targets and a Python
+wrapper (`asmtest.drtrace`). User-facing docs: [native-tracing.md](../native-tracing.md).
+
+**One deliberate deviation from the original design.** The client uses DynamoRIO's
+**raw BSD core API** (`dr_register_bb_event`, clean calls, `dr_get_proc_address`),
+not the drmgr/drwrap/drreg extensions. The prebuilt release extensions fail to load
+under DynamoRIO's private loader on modern glibc (`undefined symbol __memcpy_chk`),
+and the raw "drmgr-only" argument-capture scheme (read the SysV arg registers in an
+inserted clean call) — listed below as the rejected-for-elegance alternative — proved
+the robust choice. A welcome consequence: **the tier no longer depends on `drwrap`,
+so its LGPL-2.1 obligation is dropped** and the tier is BSD-clean. Two further
+implementation notes worth recording: (1) `libasmtest_drapp` **dlopen()s**
+libdynamorio inside `asmtest_dr_init` *after* setting `DYNAMORIO_OPTIONS`, because
+libdynamorio reads that env var in its load-time constructor (before `main`), so
+linking it would be too late to configure the client; (2) the register/unregister
+clean calls use **`dr_delay_flush_region`**, not `dr_flush_region`, which may not
+return to the cache from a clean call.
+
+Per-phase: Phase 0 (lifecycle/attach) ✅ · Phase 1 (trace substrate) ✅ ·
+Phase 2 (client + block coverage) ✅ · Phase 3 (app API + runner test) ✅ ·
+Phase 4 (host-native W^X exec code) ✅ · Phase 5 (instruction mode) ✅ ·
+Phase 6 (Python wrapper) ✅ (other languages follow the same pattern) ·
+Phase 7 (symbol mode) and the managed-runtime Phase 0b gate remain **planned**.
+
+---
+
 ## Validation notes
 
 This plan was validated against the current asm-test codebase and the relevant

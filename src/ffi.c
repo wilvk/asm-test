@@ -164,62 +164,10 @@ float asmtest_emu_x86_xmm_f32(const emu_result_t *r, int index, int lane) {
     return r->regs.xmm[index].f32[lane];
 }
 
-/* ---- execution-trace opaque handle + accessors (no Unicorn dependency) ----
- * emu_trace_t exposes caller-owned buffers (see asmtest_emu.h); a dynamic-FFI
- * binding can't lay those out, so this wraps the struct and its two buffers in
- * one handle. Pass the handle to asmtest_emu_call6_traced to record into it, then
- * read coverage back through the accessors. */
-emu_trace_t *asmtest_emu_trace_new(size_t insns_cap, size_t blocks_cap) {
-    emu_trace_t *t = (emu_trace_t *)calloc(1, sizeof *t);
-    if (!t)
-        return NULL;
-    if (insns_cap) {
-        t->insns = (uint64_t *)calloc(insns_cap, sizeof(uint64_t));
-        if (t->insns)
-            t->insns_cap = insns_cap;
-    }
-    if (blocks_cap) {
-        t->blocks = (uint64_t *)calloc(blocks_cap, sizeof(uint64_t));
-        if (t->blocks)
-            t->blocks_cap = blocks_cap;
-    }
-    return t;
-}
-void asmtest_emu_trace_free(emu_trace_t *t) {
-    if (!t)
-        return;
-    free(t->insns);
-    free(t->blocks);
-    free(t);
-}
-/* Instructions executed (counts past the insns buffer cap). */
-unsigned long long asmtest_emu_trace_insns_total(const emu_trace_t *t) {
-    return (unsigned long long)t->insns_total;
-}
-/* Distinct basic blocks recorded (<= blocks_cap). */
-unsigned long long asmtest_emu_trace_blocks_len(const emu_trace_t *t) {
-    return (unsigned long long)t->blocks_len;
-}
-/* Block entries total — a loop re-counts each pass. */
-unsigned long long asmtest_emu_trace_blocks_total(const emu_trace_t *t) {
-    return (unsigned long long)t->blocks_total;
-}
-/* True if a buffer filled and at least one entry was dropped. */
-int asmtest_emu_trace_truncated(const emu_trace_t *t) {
-    return t->truncated ? 1 : 0;
-}
-/* The i-th distinct block-start offset (byte offset from the routine entry). */
-unsigned long long asmtest_emu_trace_block_at(const emu_trace_t *t, size_t i) {
-    return (i < t->blocks_len) ? (unsigned long long)t->blocks[i] : 0;
-}
-/* True if basic-block offset `off` is in the distinct block set. Scans inline so
- * this stays free of the emulator object (emu_trace_covered lives in emu.c). */
-int asmtest_emu_trace_covered(const emu_trace_t *t, unsigned long long off) {
-    for (size_t i = 0; i < t->blocks_len; i++)
-        if (t->blocks[i] == (uint64_t)off)
-            return 1;
-    return 0;
-}
+/* The execution-trace opaque handle + accessors (asmtest_emu_trace_new/free and
+ * the readers) were extracted into the engine-neutral src/trace.c so the native
+ * and hardware-trace tiers reuse them without the Unicorn object. They stay
+ * exported under the same names for binding ABI stability. */
 
 /* ---- mid-execution guard result handles + accessors (Track F) ----
  * A binding allocates a handle, arms the guard with emu_watch_writes /

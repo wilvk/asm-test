@@ -19,6 +19,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* The execution-trace model (asmtest_trace_t), the source line-map types, the
+ * disassembler arch enum, and the engine-neutral coverage/report helpers were
+ * extracted into asmtest_trace.h so every trace backend (Unicorn here, plus the
+ * optional DynamoRIO and Intel PT / ARM CoreSight tiers) shares one sink. This
+ * header re-exports the historical emu_* / EMU_ARCH_* spellings as aliases. */
+#include "asmtest_trace.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -155,30 +162,15 @@ bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
 /* ------------------------------------------------------------------ */
 /* Execution trace & basic-block coverage (Phase 10)                   */
 /*                                                                     */
-/* Tracing is opt-in and APPENDS: zero the struct, point insns/blocks  */
-/* at caller-owned buffers (either may stay NULL to skip that          */
-/* dimension), then run via emu_call_traced. Re-running with the same  */
-/* struct accumulates, so the union of basic blocks across many inputs */
-/* answers "did the tests reach every block?". Addresses are recorded  */
-/* as byte offsets from the start of the routine (offset 0 = entry).   */
+/* The trace record (ordered instruction offsets + distinct basic-block */
+/* offsets, totals, truncation bit) is the engine-neutral asmtest_trace_t */
+/* defined in asmtest_trace.h. emu_trace_t is the historical name kept   */
+/* for the emulator-tier signatures and the bindings; it is the same     */
+/* type. Tracing is opt-in and APPENDS: zero the struct, point insns/    */
+/* blocks at caller-owned buffers (either may stay NULL), then run via    */
+/* emu_call_traced. Re-running with the same struct accumulates.          */
 /* ------------------------------------------------------------------ */
-typedef struct {
-    /* Ordered instruction trace (UC_HOOK_CODE): each executed instruction's
-     * offset, in execution order, up to insns_cap entries. */
-    uint64_t *insns;
-    size_t insns_cap;
-    size_t insns_len;      /* entries written to insns[] (<= insns_cap)      */
-    uint64_t insns_total;  /* instructions executed (counts past insns_cap)  */
-
-    /* Basic-block coverage (UC_HOOK_BLOCK): the DISTINCT block-start offsets
-     * entered, de-duplicated, up to blocks_cap entries. */
-    uint64_t *blocks;
-    size_t blocks_cap;
-    size_t blocks_len;     /* distinct blocks recorded (<= blocks_cap)       */
-    uint64_t blocks_total; /* block entries; a loop counts each pass         */
-
-    bool truncated;        /* a buffer filled and at least one entry dropped */
-} emu_trace_t;
+typedef asmtest_trace_t emu_trace_t;
 
 /* Like emu_call, but also records an execution trace / coverage into *trace
  * (which may be NULL to behave exactly like emu_call). See emu_trace_t. */
@@ -186,19 +178,10 @@ bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace);
 
-/* Opaque execution-trace handle for dynamic-FFI bindings (see ffi.c): wraps an
- * emu_trace_t and its two caller-owned buffers, so a binding need not lay out the
- * struct. Pass the handle to asmtest_emu_call6_traced to record into it; read
- * coverage back via the accessors. asmtest_emu_trace_covered tests whether a
- * basic-block byte-offset was entered. */
-emu_trace_t *asmtest_emu_trace_new(size_t insns_cap, size_t blocks_cap);
-void asmtest_emu_trace_free(emu_trace_t *t);
-unsigned long long asmtest_emu_trace_insns_total(const emu_trace_t *t);
-unsigned long long asmtest_emu_trace_blocks_len(const emu_trace_t *t);
-unsigned long long asmtest_emu_trace_blocks_total(const emu_trace_t *t);
-int asmtest_emu_trace_truncated(const emu_trace_t *t);
-unsigned long long asmtest_emu_trace_block_at(const emu_trace_t *t, size_t i);
-int asmtest_emu_trace_covered(const emu_trace_t *t, unsigned long long off);
+/* The opaque execution-trace handle for dynamic-FFI bindings (asmtest_emu_trace_*)
+ * and its accessors are declared in asmtest_trace.h (backend-neutral). Pass the
+ * handle to asmtest_emu_call6_traced to record into it; read coverage back via
+ * the accessors. */
 
 /* Like asmtest_emu_call6, but records an execution trace / coverage into the
  * opaque `trace` handle (may be NULL). */
@@ -445,24 +428,10 @@ float asmtest_emu_arm_q_f32(const emu_arm_result_t *r, int index, int lane);
 /* routine entry, whatever the guest.                                  */
 /* ------------------------------------------------------------------ */
 
-/* True if basic-block offset `off` appears in the trace's distinct block set. */
-bool emu_trace_covered(const emu_trace_t *t, uint64_t off);
-
-/* Print a human-readable coverage summary for `t` to `out`: distinct blocks,
- * total block entries (loops re-count), instruction count, and the sorted
- * covered offsets. */
-void emu_trace_report(const emu_trace_t *t, FILE *out);
-
-/* Print the block offsets present in `universe` (e.g. a trace accumulated over
- * all inputs) but absent from `covered`, plus an "X/Y covered" line, to `out`.
- * Returns the number of uncovered blocks (0 = full coverage of the universe). */
-size_t emu_coverage_uncovered(const emu_trace_t *covered,
-                              const emu_trace_t *universe, FILE *out);
-
-/* Emit an lcov-style .info record for `t` to `out`. Without debug info the
- * framework has no source lines, so block byte-offsets stand in for line
- * numbers (offset-level coverage); `name` fills the SF: source-file field. */
-void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
+/* The coverage/report helpers over an accumulated trace — emu_trace_covered,
+ * emu_trace_report, emu_coverage_uncovered, emu_trace_lcov — are engine-neutral
+ * and declared in asmtest_trace.h (new code can use the canonical asmtest_trace_*
+ * spellings). They are listed here for the emulator tier's historical surface. */
 
 /* ------------------------------------------------------------------ */
 /* Disassembly in diagnostics (optional, Capstone)                     */
@@ -480,13 +449,14 @@ void emu_trace_lcov(const emu_trace_t *t, const char *name, FILE *out);
 
 /* Guest architecture for the disassembler, mirroring the emulator's guest set
  * (and asm_arch_t's ordering): pass the arch of the guest whose code you ran
- * (the x86-64 guest -> EMU_ARCH_X86_64, the AArch64 guest -> EMU_ARCH_ARM64). */
-typedef enum {
-    EMU_ARCH_X86_64,
-    EMU_ARCH_ARM64,
-    EMU_ARCH_RISCV64,
-    EMU_ARCH_ARM32,
-} emu_arch_t;
+ * (the x86-64 guest -> EMU_ARCH_X86_64, the AArch64 guest -> EMU_ARCH_ARM64).
+ * The canonical type is asmtest_arch_t (asmtest_trace.h); emu_arch_t and the
+ * EMU_ARCH_* names are compatibility aliases for it. */
+typedef asmtest_arch_t emu_arch_t;
+#define EMU_ARCH_X86_64 ASMTEST_ARCH_X86_64
+#define EMU_ARCH_ARM64 ASMTEST_ARCH_ARM64
+#define EMU_ARCH_RISCV64 ASMTEST_ARCH_RISCV64
+#define EMU_ARCH_ARM32 ASMTEST_ARCH_ARM32
 
 /* True iff this build links Capstone, so the helpers below produce instruction
  * text rather than degrading to bare offsets. (RISC-V additionally needs a
@@ -690,33 +660,9 @@ unsigned long long asmtest_emu_mutation_survived(const emu_mutation_stat_t *s);
 /* the routine's end. A source line counts as covered when a covered    */
 /* basic block begins within its offset range.                          */
 /* ------------------------------------------------------------------ */
-typedef struct {
-    uint64_t offset; /* code byte-offset where this source line begins  */
-    uint32_t line;   /* 1-based source line number                      */
-} emu_line_entry_t;
-
-typedef struct {
-    const emu_line_entry_t *entries; /* ascending by .offset            */
-    size_t count;
-} emu_line_map_t;
-
-/* The line-map row whose offset range contains `off`, or NULL when `off`
- * precedes the first row or the map is empty. */
-const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map,
-                                        uint64_t off);
-
-/* Human-readable source-line coverage for `covered` resolved through `map`: an
- * "L/M source lines covered" line plus the sorted uncovered line numbers.
- * Returns the count of uncovered source lines (0 = every mapped line hit). */
-size_t emu_trace_source_report(const emu_trace_t *covered,
-                               const emu_line_map_t *map, FILE *out);
-
-/* lcov .info export at SOURCE-LINE granularity (cf. emu_trace_lcov, which emits
- * raw offsets). Every distinct line named by `map` is emitted as DA:line,N
- * (N=1 when a covered block falls on it, else 0), so the record shows both hit
- * and missed lines; `source_file` fills the SF: field. */
-void emu_trace_lcov_source(const emu_trace_t *covered, const emu_line_map_t *map,
-                           const char *source_file, FILE *out);
+/* The source line-map types (emu_line_entry_t / emu_line_map_t) and the
+ * resolving helpers (emu_line_lookup, emu_trace_source_report,
+ * emu_trace_lcov_source) are engine-neutral and declared in asmtest_trace.h. */
 
 /* ------------------------------------------------------------------ */
 /* Emulator assertions (Track C)                                       */

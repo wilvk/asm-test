@@ -17,6 +17,10 @@ your own test suite. Every binding exposes the same core capabilities:
 Both extra tiers now ship inside `libasmtest_emu` itself — it is the full
 superset (emulator + Keystone assembler + Capstone disassembler), so they are on
 by default (see [The optional native tiers](#the-optional-native-tiers) below).
+
+A further **in-process native-trace** tier (DynamoRIO) is a *separate*, advanced
+opt-in that ships as its own `libasmtest_drapp` (not part of the superset) with a
+Python wrapper, `asmtest.drtrace`. See [Native runtime tracing](native-tracing.md).
 A binding still keeps an `asm_available` / `disas_available` probe so it can
 self-skip if pointed at an older/leaner lib that lacks them.
 

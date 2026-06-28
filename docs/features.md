@@ -91,6 +91,21 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
   is exposed through every language binding (`disas`/`disas_available`), via
   `libasmtest_emu` (the full superset lib carries it). ([Disassembly](disassembly.md))
 
+### Native runtime trace tiers (optional, Linux x86-64)
+
+Trace code as it runs **natively, in-process** — the third execution tier
+alongside native capture and the emulator. Both fill the same `asmtest_trace_t`
+shape as the emulator trace and self-skip when their toolchain is absent.
+([Native runtime tracing](native-tracing.md))
+
+- **DynamoRIO native trace**: in-process attach (`dr_app_*`), begin/end region
+  markers, basic-block + instruction coverage for native or Keystone-generated
+  host-native code (W^X executable memory). BSD-only (raw DynamoRIO core API; no
+  drwrap/LGPL). Python wrapper (`asmtest.drtrace`).
+- **Hardware trace**: Intel PT / ARM CoreSight via `perf_event_open` + libipt /
+  OpenCSD, near-zero capture overhead, with branch-boundary block normalization.
+  Bare-metal only; the recommended backend for JIT/GC-heavy managed runtimes.
+
 ### In-line assembler (optional, Keystone)
 
 - Pass a routine as assembly **text** instead of a compiled address, then run it
