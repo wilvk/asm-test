@@ -143,10 +143,24 @@ virtualized Azure VMs that do not expose Intel PT to guests, and cloud ARM expos
 no `cs_etm`. A real job needs a *self-hosted* bare-metal Intel x86-64 (PT) or
 known-good AArch64 board (CoreSight) runner with `perf_event_paranoid` lowered —
 an explicit, separate, allowed-to-be-absent job that never gates normal tests.
+This carries a **standing operational cost** that must be owned, not assumed: a
+self-hosted runner that executes untrusted PR code with `perf_event_paranoid`
+lowered (and possibly `CAP_PERFMON`/`CAP_SYS_ADMIN`) is a real security exposure,
+so gate it to trusted branches / maintainer-approved runs only, and accept that
+these tiers ship with materially weaker automated regression protection than the
+Unicorn tier.
 
-**Effort.** PT capture + libipt decode 5-8 days on available hardware; CoreSight +
-OpenCSD a further 5-8 days, gated on board access. Both depend on **native-trace
-Phase 1** (substrate) and **native-trace Phase 5** (instruction-mode semantics).
+**Effort.** PT capture + libipt decode 5-8 days on available hardware (this range
+**includes** the block-boundary normalization step from
+[Risks](#risks-and-open-points-hardware-trace) — budget ~1-2 of those days for it
+and its cross-backend parity tests); CoreSight + OpenCSD a further 5-8 days, gated
+on board access. **Hard dependency, not a soft sibling link:** both backends
+cannot produce parity offsets until **native-trace Phase 1** (the trace substrate
+*and* its backend-neutral renames — `asmtest_trace_*`, `asmtest_arch_t` — and the
+`base_addr` report-helper fix) and **native-trace Phase 5** (instruction-mode
+semantics) have landed. This plan reads as standalone and is *packaged*
+independently, but it is **sequenced after** roughly the first half of the
+DynamoRIO plan; it cannot ship block/instruction parity before then.
 
 **Validation (hardware trace).** Intel PT ships since Broadwell and
 Goldmont/Apollo Lake; the Linux `intel_pt` PMU since ~4.3, with address-range
@@ -237,8 +251,25 @@ research-grade.
 - **Hardware-trace fidelity.** Decode is impossible without the exact
   registered code bytes (libipt returns `-pte_nomap`); self-modifying or relocated
   code silently corrupts offsets. Speculative/aborted paths
-  (`pt_block.speculative`) must be filtered before recording. libipt block
-  boundaries are not identical to Unicorn/DynamoRIO basic blocks (a libipt block
-  can span direct branches), so cross-backend block-offset parity needs a
-  normalization step or a documented difference. Finite comparators and file-less
-  Keystone memory force a software IP post-filter fallback for some regions.
+  (`pt_block.speculative`) must be filtered before recording. Finite comparators
+  and file-less Keystone memory force a software IP post-filter fallback for some
+  regions.
+- **Block-offset parity is not free — the normalization step is real work, not a
+  footnote.** A libipt/OpenCSD decoded block ends only at a *taken* branch or a
+  trace discontinuity, so it can span fall-through and even direct branches; the
+  hardware block partition is therefore strictly **coarser** than the
+  Unicorn/DynamoRIO basic-block partition, and the raw `pt_block.ip`/`ninsn`
+  stream does **not** yield offsets that match the other backends. The concrete
+  normalization: take the per-instruction stream the decoder already reconstructs
+  (`pt_insn_next` / the OpenCSD instruction-range output), then **re-split into
+  basic blocks at every branch *target* and after every branch instruction**,
+  recomputing DR/Unicorn-equivalent boundaries from `insns[]` rather than trusting
+  the decoder's coarser blocks. This is mechanical but non-trivial (it duplicates
+  the basic-block-boundary logic the emulator gets for free from Unicorn's block
+  hook) and must be unit-tested against the DynamoRIO tier's block set for the same
+  routine. The **instruction** offsets need no such step — they are identical to
+  Unicorn/DynamoRIO for a deterministic, non-speculative, single-threaded routine
+  (the acceptance-test case); the *block* offsets are correct only **after**
+  normalization. The alternative is to ship a documented per-backend block
+  difference, but the stated goal is parity, so budget the normalization. Its cost
+  is folded into the Phase 1 effort estimate below.

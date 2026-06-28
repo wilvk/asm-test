@@ -239,6 +239,16 @@ existing `bool emu_trace_covered(const emu_trace_t *, uint64_t off)` C helper
 `emu_trace_report(const emu_trace_t *, FILE *)` (no `asmtest_emu_trace_report`
 exists today).
 
+**Naming hazard (accepted).** This leaves three near-identical "covered"
+predicates exported at once: `asmtest_trace_covered` (`int`, new canonical),
+`asmtest_emu_trace_covered` (`int`, existing FFI handle accessor), and
+`emu_trace_covered` (`bool`, the C helper behind `ASSERT_BLOCK_COVERED`). They
+differ in return type and argument type, which is a real foot-gun. Keeping all
+three is a deliberate compatibility decision; document the canonical one
+(`asmtest_trace_covered`) as the form new code should call and mark the other two
+as compatibility shims in the header so callers are not left guessing which to
+use.
+
 New header: `include/asmtest_drtrace.h`.
 
 ```c
@@ -286,6 +296,24 @@ recording is active when `insns_cap > 0`, block recording when `blocks_cap > 0` 
 which the client reads from the registered `asmtest_trace_t`.
 `ASMTEST_DRTRACE_EVENTS` is **reserved**: memory-event tracing is a non-goal for
 Phases 0-8 and no phase implements it yet.
+
+**Error and return-value contract (resolve before Phase 3).** The API sketch
+leaves two contracts ambiguous; pin them down when `asmtest_drtrace.h` is written:
+- `asmtest_dr_register_region` returns `int`. This is the **app-facing status
+  code** (`0` ok / negative error), **not** the client-internal region id. The
+  small integer region id is a *client-local* handle assigned inside
+  `libasmtest_drclient` (used for the `name -> id` lookup and the per-thread
+  active-region stack); it is deliberately not surfaced to the app, which refers
+  to regions by `name`. If a future phase needs the app to hold the id, add a
+  distinct `out` parameter rather than overloading the `int` return.
+- `asmtest_trace_begin`/`asmtest_trace_end` return `void`, so they cannot report
+  errors inline. The "called before `STARTED`", "`end` without matching `begin`",
+  and mismatched-`end` conditions are therefore surfaced **out of band** — via the
+  client-side counter plus one-shot flag the app reads through a separate accessor
+  (see the Region model in Phase 2) — not through the marker call. The markers stay
+  `void` because they must remain trivially `drwrap`-wrappable; the error channel
+  is an explicit accessor, and the bindings should expose it (e.g. raise after a
+  region scope exits with the flag set).
 
 **Bracketed takeover for managed hosts (decided).** `start`/`stop` are not only
 an init-once step. Inside a JIT/GC-heavy runtime (JVM, .NET, Node) the supported
@@ -818,12 +846,26 @@ manual region calls in the test body.
 - Keep the core `libasmtest` and the superset `libasmtest_emu` DynamoRIO-free.
 - Add a separate two-library distribution (`libasmtest_drapp` plus
   `libasmtest_drclient`), built like the existing optional shared libs but kept
-  out of the superset. Because all ten bindings currently `dlopen`
-  `libasmtest_emu` via `ASMTEST_LIB`, keeping these tiers out of it means the
-  native-trace API is **not** reachable through the existing binding load path —
-  the bindings need a separate, explicitly-opted-in load of `libasmtest_drapp`
-  (and `libasmtest_hwtrace`). State this so it is a deliberate choice, not a
-  surprise.
+  out of the superset. All ten bindings today reach **only** `libasmtest_emu`,
+  so keeping these tiers out of the superset means the native-trace API is
+  **not** reachable through the existing binding load path. The remediation
+  differs by binding type, and the plan must say so rather than treating the ten
+  uniformly:
+  - **Dynamic-FFI bindings** (python, ruby, node, go, dotnet, java, lua) load
+    `libasmtest_emu` at runtime via `ASMTEST_LIB`. They reach the new tier with a
+    *second, explicitly-opted-in* runtime load of `libasmtest_drapp` (and
+    `libasmtest_hwtrace`) — same `dlopen` pattern, a new path/env var.
+  - **Static-linked bindings** (rust via `cargo:rustc-link-lib=dylib=asmtest_emu`
+    in `bindings/rust/build.rs`, zig via `linkSystemLibrary("asmtest_emu")`, cpp
+    via CMake) do **not** `dlopen` and do **not** use `ASMTEST_LIB` to *load* (rust
+    uses `ASMTEST_LIB_DIR` only as a link-search path). For them the new tier is a
+    *new link-time dependency*, which also pulls DynamoRIO's transitive libraries
+    and — critically — the `drwrap` **LGPL-2.1** obligation into a static build,
+    where LGPL relink obligations are stricter than the dynamic-`dlopen` case.
+    Keeping `libasmtest_drapp`/`libasmtest_drclient` as separate artifacts the
+    core and `libasmtest_emu` never link contains this, but the static bindings
+    must opt in deliberately and document the LGPL consequence at their link line.
+  State this so it is a deliberate choice, not a surprise.
 - Reuse the existing optional Capstone reporting/disassembly layer for native
   traces, so Unicorn, DynamoRIO, and HW traces share report formats and no
   backend-specific decoder API leaks into language bindings.
@@ -953,6 +995,12 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   backend. The single biggest unknown is whether repeated bracketed all-thread
   takeover/detach is cheap and stable enough on Linux (the Phase 0b gate); that, not
   any individual runtime quirk, is the critical path for CPython viability.
+  **Scope note:** the 0b gate is the critical path for the *language-wrapper*
+  payoff (Phase 6), not for the tier as a whole. Phases 1-5 deliver a working
+  native-trace backend for **native/C callers** regardless of the 0b outcome — if
+  0b fails, managed runtimes route to the hardware-trace backend and the DynamoRIO
+  tier ships as "native/C callers only", but the Phase 1-5 effort is not wasted.
+  Sequence accordingly: do not block Phases 1-5 on a green 0b.
 - **Thread semantics.** The MVP should record only the current region-entering
   thread. All-thread tracing needs explicit API and locking.
 - **Private loader transparency.** Do not share C globals between app and client.
