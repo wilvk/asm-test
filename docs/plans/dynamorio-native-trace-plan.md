@@ -881,6 +881,55 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 
 ---
 
+## Phase 10 - Attach-to-foreign-JIT tracing *(planned, forward-look)*
+
+**Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
+3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
+least-invasively, at instruction granularity. This is the capability the
+[Language runtime support](#language-runtime-support) matrix routes the hard
+managed runtimes toward. **Full treatment:**
+[Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
+
+**Approach (decided direction).** Stop instrumenting, start observing: hardware
+trace (Intel PT / CoreSight) for the execution stream + a **time-aware capture of
+the JIT's code bytes** for decode. PT/ETM are out-of-band (no code cache, no
+signal hijack, no W^X faults — none of the three collisions), attach to a live
+PID via `perf_event_open -p`, and reuse the Phase 9 substrate and the Capstone
+annotation layer. The one hard problem is *temporal* — the same address holds
+different bytes over time as the JIT patches/frees/reuses code — so a single
+snapshot is wrong; the decoder needs the bytes that were live at each trace
+position.
+
+**Deliverables (when scheduled).**
+
+- Runtime attach: `perf_event_open` against an existing PID (vs Phase 9's `pid=0`
+  self-trace of asm-test's own region).
+- A **time-aware code-image recorder** that replaces Phase 9's "asm-test owns the
+  bytes" saving grace, via either (a) **runtime-enabled jitdump** where the
+  runtime cooperates (.NET `DiagnosticsClient.EnablePerfMap(JitDump)`; JVM
+  jitdump agent + `GenerateEvents`) + `perf inject --jit`, or (b) an **eBPF +
+  userfaultfd-WP** recorder feeding libipt's `pt_image_set_callback` keyed to
+  trace position.
+- libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
+  no new decoder API in the bindings.
+- The hypervisor/EPT frontier (host Intel PT + Xen altp2m execute-trap capture,
+  DRAKVUF-based) as the research-grade, maximum-stealth option.
+
+**Acceptance.** Attach to a running CPython/.NET/JVM process, capture and decode at
+least one JIT-generated routine into a deterministic disassembled instruction
+trace that matches a ground-truth disassembly of the same bytes.
+
+**Status.** Forward-look only; distinct from Phases 0-9, which trace code asm-test
+generates itself. Depends on Phase 9 (PT substrate) and Phase 5 (instruction-mode
+semantics). See the analysis doc for the ranked approaches, per-runtime
+enablement matrix, prior art, and caveats.
+
+**Effort.** PT-attach + jitdump-live slice 3-5 days on PT hardware; the eBPF+uffd
+time-aware recorder a further 1-2 weeks; the hypervisor/EPT frontier is
+research-grade.
+
+---
+
 ## Language runtime support
 
 In-process DynamoRIO attach is robust for a plain native process; the difficulty
@@ -949,7 +998,10 @@ callers**. For **JVM/.NET/Node**, prefer the **Phase 9 Intel PT backend**: it
 reads branch packets without intercepting signals or perturbing JITed code,
 sidestepping all three collisions. This reframes Phase 9 from an optional fast
 path into the *correct* backend for the hard managed runtimes (where bare-metal
-PT is available).
+PT is available). Tracing a **foreign** JIT's generated code in a live process
+(rather than asm-test's own Keystone output) is the subject of Phase 10 and its
+detailed
+[Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
 
 **Sources.** DynamoRIO [dr_app.h](https://dynamorio.org/dr__app_8h.html),
 [transparency.html](https://dynamorio.org/transparency.html),
