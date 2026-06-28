@@ -52,8 +52,11 @@ Hardware records branch *decisions* only — it emits nothing per sequential
 instruction — so the per-instruction and per-block stream is *reconstructed* by
 the decoder replaying asm-test's own registered code bytes between branch
 waypoints. asm-test always holds those bytes, so the one hard precondition is
-always met. Overflow (PT `OVF` / `PERF_AUX_FLAG_TRUNCATED`, CoreSight overflow)
-maps onto the existing `truncated` bit, so no new public trace shape is needed.
+always met. Overflow maps onto the existing `truncated` bit, so no new public
+trace shape is needed — though these are *distinct* loss points: the PT `OVF`
+packet signals on-chip PT-buffer overflow, while `PERF_AUX_FLAG_TRUNCATED` (and
+the CoreSight equivalent) signals the perf AUX ring buffer filling; both mean
+trace was lost and both collapse onto the one bit.
 
 **Backends.**
 
@@ -163,7 +166,7 @@ independently, but it is **sequenced after** roughly the first half of the
 DynamoRIO plan; it cannot ship block/instruction parity before then.
 
 **Validation (hardware trace).** Intel PT ships since Broadwell and
-Goldmont/Apollo Lake; the Linux `intel_pt` PMU since ~4.3, with address-range
+Goldmont/Apollo Lake; the Linux `intel_pt` PMU since 4.2, with address-range
 filtering added in 4.7. `CAP_PERFMON` (Linux 5.8+) or a low enough
 `perf_event_paranoid` is required, and a usable default-size AUX capture for an
 unprivileged process effectively needs `perf_event_paranoid = -1` or
@@ -217,8 +220,11 @@ position.
   trace position.
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
-- The hypervisor/EPT frontier (host Intel PT + Xen altp2m execute-trap capture,
-  DRAKVUF-based) as the research-grade, maximum-stealth option.
+- The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
+  DRAKVUF (Xen VMI) supports *both* host-side Intel PT guest-execution tracing
+  (via Xen `vmtrace`) *and*, separately, stealthy altp2m execute-only EPT views
+  for hidden breakpoints — two distinct out-of-VM mechanisms, not a single fused
+  PT+altp2m technique.
 
 **Acceptance.** Attach to a running CPython/.NET/JVM process, capture and decode at
 least one JIT-generated routine into a deterministic disassembled instruction

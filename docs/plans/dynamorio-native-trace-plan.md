@@ -928,9 +928,11 @@ taken-over thread. Three things shrink the blast radius:
   asm-test's **own** `mmap` region (Phase 4), not the runtime's GC-managed JIT
   heap, so they never move or get freed and never trigger collision #2. The
   collision only comes from runtime code running *while DR is started* — exactly
-  what bracketing minimizes. CPython wins because the GIL means no concurrent
-  native code and the default build has **no JIT**, so a bracketed window is
-  genuinely quiet; JVM/.NET/V8 run concurrent background GC/JIT, so even a small
+  what bracketing minimizes. CPython wins because the GIL serializes *Python
+  bytecode* — no concurrent bytecode runs, though GIL-releasing C extensions,
+  blocking syscalls, and background/finalizer threads can still run native code —
+  and the default build has **no JIT**, so a bracketed window is genuinely quiet;
+  JVM/.NET/V8 run concurrent background GC/JIT, so even a small
   window can catch code churn on another taken-over thread.
 
 **Per-runtime fix matrix.**
@@ -939,13 +941,15 @@ taken-over thread. Three things shrink the blast radius:
 |---|---|---|---|
 | **CPython** | Almost none by default | Init on the main thread at `Py_Initialize` (or `Py_InitializeEx(0)` to skip CPython's signal setup); keep `faulthandler`/Dev Mode off; use `forkserver`/`spawn` + `os.register_at_fork(after_in_child=disable)`; avoid the free-threaded (PEP 703) and `--enable-experimental-jit` (`PYTHON_JIT=1`) builds | **Viable / robust** — vindicates the Phase 6 Python-first choice |
 | **Node / V8** | JIT generates+moves+frees code; SIGSEGV owned by the WASM trap handler; libuv+V8 threads start early | Trace only non-V8 native regions (a `.node` addon or asm-test's own `mmap`'d code — already the model); `--jitless` + `--predictable --single-threaded-gc` + `--disable-wasm-trap-handler`; tune `UV_THREADPOOL_SIZE`, avoid `worker_threads` | **Conditional** — only with V8 locked down or tracing strictly outside V8's heap |
-| **JVM** | SIGSEGV = null checks + safepoint polls; tiered JIT flushes the code cache | `LD_PRELOAD=libjsig.so` (the sanctioned signal-chaining broker) + `-Xrs`; trace only native/JNI leaf code (avoid the code cache and poll pages); `-XX:+PreserveFramePointer`; never cache JITed addresses across `CompiledMethodUnload` (code is invalidated+reused, not moved); last resort `-Xint` | **Best-effort** — async-profiler's JVMTI+libjsig model is the supported analogue |
+| **JVM** | SIGSEGV = null checks + safepoint polls; tiered JIT flushes the code cache | `LD_PRELOAD=libjsig.so` (the sanctioned signal-chaining broker) + `-Xrs`; trace only native/JNI leaf code (avoid the code cache and poll pages); `-XX:+PreserveFramePointer`; never cache JITed addresses across `CompiledMethodUnload` (code is invalidated+reused, not moved); last resort `-Xint` | **Best-effort** — async-profiler's JVMTI + `AsyncGetCallTrace` model is the supported analogue (`libjsig` above is the JVM's own signal-chaining broker, not part of async-profiler) |
 | **.NET (CoreCLR)** | SIGSEGV = null-ref + stack-overflow + HW→managed translation; **no libjsig equivalent**; OSR/tiered/ALC-unload churn addresses | Bootstrap from **native** before EE startup (managed `Main` is already too late — finalizer/GC/EventPipe threads exist); `DOTNET_TieredCompilation=0`, avoid OSR (`DOTNET_TC_QuickJitForLoops=0`) and collectible `AssemblyLoadContext`; `DOTNET_DefaultDiagnosticPortSuspend=1` for a clean attach window; bracket with `dr_app_stop` around managed code | **Hardest / not robust** — prefer out-of-process or hardware trace |
 
 **.NET is strictly harder than the JVM** for one specific reason: HotSpot ships
 `libjsig.so` to chain a third-party SIGSEGV handler behind its own, but CoreCLR
 has **no** such facility — it captures the previous handler once at init and
-forwards only to that, so either install order loses. Existence proof and its
+forwards only to that, so a handler installed *after* CoreCLR is not chained (one
+installed *before* CoreCLR is, since CoreCLR forwards to it — but under in-process
+DR takeover DR is rarely the earlier installer). Existence proof and its
 price: `pyda` runs CPython *as* a DR client but needed "nontrivial patches for
 both DynamoRIO and CPython."
 
