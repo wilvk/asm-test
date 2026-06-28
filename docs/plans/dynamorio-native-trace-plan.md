@@ -273,6 +273,18 @@ selects the static client they are ignored — mark them "dynamic-loading varian
 only". `mode` (blocks vs insns) is a **per-trace** property and also appears on
 `register_region`/`trace_new`; the process-init `mode` is only the default.
 
+**Bracketed takeover for managed hosts (decided).** `start`/`stop` are not only
+an init-once step. Inside a JIT/GC-heavy runtime (JVM, .NET, Node) the supported
+model is to keep DynamoRIO **stopped** (native execution) for almost the whole
+process and call `asmtest_dr_start` / `asmtest_dr_stop` to **bracket only the
+call into the registered routine**, so the runtime spends ~all its life running
+natively and DR never translates the runtime's churning JIT/GC code. This is the
+central mitigation for the per-language fragility documented in
+[Language runtime support](#language-runtime-support); its cost — repeated
+all-thread takeover, which is the fragile part on Linux — is what the Phase 0
+spike must measure. For CPython and native callers the cheaper persistent-`STARTED`
+model is fine because nothing is churning code concurrently.
+
 ---
 
 ## Phase 0 - Configuration and lifecycle spike *(planned)*
@@ -308,11 +320,27 @@ only". `mode` (blocks vs insns) is a **per-trace** property and also appears on
     before the heavy runtime spins up worker/GC threads.
   - the standard runner must run these tests `--no-fork` and without `-j` (see
     Phase 3 runner ownership).
+- A **managed-host gate**, run **first against CPython** (the friendliest runtime
+  — GIL-serialized, no default JIT). Two measurements decide whether the
+  in-process model survives a real language runtime:
+  - a **takeover/detach micro-benchmark**: time repeated `asmtest_dr_start` /
+    `asmtest_dr_stop` brackets around one call, to cost the bracketed-takeover
+    model (see the Public-API lifecycle note);
+  - a **signal-chaining check**: the client registers `dr_register_signal_event`
+    returning `DR_SIGNAL_DELIVER`, and the test confirms the host's own SIGSEGV
+    path (a deliberate faulting probe the runtime recovers from) still works while
+    DR is started — DR intercepts all signals and never lets SIGSEGV be blocked,
+    so chaining, not suppression, is the only viable coexistence.
+  If CPython passes both, proceed; if not, route managed runtimes to the Phase 9
+  hardware-trace backend earlier (see
+  [Language runtime support](#language-runtime-support)).
 
 **Acceptance.** A minimal program runs under DynamoRIO control without `drrun`,
 the client receives a basic-block callback, the clean call can write through an
 app-passed pointer into app-owned memory (the architecture's hinge — prove it
 here), and teardown returns the process to native execution without crashing.
+Additionally, the CPython managed-host gate passes: a generated routine is traced
+from inside a live CPython process with the host's SIGSEGV path still functional.
 
 **Effort.** 2-4 days. This spike gates the DynamoRIO-dependent phases (2-8).
 Phase 1 (trace-substrate extraction) has **no** DynamoRIO dependency and may
@@ -722,7 +750,10 @@ overhead on capable hardware — Intel PT on bare-metal Intel x86-64, ARM CoreSi
 on bare-metal AArch64 — producing the same `asmtest_trace_t` offsets as Unicorn
 and DynamoRIO, reusing the registered-region markers, with no DynamoRIO or
 `drwrap` dependency. This is an even-more-optional, mostly-bare-metal-Linux tier:
-a fast-path complement to DynamoRIO, never a replacement and never a default.
+a fast-path complement to DynamoRIO, never a replacement and never a default —
+**except** for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where it is the
+*recommended* backend because it sidesteps DynamoRIO's signal and code-cache
+collisions entirely (see [Language runtime support](#language-runtime-support)).
 
 **Why it fits.** Both Intel PT and ARM CoreSight, after decode, yield exactly the
 two dimensions `asmtest_trace_t` already carries: ordered instruction offsets and
@@ -850,18 +881,108 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 
 ---
 
+## Language runtime support
+
+In-process DynamoRIO attach is robust for a plain native process; the difficulty
+is entirely about **managed language runtimes**. This section records the root
+cause, the design reframe that makes it tractable, and a per-runtime fix matrix.
+It was derived from the DynamoRIO, HotSpot, CoreCLR, V8, and CPython sources
+listed at the end.
+
+**Root cause — three collisions.** A managed runtime fights in-process DR on:
+
+1. **Signal ownership.** DR intercepts *all* signals by default
+   (`-intercept_all_signals`), installs one process-wide master handler,
+   virtualizes the app's `sigaction`, and **never blocks SIGSEGV/SIGBUS** (it
+   needs them for safe-reads and code-cache consistency). Every managed runtime
+   *also* uses SIGSEGV on a hot correctness path (null checks, safepoint polls,
+   WASM bounds checks, hardware→managed exception translation). Both want to be
+   the primary SIGSEGV owner.
+2. **JIT/GC vs. DR code-cache consistency (the dominant one).** To keep its code
+   cache correct, DR write-protects W+X pages and catches the resulting SIGSEGV to
+   flush stale fragments — the *same* mprotect+fault mechanism a JIT emitter and a
+   generational-GC write barrier use. JITs generate, move (V8 compacting GC), and
+   free/reuse code addresses at runtime, so DR thrashes (RO ↔ sandbox).
+3. **Pre-existing threads + takeover.** `dr_app_start` takes over **all** threads
+   and assumes they share signal handlers (pthreads). Managed runtimes are
+   already multithreaded before attach (GC, finalizer, diagnostics, libuv pool,
+   background JIT), and DR has open bugs in the takeover/signal window.
+
+**The reframe.** Recording a narrow region is **not** the same as instrumenting a
+narrow region: once `dr_app_start` runs, DR translates *everything* on every
+taken-over thread. Three things shrink the blast radius:
+
+- **Bracket the active window** with `start`/`stop` around only the call into the
+  registered routine, so the runtime runs natively almost always (see the
+  bracketed-takeover note under Public API).
+- **Chain signals, don't swallow them**: the client registers
+  `dr_register_signal_event` and returns `DR_SIGNAL_DELIVER` so the runtime's own
+  SIGSEGV path still fires (`-no_intercept_all_signals` does **not** stop DR
+  intercepting SIGSEGV; there is no `-no_sigsegv`).
+- **The saving grace**: asm-test's traced bytes are Keystone-emitted into
+  asm-test's **own** `mmap` region (Phase 4), not the runtime's GC-managed JIT
+  heap, so they never move or get freed and never trigger collision #2. The
+  collision only comes from runtime code running *while DR is started* — exactly
+  what bracketing minimizes. CPython wins because the GIL means no concurrent
+  native code and the default build has **no JIT**, so a bracketed window is
+  genuinely quiet; JVM/.NET/V8 run concurrent background GC/JIT, so even a small
+  window can catch code churn on another taken-over thread.
+
+**Per-runtime fix matrix.**
+
+| Runtime | Core conflict | Concrete fix | Verdict |
+|---|---|---|---|
+| **CPython** | Almost none by default | Init on the main thread at `Py_Initialize` (or `Py_InitializeEx(0)` to skip CPython's signal setup); keep `faulthandler`/Dev Mode off; use `forkserver`/`spawn` + `os.register_at_fork(after_in_child=disable)`; avoid the free-threaded (PEP 703) and `--enable-experimental-jit` (`PYTHON_JIT=1`) builds | **Viable / robust** — vindicates the Phase 6 Python-first choice |
+| **Node / V8** | JIT generates+moves+frees code; SIGSEGV owned by the WASM trap handler; libuv+V8 threads start early | Trace only non-V8 native regions (a `.node` addon or asm-test's own `mmap`'d code — already the model); `--jitless` + `--predictable --single-threaded-gc` + `--disable-wasm-trap-handler`; tune `UV_THREADPOOL_SIZE`, avoid `worker_threads` | **Conditional** — only with V8 locked down or tracing strictly outside V8's heap |
+| **JVM** | SIGSEGV = null checks + safepoint polls; tiered JIT flushes the code cache | `LD_PRELOAD=libjsig.so` (the sanctioned signal-chaining broker) + `-Xrs`; trace only native/JNI leaf code (avoid the code cache and poll pages); `-XX:+PreserveFramePointer`; never cache JITed addresses across `CompiledMethodUnload` (code is invalidated+reused, not moved); last resort `-Xint` | **Best-effort** — async-profiler's JVMTI+libjsig model is the supported analogue |
+| **.NET (CoreCLR)** | SIGSEGV = null-ref + stack-overflow + HW→managed translation; **no libjsig equivalent**; OSR/tiered/ALC-unload churn addresses | Bootstrap from **native** before EE startup (managed `Main` is already too late — finalizer/GC/EventPipe threads exist); `DOTNET_TieredCompilation=0`, avoid OSR (`DOTNET_TC_QuickJitForLoops=0`) and collectible `AssemblyLoadContext`; `DOTNET_DefaultDiagnosticPortSuspend=1` for a clean attach window; bracket with `dr_app_stop` around managed code | **Hardest / not robust** — prefer out-of-process or hardware trace |
+
+**.NET is strictly harder than the JVM** for one specific reason: HotSpot ships
+`libjsig.so` to chain a third-party SIGSEGV handler behind its own, but CoreCLR
+has **no** such facility — it captures the previous handler once at init and
+forwards only to that, so either install order loses. Existence proof and its
+price: `pyda` runs CPython *as* a DR client but needed "nontrivial patches for
+both DynamoRIO and CPython."
+
+**Consequence for the plan.** The DynamoRIO tier targets **CPython + native/C
+callers**. For **JVM/.NET/Node**, prefer the **Phase 9 Intel PT backend**: it
+reads branch packets without intercepting signals or perturbing JITed code,
+sidestepping all three collisions. This reframes Phase 9 from an optional fast
+path into the *correct* backend for the hard managed runtimes (where bare-metal
+PT is available).
+
+**Sources.** DynamoRIO [dr_app.h](https://dynamorio.org/dr__app_8h.html),
+[transparency.html](https://dynamorio.org/transparency.html),
+[signal.c](https://github.com/DynamoRIO/dynamorio/blob/master/core/unix/signal.c),
+[optionsx.h](https://raw.githubusercontent.com/DynamoRIO/dynamorio/master/core/optionsx.h),
+[pyda](https://github.com/ndrewh/pyda); HotSpot
+[signals_posix.cpp](https://github.com/openjdk/jdk/blob/master/src/hotspot/os/posix/signals_posix.cpp),
+Oracle [signal-chaining](https://docs.oracle.com/en/java/javase/11/vm/signal-chaining.html),
+[async-profiler](https://github.com/async-profiler/async-profiler); CoreCLR
+[PAL signal.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/pal/src/exception/signal.cpp),
+[runtime#43642](https://github.com/dotnet/runtime/issues/43642),
+[code-versioning](https://github.com/dotnet/runtime/blob/main/docs/design/features/code-versioning.md);
+V8 [jitless](https://v8.dev/blog/jitless),
+[embedded-builtins](https://v8.dev/blog/embedded-builtins),
+[trap-handler.h](https://github.com/v8/v8/blob/master/src/trap-handler/trap-handler.h);
+CPython [signal](https://docs.python.org/3/library/signal.html),
+[PEP 744](https://peps.python.org/pep-0744/),
+[multiprocessing](https://docs.python.org/3/library/multiprocessing.html).
+
+---
+
 ## Risks and open points
 
 - **Client-loading in app-api mode.** The first spike must settle whether dynamic
   `dr_register_process`/configuration is sufficient for language wrappers, or
   whether a static-client build is needed for reliable in-process attach.
-- **Language runtime fragility.** Python, Node, JVM, and .NET processes have
-  threads, signal handlers, JIT code, and native libraries. Two hard DR
-  constraints bite: DR assumes all threads **share** signal handlers, which
-  runtimes installing per-thread/alternate handlers (e.g. the JVM's SEGV handler)
-  violate, yielding undefined behavior; and DR queries "may fail if the main
-  thread has quit". Initialize on the process **main thread** before the heavy
-  runtime spins up worker/GC threads, and record narrow regions only.
+- **Language runtime fragility.** Python, Node, JVM, and .NET each collide with
+  in-process DR in runtime-specific ways (signal ownership, JIT/GC code-cache
+  consistency, threads started before attach). This is large enough to have its
+  own section: see [Language runtime support](#language-runtime-support) for the
+  root cause, the record-window-vs-instrument-window reframe, and the per-runtime
+  fix matrix with viability verdicts. Summary: CPython is robust; JVM/.NET/Node
+  are best-effort and should prefer the Phase 9 hardware-trace backend.
 - **Thread semantics.** The MVP should record only the current region-entering
   thread. All-thread tracing needs explicit API and locking.
 - **Private loader transparency.** Do not share C globals between app and client.
