@@ -3,8 +3,11 @@
 A phased roadmap for two **hardware-assisted** native-trace backends — Intel PT
 on bare-metal x86-64 and ARM CoreSight on bare-metal AArch64 — and the
 forward-look capability of tracing a **foreign** JIT's generated code in a live
-process. Both produce the same `asmtest_trace_t` offsets as the Unicorn emulator
-and the DynamoRIO native tier, reusing the same registered-region markers.
+process. Both produce `asmtest_trace_t` offsets reusing the same registered-region
+markers: instruction offsets identical to the Unicorn emulator and the DynamoRIO
+native tier, and block offsets that match after a normalization step (a decoded
+hardware block can span direct branches — see
+[Risks](#risks-and-open-points-hardware-trace)).
 
 This plan is a **sibling** of the
 [DynamoRIO native-trace plan](dynamorio-native-trace-plan.md): it depends on that
@@ -15,6 +18,9 @@ matrix routes JIT/GC-heavy managed runtimes toward. It was split out of that pla
 because it pulls in entirely different dependencies (libipt, OpenCSD,
 `perf_event_open`, eBPF) and is even-more-optional and mostly bare-metal; keeping
 it inline made shipping DynamoRIO read as if it required shipping CoreSight.
+Throughout this plan, **native-trace Phase N** means a phase of the
+[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md); an unqualified
+**Phase 1 / Phase 2** is one of *this* plan's own two phases.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the
 > way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) and
@@ -38,6 +44,10 @@ collisions entirely (see the native-trace plan's
 **Why it fits.** Both Intel PT and ARM CoreSight, after decode, yield exactly the
 two dimensions `asmtest_trace_t` already carries: ordered instruction offsets and
 distinct basic-block offsets, each as `off = ip - base` from a registered range.
+The instruction offsets are identical to Unicorn/DynamoRIO; the **block** offsets
+are not free — a libipt/OpenCSD decoded block can span direct branches, so block
+boundaries need a normalization step before they match Unicorn/DR basic blocks
+(see [Risks](#risks-and-open-points-hardware-trace)).
 Hardware records branch *decisions* only — it emits nothing per sequential
 instruction — so the per-instruction and per-block stream is *reconstructed* by
 the decoder replaying asm-test's own registered code bytes between branch
@@ -135,8 +145,8 @@ known-good AArch64 board (CoreSight) runner with `perf_event_paranoid` lowered �
 an explicit, separate, allowed-to-be-absent job that never gates normal tests.
 
 **Effort.** PT capture + libipt decode 5-8 days on available hardware; CoreSight +
-OpenCSD a further 5-8 days, gated on board access. Both depend on the native-trace
-plan's Phase 1 (substrate) and Phase 5 (instruction-mode semantics).
+OpenCSD a further 5-8 days, gated on board access. Both depend on **native-trace
+Phase 1** (substrate) and **native-trace Phase 5** (instruction-mode semantics).
 
 **Validation (hardware trace).** Intel PT ships since Broadwell and
 Goldmont/Apollo Lake; the Linux `intel_pt` PMU since ~4.3, with address-range
@@ -200,9 +210,9 @@ position.
 least one JIT-generated routine into a deterministic disassembled instruction
 trace that matches a ground-truth disassembly of the same bytes.
 
-**Status.** Forward-look only; distinct from the Phase 0-9 work of the native-trace
-plan, which traces code asm-test generates itself. Depends on Phase 1 (PT
-substrate) and the native-trace plan's Phase 5 (instruction-mode semantics). See
+**Status.** Forward-look only; distinct from the Phase 0-8 work of the native-trace
+plan, which traces code asm-test generates itself. Depends on this plan's Phase 1
+(PT substrate) and **native-trace Phase 5** (instruction-mode semantics). See
 the analysis doc for the ranked approaches, per-runtime enablement matrix, prior
 art, and caveats.
 

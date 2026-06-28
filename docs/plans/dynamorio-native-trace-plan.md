@@ -128,13 +128,16 @@ DynamoRIO documentation.
 language/app startup
     |
     v
-asmtest_dr_init(client path/options)
+asmtest_dr_init(...)     = dr_app_setup() + configure client   (no start yet)
     |
     v
-dr_app_setup() + configure client + dr_app_start()
+asmtest_dr_start()       = dr_app_start()                      (DR takes over)
     |
     v
 trace_begin("region") -> native code runs -> trace_end("region")
+    |
+    v
+asmtest_dr_stop() / asmtest_dr_shutdown() = dr_app_stop[_and_cleanup]()
     |
     v
 trace buffers contain offsets from registered code ranges
@@ -244,7 +247,7 @@ typedef struct asmtest_drtrace asmtest_drtrace_t;
 typedef enum {
     ASMTEST_DRTRACE_BLOCKS,
     ASMTEST_DRTRACE_INSNS,
-    ASMTEST_DRTRACE_EVENTS,
+    ASMTEST_DRTRACE_EVENTS,  /* reserved; no phase implements memory events in 0-8 */
 } asmtest_drtrace_mode_t;
 
 typedef struct {
@@ -276,8 +279,13 @@ client configuration but **not** `dr_app_start`; `asmtest_dr_start` performs
 `init = setup + configure`, then a separate `start`). `client_path` and
 `dynamorio_home` apply only to the **dynamic** client-loading variant; if Phase 0
 selects the static client they are ignored — mark them "dynamic-loading variant
-only". `mode` (blocks vs insns) is a **per-trace** property and also appears on
-`register_region`/`trace_new`; the process-init `mode` is only the default.
+only". `mode` (blocks vs insns vs events) is the **process-init default** only; there is
+no per-trace `mode` argument on `register_region` or `trace_new`. A per-trace
+override is expressed through `asmtest_trace_new`'s capacities — instruction
+recording is active when `insns_cap > 0`, block recording when `blocks_cap > 0` —
+which the client reads from the registered `asmtest_trace_t`.
+`ASMTEST_DRTRACE_EVENTS` is **reserved**: memory-event tracing is a non-goal for
+Phases 0-8 and no phase implements it yet.
 
 **Bracketed takeover for managed hosts (decided).** `start`/`stop` are not only
 an init-once step. Inside a JIT/GC-heavy runtime (JVM, .NET, Node) the supported
@@ -287,8 +295,13 @@ call into the registered routine**, so the runtime spends ~all its life running
 natively and DR never translates the runtime's churning JIT/GC code. This is the
 central mitigation for the per-language fragility documented in
 [Language runtime support](#language-runtime-support); its cost — repeated
-all-thread takeover, which is the fragile part on Linux — is what the Phase 0
-spike must measure. For CPython and native callers the cheaper persistent-`STARTED`
+all-thread takeover, which is the fragile part on Linux — is what the Phase 0b
+gate must measure, and it is **the critical-path unknown for the whole tier**:
+bracketing shrinks the *window* of DR control but multiplies the *count* of the
+fragile takeover/detach operation, so if warm brackets re-translate (the fragment
+cache does not survive `dr_app_stop` -> `dr_app_start`) or the repeated-takeover
+loop proves unstable, the CPython-first thesis fails and managed runtimes must
+route to the hardware-trace backend instead. For CPython and native callers the cheaper persistent-`STARTED`
 model is fine because nothing is churning code concurrently.
 
 ---
@@ -297,16 +310,22 @@ model is fine because nothing is churning code concurrently.
 
 **Goal.** Prove the in-process attach path before building the full trace system.
 
+This spike has two gates with very different cost and risk, so treat them as
+**Phase 0a** (the native-attach hinge — the cheap go/no-go that gates the
+DynamoRIO-dependent Phases 2-8) and **Phase 0b** (the CPython managed-host gate —
+a standalone instrumentation effort). Run 0a first; only invest in 0b once the
+hinge is proven.
+
 **Deliverables.**
 
-- A tiny C program that calls `dr_app_setup`, configures or registers
+- **(Phase 0a)** A tiny C program that calls `dr_app_setup`, configures or registers
   `libasmtest_drclient`, calls `dr_app_start`, executes a known function, and
   calls `dr_app_stop_and_cleanup`.
-- A documented decision for the dynamic client-loading mechanism:
+- **(Phase 0a)** A documented decision for the dynamic client-loading mechanism:
   `dr_register_process`/configuration files if using dynamic DR libraries, or
   the static client path if dynamic app API cannot reliably load a client in the
   desired packaging model.
-- A lifecycle **state machine** enforced in `libasmtest_drapp`, not left as
+- **(Phase 0a)** A lifecycle **state machine** enforced in `libasmtest_drapp`, not left as
   etiquette. A single guarded global holds `{state, owning_thread_id}` with
   states `UNINIT -> INIT -> STARTED -> STOPPED -> SHUTDOWN`:
   - `asmtest_dr_init` records the calling (setup) thread; a second `init` is a
@@ -326,7 +345,7 @@ model is fine because nothing is churning code concurrently.
     before the heavy runtime spins up worker/GC threads.
   - the standard runner must run these tests `--no-fork` and without `-j` (see
     Phase 3 runner ownership).
-- A **managed-host gate**, run **first against CPython** (the friendliest runtime
+- **(Phase 0b)** A **managed-host gate**, run **first against CPython** (the friendliest runtime
   — GIL-serialized, no default JIT). Three measurements decide whether the
   in-process model survives a real language runtime:
   - a **takeover/detach micro-benchmark**: time repeated `asmtest_dr_start` /
@@ -384,9 +403,15 @@ begin executing translated, and after how long), and warm brackets are timed
 against cold to record whether the fragment cache survives `dr_app_stop` ->
 `dr_app_start`.
 
-**Effort.** 2-4 days. This spike gates the DynamoRIO-dependent phases (2-8).
-Phase 1 (trace-substrate extraction) has **no** DynamoRIO dependency and may
-proceed before or in parallel with this spike.
+**Effort.** Split by gate. **Phase 0a (native-attach hinge)** — the C program, the
+client-loading decision, and the lifecycle state machine: 2-4 days; this is the
+cheap go/no-go and gates the DynamoRIO-dependent phases (2-8). **Phase 0b (CPython
+managed-host gate)** — the embedded-CPython harness (sibling busy-spin and
+signal-blocking threads), the cold-vs-warm bracket benchmark, the signal-chaining
+probe, and the thread-takeover scope probe: a further 3-5 days, since it is a
+standalone instrumentation effort, not a quick measurement. Phase 1
+(trace-substrate extraction) has **no** DynamoRIO dependency and may proceed before
+or in parallel with this spike.
 
 ---
 
@@ -417,11 +442,15 @@ DynamoRIO can share it.
     `void emu_trace_lcov`, `const emu_line_entry_t *emu_line_lookup`,
     `size_t emu_trace_source_report`, and `void emu_trace_lcov_source`.
 - The `*_disasm` annotation helpers (`emu_trace_disasm`, `emu_trace_report_disasm`,
-  `emu_coverage_uncovered_disasm`) stay in `src/disasm.c` (Capstone-gated). To
-  make the annotation layer backend-neutral *by name* — not merely offset-based —
-  also relocate their declarations and `emu_arch_t` to `asmtest_trace.h` (or a
-  neutral header) so non-emulator backends can call them without including
-  `asmtest_emu.h`, keeping thin `emu_*`-named aliases for compatibility.
+  `emu_coverage_uncovered_disasm`) stay in `src/disasm.c` (Capstone-gated). To make
+  the annotation layer backend-neutral *by name* — not merely offset-based — give
+  each a neutral canonical name (`asmtest_trace_disasm`,
+  `asmtest_trace_report_disasm`, `asmtest_trace_coverage_uncovered_disasm`), rename
+  `emu_arch_t` to `asmtest_arch_t`, and relocate all of them plus the arch type to
+  `asmtest_trace.h` (or a neutral header) so non-emulator backends can call them
+  without including `asmtest_emu.h`. Keep the existing `emu_*_disasm` names and
+  `emu_arch_t` as thin `typedef`/wrapper aliases for compatibility, mirroring the
+  `emu_trace_t` -> `asmtest_trace_t` aliasing in this phase.
 - `include/asmtest_emu.h` deletes the `emu_trace_t` struct body, `#include`s
   `asmtest_trace.h`, and adds `typedef asmtest_trace_t emu_trace_t;`.
 - Existing `emu_trace_covered` (bool) and the `asmtest_emu_trace_*` FFI accessors
@@ -624,8 +653,9 @@ Implementation notes:
   RW to copy bytes, then `mprotect` RX (on macOS arm64, `MAP_JIT` +
   `pthread_jit_write_protect_np`); flush the icache with `__builtin___clear_cache`
   where required. The existing guard-page `mmap`/`mprotect` helper in
-  `src/asmtest.c` only maps `PROT_NONE` and is **not** reusable here — this
-  host-executable path is net-new.
+  `src/asmtest.c` (`asmtest_guarded_alloc`) maps its buffer **RW** with a single
+  `PROT_NONE` guard page and **never** maps `PROT_EXEC`, so it is **not** reusable
+  here — this host-executable path is net-new.
 - Register the generated code range with `asmtest_dr_register_region`.
 - Make the caller responsible for invoking the code through an ABI-correct
   function pointer.
@@ -920,7 +950,9 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   root cause, the record-window-vs-instrument-window reframe, and the per-runtime
   fix matrix with viability verdicts. Summary: CPython is robust; JVM/.NET/Node
   are best-effort and should prefer the [hardware-trace plan](hardware-trace-plan.md)
-  backend.
+  backend. The single biggest unknown is whether repeated bracketed all-thread
+  takeover/detach is cheap and stable enough on Linux (the Phase 0b gate); that, not
+  any individual runtime quirk, is the critical path for CPython viability.
 - **Thread semantics.** The MVP should record only the current region-entering
   thread. All-thread tracing needs explicit API and locking.
 - **Private loader transparency.** Do not share C globals between app and client.

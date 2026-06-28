@@ -298,9 +298,10 @@ cross-backend block parity needs a normalization step or a documented difference
 
 ## Relationship to asm-test
 
-This extends the plan's Phase 9 (Intel PT / CoreSight) from "trace code asm-test
-generated itself — bytes already known, the *saving grace*" to "attach to a live
-**foreign** JIT and reconstruct its generated assembly." Three components are new:
+This extends the hardware-trace plan's Phase 1 (Intel PT / CoreSight) from "trace
+code asm-test generated itself — bytes already known, the *saving grace*" to
+"attach to a live **foreign** JIT and reconstruct its generated assembly." Three
+components are new:
 
 1. **Runtime attach to a PID** — `perf_event_open -p` against an existing process,
    rather than self-tracing `pid=0` around asm-test's own region.
@@ -310,8 +311,8 @@ generated itself — bytes already known, the *saving grace*" to "attach to a li
    decoder API leaks into the bindings, consistent with the plan's report-format
    reuse.
 
-The plan tracks this as a forward-looking **Phase 10**; this document is its
-detailed treatment.
+The hardware-trace plan tracks this as its forward-looking **Phase 2**; this
+document is its detailed treatment.
 
 ## Sources
 
