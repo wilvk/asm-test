@@ -124,9 +124,11 @@ int asmtest_exec_alloc(const uint8_t *bytes, size_t len, asmtest_exec_code_t *ou
 int asmtest_asm_exec_native(const char *src, int syntax,
                             asmtest_exec_code_t *out);
 
-/* Unregister the range (if registered) so DynamoRIO drops any cached translation
- * (dr_flush_region), then unmap it. Unregister + flush + free is one ordered
- * step; call before the memory could be reused. */
+/* Unmap the executable memory. This does NOT unregister the range — regions are
+ * keyed by name and this function only has {base,len} — so if the range was
+ * registered, the caller MUST asmtest_dr_unregister_region(name) FIRST (which
+ * makes the client drop its cached translation), then call this. Order:
+ * unregister, then free. */
 void asmtest_exec_free(asmtest_exec_code_t *code);
 
 #ifdef __cplusplus

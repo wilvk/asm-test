@@ -75,9 +75,13 @@ int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
 void asmtest_hwtrace_shutdown(void);
 
 /* Region markers, reused from the native-trace model. begin(name) enables the
- * hardware AUX capture for the named region on the calling thread; end(name)
- * disables it and decodes the captured packets into the registered trace. They
- * are backend-neutral by name (no drwrap needed for this tier). */
+ * hardware AUX capture for the named region; end(name) disables it and decodes
+ * the captured packets into the registered trace. Backend-neutral by name (no
+ * drwrap needed for this tier).
+ *
+ * MVP limitation: capture state is a single process-global slot — only ONE region
+ * may be active at a time (a begin while another is active is ignored), so these
+ * are NOT yet per-thread. Bracket one registered routine per begin/end pair. */
 void asmtest_hwtrace_begin(const char *name);
 void asmtest_hwtrace_end(const char *name);
 

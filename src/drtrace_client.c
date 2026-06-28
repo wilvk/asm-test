@@ -41,6 +41,14 @@ typedef struct {
 
 /* ------------------------------------------------------------------ */
 /* Client-local region registry (never shares app globals)             */
+/*                                                                     */
+/* Concurrency contract (MVP): register_region/begin/end mutate this    */
+/* table under g_region_lock, but region_for_pc() (the per-basic-block   */
+/* hot path) reads it UNLOCKED — locking every translated block would    */
+/* defeat the cheap-default design. The contract is therefore that all   */
+/* regions are registered before tracing starts and not (un)registered   */
+/* while another thread executes traced code. Names use a fixed 64-byte  */
+/* buffer (the app rejects longer names so both sides match).           */
 /* ------------------------------------------------------------------ */
 #define MAX_REGIONS 32
 #define MAX_NAME 64
@@ -148,7 +156,12 @@ static void on_begin(app_pc name) {
             break;
         }
     dr_mutex_unlock(g_region_lock);
-    if (tr != NULL && ts->depth < MAX_DEPTH)
+    /* Push UNCONDITIONALLY (even tr == NULL for a begin naming an unregistered
+     * region) so the recording stack stays balanced with on_end, which pops on
+     * every end. A NULL entry never matches a real trace in thread_recording(),
+     * so it records nothing but preserves nesting — otherwise an unmatched begin
+     * would let a later end pop a still-active region and silently drop coverage. */
+    if (ts->depth < MAX_DEPTH)
         ts->stack[ts->depth++] = tr;
 }
 

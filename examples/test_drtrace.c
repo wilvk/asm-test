@@ -35,12 +35,11 @@ static int checks = 0;
     } while (0)
 
 /* x86-64 SysV: long f(long a, long b) { long r = a + b; if (r > 100) r--; return r; }
- *   48 01 fe             add    rsi, rdi   ; (we compute in rsi for brevity)
  * Hand-assembled, position-independent, two basic blocks (a forward branch):
  *   0:  48 89 f8             mov    rax, rdi
  *   3:  48 01 f0             add    rax, rsi
  *   6:  48 3d 64 00 00 00    cmp    rax, 100
- *   c:  7e 01                jle    .skip
+ *   c:  7e 03                jle    .skip   ; +3 skips the 3-byte dec
  *   e:  48 ff c8             dec    rax
  *  .skip:
  *  11:  c3                   ret

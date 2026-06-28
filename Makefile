@@ -1016,7 +1016,7 @@ endif
 # or link dependency (it dlopen()s libdynamorio and declares dr_app_* via dlsym),
 # so it always compiles regardless of whether DynamoRIO is installed.
 $(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
-                        include/asmtest_trace.h | $(BUILD)
+                        include/asmtest_trace.h include/asmtest_assemble.h | $(BUILD)
 	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -c $< -o $@
 
 # DynamoRIO client (.so) via CMake. Real target shape: shells out to cmake.
@@ -1044,7 +1044,7 @@ $(call shlib_dev,libasmtest_drapp): $(call shlib_real,libasmtest_drapp)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_drapp)) $@
 
 $(BUILD)/pic/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
-                            include/asmtest_trace.h | $(BUILD)/pic
+                            include/asmtest_trace.h include/asmtest_assemble.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
 
 # Standalone smoke harness (run directly: --no-fork, single job). -rdynamic puts
@@ -1081,14 +1081,24 @@ endif
 # backend is built -DASMTEST_HAVE_LIBIPT / -DASMTEST_HAVE_OPENCSD and linked; when
 # absent the same objects compile decoder-free and asmtest_hwtrace_available()
 # reports the decoder missing so the tier self-skips.
-LIBIPT_CFLAGS  ?= $(shell pkg-config --cflags libipt 2>/dev/null)
-LIBIPT_LIBS    ?= $(shell pkg-config --libs libipt 2>/dev/null)
-ifeq ($(shell pkg-config --exists libipt 2>/dev/null && echo 1),1)
-LIBIPT_DEF := -DASMTEST_HAVE_LIBIPT
+# Intel PT decoder (libipt). Unlike the other optional deps it ships NO
+# pkg-config file on common distros (Ubuntu's libipt-dev installs intel-pt.h on
+# the default include path and libipt.so), so detect by probing the header and
+# link with -lipt. Override LIBIPT_CFLAGS / LIBIPT_LIBS for a non-standard
+# location, or `make ... LIBIPT_DEF=` to force-disable.
+LIBIPT_CFLAGS ?=
+ifeq ($(shell $(CC) $(LIBIPT_CFLAGS) -E -include intel-pt.h -xc /dev/null >/dev/null 2>&1 && echo 1),1)
+LIBIPT_DEF  ?= -DASMTEST_HAVE_LIBIPT
+LIBIPT_LIBS ?= -lipt
+else
+LIBIPT_LIBS ?=
 endif
-OPENCSD_CFLAGS ?= $(shell pkg-config --cflags opencsd 2>/dev/null)
-OPENCSD_LIBS   ?= $(shell pkg-config --libs opencsd 2>/dev/null)
-ifeq ($(shell pkg-config --exists opencsd 2>/dev/null && echo 1),1)
+
+# ARM CoreSight decoder (OpenCSD). Its pkg-config module is `libopencsd` (NOT
+# `opencsd`), and ships -lopencsd.
+OPENCSD_CFLAGS ?= $(shell pkg-config --cflags libopencsd 2>/dev/null)
+OPENCSD_LIBS   ?= $(shell pkg-config --libs libopencsd 2>/dev/null)
+ifeq ($(shell pkg-config --exists libopencsd 2>/dev/null && echo 1),1)
 OPENCSD_DEF := -DASMTEST_HAVE_OPENCSD
 endif
 
@@ -1250,8 +1260,8 @@ $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
 	       $(CAPSTONE_DEF) -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM \
 	       -DASMTEST_ENABLE_DISAS -c $< -o $@
 
-$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
-                   $(BUILD)/assemble.o $(BUILD)/disasm.o \
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/trace.o \
+                   $(BUILD)/fuzz.o $(BUILD)/assemble.o $(BUILD)/disasm.o \
                    $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
                    $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@

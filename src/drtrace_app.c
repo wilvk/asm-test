@@ -43,11 +43,14 @@ static void (*p_dr_app_start)(void);
 static void (*p_dr_app_stop)(void);
 static void (*p_dr_app_stop_and_cleanup)(void);
 
-/* Resolve the libdynamorio path: explicit option, env override, then a bare
- * soname (found via rpath / LD_LIBRARY_PATH). Writes into buf, returns it. */
+/* Resolve the libdynamorio path: explicit option, the ASMTEST_DR_LIB / the
+ * DYNAMORIO_HOME env vars, then a bare soname (found via rpath / LD_LIBRARY_PATH).
+ * The DYNAMORIO_HOME branch must stay in lock-step with asmtest_dr_available(),
+ * which advertises the tier usable when DYNAMORIO_HOME is set. Writes into buf. */
 static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
                                size_t buflen) {
     const char *env = getenv("ASMTEST_DR_LIB");
+    const char *home = getenv("DYNAMORIO_HOME");
     if (opts != NULL && opts->dynamorio_home != NULL &&
         opts->dynamorio_home[0] != '\0') {
         snprintf(buf, buflen, "%s/lib64/release/libdynamorio.so",
@@ -56,6 +59,10 @@ static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
     }
     if (env != NULL && env[0] != '\0') {
         snprintf(buf, buflen, "%s", env);
+        return buf;
+    }
+    if (home != NULL && home[0] != '\0') {
+        snprintf(buf, buflen, "%s/lib64/release/libdynamorio.so", home);
         return buf;
     }
     snprintf(buf, buflen, "libdynamorio.so");
@@ -150,26 +157,38 @@ int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
     snprintf(buf, sizeof buf, "-code_api -client_lib '%s;0;%s'", client, extra);
     setenv("DYNAMORIO_OPTIONS", buf, 1);
 
-    char libpath[1024];
-    dr_lib_path(opts, libpath, sizeof libpath);
-    g_dr_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
+    /* Load libdynamorio once and cache the handle + entry points; a re-init
+     * after shutdown reuses them (DR re-attach) rather than dlclose/reload, which
+     * keeps DR's load-time DYNAMORIO_OPTIONS read intact and avoids unloading the
+     * engine. */
     if (g_dr_handle == NULL) {
-        pthread_mutex_unlock(&g_lock);
-        return ASMTEST_DR_ENODR;
-    }
-    p_dr_app_setup = (int (*)(void))dlsym(g_dr_handle, "dr_app_setup");
-    p_dr_app_start = (void (*)(void))dlsym(g_dr_handle, "dr_app_start");
-    p_dr_app_stop = (void (*)(void))dlsym(g_dr_handle, "dr_app_stop");
-    p_dr_app_stop_and_cleanup =
-        (void (*)(void))dlsym(g_dr_handle, "dr_app_stop_and_cleanup");
-    if (p_dr_app_setup == NULL || p_dr_app_start == NULL ||
-        p_dr_app_stop == NULL || p_dr_app_stop_and_cleanup == NULL) {
-        dlclose(g_dr_handle);
-        g_dr_handle = NULL;
-        pthread_mutex_unlock(&g_lock);
-        return ASMTEST_DR_ENODR;
+        char libpath[1024];
+        dr_lib_path(opts, libpath, sizeof libpath);
+        g_dr_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
+        if (g_dr_handle == NULL) {
+            pthread_mutex_unlock(&g_lock);
+            return ASMTEST_DR_ENODR;
+        }
+        p_dr_app_setup = (int (*)(void))dlsym(g_dr_handle, "dr_app_setup");
+        p_dr_app_start = (void (*)(void))dlsym(g_dr_handle, "dr_app_start");
+        p_dr_app_stop = (void (*)(void))dlsym(g_dr_handle, "dr_app_stop");
+        p_dr_app_stop_and_cleanup =
+            (void (*)(void))dlsym(g_dr_handle, "dr_app_stop_and_cleanup");
+        if (p_dr_app_setup == NULL || p_dr_app_start == NULL ||
+            p_dr_app_stop == NULL || p_dr_app_stop_and_cleanup == NULL) {
+            dlclose(g_dr_handle);
+            g_dr_handle = NULL;
+            p_dr_app_setup = NULL;
+            p_dr_app_start = NULL;
+            p_dr_app_stop = NULL;
+            p_dr_app_stop_and_cleanup = NULL;
+            pthread_mutex_unlock(&g_lock);
+            return ASMTEST_DR_ENODR;
+        }
     }
     if (p_dr_app_setup() != 0) {
+        /* Leave the cached handle/pointers in place — a retry reuses them rather
+         * than dlopen'ing a second time; state stays UNINIT so a retry is valid. */
         pthread_mutex_unlock(&g_lock);
         return ASMTEST_DR_ENODR;
     }
@@ -217,7 +236,10 @@ void asmtest_dr_shutdown(void) {
     for (int i = 0; i < g_nregions; i++)
         free(g_regions[i].name);
     g_nregions = 0;
-    g_state = ST_SHUTDOWN;
+    /* Return to UNINIT (not a terminal state) so a subsequent asmtest_dr_init
+     * can re-attach — matching the documented contract. The libdynamorio handle
+     * stays cached and is reused by that re-init. */
+    g_state = ST_UNINIT;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -244,6 +266,11 @@ asmtest_dr_unregister_region_marker(const char *name) {
 int asmtest_dr_register_region(const char *name, void *base, size_t len,
                                asmtest_trace_t *trace) {
     if (name == NULL || base == NULL || len == 0 || trace == NULL)
+        return ASMTEST_DR_EINVAL;
+    /* The client stores names in a fixed 64-byte buffer and matches against the
+     * full name; a longer name would be truncated client-side and never match,
+     * silently disabling recording. Reject it here so the two sides agree. */
+    if (strlen(name) >= 64)
         return ASMTEST_DR_EINVAL;
     pthread_mutex_lock(&g_lock);
     if (g_state != ST_STARTED) {

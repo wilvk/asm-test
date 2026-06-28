@@ -263,6 +263,14 @@ The full root-cause analysis and per-runtime fix matrix live in the
 - **Native faults stay native faults** — no Unicorn-style precise guest faults.
   Continue using guard pages and runner isolation where possible.
 - **Non-overlapping regions** in the MVP; the active region is per-thread.
+- **Concurrency contract (MVP).** Register all regions *before* tracing starts: the
+  DynamoRIO client reads its region table unlocked on the per-basic-block hot path
+  (locking every block would defeat the cheap-default design), so registering or
+  unregistering a region while another thread is executing traced code is
+  unsupported. Each `asmtest_trace_t` is bound to one thread's region activation —
+  traces are not thread-safe shared collectors; do not read a trace, or enter its
+  region on another thread, while a thread is inside it. (The hardware-trace tier
+  is single-active-region in the MVP — see its header.)
 - **DynamoRIO must be installed separately** (no pkg-config); set `DYNAMORIO_HOME`.
   It is a software DBI engine and runs on Intel and AMD alike.
 - **Hardware capture is unverifiable off bare metal** — it cannot run on AMD, VMs,
