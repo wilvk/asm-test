@@ -82,6 +82,8 @@ help:
 	@echo '  packages        build every language package (needs all toolchains)'
 	@echo '  package-libs    stage the host shared libs into build/dist/native/<plat>'
 	@echo '  package-libs-verify  check a collected native tree has both libs per platform'
+	@echo '  sync-version    write VERSION into every binding manifest'
+	@echo '  check-version   verify every manifest matches VERSION (CI)'
 	@echo ''
 	@echo 'Quality (Track D/E):'
 	@echo '  sanitize        build + run under ASan + UBSan'
@@ -123,8 +125,20 @@ SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative
 AR              ?= ar
 PREFIX          ?= /usr/local
 DESTDIR         ?=
-ASMTEST_VERSION := 1.0.0
+# Single source of truth: the VERSION file at the repo root. `make sync-version`
+# propagates it into every binding manifest; `make check-version` verifies they
+# match (run in CI). See scripts/sync-version.sh.
+ASMTEST_VERSION := $(strip $(shell cat VERSION))
 ASMTEST_VER_MAJOR := $(word 1,$(subst ., ,$(ASMTEST_VERSION)))
+
+.PHONY: print-version sync-version check-version
+print-version:
+	@echo $(ASMTEST_VERSION)
+sync-version:
+	@scripts/sync-version.sh
+check-version:
+	@scripts/sync-version.sh --check
+
 incdir := $(DESTDIR)$(PREFIX)/include/asmtest
 libdir := $(DESTDIR)$(PREFIX)/lib
 pcdir  := $(DESTDIR)$(PREFIX)/lib/pkgconfig
@@ -519,9 +533,9 @@ docker-clean:
 	-$(DOCKER) image rm $(DOCKER_IMAGE)
 
 # --- Language wrappers in Docker (Tracks P/R/X/Z/N/J/D/C) ------------------
-# Each language is tested in its OWN image for isolation (bindings/<lang>/
-# Dockerfile, FROM a shared C+libunicorn base) — toolchains never mix. A
-# docker-<lang> target builds the base (once, cached), then the small
+# Each language is tested in its OWN image for isolation (one generic
+# bindings/Dockerfile.lang, FROM a shared C+libunicorn base) — toolchains never
+# mix. A docker-<lang> target builds the base (once, cached), then the small
 # per-language image, then runs it (its CMD is `make <lang>-test`).
 #   make docker-bindings   build + run every language's image
 #   make docker-python / -cpp / -rust / -zig / -node / -java / -dotnet /
@@ -529,6 +543,32 @@ docker-clean:
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
 BINDING_LANGS := python cpp rust zig node java dotnet ruby lua go
+
+# Per-language knobs for the generic image (bindings/Dockerfile.lang):
+#   DOCKER_APT_<lang>    extra distro packages (C++ is header-only -> none)
+#   DOCKER_SETUP_<lang>  extra build-time shell (npm global, Zig tarball fetch)
+#   DOCKER_RUNENV_<lang> runtime-only env, passed to `docker run` as -e flags
+DOCKER_APT_python := python3 python3-pytest
+DOCKER_APT_cpp    :=
+DOCKER_APT_rust   := cargo rustc
+DOCKER_APT_zig    :=
+DOCKER_APT_node   := nodejs npm
+DOCKER_APT_java   := openjdk-21-jdk-headless
+DOCKER_APT_dotnet := dotnet-sdk-8.0
+DOCKER_APT_ruby   := ruby
+DOCKER_APT_lua    := luajit
+DOCKER_APT_go     := golang-go
+
+ZIG_VERSION ?= 0.13.0
+DOCKER_SETUP_node := npm install -g koffi
+DOCKER_SETUP_zig  := arch="$$(uname -m)"; \
+  curl -fsSL "https://ziglang.org/download/$(ZIG_VERSION)/zig-linux-$$arch-$(ZIG_VERSION).tar.xz" -o /tmp/zig.tar.xz; \
+  mkdir -p /opt/zig; tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+  rm /tmp/zig.tar.xz; ln -s /opt/zig/zig /usr/local/bin/zig; zig version
+
+DOCKER_RUNENV_node   := -e NODE_PATH=/usr/local/lib/node_modules:/usr/lib/node_modules
+DOCKER_RUNENV_go     := -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e GOPROXY=off
+DOCKER_RUNENV_dotnet := -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1
 
 .PHONY: docker-bindings-base docker-bindings docker-bindings-clean \
         $(addprefix docker-,$(BINDING_LANGS))
@@ -540,9 +580,12 @@ docker-bindings-base:
 # Generate `docker-<lang>`: build the per-language image on the base, then run it.
 define docker_lang_rule
 docker-$(1): docker-bindings-base
-	$$(DOCKER) build $$(_docker_plat) -f bindings/$(1)/Dockerfile \
-	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_BASE) -t asmtest-$(1) .
-	$$(DOCKER) run --rm $$(_docker_plat) asmtest-$(1)
+	$$(DOCKER) build $$(_docker_plat) -f bindings/Dockerfile.lang \
+	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_BASE) \
+	  --build-arg APT_PKGS='$$(DOCKER_APT_$(1))' \
+	  --build-arg SETUP='$$(DOCKER_SETUP_$(1))' \
+	  --build-arg TARGET=$(1) -t asmtest-$(1) .
+	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-$(1)
 endef
 $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 

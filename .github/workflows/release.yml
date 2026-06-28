@@ -158,139 +158,95 @@ jobs:
         env: { TWINE_USERNAME: __token__, TWINE_PASSWORD: "${{ secrets.PYPI_TOKEN }}" }
         run: twine upload wheelhouse/*.whl
 
-  node:
-    name: node (${{ matrix.os }})
+  # node / ruby / lua / java / dotnet all share one flow: download native-all,
+  # `make <lang>-package`, install the artifact fresh (ASMTEST_LIB unset) and load
+  # the bundled native lib. The per-language bits — toolchain setup, the smoke
+  # one-liner, and the optional registry publish — are carried in the matrix
+  # `include`. Python (per-platform wheel + repair) and the link/source bindings
+  # (rust/go/cpp/zig) are different enough to keep their own jobs below.
+  dlopen-package:
+    name: ${{ matrix.lang }} (${{ matrix.os }})
     needs: [native-all]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        lang: [node, ruby, lua, java, dotnet]
         os: [ubuntu-latest, macos-latest]
+        include:
+          - lang: node
+            smoke: |
+              cd "$GITHUB_WORKSPACE/bindings/node" && npm publish --dry-run
+              mkdir -p /tmp/t && cd /tmp/t && npm init -y >/dev/null
+              npm install "$GITHUB_WORKSPACE"/build/dist/node/asmtest-*.tgz
+              node -e "const a=require('asmtest'); if(!a.disasAvailable())throw new Error('disassembler tier not available from the self-contained package'); console.log('node ok: disas available')"
+          - lang: ruby
+            smoke: |
+              gem install --local --no-document build/dist/ruby/asmtest-*.gem
+              cd /tmp && ruby -e "require 'asmtest'; raise 'disassembler tier not available from the self-contained gem' unless Asmtest.disas_available?; puts 'ruby ok: disas available'"
+          - lang: lua
+            smoke: |
+              mkdir -p /tmp/t && cp bindings/lua/asmtest.lua /tmp/t/ && cp -R bindings/lua/native /tmp/t/
+              cd / && luajit -e "package.path='/tmp/t/?.lua;'..package.path; local a=require('asmtest'); assert(a.disas_available(), 'disassembler tier not available from the self-contained rock'); print('lua ok: disas available')"
+          - lang: java
+            smoke: |
+              printf 'public class Smoke { public static void main(String[] a){ if(!Asmtest.disasAvailable()) throw new RuntimeException("disassembler tier not available from the self-contained jar"); System.out.println("java ok: disas available"); }}' > /tmp/Smoke.java
+              javac --release 21 --enable-preview -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
+              java --enable-preview --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
+          - lang: dotnet
+            smoke: |
+              ver="$(make -s -C "$GITHUB_WORKSPACE" print-version)"
+              cd /tmp && dotnet new console -o app && cd app
+              dotnet nuget add source "$GITHUB_WORKSPACE/build/dist/dotnet" -n local
+              dotnet add app.csproj package AsmTest --version "$ver"
+              printf 'using Asmtest; class P { static void Main(){ if(!Emu.DisasAvailable) throw new System.Exception("disassembler tier not available from the self-contained nupkg"); System.Console.WriteLine("dotnet ok: disas available"); } }' > Program.cs
+              dotnet run
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: "20" }
-      - uses: actions/download-artifact@v5
-        with: { name: native-all, path: build/dist/native }
-      - name: Build the npm tarball
-        run: make node-package
-      - name: npm publish --dry-run
-        run: cd bindings/node && npm publish --dry-run
-      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
-        run: |
-          mkdir -p /tmp/t && cd /tmp/t && npm init -y >/dev/null
-          npm install "$GITHUB_WORKSPACE"/build/dist/node/asmtest-*.tgz
-          node -e "const a=require('asmtest'); if(!a.disasAvailable())throw new Error('disassembler tier not available from the self-contained package'); console.log('node ok: disas available')"
-      - name: Publish to npm (only with a token; once, from Linux)
-        if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != '' }}
-        run: cd bindings/node && echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc && npm publish
-
-  ruby:
-    name: ruby (${{ matrix.os }})
-    needs: [native-all]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    env:
       RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ruby/setup-ruby@v1
-        with: { ruby-version: "3.2" }
-      - uses: actions/download-artifact@v5
-        with: { name: native-all, path: build/dist/native }
-      - name: Build the gem
-        run: make ruby-package
-      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
-        run: |
-          gem install --local --no-document build/dist/ruby/asmtest-*.gem
-          cd /tmp && ruby -e "require 'asmtest'; raise 'disassembler tier not available from the self-contained gem' unless Asmtest.disas_available?; puts 'ruby ok: disas available'"
-      - name: Publish to RubyGems (only with a token; once, from Linux)
-        if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.RUBYGEMS_API_KEY != '' }}
-        env: { GEM_HOST_API_KEY: "${{ secrets.RUBYGEMS_API_KEY }}" }
-        run: gem push build/dist/ruby/asmtest-*.gem
-
-  lua:
-    name: lua (${{ matrix.os }})
-    needs: [native-all]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install LuaJIT
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then brew install luajit; else sudo apt-get update && sudo apt-get install -y luajit; fi
-      - uses: actions/download-artifact@v5
-        with: { name: native-all, path: build/dist/native }
-      - name: Stage the rock payload
-        run: make lua-package
-      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
-        run: |
-          mkdir -p /tmp/t && cp bindings/lua/asmtest.lua /tmp/t/ && cp -R bindings/lua/native /tmp/t/
-          cd / && luajit -e "package.path='/tmp/t/?.lua;'..package.path; local a=require('asmtest'); assert(a.disas_available(), 'disassembler tier not available from the self-contained rock'); print('lua ok: disas available')"
-
-  java:
-    name: java (${{ matrix.os }})
-    needs: [native-all]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
-        with: { distribution: temurin, java-version: "21" }
-      - uses: actions/download-artifact@v5
-        with: { name: native-all, path: build/dist/native }
-      - name: Build the jar
-        run: make java-package
-      - name: Install fresh + smoke (self-contained native from jar, no ASMTEST_LIB, no system deps)
-        run: |
-          printf 'public class Smoke { public static void main(String[] a){ if(!Asmtest.disasAvailable()) throw new RuntimeException("disassembler tier not available from the self-contained jar"); System.out.println("java ok: disas available"); }}' > /tmp/Smoke.java
-          javac --release 21 --enable-preview -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
-          java --enable-preview --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
-
-  dotnet:
-    name: dotnet (${{ matrix.os }})
-    needs: [native-all]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    env:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - if: ${{ matrix.lang == 'node' }}
+        uses: actions/setup-node@v5
+        with: { node-version: "20" }
+      - if: ${{ matrix.lang == 'ruby' }}
+        uses: ruby/setup-ruby@v1
+        with: { ruby-version: "3.2" }
+      - if: ${{ matrix.lang == 'java' }}
+        uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21" }
+      - if: ${{ matrix.lang == 'dotnet' }}
+        uses: actions/setup-dotnet@v5
         with: { dotnet-version: "10.0.x" }
+      - if: ${{ matrix.lang == 'lua' }}
+        name: Install LuaJIT
+        run: if [ "$RUNNER_OS" = "macOS" ]; then brew install luajit; else sudo apt-get update && sudo apt-get install -y luajit; fi
       - uses: actions/download-artifact@v5
         with: { name: native-all, path: build/dist/native }
-      - name: Build the nupkg (AsmTest.dll + runtimes/<rid>/native)
-        run: make dotnet-package
-      - name: Install fresh + smoke (self-contained native via RID, no ASMTEST_LIB, no system deps)
+      - name: Build the ${{ matrix.lang }} package
+        run: make ${{ matrix.lang }}-package
+      - name: Install fresh + smoke (self-contained native, no ASMTEST_LIB, no system deps)
+        run: ${{ matrix.smoke }}
+      # Real registry publish: tag builds only, once from Linux, and only when the
+      # matching token secret is present (so forks/dry-runs no-op). lua + java have
+      # no registry here, so they fall through.
+      - name: Publish to the registry (only with a token; once, from Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') }}
         run: |
-          cd /tmp && dotnet new console -o app && cd app
-          dotnet nuget add source "$GITHUB_WORKSPACE/build/dist/dotnet" -n local
-          dotnet add app.csproj package AsmTest --version 1.0.0
-          printf 'using Asmtest; class P { static void Main(){ if(!Emu.DisasAvailable) throw new System.Exception("disassembler tier not available from the self-contained nupkg"); System.Console.WriteLine("dotnet ok: disas available"); } }' > Program.cs
-          dotnet run
-      - name: Publish to NuGet (only with a token; once, from Linux)
-        if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') && env.NUGET_API_KEY != '' }}
-        run: dotnet nuget push build/dist/dotnet/*.nupkg -k "$NUGET_API_KEY" -s https://api.nuget.org/v3/index.json --skip-duplicate
+          case "${{ matrix.lang }}" in
+            node)
+              [ -n "$NPM_TOKEN" ] || { echo "no NPM_TOKEN; skip"; exit 0; }
+              cd bindings/node && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc && npm publish ;;
+            ruby)
+              [ -n "$RUBYGEMS_API_KEY" ] || { echo "no RUBYGEMS_API_KEY; skip"; exit 0; }
+              GEM_HOST_API_KEY="$RUBYGEMS_API_KEY" gem push build/dist/ruby/asmtest-*.gem ;;
+            dotnet)
+              [ -n "$NUGET_API_KEY" ] || { echo "no NUGET_API_KEY; skip"; exit 0; }
+              dotnet nuget push build/dist/dotnet/*.nupkg -k "$NUGET_API_KEY" -s https://api.nuget.org/v3/index.json --skip-duplicate ;;
+            *) echo "no registry publish for ${{ matrix.lang }}" ;;
+          esac
 
   # ---- Link bindings (source dists) ----------------------------------------- #
   # These ship source, not a prebuilt binary: the consumer links/builds the

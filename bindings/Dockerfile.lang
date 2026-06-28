@@ -1,0 +1,24 @@
+# Generic per-language binding image (Tracks P/R/X/Z/N/J/D/C). One file drives
+# every language: the Makefile's docker-<lang> rule passes
+#   APT_PKGS  extra distro packages to install (empty for header-only C++)
+#   SETUP     an extra shell snippet run after apt (e.g. `npm install -g koffi`,
+#             or the Zig tarball fetch); empty = no-op
+#   TARGET    the make target stem — CMD runs `make <TARGET>-test`
+# Toolchains still never mix: each language builds its OWN image on the shared
+# base. Runtime-only env (NODE_PATH, GO*, DOTNET_*) is passed by `docker run -e`
+# from the Makefile, not baked here. Build context = repo root.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+ARG APT_PKGS=""
+ARG SETUP=""
+ARG TARGET
+ENV TARGET=${TARGET}
+RUN if [ -n "$APT_PKGS" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends $APT_PKGS \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi \
+ && if [ -n "$SETUP" ]; then sh -eux -c "$SETUP"; fi
+COPY . .
+CMD make ${TARGET}-test

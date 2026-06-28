@@ -197,8 +197,8 @@ jobs:
         run: make asm-test
 
   # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
-  # container (bindings/<lang>/Dockerfile on a shared base) so the toolchains stay
-  # isolated — one matrix job per language, each running `make docker-<lang>`,
+  # container (the generic bindings/Dockerfile.lang on a shared base) so the
+  # toolchains stay isolated — one matrix job per language, `make docker-<lang>`,
   # which builds the per-language image and replays the conformance corpus inside
   # it. The shared base carries the full native tier (libunicorn + Keystone +
   # Capstone) because libasmtest_emu is the superset, so each job exercises the
