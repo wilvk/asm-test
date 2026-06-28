@@ -47,6 +47,24 @@ if (e.asmAvailable()) {
 }
 ```
 
+## Native tracing (DynamoRIO, optional)
+
+[`drtrace.js`](drtrace.js) is the Node counterpart to the Python
+`asmtest.drtrace`: in-process native runtime tracing backed by DynamoRIO. Where
+the emulator tier traces isolated guest bytes, `NativeTrace` traces host-native
+code as it runs inside this Node process — materialize machine code with
+`NativeCode.fromBytes`, mark a region, call into it, and read back basic-block
+coverage / the instruction stream. It loads `libasmtest_drapp` (via the existing
+`koffi` dependency) from `ASMTEST_DRAPP_LIB` (else `../../build/`), and invokes
+the generated code through a koffi function-pointer prototype.
+
+The tier is Linux-x86-64-only and requires a DynamoRIO build, so
+`NativeTrace.available()` self-skips cleanly when the lib can't load or
+`libdynamorio` is absent. [`test_drtrace.js`](test_drtrace.js) is a standalone
+runner (`node test_drtrace.js`) that prints `SKIP: ...` and exits 0 unless the
+tier is built and DynamoRIO is resolvable (`ASMTEST_DRAPP_LIB` +
+`ASMTEST_DRCLIENT`).
+
 ## Deferred
 
 A published npm package with prebuilt binaries (and `vitest`/`jest` integration

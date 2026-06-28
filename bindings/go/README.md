@@ -54,6 +54,42 @@ if asmtest.AsmAvailable() {
 }
 ```
 
+## Native trace (DynamoRIO, optional)
+
+[`drtrace.go`](drtrace.go) mirrors the Python wrapper
+(`bindings/python/asmtest/drtrace.py`): where the emulator traces isolated guest
+bytes, `NativeTrace` traces host-native code as it runs **inside this Go process**
+under DynamoRIO. The tier lives in a separate lib, `libasmtest_drapp`, which is
+built only when DynamoRIO is present — so, exactly like the in-line assembler
+above, this file does **not** link it. It `dlopen`s the lib at run time (from
+`$ASMTEST_DRAPP_LIB`, else `<repo>/build/libasmtest_drapp.so`) and `dlsym`s the
+entry points; if the lib (or `libdynamorio` inside it) can't be resolved,
+`NativeTraceAvailable()` returns false and callers self-skip. Linux x86-64 only.
+
+```go
+if asmtest.NativeTraceAvailable() {
+    // client="" -> NULL -> the C side reads $ASMTEST_DRCLIENT.
+    if err := asmtest.NativeTraceInitializeDefault(); err == nil {
+        defer asmtest.NativeTraceShutdown()
+        // mov rax,rdi; add rax,rsi; ret
+        code, _ := asmtest.NativeCodeFromBytes([]byte{0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3})
+        defer code.Free()
+        tr := asmtest.NewNativeTrace(64, 0) // blocks=64, instructions=0
+        defer tr.Free()
+        tr.Register("add", code)
+        var r int64
+        tr.Region("add", func() { r = code.Call(20, 22) }) // Begin/End balanced
+        _ = r              // 42
+        _ = tr.Covered(0)  // entry block entered
+        tr.Unregister("add")
+    }
+}
+```
+
+The `make docker-drtrace` lane runs the C + Python tiers in a DynamoRIO container;
+[`drtrace_test.go`](drtrace_test.go) self-skips wherever DynamoRIO is absent (so
+it never fails on AMD hosts, VMs, or standard CI).
+
 ## Deferred
 
 A published Go module (with the native libs bundled per platform) is future work;

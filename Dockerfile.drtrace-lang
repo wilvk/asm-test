@@ -1,0 +1,46 @@
+# Dockerfile.drtrace-lang — per-language native-trace (DynamoRIO) test image.
+#
+# Layers DynamoRIO onto an already-built per-language binding image
+# (asmtest-<lang>, from bindings/Dockerfile.lang) so that binding's
+# `make drtrace-<lang>-test` runs against a real in-process DynamoRIO. The base
+# already carries that one language's toolchain plus the emulator/assembler/
+# disassembler deps (libasmtest_emu is the superset), so this image only adds the
+# DynamoRIO runtime and a fresh copy of the sources. It is the cross-language
+# counterpart of Dockerfile.drtrace (which runs the C smoke + Python suite).
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine, so it runs on Intel and
+# AMD alike (the hardware-trace tier needs bare-metal Intel PT and is not
+# containerizable — see docs/native-tracing.md). Build context = repo root.
+#
+# Driven by `make docker-drtrace-<lang>` / `make docker-drtrace-bindings`.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG TARGET
+ENV TARGET=${TARGET}
+
+# Pin a DynamoRIO release (curl ships in the bindings base). Kept as the first
+# layer so the ~150 MB download stays cached across rebuilds. Override
+# DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+# The DR client is CMake-built and the drapp lib needs a C toolchain. A fresh
+# bindings base carries both, but install them here too so the lane is robust to
+# an older cached base image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential cmake \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Self-skips cleanly if DynamoRIO were absent; here it is installed, so the
+# wrapper initializes DynamoRIO and traces for real.
+CMD make drtrace-${TARGET}-test DYNAMORIO_HOME=$DYNAMORIO_HOME

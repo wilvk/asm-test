@@ -74,6 +74,7 @@ help:
 	@echo ''
 	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
 	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
+	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: Intel PT / ARM CoreSight (bare metal)'
 	@echo ''
 	@echo 'Packaging & install:'
@@ -106,6 +107,7 @@ help:
 	@echo '  docker-bindings            build + run every language image'
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
+	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
 	@echo ''
 	@echo 'Native Win64 (cross-compile + Wine):'
 	@echo '  win64-check     substrate smoke + capture + runner-port slices'
@@ -558,6 +560,10 @@ docker-clean:
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
 BINDING_LANGS := python cpp rust zig node java dotnet ruby lua go
+# Bindings that ship a DynamoRIO native-trace wrapper test (Python has its own
+# drtrace-python-test lane). Defined here so both the docker-drtrace-<lang> rules
+# below and the drtrace-<lang>-test rules further down can see it.
+DRTRACE_BINDING_LANGS := cpp rust go node java dotnet ruby lua zig
 
 # Per-language knobs for the generic image (bindings/Dockerfile.lang):
 #   DOCKER_APT_<lang>    extra distro packages (C++ is header-only -> none)
@@ -618,6 +624,27 @@ docker-drtrace:
 	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
 	  -t asmtest-drtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drtrace
+
+# Per-language native-trace lane: layer DynamoRIO onto each already-built
+# per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
+# against a real in-process DynamoRIO — the cross-language counterpart of
+# docker-drtrace's C+Python run.
+#   make docker-drtrace-bindings   every language wrapper, in Docker
+#   make docker-drtrace-<lang>     just one (e.g. docker-drtrace-rust)
+.PHONY: docker-drtrace-bindings \
+        $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
+
+define docker_drtrace_lang_rule
+docker-drtrace-$(1): docker-$(1)
+	$$(DOCKER) build $$(_docker_plat) -f Dockerfile.drtrace-lang \
+	  --build-arg BASE_IMAGE=asmtest-$(1) \
+	  --build-arg DR_VERSION=$$(DR_VERSION) \
+	  --build-arg TARGET=$(1) -t asmtest-drtrace-$(1) .
+	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-drtrace-$(1)
+endef
+$(foreach L,$(DRTRACE_BINDING_LANGS),$(eval $(call docker_drtrace_lang_rule,$(L))))
+
+docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND
@@ -1005,7 +1032,14 @@ endif
 
 # Keystone lets the host-native exec path assemble text (asm_exec_native);
 # without it that one entry point returns ASMTEST_DR_ENOSYS and the rest works.
-ifeq ($(shell pkg-config --exists keystone 2>/dev/null && echo 1),1)
+# DRAPP_KEYSTONE=0 forces it off even when Keystone is installed: assemble.o also
+# carries the emulator's in-line-assembler bridges (emu_*_call_asm), whose emu_*_call
+# targets are NOT linked into the standalone libasmtest_drapp, so a Keystone-enabled
+# drapp .so has unresolved emu symbols and won't dlopen. The language-wrapper test
+# lanes exercise only the raw-bytes path (asmtest_exec_alloc), so they build drapp
+# Keystone-less and stay loadable.
+DRAPP_KEYSTONE ?= 1
+ifeq ($(DRAPP_KEYSTONE)$(shell pkg-config --exists keystone 2>/dev/null && echo 1),11)
 DRAPP_KS_DEF     := -DASMTEST_HAVE_KEYSTONE
 DRAPP_KS_OBJ     := $(BUILD)/assemble.o
 DRAPP_KS_PIC_OBJ := $(BUILD)/pic/assemble.o
@@ -1131,13 +1165,148 @@ ifndef DR_AVAILABLE
 	@echo "== drtrace-python-test =="
 	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
 else
-	@$(MAKE) shared-drtrace drtrace-client
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-python-test =="
+	@# One DR lifecycle per process (in-process re-attach is unreliable), so run
+	@# each native-trace test file as its OWN pytest invocation.
 	cd bindings/python && \
-	  ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
-	  ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
-	  ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
-	  python3 -m pytest tests/test_drtrace.py -v
+	  export ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
+	         ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+	         ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) && \
+	  python3 -m pytest tests/test_drtrace.py -v && \
+	  python3 -m pytest tests/test_drgate.py -v
+endif
+
+# Per-language native-trace wrappers (parity with drtrace-python-test). Every
+# binding ships a `drtrace` wrapper that dlopens libasmtest_drapp at run time and
+# self-skips when DynamoRIO is absent, so these targets degrade to a SKIP message
+# off a DynamoRIO host exactly like the C and Python lanes. Each builds the app
+# lib + DR client, then runs that binding's standalone drtrace test with the lib
+# paths wired up. rust/go additionally link libasmtest_emu (their wrapper lives in
+# the same crate/package), so they also build shared-emu + the corpus lib; the
+# dlopen-only bindings (cpp/node/java/dotnet/ruby/lua/zig) need neither.
+# DRTRACE_BINDING_LANGS is defined up in the Docker section (used by both lanes).
+
+# Env every binding wrapper reads to find the app lib, the DR client, and (for the
+# app's lazy dlopen) libdynamorio. Mirrors the drtrace-python-test recipe.
+drtrace_env = ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
+              ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+              ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+              LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH"
+
+# $(call drtrace_skip,<lang>) — the shared "DynamoRIO absent" SKIP message body.
+define drtrace_skip
+	@echo "== drtrace-$(1)-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+endef
+
+# $(call drtrace_run,<shell command>) — run a wrapper's drtrace test, but downgrade
+# DynamoRIO's "can't take over a multi-threaded runtime" abort to a SKIP. In-process
+# DynamoRIO can't reliably seize a JIT/GC runtime's background threads, so Node, .NET
+# and (intermittently) the JVM are best-effort — the Intel PT backend is the path
+# there (docs/native-tracing.md). Verified live on cpp/ruby/java/lua/zig/rust/go.
+# Any OTHER nonzero exit (a real failure) still propagates.
+define drtrace_run
+	@out=$$($(1) 2>&1); rc=$$?; printf '%s\n' "$$out"; \
+	if [ $$rc -ne 0 ] && printf '%s' "$$out" | grep -q "Failed to take over all threads"; then \
+	  echo "# SKIP: in-process DynamoRIO can't take over this runtime's threads (best-effort; prefer the Intel PT backend — docs/native-tracing.md)"; \
+	elif [ $$rc -ne 0 ]; then exit $$rc; fi
+endef
+
+.PHONY: drtrace-bindings-test $(addprefix drtrace-,$(addsuffix -test,$(DRTRACE_BINDING_LANGS)))
+
+# Run every language wrapper's native-trace test (plus the Python lane).
+drtrace-bindings-test: drtrace-python-test \
+	$(addprefix drtrace-,$(addsuffix -test,$(DRTRACE_BINDING_LANGS)))
+
+drtrace-cpp-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,cpp)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-cpp-test =="
+	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_drtrace.cpp -ldl -o $(BUILD)/test_drtrace_cpp
+	$(drtrace_env) ./$(BUILD)/test_drtrace_cpp
+endif
+
+drtrace-rust-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,rust)
+else
+	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-rust-test =="
+	cd bindings/rust && ASMTEST_LIB_DIR=$(abspath $(BUILD)) $(drtrace_env) \
+	  $(CARGO) test --test drtrace -- --nocapture
+endif
+
+drtrace-go-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,go)
+else
+	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-go-test =="
+	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" CGO_CFLAGS="-I$(abspath include)" \
+	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) $(drtrace_env) \
+	  $(GO) test -run TestDrtrace ./...
+endif
+
+drtrace-node-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,node)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-node-test =="
+	$(call drtrace_run,cd bindings/node && $(drtrace_env) $(NODE) test_drtrace.js)
+endif
+
+drtrace-java-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,java)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-java-test =="
+	mkdir -p $(BUILD)/java-drtrace
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-drtrace \
+	  bindings/java/DrTrace.java bindings/java/DrTraceTest.java
+	$(call drtrace_run,$(drtrace_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-drtrace DrTraceTest)
+endif
+
+drtrace-dotnet-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,dotnet)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-dotnet-test =="
+	$(call drtrace_run,$(drtrace_env) $(DOTNET) run --project bindings/dotnet/drtrace/drtrace.csproj)
+endif
+
+drtrace-ruby-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,ruby)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-ruby-test =="
+	cd bindings/ruby && $(drtrace_env) $(RUBY) test_drtrace.rb
+endif
+
+drtrace-lua-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,lua)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-lua-test =="
+	cd bindings/lua && $(drtrace_env) $(LUAJIT) test_drtrace.lua
+endif
+
+drtrace-zig-test:
+ifndef DR_AVAILABLE
+	$(call drtrace_skip,zig)
+else
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@echo "== drtrace-zig-test =="
+	cd bindings/zig && $(drtrace_env) \
+	  $(ZIG) build drtrace-test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 endif
 
 # PIC variants + the standalone shared lib (never linked by core/superset).

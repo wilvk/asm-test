@@ -140,9 +140,48 @@ opt-in per trace: allocate the trace with `insns_cap > 0`
 offset. It is heavier; treat it as diagnostic rather than the default coverage
 path.
 
-### Language wrapper (Python)
+### Language wrappers
 
-The `asmtest.drtrace` module wraps the C API. Build the libraries
+**Every** binding ships a native-trace wrapper exposing the **same** small
+surface: a process-wide `NativeTrace` lifecycle (`available`, `initialize`,
+`shutdown`, `marker_error`), per-trace recorders (`register`, a scoped begin/end
+`region`, `covered`, block/instruction totals), and a `NativeCode` for
+materializing host-native bytes and calling into them. Each wrapper **dlopens
+`libasmtest_drapp` at run time** (resolved from `$ASMTEST_DRAPP_LIB`, else the
+repo's `build/`) and reads `$ASMTEST_DRCLIENT` for the client `.so`, so the core
+binding never link-depends on DynamoRIO and `available()` returns false — a clean
+self-skip — wherever the tier isn't built.
+
+| Language | Wrapper module / header | Test target |
+|---|---|---|
+| Python | `asmtest.drtrace` | `drtrace-python-test` |
+| C++ | `bindings/cpp/asmtest_drtrace.hpp` (`asmtest::NativeTrace`) | `drtrace-cpp-test` |
+| Rust | `asmtest::drtrace` | `drtrace-rust-test` |
+| Go | `asmtest` (`drtrace.go`) | `drtrace-go-test` |
+| Node | `bindings/node/drtrace.js` | `drtrace-node-test` |
+| Java | `DrTrace` (Panama FFM) | `drtrace-java-test` |
+| .NET | `Asmtest.DrTrace` / `Asmtest.NativeTrace` | `drtrace-dotnet-test` |
+| Ruby | `Asmtest::DrTrace` | `drtrace-ruby-test` |
+| Lua | `bindings/lua/drtrace.lua` | `drtrace-lua-test` |
+| Zig | `bindings/zig/src/drtrace.zig` | `drtrace-zig-test` |
+
+The surfaces are deliberately idiomatic per language (RAII scope guards in C++ /
+Rust, a `region(name, fn)` callback in Go / Node / Lua, `try`/`finally` markers
+in Java / .NET, a `region {}` block in Ruby) but map one-to-one onto the same C
+entry points. A few names dodge language keywords — Ruby uses
+`NativeTrace.start`/`.create` (`initialize`/`new` are reserved) and C++ uses
+`create` (not `new`).
+
+All ten wrappers are verified against a **real in-process DynamoRIO** in Docker
+(`make docker-drtrace-bindings`). The C++, Ruby, Java, Lua, Zig, Rust, and Go
+lanes trace live and assert coverage; **Node and .NET self-skip** there, because
+in-process DynamoRIO can't take over a JIT/GC runtime's background threads
+(`dr_app_start` aborts with *"Failed to take over all threads"*). That is the
+[managed-runtime](#language-runtimes) limitation — the wrappers themselves are
+complete and identical in surface; the recommended backend for Node/.NET (and a
+flaky JVM) is hardware-trace (Intel PT), which observes out-of-band.
+
+Python is the canonical reference. Build the libraries
 (`make shared-drtrace drtrace-client DYNAMORIO_HOME=...`) and point the env at
 them (`ASMTEST_DRCLIENT`, and `ASMTEST_DR_LIB` or `dynamorio_home=`):
 
@@ -161,18 +200,20 @@ if NativeTrace.available():
     NativeTrace.shutdown()
 ```
 
-`make drtrace-python-test DYNAMORIO_HOME=...` runs the pytest suite, and
-`make docker-drtrace` runs both the C smoke test and the Python suite inside a
-container with DynamoRIO installed. The module name is `asmtest.drtrace` (not
-`asmtest.native`, which would collide with the private ctypes loader
-`asmtest._native`).
+`make drtrace-<lang>-test DYNAMORIO_HOME=...` runs one binding's wrapper suite and
+`make drtrace-bindings-test` runs them all. The Python module is named
+`asmtest.drtrace` (not `asmtest.native`, which would collide with the private
+ctypes loader `asmtest._native`).
 
 ### Running the tests
 
 ```sh
 make drtrace-test DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>   # C smoke
 make drtrace-python-test DYNAMORIO_HOME=/path/to/DynamoRIO        # Python wrapper
-make docker-drtrace                                               # both, in Docker
+make drtrace-rust-test   DYNAMORIO_HOME=/path/to/DynamoRIO        # one binding (any of the langs)
+make drtrace-bindings-test DYNAMORIO_HOME=/path/to/DynamoRIO      # every language wrapper
+make docker-drtrace                                              # C + Python, in Docker
+make docker-drtrace-bindings                                     # every language wrapper, in Docker
 ```
 
 Without `DYNAMORIO_HOME` every target self-skips with a clear message. The native

@@ -54,6 +54,46 @@ e.call_asm(src, {10, 20, 12}, ASM_SYNTAX_ATT, /*max_insns=*/0);
 std::vector<std::uint8_t> a64 = assemble("ret", ASM_ARM64);
 ```
 
+## Native-trace wrapper (DynamoRIO)
+
+[`asmtest_drtrace.hpp`](asmtest_drtrace.hpp) is a separate header-only wrapper for
+the optional in-process DynamoRIO native-trace tier (see
+`include/asmtest_drtrace.h`), mirroring the Python `asmtest.drtrace` surface.
+Where `asmtest::Trace` traces isolated *guest* bytes, `asmtest::NativeTrace`
+traces *host-native* code as it runs inside this process.
+
+Unlike `asmtest.hpp`, it links nothing at build time: it `dlopen`s
+`libasmtest_drapp.so` at runtime (resolved via `$ASMTEST_DRAPP_LIB`, else
+`<repo>/build/libasmtest_drapp.so`) and `dlsym`s the C API — so it builds even
+when DynamoRIO is absent. `NativeTrace::available()` reports whether the tier can
+actually run, so callers self-skip cleanly. Link only `-ldl`.
+
+```cpp
+#include "asmtest_drtrace.hpp"
+using namespace asmtest;
+
+if (!NativeTrace::available()) return 0;   // self-skip; no DynamoRIO present
+NativeTrace::initialize();                 // dr_init + dr_start (throws on error)
+NativeCode code = NativeCode::from_bytes(routine_bytes);
+NativeTrace tr = NativeTrace::create(64);  // 64 block slots (add 2nd arg for insns)
+tr.register_region("add", code);
+{
+    auto scope = tr.region("add");         // RAII begin/end markers
+    long r = code.call(20, 22);            // call the host-native code (SysV ABI)
+}
+bool hit = tr.covered(0);                  // entry block reached?
+NativeTrace::shutdown();
+```
+
+[`test_drtrace.cpp`](test_drtrace.cpp) is a standalone smoke test (a plain
+`int main()`) mirroring the Python suite; it self-skips with a `SKIP:` line when
+the tier is unavailable. Build it directly:
+
+```sh
+g++ -std=c++17 -I include bindings/cpp/test_drtrace.cpp -ldl -o test_drtrace
+ASMTEST_DRAPP_LIB=$PWD/build/libasmtest_drapp.so ./test_drtrace
+```
+
 ## Consuming it
 
 Link the framework like any C consumer — via pkg-config:

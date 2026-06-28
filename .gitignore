@@ -33,6 +33,8 @@ bindings/node/node_modules/
 bindings/node/package-lock.json
 bindings/dotnet/bin/
 bindings/dotnet/obj/
+bindings/dotnet/**/bin/
+bindings/dotnet/**/obj/
 
 # Java binding artifacts (Maven)
 bindings/java/target/

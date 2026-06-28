@@ -42,4 +42,27 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run the conformance tests");
     test_step.dependOn(&run_tests.step);
+
+    // DynamoRIO native-trace smoke test (Track Z). A SEPARATE step so it does
+    // NOT break `zig build test`: it must not link libasmtest_drapp at build
+    // time (that lib needs DynamoRIO and may be absent). It dlopen()s the lib at
+    // runtime via std.DynLib and self-skips when it can't load. It still needs
+    // the include dir so `@cImport("asmtest_drtrace.h")` can translate the
+    // option/exec-code struct *types* (and the asmtest_trace.h it includes), and
+    // libC for std.DynLib / posix. No addLibraryPath / linkSystemLibrary.
+    const drtrace_exe = b.addExecutable(.{
+        .name = "drtrace-test",
+        .root_source_file = b.path("src/drtrace_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    drtrace_exe.linkLibC();
+    drtrace_exe.addIncludePath(.{ .cwd_relative = incdir });
+
+    const run_drtrace = b.addRunArtifact(drtrace_exe);
+    // Forward the parent environment (ASMTEST_DRAPP_LIB / ASMTEST_DRCLIENT /
+    // DYNAMORIO_HOME / ASMTEST_DR_LIB) so the runtime dlopen + DR config see it.
+    if (b.args) |args| run_drtrace.addArgs(args);
+    const drtrace_step = b.step("drtrace-test", "Run the DynamoRIO native-trace smoke test (self-skips if unavailable)");
+    drtrace_step.dependOn(&run_drtrace.step);
 }

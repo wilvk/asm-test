@@ -64,6 +64,44 @@ lib, then runs `zig build test`, which compiles
 in Zig — and links the libraries. [`build.zig`](build.zig) targets Zig 0.13.x and
 takes `-Dincdir=` / `-Dlibdir=` to locate the headers and shared libs.
 
+## DynamoRIO native-trace tier (optional)
+
+[`src/drtrace.zig`](src/drtrace.zig) mirrors the Python `asmtest.drtrace`
+wrapper: trace **host-native** code as it runs in-process via DynamoRIO. Unlike
+the rest of the binding, it does **not** link `libasmtest_drapp` (that lib needs
+DynamoRIO and may be absent) — it `dlopen()`s the lib at runtime with
+`std.DynLib`, resolving the path from `$ASMTEST_DRAPP_LIB` (else
+`<repo>/build/libasmtest_drapp.so`). `drtrace.available()` self-skips cleanly
+when the tier can't run.
+
+```zig
+const drtrace = @import("drtrace.zig");
+if (!drtrace.available()) return;          // self-skip
+try drtrace.initializeDefault();           // null client -> $ASMTEST_DRCLIENT
+defer drtrace.shutdown();
+var code = try drtrace.NativeCode.fromBytes(&bytes);
+var tr = try drtrace.NativeTrace.create(64, 0); // (blocks, instructions)
+try tr.register("add", &code);
+tr.begin("add"); const r = code.call(20, 22); tr.end("add"); // r == 42
+_ = tr.covered(0); _ = tr.blocksLen();
+```
+
+The smoke test [`src/drtrace_test.zig`](src/drtrace_test.zig) (the Zig analogue
+of `tests/test_drtrace.py`) is a **separate** build step — it never links the
+drapp lib, so it can't break `zig build test`:
+
+```sh
+cd bindings/zig
+ASMTEST_DRAPP_LIB=$PWD/../../build/libasmtest_drapp.so \
+ASMTEST_DRCLIENT=$PWD/../../build/libasmtest_drclient.so \
+  zig build drtrace-test -Dincdir=$PWD/../../include
+# or, equivalently, as a standalone:
+#   zig run src/drtrace_test.zig -lc -I$PWD/../../include
+```
+
+It prints `SKIP: ...` (exit 0) when the tier is unavailable and `PASS` on
+success. The `make docker-drtrace` lane builds the lib + client in a container.
+
 ## Deferred
 
 A published Zig package (`build.zig.zon` + module export for `@import("asmtest")`)

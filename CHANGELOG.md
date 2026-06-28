@@ -19,11 +19,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     enforced lifecycle state machine, begin/end region markers, basic-block and
     instruction coverage, and host-native W^X executable-memory allocation
     (`asmtest_exec_alloc` / `asmtest_asm_exec_native`). Uses DynamoRIO's BSD core
-    API only — no drmgr/drwrap, so no LGPL-2.1 obligation. Python wrapper
-    `asmtest.drtrace` (`NativeTrace`/`NativeCode`). Targets `drtrace-test`,
-    `shared-drtrace`, `drtrace-client`, `drtrace-python-test`, `docker-drtrace`
-    (a container lane with DynamoRIO installed). Gated on `DYNAMORIO_HOME`;
-    self-skips when absent. Linux x86-64.
+    API only — no drmgr/drwrap, so no LGPL-2.1 obligation. Native-trace wrappers
+    for **every** language binding — Python (`asmtest.drtrace`), C++, Rust, Go,
+    Node, Java, .NET, Ruby, Lua, and Zig — each exposing the same
+    `NativeTrace`/`NativeCode` surface and dlopen-loading `libasmtest_drapp` at
+    run time, so the core binding never link-depends on DynamoRIO and each wrapper
+    self-skips (`available()` → false) when the tier is absent. Targets
+    `drtrace-test`, `shared-drtrace`, `drtrace-client`, `drtrace-<lang>-test`,
+    `drtrace-bindings-test`, `docker-drtrace`, and `docker-drtrace-bindings`
+    (container lanes with DynamoRIO installed). Gated on `DYNAMORIO_HOME`;
+    self-skips when absent. All wrappers are verified against a real in-process
+    DynamoRIO in Docker: C++/Ruby/Java/Lua/Zig/Rust/Go trace live; Node and .NET
+    self-skip there (in-process DynamoRIO can't take over a JIT/GC runtime's
+    threads — the managed-runtime limitation, where Intel PT is the recommended
+    backend). Linux x86-64.
   - **Hardware-trace tier** (`asmtest_hwtrace.h`, `libasmtest_hwtrace`): Intel PT
     capture via `perf_event_open` + libipt decode with branch-boundary block
     normalization; ARM CoreSight (OpenCSD) scaffold. `asmtest_hwtrace_available()`

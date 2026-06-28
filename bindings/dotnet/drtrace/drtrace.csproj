@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runnable smoke test for the DynamoRIO native-trace wrapper (DrTrace.cs),
+       mirroring bindings/python/tests/test_drtrace.py. A dependency-free console
+       app: P/Invoke over libasmtest_drapp, no NuGet packages, so `dotnet run`
+       works offline. Self-skips (prints SKIP, exit 0) when the tier is not built
+       / DynamoRIO is unavailable.
+
+       EnableDefaultCompileItems=false + explicit Compile includes so this project
+       never globs the sibling binding sources — and, symmetrically, asmtest.csproj
+       excludes this drtrace/ subtree (one <Compile Remove> there) so the two never
+       glob-collide. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>drtrace</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The reusable wrapper module lives one level up, next to Asmtest.cs. -->
+    <Compile Include="DrTrace.cs" />
+    <Compile Include="DrTraceProgram.cs" />
+  </ItemGroup>
+
+</Project>

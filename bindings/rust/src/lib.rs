@@ -21,6 +21,10 @@
 
 use std::os::raw::{c_char, c_int, c_long, c_void};
 
+/// Optional in-process DynamoRIO native-trace tier (`libasmtest_drapp`, loaded at
+/// run time; self-skips when DynamoRIO is absent). See [`drtrace::NativeTrace`].
+pub mod drtrace;
+
 /// One 128-bit vector register, several lane views (mirrors `vec128_t`).
 #[repr(C)]
 #[derive(Clone, Copy)]

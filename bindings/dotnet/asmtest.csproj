@@ -12,4 +12,11 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <!-- The native-trace smoke test is its own project (drtrace/drtrace.csproj);
+       exclude its sources from this app's default glob so the two never
+       glob-collide (a second Main). -->
+  <ItemGroup>
+    <Compile Remove="drtrace/**/*.cs" />
+  </ItemGroup>
+
 </Project>

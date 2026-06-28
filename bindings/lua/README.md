@@ -44,6 +44,35 @@ if e:asm_available() then
 end
 ```
 
+## Native tracing (DynamoRIO, optional)
+
+[`drtrace.lua`](drtrace.lua) is the Lua mirror of Python's `asmtest.drtrace`: it
+traces **host-native** code as it runs inside this LuaJIT process, backed by the
+optional DynamoRIO tier. It loads `libasmtest_drapp` (from `ASMTEST_DRAPP_LIB`,
+else `<repo>/build/`) and returns `NativeTrace` / `NativeCode`. The tier is
+advanced, Linux-x86-64-only, and opt-in; `NativeTrace.available()` self-skips
+cleanly when it can't run (no DynamoRIO / lib absent).
+
+```lua
+local drtrace = require("drtrace")
+if drtrace.NativeTrace.available() then
+  drtrace.NativeTrace.initialize{ client = "./build/libasmtest_drclient.so" }
+  local code = drtrace.NativeCode.from_bytes("\x48\x89\xf8\x48\x01\xf0\xc3")  -- mov rax,rdi; add rax,rsi; ret
+  local tr = drtrace.NativeTrace.new(64)
+  tr:register("add", code)
+  local r; tr:region("add", function() r = code:call(20, 22) end)  -- r == 42, tr:covered(0)
+  drtrace.NativeTrace.shutdown()
+end
+```
+
+[`test_drtrace.lua`](test_drtrace.lua) is the standalone test (mirrors
+`tests/test_drtrace.py`); it self-skips (`SKIP: ...`, exit 0) when the tier is
+unavailable:
+
+```sh
+ASMTEST_DRAPP_LIB=../../build/libasmtest_drapp.so luajit test_drtrace.lua
+```
+
 ## Deferred
 
 A published LuaRocks rock (and `busted` integration of the `assert_*` helpers) is

@@ -65,6 +65,31 @@ if (Corpus.Available)
 }
 ```
 
+## Native tracing (DynamoRIO, optional)
+
+The peer of the emulator tier for tracing **host-native** code as it runs *inside
+this .NET process*, backed by DynamoRIO. The wrapper is
+[`drtrace/DrTrace.cs`](drtrace/DrTrace.cs) — `DrTrace.Available()` /
+`Initialize()` / `Shutdown()` plus `NativeCode` (executable W^X memory) and
+`NativeTrace` (block coverage + an ordered instruction stream). It loads
+`libasmtest_drapp` via a `DllImportResolver`: `ASMTEST_DRAPP_LIB` →
+`<repo>/build/libasmtest_drapp.so` → by soname. Advanced, Linux-x86-64-only,
+opt-in — `DrTrace.Available()` is false (never throws) when the lib is absent or
+DynamoRIO is unresolvable, so callers self-skip.
+
+The runnable smoke test mirrors `bindings/python/tests/test_drtrace.py`; it
+self-skips (prints `SKIP`, exits 0) without DynamoRIO:
+
+```sh
+# from the repo root
+ASMTEST_DRAPP_LIB=$PWD/build/libasmtest_drapp.so \
+  dotnet run --project bindings/dotnet/drtrace/drtrace.csproj
+```
+
+It is its own project (`drtrace/drtrace.csproj`, `EnableDefaultCompileItems=false`
++ explicit `Compile` includes) and `asmtest.csproj` excludes the `drtrace/`
+subtree (one `<Compile Remove>`), so the two never glob-collide.
+
 ## Deferred
 
 A published NuGet package with `runtimes/<rid>/native/` payloads, a

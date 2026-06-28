@@ -46,6 +46,34 @@ end
 bytes = Asmtest.assemble("ret", arch: Asmtest::ARCH[:arm64])
 ```
 
+## Native-trace tier (DynamoRIO, optional)
+
+[`drtrace.rb`](drtrace.rb) mirrors the Python `asmtest.drtrace`: in-process tracing
+of **host-native** code via DynamoRIO. It loads a *separate* shared object,
+`libasmtest_drapp` (env `ASMTEST_DRAPP_LIB`, else `<repo>/build/libasmtest_drapp.so`),
+which dlopen()s `libdynamorio` lazily — so nothing here links DynamoRIO. The tier is
+Linux-x86-64-only and opt-in; `NativeTrace.available?` returns false (no raise) when
+the lib can't load or DynamoRIO is absent.
+
+```ruby
+require_relative "drtrace"
+NT = Asmtest::DrTrace::NativeTrace
+next unless NT.available?
+NT.start(client: "./build/libasmtest_drclient.so", dynamorio_home: "/opt/DynamoRIO")
+code = Asmtest::DrTrace::NativeCode.from_bytes([0x48,0x89,0xF8,0x48,0x01,0xF0,0xC3].pack("C*"))
+tr = NT.create(blocks: 64, instructions: 0)   # NOTE: create, not new (handle is from C)
+tr.register("add", code)
+tr.region("add") { @r = code.call(20, 22) }    # begin/yield/ensure-end; markers stay balanced
+raise unless @r == 42 && tr.covered?(0)
+tr.unregister("add"); code.free; tr.free; NT.shutdown
+```
+
+The lifecycle entry point is `NativeTrace.start` (not `initialize`, which Ruby
+reserves) and a trace is allocated with `NativeTrace.create` (not `new`, since the
+handle comes from C). [`test_drtrace.rb`](test_drtrace.rb) is a standalone smoke test
+(`ruby test_drtrace.rb`) that self-skips (`SKIP: ...`, exit 0) when the tier is
+unavailable.
+
 ## Deferred
 
 A published gem (and RSpec/minitest integration of the `assert_*` helpers) is

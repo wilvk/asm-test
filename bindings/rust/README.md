@@ -61,6 +61,35 @@ if asmtest::asm_available() {
 }
 ```
 
+## Native tracing (DynamoRIO, optional)
+
+[`drtrace::NativeTrace`](src/drtrace.rs) traces **host-native** code as it runs
+in-process, backed by DynamoRIO — the parallel of the Python `asmtest.drtrace`
+surface. It links nothing: `libasmtest_drapp` needs DynamoRIO and may be absent,
+so (like the in-line assembler) the symbols are resolved at run time via the libc
+loader from `ASMTEST_DRAPP_LIB`, else `<repo>/build/libasmtest_drapp.so`.
+`NativeTrace::available()` is `false` when DynamoRIO can't be resolved, so callers
+self-skip cleanly.
+
+```rust
+use asmtest::drtrace::{NativeTrace, NativeCode};
+if NativeTrace::available() {
+    NativeTrace::initialize_default().unwrap();   // client/home from env
+    let code = NativeCode::from_bytes(&[0x48,0x89,0xf8,0x48,0x01,0xf0,0xc3]);
+    let tr = NativeTrace::new_trace(64, 0);        // (blocks, instructions)
+    tr.register("add", &code).unwrap();
+    { let _r = tr.region("add"); assert_eq!(code.call2(20, 22), 42); }
+    assert!(tr.covered(0));
+    NativeTrace::shutdown();
+}
+```
+
+Build the tier + client with `make shared-drtrace drtrace-client DYNAMORIO_HOME=...`
+(or use the `make docker-drtrace` lane), then export `ASMTEST_DRAPP_LIB` /
+`ASMTEST_DRCLIENT` (+ `ASMTEST_DR_LIB` or `DYNAMORIO_HOME`).
+[`tests/drtrace.rs`](tests/drtrace.rs) mirrors the Python suite and self-skips
+when the tier is unavailable. Linux x86-64 only.
+
 ## Crash safety
 
 The native capture path runs the routine in-process; a buggy routine can abort

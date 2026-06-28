@@ -50,6 +50,32 @@ try (Asmtest.Emu e = new Asmtest.Emu()) {
 }
 ```
 
+## DynamoRIO native-trace tier (optional)
+
+[`DrTrace.java`](DrTrace.java) is a separate, opt-in binding for the in-process
+**DynamoRIO native-trace** tier (mirrors the Python `asmtest.drtrace`). Where
+`Emu` traces isolated guest bytes through Unicorn, `DrTrace` traces host-native
+code as it runs **inside this JVM**: initialize DynamoRIO once, materialize
+host-native machine code (`NativeCode.fromBytes`), mark a region, call into it,
+and read back basic-block coverage / the instruction stream (`NativeTrace`). It
+loads one library, `libasmtest_drapp` (from `ASMTEST_DRAPP_LIB`, else
+`<repo>/build/libasmtest_drapp.{so,dylib}`), which `dlopen`s `libdynamorio`
+lazily — so this binding never links DynamoRIO.
+
+The tier is advanced and **Linux-x86-64-only**; the library may be absent (no
+DynamoRIO at build time), so `DrTrace.available()` never throws and the smoke
+test [`DrTraceTest.java`](DrTraceTest.java) self-skips (prints `SKIP: ...`,
+exits 0) when it can't run. Build the tier and client with
+`make shared-drtrace drtrace-client DYNAMORIO_HOME=...` (or `make docker-drtrace`)
+and export `ASMTEST_DRCLIENT`. Compile + run standalone:
+
+```sh
+javac --release 21 --enable-preview -d /tmp/jdt \
+    bindings/java/DrTrace.java bindings/java/DrTraceTest.java
+ASMTEST_DRAPP_LIB=$PWD/build/libasmtest_drapp.so \
+    java --enable-preview --enable-native-access=ALL-UNNAMED -cp /tmp/jdt DrTraceTest
+```
+
 ## Deferred
 
 A published Maven/Gradle artifact (and JUnit integration of the `assert*`
