@@ -2,10 +2,10 @@
 # package-native.sh — finish a native payload slot for a fully-featured package.
 #
 # Given a staged slot directory that already holds the core lib and the superset
-# emulator lib (libasmtest_emu_full, copied in under the libasmtest_emu name), this:
+# emulator lib (libasmtest_emu — emu + Keystone assembler + Capstone disassembler), this:
 #
 #   1. asserts the emu lib actually exports the optional asm + disas entry points
-#      (so a release can never silently ship the lean lib in the full slot),
+#      (so a release can never silently ship a lib missing a tier),
 #   2. vendors the three native dependencies (Unicorn, Keystone, Capstone) next to
 #      it and rewrites the lib's runtime search path to its own directory
 #      ($ORIGIN on Linux, @loader_path on macOS) so it loads with no system install,

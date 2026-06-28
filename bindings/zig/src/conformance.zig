@@ -131,8 +131,9 @@ test "emu.int_to_double" {
     try std.testing.expect((res.regs.rflags & 0x2) != 0);
 }
 
-// In-line assembler (Keystone): compiled in only when linked against the
-// assembler-carrying lib (build with -Dasm=true, i.e. `make zig-asm-test`).
+// In-line assembler (Keystone): libasmtest_emu carries it, and the asm build
+// option defaults on, so `zig build test` (and `make zig-test`) compiles this
+// in without `-Dasm=true`.
 test "asm.inline_assembler" {
     if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
     if (build_options.with_asm) {
@@ -172,9 +173,10 @@ test "asm.inline_assembler" {
 }
 
 // Disassembler (Capstone): decode known x86-64 bytes back to instruction text.
-// Built only with -Dasm=true (the full lib, which links Capstone); the symbol is
-// gated under build_options.with_asm so the plain `zig-test` build never refers
-// to it. `make zig-asm-test`.
+// libasmtest_emu links Capstone, and the asm build option defaults on, so
+// `zig build test` (and `make zig-test`) compiles this in without `-Dasm=true`;
+// it stays gated under build_options.with_asm as a defensive fallback for a
+// build with asm disabled.
 test "disas.x86" {
     if (@import("builtin").cpu.arch != .x86_64) return error.SkipZigTest;
     if (build_options.with_asm) {

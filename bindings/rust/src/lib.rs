@@ -495,12 +495,13 @@ impl Drop for Emulator {
 
 // --- In-line assembler (Keystone) — optional ------------------------------- //
 //
-// The assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
-// which the default build does not link. To keep this crate dependency-free *and*
-// link-clean against the plain libasmtest_emu, resolve them at run time with the
-// libc dynamic loader: dlopen the lib named by `ASMTEST_LIB`, then dlsym. Against
-// a Keystone-free lib the pointers stay `None` and the helpers report
-// unavailability — matching the dlopen-based bindings (Ruby, Node, ...).
+// The assembler entry points live in libasmtest_emu (now the full superset:
+// emulator + Keystone assembler + Capstone disassembler). To keep this crate
+// dependency-free *and* link-clean, resolve them at run time with the libc dynamic
+// loader: dlopen the lib named by `ASMTEST_LIB`, then dlsym. They normally resolve,
+// so the helpers run by default; against an older/leaner Keystone-free lib the
+// pointers stay `None` and the helpers report unavailability — matching the
+// dlopen-based bindings (Ruby, Node, ...).
 
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
@@ -611,8 +612,9 @@ pub fn asm_error() -> String {
     }
 }
 
-/// Whether the loaded native lib carries the disassembler (Capstone) — true only
-/// for `libasmtest_emu_full`; the lean `libasmtest_emu` / `_emu_asm` return false.
+/// Whether the loaded native lib carries the disassembler (Capstone) — true by
+/// default, since `libasmtest_emu` (the superset) carries it; false only if
+/// `ASMTEST_LIB` points at an older/leaner lib.
 pub fn disas_available() -> bool {
     match asm_fns().disas_avail {
         Some(f) => unsafe { f() },

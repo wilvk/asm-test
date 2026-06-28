@@ -72,13 +72,14 @@ The wrapper's `Corpus.Routine(name)` resolves the built-in fixtures;
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make dotnet-asm-test` points `ASMTEST_LIB` at it);
-`Emu.AsmAvailable` is false against the plain lib.
+Pass a routine as an **assembly string**. `libasmtest_emu` carries the Keystone
+in-line assembler, so this works out of the box under `make dotnet-test`.
+`Emu.AsmAvailable` is a defensive probe — false only against an older/leaner lib
+pointed at by `ASMTEST_LIB`.
 
 ```csharp
 [Fact] public void InlineAssembler() {       // optional: the routine IS the text
-    if (!Asm.Emu.AsmAvailable) return;        // false against the plain libasmtest_emu
+    if (!Asm.Emu.AsmAvailable) return;        // defensive: false only against an older/leaner lib
     using var e = new Asm.Emu();
     // Intel, up to six args; throws AsmtestException (carrying the Keystone
     // diagnostic) if the string fails to assemble.
@@ -224,7 +225,6 @@ Asm.Assert.Covered(t, 0x0);            // basic block entered
 ```sh
 export LD_LIBRARY_PATH=$PWD/build      # DYLD_LIBRARY_PATH on macOS
 dotnet test
-make dotnet-asm-test                   # or: point ASMTEST_LIB at libasmtest_emu_asm first
 ```
 
 `make dotnet-test` (from the repo root) builds `libasmtest_emu` + the routine

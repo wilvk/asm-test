@@ -88,14 +88,15 @@ and friends.
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string** instead of an address. Present only in
-the Keystone-carrying `libasmtest_emu_asm` (`make python-asm-test` points
-`ASMTEST_LIB` at it); `asmtest.asm_available()` is false against the plain lib and
-the assembler calls self-skip.
+Pass a routine as an **assembly string** instead of an address. The
+Keystone assembler ships in `libasmtest_emu` (the superset lib), so it runs by
+default under `make python-test`. `asmtest.asm_available()` stays as a defensive
+probe — it returns false only if `ASMTEST_LIB` points at an older/leaner lib
+without Keystone, in which case the assembler calls self-skip.
 
 ```python
 def test_inline_assembler():
-    if not asmtest.asm_available():  # only with libasmtest_emu_asm (make python-asm-test)
+    if not asmtest.asm_available():  # carried by libasmtest_emu; false only on an older/leaner lib
         pytest.skip("assembler not in this build")
     with asmtest.Emulator() as e:
         res = e.call_asm("mov rax, rdi; add rax, rsi; ret", [40, 2])   # Intel, ≤6 args
@@ -126,7 +127,7 @@ ctx = asmtest.load()        # process-wide Context (created lazily on first use)
 ctx.version                 # native lib version string, e.g. "1.0.0"
 ctx.arch                    # host arch the shared lib was built for, e.g. "x86_64"
 ctx.has_emu                 # bool: emulator tier present (libasmtest_emu)
-ctx.has_asm                 # bool: in-line assembler present (libasmtest_emu_asm)
+ctx.has_asm                 # bool: in-line assembler present (carried by libasmtest_emu)
 ctx.flags                   # {"CF": mask, "ZF": mask, …} for this arch
 ctx.size("regs_t")          # struct size from the manifest
 ctx.offset("regs_t", "ret") # field offset from the manifest
@@ -286,7 +287,7 @@ with asmtest.GuestEmulator("arm64") as g:         # "arm64" | "riscv" | "arm"
 if the emulator tier is absent. `call_vec` on the RISC-V guest raises (no vector
 file). Every `call*` takes the same `max_insns=0` budget.
 
-### In-line assembler (optional — `libasmtest_emu_asm`)
+### In-line assembler (carried by `libasmtest_emu`)
 
 ```python
 asmtest.asm_available()                            # bool: assembler compiled in
@@ -307,14 +308,14 @@ asmtest.asm_error()                                # last Keystone diagnostic ("
   `Arch.X86_64 | ARM64 | RISCV64 | ARM32`; `addr` is the base load address (matters
   for PC-relative encodings). Works for guests the x86 emulator can't run.
 * `Arch` / `Syntax` are integer-code enums; `AsmtestError` is the raised type.
-* Both optional tiers ship together in `libasmtest_emu_full` — point `ASMTEST_LIB`
-  there to get the assembler *and* the disassembler (below) from one load.
+* Both tiers ship in `libasmtest_emu` (the superset) — a single load gives you the
+  assembler *and* the disassembler (below).
 
-### Disassembler (optional — `libasmtest_emu_full`)
+### Disassembler (carried by `libasmtest_emu`)
 
 Turn an emulator fault/trace/coverage **offset** into the instruction text at it
-(Capstone). It self-skips to `""` against the lean lib, so the same call is safe
-either way — branch on `disas_available()`.
+(Capstone). It self-skips to `""` against an older/leaner lib without Capstone, so
+the same call is safe either way — branch on `disas_available()`.
 
 ```python
 asmtest.disas_available()                          # bool: disassembler compiled in
@@ -327,8 +328,8 @@ asmtest.disas(code, off, arch=asmtest.Arch.ARM64, base=0x00100000)
   resolve. Returns `"mnemonic operands"`, or `""` with no disassembler / when the
   bytes do not decode. Pair it with a fault's `res.reg("rip")` (minus the load
   base) to name the offending instruction.
-* Needs the Capstone-carrying `libasmtest_emu_full`; build it with
-  `make shared-emu-full` and point `ASMTEST_LIB` at it.
+* Carried by `libasmtest_emu` (the superset includes Capstone), so it is present
+  out of the box with `make shared-emu`.
 
 ### Tier-2 assertions (`asmtest.assertions`)
 
@@ -355,9 +356,8 @@ assert_reg(res, "rax", 42)              # a guest register equals expected
 
 ```sh
 pytest
-# For the in-line assembler tests, point ASMTEST_LIB at the Keystone-carrying lib
-# (or just run the wired-up target, which does it for you):
-make python-asm-test
+# The in-line assembler and disassembler tiers ship in libasmtest_emu, so they
+# run by default under `make python-test`.
 ```
 
 `make python-test` (from the repo root) builds the shared libs, the manifest, and

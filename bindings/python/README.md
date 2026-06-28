@@ -54,9 +54,10 @@ A routine reference is either an integer address or a ctypes function pointer
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string** instead of an address. Present only in
-the Keystone-carrying `libasmtest_emu_asm` (`make python-asm-test` points
-`ASMTEST_LIB` at it); `asmtest.asm_available()` is false against the plain lib.
+Pass a routine as an **assembly string** instead of an address. The Keystone
+assembler ships in `libasmtest_emu` (the superset lib), so it runs by default
+under `make python-test`. `asmtest.asm_available()` stays as a defensive probe —
+false only if `ASMTEST_LIB` points at an older/leaner lib without Keystone.
 
 ```python
 if asmtest.asm_available():

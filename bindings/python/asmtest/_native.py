@@ -194,8 +194,9 @@ def _declare_emu_ext(lib, v):
         getattr(lib, nm).argtypes = [v]
         getattr(lib, nm).restype = u64
 
-    # In-line assembler (Keystone) is optional again — only libasmtest_emu_asm
-    # exports it. The widened run shim takes six scalar args + syntax + a cap;
+    # In-line assembler (Keystone) ships in libasmtest_emu (the superset), so it
+    # is normally present; the probe still guards against an older/leaner lib.
+    # The widened run shim takes six scalar args + syntax + a cap;
     # asmtest_asm_bytes is multi-arch text->bytes; the last-error accessor
     # carries the Keystone diagnostic.
     if has_asm(lib):
@@ -211,8 +212,9 @@ def _declare_emu_ext(lib, v):
         lib.asmtest_asm_last_error.argtypes = []
         lib.asmtest_asm_last_error.restype = C.c_char_p
 
-    # Disassembler (Capstone) is optional too — only libasmtest_emu_full carries
-    # it. emu_disas decodes one instruction at `off` into a text buffer and
+    # Disassembler (Capstone) ships in libasmtest_emu too (the superset carries
+    # it); the probe still guards against an older/leaner lib.
+    # emu_disas decodes one instruction at `off` into a text buffer and
     # returns its byte length; emu_disas_available() reports whether Capstone is
     # linked at all (a Capstone build can still self-skip an arch it lacks).
     if has_disas(lib):

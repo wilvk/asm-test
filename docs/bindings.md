@@ -14,9 +14,11 @@ your own test suite. Every binding exposes the same core capabilities:
   instruction back to `"mnemonic operands"` text (e.g. to name the instruction
   at an emulator fault's `rip`).
 
-The two optional tiers live in one shared lib, `libasmtest_emu_full` (see
-[The optional native tiers](#the-optional-native-tiers) below); a binding's
-`asm_available` / `disas_available` probe self-skips when they are absent.
+Both extra tiers now ship inside `libasmtest_emu` itself — it is the full
+superset (emulator + Keystone assembler + Capstone disassembler), so they are on
+by default (see [The optional native tiers](#the-optional-native-tiers) below).
+A binding still keeps an `asm_available` / `disas_available` probe so it can
+self-skip if pointed at an older/leaner lib that lacks them.
 
 This page is the **shared overview** — architecture, one-time setup, and the
 capability map common to every binding. Each language then has its own page with
@@ -83,22 +85,17 @@ make manifest      # asmtest_abi.json — required by the Python binding only
 
 ### The optional native tiers
 
-The in-line assembler (Keystone) and the disassembler (Capstone) are *optional*
-add-ons, kept out of the base build so it needs neither dependency. **The published
-packages bundle them out of the box** — `make <lang>-package` stages the superset
-lib (below) into the `libasmtest_emu` slot and vendors the native deps, so a fresh
-`pip install` / `gem install` / `npm install` has both tiers working with no system
-libs (see [Packaging the bindings](packaging.md)). The build targets:
+The in-line assembler (Keystone) and the disassembler (Capstone) are folded into
+`libasmtest_emu` itself, which is the **full superset** (emulator + Keystone +
+Capstone). `make shared-emu` builds it with all three tiers, so every binding gets
+them with no extra flag. **The published packages bundle them out of the box** —
+`make <lang>-package` stages this lib and vendors the native deps, so a fresh `pip
+install` / `gem install` / `npm install` has both tiers working with no system
+libs (see [Packaging the bindings](packaging.md)).
 
-```sh
-make shared-emu-asm   # libasmtest_emu_asm.{so,dylib}  — base + the Keystone assembler
-make shared-emu-full  # libasmtest_emu_full.{so,dylib} — base + BOTH tiers (Keystone + Capstone)
-```
-
-`libasmtest_emu_full` is the **one lib carrying both optional tiers** (and what the
-packages ship): point a binding at it to get the assembler *and* the disassembler
-from a single load (no combinatorial lib matrix). The lean `libasmtest_emu` stays
-Unicorn-only — it's the dev build, where the tiers self-skip.
+`libasmtest_emu` is the **one lib carrying both optional tiers** (and what the
+packages ship): load it and you get the assembler *and* the disassembler from a
+single library (no combinatorial lib matrix).
 
 Your *routine under test* is any System V ABI function in a shared library.
 Assemble yours with the
@@ -111,20 +108,19 @@ cc -shared -fPIC -Iinclude -o libmyroutines.so myroutines.s
 
 At run time the dynamic loader must find `libasmtest_emu` — point it at the
 build directory with `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS), or
-set `ASMTEST_LIB` for Python. The emulator tier additionally needs **libunicorn**
-(see [Emulator tier](emulator.md)).
+set `ASMTEST_LIB` for Python. The emulator tier additionally needs **libunicorn**,
+and the assembler/disassembler tiers need **libkeystone** + **libcapstone** (see
+[Emulator tier](emulator.md)).
 
-To use either optional tier, point the binding at `libasmtest_emu_full` (which
-needs **libkeystone** + **libcapstone**). The `make <lang>-asm-test` targets do
-this for you — e.g. `make python-asm-test`, `make dotnet-asm-test`,
-`make go-asm-test` build the full lib and set `ASMTEST_LIB` accordingly, so a
-single run exercises both the assembler *and* the disassembler. Because they are
-optional, the dynamic-FFI bindings have runtime `asm_available()` /
-`disas_available()` (or `AsmAvailable` / `DisasAvailable`) probes: against the
-plain `libasmtest_emu` they return false and those calls self-skip. The
-statically compiled bindings (C++ and Zig) gate the tiers at **build time**
-instead — `-DASMTEST_ENABLE_ASM` / `-DASMTEST_ENABLE_DISAS` for C++, `-Dasm=true`
-for Zig — so they compile out entirely against a lean build.
+Because `libasmtest_emu` carries both optional tiers, every binding gets the
+assembler *and* the disassembler from a single load — `make <lang>-test` exercises
+both. The dynamic-FFI bindings still keep runtime `asm_available()` /
+`disas_available()` (or `AsmAvailable` / `DisasAvailable`) probes as defensive
+checks — if a consumer points `ASMTEST_LIB` at an older/leaner lib without these
+tiers, those calls
+self-skip. The statically compiled bindings (C++ and Zig) compile the tiers in by
+default; C++ still honours the `-DASMTEST_ENABLE_ASM` / `-DASMTEST_ENABLE_DISAS`
+opt-outs.
 
 ## Capabilities at a glance
 

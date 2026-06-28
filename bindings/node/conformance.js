@@ -122,7 +122,8 @@ withRegs((r) => {
     g.close();
   }
 
-  // in-line assembly (Keystone) replays add_signed, only if the lib has it
+  // in-line assembly (Keystone) replays add_signed; carried by libasmtest_emu,
+  // the probe is a defensive guard against an older/leaner lib
   if (e.asmAvailable()) {
     const ares = e.callAsm('mov rax, rdi; add rax, rsi; ret', [40, 2]);
     check('asm.add_signed', !ares.faulted() && ares.reg('rax') === 42);
@@ -148,15 +149,15 @@ withRegs((r) => {
 }
 
 // --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
-// Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
-// libasmtest_emu / _emu_asm report disasAvailable() false and this skips.
+// libasmtest_emu carries Capstone, so this runs by default; the probe stays a
+// defensive guard -- only an older/leaner lib reports disasAvailable() false.
 if (disasAvailable()) {
   const code = Buffer.from([0x48, 0x31, 0xC0, 0xC3]); // xor rax, rax ; ret
   check('disas.xor_rax', disas(code, 0) === 'xor rax, rax');
   check('disas.ret', disas(code, 3) === 'ret');
   check('disas.nop', disas(Buffer.from([0x90])) === 'nop');
 } else {
-  console.log('ok - disas.xor_rax # SKIP no disassembler (lean lib)');
+  console.log('ok - disas.xor_rax # SKIP no disassembler (older/leaner lib)');
 }
 
 // --- Tier 2: idiomatic assertions pass on good input -----------------------

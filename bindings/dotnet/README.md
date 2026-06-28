@@ -28,9 +28,10 @@ The reusable module is [`Asmtest.cs`](Asmtest.cs) — it keeps all P/Invoke
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make dotnet-asm-test` points `ASMTEST_LIB` at it);
-`Emu.AsmAvailable` is false against the plain lib.
+Pass a routine as an **assembly string**. `libasmtest_emu` carries the Keystone
+in-line assembler, so this works out of the box under `make dotnet-test`.
+`Emu.AsmAvailable` is a defensive probe — false only against an older/leaner lib
+pointed at by `ASMTEST_LIB`.
 
 ```csharp
 if (Emu.AsmAvailable)

@@ -135,8 +135,8 @@ tr.free
 gt.close
 
 # --- Tier 1: in-line assembly (Keystone) replays add_signed ----------------
-# Only when the loaded lib carries the assembler (libasmtest_emu_asm); against
-# the plain libasmtest_emu it is simply absent.
+# libasmtest_emu carries the assembler, so this runs by default; the probe stays
+# a defensive guard, false only against an older/leaner lib.
 if e.asm_available?
   ares = e.call_asm("mov rax, rdi; add rax, rsi; ret", [40, 2])
   check("asm.add_signed", !ares.faulted? && ares.reg("rax") == 42)
@@ -164,15 +164,15 @@ end
 e.close
 
 # --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
-# Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
-# libasmtest_emu / _emu_asm report disas_available? == false and this skips.
+# libasmtest_emu carries Capstone, so this runs by default; the probe stays a
+# defensive guard — only an older/leaner lib reports disas_available? == false.
 if Asmtest.disas_available?
   code = [0x48, 0x31, 0xC0, 0xC3].pack("C*") # xor rax, rax ; ret
   check("disas.xor_rax", Asmtest.disas(code, 0) == "xor rax, rax")
   check("disas.ret", Asmtest.disas(code, 3) == "ret")
   check("disas.nop", Asmtest.disas([0x90].pack("C*")) == "nop")
 else
-  puts "ok - disas.xor_rax # SKIP no disassembler (lean lib)"
+  puts "ok - disas.xor_rax # SKIP no disassembler (older/leaner lib)"
 end
 
 # --- Tier 2: idiomatic assertions pass on good input -----------------------

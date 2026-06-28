@@ -34,9 +34,9 @@ hit, not just that one did. Prefer it for untrusted routines.
 ## In-line assembler (optional)
 
 Add `@cInclude("asmtest_assemble.h")` to the `@cImport` and pass a routine as an
-**assembly string**. The assembler lives in `libasmtest_emu_asm`; `zig build test
--Dasm=true` (`make zig-asm-test`) links it and compiles the asm test in, so the
-default build stays Keystone-free.
+**assembly string**. The assembler lives in `libasmtest_emu`, compiled in by
+default, so `zig build test` (and `make zig-test`) links it and compiles the asm
+test in.
 
 ```zig
 var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);

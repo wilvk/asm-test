@@ -36,7 +36,7 @@ Selection (default: all of them):
   --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + clang-tidy + valgrind
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + capstone + pkg-config
-  --asm          optional native tiers (make *-asm-test) — keystone + capstone + unicorn + pkg-config + patchelf
+  --asm          full emu lib + bindings (make shared-emu / <lang>-test) — keystone + capstone + unicorn + pkg-config + patchelf
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
   --patchelf     dlopen packaging      (make package-libs) — rpath-patch vendored deps (Linux)
   --tidy         static analysis       (make tidy)
@@ -133,7 +133,7 @@ skip() { echo "$prog: $1 already present, skipping"; }
     if have_capstone; then skip capstone
     elif [ -z "$capstone_pkg" ]; then
         echo "$prog: capstone is built from a pinned source release; build it with:" >&2
-        echo "  scripts/build-capstone.sh   (then re-run make emu-test / *-asm-test)" >&2
+        echo "  scripts/build-capstone.sh   (then re-run make emu-test / <lang>-test)" >&2
     else add "$capstone_pkg"; fi
 }
 [ "$want_keystone" -eq 1 ]  && {

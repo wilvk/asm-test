@@ -115,8 +115,9 @@ fn emu_xmm_and_rflags() {
     assert_ne!(res.regs.rflags & 0x2, 0);
 }
 
-// In-line assembler (Keystone): only when the loaded lib carries it (run via
-// `make rust-asm-test`, which points ASMTEST_LIB at libasmtest_emu_asm).
+// In-line assembler (Keystone): runs by default — libasmtest_emu (the superset)
+// carries it; the asm_available() probe only self-skips against an older/leaner
+// lib pointed to by ASMTEST_LIB.
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn inline_assembler() {
@@ -155,8 +156,9 @@ fn inline_assembler() {
     assert_eq!(a64, vec![0xC0, 0x03, 0x5F, 0xD6]);
 }
 
-// Disassembler (Capstone): only when the loaded lib carries it (run via
-// `make rust-asm-test`, which points ASMTEST_LIB at libasmtest_emu_full).
+// Disassembler (Capstone): runs by default — libasmtest_emu (the superset)
+// carries it; the disas_available() probe only self-skips against an older/leaner
+// lib pointed to by ASMTEST_LIB.
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn disassembler() {

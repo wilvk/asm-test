@@ -117,12 +117,12 @@ local corpus_path = os.getenv("ASMTEST_CORPUS_LIB")
 local L = ffi.load(emu_path)
 local C = corpus_path and ffi.load(corpus_path) or nil
 
--- The in-line assembler (Keystone) is present only in the emu+asm lib; probe for
--- its symbol so the binding degrades cleanly against the plain libasmtest_emu.
+-- The in-line assembler (Keystone) is carried by libasmtest_emu; still probe for
+-- its symbol so the binding degrades cleanly against an older/leaner lib.
 local HAS_ASM = pcall(function() return L.asmtest_emu_call_asm6 end)
 
--- The disassembler (Capstone) is present only in the emu+full lib; probe its
--- symbol so the binding degrades cleanly against the plain libasmtest_emu.
+-- The disassembler (Capstone) is carried by libasmtest_emu; still probe its
+-- symbol so the binding degrades cleanly against an older/leaner lib.
 local HAS_DISAS = pcall(function() return L.emu_disas end)
 
 local M = {}
@@ -319,8 +319,8 @@ function Emu:asm_available() return HAS_ASM end
 -- The Keystone diagnostic from the most recent assemble ("" on success).
 function M.asm_error() return HAS_ASM and ffi.string(L.asmtest_asm_last_error()) or "" end
 
--- Whether the loaded native lib carries the disassembler (Capstone). True only
--- for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false.
+-- Whether the loaded native lib carries the disassembler (Capstone). True for
+-- libasmtest_emu (the superset); only an older/leaner lib returns false.
 function M.disas_available() return HAS_DISAS and L.emu_disas_available() end
 -- Disassemble the one instruction at byte `off` of `code` (a byte string) for
 -- `arch` (0=x86-64, 1=arm64, 2=riscv64, 3=arm32; mirrors emu_arch_t). `base` is
@@ -336,8 +336,9 @@ end
 -- 4=GAS; see M.Syntax) via Keystone and run
 -- it with the integer `args` (a table of up to six), stopping after
 -- `opts.max_insns` instructions (0 = run to `ret`). Returns the EmuResult;
--- error()s with the Keystone diagnostic if it fails to assemble. Only when
--- :asm_available() — needs the emu+asm lib.
+-- error()s with the Keystone diagnostic if it fails to assemble. libasmtest_emu
+-- carries the assembler, so this works by default; guard with :asm_available()
+-- for an older/leaner lib.
 function Emu:call_asm(src, args, opts)
   assert(HAS_ASM, "in-line assembler not in this build")
   args, opts = args or {}, opts or {}

@@ -46,9 +46,10 @@ try (Asmtest.Emu e = new Asmtest.Emu();
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make java-asm-test` points `ASMTEST_LIB` at it);
-`Emu#asmAvailable()` is false against the plain lib.
+Pass a routine as an **assembly string**. `libasmtest_emu` carries the Keystone
+in-line assembler, so this works out of the box under `make java-test`.
+`Emu#asmAvailable()` is a defensive probe — false only against an older/leaner
+lib pointed at by `ASMTEST_LIB`.
 
 ```java
 try (Asmtest.Emu e = new Asmtest.Emu()) {
@@ -179,7 +180,6 @@ Asmtest.assertCovered(t, 0x0);             // basic block entered
 ```sh
 make java-test        # from the repo root (needs the shared libs + JDK 21)
 make docker-java      # or in an isolated container
-make java-asm-test    # points ASMTEST_LIB at libasmtest_emu_asm
 ```
 
 `make java-test` builds `libasmtest_emu` + the routine fixture lib, compiles both

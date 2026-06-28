@@ -14,7 +14,9 @@ fn main() {
     });
 
     println!("cargo:rustc-link-search=native={dir}");
-    // libasmtest_emu: capture trampoline + verdict shims + emulator (superset).
+    // libasmtest_emu is the full superset: capture trampoline + verdict shims +
+    // emulator + Keystone assembler + Capstone disassembler. Linking it gives the
+    // binding all tiers with no flag — asm_available()/disas_available() are true.
     println!("cargo:rustc-link-lib=dylib=asmtest_emu");
     // The canonical routines under test, as a fixture lib (make's CORPUS_LIB).
     println!("cargo:rustc-link-lib=dylib=asmtest_corpus");

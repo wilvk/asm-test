@@ -8,15 +8,15 @@ the integer-constant flag masks), and Zig's target selects the right architectur
 branch. No GC, so arg arrays are plain stack slices passed by pointer. See
 [Language bindings](../bindings.md) for the shared architecture.
 
-Like C++, Zig gates the optional assembler at **build time** (`-Dasm=true`), so
-the default build stays Keystone-free.
+Like C++, Zig gates the assembler at **build time**, but it now defaults on — the
+assembler is compiled into `libasmtest_emu`, so no flag is needed.
 
 ## Setup
 
 From the repository root, build the native library:
 
 ```sh
-make shared-emu     # libasmtest_emu.{so,dylib} — capture trampoline + emulator
+make shared-emu     # libasmtest_emu.{so,dylib} — capture trampoline + emulator + assembler + disassembler
 ```
 
 ## Usage
@@ -45,9 +45,9 @@ hit, not just that one did. Prefer it for untrusted routines.
 ## In-line assembler (optional)
 
 Add `@cInclude("asmtest_assemble.h")` to the `@cImport` and pass a routine as an
-**assembly string**. The assembler lives in `libasmtest_emu_asm`; `zig build test
--Dasm=true` (`make zig-asm-test`) links it and compiles the asm test in, so the
-default build stays Keystone-free.
+**assembly string**. The assembler lives in `libasmtest_emu`, compiled in by
+default, so `zig build test` (and `make zig-test`) links it and compiles the asm
+test in.
 
 ```zig
 var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
@@ -150,7 +150,7 @@ _ = ar.regs.x[0];        // arm64 x0..x30; ar.regs.sp / pc / nzcv; ar.regs.v[0].
 
 `emu_arm64_call_traced` records into an `emu_trace_t` as above (arm64).
 
-### In-line assembler (build with `-Dasm=true`)
+### In-line assembler (compiled in by default)
 
 ```zig
 var res: c.emu_result_t = std.mem.zeroes(c.emu_result_t);
@@ -172,8 +172,7 @@ const n = c.asmtest_asm_bytes(c.ASM_ARM64, c.ASM_SYNTAX_INTEL, "ret", 0x00100000
 ## Run the tests
 
 ```sh
-make zig-test       # from the repo root
-make zig-asm-test   # adds libasmtest_emu_asm and compiles the asm test in
+make zig-test       # from the repo root (libasmtest_emu carries the assembler; asm + disas tests compiled in)
 ```
 
 `make zig-test` builds the shared libs + a routine fixture lib, then runs `zig

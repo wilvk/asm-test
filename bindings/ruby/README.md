@@ -27,10 +27,10 @@ helpers. [`conformance.rb`](conformance.rb) is a thin consumer that
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string** instead of a pre-built address. Present
-only in the Keystone-carrying `libasmtest_emu_asm` (`make ruby-asm-test` points
-`ASMTEST_LIB` at it); `Emu#asm_available?` is false against the plain lib, so
-guard with it.
+Pass a routine as an **assembly string** instead of a pre-built address. The
+Keystone assembler is built into `libasmtest_emu`, so this runs by default under
+`make ruby-test`; `Emu#asm_available?` remains a defensive probe — it returns
+false only against an older/leaner lib, so guard with it.
 
 ```ruby
 e = Asmtest::Emu.new

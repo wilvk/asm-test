@@ -46,9 +46,10 @@ assertEmuReg(res, 'rax', 42);
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make node-asm-test` points `ASMTEST_LIB` at it);
-`Emu#asmAvailable()` is false against the plain lib.
+Pass a routine as an **assembly string**. The Keystone assembler is built into
+`libasmtest_emu`, so this runs by default under `make node-test`;
+`Emu#asmAvailable()` remains a defensive probe, false only against an
+older/leaner lib.
 
 ```js
 const { Emu, assemble, Arch, Syntax, AsmtestError } = require('./asmtest');
@@ -177,7 +178,6 @@ asm.assertCovered(t, 0x0);             // basic block entered
 ```sh
 make node-test        # from the repo root (needs the shared libs + Node + koffi)
 make docker-node      # or in an isolated container (koffi preinstalled)
-make node-asm-test    # points ASMTEST_LIB at libasmtest_emu_asm
 ```
 
 `make node-test` builds `libasmtest_emu` + the routine fixture lib, then runs

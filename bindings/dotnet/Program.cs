@@ -107,7 +107,8 @@ static class Conformance
         }
 
         // --- Tier 1: in-line assembly (Keystone) replays add_signed --------- //
-        // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
+        // libasmtest_emu carries the assembler, so this runs by default; the
+        // guard is defensive against an older/leaner lib via ASMTEST_LIB.
         if (Emu.AsmAvailable)
         {
             using (var e = new Emu())
@@ -132,8 +133,9 @@ static class Conformance
         }
 
         // --- Tier 1: disassembly (Capstone) decodes known bytes to text ----- //
-        // Only when the loaded lib carries Capstone (libasmtest_emu_full); the
-        // lean libasmtest_emu / _emu_asm report DisasAvailable == false.
+        // libasmtest_emu carries Capstone, so this runs by default; the guard is
+        // defensive against an older/leaner lib via ASMTEST_LIB, which would
+        // report DisasAvailable == false.
         if (Emu.DisasAvailable)
         {
             byte[] code = { 0x48, 0x31, 0xC0, 0xC3 }; // xor rax, rax ; ret
@@ -141,7 +143,7 @@ static class Conformance
             Check("disas.ret", Emu.Disas(code, 3) == "ret");
             Check("disas.nop", Emu.Disas(new byte[] { 0x90 }) == "nop");
         }
-        else { Console.WriteLine("ok - disas.xor_rax # SKIP no disassembler (lean lib)"); }
+        else { Console.WriteLine("ok - disas.xor_rax # SKIP no disassembler (older/leaner lib)"); }
 
         // --- Tier 2: idiomatic assertions pass on good input ---------------- //
         bool t2pass = true;

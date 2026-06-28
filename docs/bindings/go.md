@@ -78,15 +78,16 @@ interface that `*testing.T` satisfies, so they fail a test with a legible messag
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. The assembler entry points live only in
-the Keystone-carrying `libasmtest_emu_asm`; Go statically links the plain lib and
-resolves them at run time through the dynamic loader, so `AsmAvailable()` is true
-only when `ASMTEST_LIB` points at the assembler lib (`make go-asm-test`).
+Pass a routine as an **assembly string**. The assembler entry points live in the
+Keystone-carrying `libasmtest_emu` (now the full superset), which Go resolves at
+run time through the dynamic loader, so `AsmAvailable()` is true by default.
+`AsmAvailable()` stays a defensive probe: it goes false only if `ASMTEST_LIB`
+points at an older/leaner lib without the assembler.
 
 ```go
 func TestInlineAssembler(t *testing.T) {      // optional: pass the routine as text
-    if !asmtest.AsmAvailable() {              // false against the plain libasmtest_emu
-        t.Skip("assembler not in this build (run `make go-asm-test`)")
+    if !asmtest.AsmAvailable() {              // false only against an older/leaner lib
+        t.Skip("assembler not in this build (run `make go-test`)")
     }
     e := asmtest.NewEmu()
     defer e.Close()
@@ -235,8 +236,7 @@ asmtest.AssertCovered(t, tr, 0x0)            // basic block entered
 
 ```sh
 export LD_LIBRARY_PATH=$PWD/build:$PWD       # DYLD_LIBRARY_PATH on macOS
-CGO_ENABLED=1 go test ./...
-make go-asm-test                             # adds libasmtest_emu_asm so CallAsm/Assemble light up
+CGO_ENABLED=1 go test ./...                  # libasmtest_emu already carries CallAsm/Assemble
 ```
 
 `make go-test` (from the repo root) builds `libasmtest_emu` + the routine fixture

@@ -190,7 +190,8 @@ public final class Asmtest {
         ASM_BYTES = hOpt(emu, "asmtest_asm_bytes", FunctionDescriptor.of(
             JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT));
         ASM_LAST_ERROR = hOpt(emu, "asmtest_asm_last_error", FunctionDescriptor.of(ADDRESS));
-        // Optional (emu+full lib only): the Capstone disassembler.
+        // The Capstone disassembler: carried by libasmtest_emu (hOpt so an
+        // older/leaner lib pointed at by ASMTEST_LIB degrades gracefully).
         EMU_DISAS = hOpt(emu, "emu_disas", FunctionDescriptor.of(
             JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG));
         EMU_DISAS_AVAIL = hOpt(emu, "emu_disas_available", FunctionDescriptor.of(JAVA_BOOLEAN));
@@ -305,8 +306,9 @@ public final class Asmtest {
             () -> new RuntimeException("missing symbol: " + name)), fd);
     }
 
-    /** Like h, but null when the symbol is absent — for optional entry points
-     *  such as the in-line assembler (present only in the emu+asm lib). */
+    /** Like h, but null when the symbol is absent — for entry points such as the
+     *  in-line assembler that libasmtest_emu carries, so an older/leaner lib
+     *  pointed at by ASMTEST_LIB degrades gracefully rather than failing to link. */
     private static MethodHandle hOpt(SymbolLookup lk, String name, FunctionDescriptor fd) {
         return lk.find(name).map(s -> LINKER.downcallHandle(s, fd)).orElse(null);
     }
@@ -361,7 +363,8 @@ public final class Asmtest {
     }
 
     /** Whether the loaded native lib carries the disassembler (Capstone). True
-     *  only for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false. */
+     *  for libasmtest_emu; defensive against an older/leaner lib pointed at by
+     *  ASMTEST_LIB, which may return false. */
     public static boolean disasAvailable() {
         if (EMU_DISAS == null || EMU_DISAS_AVAIL == null) return false;
         try { return (boolean) EMU_DISAS_AVAIL.invoke(); }

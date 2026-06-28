@@ -123,7 +123,8 @@ public class Conformance {
         }
 
         // --- Tier 1: in-line assembly (Keystone) replays add_signed ------- //
-        // Only when the loaded lib carries the assembler (libasmtest_emu_asm).
+        // libasmtest_emu carries the assembler, so this runs by default; the
+        // guard is defensive against an older/leaner lib via ASMTEST_LIB.
         try (Asmtest.Emu e = new Asmtest.Emu()) {
             if (e.asmAvailable()) {
                 try (Asmtest.EmuResult res = e.callAsm("mov rax, rdi; add rax, rsi; ret", 40L, 2L)) {
@@ -147,15 +148,16 @@ public class Conformance {
             }
         }
 
-        // Disassembler (Capstone): decode known x86-64 bytes to text. Only when
-        // the loaded lib carries Capstone (libasmtest_emu_full); else it skips.
+        // Disassembler (Capstone): decode known x86-64 bytes to text.
+        // libasmtest_emu carries Capstone, so this runs by default; the guard is
+        // defensive against an older/leaner lib via ASMTEST_LIB, which would skip.
         if (Asmtest.disasAvailable()) {
             byte[] code = {0x48, 0x31, (byte) 0xC0, (byte) 0xC3}; // xor rax,rax;ret
             check("disas.xor_rax", Asmtest.disas(code, 0).equals("xor rax, rax"));
             check("disas.ret", Asmtest.disas(code, 3).equals("ret"));
             check("disas.nop", Asmtest.disas(new byte[] {(byte) 0x90}, 0).equals("nop"));
         } else {
-            System.out.println("ok - disas.xor_rax # SKIP no disassembler (lean lib)");
+            System.out.println("ok - disas.xor_rax # SKIP no disassembler (older/leaner lib)");
         }
 
         // --- Tier 2: idiomatic assertions pass on good input -------------- //

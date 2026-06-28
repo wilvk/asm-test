@@ -201,10 +201,9 @@ def _run_asm(case, expect):
 def test_disas():
     """The disassembler tier (Capstone): decode known x86-64 bytes to text.
 
-    Self-skips unless the loaded lib carries Capstone — only
-    libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm return
-    disas_available() == False. `make python-asm-test` points ASMTEST_LIB at
-    the full lib, so this runs there."""
+    libasmtest_emu (the superset) carries Capstone, so this runs by default;
+    it self-skips only against an older/leaner lib where
+    disas_available() == False."""
     if not asmtest.disas_available():
         pytest.skip("disassembler not in this build")
     code = bytes([0x48, 0x31, 0xC0, 0xC3])  # xor rax, rax ; ret

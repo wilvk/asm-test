@@ -89,7 +89,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **Fault/trace disassembly** (optional, Capstone): annotate offsets with the
   instruction text (`emu_disas`, `emu_fault_describe`, `…_disasm`). `emu_disas`
   is exposed through every language binding (`disas`/`disas_available`), via
-  `libasmtest_emu_full`. ([Disassembly](disassembly.md))
+  `libasmtest_emu` (the full superset lib carries it). ([Disassembly](disassembly.md))
 
 ### In-line assembler (optional, Keystone)
 
@@ -175,8 +175,8 @@ in which extra paths exist.
 All ten bindings are at **full capability parity** — integer/FP/vector capture
 (incl. AVX2 256-bit), the x86-64 emulator plus all cross-arch guests
 (arm64/riscv/arm) and Win64, execution trace/coverage, mid-execution guards,
-coverage-guided fuzzing and mutation testing, the optional in-line assembler
-**and disassembler** (both from one `libasmtest_emu_full`), and Tier-2
+coverage-guided fuzzing and mutation testing, the in-line assembler
+**and disassembler** (both carried by the superset `libasmtest_emu`), and Tier-2
 assertions. They differ in FFI mechanism, how the optional tiers are gated, and
 packaging maturity.
 
@@ -187,7 +187,7 @@ packaging maturity.
 | Go | `cgo` | runtime probe | not yet⁴ |
 | Rust | `extern` + build script | runtime probe | not yet⁴ |
 | C++ | direct `#include` | **build-time** (`-DASMTEST_ENABLE_ASM` / `_DISAS`) | not yet⁴ |
-| Zig | `@cImport` | **build-time** (`-Dasm=true`) | not yet⁴ |
+| Zig | `@cImport` | on by default (build-time, no flag) | not yet⁴ |
 | Node.js | `koffi` | runtime probe | not yet⁴ |
 | Java | FFM (Panama) | runtime probe | not yet⁴ |
 | Ruby | `Fiddle` | runtime probe | not yet⁴ |
@@ -218,7 +218,8 @@ fall back to bare offsets) and the core stays dependency-free.
 | Fault/trace disassembly | `libcapstone` (≥ 5 for RISC-V) | emulator diagnostics | helpers print bare offsets |
 
 Install the optional native deps with `make deps DEPS_ARGS=--emu` (Unicorn +
-Capstone) and the in-line assembler libs with `make shared-emu-asm` (Keystone).
+Capstone) plus `libkeystone` for the in-line assembler; `make shared-emu` then
+builds the superset `libasmtest_emu` with all three tiers.
 
 ## Where next
 

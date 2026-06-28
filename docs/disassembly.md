@@ -21,16 +21,14 @@ make deps DEPS_ARGS=--emu
 make emu-test
 ```
 
-For language bindings and packaged native payloads, build the full optional
-emulator library:
+For language bindings and packaged native payloads, build the emulator library:
 
 ```sh
-make shared-emu-full
+make shared-emu
 ```
 
-`libasmtest_emu_full` carries the emulator, the Keystone in-line assembler, and
-the Capstone disassembler. The lean `libasmtest_emu` intentionally stays
-Capstone-free.
+`libasmtest_emu` is the full superset — it carries the emulator, the Keystone
+in-line assembler, and the Capstone disassembler.
 
 The API is self-skipping. If Capstone is absent, `emu_disas_available()` returns
 false, `emu_disas(...)` returns `0` and writes an empty string, and report helpers

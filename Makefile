@@ -44,7 +44,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 
 .PHONY: all help test check demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
-.PHONY: shared shared-emu shared-emu-asm manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
+.PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
 .PHONY: sanitize coverage tidy
@@ -307,9 +307,9 @@ $(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
 $(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-# Disassembly (Track C) for the "full" shared lib. Gated on Capstone exactly like
-# the test-binary disasm.o (degrades to offsets when absent); only libasmtest_emu_full
-# carries it, so the base emu lib stays Capstone-free.
+# Disassembly (Track C) for the emu shared lib (the superset). Gated on Capstone
+# exactly like the test-binary disasm.o (degrades to offsets when absent);
+# libasmtest_emu links it in, so disas_available() is true out of the box.
 $(BUILD)/pic/disasm.o: src/disasm.c include/asmtest_emu.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
 
@@ -337,49 +337,24 @@ $(call shlib_dev,libasmtest): $(call shlib_real,libasmtest)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest)
 	ln -sf $(notdir $(call shlib_compat,libasmtest)) $@
 
-# Emulator shared lib: kept separate so the core binding never pulls in Unicorn.
-# Deliberately Keystone-free: the in-line assembler (assemble.o, -lkeystone)
-# stays out of here so the binding images — which carry only libunicorn — keep
-# building. In-line assembly is exercised by `make asm-test` (below).
+# Emulator shared lib: the SUPERSET — emulator (emu.o, -lunicorn) plus BOTH
+# optional native tiers, the Keystone in-line assembler (assemble.o, -lkeystone)
+# and the Capstone disassembler (disasm.o, -lcapstone). Every binding that links
+# -lasmtest_emu or dlopens libasmtest_emu therefore gets all three tiers with no
+# flag — asm_available() and disas_available() are true out of the box. ONE lib
+# for everything optional, so binding asm/disas does not spawn a per-dependency
+# lib matrix (emu, emu+asm, emu+disasm, …). Needs libunicorn + libkeystone +
+# libcapstone at build time.
 shared-emu: $(call shlib_dev,libasmtest_emu)
 $(call shlib_real,libasmtest_emu): $(PIC_OBJS) $(BUILD)/pic/emu.o \
-                                   $(BUILD)/pic/fuzz.o
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ $(UNICORN_LIBS) -o $@
+                                   $(BUILD)/pic/fuzz.o \
+                                   $(BUILD)/pic/assemble.o \
+                                   $(BUILD)/pic/disasm.o
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu) $^ \
+	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
 $(call shlib_dev,libasmtest_emu): $(call shlib_real,libasmtest_emu)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_emu)) $@
-
-# Emulator + in-line assembler shared lib: libasmtest_emu plus assemble.o, so it
-# also exports asmtest_emu_call_asm for the bindings' optional CallAsm. A SEPARATE
-# lib (not libasmtest_emu) so only a consumer that wants in-line asm pays the
-# Keystone dependency — a binding points ASMTEST_LIB here to test CallAsm, and at
-# the plain libasmtest_emu otherwise (where CallAsm self-skips). Needs libkeystone.
-shared-emu-asm: $(call shlib_dev,libasmtest_emu_asm)
-$(call shlib_real,libasmtest_emu_asm): $(PIC_OBJS) $(BUILD)/pic/emu.o \
-                                       $(BUILD)/pic/fuzz.o \
-                                       $(BUILD)/pic/assemble.o
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu_asm) $^ \
-	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
-$(call shlib_dev,libasmtest_emu_asm): $(call shlib_real,libasmtest_emu_asm)
-	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu_asm)
-	ln -sf $(notdir $(call shlib_compat,libasmtest_emu_asm)) $@
-
-# The "full" emulator shared lib: libasmtest_emu plus BOTH optional native tiers —
-# the Keystone in-line assembler (assemble.o) and the Capstone disassembler
-# (disasm.o, Track C). ONE lib for everything optional, so binding disassembly
-# does not spawn a per-dependency lib matrix (emu, emu+asm, emu+disasm, …): the
-# lean libasmtest_emu stays dependency-light, and a binding points ASMTEST_LIB
-# here when it wants disasm (and gets asm for free). Needs libkeystone + libcapstone.
-shared-emu-full: $(call shlib_dev,libasmtest_emu_full)
-$(call shlib_real,libasmtest_emu_full): $(PIC_OBJS) $(BUILD)/pic/emu.o \
-                                        $(BUILD)/pic/fuzz.o \
-                                        $(BUILD)/pic/assemble.o \
-                                        $(BUILD)/pic/disasm.o
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_emu_full) $^ \
-	      $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
-$(call shlib_dev,libasmtest_emu_full): $(call shlib_real,libasmtest_emu_full)
-	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_emu_full)
-	ln -sf $(notdir $(call shlib_compat,libasmtest_emu_full)) $@
 
 # Machine-readable layout manifest: a small program compiled against the real
 # headers prints sizeof/offsetof for the host arch (see scripts/gen-manifest.c).
@@ -448,7 +423,10 @@ install-shared: shared manifest
 	cp asmtest_abi.json $(incdir)/
 	@echo "installed shared libasmtest $(ASMTEST_VERSION) to $(libdir)"
 
-# Install the emulator shared lib + its pkg-config (needs libunicorn present).
+# Install the emulator shared lib + its pkg-config. libasmtest_emu is the superset
+# (emu + Keystone assembler + Capstone disassembler), so this needs libunicorn +
+# libkeystone + libcapstone present — the C++/link bindings find it via the
+# installed asmtest-emu.pc and get all tiers with no flag.
 install-shared-emu: shared-emu
 	mkdir -p $(libdir) $(pcdir)
 	cp $(call shlib_real,libasmtest_emu) $(libdir)/
@@ -570,38 +548,13 @@ $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 
 docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 
-# --- In-line-asm binding images (bindings base + Keystone) ------------------
-# Like docker-<lang>, but built on a Keystone-carrying base so the image can run
-# `make <lang>-asm-test` — the optional CallAsm / assemble path — end to end
-# (binding -> asmtest_emu_call_asm6 / asmtest_asm_bytes -> Keystone -> emulator),
-# the same check the native `bindings-asm` CI matrix runs. Kept off the normal
-# docker-<lang> images so those stay Keystone-free. `make docker-bindings-asm`
-# runs every language; `make docker-<lang>-asm` runs one.
-DOCKER_BINDINGS_ASM_BASE ?= asmtest-bindings-asm-base
-
-.PHONY: docker-bindings-asm-base docker-bindings-asm \
-        $(addsuffix -asm,$(addprefix docker-,$(BINDING_LANGS)))
-
-docker-bindings-asm-base: docker-bindings-base
-	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-asm-base \
-	  --build-arg BASE=$(DOCKER_BINDINGS_BASE) -t $(DOCKER_BINDINGS_ASM_BASE) .
-
-# Generate `docker-<lang>-asm`: build the per-language image on the Keystone base
-# and run its in-line-asm conformance, overriding the image's default CMD.
-define docker_lang_asm_rule
-docker-$(1)-asm: docker-bindings-asm-base
-	$$(DOCKER) build $$(_docker_plat) -f bindings/$(1)/Dockerfile \
-	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_ASM_BASE) -t asmtest-$(1)-asm .
-	$$(DOCKER) run --rm $$(_docker_plat) asmtest-$(1)-asm make $(1)-asm-test
-endef
-$(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_asm_rule,$(L))))
-
-docker-bindings-asm: $(addsuffix -asm,$(addprefix docker-,$(BINDING_LANGS)))
+# libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
+# + Capstone, so each per-language image exercises the in-line-assembler AND
+# disassembler path under `make <lang>-test` — there is no separate asm image.
 
 docker-bindings-clean:
-	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) \
-	  $(addsuffix -asm,$(addprefix asmtest-,$(BINDING_LANGS))) asmtest-win64 \
-	  $(DOCKER_BINDINGS_BASE) $(DOCKER_BINDINGS_ASM_BASE)
+	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \
+	  $(DOCKER_BINDINGS_BASE)
 
 # --- Native Win64 tier (Win64 native tier plan) ----------------------------
 # Cross-compile to a Windows PE and run it under Wine — no Windows host. The
@@ -1038,41 +991,24 @@ python-test: shared-emu manifest conformance $(CORPUS_LIB)
 CXX      ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O0 -g -Iinclude
 
-# Keystone-free build (the default bindings image carries no Keystone): emulator
-# conveniences only. test_cpp.cpp's in-line-asm case is #ifdef ASMTEST_ENABLE_ASM,
-# so it compiles out here and asmtest.hpp never pulls in asmtest_assemble.h.
+# Full build: the bindings base now carries Keystone + Capstone (libasmtest_emu is
+# the superset), so the C++ example enables emulator + in-line assembler + disas
+# by default — matching the other bindings, where asm/disas are on out of the box.
 $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
-                     include/asmtest.h include/asmtest_emu.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) -DASMTEST_ENABLE_EMU -c $< -o $@
-
-$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
-                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                   $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp.o
-	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) -o $@
-
-cpp-test: $(BUILD)/test_cpp
-	./$(BUILD)/test_cpp
-
-# Asm-enabled build (needs Keystone): -DASMTEST_ENABLE_ASM + assemble.o +
-# -lkeystone so the inline_assembler case compiles and runs. A SEPARATE object
-# and binary from cpp-test so the Keystone-free `make cpp-test` / `docker-cpp`
-# stay buildable without Keystone; the bindings-asm matrix runs this one.
-$(BUILD)/test_cpp_asm.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
-                         include/asmtest.h include/asmtest_emu.h \
-                         include/asmtest_assemble.h | $(BUILD)
+                     include/asmtest.h include/asmtest_emu.h \
+                     include/asmtest_assemble.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(UNICORN_CFLAGS) $(KEYSTONE_CFLAGS) $(CAPSTONE_CFLAGS) \
 	       $(CAPSTONE_DEF) -DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM \
 	       -DASMTEST_ENABLE_DISAS -c $< -o $@
 
-$(BUILD)/test_cpp_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
-                       $(BUILD)/assemble.o $(BUILD)/disasm.o $(BUILD)/add.o \
-                       $(BUILD)/flags.o $(BUILD)/fp.o $(BUILD)/simd.o \
-                       $(BUILD)/fault.o $(BUILD)/test_cpp_asm.o
+$(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/fuzz.o \
+                   $(BUILD)/assemble.o $(BUILD)/disasm.o \
+                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
+                   $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
 
-.PHONY: cpp-asm-test
-cpp-asm-test: $(BUILD)/test_cpp_asm
-	./$(BUILD)/test_cpp_asm
+cpp-test: $(BUILD)/test_cpp
+	./$(BUILD)/test_cpp
 
 # --- Rust binding (Track R) ------------------------------------------------
 # A no-dependency crate (#[repr(C)] structs + extern "C" over the binding ABI)
@@ -1116,25 +1052,11 @@ bindings_env = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) \
                LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
                DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
 
-# Same, but ASMTEST_LIB points at the emu+assembler lib so the binding's optional
-# CallAsm/disas resolve and their conformance cases actually run (vs. skip
-# against the plain libasmtest_emu). Points at libasmtest_emu_full — the one lib
-# carrying BOTH optional native tiers (Keystone assembler + Capstone
-# disassembler) — so a single `*-asm-test` run exercises asm and disas together.
-# Used by the `bindings-asm` matrix; needs Keystone + Capstone.
-bindings_env_asm = ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
-               ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
-               LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
-               DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH"
-
+# libasmtest_emu is the superset, so bindings_env resolves the assembler +
+# disassembler too — asm_available()/disas_available() are true and every
+# binding's `<lang>-test` exercises asm and disas (no separate asm env/target).
 ruby-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(RUBY) bindings/ruby/conformance.rb
-
-# In-line-asm binding check: drive the Ruby conformance against libasmtest_emu_asm
-# so its CallAsm case runs end to end (binding -> shim -> Keystone -> emulator).
-.PHONY: ruby-asm-test
-ruby-asm-test: shared-emu-full $(CORPUS_LIB)
-	$(bindings_env_asm) $(RUBY) bindings/ruby/conformance.rb
 
 lua-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(LUAJIT) bindings/lua/conformance.lua
@@ -1151,62 +1073,6 @@ java-test: shared-emu $(CORPUS_LIB)
 
 dotnet-test: shared-emu $(CORPUS_LIB)
 	$(bindings_env) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
-
-# Optional-tiers binding checks (siblings of ruby-asm-test): each drives its
-# conformance against libasmtest_emu_full so the optional CallAsm AND disas cases
-# actually run (binding -> shim -> Keystone/Capstone -> emulator) rather than
-# self-skipping against the lean libasmtest_emu. The CI `bindings-asm` matrix
-# runs these; they need Keystone + Capstone.
-.PHONY: lua-asm-test node-asm-test java-asm-test dotnet-asm-test \
-        python-asm-test go-asm-test rust-asm-test zig-asm-test
-lua-asm-test: shared-emu-full $(CORPUS_LIB)
-	$(bindings_env_asm) $(LUAJIT) bindings/lua/conformance.lua
-
-# Python drives the same optional CallAsm/assemble surface; point ASMTEST_LIB at
-# the emu+asm lib so asm_available() is true and the asm tests run (vs. skip).
-python-asm-test: shared-emu-full manifest conformance $(CORPUS_LIB)
-	cd bindings/python && \
-	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
-	  ASMTEST_MANIFEST=$(abspath asmtest_abi.json) \
-	  ASMTEST_CORPUS_JSON=$(abspath bindings/conformance/corpus.json) \
-	  ASMTEST_CORPUS_LIB=$(abspath $(CORPUS_LIB)) \
-	  $(PYTEST) -q
-
-# Go/Rust resolve the assembler at run time (they statically link the plain
-# libasmtest_emu), so these mirror their base tests but add the emu+asm lib and
-# point ASMTEST_LIB at it (the binding dlopen()s that to find the asm symbols).
-go-asm-test: shared-emu shared-emu-full $(CORPUS_LIB)
-	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" \
-	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
-	  $(bindings_env_asm) $(GO) test ./...
-
-rust-asm-test: shared-emu shared-emu-full $(CORPUS_LIB)
-	cd bindings/rust && \
-	  ASMTEST_LIB_DIR=$(abspath $(BUILD)) \
-	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu_full)) \
-	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
-	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
-	  $(CARGO) test
-
-# Zig links the assembler lib directly (-Dasm=true compiles its asm test in).
-zig-asm-test: shared-emu-full $(CORPUS_LIB)
-	cd bindings/zig && \
-	  LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH" \
-	  DYLD_LIBRARY_PATH="$(abspath $(BUILD)):$$DYLD_LIBRARY_PATH" \
-	  $(ZIG) build test -Dasm=true -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
-
-node-asm-test: shared-emu-full $(CORPUS_LIB)
-	$(bindings_env_asm) $(NODE) bindings/node/conformance.js
-
-java-asm-test: shared-emu-full $(CORPUS_LIB)
-	mkdir -p $(BUILD)/java
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java \
-	  bindings/java/Asmtest.java bindings/java/Conformance.java
-	$(bindings_env_asm) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
-	  -cp $(BUILD)/java Conformance
-
-dotnet-asm-test: shared-emu-full $(CORPUS_LIB)
-	$(bindings_env_asm) $(DOTNET) run --project bindings/dotnet/asmtest.csproj
 
 # Go links the shared libs at build time via cgo; CGO_LDFLAGS carries the -L (so
 # a custom BUILD works), and bindings_env's LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
@@ -1253,17 +1119,16 @@ native-payload-check:
 	  echo "native-payload-check: no payload in $(PKG_DIST)/native — run 'make package-libs' first"; exit 1; }
 
 # package-libs stages the build host's native payload into build/dist/native/<plat>/.
-# The dlopen bindings load libasmtest_emu by a fixed name, so the FULL superset lib
-# (libasmtest_emu_full: emu + Keystone assembler + Capstone disassembler) is staged
-# INTO that slot (D1) and scripts/package-native.sh then vendors its three native
-# deps beside it (rpath -> $$ORIGIN/@loader_path) and assembles THIRD-PARTY-LICENSES,
-# so a fresh install runs both optional tiers with no system libs. Needs libunicorn
-# + libkeystone + libcapstone at build time (make deps DEPS_ARGS=--asm plus the
-# build-{keystone,capstone}.sh source builds).
-package-libs: shared shared-emu-full
+# libasmtest_emu IS the full superset (emu + Keystone assembler + Capstone
+# disassembler), so it is staged directly under that slot and scripts/package-native.sh
+# then vendors its three native deps beside it (rpath -> $$ORIGIN/@loader_path) and
+# assembles THIRD-PARTY-LICENSES, so a fresh install runs both optional tiers with no
+# system libs. Needs libunicorn + libkeystone + libcapstone at build time (make deps
+# DEPS_ARGS=--asm plus the build-{keystone,capstone}.sh source builds).
+package-libs: shared shared-emu
 	mkdir -p $(PKG_DIST)/native/$(PKG_PLAT)
-	cp -f $(call shlib_real,libasmtest)          $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
-	cp -f $(call shlib_real,libasmtest_emu_full) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
+	cp -f $(call shlib_real,libasmtest)     $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
+	cp -f $(call shlib_real,libasmtest_emu) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
 	sh scripts/package-native.sh $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_emu_name)
 	@echo "package-libs: staged $(PKG_PLAT) full payload in $(PKG_DIST)/native/$(PKG_PLAT)"
 
@@ -1280,8 +1145,8 @@ python-package: package-libs manifest
 	# delocate (macOS) at repair time, and those tools resolve the lib's
 	# dependencies from the system — they choke on a lib already rewritten to
 	# @loader_path. The THIRD-PARTY-LICENSES notices still ride along.
-	cp -f $(call shlib_real,libasmtest_emu_full) bindings/python/asmtest/_libs/$(pkg_emu_name)
-	cp -f $(call shlib_real,libasmtest)          bindings/python/asmtest/_libs/$(pkg_core_name)
+	cp -f $(call shlib_real,libasmtest_emu) bindings/python/asmtest/_libs/$(pkg_emu_name)
+	cp -f $(call shlib_real,libasmtest)     bindings/python/asmtest/_libs/$(pkg_core_name)
 	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
 	cp -Rf $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES bindings/python/asmtest/_libs/ 2>/dev/null || true
 	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python

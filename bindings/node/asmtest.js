@@ -53,8 +53,8 @@ const fn = {
   emuResNew: L.func('void *asmtest_emu_result_new()'),
   emuResFree: L.func('void asmtest_emu_result_free(void *)'),
   emuCall2: L.func('int asmtest_emu_call2(void *, void *, long, long, void *)'),
-  // Optional: the in-line assembler (Keystone) is only in the emu+asm lib. koffi
-  // throws here if the symbol is absent, so degrade to null against plain emu.
+  // The in-line assembler (Keystone) is carried by libasmtest_emu. koffi throws
+  // here if the symbol is absent, so degrade to null against an older/leaner lib.
   // The widened run shim takes six scalar args + syntax + an instruction cap;
   // asmBytes is multi-arch text->bytes; asmLastError carries the diagnostic.
   emuCallAsm6: (() => {
@@ -69,8 +69,9 @@ const fn = {
     try { return L.func('const char *asmtest_asm_last_error()'); }
     catch { return null; }
   })(),
-  // Optional: the disassembler (Capstone) is only in the emu+full lib. emuDisas
-  // decodes one instruction at `off` into a text buffer; the probe self-skips.
+  // The disassembler (Capstone) is carried by libasmtest_emu (resolved
+  // defensively, in case of an older/leaner lib). emuDisas decodes one
+  // instruction at `off` into a text buffer; the probe guards the call.
   emuDisas: (() => {
     try { return L.func('size_t emu_disas(int, const uint8_t *, size_t, uint64_t, uint64_t, _Out_ char *, size_t)'); }
     catch { return null; }
@@ -283,8 +284,9 @@ class Emu {
    * 4=GAS; see `Syntax`) via Keystone and
    * run it with the integer `args` (up to six), stopping after `opts.maxInsns`
    * instructions (0 = run to `ret`). Returns the EmuResult; throws AsmtestError
-   * carrying the Keystone diagnostic if the string fails to assemble. Only when
-   * asmAvailable() — needs the emu+asm native lib.
+   * carrying the Keystone diagnostic if the string fails to assemble.
+   * libasmtest_emu carries the assembler, so this works by default; guard with
+   * asmAvailable() for an older/leaner lib.
    */
   callAsm(src, args = [], { syntax = 0, maxInsns = 0 } = {}) {
     if (!fn.emuCallAsm6) throw new AsmtestError('in-line assembler not in this build');
@@ -391,8 +393,8 @@ function assemble(src, arch = 0, syntax = 0, addr = 0x00100000) {
   return buf.subarray(0, n);
 }
 
-/** Whether the loaded native lib carries the disassembler (Capstone). True only
- * for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false. */
+/** Whether the loaded native lib carries the disassembler (Capstone). True for
+ * libasmtest_emu (the superset); only an older/leaner lib returns false. */
 function disasAvailable() { return fn.emuDisas !== null && fn.emuDisasAvailable(); }
 
 /**

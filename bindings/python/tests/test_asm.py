@@ -1,9 +1,10 @@
 """In-line assembler (Keystone) tests for the Python binding.
 
-These exercise the optional assembler surface — :meth:`Emulator.call_asm` and
-:func:`assemble` — which is present only when the loaded native lib carries
-Keystone (libasmtest_emu_asm). Run via ``make python-asm-test``; against the
-plain libasmtest_emu they skip.
+These exercise the assembler surface — :meth:`Emulator.call_asm` and
+:func:`assemble` — which Keystone provides. It ships in libasmtest_emu (the
+superset), so these run by default (``make python-asm-test`` is an alias of
+``make python-test``); they self-skip only against an older/leaner lib without
+Keystone.
 """
 import pytest
 
@@ -11,7 +12,7 @@ import asmtest
 
 pytestmark = pytest.mark.skipif(
     not asmtest.asm_available(),
-    reason="in-line assembler not in this build (run `make python-asm-test`)",
+    reason="in-line assembler not in this build (ASMTEST_LIB points at an older/leaner lib)",
 )
 
 

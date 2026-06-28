@@ -49,8 +49,9 @@ module Asmtest
     Fiddle::Function.new(lib[name], args, ret)
   end
 
-  # Like func, but returns nil if the symbol is absent — for optional entry
-  # points such as the in-line assembler (present only in the emu+asm lib).
+  # Like func, but returns nil if the symbol is absent — a defensive fallback for
+  # entry points such as the in-line assembler, which libasmtest_emu carries but
+  # an older/leaner lib may not.
   def self.func_opt(lib, name, args, ret)
     func(lib, name, args, ret)
   rescue Fiddle::DLError
@@ -75,13 +76,15 @@ module Asmtest
     emu_res_new:    func(L, "asmtest_emu_result_new", [], VOIDP),
     emu_res_free:   func(L, "asmtest_emu_result_free", [VOIDP], VOID),
     emu_call2:      func(L, "asmtest_emu_call2", [VOIDP, VOIDP, LONG, LONG, VOIDP], INT),
-    # Optional (emu+asm lib only): widened run shim (six scalars + syntax + cap),
-    # multi-arch text->bytes, and the thread-local diagnostic.
+    # Carried by libasmtest_emu (resolved defensively, in case of an older/leaner
+    # lib): widened run shim (six scalars + syntax + cap), multi-arch text->bytes,
+    # and the thread-local diagnostic.
     emu_call_asm6:  func_opt(L, "asmtest_emu_call_asm6", [VOIDP, VOIDP, INT, LONG, LONG, LONG, LONG, LONG, LONG, INT, LL, VOIDP], INT),
     asm_bytes:      func_opt(L, "asmtest_asm_bytes", [INT, INT, VOIDP, LL, VOIDP, INT], INT),
     asm_last_error: func_opt(L, "asmtest_asm_last_error", [], VOIDP),
-    # Optional (emu+full lib only): the Capstone disassembler — decode one
-    # instruction at +off+ into a text buffer; the availability probe self-skips.
+    # Carried by libasmtest_emu (resolved defensively, in case of an older/leaner
+    # lib): the Capstone disassembler — decode one instruction at +off+ into a
+    # text buffer; the availability probe guards the call.
     emu_disas:       func_opt(L, "emu_disas", [INT, VOIDP, LL, LL, LL, VOIDP, LL], LL),
     emu_disas_avail: func_opt(L, "emu_disas_available", [], INT),
     emu_faulted:    func(L, "asmtest_emu_result_faulted", [VOIDP], INT),
@@ -185,8 +188,8 @@ module Asmtest
     buf[0, n]
   end
 
-  # Whether the loaded native lib carries the disassembler (Capstone). True only
-  # for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm return false.
+  # Whether the loaded native lib carries the disassembler (Capstone). True for
+  # libasmtest_emu (the superset); only an older/leaner lib returns false.
   def self.disas_available?
     !FN[:emu_disas].nil? && FN[:emu_disas_avail].call != 0
   end
@@ -373,8 +376,8 @@ module Asmtest
     # see SYNTAX) via Keystone and run it
     # with the integer +args+ (up to six), stopping after +max_insns+ instructions
     # (0 = run to +ret+). Returns the EmuResult; raises Error carrying the Keystone
-    # diagnostic if it fails to assemble. Only when #asm_available? — needs the
-    # emu+asm native lib.
+    # diagnostic if it fails to assemble. libasmtest_emu carries the assembler, so
+    # this works by default; guard with #asm_available? for an older/leaner lib.
     def call_asm(src, args = [], syntax: 0, max_insns: 0)
       raise Error, "in-line assembler not in this build" unless asm_available?
       a = Array.new(6, 0)

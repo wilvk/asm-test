@@ -42,10 +42,11 @@ accesses — where and why, not just that one hit.
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. The assembler lives only in the
-Keystone-carrying `libasmtest_emu_asm`; the dependency-free crate links the plain
-lib and resolves it at run time via the libc loader, so `asm_available()` is true
-only when `ASMTEST_LIB` points at the assembler lib (`make rust-asm-test`).
+Pass a routine as an **assembly string**. The assembler lives in the
+Keystone-carrying `libasmtest_emu` (now the full superset); the dependency-free
+crate resolves it at run time via the libc loader, so `asm_available()` is true by
+default. It stays a defensive probe — false only if `ASMTEST_LIB` points at an
+older/leaner lib without the assembler.
 
 ```rust
 use asmtest::{AsmArch, AsmSyntax};

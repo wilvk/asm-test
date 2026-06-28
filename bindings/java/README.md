@@ -29,9 +29,10 @@ is a **preview** API in JDK 21, so it compiles with `--release 21
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make java-asm-test` points `ASMTEST_LIB` at it);
-`Emu#asmAvailable()` is false against the plain lib.
+Pass a routine as an **assembly string**. `libasmtest_emu` carries the Keystone
+in-line assembler, so this works out of the box under `make java-test`.
+`Emu#asmAvailable()` is a defensive probe — false only against an older/leaner
+lib pointed at by `ASMTEST_LIB`.
 
 ```java
 try (Asmtest.Emu e = new Asmtest.Emu()) {

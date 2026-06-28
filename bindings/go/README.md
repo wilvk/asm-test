@@ -32,10 +32,11 @@ target (e.g. `make docker-go DOCKER_PLATFORM=linux/amd64`).
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. The assembler entry points live only
-in the Keystone-carrying `libasmtest_emu_asm`; Go statically links the plain lib
-and resolves them at run time through the dynamic loader, so `AsmAvailable()` is
-true only when `ASMTEST_LIB` points at the assembler lib (`make go-asm-test`).
+Pass a routine as an **assembly string**. The assembler entry points live in the
+Keystone-carrying `libasmtest_emu` (now the full superset), which Go resolves at
+run time through the dynamic loader, so `AsmAvailable()` is true by default. It
+stays a defensive probe — false only if `ASMTEST_LIB` points at an older/leaner
+lib without the assembler.
 
 ```go
 if asmtest.AsmAvailable() {

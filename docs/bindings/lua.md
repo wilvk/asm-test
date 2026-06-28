@@ -44,9 +44,10 @@ asmtest.assert_emu_reg(res, "rax", 42)
 
 ## In-line assembler (optional)
 
-Pass a routine as an **assembly string**. Present only in the Keystone-carrying
-`libasmtest_emu_asm` (`make lua-asm-test` points `ASMTEST_LIB` at it);
-`Emu:asm_available()` is false against the plain lib.
+Pass a routine as an **assembly string**. The Keystone assembler is built into
+`libasmtest_emu`, so this runs by default under `make lua-test`;
+`Emu:asm_available()` remains a defensive probe, false only against an
+older/leaner lib.
 
 ```lua
 local e = asmtest.Emu()
@@ -172,7 +173,6 @@ asmtest.assert_covered(t, 0x0)             -- basic block entered
 ```sh
 make lua-test         # from the repo root (needs the shared libs + LuaJIT)
 make docker-lua       # or in an isolated container
-make lua-asm-test     # points ASMTEST_LIB at libasmtest_emu_asm
 ```
 
 `make lua-test` builds `libasmtest_emu` + the routine fixture lib, then runs

@@ -21,10 +21,10 @@ package ships:
 - **dlopen bindings** — Python, Ruby, Lua, Node, Java, .NET. They open the shared
   library at run time (`ctypes`, `Fiddle`, LuaJIT `ffi`, `koffi`, FFM, P/Invoke),
   so their package **bundles the prebuilt `libasmtest_emu`** under that fixed name.
-  The staged lib is the **superset `libasmtest_emu_full`** (capture trampoline +
-  opaque-handle FFI + emulator + the Keystone in-line assembler + the Capstone
-  disassembler), so a fresh install has **both optional tiers working out of the
-  box** — `asm_available()` and `disas_available()` return true. Alongside it the
+  That lib is the **full superset** (capture trampoline + opaque-handle FFI +
+  emulator + the Keystone in-line assembler + the Capstone disassembler), so a
+  fresh install has **both optional tiers working out of the box** —
+  `asm_available()` and `disas_available()` return true. Alongside it the
   payload vendors the three native dependencies (**Unicorn, Keystone, Capstone**)
   with the lib's runtime search path rewritten to its own directory (`$ORIGIN` on
   Linux, `@loader_path` on macOS), plus a **`THIRD-PARTY-LICENSES/`** notice — so

@@ -369,7 +369,8 @@ class Emulator:
         run it with the integer `args` (up to six), stopping after `max_insns`
         instructions (0 = run to ``ret``). Returns an :class:`EmuResult`; raises
         :class:`AsmtestError` carrying the Keystone diagnostic if it fails to
-        assemble. Only when the loaded lib has the assembler (libasmtest_emu_asm).
+        assemble. The assembler ships in libasmtest_emu (the superset), so this
+        is available by default; raises if a leaner lib lacks it.
         """
         c = load()
         if not c.has_asm:
@@ -814,8 +815,9 @@ def assemble(src, arch=Arch.X86_64, syntax=Syntax.INTEL, addr=0x00100000):
 def disas_available():
     """Whether the loaded native lib carries the disassembler (Capstone).
 
-    True only for libasmtest_emu_full; the lean libasmtest_emu / _emu_asm
-    return False, so a caller can self-skip a disassembly check.
+    True for libasmtest_emu (the superset carries Capstone); returns False only
+    against an older/leaner lib without it, so a caller can self-skip a
+    disassembly check.
     """
     c = load()
     return c.has_disas and bool(c.lib.emu_disas_available())
@@ -827,7 +829,7 @@ def disas(code, off=0, arch=Arch.X86_64, base=0x00100000):
     `arch` mirrors emu_arch_t (== :class:`Arch`); `base` is the address the
     bytes run at (EMU_CODE_BASE), so PC-relative operands read correctly.
     Returns "mnemonic operands" text, or "" when no disassembler is present
-    (lean lib) or the bytes do not decode. Pair it with an emulator fault's
+    (an older/leaner lib) or the bytes do not decode. Pair it with an emulator fault's
     rip offset to name the offending instruction.
     """
     c = load()

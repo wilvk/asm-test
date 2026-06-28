@@ -174,20 +174,21 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   guests, then `emu_*_call_asm` runs it via the Phase 4 engine — assembling at the
   emulator's load base so PC-relative and branch targets resolve. It is the
   assembler counterpart to the Unicorn disassembler: the emulator already consumes
-  raw `(code, code_len)` buffers, so this is a text→bytes front end. Optional and
-  pkg-config gated, and deliberately kept out of `libasmtest_emu` so the
-  Unicorn-only bindings are unaffected; `make asm-test` and a CI `asm` job
+  raw `(code, code_len)` buffers, so this is a text→bytes front end. It is now
+  folded into `libasmtest_emu`, which is the full superset (emulator + Keystone +
+  Capstone), so every binding gets it by default; `make asm-test` and a CI `asm` job
   (Keystone has no distro package, so it is source-built via
   `scripts/build-keystone.sh`). All ten bindings expose it optionally as a
   `callAsm`/`assemble` pair over a widened opaque-handle shim
   (`asmtest_emu_call_asm6` — Intel/AT&T syntax, up to six args, an instruction
   cap, and `asmtest_asm_last_error()` for the diagnostic; `asmtest_asm_bytes`
-  for multi-arch text→bytes), self-skipping against the Keystone-free
-  `libasmtest_emu`, exercised by the native `bindings-asm` CI matrix. See
+  for multi-arch text→bytes), now carried by the superset `libasmtest_emu`
+  (self-skipping only against an older, Keystone-free lib), exercised by the
+  native `bindings-asm` CI matrix. See
   [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
   The Capstone disassembler counterpart is built the same way from a pinned source
   release (`scripts/build-capstone.sh`). The **published packages are fully
-  featured**: each bundles the superset `libasmtest_emu_full` plus vendored
+  featured**: each bundles the superset `libasmtest_emu` plus vendored
   Unicorn/Keystone/Capstone (so the tiers work with no system libs), which makes
   the distributed package effectively GPL-2.0 — see
   [the fully-featured-packages plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/fully-featured-packages-plan.md).

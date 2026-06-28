@@ -21,10 +21,10 @@ namespace Asmtest
         const string COR = "asmtest_corpus";
 
         // Resolve the two logical libs from the environment, matching the other
-        // bindings: ASMTEST_LIB selects which "asmtest_emu" to load — the plain
-        // libasmtest_emu or the emu+assembler libasmtest_emu_asm (so CallAsm runs
-        // against the latter) — and ASMTEST_CORPUS_LIB selects the fixtures lib.
-        // Falls back to default name-based resolution when unset.
+        // bindings: ASMTEST_LIB selects which "asmtest_emu" to load — by default
+        // libasmtest_emu, the full superset carrying the emulator + Keystone
+        // assembler + Capstone disassembler — and ASMTEST_CORPUS_LIB selects the
+        // fixtures lib. Falls back to default name-based resolution when unset.
         static Native()
         {
             NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, asm, paths) =>
@@ -56,17 +56,18 @@ namespace Asmtest
         [DllImport(EMU)] public static extern void asmtest_emu_result_free(IntPtr r);
         [DllImport(EMU)] public static extern int asmtest_emu_call2(
             IntPtr e, IntPtr fn, long a0, long a1, IntPtr o);
-        // Optional: present only in the emu+asm native lib (Keystone). Guard
-        // every call with AsmAvailable so a plain libasmtest_emu never hits a
-        // missing entry point. The widened shim takes six scalar args + syntax
-        // + an instruction cap; the assemble-only shim is multi-arch.
+        // The in-line assembler (Keystone): carried by libasmtest_emu. Guard
+        // every call with AsmAvailable anyway, so an older/leaner lib pointed at
+        // by ASMTEST_LIB never hits a missing entry point. The widened shim takes
+        // six scalar args + syntax + an instruction cap; the assemble-only shim
+        // is multi-arch.
         [DllImport(EMU)] public static extern int asmtest_emu_call_asm6(
             IntPtr e, string src, int syntax, long a0, long a1, long a2, long a3,
             long a4, long a5, int nargs, ulong maxInsns, IntPtr o);
         [DllImport(EMU)] public static extern int asmtest_asm_bytes(
             int arch, int syntax, string src, ulong addr, byte[] buf, int cap);
         [DllImport(EMU)] static extern IntPtr asmtest_asm_last_error();
-        // Optional: the disassembler (Capstone), present only in libasmtest_emu_full.
+        // The disassembler (Capstone): carried by libasmtest_emu.
         [DllImport(EMU)] public static extern UIntPtr emu_disas(
             int arch, byte[] code, UIntPtr codeLen, ulong baseAddr, ulong off,
             byte[] buf, UIntPtr bufLen);
@@ -190,8 +191,9 @@ namespace Asmtest
             catch { return false; }
         }
 
-        // Whether the loaded lib carries the disassembler (Capstone) — only
-        // libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm do not.
+        // Whether the loaded lib carries the disassembler (Capstone) —
+        // libasmtest_emu does; defensive against an older/leaner lib pointed at
+        // by ASMTEST_LIB, which may not.
         public static readonly bool DisasAvailable = ProbeDisas();
         static bool ProbeDisas()
         {
@@ -414,9 +416,10 @@ namespace Asmtest
         }
 
         /// <summary>Whether the loaded native lib carries the disassembler (Capstone) —
-        /// only libasmtest_emu_full does; the lean libasmtest_emu / _emu_asm do not.
-        /// Combines the symbol-presence probe with the runtime Capstone check (safe
-        /// to call here: the DllImport resolver is registered by now).</summary>
+        /// libasmtest_emu does; defensive against an older/leaner lib pointed at by
+        /// ASMTEST_LIB, which may not. Combines the symbol-presence probe with the
+        /// runtime Capstone check (safe to call here: the DllImport resolver is
+        /// registered by now).</summary>
         public static bool DisasAvailable => Native.DisasAvailable && Native.emu_disas_available();
 
         /// <summary>

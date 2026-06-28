@@ -188,7 +188,7 @@ so neither optional tier depends on a distro/brew package. See
 [docs/plans/inline-asm-keystone-plan.md](docs/plans/inline-asm-keystone-plan.md).
 
 The **published language packages bundle both optional tiers** (the superset
-`libasmtest_emu_full` plus vendored Unicorn/Keystone/Capstone), so a fresh install
+`libasmtest_emu` plus vendored Unicorn/Keystone/Capstone), so a fresh install
 runs in-line assembly and disassembly with no system libraries. Because they
 convey the GPL-2.0 engines as binaries, those packages are **effectively GPL-2.0**
 (asm-test's own source stays MIT — see [LICENSE](LICENSE) and

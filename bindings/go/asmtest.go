@@ -13,10 +13,12 @@
 //   asmtest_check_abi               non-jumping ABI-preservation verdict
 //   emu_open/_close, asmtest_emu_*  run a routine in the emulator (faults as data)
 //
-// The build links libasmtest_emu (capture + emulator + accessors) and
-// libasmtest_corpus (the routine fixtures). At run time the dynamic loader finds
-// them via LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (set by `make go-test`); the
-// CGO_LDFLAGS -L below makes a default `build/` tree work without the Makefile.
+// The build links libasmtest_emu (the full superset: capture + emulator +
+// accessors + Keystone assembler + Capstone disassembler) and libasmtest_corpus
+// (the routine fixtures), so asm_available()/disas_available() are true with no
+// flag. At run time the dynamic loader finds them via LD_LIBRARY_PATH /
+// DYLD_LIBRARY_PATH (set by `make go-test`); the CGO_LDFLAGS -L below makes a
+// default `build/` tree work without the Makefile.
 package asmtest
 
 /*
@@ -121,16 +123,19 @@ extern unsigned long long asmtest_emu_mutation_survived(void *s);
 extern void asm_call_capture_vec256(void *vec, void *fn, long *iargs, void *vargs);
 extern int asmtest_cpu_has_avx2(void);
 
-// In-line assembler entry points live only in the emu+asm lib (libasmtest_emu_asm),
-// which the default build does not link. Resolve them at run time from the lib the
-// binding loads (ASMTEST_LIB): dlopen it RTLD_GLOBAL, then dlsym. Against the plain
-// libasmtest_emu these stay NULL and CallAsm/Assemble self-skip — matching how the
-// dlopen-based bindings (Ruby, Node, ...) degrade.
+// In-line assembler entry points live in libasmtest_emu (now the full superset:
+// emulator + Keystone assembler + Capstone disassembler), which the binding loads.
+// Resolve them at run time from the lib the binding loads (ASMTEST_LIB): dlopen it
+// RTLD_GLOBAL, then dlsym. They normally resolve, so CallAsm/Assemble run by
+// default; against an older/leaner lib without Keystone these stay NULL and the
+// helpers self-skip — matching how the dlopen-based bindings (Ruby, Node, ...)
+// degrade.
 typedef int (*asmtest_call_asm6_fn)(void *, const char *, int, long, long, long, long, long, long, int, unsigned long long, void *);
 typedef int (*asmtest_asm_bytes_fn)(int, int, const char *, unsigned long long, unsigned char *, int);
 typedef const char *(*asmtest_asm_err_fn)(void);
-// The disassembler (Capstone) is optional too — only libasmtest_emu_full carries
-// it. Same dlsym-or-NULL degrade as the assembler above.
+// The disassembler (Capstone) ships in libasmtest_emu too (the full superset), so
+// it normally resolves. Same dlsym-or-NULL degrade as the assembler above against
+// an older/leaner lib.
 typedef unsigned long (*asmtest_disas_fn)(int, const unsigned char *, unsigned long, unsigned long long, unsigned long long, char *, unsigned long);
 typedef int (*asmtest_disas_avail_fn)(void);
 
@@ -487,7 +492,8 @@ const (
 )
 
 // AsmAvailable reports whether the loaded native lib carries the in-line
-// assembler (Keystone) — i.e. ASMTEST_LIB points at libasmtest_emu_asm.
+// assembler (Keystone) — true by default, since libasmtest_emu (the superset)
+// carries it; false only if ASMTEST_LIB points at an older/leaner lib.
 func AsmAvailable() bool { return C.asmtest_has_asm() != 0 }
 
 // AsmError returns the Keystone diagnostic from the most recent assemble on this
@@ -540,8 +546,8 @@ func Assemble(src string, arch AsmArch, syntax AsmSyntax, addr uint64) ([]byte, 
 }
 
 // DisasAvailable reports whether the loaded native lib carries the disassembler
-// (Capstone) — i.e. ASMTEST_LIB points at libasmtest_emu_full. The lean
-// libasmtest_emu / _emu_asm return false.
+// (Capstone) — true by default, since libasmtest_emu (the superset) carries it;
+// false only if ASMTEST_LIB points at an older/leaner lib.
 func DisasAvailable() bool { return C.asmtest_has_disas() != 0 }
 
 // Disas disassembles the one instruction at byte off of code for arch (reuse the

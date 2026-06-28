@@ -264,8 +264,9 @@ func TestInlineAsm(t *testing.T) {
 }
 
 // TestDisas exercises the disassembler tier (Capstone): decode known x86-64
-// bytes back to text. Self-skips unless ASMTEST_LIB points at libasmtest_emu_full
-// (`make go-asm-test`); the lean libasmtest_emu reports DisasAvailable() false.
+// bytes back to text. Runs by default — libasmtest_emu (the superset) carries
+// Capstone; the DisasAvailable() probe only self-skips against an older/leaner
+// lib pointed to by ASMTEST_LIB.
 func TestDisas(t *testing.T) {
 	if !DisasAvailable() {
 		t.Skip("disassembler not in this build (run via `make go-asm-test`)")

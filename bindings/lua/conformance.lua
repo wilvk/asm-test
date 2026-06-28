@@ -127,7 +127,8 @@ do
   tr:free()
   gt:close()
 
-  -- in-line assembly (Keystone) replays add_signed, only if the lib has it
+  -- in-line assembly (Keystone) replays add_signed; carried by libasmtest_emu,
+  -- the probe is a defensive guard against an older/leaner lib
   if e:asm_available() then
     local ares = e:call_asm("mov rax, rdi; add rax, rsi; ret", {40, 2})
     check("asm.add_signed", not ares:faulted() and ares:reg("rax") == 42)
@@ -151,15 +152,15 @@ do
 end
 
 -- --- Tier 1: disassembly (Capstone) decodes known bytes to text ------------
--- Only when the loaded lib carries Capstone (libasmtest_emu_full); the lean
--- libasmtest_emu / _emu_asm report disas_available() false and this skips.
+-- libasmtest_emu carries Capstone, so this runs by default; the probe stays a
+-- defensive guard -- only an older/leaner lib reports disas_available() false.
 if asmtest.disas_available() then
   local code = string.char(0x48, 0x31, 0xC0, 0xC3) -- xor rax, rax ; ret
   check("disas.xor_rax", asmtest.disas(code, 0) == "xor rax, rax")
   check("disas.ret", asmtest.disas(code, 3) == "ret")
   check("disas.nop", asmtest.disas(string.char(0x90)) == "nop")
 else
-  print("ok - disas.xor_rax # SKIP no disassembler (lean lib)")
+  print("ok - disas.xor_rax # SKIP no disassembler (older/leaner lib)")
 end
 
 -- --- Tier 2: idiomatic assertions pass on good input -----------------------
