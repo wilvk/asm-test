@@ -11,6 +11,11 @@ the runtime at app startup, mark a trace region, execute native or
 Keystone-generated host code, and read back the covered basic blocks or
 instructions.
 
+Two hardware-assisted backends (Intel PT, ARM CoreSight) and a foreign-JIT
+forward-look that once lived here as Phases 9–10 now have their own
+[hardware-trace plan](hardware-trace-plan.md); this plan covers the DynamoRIO
+tier (Phases 0–8) plus the shared trace substrate all backends reuse.
+
 > Status legend: **planned** unless noted. Update this file as phases land, the
 > way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) and
 > [win64-native-tier-plan.md](win64-native-tier-plan.md) track theirs.
@@ -152,8 +157,9 @@ begin/end markers are backend-neutral. The Capstone annotation layer is *offset-
 based* (it renders recorded offsets from caller-supplied code bytes) but today is
 `emu_*`/`emu_arch_t`-typed and declared in `asmtest_emu.h`; Phase 1 makes it
 backend-neutral *by name*. With that, a caller can switch backends without
-changing test code. Phase 9 adds the two hardware-trace backends; the rest of
-this plan builds the DynamoRIO one.
+changing test code. A separate [hardware-trace plan](hardware-trace-plan.md)
+adds two hardware-trace backends (Intel PT, ARM CoreSight); the rest of this
+plan builds the DynamoRIO one.
 
 Do **not** rely on ordinary shared C globals between the app library and the
 DynamoRIO client. DynamoRIO clients may be privately loaded. Communication
@@ -321,26 +327,62 @@ model is fine because nothing is churning code concurrently.
   - the standard runner must run these tests `--no-fork` and without `-j` (see
     Phase 3 runner ownership).
 - A **managed-host gate**, run **first against CPython** (the friendliest runtime
-  — GIL-serialized, no default JIT). Two measurements decide whether the
+  — GIL-serialized, no default JIT). Three measurements decide whether the
   in-process model survives a real language runtime:
   - a **takeover/detach micro-benchmark**: time repeated `asmtest_dr_start` /
     `asmtest_dr_stop` brackets around one call, to cost the bracketed-takeover
-    model (see the Public-API lifecycle note);
+    model (see the Public-API lifecycle note). The benchmark must separate
+    **cold** from **warm** bracket cost: time the first start->run->stop bracket
+    over the registered routine, then many subsequent brackets over the **same**
+    routine, and report whether warm brackets are materially cheaper (the
+    instrumented fragment cache **survived** the `dr_app_stop` -> `dr_app_start`
+    bracket) or roughly equal to cold (the region is **re-translated each
+    bracket**, which materially changes whether bracketing is affordable). The
+    DynamoRIO docs are **silent** on cache persistence across a plain
+    `dr_app_stop` -> `dr_app_start` bracket: only `dr_app_stop_and_cleanup` is
+    documented to free DR's resources, so plain `dr_app_stop` is *expected, but
+    undocumented,* to leave fragments warm — treat persistence as something to
+    **measure, not assert**. Because the bracketed model relies on **repeated
+    plain `dr_app_stop`** (which a DR developer warns is "potentially less robust
+    in certain situations" than `dr_app_stop_and_cleanup`), also record
+    **stability over a long bracket loop**, not just per-bracket latency;
   - a **signal-chaining check**: the client registers `dr_register_signal_event`
     returning `DR_SIGNAL_DELIVER`, and the test confirms the host's own SIGSEGV
     path (a deliberate faulting probe the runtime recovers from) still works while
     DR is started — DR intercepts all signals and never lets SIGSEGV be blocked,
-    so chaining, not suppression, is the only viable coexistence.
-  If CPython passes both, proceed; if not, route managed runtimes to the Phase 9
-  hardware-trace backend earlier (see
-  [Language runtime support](#language-runtime-support)).
+    so chaining, not suppression, is the only viable coexistence;
+  - a **thread-takeover scope probe**: empirically confirm *which* threads
+    `dr_app_start` actually puts under DR control, since the whole managed-host
+    fragility argument rests on it and the docs are subtle. `dr_app.h` states
+    `dr_app_start` "Attempts to take over any existing threads," so takeover is
+    **process-wide** (all pre-existing threads, not the calling thread only), and
+    DR exposes **no per-thread variant**; on Linux it is implemented by
+    enumerating the thread group and sending a takeover/suspend signal to each
+    thread in a best-effort bounded-retry loop (DR can report "Failed to take
+    over all threads after multiple attempts"). The probe must (i) start DR with
+    several pre-existing **sibling** threads alive — one **busy-spinning**, one
+    **blocking the takeover signal** — then (ii) on each thread call
+    `dr_app_running_under_dynamorio()` immediately after `dr_app_start` returns
+    **and again** after forcing a syscall, and (iii) record which sibling threads
+    are actually executing translated and after how long. Treat "all sibling
+    threads are under DR control by the time `dr_app_start` returns" as something
+    to **prove, not assume**, and capture any takeover-timeout or signal-mask
+    failure (e.g. a `CLONE_VM` thread without `CLONE_SIGHAND`, where DR's signal
+    "would have no effect") as **data**.
+  If CPython passes all three, proceed; if not, route managed runtimes to the
+  hardware-trace backend earlier (see the [hardware-trace plan](hardware-trace-plan.md)
+  and [Language runtime support](#language-runtime-support)).
 
 **Acceptance.** A minimal program runs under DynamoRIO control without `drrun`,
 the client receives a basic-block callback, the clean call can write through an
 app-passed pointer into app-owned memory (the architecture's hinge — prove it
 here), and teardown returns the process to native execution without crashing.
 Additionally, the CPython managed-host gate passes: a generated routine is traced
-from inside a live CPython process with the host's SIGSEGV path still functional.
+from inside a live CPython process with the host's SIGSEGV path still functional,
+the thread-takeover scope of `dr_app_start` is **measured** (which sibling threads
+begin executing translated, and after how long), and warm brackets are timed
+against cold to record whether the fragment cache survives `dr_app_stop` ->
+`dr_app_start`.
 
 **Effort.** 2-4 days. This spike gates the DynamoRIO-dependent phases (2-8).
 Phase 1 (trace-substrate extraction) has **no** DynamoRIO dependency and may
@@ -433,21 +475,49 @@ Unicorn behavior change.
 **Region model (decided).** Regions form a per-thread **stack**. `begin(name)`
 pushes the region id; `end(name)` must match the **top** of the stack and pops
 it. A mismatched `end` is an error surfaced as **data** — a client-side counter
-plus a one-shot flag the app can read — not a silent correction. Overlapping
-registered ranges resolve **innermost-active-region wins** (a block PC is
-attributed to the topmost active region whose range contains it). An abandoned
+plus a one-shot flag the app can read — not a silent correction. **MVP
+restriction:** registered ranges are required to be **non-overlapping**, and
+recording is scoped by a single per-thread "recording active" TLS flag — the
+**same** `drmgr` TLS slot as the active-region stack (recording-active means that
+stack is non-empty), not a second slot; a block's recorded offset
+`off = app_pc - base` resolves at build time against the single range that
+contains the PC. **Innermost-
+active-region-wins** over overlapping/nested **active** ranges is explicitly
+**deferred**: it cannot be resolved in the cheap inlined guard, because the
+inlined code knows only the static fact that a PC lies in some registered range,
+while the topmost currently-active overlapping range is a runtime property that
+would force a per-block scan of the per-thread active-region stack (or a clean
+call) — reintroducing exactly the O(n)/context-switch cost the inline design
+avoids. A later phase may add overlap resolution via a clean call or an inlined
+stack walk, accepting that cost as opt-in. An abandoned
 `begin` (early return / `longjmp` / exception in the app) leaves its activation
 on the stack until a matching `end` or `asmtest_dr_shutdown`; document that
 markers must be balanced, ideally via a scoped wrapper in each binding.
 
 **Block instrumentation (decided).** Do **not** use a per-block clean call with a
 linear dedup scan — that pays a full context switch plus an O(n) scan on every
-basic block of natively running code, defeating the "cheap default". Instead, at
-`bb_instrumentation` time, when the block's **application** PC
+basic block of natively running code, defeating the "cheap default". Be explicit
+that the `drmgr_register_bb_instrumentation_event` callback fires **once per
+fragment at translation time** and the emitted code is cached and re-run on every
+execution of that PC — **including executions outside any active begin/end
+window**. A registered block is therefore instrumented **unconditionally** but
+must **record conditionally**: the same instrumented bytes run before `begin()`,
+after `end()`, and between two regions, so a plain unconditional store would
+over-record every native execution of a registered PC and is **rejected**.
+Instead, at `bb_instrumentation` time, when the block's **application** PC
 (`instr_get_app_pc` of the first instruction — *not* the code-cache PC) falls
-inside a registered range, inline a single store: increment a per-block "seen"
-flag + hit counter in a client-side per-region table (or append the offset to a
-client-side per-thread buffer). Reconcile the **distinct** block offsets and
+inside a registered range, inline a **TLS-guarded** store: use `drreg` to reserve
+a scratch GPR and the arithmetic flags (`drreg_reserve_register` /
+`drreg_reserve_aflags`), read the per-thread "recording active" flag from the
+`drmgr` TLS slot (`drmgr_insert_read_tls_field`), compare, and **conditionally
+skip** the store when recording is inactive; when active, the store increments a
+per-block "seen" flag + hit counter in a client-side per-region table (or appends
+the offset to a client-side per-thread buffer). The honest cost of the guard is
+one TLS load, a compare, a short forward branch, and possible `drreg`
+register/flag spills per registered block — still far cheaper than a per-block
+clean call, and **unavoidable** because (unlike drcov, which records all blocks
+at build time with no begin/end window and so needs no guard) this tier scopes
+recording to explicit regions. Reconcile the **distinct** block offsets and
 totals into the app-owned `asmtest_trace_t` at `trace_end` (drcov-style
 end-of-region reconciliation), preserving `emu_trace_t` accumulate/dedup/
 truncation semantics without any per-block scan. Record `off = app_pc - base`.
@@ -502,8 +572,8 @@ call.
   uses pkg-config `<DEP>_CFLAGS`/`<DEP>_LIBS`. The new shape is unavoidable
   because DynamoRIO ships **no** pkg-config file and requires
   `find_package(DynamoRIO)`; call it out as a deliberate new convention. (libipt
-  and OpenCSD in Phase 9 *do* ship pkg-config, so they keep the `*_CFLAGS`/
-  `*_LIBS` style.)
+  and OpenCSD in the [hardware-trace plan](hardware-trace-plan.md) *do* ship
+  pkg-config, so they keep the `*_CFLAGS`/`*_LIBS` style.)
 
 **Runner integration (owned here).** The asm-test runner's headline features are
 per-test `fork` isolation and a `-jN` pool, both hostile to an in-process DR
@@ -736,197 +806,11 @@ manual region calls in the test body.
 - Cache or install a pinned DynamoRIO release.
 - Run `make drtrace-test`.
 - Keep normal tests independent of DynamoRIO.
-- Hardware-assisted trace (Phase 9) needs a *separate* self-hosted bare-metal
+- Hardware-assisted trace (see the [hardware-trace plan](hardware-trace-plan.md))
+  needs a *separate* self-hosted bare-metal
   runner job and is allowed to be absent; it never gates normal tests.
 
 **Effort.** 2-4 days.
-
----
-
-## Phase 9 - Hardware-assisted trace backends (Intel PT, ARM CoreSight) *(planned)*
-
-**Goal.** Record native block and instruction coverage with near-zero *capture*
-overhead on capable hardware — Intel PT on bare-metal Intel x86-64, ARM CoreSight
-on bare-metal AArch64 — producing the same `asmtest_trace_t` offsets as Unicorn
-and DynamoRIO, reusing the registered-region markers, with no DynamoRIO or
-`drwrap` dependency. This is an even-more-optional, mostly-bare-metal-Linux tier:
-a fast-path complement to DynamoRIO, never a replacement and never a default —
-**except** for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where it is the
-*recommended* backend because it sidesteps DynamoRIO's signal and code-cache
-collisions entirely (see [Language runtime support](#language-runtime-support)).
-
-**Why it fits.** Both Intel PT and ARM CoreSight, after decode, yield exactly the
-two dimensions `asmtest_trace_t` already carries: ordered instruction offsets and
-distinct basic-block offsets, each as `off = ip - base` from a registered range.
-Hardware records branch *decisions* only — it emits nothing per sequential
-instruction — so the per-instruction and per-block stream is *reconstructed* by
-the decoder replaying asm-test's own registered code bytes between branch
-waypoints. asm-test always holds those bytes, so the one hard precondition is
-always met. Overflow (PT `OVF` / `PERF_AUX_FLAG_TRUNCATED`, CoreSight overflow)
-maps onto the existing `truncated` bit, so no new public trace shape is needed.
-
-**Backends.**
-
-- **Intel PT.** `perf_event_open` with `attr.type` from
-  `/sys/bus/event_source/devices/intel_pt/type` and `pid=0` self-traces the
-  calling thread; a second `mmap` exposes the AUX buffer the CPU fills with
-  TNT/TIP/PSB packets. libipt decodes them against the registered bytes
-  (`pt_image_add_cached` over `[base, base+len)`): `pt_insn_next` yields ordered
-  instructions for `insns[]`; the block decoder's `pt_block.ip` + `ninsn` feed
-  `blocks[]`. A read-write AUX mapping is a linear buffer that must be drained
-  (overflow is dropped and flagged); a read-only mapping is circular, the basis
-  of low-overhead snapshot mode.
-- **ARM CoreSight.** `perf_event_open` for `cs_etm` (per-thread) captures ETM/ETE
-  waypoint trace to a sink (TMC-ETR/ETB, or a per-CPU TRBE on ARMv9 ETE);
-  OpenCSD deformats and decodes it against the same bytes into instruction
-  ranges, giving `insns[]`/`blocks[]`. `FEAT_TRF` exception-level filtering
-  (`E0TRE`) scopes a `/u` capture to EL0 userspace, cutting runtime/kernel noise.
-
-**Region mapping (the ergonomic win).** The registered `[base, base+len)` maps to
-one *hardware* address-range filter — Intel PT's `IA32_RTIT_ADDRn_A/B` comparators
-(Linux `perf --filter 'filter <off>/<len>@<obj>'`), or CoreSight's ETM/ETE address
-comparators with identical `perf --filter` syntax — so the CPU emits packets only
-inside the region with no inserted instrumentation at all. The begin/end markers
-realize two equivalent styles: *range* style installs the filter and begin/end
-merely `ioctl(PERF_EVENT_IOC_ENABLE/DISABLE)` the AUX capture around the call
-(preferred for a single registered routine); *address* style uses hardware
-`start`/`stop` on the marker PCs to bracket a sub-range. The markers stay real
-exported functions so address style can name their PCs and the API stays
-backend-neutral, but `drwrap` is *not* needed here. Per-thread scoping is just
-`pid=0`, replacing the DynamoRIO per-thread active-region stack.
-
-Two limits drive a software fallback. Hardware comparators are few — Intel PT
-reports its count via CPUID leaf `14H` `RANGECNT` / `nr_addr_filters` (often 2),
-CoreSight a small fixed number — so beyond that, distinct simultaneous regions
-fall back to *software* post-filtering of decoded IPs by `[base, base+len)`.
-Keystone-generated executable memory (Phase 4) has no backing object file, but
-`perf` filter addresses are object-relative, so generated regions also use the
-software post-filter rather than a hardware filter.
-
-**Decode and annotation reuse.** libipt (PT) and OpenCSD (CoreSight) are *new*
-optional *decoders* — the reverse of Capstone: they turn the hardware packet
-stream into the offset stream. The existing Capstone layer (`src/disasm.c`,
-`emu_trace_report_disasm` and friends) is reused *unchanged* to *annotate* those
-offsets, so Unicorn, DynamoRIO, PT, and CoreSight share one report format and no
-hardware-specific decoder leaks into language bindings. The registered bytes flow
-twice from one source: into libipt/OpenCSD to reconstruct offsets, then into
-Capstone to render text.
-
-**Deliverables.**
-
-- `include/asmtest_hwtrace.h`: an `asmtest_trace_backend_t` enum
-  (`INTEL_PT`, `CORESIGHT`), an options struct (backend, AUX/DATA buffer sizes,
-  snapshot-vs-linear mode, optional object-file hint), and
-  `asmtest_hwtrace_available/init/register_region/shutdown` plus the shared
-  `asmtest_trace_begin/end` markers.
-- `src/pt_backend.c` (libipt) and `src/cs_backend.c` (OpenCSD), each its own
-  translation unit, plus a Linux-only perf-AUX capture helper.
-- `examples/test_hwtrace.c`: a smoke test that self-skips when unavailable.
-- Makefile knobs `LIBIPT_CFLAGS/LIBIPT_LIBS` and `OPENCSD_CFLAGS/OPENCSD_LIBS`
-  (pkg-config auto-detect, mirroring `CAPSTONE_*`), defines `-DASMTEST_HAVE_LIBIPT`
-  / `-DASMTEST_HAVE_OPENCSD`, and targets `hwtrace-test` and `shared-hwtrace`
-  (a separate `libasmtest_hwtrace`, never linked by core or `libasmtest_emu`).
-- `asmtest_hwtrace_available()`: the detect-and-skip routine encoding the full
-  gating chain (decoder lib present, PMU node present, right CPU/ISA/vendor, perf
-  privilege, not a restricted VM guest).
-
-**Acceptance.**
-
-- `make hwtrace-test` self-skips with a clear message — the common case — when the
-  decoder library, the `intel_pt`/`cs_etm` PMU, the right CPU/host, or the
-  `perf_event` privilege is absent.
-- On a bare-metal Intel x86-64 Linux host with PT and `perf_event_paranoid`
-  lowered, tracing a registered routine (or a Phase 4 Keystone host-native
-  routine) records block offset `0` and a deterministic ordered `insns[]` that
-  matches the Unicorn/DynamoRIO output for the same code.
-- A tiny AUX buffer or a hot loop sets `truncated` via overflow.
-- CoreSight acceptance is identical, explicitly opt-in on a named bare-metal
-  AArch64 board.
-
-**Licensing.** libipt is BSD and OpenCSD is BSD-3-Clause, so this tier carries no
-LGPL obligation (unlike `drwrap`). OpenCSD is C++, unlike the otherwise-C optional
-tiers; keep it isolated in its own translation unit and the separate
-`libasmtest_hwtrace`.
-
-**CI.** Hardware trace cannot run on standard CI: GitHub-hosted runners are
-virtualized Azure VMs that do not expose Intel PT to guests, and cloud ARM exposes
-no `cs_etm`. A real job needs a *self-hosted* bare-metal Intel x86-64 (PT) or
-known-good AArch64 board (CoreSight) runner with `perf_event_paranoid` lowered —
-an explicit, separate, allowed-to-be-absent job that never gates normal tests.
-
-**Effort.** PT capture + libipt decode 5-8 days on available hardware; CoreSight +
-OpenCSD a further 5-8 days, gated on board access. Both depend on Phase 1
-(substrate) and Phase 5 (instruction-mode semantics).
-
-**Validation (hardware trace).** Intel PT ships since Broadwell and
-Goldmont/Apollo Lake; the Linux `intel_pt` PMU since ~4.3, with address-range
-filtering added in 4.7. `CAP_PERFMON` (Linux 5.8+) or a low enough
-`perf_event_paranoid` is required, and a usable default-size AUX capture for an
-unprivileged process effectively needs `perf_event_paranoid = -1` or
-`CAP_PERFMON` — a host knob the process cannot set itself. PT is in practice
-unavailable on standard cloud VMs and GitHub-hosted runners (the hypervisor does
-not expose it), though PT is itself virtualizable when the host opts in. ARM
-`FEAT_ETE` requires `FEAT_TRF` and can pair with either a `TRBE` sink or a legacy
-CoreSight sink (ETR/ETB); both `FEAT_ETE` and `FEAT_TRBE` are optional from
-Armv9.0. KVM clears `TRFCR_EL1` and does not advertise the trace filter to guests,
-so cloud ARM VMs (Graviton, Altra) cannot self-host trace, and Apple Silicon does
-not expose CoreSight to the OS; self-hosted capture is realistic only on specific
-dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` and
-`perf` built against OpenCSD.
-
-- Intel PT (Linux perf): https://perf.wiki.kernel.org/index.php/Perf_tools_support_for_Intel%C2%AE_Processor_Trace
-- libipt decoder library: https://github.com/intel/libipt
-- ARM CoreSight / cs_etm (Linux perf): https://www.kernel.org/doc/html/latest/trace/coresight/coresight.html
-- OpenCSD decoder library: https://github.com/Linaro/OpenCSD
-
----
-
-## Phase 10 - Attach-to-foreign-JIT tracing *(planned, forward-look)*
-
-**Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
-3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
-least-invasively, at instruction granularity. This is the capability the
-[Language runtime support](#language-runtime-support) matrix routes the hard
-managed runtimes toward. **Full treatment:**
-[Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
-
-**Approach (decided direction).** Stop instrumenting, start observing: hardware
-trace (Intel PT / CoreSight) for the execution stream + a **time-aware capture of
-the JIT's code bytes** for decode. PT/ETM are out-of-band (no code cache, no
-signal hijack, no W^X faults — none of the three collisions), attach to a live
-PID via `perf_event_open -p`, and reuse the Phase 9 substrate and the Capstone
-annotation layer. The one hard problem is *temporal* — the same address holds
-different bytes over time as the JIT patches/frees/reuses code — so a single
-snapshot is wrong; the decoder needs the bytes that were live at each trace
-position.
-
-**Deliverables (when scheduled).**
-
-- Runtime attach: `perf_event_open` against an existing PID (vs Phase 9's `pid=0`
-  self-trace of asm-test's own region).
-- A **time-aware code-image recorder** that replaces Phase 9's "asm-test owns the
-  bytes" saving grace, via either (a) **runtime-enabled jitdump** where the
-  runtime cooperates (.NET `DiagnosticsClient.EnablePerfMap(JitDump)`; JVM
-  jitdump agent + `GenerateEvents`) + `perf inject --jit`, or (b) an **eBPF +
-  userfaultfd-WP** recorder feeding libipt's `pt_image_set_callback` keyed to
-  trace position.
-- libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
-  no new decoder API in the bindings.
-- The hypervisor/EPT frontier (host Intel PT + Xen altp2m execute-trap capture,
-  DRAKVUF-based) as the research-grade, maximum-stealth option.
-
-**Acceptance.** Attach to a running CPython/.NET/JVM process, capture and decode at
-least one JIT-generated routine into a deterministic disassembled instruction
-trace that matches a ground-truth disassembly of the same bytes.
-
-**Status.** Forward-look only; distinct from Phases 0-9, which trace code asm-test
-generates itself. Depends on Phase 9 (PT substrate) and Phase 5 (instruction-mode
-semantics). See the analysis doc for the ranked approaches, per-runtime
-enablement matrix, prior art, and caveats.
-
-**Effort.** PT-attach + jitdump-live slice 3-5 days on PT hardware; the eBPF+uffd
-time-aware recorder a further 1-2 weeks; the hypervisor/EPT frontier is
-research-grade.
 
 ---
 
@@ -994,13 +878,14 @@ price: `pyda` runs CPython *as* a DR client but needed "nontrivial patches for
 both DynamoRIO and CPython."
 
 **Consequence for the plan.** The DynamoRIO tier targets **CPython + native/C
-callers**. For **JVM/.NET/Node**, prefer the **Phase 9 Intel PT backend**: it
-reads branch packets without intercepting signals or perturbing JITed code,
-sidestepping all three collisions. This reframes Phase 9 from an optional fast
-path into the *correct* backend for the hard managed runtimes (where bare-metal
-PT is available). Tracing a **foreign** JIT's generated code in a live process
-(rather than asm-test's own Keystone output) is the subject of Phase 10 and its
-detailed
+callers**. For **JVM/.NET/Node**, prefer the **Intel PT backend** (in the
+[hardware-trace plan](hardware-trace-plan.md)): it reads branch packets without
+intercepting signals or perturbing JITed code, sidestepping all three collisions.
+This reframes the hardware-trace tier from an optional fast path into the
+*correct* backend for the hard managed runtimes (where bare-metal PT is
+available). Tracing a **foreign** JIT's generated code in a live process (rather
+than asm-test's own Keystone output) is the subject of the
+[hardware-trace plan](hardware-trace-plan.md)'s foreign-JIT phase and its detailed
 [Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
 
 **Sources.** DynamoRIO [dr_app.h](https://dynamorio.org/dr__app_8h.html),
@@ -1034,7 +919,8 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   own section: see [Language runtime support](#language-runtime-support) for the
   root cause, the record-window-vs-instrument-window reframe, and the per-runtime
   fix matrix with viability verdicts. Summary: CPython is robust; JVM/.NET/Node
-  are best-effort and should prefer the Phase 9 hardware-trace backend.
+  are best-effort and should prefer the [hardware-trace plan](hardware-trace-plan.md)
+  backend.
 - **Thread semantics.** The MVP should record only the current region-entering
   thread. All-thread tracing needs explicit API and locking.
 - **Private loader transparency.** Do not share C globals between app and client.
@@ -1063,24 +949,9 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   precise guest faults.
 - **Overhead.** Basic-block coverage should be the default. Instruction and
   memory-event modes must be opt-in.
-- **Hardware-trace availability (Phase 9).** Intel PT is Intel-x86-64-only and
-  absent on AMD, ARM, Apple Silicon, and almost all cloud/VM/GitHub-hosted
-  guests; CoreSight self-hosted trace is realistic only on specific bare-metal
-  AArch64 boards and is prohibited in KVM guests. The tier is opt-in and cannot
-  be a default or a portable CI gate.
-- **Hardware-trace privilege (Phase 9).** Both backends need `perf_event_paranoid`
-  lowered (effectively `-1` for a default-size PT buffer) or
-  `CAP_PERFMON`/`CAP_SYS_ADMIN`, plus `perf_event_mlock_kb`/`RLIMIT_MEMLOCK` for
-  large AUX buffers — host knobs the process cannot grant itself.
-  `asmtest_hwtrace_available()` must detect-and-skip on exactly this.
-- **Hardware-trace fidelity (Phase 9).** Decode is impossible without the exact
-  registered code bytes (libipt returns `-pte_nomap`); self-modifying or relocated
-  code silently corrupts offsets. Speculative/aborted paths
-  (`pt_block.speculative`) must be filtered before recording. libipt block
-  boundaries are not identical to Unicorn/DynamoRIO basic blocks (a libipt block
-  can span direct branches), so cross-backend block-offset parity needs a
-  normalization step or a documented difference. Finite comparators and file-less
-  Keystone memory force a software IP post-filter fallback for some regions.
+- **Hardware-trace tier (separate plan).** The Intel PT / ARM CoreSight backends —
+  and their availability, privilege, fidelity, and CI caveats — moved to the
+  sibling [hardware-trace plan](hardware-trace-plan.md).
 
 ---
 

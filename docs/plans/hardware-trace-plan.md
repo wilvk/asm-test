@@ -1,0 +1,234 @@
+# asm-test - Hardware-assisted & foreign-JIT trace backends: implementation plan
+
+A phased roadmap for two **hardware-assisted** native-trace backends — Intel PT
+on bare-metal x86-64 and ARM CoreSight on bare-metal AArch64 — and the
+forward-look capability of tracing a **foreign** JIT's generated code in a live
+process. Both produce the same `asmtest_trace_t` offsets as the Unicorn emulator
+and the DynamoRIO native tier, reusing the same registered-region markers.
+
+This plan is a **sibling** of the
+[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md): it depends on that
+plan's Phase 1 (the engine-neutral trace substrate) and Phase 5 (instruction-mode
+semantics), reuses its begin/end markers, and is the backend the native-trace
+plan's [Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)
+matrix routes JIT/GC-heavy managed runtimes toward. It was split out of that plan
+because it pulls in entirely different dependencies (libipt, OpenCSD,
+`perf_event_open`, eBPF) and is even-more-optional and mostly bare-metal; keeping
+it inline made shipping DynamoRIO read as if it required shipping CoreSight.
+
+> Status legend: **planned** unless noted. Update this file as phases land, the
+> way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) and
+> [win64-native-tier-plan.md](win64-native-tier-plan.md) track theirs.
+
+---
+
+## Phase 1 - Hardware-assisted trace backends (Intel PT, ARM CoreSight) *(planned)*
+
+**Goal.** Record native block and instruction coverage with near-zero *capture*
+overhead on capable hardware — Intel PT on bare-metal Intel x86-64, ARM CoreSight
+on bare-metal AArch64 — producing the same `asmtest_trace_t` offsets as Unicorn
+and DynamoRIO, reusing the registered-region markers, with no DynamoRIO or
+`drwrap` dependency. This is an even-more-optional, mostly-bare-metal-Linux tier:
+a fast-path complement to DynamoRIO, never a replacement and never a default —
+**except** for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where it is the
+*recommended* backend because it sidesteps DynamoRIO's signal and code-cache
+collisions entirely (see the native-trace plan's
+[Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)).
+
+**Why it fits.** Both Intel PT and ARM CoreSight, after decode, yield exactly the
+two dimensions `asmtest_trace_t` already carries: ordered instruction offsets and
+distinct basic-block offsets, each as `off = ip - base` from a registered range.
+Hardware records branch *decisions* only — it emits nothing per sequential
+instruction — so the per-instruction and per-block stream is *reconstructed* by
+the decoder replaying asm-test's own registered code bytes between branch
+waypoints. asm-test always holds those bytes, so the one hard precondition is
+always met. Overflow (PT `OVF` / `PERF_AUX_FLAG_TRUNCATED`, CoreSight overflow)
+maps onto the existing `truncated` bit, so no new public trace shape is needed.
+
+**Backends.**
+
+- **Intel PT.** `perf_event_open` with `attr.type` from
+  `/sys/bus/event_source/devices/intel_pt/type` and `pid=0` self-traces the
+  calling thread; a second `mmap` exposes the AUX buffer the CPU fills with
+  TNT/TIP/PSB packets. libipt decodes them against the registered bytes
+  (`pt_image_add_cached` over `[base, base+len)`): `pt_insn_next` yields ordered
+  instructions for `insns[]`; the block decoder's `pt_block.ip` + `ninsn` feed
+  `blocks[]`. A read-write AUX mapping is a linear buffer that must be drained
+  (overflow is dropped and flagged); a read-only mapping is circular, the basis
+  of low-overhead snapshot mode.
+- **ARM CoreSight.** `perf_event_open` for `cs_etm` (per-thread) captures ETM/ETE
+  waypoint trace to a sink (TMC-ETR/ETB, or a per-CPU TRBE on ARMv9 ETE);
+  OpenCSD deformats and decodes it against the same bytes into instruction
+  ranges, giving `insns[]`/`blocks[]`. `FEAT_TRF` exception-level filtering
+  (`E0TRE`) scopes a `/u` capture to EL0 userspace, cutting runtime/kernel noise.
+
+**Region mapping (the ergonomic win).** The registered `[base, base+len)` maps to
+one *hardware* address-range filter — Intel PT's `IA32_RTIT_ADDRn_A/B` comparators
+(Linux `perf --filter 'filter <off>/<len>@<obj>'`), or CoreSight's ETM/ETE address
+comparators with identical `perf --filter` syntax — so the CPU emits packets only
+inside the region with no inserted instrumentation at all. The begin/end markers
+realize two equivalent styles: *range* style installs the filter and begin/end
+merely `ioctl(PERF_EVENT_IOC_ENABLE/DISABLE)` the AUX capture around the call
+(preferred for a single registered routine); *address* style uses hardware
+`start`/`stop` on the marker PCs to bracket a sub-range. The markers stay real
+exported functions so address style can name their PCs and the API stays
+backend-neutral, but `drwrap` is *not* needed here. Per-thread scoping is just
+`pid=0`, replacing the DynamoRIO per-thread active-region stack.
+
+Two limits drive a software fallback. Hardware comparators are few — Intel PT
+reports its count via CPUID leaf `14H` `RANGECNT` / `nr_addr_filters` (often 2),
+CoreSight a small fixed number — so beyond that, distinct simultaneous regions
+fall back to *software* post-filtering of decoded IPs by `[base, base+len)`.
+Keystone-generated executable memory (the native-trace plan's Phase 4) has no
+backing object file, but `perf` filter addresses are object-relative, so generated
+regions also use the software post-filter rather than a hardware filter.
+
+**Decode and annotation reuse.** libipt (PT) and OpenCSD (CoreSight) are *new*
+optional *decoders* — the reverse of Capstone: they turn the hardware packet
+stream into the offset stream. The existing Capstone layer (`src/disasm.c`,
+`emu_trace_report_disasm` and friends) is reused *unchanged* to *annotate* those
+offsets, so Unicorn, DynamoRIO, PT, and CoreSight share one report format and no
+hardware-specific decoder leaks into language bindings. The registered bytes flow
+twice from one source: into libipt/OpenCSD to reconstruct offsets, then into
+Capstone to render text.
+
+**Deliverables.**
+
+- `include/asmtest_hwtrace.h`: an `asmtest_trace_backend_t` enum
+  (`INTEL_PT`, `CORESIGHT`), an options struct (backend, AUX/DATA buffer sizes,
+  snapshot-vs-linear mode, optional object-file hint), and
+  `asmtest_hwtrace_available/init/register_region/shutdown` plus the shared
+  `asmtest_trace_begin/end` markers.
+- `src/pt_backend.c` (libipt) and `src/cs_backend.c` (OpenCSD), each its own
+  translation unit, plus a Linux-only perf-AUX capture helper.
+- `examples/test_hwtrace.c`: a smoke test that self-skips when unavailable.
+- Makefile knobs `LIBIPT_CFLAGS/LIBIPT_LIBS` and `OPENCSD_CFLAGS/OPENCSD_LIBS`
+  (pkg-config auto-detect, mirroring `CAPSTONE_*`), defines `-DASMTEST_HAVE_LIBIPT`
+  / `-DASMTEST_HAVE_OPENCSD`, and targets `hwtrace-test` and `shared-hwtrace`
+  (a separate `libasmtest_hwtrace`, never linked by core or `libasmtest_emu`).
+- `asmtest_hwtrace_available()`: the detect-and-skip routine encoding the full
+  gating chain (decoder lib present, PMU node present, right CPU/ISA/vendor, perf
+  privilege, not a restricted VM guest).
+
+**Acceptance.**
+
+- `make hwtrace-test` self-skips with a clear message — the common case — when the
+  decoder library, the `intel_pt`/`cs_etm` PMU, the right CPU/host, or the
+  `perf_event` privilege is absent.
+- On a bare-metal Intel x86-64 Linux host with PT and `perf_event_paranoid`
+  lowered, tracing a registered routine (or a native-trace-plan Phase 4 Keystone
+  host-native routine) records block offset `0` and a deterministic ordered
+  `insns[]` that matches the Unicorn/DynamoRIO output for the same code.
+- A tiny AUX buffer or a hot loop sets `truncated` via overflow.
+- CoreSight acceptance is identical, explicitly opt-in on a named bare-metal
+  AArch64 board.
+
+**Licensing.** libipt is BSD and OpenCSD is BSD-3-Clause, so this tier carries no
+LGPL obligation (unlike `drwrap`). OpenCSD is C++, unlike the otherwise-C optional
+tiers; keep it isolated in its own translation unit and the separate
+`libasmtest_hwtrace`.
+
+**CI.** Hardware trace cannot run on standard CI: GitHub-hosted runners are
+virtualized Azure VMs that do not expose Intel PT to guests, and cloud ARM exposes
+no `cs_etm`. A real job needs a *self-hosted* bare-metal Intel x86-64 (PT) or
+known-good AArch64 board (CoreSight) runner with `perf_event_paranoid` lowered —
+an explicit, separate, allowed-to-be-absent job that never gates normal tests.
+
+**Effort.** PT capture + libipt decode 5-8 days on available hardware; CoreSight +
+OpenCSD a further 5-8 days, gated on board access. Both depend on the native-trace
+plan's Phase 1 (substrate) and Phase 5 (instruction-mode semantics).
+
+**Validation (hardware trace).** Intel PT ships since Broadwell and
+Goldmont/Apollo Lake; the Linux `intel_pt` PMU since ~4.3, with address-range
+filtering added in 4.7. `CAP_PERFMON` (Linux 5.8+) or a low enough
+`perf_event_paranoid` is required, and a usable default-size AUX capture for an
+unprivileged process effectively needs `perf_event_paranoid = -1` or
+`CAP_PERFMON` — a host knob the process cannot set itself. PT is in practice
+unavailable on standard cloud VMs and GitHub-hosted runners (the hypervisor does
+not expose it), though PT is itself virtualizable when the host opts in. ARM
+`FEAT_ETE` requires `FEAT_TRF` and can pair with either a `TRBE` sink or a legacy
+CoreSight sink (ETR/ETB); both `FEAT_ETE` and `FEAT_TRBE` are optional from
+Armv9.0. KVM clears `TRFCR_EL1` and does not advertise the trace filter to guests,
+so cloud ARM VMs (Graviton, Altra) cannot self-host trace, and Apple Silicon does
+not expose CoreSight to the OS; self-hosted capture is realistic only on specific
+dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` and
+`perf` built against OpenCSD.
+
+- Intel PT (Linux perf): https://perf.wiki.kernel.org/index.php/Perf_tools_support_for_Intel%C2%AE_Processor_Trace
+- libipt decoder library: https://github.com/intel/libipt
+- ARM CoreSight / cs_etm (Linux perf): https://www.kernel.org/doc/html/latest/trace/coresight/coresight.html
+- OpenCSD decoder library: https://github.com/Linaro/OpenCSD
+
+---
+
+## Phase 2 - Attach-to-foreign-JIT tracing *(planned, forward-look)*
+
+**Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
+3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
+least-invasively, at instruction granularity. This is the capability the
+native-trace plan's
+[Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)
+matrix routes the hard managed runtimes toward. **Full treatment:**
+[Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
+
+**Approach (decided direction).** Stop instrumenting, start observing: hardware
+trace (Intel PT / CoreSight) for the execution stream + a **time-aware capture of
+the JIT's code bytes** for decode. PT/ETM are out-of-band (no code cache, no
+signal hijack, no W^X faults — none of the three collisions), attach to a live
+PID via `perf_event_open -p`, and reuse the Phase 1 substrate and the Capstone
+annotation layer. The one hard problem is *temporal* — the same address holds
+different bytes over time as the JIT patches/frees/reuses code — so a single
+snapshot is wrong; the decoder needs the bytes that were live at each trace
+position.
+
+**Deliverables (when scheduled).**
+
+- Runtime attach: `perf_event_open` against an existing PID (vs Phase 1's `pid=0`
+  self-trace of asm-test's own region).
+- A **time-aware code-image recorder** that replaces Phase 1's "asm-test owns the
+  bytes" saving grace, via either (a) **runtime-enabled jitdump** where the
+  runtime cooperates (.NET `DiagnosticsClient.EnablePerfMap(JitDump)`; JVM
+  jitdump agent + `GenerateEvents`) + `perf inject --jit`, or (b) an **eBPF +
+  userfaultfd-WP** recorder feeding libipt's `pt_image_set_callback` keyed to
+  trace position.
+- libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
+  no new decoder API in the bindings.
+- The hypervisor/EPT frontier (host Intel PT + Xen altp2m execute-trap capture,
+  DRAKVUF-based) as the research-grade, maximum-stealth option.
+
+**Acceptance.** Attach to a running CPython/.NET/JVM process, capture and decode at
+least one JIT-generated routine into a deterministic disassembled instruction
+trace that matches a ground-truth disassembly of the same bytes.
+
+**Status.** Forward-look only; distinct from the Phase 0-9 work of the native-trace
+plan, which traces code asm-test generates itself. Depends on Phase 1 (PT
+substrate) and the native-trace plan's Phase 5 (instruction-mode semantics). See
+the analysis doc for the ranked approaches, per-runtime enablement matrix, prior
+art, and caveats.
+
+**Effort.** PT-attach + jitdump-live slice 3-5 days on PT hardware; the eBPF+uffd
+time-aware recorder a further 1-2 weeks; the hypervisor/EPT frontier is
+research-grade.
+
+---
+
+## Risks and open points (hardware trace)
+
+- **Hardware-trace availability.** Intel PT is Intel-x86-64-only and
+  absent on AMD, ARM, Apple Silicon, and almost all cloud/VM/GitHub-hosted
+  guests; CoreSight self-hosted trace is realistic only on specific bare-metal
+  AArch64 boards and is prohibited in KVM guests. The tier is opt-in and cannot
+  be a default or a portable CI gate.
+- **Hardware-trace privilege.** Both backends need `perf_event_paranoid`
+  lowered (effectively `-1` for a default-size PT buffer) or
+  `CAP_PERFMON`/`CAP_SYS_ADMIN`, plus `perf_event_mlock_kb`/`RLIMIT_MEMLOCK` for
+  large AUX buffers — host knobs the process cannot grant itself.
+  `asmtest_hwtrace_available()` must detect-and-skip on exactly this.
+- **Hardware-trace fidelity.** Decode is impossible without the exact
+  registered code bytes (libipt returns `-pte_nomap`); self-modifying or relocated
+  code silently corrupts offsets. Speculative/aborted paths
+  (`pt_block.speculative`) must be filtered before recording. libipt block
+  boundaries are not identical to Unicorn/DynamoRIO basic blocks (a libipt block
+  can span direct branches), so cross-backend block-offset parity needs a
+  normalization step or a documented difference. Finite comparators and file-less
+  Keystone memory force a software IP post-filter fallback for some regions.

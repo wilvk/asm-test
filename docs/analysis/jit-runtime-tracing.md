@@ -2,9 +2,10 @@
 
 *Status: analysis / findings. This document records a research investigation,
 not shipped behaviour. The corresponding implementation roadmap is the
-[DynamoRIO native-trace plan](../plans/dynamorio-native-trace-plan.md) (Phase 9
-hardware trace, and the Phase 10 forward-look it adds). It is the sequel to that
-plan's [Language runtime support](../plans/dynamorio-native-trace-plan.md#language-runtime-support)
+[hardware-trace plan](../plans/hardware-trace-plan.md) (Phase 1 hardware trace,
+and the Phase 2 foreign-JIT forward-look it adds), a sibling of the
+[DynamoRIO native-trace plan](../plans/dynamorio-native-trace-plan.md). It is the
+sequel to the DynamoRIO plan's [Language runtime support](../plans/dynamorio-native-trace-plan.md#language-runtime-support)
 section: that section explains why in-process DBI fights managed runtimes; this
 one asks how to trace a **foreign** JIT's generated code anyway.*
 
