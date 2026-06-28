@@ -270,7 +270,11 @@ research-grade.
   absent on AMD, ARM, Apple Silicon, and almost all cloud/VM/GitHub-hosted
   guests; CoreSight self-hosted trace is realistic only on specific bare-metal
   AArch64 boards and is prohibited in KVM guests. The tier is opt-in and cannot
-  be a default or a portable CI gate.
+  be a default or a portable CI gate. AMD has **no Intel PT equivalent** (no
+  continuous control-flow trace ring on Zen); the closest AMD-native approximation
+  and its hard 16-branch limit are specified in the sibling
+  [AMD LBR snapshot plan](amd-lbr-trace-plan.md), with DynamoRIO as the fallback
+  beyond that window.
 - **Hardware-trace privilege.** Both backends need `perf_event_paranoid`
   lowered (effectively `-1` for a default-size PT buffer) or
   `CAP_PERFMON`/`CAP_SYS_ADMIN`, plus `perf_event_mlock_kb`/`RLIMIT_MEMLOCK` for
