@@ -229,6 +229,50 @@ libipt, both need the code image ("ELF files **or** the JIT code cache"), and
 `perf inject --jit` is architecture-independent (the jitdump header carries
 `elf_mach`). ([CoreSight], [OpenCSD])
 
+## Data provided
+
+The implementation fills one shared record — `asmtest_trace_t`, the same sink
+every backend uses (emulator, DynamoRIO, PT/foreign-JIT) — plus, for the JIT case,
+the generated code and its disassembly. The output is **control-flow complete**,
+not a register/memory snapshot (see the boundary below).
+
+**Core trace record** (`asmtest_trace_t`; offsets are `off = ip - base`, byte
+offsets from the registered region):
+
+| Field(s) | Data |
+|---|---|
+| `insns[]`, `insns_len`, `insns_total` | **ordered instruction trace** — each executed instruction's offset in execution order; `len` = entries kept, `total` = instructions executed (counts past the buffer cap) |
+| `blocks[]`, `blocks_len`, `blocks_total` | **basic-block coverage** — the *distinct* block-start offsets entered (deduped); `len` = distinct blocks, `total` = every block entry (a loop counts each pass) |
+| `truncated` | a buffer filled and entries were dropped; PT/ETM overflow (`OVF` / `PERF_AUX_FLAG_TRUNCATED`) maps onto this bit |
+
+**The generated assembly** (the distinctive Phase-10 payload):
+
+- the JIT's **machine-code bytes**, time-versioned (the code-image timeline from
+  "The one hard problem") — a data product in their own right;
+- **disassembled instructions** (mnemonic + operands) rendered from those bytes
+  through Capstone (`emu_trace_disasm` / `emu_trace_report_disasm`), so the output
+  reads as assembly rather than bare offsets.
+
+**Derived / rendered outputs** (existing backend-neutral helpers): `asmtest_trace_covered(off)`
+(was a block reached), `emu_trace_report` (human-readable report),
+`emu_coverage_uncovered` (diff against a universe — what was *not* hit),
+`emu_trace_lcov` / `emu_trace_lcov_source` (lcov for CI), and
+`emu_trace_source_report` (source-line attribution via a caller-supplied line map).
+
+**PT-specific extras** (available beyond the current struct, as extensions):
+timing (PT TSC/CYC/MTC → per-region / per-branch cycle or wall-clock),
+speculative-path filtering (`pt_block.speculative` dropped), per-thread
+attribution, and PTWRITE CR3/TID markers in the hypervisor variant (§3).
+
+**What it does *not* provide (boundary).** PT/ETM record **control flow, not data
+values**. You get which instructions ran, in what order, and the code bytes — not
+the contents of `rax` or of memory at each step. Register/memory state remains the
+**emulator tier's** job (`emu_result_t` registers, memory watchpoints) or would
+require a DBI memory-event mode / PTWRITE injection. The implementation likewise
+does not provide data-flow/taint, and libipt block boundaries are not identical to
+Unicorn/DynamoRIO basic blocks (a libipt block can span direct branches), so
+cross-backend block parity needs a normalization step or a documented difference.
+
 ## Caveats and preconditions
 
 - **The temporal correctness problem is fundamental.** Only time-aware capture
