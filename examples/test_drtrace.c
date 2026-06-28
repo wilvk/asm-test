@@ -118,11 +118,33 @@ int main(int argc, char **argv) {
     long ri = fn2(1, 2);
     asmtest_trace_end("add2i");
     CHECK(ri == 3, "instruction-mode routine computes correctly (1+2)");
-    CHECK(asmtest_emu_trace_insns_total(itr) >= 4,
-          "instruction mode records the ordered instruction stream");
+    /* fn(1,2): 3 <= 100, so the jle is taken and the dec at 0xe is skipped. The
+     * deterministic ordered stream is exactly mov(0) add(3) cmp(6) jle(0xc) ret(0x11). */
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq_ok = (itr->insns_len == 5);
+    for (size_t i = 0; seq_ok && i < 5; i++)
+        seq_ok = (itr->insns[i] == EXPECT[i]);
+    CHECK(seq_ok, "instruction mode records the exact ordered offset sequence");
     asmtest_dr_unregister_region("add2i");
     asmtest_exec_free(&code2);
     asmtest_trace_free(itr);
+
+    /* Truncation: a tiny block buffer (cap 1) over a routine that enters two
+     * distinct blocks must set the truncated bit (Phase 2 acceptance). */
+    asmtest_exec_code_t code3;
+    CHECK(asmtest_exec_alloc(ROUTINE, sizeof ROUTINE, &code3) == ASMTEST_DR_OK,
+          "third exec allocation for truncation case");
+    asmtest_trace_t *ttr = asmtest_trace_new(0, 1); /* blocks_cap = 1 */
+    asmtest_dr_register_region("trunc", code3.base, code3.len, ttr);
+    add2_fn fn3 = (add2_fn)code3.base;
+    asmtest_trace_begin("trunc");
+    (void)fn3(60, 60); /* 120 > 100 -> two distinct blocks (entry + dec path) */
+    asmtest_trace_end("trunc");
+    CHECK(asmtest_emu_trace_truncated(ttr),
+          "tiny block buffer sets the truncated bit on overflow");
+    asmtest_dr_unregister_region("trunc");
+    asmtest_exec_free(&code3);
+    asmtest_trace_free(ttr);
 
     asmtest_dr_unregister_region("add2");
     asmtest_exec_free(&code);

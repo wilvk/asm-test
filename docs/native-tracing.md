@@ -271,6 +271,9 @@ The full root-cause analysis and per-runtime fix matrix live in the
   traces are not thread-safe shared collectors; do not read a trace, or enter its
   region on another thread, while a thread is inside it. (The hardware-trace tier
   is single-active-region in the MVP — see its header.)
+- **fork after `start` is unsupported.** DynamoRIO takes over all threads; forking
+  while started (e.g. Python `multiprocessing` with the default `fork` start
+  method) is not supported — use `forkserver`/`spawn`, or fork before `start`.
 - **DynamoRIO must be installed separately** (no pkg-config); set `DYNAMORIO_HOME`.
   It is a software DBI engine and runs on Intel and AMD alike.
 - **Hardware capture is unverifiable off bare metal** — it cannot run on AMD, VMs,

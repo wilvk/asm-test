@@ -314,15 +314,22 @@ void asmtest_hwtrace_end(const char *name) {
     /* Linear ring: valid trace is [0, aux_head). (Snapshot decode would walk the
      * circular ring from aux_tail; left to the snapshot-mode follow-up.) */
     uint64_t head = mp->aux_head;
-    if (head > g_aux_sz)
+    int overflow = 0;
+    if (head >= g_aux_sz) {
+        /* The linear AUX ring filled to capacity: trailing trace was almost
+         * certainly dropped (the tiny-buffer / hot-loop overflow case). Flag it.
+         * The precise signal is PERF_AUX_FLAG_TRUNCATED on the PERF_RECORD_AUX
+         * record in the DATA ring; parsing that ring is a follow-up. */
         head = g_aux_sz;
+        overflow = 1;
+    }
     hw_region_t *r = g_active;
     int rc = (g_opts.backend == ASMTEST_HWTRACE_INTEL_PT)
                  ? asmtest_pt_decode((const uint8_t *)g_aux_map, (size_t)head,
                                      r->base, r->len, r->trace)
                  : asmtest_cs_decode((const uint8_t *)g_aux_map, (size_t)head,
                                      r->base, r->len, r->trace);
-    if (rc != ASMTEST_HW_OK && r->trace != NULL)
+    if (r->trace != NULL && (overflow || rc != ASMTEST_HW_OK))
         r->trace->truncated = true;
 
     munmap(g_aux_map, g_aux_sz);
