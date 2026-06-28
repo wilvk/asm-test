@@ -44,10 +44,12 @@ DynamoRIO documentation.
 - `drmgr` exposes `drmgr_register_bb_instrumentation_event`, which is the right
   hook family for basic-block analysis and instrumentation.
   https://dynamorio.org/group__drmgr.html
-- `drwrap` can wrap functions with pre/post callbacks and can locate exported
-  functions with `dr_get_proc_address`; it also notes that internal functions
-  use `drsyms`. The docs also call out the separate LGPL 2.1 license for
-  `drwrap`, which affects packaging.
+- `drwrap` can wrap functions with pre/post callbacks, read their arguments with
+  `drwrap_get_arg`, and locate exported functions with `dr_get_proc_address`; it
+  also notes that internal functions use `drsyms`. The MVP uses `drwrap` to
+  capture the marker-call arguments (see Phase 2), so its separate LGPL 2.1
+  license is accepted as an up-front packaging decision rather than a Phase 7
+  caveat.
   https://dynamorio.org/page_drwrap.html
 - `drsyms` provides symbol information for ELF, Mach-O, PE/COFF, PDB, and DWARF
   line info. It is optional for this plan because marker APIs and explicit code
@@ -139,9 +141,18 @@ Two libraries are needed:
 
 Do **not** rely on ordinary shared C globals between the app library and the
 DynamoRIO client. DynamoRIO clients may be privately loaded. Communication
-should flow through explicit app-code marker calls that the client wraps or
-observes, and through app-owned trace buffers whose addresses are passed through
-registration marker calls.
+should flow through explicit app-code marker calls that the client wraps with
+`drwrap` (reading their arguments with `drwrap_get_arg`), and through app-owned
+trace buffers whose addresses are passed through registration marker calls.
+
+**Licensing decision (up front).** The marker argument-capture mechanism uses the
+`drwrap` extension, which DynamoRIO licenses under LGPL 2.1 separately from the
+rest of the framework. The native trace tier therefore takes on `drwrap`'s
+LGPL-2.1 obligation as a hard packaging decision from the MVP onward, not a late
+symbol-mode concern. This is acceptable because the tier already ships as a
+separate optional artifact (`libasmtest_drclient`) that the core and
+`libasmtest_emu` never link. `drsyms` (Phase 7) carries its own considerations
+and stays separately deferred.
 
 The default execution model should be:
 
@@ -286,12 +297,22 @@ Unicorn behavior change.
 
 - Build `libasmtest_drclient` as a DynamoRIO client with CMake:
   `find_package(DynamoRIO)`, `configure_DynamoRIO_client`, and
-  `use_DynamoRIO_extension(... drmgr)`.
-- Initialize `drmgr` in `dr_client_main`.
-- Wrap or observe these app marker functions:
-  - `asmtest_dr_register_region(name, base, len, trace)`
-  - `asmtest_trace_begin(name)`
-  - `asmtest_trace_end(name)`
+  `use_DynamoRIO_extension(... drmgr drwrap)`.
+- Initialize `drmgr` and `drwrap` in `dr_client_main`.
+- **Argument capture mechanism (decided): use `drwrap`.** Resolve each marker's
+  exported address with `dr_get_proc_address` and `drwrap_wrap` it with a
+  pre-callback that reads the arguments by position with `drwrap_get_arg`:
+  - `asmtest_dr_register_region(name, base, len, trace)` -> args 0..3
+  - `asmtest_trace_begin(name)` -> arg 0
+  - `asmtest_trace_end(name)` -> arg 0
+
+  This is why the markers must stay real exported functions (see Public API).
+  The alternative `drmgr`-only scheme (resolve the marker entry PCs and read the
+  SysV/AAPCS64 argument registers by hand in an inserted clean call) was
+  rejected: it hard-codes the calling convention and re-implements what
+  `drwrap_get_arg` already provides. The cost of this decision is the `drwrap`
+  LGPL-2.1 dependency, accepted up front (see the licensing note in the Design
+  overview and Phase 8).
 - Keep client-local registries:
   - region name -> code range and app-owned trace buffer;
   - per-thread active region stack or active region pointer;
@@ -481,7 +502,9 @@ binding.
 
 **Caveats.**
 
-- `drwrap` carries LGPL 2.1 licensing separate from the rest of DynamoRIO.
+- `drwrap` is already a dependency from the Phase 2 MVP, so symbol mode adds no
+  new license obligation beyond it; the remaining new consideration here is the
+  optional `drsyms` dependency for internal symbols.
 - Wrapping may be less robust for inlined functions, hand-written labels, or
   generated code than explicit region markers.
 
@@ -543,8 +566,11 @@ manual region calls in the test body.
   thread. All-thread tracing needs explicit API and locking.
 - **Private loader transparency.** Do not share C globals between app and client.
   Use marker calls and app-owned buffers.
-- **Licensing.** `drwrap` and `drsyms` carry licensing considerations. The marker
-  and explicit-range MVP should avoid them until symbol mode is needed.
+- **Licensing.** `drwrap` (LGPL 2.1) is accepted in the MVP because the marker
+  argument-capture mechanism depends on it (see Phase 2); the native trace tier
+  ships as a separate optional artifact, so this does not affect the core or
+  `libasmtest_emu`. `drsyms` carries its own licensing/packaging considerations
+  and stays deferred until the optional symbol mode (Phase 7) needs it.
 - **macOS and AArch64.** DynamoRIO docs and build notes are strongest for Linux
   and Windows. Start Linux x86-64 only; treat macOS/AArch64 as follow-up.
 - **Fault model.** Native faults remain native faults. Continue using asm-test
