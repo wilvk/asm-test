@@ -59,14 +59,31 @@ both for an arbitrary routine. The two operating points:
 
 ## Implementation status
 
-**Planned — nothing built yet.** Today AMD is handled correctly by *self-skip*:
-[`cpu_matches`](../../src/hwtrace.c) pins Intel PT to `GenuineIntel`, so
-`asmtest_hwtrace_available(INTEL_PT)` returns 0 on AMD ("no intel_pt PMU") and the
-caller falls through to the DynamoRIO native tier (fully validated on the AMD dev
-host) or the Unicorn emulator. This plan is **additive**: it introduces a new
-`ASMTEST_HWTRACE_AMD_LBR` backend that, when present and within its window, gives a
-hardware-native trace on AMD; it does **not** change the Intel-PT gating, which is
-correct and must stay.
+**Phases 0–4 implemented.** `ASMTEST_HWTRACE_AMD_LBR`
+([include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)) ships with: the AMD
+vendor + branch-stack-probe gating in [src/hwtrace.c](../../src/hwtrace.c)
+(`amd_branch_probe`, `vendor_is("AuthenticAMD")`, AMD `skip_reason` strings); the
+data-ring (non-AUX) `PERF_SAMPLE_BRANCH_STACK` capture (`hwtrace_begin_amd` /
+`hwtrace_end_amd`); and the reconstruction backend
+[src/amd_backend.c](../../src/amd_backend.c) (`asmtest_amd_decode`), which replays
+the registered bytes through the Capstone layer (`asmtest_disas`) between branch
+records, normalizes blocks at branch edges (identical to
+[pt_backend.c](../../src/pt_backend.c)), filters aborted entries, and flags
+window-overflow (`nbr >= 16`) as `truncated`. Built into `libasmtest_hwtrace` and
+`hwtrace-test`.
+
+**Validation.** The reconstruction, block parity, and overflow-truncation
+(Phases 2–4) are validated on the dev host with **synthetic** `perf_branch_entry[]`
+inputs (examples/test_hwtrace.c): a Tier-A branch stack reconstructs the exact same
+`insns[]`/`blocks[]` the PT/DynamoRIO backends produce (`{0,3,6,0xc,0x11}`,
+blocks `{0,0x11}`), and a full 16-entry stack sets `truncated`. The live **capture**
+(Phase 1) self-skips here because this dev box is **Zen 2** (BRS needs Zen 3,
+LbrExtV2 Zen 4): `perf` branch-stack open returns `EOPNOTSUPP`, so
+`asmtest_hwtrace_available(AMD_LBR)` returns 0 with reason "no AMD branch records
+(needs Zen 3 BRS / Zen 4 LbrExtV2)". Capture is validated only on a Zen 3+/Zen 4
+host with perf privilege. The Intel-PT gating is unchanged (AMD still self-skips PT).
+
+**Phase 5** (Tier-B stitching / MSR-direct) remains **forward-look**.
 
 ---
 

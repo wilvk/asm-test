@@ -1143,12 +1143,16 @@ $(BUILD)/pt_backend.o: src/pt_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(LIBIPT_DEF) $(LIBIPT_CFLAGS) -c $< -o $@
 $(BUILD)/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -c $< -o $@
+# AMD branch-record reconstruction reuses the Capstone layer (disasm.o) via
+# asmtest_disas for instruction lengths — no new decoder lib, just Capstone.
+$(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
-                $(BUILD)/trace.o
+                $(BUILD)/amd_backend.o $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
-	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -o $@
 
 .PHONY: hwtrace-test
 hwtrace-test: $(BUILD)/test_hwtrace
@@ -1317,14 +1321,18 @@ $(BUILD)/pic/pt_backend.o: src/pt_backend.c include/asmtest_trace.h | $(BUILD)/p
 	$(CC) $(CFLAGS) $(LIBIPT_DEF) $(LIBIPT_CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/pt_backend.o \
                                        $(BUILD)/pic/cs_backend.o \
+                                       $(BUILD)/pic/amd_backend.o \
+                                       $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
-	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) -o $@
+	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -o $@
 $(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_hwtrace)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_hwtrace)) $@

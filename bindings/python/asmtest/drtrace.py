@@ -93,6 +93,9 @@ def _declare(lib):
     lib.asmtest_trace_begin.argtypes = [cc]
     lib.asmtest_trace_end.argtypes = [cc]
     lib.asmtest_dr_marker_error.restype = ci
+    lib.asmtest_dr_under_dynamorio.restype = ci
+    lib.asmtest_dr_register_symbol.argtypes = [cc, sz, v]
+    lib.asmtest_dr_register_symbol.restype = ci
     lib.asmtest_exec_alloc.argtypes = [C.c_char_p, sz, C.POINTER(_ExecCode)]
     lib.asmtest_exec_alloc.restype = ci
     lib.asmtest_exec_free.argtypes = [C.POINTER(_ExecCode)]
@@ -189,10 +192,12 @@ class NativeTrace:
 
     @classmethod
     def initialize(cls, client=None, dynamorio_home=None, client_options=None,
-                   mode=0):
-        """Bring DynamoRIO up in-process and take over. ``client`` is the path to
+                   mode=0, start=True):
+        """Bring DynamoRIO up in-process. ``client`` is the path to
         libasmtest_drclient.so (else $ASMTEST_DRCLIENT); ``dynamorio_home`` lets
-        the C side find libdynamorio (else $ASMTEST_DR_LIB / rpath)."""
+        the C side find libdynamorio (else $ASMTEST_DR_LIB / rpath). With
+        ``start=False`` DR is configured but not taken over yet — use start()/stop()
+        to bracket only the calls into traced code (the managed-runtime model)."""
         lib = _get()
         opts = _Options()
         opts.client_path = (client or "").encode() or None
@@ -202,10 +207,29 @@ class NativeTrace:
         rc = lib.asmtest_dr_init(C.byref(opts))
         if rc != ASMTEST_DR_OK:
             raise RuntimeError(f"asmtest_dr_init failed: {rc}")
-        rc = lib.asmtest_dr_start()
+        if start:
+            cls.start()
+
+    @classmethod
+    def start(cls):
+        """Take DynamoRIO over (dr_app_start). Must run on the init thread."""
+        rc = _get().asmtest_dr_start()
         if rc != ASMTEST_DR_OK:
             raise RuntimeError(f"asmtest_dr_start failed: {rc}")
         cls._started = True
+
+    @classmethod
+    def stop(cls):
+        """Return to native execution (dr_app_stop) without tearing DR down."""
+        rc = _get().asmtest_dr_stop()
+        if rc != ASMTEST_DR_OK:
+            raise RuntimeError(f"asmtest_dr_stop failed: {rc}")
+        cls._started = False
+
+    @classmethod
+    def under_dynamorio(cls) -> bool:
+        """True if the calling thread is currently executing under DynamoRIO."""
+        return bool(_get().asmtest_dr_under_dynamorio())
 
     @classmethod
     def shutdown(cls):

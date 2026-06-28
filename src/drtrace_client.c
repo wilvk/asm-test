@@ -58,14 +58,15 @@ typedef struct {
     app_pc base;
     size_t len;
     at_trace_t *trace;
-    bool insns; /* instruction mode for this region (trace->insns_cap > 0) */
+    bool insns;  /* instruction mode for this region (trace->insns_cap > 0) */
+    bool symbol; /* symbol mode (Phase 7): record always-on, no begin/end gate */
 } region_t;
 static region_t g_regions[MAX_REGIONS];
 static int g_nregions = 0;
 static void *g_region_lock; /* dr_mutex */
 
 /* Resolved marker PCs (NULL until the drapp module is seen). */
-static app_pc pc_register, pc_unregister, pc_begin, pc_end;
+static app_pc pc_register, pc_unregister, pc_begin, pc_end, pc_register_symbol;
 
 /* Per-thread recording state: a small stack of active trace pointers. */
 #define MAX_DEPTH 16
@@ -115,6 +116,7 @@ static void on_register(app_pc name, app_pc base, size_t len, at_trace_t *tr) {
         g_regions[slot].len = len;
         g_regions[slot].trace = tr;
         g_regions[slot].insns = (tr != NULL && tr->insns_cap > 0);
+        g_regions[slot].symbol = false;
     }
     dr_mutex_unlock(g_region_lock);
     /* Re-instrument the range so any already-cached translation picks up our
@@ -140,6 +142,49 @@ static void on_unregister(app_pc name) {
             return;
         }
     dr_mutex_unlock(g_region_lock);
+}
+
+/* Resolve an arbitrary exported symbol's PC across all loaded modules. */
+static app_pc resolve_symbol(const char *name) {
+    app_pc pc = NULL;
+    dr_module_iterator_t *it = dr_module_iterator_start();
+    while (pc == NULL && dr_module_iterator_hasnext(it)) {
+        module_data_t *m = dr_module_iterator_next(it);
+        pc = (app_pc)dr_get_proc_address(m->handle, name);
+        dr_free_module_data(m);
+    }
+    dr_module_iterator_stop(it);
+    return pc;
+}
+
+/* Symbol mode (Phase 7): resolve the named function's entry PC and register an
+ * always-recording region over [entry, entry+max_len) — no begin/end needed. */
+static void on_register_symbol(app_pc name, size_t max_len, at_trace_t *tr) {
+    const char *nm = (const char *)name;
+    app_pc pc = resolve_symbol(nm);
+    if (pc == NULL)
+        return; /* unresolved symbol: nothing to trace (best-effort) */
+    dr_mutex_lock(g_region_lock);
+    int slot = -1;
+    for (int i = 0; i < g_nregions; i++)
+        if (g_regions[i].used && strcmp(g_regions[i].name, nm) == 0) {
+            slot = i;
+            break;
+        }
+    if (slot < 0 && g_nregions < MAX_REGIONS)
+        slot = g_nregions++;
+    if (slot >= 0) {
+        dr_snprintf(g_regions[slot].name, MAX_NAME, "%s", nm);
+        g_regions[slot].name[MAX_NAME - 1] = '\0';
+        g_regions[slot].used = true;
+        g_regions[slot].base = pc;
+        g_regions[slot].len = max_len;
+        g_regions[slot].trace = tr;
+        g_regions[slot].insns = (tr != NULL && tr->insns_cap > 0);
+        g_regions[slot].symbol = true;
+    }
+    dr_mutex_unlock(g_region_lock);
+    dr_delay_flush_region(pc, max_len, 0, NULL);
 }
 
 static void on_begin(app_pc name) {
@@ -173,11 +218,16 @@ static void on_end(app_pc name) {
         ts->depth--;
 }
 
-static void on_block(at_trace_t *tr, uint64_t off) {
-    void *dc = dr_get_current_drcontext();
-    thread_state_t *ts = (thread_state_t *)dr_get_tls_field(dc);
-    if (!thread_recording(ts, tr))
-        return;
+/* `always` is set for symbol-mode regions (Phase 7): record every execution of
+ * the range, with no begin/end gating; marker regions gate on the per-thread
+ * recording stack. */
+static void on_block(at_trace_t *tr, uint64_t off, int always) {
+    if (!always) {
+        void *dc = dr_get_current_drcontext();
+        thread_state_t *ts = (thread_state_t *)dr_get_tls_field(dc);
+        if (!thread_recording(ts, tr))
+            return;
+    }
     tr->blocks_total++;
     if (tr->blocks != NULL) {
         for (size_t i = 0; i < tr->blocks_len; i++)
@@ -190,11 +240,13 @@ static void on_block(at_trace_t *tr, uint64_t off) {
     }
 }
 
-static void on_insn(at_trace_t *tr, uint64_t off) {
-    void *dc = dr_get_current_drcontext();
-    thread_state_t *ts = (thread_state_t *)dr_get_tls_field(dc);
-    if (!thread_recording(ts, tr))
-        return;
+static void on_insn(at_trace_t *tr, uint64_t off, int always) {
+    if (!always) {
+        void *dc = dr_get_current_drcontext();
+        thread_state_t *ts = (thread_state_t *)dr_get_tls_field(dc);
+        if (!thread_recording(ts, tr))
+            return;
+    }
     if (tr->insns != NULL) {
         if (tr->insns_len < tr->insns_cap)
             tr->insns[tr->insns_len++] = off;
@@ -238,21 +290,31 @@ static dr_emit_flags_t event_bb(void *drcontext, void *tag, instrlist_t *bb,
                              opnd_create_reg(DR_REG_RDI));
         return DR_EMIT_DEFAULT;
     }
+    if (pc == pc_register_symbol) {
+        dr_insert_clean_call(drcontext, bb, first, (void *)on_register_symbol,
+                             false, 3, opnd_create_reg(DR_REG_RDI),
+                             opnd_create_reg(DR_REG_RSI),
+                             opnd_create_reg(DR_REG_RDX));
+        return DR_EMIT_DEFAULT;
+    }
 
     region_t *r = region_for_pc(pc);
     if (r != NULL) {
-        dr_insert_clean_call(drcontext, bb, first, (void *)on_block, false, 2,
+        int always = r->symbol ? 1 : 0;
+        dr_insert_clean_call(drcontext, bb, first, (void *)on_block, false, 3,
                              OPND_CREATE_INTPTR(r->trace),
-                             OPND_CREATE_INT64((uint64_t)(pc - r->base)));
+                             OPND_CREATE_INT64((uint64_t)(pc - r->base)),
+                             OPND_CREATE_INT32(always));
         if (r->insns) {
             for (instr_t *in = first; in != NULL; in = instr_get_next(in)) {
                 app_pc ipc = instr_get_app_pc(in);
                 if (ipc == NULL || ipc < r->base || ipc >= r->base + r->len)
                     continue;
                 dr_insert_clean_call(
-                    drcontext, bb, in, (void *)on_insn, false, 2,
+                    drcontext, bb, in, (void *)on_insn, false, 3,
                     OPND_CREATE_INTPTR(r->trace),
-                    OPND_CREATE_INT64((uint64_t)(ipc - r->base)));
+                    OPND_CREATE_INT64((uint64_t)(ipc - r->base)),
+                    OPND_CREATE_INT32(always));
             }
         }
     }
@@ -274,6 +336,9 @@ static void try_resolve(module_handle_t h) {
         pc_begin = (app_pc)dr_get_proc_address(h, "asmtest_trace_begin");
     if (pc_end == NULL)
         pc_end = (app_pc)dr_get_proc_address(h, "asmtest_trace_end");
+    if (pc_register_symbol == NULL)
+        pc_register_symbol =
+            (app_pc)dr_get_proc_address(h, "asmtest_dr_register_symbol_marker");
 }
 
 static void resolve_all_modules(void) {
@@ -308,6 +373,17 @@ static void event_thread_exit(void *drcontext) {
 
 static void event_exit(void) { dr_mutex_destroy(g_region_lock); }
 
+/* Signal chaining (managed-runtime coexistence, native-trace Phase 0b): DELIVER
+ * every signal to the application's own handler. Managed runtimes (CPython
+ * faulthandler, JVM/.NET null-check SIGSEGV) rely on receiving signals; returning
+ * DR_SIGNAL_DELIVER lets their handlers fire normally while DR is started, rather
+ * than DR swallowing the signal. The tracer never needs to intercept signals. */
+static dr_signal_action_t event_signal(void *drcontext, dr_siginfo_t *info) {
+    (void)drcontext;
+    (void)info;
+    return DR_SIGNAL_DELIVER;
+}
+
 DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     (void)id;
     (void)argc;
@@ -319,5 +395,6 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     dr_register_thread_init_event(event_thread_init);
     dr_register_thread_exit_event(event_thread_exit);
     dr_register_bb_event(event_bb);
+    dr_register_signal_event(event_signal);
     dr_register_exit_event(event_exit);
 }

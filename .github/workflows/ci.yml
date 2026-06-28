@@ -196,6 +196,55 @@ jobs:
       - name: Build and run in-line assembler suite
         run: make asm-test
 
+  # Optional DynamoRIO in-process native-trace tier (Linux x86-64). Installs a
+  # pinned DynamoRIO release and runs the standalone C smoke harness + the Python
+  # language-wrapper suite. DynamoRIO is a software DBI engine (runs on the CI VM's
+  # CPU); the tier self-skips cleanly if the install step is removed. See
+  # docs/plans/dynamorio-native-trace-plan.md (Phase 8).
+  drtrace:
+    name: drtrace (DynamoRIO native trace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DR_VERSION: 11.91.20630
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build deps (python3 + pytest for the wrapper)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake python3 python3-pytest
+
+      - name: Fetch a pinned DynamoRIO release
+        run: |
+          url="https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz"
+          curl -fsSL "$url" -o /tmp/dr.tar.gz
+          mkdir -p "$HOME/dynamorio"
+          tar -xzf /tmp/dr.tar.gz -C "$HOME/dynamorio" --strip-components=1
+
+      - name: Build + run the C native-trace smoke harness
+        run: make drtrace-test DYNAMORIO_HOME="$HOME/dynamorio"
+
+      - name: Build + run the Python native-trace wrapper suite
+        run: make drtrace-python-test DYNAMORIO_HOME="$HOME/dynamorio"
+
+  # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
+  # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
+  # not expose, so they self-skip — but the AMD branch-record RECONSTRUCTION is
+  # validated with synthetic inputs against the Capstone layer, and the full
+  # detect-and-skip gating chain is exercised. A self-hosted bare-metal job (Intel
+  # PT / AMD Zen 3+ / AArch64 CoreSight) is a separate, allowed-to-be-absent lane.
+  hwtrace:
+    name: hwtrace (decode + self-skip gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Capstone (AMD reconstruction) + libipt (PT decode) + OpenCSD
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config
+
+      - name: Build + run the hardware-trace suite (decode validated; capture self-skips)
+        run: make hwtrace-test
+
   # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
   # container (the generic bindings/Dockerfile.lang on a shared base) so the
   # toolchains stay isolated — one matrix job per language, `make docker-<lang>`,

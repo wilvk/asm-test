@@ -39,9 +39,17 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
 int asmtest_cs_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
 
+/* AMD branch-record decode (amd_backend.c): takes the perf branch-stack array,
+ * not an AUX byte stream. */
+#if defined(__linux__) && defined(__x86_64__)
+int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
+                       const void *base, size_t len, asmtest_trace_t *trace);
+#endif
+
 /* Whether each decoder was compiled in (queried by available()). */
 int asmtest_pt_decoder_present(void);
 int asmtest_cs_decoder_present(void);
+int asmtest_amd_decoder_present(void);
 
 /* ------------------------------------------------------------------ */
 /* Gating: detect-and-skip                                             */
@@ -72,37 +80,54 @@ static int pmu_type(asmtest_trace_backend_t b) {
 }
 
 static int decoder_present(asmtest_trace_backend_t b) {
-    return b == ASMTEST_HWTRACE_INTEL_PT ? asmtest_pt_decoder_present()
-                                         : asmtest_cs_decoder_present();
+    switch (b) {
+    case ASMTEST_HWTRACE_INTEL_PT:
+        return asmtest_pt_decoder_present();
+    case ASMTEST_HWTRACE_CORESIGHT:
+        return asmtest_cs_decoder_present();
+    case ASMTEST_HWTRACE_AMD_LBR:
+        return asmtest_amd_decoder_present();
+    }
+    return 0;
 }
 
-/* CPU/ISA/vendor check: Intel PT needs GenuineIntel x86-64; CoreSight needs
- * AArch64. */
-static int cpu_matches(asmtest_trace_backend_t b) {
-    if (b == ASMTEST_HWTRACE_CORESIGHT) {
-#if defined(__aarch64__)
-        return 1;
-#else
-        return 0;
-#endif
-    }
+/* True if /proc/cpuinfo's vendor_id contains `want` (x86 only). */
+static int vendor_is(const char *want) {
 #if defined(__x86_64__)
     FILE *f = fopen("/proc/cpuinfo", "r");
     if (f == NULL)
         return 0;
     char line[256];
-    int intel = 0;
-    while (fgets(line, sizeof line, f) != NULL) {
+    int hit = 0;
+    while (fgets(line, sizeof line, f) != NULL)
         if (strncmp(line, "vendor_id", 9) == 0) {
-            intel = strstr(line, "GenuineIntel") != NULL;
+            hit = strstr(line, want) != NULL;
             break;
         }
-    }
     fclose(f);
-    return intel;
+    return hit;
 #else
+    (void)want;
     return 0;
 #endif
+}
+
+/* CPU/ISA/vendor check: Intel PT needs GenuineIntel x86-64; AMD LBR needs
+ * AuthenticAMD x86-64; CoreSight needs AArch64. */
+static int cpu_matches(asmtest_trace_backend_t b) {
+    switch (b) {
+    case ASMTEST_HWTRACE_CORESIGHT:
+#if defined(__aarch64__)
+        return 1;
+#else
+        return 0;
+#endif
+    case ASMTEST_HWTRACE_INTEL_PT:
+        return vendor_is("GenuineIntel");
+    case ASMTEST_HWTRACE_AMD_LBR:
+        return vendor_is("AuthenticAMD");
+    }
+    return 0;
 }
 
 #if defined(__linux__)
@@ -110,9 +135,37 @@ static long perf_open(struct perf_event_attr *a, pid_t pid, int cpu, int group,
                       unsigned long flags) {
     return syscall(SYS_perf_event_open, a, pid, cpu, group, flags);
 }
+
+/* AMD capability probe outcomes (no sysfs PMU node exists for branch records). */
+enum { AMD_OK = 0, AMD_NOHW = 1, AMD_NOPERM = 2 };
+
+/* Probe AMD branch-record support by attempting a branch-stack sampling open
+ * (Zen 4 LbrExtV2 / Zen 3 BRS). EOPNOTSUPP/EINVAL => no hardware (e.g. Zen 2);
+ * EACCES/EPERM => privilege. */
+static int amd_branch_probe(void) {
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a;
+    a.type = PERF_TYPE_HARDWARE;
+    a.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+    a.sample_period = 1;
+    a.sample_type = PERF_SAMPLE_BRANCH_STACK;
+    a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    a.exclude_kernel = 1;
+    a.disabled = 1;
+    long fd = perf_open(&a, 0, -1, -1, 0);
+    if (fd >= 0) {
+        close((int)fd);
+        return AMD_OK;
+    }
+    if (errno == EACCES || errno == EPERM)
+        return AMD_NOPERM;
+    return AMD_NOHW; /* EOPNOTSUPP/EINVAL: no Zen 3 BRS / Zen 4 LbrExtV2 */
+}
 #endif
 
-/* A real privilege probe: try to open the PMU event disabled, then close it. */
+/* A real privilege probe: try to open the AUX PMU event disabled, then close it
+ * (Intel PT / CoreSight). AMD uses amd_branch_probe instead. */
 static int perf_permitted(asmtest_trace_backend_t b) {
 #if defined(__linux__)
     int type = pmu_type(b);
@@ -137,32 +190,50 @@ static int perf_permitted(asmtest_trace_backend_t b) {
 }
 
 int asmtest_hwtrace_available(asmtest_trace_backend_t backend) {
-    return decoder_present(backend) && cpu_matches(backend) &&
-           pmu_type(backend) >= 0 && perf_permitted(backend);
+    if (!decoder_present(backend) || !cpu_matches(backend))
+        return 0;
+    if (backend == ASMTEST_HWTRACE_AMD_LBR) {
+#if defined(__linux__) && defined(__x86_64__)
+        return amd_branch_probe() == AMD_OK;
+#else
+        return 0;
+#endif
+    }
+    return pmu_type(backend) >= 0 && perf_permitted(backend);
 }
 
 void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
                                  size_t buflen) {
     if (buf == NULL || buflen == 0)
         return;
-    const char *r;
+    const char *r = "available";
     if (!decoder_present(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)
-                ? "built without libipt"
-                : "built without OpenCSD";
+        r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "built without libipt"
+            : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "built without OpenCSD"
+                                                     : "built without Capstone (AMD reconstruction)";
     else if (!cpu_matches(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)
-                ? "not a GenuineIntel x86-64 host"
-                : "not an AArch64 host";
-    else if (pmu_type(backend) < 0)
+        r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "not a GenuineIntel x86-64 host"
+            : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
+                                                     : "not an AuthenticAMD x86-64 host";
+    else if (backend == ASMTEST_HWTRACE_AMD_LBR) {
+#if defined(__linux__) && defined(__x86_64__)
+        int p = amd_branch_probe();
+        r = (p == AMD_NOHW)
+                ? "no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)"
+            : (p == AMD_NOPERM)
+                ? "perf branch-stack not permitted (lower perf_event_paranoid or "
+                  "grant CAP_PERFMON)"
+                : "available";
+#else
+        r = "AMD LBR is Linux x86-64 only";
+#endif
+    } else if (pmu_type(backend) < 0)
         r = (backend == ASMTEST_HWTRACE_INTEL_PT)
                 ? "no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)"
                 : "no cs_etm PMU (needs a CoreSight-capable AArch64 board)";
     else if (!perf_permitted(backend))
         r = "perf_event capture not permitted (lower perf_event_paranoid or "
             "grant CAP_PERFMON)";
-    else
-        r = "available";
     snprintf(buf, buflen, "%s", r);
 }
 
@@ -245,6 +316,113 @@ static hw_region_t *find_region(const char *name) {
 }
 
 /* ------------------------------------------------------------------ */
+/* AMD branch-record capture (data ring, NOT AUX)                      */
+/*                                                                     */
+/* AMD branch records arrive as PERF_RECORD_SAMPLE records in the base */
+/* (data) ring, each carrying a perf_branch_stack ({nr, entries[]}).   */
+/* sample_period=1 emits a sample at every taken branch, so the sample */
+/* at the region's last branch holds the complete <=16-entry history.  */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__) && defined(__x86_64__)
+static int hwtrace_begin_amd(hw_region_t *r) {
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a;
+    a.type = PERF_TYPE_HARDWARE;
+    a.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+    a.sample_period = 1;
+    a.sample_type = PERF_SAMPLE_BRANCH_STACK;
+    a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    a.exclude_kernel = 1;
+    a.exclude_hv = 1;
+    a.disabled = 1;
+    long fd = perf_open(&a, 0, -1, -1, 0);
+    if (fd < 0)
+        return -1;
+    g_fd = (int)fd;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 64 * 1024);
+    g_base_map = mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
+    if (g_base_map == MAP_FAILED) {
+        g_base_map = NULL;
+        close(g_fd);
+        g_fd = -1;
+        return -1;
+    }
+    g_aux_map = NULL; /* AMD uses no AUX ring */
+    g_aux_sz = 0;
+    g_active = r;
+    ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0);
+    return 0;
+}
+
+static void hwtrace_end_amd(void) {
+    ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    uint8_t *data = (uint8_t *)g_base_map + (size_t)pg;
+    size_t dsz = g_base_sz - (size_t)pg;
+    uint64_t head = mp->data_head;
+    __sync_synchronize(); /* read data_head before the records (smp_rmb) */
+    uint64_t tail = mp->data_tail;
+    hw_region_t *r = g_active;
+
+    /* Linearize [tail, head) (it may wrap the circular data ring) into scratch,
+     * then walk perf_event_header records, keeping the last branch sample. */
+    size_t span = (size_t)(head - tail);
+    struct perf_branch_entry *best = NULL;
+    uint64_t best_nr = 0;
+    uint8_t *buf = NULL;
+    if (span > 0 && span <= dsz) {
+        buf = (uint8_t *)malloc(span);
+        if (buf != NULL) {
+            for (size_t i = 0; i < span; i++)
+                buf[i] = data[(tail + i) % dsz];
+            size_t off = 0;
+            while (off + sizeof(struct perf_event_header) <= span) {
+                struct perf_event_header *h = (struct perf_event_header *)(buf + off);
+                if (h->size == 0 || off + h->size > span)
+                    break;
+                if (h->type == PERF_RECORD_SAMPLE) {
+                    /* Only PERF_SAMPLE_BRANCH_STACK is set, so the body is
+                     * {u64 nr; perf_branch_entry[nr]}. Keep the last (most
+                     * complete) sample. */
+                    uint8_t *body = buf + off + sizeof *h;
+                    uint64_t nr = *(uint64_t *)body;
+                    if (nr > 0 &&
+                        sizeof *h + sizeof(uint64_t) +
+                                nr * sizeof(struct perf_branch_entry) <=
+                            h->size) {
+                        best = (struct perf_branch_entry *)(body + sizeof(uint64_t));
+                        best_nr = nr;
+                    }
+                }
+                off += h->size;
+            }
+        }
+    }
+
+    if (best != NULL && best_nr > 0)
+        asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len, r->trace);
+    else if (r->trace != NULL)
+        r->trace->truncated = true; /* nothing captured: do not claim complete */
+
+    free(buf);
+    mp->data_tail = head; /* consume */
+    munmap(g_base_map, g_base_sz);
+    close(g_fd);
+    g_base_map = NULL;
+    g_fd = -1;
+    g_active = NULL;
+}
+#endif /* __linux__ && __x86_64__ */
+
+/* ------------------------------------------------------------------ */
 /* Capture lifecycle (Intel PT via perf AUX; CoreSight is analogous)   */
 /* ------------------------------------------------------------------ */
 
@@ -255,6 +433,12 @@ void asmtest_hwtrace_begin(const char *name) {
     hw_region_t *r = find_region(name);
     if (r == NULL)
         return;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_AMD_LBR) {
+        hwtrace_begin_amd(r);
+        return;
+    }
+#endif
     int type = pmu_type(g_opts.backend);
     if (type < 0)
         return;
@@ -304,22 +488,63 @@ void asmtest_hwtrace_begin(const char *name) {
 #endif
 }
 
+/* Scan the base (data) ring for PERF_RECORD_AUX records and report whether any
+ * carried PERF_AUX_FLAG_TRUNCATED — the precise "AUX trace was lost" signal that
+ * complements the head>=size heuristic. */
+#if defined(__linux__)
+static int aux_data_ring_truncated(void) {
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    uint8_t *data = (uint8_t *)g_base_map + (size_t)pg;
+    size_t dsz = g_base_sz - (size_t)pg;
+    uint64_t dhead = mp->data_head;
+    __sync_synchronize();
+    uint64_t dtail = mp->data_tail;
+    int trunc = 0;
+    for (uint64_t off = dtail; off + sizeof(struct perf_event_header) <= dhead;) {
+        struct perf_event_header h;
+        for (size_t i = 0; i < sizeof h; i++)
+            ((uint8_t *)&h)[i] = data[(off + i) % dsz];
+        if (h.size < sizeof h)
+            break;
+        if (h.type == PERF_RECORD_AUX) {
+            /* body: u64 aux_offset, u64 aux_size, u64 flags */
+            uint64_t flags = 0;
+            uint64_t fpos = off + sizeof h + 2 * sizeof(uint64_t);
+            for (size_t i = 0; i < sizeof flags; i++)
+                ((uint8_t *)&flags)[i] = data[(fpos + i) % dsz];
+            if (flags & PERF_AUX_FLAG_TRUNCATED)
+                trunc = 1;
+        }
+        off += h.size;
+    }
+    mp->data_tail = dhead; /* consume */
+    return trunc;
+}
+#endif
+
 void asmtest_hwtrace_end(const char *name) {
 #if defined(__linux__)
     (void)name;
     if (g_fd < 0 || g_active == NULL)
         return;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_AMD_LBR) {
+        hwtrace_end_amd();
+        return;
+    }
+#endif
     ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
     struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
     /* Linear ring: valid trace is [0, aux_head). (Snapshot decode would walk the
      * circular ring from aux_tail; left to the snapshot-mode follow-up.) */
     uint64_t head = mp->aux_head;
-    int overflow = 0;
+    /* Precise overflow: PERF_AUX_FLAG_TRUNCATED on a PERF_RECORD_AUX in the data
+     * ring; plus the head>=size heuristic as a backstop for the tiny-buffer case. */
+    int overflow = aux_data_ring_truncated();
     if (head >= g_aux_sz) {
-        /* The linear AUX ring filled to capacity: trailing trace was almost
-         * certainly dropped (the tiny-buffer / hot-loop overflow case). Flag it.
-         * The precise signal is PERF_AUX_FLAG_TRUNCATED on the PERF_RECORD_AUX
-         * record in the DATA ring; parsing that ring is a follow-up. */
         head = g_aux_sz;
         overflow = 1;
     }

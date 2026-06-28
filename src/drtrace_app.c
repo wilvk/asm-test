@@ -42,6 +42,7 @@ static int (*p_dr_app_setup)(void);
 static void (*p_dr_app_start)(void);
 static void (*p_dr_app_stop)(void);
 static void (*p_dr_app_stop_and_cleanup)(void);
+static char (*p_dr_app_running)(void); /* dr_app_running_under_dynamorio (bool) */
 
 /* Resolve the libdynamorio path: explicit option, the ASMTEST_DR_LIB / the
  * DYNAMORIO_HOME env vars, then a bare soname (found via rpath / LD_LIBRARY_PATH).
@@ -108,6 +109,18 @@ static _Thread_local int g_active_depth = 0;
  * end to the PC-resolving client). */
 static volatile unsigned long g_marker_sink;
 
+/* fork-after-start is unsupported (DR took over all threads). A pthread_atfork
+ * child handler disables the tier in the forked child (e.g. Python multiprocessing
+ * with the default 'fork' start method) so it degrades safely instead of running
+ * with a broken DR state inherited across fork. */
+static volatile int g_disabled_in_child = 0;
+static pthread_once_t g_atfork_once = PTHREAD_ONCE_INIT;
+static void dr_atfork_child(void) {
+    g_disabled_in_child = 1;
+    g_active_depth = 0;
+}
+static void install_atfork(void) { pthread_atfork(NULL, NULL, dr_atfork_child); }
+
 int asmtest_dr_available(void) {
     /* A cheap, side-effect-free probe: is a libdynamorio path resolvable? We do
      * NOT dlopen here (that runs DR's constructor); we just check the file. A
@@ -126,11 +139,18 @@ int asmtest_dr_available(void) {
 
 int asmtest_dr_marker_error(void) { return g_marker_errors; }
 
+int asmtest_dr_under_dynamorio(void) {
+    return (p_dr_app_running != NULL && p_dr_app_running()) ? 1 : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Init / start / stop / shutdown                                      */
 /* ------------------------------------------------------------------ */
 
 int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
+    if (g_disabled_in_child)
+        return ASMTEST_DR_ENODR; /* tier disabled in a forked child */
+    pthread_once(&g_atfork_once, install_atfork);
     pthread_mutex_lock(&g_lock);
     if (g_state == ST_INIT || g_state == ST_STARTED || g_state == ST_STOPPED) {
         pthread_mutex_unlock(&g_lock);
@@ -174,6 +194,8 @@ int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
         p_dr_app_stop = (void (*)(void))dlsym(g_dr_handle, "dr_app_stop");
         p_dr_app_stop_and_cleanup =
             (void (*)(void))dlsym(g_dr_handle, "dr_app_stop_and_cleanup");
+        p_dr_app_running = /* optional: only the managed-host probe uses it */
+            (char (*)(void))dlsym(g_dr_handle, "dr_app_running_under_dynamorio");
         if (p_dr_app_setup == NULL || p_dr_app_start == NULL ||
             p_dr_app_stop == NULL || p_dr_app_stop_and_cleanup == NULL) {
             dlclose(g_dr_handle);
@@ -200,6 +222,8 @@ int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
 }
 
 int asmtest_dr_start(void) {
+    if (g_disabled_in_child)
+        return ASMTEST_DR_ENODR;
     pthread_mutex_lock(&g_lock);
     if (g_state != ST_INIT && g_state != ST_STOPPED) {
         pthread_mutex_unlock(&g_lock);
@@ -228,6 +252,10 @@ int asmtest_dr_stop(void) {
 }
 
 void asmtest_dr_shutdown(void) {
+    /* Surface "shutdown while a region is still active on this thread" as data
+     * (the markers are void and cannot return it inline). */
+    if (g_active_depth > 0)
+        g_marker_errors++;
     pthread_mutex_lock(&g_lock);
     if ((g_state == ST_STARTED || g_state == ST_STOPPED || g_state == ST_INIT) &&
         p_dr_app_stop_and_cleanup != NULL) {
@@ -236,10 +264,11 @@ void asmtest_dr_shutdown(void) {
     for (int i = 0; i < g_nregions; i++)
         free(g_regions[i].name);
     g_nregions = 0;
-    /* Return to UNINIT (not a terminal state) so a subsequent asmtest_dr_init
-     * can re-attach — matching the documented contract. The libdynamorio handle
-     * stays cached and is reused by that re-init. */
-    g_state = ST_UNINIT;
+    /* SHUTDOWN is terminal for the process: a subsequent asmtest_dr_init returns
+     * ASMTEST_DR_ESTATE. DynamoRIO's in-process re-attach (dr_app_setup after
+     * dr_app_stop_and_cleanup) is unreliable in practice — it can crash inside
+     * DR — so we do not offer it. Trace again from a FRESH process. */
+    g_state = ST_SHUTDOWN;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -297,6 +326,33 @@ int asmtest_dr_register_region(const char *name, void *base, size_t len,
     return ASMTEST_DR_OK;
 }
 
+/* Symbol-mode marker (native-trace Phase 7): the client resolves the symbol's
+ * entry PC and records its [entry, entry+max_len) range always-on. Distinct body
+ * so it is not merged with the other markers. */
+__attribute__((noinline, visibility("default"))) void
+asmtest_dr_register_symbol_marker(const char *symbol, size_t max_len,
+                                  asmtest_trace_t *trace) {
+    g_marker_sink += 0x55 + (unsigned long)(uintptr_t)symbol;
+    (void)max_len;
+    (void)trace;
+}
+
+int asmtest_dr_register_symbol(const char *symbol, size_t max_len,
+                               asmtest_trace_t *trace) {
+    if (symbol == NULL || max_len == 0 || trace == NULL)
+        return ASMTEST_DR_EINVAL;
+    if (strlen(symbol) >= 64) /* must fit the client's fixed name buffer */
+        return ASMTEST_DR_EINVAL;
+    pthread_mutex_lock(&g_lock);
+    if (g_state != ST_STARTED) {
+        pthread_mutex_unlock(&g_lock);
+        return ASMTEST_DR_ESTATE;
+    }
+    pthread_mutex_unlock(&g_lock);
+    asmtest_dr_register_symbol_marker(symbol, max_len, trace);
+    return ASMTEST_DR_OK;
+}
+
 int asmtest_dr_unregister_region(const char *name) {
     if (name == NULL)
         return ASMTEST_DR_EINVAL;
@@ -324,6 +380,8 @@ int asmtest_dr_unregister_region(const char *name) {
 
 void asmtest_trace_begin(const char *name) {
     g_marker_sink += 0x33; /* distinct body (also read by the client at entry) */
+    if (g_disabled_in_child)
+        return;
     if (g_active_depth < ASMTEST_DR_MAX_DEPTH)
         g_active_stack[g_active_depth] = name;
     g_active_depth++;
@@ -331,6 +389,8 @@ void asmtest_trace_begin(const char *name) {
 
 void asmtest_trace_end(const char *name) {
     g_marker_sink += 0x44; /* distinct body */
+    if (g_disabled_in_child)
+        return;
     if (g_active_depth <= 0) {
         g_marker_errors++; /* end without begin */
         return;

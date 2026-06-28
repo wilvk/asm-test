@@ -47,6 +47,7 @@ extern "C" {
 typedef enum {
     ASMTEST_HWTRACE_INTEL_PT = 0,
     ASMTEST_HWTRACE_CORESIGHT = 1,
+    ASMTEST_HWTRACE_AMD_LBR = 2, /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
 } asmtest_trace_backend_t;
 
 typedef struct {

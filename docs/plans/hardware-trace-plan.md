@@ -38,6 +38,16 @@ chain, and the `hwtrace-test` / `shared-hwtrace` targets all ship behind
 (`src/cs_backend.c`): `asmtest_cs_decoder_present()` returns 0 so it self-skips
 until completed on a real AArch64 board.
 
+Overflow/loss now uses the precise signal: `asmtest_hwtrace_end` scans the perf
+data ring for `PERF_RECORD_AUX` records and sets `truncated` on
+`PERF_AUX_FLAG_TRUNCATED` (with the AUX-ring-full heuristic as a backstop).
+
+A **third, AMD-specific** hardware backend was added as a sibling plan,
+[amd-lbr-trace-plan.md](amd-lbr-trace-plan.md) (`ASMTEST_HWTRACE_AMD_LBR`,
+`src/amd_backend.c`): AMD has no PT equivalent, so it reconstructs from the 16-deep
+branch-record stack (Zen 3 BRS / Zen 4 LbrExtV2). Its reconstruction is
+host-validated with synthetic branch records; live capture needs Zen 3+.
+
 **Validation caveat.** The libipt API usage is verified against upstream
 `intel-pt.h`, and the gating/self-skip path is exercised on every host — but the
 live PT **capture** cannot run on AMD CPUs, VMs, or standard CI (no `intel_pt`
@@ -46,7 +56,10 @@ with the specific reason. Capture is validated only on bare-metal Intel PT with
 `perf_event_paranoid` lowered. User-facing docs:
 [native-tracing.md](../native-tracing.md#hardware-trace-tier-intel-pt--arm-coresight).
 
-Phase 2 (attach-to-foreign-JIT) remains **planned, forward-look**.
+Phase 2 (attach-to-foreign-JIT) remains **planned, forward-look** (it is research-
+grade: PT-attach-to-PID + a time-aware jitdump/eBPF code-image recorder, then the
+hypervisor/EPT frontier — see the analysis doc); it needs PT hardware to build and
+validate and is intentionally not implemented as untested code.
 
 ---
 

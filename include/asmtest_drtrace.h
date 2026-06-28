@@ -70,13 +70,22 @@ int asmtest_dr_available(void);
  *   start    performs dr_app_start (DR takes over) — MUST run on the setup
  *            thread, from INIT or STOPPED;
  *   stop     performs dr_app_stop (back to native), from STARTED;
- *   shutdown performs dr_app_stop_and_cleanup and returns to UNINIT.
+ *   shutdown performs dr_app_stop_and_cleanup; SHUTDOWN is TERMINAL.
  * A second init is a no-op returning ASMTEST_DR_OK. Out-of-order calls return a
- * defined error rather than invoking DR (whose ordering violations are UB). */
+ * defined error rather than invoking DR (whose ordering violations are UB).
+ * ONE lifecycle per process: after shutdown, init returns ASMTEST_DR_ESTATE —
+ * DynamoRIO's in-process re-attach is unreliable, so trace again from a fresh
+ * process. start/stop may be cycled repeatedly while single-threaded (the
+ * bracket model); doing so under concurrent threads is the fragile case. */
 int asmtest_dr_init(const asmtest_drtrace_options_t *opts);
 int asmtest_dr_start(void);
 int asmtest_dr_stop(void);
 void asmtest_dr_shutdown(void);
+
+/* 1 if the calling thread is currently executing under DynamoRIO's control
+ * (dr_app_running_under_dynamorio), else 0. Used by the managed-host gate to
+ * measure thread-takeover scope after asmtest_dr_start(). */
+int asmtest_dr_under_dynamorio(void);
 
 /* Register a non-overlapping native code range under `name`, recording coverage
  * into the app-owned `trace` (allocate it with asmtest_trace_new). The app may
@@ -97,6 +106,17 @@ void asmtest_trace_end(const char *name);
 /* Count of illegal marker operations observed (end without matching begin, or a
  * mismatched end) since init. 0 means every marker was balanced. */
 int asmtest_dr_marker_error(void);
+
+/* Symbol/function mode (native-trace Phase 7): trace a named exported function
+ * WITHOUT explicit begin/end markers. The client resolves `symbol`'s entry PC
+ * with dr_get_proc_address and records every execution of blocks in
+ * [entry, entry+max_len) into `trace` — recording is always-on for the range, so
+ * no begin/end is needed. `max_len` bounds the function (pass its size, or a
+ * generous upper bound; ranges must not overlap). Best-effort: less robust for
+ * inlined or generated code than explicit markers, where the symbol may not have
+ * a single stable entry PC. Returns ASMTEST_DR_OK or an error. */
+int asmtest_dr_register_symbol(const char *symbol, size_t max_len,
+                               asmtest_trace_t *trace);
 
 /* ------------------------------------------------------------------ */
 /* Host-native executable code (native-trace Phase 4)                  */

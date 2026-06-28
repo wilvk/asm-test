@@ -44,11 +44,20 @@ linking it would be too late to configure the client; (2) the register/unregiste
 clean calls use **`dr_delay_flush_region`**, not `dr_flush_region`, which may not
 return to the cache from a clean call.
 
-Per-phase: Phase 0 (lifecycle/attach) ✅ · Phase 1 (trace substrate) ✅ ·
-Phase 2 (client + block coverage) ✅ · Phase 3 (app API + runner test) ✅ ·
-Phase 4 (host-native W^X exec code) ✅ · Phase 5 (instruction mode) ✅ ·
-Phase 6 (Python wrapper) ✅ (other languages follow the same pattern) ·
-Phase 7 (symbol mode) and the managed-runtime Phase 0b gate remain **planned**.
+Per-phase: Phase 0a (lifecycle/attach) ✅ · Phase 0b (CPython managed-host gate) ✅
+(`bindings/python/tests/test_drgate.py`: takeover scope via
+`asmtest_dr_under_dynamorio`, signal chaining via the client's
+`dr_register_signal_event`→`DR_SIGNAL_DELIVER`, and single-threaded start/stop
+bracketing — all stable; the gate also *records the boundary* it found: repeated
+re-takeover under a concurrently-busy thread, and in-process re-attach after
+shutdown, are unstable on this DR build, so SHUTDOWN is terminal/one-lifecycle-per-
+process and concurrent managed runtimes route to hardware trace) ·
+Phase 1 (trace substrate) ✅ · Phase 2 (client + block coverage) ✅ ·
+Phase 3 (app API + runner test) ✅ · Phase 4 (host-native W^X exec code) ✅ ·
+Phase 5 (instruction mode) ✅ · Phase 6 (language wrappers — all bindings) ✅ ·
+Phase 7 (symbol mode) ✅ (`asmtest_dr_register_symbol`; always-on range recording).
+Phase 0a fork safety: a `pthread_atfork` child handler disables the tier in forked
+children. Remaining: drsyms-based internal-symbol mode (Phase 7 stretch).
 
 ---
 
