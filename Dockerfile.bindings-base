@@ -31,12 +31,14 @@ RUN apt-get update \
 
 WORKDIR /src
 
-# Install the full native tier from just the Makefile + scripts so this layer
-# caches independently of the sources: libunicorn (apt) plus Keystone + Capstone
+# Install the full native tier from just the Makefile (+ its mk/ includes, which
+# the Makefile reads at parse time) + scripts so this layer caches independently
+# of the sources: libunicorn (apt) plus Keystone + Capstone
 # (pinned source builds, matching what a published package vendors). libasmtest_emu
 # is the superset, so every binding image needs all three on the default search
 # path to build `make shared-emu`.
 COPY Makefile ./
+COPY mk/ ./mk/
 COPY scripts/ ./scripts/
 RUN make deps DEPS_ARGS=--emu \
  && ./scripts/build-keystone.sh && ./scripts/build-capstone.sh \

@@ -29,13 +29,17 @@ RUN apt-get update \
 
 WORKDIR /src
 
-# Install the OPTIONAL toolchain first, from just the Makefile + installer, so
-# this (slow) layer stays cached when only sources change. `make deps` runs as
+# Install the OPTIONAL toolchain first, from just the Makefile (+ its mk/
+# includes) + installer, so this (slow) layer stays cached when only sources
+# change. The mk/ includes are needed because the Makefile reads them at parse
+# time, so any `make` here (even `make deps`) requires them present. `make deps`
+# runs as
 # root here and so skips sudo. DEPS_ARGS lets you trim it, e.g.
 # `docker build --build-arg DEPS_ARGS=--emu .`. Keystone has no apt package, so
 # when asm is in scope (--asm/--all) it is built from source (cached layer).
 ARG DEPS_ARGS=--all
 COPY Makefile ./
+COPY mk/ ./mk/
 COPY scripts/ ./scripts/
 RUN make deps DEPS_ARGS=$DEPS_ARGS && rm -rf /var/lib/apt/lists/*
 RUN case "$DEPS_ARGS" in *--asm*|*--all*) sh scripts/build-keystone.sh ;; esac
