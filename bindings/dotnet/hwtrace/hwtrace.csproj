@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runnable smoke test for the single-step hardware-trace wrapper
+       (HwTrace.cs), mirroring bindings/python/tests/test_hwtrace.py. A
+       dependency-free console app: P/Invoke over libasmtest_hwtrace, no NuGet
+       packages, so `dotnet run` works offline. Self-skips (prints "# SKIP ...",
+       exit 0) when the single-step backend cannot run on this host.
+
+       EnableDefaultCompileItems=false + explicit Compile includes so this project
+       never globs the sibling binding sources — and, symmetrically, asmtest.csproj
+       excludes this hwtrace/ subtree so the two never glob-collide. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>hwtrace</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="HwTrace.cs" />
+    <Compile Include="HwTraceProgram.cs" />
+  </ItemGroup>
+
+</Project>

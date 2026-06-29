@@ -1,0 +1,19 @@
+# Dockerfile.hwtrace — the single-step hardware-trace tier (C smoke test + Python
+# wrapper) in a PLAIN container. Unlike Dockerfile.drtrace (which carries
+# DynamoRIO) and unlike the PT/AMD backends (which need bare-metal hardware), the
+# SINGLESTEP backend needs no engine, no perf_event, no privilege, and no extra
+# Linux capability: it drives EFLAGS.TF (#DB -> SIGTRAP), which is baseline x86-64
+# userspace. So this image runs under a default `docker run` — no --privileged, no
+# --cap-add, no --security-opt seccomp=unconfined. That is the point of the lane:
+# the hardware-trace tier is, for the first time, containerizable and CI-able.
+#
+# FROM the bindings base (build/native toolchain + Capstone, which the tier's block
+# normalization needs); add python3 + pytest for the Python wrapper lane.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pytest \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+CMD sh -c 'make hwtrace-test && make hwtrace-python-test'

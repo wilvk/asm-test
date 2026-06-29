@@ -65,4 +65,27 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_drtrace.addArgs(args);
     const drtrace_step = b.step("drtrace-test", "Run the DynamoRIO native-trace smoke test (self-skips if unavailable)");
     drtrace_step.dependOn(&run_drtrace.step);
+
+    // Hardware-trace (single-step / Intel PT / AMD) live test. A SEPARATE step
+    // for the same reason as drtrace-test: it must NOT link libasmtest_hwtrace at
+    // build time (that lib is optional and may be absent). It dlopen()s the lib at
+    // runtime via std.DynLib and self-skips when it can't load (or the backend is
+    // unavailable). It still needs the include dir so `@cImport("asmtest_hwtrace.h")`
+    // can translate the option struct *type* (and the asmtest_trace.h it includes),
+    // and libC for std.DynLib / posix. No addLibraryPath / linkSystemLibrary.
+    const hwtrace_exe = b.addExecutable(.{
+        .name = "hwtrace-test",
+        .root_source_file = b.path("src/hwtrace_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hwtrace_exe.linkLibC();
+    hwtrace_exe.addIncludePath(.{ .cwd_relative = incdir });
+
+    const run_hwtrace = b.addRunArtifact(hwtrace_exe);
+    // Forward the parent environment (ASMTEST_HWTRACE_LIB) so the runtime dlopen
+    // sees it.
+    if (b.args) |args| run_hwtrace.addArgs(args);
+    const hwtrace_step = b.step("hwtrace-test", "Run the single-step hardware-trace live test (self-skips if unavailable)");
+    hwtrace_step.dependOn(&run_hwtrace.step);
 }

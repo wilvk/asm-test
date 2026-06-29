@@ -144,9 +144,15 @@ $(BUILD)/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)
 # asmtest_disas for instruction lengths — no new decoder lib, just Capstone.
 $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# Single-step (EFLAGS.TF / SIGTRAP) backend: no external library at all, just the
+# same Capstone length-decoder (disasm.o) for block normalization. Runs on ANY
+# x86-64 Linux host with no PMU/perf/privilege — the universal hardware-tier path.
+$(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
-                $(BUILD)/amd_backend.o $(BUILD)/disasm.o $(BUILD)/trace.o
+                $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
+                $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -o $@
@@ -313,6 +319,81 @@ else
 	  $(ZIG) build drtrace-test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
 endif
 
+# --- Hardware-trace language wrappers (single-step / PT / AMD) --------------
+# The counterpart of the drtrace-<lang> lanes for the hardware-trace tier. Unlike
+# DynamoRIO, the tier's portable SINGLESTEP backend needs NO external engine and NO
+# perf privilege, so there is no DR_AVAILABLE gate: each target always builds
+# shared-hwtrace and runs the binding's test, which self-skips internally only off
+# x86-64 Linux or without Capstone. Every wrapper dlopens libasmtest_hwtrace and
+# reads $ASMTEST_HWTRACE_LIB; the single-step backend runs live here and on CI/in a
+# plain container (no privilege), making these the tier's first cross-language
+# regression that actually executes rather than self-skipping.
+HWTRACE_BINDING_LANGS := cpp rust go node java dotnet ruby lua zig
+
+hwtrace_env = ASMTEST_HWTRACE_LIB=$(abspath $(call shlib_dev,libasmtest_hwtrace)) \
+              LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH"
+
+.PHONY: hwtrace-python-test hwtrace-bindings-test \
+        $(addprefix hwtrace-,$(addsuffix -test,$(HWTRACE_BINDING_LANGS)))
+
+# Run every language wrapper's hardware-trace test (plus the Python lane).
+hwtrace-bindings-test: hwtrace-python-test \
+	$(addprefix hwtrace-,$(addsuffix -test,$(HWTRACE_BINDING_LANGS)))
+
+hwtrace-python-test: shared-hwtrace
+	@echo "== hwtrace-python-test =="
+	cd bindings/python && $(hwtrace_env) python3 -m pytest tests/test_hwtrace.py -v
+
+hwtrace-cpp-test: shared-hwtrace
+	@echo "== hwtrace-cpp-test =="
+	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_hwtrace.cpp -ldl -o $(BUILD)/test_hwtrace_cpp
+	$(hwtrace_env) ./$(BUILD)/test_hwtrace_cpp
+
+# rust/go link libasmtest_emu (their wrapper shares the crate/package), so build
+# the emu superset + corpus lib too — mirroring the drtrace-rust/go lanes.
+hwtrace-rust-test: shared-hwtrace
+	@$(MAKE) shared-emu $(CORPUS_LIB)
+	@echo "== hwtrace-rust-test =="
+	cd bindings/rust && ASMTEST_LIB_DIR=$(abspath $(BUILD)) $(hwtrace_env) \
+	  $(CARGO) test --test hwtrace -- --nocapture
+
+hwtrace-go-test: shared-hwtrace
+	@$(MAKE) shared-emu $(CORPUS_LIB)
+	@echo "== hwtrace-go-test =="
+	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" CGO_CFLAGS="-I$(abspath include)" \
+	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
+	  ASMTEST_LIB=$(abspath $(call shlib_dev,libasmtest_emu)) $(hwtrace_env) \
+	  $(GO) test -run TestHwtrace ./...
+
+hwtrace-node-test: shared-hwtrace
+	@echo "== hwtrace-node-test =="
+	cd bindings/node && $(hwtrace_env) $(NODE) test_hwtrace.js
+
+hwtrace-java-test: shared-hwtrace
+	@echo "== hwtrace-java-test =="
+	mkdir -p $(BUILD)/java-hwtrace
+	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-hwtrace \
+	  bindings/java/HwTrace.java bindings/java/HwTraceTest.java
+	$(hwtrace_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
+	  -cp $(BUILD)/java-hwtrace HwTraceTest
+
+hwtrace-dotnet-test: shared-hwtrace
+	@echo "== hwtrace-dotnet-test =="
+	$(hwtrace_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
+
+hwtrace-ruby-test: shared-hwtrace
+	@echo "== hwtrace-ruby-test =="
+	cd bindings/ruby && $(hwtrace_env) $(RUBY) test_hwtrace.rb
+
+hwtrace-lua-test: shared-hwtrace
+	@echo "== hwtrace-lua-test =="
+	cd bindings/lua && $(hwtrace_env) $(LUAJIT) test_hwtrace.lua
+
+hwtrace-zig-test: shared-hwtrace
+	@echo "== hwtrace-zig-test =="
+	cd bindings/zig && $(hwtrace_env) \
+	  $(ZIG) build hwtrace-test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
+
 # PIC variants + the standalone shared lib (never linked by core/superset).
 $(BUILD)/pic/hwtrace.o: src/hwtrace.c include/asmtest_hwtrace.h \
                         include/asmtest_trace.h | $(BUILD)/pic
@@ -323,12 +404,15 @@ $(BUILD)/pic/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)/p
 	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/pt_backend.o \
                                        $(BUILD)/pic/cs_backend.o \
                                        $(BUILD)/pic/amd_backend.o \
+                                       $(BUILD)/pic/ss_backend.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \

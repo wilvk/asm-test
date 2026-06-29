@@ -88,11 +88,115 @@ static void test_amd_reconstruction(void) {
 #endif
 }
 
+/* Single-step (EFLAGS.TF) LIVE capture: unlike PT/AMD this runs on ANY x86-64
+ * Linux host — no PMU, no perf_event, no privilege — so it executes here (and on
+ * standard CI / in a plain container) instead of self-skipping. Trace the shared
+ * fixture on the real CPU and assert byte-for-byte parity with the
+ * Unicorn/DynamoRIO/PT instruction+block partition. */
+static void test_singlestep_live(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        char why[160];
+        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_SINGLESTEP, why, sizeof why);
+        printf("# SKIP single-step live capture: %s\n", why);
+        return;
+    }
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP single-step: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "single-step init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    CHECK(asmtest_hwtrace_register_region("add2", p, sizeof ROUTINE, tr) ==
+              ASMTEST_HW_OK,
+          "single-step register region");
+
+    add2_fn fn = (add2_fn)p;
+    asmtest_hwtrace_begin("add2");
+    long r = fn(20, 22); /* 42 <= 100: jle taken, dec (0xe) skipped */
+    asmtest_hwtrace_end("add2");
+
+    CHECK(r == 42, "single-step traced call returns 20+22");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "single-step yields the exact live instruction stream [0,3,6,c,11]");
+    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
+          "single-step block partition {0, 0x11} matches PT/AMD/DynamoRIO");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
+          "single-step records exactly two blocks");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "single-step trace is complete (not truncated)");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+}
+
+/* The single-step differentiator: NO depth ceiling. A 20-trip loop takes 19 taken
+ * back-edges — past AMD LBR's 16-entry window (which would flag truncated) — yet
+ * single-step reconstructs every instruction exactly and stays complete. */
+static void test_singlestep_loop(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP))
+        return; /* already reported by test_singlestep_live */
+    /* mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret   (rdi=step, rsi=trips) */
+    static const unsigned char LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
+                                         0x48, 0x01, 0xf8, 0x48, 0xff, 0xce,
+                                         0x75, 0xf8, 0xc3};
+    void *p = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return;
+    memcpy(p, LOOP, sizeof LOOP);
+    mprotect(p, sizeof LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof LOOP);
+
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tr = asmtest_trace_new(256, 64);
+    asmtest_hwtrace_register_region("loop", p, sizeof LOOP, tr);
+
+    long (*fn)(long, long) = (long (*)(long, long))p;
+    asmtest_hwtrace_begin("loop");
+    long r = fn(1, 20); /* 20 trips, returns 20 */
+    asmtest_hwtrace_end("loop");
+
+    CHECK(r == 20, "single-step loop call returns sum");
+    /* 1 (mov) + 20*(add,dec,jnz) + 1 (ret) = 62 instructions, all captured. */
+    CHECK(asmtest_emu_trace_insns_total(tr) == 62,
+          "single-step captures all 62 insns of a 20-trip loop (no depth ceiling)");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 && asmtest_trace_covered(tr, 0) &&
+              asmtest_trace_covered(tr, 0x7),
+          "single-step loop block partition {0, 0x7}");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "single-step loop trace complete past LBR's 16-branch window");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(p, sizeof LOOP);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_reconstruction();
+
+    /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
+    test_singlestep_live();
+    test_singlestep_loop();
 
     asmtest_trace_backend_t backend = ASMTEST_HWTRACE_INTEL_PT;
     if (!asmtest_hwtrace_available(backend)) {

@@ -12,11 +12,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
-  <!-- The native-trace smoke test is its own project (drtrace/drtrace.csproj);
-       exclude its sources from this app's default glob so the two never
-       glob-collide (a second Main). -->
+  <!-- The native-trace smoke tests are their own projects
+       (drtrace/drtrace.csproj, hwtrace/hwtrace.csproj); exclude their sources from
+       this app's default glob so the projects never glob-collide (a second Main). -->
   <ItemGroup>
     <Compile Remove="drtrace/**/*.cs" />
+    <Compile Remove="hwtrace/**/*.cs" />
   </ItemGroup>
 
 </Project>

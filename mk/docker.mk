@@ -145,8 +145,9 @@ docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 # Native-trace lane: a container with DynamoRIO installed that builds the tier and
 # runs BOTH the C smoke harness and the Python language-wrapper suite. Separate
 # from the binding images (it carries DynamoRIO, ~hundreds of MB, that the others
-# don't need). Linux x86-64 only; the hardware-trace tier needs bare metal and is
-# not containerizable. Override DR_VERSION to bump the pinned DynamoRIO.
+# don't need). Linux x86-64 only. (The Intel PT / AMD LBR hardware backends need bare
+# metal; the single-step hardware backend, by contrast, IS containerizable — see the
+# docker-hwtrace lane below.) Override DR_VERSION to bump the pinned DynamoRIO.
 DR_VERSION ?= 11.91.20630
 .PHONY: docker-drtrace
 docker-drtrace:
@@ -175,6 +176,37 @@ endef
 $(foreach L,$(DRTRACE_BINDING_LANGS),$(eval $(call docker_drtrace_lang_rule,$(L))))
 
 docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
+
+# --- Hardware-trace (single-step) lane in Docker ---------------------------
+# The single-step backend needs NO DynamoRIO, NO perf_event, NO privilege and NO
+# extra Linux capability (it drives EFLAGS.TF -> SIGTRAP, baseline x86-64
+# userspace). So unlike docker-drtrace these run under a PLAIN `docker run` — no
+# --privileged/--cap-add/--security-opt. That portability is the whole point: the
+# hardware-trace tier is containerizable and CI-able here for the first time.
+#   make docker-hwtrace            C smoke + Python wrapper, in a plain container
+#   make docker-hwtrace-bindings   every language wrapper, in a plain container
+#   make docker-hwtrace-<lang>     just one (e.g. docker-hwtrace-rust)
+HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
+
+.PHONY: docker-hwtrace docker-hwtrace-bindings \
+        $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
+
+docker-hwtrace: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace
+
+# Reuse each already-built per-language image (asmtest-<lang>: full source +
+# toolchain + Capstone) and just run its hwtrace test target — no extra image
+# layer needed (no DynamoRIO). Plain `docker run`.
+define docker_hwtrace_lang_rule
+docker-hwtrace-$(1): docker-$(1)
+	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-$(1) \
+	  make hwtrace-$(1)-test
+endef
+$(foreach L,$(HWTRACE_DOCKER_LANGS),$(eval $(call docker_hwtrace_lang_rule,$(L))))
+
+docker-hwtrace-bindings: $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND

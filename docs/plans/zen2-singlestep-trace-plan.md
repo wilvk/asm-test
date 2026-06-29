@@ -62,11 +62,19 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 
 ## Implementation status
 
-**All phases planned.** Nothing in this plan is implemented yet; it is the design of
-record. The existing [hardware-trace tier](../../include/asmtest_hwtrace.h) (Intel
-PT / CoreSight / AMD LBR) is unaffected — this adds a fourth, perf-free backend
-behind the same `asmtest_hwtrace_*` API so callers and language bindings switch to
-it by enum, exactly as they do between PT and AMD LBR today.
+**Phases 0–4 implemented (Linux/x86-64).** The `ASMTEST_HWTRACE_SINGLESTEP` backend
+ships: gating ([src/hwtrace.c](../../src/hwtrace.c)), the stepper + block
+normalization ([src/ss_backend.c](../../src/ss_backend.c)), the begin/end dispatch
+arm, the Makefile wiring (`ss_backend.o` in `HWTRACE_OBJS` + the PIC/`shared-hwtrace`
+variant), a **live** cross-backend parity test in
+[examples/test_hwtrace.c](../../examples/test_hwtrace.c) (`make hwtrace-test`, plus a
+20-trip loop proving no depth ceiling), an `hwtrace` language wrapper + live test for
+**all ten bindings** (`make hwtrace-bindings-test`), and **plain-container** Docker
+lanes (`make docker-hwtrace` / `docker-hwtrace-bindings` — no privilege, no
+`CAP_PERFMON`, no seccomp change). Phase 5 (Windows/macOS/ARM/out-of-process ptrace)
+remains a forward-look. The existing hardware-trace backends (Intel PT / CoreSight /
+AMD LBR) are unaffected — this is a fourth, perf-free backend behind the same
+`asmtest_hwtrace_*` API, selected by enum exactly as PT and AMD LBR are.
 
 ---
 

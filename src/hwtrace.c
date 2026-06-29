@@ -46,6 +46,15 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 #endif
 
+/* Single-step (EFLAGS.TF / SIGTRAP) stepper (ss_backend.c). Unlike the trace
+ * backends there is no post-pass decode: begin() arms TF and the SIGTRAP handler
+ * fills the trace live; end() disarms. base/len bound the region, trace is the
+ * sink (block normalization needs the Capstone length-decoder). */
+#if defined(__linux__) && defined(__x86_64__)
+int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace);
+void asmtest_ss_end(void);
+#endif
+
 /* Whether each decoder was compiled in (queried by available()). */
 int asmtest_pt_decoder_present(void);
 int asmtest_cs_decoder_present(void);
@@ -87,6 +96,10 @@ static int decoder_present(asmtest_trace_backend_t b) {
         return asmtest_cs_decoder_present();
     case ASMTEST_HWTRACE_AMD_LBR:
         return asmtest_amd_decoder_present();
+    case ASMTEST_HWTRACE_SINGLESTEP:
+        /* The stepper records exact instruction offsets with no decoder; block
+         * normalization needs only the Capstone length-decoder, already linked. */
+        return asmtest_disas_available();
     }
     return 0;
 }
@@ -126,6 +139,13 @@ static int cpu_matches(asmtest_trace_backend_t b) {
         return vendor_is("GenuineIntel");
     case ASMTEST_HWTRACE_AMD_LBR:
         return vendor_is("AuthenticAMD");
+    case ASMTEST_HWTRACE_SINGLESTEP:
+        /* TF/#DB single-step is baseline x86-64 — any vendor, Intel or AMD. */
+#if defined(__x86_64__)
+        return 1;
+#else
+        return 0;
+#endif
     }
     return 0;
 }
@@ -192,6 +212,10 @@ static int perf_permitted(asmtest_trace_backend_t b) {
 int asmtest_hwtrace_available(asmtest_trace_backend_t backend) {
     if (!decoder_present(backend) || !cpu_matches(backend))
         return 0;
+    if (backend == ASMTEST_HWTRACE_SINGLESTEP)
+        /* No PMU, no perf_event, no privilege: decoder (Capstone) + x86-64 is all
+         * the gate needs. This is why it runs where PT/AMD self-skip. */
+        return 1;
     if (backend == ASMTEST_HWTRACE_AMD_LBR) {
 #if defined(__linux__) && defined(__x86_64__)
         return amd_branch_probe() == AMD_OK;
@@ -210,11 +234,17 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
     if (!decoder_present(backend))
         r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "built without libipt"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "built without OpenCSD"
-                                                     : "built without Capstone (AMD reconstruction)";
+            : (backend == ASMTEST_HWTRACE_SINGLESTEP)
+                ? "built without Capstone (single-step block normalization)"
+                : "built without Capstone (AMD reconstruction)";
     else if (!cpu_matches(backend))
         r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "not a GenuineIntel x86-64 host"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
-                                                     : "not an AuthenticAMD x86-64 host";
+            : (backend == ASMTEST_HWTRACE_SINGLESTEP)
+                ? "single-step backend is Linux x86-64 only (Windows/macOS planned)"
+                : "not an AuthenticAMD x86-64 host";
+    else if (backend == ASMTEST_HWTRACE_SINGLESTEP)
+        r = "available"; /* decoder + x86-64 satisfied: no PMU/perf/privilege gate */
     else if (backend == ASMTEST_HWTRACE_AMD_LBR) {
 #if defined(__linux__) && defined(__x86_64__)
         int p = amd_branch_probe();
@@ -428,12 +458,18 @@ static void hwtrace_end_amd(void) {
 
 void asmtest_hwtrace_begin(const char *name) {
 #if defined(__linux__)
-    if (!g_inited || g_fd >= 0)
-        return; /* MVP: one active region at a time */
+    if (!g_inited || g_fd >= 0 || g_active != NULL)
+        return; /* MVP: one active region at a time (g_active covers the fd-less
+                 * single-step backend, whose capture uses no perf fd) */
     hw_region_t *r = find_region(name);
     if (r == NULL)
         return;
 #if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        g_active = r; /* set before arming TF: the handler reads it immediately */
+        asmtest_ss_begin(r->base, r->len, r->trace);
+        return;
+    }
     if (g_opts.backend == ASMTEST_HWTRACE_AMD_LBR) {
         hwtrace_begin_amd(r);
         return;
@@ -528,14 +564,21 @@ static int aux_data_ring_truncated(void) {
 void asmtest_hwtrace_end(const char *name) {
 #if defined(__linux__)
     (void)name;
-    if (g_fd < 0 || g_active == NULL)
+    if (g_active == NULL)
         return;
 #if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        asmtest_ss_end(); /* disarms TF + restores SIGTRAP; trace already filled */
+        g_active = NULL;
+        return;
+    }
     if (g_opts.backend == ASMTEST_HWTRACE_AMD_LBR) {
         hwtrace_end_amd();
         return;
     }
 #endif
+    if (g_fd < 0)
+        return; /* PT/CoreSight need the perf fd; nothing captured if open failed */
     ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
     struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
     /* Linear ring: valid trace is [0, aux_head). (Snapshot decode would walk the
@@ -571,9 +614,56 @@ void asmtest_hwtrace_end(const char *name) {
 
 void asmtest_hwtrace_shutdown(void) {
 #if defined(__linux__)
-    if (g_fd >= 0)
+    /* g_active covers an unbalanced region for every backend, including the
+     * single-step one (g_fd stays -1): end() must still run to disarm TF. */
+    if (g_fd >= 0 || g_active != NULL)
         asmtest_hwtrace_end(NULL);
 #endif
     g_inited = 0;
     g_nregions = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* W^X executable-memory helper (self-contained; for language bindings) */
+/* ------------------------------------------------------------------ */
+int asmtest_hwtrace_exec_alloc(const void *bytes, size_t len, void **base_out,
+                               size_t *len_out) {
+#if defined(__linux__)
+    if (bytes == NULL || len == 0 || base_out == NULL)
+        return ASMTEST_HW_EINVAL;
+    /* PROT_NONE first, then RW to copy, then RX: never simultaneously W and X. */
+    void *p = mmap(NULL, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return ASMTEST_HW_EUNAVAIL;
+    if (mprotect(p, len, PROT_READ | PROT_WRITE) != 0) {
+        munmap(p, len);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    memcpy(p, bytes, len);
+    if (mprotect(p, len, PROT_READ | PROT_EXEC) != 0) {
+        munmap(p, len);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    __builtin___clear_cache((char *)p, (char *)p + len);
+    *base_out = p;
+    if (len_out != NULL)
+        *len_out = len;
+    return ASMTEST_HW_OK;
+#else
+    (void)bytes;
+    (void)len;
+    (void)base_out;
+    (void)len_out;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+void asmtest_hwtrace_exec_free(void *base, size_t len) {
+#if defined(__linux__)
+    if (base != NULL && len != 0)
+        munmap(base, len);
+#else
+    (void)base;
+    (void)len;
+#endif
 }

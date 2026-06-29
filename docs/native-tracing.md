@@ -10,6 +10,7 @@ the **real CPU, in-process**:
 | Emulator trace ([traces.md](traces.md)) | Unicorn | guest blocks + instructions | any host |
 | **DynamoRIO native trace** | DynamoRIO (software DBI) | native blocks + instructions | Linux x86-64 |
 | **Hardware trace** | Intel PT / ARM CoreSight | native blocks + instructions | bare-metal Intel / AArch64 |
+| **Single-step trace** | EFLAGS.TF → SIGTRAP (debug exception) | native blocks + instructions | **any x86-64 Linux** (no PMU/perf/privilege) |
 
 All three fill the **same** `asmtest_trace_t` shape (ordered instruction offsets,
 distinct basic-block offsets, totals, a truncation bit) — see
@@ -315,9 +316,105 @@ if (asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
 
 The Intel PT capture and libipt decode are implemented; the CoreSight backend is a
 documented scaffold pending AArch64 board access (it always self-skips until
-completed). The hardware tier **cannot run on standard CI** — it needs a
-self-hosted bare-metal runner — so it ships with materially weaker automated
-regression protection than the Unicorn tier, by design.
+completed). The Intel-PT/CoreSight hardware capture **cannot run on standard CI** —
+it needs a self-hosted bare-metal runner. The **single-step backend below removes
+that limitation** for x86-64: it records the same offsets on any Linux x86-64 host,
+including CI and containers, with full automated regression protection.
+
+---
+
+## Single-step tier (EFLAGS.TF — the universal x86-64 backend)
+
+The single-step backend (`ASMTEST_HWTRACE_SINGLESTEP`) is the **portable** member of
+the hardware tier: it produces the **same exact, complete** `asmtest_trace_t` offsets
+as Intel PT — byte-for-byte the Unicorn/DynamoRIO instruction and block streams — but
+needs **no PMU, no `perf_event`, no privilege, no decoder library, and no specific
+CPU**. It runs on **any x86-64 Linux host**: Intel, AMD of any generation (including
+Zen 2, which has no branch-trace facility at all), VMs, standard CI, and a **plain
+unprivileged container** (no `--privileged`, no `CAP_PERFMON`, no seccomp changes).
+
+### How it works
+
+With `EFLAGS.TF` set, the CPU raises a trap-class `#DB` **after every instruction**,
+which Linux delivers as `SIGTRAP`. `asmtest_hwtrace_begin(name)` installs a `SIGTRAP`
+handler and arms `TF` on the calling thread; the handler records each in-region `RIP`
+(offsets outside the registered region — callees, the begin/end glue — are stepped but
+not recorded). `asmtest_hwtrace_end(name)` clears `TF`, restores the handler, and runs
+a post-pass that derives the block partition from fall-through discontinuities (a new
+block at the entry and after every taken branch), using the Capstone length-decoder —
+the same single-entry/ends-at-branch model the other backends use. The handler itself
+does only async-signal-safe work (a bounds-checked store of each offset); all Capstone
+decoding happens in the post-pass, never in the handler.
+
+The trade is **exact-cheap (a hardware trace ring) vs. exact-slow (a fault per
+instruction)** — roughly a couple of microseconds per instruction. So single-step is
+the right tool for **small registered routines** (asm-test's Tier-A common case): a
+handful to a few hundred instructions cost microseconds to low milliseconds. It is
+**not** for whole-program or hot-loop tracing — that is the DynamoRIO tier's job
+(native-speed code cache, no per-step tax). Unlike AMD LBR there is **no depth
+ceiling**: a loop of any length reconstructs exactly.
+
+```c
+#include "asmtest_hwtrace.h"
+
+if (asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+    asmtest_hwtrace_options_t opts = {.backend = ASMTEST_HWTRACE_SINGLESTEP};
+    asmtest_hwtrace_init(&opts);
+    asmtest_hwtrace_register_region("add2", base, len, tr);
+    asmtest_hwtrace_begin("add2");
+    fn(20, 22);                         /* stepped on the real CPU */
+    asmtest_hwtrace_end("add2");        /* trace already filled; blocks normalized */
+    asmtest_hwtrace_shutdown();
+}
+```
+
+`asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)` returns 1 on x86-64 Linux when
+Capstone is linked (for block normalization), and self-skips elsewhere with a specific
+reason (e.g. *"single-step backend is Linux x86-64 only (Windows/macOS planned)"*).
+The supported target is a **well-behaved compute routine** — no in-routine
+`POPF`/`IRET`/signal handlers or self-modifying code, which break naive stepping and
+are flagged `truncated` rather than emitted as complete (the same "registered bytes
+must be stable" contract the PT/AMD backends carry). Single active region, single
+thread, like the rest of the tier.
+
+### Running it
+
+```sh
+make hwtrace-test          # C smoke test — runs the single-step backend LIVE here
+make hwtrace-bindings-test # every language wrapper, live (Python + the nine others)
+make docker-hwtrace        # C + Python in a PLAIN unprivileged container
+make docker-hwtrace-bindings  # every language wrapper, in plain containers
+```
+
+`make hwtrace-test` executes the single-step backend live on this host (where Intel PT
+and AMD LBR self-skip), asserting the same `[0x0, 0x3, 0x6, 0xc, 0x11]` /
+`{0, 0x11}` partition the other backends produce, plus a 20-trip loop (62 instructions,
+past LBR's 16-branch window) to prove completeness. This is the hardware tier's first
+regression that **runs** on standard CI instead of self-skipping.
+
+### Language wrappers
+
+Every binding ships an `hwtrace` wrapper alongside its `drtrace` one, exposing the same
+small surface — `HwTrace.available/init/shutdown`, per-trace `register`/`region`/
+`covered`/block+instruction accessors, and a `NativeCode` for materializing
+host-native bytes via `asmtest_hwtrace_exec_alloc`. Each wrapper dlopens
+`libasmtest_hwtrace` (resolved from `$ASMTEST_HWTRACE_LIB`, else the repo `build/`) and
+defaults to the single-step backend, so `available()` is true and the test **traces
+live** on any x86-64 Linux — including in CI and plain containers, where the DynamoRIO
+wrapper needs a DynamoRIO install and the PT/AMD wrappers self-skip.
+
+| Language | Wrapper module / header | Test target |
+|---|---|---|
+| Python | `asmtest.hwtrace` | `hwtrace-python-test` |
+| C++ | `bindings/cpp/asmtest_hwtrace.hpp` (`asmtest::HwTrace`) | `hwtrace-cpp-test` |
+| Rust | `asmtest::hwtrace` | `hwtrace-rust-test` |
+| Go | `asmtest` (`hwtrace.go`) | `hwtrace-go-test` |
+| Node | `bindings/node/hwtrace.js` | `hwtrace-node-test` |
+| Java | `HwTrace` (Panama FFM) | `hwtrace-java-test` |
+| .NET | `Asmtest.HwTrace` | `hwtrace-dotnet-test` |
+| Ruby | `Asmtest::HwTrace` | `hwtrace-ruby-test` |
+| Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
+| Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
 
 ---
 

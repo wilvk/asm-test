@@ -25,6 +25,11 @@ use std::os::raw::{c_char, c_int, c_long, c_void};
 /// run time; self-skips when DynamoRIO is absent). See [`drtrace::NativeTrace`].
 pub mod drtrace;
 
+/// Optional hardware-trace tier (`libasmtest_hwtrace`, loaded at run time;
+/// self-skips when unavailable). The single-step backend runs on any x86-64 Linux.
+/// See [`hwtrace::HwTrace`].
+pub mod hwtrace;
+
 /// One 128-bit vector register, several lane views (mirrors `vec128_t`).
 #[repr(C)]
 #[derive(Clone, Copy)]

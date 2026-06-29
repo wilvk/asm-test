@@ -15,13 +15,20 @@
  * code-cache machinery — PT/ETM observe out-of-band without intercepting signals
  * or perturbing code.
  *
- * It is mostly-bare-metal-Linux and even-more-optional than the DynamoRIO tier:
- * Intel PT is Intel-x86-64-only and absent on AMD, ARM, and almost all
- * cloud/VM/CI guests; CoreSight self-hosted trace needs specific AArch64 boards.
- * asmtest_hwtrace_available() encodes the full detect-and-skip chain so callers
- * self-skip cleanly (the common case). Built only when libipt/OpenCSD are present;
- * kept out of the core libasmtest and the libasmtest_emu superset. No DynamoRIO
- * or drwrap dependency (libipt and OpenCSD are BSD).
+ * The hardware-trace backends are mostly-bare-metal-Linux and even-more-optional
+ * than the DynamoRIO tier: Intel PT is Intel-x86-64-only and absent on AMD, ARM,
+ * and almost all cloud/VM/CI guests; CoreSight self-hosted trace needs specific
+ * AArch64 boards. The SINGLESTEP backend is the universal fallback: it drives the
+ * x86 EFLAGS.TF single-step debug exception (#DB -> SIGTRAP) to record every
+ * executed RIP, so it produces the SAME exact/complete asmtest_trace_t offsets on
+ * ANY x86-64 Linux host (Intel, AMD of any Zen, VM, CI, container) with no PMU, no
+ * perf_event, no privilege, and no decoder library (only the existing Capstone
+ * length-decoder, for block normalization). asmtest_hwtrace_available() encodes
+ * the full detect-and-skip chain per backend so callers self-skip cleanly. The
+ * PT/CoreSight backends build only when libipt/OpenCSD are present; the AMD and
+ * single-step backends need no extra library. Kept out of the core libasmtest and
+ * the libasmtest_emu superset. No DynamoRIO or drwrap dependency (libipt and
+ * OpenCSD are BSD).
  */
 #ifndef ASMTEST_HWTRACE_H
 #define ASMTEST_HWTRACE_H
@@ -47,7 +54,9 @@ extern "C" {
 typedef enum {
     ASMTEST_HWTRACE_INTEL_PT = 0,
     ASMTEST_HWTRACE_CORESIGHT = 1,
-    ASMTEST_HWTRACE_AMD_LBR = 2, /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
+    ASMTEST_HWTRACE_AMD_LBR = 2,    /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
+    ASMTEST_HWTRACE_SINGLESTEP = 3, /* EFLAGS.TF #DB single-step: any x86-64 Linux,
+                                       no PMU/perf/privilege/decoder; exact + complete */
 } asmtest_trace_backend_t;
 
 typedef struct {
@@ -74,6 +83,18 @@ int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts);
 int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
                                     asmtest_trace_t *trace);
 void asmtest_hwtrace_shutdown(void);
+
+/* Materialize raw host-native machine code into W^X-correct executable memory
+ * (mmap PROT_NONE -> mprotect RW to copy bytes in -> mprotect RX, icache flushed),
+ * so a caller — notably a language binding — can register and call into it under
+ * the single-step backend without rolling its own mmap/mprotect dance. On success
+ * *base_out is the executable address (cast to a function pointer to call it) and
+ * *len_out is its length; free with asmtest_hwtrace_exec_free. Self-contained: no
+ * dependency on the DynamoRIO tier's asmtest_exec_alloc. Returns ASMTEST_HW_OK or
+ * a negative status. */
+int asmtest_hwtrace_exec_alloc(const void *bytes, size_t len, void **base_out,
+                               size_t *len_out);
+void asmtest_hwtrace_exec_free(void *base, size_t len);
 
 /* Region markers, reused from the native-trace model. begin(name) enables the
  * hardware AUX capture for the named region; end(name) disables it and decodes
