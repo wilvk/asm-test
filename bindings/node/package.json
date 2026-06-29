@@ -18,7 +18,7 @@
     "native/"
   ],
   "dependencies": {
-    "koffi": "^2.8.0"
+    "koffi": "^3.1.0"
   },
   "engines": {
     "node": ">=18"
