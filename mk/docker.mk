@@ -13,6 +13,7 @@
 #   make docker-valgrind   memcheck the routines under test
 #   make docker-sanitize   ASan + UBSan
 #   make docker-analyze    clang-tidy
+#   make docker-fmt-check  clang-format drift (informational)
 #   make docker-coverage   gcov of the runner
 #   make docker-ci         the whole x86-64 Linux matrix end to end
 #   make docker-shell      interactive shell in the CI image
@@ -27,8 +28,8 @@ _docker_plat := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 _docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
 
 .PHONY: docker-build docker-test docker-nasm docker-emu docker-asm \
-        docker-valgrind docker-sanitize docker-analyze docker-coverage \
-        docker-ci docker-shell docker-clean
+        docker-valgrind docker-sanitize docker-analyze docker-fmt-check \
+        docker-coverage docker-ci docker-shell docker-clean
 
 docker-build:
 	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
@@ -53,6 +54,9 @@ docker-sanitize: docker-build
 
 docker-analyze: docker-build
 	$(_docker_run) make tidy
+
+docker-fmt-check: docker-build
+	$(_docker_run) make fmt-check
 
 docker-coverage: docker-build
 	$(_docker_run) make coverage

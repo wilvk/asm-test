@@ -46,6 +46,19 @@ static int asmtest_loc_line;
  * --timeout / ASMTEST_TIMEOUT before the run; read by the SIGALRM handler. */
 static int asmtest_timeout_secs = 10;
 
+/* Runner-internal allocation guard. The library APIs (trace.c/disasm.c/fuzz.c)
+ * degrade gracefully on OOM because their caller can handle a NULL/0 return; the
+ * runner's own small startup allocations have no such caller and the run can't
+ * proceed without them, so fail loudly with a clear diagnostic (exit 2, distinct
+ * from the 0/1 pass/fail codes) instead of dereferencing NULL. */
+static void *asmtest_xalloc(void *p, const char *what) {
+    if (p == NULL) {
+        fprintf(stderr, "asmtest: out of memory allocating %s\n", what);
+        exit(2);
+    }
+    return p;
+}
+
 /* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
@@ -1005,8 +1018,8 @@ static int run_parallel_win32(asmtest_case_t **sel, const int *gidx,
         return -1;
     }
     for (int i = 0; i < n; i++) {
-        outs[i] = (char *)malloc(MAX_PATH);
-        cmds[i] = (char *)malloc(MAX_PATH * 2);
+        outs[i] = (char *)asmtest_xalloc(malloc(MAX_PATH), "child out path");
+        cmds[i] = (char *)asmtest_xalloc(malloc(MAX_PATH * 2), "child cmdline");
         child_out_path(outs[i], MAX_PATH, gidx[i]);
         remove(outs[i]);
         child_cmdline(cmds[i], MAX_PATH * 2, exe, gidx[i], outs[i]);
@@ -1160,8 +1173,10 @@ static void run_parallel(asmtest_case_t **sel, test_result_t *results, int n,
         jobs = 1;
     if (jobs > n)
         jobs = n;
-    job_slot_t *slots = (job_slot_t *)malloc((size_t)jobs * sizeof *slots);
-    struct pollfd *pfds = (struct pollfd *)malloc((size_t)jobs * sizeof *pfds);
+    job_slot_t *slots = (job_slot_t *)asmtest_xalloc(
+        malloc((size_t)jobs * sizeof *slots), "job slots");
+    struct pollfd *pfds = (struct pollfd *)asmtest_xalloc(
+        malloc((size_t)jobs * sizeof *pfds), "poll fds");
     for (int j = 0; j < jobs; j++)
         slots[j].fd = -1;
 
@@ -1340,7 +1355,8 @@ static void render_junit(const test_result_t *results, int n) {
     printf("<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", n,
            failures, skipped);
 
-    int *done = (int *)calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+    int *done = (int *)asmtest_xalloc(
+        calloc((size_t)(n > 0 ? n : 1), sizeof(int)), "junit suite map");
     for (int i = 0; i < n; i++) {
         if (done[i])
             continue;
@@ -1654,8 +1670,9 @@ int main(int argc, char **argv) {
         int btotal = 0;
         for (asmtest_bench_t *b = asmtest_bench_head; b != NULL; b = b->next)
             btotal++;
-        asmtest_bench_t **bsel = (asmtest_bench_t **)malloc(
-            (size_t)(btotal > 0 ? btotal : 1) * sizeof *bsel);
+        asmtest_bench_t **bsel = (asmtest_bench_t **)asmtest_xalloc(
+            malloc((size_t)(btotal > 0 ? btotal : 1) * sizeof *bsel),
+            "benchmark selection");
         int bn = 0;
         for (asmtest_bench_t *b = asmtest_bench_head; b != NULL; b = b->next) {
             if (opt.filter == NULL || id_matches(b->suite, b->name, opt.filter))
@@ -1675,12 +1692,14 @@ int main(int argc, char **argv) {
     int total = 0;
     for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next)
         total++;
-    asmtest_case_t **sel =
-        (asmtest_case_t **)malloc((size_t)(total > 0 ? total : 1) * sizeof *sel);
+    asmtest_case_t **sel = (asmtest_case_t **)asmtest_xalloc(
+        malloc((size_t)(total > 0 ? total : 1) * sizeof *sel), "test selection");
     /* Global registration index of each selected test, kept in lockstep with
      * sel[] (through the shuffle) so the Win64 re-exec child can select the same
      * test by index. Built everywhere; only read on the _WIN32 isolation path. */
-    int *gidx = (int *)malloc((size_t)(total > 0 ? total : 1) * sizeof *gidx);
+    int *gidx = (int *)asmtest_xalloc(
+        malloc((size_t)(total > 0 ? total : 1) * sizeof *gidx),
+        "registration index");
     int n = 0, gi = 0;
     for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next, gi++) {
         if (opt.filter == NULL || test_matches(tc, opt.filter)) {
@@ -1729,8 +1748,8 @@ int main(int argc, char **argv) {
         printf("1..%d\n", n);
     }
 
-    test_result_t *results =
-        (test_result_t *)malloc((size_t)(n > 0 ? n : 1) * sizeof *results);
+    test_result_t *results = (test_result_t *)asmtest_xalloc(
+        malloc((size_t)(n > 0 ? n : 1) * sizeof *results), "results buffer");
     int passed = 0, failed = 0, skipped = 0;
 
     /* Parallel needs fork isolation to contain children; --no-fork forces

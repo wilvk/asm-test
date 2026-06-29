@@ -354,6 +354,22 @@ jobs:
       - name: Run clang-tidy
         run: make tidy
 
+  # Quality: clang-format drift (style in .clang-format). Informational, like
+  # `analyze` — the hand-tuned tree is not bulk-reformatted, so this reports drift
+  # without gating (continue-on-error). Promote to a gate after a reviewed
+  # one-shot `make fmt` pass.
+  format:
+    name: format (clang-format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang-format
+        run: make deps DEPS_ARGS=--format
+      - name: Report clang-format drift
+        run: make fmt-check
+
   # Quality: coverage of the runner (src/asmtest.c), surfaced as an artifact.
   # Informational, not a gate.
   coverage:

@@ -1,0 +1,23 @@
+# clang-format configuration for asm-test — the project's intended C style.
+#
+# The existing tree is hand-formatted to this intent, but is deliberately NOT
+# bulk-reformatted: a few function signatures, macros, and trailing comments run
+# a hair past the column limit by hand for readability, and the asm-heavy headers
+# (include/asm.h, the ASM_FUNC macros) read better untouched. So `make fmt-check`
+# is INFORMATIONAL (like `make tidy`/clang-tidy) — it reports drift without
+# gating. Run `make fmt` to normalize NEW code before sending a change; editors
+# that auto-format on save will pick this up so new C converges on one style.
+#
+# Promote fmt-check to a gate only after a reviewed, one-shot `make fmt` pass.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 80
+PointerAlignment: Right
+# The tree keeps comments at their hand-wrapped widths (some intentionally a few
+# columns over 80); don't let the formatter re-flow prose.
+ReflowComments: false
+# Match the manual column-aligned macro tables (e.g. the EMU_* address map).
+AlignConsecutiveMacros: Consecutive

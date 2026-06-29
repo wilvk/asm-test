@@ -1,0 +1,26 @@
+# Normalize line endings to LF in the repository AND in working trees, so the
+# cross-platform build sees consistent files everywhere — including the native
+# Windows lane (MSYS2/mingw + nasm), which expects LF. Prevents CRLF from a
+# Windows checkout creeping into shell scripts, the .s/.asm sources, or the C.
+* text=auto eol=lf
+
+# Belt-and-suspenders for files that must stay LF regardless of the above.
+*.sh   text eol=lf
+*.s    text eol=lf
+*.asm  text eol=lf
+*.inc  text eol=lf
+
+# Never line-ending-munge binary assets (none tracked today; future-proofing).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.gz   binary
+*.xz   binary
+*.zip  binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary

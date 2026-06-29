@@ -33,13 +33,14 @@ $prog — install asm-test's optional build dependencies cross-platform.
 Usage: scripts/install-deps.sh [options]
 
 Selection (default: all of them):
-  --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + clang-tidy + valgrind
+  --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + clang-tidy + clang-format + valgrind
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + capstone + pkg-config
   --asm          full emu lib + bindings (make shared-emu / <lang>-test) — keystone + capstone + unicorn + pkg-config + patchelf
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
   --patchelf     dlopen packaging      (make package-libs) — rpath-patch vendored deps (Linux)
   --tidy         static analysis       (make tidy)
+  --format       code formatting       (make fmt / fmt-check)
   --valgrind     routine memcheck      (make valgrind) — Linux/x86-64
 
 Other:
@@ -57,19 +58,21 @@ want_capstone=0
 want_keystone=0
 want_patchelf=0
 want_tidy=0
+want_format=0
 want_valgrind=0
 dry_run=0
 selected=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_valgrind=1; selected=1 ;;
+        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_format=1; want_valgrind=1; selected=1 ;;
         --nasm)       want_nasm=1; selected=1 ;;
         --emu)        want_unicorn=1; want_capstone=1; want_pkgconfig=1; selected=1 ;;
         --asm)        want_keystone=1; want_capstone=1; want_unicorn=1; want_pkgconfig=1; want_patchelf=1; selected=1 ;;
         --pkgconfig|--pkg-config) want_pkgconfig=1; selected=1 ;;
         --patchelf)   want_patchelf=1; selected=1 ;;
         --tidy)       want_tidy=1; selected=1 ;;
+        --format)     want_format=1; selected=1 ;;
         --valgrind)   want_valgrind=1; selected=1 ;;
         --dry-run|-n) dry_run=1 ;;
         --help|-h)    usage; exit 0 ;;
@@ -80,7 +83,7 @@ done
 
 # No selection flag => full dev setup.
 if [ "$selected" -eq 0 ]; then
-    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_valgrind=1
+    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_format=1; want_valgrind=1
 fi
 
 # Detect the package manager. Native Linux managers take precedence over a
@@ -117,6 +120,18 @@ case "$PM" in
     brew)    nasm_pkg=nasm; pkgconfig_pkg=pkg-config;  unicorn_pkg=unicorn;          capstone_pkg=;         keystone_pkg=keystone; patchelf_pkg=; tidy_pkg=llvm;     valgrind_pkg= ;; # valgrind unsupported on current macOS; macOS vendors deps via install_name_tool (Xcode CLT), not patchelf
 esac
 
+# clang-format package per manager. Often the same bundle that ships clang-tidy
+# (Fedora/Arch/SUSE/Alpine), but apt and brew ship it as a standalone package —
+# and unlike brew's keg-only clang-tidy, brew's `clang-format` is on PATH.
+case "$PM" in
+    apt-get) format_pkg=clang-format ;;
+    dnf|yum) format_pkg=clang-tools-extra ;;
+    pacman)  format_pkg=clang ;;
+    zypper)  format_pkg=clang-tools ;;
+    apk)     format_pkg=clang-extra-tools ;;
+    brew)    format_pkg=clang-format ;;
+esac
+
 have() { command -v "$1" >/dev/null 2>&1; }
 have_unicorn() { have pkg-config && pkg-config --exists unicorn 2>/dev/null; }
 have_capstone() { have pkg-config && pkg-config --exists capstone 2>/dev/null; }
@@ -149,6 +164,7 @@ skip() { echo "$prog: $1 already present, skipping"; }
     else add "$patchelf_pkg"; fi
 }
 [ "$want_tidy" -eq 1 ]      && { have clang-tidy && skip clang-tidy || add "$tidy_pkg"; }
+[ "$want_format" -eq 1 ]    && { have clang-format && skip clang-format || add "$format_pkg"; }
 [ "$want_valgrind" -eq 1 ]  && {
     if have valgrind; then skip valgrind
     elif [ -z "$valgrind_pkg" ]; then echo "$prog: valgrind unsupported on $PM (skipping)"

@@ -1,0 +1,29 @@
+# EditorConfig — consistent indentation/whitespace across the polyglot tree
+# (C runtime + 10 language bindings + Win64/asm sources). https://editorconfig.org
+root = true
+
+# Defaults: UTF-8, LF, final newline, no trailing whitespace, 4-space indent.
+# Matches the C sources (see also .clang-format) and most bindings.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Tab-indented by their own toolchains/convention.
+[Makefile]
+indent_style = tab
+[*.mk]
+indent_style = tab
+[*.go]
+indent_style = tab
+
+# 2-space is the norm for these data/markup formats.
+[*.{yml,yaml,json,toml}]
+indent_size = 2
+
+# Markdown uses two trailing spaces as a hard line break — don't strip them.
+[*.md]
+trim_trailing_whitespace = false

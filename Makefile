@@ -59,7 +59,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
-.PHONY: sanitize coverage tidy
+.PHONY: sanitize coverage tidy fmt fmt-check
 .PHONY: deps usecases usecases-emu
 .PHONY: drtrace-test drtrace-client shared-drtrace hwtrace-test shared-hwtrace
 all: test
@@ -107,6 +107,8 @@ help:
 	@echo '  sanitize        build + run under ASan + UBSan'
 	@echo '  coverage        gcov of the runner'
 	@echo '  tidy            clang-tidy static analysis'
+	@echo '  fmt             reformat the C sources with clang-format (in place)'
+	@echo '  fmt-check       report clang-format drift (informational; no gate)'
 	@echo '  valgrind        memcheck the routines under test (Linux/x86-64)'
 	@echo ''
 	@echo 'Language bindings (per-language; need libunicorn):'
@@ -536,6 +538,21 @@ coverage:
 CLANG_TIDY ?= clang-tidy
 tidy:
 	$(CLANG_TIDY) src/asmtest.c -- $(CFLAGS)
+
+# Formatting with clang-format (style in .clang-format). `fmt` rewrites in place;
+# `fmt-check` reports drift and exits nonzero (so it CAN gate) but the CI job runs
+# it informationally for now — the hand-tuned tree is not bulk-reformatted (see
+# .clang-format). Scope: the C translation units + headers (the asm and C++/binding
+# sources keep their own conventions and are left out). Run `make fmt` on new code.
+CLANG_FORMAT ?= clang-format
+FMT_SOURCES  := $(wildcard src/*.c src/*.h include/*.h tests/*.c \
+                 tests/win64/*.c tests/win64/*.h bindings/conformance/*.c \
+                 examples/*.c scripts/gen-manifest.c)
+fmt:
+	$(CLANG_FORMAT) -i $(FMT_SOURCES)
+
+fmt-check:
+	$(CLANG_FORMAT) --dry-run -Werror $(FMT_SOURCES)
 
 # --- Valgrind the routine under test (Track E) -----------------------------
 # Run the example suites under Valgrind's memcheck to catch bugs in the ROUTINE
