@@ -1239,8 +1239,11 @@ ifndef DR_AVAILABLE
 else
 	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-rust-test =="
+	@# Run as an EXAMPLE binary (main thread), NOT `cargo test` (which runs the
+	@# test on a worker thread, making the process multi-threaded when dr_app_start
+	@# takes over — that crashes; a single-threaded main lets DR take over cleanly).
 	cd bindings/rust && ASMTEST_LIB_DIR=$(abspath $(BUILD)) $(drtrace_env) \
-	  $(CARGO) test --test drtrace -- --nocapture
+	  $(CARGO) run --quiet --example drtrace
 endif
 
 drtrace-go-test:
