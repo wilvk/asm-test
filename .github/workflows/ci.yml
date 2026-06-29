@@ -41,10 +41,10 @@ jobs:
           uname -m
 
       - name: Build and run test suites
-        run: make test
+        run: make WERROR=1 test
 
       - name: Framework self-tests (meta-tests; assertions/runner/containment)
-        run: make check
+        run: make WERROR=1 check
 
       - name: Failure demo (informational; detects intentional failures)
         run: make demo-fail
@@ -75,10 +75,10 @@ jobs:
           uname -m
 
       - name: Build and run test suites
-        run: make test
+        run: make WERROR=1 test
 
       - name: Framework self-tests (meta-tests; assertions/runner/containment)
-        run: make check
+        run: make WERROR=1 check
 
       - name: Failure demo (informational; detects intentional failures)
         run: make demo-fail
@@ -114,10 +114,10 @@ jobs:
           echo "host $(uname -m) -> target x86_64 (executed via Rosetta 2)"
 
       - name: Build and run test suites (x86_64 Mach-O under Rosetta)
-        run: make CC="cc -arch x86_64" test
+        run: make WERROR=1 CC="cc -arch x86_64" test
 
       - name: Framework self-tests (meta-tests; assertions/runner/containment)
-        run: make CC="cc -arch x86_64" check
+        run: make WERROR=1 CC="cc -arch x86_64" check
 
   # Opt-in NASM backend (Intel syntax, x86-64 only).
   nasm:
@@ -131,10 +131,10 @@ jobs:
         run: make deps DEPS_ARGS=--nasm
 
       - name: Build and run test suites (NASM backend)
-        run: make ASM_SYNTAX=nasm test
+        run: make ASM_SYNTAX=nasm WERROR=1 test
 
       - name: Framework self-tests (NASM backend)
-        run: make ASM_SYNTAX=nasm check
+        run: make ASM_SYNTAX=nasm WERROR=1 check
 
       - name: Failure demo (NASM backend)
         run: make ASM_SYNTAX=nasm demo-fail
