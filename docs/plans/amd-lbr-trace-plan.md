@@ -9,13 +9,16 @@ emulator, the DynamoRIO native tier, and Intel PT, and block offsets that match
 after the same branch-edge normalization step.
 
 This plan is a **sibling** of the
-[hardware-trace plan](hardware-trace-plan.md) (Intel PT / ARM CoreSight) and of the
+[hardware-trace plan](hardware-trace-plan.md) (Intel PT / ARM CoreSight), the
+[single-step plan](zen2-singlestep-trace-plan.md) (Trap Flag `#DB`), and the
 [DynamoRIO native-trace plan](dynamorio-native-trace-plan.md). It exists because of
 a hardware fact: **AMD has no Intel PT equivalent** — there is no continuous,
 compressed control-flow trace ring on any Zen part. The closest achievable native
 trace on AMD is *reconstruction from the shallow (16-entry) branch-record stack*.
 This plan specifies that closest-achievable backend, its hard limits, and the
-DynamoRIO fallback for everything beyond them.
+DynamoRIO fallback for everything beyond them. On **pre-Zen3** AMD (e.g. Zen 2),
+which has *no* branch-record stack at all, the exact in-process backend is instead
+the [single-step plan](zen2-singlestep-trace-plan.md)'s Trap-Flag stepper.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [hardware-trace-plan.md](hardware-trace-plan.md) and
