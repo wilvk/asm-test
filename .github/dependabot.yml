@@ -1,0 +1,38 @@
+# Dependabot keeps dependencies current. Only ecosystems with actual external
+# dependencies are configured; the other bindings (Rust, Go, Java, .NET, Ruby,
+# Lua, Zig) FFI directly into the C library and pull in nothing third-party, so
+# adding them here would just be no-ops. Add a block when one gains a dependency.
+version: 2
+updates:
+  # GitHub Actions used across ci.yml / release.yml (checkout, setup-*, etc.).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # Node binding: koffi (the FFI loader).
+  - package-ecosystem: npm
+    directory: /bindings/node
+    schedule:
+      interval: weekly
+    groups:
+      node:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps(node)
+
+  # Python binding: the `test` extra (pytest). The runtime uses stdlib ctypes.
+  - package-ecosystem: pip
+    directory: /bindings/python
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps(python)
