@@ -11,6 +11,7 @@
  *   g++ -std=c++17 -I include bindings/cpp/test_drtrace.cpp -ldl -o test_drtrace
  *   ASMTEST_DRAPP_LIB=$PWD/build/libasmtest_drapp.so ./test_drtrace
  */
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -89,6 +90,13 @@ int main() {
             CHECK(r == 3, "code2.call(1, 2) == 3");
         }
         CHECK(tr2.insns_total() >= 4, "tr2.insns_total() >= 4");
+        // offset-list accessors: 1+2 <= 100 -> jle taken, dec (0xe) skipped:
+        // exact stream mov(0) add(3) cmp(6) jle(0xc) ret(0x11); blocks {0, 0x11}.
+        const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xc, 0x11};
+        CHECK(tr2.insn_offsets() == expect, "tr2.insn_offsets() exact sequence");
+        auto bo = tr2.block_offsets();
+        bool has0 = std::find(bo.begin(), bo.end(), 0u) != bo.end();
+        CHECK(has0, "tr2.block_offsets() contains entry block 0");
 
         tr2.unregister("add2i");
         code2.free();

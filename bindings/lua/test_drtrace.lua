@@ -67,6 +67,25 @@ tr2:region("add2i", function() r3 = code2:call(1, 2) end)
 assert(r3 == 3, "expected 3, got " .. tostring(r3))
 assert(tr2:insns_total() >= 4, "expected >=4 instructions recorded")
 
+-- The ordered instruction-offset stream is the exact, first-block instruction
+-- sequence of ROUTINE: mov(0x0), add(0x3), cmp(0x6), jle(0xc), ret(0x11).
+local insns = tr2:insn_offsets()
+local expected = { 0x0, 0x3, 0x6, 0xc, 0x11 }
+assert(#insns == #expected,
+       "expected " .. #expected .. " insn offsets, got " .. #insns)
+for i = 1, #expected do
+  assert(insns[i] == expected[i],
+         string.format("insn_offsets[%d]: expected 0x%x, got 0x%x",
+                       i, expected[i], insns[i]))
+end
+-- The distinct basic-block set includes the region entry (offset 0).
+local blocks = tr2:block_offsets()
+local has_zero = false
+for _, off in ipairs(blocks) do
+  if off == 0 then has_zero = true break end
+end
+assert(has_zero, "block_offsets should contain 0 (entry block)")
+
 tr2:unregister("add2i")
 code2:free()
 tr2:free()

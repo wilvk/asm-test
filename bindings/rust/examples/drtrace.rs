@@ -62,6 +62,15 @@ fn main() {
         assert_eq!(code2.call2(1, 2), 3, "instruction-mode routine computes");
     }
     assert!(tr2.insns_total() >= 4, "ordered instruction stream recorded");
+    assert_eq!(
+        tr2.insn_offsets(),
+        vec![0x0, 0x3, 0x6, 0xc, 0x11],
+        "instruction-offset stream matches the executed (1,2) path"
+    );
+    assert!(
+        tr2.block_offsets().contains(&0),
+        "block offsets include the entry block"
+    );
     tr2.unregister("add2i");
     drop(code2);
     drop(tr2);

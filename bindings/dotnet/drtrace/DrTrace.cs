@@ -138,6 +138,9 @@ namespace Asmtest
         [DllImport(DRAPP)] public static extern int asmtest_trace_covered(IntPtr trace, ulong off);
         [DllImport(DRAPP)] public static extern ulong asmtest_emu_trace_blocks_len(IntPtr trace);
         [DllImport(DRAPP)] public static extern ulong asmtest_emu_trace_insns_total(IntPtr trace);
+        [DllImport(DRAPP)] public static extern ulong asmtest_emu_trace_block_at(IntPtr trace, UIntPtr i);
+        [DllImport(DRAPP)] public static extern ulong asmtest_emu_trace_insns_len(IntPtr trace);
+        [DllImport(DRAPP)] public static extern ulong asmtest_emu_trace_insn_at(IntPtr trace, UIntPtr i);
 
         // Whether libasmtest_drapp loaded at all. A missing lib (no DynamoRIO build)
         // self-skips via DrTrace.Available() rather than crashing. Derived from the
@@ -332,6 +335,34 @@ namespace Asmtest
 
         /// <summary>The total count of instructions in the recorded stream.</summary>
         public ulong InsnsTotal => DrNative.asmtest_emu_trace_insns_total(_handle);
+
+        /// <summary>
+        /// The distinct basic-block start offsets recorded, in storage (first-seen)
+        /// order. Read one-by-one through the opaque-handle accessor.
+        /// </summary>
+        public ulong[] BlockOffsets()
+        {
+            int n = (int)BlocksLen;
+            var offs = new ulong[n];
+            for (int i = 0; i < n; i++)
+                offs[i] = DrNative.asmtest_emu_trace_block_at(_handle, (UIntPtr)(nuint)i);
+            return offs;
+        }
+
+        /// <summary>
+        /// The ordered instruction-offset stream actually stored — each executed
+        /// instruction's offset in execution order, up to the trace's insns capacity
+        /// (insns_len, not the possibly-larger insns_total). Read one-by-one through
+        /// the scalar accessor.
+        /// </summary>
+        public ulong[] InsnOffsets()
+        {
+            int n = (int)DrNative.asmtest_emu_trace_insns_len(_handle);
+            var offs = new ulong[n];
+            for (int i = 0; i < n; i++)
+                offs[i] = DrNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)(nuint)i);
+            return offs;
+        }
 
         /// <summary>Free the trace recorder.</summary>
         public void Free()

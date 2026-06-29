@@ -70,6 +70,10 @@ def test_instruction_mode(started):
         r = code.call(1, 2)
     assert r == 3
     assert tr.insns_total >= 4  # ordered instruction stream recorded
+    # offset-list accessors: 1+2 <= 100, so the jle is taken and dec (0xe) skipped:
+    # exact ordered stream mov(0) add(3) cmp(6) jle(0xc) ret(0x11); blocks {0, 0x11}.
+    assert tr.insn_offsets() == [0x0, 0x3, 0x6, 0xc, 0x11]
+    assert 0 in tr.block_offsets() and 0x11 in tr.block_offsets()
     tr.unregister("add2i")
     code.free()
     tr.free()

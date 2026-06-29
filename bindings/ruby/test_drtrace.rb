@@ -62,6 +62,8 @@ r3 = nil
 tr2.region("add2i") { r3 = code2.call(1, 2) }
 raise "expected 3, got #{r3}" unless r3 == 3
 raise "no instructions recorded" unless tr2.insns_total >= 4
+raise "insn_offsets mismatch: #{tr2.insn_offsets.inspect}" unless tr2.insn_offsets == [0x0, 0x3, 0x6, 0xc, 0x11]
+raise "block_offsets missing 0: #{tr2.block_offsets.inspect}" unless tr2.block_offsets.include?(0)
 
 tr2.unregister("add2i")
 code2.free

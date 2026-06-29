@@ -69,6 +69,9 @@ struct DrApi {
     int (*trace_covered)(asmtest_trace_t *, uint64_t) = nullptr;
     unsigned long long (*trace_blocks_len)(asmtest_trace_t *) = nullptr;
     unsigned long long (*trace_insns_total)(asmtest_trace_t *) = nullptr;
+    unsigned long long (*trace_insns_len)(asmtest_trace_t *) = nullptr;
+    unsigned long long (*trace_block_at)(asmtest_trace_t *, size_t) = nullptr;
+    unsigned long long (*trace_insn_at)(asmtest_trace_t *, size_t) = nullptr;
 
     /* True if the library loaded and every symbol resolved. */
     bool loaded() const { return handle != nullptr; }
@@ -124,6 +127,9 @@ inline DrApi &api() {
         ok &= dlsym_into(h, "asmtest_emu_trace_blocks_len", t.trace_blocks_len);
         ok &= dlsym_into(h, "asmtest_emu_trace_insns_total",
                          t.trace_insns_total);
+        ok &= dlsym_into(h, "asmtest_emu_trace_insns_len", t.trace_insns_len);
+        ok &= dlsym_into(h, "asmtest_emu_trace_block_at", t.trace_block_at);
+        ok &= dlsym_into(h, "asmtest_emu_trace_insn_at", t.trace_insn_at);
         if (!ok) {
             ::dlclose(h);
             return DrApi{};  // a fresh, empty table -> available() == false
@@ -345,6 +351,27 @@ class NativeTrace {
     /// Total instructions executed (counts past the instruction buffer cap).
     std::uint64_t insns_total() const {
         return detail::api().trace_insns_total(handle_);
+    }
+
+    /// The distinct basic-block start offsets recorded, in first-seen order.
+    std::vector<std::uint64_t> block_offsets() const {
+        const auto &a = detail::api();
+        std::size_t n = static_cast<std::size_t>(a.trace_blocks_len(handle_));
+        std::vector<std::uint64_t> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = a.trace_block_at(handle_, i);
+        return v;
+    }
+
+    /// The ordered instruction-offset stream actually stored (insns_len entries,
+    /// in execution order — not the possibly-larger insns_total).
+    std::vector<std::uint64_t> insn_offsets() const {
+        const auto &a = detail::api();
+        std::size_t n = static_cast<std::size_t>(a.trace_insns_len(handle_));
+        std::vector<std::uint64_t> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = a.trace_insn_at(handle_, i);
+        return v;
     }
 
     void free() {

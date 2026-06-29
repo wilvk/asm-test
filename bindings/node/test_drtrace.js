@@ -69,6 +69,9 @@ function main() {
       tr.region('add2i', () => { r = code.call(1, 2); });
       assert.strictEqual(Number(r), 3);
       assert.ok(tr.insnsTotal() >= 4, 'ordered instruction stream recorded');
+      assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xc, 0x11],
+        'ordered instruction-offset stream');
+      assert.ok(tr.blockOffsets().includes(0), 'entry block offset recorded');
 
       tr.unregister('add2i');
       code.free();

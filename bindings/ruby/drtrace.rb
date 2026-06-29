@@ -82,6 +82,9 @@ module Asmtest
         trace_covered: func(LIB, "asmtest_trace_covered", [VOIDP, LL], INT),
         blocks_len:   func(LIB, "asmtest_emu_trace_blocks_len", [VOIDP], LL),
         insns_total:  func(LIB, "asmtest_emu_trace_insns_total", [VOIDP], LL),
+        insns_len:    func(LIB, "asmtest_emu_trace_insns_len", [VOIDP], LL),
+        block_at:     func(LIB, "asmtest_emu_trace_block_at", [VOIDP, SZ], LL),
+        insn_at:      func(LIB, "asmtest_emu_trace_insn_at", [VOIDP, SZ], LL),
       }.freeze
     rescue Fiddle::DLError
       LIB = nil
@@ -238,6 +241,20 @@ module Asmtest
       # Total instructions in the ordered instruction stream (instruction mode).
       def insns_total
         DrTrace::FN[:insns_total].call(@handle)
+      end
+
+      # The distinct basic-block start offsets recorded, in first-seen order.
+      def block_offsets
+        n = DrTrace::FN[:blocks_len].call(@handle)
+        (0...n).map { |i| DrTrace::FN[:block_at].call(@handle, i) }
+      end
+
+      # The ordered instruction-offset stream actually stored — each executed
+      # instruction's offset in execution order, up to the trace's insns capacity
+      # (insns_len, not the possibly-larger insns_total).
+      def insn_offsets
+        n = DrTrace::FN[:insns_len].call(@handle)
+        (0...n).map { |i| DrTrace::FN[:insn_at].call(@handle, i) }
       end
 
       def free

@@ -77,6 +77,16 @@ pub fn main() !void {
     try check(g_result == 3, "add2i(1,2) == 3");
     try check(tr2.insnsTotal() >= 4, "insns_total >= 4 (ordered instruction stream)");
 
+    const alloc = std.heap.page_allocator;
+    const insns = try tr2.insnOffsets(alloc);
+    defer alloc.free(insns);
+    try check(std.mem.eql(u64, insns, &[_]u64{ 0x0, 0x3, 0x6, 0xc, 0x11 }),
+        "insn_offsets == [0x0,0x3,0x6,0xc,0x11]");
+
+    const blocks = try tr2.blockOffsets(alloc);
+    defer alloc.free(blocks);
+    try check(std.mem.indexOfScalar(u64, blocks, 0) != null, "block_offsets contains 0");
+
     tr2.unregister("add2i");
     code2.free();
     tr2.free();

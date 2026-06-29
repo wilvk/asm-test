@@ -95,6 +95,12 @@ unsigned long long asmtest_emu_trace_insns_total(const asmtest_trace_t *t) {
 unsigned long long asmtest_emu_trace_blocks_len(const asmtest_trace_t *t) {
     return (unsigned long long)t->blocks_len;
 }
+/* Instruction offsets actually stored in insns[] (<= insns_cap). Distinct from
+ * insns_total, which counts every executed instruction past the buffer cap; this
+ * is the count an insn_at() reader should iterate. */
+unsigned long long asmtest_emu_trace_insns_len(const asmtest_trace_t *t) {
+    return (unsigned long long)t->insns_len;
+}
 /* Block entries total — a loop re-counts each pass. */
 unsigned long long asmtest_emu_trace_blocks_total(const asmtest_trace_t *t) {
     return (unsigned long long)t->blocks_total;
@@ -107,6 +113,12 @@ int asmtest_emu_trace_truncated(const asmtest_trace_t *t) {
 unsigned long long asmtest_emu_trace_block_at(const asmtest_trace_t *t,
                                               size_t i) {
     return (i < t->blocks_len) ? (unsigned long long)t->blocks[i] : 0;
+}
+/* The i-th instruction offset in the ordered execution-order stream — the insns[]
+ * counterpart to block_at, so a binding can read the instruction stream through a
+ * scalar accessor instead of laying out the struct. */
+unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t, size_t i) {
+    return (i < t->insns_len) ? (unsigned long long)t->insns[i] : 0;
 }
 /* True if basic-block offset `off` is in the distinct block set (FFI shim). */
 int asmtest_emu_trace_covered(const asmtest_trace_t *t, unsigned long long off) {

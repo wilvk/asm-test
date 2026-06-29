@@ -98,9 +98,11 @@ asmtest_trace_t *asmtest_emu_trace_new(size_t insns_cap, size_t blocks_cap);
 void asmtest_emu_trace_free(asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_insns_total(const asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_blocks_len(const asmtest_trace_t *t);
+unsigned long long asmtest_emu_trace_insns_len(const asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_blocks_total(const asmtest_trace_t *t);
 int asmtest_emu_trace_truncated(const asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_block_at(const asmtest_trace_t *t, size_t i);
+unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t, size_t i);
 /* Compatibility shim: same predicate as asmtest_trace_covered (int return). */
 int asmtest_emu_trace_covered(const asmtest_trace_t *t, unsigned long long off);
 

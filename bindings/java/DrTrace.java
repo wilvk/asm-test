@@ -64,7 +64,7 @@ public final class DrTrace {
     private static final MethodHandle DR_AVAILABLE, DR_INIT, DR_START, DR_STOP, DR_SHUTDOWN,
         REGISTER_REGION, UNREGISTER_REGION, TRACE_BEGIN, TRACE_END, MARKER_ERROR,
         EXEC_ALLOC, EXEC_FREE, TRACE_NEW, TRACE_FREE, TRACE_COVERED,
-        TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL;
+        TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL, TRACE_INSNS_LEN, TRACE_BLOCK_AT, TRACE_INSN_AT;
 
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
@@ -86,7 +86,8 @@ public final class DrTrace {
             drShutdown = null, registerRegion = null, unregisterRegion = null,
             traceBegin = null, traceEnd = null, markerError = null, execAlloc = null,
             execFree = null, traceNew = null, traceFree = null, traceCovered = null,
-            traceBlocksLen = null, traceInsnsTotal = null;
+            traceBlocksLen = null, traceInsnsTotal = null, traceInsnsLen = null,
+            traceBlockAt = null, traceInsnAt = null;
         Throwable loadError = null;
         try {
             SymbolLookup lib = SymbolLookup.libraryLookup(resolveDrappLib(), ARENA);
@@ -115,6 +116,12 @@ public final class DrTrace {
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS));
             traceInsnsTotal = h(lib, "asmtest_emu_trace_insns_total",
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            traceInsnsLen = h(lib, "asmtest_emu_trace_insns_len",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            traceBlockAt = h(lib, "asmtest_emu_trace_block_at",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            traceInsnAt = h(lib, "asmtest_emu_trace_insn_at",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
         } catch (Throwable t) {
             // The library requires DynamoRIO and may be absent — degrade to
             // available() == false rather than failing class init.
@@ -126,6 +133,8 @@ public final class DrTrace {
         MARKER_ERROR = markerError; EXEC_ALLOC = execAlloc; EXEC_FREE = execFree;
         TRACE_NEW = traceNew; TRACE_FREE = traceFree; TRACE_COVERED = traceCovered;
         TRACE_BLOCKS_LEN = traceBlocksLen; TRACE_INSNS_TOTAL = traceInsnsTotal;
+        TRACE_INSNS_LEN = traceInsnsLen; TRACE_BLOCK_AT = traceBlockAt;
+        TRACE_INSN_AT = traceInsnAt;
         LOAD_ERROR = loadError;
     }
 
@@ -318,6 +327,28 @@ public final class DrTrace {
         public long insnsTotal() {
             try { return (long) TRACE_INSNS_TOTAL.invoke(handle); }
             catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The distinct basic-block start offsets recorded, in first-seen order. */
+        public long[] blockOffsets() {
+            try {
+                int n = (int) (long) TRACE_BLOCKS_LEN.invoke(handle);
+                long[] out = new long[n];
+                for (int i = 0; i < n; i++) out[i] = (long) TRACE_BLOCK_AT.invoke(handle, (long) i);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The ordered instruction-offset stream actually stored — each executed
+         *  instruction's offset in execution order, up to the trace's insns capacity
+         *  (insns_len, not the possibly-larger insns_total). */
+        public long[] insnOffsets() {
+            try {
+                int n = (int) (long) TRACE_INSNS_LEN.invoke(handle);
+                long[] out = new long[n];
+                for (int i = 0; i < n; i++) out[i] = (long) TRACE_INSN_AT.invoke(handle, (long) i);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
         }
 
         public void free() {

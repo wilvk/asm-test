@@ -77,6 +77,26 @@ func TestDrtrace(t *testing.T) {
 	if tr2.InsnsTotal() < 4 {
 		t.Fatalf("InsnsTotal: got %d, want >= 4", tr2.InsnsTotal())
 	}
+	wantInsns := []uint64{0x0, 0x3, 0x6, 0xc, 0x11}
+	gotInsns := tr2.InsnOffsets()
+	if len(gotInsns) != len(wantInsns) {
+		t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+	}
+	for i := range wantInsns {
+		if gotInsns[i] != wantInsns[i] {
+			t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+		}
+	}
+	hasZero := false
+	for _, off := range tr2.BlockOffsets() {
+		if off == 0 {
+			hasZero = true
+			break
+		}
+	}
+	if !hasZero {
+		t.Fatalf("BlockOffsets %v: expected to contain 0", tr2.BlockOffsets())
+	}
 
 	tr2.Unregister("add2i")
 	code2.Free()

@@ -96,6 +96,9 @@ let _loadError = null;
     traceCovered: lib.func('int asmtest_trace_covered(void*, uint64_t)'),
     blocksLen: lib.func('uint64_t asmtest_emu_trace_blocks_len(void*)'),
     insnsTotal: lib.func('uint64_t asmtest_emu_trace_insns_total(void*)'),
+    insnsLen: lib.func('uint64_t asmtest_emu_trace_insns_len(void*)'),
+    blockAt: lib.func('uint64_t asmtest_emu_trace_block_at(void*, size_t)'),
+    insnAt: lib.func('uint64_t asmtest_emu_trace_insn_at(void*, size_t)'),
   };
 })();
 
@@ -217,6 +220,23 @@ class NativeTrace {
 
   /** Total instructions in the ordered instruction stream (instruction mode). */
   insnsTotal() { return Number(_fn.insnsTotal(this._handle)); }
+
+  /** The distinct basic-block start offsets recorded, in first-seen order. */
+  blockOffsets() {
+    const n = Number(_fn.blocksLen(this._handle));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = Number(_fn.blockAt(this._handle, i));
+    return out;
+  }
+
+  /** The ordered instruction-offset stream actually stored (insnsLen entries, in
+   *  execution order — not the possibly-larger insnsTotal). */
+  insnOffsets() {
+    const n = Number(_fn.insnsLen(this._handle));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = Number(_fn.insnAt(this._handle, i));
+    return out;
+  }
 
   free() {
     if (this._handle) {

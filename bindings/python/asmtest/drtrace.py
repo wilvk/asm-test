@@ -109,6 +109,12 @@ def _declare(lib):
     lib.asmtest_emu_trace_blocks_len.restype = u64
     lib.asmtest_emu_trace_insns_total.argtypes = [v]
     lib.asmtest_emu_trace_insns_total.restype = u64
+    lib.asmtest_emu_trace_insns_len.argtypes = [v]
+    lib.asmtest_emu_trace_insns_len.restype = u64
+    lib.asmtest_emu_trace_block_at.argtypes = [v, sz]
+    lib.asmtest_emu_trace_block_at.restype = u64
+    lib.asmtest_emu_trace_insn_at.argtypes = [v, sz]
+    lib.asmtest_emu_trace_insn_at.restype = u64
     return lib
 
 
@@ -271,6 +277,20 @@ class NativeTrace:
     @property
     def insns_total(self) -> int:
         return int(self._lib.asmtest_emu_trace_insns_total(self._handle))
+
+    def block_offsets(self) -> list:
+        """The distinct basic-block start offsets recorded, in first-seen order."""
+        n = self.blocks_len
+        at = self._lib.asmtest_emu_trace_block_at
+        return [int(at(self._handle, i)) for i in range(n)]
+
+    def insn_offsets(self) -> list:
+        """The ordered instruction-offset stream actually stored — each executed
+        instruction's offset in execution order, up to the trace's insns capacity
+        (insns_len, not the possibly-larger insns_total)."""
+        n = int(self._lib.asmtest_emu_trace_insns_len(self._handle))
+        at = self._lib.asmtest_emu_trace_insn_at
+        return [int(at(self._handle, i)) for i in range(n)]
 
     def free(self):
         if self._handle:

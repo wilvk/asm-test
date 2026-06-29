@@ -60,6 +60,9 @@ typedef void  (*dr_trace_free_fn)(void *);
 typedef int   (*dr_trace_covered_fn)(void *, uint64_t);
 typedef unsigned long long (*dr_trace_blocks_len_fn)(void *);
 typedef unsigned long long (*dr_trace_insns_total_fn)(void *);
+typedef unsigned long long (*dr_trace_insns_len_fn)(void *);
+typedef unsigned long long (*dr_trace_block_at_fn)(void *, size_t);
+typedef unsigned long long (*dr_trace_insn_at_fn)(void *, size_t);
 
 static dr_available_fn          p_dr_available;
 static dr_init_fn               p_dr_init;
@@ -78,6 +81,9 @@ static dr_trace_free_fn         p_dr_trace_free;
 static dr_trace_covered_fn      p_dr_trace_covered;
 static dr_trace_blocks_len_fn   p_dr_trace_blocks_len;
 static dr_trace_insns_total_fn  p_dr_trace_insns_total;
+static dr_trace_insns_len_fn    p_dr_trace_insns_len;
+static dr_trace_block_at_fn     p_dr_trace_block_at;
+static dr_trace_insn_at_fn      p_dr_trace_insn_at;
 
 static int g_dr_loaded;   // 1 once dlopen + every dlsym succeeded.
 
@@ -109,12 +115,16 @@ static void asmtest_dr_resolve(void) {
     p_dr_trace_covered   = (dr_trace_covered_fn)dlsym(h, "asmtest_trace_covered");
     p_dr_trace_blocks_len  = (dr_trace_blocks_len_fn)dlsym(h, "asmtest_emu_trace_blocks_len");
     p_dr_trace_insns_total = (dr_trace_insns_total_fn)dlsym(h, "asmtest_emu_trace_insns_total");
+    p_dr_trace_insns_len   = (dr_trace_insns_len_fn)dlsym(h, "asmtest_emu_trace_insns_len");
+    p_dr_trace_block_at    = (dr_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
+    p_dr_trace_insn_at     = (dr_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
     g_dr_loaded = p_dr_available && p_dr_init && p_dr_start && p_dr_stop &&
                   p_dr_shutdown && p_dr_register && p_dr_unregister && p_dr_begin &&
                   p_dr_end && p_dr_marker_error && p_dr_exec_alloc &&
                   p_dr_exec_free && p_dr_trace_new && p_dr_trace_free &&
                   p_dr_trace_covered && p_dr_trace_blocks_len &&
-                  p_dr_trace_insns_total;
+                  p_dr_trace_insns_total && p_dr_trace_insns_len &&
+                  p_dr_trace_block_at && p_dr_trace_insn_at;
 }
 
 static int asmtest_dr_is_loaded(void) { return g_dr_loaded; }
@@ -158,6 +168,15 @@ static unsigned long long asmtest_dr_go_blocks_len(void *t) {
 }
 static unsigned long long asmtest_dr_go_insns_total(void *t) {
     return p_dr_trace_insns_total ? p_dr_trace_insns_total(t) : 0;
+}
+static unsigned long long asmtest_dr_go_insns_len(void *t) {
+    return p_dr_trace_insns_len ? p_dr_trace_insns_len(t) : 0;
+}
+static unsigned long long asmtest_dr_go_block_at(void *t, size_t i) {
+    return p_dr_trace_block_at ? p_dr_trace_block_at(t, i) : 0;
+}
+static unsigned long long asmtest_dr_go_insn_at(void *t, size_t i) {
+    return p_dr_trace_insn_at ? p_dr_trace_insn_at(t, i) : 0;
 }
 
 // Trampoline that invokes the generated host-native code through a function
@@ -345,6 +364,29 @@ func (t *NativeTrace) BlocksLen() uint64 { return uint64(C.asmtest_dr_go_blocks_
 
 // InsnsTotal is the number of instructions executed (counts past the buffer cap).
 func (t *NativeTrace) InsnsTotal() uint64 { return uint64(C.asmtest_dr_go_insns_total(t.h)) }
+
+// BlockOffsets is the distinct basic-block start offsets recorded, in first-seen
+// order.
+func (t *NativeTrace) BlockOffsets() []uint64 {
+	n := uint64(C.asmtest_dr_go_blocks_len(t.h))
+	offs := make([]uint64, n)
+	for i := uint64(0); i < n; i++ {
+		offs[i] = uint64(C.asmtest_dr_go_block_at(t.h, C.size_t(i)))
+	}
+	return offs
+}
+
+// InsnOffsets is the ordered instruction-offset stream actually stored — each
+// executed instruction's offset in execution order, up to the trace's insns
+// capacity (insns_len, not the possibly-larger InsnsTotal).
+func (t *NativeTrace) InsnOffsets() []uint64 {
+	n := uint64(C.asmtest_dr_go_insns_len(t.h))
+	offs := make([]uint64, n)
+	for i := uint64(0); i < n; i++ {
+		offs[i] = uint64(C.asmtest_dr_go_insn_at(t.h, C.size_t(i)))
+	}
+	return offs
+}
 
 // Free releases the trace handle. Safe to call more than once.
 func (t *NativeTrace) Free() {

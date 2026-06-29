@@ -61,6 +61,9 @@ const FnTraceFree = *const fn (?*anyopaque) callconv(.C) void;
 const FnTraceCovered = *const fn (?*anyopaque, u64) callconv(.C) c_int;
 const FnBlocksLen = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
 const FnInsnsTotal = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
+const FnInsnsLen = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
+const FnBlockAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
+const FnInsnAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
 
 /// The resolved entry points. Populated once on first `load()`; held in a
 /// process-global because the DynLib handle and its symbols outlive any one
@@ -84,6 +87,9 @@ const Api = struct {
     trace_covered: FnTraceCovered,
     blocks_len: FnBlocksLen,
     insns_total: FnInsnsTotal,
+    insns_len: FnInsnsLen,
+    block_at: FnBlockAt,
+    insn_at: FnInsnAt,
 };
 
 var g_api: ?Api = null;
@@ -134,6 +140,9 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .trace_covered = lib.lookup(FnTraceCovered, "asmtest_trace_covered") orelse return null,
         .blocks_len = lib.lookup(FnBlocksLen, "asmtest_emu_trace_blocks_len") orelse return null,
         .insns_total = lib.lookup(FnInsnsTotal, "asmtest_emu_trace_insns_total") orelse return null,
+        .insns_len = lib.lookup(FnInsnsLen, "asmtest_emu_trace_insns_len") orelse return null,
+        .block_at = lib.lookup(FnBlockAt, "asmtest_emu_trace_block_at") orelse return null,
+        .insn_at = lib.lookup(FnInsnAt, "asmtest_emu_trace_insn_at") orelse return null,
     };
 }
 
@@ -331,6 +340,29 @@ pub const NativeTrace = struct {
     pub fn insnsTotal(self: *const NativeTrace) u64 {
         const api = load() orelse return 0;
         return api.insns_total(self.handle);
+    }
+
+    /// The distinct basic-block start offsets recorded, in first-seen order.
+    /// Returns an allocator-owned slice the caller must `free`; an empty slice if
+    /// the tier is unavailable.
+    pub fn blockOffsets(self: *const NativeTrace, allocator: std.mem.Allocator) ![]u64 {
+        const api = load() orelse return allocator.alloc(u64, 0);
+        const n: usize = @intCast(api.blocks_len(self.handle));
+        const out = try allocator.alloc(u64, n);
+        for (out, 0..) |*slot, i| slot.* = api.block_at(self.handle, i);
+        return out;
+    }
+
+    /// The ordered instruction-offset stream actually stored (insns_len entries,
+    /// in execution order — not the possibly-larger insns_total). Returns an
+    /// allocator-owned slice the caller must `free`; an empty slice if the tier is
+    /// unavailable.
+    pub fn insnOffsets(self: *const NativeTrace, allocator: std.mem.Allocator) ![]u64 {
+        const api = load() orelse return allocator.alloc(u64, 0);
+        const n: usize = @intCast(api.insns_len(self.handle));
+        const out = try allocator.alloc(u64, n);
+        for (out, 0..) |*slot, i| slot.* = api.insn_at(self.handle, i);
+        return out;
     }
 
     /// Release the trace handle. Idempotent.

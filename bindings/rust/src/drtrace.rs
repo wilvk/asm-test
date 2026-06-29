@@ -86,6 +86,7 @@ type TraceNewFn = unsafe extern "C" fn(usize, usize) -> *mut c_void;
 type TraceFreeFn = unsafe extern "C" fn(*mut c_void);
 type TraceCoveredFn = unsafe extern "C" fn(*mut c_void, u64) -> c_int;
 type TraceU64Fn = unsafe extern "C" fn(*mut c_void) -> u64;
+type TraceAtFn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
 
 struct DrFns {
     available: Option<AvailableFn>,
@@ -106,6 +107,9 @@ struct DrFns {
     trace_covered: Option<TraceCoveredFn>,
     blocks_len: Option<TraceU64Fn>,
     insns_total: Option<TraceU64Fn>,
+    insns_len: Option<TraceU64Fn>,
+    block_at: Option<TraceAtFn>,
+    insn_at: Option<TraceAtFn>,
 }
 
 // The function pointers come from the process's own libraries and outlive any
@@ -158,7 +162,8 @@ fn dr_fns() -> &'static DrFns {
                 register_region: None, unregister_region: None, trace_begin: None,
                 trace_end: None, marker_error: None, exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
-                blocks_len: None, insns_total: None,
+                blocks_len: None, insns_total: None, insns_len: None,
+                block_at: None, insn_at: None,
             };
         }
         let sym = |name: &str| -> *mut c_void {
@@ -196,6 +201,9 @@ fn dr_fns() -> &'static DrFns {
             trace_covered: load!("asmtest_trace_covered", TraceCoveredFn),
             blocks_len: load!("asmtest_emu_trace_blocks_len", TraceU64Fn),
             insns_total: load!("asmtest_emu_trace_insns_total", TraceU64Fn),
+            insns_len: load!("asmtest_emu_trace_insns_len", TraceU64Fn),
+            block_at: load!("asmtest_emu_trace_block_at", TraceAtFn),
+            insn_at: load!("asmtest_emu_trace_insn_at", TraceAtFn),
         }
     })
 }
@@ -474,6 +482,34 @@ impl NativeTrace {
         match dr_fns().insns_total {
             Some(f) => unsafe { f(self.handle) },
             None => 0,
+        }
+    }
+
+    /// The distinct basic-block start offsets recorded, in first-seen order.
+    /// Empty when the lib is absent.
+    pub fn block_offsets(&self) -> Vec<u64> {
+        let fns = dr_fns();
+        match (fns.blocks_len, fns.block_at) {
+            (Some(len), Some(at)) => {
+                let n = unsafe { len(self.handle) };
+                (0..n).map(|i| unsafe { at(self.handle, i as usize) }).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The ordered instruction-offset stream actually stored — each executed
+    /// instruction's offset in execution order, up to the trace's insns capacity
+    /// (insns_len, not the possibly-larger insns_total). Empty when the lib is
+    /// absent.
+    pub fn insn_offsets(&self) -> Vec<u64> {
+        let fns = dr_fns();
+        match (fns.insns_len, fns.insn_at) {
+            (Some(len), Some(at)) => {
+                let n = unsafe { len(self.handle) };
+                (0..n).map(|i| unsafe { at(self.handle, i as usize) }).collect()
+            }
+            _ => Vec::new(),
         }
     }
 }

@@ -22,6 +22,10 @@ static class DrTraceProgram
         if (!cond) throw new DrTraceException("assertion failed: " + msg);
     }
 
+    // Render an offset list as "[0x0, 0x3, 0x6, ...]" for the verbatim dump.
+    static string Hex(ulong[] offs) =>
+        "[" + string.Join(", ", Array.ConvertAll(offs, o => "0x" + o.ToString("x"))) + "]";
+
     static int Main()
     {
         // Self-skip unless the tier is built AND DynamoRIO is resolvable.
@@ -64,6 +68,7 @@ static class DrTraceProgram
             Assert(r2 == 119, $"add2(60,60) == 119 (got {r2})");
             Assert(tr.BlocksLen >= before, $"blocks accumulate ({tr.BlocksLen} >= {before})");
             Assert(DrTrace.MarkerError() == 0, "markers balanced");
+            Console.WriteLine($"blocks covered: {Hex(tr.BlockOffsets())}  ({tr.BlocksLen} distinct)");
 
             tr.Unregister("add2");
             code.Free();
@@ -77,6 +82,7 @@ static class DrTraceProgram
             tr2.Region("add2i", () => { r3 = code2.Call(1, 2); });
             Assert(r3 == 3, $"add2i(1,2) == 3 (got {r3})");
             Assert(tr2.InsnsTotal >= 4, $"instruction stream recorded ({tr2.InsnsTotal} >= 4)");
+            Console.WriteLine($"insn stream:    {Hex(tr2.InsnOffsets())}  ({tr2.InsnsTotal} total)");
 
             tr2.Unregister("add2i");
             code2.Free();

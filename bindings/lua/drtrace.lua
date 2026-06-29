@@ -37,6 +37,9 @@ void  asmtest_trace_free(void*);
 int   asmtest_trace_covered(void* trace, uint64_t off);
 uint64_t asmtest_emu_trace_blocks_len(void* trace);
 uint64_t asmtest_emu_trace_insns_total(void* trace);
+uint64_t asmtest_emu_trace_insns_len(void* trace);
+uint64_t asmtest_emu_trace_block_at(void* trace, size_t i);
+uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
 ]])
 
 local ASMTEST_DR_OK = 0
@@ -189,6 +192,29 @@ end
 -- Total instructions recorded so far (only when allocated with instructions > 0).
 function NativeTrace:insns_total()
   return tonumber(L.asmtest_emu_trace_insns_total(self.h))
+end
+
+-- The distinct basic-block start offsets recorded, in first-seen order, as a
+-- 1-based Lua array of numbers.
+function NativeTrace:block_offsets()
+  local n = tonumber(L.asmtest_emu_trace_blocks_len(self.h))
+  local t = {}
+  for i = 0, n - 1 do
+    t[i + 1] = tonumber(L.asmtest_emu_trace_block_at(self.h, i))
+  end
+  return t
+end
+
+-- The ordered instruction-offset stream actually stored — each executed
+-- instruction's offset in execution order, up to the trace's insns capacity
+-- (insns_len, not the possibly-larger insns_total) — as a 1-based Lua array.
+function NativeTrace:insn_offsets()
+  local n = tonumber(L.asmtest_emu_trace_insns_len(self.h))
+  local t = {}
+  for i = 0, n - 1 do
+    t[i + 1] = tonumber(L.asmtest_emu_trace_insn_at(self.h, i))
+  end
+  return t
 end
 
 function NativeTrace:free()

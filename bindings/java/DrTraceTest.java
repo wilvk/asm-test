@@ -76,6 +76,17 @@ public final class DrTraceTest {
         check(r[0] == 3, "call(1,2): got " + r[0] + ", want 3");
         check(tr.insnsTotal() >= 4, "insnsTotal: got " + tr.insnsTotal() + ", want >= 4");
 
+        long[] insns = tr.insnOffsets();
+        long[] wantInsns = {0x0, 0x3, 0x6, 0xc, 0x11};
+        check(java.util.Arrays.equals(insns, wantInsns),
+            "insnOffsets: got " + java.util.Arrays.toString(insns)
+                + ", want " + java.util.Arrays.toString(wantInsns));
+
+        long[] blocks = tr.blockOffsets();
+        boolean hasZero = false;
+        for (long b : blocks) if (b == 0) { hasZero = true; break; }
+        check(hasZero, "blockOffsets: " + java.util.Arrays.toString(blocks) + " does not contain 0");
+
         tr.unregister("add2i");
         code.free();
         tr.free();
