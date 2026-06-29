@@ -15,8 +15,11 @@ Four backends share one API, selected by enum:
   self-skip off the specific bare-metal hardware they need.
 
 ``HwTrace.available(backend)`` reports whether the chosen backend can run so
-callers self-skip cleanly. The module loads ``libasmtest_hwtrace`` (resolved from
-``$ASMTEST_HWTRACE_LIB``, else the repo ``build/``); nothing here links a decoder.
+callers self-skip cleanly. ``HwTrace.auto(policy)`` / ``HwTrace.resolve(policy)``
+pick the most faithful available backend for the host without hard-coding an enum
+(the hardware-tier fallback cascade — see ``docs/native-tracing.md``). The module
+loads ``libasmtest_hwtrace`` (resolved from ``$ASMTEST_HWTRACE_LIB``, else the repo
+``build/``); nothing here links a decoder.
 
 Example::
 
@@ -40,12 +43,18 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 ASMTEST_HW_OK = 0
+ASMTEST_HW_EUNAVAIL = -3  # no hardware-trace backend available on this host
 
 # asmtest_trace_backend_t
 INTEL_PT = 0
 CORESIGHT = 1
 AMD_LBR = 2
 SINGLESTEP = 3
+
+# asmtest_hwtrace_policy_t — backend auto-selection policy
+BEST = 0          # the most faithful available backend
+CEILING_FREE = 1  # the same, but skipping the one fixed-window backend (AMD LBR);
+                  # re-resolve under this after a trace comes back truncated
 
 
 class _Options(C.Structure):
@@ -87,6 +96,10 @@ def _declare(lib):
     lib.asmtest_hwtrace_available.argtypes = [ci]
     lib.asmtest_hwtrace_available.restype = ci
     lib.asmtest_hwtrace_skip_reason.argtypes = [ci, cc, sz]
+    lib.asmtest_hwtrace_resolve.argtypes = [ci, C.POINTER(ci), sz]
+    lib.asmtest_hwtrace_resolve.restype = sz
+    lib.asmtest_hwtrace_auto.argtypes = [ci]
+    lib.asmtest_hwtrace_auto.restype = ci
     lib.asmtest_hwtrace_init.argtypes = [C.POINTER(_Options)]
     lib.asmtest_hwtrace_init.restype = ci
     lib.asmtest_hwtrace_register_region.argtypes = [cc, v, sz, v]
@@ -204,6 +217,23 @@ class HwTrace:
         buf = C.create_string_buffer(160)
         _get().asmtest_hwtrace_skip_reason(backend, buf, len(buf))
         return buf.value.decode()
+
+    @staticmethod
+    def resolve(policy=BEST) -> list:
+        """This host's hardware-trace fallback cascade: the available backends,
+        most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
+        ``policy``. Empty only off x86-64 Linux (single-step is the floor there).
+        ``CEILING_FREE`` drops the depth-bounded backend (AMD LBR)."""
+        out = (C.c_int * 4)()
+        n = _get().asmtest_hwtrace_resolve(policy, out, len(out))
+        return [out[i] for i in range(n)]
+
+    @staticmethod
+    def auto(policy=BEST) -> int:
+        """The single most-preferred available backend under ``policy`` (a backend
+        enum >= 0, ready to ``init``), or ``ASMTEST_HW_EUNAVAIL`` (< 0) when no
+        hardware-trace backend is available on this host."""
+        return int(_get().asmtest_hwtrace_auto(policy))
 
     @classmethod
     def init(cls, backend=SINGLESTEP):

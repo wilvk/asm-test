@@ -46,12 +46,20 @@ public final class HwTrace {
 
     /** ASMTEST_HW_OK — the success status returned by the lifecycle/registration calls. */
     public static final int ASMTEST_HW_OK = 0;
+    /** ASMTEST_HW_EUNAVAIL — {@link #auto(int)} returns this when no backend is available. */
+    public static final int ASMTEST_HW_EUNAVAIL = -3;
 
     // asmtest_trace_backend_t — the SINGLESTEP backend is the portable default.
     public static final int INTEL_PT = 0;
     public static final int CORESIGHT = 1;
     public static final int AMD_LBR = 2;
     public static final int SINGLESTEP = 3;
+
+    // asmtest_hwtrace_policy_t — backend auto-selection policy. BEST is the most
+    // faithful available backend; CEILING_FREE drops the one fixed-window backend
+    // (AMD LBR) — re-resolve under it after a trace comes back truncated.
+    public static final int BEST = 0;
+    public static final int CEILING_FREE = 1;
 
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
@@ -70,7 +78,8 @@ public final class HwTrace {
         ADDRESS.withName("object_hint"));
 
     // Resolved when the library loads; null when it can't (then available() == false).
-    private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_INIT, HW_SHUTDOWN,
+    private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
+        HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT;
@@ -91,7 +100,8 @@ public final class HwTrace {
     }
 
     static {
-        MethodHandle hwAvailable = null, hwSkipReason = null, hwInit = null, hwShutdown = null,
+        MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
+            hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
@@ -102,6 +112,11 @@ public final class HwTrace {
             hwAvailable = h(lib, "asmtest_hwtrace_available", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
             hwSkipReason = h(lib, "asmtest_hwtrace_skip_reason",
                 FunctionDescriptor.ofVoid(JAVA_INT, ADDRESS, JAVA_LONG));
+            // asmtest_hwtrace_resolve(policy, out, cap) — writes cap backend ints into out,
+            // returns the count (size_t); asmtest_hwtrace_auto(policy) — the single best int.
+            hwResolve = h(lib, "asmtest_hwtrace_resolve",
+                FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
+            hwAuto = h(lib, "asmtest_hwtrace_auto", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
             hwInit = h(lib, "asmtest_hwtrace_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             hwShutdown = h(lib, "asmtest_hwtrace_shutdown", FunctionDescriptor.ofVoid());
             registerRegion = h(lib, "asmtest_hwtrace_register_region",
@@ -135,7 +150,8 @@ public final class HwTrace {
             // rather than failing class init.
             loadError = t;
         }
-        HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_INIT = hwInit;
+        HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
+        HW_AUTO = hwAuto; HW_INIT = hwInit;
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
@@ -186,6 +202,31 @@ public final class HwTrace {
 
     /** Convenience: skip reason for the SINGLESTEP default. */
     public static String skipReason() { return skipReason(SINGLESTEP); }
+
+    /** This host's hardware-trace fallback cascade: the available backend enums,
+     *  most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
+     *  {@code policy}. Empty only off x86-64 Linux (single-step is the floor there).
+     *  {@code CEILING_FREE} drops the depth-bounded backend (AMD LBR). */
+    public static int[] resolve(int policy) {
+        if (HW_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try {
+            MemorySegment out = ARENA.allocate(JAVA_INT, 4); // up to 4 backend ints
+            int n = (int) (long) HW_RESOLVE.invoke(policy, out, 4L);
+            int[] backends = new int[n];
+            for (int i = 0; i < n; i++) backends[i] = out.getAtIndex(JAVA_INT, i);
+            return backends;
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The single most-preferred available backend enum under {@code policy} (>= 0,
+     *  ready to {@link #init(int)}), or {@link #ASMTEST_HW_EUNAVAIL} (-3) when no
+     *  hardware-trace backend is available on this host. */
+    public static int auto(int policy) {
+        if (HW_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try { return (int) HW_AUTO.invoke(policy); }
+        catch (Throwable t) { throw rethrow(t); }
+    }
 
     /** Diagnostic for why the library failed to load, or null if it loaded. */
     public static Throwable loadError() { return LOAD_ERROR; }

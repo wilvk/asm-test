@@ -13,7 +13,10 @@
 //     NODE_PATH=$(npm root -g) node test_hwtrace.js
 'use strict';
 const assert = require('assert');
-const { HwTrace, NativeCode, SINGLESTEP } = require('./hwtrace');
+const {
+  HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
+  BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+} = require('./hwtrace');
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 const ROUTINE = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
@@ -37,6 +40,29 @@ function ok(cond, msg) {
 }
 
 function main() {
+  // --- auto-select orchestrator: selection invariants (hold on every host, even
+  //     where all backends self-skip and the cascade is empty) ---
+  {
+    const best = HwTrace.resolve(BEST);
+    const cf = HwTrace.resolve(CEILING_FREE);
+
+    // Every resolved backend is actually available, ordered by descending fidelity
+    // (ascending enum), with no duplicates.
+    ok(best.every((b) => HwTrace.available(b)), 'resolve(BEST) returns only available backends');
+    let ordered = true;
+    for (let i = 1; i < best.length; i++) if (best[i] <= best[i - 1]) ordered = false;
+    ok(ordered, 'resolve(BEST) is ordered by descending fidelity, no dups');
+
+    // CEILING_FREE drops the one fixed-window backend (AMD LBR) and is otherwise a
+    // subset of BEST.
+    ok(!cf.includes(AMD_LBR), 'resolve(CEILING_FREE) never selects AMD LBR');
+    ok(cf.every((b) => best.includes(b)), 'resolve(CEILING_FREE) is a subset of resolve(BEST)');
+
+    // auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
+    const ab = HwTrace.auto(BEST);
+    ok(ab === (best.length ? best[0] : ASMTEST_HW_EUNAVAIL), 'auto(BEST) is the head of resolve(BEST)');
+  }
+
   if (!HwTrace.available(SINGLESTEP)) {
     console.log(`# SKIP single-step backend unavailable: ${HwTrace.skipReason(SINGLESTEP)}`);
     process.exit(0);
@@ -86,6 +112,37 @@ function main() {
     }
   } finally {
     HwTrace.shutdown();
+  }
+
+  // --- auto-select orchestrator: live trace through whatever auto picked. On any
+  //     x86-64 Linux host the cascade is non-empty (single-step floor), so auto()
+  //     resolves a usable backend. Own init/shutdown (single global lifecycle). ---
+  {
+    const best = HwTrace.resolve(BEST);
+    const pick = HwTrace.auto(BEST);
+    ok(best.length > 0 && pick >= 0, 'auto resolves a backend (single-step floor)');
+
+    HwTrace.init(pick);
+    try {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+      tr.register('auto', code);
+
+      let r;
+      tr.region('auto', () => { r = code.call(20, 22); });
+
+      ok(Number(r) === 42, 'auto-selected backend traces a live call (returns 42)');
+      ok(tr.covered(0), 'auto-selected backend covers block offset 0');
+      if (pick === SINGLESTEP) { // the pick off PT/AMD hosts: byte-exact parity
+        assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
+        ok(true, 'auto pick (single-step) yields offsets [0, 3, 6, 12, 17]');
+      }
+
+      code.free();
+      tr.free();
+    } finally {
+      HwTrace.shutdown();
+    }
   }
 
   if (_failed) {

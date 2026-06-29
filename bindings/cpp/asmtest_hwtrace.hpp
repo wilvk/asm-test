@@ -59,6 +59,15 @@ enum Backend {
     SINGLESTEP = ASMTEST_HWTRACE_SINGLESTEP,
 };
 
+/* asmtest_hwtrace_policy_t values for HwTrace::resolve()/auto_select(). BEST is
+ * the most faithful available backend; CEILING_FREE additionally skips the one
+ * fixed-window backend (AMD LBR) and is what you re-resolve under after a trace
+ * comes back truncated. */
+enum Policy {
+    BEST = ASMTEST_HWTRACE_BEST,
+    CEILING_FREE = ASMTEST_HWTRACE_CEILING_FREE,
+};
+
 namespace detail {
 
 /* The C symbols of libasmtest_hwtrace, resolved once via dlsym. Mirrors the
@@ -70,6 +79,8 @@ struct HwApi {
 
     int (*available)(int) = nullptr;
     void (*skip_reason)(int, char *, size_t) = nullptr;
+    size_t (*resolve)(int, asmtest_trace_backend_t *, size_t) = nullptr;
+    int (*hwauto)(int) = nullptr;
     int (*init)(const asmtest_hwtrace_options_t *) = nullptr;
     int (*register_region)(const char *, void *, size_t, void *) = nullptr;
     void (*begin)(const char *) = nullptr;
@@ -128,6 +139,8 @@ inline HwApi &api() {
         bool ok = true;
         ok &= dlsym_into(h, "asmtest_hwtrace_available", t.available);
         ok &= dlsym_into(h, "asmtest_hwtrace_skip_reason", t.skip_reason);
+        ok &= dlsym_into(h, "asmtest_hwtrace_resolve", t.resolve);
+        ok &= dlsym_into(h, "asmtest_hwtrace_auto", t.hwauto);
         ok &= dlsym_into(h, "asmtest_hwtrace_init", t.init);
         ok &= dlsym_into(h, "asmtest_hwtrace_register_region",
                          t.register_region);
@@ -303,6 +316,34 @@ class HwTrace {
         char buf[256] = {0};
         a.skip_reason(backend, buf, sizeof(buf));
         return std::string(buf);
+    }
+
+    /// This host's hardware-trace fallback cascade: the available backends,
+    /// most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
+    /// `policy`. Empty only off x86-64 Linux (single-step is the floor there) or
+    /// when the library is missing. CEILING_FREE drops the depth-bounded backend
+    /// (AMD LBR).
+    static std::vector<int> resolve(int policy = BEST) {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return {};
+        asmtest_trace_backend_t out[4];
+        std::size_t n = a.resolve(policy, out, 4);
+        std::vector<int> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = static_cast<int>(out[i]);
+        return v;
+    }
+
+    /// The single most-preferred available backend under `policy` (a backend enum
+    /// >= 0, ready to init()), or ASMTEST_HW_EUNAVAIL (< 0) when no hardware-trace
+    /// backend is available on this host. (`auto` is a keyword, so this is
+    /// `auto_select`.)
+    static int auto_select(int policy = BEST) {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return ASMTEST_HW_EUNAVAIL;
+        return a.hwauto(policy);
     }
 
     /// Select a backend and initialize the tier. SINGLESTEP is the portable

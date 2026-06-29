@@ -7,7 +7,10 @@ self-skipping only off x86-64 Linux or without Capstone.
 """
 import pytest
 
-from asmtest.hwtrace import HwTrace, NativeCode, SINGLESTEP
+from asmtest.hwtrace import (
+    HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
+    BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+)
 
 # mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two blocks)
 ROUTINE = bytes(
@@ -64,3 +67,51 @@ def test_singlestep_loop_no_depth_ceiling(hwtrace):
 
     trace.free()
     code.free()
+
+
+def test_auto_resolve_selection_invariants():
+    """The orchestrator's selection invariants hold on every host (even where all
+    backends self-skip and the cascade is empty)."""
+    best = HwTrace.resolve(BEST)
+    cf = HwTrace.resolve(CEILING_FREE)
+
+    # Every resolved backend is actually available, ordered by descending fidelity
+    # (ascending enum), with no duplicates.
+    assert all(HwTrace.available(b) for b in best)
+    assert best == sorted(set(best))
+
+    # CEILING_FREE drops the one fixed-window backend (AMD LBR) and is otherwise a
+    # subset of BEST.
+    assert AMD_LBR not in cf
+    assert set(cf).issubset(set(best))
+
+    # auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
+    ab = HwTrace.auto(BEST)
+    assert ab == (best[0] if best else ASMTEST_HW_EUNAVAIL)
+
+
+def test_auto_resolve_traces_live():
+    """On any x86-64 Linux host the cascade is non-empty (single-step floor), so
+    auto() resolves a usable backend; trace the shared fixture through it."""
+    if not HwTrace.available(SINGLESTEP):
+        pytest.skip(f"single-step backend unavailable: {HwTrace.skip_reason(SINGLESTEP)}")
+
+    best = HwTrace.resolve(BEST)
+    ab = HwTrace.auto(BEST)
+    assert best and ab >= 0  # single-step keeps the cascade non-empty here
+
+    HwTrace.init(ab)
+    try:
+        code = NativeCode.from_bytes(ROUTINE)
+        trace = HwTrace.new(blocks=64, instructions=64)
+        trace.register("auto", code)
+        with trace.region("auto"):
+            result = code.call(20, 22)
+        assert result == 42
+        assert trace.covered(0)
+        if ab == SINGLESTEP:  # the pick off PT/AMD hosts: byte-exact parity
+            assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xC, 0x11]
+        trace.free()
+        code.free()
+    finally:
+        HwTrace.shutdown()

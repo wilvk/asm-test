@@ -19,6 +19,11 @@ const std = @import("std");
 const hwtrace = @import("hwtrace.zig");
 
 const SINGLESTEP = hwtrace.SINGLESTEP;
+const BEST = hwtrace.BEST;
+const CEILING_FREE = hwtrace.CEILING_FREE;
+const AMD_LBR = @intFromEnum(hwtrace.Backend.amd_lbr);
+const SINGLESTEP_ENUM = @intFromEnum(hwtrace.Backend.singlestep);
+const ASMTEST_HW_EUNAVAIL = hwtrace.ASMTEST_HW_EUNAVAIL;
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 const ROUTINE = [_]u8{
@@ -48,12 +53,74 @@ fn callBody(code: *const hwtrace.NativeCode, a: c_long, b: c_long) void {
     g_result = code.call(a, b);
 }
 
+// The orchestrator's selection invariants hold on EVERY host (even where all
+// backends self-skip and the cascade is empty), so this runs before the skip
+// guard. Mirrors Python's `test_auto_resolve_selection_invariants`.
+fn checkAutoResolveInvariants() Failure!void {
+    const best = hwtrace.resolve(BEST).slice();
+    const cf = hwtrace.resolve(CEILING_FREE).slice();
+
+    // Every resolved backend is actually available, ordered by descending fidelity
+    // (ascending enum), with no duplicates.
+    for (best, 0..) |b, i| {
+        try check(hwtrace.available(@enumFromInt(b)), "resolve(BEST) entry is available");
+        if (i != 0) try check(b > best[i - 1], "resolve(BEST) strictly ascending, no dups");
+    }
+
+    // CEILING_FREE drops the one fixed-window backend (AMD LBR) and is otherwise a
+    // subset of BEST.
+    for (cf) |c| {
+        try check(c != AMD_LBR, "resolve(CEILING_FREE) never selects AMD LBR");
+        try check(std.mem.indexOfScalar(c_int, best, c) != null,
+            "resolve(CEILING_FREE) is a subset of resolve(BEST)");
+    }
+
+    // auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
+    const ab = hwtrace.auto(BEST);
+    const want = if (best.len == 0) ASMTEST_HW_EUNAVAIL else best[0];
+    try check(ab == want, "auto(BEST) is the head of the resolved cascade");
+}
+
 pub fn main() !void {
+    try checkAutoResolveInvariants();
+
     if (!hwtrace.available(SINGLESTEP)) {
         var buf: [192]u8 = undefined;
         const reason = hwtrace.skipReason(SINGLESTEP, &buf);
         std.debug.print("# SKIP: single-step backend unavailable: {s}\n", .{reason});
         return; // exit 0
+    }
+
+    const alloc = std.heap.page_allocator;
+
+    // ---- live trace via auto-select: trace the shared fixture through whatever
+    // auto picked (its own init/shutdown — single global lifecycle). Mirrors
+    // Python's `test_auto_resolve_traces_live`. On any x86-64 Linux host the cascade
+    // is non-empty (single-step floor), so auto() resolves a usable backend. ---- //
+    {
+        const best = hwtrace.resolve(BEST).slice();
+        const ab = hwtrace.auto(BEST);
+        try check(best.len != 0 and ab >= 0, "auto resolves a backend (single-step floor)");
+
+        try hwtrace.init(@enumFromInt(ab));
+        defer hwtrace.shutdown();
+
+        var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer code.free();
+        var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
+        defer tr.free();
+        try tr.register("auto", &code);
+
+        tr.region("auto", .{ &code, @as(c_long, 20), @as(c_long, 22) }, callBody);
+        try check(g_result == 42, "auto-selected backend traces a live call (returns 42)");
+        try check(tr.covered(0), "auto-selected backend covers block offset 0");
+
+        if (ab == SINGLESTEP_ENUM) { // the pick off PT/AMD hosts: byte-exact parity
+            const insns = try tr.insnOffsets(alloc);
+            defer alloc.free(insns);
+            try check(std.mem.eql(u64, insns, &[_]u64{ 0x0, 0x3, 0x6, 0xC, 0x11 }),
+                "auto pick (single-step) yields the exact shared offset stream");
+        }
     }
 
     hwtrace.init(SINGLESTEP) catch |e| {
@@ -63,8 +130,6 @@ pub fn main() !void {
         return;
     };
     defer hwtrace.shutdown();
-
-    const alloc = std.heap.page_allocator;
 
     // ---- routine: two blocks, full instruction stream ---- //
     {

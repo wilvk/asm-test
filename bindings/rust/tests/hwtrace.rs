@@ -11,7 +11,7 @@
 //! Run: `ASMTEST_HWTRACE_LIB=<repo>/build/libasmtest_hwtrace.so \
 //!       cargo test --test hwtrace -- --nocapture`
 
-use asmtest::hwtrace::{Backend, HwTrace, NativeCode};
+use asmtest::hwtrace::{Backend, HwTrace, NativeCode, Policy, ASMTEST_HW_EUNAVAIL};
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
 const ROUTINE: [u8; 18] = [
@@ -80,4 +80,96 @@ fn singlestep_live_trace() {
 
     HwTrace::shutdown();
     eprintln!("# PASS: single-step hardware-trace wrapper (routine + loop)");
+}
+
+#[test]
+fn auto_resolve_selection_invariants() {
+    // The orchestrator's selection invariants hold on every host (even where all
+    // backends self-skip and the cascade is empty).
+    let best = HwTrace::resolve(Policy::Best);
+    let cf = HwTrace::resolve(Policy::CeilingFree);
+
+    // Every resolved backend is actually available, ordered by descending fidelity
+    // (ascending enum), with no duplicates.
+    assert!(
+        best.iter().all(|&b| HwTrace::available(backend_of(b))),
+        "resolve(BEST) returns only available backends"
+    );
+    let mut sorted_deduped = best.clone();
+    sorted_deduped.sort_unstable();
+    sorted_deduped.dedup();
+    assert_eq!(best, sorted_deduped, "resolve(BEST) is ascending enum order, no dups");
+
+    // CEILING_FREE drops the one fixed-window backend (AMD LBR) and is otherwise a
+    // subset of BEST.
+    assert!(
+        !cf.contains(&(Backend::AmdLbr as i32)),
+        "resolve(CEILING_FREE) never selects AMD LBR"
+    );
+    assert!(
+        cf.iter().all(|b| best.contains(b)),
+        "resolve(CEILING_FREE) is a subset of resolve(BEST)"
+    );
+
+    // auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
+    let ab = HwTrace::auto(Policy::Best);
+    let expect = best.first().copied().unwrap_or(ASMTEST_HW_EUNAVAIL);
+    assert_eq!(ab, expect, "auto(BEST) is the head of the resolved cascade");
+}
+
+#[test]
+fn auto_resolve_traces_live() {
+    // On any x86-64 Linux host the cascade is non-empty (single-step floor), so
+    // auto() resolves a usable backend; trace the shared fixture through it. Guard
+    // exactly like singlestep_live_trace so we self-skip off the single-step floor.
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step hardware-trace backend unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+
+    let best = HwTrace::resolve(Policy::Best);
+    let ab = HwTrace::auto(Policy::Best);
+    assert!(!best.is_empty() && ab >= 0, "single-step keeps the cascade non-empty here");
+
+    // The tier is a single global lifecycle, so this section owns its own
+    // init/shutdown rather than nesting inside another active region.
+    HwTrace::init(backend_of(ab)).expect("hwtrace init (auto)");
+    {
+        let code = NativeCode::from_bytes(&ROUTINE);
+        let tr = HwTrace::new_trace(64, 64);
+        tr.register("auto", &code).expect("register auto");
+
+        let result = {
+            let _r = tr.region("auto");
+            code.call(20, 22)
+        };
+
+        assert_eq!(result, 42, "auto-selected backend traces a live call");
+        assert!(tr.covered(0), "auto-selected backend covers block offset 0");
+        if ab == Backend::Singlestep as i32 {
+            // The pick off PT/AMD hosts: byte-exact parity with the shared fixture.
+            assert_eq!(
+                tr.insn_offsets(),
+                vec![0x0, 0x3, 0x6, 0xC, 0x11],
+                "auto pick (single-step) yields the exact shared offset stream"
+            );
+        }
+    }
+    HwTrace::shutdown();
+    eprintln!("# PASS: auto-selected hardware-trace wrapper (live trace)");
+}
+
+/// Map a resolved backend enum int (from [`HwTrace::resolve`] / [`HwTrace::auto`])
+/// back to a [`Backend`] for the enum-typed wrapper entries (`available`, `init`).
+fn backend_of(b: i32) -> Backend {
+    match b {
+        0 => Backend::IntelPt,
+        1 => Backend::CoreSight,
+        2 => Backend::AmdLbr,
+        3 => Backend::Singlestep,
+        other => panic!("unexpected backend enum {other}"),
+    }
 }

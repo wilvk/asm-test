@@ -462,12 +462,25 @@ x86-64 Linux (and non-CoreSight). On this Zen 2 dev box `auto(BEST)` resolves to
 single-step (PT/AMD LBR self-skip); on a bare-metal Intel host it resolves to Intel
 PT; on a Zen 3/4 host to AMD LBR, with `CEILING_FREE` falling to single-step.
 
+**Every language wrapper exposes it too.** Alongside `available`/`init`, each
+binding's `HwTrace` surfaces `resolve(policy)` (the available cascade, as a
+list/array of backend enums) and `auto(policy)` (the single best pick, or
+`ASMTEST_HW_EUNAVAIL` when none), with `BEST` / `CEILING_FREE` policy constants —
+so a Python/Rust/Go/… caller picks the host's most-faithful backend without
+hard-coding an enum, exactly as the C API does. The names are idiomatic per language
+(C++ uses `auto_select`, since `auto` is a keyword; Rust/C# expose a `Policy` enum
+rather than loose constants), but map one-to-one onto `asmtest_hwtrace_resolve` /
+`asmtest_hwtrace_auto`. Each wrapper's hwtrace self-test asserts the selection
+invariants (only-available, descending-fidelity order, `CEILING_FREE` ⊆ `BEST` and
+excludes AMD LBR, `auto` == head) and, where single-step is available, runs a live
+traced call through the auto-picked backend.
+
 **Scope.** This orchestrates the *hardware tier's own* backends — one library, one
 API. The DynamoRIO tier (`libasmtest_drapp`) and the Unicorn emulator are separate
 libraries with their own call APIs, and a fall to the emulator crosses a fidelity
 line (real CPU → isolated guest). So extending the cascade across tiers stays an
-explicit, fidelity-aware caller decision rather than an automatic last resort; the
-front-end is the C API today (the language wrappers can adopt it next).
+explicit, fidelity-aware caller decision rather than an automatic last resort — the
+cross-tier `asmtest_trace_auto(...)` front-end remains a deliberate follow-up.
 
 ---
 

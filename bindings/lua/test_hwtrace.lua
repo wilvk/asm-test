@@ -15,6 +15,10 @@ local hwtrace = require("hwtrace")
 local HwTrace = hwtrace.HwTrace
 local NativeCode = hwtrace.NativeCode
 local SINGLESTEP = hwtrace.SINGLESTEP
+local AMD_LBR = hwtrace.AMD_LBR
+local BEST = hwtrace.BEST
+local CEILING_FREE = hwtrace.CEILING_FREE
+local ASMTEST_HW_EUNAVAIL = hwtrace.ASMTEST_HW_EUNAVAIL
 
 -- mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 local ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
@@ -62,6 +66,43 @@ if not HwTrace.available(SINGLESTEP) then
   print("# SKIP single-step hardware-trace tier unavailable: "
         .. HwTrace.skip_reason(SINGLESTEP))
   os.exit(0)
+end
+
+-- test_auto_resolve_selection_invariants — the orchestrator's selection invariants
+-- hold on every host (here, every x86-64 Linux host past the skip guard); they need
+-- no initialized tier, so assert them before the global single-step lifecycle.
+do
+  local best = HwTrace.resolve(BEST)
+  local cf = HwTrace.resolve(CEILING_FREE)
+
+  -- Every resolved backend is actually available, in descending-fidelity
+  -- (ascending-enum) order, with no duplicates.
+  local avail, order = true, true
+  for i = 1, #best do
+    if not HwTrace.available(best[i]) then avail = false end
+    if i > 1 and best[i] <= best[i - 1] then order = false end
+  end
+  ok(avail, "auto BEST returns only available backends")
+  ok(order, "auto BEST is ordered by descending fidelity, no dups")
+
+  -- CEILING_FREE drops the one fixed-window backend (AMD LBR) and is otherwise a
+  -- subset of BEST.
+  local no_amd, subset = true, true
+  for i = 1, #cf do
+    if cf[i] == AMD_LBR then no_amd = false end
+    local in_best = false
+    for j = 1, #best do
+      if best[j] == cf[i] then in_best = true end
+    end
+    if not in_best then subset = false end
+  end
+  ok(no_amd, "auto CEILING_FREE never selects AMD LBR (16-branch window)")
+  ok(subset, "auto CEILING_FREE is a subset of BEST")
+
+  -- auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
+  local ab = HwTrace.auto(BEST)
+  eq(ab, #best > 0 and best[1] or ASMTEST_HW_EUNAVAIL,
+     "auto(BEST) is the head of the resolved cascade")
 end
 
 local init_ok, err = pcall(HwTrace.init, SINGLESTEP)
@@ -113,6 +154,35 @@ do
 end
 
 HwTrace.shutdown()
+
+-- test_auto_resolve_traces_live — on any x86-64 Linux host the cascade is non-empty
+-- (single-step floor), so auto() resolves a usable backend; trace the shared ROUTINE
+-- fixture through whatever it picked. Owns its own init/shutdown (one tier at a time)
+-- now that the global single-step lifecycle above is done.
+do
+  local best = HwTrace.resolve(BEST)
+  local ab = HwTrace.auto(BEST)
+  ok(#best > 0 and ab >= 0, "auto resolves a backend (single-step floor)")
+
+  HwTrace.init(ab)
+  local code = NativeCode.from_bytes(ROUTINE)
+  local tr = HwTrace.create(64, 64)
+  tr:register("auto", code)
+
+  local result
+  tr:region("auto", function() result = code:call(20, 22) end)
+
+  eq(result, 42, "auto: call(20,22) == 42")
+  ok(tr:covered(0), "auto: covered(0)")
+  if ab == SINGLESTEP then  -- the pick off PT/AMD hosts: byte-exact parity
+    list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
+            "auto (single-step): insn_offsets == {0,3,6,12,17}")
+  end
+
+  tr:free()
+  code:free()
+  HwTrace.shutdown()
+end
 
 print(string.format("# %d tests, %d failed", count, failed))
 os.exit(failed == 0 and 0 or 1)

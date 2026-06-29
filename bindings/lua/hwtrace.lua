@@ -24,6 +24,8 @@ ffi.cdef([[
 typedef struct { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; } asmtest_hwtrace_options_t;
 int  asmtest_hwtrace_available(int backend);
 void asmtest_hwtrace_skip_reason(int backend, char* buf, size_t buflen);
+size_t asmtest_hwtrace_resolve(int policy, int* out, size_t cap);
+int  asmtest_hwtrace_auto(int policy);
 int  asmtest_hwtrace_init(const asmtest_hwtrace_options_t* opts);
 int  asmtest_hwtrace_register_region(const char* name, void* base, size_t len, void* trace);
 void asmtest_hwtrace_begin(const char* name);
@@ -43,6 +45,7 @@ uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
 ]])
 
 local ASMTEST_HW_OK = 0
+local ASMTEST_HW_EUNAVAIL = -3  -- no hardware-trace backend available on this host
 
 -- asmtest_trace_backend_t. SINGLESTEP is the portable default that runs on any
 -- x86-64 Linux; the rest self-skip off their specific bare-metal hardware.
@@ -50,6 +53,11 @@ local INTEL_PT = 0
 local CORESIGHT = 1
 local AMD_LBR = 2
 local SINGLESTEP = 3
+
+-- asmtest_hwtrace_policy_t — backend auto-selection policy.
+local BEST = 0          -- the most faithful available backend
+local CEILING_FREE = 1  -- the same, but skipping the one fixed-window backend
+                        -- (AMD LBR); re-resolve under this after a truncated trace
 
 -- Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 -- build); otherwise fall back to <repo>/build/ next to this binding. This file
@@ -73,6 +81,9 @@ M.INTEL_PT = INTEL_PT
 M.CORESIGHT = CORESIGHT
 M.AMD_LBR = AMD_LBR
 M.SINGLESTEP = SINGLESTEP
+M.BEST = BEST
+M.CEILING_FREE = CEILING_FREE
+M.ASMTEST_HW_EUNAVAIL = ASMTEST_HW_EUNAVAIL
 
 -- ---- Host-native machine code in real executable (W^X) memory ----
 local NativeCode = {}
@@ -130,6 +141,30 @@ function HwTrace.skip_reason(backend)
   local buf = ffi.new("char[?]", 160)
   L.asmtest_hwtrace_skip_reason(backend or SINGLESTEP, buf, 160)
   return ffi.string(buf)
+end
+
+-- This host's hardware-trace fallback cascade: the available backends, most-
+-- faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`
+-- (default BEST), as a 1-based Lua array of backend ints. Empty only off x86-64
+-- Linux (single-step is the floor there). CEILING_FREE drops the depth-bounded
+-- backend (AMD LBR).
+function HwTrace.resolve(policy)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local out = ffi.new("int[4]")
+  local n = tonumber(L.asmtest_hwtrace_resolve(policy or BEST, out, 4))
+  local t = {}
+  for i = 0, n - 1 do
+    t[i + 1] = out[i]
+  end
+  return t
+end
+
+-- The single most-preferred available backend under `policy` (default BEST), as a
+-- backend enum >= 0 ready to init, or ASMTEST_HW_EUNAVAIL (< 0) when no hardware-
+-- trace backend is available on this host.
+function HwTrace.auto(policy)
+  assert(L, "libasmtest_hwtrace not loaded")
+  return tonumber(L.asmtest_hwtrace_auto(policy or BEST))
 end
 
 -- Select a backend and initialize the tier. SINGLESTEP is the portable default

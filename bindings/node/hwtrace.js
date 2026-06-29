@@ -37,11 +37,18 @@ const path = require('path');
 
 const ASMTEST_HW_OK = 0;
 
+const ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available on this host
+
 // asmtest_trace_backend_t
 const INTEL_PT = 0;
 const CORESIGHT = 1;
 const AMD_LBR = 2;
 const SINGLESTEP = 3;
+
+// asmtest_hwtrace_policy_t — backend auto-selection policy
+const BEST = 0;         // the most faithful available backend
+const CEILING_FREE = 1; // the same, but skipping the one fixed-window backend (AMD
+                        // LBR); re-resolve under this after a trace comes back truncated
 
 // Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 // build); otherwise fall back to the build/ tree next to the repo root. The tier
@@ -88,6 +95,8 @@ let _loadError = null;
   _fn = {
     available: lib.func('int asmtest_hwtrace_available(int)'),
     skipReason: lib.func('void asmtest_hwtrace_skip_reason(int, _Out_ char*, size_t)'),
+    resolve: lib.func('size_t asmtest_hwtrace_resolve(int, _Out_ int*, size_t)'),
+    auto: lib.func('int asmtest_hwtrace_auto(int)'),
     init: lib.func('int asmtest_hwtrace_init(const asmtest_hwtrace_options_t*)'),
     registerRegion: lib.func('int asmtest_hwtrace_register_region(const char*, void*, size_t, void*)'),
     begin: lib.func('void asmtest_hwtrace_begin(const char*)'),
@@ -174,6 +183,25 @@ class HwTrace {
     return buf.toString('utf8', 0, nul < 0 ? buf.length : nul);
   }
 
+  /** This host's hardware-trace fallback cascade: the available backends, most-
+   *  faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`.
+   *  Empty only off x86-64 Linux (single-step is the floor there). CEILING_FREE
+   *  drops the depth-bounded backend (AMD LBR). Returns an array of backend ints. */
+  static resolve(policy = BEST) {
+    const out = Buffer.alloc(4 * 4); // up to 4 int32 backend enums
+    const n = Number(_fn.resolve(policy, out, 4));
+    const cascade = new Array(n);
+    for (let i = 0; i < n; i++) cascade[i] = out.readInt32LE(i * 4);
+    return cascade;
+  }
+
+  /** The single most-preferred available backend under `policy` (a backend enum
+   *  >= 0, ready to init()), or ASMTEST_HW_EUNAVAIL (< 0) when no hardware-trace
+   *  backend is available on this host. */
+  static auto(policy = BEST) {
+    return _fn.auto(policy);
+  }
+
   /** Select a backend and initialize the tier. SINGLESTEP is the portable default
    *  that runs on any x86-64 Linux. Throws on a nonzero rc. */
   static init(backend = SINGLESTEP) {
@@ -256,5 +284,6 @@ class HwTrace {
 
 module.exports = {
   HwTrace, NativeCode,
-  ASMTEST_HW_OK, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
+  ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
+  BEST, CEILING_FREE,
 };

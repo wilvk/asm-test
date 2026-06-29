@@ -354,8 +354,11 @@ hwtrace-cpp-test: shared-hwtrace
 hwtrace-rust-test: shared-hwtrace
 	@$(MAKE) shared-emu $(CORPUS_LIB)
 	@echo "== hwtrace-rust-test =="
+	@# --test-threads=1: the single-step backend is process-global (single active
+	@# region, a global SIGTRAP handler, per-thread EFLAGS.TF), so the two live
+	@# single-step tests must run serially — concurrent stepping crashes (SIGTRAP).
 	cd bindings/rust && ASMTEST_LIB_DIR=$(abspath $(BUILD)) $(hwtrace_env) \
-	  $(CARGO) test --test hwtrace -- --nocapture
+	  $(CARGO) test --test hwtrace -- --nocapture --test-threads=1
 
 hwtrace-go-test: shared-hwtrace
 	@$(MAKE) shared-emu $(CORPUS_LIB)

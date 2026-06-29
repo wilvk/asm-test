@@ -48,6 +48,9 @@ use std::sync::OnceLock;
 
 /// `ASMTEST_HW_OK` from `asmtest_hwtrace.h`; nonzero is an error.
 const ASMTEST_HW_OK: c_int = 0;
+/// `ASMTEST_HW_EUNAVAIL` from `asmtest_hwtrace.h`: no hardware-trace backend is
+/// available on this host (the `< 0` return of [`HwTrace::auto`]).
+pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
 const RTLD_NOW: c_int = 2; // same value on Linux and macOS
 
 // The crate stays dependency-free, so the dynamic loader is reached directly
@@ -76,6 +79,18 @@ pub enum Backend {
 /// The portable default backend used by the `*_default` helpers.
 pub const DEFAULT_BACKEND: Backend = Backend::Singlestep;
 
+/// The backend auto-selection policy (mirrors `asmtest_hwtrace_policy_t`), passed
+/// to [`HwTrace::resolve`] / [`HwTrace::auto`].
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Policy {
+    /// The most faithful available backend.
+    Best = 0,
+    /// The same, but skipping the one fixed-window backend (AMD LBR); re-resolve
+    /// under this after a trace comes back truncated.
+    CeilingFree = 1,
+}
+
 /// Mirrors `asmtest_hwtrace_options_t`.
 #[repr(C)]
 struct Options {
@@ -94,6 +109,8 @@ struct Options {
 
 type AvailableFn = unsafe extern "C" fn(c_int) -> c_int;
 type SkipReasonFn = unsafe extern "C" fn(c_int, *mut c_char, usize);
+type ResolveFn = unsafe extern "C" fn(c_int, *mut c_int, usize) -> usize;
+type AutoFn = unsafe extern "C" fn(c_int) -> c_int;
 type InitFn = unsafe extern "C" fn(*const Options) -> c_int;
 type ShutdownFn = unsafe extern "C" fn();
 type RegisterRegionFn =
@@ -112,6 +129,8 @@ type TraceAtFn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
 struct HwFns {
     available: Option<AvailableFn>,
     skip_reason: Option<SkipReasonFn>,
+    resolve: Option<ResolveFn>,
+    auto: Option<AutoFn>,
     init: Option<InitFn>,
     shutdown: Option<ShutdownFn>,
     register_region: Option<RegisterRegionFn>,
@@ -176,7 +195,8 @@ fn hw_fns() -> &'static HwFns {
         if handle.is_null() {
             // No lib: every pointer stays None, available() returns false.
             return HwFns {
-                available: None, skip_reason: None, init: None, shutdown: None,
+                available: None, skip_reason: None, resolve: None, auto: None,
+                init: None, shutdown: None,
                 register_region: None, begin: None, end: None,
                 exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
@@ -204,6 +224,8 @@ fn hw_fns() -> &'static HwFns {
         HwFns {
             available: load!("asmtest_hwtrace_available", AvailableFn),
             skip_reason: load!("asmtest_hwtrace_skip_reason", SkipReasonFn),
+            resolve: load!("asmtest_hwtrace_resolve", ResolveFn),
+            auto: load!("asmtest_hwtrace_auto", AutoFn),
             init: load!("asmtest_hwtrace_init", InitFn),
             shutdown: load!("asmtest_hwtrace_shutdown", ShutdownFn),
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
@@ -371,6 +393,33 @@ impl HwTrace {
     /// [`skip_reason`](HwTrace::skip_reason) for the [`DEFAULT_BACKEND`].
     pub fn skip_reason_default() -> String {
         Self::skip_reason(DEFAULT_BACKEND)
+    }
+
+    /// This host's hardware-trace fallback cascade: the available backends (as their
+    /// `asmtest_trace_backend_t` enum values), most-faithful first
+    /// (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`. Empty only
+    /// off x86-64 Linux (single-step is the floor there) or when the lib is absent.
+    /// `CeilingFree` drops the depth-bounded backend (AMD LBR).
+    pub fn resolve(policy: Policy) -> Vec<i32> {
+        match hw_fns().resolve {
+            Some(f) => {
+                let mut out = [0i32; 4];
+                let n = unsafe { f(policy as c_int, out.as_mut_ptr(), out.len()) };
+                out[..n].to_vec()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The single most-preferred available backend under `policy` (a backend enum
+    /// `>= 0`, ready to [`init`](HwTrace::init)), or [`ASMTEST_HW_EUNAVAIL`] (`< 0`)
+    /// when no hardware-trace backend is available on this host. NOTE: `auto` is not
+    /// a Rust keyword, so this keeps the C name.
+    pub fn auto(policy: Policy) -> i32 {
+        match hw_fns().auto {
+            Some(f) => unsafe { f(policy as c_int) },
+            None => ASMTEST_HW_EUNAVAIL,
+        }
     }
 
     /// Select `backend` and initialize the tier (`asmtest_hwtrace_init` with the

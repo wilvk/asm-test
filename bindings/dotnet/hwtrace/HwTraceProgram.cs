@@ -109,10 +109,81 @@ static class HwTraceProgram
 
             tr2.Free();
             code2.Free();
+
+            // --- auto-select: selection invariants (hold on every host) --- //
+            // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
+            // only available backends in ascending-enum order with no dups;
+            // CEILING_FREE excludes AMD_LBR and is a subset of BEST; auto(BEST) is the
+            // head of resolve(BEST) (or -3 when the cascade is empty).
+            var best = HwTrace.Resolve(HwPolicy.Best);
+            var cf = HwTrace.Resolve(HwPolicy.CeilingFree);
+
+            bool okAvail = true, okOrder = true;
+            for (int i = 0; i < best.Length; i++)
+            {
+                if (!HwTrace.Available((HwBackend)best[i])) okAvail = false;
+                if (i > 0 && best[i] <= best[i - 1]) okOrder = false;
+            }
+            Check(okAvail, "auto: Resolve(Best) returns only available backends");
+            Check(okOrder, "auto: Resolve(Best) ordered by descending fidelity, no dups");
+
+            bool cfNoAmd = true, cfSubset = true;
+            foreach (int b in cf)
+            {
+                if (b == (int)HwBackend.AmdLbr) cfNoAmd = false;
+                if (Array.IndexOf(best, b) < 0) cfSubset = false;
+            }
+            Check(cfNoAmd, "auto: CeilingFree never selects AMD LBR");
+            Check(cfSubset, "auto: CeilingFree is a subset of Best");
+
+            int ab = HwTrace.Auto(HwPolicy.Best);
+            bool headOk = best.Length == 0
+                ? ab == HwNative.ASMTEST_HW_EUNAVAIL
+                : ab == best[0];
+            Check(headOk, "auto: Auto(Best) is the head of Resolve(Best)");
         }
         finally
         {
             HwTrace.Shutdown();
+        }
+
+        // --- auto-select: live trace through whatever auto picks --- //
+        // Mirrors test_auto_resolve_traces_live: single-step keeps the cascade
+        // non-empty here, so auto() resolves a usable backend. Owns its own
+        // init/shutdown (one global lifecycle, distinct from the bracket above).
+        {
+            var best = HwTrace.Resolve(HwPolicy.Best);
+            int ab = HwTrace.Auto(HwPolicy.Best);
+            Check(best.Length >= 1 && ab >= 0, "auto: resolves a backend (single-step floor)");
+
+            if (ab >= 0)
+            {
+                HwTrace.Init((HwBackend)ab);
+                try
+                {
+                    var code = NativeCode.FromBytes(ROUTINE);
+                    var tr = HwTrace.Create(blocks: 64, instructions: 64);
+                    tr.Register("auto", code);
+
+                    long r = 0;
+                    tr.Region("auto", () => { r = code.Call(20, 22); });
+                    Check(r == 42, $"auto: auto-selected backend traces a live call (got {r})");
+                    Check(tr.Covered(0), "auto: auto-selected backend covers block offset 0");
+                    if (ab == HwNative.SINGLESTEP)
+                    {
+                        var insns = tr.InsnOffsets();
+                        var wantInsns = new ulong[] { 0x0, 0x3, 0x6, 0xC, 0x11 };
+                        Check(Eq(insns, wantInsns), $"auto: single-step pick yields {Hex(wantInsns)} (got {Hex(insns)})");
+                    }
+
+                    tr.Free();
+                    code.Free();
+                }
+                finally
+                {
+                    HwTrace.Shutdown();
+                }
+            }
         }
 
         Console.WriteLine($"1..{_n}");

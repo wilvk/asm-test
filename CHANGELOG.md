@@ -33,12 +33,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     self-skip there (in-process DynamoRIO can't take over a JIT/GC runtime's
     threads — the managed-runtime limitation, where Intel PT is the recommended
     backend). Linux x86-64.
-  - **Hardware-trace tier** (`asmtest_hwtrace.h`, `libasmtest_hwtrace`): Intel PT
-    capture via `perf_event_open` + libipt decode with branch-boundary block
-    normalization; ARM CoreSight (OpenCSD) scaffold. `asmtest_hwtrace_available()`
-    encodes the full detect-and-skip chain. Targets `hwtrace-test`,
-    `shared-hwtrace`; auto-detects libipt/OpenCSD via pkg-config. Bare-metal only;
-    self-skips on AMD/VMs/CI (the common case).
+  - **Hardware-trace tier** (`asmtest_hwtrace.h`, `libasmtest_hwtrace`): four
+    backends behind one API, one `available()` gating chain, and one
+    `asmtest_trace_t` sink. **Intel PT** capture via `perf_event_open` + libipt
+    decode with branch-boundary block normalization; **AMD LBR** (Zen 3 BRS / Zen 4
+    LbrExtV2, 16-deep, exact within window then `truncated`); **ARM CoreSight**
+    (OpenCSD) scaffold; and **single-step** (`EFLAGS.TF` → `#DB`/`SIGTRAP`), the
+    portable backend that records the same exact/complete offsets on **any x86-64
+    Linux** host (Intel, any-Zen AMD, VM, CI, plain container) with no PMU,
+    perf_event, privilege, or decoder library. `asmtest_hwtrace_available()` encodes
+    the full detect-and-skip chain; the PT/AMD/CoreSight backends self-skip off the
+    bare-metal hardware they need (the common case). Targets `hwtrace-test`,
+    `shared-hwtrace`, `hwtrace-<lang>-test`, `hwtrace-bindings-test`,
+    `docker-hwtrace`, and `docker-hwtrace-bindings` (plain unprivileged container
+    lanes); auto-detects libipt/OpenCSD via pkg-config.
+  - **Hardware-tier backend auto-selection.** `asmtest_hwtrace_resolve(policy, out,
+    cap)` returns the host's available backends most-faithful first (Intel PT > AMD
+    LBR > single-step > CoreSight); `asmtest_hwtrace_auto(policy)` returns the single
+    best pick ready to `init` (or `ASMTEST_HW_EUNAVAIL`). `policy` is
+    `ASMTEST_HWTRACE_BEST` or `ASMTEST_HWTRACE_CEILING_FREE` (drops the one
+    fixed-window backend, AMD LBR — what a caller re-resolves under after a trace
+    comes back `truncated`). On any x86-64 Linux host the cascade is non-empty
+    (single-step is the floor), so `auto()` never fails there. Exposed through the C
+    API **and every language wrapper** — Python, C++, Rust, Go, Node, Java, .NET,
+    Ruby, Lua, Zig — each surfacing `resolve`/`auto` (C++ uses `auto_select`, since
+    `auto` is a keyword) with `BEST`/`CEILING_FREE` policy constants, plus a
+    per-binding self-test of the selection invariants and a live auto-picked trace.
+    Scope is the hardware tier's own backends; a cross-tier fall to DynamoRIO/the
+    emulator stays a deliberate, fidelity-aware caller decision.
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft

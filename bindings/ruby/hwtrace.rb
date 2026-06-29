@@ -40,6 +40,9 @@ module Asmtest
   module HwTrace
     # Status code shared by the lifecycle + registration calls (ASMTEST_HW_OK).
     OK = 0
+    # No hardware-trace backend available on this host (ASMTEST_HW_EUNAVAIL): what
+    # auto returns when even single-step can't run (off x86-64 Linux).
+    EUNAVAIL = -3
 
     # asmtest_trace_backend_t. SINGLESTEP is the portable default that runs on any
     # x86-64 Linux; the others self-skip off the hardware they need.
@@ -47,6 +50,12 @@ module Asmtest
     CORESIGHT  = 1
     AMD_LBR    = 2
     SINGLESTEP = 3
+
+    # asmtest_hwtrace_policy_t — the backend auto-selection policy. BEST is the most
+    # faithful available backend; CEILING_FREE is the same but skips the one
+    # fixed-window backend (AMD LBR), to re-resolve under after a truncated trace.
+    BEST         = 0
+    CEILING_FREE = 1
 
     VOIDP = Fiddle::TYPE_VOIDP
     LONG  = Fiddle::TYPE_LONG
@@ -76,6 +85,8 @@ module Asmtest
         # ---- process-wide lifecycle ----
         available:    func(LIB, "asmtest_hwtrace_available", [INT], INT),
         skip_reason:  func(LIB, "asmtest_hwtrace_skip_reason", [INT, VOIDP, SZ], VOID),
+        resolve:      func(LIB, "asmtest_hwtrace_resolve", [INT, VOIDP, SZ], SZ),
+        auto:         func(LIB, "asmtest_hwtrace_auto", [INT], INT),
         init:         func(LIB, "asmtest_hwtrace_init", [VOIDP], INT),
         shutdown:     func(LIB, "asmtest_hwtrace_shutdown", [], VOID),
         # ---- region registration + markers ----
@@ -205,6 +216,28 @@ module Asmtest
         s = buf.to_s # up to first NUL
         Fiddle.free(buf.to_i)
         s
+      end
+
+      # This host's hardware-trace fallback cascade: the available backends, most-
+      # faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
+      # +policy+. Empty only off x86-64 Linux (single-step is the floor there).
+      # CEILING_FREE drops the depth-bounded backend (AMD LBR). Returns an Array of
+      # backend ints. resolve writes up to 4 enums into the out buffer and returns
+      # the count; we read back the first n int values.
+      def self.resolve(policy = BEST)
+        out = Fiddle::Pointer.new(Fiddle.malloc(16), 16) # 4 ints
+        out[0, 16] = "\x00".b * 16
+        n = Asmtest::HwTrace::FN[:resolve].call(policy, out, 4)
+        backends = (0...n).map { |i| out[i * 4, 4].unpack1("l") }
+        Fiddle.free(out.to_i)
+        backends
+      end
+
+      # The single most-preferred available backend under +policy+ (a backend enum
+      # >= 0, ready to .init), or EUNAVAIL (-3) when no hardware-trace backend is
+      # available on this host. Named .auto to match the C name (not a Ruby keyword).
+      def self.auto(policy = BEST)
+        Asmtest::HwTrace::FN[:auto].call(policy)
       end
 
       # Select a backend and initialize the tier. SINGLESTEP is the portable default

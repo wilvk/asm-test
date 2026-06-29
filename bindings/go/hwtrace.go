@@ -49,6 +49,8 @@ typedef struct {
 // Entry-point typedefs (one per exported symbol in libasmtest_hwtrace).
 typedef int  (*hw_available_fn)(int);
 typedef void (*hw_skip_reason_fn)(int, char *, size_t);
+typedef size_t (*hw_resolve_fn)(int, int *, size_t);
+typedef int  (*hw_auto_fn)(int);
 typedef int  (*hw_init_fn)(const asmtest_hwtrace_options_t *);
 typedef int  (*hw_register_fn)(const char *, void *, size_t, void *);
 typedef void (*hw_marker_fn)(const char *);
@@ -67,6 +69,8 @@ typedef unsigned long long (*hw_trace_insn_at_fn)(void *, size_t);
 
 static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
+static hw_resolve_fn          p_hw_resolve;
+static hw_auto_fn             p_hw_auto;
 static hw_init_fn             p_hw_init;
 static hw_register_fn         p_hw_register;
 static hw_marker_fn           p_hw_begin;
@@ -100,6 +104,8 @@ static void asmtest_hw_resolve(void) {
     if (!h) return;
     p_hw_available       = (hw_available_fn)dlsym(h, "asmtest_hwtrace_available");
     p_hw_skip_reason     = (hw_skip_reason_fn)dlsym(h, "asmtest_hwtrace_skip_reason");
+    p_hw_resolve         = (hw_resolve_fn)dlsym(h, "asmtest_hwtrace_resolve");
+    p_hw_auto            = (hw_auto_fn)dlsym(h, "asmtest_hwtrace_auto");
     p_hw_init            = (hw_init_fn)dlsym(h, "asmtest_hwtrace_init");
     p_hw_register        = (hw_register_fn)dlsym(h, "asmtest_hwtrace_register_region");
     p_hw_begin           = (hw_marker_fn)dlsym(h, "asmtest_hwtrace_begin");
@@ -116,7 +122,8 @@ static void asmtest_hw_resolve(void) {
     p_hw_trace_truncated   = (hw_trace_truncated_fn)dlsym(h, "asmtest_emu_trace_truncated");
     p_hw_trace_block_at    = (hw_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
     p_hw_trace_insn_at     = (hw_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
-    g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_init &&
+    g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
+                  p_hw_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
                   p_hw_exec_alloc && p_hw_exec_free && p_hw_trace_new &&
                   p_hw_trace_free && p_hw_trace_covered && p_hw_trace_blocks_len &&
@@ -132,6 +139,12 @@ static int  asmtest_hw_go_available(int backend) { return p_hw_available ? p_hw_
 static void asmtest_hw_go_skip_reason(int backend, char *buf, size_t buflen) {
     if (p_hw_skip_reason) p_hw_skip_reason(backend, buf, buflen);
     else if (buflen) buf[0] = 0;
+}
+static size_t asmtest_hw_go_resolve(int policy, int *out, size_t cap) {
+    return p_hw_resolve ? p_hw_resolve(policy, out, cap) : 0;
+}
+static int  asmtest_hw_go_auto(int policy) {
+    return p_hw_auto ? p_hw_auto(policy) : -3; // ASMTEST_HW_EUNAVAIL
 }
 static int  asmtest_hw_go_init(int backend) {
     asmtest_hwtrace_options_t o;
@@ -196,6 +209,10 @@ import (
 // (mirrors the C macro ASMTEST_HW_OK).
 const hwOK = 0
 
+// HwEUnavail is the status HwTraceAuto returns when no hardware-trace backend is
+// available on this host (mirrors the C macro ASMTEST_HW_EUNAVAIL).
+const HwEUnavail = -3
+
 // asmtest_trace_backend_t — the four hardware-trace backends. SINGLESTEP is the
 // portable default that runs on any x86-64 Linux.
 const (
@@ -203,6 +220,15 @@ const (
 	CoreSight  = 1
 	AmdLBR     = 2
 	SingleStep = 3
+)
+
+// asmtest_hwtrace_policy_t — the backend auto-selection policy for HwTraceResolve
+// / HwTraceAuto. BEST is the most faithful available backend; CEILING_FREE is the
+// same but skips the one fixed-window backend (AMD LBR) — re-resolve under it
+// after a trace comes back truncated.
+const (
+	Best        = 0
+	CeilingFree = 1
 )
 
 // Resolve the optional hardware-trace tier the first time the package loads,
@@ -227,6 +253,28 @@ func HwTraceSkipReason(backend int) string {
 	buf := make([]byte, 160)
 	C.asmtest_hw_go_skip_reason(C.int(backend), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
 	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+}
+
+// HwTraceResolve is this host's hardware-trace fallback cascade: the available
+// backends, most-faithful first (IntelPT > AmdLBR > SingleStep > CoreSight),
+// honoring policy. Empty only off x86-64 Linux (single-step is the floor there)
+// or when libasmtest_hwtrace is not loaded. CeilingFree drops the depth-bounded
+// backend (AMD LBR).
+func HwTraceResolve(policy int) []int {
+	var out [4]C.int
+	n := C.asmtest_hw_go_resolve(C.int(policy), &out[0], C.size_t(len(out)))
+	bes := make([]int, int(n))
+	for i := range bes {
+		bes[i] = int(out[i])
+	}
+	return bes
+}
+
+// HwTraceAuto is the single most-preferred available backend under policy (a
+// backend enum >= 0, ready to pass to HwTraceInit), or HwEUnavail (-3) when no
+// hardware-trace backend is available on this host.
+func HwTraceAuto(policy int) int {
+	return int(C.asmtest_hw_go_auto(C.int(policy)))
 }
 
 // HwTraceInit selects a backend and initializes the tier. SingleStep is the

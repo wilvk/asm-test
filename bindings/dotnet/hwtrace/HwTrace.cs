@@ -26,6 +26,14 @@ namespace Asmtest
     /// <summary>The hardware-trace backend to select (mirrors asmtest_trace_backend_t).</summary>
     public enum HwBackend { IntelPt = 0, CoreSight = 1, AmdLbr = 2, SingleStep = 3 }
 
+    /// <summary>
+    /// Backend auto-selection policy (mirrors asmtest_hwtrace_policy_t). Best is the
+    /// most faithful available backend; CeilingFree additionally skips the one
+    /// fixed-window backend (AMD LBR) so the pick has no completeness ceiling —
+    /// re-resolve under it after a trace comes back truncated.
+    /// </summary>
+    public enum HwPolicy { Best = 0, CeilingFree = 1 }
+
     // The native entry points for libasmtest_hwtrace. Internal: callers use the
     // typed HwTrace / NativeCode classes below, never DllImport directly. Loading
     // is wrapped so a missing lib (tier not built) self-skips cleanly via
@@ -35,6 +43,7 @@ namespace Asmtest
         const string HWTRACE = "asmtest_hwtrace";
 
         public const int ASMTEST_HW_OK = 0;
+        public const int ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available
         public const int SINGLESTEP = 3;
 
         // asmtest_hwtrace_options_t: backend + two ring sizes + snapshot flag + an
@@ -109,6 +118,11 @@ namespace Asmtest
         // ---- lifecycle ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_available(int backend);
         [DllImport(HWTRACE)] public static extern void asmtest_hwtrace_skip_reason(int backend, byte[] buf, UIntPtr buflen);
+        // Auto-select: resolve writes up to cap available backend enums into out[],
+        // most-faithful first, returning the count; auto returns the single best
+        // backend enum (>= 0) or ASMTEST_HW_EUNAVAIL (-3) when none.
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_hwtrace_resolve(int policy, int[] @out, UIntPtr cap);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_auto(int policy);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_init(ref Options opts);
         [DllImport(HWTRACE)] public static extern void asmtest_hwtrace_shutdown();
 
@@ -239,6 +253,35 @@ namespace Asmtest
             HwNative.asmtest_hwtrace_skip_reason((int)backend, buf, (UIntPtr)buf.Length);
             int z = Array.IndexOf(buf, (byte)0);
             return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
+        }
+
+        /// <summary>
+        /// This host's hardware-trace fallback cascade: the available backend enums,
+        /// most-faithful first (INTEL_PT &gt; AMD_LBR &gt; SINGLESTEP &gt; CORESIGHT),
+        /// honoring <paramref name="policy"/>. Empty only off x86-64 Linux (single-step
+        /// is the floor there) or when the lib is missing. CeilingFree drops the
+        /// depth-bounded backend (AMD LBR).
+        /// </summary>
+        public static int[] Resolve(HwPolicy policy = HwPolicy.Best)
+        {
+            if (!HwNative.LibAvailable) return Array.Empty<int>();
+            var buf = new int[4];
+            int n = (int)HwNative.asmtest_hwtrace_resolve((int)policy, buf, (UIntPtr)buf.Length);
+            var cascade = new int[n];
+            Array.Copy(buf, cascade, n);
+            return cascade;
+        }
+
+        /// <summary>
+        /// The single most-preferred available backend under <paramref name="policy"/>
+        /// (a backend enum &gt;= 0, ready to <see cref="Init"/>), or
+        /// <c>ASMTEST_HW_EUNAVAIL</c> (-3) when no hardware-trace backend is available
+        /// on this host.
+        /// </summary>
+        public static int Auto(HwPolicy policy = HwPolicy.Best)
+        {
+            if (!HwNative.LibAvailable) return HwNative.ASMTEST_HW_EUNAVAIL;
+            return HwNative.asmtest_hwtrace_auto((int)policy);
         }
 
         /// <summary>

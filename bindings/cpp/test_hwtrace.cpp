@@ -112,6 +112,66 @@ int main() {
 
     HwTrace::shutdown();
 
+    // ---- auto-select front-end: pick the most-faithful available backend ----
+    // Mirrors examples/test_hwtrace.c's test_auto_resolve: selection invariants
+    // plus a live traced call through whatever auto picks (single-step here).
+    {
+        std::vector<int> best = HwTrace::resolve(BEST);
+        std::vector<int> cf = HwTrace::resolve(CEILING_FREE);
+
+        bool ok_avail = true, ok_order = true;
+        for (std::size_t i = 0; i < best.size(); ++i) {
+            if (!HwTrace::available(best[i]))
+                ok_avail = false;
+            if (i && best[i] <= best[i - 1])
+                ok_order = false;
+        }
+        ok(ok_avail, "auto: resolve(BEST) returns only available backends");
+        ok(ok_order, "auto: resolve(BEST) ordered by descending fidelity, no dups");
+
+        bool cf_no_amd = true, cf_subset = true;
+        for (int b : cf) {
+            if (b == AMD_LBR)
+                cf_no_amd = false;
+            bool in_best = false;
+            for (int x : best)
+                in_best = in_best || (x == b);
+            cf_subset = cf_subset && in_best;
+        }
+        ok(cf_no_amd, "auto: CEILING_FREE never selects AMD LBR");
+        ok(cf_subset, "auto: CEILING_FREE is a subset of BEST");
+
+        int ab = HwTrace::auto_select(BEST);
+        bool head_ok = best.empty() ? (ab == ASMTEST_HW_EUNAVAIL) : (ab == best[0]);
+        ok(head_ok, "auto: auto_select(BEST) is the head of resolve(BEST)");
+
+        // single-step keeps the cascade non-empty on this x86-64 Linux host.
+        ok(!best.empty() && ab >= 0,
+           "auto: resolves a backend (single-step floor)");
+
+        if (ab >= 0) {
+            HwTrace::init(ab);
+            NativeCode code = NativeCode::from_bytes(ROUTINE);
+            HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+            tr.register_region("auto", code);
+            long result;
+            {
+                auto scope = tr.region("auto");
+                result = code.call(20, 22);
+            }
+            ok(result == 42, "auto: auto-selected backend traces a live call (== 42)");
+            ok(tr.covered(0), "auto: auto-selected backend covers block offset 0");
+            if (ab == SINGLESTEP) {
+                const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
+                ok(tr.insn_offsets() == expect,
+                   "auto: single-step pick yields [0, 3, 6, 0xC, 0x11]");
+            }
+            tr.free();
+            code.free();
+            HwTrace::shutdown();
+        }
+    }
+
     std::printf("1..%d\n", g_test);
     return g_failed == 0 ? 0 : 1;
 }

@@ -49,6 +49,25 @@ pub const Backend = enum(c_int) {
 /// The default backend: EFLAGS.TF single-step, portable across any x86-64 Linux.
 pub const SINGLESTEP: Backend = .singlestep;
 
+/// asmtest_hwtrace_policy_t — backend auto-selection policy for `resolve`/`auto`.
+/// `BEST` is the most faithful available backend; `CEILING_FREE` is the same but
+/// skips the one fixed-window backend (AMD LBR) — re-resolve under it after a trace
+/// comes back truncated.
+pub const Policy = enum(c_int) {
+    best = 0,
+    ceiling_free = 1,
+};
+
+/// Pick the most faithful available backend for the host.
+pub const BEST: Policy = .best;
+
+/// Like `BEST`, but skipping the one fixed-window backend (AMD LBR).
+pub const CEILING_FREE: Policy = .ceiling_free;
+
+/// No hardware-trace backend is available on this host (ASMTEST_HW_EUNAVAIL); the
+/// value `auto` returns in that case.
+pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
+
 /// Errors surfaced by the wrapper. `LibUnavailable` means the tier can't run
 /// (lib missing or the backend self-skips) — callers should self-skip on it; the
 /// rest map nonzero C return codes onto an error.
@@ -63,6 +82,8 @@ pub const Error = error{
 // ---- function-pointer prototypes (mirror the exported C symbols) ---- //
 const FnAvailable = *const fn (c_int) callconv(.C) c_int;
 const FnSkipReason = *const fn (c_int, [*c]u8, usize) callconv(.C) void;
+const FnResolve = *const fn (c_int, [*]c_int, usize) callconv(.C) usize;
+const FnAuto = *const fn (c_int) callconv(.C) c_int;
 const FnInit = *const fn (*const c.asmtest_hwtrace_options_t) callconv(.C) c_int;
 const FnRegister = *const fn ([*:0]const u8, ?*anyopaque, usize, ?*anyopaque) callconv(.C) c_int;
 const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
@@ -86,6 +107,8 @@ const Api = struct {
     lib: std.DynLib,
     available: FnAvailable,
     skip_reason: FnSkipReason,
+    resolve: FnResolve,
+    auto: FnAuto,
     init: FnInit,
     register: FnRegister,
     begin: FnMarker,
@@ -137,6 +160,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .lib = lib.*,
         .available = lib.lookup(FnAvailable, "asmtest_hwtrace_available") orelse return null,
         .skip_reason = lib.lookup(FnSkipReason, "asmtest_hwtrace_skip_reason") orelse return null,
+        .resolve = lib.lookup(FnResolve, "asmtest_hwtrace_resolve") orelse return null,
+        .auto = lib.lookup(FnAuto, "asmtest_hwtrace_auto") orelse return null,
         .init = lib.lookup(FnInit, "asmtest_hwtrace_init") orelse return null,
         .register = lib.lookup(FnRegister, "asmtest_hwtrace_register_region") orelse return null,
         .begin = lib.lookup(FnMarker, "asmtest_hwtrace_begin") orelse return null,
@@ -201,6 +226,39 @@ pub fn skipReason(backend: Backend, buf: []u8) []const u8 {
     api.skip_reason(@intFromEnum(backend), buf.ptr, buf.len);
     const z = std.mem.sliceTo(buf, 0);
     return z;
+}
+
+/// This host's hardware-trace fallback cascade under `policy`: the available
+/// backend enums, most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP >
+/// CORESIGHT). Self-owns a fixed 4-element buffer (there are only four backends)
+/// and returns the live `[0..n]` slice into it; empty only off x86-64 Linux
+/// (single-step is the floor there) or when the lib can't load. `CEILING_FREE`
+/// drops the depth-bounded backend (AMD LBR). Mirrors `HwTrace.resolve()`.
+pub const Resolved = struct {
+    buf: [4]c_int = undefined,
+    len: usize = 0,
+
+    /// The resolved backend enums, in descending-fidelity (ascending-enum) order.
+    pub fn slice(self: *const Resolved) []const c_int {
+        return self.buf[0..self.len];
+    }
+};
+
+/// Resolve `policy` into the available backend cascade (see `Resolved`).
+pub fn resolve(policy: Policy) Resolved {
+    var r = Resolved{};
+    const api = load() orelse return r;
+    r.len = api.resolve(@intFromEnum(policy), &r.buf, r.buf.len);
+    return r;
+}
+
+/// The single most-preferred available backend under `policy` (a backend enum
+/// >= 0, ready to `init`), or `ASMTEST_HW_EUNAVAIL` (< 0) when no hardware-trace
+/// backend is available on this host. `auto` is not a Zig keyword, so this keeps
+/// the C name. Mirrors `HwTrace.auto()`.
+pub fn auto(policy: Policy) c_int {
+    const api = load() orelse return ASMTEST_HW_EUNAVAIL;
+    return api.auto(@intFromEnum(policy));
 }
 
 /// Select a backend and initialize the tier. SINGLESTEP is the portable default
