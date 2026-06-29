@@ -15,6 +15,8 @@
  * --enable-native-access=ALL-UNNAMED`.
  */
 import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
 
 public final class HwTraceTest {
 
@@ -47,6 +49,8 @@ public final class HwTraceTest {
         // backends self-skip and the cascade is empty), so run them before any skip.
         try {
             autoResolveSelectionInvariants();
+            crossTierResolveInvariants();
+            crossTierNativeOnlyResolvesOnLinuxX86_64();
             autoResolveTracesLive();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
@@ -146,6 +150,69 @@ public final class HwTraceTest {
         int ab = HwTrace.auto(HwTrace.BEST);
         int want = (best.length == 0) ? HwTrace.ASMTEST_HW_EUNAVAIL : best[0];
         ok(ab == want, "auto(BEST) is the head of resolve(BEST) (got " + ab + ")");
+    }
+
+    // Mirrors test_cross_tier_resolve_invariants — holds on every host.
+    private static void crossTierResolveInvariants() {
+        List<HwTrace.TierChoice> best = HwTrace.resolveTiers(HwTrace.TRACE_BEST);
+        List<HwTrace.TierChoice> nat = HwTrace.resolveTiers(HwTrace.TRACE_NATIVE_ONLY);
+        List<HwTrace.TierChoice> cf = HwTrace.resolveTiers(HwTrace.TRACE_CEILING_FREE);
+
+        // Every HW choice satisfies the hardware-tier probe; the fidelity class matches
+        // the tier (only the emulator tier is VIRTUAL).
+        boolean okHwAvail = true, okFidelity = true;
+        for (HwTrace.TierChoice c : best) {
+            if (c.tier() == HwTrace.TIER_HWTRACE && !HwTrace.available(c.backend())) okHwAvail = false;
+            int wantFid = (c.tier() == HwTrace.TIER_EMULATOR)
+                ? HwTrace.FIDELITY_VIRTUAL : HwTrace.FIDELITY_NATIVE;
+            if (c.fidelity() != wantFid) okFidelity = false;
+        }
+        ok(okHwAvail, "resolveTiers(BEST) HW choices are all available");
+        ok(okFidelity, "resolveTiers(BEST) fidelity matches tier (only emulator is VIRTUAL)");
+
+        // The single VIRTUAL emulator floor is the last entry under BEST, exactly once.
+        int emuCount = 0;
+        for (HwTrace.TierChoice c : best) if (c.tier() == HwTrace.TIER_EMULATOR) emuCount++;
+        ok(!best.isEmpty() && best.get(best.size() - 1).tier() == HwTrace.TIER_EMULATOR,
+            "resolveTiers(BEST) ends with the emulator floor");
+        ok(emuCount == 1, "resolveTiers(BEST) has exactly one emulator entry (got " + emuCount + ")");
+
+        // NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+        boolean natNoEmu = true;
+        for (HwTrace.TierChoice c : nat) if (c.tier() == HwTrace.TIER_EMULATOR) natNoEmu = false;
+        ok(natNoEmu, "resolveTiers(NATIVE_ONLY) drops the emulator floor");
+        ok(nat.size() == best.size() - 1,
+            "resolveTiers(NATIVE_ONLY) is BEST minus the floor (got " + nat.size()
+                + " vs " + best.size() + ")");
+
+        // CEILING_FREE drops AMD LBR.
+        boolean cfNoAmd = true;
+        for (HwTrace.TierChoice c : cf)
+            if (c.tier() == HwTrace.TIER_HWTRACE && c.backend() == HwTrace.AMD_LBR) cfNoAmd = false;
+        ok(cfNoAmd, "resolveTiers(CEILING_FREE) never selects AMD_LBR");
+
+        // autoTier(policy) is the head of resolveTiers(policy).
+        Optional<HwTrace.TierChoice> one = HwTrace.autoTier(HwTrace.TRACE_BEST);
+        ok(one.isPresent(), "autoTier(BEST) is present");
+        ok(one.get().tier() == best.get(0).tier() && one.get().backend() == best.get(0).backend(),
+            "autoTier(BEST) is the head of resolveTiers(BEST)");
+    }
+
+    // Mirrors test_cross_tier_native_only_resolves_on_linux_x86_64.
+    private static void crossTierNativeOnlyResolvesOnLinuxX86_64() {
+        // On any x86-64 Linux host single-step is a native floor, so even NATIVE_ONLY
+        // resolves (the cascade never collapses to nothing here). Off such a host, skip.
+        if (!HwTrace.available(HwTrace.SINGLESTEP)) return;
+
+        List<HwTrace.TierChoice> nat = HwTrace.resolveTiers(HwTrace.TRACE_NATIVE_ONLY);
+        Optional<HwTrace.TierChoice> pick = HwTrace.autoTier(HwTrace.TRACE_NATIVE_ONLY);
+        ok(!nat.isEmpty() && pick.isPresent() && pick.get().fidelity() == HwTrace.FIDELITY_NATIVE,
+            "autoTier(NATIVE_ONLY) resolves a NATIVE choice on x86-64 Linux");
+
+        boolean hasSinglestep = false;
+        for (HwTrace.TierChoice c : nat)
+            if (c.tier() == HwTrace.TIER_HWTRACE && c.backend() == HwTrace.SINGLESTEP) hasSinglestep = true;
+        ok(hasSinglestep, "resolveTiers(NATIVE_ONLY) includes the single-step floor");
     }
 
     // Mirrors test_auto_resolve_traces_live — owns its own init/shutdown.

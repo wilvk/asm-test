@@ -336,17 +336,37 @@ under after a trace comes back `truncated`. On any x86-64 Linux host the cascade
 non-empty (single-step is the floor), so it never fails to resolve. This is exactly
 the within-hardware-tier portion of Matrix 8.
 
-**What is still missing is the *cross-tier* front-end.** `asmtest_hwtrace_resolve`
-stops at the hardware tier's library boundary: the DynamoRIO tier
-(`libasmtest_drapp`, located by `DYNAMORIO_HOME`) and the emulator tier
-(`libasmtest_emu`) are separate libraries with their own call APIs, and a fall to
-the emulator crosses a fidelity line (real CPU → isolated guest). So a full
-`asmtest_trace_auto(...)` spanning all of Matrix 8–10 — with a flag to forbid the
-native→emulator crossing — remains a follow-up; deliberately, the cross-tier fall
-stays an explicit, fidelity-aware integrator decision rather than an automatic last
-resort (consistent with the [AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md)
-overflow→DynamoRIO routing rule, which is specified for "where a caller orchestrates
-backends").
+**The *cross-tier* front-end now ships too.** `asmtest_hwtrace_resolve` stops at the
+hardware tier's library boundary; the DynamoRIO tier (`libasmtest_drapp`, located by
+`DYNAMORIO_HOME`) and the emulator tier (`libasmtest_emu`) are separate libraries
+with their own call APIs. `asmtest_trace_resolve(policy, out, cap)` /
+`asmtest_trace_auto(policy, &choice)`
+([asmtest_trace_auto.h](../../include/asmtest_trace_auto.h),
+[src/trace_auto.c](../../src/trace_auto.c)) are the front-end **over all three** —
+they walk the full descending-fidelity cascade of Matrix 8 (Intel PT → AMD LBR →
+DynamoRIO → single-step → CoreSight → emulator, DynamoRIO ranking *above* single-step
+because its code cache runs at native speed while single-step pays a per-instruction
+kernel round-trip) and return `asmtest_trace_choice_t` descriptors `{tier, backend,
+fidelity}`. It calls `asmtest_hwtrace_available()` directly and **dlopen-probes**
+`libasmtest_drapp` (via `$ASMTEST_DRAPP_LIB`) for the DynamoRIO tier, so it
+hard-links neither the DynamoRIO nor the emulator library — keeping the three
+decoupled. Shipped in `libasmtest_hwtrace` and exposed through **every language
+wrapper** (Python `resolve_tiers`/`auto_tier`, and the idiomatic spelling in each
+other binding).
+
+The `policy` bitmask encodes the three controls the cascade needs:
+`ASMTEST_TRACE_BEST` (most-faithful available, emulator floor allowed),
+`ASMTEST_TRACE_CEILING_FREE` (drop the one fixed-window backend, AMD LBR — the policy
+to re-resolve under after a trace comes back `truncated`), and — crucially —
+`ASMTEST_TRACE_NATIVE_ONLY`, **the flag that forbids the native→emulator crossing**.
+That is the one boundary the fallback table above says must never be crossed
+silently: under `NATIVE_ONLY` the emulator floor is dropped, so on a host with no
+native tier (e.g. macOS arm64) the cascade resolves to *nothing*
+(`ASMTEST_HW_EUNAVAIL`) rather than silently downgrading real-CPU execution to an
+isolated guest. So the native→emulator fall stays an explicit, fidelity-aware
+integrator decision (consistent with the
+[AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md) overflow→DynamoRIO routing
+rule) — now expressed as a policy flag rather than left to each caller to hand-roll.
 
 ---
 

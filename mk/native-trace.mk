@@ -149,13 +149,19 @@ $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 # x86-64 Linux host with no PMU/perf/privilege — the universal hardware-tier path.
 $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# Cross-tier orchestrator (asmtest_trace_auto.h): no external library; calls
+# asmtest_hwtrace_available() directly and dlopen-probes libasmtest_drapp (-ldl).
+$(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
+                       include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
+                $(BUILD)/trace_auto.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
-	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
 
 .PHONY: hwtrace-test
 hwtrace-test: $(BUILD)/test_hwtrace
@@ -409,6 +415,9 @@ $(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
+                           include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
@@ -416,10 +425,11 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/cs_backend.o \
                                        $(BUILD)/pic/amd_backend.o \
                                        $(BUILD)/pic/ss_backend.o \
+                                       $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
-	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -o $@
+	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
 $(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_hwtrace)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_hwtrace)) $@

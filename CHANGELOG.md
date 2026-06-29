@@ -61,6 +61,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     per-binding self-test of the selection invariants and a live auto-picked trace.
     Scope is the hardware tier's own backends; a cross-tier fall to DynamoRIO/the
     emulator stays a deliberate, fidelity-aware caller decision.
+  - **Cross-tier trace orchestration.** `asmtest_trace_resolve(policy, out, cap)` /
+    `asmtest_trace_auto(policy, &choice)`
+    ([asmtest_trace_auto.h](https://github.com/wilvk/asm-test/blob/main/include/asmtest_trace_auto.h),
+    `src/trace_auto.c`) are the front-end **over all three tiers**, not just the
+    hardware backends: they walk the full descending-fidelity cascade — Intel PT →
+    AMD LBR → **DynamoRIO** → single-step → CoreSight → **emulator** (DynamoRIO ranks
+    above single-step because its code cache runs at native speed while single-step
+    pays a per-instruction kernel round-trip) — and return `asmtest_trace_choice_t`
+    descriptors `{tier, backend, fidelity}`. It calls `asmtest_hwtrace_available()`
+    directly and **dlopen-probes** `libasmtest_drapp` (via `$ASMTEST_DRAPP_LIB`) for
+    the DynamoRIO tier, so it hard-links neither the DynamoRIO nor the emulator
+    library — the three stay decoupled. The `policy` bitmask composes
+    `ASMTEST_TRACE_BEST`, `ASMTEST_TRACE_CEILING_FREE` (drop AMD LBR; re-resolve under
+    it after `truncated`), and `ASMTEST_TRACE_NATIVE_ONLY` — **the flag that forbids
+    the native→emulator fidelity crossing**: under it the emulator floor is dropped,
+    so a host with no native tier resolves to `ASMTEST_HW_EUNAVAIL` rather than
+    silently downgrading real-CPU execution to an isolated guest. Shipped in
+    `libasmtest_hwtrace` and exposed through **every language wrapper** (Python/Rust/
+    Go/Lua/Ruby `resolve_tiers`/`auto_tier`, camelCase `resolveTiers`/`autoTier` for
+    C++/Node/Java/.NET/Zig, `ResolveTiers`/`AutoTier` for Go), each with a per-binding
+    self-test of the cross-tier invariants. This is the cross-tier front-end the
+    [trace parity matrix](https://github.com/wilvk/asm-test/blob/main/docs/analysis/trace-parity-matrix.md)
+    flagged as the remaining gap.
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft

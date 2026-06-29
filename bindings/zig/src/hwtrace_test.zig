@@ -25,6 +25,15 @@ const AMD_LBR = @intFromEnum(hwtrace.Backend.amd_lbr);
 const SINGLESTEP_ENUM = @intFromEnum(hwtrace.Backend.singlestep);
 const ASMTEST_HW_EUNAVAIL = hwtrace.ASMTEST_HW_EUNAVAIL;
 
+// Cross-tier orchestrator constants.
+const TRACE_BEST = hwtrace.TRACE_BEST;
+const TRACE_CEILING_FREE = hwtrace.TRACE_CEILING_FREE;
+const TRACE_NATIVE_ONLY = hwtrace.TRACE_NATIVE_ONLY;
+const TIER_HWTRACE = @intFromEnum(hwtrace.Tier.hwtrace);
+const TIER_EMULATOR = @intFromEnum(hwtrace.Tier.emulator);
+const FIDELITY_NATIVE = @intFromEnum(hwtrace.Fidelity.native);
+const FIDELITY_VIRTUAL = @intFromEnum(hwtrace.Fidelity.virtual);
+
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 const ROUTINE = [_]u8{
     0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
@@ -81,8 +90,69 @@ fn checkAutoResolveInvariants() Failure!void {
     try check(ab == want, "auto(BEST) is the head of the resolved cascade");
 }
 
+// The CROSS-TIER orchestrator (resolve over hwtrace + DynamoRIO + emulator) holds
+// its structural invariants on EVERY host, so this runs before the skip guard.
+// Mirrors Python's `test_cross_tier_resolve_invariants`.
+fn checkCrossTierResolveInvariants() Failure!void {
+    const best_r = hwtrace.resolveTiers(TRACE_BEST);
+    const nat_r = hwtrace.resolveTiers(TRACE_NATIVE_ONLY);
+    const cf_r = hwtrace.resolveTiers(TRACE_CEILING_FREE);
+    const best = best_r.slice();
+    const nat = nat_r.slice();
+    const cf = cf_r.slice();
+
+    // Every HW choice satisfies the hardware-tier probe; NATIVE choices precede the
+    // single VIRTUAL emulator floor, which is the last entry under BEST.
+    for (best) |c| {
+        if (c.tier == TIER_HWTRACE)
+            try check(hwtrace.available(@enumFromInt(c.backend)), "cross-tier HW choice is available");
+        const want_fid: c_int = if (c.tier == TIER_EMULATOR) FIDELITY_VIRTUAL else FIDELITY_NATIVE;
+        try check(c.fidelity == want_fid, "cross-tier choice has the expected fidelity class");
+    }
+    try check(best.len != 0 and best[best.len - 1].tier == TIER_EMULATOR,
+        "resolve(TRACE_BEST) ends at the emulator floor");
+    var emu_count: usize = 0;
+    for (best) |c| {
+        if (c.tier == TIER_EMULATOR) emu_count += 1;
+    }
+    try check(emu_count == 1, "resolve(TRACE_BEST) has exactly one emulator entry");
+
+    // NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+    for (nat) |c| try check(c.tier != TIER_EMULATOR, "TRACE_NATIVE_ONLY drops the emulator floor");
+    try check(nat.len == best.len - 1, "TRACE_NATIVE_ONLY is BEST minus the floor");
+
+    // CEILING_FREE drops AMD LBR.
+    for (cf) |c|
+        try check(!(c.tier == TIER_HWTRACE and c.backend == AMD_LBR),
+            "TRACE_CEILING_FREE never selects AMD LBR");
+
+    // auto(policy) is the head of resolve(policy).
+    const one = hwtrace.autoTier(TRACE_BEST);
+    try check(one != null, "auto_tier(TRACE_BEST) resolves a choice");
+    try check(one.?.tier == best[0].tier and one.?.backend == best[0].backend,
+        "auto_tier(TRACE_BEST) is the head of the resolved cascade");
+}
+
+// On any x86-64 Linux host the single-step backend is a native floor, so even
+// NATIVE_ONLY resolves (the cascade never collapses to nothing here). Runs only
+// after the SINGLESTEP skip guard. Mirrors Python's
+// `test_cross_tier_native_only_resolves_on_linux_x86_64`.
+fn checkCrossTierNativeOnly() Failure!void {
+    const nat_r = hwtrace.resolveTiers(TRACE_NATIVE_ONLY);
+    const nat = nat_r.slice();
+    const pick = hwtrace.autoTier(TRACE_NATIVE_ONLY);
+    try check(nat.len != 0 and pick != null and pick.?.fidelity == FIDELITY_NATIVE,
+        "TRACE_NATIVE_ONLY resolves a native choice on x86-64 Linux");
+    var found = false;
+    for (nat) |c| {
+        if (c.tier == TIER_HWTRACE and c.backend == SINGLESTEP_ENUM) found = true;
+    }
+    try check(found, "single-step is in the native-only cascade on x86-64 Linux");
+}
+
 pub fn main() !void {
     try checkAutoResolveInvariants();
+    try checkCrossTierResolveInvariants();
 
     if (!hwtrace.available(SINGLESTEP)) {
         var buf: [192]u8 = undefined;
@@ -90,6 +160,10 @@ pub fn main() !void {
         std.debug.print("# SKIP: single-step backend unavailable: {s}\n", .{reason});
         return; // exit 0
     }
+
+    // On any x86-64 Linux host single-step is a native floor, so even NATIVE_ONLY
+    // resolves the cross-tier cascade (it never collapses to nothing here).
+    try checkCrossTierNativeOnly();
 
     const alloc = std.heap.page_allocator;
 

@@ -155,6 +155,106 @@ func TestHwtraceAutoSelection(t *testing.T) {
 	}
 }
 
+// TestCrossTierResolveInvariants mirrors the Python suite's
+// test_cross_tier_resolve_invariants: the cross-tier orchestrator (resolve over
+// hwtrace + DynamoRIO + emulator) holds its structural invariants on every host.
+func TestCrossTierResolveInvariants(t *testing.T) {
+	best := ResolveTiers(TraceBest)
+	nat := ResolveTiers(TraceNativeOnly)
+	cf := ResolveTiers(TraceCeilingFree)
+
+	if len(best) == 0 {
+		t.Skip("cross-tier cascade empty (libasmtest_hwtrace not loaded?)")
+	}
+
+	// Every HW choice satisfies the hardware-tier probe; the fidelity class matches
+	// the tier (only the emulator tier is virtual).
+	for _, c := range best {
+		if c.Tier == TierHwtrace && !HwTraceAvailable(c.Backend) {
+			t.Fatalf("ResolveTiers(TraceBest) HW choice backend %d not available", c.Backend)
+		}
+		wantFidelity := FidelityNative
+		if c.Tier == TierEmulator {
+			wantFidelity = FidelityVirtual
+		}
+		if c.Fidelity != wantFidelity {
+			t.Fatalf("choice %+v: fidelity %d, want %d", c, c.Fidelity, wantFidelity)
+		}
+	}
+
+	// The single VIRTUAL emulator floor is the last entry under BEST, and appears
+	// exactly once.
+	if best[len(best)-1].Tier != TierEmulator {
+		t.Fatalf("ResolveTiers(TraceBest) last entry tier %d, want emulator (%d)",
+			best[len(best)-1].Tier, TierEmulator)
+	}
+	emuCount := 0
+	for _, c := range best {
+		if c.Tier == TierEmulator {
+			emuCount++
+		}
+	}
+	if emuCount != 1 {
+		t.Fatalf("ResolveTiers(TraceBest): %d emulator entries, want exactly 1", emuCount)
+	}
+
+	// NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+	for _, c := range nat {
+		if c.Tier == TierEmulator {
+			t.Fatalf("ResolveTiers(TraceNativeOnly) must not include the emulator floor: %+v", nat)
+		}
+	}
+	if len(nat) != len(best)-1 {
+		t.Fatalf("ResolveTiers(TraceNativeOnly) len %d, want len(best)-1 = %d", len(nat), len(best)-1)
+	}
+
+	// CEILING_FREE drops AMD LBR.
+	for _, c := range cf {
+		if c.Tier == TierHwtrace && c.Backend == AmdLBR {
+			t.Fatalf("ResolveTiers(TraceCeilingFree) must not select AMD LBR: %+v", cf)
+		}
+	}
+
+	// auto(policy) is the head of resolve(policy).
+	one, ok := AutoTier(TraceBest)
+	if !ok {
+		t.Fatalf("AutoTier(TraceBest) returned EUNAVAIL but resolve was non-empty: %+v", best)
+	}
+	if one.Tier != best[0].Tier || one.Backend != best[0].Backend {
+		t.Fatalf("AutoTier(TraceBest) = %+v, want head of resolve %+v", one, best[0])
+	}
+}
+
+// TestCrossTierNativeOnlyResolvesOnLinuxAmd64 mirrors the Python suite's
+// test_cross_tier_native_only_resolves_on_linux_x86_64: on any x86-64 Linux host
+// the single-step backend is a native floor, so even NATIVE_ONLY resolves (the
+// cascade never collapses to nothing here).
+func TestCrossTierNativeOnlyResolvesOnLinuxAmd64(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+
+	nat := ResolveTiers(TraceNativeOnly)
+	pick, ok := AutoTier(TraceNativeOnly)
+	if len(nat) == 0 || !ok {
+		t.Fatalf("NATIVE_ONLY resolved nothing on x86-64 Linux: resolve=%+v ok=%v", nat, ok)
+	}
+	if pick.Fidelity != FidelityNative {
+		t.Fatalf("AutoTier(TraceNativeOnly) fidelity %d, want native (%d)", pick.Fidelity, FidelityNative)
+	}
+
+	found := false
+	for _, c := range nat {
+		if c.Tier == TierHwtrace && c.Backend == SingleStep {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("NATIVE_ONLY cascade missing the single-step floor: %+v", nat)
+	}
+}
+
 // TestHwtraceAutoLive mirrors test_auto_resolve_traces_live: on any x86-64 Linux
 // host the cascade is non-empty (single-step floor), so auto() resolves a usable
 // backend; trace the shared fixture through whatever it picked.

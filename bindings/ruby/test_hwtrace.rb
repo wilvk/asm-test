@@ -20,6 +20,15 @@ BEST         = Asmtest::HwTrace::BEST
 CEILING_FREE = Asmtest::HwTrace::CEILING_FREE
 EUNAVAIL     = Asmtest::HwTrace::EUNAVAIL
 
+# Cross-tier orchestrator (asmtest_trace_auto.h).
+TIER_HWTRACE       = Asmtest::HwTrace::TIER_HWTRACE
+TIER_EMULATOR      = Asmtest::HwTrace::TIER_EMULATOR
+FIDELITY_NATIVE    = Asmtest::HwTrace::FIDELITY_NATIVE
+FIDELITY_VIRTUAL   = Asmtest::HwTrace::FIDELITY_VIRTUAL
+TRACE_BEST         = Asmtest::HwTrace::TRACE_BEST
+TRACE_CEILING_FREE = Asmtest::HwTrace::TRACE_CEILING_FREE
+TRACE_NATIVE_ONLY  = Asmtest::HwTrace::TRACE_NATIVE_ONLY
+
 # mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 ROUTINE = [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
            0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3].pack("C*")
@@ -65,6 +74,54 @@ ok((cf - best).empty?, "auto CEILING_FREE is a subset of BEST")
 ab = HwTrace.auto(BEST)
 ok(ab == (best.empty? ? EUNAVAIL : best.first),
    "auto(BEST) is the head of the resolved cascade")
+
+# ---- cross-tier orchestrator: structural invariants hold on every host (resolve
+# over hwtrace + DynamoRIO + emulator) — resolve/auto need no init. ----
+ct_best = HwTrace.resolve_tiers(TRACE_BEST)
+ct_nat  = HwTrace.resolve_tiers(TRACE_NATIVE_ONLY)
+ct_cf   = HwTrace.resolve_tiers(TRACE_CEILING_FREE)
+
+# Every HW choice satisfies the hardware-tier probe; NATIVE choices precede the
+# single VIRTUAL emulator floor, which is the last entry under BEST.
+ct_field_ok = ct_best.all? do |c|
+  hw_ok = c.tier != TIER_HWTRACE || HwTrace.available?(c.backend)
+  want = c.tier == TIER_EMULATOR ? FIDELITY_VIRTUAL : FIDELITY_NATIVE
+  hw_ok && c.fidelity == want
+end
+ok(ct_field_ok, "cross-tier BEST: HW choices available, fidelity matches tier")
+ok(!ct_best.empty? && ct_best.last.tier == TIER_EMULATOR,
+   "cross-tier BEST ends at the emulator floor")
+ok(ct_best.count { |c| c.tier == TIER_EMULATOR } == 1,
+   "cross-tier BEST has exactly one emulator floor entry")
+
+# NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+ok(ct_nat.all? { |c| c.tier != TIER_EMULATOR },
+   "cross-tier NATIVE_ONLY drops the emulator floor")
+ok(ct_nat.length == ct_best.length - 1,
+   "cross-tier NATIVE_ONLY is BEST minus the floor")
+
+# CEILING_FREE drops AMD LBR.
+ok(ct_cf.all? { |c| !(c.tier == TIER_HWTRACE && c.backend == AMD_LBR) },
+   "cross-tier CEILING_FREE never selects AMD LBR")
+
+# auto_tier(policy) is the head of resolve_tiers(policy).
+ct_one = HwTrace.auto_tier(TRACE_BEST)
+ok(!ct_one.nil? &&
+   ct_one.tier == ct_best.first.tier && ct_one.backend == ct_best.first.backend,
+   "cross-tier auto_tier(BEST) is the head of the resolved cascade")
+
+# On any x86-64 Linux host the single-step backend is a native floor, so even
+# NATIVE_ONLY resolves (the cascade never collapses to nothing here). Inline-guard
+# rather than the process-exiting skip(): the rest of the suite still runs.
+if HwTrace.available?(SINGLESTEP)
+  pick = HwTrace.auto_tier(TRACE_NATIVE_ONLY)
+  ok(!ct_nat.empty? && !pick.nil? && pick.fidelity == FIDELITY_NATIVE,
+     "cross-tier NATIVE_ONLY resolves a native pick on x86-64 Linux")
+  ok(ct_nat.any? { |c| c.tier == TIER_HWTRACE && c.backend == SINGLESTEP },
+     "cross-tier NATIVE_ONLY includes the single-step native floor")
+else
+  puts "# SKIP cross-tier NATIVE_ONLY (single-step unavailable): #{HwTrace.skip_reason(SINGLESTEP)}"
+end
 
 # Self-skip cleanly when the single-step tier can't run (lib absent / off x86-64).
 unless HwTrace.available?(SINGLESTEP)

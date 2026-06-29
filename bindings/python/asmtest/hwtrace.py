@@ -56,6 +56,20 @@ BEST = 0          # the most faithful available backend
 CEILING_FREE = 1  # the same, but skipping the one fixed-window backend (AMD LBR);
                   # re-resolve under this after a trace comes back truncated
 
+# asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+# (hardware + DynamoRIO + emulator), not just the hardware backends above.
+# asmtest_trace_tier_t
+TIER_HWTRACE = 0    # HW branch trace / single-step (real CPU)
+TIER_DYNAMORIO = 1  # in-process software DBI (real CPU)
+TIER_EMULATOR = 2   # Unicorn virtual CPU (isolated guest)
+# asmtest_trace_fidelity_t
+FIDELITY_NATIVE = 0   # runs the real bytes on the real CPU in-process
+FIDELITY_VIRTUAL = 1  # isolated guest on an emulated CPU
+# cross-tier policy bitmask
+TRACE_BEST = 0x0          # most-faithful available; emulator floor allowed
+TRACE_CEILING_FREE = 0x1  # drop the fixed-window backend (AMD LBR)
+TRACE_NATIVE_ONLY = 0x2   # forbid the native->emulator fidelity crossing
+
 
 class _Options(C.Structure):
     """Mirrors asmtest_hwtrace_options_t."""
@@ -67,6 +81,28 @@ class _Options(C.Structure):
         ("snapshot", C.c_int),
         ("object_hint", C.c_char_p),
     ]
+
+
+class _Choice(C.Structure):
+    """Mirrors asmtest_trace_choice_t (three int-sized enum fields, no padding)."""
+
+    _fields_ = [
+        ("tier", C.c_int),
+        ("backend", C.c_int),
+        ("fidelity", C.c_int),
+    ]
+
+
+class TierChoice(C.Structure):
+    """A resolved cross-tier trace option: which ``tier`` to use, which hardware
+    ``backend`` within it (meaningful only when ``tier == TIER_HWTRACE``), and the
+    ``fidelity`` class (``FIDELITY_NATIVE`` vs ``FIDELITY_VIRTUAL``)."""
+
+    _fields_ = _Choice._fields_
+
+    def __repr__(self):
+        return (f"TierChoice(tier={self.tier}, backend={self.backend}, "
+                f"fidelity={self.fidelity})")
 
 
 def _lib_name():
@@ -100,6 +136,11 @@ def _declare(lib):
     lib.asmtest_hwtrace_resolve.restype = sz
     lib.asmtest_hwtrace_auto.argtypes = [ci]
     lib.asmtest_hwtrace_auto.restype = ci
+    # Cross-tier orchestrator (asmtest_trace_auto.h).
+    lib.asmtest_trace_resolve.argtypes = [C.c_uint, C.POINTER(_Choice), sz]
+    lib.asmtest_trace_resolve.restype = sz
+    lib.asmtest_trace_auto.argtypes = [C.c_uint, C.POINTER(_Choice)]
+    lib.asmtest_trace_auto.restype = ci
     lib.asmtest_hwtrace_init.argtypes = [C.POINTER(_Options)]
     lib.asmtest_hwtrace_init.restype = ci
     lib.asmtest_hwtrace_register_region.argtypes = [cc, v, sz, v]
@@ -234,6 +275,29 @@ class HwTrace:
         enum >= 0, ready to ``init``), or ``ASMTEST_HW_EUNAVAIL`` (< 0) when no
         hardware-trace backend is available on this host."""
         return int(_get().asmtest_hwtrace_auto(policy))
+
+    @staticmethod
+    def resolve_tiers(policy=TRACE_BEST) -> list:
+        """The host's full CROSS-TIER cascade (``asmtest_trace_resolve``), most-
+        faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight
+        -> emulator, each included only if its tier is available. Returns a list of
+        :class:`TierChoice`. ``TRACE_NATIVE_ONLY`` drops the emulator floor (no
+        native->emulator fidelity crossing); ``TRACE_CEILING_FREE`` drops AMD LBR."""
+        out = (_Choice * 8)()
+        n = _get().asmtest_trace_resolve(policy, out, len(out))
+        return [TierChoice(out[i].tier, out[i].backend, out[i].fidelity)
+                for i in range(n)]
+
+    @staticmethod
+    def auto_tier(policy=TRACE_BEST):
+        """The single most-preferred available cross-tier choice under ``policy`` as
+        a :class:`TierChoice`, or ``None`` when the cascade is empty (only off a
+        native host under ``TRACE_NATIVE_ONLY``)."""
+        out = _Choice()
+        rc = _get().asmtest_trace_auto(policy, C.byref(out))
+        if rc != ASMTEST_HW_OK:
+            return None
+        return TierChoice(out.tier, out.backend, out.fidelity)
 
     @classmethod
     def init(cls, backend=SINGLESTEP):

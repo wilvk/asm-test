@@ -49,6 +49,51 @@ pub const Backend = enum(c_int) {
 /// The default backend: EFLAGS.TF single-step, portable across any x86-64 Linux.
 pub const SINGLESTEP: Backend = .singlestep;
 
+/// asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+/// (hardware + DynamoRIO + emulator), not just the hardware backends above.
+/// asmtest_trace_tier_t — the trace tiers, most-faithful to least.
+pub const Tier = enum(c_int) {
+    hwtrace = 0, // HW branch trace / single-step (real CPU)
+    dynamorio = 1, // in-process software DBI (real CPU)
+    emulator = 2, // Unicorn virtual CPU (isolated guest)
+};
+
+/// asmtest_trace_fidelity_t — NATIVE runs the real bytes on the real CPU
+/// in-process; VIRTUAL runs an isolated guest on an emulated CPU.
+pub const Fidelity = enum(c_int) {
+    native = 0,
+    virtual = 1,
+};
+
+/// Cross-tier policy bitmask (composable), passed across the FFI as an int.
+/// `TRACE_BEST` resolves the most-faithful available choice (emulator floor
+/// allowed); `TRACE_CEILING_FREE` drops the one fixed-window backend (AMD LBR);
+/// `TRACE_NATIVE_ONLY` forbids the native->emulator fidelity crossing.
+pub const TracePolicy = enum(c_int) {
+    best = 0x0,
+    ceiling_free = 0x1,
+    native_only = 0x2,
+};
+
+/// Most-faithful available; the emulator floor is allowed.
+pub const TRACE_BEST: TracePolicy = .best;
+
+/// Like `TRACE_BEST`, but dropping the one fixed-window backend (AMD LBR).
+pub const TRACE_CEILING_FREE: TracePolicy = .ceiling_free;
+
+/// Forbid the native->emulator fidelity crossing (resolve only the real-CPU tiers).
+pub const TRACE_NATIVE_ONLY: TracePolicy = .native_only;
+
+/// asmtest_trace_choice_t — a resolved cross-tier trace option: which `tier` to
+/// use, which hardware `backend` within it (meaningful only when
+/// `tier == .hwtrace`), and the `fidelity` class. Exactly three int-sized fields,
+/// no padding, so it marshals as three consecutive C ints.
+pub const Choice = extern struct {
+    tier: c_int,
+    backend: c_int,
+    fidelity: c_int,
+};
+
 /// asmtest_hwtrace_policy_t — backend auto-selection policy for `resolve`/`auto`.
 /// `BEST` is the most faithful available backend; `CEILING_FREE` is the same but
 /// skips the one fixed-window backend (AMD LBR) — re-resolve under it after a trace
@@ -84,6 +129,10 @@ const FnAvailable = *const fn (c_int) callconv(.C) c_int;
 const FnSkipReason = *const fn (c_int, [*c]u8, usize) callconv(.C) void;
 const FnResolve = *const fn (c_int, [*]c_int, usize) callconv(.C) usize;
 const FnAuto = *const fn (c_int) callconv(.C) c_int;
+// Cross-tier orchestrator (asmtest_trace_auto.h). `policy` is an `unsigned`
+// bitmask; the choices marshal as the 3-int `Choice` struct.
+const FnResolveTiers = *const fn (c_uint, [*]Choice, usize) callconv(.C) usize;
+const FnAutoTier = *const fn (c_uint, *Choice) callconv(.C) c_int;
 const FnInit = *const fn (*const c.asmtest_hwtrace_options_t) callconv(.C) c_int;
 const FnRegister = *const fn ([*:0]const u8, ?*anyopaque, usize, ?*anyopaque) callconv(.C) c_int;
 const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
@@ -109,6 +158,8 @@ const Api = struct {
     skip_reason: FnSkipReason,
     resolve: FnResolve,
     auto: FnAuto,
+    resolve_tiers: FnResolveTiers,
+    auto_tier: FnAutoTier,
     init: FnInit,
     register: FnRegister,
     begin: FnMarker,
@@ -162,6 +213,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .skip_reason = lib.lookup(FnSkipReason, "asmtest_hwtrace_skip_reason") orelse return null,
         .resolve = lib.lookup(FnResolve, "asmtest_hwtrace_resolve") orelse return null,
         .auto = lib.lookup(FnAuto, "asmtest_hwtrace_auto") orelse return null,
+        .resolve_tiers = lib.lookup(FnResolveTiers, "asmtest_trace_resolve") orelse return null,
+        .auto_tier = lib.lookup(FnAutoTier, "asmtest_trace_auto") orelse return null,
         .init = lib.lookup(FnInit, "asmtest_hwtrace_init") orelse return null,
         .register = lib.lookup(FnRegister, "asmtest_hwtrace_register_region") orelse return null,
         .begin = lib.lookup(FnMarker, "asmtest_hwtrace_begin") orelse return null,
@@ -259,6 +312,43 @@ pub fn resolve(policy: Policy) Resolved {
 pub fn auto(policy: Policy) c_int {
     const api = load() orelse return ASMTEST_HW_EUNAVAIL;
     return api.auto(@intFromEnum(policy));
+}
+
+/// This host's full CROSS-TIER fallback cascade under `policy` (the cross-tier
+/// orchestrator over hwtrace + DynamoRIO + emulator, `asmtest_trace_resolve`),
+/// most-faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step ->
+/// CoreSight -> emulator, each included only if its tier is available. Self-owns
+/// a fixed buffer (one slot per cascade stage) and returns the live `[0..n]`
+/// slice into it. `TRACE_NATIVE_ONLY` drops the emulator floor (no
+/// native->emulator fidelity crossing); `TRACE_CEILING_FREE` drops AMD LBR.
+/// Mirrors `HwTrace.resolve_tiers()`.
+pub const ResolvedTiers = struct {
+    buf: [8]Choice = undefined,
+    len: usize = 0,
+
+    /// The resolved choices, in descending-fidelity order.
+    pub fn slice(self: *const ResolvedTiers) []const Choice {
+        return self.buf[0..self.len];
+    }
+};
+
+/// Resolve `policy` into the available cross-tier cascade (see `ResolvedTiers`).
+pub fn resolveTiers(policy: TracePolicy) ResolvedTiers {
+    var r = ResolvedTiers{};
+    const api = load() orelse return r;
+    r.len = api.resolve_tiers(@intCast(@intFromEnum(policy)), &r.buf, r.buf.len);
+    return r;
+}
+
+/// The single most-preferred available cross-tier choice under `policy`
+/// (`asmtest_trace_auto`), or `null` when the cascade is empty (only off a native
+/// host under `TRACE_NATIVE_ONLY`) or the lib can't load. Mirrors
+/// `HwTrace.auto_tier()`.
+pub fn autoTier(policy: TracePolicy) ?Choice {
+    const api = load() orelse return null;
+    var out: Choice = undefined;
+    if (api.auto_tier(@intCast(@intFromEnum(policy)), &out) != OK) return null;
+    return out;
 }
 
 /// Select a backend and initialize the tier. SINGLESTEP is the portable default

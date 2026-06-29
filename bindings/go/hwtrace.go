@@ -46,11 +46,23 @@ typedef struct {
     const char *object_hint;
 } asmtest_hwtrace_options_t;
 
+// The cross-tier orchestrator's resolved-choice struct, redefined here (mirrors
+// asmtest_trace_choice_t from include/asmtest_trace_auto.h): exactly three
+// int-sized enum fields, no padding, so it marshals as three consecutive C ints.
+typedef struct {
+    int tier;
+    int backend;
+    int fidelity;
+} asmtest_trace_choice_t;
+
 // Entry-point typedefs (one per exported symbol in libasmtest_hwtrace).
 typedef int  (*hw_available_fn)(int);
 typedef void (*hw_skip_reason_fn)(int, char *, size_t);
 typedef size_t (*hw_resolve_fn)(int, int *, size_t);
 typedef int  (*hw_auto_fn)(int);
+// Cross-tier orchestrator entry points (asmtest_trace_auto.h), from the SAME lib.
+typedef size_t (*hw_trace_resolve_fn)(unsigned, asmtest_trace_choice_t *, size_t);
+typedef int    (*hw_trace_auto_fn)(unsigned, asmtest_trace_choice_t *);
 typedef int  (*hw_init_fn)(const asmtest_hwtrace_options_t *);
 typedef int  (*hw_register_fn)(const char *, void *, size_t, void *);
 typedef void (*hw_marker_fn)(const char *);
@@ -71,6 +83,8 @@ static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
 static hw_resolve_fn          p_hw_resolve;
 static hw_auto_fn             p_hw_auto;
+static hw_trace_resolve_fn    p_trace_resolve;
+static hw_trace_auto_fn       p_trace_auto;
 static hw_init_fn             p_hw_init;
 static hw_register_fn         p_hw_register;
 static hw_marker_fn           p_hw_begin;
@@ -106,6 +120,8 @@ static void asmtest_hw_resolve(void) {
     p_hw_skip_reason     = (hw_skip_reason_fn)dlsym(h, "asmtest_hwtrace_skip_reason");
     p_hw_resolve         = (hw_resolve_fn)dlsym(h, "asmtest_hwtrace_resolve");
     p_hw_auto            = (hw_auto_fn)dlsym(h, "asmtest_hwtrace_auto");
+    p_trace_resolve      = (hw_trace_resolve_fn)dlsym(h, "asmtest_trace_resolve");
+    p_trace_auto         = (hw_trace_auto_fn)dlsym(h, "asmtest_trace_auto");
     p_hw_init            = (hw_init_fn)dlsym(h, "asmtest_hwtrace_init");
     p_hw_register        = (hw_register_fn)dlsym(h, "asmtest_hwtrace_register_region");
     p_hw_begin           = (hw_marker_fn)dlsym(h, "asmtest_hwtrace_begin");
@@ -123,7 +139,7 @@ static void asmtest_hw_resolve(void) {
     p_hw_trace_block_at    = (hw_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
     p_hw_trace_insn_at     = (hw_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
     g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
-                  p_hw_auto && p_hw_init &&
+                  p_hw_auto && p_trace_resolve && p_trace_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
                   p_hw_exec_alloc && p_hw_exec_free && p_hw_trace_new &&
                   p_hw_trace_free && p_hw_trace_covered && p_hw_trace_blocks_len &&
@@ -145,6 +161,13 @@ static size_t asmtest_hw_go_resolve(int policy, int *out, size_t cap) {
 }
 static int  asmtest_hw_go_auto(int policy) {
     return p_hw_auto ? p_hw_auto(policy) : -3; // ASMTEST_HW_EUNAVAIL
+}
+// Cross-tier orchestrator bridges (asmtest_trace_auto.h).
+static size_t asmtest_go_trace_resolve(unsigned policy, asmtest_trace_choice_t *out, size_t cap) {
+    return p_trace_resolve ? p_trace_resolve(policy, out, cap) : 0;
+}
+static int  asmtest_go_trace_auto(unsigned policy, asmtest_trace_choice_t *out) {
+    return p_trace_auto ? p_trace_auto(policy, out) : -3; // ASMTEST_HW_EUNAVAIL
 }
 static int  asmtest_hw_go_init(int backend) {
     asmtest_hwtrace_options_t o;
@@ -231,6 +254,31 @@ const (
 	CeilingFree = 1
 )
 
+// asmtest_trace_tier_t — the CROSS-TIER orchestrator's trace tiers (over the
+// hardware + DynamoRIO + emulator tiers), most-faithful to least. See
+// include/asmtest_trace_auto.h and the Python wrapper's resolve_tiers/auto_tier.
+const (
+	TierHwtrace   = 0 // HW branch trace / single-step (real CPU)
+	TierDynamoRIO = 1 // in-process software DBI (real CPU)
+	TierEmulator  = 2 // Unicorn virtual CPU (isolated guest)
+)
+
+// asmtest_trace_fidelity_t — execution fidelity of a resolved tier choice.
+const (
+	FidelityNative  = 0 // runs the real bytes on the real CPU in-process
+	FidelityVirtual = 1 // isolated guest on an emulated CPU
+)
+
+// Cross-tier policy bitmask for ResolveTiers / AutoTier. TraceBest is the most-
+// faithful available (emulator floor allowed); TraceCeilingFree drops the one
+// fixed-window backend (AMD LBR); TraceNativeOnly forbids the native->emulator
+// fidelity crossing (drops the emulator floor).
+const (
+	TraceBest        = 0x0
+	TraceCeilingFree = 0x1
+	TraceNativeOnly  = 0x2
+)
+
 // Resolve the optional hardware-trace tier the first time the package loads,
 // exactly as drtrace.go resolves the DynamoRIO tier. A miss is silent —
 // HwTraceAvailable() reports it.
@@ -275,6 +323,53 @@ func HwTraceResolve(policy int) []int {
 // hardware-trace backend is available on this host.
 func HwTraceAuto(policy int) int {
 	return int(C.asmtest_hw_go_auto(C.int(policy)))
+}
+
+// TierChoice is one resolved cross-tier trace option: which Tier to use, which
+// hardware Backend within it (meaningful only when Tier == TierHwtrace), and the
+// Fidelity class (FidelityNative vs FidelityVirtual). Mirrors
+// asmtest_trace_choice_t / the Python wrapper's TierChoice.
+type TierChoice struct {
+	Tier     int
+	Backend  int
+	Fidelity int
+}
+
+// ResolveTiers is this host's full CROSS-TIER cascade (asmtest_trace_resolve),
+// most-faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step ->
+// CoreSight -> emulator, each included only if its tier is available, honoring
+// policy. The emulator (TierEmulator, FidelityVirtual) is the universal floor and
+// the last entry under TraceBest. TraceNativeOnly drops that floor (no
+// native->emulator crossing); TraceCeilingFree drops AMD LBR. Empty only off a
+// native host under TraceNativeOnly, or when libasmtest_hwtrace is not loaded.
+func ResolveTiers(policy int) []TierChoice {
+	var out [8]C.asmtest_trace_choice_t
+	n := C.asmtest_go_trace_resolve(C.uint(policy), &out[0], C.size_t(len(out)))
+	cs := make([]TierChoice, int(n))
+	for i := range cs {
+		cs[i] = TierChoice{
+			Tier:     int(out[i].tier),
+			Backend:  int(out[i].backend),
+			Fidelity: int(out[i].fidelity),
+		}
+	}
+	return cs
+}
+
+// AutoTier is the single most-preferred available cross-tier choice under policy
+// (asmtest_trace_auto). The bool is false (meaning EUNAVAIL) when the cascade is
+// empty — only off a native host under TraceNativeOnly, or when
+// libasmtest_hwtrace is not loaded.
+func AutoTier(policy int) (TierChoice, bool) {
+	var c C.asmtest_trace_choice_t
+	if rc := C.asmtest_go_trace_auto(C.uint(policy), &c); rc != hwOK {
+		return TierChoice{}, false
+	}
+	return TierChoice{
+		Tier:     int(c.tier),
+		Backend:  int(c.backend),
+		Fidelity: int(c.fidelity),
+	}, true
 }
 
 // HwTraceInit selects a backend and initializes the tier. SingleStep is the

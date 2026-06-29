@@ -61,6 +61,22 @@ public final class HwTrace {
     public static final int BEST = 0;
     public static final int CEILING_FREE = 1;
 
+    // asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+    // (hardware + DynamoRIO + emulator), not just the hardware backends above.
+    // asmtest_trace_tier_t — the trace tiers, most-faithful to least.
+    public static final int TIER_HWTRACE = 0;   // HW branch trace / single-step (real CPU)
+    public static final int TIER_DYNAMORIO = 1; // in-process software DBI (real CPU)
+    public static final int TIER_EMULATOR = 2;  // Unicorn virtual CPU (isolated guest)
+    // asmtest_trace_fidelity_t — execution fidelity of a tier.
+    public static final int FIDELITY_NATIVE = 0;  // runs the real bytes on the real CPU in-process
+    public static final int FIDELITY_VIRTUAL = 1; // isolated guest on an emulated CPU
+    // cross-tier policy bitmask. TRACE_BEST allows the emulator floor; TRACE_CEILING_FREE
+    // drops the fixed-window backend (AMD LBR); TRACE_NATIVE_ONLY forbids the
+    // native->emulator fidelity crossing.
+    public static final int TRACE_BEST = 0x0;
+    public static final int TRACE_CEILING_FREE = 0x1;
+    public static final int TRACE_NATIVE_ONLY = 0x2;
+
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
 
@@ -77,8 +93,20 @@ public final class HwTrace {
         MemoryLayout.paddingLayout(4),
         ADDRESS.withName("object_hint"));
 
+    // asmtest_trace_choice_t {int tier; int backend; int fidelity;} — three int-sized
+    // enum fields, no padding (pinned by a static_assert in the header), so a choice
+    // marshals as three consecutive ints (12 bytes).
+    private static final int CHOICE_INTS = 3;
+
+    /** A resolved cross-tier trace option: which {@code tier} to use, which hardware
+     *  {@code backend} within it (meaningful only when {@code tier == TIER_HWTRACE}),
+     *  and the {@code fidelity} class ({@link #FIDELITY_NATIVE} vs
+     *  {@link #FIDELITY_VIRTUAL}). Mirrors {@code asmtest_trace_choice_t}. */
+    public record TierChoice(int tier, int backend, int fidelity) {}
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
+        TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
@@ -101,6 +129,7 @@ public final class HwTrace {
 
     static {
         MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
+            traceResolve = null, traceAuto = null,
             hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
@@ -117,6 +146,13 @@ public final class HwTrace {
             hwResolve = h(lib, "asmtest_hwtrace_resolve",
                 FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
             hwAuto = h(lib, "asmtest_hwtrace_auto", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
+            // Cross-tier orchestrator (asmtest_trace_auto.h): asmtest_trace_resolve(policy,
+            // out, cap) writes cap choice-structs into out and returns the count (size_t);
+            // asmtest_trace_auto(policy, out) writes the single best choice, returns 0/EUNAVAIL.
+            traceResolve = h(lib, "asmtest_trace_resolve",
+                FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
+            traceAuto = h(lib, "asmtest_trace_auto",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
             hwInit = h(lib, "asmtest_hwtrace_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             hwShutdown = h(lib, "asmtest_hwtrace_shutdown", FunctionDescriptor.ofVoid());
             registerRegion = h(lib, "asmtest_hwtrace_register_region",
@@ -151,7 +187,7 @@ public final class HwTrace {
             loadError = t;
         }
         HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
-        HW_AUTO = hwAuto; HW_INIT = hwInit;
+        HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto; HW_INIT = hwInit;
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
@@ -210,7 +246,11 @@ public final class HwTrace {
     public static int[] resolve(int policy) {
         if (HW_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
         try {
-            MemorySegment out = ARENA.allocate(JAVA_INT, 4); // up to 4 backend ints
+            // up to 4 backend ints. A sequence layout sizes by element count
+            // unambiguously (ARENA.allocate(JAVA_INT, n) sizes to one int on this
+            // JDK, which only ever sufficed because this host exposes a single
+            // backend — it would truncate on a multi-backend Intel-PT host).
+            MemorySegment out = ARENA.allocate(MemoryLayout.sequenceLayout(4, JAVA_INT));
             int n = (int) (long) HW_RESOLVE.invoke(policy, out, 4L);
             int[] backends = new int[n];
             for (int i = 0; i < n; i++) backends[i] = out.getAtIndex(JAVA_INT, i);
@@ -225,6 +265,46 @@ public final class HwTrace {
     public static int auto(int policy) {
         if (HW_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
         try { return (int) HW_AUTO.invoke(policy); }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
+     *  first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
+     *  emulator, each included only if its tier is available. {@code TRACE_NATIVE_ONLY}
+     *  drops the emulator floor (no native->emulator fidelity crossing);
+     *  {@code TRACE_CEILING_FREE} drops AMD LBR. */
+    public static java.util.List<TierChoice> resolveTiers(int policy) {
+        if (TRACE_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try {
+            final int cap = 8; // the cascade is at most 6 entries; headroom
+            // 3 consecutive JAVA_INT per choice (asmtest_trace_choice_t, no padding).
+            MemorySegment out = ARENA.allocate(
+                MemoryLayout.sequenceLayout((long) CHOICE_INTS * cap, JAVA_INT));
+            int n = (int) (long) TRACE_RESOLVE.invoke(policy, out, (long) cap);
+            java.util.List<TierChoice> choices = new java.util.ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                int base = i * CHOICE_INTS;
+                choices.add(new TierChoice(out.getAtIndex(JAVA_INT, base),
+                    out.getAtIndex(JAVA_INT, base + 1), out.getAtIndex(JAVA_INT, base + 2)));
+            }
+            return choices;
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The single most-preferred available cross-tier choice under {@code policy}
+     *  (asmtest_trace_auto), or an empty {@link java.util.Optional} on EUNAVAIL (only
+     *  off a native host under {@code TRACE_NATIVE_ONLY}). */
+    public static java.util.Optional<TierChoice> autoTier(int policy) {
+        if (TRACE_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try {
+            MemorySegment out = ARENA.allocate(
+                MemoryLayout.sequenceLayout(CHOICE_INTS, JAVA_INT));
+            int rc = (int) TRACE_AUTO.invoke(policy, out);
+            if (rc != ASMTEST_HW_OK) return java.util.Optional.empty();
+            return java.util.Optional.of(new TierChoice(out.getAtIndex(JAVA_INT, 0),
+                out.getAtIndex(JAVA_INT, 1), out.getAtIndex(JAVA_INT, 2)));
+        } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
     }
 

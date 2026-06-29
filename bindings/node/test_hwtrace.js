@@ -16,6 +16,8 @@ const assert = require('assert');
 const {
   HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
   BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+  TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+  TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
 } = require('./hwtrace');
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
@@ -63,9 +65,59 @@ function main() {
     ok(ab === (best.length ? best[0] : ASMTEST_HW_EUNAVAIL), 'auto(BEST) is the head of resolve(BEST)');
   }
 
+  // --- cross-tier orchestrator: structural invariants (hold on every host) ---
+  {
+    const best = HwTrace.resolveTiers(TRACE_BEST);
+    const nat = HwTrace.resolveTiers(TRACE_NATIVE_ONLY);
+    const cf = HwTrace.resolveTiers(TRACE_CEILING_FREE);
+
+    // Every HW choice satisfies the hardware-tier probe; each choice's fidelity
+    // matches its tier (emulator is VIRTUAL, every other tier is NATIVE).
+    let hwAvail = true;
+    let fidOK = true;
+    for (const c of best) {
+      if (c.tier === TIER_HWTRACE && !HwTrace.available(c.backend)) hwAvail = false;
+      const want = c.tier === TIER_EMULATOR ? FIDELITY_VIRTUAL : FIDELITY_NATIVE;
+      if (c.fidelity !== want) fidOK = false;
+    }
+    ok(hwAvail, 'resolveTiers(BEST): every HW-tier choice is available');
+    ok(fidOK, 'resolveTiers(BEST): fidelity matches tier (emulator VIRTUAL, else NATIVE)');
+
+    // NATIVE choices precede the single VIRTUAL emulator floor, which is the last
+    // entry under BEST.
+    ok(best.length > 0 && best[best.length - 1].tier === TIER_EMULATOR,
+      'resolveTiers(BEST): emulator floor is the last entry');
+    ok(best.filter((c) => c.tier === TIER_EMULATOR).length === 1,
+      'resolveTiers(BEST): exactly one emulator entry');
+
+    // NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+    ok(nat.every((c) => c.tier !== TIER_EMULATOR), 'resolveTiers(NATIVE_ONLY) drops the emulator floor');
+    ok(nat.length === best.length - 1, 'resolveTiers(NATIVE_ONLY) is BEST minus the floor');
+
+    // CEILING_FREE drops AMD LBR.
+    ok(cf.every((c) => !(c.tier === TIER_HWTRACE && c.backend === AMD_LBR)),
+      'resolveTiers(CEILING_FREE) never selects AMD LBR');
+
+    // autoTier(policy) is the head of resolveTiers(policy).
+    const one = HwTrace.autoTier(TRACE_BEST);
+    ok(one !== null && one.tier === best[0].tier && one.backend === best[0].backend,
+      'autoTier(BEST) is the head of resolveTiers(BEST)');
+  }
+
   if (!HwTrace.available(SINGLESTEP)) {
     console.log(`# SKIP single-step backend unavailable: ${HwTrace.skipReason(SINGLESTEP)}`);
     process.exit(0);
+  }
+
+  // --- cross-tier native-only resolves on x86-64 Linux: single-step is a native
+  //     floor, so even NATIVE_ONLY never collapses to nothing here. ---
+  {
+    const nat = HwTrace.resolveTiers(TRACE_NATIVE_ONLY);
+    const pick = HwTrace.autoTier(TRACE_NATIVE_ONLY);
+    ok(nat.length > 0 && pick !== null && pick.fidelity === FIDELITY_NATIVE,
+      'resolveTiers(NATIVE_ONLY) resolves a native choice on x86-64 Linux');
+    ok(nat.some((c) => c.tier === TIER_HWTRACE && c.backend === SINGLESTEP),
+      'resolveTiers(NATIVE_ONLY) includes the single-step native floor');
   }
 
   HwTrace.init(SINGLESTEP);

@@ -480,9 +480,49 @@ traced call through the auto-picked backend.
 **Scope.** This orchestrates the *hardware tier's own* backends — one library, one
 API. The DynamoRIO tier (`libasmtest_drapp`) and the Unicorn emulator are separate
 libraries with their own call APIs, and a fall to the emulator crosses a fidelity
-line (real CPU → isolated guest). So extending the cascade across tiers stays an
-explicit, fidelity-aware caller decision rather than an automatic last resort — the
-cross-tier `asmtest_trace_auto(...)` front-end remains a deliberate follow-up.
+line (real CPU → isolated guest).
+
+### Cross-tier orchestration (over all three tiers)
+
+`asmtest_trace_resolve(policy, out, cap)` / `asmtest_trace_auto(policy, &choice)`
+(`asmtest_trace_auto.h`, `src/trace_auto.c`) extend the cascade *across* tiers. They
+walk the full descending-fidelity order — **Intel PT → AMD LBR → DynamoRIO →
+single-step → CoreSight → emulator** — and return `asmtest_trace_choice_t`
+descriptors `{tier, backend, fidelity}` rather than a bare backend enum. DynamoRIO
+ranks **above** single-step because its code cache runs at native speed while
+single-step pays a per-instruction kernel round-trip; that interleaving is why this
+is a distinct front-end and not just the hardware cascade with two tiers appended.
+
+```c
+#include "asmtest_trace_auto.h"
+
+asmtest_trace_choice_t pick;
+if (asmtest_trace_auto(ASMTEST_TRACE_BEST, &pick) == ASMTEST_HW_OK) {
+    /* pick.tier ∈ {HWTRACE, DYNAMORIO, EMULATOR}; pick.backend valid for HWTRACE;
+     * pick.fidelity is NATIVE except the emulator floor (VIRTUAL). Dispatch to that
+     * tier's own init/begin/end. */
+}
+```
+
+It calls `asmtest_hwtrace_available()` directly and **dlopen-probes**
+`libasmtest_drapp` (via `$ASMTEST_DRAPP_LIB`, else the default soname) for the
+DynamoRIO tier — so it hard-links neither the DynamoRIO nor the emulator library,
+keeping the three decoupled. The `policy` bitmask composes three controls:
+
+- `ASMTEST_TRACE_BEST` — most-faithful available; the emulator floor is allowed.
+- `ASMTEST_TRACE_CEILING_FREE` — drop the one fixed-window backend (AMD LBR); the
+  policy to **re-resolve under after a trace comes back `truncated`**.
+- `ASMTEST_TRACE_NATIVE_ONLY` — **forbid the native→emulator crossing**. The emulator
+  floor is dropped, so a host with no native tier (e.g. macOS arm64) resolves to
+  *nothing* (`ASMTEST_HW_EUNAVAIL`) rather than silently downgrading real-CPU
+  execution to an isolated guest. This keeps the one fidelity-line crossing an
+  explicit, opt-in decision — now a policy flag instead of hand-rolled per caller.
+
+On any x86-64 Linux host the cascade is non-empty under `BEST` (the emulator is the
+universal floor) and under `NATIVE_ONLY` (single-step is the native floor). **Every
+language wrapper exposes it** as `resolve_tiers`/`auto_tier` (Python/Rust/Go/Lua/Ruby)
+or `resolveTiers`/`autoTier` (C++/Node/Java/.NET/Zig), each with a self-test of the
+cross-tier invariants.
 
 ---
 

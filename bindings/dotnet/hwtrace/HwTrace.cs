@@ -34,6 +34,25 @@ namespace Asmtest
     /// </summary>
     public enum HwPolicy { Best = 0, CeilingFree = 1 }
 
+    /// <summary>The cross-tier trace tier, most-faithful to least (mirrors asmtest_trace_tier_t).</summary>
+    public enum TraceTier { HwTrace = 0, DynamoRio = 1, Emulator = 2 }
+
+    /// <summary>
+    /// Execution fidelity of a tier (mirrors asmtest_trace_fidelity_t). Native runs
+    /// the real bytes on the real CPU in-process; Virtual runs an isolated guest on an
+    /// emulated CPU. The single Native-&gt;Virtual transition is the line TracePolicy.NativeOnly gates.
+    /// </summary>
+    public enum TraceFidelity { Native = 0, Virtual = 1 }
+
+    /// <summary>
+    /// Cross-tier auto-selection policy bitmask (mirrors the ASMTEST_TRACE_* flags).
+    /// Best is the most-faithful available choice with the emulator floor allowed;
+    /// CeilingFree additionally drops the one fixed-window backend (AMD LBR); NativeOnly
+    /// forbids the native-&gt;emulator fidelity crossing (drops the emulator floor).
+    /// </summary>
+    [Flags]
+    public enum TracePolicy { Best = 0x0, CeilingFree = 0x1, NativeOnly = 0x2 }
+
     // The native entry points for libasmtest_hwtrace. Internal: callers use the
     // typed HwTrace / NativeCode classes below, never DllImport directly. Loading
     // is wrapped so a missing lib (tier not built) self-skips cleanly via
@@ -45,6 +64,17 @@ namespace Asmtest
         public const int ASMTEST_HW_OK = 0;
         public const int ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available
         public const int SINGLESTEP = 3;
+
+        // asmtest_trace_choice_t: three int-sized enum fields, no padding (pinned by a
+        // static_assert in asmtest_trace_auto.h), so it marshals as three consecutive C
+        // ints — matching the [Out] Choice[] the cross-tier resolve writes into.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Choice
+        {
+            public int Tier;     // asmtest_trace_tier_t
+            public int Backend;  // asmtest_trace_backend_t (valid iff Tier == TIER_HWTRACE)
+            public int Fidelity; // asmtest_trace_fidelity_t
+        }
 
         // asmtest_hwtrace_options_t: backend + two ring sizes + snapshot flag + an
         // optional object-file hint. object_hint is marshalled by hand
@@ -123,6 +153,12 @@ namespace Asmtest
         // backend enum (>= 0) or ASMTEST_HW_EUNAVAIL (-3) when none.
         [DllImport(HWTRACE)] public static extern UIntPtr asmtest_hwtrace_resolve(int policy, int[] @out, UIntPtr cap);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_auto(int policy);
+        // Cross-tier orchestrator (asmtest_trace_auto.h), over hwtrace + DynamoRIO +
+        // emulator. resolve writes up to cap Choice triples into out[], most-faithful
+        // first, returning the count; auto fills one Choice and returns ASMTEST_HW_OK
+        // (0) or ASMTEST_HW_EUNAVAIL (-3) when the cascade is empty.
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_trace_resolve(uint policy, [Out] Choice[] @out, UIntPtr cap);
+        [DllImport(HWTRACE)] public static extern int asmtest_trace_auto(uint policy, out Choice @out);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_init(ref Options opts);
         [DllImport(HWTRACE)] public static extern void asmtest_hwtrace_shutdown();
 
@@ -167,6 +203,30 @@ namespace Asmtest
     /// <summary>The signature generated code is invoked through: two longs in, a long out (SysV).</summary>
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate long HwFunc2(long a, long b);
+
+    /// <summary>
+    /// A resolved cross-tier trace option (mirrors asmtest_trace_choice_t): which
+    /// <see cref="Tier"/> to use, which hardware <see cref="Backend"/> within it
+    /// (meaningful only when <see cref="Tier"/> == <see cref="TraceTier.HwTrace"/>),
+    /// and the <see cref="Fidelity"/> class so a caller can see at a glance whether a
+    /// choice crosses the native-&gt;emulator line.
+    /// </summary>
+    public readonly struct TierChoice
+    {
+        public TraceTier Tier { get; }
+        public HwBackend Backend { get; }
+        public TraceFidelity Fidelity { get; }
+
+        public TierChoice(TraceTier tier, HwBackend backend, TraceFidelity fidelity)
+        {
+            Tier = tier;
+            Backend = backend;
+            Fidelity = fidelity;
+        }
+
+        public override string ToString() =>
+            $"TierChoice(tier={Tier}, backend={Backend}, fidelity={Fidelity})";
+    }
 
     /// <summary>
     /// Host-native machine code in real executable (W^X) memory. Allocate with
@@ -282,6 +342,41 @@ namespace Asmtest
         {
             if (!HwNative.LibAvailable) return HwNative.ASMTEST_HW_EUNAVAIL;
             return HwNative.asmtest_hwtrace_auto((int)policy);
+        }
+
+        /// <summary>
+        /// This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
+        /// first: Intel PT -&gt; AMD LBR -&gt; DynamoRIO -&gt; single-step -&gt; CoreSight
+        /// -&gt; emulator, each included only if its tier is available on this host.
+        /// Returns the resolved <see cref="TierChoice"/> options. Empty only off a
+        /// native host under <see cref="TracePolicy.NativeOnly"/> (which drops the
+        /// emulator floor) or when the lib is missing. <see cref="TracePolicy.CeilingFree"/>
+        /// drops the fixed-window backend (AMD LBR).
+        /// </summary>
+        public static TierChoice[] ResolveTiers(TracePolicy policy = TracePolicy.Best)
+        {
+            if (!HwNative.LibAvailable) return Array.Empty<TierChoice>();
+            var buf = new HwNative.Choice[8];
+            int n = (int)HwNative.asmtest_trace_resolve((uint)policy, buf, (UIntPtr)buf.Length);
+            var choices = new TierChoice[n];
+            for (int i = 0; i < n; i++)
+                choices[i] = new TierChoice(
+                    (TraceTier)buf[i].Tier, (HwBackend)buf[i].Backend, (TraceFidelity)buf[i].Fidelity);
+            return choices;
+        }
+
+        /// <summary>
+        /// The single most-preferred available cross-tier choice under
+        /// <paramref name="policy"/> (asmtest_trace_auto), or <c>null</c> when the
+        /// cascade is empty (only off a native host under
+        /// <see cref="TracePolicy.NativeOnly"/>) or the lib is missing.
+        /// </summary>
+        public static TierChoice? AutoTier(TracePolicy policy = TracePolicy.Best)
+        {
+            if (!HwNative.LibAvailable) return null;
+            int rc = HwNative.asmtest_trace_auto((uint)policy, out var c);
+            if (rc != HwNative.ASMTEST_HW_OK) return null;
+            return new TierChoice((TraceTier)c.Tier, (HwBackend)c.Backend, (TraceFidelity)c.Fidelity);
         }
 
         /// <summary>

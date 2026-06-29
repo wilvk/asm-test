@@ -10,6 +10,7 @@
  */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
+#include "asmtest_trace_auto.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -387,6 +388,87 @@ static void test_auto_resolve(void) {
 #endif
 }
 
+/* Cross-tier orchestrator (asmtest_trace_auto.h): the front-end OVER all three
+ * tiers. It interleaves the hardware backends around the DynamoRIO tier by overhead
+ * (PT, AMD LBR rank above DynamoRIO; single-step, CoreSight below it) and ends at
+ * the emulator floor, gating the native->emulator crossing behind
+ * ASMTEST_TRACE_NATIVE_ONLY. These structural invariants hold on every host,
+ * independent of which tiers happen to be present. */
+static void test_cross_tier_resolve(void) {
+    asmtest_trace_choice_t best[8], nat[8], cf[8];
+    size_t nb = asmtest_trace_resolve(ASMTEST_TRACE_BEST, best, 8);
+    size_t nn = asmtest_trace_resolve(ASMTEST_TRACE_NATIVE_ONLY, nat, 8);
+    size_t ncf = asmtest_trace_resolve(ASMTEST_TRACE_CEILING_FREE, cf, 8);
+
+    /* Every HW choice satisfies the hardware-tier probe; fidelity is consistent
+     * (NATIVE for HW/DynamoRIO, VIRTUAL for the emulator); and once a VIRTUAL row
+     * appears no NATIVE row follows it (the cascade is weakly descending). */
+    int ok_hw = 1, ok_fidelity = 1, emu_count = 0;
+    for (size_t i = 0; i < nb; i++) {
+        if (best[i].tier == ASMTEST_TIER_HWTRACE &&
+            !asmtest_hwtrace_available(best[i].backend))
+            ok_hw = 0;
+        if (best[i].tier == ASMTEST_TIER_EMULATOR) {
+            emu_count++;
+            if (best[i].fidelity != ASMTEST_FIDELITY_VIRTUAL)
+                ok_fidelity = 0;
+        } else if (best[i].fidelity != ASMTEST_FIDELITY_NATIVE) {
+            ok_fidelity = 0;
+        }
+        if (i && best[i - 1].fidelity == ASMTEST_FIDELITY_VIRTUAL &&
+            best[i].fidelity == ASMTEST_FIDELITY_NATIVE)
+            ok_fidelity = 0;
+    }
+    CHECK(ok_hw, "cross-tier BEST: every HW choice is asmtest_hwtrace_available");
+    CHECK(ok_fidelity,
+          "cross-tier BEST: NATIVE choices precede the VIRTUAL emulator floor");
+    CHECK(nb >= 1 && best[nb - 1].tier == ASMTEST_TIER_EMULATOR && emu_count == 1,
+          "cross-tier BEST ends at exactly one emulator floor on every host");
+
+    /* NATIVE_ONLY forbids the native->emulator crossing: no emulator row, and the
+     * result is exactly BEST with the trailing emulator floor removed. */
+    int nat_no_emu = 1;
+    for (size_t i = 0; i < nn; i++)
+        if (nat[i].tier == ASMTEST_TIER_EMULATOR)
+            nat_no_emu = 0;
+    CHECK(nat_no_emu,
+          "cross-tier NATIVE_ONLY drops the emulator (no fidelity crossing)");
+    CHECK(nn == nb - 1, "cross-tier NATIVE_ONLY is BEST minus the emulator floor");
+
+    /* CEILING_FREE drops the one fixed-window backend (AMD LBR, 16 taken branches). */
+    int cf_no_amd = 1;
+    for (size_t i = 0; i < ncf; i++)
+        if (cf[i].tier == ASMTEST_TIER_HWTRACE &&
+            cf[i].backend == ASMTEST_HWTRACE_AMD_LBR)
+            cf_no_amd = 0;
+    CHECK(cf_no_amd, "cross-tier CEILING_FREE never selects AMD LBR");
+
+    /* auto(policy) is the head of resolve(policy), or EUNAVAIL when empty. */
+    asmtest_trace_choice_t one;
+    int rc = asmtest_trace_auto(ASMTEST_TRACE_BEST, &one);
+    int head_ok = (nb == 0)
+                      ? (rc == ASMTEST_HW_EUNAVAIL)
+                      : (rc == ASMTEST_HW_OK && one.tier == best[0].tier &&
+                         one.backend == best[0].backend);
+    CHECK(head_ok, "cross-tier auto(BEST) is the head of the resolved cascade");
+
+#if defined(__linux__) && defined(__x86_64__)
+    /* On x86-64 Linux the single-step backend is a NATIVE floor, so even NATIVE_ONLY
+     * resolves — the cascade never collapses to nothing here. */
+    asmtest_trace_choice_t natpick;
+    int nrc = asmtest_trace_auto(ASMTEST_TRACE_NATIVE_ONLY, &natpick);
+    CHECK(nrc == ASMTEST_HW_OK &&
+              natpick.fidelity == ASMTEST_FIDELITY_NATIVE && nn >= 1,
+          "cross-tier NATIVE_ONLY still resolves a native tier on x86-64 Linux");
+    int has_ss = 0;
+    for (size_t i = 0; i < nn; i++)
+        has_ss |= (nat[i].tier == ASMTEST_TIER_HWTRACE &&
+                   nat[i].backend == ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(has_ss,
+          "cross-tier native cascade includes the single-step floor (x86-64 Linux)");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -403,6 +485,9 @@ int main(void) {
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();
+
+    /* The cross-tier orchestrator: resolve over hwtrace + DynamoRIO + emulator. */
+    test_cross_tier_resolve();
 
     asmtest_trace_backend_t backend = ASMTEST_HWTRACE_INTEL_PT;
     if (!asmtest_hwtrace_available(backend)) {

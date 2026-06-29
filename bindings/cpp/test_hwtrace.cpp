@@ -172,6 +172,80 @@ int main() {
         }
     }
 
+    // ---- cross-tier orchestrator: resolve over hwtrace + DynamoRIO + emulator ----
+    // Mirrors test_hwtrace.py's test_cross_tier_resolve_invariants: structural
+    // invariants of the full descending-fidelity cascade.
+    {
+        std::vector<TierChoice> best = HwTrace::resolveTiers(TRACE_BEST);
+        std::vector<TierChoice> nat = HwTrace::resolveTiers(TRACE_NATIVE_ONLY);
+        std::vector<TierChoice> cf = HwTrace::resolveTiers(TRACE_CEILING_FREE);
+
+        // Every HW choice satisfies the hardware-tier probe; each choice's fidelity
+        // is VIRTUAL iff it is the emulator tier, NATIVE otherwise.
+        bool hw_avail = true, fidelity_ok = true;
+        int emu_count = 0;
+        for (const TierChoice &c : best) {
+            if (c.tier == TIER_HWTRACE && !HwTrace::available(c.backend))
+                hw_avail = false;
+            int want = (c.tier == TIER_EMULATOR) ? FIDELITY_VIRTUAL
+                                                 : FIDELITY_NATIVE;
+            if (c.fidelity != want)
+                fidelity_ok = false;
+            if (c.tier == TIER_EMULATOR)
+                ++emu_count;
+        }
+        ok(hw_avail, "cross-tier: every HW choice in resolveTiers(BEST) is available");
+        ok(fidelity_ok,
+           "cross-tier: fidelity is VIRTUAL iff emulator tier, else NATIVE");
+
+        // The emulator floor is the single last entry under BEST.
+        ok(!best.empty() && best.back().tier == TIER_EMULATOR,
+           "cross-tier: emulator is the last entry under BEST");
+        ok(emu_count == 1, "cross-tier: exactly one emulator floor under BEST");
+
+        // NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus floor.
+        bool nat_no_emu = true;
+        for (const TierChoice &c : nat)
+            if (c.tier == TIER_EMULATOR)
+                nat_no_emu = false;
+        ok(nat_no_emu, "cross-tier: NATIVE_ONLY never selects the emulator tier");
+        ok(nat.size() == best.size() - 1,
+           "cross-tier: NATIVE_ONLY is BEST minus the emulator floor");
+
+        // CEILING_FREE drops AMD LBR.
+        bool cf_no_amd = true;
+        for (const TierChoice &c : cf)
+            if (c.tier == TIER_HWTRACE && c.backend == AMD_LBR)
+                cf_no_amd = false;
+        ok(cf_no_amd, "cross-tier: CEILING_FREE never selects AMD LBR");
+
+        // autoTier(policy) is the head of resolveTiers(policy).
+        std::optional<TierChoice> one = HwTrace::autoTier(TRACE_BEST);
+        bool head_ok = one.has_value() && !best.empty() &&
+                       one->tier == best[0].tier &&
+                       one->backend == best[0].backend;
+        ok(head_ok, "cross-tier: autoTier(BEST) is the head of resolveTiers(BEST)");
+    }
+
+    // ---- cross-tier NATIVE_ONLY on x86-64 Linux: single-step is a native floor ----
+    // Mirrors test_cross_tier_native_only_resolves_on_linux_x86_64. We are past the
+    // single-step availability guard at the top of main(), so the floor is present.
+    {
+        std::vector<TierChoice> nat = HwTrace::resolveTiers(TRACE_NATIVE_ONLY);
+        std::optional<TierChoice> pick = HwTrace::autoTier(TRACE_NATIVE_ONLY);
+
+        ok(!nat.empty() && pick.has_value() &&
+               pick->fidelity == FIDELITY_NATIVE,
+           "cross-tier: NATIVE_ONLY resolves a native pick on x86-64 Linux");
+
+        bool has_singlestep = false;
+        for (const TierChoice &c : nat)
+            if (c.tier == TIER_HWTRACE && c.backend == SINGLESTEP)
+                has_singlestep = true;
+        ok(has_singlestep,
+           "cross-tier: NATIVE_ONLY cascade includes the single-step floor");
+    }
+
     std::printf("1..%d\n", g_test);
     return g_failed == 0 ? 0 : 1;
 }

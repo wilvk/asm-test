@@ -11,7 +11,9 @@
 //! Run: `ASMTEST_HWTRACE_LIB=<repo>/build/libasmtest_hwtrace.so \
 //!       cargo test --test hwtrace -- --nocapture`
 
-use asmtest::hwtrace::{Backend, HwTrace, NativeCode, Policy, ASMTEST_HW_EUNAVAIL};
+use asmtest::hwtrace::{
+    Backend, Fidelity, HwTrace, NativeCode, Policy, Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
+};
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
 const ROUTINE: [u8; 18] = [
@@ -115,6 +117,97 @@ fn auto_resolve_selection_invariants() {
     let ab = HwTrace::auto(Policy::Best);
     let expect = best.first().copied().unwrap_or(ASMTEST_HW_EUNAVAIL);
     assert_eq!(ab, expect, "auto(BEST) is the head of the resolved cascade");
+}
+
+#[test]
+fn cross_tier_resolve_invariants() {
+    // The cross-tier orchestrator (resolve over hwtrace + DynamoRIO + emulator)
+    // holds its structural invariants on every host.
+    let best = HwTrace::resolve_tiers(TracePolicy::Best);
+    let nat = HwTrace::resolve_tiers(TracePolicy::NativeOnly);
+    let cf = HwTrace::resolve_tiers(TracePolicy::CeilingFree);
+
+    // Skip cleanly where the lib is absent (resolve_tiers returns empty) — there is
+    // no cross-tier cascade to assert on, exactly like the live-trace self-skip.
+    if best.is_empty() {
+        eprintln!(
+            "# SKIP: cross-tier cascade empty (libasmtest_hwtrace not loaded): {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+
+    // Every HW choice satisfies the hardware-tier probe; NATIVE choices precede the
+    // single VIRTUAL emulator floor, which is the last entry under BEST.
+    for c in &best {
+        if c.tier == Tier::HwTrace {
+            assert!(
+                HwTrace::available(backend_of(c.backend)),
+                "every HW-tier choice is an available backend"
+            );
+        }
+        let want = if c.tier == Tier::Emulator { Fidelity::Virtual } else { Fidelity::Native };
+        assert_eq!(c.fidelity, want, "fidelity matches tier (emulator => virtual)");
+    }
+    assert_eq!(
+        best.last().map(|c| c.tier),
+        Some(Tier::Emulator),
+        "the emulator floor is the last BEST entry"
+    );
+    assert_eq!(
+        best.iter().filter(|c| c.tier == Tier::Emulator).count(),
+        1,
+        "exactly one emulator floor entry under BEST"
+    );
+
+    // NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+    assert!(
+        nat.iter().all(|c| c.tier != Tier::Emulator),
+        "resolve(NATIVE_ONLY) never includes the emulator tier"
+    );
+    assert_eq!(nat.len(), best.len() - 1, "NATIVE_ONLY is BEST minus the emulator floor");
+
+    // CEILING_FREE drops AMD LBR.
+    assert!(
+        cf.iter()
+            .all(|c| !(c.tier == Tier::HwTrace && c.backend == Backend::AmdLbr as i32)),
+        "resolve(CEILING_FREE) never selects the AMD LBR backend"
+    );
+
+    // auto(policy) is the head of resolve(policy).
+    let one = HwTrace::auto_tier(TracePolicy::Best).expect("auto_tier(BEST) resolves a choice");
+    assert_eq!(
+        (one.tier, one.backend),
+        (best[0].tier, best[0].backend),
+        "auto_tier(BEST) is the head of the resolved cross-tier cascade"
+    );
+}
+
+#[test]
+fn cross_tier_native_only_resolves_on_linux_x86_64() {
+    // On any x86-64 Linux host the single-step backend is a native floor, so even
+    // NATIVE_ONLY resolves (the cascade never collapses to nothing here). Guard
+    // exactly like singlestep_live_trace so we self-skip off the single-step floor.
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step hardware-trace backend unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+
+    let nat = HwTrace::resolve_tiers(TracePolicy::NativeOnly);
+    let pick = HwTrace::auto_tier(TracePolicy::NativeOnly);
+
+    assert!(!nat.is_empty(), "NATIVE_ONLY resolves a non-empty cascade on x86-64 Linux");
+    let pick = pick.expect("auto_tier(NATIVE_ONLY) resolves a native choice here");
+    assert_eq!(pick.fidelity, Fidelity::Native, "the NATIVE_ONLY pick is a native choice");
+    assert!(
+        nat.iter()
+            .any(|c| c.tier == Tier::HwTrace && c.backend == Backend::Singlestep as i32),
+        "the single-step backend is present as a native floor under NATIVE_ONLY"
+    );
+    eprintln!("# PASS: cross-tier NATIVE_ONLY resolves on x86-64 Linux");
 }
 
 #[test]

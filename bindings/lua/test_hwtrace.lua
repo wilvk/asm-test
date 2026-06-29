@@ -19,6 +19,13 @@ local AMD_LBR = hwtrace.AMD_LBR
 local BEST = hwtrace.BEST
 local CEILING_FREE = hwtrace.CEILING_FREE
 local ASMTEST_HW_EUNAVAIL = hwtrace.ASMTEST_HW_EUNAVAIL
+local TIER_HWTRACE = hwtrace.TIER_HWTRACE
+local TIER_EMULATOR = hwtrace.TIER_EMULATOR
+local FIDELITY_NATIVE = hwtrace.FIDELITY_NATIVE
+local FIDELITY_VIRTUAL = hwtrace.FIDELITY_VIRTUAL
+local TRACE_BEST = hwtrace.TRACE_BEST
+local TRACE_CEILING_FREE = hwtrace.TRACE_CEILING_FREE
+local TRACE_NATIVE_ONLY = hwtrace.TRACE_NATIVE_ONLY
 
 -- mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 local ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
@@ -103,6 +110,80 @@ do
   local ab = HwTrace.auto(BEST)
   eq(ab, #best > 0 and best[1] or ASMTEST_HW_EUNAVAIL,
      "auto(BEST) is the head of the resolved cascade")
+end
+
+-- test_cross_tier_resolve_invariants — the cross-tier orchestrator (resolve over
+-- hwtrace + DynamoRIO + emulator) holds its structural invariants on every host.
+-- Needs no initialized tier, like the hardware-backend invariants above.
+do
+  local best = HwTrace.resolve_tiers(TRACE_BEST)
+  local nat = HwTrace.resolve_tiers(TRACE_NATIVE_ONLY)
+  local cf = HwTrace.resolve_tiers(TRACE_CEILING_FREE)
+
+  -- Every HW choice satisfies the hardware-tier probe; every choice's fidelity
+  -- matches its tier (VIRTUAL for the emulator, NATIVE otherwise).
+  local hw_avail, fidelity_ok = true, true
+  for i = 1, #best do
+    local c = best[i]
+    if c.tier == TIER_HWTRACE and not HwTrace.available(c.backend) then
+      hw_avail = false
+    end
+    local want = (c.tier == TIER_EMULATOR) and FIDELITY_VIRTUAL or FIDELITY_NATIVE
+    if c.fidelity ~= want then fidelity_ok = false end
+  end
+  ok(hw_avail, "cross-tier BEST: every HW choice is available")
+  ok(fidelity_ok, "cross-tier BEST: fidelity matches tier")
+
+  -- The single VIRTUAL emulator floor is the last entry under BEST, exactly once.
+  local emu_count = 0
+  for i = 1, #best do
+    if best[i].tier == TIER_EMULATOR then emu_count = emu_count + 1 end
+  end
+  ok(#best > 0 and best[#best].tier == TIER_EMULATOR,
+     "cross-tier BEST: emulator floor is the last entry")
+  eq(emu_count, 1, "cross-tier BEST: exactly one emulator floor")
+
+  -- NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+  local no_emu = true
+  for i = 1, #nat do
+    if nat[i].tier == TIER_EMULATOR then no_emu = false end
+  end
+  ok(no_emu, "cross-tier NATIVE_ONLY: no emulator tier")
+  eq(#nat, #best - 1, "cross-tier NATIVE_ONLY: BEST minus the floor")
+
+  -- CEILING_FREE drops AMD LBR.
+  local no_amd = true
+  for i = 1, #cf do
+    if cf[i].tier == TIER_HWTRACE and cf[i].backend == AMD_LBR then
+      no_amd = false
+    end
+  end
+  ok(no_amd, "cross-tier CEILING_FREE: never selects AMD LBR")
+
+  -- auto(policy) is the head of resolve(policy).
+  local one = HwTrace.auto_tier(TRACE_BEST)
+  ok(one ~= nil, "cross-tier auto(BEST) is non-nil")
+  if one then
+    ok(one.tier == best[1].tier and one.backend == best[1].backend,
+       "cross-tier auto(BEST) is the head of the resolved cascade")
+  end
+end
+
+-- test_cross_tier_native_only_resolves_on_linux_x86_64 — on any x86-64 Linux host
+-- the single-step backend is a native floor, so even NATIVE_ONLY resolves (the
+-- cascade never collapses to nothing here). Past the SINGLESTEP skip guard above.
+do
+  local nat = HwTrace.resolve_tiers(TRACE_NATIVE_ONLY)
+  local pick = HwTrace.auto_tier(TRACE_NATIVE_ONLY)
+  ok(#nat > 0 and pick ~= nil and pick.fidelity == FIDELITY_NATIVE,
+     "cross-tier NATIVE_ONLY resolves a native pick on x86-64 Linux")
+  local has_singlestep = false
+  for i = 1, #nat do
+    if nat[i].tier == TIER_HWTRACE and nat[i].backend == SINGLESTEP then
+      has_singlestep = true
+    end
+  end
+  ok(has_singlestep, "cross-tier NATIVE_ONLY: single-step is in the cascade")
 end
 
 local init_ok, err = pcall(HwTrace.init, SINGLESTEP)

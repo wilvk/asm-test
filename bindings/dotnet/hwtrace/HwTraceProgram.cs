@@ -141,6 +141,58 @@ static class HwTraceProgram
                 ? ab == HwNative.ASMTEST_HW_EUNAVAIL
                 : ab == best[0];
             Check(headOk, "auto: Auto(Best) is the head of Resolve(Best)");
+
+            // --- cross-tier orchestrator: structural invariants (every host) --- //
+            // Mirrors test_cross_tier_resolve_invariants: every HW choice satisfies the
+            // hardware-tier probe; NATIVE choices precede the single VIRTUAL emulator
+            // floor (the last entry under Best); NativeOnly is Best minus that floor;
+            // CeilingFree drops AMD LBR; AutoTier(Best) is the head of ResolveTiers(Best).
+            var tBest = HwTrace.ResolveTiers(TracePolicy.Best);
+            var tNat = HwTrace.ResolveTiers(TracePolicy.NativeOnly);
+            var tCf = HwTrace.ResolveTiers(TracePolicy.CeilingFree);
+
+            bool ctAvail = true, ctFidelity = true;
+            foreach (var c in tBest)
+            {
+                if (c.Tier == TraceTier.HwTrace && !HwTrace.Available(c.Backend)) ctAvail = false;
+                var wantFid = c.Tier == TraceTier.Emulator ? TraceFidelity.Virtual : TraceFidelity.Native;
+                if (c.Fidelity != wantFid) ctFidelity = false;
+            }
+            Check(ctAvail, "cross-tier: every HW-tier choice satisfies the hardware probe");
+            Check(ctFidelity, "cross-tier: emulator choice is Virtual, all others Native");
+
+            int nEmu = 0;
+            foreach (var c in tBest) if (c.Tier == TraceTier.Emulator) nEmu++;
+            Check(tBest.Length > 0 && tBest[tBest.Length - 1].Tier == TraceTier.Emulator,
+                  "cross-tier: emulator floor is the last entry under Best");
+            Check(nEmu == 1, "cross-tier: exactly one emulator floor under Best");
+
+            bool natNoEmu = true;
+            foreach (var c in tNat) if (c.Tier == TraceTier.Emulator) natNoEmu = false;
+            Check(natNoEmu, "cross-tier: NativeOnly forbids the native->emulator crossing");
+            Check(tNat.Length == tBest.Length - 1, "cross-tier: NativeOnly is Best minus the floor");
+
+            bool cfNoAmdTier = true;
+            foreach (var c in tCf)
+                if (c.Tier == TraceTier.HwTrace && c.Backend == HwBackend.AmdLbr) cfNoAmdTier = false;
+            Check(cfNoAmdTier, "cross-tier: CeilingFree drops AMD LBR");
+
+            var one = HwTrace.AutoTier(TracePolicy.Best);
+            Check(one.HasValue
+                  && one.Value.Tier == tBest[0].Tier
+                  && one.Value.Backend == tBest[0].Backend,
+                  "cross-tier: AutoTier(Best) is the head of ResolveTiers(Best)");
+
+            // --- cross-tier: NativeOnly resolves on x86-64 Linux (single-step floor) --- //
+            // Mirrors test_cross_tier_native_only_resolves_on_linux_x86_64: single-step
+            // is a native floor here, so even NativeOnly never collapses to nothing.
+            var pick = HwTrace.AutoTier(TracePolicy.NativeOnly);
+            bool hasSsFloor = false;
+            foreach (var c in tNat)
+                if (c.Tier == TraceTier.HwTrace && c.Backend == HwBackend.SingleStep) hasSsFloor = true;
+            Check(tNat.Length > 0 && pick.HasValue && pick.Value.Fidelity == TraceFidelity.Native,
+                  "cross-tier: NativeOnly resolves a Native choice on x86-64 Linux");
+            Check(hasSsFloor, "cross-tier: single-step is the NativeOnly floor on x86-64 Linux");
         }
         finally
         {

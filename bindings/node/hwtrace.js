@@ -50,6 +50,20 @@ const BEST = 0;         // the most faithful available backend
 const CEILING_FREE = 1; // the same, but skipping the one fixed-window backend (AMD
                         // LBR); re-resolve under this after a trace comes back truncated
 
+// asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+// (hardware + DynamoRIO + emulator), not just the hardware backends above.
+// asmtest_trace_tier_t
+const TIER_HWTRACE = 0;   // HW branch trace / single-step (real CPU)
+const TIER_DYNAMORIO = 1; // in-process software DBI (real CPU)
+const TIER_EMULATOR = 2;  // Unicorn virtual CPU (isolated guest)
+// asmtest_trace_fidelity_t
+const FIDELITY_NATIVE = 0;  // runs the real bytes on the real CPU in-process
+const FIDELITY_VIRTUAL = 1; // isolated guest on an emulated CPU
+// cross-tier policy bitmask
+const TRACE_BEST = 0x0;         // most-faithful available; emulator floor allowed
+const TRACE_CEILING_FREE = 0x1; // drop the fixed-window backend (AMD LBR)
+const TRACE_NATIVE_ONLY = 0x2;  // forbid the native->emulator fidelity crossing
+
 // Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 // build); otherwise fall back to the build/ tree next to the repo root. The tier
 // may be absent, so the load is wrapped in try/catch and available() self-skips
@@ -97,6 +111,11 @@ let _loadError = null;
     skipReason: lib.func('void asmtest_hwtrace_skip_reason(int, _Out_ char*, size_t)'),
     resolve: lib.func('size_t asmtest_hwtrace_resolve(int, _Out_ int*, size_t)'),
     auto: lib.func('int asmtest_hwtrace_auto(int)'),
+    // Cross-tier orchestrator (asmtest_trace_auto.h). A choice is exactly three
+    // consecutive int32s (tier, backend, fidelity), so — like resolve above — we
+    // marshal a raw int array and read triples rather than declaring a struct.
+    traceResolve: lib.func('size_t asmtest_trace_resolve(uint, _Out_ int*, size_t)'),
+    traceAuto: lib.func('int asmtest_trace_auto(uint, _Out_ int*)'),
     init: lib.func('int asmtest_hwtrace_init(const asmtest_hwtrace_options_t*)'),
     registerRegion: lib.func('int asmtest_hwtrace_register_region(const char*, void*, size_t, void*)'),
     begin: lib.func('void asmtest_hwtrace_begin(const char*)'),
@@ -202,6 +221,41 @@ class HwTrace {
     return _fn.auto(policy);
   }
 
+  /** This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
+   *  first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
+   *  emulator, each included only if its tier is available. Returns an array of
+   *  { tier, backend, fidelity } objects. TRACE_NATIVE_ONLY drops the emulator
+   *  floor (no native->emulator fidelity crossing); TRACE_CEILING_FREE drops AMD
+   *  LBR. A choice is three int32s, so we read consecutive triples. */
+  static resolveTiers(policy = TRACE_BEST) {
+    const cap = 8; // up to 8 cross-tier choices (Intel PT..emulator)
+    const out = Buffer.alloc(cap * 3 * 4); // each choice = 3 int32s
+    const n = Number(_fn.traceResolve(policy, out, cap));
+    const cascade = new Array(n);
+    for (let i = 0; i < n; i++) {
+      cascade[i] = {
+        tier: out.readInt32LE(i * 12),
+        backend: out.readInt32LE(i * 12 + 4),
+        fidelity: out.readInt32LE(i * 12 + 8),
+      };
+    }
+    return cascade;
+  }
+
+  /** The single most-preferred available cross-tier choice under `policy` as a
+   *  { tier, backend, fidelity } object, or null on EUNAVAIL (the cascade is empty
+   *  only off a native host under TRACE_NATIVE_ONLY). */
+  static autoTier(policy = TRACE_BEST) {
+    const out = Buffer.alloc(3 * 4); // one choice = 3 int32s
+    const rc = _fn.traceAuto(policy, out);
+    if (rc !== ASMTEST_HW_OK) return null;
+    return {
+      tier: out.readInt32LE(0),
+      backend: out.readInt32LE(4),
+      fidelity: out.readInt32LE(8),
+    };
+  }
+
   /** Select a backend and initialize the tier. SINGLESTEP is the portable default
    *  that runs on any x86-64 Linux. Throws on a nonzero rc. */
   static init(backend = SINGLESTEP) {
@@ -286,4 +340,7 @@ module.exports = {
   HwTrace, NativeCode,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
+  TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,
+  FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+  TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
 };

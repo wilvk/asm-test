@@ -91,6 +91,82 @@ pub enum Policy {
     CeilingFree = 1,
 }
 
+// --- Cross-tier orchestrator (asmtest_trace_auto.h) ----------------------- //
+//
+// The front-end OVER all three trace tiers (hardware + DynamoRIO + emulator), not
+// just the hardware backends above. It walks the full descending-fidelity cascade
+// — Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight -> emulator — and
+// returns the available options for the caller to bracket with that tier's API.
+
+/// A trace tier, most-faithful to least (mirrors `asmtest_trace_tier_t`).
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tier {
+    /// HW branch trace / single-step on the real CPU.
+    HwTrace = 0,
+    /// In-process software DBI (DynamoRIO) on the real CPU.
+    DynamoRio = 1,
+    /// Unicorn virtual CPU tracing an isolated guest.
+    Emulator = 2,
+}
+
+/// Execution fidelity of a tier (mirrors `asmtest_trace_fidelity_t`). The single
+/// `Native` -> `Virtual` transition is the line [`TracePolicy::NativeOnly`] gates.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fidelity {
+    /// Runs the real bytes on the real CPU in this process.
+    Native = 0,
+    /// Runs an isolated guest on an emulated CPU.
+    Virtual = 1,
+}
+
+/// The cross-tier auto-selection policy bitmask (mirrors the `ASMTEST_TRACE_*`
+/// flags), passed to [`HwTrace::resolve_tiers`] / [`HwTrace::auto_tier`].
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TracePolicy {
+    /// The most-faithful available choice; the emulator floor is allowed.
+    Best = 0,
+    /// The same, but dropping the one fixed-window backend (AMD LBR).
+    CeilingFree = 1,
+    /// Forbid the native->emulator crossing: resolve only the real-CPU tiers.
+    NativeOnly = 2,
+}
+
+/// A resolved cross-tier trace option (the safe wrapper over `asmtest_trace_choice_t`):
+/// which [`Tier`] to use, which hardware [`Backend`] within it (meaningful only when
+/// `tier == Tier::HwTrace`; otherwise `0`/ignore, exposed as the raw `i32`), and the
+/// [`Fidelity`] class so a caller can see at a glance whether a choice crosses the
+/// native->emulator line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TierChoice {
+    /// The trace tier of this choice.
+    pub tier: Tier,
+    /// The hardware backend enum, valid only when `tier == Tier::HwTrace`.
+    pub backend: i32,
+    /// The execution fidelity (native vs emulated) of this choice.
+    pub fidelity: Fidelity,
+}
+
+/// Marshal a raw `asmtest_trace_choice_t` (three C ints) into the safe
+/// [`TierChoice`]. The `tier`/`fidelity` ints come straight from the C enums, so
+/// any value outside the known set is a contract break and panics.
+fn tier_choice_of(c: TraceChoice) -> TierChoice {
+    let tier = match c.tier {
+        0 => Tier::HwTrace,
+        1 => Tier::DynamoRio,
+        2 => Tier::Emulator,
+        other => panic!("unexpected trace tier enum {other}"),
+    };
+    let fidelity = match c.fidelity {
+        0 => Fidelity::Native,
+        1 => Fidelity::Virtual,
+        other => panic!("unexpected trace fidelity enum {other}"),
+    };
+    TierChoice { tier, backend: c.backend, fidelity }
+}
+
 /// Mirrors `asmtest_hwtrace_options_t`.
 #[repr(C)]
 struct Options {
@@ -99,6 +175,15 @@ struct Options {
     data_size: usize,
     snapshot: c_int,
     object_hint: *const c_char,
+}
+
+/// Mirrors `asmtest_trace_choice_t` (three int-sized enum fields, no padding).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TraceChoice {
+    tier: c_int,
+    backend: c_int,
+    fidelity: c_int,
 }
 
 // --- Resolved entry points (libasmtest_hwtrace) --------------------------- //
@@ -111,6 +196,9 @@ type AvailableFn = unsafe extern "C" fn(c_int) -> c_int;
 type SkipReasonFn = unsafe extern "C" fn(c_int, *mut c_char, usize);
 type ResolveFn = unsafe extern "C" fn(c_int, *mut c_int, usize) -> usize;
 type AutoFn = unsafe extern "C" fn(c_int) -> c_int;
+type TraceResolveFn =
+    unsafe extern "C" fn(std::os::raw::c_uint, *mut TraceChoice, usize) -> usize;
+type TraceAutoFn = unsafe extern "C" fn(std::os::raw::c_uint, *mut TraceChoice) -> c_int;
 type InitFn = unsafe extern "C" fn(*const Options) -> c_int;
 type ShutdownFn = unsafe extern "C" fn();
 type RegisterRegionFn =
@@ -131,6 +219,8 @@ struct HwFns {
     skip_reason: Option<SkipReasonFn>,
     resolve: Option<ResolveFn>,
     auto: Option<AutoFn>,
+    trace_resolve: Option<TraceResolveFn>,
+    trace_auto: Option<TraceAutoFn>,
     init: Option<InitFn>,
     shutdown: Option<ShutdownFn>,
     register_region: Option<RegisterRegionFn>,
@@ -196,6 +286,7 @@ fn hw_fns() -> &'static HwFns {
             // No lib: every pointer stays None, available() returns false.
             return HwFns {
                 available: None, skip_reason: None, resolve: None, auto: None,
+                trace_resolve: None, trace_auto: None,
                 init: None, shutdown: None,
                 register_region: None, begin: None, end: None,
                 exec_alloc: None, exec_free: None,
@@ -226,6 +317,8 @@ fn hw_fns() -> &'static HwFns {
             skip_reason: load!("asmtest_hwtrace_skip_reason", SkipReasonFn),
             resolve: load!("asmtest_hwtrace_resolve", ResolveFn),
             auto: load!("asmtest_hwtrace_auto", AutoFn),
+            trace_resolve: load!("asmtest_trace_resolve", TraceResolveFn),
+            trace_auto: load!("asmtest_trace_auto", TraceAutoFn),
             init: load!("asmtest_hwtrace_init", InitFn),
             shutdown: load!("asmtest_hwtrace_shutdown", ShutdownFn),
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
@@ -420,6 +513,40 @@ impl HwTrace {
             Some(f) => unsafe { f(policy as c_int) },
             None => ASMTEST_HW_EUNAVAIL,
         }
+    }
+
+    /// This host's full CROSS-TIER fallback cascade (`asmtest_trace_resolve`),
+    /// most-faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step ->
+    /// CoreSight -> emulator, each included only if its tier is available, honoring
+    /// `policy`. Returns a [`TierChoice`] per option. [`TracePolicy::NativeOnly`]
+    /// drops the emulator floor (no native->emulator fidelity crossing);
+    /// [`TracePolicy::CeilingFree`] drops AMD LBR. Empty when the lib is absent.
+    pub fn resolve_tiers(policy: TracePolicy) -> Vec<TierChoice> {
+        match hw_fns().trace_resolve {
+            Some(f) => {
+                let mut out = [TraceChoice { tier: 0, backend: 0, fidelity: 0 }; 8];
+                let n = unsafe {
+                    f(policy as std::os::raw::c_uint, out.as_mut_ptr(), out.len())
+                };
+                out[..n].iter().map(|c| tier_choice_of(*c)).collect()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The single most-preferred available cross-tier choice under `policy`
+    /// (`asmtest_trace_auto`) as a [`TierChoice`], or `None` when the cascade is
+    /// empty (only off a native host under [`TracePolicy::NativeOnly`]) or the lib
+    /// is absent. NOTE: `auto` is not a Rust keyword, but this keeps `_tier` to
+    /// distinguish it from the hardware-tier [`auto`](HwTrace::auto).
+    pub fn auto_tier(policy: TracePolicy) -> Option<TierChoice> {
+        let f = hw_fns().trace_auto?;
+        let mut out = TraceChoice { tier: 0, backend: 0, fidelity: 0 };
+        let rc = unsafe { f(policy as std::os::raw::c_uint, &mut out) };
+        if rc != ASMTEST_HW_OK {
+            return None;
+        }
+        Some(tier_choice_of(out))
     }
 
     /// Select `backend` and initialize the tier (`asmtest_hwtrace_init` with the

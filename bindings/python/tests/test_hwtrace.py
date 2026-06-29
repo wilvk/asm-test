@@ -10,6 +10,8 @@ import pytest
 from asmtest.hwtrace import (
     HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
     BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+    TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+    TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
 )
 
 # mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two blocks)
@@ -88,6 +90,47 @@ def test_auto_resolve_selection_invariants():
     # auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
     ab = HwTrace.auto(BEST)
     assert ab == (best[0] if best else ASMTEST_HW_EUNAVAIL)
+
+
+def test_cross_tier_resolve_invariants():
+    """The cross-tier orchestrator (resolve over hwtrace + DynamoRIO + emulator)
+    holds its structural invariants on every host."""
+    best = HwTrace.resolve_tiers(TRACE_BEST)
+    nat = HwTrace.resolve_tiers(TRACE_NATIVE_ONLY)
+    cf = HwTrace.resolve_tiers(TRACE_CEILING_FREE)
+
+    # Every HW choice satisfies the hardware-tier probe; NATIVE choices precede the
+    # single VIRTUAL emulator floor, which is the last entry under BEST.
+    for c in best:
+        if c.tier == TIER_HWTRACE:
+            assert HwTrace.available(c.backend)
+        assert c.fidelity == (FIDELITY_VIRTUAL if c.tier == TIER_EMULATOR
+                              else FIDELITY_NATIVE)
+    assert best and best[-1].tier == TIER_EMULATOR
+    assert sum(1 for c in best if c.tier == TIER_EMULATOR) == 1
+
+    # NATIVE_ONLY forbids the native->emulator crossing: it is BEST minus the floor.
+    assert all(c.tier != TIER_EMULATOR for c in nat)
+    assert len(nat) == len(best) - 1
+
+    # CEILING_FREE drops AMD LBR.
+    assert all(not (c.tier == TIER_HWTRACE and c.backend == AMD_LBR) for c in cf)
+
+    # auto(policy) is the head of resolve(policy).
+    one = HwTrace.auto_tier(TRACE_BEST)
+    assert one is not None
+    assert (one.tier, one.backend) == (best[0].tier, best[0].backend)
+
+
+def test_cross_tier_native_only_resolves_on_linux_x86_64():
+    """On any x86-64 Linux host the single-step backend is a native floor, so even
+    NATIVE_ONLY resolves (the cascade never collapses to nothing here)."""
+    if not HwTrace.available(SINGLESTEP):
+        pytest.skip(f"single-step backend unavailable: {HwTrace.skip_reason(SINGLESTEP)}")
+    nat = HwTrace.resolve_tiers(TRACE_NATIVE_ONLY)
+    pick = HwTrace.auto_tier(TRACE_NATIVE_ONLY)
+    assert nat and pick is not None and pick.fidelity == FIDELITY_NATIVE
+    assert any(c.tier == TIER_HWTRACE and c.backend == SINGLESTEP for c in nat)
 
 
 def test_auto_resolve_traces_live():

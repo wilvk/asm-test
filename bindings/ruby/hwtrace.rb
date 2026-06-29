@@ -57,6 +57,26 @@ module Asmtest
     BEST         = 0
     CEILING_FREE = 1
 
+    # asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+    # (hardware + DynamoRIO + emulator), not just the hardware backends above.
+    # asmtest_trace_tier_t.
+    TIER_HWTRACE   = 0 # HW branch trace / single-step (real CPU)
+    TIER_DYNAMORIO = 1 # in-process software DBI (real CPU)
+    TIER_EMULATOR  = 2 # Unicorn virtual CPU (isolated guest)
+    # asmtest_trace_fidelity_t.
+    FIDELITY_NATIVE  = 0 # runs the real bytes on the real CPU in-process
+    FIDELITY_VIRTUAL = 1 # isolated guest on an emulated CPU
+    # cross-tier policy bitmask.
+    TRACE_BEST         = 0x0 # most-faithful available; emulator floor allowed
+    TRACE_CEILING_FREE = 0x1 # drop the fixed-window backend (AMD LBR)
+    TRACE_NATIVE_ONLY  = 0x2 # forbid the native->emulator fidelity crossing
+
+    # A resolved cross-tier trace option: which +tier+ to use, which hardware
+    # +backend+ within it (meaningful only when +tier+ == TIER_HWTRACE), and the
+    # +fidelity+ class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL). Mirrors
+    # asmtest_trace_choice_t — three packed C ints.
+    TierChoice = Struct.new(:tier, :backend, :fidelity)
+
     VOIDP = Fiddle::TYPE_VOIDP
     LONG  = Fiddle::TYPE_LONG
     INT   = Fiddle::TYPE_INT
@@ -87,6 +107,9 @@ module Asmtest
         skip_reason:  func(LIB, "asmtest_hwtrace_skip_reason", [INT, VOIDP, SZ], VOID),
         resolve:      func(LIB, "asmtest_hwtrace_resolve", [INT, VOIDP, SZ], SZ),
         auto:         func(LIB, "asmtest_hwtrace_auto", [INT], INT),
+        # ---- the cross-tier orchestrator (asmtest_trace_auto.h) ----
+        trace_resolve: func(LIB, "asmtest_trace_resolve", [INT, VOIDP, SZ], SZ),
+        trace_auto:    func(LIB, "asmtest_trace_auto", [INT, VOIDP], INT),
         init:         func(LIB, "asmtest_hwtrace_init", [VOIDP], INT),
         shutdown:     func(LIB, "asmtest_hwtrace_shutdown", [], VOID),
         # ---- region registration + markers ----
@@ -238,6 +261,43 @@ module Asmtest
       # available on this host. Named .auto to match the C name (not a Ruby keyword).
       def self.auto(policy = BEST)
         Asmtest::HwTrace::FN[:auto].call(policy)
+      end
+
+      # This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
+      # first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
+      # emulator, each included only if its tier is available. Returns an Array of
+      # TierChoice. TRACE_NATIVE_ONLY drops the emulator floor (no native->emulator
+      # fidelity crossing); TRACE_CEILING_FREE drops AMD LBR. Each choice is three
+      # packed C ints (tier, backend, fidelity); we allocate 3*cap ints and unpack
+      # the first n triples the call reports it wrote.
+      def self.resolve_tiers(policy = TRACE_BEST)
+        cap = 8
+        out = Fiddle::Pointer.new(Fiddle.malloc(12 * cap), 12 * cap) # 3 ints each
+        out[0, 12 * cap] = "\x00".b * (12 * cap)
+        n = Asmtest::HwTrace::FN[:trace_resolve].call(policy, out, cap)
+        choices = (0...n).map do |i|
+          tier, backend, fidelity = out[i * 12, 12].unpack("l3")
+          TierChoice.new(tier, backend, fidelity)
+        end
+        Fiddle.free(out.to_i)
+        choices
+      end
+
+      # The single most-preferred available cross-tier choice under +policy+ as a
+      # TierChoice, or nil when the cascade is empty (only off a native host under
+      # TRACE_NATIVE_ONLY). asmtest_trace_auto returns OK(0) and fills *out, or
+      # EUNAVAIL(-3) when the cascade is empty.
+      def self.auto_tier(policy = TRACE_BEST)
+        out = Fiddle::Pointer.new(Fiddle.malloc(12), 12) # one choice = 3 ints
+        out[0, 12] = "\x00".b * 12
+        rc = Asmtest::HwTrace::FN[:trace_auto].call(policy, out)
+        choice = nil
+        if rc == OK
+          tier, backend, fidelity = out[0, 12].unpack("l3")
+          choice = TierChoice.new(tier, backend, fidelity)
+        end
+        Fiddle.free(out.to_i)
+        choice
       end
 
       # Select a backend and initialize the tier. SINGLESTEP is the portable default

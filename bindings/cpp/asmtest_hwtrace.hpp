@@ -43,11 +43,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "asmtest_hwtrace.h"
+#include "asmtest_trace_auto.h"
 
 namespace asmtest {
 
@@ -68,6 +70,44 @@ enum Policy {
     CEILING_FREE = ASMTEST_HWTRACE_CEILING_FREE,
 };
 
+/* asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+ * (hardware + DynamoRIO + emulator), not just the hardware backends above. */
+
+/* asmtest_trace_tier_t values: the trace tiers, most-faithful to least. */
+enum Tier {
+    TIER_HWTRACE = ASMTEST_TIER_HWTRACE,     // HW branch trace / single-step (real CPU)
+    TIER_DYNAMORIO = ASMTEST_TIER_DYNAMORIO, // in-process software DBI (real CPU)
+    TIER_EMULATOR = ASMTEST_TIER_EMULATOR,   // Unicorn virtual CPU (isolated guest)
+};
+
+/* asmtest_trace_fidelity_t values: NATIVE runs the real bytes on the real CPU
+ * in-process; VIRTUAL runs an isolated guest on an emulated CPU. */
+enum Fidelity {
+    FIDELITY_NATIVE = ASMTEST_FIDELITY_NATIVE,
+    FIDELITY_VIRTUAL = ASMTEST_FIDELITY_VIRTUAL,
+};
+
+/* Cross-tier policy bitmask for HwTrace::resolveTiers()/autoTier(). TRACE_BEST is
+ * the most-faithful available choice (emulator floor allowed); TRACE_CEILING_FREE
+ * drops the one fixed-window backend (AMD LBR); TRACE_NATIVE_ONLY forbids the
+ * native->emulator fidelity crossing (drops the emulator floor). */
+enum TracePolicy {
+    TRACE_BEST = ASMTEST_TRACE_BEST,
+    TRACE_CEILING_FREE = ASMTEST_TRACE_CEILING_FREE,
+    TRACE_NATIVE_ONLY = ASMTEST_TRACE_NATIVE_ONLY,
+};
+
+/// A resolved cross-tier trace option: which `tier` to use, which hardware
+/// `backend` within it (meaningful only when tier == TIER_HWTRACE; otherwise
+/// 0/ignore), and the `fidelity` class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL) so a
+/// caller can see at a glance whether a choice crosses the native->emulator line.
+/// Mirrors asmtest_trace_choice_t (three int-sized fields, no padding).
+struct TierChoice {
+    int tier;
+    int backend;
+    int fidelity;
+};
+
 namespace detail {
 
 /* The C symbols of libasmtest_hwtrace, resolved once via dlsym. Mirrors the
@@ -81,6 +121,8 @@ struct HwApi {
     void (*skip_reason)(int, char *, size_t) = nullptr;
     size_t (*resolve)(int, asmtest_trace_backend_t *, size_t) = nullptr;
     int (*hwauto)(int) = nullptr;
+    size_t (*trace_resolve)(unsigned, asmtest_trace_choice_t *, size_t) = nullptr;
+    int (*trace_auto)(unsigned, asmtest_trace_choice_t *) = nullptr;
     int (*init)(const asmtest_hwtrace_options_t *) = nullptr;
     int (*register_region)(const char *, void *, size_t, void *) = nullptr;
     void (*begin)(const char *) = nullptr;
@@ -141,6 +183,8 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_hwtrace_skip_reason", t.skip_reason);
         ok &= dlsym_into(h, "asmtest_hwtrace_resolve", t.resolve);
         ok &= dlsym_into(h, "asmtest_hwtrace_auto", t.hwauto);
+        ok &= dlsym_into(h, "asmtest_trace_resolve", t.trace_resolve);
+        ok &= dlsym_into(h, "asmtest_trace_auto", t.trace_auto);
         ok &= dlsym_into(h, "asmtest_hwtrace_init", t.init);
         ok &= dlsym_into(h, "asmtest_hwtrace_register_region",
                          t.register_region);
@@ -344,6 +388,42 @@ class HwTrace {
         if (!a.loaded())
             return ASMTEST_HW_EUNAVAIL;
         return a.hwauto(policy);
+    }
+
+    /// This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
+    /// first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
+    /// emulator, each included only if its tier is available. Empty when the
+    /// library is missing, or off a native host under TRACE_NATIVE_ONLY.
+    /// TRACE_NATIVE_ONLY drops the emulator floor (no native->emulator fidelity
+    /// crossing); TRACE_CEILING_FREE drops AMD LBR.
+    static std::vector<TierChoice> resolveTiers(unsigned policy = TRACE_BEST) {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return {};
+        asmtest_trace_choice_t out[8];
+        std::size_t n = a.trace_resolve(policy, out, 8);
+        std::vector<TierChoice> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = TierChoice{static_cast<int>(out[i].tier),
+                              static_cast<int>(out[i].backend),
+                              static_cast<int>(out[i].fidelity)};
+        return v;
+    }
+
+    /// The single most-preferred available cross-tier choice under `policy`
+    /// (asmtest_trace_auto), or std::nullopt when the cascade is empty (the library
+    /// is missing, or off a native host under TRACE_NATIVE_ONLY). (`auto` is a
+    /// keyword, so this is `autoTier`.)
+    static std::optional<TierChoice> autoTier(unsigned policy = TRACE_BEST) {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return std::nullopt;
+        asmtest_trace_choice_t out{};
+        if (a.trace_auto(policy, &out) != ASMTEST_HW_OK)
+            return std::nullopt;
+        return TierChoice{static_cast<int>(out.tier),
+                          static_cast<int>(out.backend),
+                          static_cast<int>(out.fidelity)};
     }
 
     /// Select a backend and initialize the tier. SINGLESTEP is the portable

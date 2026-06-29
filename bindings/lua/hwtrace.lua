@@ -26,6 +26,9 @@ int  asmtest_hwtrace_available(int backend);
 void asmtest_hwtrace_skip_reason(int backend, char* buf, size_t buflen);
 size_t asmtest_hwtrace_resolve(int policy, int* out, size_t cap);
 int  asmtest_hwtrace_auto(int policy);
+typedef struct { int tier; int backend; int fidelity; } asmtest_trace_choice_t;
+size_t asmtest_trace_resolve(unsigned policy, asmtest_trace_choice_t* out, size_t cap);
+int    asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t* out);
 int  asmtest_hwtrace_init(const asmtest_hwtrace_options_t* opts);
 int  asmtest_hwtrace_register_region(const char* name, void* base, size_t len, void* trace);
 void asmtest_hwtrace_begin(const char* name);
@@ -59,6 +62,20 @@ local BEST = 0          -- the most faithful available backend
 local CEILING_FREE = 1  -- the same, but skipping the one fixed-window backend
                         -- (AMD LBR); re-resolve under this after a truncated trace
 
+-- asmtest_trace_auto.h — the CROSS-TIER orchestrator over all three trace tiers
+-- (hardware + DynamoRIO + emulator), not just the hardware backends above.
+-- asmtest_trace_tier_t.
+local TIER_HWTRACE = 0    -- HW branch trace / single-step (real CPU)
+local TIER_DYNAMORIO = 1  -- in-process software DBI (real CPU)
+local TIER_EMULATOR = 2   -- Unicorn virtual CPU (isolated guest)
+-- asmtest_trace_fidelity_t.
+local FIDELITY_NATIVE = 0   -- runs the real bytes on the real CPU in-process
+local FIDELITY_VIRTUAL = 1  -- isolated guest on an emulated CPU
+-- cross-tier policy bitmask.
+local TRACE_BEST = 0x0          -- most-faithful available; emulator floor allowed
+local TRACE_CEILING_FREE = 0x1  -- drop the fixed-window backend (AMD LBR)
+local TRACE_NATIVE_ONLY = 0x2   -- forbid the native->emulator fidelity crossing
+
 -- Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 -- build); otherwise fall back to <repo>/build/ next to this binding. This file
 -- lives at bindings/lua/, so the repo root is two directories up.
@@ -83,6 +100,14 @@ M.AMD_LBR = AMD_LBR
 M.SINGLESTEP = SINGLESTEP
 M.BEST = BEST
 M.CEILING_FREE = CEILING_FREE
+M.TIER_HWTRACE = TIER_HWTRACE
+M.TIER_DYNAMORIO = TIER_DYNAMORIO
+M.TIER_EMULATOR = TIER_EMULATOR
+M.FIDELITY_NATIVE = FIDELITY_NATIVE
+M.FIDELITY_VIRTUAL = FIDELITY_VIRTUAL
+M.TRACE_BEST = TRACE_BEST
+M.TRACE_CEILING_FREE = TRACE_CEILING_FREE
+M.TRACE_NATIVE_ONLY = TRACE_NATIVE_ONLY
 M.ASMTEST_HW_EUNAVAIL = ASMTEST_HW_EUNAVAIL
 
 -- ---- Host-native machine code in real executable (W^X) memory ----
@@ -165,6 +190,37 @@ end
 function HwTrace.auto(policy)
   assert(L, "libasmtest_hwtrace not loaded")
   return tonumber(L.asmtest_hwtrace_auto(policy or BEST))
+end
+
+-- This host's full CROSS-TIER fallback cascade (asmtest_trace_resolve), most-
+-- faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
+-- emulator, each included only if its tier is available. Honors `policy` (default
+-- TRACE_BEST), returned as a 1-based Lua array of { tier=, backend=, fidelity= }
+-- tables. TRACE_NATIVE_ONLY drops the emulator floor (no native->emulator fidelity
+-- crossing); TRACE_CEILING_FREE drops the depth-bounded backend (AMD LBR).
+function HwTrace.resolve_tiers(policy)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local cap = 8
+  local out = ffi.new("asmtest_trace_choice_t[?]", cap)
+  local n = tonumber(L.asmtest_trace_resolve(policy or TRACE_BEST, out, cap))
+  local t = {}
+  for i = 0, n - 1 do
+    t[i + 1] = { tier = out[i].tier, backend = out[i].backend,
+                 fidelity = out[i].fidelity }
+  end
+  return t
+end
+
+-- The single most-preferred available cross-tier choice under `policy` (default
+-- TRACE_BEST) as a { tier=, backend=, fidelity= } table, or nil when the cascade is
+-- empty (only off a native host under TRACE_NATIVE_ONLY).
+function HwTrace.auto_tier(policy)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local out = ffi.new("asmtest_trace_choice_t[1]")
+  local rc = L.asmtest_trace_auto(policy or TRACE_BEST, out)
+  if rc ~= ASMTEST_HW_OK then return nil end
+  return { tier = out[0].tier, backend = out[0].backend,
+           fidelity = out[0].fidelity }
 end
 
 -- Select a backend and initialize the tier. SINGLESTEP is the portable default
