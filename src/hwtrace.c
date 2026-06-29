@@ -444,10 +444,24 @@ static void hwtrace_end_amd(void) {
     hw_region_t *r = g_active;
 
     /* Linearize [tail, head) (it may wrap the circular data ring) into scratch,
-     * then walk perf_event_header records, keeping the last branch sample. */
+     * then walk perf_event_header records to pick the branch sample to decode.
+     *
+     * With sample_period=1 every taken branch emits a sample whose branch stack is
+     * the 16 most-recent branches AT THAT POINT. A small registered routine's own
+     * branches live in the stack only briefly: the post-routine glue (returning
+     * into asmtest_hwtrace_end and its callees, before the perf DISABLE) is itself
+     * a dozen-plus taken branches that push the routine's branches out of the
+     * 16-deep window. So the LAST sample is all glue and decodes to nothing —
+     * instead keep the sample with the MOST in-region branch entries: the one taken
+     * at/just after the routine, whose window still holds its jcc/ret. (Verified on
+     * a Zen 5 host: last-sample gave insns_total=0; richest-sample reconstructs the
+     * exact stream.) */
+    const uint64_t base_ip = (uint64_t)(uintptr_t)r->base;
+    const uint64_t end_ip = base_ip + r->len;
     size_t span = (size_t)(head - tail);
     struct perf_branch_entry *best = NULL;
     uint64_t best_nr = 0;
+    size_t best_inregion = 0;
     uint8_t *buf = NULL;
     if (span > 0 && span <= dsz) {
         buf = (uint8_t *)malloc(span);
@@ -461,16 +475,27 @@ static void hwtrace_end_amd(void) {
                     break;
                 if (h->type == PERF_RECORD_SAMPLE) {
                     /* Only PERF_SAMPLE_BRANCH_STACK is set, so the body is
-                     * {u64 nr; perf_branch_entry[nr]}. Keep the last (most
-                     * complete) sample. */
+                     * {u64 nr; perf_branch_entry[nr]}. */
                     uint8_t *body = buf + off + sizeof *h;
                     uint64_t nr = *(uint64_t *)body;
                     if (nr > 0 &&
                         sizeof *h + sizeof(uint64_t) +
                                 nr * sizeof(struct perf_branch_entry) <=
                             h->size) {
-                        best = (struct perf_branch_entry *)(body + sizeof(uint64_t));
-                        best_nr = nr;
+                        struct perf_branch_entry *e =
+                            (struct perf_branch_entry *)(body + sizeof(uint64_t));
+                        size_t inregion = 0;
+                        for (uint64_t i = 0; i < nr; i++)
+                            if ((e[i].from >= base_ip && e[i].from < end_ip) ||
+                                (e[i].to >= base_ip && e[i].to < end_ip))
+                                inregion++;
+                        /* Richest-in-region wins; on a tie keep the earliest (closest
+                         * to the routine, least surrounding glue). */
+                        if (best == NULL || inregion > best_inregion) {
+                            best = e;
+                            best_nr = nr;
+                            best_inregion = inregion;
+                        }
                     }
                 }
                 off += h->size;
@@ -478,10 +503,10 @@ static void hwtrace_end_amd(void) {
         }
     }
 
-    if (best != NULL && best_nr > 0)
+    if (best != NULL && best_nr > 0 && best_inregion > 0)
         asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len, r->trace);
     else if (r->trace != NULL)
-        r->trace->truncated = true; /* nothing captured: do not claim complete */
+        r->trace->truncated = true; /* no in-region branches captured: not complete */
 
     free(buf);
     mp->data_tail = head; /* consume */

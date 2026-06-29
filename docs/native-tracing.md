@@ -458,9 +458,11 @@ the head (or `ASMTEST_HW_EUNAVAIL`). The `policy`:
 
 On **any x86-64 Linux host the cascade is non-empty** — the single-step backend is
 the floor — so `auto()` never fails there; it only returns a negative status off
-x86-64 Linux (and non-CoreSight). On this Zen 2 dev box `auto(BEST)` resolves to
-single-step (PT/AMD LBR self-skip); on a bare-metal Intel host it resolves to Intel
-PT; on a Zen 3/4 host to AMD LBR, with `CEILING_FREE` falling to single-step.
+x86-64 Linux (and non-CoreSight). On a bare-metal Intel host `auto(BEST)` resolves
+to Intel PT; on this Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`) with perf
+permitted it resolves to **AMD LBR** (live-verified), with `CEILING_FREE` falling to
+single-step; without perf access (or on a Zen 2, which has no branch facility) it
+resolves to single-step.
 
 **Every language wrapper exposes it too.** Alongside `available`/`init`, each
 binding's `HwTrace` surfaces `resolve(policy)` (the available cascade, as a
@@ -523,5 +525,12 @@ The full root-cause analysis and per-runtime fix matrix live in the
   method) is not supported — use `forkserver`/`spawn`, or fork before `start`.
 - **DynamoRIO must be installed separately** (no pkg-config); set `DYNAMORIO_HOME`.
   It is a software DBI engine and runs on Intel and AMD alike.
-- **Hardware capture is unverifiable off bare metal** — it cannot run on AMD, VMs,
-  or standard CI; that is expected and the tier self-skips.
+- **Hardware capture needs bare metal + perf privilege.** Intel PT needs a
+  bare-metal Intel host; AMD LBR needs a Zen 3+/4/5 host with the perf branch-stack
+  permitted. Neither runs under standard CI's default sandbox (the tier self-skips),
+  but **AMD LBR is live-verified** on a Zen 5 host (Ryzen 9 9950X, `amd_lbr_v2`) via
+  `make docker-hwtrace-amd` — the hwtrace image run with `--security-opt
+  seccomp=unconfined --cap-add=PERFMON` so `perf_event_open` is allowed. Note AMD's
+  branch stack is delivered only at a PMU sample, so AMD LBR captures branch-heavy
+  routines and honestly `truncated`s a tiny single-shot routine (too fast to sample);
+  single-step is the deterministic in-process backend for the latter.

@@ -536,6 +536,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **AMD LBR live capture (first verified on real hardware, Zen 5).** Running the
+  branch-record capture on an actual AMD LbrExtV2 host (Ryzen 9 9950X, Zen 5 — the
+  project's real dev box, long mis-documented as Zen 2) surfaced a capture bug:
+  `hwtrace_end_amd` kept the **last** `PERF_SAMPLE_BRANCH_STACK` sample, which for a
+  small routine is all post-routine glue branches — it decoded to an empty in-region
+  trace yet reported it **complete** (`truncated=0`). It now keeps the sample
+  **richest in in-region branches** (the one taken at/just after the routine, whose
+  16-deep window still holds its branches) and sets `truncated` when none is found —
+  the honest dynamic-fallback signal. A branch-heavy loop now reconstructs exactly
+  from the live LbrExtV2 stack; a tiny single-shot routine (too fast for an in-region
+  PMU sample) honestly truncates. New live regression `test_amd_live` +
+  `make docker-hwtrace-amd` lane (hwtrace image run with `--security-opt
+  seccomp=unconfined --cap-add=PERFMON`); the standard `docker-hwtrace` lane is
+  unchanged (AMD self-skips without perf). Docs corrected across the trace-parity
+  matrix, native-tracing, and the AMD-LBR / single-step plans (dev host is Zen 5
+  with `amd_lbr_v2`; AMD LBR live-verified, no longer "unverified on dev").
+
 - **Emulator handle reuse.** Unicorn's translation-block cache is now flushed
   when new code is loaded, so reusing an `emu_t`/guest handle for a different
   routine no longer re-runs the previous routine's stale translation.

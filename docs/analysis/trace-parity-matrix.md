@@ -23,8 +23,9 @@ changing how it reads coverage.
 - **DynamoRIO** is the only vendor- and microarchitecture-independent *native*
   backend shipping today (Linux x86-64, every Intel + every Zen).
 - **Hardware trace splits strictly by vendor/uarch:** Intel → Intel PT; AMD
-  Zen 3 / Zen 4 → AMD LBR (16-taken-branch cap); AMD Zen 2 → nothing yet (its
-  branch-stack `perf_event_open` returns `EOPNOTSUPP`).
+  Zen 3 / Zen 4 / Zen 5 → AMD LBR (16-taken-branch cap; live-verified on a Zen 5
+  Ryzen 9 9950X); AMD Zen 2 → nothing yet (its branch-stack `perf_event_open`
+  returns `EOPNOTSUPP`).
 - The **emulator (Unicorn)** tier is the universal floor for every OS, architecture,
   and language the native tiers do not reach (Windows-x64, macOS, AArch64, and the
   managed runtimes in-process DynamoRIO cannot take over).
@@ -54,7 +55,7 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Emulator** | Unicorn virtual CPU (isolated guest) | Capstone (annotate) | (Unicorn) | n/a (interpreted) | exact, unbounded | **implemented** |
 | **DynamoRIO** | software DBI, native code cache | none | DR core BSD | low (cached) | exact, unbounded | **implemented** |
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
-| **AMD LBR** | 16-deep branch stack snapshot | Capstone (replay) | BSD | low (few PMIs) | exact ≤16 taken branches; else `truncated`→fallback | **impl. Ph0–4**; live capture unverified on dev (Zen 2) |
+| **AMD LBR** | 16-deep branch stack snapshot | Capstone (replay) | BSD | low (few PMIs) | exact ≤16 taken branches; else `truncated`→fallback | **impl. Ph0–4; live capture verified on Zen 5** (Ryzen 9 9950X, `amd_lbr_v2`) |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **scaffold** — always self-skips |
 | **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4, Linux x86-64; cross-OS Ph5 planned) |
 
@@ -83,20 +84,38 @@ Linux-x86-64-only.
 
 ## Matrix 3 — x86 native trace × CPU vendor / microarchitecture (Linux x86-64)
 
-| Backend | Intel | AMD Zen 2 (Fam17h) | AMD Zen 3 (Fam19h) | AMD Zen 4 | Self-skip reason when absent |
+| Backend | Intel | AMD Zen 2 (Fam17h) | AMD Zen 3 (Fam19h) | AMD Zen 4 / Zen 5 | Self-skip reason when absent |
 |---|---|---|---|---|---|
 | DynamoRIO | ✓ | ✓ | ✓ | ✓ | — (vendor-independent DBI) |
 | Intel PT | ✓ | ✗ | ✗ | ✗ | `no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)` |
-| AMD LBR | ✗ | ✗ **no facility** | ✓ BRS | ✓ LbrExtV2 | `no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)` |
+| AMD LBR | ✗ | ✗ **no facility** | ✓ BRS | ✓ LbrExtV2 **(live-verified, Zen 5)** | `no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)` |
 | Single-step | ✓ | ✓ | ✓ | ✓ | (none — no PMU/perf/privilege needed) |
 
 Zen 2's branch-stack `perf_event_open` returns `EOPNOTSUPP` → `AMD_NOHW`
 ([hwtrace.c `amd_branch_probe`](../../src/hwtrace.c)); its legacy LBR is depth-1 and
 not wired to perf branch-stack. So on Zen 2 the only exact native options are
 **DynamoRIO** and **single-step** (both shipping today). Zen 3 uses **BRS** (Family 19h,
-opt-in `branch-brs` event); Zen 4 uses **LbrExtV2** (mainline Linux 6.1+); both are
-a fixed 16-entry stack, so the AMD backend is exact only within a 16-taken-branch
-window (Tier A) and sets `truncated` to route longer routines to DynamoRIO.
+opt-in `branch-brs` event); Zen 4 and **Zen 5** use **LbrExtV2** (mainline Linux 6.1+);
+both are a fixed 16-entry stack, so the AMD backend is exact only within a
+16-taken-branch window (Tier A) and sets `truncated` to route longer routines to
+DynamoRIO.
+
+**Live-verified on Zen 5.** The AMD LBR capture+decode path was run on a **Ryzen 9
+9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)** — the project's actual dev host
+([test_amd_live](../../examples/test_hwtrace.c), `make docker-hwtrace-amd`). Two
+findings from that first real-hardware run:
+
+- It **works**: for a branch-heavy routine a PMU sample fires *inside* the region, so
+  LbrExtV2 delivers a full 16-deep in-region branch stack and the decoder
+  reconstructs it exactly (loop-body block + ordered offsets, `truncated` once the
+  routine exceeds 16 taken branches — Tier A as specified).
+- perf gives the 16-deep stack **only at a sample**, so a **tiny single-shot routine
+  is too fast to be sampled in-region** and the capture honestly sets `truncated`
+  (the dynamic-fallback signal) rather than emitting an empty trace. This corrected a
+  capture bug: `hwtrace_end_amd` kept the *last* perf sample (all post-routine glue
+  branches for a small routine, decoding to nothing yet reported complete); it now
+  keeps the sample **richest in in-region branches** and flags `truncated` when none
+  is found.
 
 ---
 
@@ -292,7 +311,8 @@ resolve(os, arch, vendor, uarch, runtime, routine_profile):
 | Linux x86-64 | Intel cloud VM | Python | **DynamoRIO** → emulator *(PT self-skips)* |
 | Linux x86-64 | AMD Zen 4 bare-metal | C, small kernel | **AMD LBR** → DynamoRIO → emulator |
 | Linux x86-64 | AMD Zen 4 bare-metal | C, looping kernel | LBR `truncated` → **DynamoRIO** → emulator |
-| Linux x86-64 | AMD Zen 2 (dev host) | Go | **DynamoRIO** → single-step → emulator |
+| Linux x86-64 | AMD Zen 5 (dev host) bare-metal | C, looping kernel | **AMD LBR** *(live-verified)* → DynamoRIO → single-step → emulator |
+| Linux x86-64 | AMD Zen 2 | Go | **DynamoRIO** → single-step → emulator *(no branch facility)* |
 | Linux x86-64 | Intel bare-metal | Node | **Intel PT** → emulator *(DynamoRIO self-skips)* |
 | Linux x86-64 | AMD Zen 3 | .NET | W2 ptrace *(planned)* → **emulator** *(no PT on AMD; DR self-skips)* |
 | Linux AArch64 | — | Java | **emulator** *(CoreSight scaffold; no in-proc stepper on ARM)* |
@@ -417,7 +437,8 @@ out-of-the-box package install — lands on the emulator floor.
 
 DynamoRIO is the only vendor- and uarch-independent native backend shipping today
 (Linux x86-64, every Intel + Zen); hardware trace splits strictly
-**Intel → PT / Zen 3-4 → LBR (16-cap) / Zen 2 → nothing-yet**; the emulator is the
+**Intel → PT / Zen 3-5 → LBR (16-cap, live-verified on Zen 5) / Zen 2 → nothing-yet**;
+the emulator is the
 universal floor for every OS, architecture, and language the native tiers do not
 reach. Fallback between them is cheap and transparent **as data** (one trace shape,
 one offset basis) but must be deliberate **as fidelity** — native→native is free,

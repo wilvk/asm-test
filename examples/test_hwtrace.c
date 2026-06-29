@@ -88,6 +88,113 @@ static void test_amd_reconstruction(void) {
 #endif
 }
 
+/* mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  — loop body block at 0x7, the
+ * jnz back-edge target. A long trip count makes the routine run long enough that
+ * PMU branch samples fire INSIDE the region (a tiny routine completes before a
+ * second sample can arm), which is what AMD LBR capture needs. */
+static const unsigned char AMD_LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
+                                         0x48, 0x01, 0xf8, 0x48, 0xff, 0xce,
+                                         0x75, 0xf8, 0xc3};
+
+/* One live AMD-LBR capture of AMD_LOOP(trips). Returns insns_total reconstructed;
+ * reports loop-body coverage and the truncation bit. */
+static uint64_t amd_capture_loop(void *p, long trips, int *cov7, int *trunc) {
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("amdloop", p, sizeof AMD_LOOP, tr);
+    long (*fn)(long, long) = (long (*)(long, long))p;
+    asmtest_hwtrace_begin("amdloop");
+    fn(1, trips);
+    asmtest_hwtrace_end("amdloop");
+    uint64_t n = asmtest_emu_trace_insns_total(tr);
+    *cov7 = asmtest_trace_covered(tr, 0x7);
+    *trunc = asmtest_emu_trace_truncated(tr);
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    return n;
+}
+
+/* AMD LBR LIVE capture: on a Zen 3+ / Zen 4 / Zen 5 host with perf branch-stack
+ * permitted, this exercises the REAL perf_event_open branch-record capture + decode
+ * path (hwtrace_begin_amd/_end_amd -> asmtest_amd_decode), not the synthetic
+ * reconstruction above. Self-skips where AMD LBR is unavailable (non-AMD host, no
+ * LbrExtV2/BRS, perf locked down, or built without Capstone).
+ *
+ * AMD has no continuous trace ring; perf delivers the 16-deep branch stack only AT
+ * a PMU sample. So capture works for branch-heavy routines (a sample fires inside
+ * the region and snapshots its branches) and honestly TRUNCATES for a tiny
+ * single-shot routine (too fast to be sampled in-region) — the fallback signal,
+ * never an empty trace claimed complete. Verified on a Zen 5 host (Ryzen 9 9950X,
+ * amd_lbr_v2). */
+static void test_amd_live(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+        char why[160];
+        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, why, sizeof why);
+        printf("# SKIP AMD LBR live capture: %s\n", why);
+        return;
+    }
+
+    /* (a) Tiny, fast single-shot routine: completes before a second PMU sample can
+     * fire, so its branches are never sampled in-region. The capture must come back
+     * truncated (the dynamic-fallback signal) — never insns=0 with truncated=0,
+     * which the old "keep the last sample" logic produced (it decoded a post-routine
+     * glue sample with no in-region branches and silently claimed complete). */
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p != MAP_FAILED) {
+        memcpy(p, ROUTINE, sizeof ROUTINE);
+        mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+        asmtest_hwtrace_options_t opts;
+        memset(&opts, 0, sizeof opts);
+        opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+        CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "AMD LBR live init");
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        CHECK(asmtest_hwtrace_register_region("amd", p, sizeof ROUTINE, tr) ==
+                  ASMTEST_HW_OK,
+              "AMD LBR live register region");
+        add2_fn fn = (add2_fn)p;
+        asmtest_hwtrace_begin("amd");
+        long r = fn(20, 22);
+        asmtest_hwtrace_end("amd");
+        CHECK(r == 42, "AMD LBR live single-shot call returns 20+22");
+        CHECK(asmtest_emu_trace_truncated(tr) ||
+                  asmtest_emu_trace_insns_total(tr) > 0,
+              "AMD LBR live single-shot: honest result (never empty-yet-complete)");
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(p, sizeof ROUTINE);
+    }
+
+    /* (b) Branch-heavy loop: runs long enough that PMU samples fire INSIDE the
+     * region, so AMD LbrExtV2 delivers a full 16-deep in-region branch stack and the
+     * decoder reconstructs it. Sampling is statistical, so retry a few times and
+     * assert the reconstruction once captured. */
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q != MAP_FAILED) {
+        memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+        mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+        int cov7 = 0, trunc = 0;
+        uint64_t insns = 0;
+        for (int attempt = 0; attempt < 8 && insns == 0; attempt++)
+            insns = amd_capture_loop(q, 20000, &cov7, &trunc);
+        printf("# AMD LBR live loop: insns_total=%llu covered(0x7)=%d truncated=%d\n",
+               (unsigned long long)insns, cov7, trunc);
+        CHECK(insns > 0,
+              "AMD LBR live loop: reconstructs in-region branches from the real LBR");
+        CHECK(insns == 0 || cov7,
+              "AMD LBR live loop: reconstructs the loop-body block 0x7");
+        CHECK(insns == 0 || trunc,
+              "AMD LBR live loop: >16-branch window flagged truncated");
+        munmap(q, sizeof AMD_LOOP);
+    }
+}
+
 /* Single-step (EFLAGS.TF) LIVE capture: unlike PT/AMD this runs on ANY x86-64
  * Linux host — no PMU, no perf_event, no privilege — so it executes here (and on
  * standard CI / in a plain container) instead of self-skipping. Trace the shared
@@ -236,9 +343,12 @@ static void test_auto_resolve(void) {
     CHECK(nb >= 1 && ab >= 0,
           "auto resolves a backend on x86-64 Linux (single-step floor)");
 
-    /* End to end: trace the shared fixture through whatever auto picked. When the
-     * pick is single-step (always so off PT/AMD hosts, e.g. this Zen 2 box) the
-     * byte-exact parity runs live; otherwise assert the looser shape PT's lane uses. */
+    /* End to end: trace the shared fixture through whatever auto picked. The pick is
+     * single-step on a PT-/AMD-LBR-less host (byte-exact parity), AMD LBR on a Zen
+     * 3+/4/5 host with perf (which honestly truncates on this tiny single-shot
+     * fixture — too short to be sampled in-region), or Intel PT on bare-metal Intel.
+     * So assert the call ran and the trace is honest (covered OR truncated), with the
+     * byte-exact stream only for the single-step pick. */
     if (ab >= 0) {
         void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -257,8 +367,9 @@ static void test_auto_resolve(void) {
                 long r = fn(20, 22);
                 asmtest_hwtrace_end("auto");
                 CHECK(r == 42, "auto-selected backend traces a live call (returns 42)");
-                CHECK(asmtest_trace_covered(tr, 0),
-                      "auto-selected backend covers block offset 0");
+                CHECK(asmtest_trace_covered(tr, 0) ||
+                          asmtest_emu_trace_truncated(tr),
+                      "auto-selected backend covers block 0 (or honestly truncates)");
                 if (ab == ASMTEST_HWTRACE_SINGLESTEP) {
                     static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
                     int seq = (asmtest_emu_trace_insns_total(tr) == 5);
@@ -281,6 +392,10 @@ int main(void) {
 
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_reconstruction();
+
+    /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
+     * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
+    test_amd_live();
 
     /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
     test_singlestep_live();

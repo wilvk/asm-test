@@ -62,6 +62,19 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 
 ## Implementation status
 
+> **Correction (dev host is Zen 5, not Zen 2).** This plan was written assuming the
+> project's primary dev host is an AMD **Zen 2** box with no branch facility — making
+> single-step "the only exact native option here." The host is in fact a **Ryzen 9
+> 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)**, on which **AMD LBR is available and
+> live-verified** (see the [AMD LBR plan](amd-lbr-trace-plan.md) and
+> [trace-parity-matrix](../analysis/trace-parity-matrix.md)). The single-step
+> backend's value is **unchanged** — it is the portable, no-PMU/perf/privilege,
+> depth-unbounded backend that runs on *any* x86-64 Linux host (including a true
+> Zen 2, VMs, plain containers, and standard CI) and is the deterministic in-process
+> path for tiny single-shot routines that AMD LBR's sampling cannot snapshot. Read
+> the "this Zen 2 host" phrasing below as "this x86-64 Linux dev host": single-step
+> runs live there regardless of microarchitecture.
+
 **Phases 0–4 implemented (Linux/x86-64).** The `ASMTEST_HWTRACE_SINGLESTEP` backend
 ships: gating ([src/hwtrace.c](../../src/hwtrace.c)), the stepper + block
 normalization ([src/ss_backend.c](../../src/ss_backend.c)), the begin/end dispatch

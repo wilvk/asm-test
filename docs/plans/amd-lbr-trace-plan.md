@@ -76,15 +76,25 @@ window-overflow (`nbr >= 16`) as `truncated`. Built into `libasmtest_hwtrace` an
 `hwtrace-test`.
 
 **Validation.** The reconstruction, block parity, and overflow-truncation
-(Phases 2–4) are validated on the dev host with **synthetic** `perf_branch_entry[]`
-inputs (examples/test_hwtrace.c): a Tier-A branch stack reconstructs the exact same
-`insns[]`/`blocks[]` the PT/DynamoRIO backends produce (`{0,3,6,0xc,0x11}`,
-blocks `{0,0x11}`), and a full 16-entry stack sets `truncated`. The live **capture**
-(Phase 1) self-skips here because this dev box is **Zen 2** (BRS needs Zen 3,
-LbrExtV2 Zen 4): `perf` branch-stack open returns `EOPNOTSUPP`, so
-`asmtest_hwtrace_available(AMD_LBR)` returns 0 with reason "no AMD branch records
-(needs Zen 3 BRS / Zen 4 LbrExtV2)". Capture is validated only on a Zen 3+/Zen 4
-host with perf privilege. The Intel-PT gating is unchanged (AMD still self-skips PT).
+(Phases 2–4) are validated host-independently with **synthetic** `perf_branch_entry[]`
+inputs (examples/test_hwtrace.c `test_amd_reconstruction`): a Tier-A branch stack
+reconstructs the exact same `insns[]`/`blocks[]` the PT/DynamoRIO backends produce
+(`{0,3,6,0xc,0x11}`, blocks `{0,0x11}`), and a full 16-entry stack sets `truncated`.
+
+**Live capture (Phase 1) is verified on a Zen 5 host** — the project's actual dev
+box is a **Ryzen 9 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)**, not Zen 2 as earlier
+revisions of this plan assumed. `test_amd_live` (`make docker-hwtrace-amd`, which
+runs the hwtrace image with `--security-opt seccomp=unconfined --cap-add=PERFMON` so
+`perf_event_open` is permitted) exercises the real `PERF_SAMPLE_BRANCH_STACK` capture
++ decode: a branch-heavy loop is reconstructed from the live 16-deep LbrExtV2 stack
+(loop-body block, `truncated` past 16 branches), and a tiny single-shot routine
+honestly `truncated`s (perf delivers the stack only at a PMU sample, so a fast
+single-run routine is never sampled in-region). That run also fixed a capture bug:
+`hwtrace_end_amd` kept the *last* perf sample — all post-routine glue for a small
+routine, decoding to nothing yet flagged complete — and now keeps the sample
+**richest in in-region branches**, setting `truncated` when none is found. Capture
+still self-skips on **Zen 2** (no branch facility — `EOPNOTSUPP`), non-AMD, VMs, and
+CI's default sandbox; the Intel-PT gating is unchanged (AMD still self-skips PT).
 
 **Phase 5** (Tier-B stitching / MSR-direct) remains **forward-look**.
 

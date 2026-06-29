@@ -16,9 +16,12 @@
  * when Capstone is linked (asmtest_disas_available()) on a Linux x86-64 build;
  * otherwise the tier self-skips, exactly like the libipt/OpenCSD gating.
  *
- * The capture is Zen 3+/Zen 4 + perf-privilege only (this dev host is Zen 2, so it
- * self-skips), but THIS reconstruction is validated independently with synthetic
- * perf_branch_entry[] inputs (examples/test_hwtrace.c), cross-checked against the
+ * The capture needs an AMD Zen 3 (BRS) / Zen 4 / Zen 5 (LbrExtV2) host with perf
+ * branch-stack permitted; it self-skips on Zen 2 (no branch facility), non-AMD, VMs,
+ * and CI. Live capture + decode is verified on a Zen 5 host (Ryzen 9 9950X,
+ * amd_lbr_v2 — see examples/test_hwtrace.c test_amd_live and `make docker-hwtrace-amd`);
+ * THIS reconstruction is additionally validated host-independently with synthetic
+ * perf_branch_entry[] inputs (test_amd_reconstruction), cross-checked against the
  * DynamoRIO/PT block+instruction partition.
  */
 #include "asmtest_trace.h"

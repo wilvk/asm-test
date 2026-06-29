@@ -188,13 +188,25 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-<lang>     just one (e.g. docker-hwtrace-rust)
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-bindings \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace
+
+# AMD LBR live lane: same image, but with perf access so the AMD branch-stack
+# backend actually runs instead of self-skipping. Unlike the single-step lane this
+# is NOT a plain container — perf_event_open needs the default seccomp profile
+# relaxed (it blocks the syscall) and CAP_PERFMON; it still needs an AMD Zen 3+/4/5
+# host with perf_event_paranoid lowered. On any other host the AMD test self-skips,
+# so this lane is for a self-hosted AMD runner. (PT remains bare-metal-Intel only.)
+docker-hwtrace-amd: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  --cap-add=PERFMON asmtest-hwtrace make hwtrace-test
 
 # Reuse each already-built per-language image (asmtest-<lang>: full source +
 # toolchain + Capstone) and just run its hwtrace test target — no extra image
