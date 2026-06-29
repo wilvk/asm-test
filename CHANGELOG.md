@@ -13,7 +13,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trace. Both fill the same engine-neutral `asmtest_trace_t` shape (now extracted
   into `include/asmtest_trace.h` + `src/trace.c`, shared by all backends) and the
   Capstone annotation layer renders any backend's offsets. ([Native runtime
-  tracing](docs/native-tracing.md))
+  tracing](https://github.com/wilvk/asm-test/blob/main/docs/native-tracing.md))
   - **DynamoRIO in-process tier** (`asmtest_drtrace.h`, `libasmtest_drapp` +
     CMake-built `libasmtest_drclient.so`): `dr_app_*` in-process attach with an
     enforced lifecycle state machine, begin/end region markers, basic-block and
