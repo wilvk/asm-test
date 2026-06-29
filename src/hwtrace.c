@@ -268,6 +268,47 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
 }
 
 /* ------------------------------------------------------------------ */
+/* Backend auto-selection (the hardware-tier fallback cascade)         */
+/*                                                                     */
+/* All four backends fill the same asmtest_trace_t and self-skip via    */
+/* asmtest_hwtrace_available(), so the cascade is just those probes in   */
+/* priority order. Order is descending fidelity == ascending enum:      */
+/* Intel PT (near-zero overhead, exact, unbounded ring) > AMD LBR        */
+/* (HW-attributed, exact within a 16-taken-branch window) > single-step  */
+/* (exact + unbounded, per-instruction cost) > CoreSight (AArch64).      */
+/* CEILING_FREE drops AMD LBR — the one backend with a fixed completeness */
+/* window a small routine can overflow — so its pick has no depth ceiling */
+/* and is the right target to re-resolve to after trace.truncated.       */
+/* ------------------------------------------------------------------ */
+size_t asmtest_hwtrace_resolve(asmtest_hwtrace_policy_t policy,
+                               asmtest_trace_backend_t *out, size_t cap) {
+    if (out == NULL || cap == 0)
+        return 0;
+    static const asmtest_trace_backend_t order[] = {
+        ASMTEST_HWTRACE_INTEL_PT,
+        ASMTEST_HWTRACE_AMD_LBR,
+        ASMTEST_HWTRACE_SINGLESTEP,
+        ASMTEST_HWTRACE_CORESIGHT,
+    };
+    size_t n = 0;
+    for (size_t i = 0; i < sizeof order / sizeof order[0] && n < cap; i++) {
+        if (policy == ASMTEST_HWTRACE_CEILING_FREE &&
+            order[i] == ASMTEST_HWTRACE_AMD_LBR)
+            continue; /* fixed 16-branch window: excluded from the ceiling-free set */
+        if (asmtest_hwtrace_available(order[i]))
+            out[n++] = order[i];
+    }
+    return n;
+}
+
+int asmtest_hwtrace_auto(asmtest_hwtrace_policy_t policy) {
+    asmtest_trace_backend_t b;
+    if (asmtest_hwtrace_resolve(policy, &b, 1) == 0)
+        return ASMTEST_HW_EUNAVAIL;
+    return (int)b;
+}
+
+/* ------------------------------------------------------------------ */
 /* Region registry + per-thread capture                                */
 /* ------------------------------------------------------------------ */
 #define MAX_REGIONS 32

@@ -35,10 +35,15 @@ Two facts worth stating up front because they are easy to get wrong:
   cpp/ruby/java/lua/zig/rust/go), but its make target is wrapped in the "Failed to
   take over all threads" → SKIP downgrade because the JVM is intermittent —
   distinct from Node/.NET, which **always** self-skip.
-- The **single-step (Trap Flag) backend is design-of-record only** — it is *not* in
-  the source. `asmtest_trace_backend_t` is `{INTEL_PT, CORESIGHT, AMD_LBR}` today
-  ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)); rows marked *(planned)*
-  below track the [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
+- The **single-step (Trap Flag) backend now ships** (Phases 0–4, Linux x86-64):
+  `asmtest_trace_backend_t` is `{INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP}`
+  ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)), and `src/ss_backend.c`
+  drives `EFLAGS.TF`→`#DB`/`SIGTRAP` to record every executed `RIP` **live on any
+  x86-64 Linux host** (no PMU, no perf, no privilege, no decoder beyond Capstone).
+  Only the *cross-OS* variants (Windows VEH, macOS-Intel, out-of-process `ptrace`
+  W2, AArch64) remain Phase-5 *(planned)* — so single-step rows below read
+  *implemented* for Linux x86-64 and carry *(planned)* only where they name a
+  Phase-5 front. See the [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
 
 ---
 
@@ -51,7 +56,7 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
 | **AMD LBR** | 16-deep branch stack snapshot | Capstone (replay) | BSD | low (few PMIs) | exact ≤16 taken branches; else `truncated`→fallback | **impl. Ph0–4**; live capture unverified on dev (Zen 2) |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **scaffold** — always self-skips |
-| **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **planned** (not in code) |
+| **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4, Linux x86-64; cross-OS Ph5 planned) |
 
 DynamoRIO core is BSD (the tier deliberately avoids `drwrap`'s LGPL-2.1); libipt and
 OpenCSD are BSD. Licensing for the optional emulator dependencies (Unicorn,
@@ -68,7 +73,7 @@ Keystone) is not asserted here.
 | Intel PT | ✓ bare-metal | ✗ | ✗ | — | — |
 | AMD LBR | ✓ (Zen 3+) | ✗ | ✗ | — | — |
 | CoreSight | — | — | — | scaffold (board) | ✗ |
-| Single-step *(planned)* | ✓ | macOS-Intel (Ph5) | ✗ → Ph5 (VEH, ~6×) | ptrace-only (W2) | ptrace-only (W2) |
+| Single-step | ✓ **shipped** | macOS-Intel (Ph5) | ✗ → Ph5 (VEH, ~6×) | ptrace-only (W2) | ptrace-only (W2) |
 
 Windows-x64 and all of macOS/AArch64 are served **only by the emulator tier** today
 (`emu_call_win64_traced` for the Win64 ABI). The two implemented native tiers are
@@ -83,12 +88,12 @@ Linux-x86-64-only.
 | DynamoRIO | ✓ | ✓ | ✓ | ✓ | — (vendor-independent DBI) |
 | Intel PT | ✓ | ✗ | ✗ | ✗ | `no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)` |
 | AMD LBR | ✗ | ✗ **no facility** | ✓ BRS | ✓ LbrExtV2 | `no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)` |
-| Single-step *(planned)* | ✓ | ✓ | ✓ | ✓ | (none — no PMU/perf/privilege needed) |
+| Single-step | ✓ | ✓ | ✓ | ✓ | (none — no PMU/perf/privilege needed) |
 
 Zen 2's branch-stack `perf_event_open` returns `EOPNOTSUPP` → `AMD_NOHW`
 ([hwtrace.c `amd_branch_probe`](../../src/hwtrace.c)); its legacy LBR is depth-1 and
 not wired to perf branch-stack. So on Zen 2 the only exact native options are
-**DynamoRIO** (today) or **single-step** (planned). Zen 3 uses **BRS** (Family 19h,
+**DynamoRIO** and **single-step** (both shipping today). Zen 3 uses **BRS** (Family 19h,
 opt-in `branch-brs` event); Zen 4 uses **LbrExtV2** (mainline Linux 6.1+); both are
 a fixed 16-entry stack, so the AMD backend is exact only within a 16-taken-branch
 window (Tier A) and sets `truncated` to route longer routines to DynamoRIO.
@@ -150,8 +155,8 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 | Intel bare-metal, small routine | **Intel PT** | DynamoRIO | complete + near-zero overhead |
 | Intel/AMD, long or looping routine | **DynamoRIO** | — | native-speed code cache, no depth ceiling, vendor-independent |
 | AMD Zen 3 / Zen 4, small routine | **AMD LBR (Tier A)** | DynamoRIO (on `truncated`) | HW-attributed, exact within 16 branches |
-| AMD Zen 2 | **DynamoRIO** | single-step *(planned)* | no branch facility exists on Zen 2 |
-| Any x86, exact + unprivileged + on CI | **single-step** *(planned)* | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
+| AMD Zen 2 | **DynamoRIO** | single-step | no branch facility exists on Zen 2 |
+| Any x86, exact + unprivileged + on CI | **single-step** | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
 | Managed runtime (JVM/.NET/Node), Intel | **Intel PT** | — | observes out-of-band; no thread takeover, no signal collision |
 | Managed runtime, AMD | **W2 out-of-proc `ptrace` single-step** *(planned)* | DynamoRIO (best-effort) | PT is Intel-only; in-proc DR cannot seize JIT/GC threads |
 | Windows-x64 / macOS / AArch64 (any) | **Emulator (Unicorn)** | — | only tier covering these hosts today; CoreSight is a scaffold |
@@ -216,12 +221,12 @@ transparent, while a native→emulator fallback crosses a semantic line and shou
 
 | CPU | Resolution order (first `available()` wins) |
 |---|---|
-| Intel, bare-metal | Intel PT → DynamoRIO → single-step *(planned)* → emulator |
-| Intel, VM / cloud | DynamoRIO → single-step *(planned)* → emulator *(PT self-skips: no `intel_pt` PMU)* |
-| AMD Zen 3 / Zen 4, bare-metal, ≤16 branches | AMD LBR → DynamoRIO → single-step *(planned)* → emulator |
-| AMD Zen 3 / Zen 4, routine > 16 branches | *(LBR sets `truncated`)* → DynamoRIO → single-step *(planned)* → emulator |
-| AMD Zen 2 | DynamoRIO → single-step *(planned)* → emulator *(no branch facility exists)* |
-| AMD, VM / cloud | DynamoRIO → single-step *(planned)* → emulator |
+| Intel, bare-metal | Intel PT → DynamoRIO → single-step → emulator |
+| Intel, VM / cloud | DynamoRIO → single-step → emulator *(PT self-skips: no `intel_pt` PMU)* |
+| AMD Zen 3 / Zen 4, bare-metal, ≤16 branches | AMD LBR → DynamoRIO → single-step → emulator |
+| AMD Zen 3 / Zen 4, routine > 16 branches | *(LBR sets `truncated`)* → DynamoRIO → single-step → emulator |
+| AMD Zen 2 | DynamoRIO → single-step → emulator *(no branch facility exists)* |
+| AMD, VM / cloud | DynamoRIO → single-step → emulator |
 
 ### Matrix 9 — OS / architecture fallback chain
 
@@ -269,7 +274,7 @@ resolve(os, arch, vendor, uarch, runtime, routine_profile):
                 if vendor == Intel:                  chain += [INTEL_PT]
                 elif vendor == AMD and uarch >= Zen3: chain += [AMD_LBR]   # Tier A
             chain += [DYNAMORIO]                     # vendor/uarch-independent, no ceiling
-            chain += [SINGLESTEP]                    # planned; exact, unprivileged, CI-safe
+            chain += [SINGLESTEP]                    # shipped; exact, unprivileged, CI-safe
     chain += [EMULATOR]                              # universal floor (always available)
 
     for b in chain:
@@ -287,26 +292,41 @@ resolve(os, arch, vendor, uarch, runtime, routine_profile):
 | Linux x86-64 | Intel cloud VM | Python | **DynamoRIO** → emulator *(PT self-skips)* |
 | Linux x86-64 | AMD Zen 4 bare-metal | C, small kernel | **AMD LBR** → DynamoRIO → emulator |
 | Linux x86-64 | AMD Zen 4 bare-metal | C, looping kernel | LBR `truncated` → **DynamoRIO** → emulator |
-| Linux x86-64 | AMD Zen 2 (dev host) | Go | **DynamoRIO** → single-step *(planned)* → emulator |
+| Linux x86-64 | AMD Zen 2 (dev host) | Go | **DynamoRIO** → single-step → emulator |
 | Linux x86-64 | Intel bare-metal | Node | **Intel PT** → emulator *(DynamoRIO self-skips)* |
 | Linux x86-64 | AMD Zen 3 | .NET | W2 ptrace *(planned)* → **emulator** *(no PT on AMD; DR self-skips)* |
 | Linux AArch64 | — | Java | **emulator** *(CoreSight scaffold; no in-proc stepper on ARM)* |
 | macOS Apple Silicon | — | any | **emulator** only |
 | Windows x64 | any | .NET | **emulator** (`emu_call_win64_traced`) |
 
-### What is missing to automate this
+### What is automated, and what is still missing
 
 The framework ships the **primitives** — per-backend `available()`, the `truncated`
-completeness bit, and a single `asmtest_trace_t` shape every backend fills — but it
-does **not** ship an orchestrator that walks these chains automatically. Today the
-caller (or a per-binding helper) selects a backend by enum and, on `truncated`,
-chooses whether to re-run on a ceiling-free tier. The
-[AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md) makes this explicit: it
-defines the overflow→DynamoRIO routing rule "where a caller orchestrates backends,"
-i.e. the policy is specified but its automatic execution is left to the integrator. A
-natural follow-up is a thin `asmtest_trace_auto(...)` front-end that encodes
-Matrix 8–10 as the default cascade with a flag to forbid the native→emulator
-fidelity crossing.
+completeness bit, and a single `asmtest_trace_t` shape every backend fills.
+
+**The hardware tier now also ships the orchestrator over its own backends.**
+`asmtest_hwtrace_resolve(policy, out, cap)` walks `{Intel PT, AMD LBR, single-step,
+CoreSight}` in descending-fidelity order and returns those that `available()`, and
+`asmtest_hwtrace_auto(policy)` returns the single best pick ready to `init`
+([hwtrace.c](../../src/hwtrace.c), [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)).
+The `policy` encodes the static *and* the dynamic fallback: `ASMTEST_HWTRACE_BEST`
+picks the most faithful backend; `ASMTEST_HWTRACE_CEILING_FREE` drops the one
+fixed-window backend (AMD LBR, 16 taken branches) and is what a caller re-resolves
+under after a trace comes back `truncated`. On any x86-64 Linux host the cascade is
+non-empty (single-step is the floor), so it never fails to resolve. This is exactly
+the within-hardware-tier portion of Matrix 8.
+
+**What is still missing is the *cross-tier* front-end.** `asmtest_hwtrace_resolve`
+stops at the hardware tier's library boundary: the DynamoRIO tier
+(`libasmtest_drapp`, located by `DYNAMORIO_HOME`) and the emulator tier
+(`libasmtest_emu`) are separate libraries with their own call APIs, and a fall to
+the emulator crosses a fidelity line (real CPU → isolated guest). So a full
+`asmtest_trace_auto(...)` spanning all of Matrix 8–10 — with a flag to forbid the
+native→emulator crossing — remains a follow-up; deliberately, the cross-tier fall
+stays an explicit, fidelity-aware integrator decision rather than an automatic last
+resort (consistent with the [AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md)
+overflow→DynamoRIO routing rule, which is specified for "where a caller orchestrates
+backends").
 
 ---
 

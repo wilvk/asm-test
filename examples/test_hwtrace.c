@@ -188,6 +188,94 @@ static void test_singlestep_loop(void) {
     munmap(p, sizeof LOOP);
 }
 
+/* Auto-select front-end: the orchestrator picks the most-faithful AVAILABLE
+ * hardware-trace backend for this host, so a caller need not hard-code one. The
+ * SELECTION invariants hold on every host (even where all backends self-skip); on
+ * any x86-64 Linux host the cascade is non-empty (single-step is always available)
+ * and we additionally run a live traced call through the auto-picked backend to
+ * prove the choice is usable end to end. */
+static void test_auto_resolve(void) {
+    asmtest_trace_backend_t best[4], cf[4];
+    size_t nb = asmtest_hwtrace_resolve(ASMTEST_HWTRACE_BEST, best, 4);
+    size_t nc = asmtest_hwtrace_resolve(ASMTEST_HWTRACE_CEILING_FREE, cf, 4);
+
+    /* Every resolved backend is actually available, in descending-fidelity
+     * (ascending-enum) order, with no duplicates. */
+    int ok_avail = 1, ok_order = 1;
+    for (size_t i = 0; i < nb; i++) {
+        if (!asmtest_hwtrace_available(best[i]))
+            ok_avail = 0;
+        if (i && best[i] <= best[i - 1])
+            ok_order = 0;
+    }
+    CHECK(ok_avail, "auto BEST returns only available backends");
+    CHECK(ok_order, "auto BEST is ordered by descending fidelity, no dups");
+
+    /* CEILING_FREE drops the one fixed-window backend (AMD LBR); it is otherwise a
+     * subset of BEST (so it never adds a backend BEST lacks). */
+    int cf_no_amd = 1, cf_subset = 1;
+    for (size_t i = 0; i < nc; i++) {
+        if (cf[i] == ASMTEST_HWTRACE_AMD_LBR)
+            cf_no_amd = 0;
+        int in_best = 0;
+        for (size_t j = 0; j < nb; j++)
+            in_best |= (best[j] == cf[i]);
+        cf_subset &= in_best;
+    }
+    CHECK(cf_no_amd, "auto CEILING_FREE never selects AMD LBR (16-branch window)");
+    CHECK(cf_subset, "auto CEILING_FREE is a subset of BEST");
+
+    /* auto(policy) is the head of resolve(policy), or EUNAVAIL when empty. */
+    int ab = asmtest_hwtrace_auto(ASMTEST_HWTRACE_BEST);
+    int head_ok = (nb == 0) ? (ab == ASMTEST_HW_EUNAVAIL) : (ab == (int)best[0]);
+    CHECK(head_ok, "auto(BEST) is the head of the resolved cascade");
+
+#if defined(__linux__) && defined(__x86_64__)
+    /* Universal guarantee: single-step keeps the cascade non-empty on every x86-64
+     * Linux host, so the orchestrator never fails to resolve here. */
+    CHECK(nb >= 1 && ab >= 0,
+          "auto resolves a backend on x86-64 Linux (single-step floor)");
+
+    /* End to end: trace the shared fixture through whatever auto picked. When the
+     * pick is single-step (always so off PT/AMD hosts, e.g. this Zen 2 box) the
+     * byte-exact parity runs live; otherwise assert the looser shape PT's lane uses. */
+    if (ab >= 0) {
+        void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED) {
+            memcpy(p, ROUTINE, sizeof ROUTINE);
+            mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+            asmtest_hwtrace_options_t opts;
+            memset(&opts, 0, sizeof opts);
+            opts.backend = (asmtest_trace_backend_t)ab;
+            if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
+                asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+                asmtest_hwtrace_register_region("auto", p, sizeof ROUTINE, tr);
+                add2_fn fn = (add2_fn)p;
+                asmtest_hwtrace_begin("auto");
+                long r = fn(20, 22);
+                asmtest_hwtrace_end("auto");
+                CHECK(r == 42, "auto-selected backend traces a live call (returns 42)");
+                CHECK(asmtest_trace_covered(tr, 0),
+                      "auto-selected backend covers block offset 0");
+                if (ab == ASMTEST_HWTRACE_SINGLESTEP) {
+                    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+                    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+                    for (size_t i = 0; seq && i < 5; i++)
+                        seq = (tr->insns[i] == EXPECT[i]);
+                    CHECK(seq, "auto pick (single-step) yields the exact shared "
+                               "offset stream [0,3,6,c,11]");
+                }
+                asmtest_hwtrace_shutdown();
+                asmtest_trace_free(tr);
+            }
+            munmap(p, sizeof ROUTINE);
+        }
+    }
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -197,6 +285,9 @@ int main(void) {
     /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
     test_singlestep_live();
     test_singlestep_loop();
+
+    /* The auto-select orchestrator: pick + use the best available backend. */
+    test_auto_resolve();
 
     asmtest_trace_backend_t backend = ASMTEST_HWTRACE_INTEL_PT;
     if (!asmtest_hwtrace_available(backend)) {

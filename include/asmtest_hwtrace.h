@@ -79,6 +79,46 @@ int asmtest_hwtrace_available(asmtest_trace_backend_t backend);
 void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
                                  size_t buflen);
 
+/* ------------------------------------------------------------------ */
+/* Backend auto-selection (the hardware-tier fallback cascade)         */
+/*                                                                     */
+/* Every backend above fills the same asmtest_trace_t (one offset basis, */
+/* one block partition) and self-skips cleanly via asmtest_hwtrace_     */
+/* available(), so the most-faithful AVAILABLE one can be chosen without */
+/* the caller hard-coding an enum. These resolve that choice; the caller */
+/* still brackets its own routine with init/register/begin/end.         */
+/* ------------------------------------------------------------------ */
+
+/* Selection policy. BEST returns the most faithful available backend.
+ * CEILING_FREE additionally skips the depth-bounded backend (AMD LBR, whose
+ * 16-taken-branch window a routine can overflow and set trace.truncated) — so the
+ * backend it returns has no fixed completeness ceiling. CEILING_FREE is the policy
+ * to re-resolve under after a trace comes back truncated. */
+typedef enum {
+    ASMTEST_HWTRACE_BEST = 0,
+    ASMTEST_HWTRACE_CEILING_FREE = 1,
+} asmtest_hwtrace_policy_t;
+
+/* Resolve this host's hardware-trace fallback cascade: write the AVAILABLE
+ * backends, most-faithful first (Intel PT > AMD LBR > single-step > CoreSight),
+ * into out[0..cap), honoring `policy`; return how many were written (0 = none
+ * available — only off x86-64 Linux / a non-CoreSight host, since the single-step
+ * backend covers every x86-64 Linux host). Each entry satisfies
+ * asmtest_hwtrace_available(). This is the static capability cascade restricted to
+ * the hardware tier: the DynamoRIO and emulator tiers are separate libraries, and a
+ * fall to them stays an explicit, fidelity-aware caller decision (native->emulator
+ * crosses real-CPU vs. virtual-guest execution — see docs/native-tracing.md). */
+size_t asmtest_hwtrace_resolve(asmtest_hwtrace_policy_t policy,
+                               asmtest_trace_backend_t *out, size_t cap);
+
+/* The single most-preferred AVAILABLE backend under `policy`, as an int that is a
+ * valid asmtest_trace_backend_t when >= 0 (init it directly) or a negative
+ * ASMTEST_HW_* status (ASMTEST_HW_EUNAVAIL) when no hardware-trace backend is
+ * available on this host. Dynamic-fallback idiom: run under asmtest_hwtrace_auto
+ * (ASMTEST_HWTRACE_BEST); if trace.truncated afterward, re-resolve with
+ * asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE) and, when it differs, re-run. */
+int asmtest_hwtrace_auto(asmtest_hwtrace_policy_t policy);
+
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts);
 int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
                                     asmtest_trace_t *trace);

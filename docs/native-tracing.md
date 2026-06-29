@@ -416,6 +416,59 @@ wrapper needs a DynamoRIO install and the PT/AMD wrappers self-skip.
 | Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
 | Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
 
+## Auto-selecting a backend (the hardware-tier cascade)
+
+All four hardware backends fill the same `asmtest_trace_t`, self-skip cleanly via
+`asmtest_hwtrace_available()`, and share one `truncated` completeness bit — so the
+**most faithful available** one can be chosen for the host without hard-coding an
+enum. Two front-end calls do that:
+
+```c
+#include "asmtest_hwtrace.h"
+
+/* Pick the best available backend for this host, init it, trace. */
+int b = asmtest_hwtrace_auto(ASMTEST_HWTRACE_BEST);   /* >=0 backend, or <0 status */
+if (b >= 0) {
+    asmtest_hwtrace_options_t opts = {.backend = (asmtest_trace_backend_t)b};
+    asmtest_hwtrace_init(&opts);
+    asmtest_hwtrace_register_region("fn", base, len, tr);
+    asmtest_hwtrace_begin("fn");  fn(20, 22);  asmtest_hwtrace_end("fn");
+    asmtest_hwtrace_shutdown();
+
+    /* Dynamic fallback: if the backend could not record the whole path (AMD LBR
+     * overflowed its 16-branch window, a PT ring overflowed), re-resolve to a
+     * ceiling-free backend and re-run the routine. */
+    if (tr->truncated) {
+        int b2 = asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE);
+        if (b2 >= 0 && b2 != b) { /* re-init under b2, begin/call/end again */ }
+    }
+}
+```
+
+`asmtest_hwtrace_resolve(policy, out, cap)` returns the **whole** cascade — the
+available backends most-faithful first (`Intel PT > AMD LBR > single-step >
+CoreSight`) — and `asmtest_hwtrace_auto(policy)` is the convenience that returns just
+the head (or `ASMTEST_HW_EUNAVAIL`). The `policy`:
+
+- **`ASMTEST_HWTRACE_BEST`** — the most faithful backend the host can run.
+- **`ASMTEST_HWTRACE_CEILING_FREE`** — the same, but skipping the one backend with a
+  fixed completeness window (AMD LBR, 16 taken branches). This is what you re-resolve
+  under after a trace comes back `truncated`, so the second attempt has no depth
+  ceiling.
+
+On **any x86-64 Linux host the cascade is non-empty** — the single-step backend is
+the floor — so `auto()` never fails there; it only returns a negative status off
+x86-64 Linux (and non-CoreSight). On this Zen 2 dev box `auto(BEST)` resolves to
+single-step (PT/AMD LBR self-skip); on a bare-metal Intel host it resolves to Intel
+PT; on a Zen 3/4 host to AMD LBR, with `CEILING_FREE` falling to single-step.
+
+**Scope.** This orchestrates the *hardware tier's own* backends — one library, one
+API. The DynamoRIO tier (`libasmtest_drapp`) and the Unicorn emulator are separate
+libraries with their own call APIs, and a fall to the emulator crosses a fidelity
+line (real CPU → isolated guest). So extending the cascade across tiers stays an
+explicit, fidelity-aware caller decision rather than an automatic last resort; the
+front-end is the C API today (the language wrappers can adopt it next).
+
 ---
 
 ## Language runtimes
