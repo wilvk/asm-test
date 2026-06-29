@@ -1,0 +1,35 @@
+# bindings-parity-allow.txt — intentional exemptions for check-bindings-parity.
+#
+# The parity gate (scripts/check-bindings-parity.sh) requires every language
+# binding to wrap every symbol declared in the native-trace tier headers
+# (asmtest_hwtrace.h, asmtest_drtrace.h) — the surface that is uniformly mirrored
+# across all ten bindings and the one most often extended "across all bindings"
+# in a single change. List here the (binding, symbol) pairs that are deliberately
+# NOT wrapped.
+#
+# Syntax:  <lang|ALL> <symbol>          # everything after '#' is a comment
+#   ALL   exempts the symbol for every binding.
+#   <lang>  exempts it for one binding, where <lang> is one of:
+#           python cpp rust zig node java dotnet ruby lua go
+# Blank lines and lines beginning with '#' are ignored.
+#
+# Stale entries fail the gate (the binding actually wraps the symbol now, or the
+# symbol left the tier headers), so this file cannot rot silently — remove an
+# entry once it is no longer needed.
+
+# Optional Keystone-only convenience helper (assemble + materialize in one call);
+# every binding wraps the lower-level asmtest_exec_alloc instead, so none bind it.
+ALL asmtest_asm_exec_native
+
+# Managed-host-gate diagnostic (dr_app_running_under_dynamorio). Only the Python
+# binding surfaces it today; the other nine have no caller for it yet. Drop the
+# matching line here when a binding starts wrapping it.
+cpp asmtest_dr_under_dynamorio
+rust asmtest_dr_under_dynamorio
+zig asmtest_dr_under_dynamorio
+node asmtest_dr_under_dynamorio
+java asmtest_dr_under_dynamorio
+dotnet asmtest_dr_under_dynamorio
+ruby asmtest_dr_under_dynamorio
+lua asmtest_dr_under_dynamorio
+go asmtest_dr_under_dynamorio

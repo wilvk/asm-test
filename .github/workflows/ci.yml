@@ -268,6 +268,20 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
+  # Binding function-surface parity: every language binding must wrap every symbol
+  # in the native-trace tier headers (asmtest_hwtrace.h / asmtest_drtrace.h), so a
+  # contract change can't reach nine bindings and silently miss the tenth. Pure
+  # git-grep over headers + binding sources — no toolchain, no build — so it is a
+  # fast gate that complements the per-language conformance replay above.
+  bindings-parity:
+    name: bindings (function-surface parity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check every binding wraps every native-trace tier symbol
+        run: make check-bindings-parity
+
   # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
   # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:
   # the fast native lane via __attribute__((ms_abi)) on the runner itself, then a

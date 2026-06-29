@@ -32,6 +32,19 @@ conformance: $(BUILD)/conformance
 	./$(BUILD)/conformance --emit > bindings/conformance/corpus.json
 	@echo "conformance: wrote bindings/conformance/corpus.json"
 
+# --- Binding function-surface parity (Track 0.5) ---------------------------
+# The conformance corpus pins binding BEHAVIOUR and the manifest pins struct
+# LAYOUT; this pins the FUNCTION SURFACE of the native-trace tiers — every
+# binding must wrap every symbol in asmtest_hwtrace.h / asmtest_drtrace.h, so a
+# new entry point can't be wired into nine bindings and missed in the tenth.
+# Pure git-grep over the headers + binding sources: no toolchain, no build.
+# Intentional omissions live in scripts/bindings-parity-allow.txt.
+check-bindings-parity:
+	@scripts/check-bindings-parity.sh
+
+bindings-parity-report:
+	@scripts/check-bindings-parity.sh --report
+
 # In-line-assembler variant: the same reference runner built -DASMTEST_ENABLE_ASM
 # and linked against the assembler (assemble.o, -lkeystone), so the optional asm
 # tier (asm.add_signed / asm.att_3arg / asm.bad_source / asm.arm64_bytes) is

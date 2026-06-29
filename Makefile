@@ -59,6 +59,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
 .PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
+.PHONY: check-bindings-parity bindings-parity-report
 .PHONY: sanitize coverage tidy fmt fmt-check
 .PHONY: deps usecases usecases-emu
 .PHONY: drtrace-test drtrace-client shared-drtrace hwtrace-test shared-hwtrace
@@ -103,6 +104,8 @@ help:
 	@echo '  package-libs-verify  check a collected native tree has both libs per platform'
 	@echo '  sync-version    write VERSION into every binding manifest'
 	@echo '  check-version   verify every manifest matches VERSION (CI)'
+	@echo '  check-bindings-parity  every binding wraps every native-trace tier symbol'
+	@echo '  bindings-parity-report print the tier symbol x binding coverage matrix'
 	@echo ''
 	@echo 'Quality (Track D/E):'
 	@echo '  sanitize        build + run under ASan + UBSan'

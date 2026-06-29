@@ -70,6 +70,19 @@ make <lang>-test     # e.g. python-test, rust-test, go-test (see `make help`)
 make docker-bindings # all bindings in their containers
 ```
 
+When you add a C entry point to a **native-trace tier** (`asmtest_hwtrace.h` /
+`asmtest_drtrace.h`), wrap it in every binding: a gate enforces that every binding
+exposes every tier symbol, so the contract can't reach nine bindings and miss the
+tenth.
+
+```sh
+make check-bindings-parity   # gate: fail if any binding is missing a tier symbol
+make bindings-parity-report  # the symbol x binding coverage matrix
+```
+
+Record a deliberate omission in [scripts/bindings-parity-allow.txt](scripts/bindings-parity-allow.txt)
+with a reason (stale exemptions fail the gate, so the list stays honest).
+
 See [docs/bindings.md](docs/bindings.md) for the shared model and the per-language
 pages, and [docs/plans/binding-parity-plan.md](docs/plans/binding-parity-plan.md)
 for the parity checklist a new binding is held to. Keep the public surface and the
