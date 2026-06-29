@@ -130,6 +130,53 @@ try (Asmtest.Trace t = new Asmtest.Trace(4096, 4096)) {    // or new Trace() for
 }
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate **native** tier ([`DrTrace.java`](https://github.com/wilvk/asm-test/blob/main/bindings/java/DrTrace.java),
+also FFM) traces host-native code as it runs **inside this JVM process** under
+DynamoRIO, rather than through the Unicorn guest. Bring DynamoRIO up once with
+`DrTrace.initialize()`, materialize machine code with `DrTrace.NativeCode`, mark a
+region, call into it, and read back basic-block / instruction coverage. The tier
+is opt-in: when the library or DynamoRIO is absent, `DrTrace.available()` returns
+false so callers self-skip.
+
+```java
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+byte[] routine = {
+    0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x01, (byte) 0xF0, 0x48, 0x3D,
+    0x64, 0x00, 0x00, 0x00, 0x7E, 0x03, 0x48, (byte) 0xFF, (byte) 0xC8, (byte) 0xC3
+};
+
+if (!DrTrace.available()) return;             // self-skip without DynamoRIO
+DrTrace.initialize();                         // up once; null client → $ASMTEST_DRCLIENT
+try {
+    // Instruction mode: trace executed code through a registered region.
+    try (DrTrace.NativeCode code = DrTrace.NativeCode.fromBytes(routine);
+         DrTrace.NativeTrace tr = DrTrace.NativeTrace.create(64, 64)) {  // 64 blocks, 64 insns
+        tr.register("add2", code);
+        tr.region("add2", () -> code.call(1, 2));  // run inside the region
+        tr.covered(0);                             // entry block entered?
+
+        tr.blockOffsets();    // distinct basic-block starts, first-seen order
+        tr.insnOffsets();     // ordered instruction stream; jle-taken path:
+                              //   {0x0, 0x3, 0x6, 0xc, 0x11}
+    }
+
+    // Symbol mode: trace a named exported function — no region/markers.
+    try (DrTrace.NativeTrace tr = DrTrace.NativeTrace.create(64, 0)) {
+        tr.registerSymbol("asmtest_symbol_demo", 256);
+        long r = DrTrace.symbolDemo(3, 4);    // r == 10 (a*2+b), always-on recording
+        tr.covered(0);                        // entry block entered?
+    }
+} finally {
+    DrTrace.shutdown();
+}
+```
+
+Linux x86-64 only; self-skips without DynamoRIO (and the JVM can be flaky for
+in-process takeover — prefer Intel PT, see the central doc). Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```java

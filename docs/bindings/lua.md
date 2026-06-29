@@ -125,6 +125,54 @@ t:covered(0x0)            -- was the basic block at this byte-offset entered?
 t:free()
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+Where `Trace` records isolated guest bytes under the emulator, the optional
+[native-trace tier](../native-tracing.md) traces **host-native code as it runs
+inside this LuaJIT process**: DynamoRIO is brought up once, machine code is
+materialized into executable (W^X) memory, a region is marked, you call into it,
+and basic-block coverage / the ordered instruction stream is read back. It lives
+in a separate module,
+[`drtrace.lua`](https://github.com/wilvk/asm-test/blob/main/bindings/lua/drtrace.lua),
+and is Linux-x86-64-only and opt-in: `NativeTrace.available()` reports whether it
+can run so callers self-skip cleanly.
+
+```lua
+local drtrace = require("drtrace")
+local NativeTrace, NativeCode = drtrace.NativeTrace, drtrace.NativeCode
+
+-- Self-skip unless the tier is built and DynamoRIO is resolvable.
+if not NativeTrace.available() then return end
+NativeTrace.initialize()                  -- dr_init + dr_start (opts table optional)
+
+-- mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+local code = NativeCode.from_bytes(string.char(
+  0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00, 0x00, 0x00,
+  0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3))
+
+-- Instruction mode: blocks AND the ordered instruction stream (insns 2nd arg).
+local tr = NativeTrace.new(64, 64)        -- (blocks, instructions)
+tr:register("add", code)
+tr:region("add", function() code:call(20, 22) end)   -- balanced begin/end markers
+tr:covered(0)                             -- entry block entered?
+
+-- block_offsets()/insn_offsets() are 1-based Lua tables; the jle-taken path here
+-- yields {0x0, 0x3, 0x6, 0xc, 0x11}.
+local blocks = tr:block_offsets()
+local insns  = tr:insn_offsets()
+
+-- Symbol mode: trace a named exported function by NAME, no region/markers.
+local tr2 = NativeTrace.new(64)
+tr2:register_symbol("asmtest_symbol_demo", 256)
+drtrace.symbol_demo(3, 4)                 -- a*2+b == 10; always-on recording
+tr2:covered(0)
+
+NativeTrace.shutdown()
+```
+
+Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```lua

@@ -136,6 +136,71 @@ _ = tr.insns_total;                // instructions executed (counts past the cap
 _ = tr.blocks_len;                 // distinct basic blocks recorded
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate **native** tier (`src/drtrace.zig`) traces host-native code as it runs
+**inside this process**, backed by DynamoRIO — distinct from the emulator trace
+above. The wrapper dlopen()s `libasmtest_drapp` at runtime, so it self-skips
+cleanly when DynamoRIO is absent: gate on `available()`, `initialize` the tier,
+materialize host code as a `NativeCode`, mark a region, call into it, and read
+back basic-block coverage or the ordered instruction stream. Offsets are byte
+offsets from the routine's entry (offset 0).
+
+```zig
+const drtrace = @import("drtrace.zig");
+
+if (!drtrace.available()) return;                // no DynamoRIO -> self-skip
+try drtrace.initialize(.{});                     // null client -> $ASMTEST_DRCLIENT
+defer drtrace.shutdown();
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+const routine = [_]u8{
+    0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+    0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+};
+var code = try drtrace.NativeCode.fromBytes(&routine);
+defer code.free();
+
+// instruction mode: capacities are (blocks, instructions); both on here.
+var tr = try drtrace.NativeTrace.create(64, 64);
+defer tr.free();
+try tr.register("add2", &code);
+
+tr.begin("add2");
+_ = code.call(20, 22);                            // jle taken (42 <= 100)
+tr.end("add2");
+_ = tr.covered(0);                                // entry block entered?
+
+const blocks = try tr.blockOffsets(std.heap.page_allocator);
+defer std.heap.page_allocator.free(blocks);
+const insns = try tr.insnOffsets(std.heap.page_allocator);
+defer std.heap.page_allocator.free(insns);
+// jle-taken path -> insns == { 0x0, 0x3, 0x6, 0xc, 0x11 }
+
+tr.unregister("add2");
+```
+
+`region(name, args, body)` wraps the `begin`/`end` pair in a scoped helper that
+guarantees the matching `end`. The offset accessors return allocator-owned `[]u64`
+slices — free them with the same allocator.
+
+**Symbol mode** traces a named exported function by NAME, with no begin/end
+markers — recording is always on for the symbol's range:
+
+```zig
+var st = try drtrace.NativeTrace.create(64, 0);  // blocks only
+defer st.free();
+try st.registerSymbol("asmtest_symbol_demo", 256);
+
+_ = drtrace.symbolDemo(3, 4);                     // == 10  (a*2 + b)
+_ = st.covered(0);                                // symbol entry block entered?
+
+st.unregister("asmtest_symbol_demo");
+```
+
+Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```zig

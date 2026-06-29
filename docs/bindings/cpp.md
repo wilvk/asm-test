@@ -121,6 +121,59 @@ t.blocks_len();              // distinct basic blocks recorded
 
 `t.get()` hands the underlying `emu_trace_t*` to `Emu::call_traced` (or a guest's).
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate, opt-in tier in `asmtest_drtrace.hpp` traces **host-native code as it
+runs inside this process** under DynamoRIO, rather than inside the emulator's
+virtual CPU. It is header-only, links nothing at build time (it `dlopen`s
+`libasmtest_drapp` at run time and needs only `-ldl`), and self-skips cleanly when
+DynamoRIO is absent. Bring DynamoRIO up once, materialize host-native bytes with
+`NativeCode`, mark a region, call into it, and read back coverage.
+
+```cpp
+#include "asmtest_drtrace.hpp"
+using namespace asmtest;
+
+if (!NativeTrace::available()) return;     // self-skip when DynamoRIO is absent
+NativeTrace::initialize();                 // dr_init + dr_start (once, per process)
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks)
+std::vector<std::uint8_t> bytes = {
+    0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+    0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3};
+NativeCode code = NativeCode::from_bytes(bytes);
+
+NativeTrace tr = NativeTrace::create(/*blocks=*/64, /*instructions=*/64);
+tr.register_region("add", code);
+{
+    auto s = tr.region("add");             // RAII begin/end marker pair
+    long r = code.call(1, 2);              // r == 3
+}
+tr.covered(0);                             // entry basic block entered?
+
+// Instruction mode (allocated above with instructions > 0): the jle-taken path
+// (1 + 2 <= 100, dec skipped) yields the exact ordered stream
+//   tr.insn_offsets() == {0x0, 0x3, 0x6, 0xc, 0x11}
+tr.block_offsets();                        // distinct block starts, first-seen order
+tr.insn_offsets();                         // ordered instruction offsets (std::vector<uint64_t>)
+```
+
+Symbol mode traces a **named exported function** with no begin/end markers —
+recording is always-on over the resolved range, so the fixture is called without a
+region scope and coverage still lands:
+
+```cpp
+NativeTrace tr2 = NativeTrace::create(/*blocks=*/64);
+tr2.register_symbol("asmtest_symbol_demo", 256);
+long sr = NativeTrace::symbol_demo(3, 4);  // == 10, no region scope
+tr2.covered(0);                            // recorded with no manual marker
+
+NativeTrace::shutdown();                   // dr_app_stop_and_cleanup (back to native)
+```
+
+Linux x86-64 only, self-skips when DynamoRIO is absent; full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```cpp

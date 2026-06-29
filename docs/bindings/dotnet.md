@@ -172,6 +172,57 @@ Asm.Assert.Covered(t, 0x0);            // the assertion form
 `new Trace(insnsCap, blocksCap)` sets the recorder's buffer capacities (default
 4096 each). `Emu.CallTraced(code, args, trace)` records while running.
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate, optional tier (see [Native runtime tracing](../native-tracing.md))
+traces **host-native code as it runs inside this process** via an in-process
+DynamoRIO client, rather than emulated guest bytes. Bring DynamoRIO up once with
+`DrTrace.Initialize`, materialize machine code as a `NativeCode`, register it
+under a name into a `NativeTrace`, run it inside the marked region, then read back
+coverage and the ordered instruction stream. Always self-skip on
+`DrTrace.Available()` — it never throws and returns false when the lib or
+DynamoRIO is absent.
+
+```csharp
+using Asm = Asmtest;
+
+if (!DrTrace.Available()) return;          // self-skip: no lib / no DynamoRIO
+DrTrace.Initialize();                       // dr_app_setup + dr_app_start, once
+try {
+    // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret
+    var bytes = new byte[] {
+        0x48,0x89,0xF8, 0x48,0x01,0xF0, 0x48,0x3D,0x64,0x00,0x00,0x00,
+        0x7E,0x03, 0x48,0xFF,0xC8, 0xC3 };
+    var code = Asm.NativeCode.FromBytes(bytes);
+
+    // instruction mode: 64 blocks, 64 insns
+    var trace = Asm.NativeTrace.Create(blocks: 64, instructions: 64);
+    trace.Register("addcap", code);
+    trace.Region("addcap", () => code.Call(40, 2));   // 42 <= 100 -> jle taken
+    bool entered = trace.Covered(0x0);                 // entry block hit
+
+    ulong[] blocks = trace.BlockOffsets();             // distinct block starts
+    ulong[] insns  = trace.InsnOffsets();              // jle-taken path: {0x0, 0x3, 0x6, 0xc, 0x11}
+
+    trace.Free();
+    code.Free();
+
+    // symbol mode: trace an exported function by name, no region/markers
+    var sym = Asm.NativeTrace.Create(blocks: 64, instructions: 64);
+    sym.RegisterSymbol("asmtest_symbol_demo", 256);
+    long r = DrTrace.SymbolDemo(3, 4);                 // a*2+b == 10
+    bool symHit = sym.Covered(0x0);
+    sym.Free();
+} finally {
+    DrTrace.Shutdown();                                 // back to UNINIT
+}
+```
+
+Under .NET — a managed runtime — this in-process tier **self-skips at run time**:
+in-process DynamoRIO can't take over the CLR's background threads, so prefer the
+out-of-band Intel PT path (see the central doc). Linux x86-64 only; full reference
+in [Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```csharp

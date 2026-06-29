@@ -167,6 +167,22 @@ opt-in per trace: allocate the trace with `insns_cap > 0`
 offset. It is heavier; treat it as diagnostic rather than the default coverage
 path.
 
+Two accessors read the recorded offsets back as lists (every language wrapper
+exposes them under these names):
+
+- `block_offsets()` — the distinct basic-block start offsets, in first-seen order.
+  Backed by `blocks_len()` + the per-index `block_at` accessor.
+- `insn_offsets()` — the ordered instruction-offset stream actually stored (one
+  entry per executed instruction, in execution order). Its length is `insns_len`,
+  which is **capped at the trace's `insns_cap`** and so can be smaller than
+  `insns_total()` (the uncapped count of instructions executed). Empty unless the
+  trace was allocated in instruction mode.
+
+For the two-block routine `mov; add; cmp; jle; dec; ret` called so the `jle` is
+taken (the `dec` skipped), `insn_offsets()` is exactly `[0x0, 0x3, 0x6, 0xc,
+0x11]` and `block_offsets()` contains the entry block `0` — the values the binding
+tests assert.
+
 ### Language wrappers
 
 **Every** binding ships a native-trace wrapper exposing the **same** small

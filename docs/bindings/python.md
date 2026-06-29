@@ -224,6 +224,52 @@ with asmtest.Emulator() as e, asmtest.Trace(insns_cap=4096, blocks_cap=4096) as 
 * `Emulator.call_traced(fn, args=(), trace=None, code_len=64, max_insns=0)` —
   like `call`, plus a `trace` to record into (`None` runs untraced).
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate **native** tier (`asmtest.drtrace`) traces host-native machine code as
+it runs **inside this Python process**, backed by in-process DynamoRIO — the same
+`asmtest_trace_t` coverage shape as the emulator `Trace` above, but on the real
+CPU. Bring DynamoRIO up once, materialize host-native bytes with `NativeCode`,
+mark a region, call into it, and read back basic-block (and optionally
+instruction) coverage. Build the libraries with
+`make shared-drtrace drtrace-client DYNAMORIO_HOME=...` and point the env at the
+client (`ASMTEST_DRCLIENT`).
+
+```python
+from asmtest.drtrace import NativeTrace, NativeCode
+
+if not NativeTrace.available():        # not built, or DynamoRIO not resolvable
+    pytest.skip("DynamoRIO native-trace tier unavailable")
+
+NativeTrace.initialize(client="build/libasmtest_drclient.so",
+                       dynamorio_home="/opt/DynamoRIO")
+# mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+code = NativeCode.from_bytes(
+    b"\x48\x89\xf8\x48\x01\xf0\x48\x3d\x64\x00\x00\x00\x7e\x03\x48\xff\xc8\xc3")
+
+# Marker mode + instruction recording: bracket the call with region(name).
+trace = NativeTrace.new(blocks=64, instructions=64)   # instructions>0 -> insn mode
+trace.register("add", code)
+with trace.region("add"):
+    result = code.call(20, 22)         # 42 <= 100, so the jle is taken
+assert result == 42 and trace.covered(0)              # entry block entered
+trace.block_offsets()                  # distinct block starts, first-seen order
+trace.insn_offsets()                   # ordered insn stream == [0x0, 0x3, 0x6, 0xc, 0x11]
+
+# Symbol mode: trace a named exported function with no begin/end markers —
+# recording is always-on over [entry, entry+max_len), so just call it.
+trace2 = NativeTrace.new(blocks=64)
+trace2.register_symbol("asmtest_symbol_demo", 256)
+assert NativeTrace.symbol_demo(3, 4) == 10            # a*2 + b, no region()
+assert trace2.covered(0)
+
+NativeTrace.shutdown()
+```
+
+This tier is Linux x86-64 only and self-skips when DynamoRIO is absent; the full
+reference (lifecycle, env vars, the managed-runtime caveat) lives in
+[Native runtime tracing](../native-tracing.md).
+
 ### Mid-execution guards (Track F)
 
 Assert a property *while* a routine runs, not just on its result (x86-64 guest).

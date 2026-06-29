@@ -123,6 +123,56 @@ let res = emu.call_traced(&code, &[1, 2], &t);  // record while running
 t.covered(0x0);                                 // bool: basic block at byte-offset entered?
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+The optional in-process [native-trace tier](../native-tracing.md) traces
+**host-native** code as it runs inside this Rust process, rather than guest bytes
+in the emulator. Bring DynamoRIO up once, materialize machine code with
+`NativeCode`, mark a region, call into it, and read back basic-block coverage and
+the ordered instruction stream. The tier links nothing and resolves
+`libasmtest_drapp` at run time, so always gate on `NativeTrace::available()` —
+without DynamoRIO it returns `false` and you self-skip.
+
+```rust
+use asmtest::drtrace::{NativeCode, NativeTrace};
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+const ROUTINE: [u8; 18] = [
+    0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00, 0x00, 0x00,
+    0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+];
+
+if NativeTrace::available() {
+    NativeTrace::initialize_default().unwrap();   // dr_init + dr_start, once per process
+
+    // ---- instruction mode (64 blocks, 64 insns) ----
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let tr = NativeTrace::new_trace(64, 64);
+    tr.register("add2", &code).unwrap();
+    {
+        let _r = tr.region("add2");               // RAII: trace_begin now, trace_end on drop
+        assert_eq!(code.call2(1, 2), 3);
+    }
+    assert!(tr.covered(0));                        // entry basic block entered
+    tr.block_offsets();                            // distinct block starts, first-seen order
+    // the jle-taken path yields [0x0, 0x3, 0x6, 0xc, 0x11]
+    assert_eq!(tr.insn_offsets(), vec![0x0, 0x3, 0x6, 0xc, 0x11]);
+    tr.unregister("add2");
+
+    // ---- symbol mode (trace an exported function by name, no markers) ----
+    let sym = NativeTrace::new_trace(64, 0);
+    sym.register_symbol("asmtest_symbol_demo", 256).unwrap();
+    assert_eq!(NativeTrace::symbol_demo(3, 4), 10);   // always-on recording, no region
+    assert!(sym.covered(0));
+    sym.unregister("asmtest_symbol_demo");
+
+    NativeTrace::shutdown();
+}
+```
+
+Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```rust

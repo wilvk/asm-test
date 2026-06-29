@@ -130,6 +130,52 @@ t.covered(0x0);           // was the basic block at this byte-offset entered?
 t.free();
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate, opt-in tier from the emulator's `Trace`: instead of tracing isolated
+guest bytes under Unicorn, [`drtrace.js`](https://github.com/wilvk/asm-test/blob/main/bindings/node/drtrace.js)
+brings DynamoRIO up **in-process** and records basic-block / instruction
+coverage of host-native code as it runs inside this Node process. The surface is
+`NativeTrace` / `NativeCode` (plus the `symbolDemo` fixture). It self-skips when
+the tier isn't built or DynamoRIO can't be resolved, so guard every use with
+`NativeTrace.available()`.
+
+```js
+const { NativeTrace, NativeCode, symbolDemo } = require('./drtrace');
+
+if (!NativeTrace.available()) return;          // tier not built / no DynamoRIO
+NativeTrace.initialize();                       // bring DynamoRIO up + take over
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks)
+const code = NativeCode.fromBytes(Buffer.from([
+  0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00, 0x00, 0x00,
+  0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3]));
+
+const tr = NativeTrace.create(64, 64);          // blocks=64, instructions=64
+tr.register('add2', code);
+tr.region('add2', () => code.call(1, 2));       // record only inside the region
+tr.covered(0);                                  // entry block entered?
+tr.blockOffsets();                              // distinct block starts, first-seen order
+tr.insnOffsets();                               // jle-taken path -> [0, 3, 6, 0xc, 0x11]
+code.free();
+tr.free();
+
+// Symbol mode: trace a named exported function — always-on, no region/markers.
+const sym = NativeTrace.create(64);
+sym.registerSymbol('asmtest_symbol_demo', 256);
+symbolDemo(3, 4) === 10;                         // 3*2+4, recorded as it runs
+sym.covered(0);                                 // symbol entry block entered?
+sym.free();
+
+NativeTrace.shutdown();
+```
+
+* Under Node — a managed/JIT runtime — the in-process tier **self-skips at run
+  time**: in-process DynamoRIO can't take over V8's background threads, so
+  `available()` may return true yet tracing yields no coverage. Intel PT is the
+  recommended backend on such hosts (see the central doc).
+* Linux x86-64 only; full reference in [Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```js

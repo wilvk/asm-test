@@ -177,6 +177,78 @@ tr.InsnsTotal()          // uint64: instructions executed (counts past the cap)
 tr.BlocksLen()           // uint64: distinct basic blocks recorded
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate, opt-in tier from the emulator `Trace` above: instead of running guest
+bytes under Unicorn, it traces **host-native code as it runs inside this Go
+process** under DynamoRIO. It lives in `libasmtest_drapp`, dlopen'd at run time, so
+`NativeTraceAvailable()` self-skips cleanly when the lib (or DynamoRIO) is absent.
+Bring the tier up with `NativeTraceInitializeDefault()` (env-driven) and tear it
+down with `NativeTraceShutdown()`; materialize bytes into a `NativeCode`, allocate
+a `NewNativeTrace(blocks, instructions)`, `Register` the range, then call into it
+inside a `Region` (balanced begin/end). Read coverage back in the same
+`Covered`/`BlocksLen`/`InsnsTotal` shape, plus `BlockOffsets()`/`InsnOffsets()`.
+
+```go
+func TestNativeTrace(t *testing.T) {
+    if !asmtest.NativeTraceAvailable() {       // no libasmtest_drapp / DynamoRIO -> self-skip
+        t.Skip("DynamoRIO native-trace tier unavailable")
+    }
+    if err := asmtest.NativeTraceInitializeDefault(); err != nil {
+        t.Skipf("dr_init/start failed: %v", err)
+    }
+    defer asmtest.NativeTraceShutdown()
+
+    // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks)
+    routine := []byte{
+        0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+        0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+    }
+    code, err := asmtest.NativeCodeFromBytes(routine)
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer code.Free()
+
+    // Instruction mode: blocks=64, instructions=64 (both buffers recorded).
+    tr := asmtest.NewNativeTrace(64, 64)
+    defer tr.Free()
+    if err := tr.Register("add2", code); err != nil {
+        t.Fatal(err)
+    }
+    defer tr.Unregister("add2")
+
+    var r int64
+    tr.Region("add2", func() { r = code.Call(60, 60) })   // 120 > 100 -> dec -> 119
+    if r != 119 || !tr.Covered(0) {                       // entry block entered
+        t.Fatalf("Call=%d, Covered(0)=%v", r, tr.Covered(0))
+    }
+    _ = tr.BlockOffsets()                                 // distinct block starts, first-seen order
+    _ = tr.InsnOffsets()                                  // jle-taken path -> [0 3 6 0xc 0x11]
+}
+```
+
+Symbol mode traces an exported function by NAME with no region or markers —
+recording is always on for `[entry, entry+maxLen)`:
+
+```go
+tr := asmtest.NewNativeTrace(64, 0)                       // blocks=64, instructions=0
+defer tr.Free()
+if err := tr.RegisterSymbol("asmtest_symbol_demo", 256); err != nil {
+    t.Fatal(err)
+}
+defer tr.Unregister("asmtest_symbol_demo")
+if got := asmtest.SymbolDemo(3, 4); got != 10 {          // exported fixture: a*2+b
+    t.Fatalf("SymbolDemo(3,4)=%d, want 10", got)
+}
+if !tr.Covered(0) {
+    t.Error("entry block (offset 0) expected covered")
+}
+```
+
+Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 These run **raw machine-code bytes** on any host.

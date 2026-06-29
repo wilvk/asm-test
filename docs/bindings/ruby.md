@@ -125,6 +125,53 @@ t.covered?(0x0)           # was the basic block at this byte-offset entered?
 t.free
 ```
 
+### Native tracing — `NativeTrace` (optional, DynamoRIO)
+
+A separate, opt-in tier in
+[`drtrace.rb`](https://github.com/wilvk/asm-test/blob/main/bindings/ruby/drtrace.rb)
+(`Asmtest::DrTrace`) traces **host-native** code as it runs *inside this Ruby
+process*, backed by DynamoRIO rather than the Unicorn emulator. Bring DynamoRIO
+up once with `NativeTrace.start`, materialize machine code with
+`NativeCode.from_bytes`, mark a region, call into it, then read back basic-block
+coverage and the ordered instruction stream. `NativeTrace.available?` reports
+whether the tier can run so callers self-skip cleanly.
+
+```ruby
+require_relative "drtrace"
+
+NativeTrace = Asmtest::DrTrace::NativeTrace
+NativeCode  = Asmtest::DrTrace::NativeCode
+
+return unless NativeTrace.available?         # self-skip without DynamoRIO
+
+NativeTrace.start(client: "./build/libasmtest_drclient.so",
+                  dynamorio_home: "/opt/DynamoRIO")
+
+# mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+code = NativeCode.from_bytes(
+  [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+   0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3].pack("C*"))
+
+tr = NativeTrace.create(blocks: 64, instructions: 64)
+tr.register("add", code)
+tr.region("add") { code.call(20, 22) }       # => 42, runs the jle-taken path
+tr.covered?(0)            # entry block entered?
+tr.block_offsets         # distinct block starts, first-seen order
+tr.insn_offsets          # ordered instruction stream => [0x0, 0x3, 0x6, 0xc, 0x11]
+
+# Symbol mode: trace a named exported function with NO begin/end markers —
+# recording is always-on over [entry, entry + max_len).
+tr2 = NativeTrace.create(blocks: 64)
+tr2.register_symbol("asmtest_symbol_demo", 256)
+NativeTrace.symbol_demo(3, 4)                 # => 10, called with no region/markers
+tr2.covered?(0)           # symbol-mode block entered?
+
+NativeTrace.shutdown
+```
+
+Linux x86-64 only; self-skips without DynamoRIO; full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```ruby
