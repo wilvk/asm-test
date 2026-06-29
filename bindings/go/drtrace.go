@@ -50,7 +50,9 @@ typedef int  (*dr_start_fn)(void);
 typedef int  (*dr_stop_fn)(void);
 typedef void (*dr_shutdown_fn)(void);
 typedef int  (*dr_register_fn)(const char *, void *, size_t, void *);
+typedef int  (*dr_register_symbol_fn)(const char *, size_t, void *);
 typedef int  (*dr_unregister_fn)(const char *);
+typedef long (*dr_symbol_demo_fn)(long, long);
 typedef void (*dr_marker_fn)(const char *);
 typedef int  (*dr_marker_error_fn)(void);
 typedef int  (*dr_exec_alloc_fn)(const uint8_t *, size_t, asmtest_dr_exec_code_t *);
@@ -70,7 +72,9 @@ static dr_start_fn              p_dr_start;
 static dr_stop_fn               p_dr_stop;
 static dr_shutdown_fn           p_dr_shutdown;
 static dr_register_fn           p_dr_register;
+static dr_register_symbol_fn    p_dr_register_symbol;
 static dr_unregister_fn         p_dr_unregister;
+static dr_symbol_demo_fn        p_dr_symbol_demo;
 static dr_marker_fn             p_dr_begin;
 static dr_marker_fn             p_dr_end;
 static dr_marker_error_fn       p_dr_marker_error;
@@ -104,7 +108,9 @@ static void asmtest_dr_resolve(void) {
     p_dr_stop            = (dr_stop_fn)dlsym(h, "asmtest_dr_stop");
     p_dr_shutdown        = (dr_shutdown_fn)dlsym(h, "asmtest_dr_shutdown");
     p_dr_register        = (dr_register_fn)dlsym(h, "asmtest_dr_register_region");
+    p_dr_register_symbol = (dr_register_symbol_fn)dlsym(h, "asmtest_dr_register_symbol");
     p_dr_unregister      = (dr_unregister_fn)dlsym(h, "asmtest_dr_unregister_region");
+    p_dr_symbol_demo     = (dr_symbol_demo_fn)dlsym(h, "asmtest_symbol_demo");
     p_dr_begin           = (dr_marker_fn)dlsym(h, "asmtest_trace_begin");
     p_dr_end             = (dr_marker_fn)dlsym(h, "asmtest_trace_end");
     p_dr_marker_error    = (dr_marker_error_fn)dlsym(h, "asmtest_dr_marker_error");
@@ -119,7 +125,8 @@ static void asmtest_dr_resolve(void) {
     p_dr_trace_block_at    = (dr_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
     p_dr_trace_insn_at     = (dr_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
     g_dr_loaded = p_dr_available && p_dr_init && p_dr_start && p_dr_stop &&
-                  p_dr_shutdown && p_dr_register && p_dr_unregister && p_dr_begin &&
+                  p_dr_shutdown && p_dr_register && p_dr_register_symbol &&
+                  p_dr_unregister && p_dr_symbol_demo && p_dr_begin &&
                   p_dr_end && p_dr_marker_error && p_dr_exec_alloc &&
                   p_dr_exec_free && p_dr_trace_new && p_dr_trace_free &&
                   p_dr_trace_covered && p_dr_trace_blocks_len &&
@@ -146,8 +153,14 @@ static int  asmtest_dr_go_marker_error(void) { return p_dr_marker_error ? p_dr_m
 static int  asmtest_dr_go_register(const char *name, void *base, size_t len, void *trace) {
     return p_dr_register ? p_dr_register(name, base, len, trace) : -1;
 }
+static int  asmtest_dr_go_register_symbol(const char *name, size_t max_len, void *trace) {
+    return p_dr_register_symbol ? p_dr_register_symbol(name, max_len, trace) : -1;
+}
 static int  asmtest_dr_go_unregister(const char *name) {
     return p_dr_unregister ? p_dr_unregister(name) : -1;
+}
+static long asmtest_dr_go_symbol_demo(long a, long b) {
+    return p_dr_symbol_demo ? p_dr_symbol_demo(a, b) : 0;
 }
 static void asmtest_dr_go_begin(const char *name) { if (p_dr_begin) p_dr_begin(name); }
 static void asmtest_dr_go_end(const char *name)   { if (p_dr_end) p_dr_end(name); }
@@ -249,6 +262,12 @@ func NativeTraceShutdown() { C.asmtest_dr_go_shutdown() }
 // Begin/End was balanced.
 func NativeTraceMarkerError() int { return int(C.asmtest_dr_go_marker_error()) }
 
+// SymbolDemo is the exported fixture (a*2+b) in libasmtest_drapp that the
+// symbol-mode test traces by name.
+func SymbolDemo(a, b int64) int64 {
+	return int64(C.asmtest_dr_go_symbol_demo(C.long(a), C.long(b)))
+}
+
 // NativeCode is host-native machine code in real executable (W^X) memory,
 // materialized at its runtime address so PC-relative and branch targets resolve.
 // Release it with Free.
@@ -317,6 +336,20 @@ func (t *NativeTrace) Register(name string, code *NativeCode) error {
 	rc := C.asmtest_dr_go_register(cs, code.code.base, code.code.len, t.h)
 	if rc != drOK {
 		return fmt.Errorf("register_region(%q) failed: %d", name, int(rc))
+	}
+	return nil
+}
+
+// RegisterSymbol enables symbol mode: it traces a named exported function (found
+// by NAME across the loaded modules) with NO begin/end markers — recording is
+// always on for [entry, entry+maxLen). The name may be freed after the call (it
+// is copied).
+func (t *NativeTrace) RegisterSymbol(name string, maxLen uintptr) error {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	rc := C.asmtest_dr_go_register_symbol(cs, C.size_t(maxLen), t.h)
+	if rc != drOK {
+		return fmt.Errorf("register_symbol(%q) failed: %d", name, int(rc))
 	}
 	return nil
 }

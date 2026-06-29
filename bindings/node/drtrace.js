@@ -83,6 +83,7 @@ let _loadError = null;
     stop: lib.func('int asmtest_dr_stop()'),
     shutdown: lib.func('void asmtest_dr_shutdown()'),
     registerRegion: lib.func('int asmtest_dr_register_region(const char*, void*, size_t, void*)'),
+    registerSymbol: lib.func('int asmtest_dr_register_symbol(const char*, size_t, void*)'),
     unregisterRegion: lib.func('int asmtest_dr_unregister_region(const char*)'),
     traceBegin: lib.func('void asmtest_trace_begin(const char*)'),
     traceEnd: lib.func('void asmtest_trace_end(const char*)'),
@@ -99,6 +100,7 @@ let _loadError = null;
     insnsLen: lib.func('uint64_t asmtest_emu_trace_insns_len(void*)'),
     blockAt: lib.func('uint64_t asmtest_emu_trace_block_at(void*, size_t)'),
     insnAt: lib.func('uint64_t asmtest_emu_trace_insn_at(void*, size_t)'),
+    symbolDemo: lib.func('long asmtest_symbol_demo(long, long)'),
   };
 })();
 
@@ -199,6 +201,16 @@ class NativeTrace {
     return this;
   }
 
+  /** Symbol mode: trace a named exported function by NAME, with no begin/end
+   *  markers — recording is always on for [entry, entry+maxLen). The client
+   *  resolves `name` across all loaded modules, recording coverage into this
+   *  trace. */
+  registerSymbol(name, maxLen = 256) {
+    const rc = _fn.registerSymbol(name, maxLen, this._handle);
+    if (rc !== ASMTEST_DR_OK) throw new Error(`register_symbol(${name}) failed: ${rc}`);
+    return this;
+  }
+
   unregister(name) { _fn.unregisterRegion(name); }
 
   /** Open recording for `name`, run `fn`, then close recording — markers must be
@@ -246,4 +258,8 @@ class NativeTrace {
   }
 }
 
-module.exports = { NativeTrace, NativeCode, ASMTEST_DR_OK };
+/** The exported fixture (a*2+b) that the symbol-mode test traces by name; lives
+ *  in libasmtest_drapp so the client's resolve_symbol can find it. */
+function symbolDemo(a, b) { return _fn.symbolDemo(a, b); }
+
+module.exports = { NativeTrace, NativeCode, symbolDemo, ASMTEST_DR_OK };

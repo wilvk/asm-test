@@ -59,6 +59,9 @@ struct DrApi {
     int (*dr_register_region)(const char *, void *, size_t,
                               asmtest_trace_t *) = nullptr;
     int (*dr_unregister_region)(const char *) = nullptr;
+    int (*dr_register_symbol)(const char *, size_t,
+                              asmtest_trace_t *) = nullptr;
+    long (*symbol_demo)(long, long) = nullptr;
     void (*trace_begin)(const char *) = nullptr;
     void (*trace_end)(const char *) = nullptr;
     int (*dr_marker_error)(void) = nullptr;
@@ -116,6 +119,8 @@ inline DrApi &api() {
         ok &= dlsym_into(h, "asmtest_dr_register_region", t.dr_register_region);
         ok &= dlsym_into(h, "asmtest_dr_unregister_region",
                          t.dr_unregister_region);
+        ok &= dlsym_into(h, "asmtest_dr_register_symbol", t.dr_register_symbol);
+        ok &= dlsym_into(h, "asmtest_symbol_demo", t.symbol_demo);
         ok &= dlsym_into(h, "asmtest_trace_begin", t.trace_begin);
         ok &= dlsym_into(h, "asmtest_trace_end", t.trace_end);
         ok &= dlsym_into(h, "asmtest_dr_marker_error", t.dr_marker_error);
@@ -304,6 +309,12 @@ class NativeTrace {
     /// Count of illegal marker operations since init (0 = every marker balanced).
     static int marker_error() { return detail::api().dr_marker_error(); }
 
+    /// Call the exported asmtest_symbol_demo fixture (a*2+b) that the symbol-mode
+    /// test traces by name.
+    static long symbol_demo(long a, long b) {
+        return detail::api().symbol_demo(a, b);
+    }
+
     // ---- per-trace ----
 
     /// Allocate a trace: `blocks` block slots and `instructions` instruction
@@ -325,6 +336,17 @@ class NativeTrace {
             name.c_str(), code.base(), code.length(), handle_);
         if (rc != ASMTEST_DR_OK)
             throw std::runtime_error("register_region(" + name +
+                                     ") failed: " + std::to_string(rc));
+    }
+
+    /// Symbol mode: trace a named exported function by NAME, with no begin/end
+    /// markers — recording is always-on for the resolved range [entry,
+    /// entry+max_len). Throws std::runtime_error on failure.
+    void register_symbol(const std::string &symbol, std::size_t max_len = 256) {
+        int rc =
+            detail::api().dr_register_symbol(symbol.c_str(), max_len, handle_);
+        if (rc != ASMTEST_DR_OK)
+            throw std::runtime_error("register_symbol(" + symbol +
                                      ") failed: " + std::to_string(rc));
     }
 

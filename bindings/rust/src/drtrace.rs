@@ -78,6 +78,8 @@ type ShutdownFn = unsafe extern "C" fn();
 type RegisterRegionFn =
     unsafe extern "C" fn(*const c_char, *mut c_void, usize, *mut c_void) -> c_int;
 type UnregisterRegionFn = unsafe extern "C" fn(*const c_char) -> c_int;
+type RegisterSymbolFn = unsafe extern "C" fn(*const c_char, usize, *mut c_void) -> c_int;
+type SymbolDemoFn = unsafe extern "C" fn(c_long, c_long) -> c_long;
 type MarkerFn = unsafe extern "C" fn(*const c_char);
 type MarkerErrorFn = unsafe extern "C" fn() -> c_int;
 type ExecAllocFn = unsafe extern "C" fn(*const u8, usize, *mut ExecCode) -> c_int;
@@ -97,6 +99,8 @@ struct DrFns {
     shutdown: Option<ShutdownFn>,
     register_region: Option<RegisterRegionFn>,
     unregister_region: Option<UnregisterRegionFn>,
+    register_symbol: Option<RegisterSymbolFn>,
+    symbol_demo: Option<SymbolDemoFn>,
     trace_begin: Option<MarkerFn>,
     trace_end: Option<MarkerFn>,
     marker_error: Option<MarkerErrorFn>,
@@ -159,7 +163,8 @@ fn dr_fns() -> &'static DrFns {
             // No lib: every pointer stays None, available() returns false.
             return DrFns {
                 available: None, init: None, start: None, stop: None, shutdown: None,
-                register_region: None, unregister_region: None, trace_begin: None,
+                register_region: None, unregister_region: None, register_symbol: None,
+                symbol_demo: None, trace_begin: None,
                 trace_end: None, marker_error: None, exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
                 blocks_len: None, insns_total: None, insns_len: None,
@@ -191,6 +196,8 @@ fn dr_fns() -> &'static DrFns {
             shutdown: load!("asmtest_dr_shutdown", ShutdownFn),
             register_region: load!("asmtest_dr_register_region", RegisterRegionFn),
             unregister_region: load!("asmtest_dr_unregister_region", UnregisterRegionFn),
+            register_symbol: load!("asmtest_dr_register_symbol", RegisterSymbolFn),
+            symbol_demo: load!("asmtest_symbol_demo", SymbolDemoFn),
             trace_begin: load!("asmtest_trace_begin", MarkerFn),
             trace_end: load!("asmtest_trace_end", MarkerFn),
             marker_error: load!("asmtest_dr_marker_error", MarkerErrorFn),
@@ -412,6 +419,15 @@ impl NativeTrace {
         }
     }
 
+    /// Call the exported `asmtest_symbol_demo` fixture (`a*2+b`) that the
+    /// symbol-mode test traces by name. Returns 0 when the lib is absent.
+    pub fn symbol_demo(a: i64, b: i64) -> i64 {
+        match dr_fns().symbol_demo {
+            Some(f) => unsafe { f(a as c_long, b as c_long) as i64 },
+            None => 0,
+        }
+    }
+
     // ---- per-trace ---- //
 
     /// Allocate an app-owned trace handle. Records the ordered instruction stream
@@ -440,6 +456,23 @@ impl NativeTrace {
         };
         if rc != ASMTEST_DR_OK {
             return Err(format!("register_region({name:?}) failed: {rc}"));
+        }
+        Ok(())
+    }
+
+    /// Symbol mode: trace a named exported function by `symbol` with no begin/end
+    /// markers — recording is always on for `[entry, entry+max_len)`. The symbol is
+    /// resolved across all loaded modules, so a fixture in `libasmtest_drapp` (e.g.
+    /// `asmtest_symbol_demo`) is reachable. The copy of `symbol` may be dropped
+    /// after the call.
+    pub fn register_symbol(&self, symbol: &str, max_len: usize) -> Result<(), String> {
+        let f = dr_fns()
+            .register_symbol
+            .ok_or("libasmtest_drapp not loaded")?;
+        let csym = CString::new(symbol).map_err(|e| e.to_string())?;
+        let rc = unsafe { f(csym.as_ptr(), max_len, self.handle) };
+        if rc != ASMTEST_DR_OK {
+            return Err(format!("register_symbol({symbol:?}) failed: {rc}"));
         }
         Ok(())
     }

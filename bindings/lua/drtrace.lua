@@ -26,7 +26,9 @@ int  asmtest_dr_start(void);
 int  asmtest_dr_stop(void);
 void asmtest_dr_shutdown(void);
 int  asmtest_dr_register_region(const char* name, void* base, size_t len, void* trace);
+int  asmtest_dr_register_symbol(const char* symbol, size_t max_len, void* trace);
 int  asmtest_dr_unregister_region(const char* name);
+long asmtest_symbol_demo(long a, long b);
 void asmtest_trace_begin(const char* name);
 void asmtest_trace_end(const char* name);
 int  asmtest_dr_marker_error(void);
@@ -136,6 +138,13 @@ function NativeTrace.shutdown()
   if L then L.asmtest_dr_shutdown() end
 end
 
+-- The exported fixture (a*2+b) the symbol-mode test traces by name. Returns a
+-- Lua number.
+function M.symbol_demo(a, b)
+  assert(L, "libasmtest_drapp not loaded")
+  return tonumber(L.asmtest_symbol_demo(a, b))
+end
+
 -- Count of illegal marker operations since init; 0 means every marker balanced.
 function NativeTrace.marker_error()
   return tonumber(L.asmtest_dr_marker_error())
@@ -161,6 +170,17 @@ function NativeTrace:register(name, code)
   local rc = L.asmtest_dr_register_region(name, code:base(), code:length(), self.h)
   if rc ~= ASMTEST_DR_OK then
     error(string.format("register_region(%q) failed: %d", name, tonumber(rc)))
+  end
+  return self
+end
+
+-- Symbol mode: trace a named exported function by NAME, with no begin/end
+-- markers — always-on recording for [entry, entry+max_len). error()s on failure.
+function NativeTrace:register_symbol(symbol, max_len)
+  max_len = max_len or 256
+  local rc = L.asmtest_dr_register_symbol(symbol, max_len, self.h)
+  if rc ~= ASMTEST_DR_OK then
+    error(string.format("register_symbol(%q) failed: %d", symbol, tonumber(rc)))
   end
   return self
 end

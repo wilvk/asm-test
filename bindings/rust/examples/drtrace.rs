@@ -75,6 +75,17 @@ fn main() {
     drop(code2);
     drop(tr2);
 
+    // ---- symbol mode (trace by name, no markers) ----
+    let tr3 = NativeTrace::new_trace(64, 0);
+    tr3.register_symbol("asmtest_symbol_demo", 256)
+        .expect("register_symbol asmtest_symbol_demo");
+    // Called WITHOUT any region/markers — symbol mode is always-on recording.
+    assert_eq!(NativeTrace::symbol_demo(3, 4), 10, "symbol_demo(3, 4) == 10");
+    assert!(tr3.covered(0), "symbol entry block covered");
+    assert_eq!(NativeTrace::marker_error(), 0, "no markers used in symbol mode");
+    tr3.unregister("asmtest_symbol_demo");
+    drop(tr3);
+
     NativeTrace::shutdown();
     println!("PASS");
     let _ = exit; // (exit imported for symmetry with other bindings; success path returns)

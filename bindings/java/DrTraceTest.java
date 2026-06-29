@@ -37,6 +37,7 @@ public final class DrTraceTest {
         try {
             blockCoverageAndAccumulation();
             instructionMode();
+            symbolMode();
         } finally {
             DrTrace.shutdown();
         }
@@ -89,6 +90,20 @@ public final class DrTraceTest {
 
         tr.unregister("add2i");
         code.free();
+        tr.free();
+    }
+
+    // Mirrors test_symbol_mode: trace an exported function by name, no markers.
+    private static void symbolMode() {
+        DrTrace.NativeTrace tr = DrTrace.NativeTrace.create(64, 0);
+        tr.registerSymbol("asmtest_symbol_demo", 256);
+
+        long r = DrTrace.symbolDemo(3, 4); // no region/markers — always-on recording
+        check(r == 10, "symbolDemo(3,4): got " + r + ", want 10");
+        check(tr.covered(0), "entry block (offset 0) expected covered");
+        check(DrTrace.markerError() == 0, "markerError: " + DrTrace.markerError());
+
+        tr.unregister("asmtest_symbol_demo");
         tr.free();
     }
 }

@@ -77,3 +77,18 @@ def test_instruction_mode(started):
     tr.unregister("add2i")
     code.free()
     tr.free()
+
+
+def test_symbol_mode(started):
+    # Symbol mode traces an exported function by name with NO begin/end markers:
+    # recording is always-on over the resolved range, so we just call it.
+    tr = NativeTrace.new(blocks=64, instructions=0)
+    tr.register_symbol("asmtest_symbol_demo", 256)
+
+    r = NativeTrace.symbol_demo(3, 4)  # no region()/markers — the whole point
+    assert r == 10
+    assert tr.covered(0)  # coverage recorded with no manual region
+    assert NativeTrace.marker_error() == 0  # symbol mode uses no markers
+
+    tr.unregister("asmtest_symbol_demo")
+    tr.free()

@@ -91,5 +91,19 @@ pub fn main() !void {
     code2.free();
     tr2.free();
 
+    // ---- symbol mode ---- //
+    // Trace a named exported function by NAME, no begin/end markers — recording
+    // is always on for the symbol's range. `asmtest_symbol_demo` lives in the
+    // drapp lib and is resolvable by the client's symbol search.
+    var tr3 = try drtrace.NativeTrace.create(64, 0); // blocks=64, instructions=0
+    try tr3.registerSymbol("asmtest_symbol_demo", 256);
+
+    try check(drtrace.symbolDemo(3, 4) == 10, "symbol_demo(3,4) == 10 (a*2+b)");
+    try check(tr3.covered(0), "symbol entry block (offset 0) covered");
+    try check(drtrace.markerError() == 0, "marker_error == 0 (no markers used)");
+
+    tr3.unregister("asmtest_symbol_demo");
+    tr3.free();
+
     std.debug.print("PASS\n", .{});
 }

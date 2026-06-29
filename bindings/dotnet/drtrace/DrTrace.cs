@@ -122,6 +122,9 @@ namespace Asmtest
         public static extern int asmtest_dr_register_region(
             [MarshalAs(UnmanagedType.LPStr)] string name, IntPtr @base, UIntPtr len, IntPtr trace);
         [DllImport(DRAPP, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_dr_register_symbol(
+            [MarshalAs(UnmanagedType.LPStr)] string symbol, UIntPtr maxLen, IntPtr trace);
+        [DllImport(DRAPP, CharSet = CharSet.Ansi)]
         public static extern int asmtest_dr_unregister_region([MarshalAs(UnmanagedType.LPStr)] string name);
         [DllImport(DRAPP, CharSet = CharSet.Ansi)]
         public static extern void asmtest_trace_begin([MarshalAs(UnmanagedType.LPStr)] string name);
@@ -131,6 +134,9 @@ namespace Asmtest
         // ---- host-native executable code ----
         [DllImport(DRAPP)] public static extern int asmtest_exec_alloc(byte[] bytes, UIntPtr len, out ExecCode outCode);
         [DllImport(DRAPP)] public static extern void asmtest_exec_free(ref ExecCode code);
+
+        // ---- symbol-mode fixture (a*2+b) traced by name ----
+        [DllImport(DRAPP)] public static extern long asmtest_symbol_demo(long a, long b);
 
         // ---- trace handle + accessors (insns_cap FIRST, blocks_cap SECOND) ----
         [DllImport(DRAPP)] public static extern IntPtr asmtest_trace_new(UIntPtr insnsCap, UIntPtr blocksCap);
@@ -224,6 +230,9 @@ namespace Asmtest
         /// <summary>Count of unbalanced marker operations since init (0 means all balanced).</summary>
         public static int MarkerError() => DrNative.asmtest_dr_marker_error();
 
+        /// <summary>The exported fixture (a*2+b) the symbol-mode test traces by name.</summary>
+        public static long SymbolDemo(long a, long b) => DrNative.asmtest_symbol_demo(a, b);
+
         static IntPtr ToNative(string s) =>
             string.IsNullOrEmpty(s) ? IntPtr.Zero : Marshal.StringToHGlobalAnsi(s);
         static void FreeNative(IntPtr p)
@@ -310,6 +319,18 @@ namespace Asmtest
                 name, code.Base, (UIntPtr)code.Length, _handle);
             if (rc != DrNative.ASMTEST_DR_OK)
                 throw new DrTraceException($"register_region(\"{name}\") failed: {rc}");
+            return this;
+        }
+
+        /// <summary>
+        /// Symbol mode: trace a named exported function with no begin/end markers —
+        /// always-on recording for [entry, entry + <paramref name="maxLen"/>).
+        /// </summary>
+        public NativeTrace RegisterSymbol(string symbol, nuint maxLen)
+        {
+            int rc = DrNative.asmtest_dr_register_symbol(symbol, (UIntPtr)maxLen, _handle);
+            if (rc != DrNative.ASMTEST_DR_OK)
+                throw new DrTraceException($"register_symbol(\"{symbol}\") failed: {rc}");
             return this;
         }
 

@@ -54,16 +54,10 @@ static const unsigned char ROUTINE[] = {
 };
 typedef long (*add2_fn)(long, long);
 
-/* A real exported function for symbol-mode tracing (Phase 7): traced by NAME with
- * no begin/end markers. noinline + default visibility so it has a stable entry PC
- * the client can resolve via dr_get_proc_address (the test links -rdynamic). */
-__attribute__((noinline, visibility("default"))) long asmtest_symbol_demo(long a,
-                                                                          long b) {
-    long r = a * 2 + b;
-    if (r > 1000)
-        r -= 7;
-    return r;
-}
+/* asmtest_symbol_demo (the symbol-mode fixture, Phase 7) now lives in
+ * libasmtest_drapp and is declared in asmtest_drtrace.h, so every language
+ * binding shares one resolvable symbol; this harness links drtrace_app.o (and
+ * -rdynamic), so it resolves and calls the same definition. */
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: progress survives a hard kill */

@@ -11,7 +11,7 @@
 //     node test_drtrace.js
 'use strict';
 const assert = require('assert');
-const { NativeTrace, NativeCode } = require('./drtrace');
+const { NativeTrace, NativeCode, symbolDemo } = require('./drtrace');
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 const ROUTINE = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
@@ -75,6 +75,21 @@ function main() {
 
       tr.unregister('add2i');
       code.free();
+      tr.free();
+    }
+
+    // --- symbol mode (no markers; trace a named exported function) ---
+    {
+      const tr = NativeTrace.create(64); // blocks=64, instructions=0
+      tr.registerSymbol('asmtest_symbol_demo', 256);
+
+      // No region/markers: symbol mode is always-on for the named function.
+      const r = symbolDemo(3, 4);
+      assert.strictEqual(Number(r), 10); // 3*2+4
+      assert.ok(tr.covered(0), 'symbol entry block should be covered');
+      assert.strictEqual(NativeTrace.markerError(), 0);
+
+      tr.unregister('asmtest_symbol_demo');
       tr.free();
     }
   } finally {

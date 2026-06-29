@@ -292,6 +292,19 @@ asmtest_dr_unregister_region_marker(const char *name) {
     g_marker_sink += 0x22 + (unsigned long)(uintptr_t)name;
 }
 
+/* A real exported function for symbol-mode tracing (Phase 7): traced by NAME with
+ * no begin/end markers. noinline + default visibility so it has a stable entry PC
+ * the client can resolve via dr_get_proc_address across all loaded modules. Lives
+ * in libasmtest_drapp so every language binding (which dlopens drapp) shares one
+ * resolvable symbol. (3, 4) -> 10. */
+__attribute__((noinline, visibility("default"))) long asmtest_symbol_demo(long a,
+                                                                          long b) {
+    long r = a * 2 + b;
+    if (r > 1000)
+        r -= 7;
+    return r;
+}
+
 int asmtest_dr_register_region(const char *name, void *base, size_t len,
                                asmtest_trace_t *trace) {
     if (name == NULL || base == NULL || len == 0 || trace == NULL)

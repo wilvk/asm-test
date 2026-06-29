@@ -101,4 +101,24 @@ func TestDrtrace(t *testing.T) {
 	tr2.Unregister("add2i")
 	code2.Free()
 	tr2.Free()
+
+	// --- symbol mode ---------------------------------------------------------
+	// Trace an exported function by NAME, with no region or begin/end markers —
+	// recording is always on for [entry, entry+maxLen).
+	tr3 := NewNativeTrace(64, 0) // blocks=64, instructions=0
+	if err := tr3.RegisterSymbol("asmtest_symbol_demo", 256); err != nil {
+		t.Fatalf("RegisterSymbol: %v", err)
+	}
+	if got := SymbolDemo(3, 4); got != 10 {
+		t.Fatalf("SymbolDemo(3,4): got %d, want 10", got)
+	}
+	if !tr3.Covered(0) {
+		t.Errorf("entry block (offset 0) expected covered")
+	}
+	if NativeTraceMarkerError() != 0 {
+		t.Errorf("marker error count: got %d, want 0", NativeTraceMarkerError())
+	}
+
+	tr3.Unregister("asmtest_symbol_demo")
+	tr3.Free()
 }

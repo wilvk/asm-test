@@ -90,5 +90,17 @@ tr2:unregister("add2i")
 code2:free()
 tr2:free()
 
+-- test_symbol_mode — trace a named exported function (asmtest_symbol_demo) by
+-- NAME, with no region/begin/end markers (always-on recording).
+local tr3 = NativeTrace.new(64)
+tr3:register_symbol("asmtest_symbol_demo", 256)
+local r4 = drtrace.symbol_demo(3, 4)  -- a*2+b = 10, no region/markers
+assert(r4 == 10, "expected 10, got " .. tostring(r4))
+assert(tr3:covered(0), "entry block should be covered")
+assert(NativeTrace.marker_error() == 0, "markers should be balanced")
+
+tr3:unregister("asmtest_symbol_demo")
+tr3:free()
+
 NativeTrace.shutdown()
 print("PASS")

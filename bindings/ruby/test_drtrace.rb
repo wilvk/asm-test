@@ -69,5 +69,15 @@ tr2.unregister("add2i")
 code2.free
 tr2.free
 
+# ---- symbol mode: trace a named exported function with NO begin/end markers ----
+str = NativeTrace.create(blocks: 64)
+str.register_symbol("asmtest_symbol_demo", 256)
+sr = NativeTrace.symbol_demo(3, 4)        # called WITHOUT any region/markers
+raise "expected 10, got #{sr}" unless sr == 10
+raise "symbol-mode block 0 not covered" unless str.covered?(0)
+raise "symbol mode should use no markers" unless NativeTrace.marker_error == 0
+str.unregister("asmtest_symbol_demo")
+str.free
+
 NativeTrace.shutdown
 puts "PASS"

@@ -114,6 +114,33 @@ matching `begin`. A registered range is instrumented unconditionally but **recor
 conditionally** — the same bytes also run outside a begin/end window — so recording
 is gated per-thread by whether a region is active.
 
+### Symbol mode (trace a named function, no markers)
+
+When the code under test is a **named exported function**, register it by symbol
+instead of bracketing every call site. `asmtest_dr_register_symbol(name, max_len,
+trace)` has the client resolve `name`'s entry PC (via `dr_get_proc_address`, across
+all loaded modules) and records every execution of blocks in `[entry, entry +
+max_len)` — recording is **always-on** for the range, so there are no begin/end
+markers to balance:
+
+```c
+asmtest_trace_t *tr = asmtest_trace_new(/*insns*/0, /*blocks*/64);
+asmtest_dr_register_symbol("asmtest_symbol_demo", 256, tr);
+
+long r = asmtest_symbol_demo(3, 4);     /* no begin/end — just call it */
+
+assert(r == 10 && asmtest_trace_covered(tr, 0));
+asmtest_dr_unregister_region("asmtest_symbol_demo");   /* unregister by the same name */
+```
+
+`asmtest_symbol_demo` is a small exported fixture (computes `a*2 + b`) that ships in
+`libasmtest_drapp` so every language binding shares one resolvable symbol for its
+symbol-mode test. `max_len` bounds the function — pass its size or a generous upper
+bound; registered ranges must not overlap. Symbol mode is best-effort: explicit
+markers remain more robust for inlined or generated code, where a symbol may not have
+a single stable entry PC. Every language wrapper exposes it as `register_symbol(...)`
+(plus a `symbol_demo(a, b)` helper that calls the fixture).
+
 ### Host-native generated code
 
 DynamoRIO traces code running natively, so it needs real executable host memory —

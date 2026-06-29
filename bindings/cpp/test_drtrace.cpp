@@ -103,6 +103,22 @@ int main() {
         tr2.free();
     }
 
+    // ---- symbol mode ----
+    // Traces a named exported function by name with no begin/end markers:
+    // recording is always-on over the resolved range, so the fixture is called
+    // WITHOUT any region scope and coverage still lands.
+    {
+        NativeTrace str = NativeTrace::create(/*blocks=*/64);
+        str.register_symbol("asmtest_symbol_demo", 256);
+        long sr = NativeTrace::symbol_demo(3, 4);  // no region scope on purpose
+        CHECK(sr == 10, "symbol_demo(3, 4) == 10");
+        CHECK(str.covered(0), "symbol mode records coverage with no manual region");
+        CHECK(NativeTrace::marker_error() == 0, "symbol mode uses no markers");
+
+        str.unregister("asmtest_symbol_demo");
+        str.free();
+    }
+
     NativeTrace::shutdown();
     std::printf("PASS\n");
     return 0;

@@ -118,6 +118,14 @@ int asmtest_dr_marker_error(void);
 int asmtest_dr_register_symbol(const char *symbol, size_t max_len,
                                asmtest_trace_t *trace);
 
+/* A real exported function used to exercise symbol mode: trace it by NAME with
+ * asmtest_dr_register_symbol("asmtest_symbol_demo", ...) and call it with no
+ * begin/end markers. noinline + default visibility give it a stable entry PC the
+ * client resolves via dr_get_proc_address. Computes a*2 + b (small enough to fit
+ * the entry block); the language-binding native-trace tests trace it so every
+ * binding shares one resolvable symbol. Returns 10 for (3, 4). */
+long asmtest_symbol_demo(long a, long b);
+
 /* ------------------------------------------------------------------ */
 /* Host-native executable code (native-trace Phase 4)                  */
 /*                                                                     */

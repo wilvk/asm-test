@@ -51,6 +51,7 @@ const FnStart = *const fn () callconv(.C) c_int;
 const FnStop = *const fn () callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
 const FnRegister = *const fn ([*:0]const u8, ?*anyopaque, usize, ?*anyopaque) callconv(.C) c_int;
+const FnRegisterSymbol = *const fn ([*:0]const u8, usize, ?*anyopaque) callconv(.C) c_int;
 const FnUnregister = *const fn ([*:0]const u8) callconv(.C) c_int;
 const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
 const FnMarkerError = *const fn () callconv(.C) c_int;
@@ -64,6 +65,7 @@ const FnInsnsTotal = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
 const FnInsnsLen = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
 const FnBlockAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
 const FnInsnAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
+const FnSymbolDemo = *const fn (c_long, c_long) callconv(.C) c_long;
 
 /// The resolved entry points. Populated once on first `load()`; held in a
 /// process-global because the DynLib handle and its symbols outlive any one
@@ -76,6 +78,7 @@ const Api = struct {
     stop: FnStop,
     shutdown: FnShutdown,
     register: FnRegister,
+    register_symbol: FnRegisterSymbol,
     unregister: FnUnregister,
     begin: FnMarker,
     end: FnMarker,
@@ -90,6 +93,7 @@ const Api = struct {
     insns_len: FnInsnsLen,
     block_at: FnBlockAt,
     insn_at: FnInsnAt,
+    symbol_demo: FnSymbolDemo,
 };
 
 var g_api: ?Api = null;
@@ -129,6 +133,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .stop = lib.lookup(FnStop, "asmtest_dr_stop") orelse return null,
         .shutdown = lib.lookup(FnShutdown, "asmtest_dr_shutdown") orelse return null,
         .register = lib.lookup(FnRegister, "asmtest_dr_register_region") orelse return null,
+        .register_symbol = lib.lookup(FnRegisterSymbol, "asmtest_dr_register_symbol") orelse return null,
         .unregister = lib.lookup(FnUnregister, "asmtest_dr_unregister_region") orelse return null,
         .begin = lib.lookup(FnMarker, "asmtest_trace_begin") orelse return null,
         .end = lib.lookup(FnMarker, "asmtest_trace_end") orelse return null,
@@ -143,6 +148,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .insns_len = lib.lookup(FnInsnsLen, "asmtest_emu_trace_insns_len") orelse return null,
         .block_at = lib.lookup(FnBlockAt, "asmtest_emu_trace_block_at") orelse return null,
         .insn_at = lib.lookup(FnInsnAt, "asmtest_emu_trace_insn_at") orelse return null,
+        .symbol_demo = lib.lookup(FnSymbolDemo, "asmtest_symbol_demo") orelse return null,
     };
 }
 
@@ -222,6 +228,13 @@ pub fn markerError() c_int {
     return api.marker_error();
 }
 
+/// The exported fixture (`a*2+b`) the symbol-mode test traces by name. Calls the
+/// `asmtest_symbol_demo` symbol resolved from the drapp library.
+pub fn symbolDemo(a: i64, b: i64) i64 {
+    const api = load() orelse return 0;
+    return api.symbol_demo(a, b);
+}
+
 /// Host-native machine code in real executable (W^X) memory.
 pub const NativeCode = struct {
     code: c.asmtest_exec_code_t,
@@ -286,6 +299,15 @@ pub const NativeTrace = struct {
     pub fn register(self: *NativeTrace, name: [:0]const u8, code: *const NativeCode) Error!void {
         const api = load() orelse return Error.LibUnavailable;
         if (api.register(name.ptr, code.code.base, code.code.len, self.handle) != OK)
+            return Error.RegisterFailed;
+    }
+
+    /// Symbol mode: trace a named exported function by NAME, with no begin/end
+    /// markers — recording is always on for `[entry, entry+max_len)`. `symbol`
+    /// must be NUL-terminated and resolvable in some loaded module.
+    pub fn registerSymbol(self: *NativeTrace, symbol: [:0]const u8, max_len: usize) Error!void {
+        const api = load() orelse return Error.LibUnavailable;
+        if (api.register_symbol(symbol.ptr, max_len, self.handle) != OK)
             return Error.RegisterFailed;
     }
 

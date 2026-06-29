@@ -87,6 +87,17 @@ static class DrTraceProgram
             tr2.Unregister("add2i");
             code2.Free();
             tr2.Free();
+
+            // --- symbol mode (trace a named export, no markers) --- //
+            var tr3 = NativeTrace.Create(blocks: 64, instructions: 0);
+            tr3.RegisterSymbol("asmtest_symbol_demo", 256);
+            long r4 = DrTrace.SymbolDemo(3, 4); // 3*2+4 = 10, no region/markers
+            Assert(r4 == 10, $"asmtest_symbol_demo(3,4) == 10 (got {r4})");
+            Assert(tr3.Covered(0), "symbol entry block covered");
+            Assert(DrTrace.MarkerError() == 0, "markers balanced");
+
+            tr3.Unregister("asmtest_symbol_demo");
+            tr3.Free();
         }
         finally
         {

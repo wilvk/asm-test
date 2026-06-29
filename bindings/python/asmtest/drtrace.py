@@ -96,6 +96,8 @@ def _declare(lib):
     lib.asmtest_dr_under_dynamorio.restype = ci
     lib.asmtest_dr_register_symbol.argtypes = [cc, sz, v]
     lib.asmtest_dr_register_symbol.restype = ci
+    lib.asmtest_symbol_demo.argtypes = [C.c_long, C.c_long]
+    lib.asmtest_symbol_demo.restype = C.c_long
     lib.asmtest_exec_alloc.argtypes = [C.c_char_p, sz, C.POINTER(_ExecCode)]
     lib.asmtest_exec_alloc.restype = ci
     lib.asmtest_exec_free.argtypes = [C.POINTER(_ExecCode)]
@@ -246,6 +248,12 @@ class NativeTrace:
     def marker_error(cls) -> int:
         return int(_get().asmtest_dr_marker_error())
 
+    @staticmethod
+    def symbol_demo(a, b) -> int:
+        """Call the exported asmtest_symbol_demo fixture (a*2+b); the symbol-mode
+        test traces it by name."""
+        return int(_get().asmtest_symbol_demo(a, b))
+
     # ---- per-trace ----
     @classmethod
     def new(cls, blocks=64, instructions=0) -> "NativeTrace":
@@ -259,6 +267,16 @@ class NativeTrace:
             name.encode(), code.base, code.length, self._handle)
         if rc != ASMTEST_DR_OK:
             raise RuntimeError(f"register_region({name!r}) failed: {rc}")
+        return self
+
+    def register_symbol(self, symbol: str, max_len: int = 256):
+        """Symbol mode: trace a named exported function by name, with no
+        begin/end markers. Recording is always-on over the resolved range
+        [entry, entry+max_len) once DR is started — just call the function."""
+        rc = self._lib.asmtest_dr_register_symbol(
+            symbol.encode(), max_len, self._handle)
+        if rc != ASMTEST_DR_OK:
+            raise RuntimeError(f"register_symbol({symbol!r}) failed: {rc}")
         return self
 
     def unregister(self, name: str):

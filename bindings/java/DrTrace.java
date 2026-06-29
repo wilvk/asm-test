@@ -64,7 +64,8 @@ public final class DrTrace {
     private static final MethodHandle DR_AVAILABLE, DR_INIT, DR_START, DR_STOP, DR_SHUTDOWN,
         REGISTER_REGION, UNREGISTER_REGION, TRACE_BEGIN, TRACE_END, MARKER_ERROR,
         EXEC_ALLOC, EXEC_FREE, TRACE_NEW, TRACE_FREE, TRACE_COVERED,
-        TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL, TRACE_INSNS_LEN, TRACE_BLOCK_AT, TRACE_INSN_AT;
+        TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL, TRACE_INSNS_LEN, TRACE_BLOCK_AT, TRACE_INSN_AT,
+        REGISTER_SYMBOL, SYMBOL_DEMO;
 
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
@@ -87,7 +88,7 @@ public final class DrTrace {
             traceBegin = null, traceEnd = null, markerError = null, execAlloc = null,
             execFree = null, traceNew = null, traceFree = null, traceCovered = null,
             traceBlocksLen = null, traceInsnsTotal = null, traceInsnsLen = null,
-            traceBlockAt = null, traceInsnAt = null;
+            traceBlockAt = null, traceInsnAt = null, registerSymbol = null, symbolDemo = null;
         Throwable loadError = null;
         try {
             SymbolLookup lib = SymbolLookup.libraryLookup(resolveDrappLib(), ARENA);
@@ -122,6 +123,11 @@ public final class DrTrace {
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
             traceInsnAt = h(lib, "asmtest_emu_trace_insn_at",
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            // Symbol mode: trace a named exported function by name (no begin/end markers).
+            registerSymbol = h(lib, "asmtest_dr_register_symbol",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+            symbolDemo = h(lib, "asmtest_symbol_demo",
+                FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG));
         } catch (Throwable t) {
             // The library requires DynamoRIO and may be absent — degrade to
             // available() == false rather than failing class init.
@@ -134,7 +140,7 @@ public final class DrTrace {
         TRACE_NEW = traceNew; TRACE_FREE = traceFree; TRACE_COVERED = traceCovered;
         TRACE_BLOCKS_LEN = traceBlocksLen; TRACE_INSNS_TOTAL = traceInsnsTotal;
         TRACE_INSNS_LEN = traceInsnsLen; TRACE_BLOCK_AT = traceBlockAt;
-        TRACE_INSN_AT = traceInsnAt;
+        TRACE_INSN_AT = traceInsnAt; REGISTER_SYMBOL = registerSymbol; SYMBOL_DEMO = symbolDemo;
         LOAD_ERROR = loadError;
     }
 
@@ -206,6 +212,12 @@ public final class DrTrace {
     public static int markerError() {
         if (MARKER_ERROR == null) return 0;
         try { return (int) MARKER_ERROR.invoke(); } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The exported fixture (a*2+b) the symbol-mode test traces by name. */
+    public static long symbolDemo(long a, long b) {
+        if (SYMBOL_DEMO == null) throw new RuntimeException("libasmtest_drapp not loaded", LOAD_ERROR);
+        try { return (long) SYMBOL_DEMO.invoke(a, b); } catch (Throwable t) { throw rethrow(t); }
     }
 
     /** Host-native machine code in real executable (W^X) memory. */
@@ -296,6 +308,19 @@ public final class DrTrace {
         /** Drop the named region (the client drops its cached translation). */
         public void unregister(String name) {
             try { UNREGISTER_REGION.invoke(str(name)); } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Symbol mode: trace a named exported function with no begin/end markers —
+         *  always-on recording for [entry, entry+maxLen) of {@code symbol}, resolved
+         *  by name across all loaded modules. */
+        public NativeTrace registerSymbol(String symbol, long maxLen) {
+            try {
+                int rc = (int) REGISTER_SYMBOL.invoke(str(symbol), maxLen, handle);
+                if (rc != ASMTEST_DR_OK)
+                    throw new RuntimeException("register_symbol(" + symbol + ") failed: " + rc);
+                return this;
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
         }
 
         /** Run {@code body} between balanced begin/end markers for {@code name}.

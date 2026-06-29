@@ -70,6 +70,8 @@ module Asmtest
         marker_error: func(LIB, "asmtest_dr_marker_error", [], INT),
         # ---- region registration + markers ----
         register:     func(LIB, "asmtest_dr_register_region", [VOIDP, VOIDP, SZ, VOIDP], INT),
+        register_symbol: func(LIB, "asmtest_dr_register_symbol", [VOIDP, SZ, VOIDP], INT),
+        symbol_demo:  func(LIB, "asmtest_symbol_demo", [LONG, LONG], LONG),
         unregister:   func(LIB, "asmtest_dr_unregister_region", [VOIDP], INT),
         trace_begin:  func(LIB, "asmtest_trace_begin", [VOIDP], VOID),
         trace_end:    func(LIB, "asmtest_trace_end", [VOIDP], VOID),
@@ -191,6 +193,12 @@ module Asmtest
         DrTrace::FN[:marker_error].call
       end
 
+      # Call the exported asmtest_symbol_demo fixture (a*2+b) that symbol-mode
+      # tests trace by name.
+      def self.symbol_demo(a, b)
+        DrTrace::FN[:symbol_demo].call(a, b)
+      end
+
       # ---- per-trace ----
 
       # Allocate a trace handle. NOTE the C order: asmtest_trace_new(insns_cap,
@@ -207,6 +215,15 @@ module Asmtest
       def register(name, code)
         rc = DrTrace::FN[:register].call(name, code.base, code.length, @handle)
         raise "register_region(#{name.inspect}) failed: #{rc}" if rc != DrTrace::OK
+        self
+      end
+
+      # Symbol mode: trace a named exported function with no begin/end markers —
+      # recording is always-on over [entry, entry+max_len). The client resolves
+      # +name+ across all loaded modules.
+      def register_symbol(name, max_len = 256)
+        rc = DrTrace::FN[:register_symbol].call(name, max_len, @handle)
+        raise "register_symbol(#{name.inspect}) failed: #{rc}" if rc != DrTrace::OK
         self
       end
 
