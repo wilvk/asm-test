@@ -163,10 +163,245 @@ See the [Zen 2 single-step plan, Phase 5](../plans/zen2-singlestep-trace-plan.md
 
 ---
 
+## Fallback model
+
+The matrices above are static capability snapshots. This section is the dynamic
+question: given a concrete `(OS, hardware, language)` tuple, **how does a caller
+fall from the most faithful backend down to one that actually runs** — and what does
+each step cost?
+
+### What makes a fallback cascade possible — and where it stops
+
+Every tier reduces to two primitives that make a cascade tractable:
+
+- **A static capability probe.** `asmtest_hwtrace_available(backend)` and each
+  binding's `NativeTrace.available()` self-skip cleanly with a specific reason
+  ([hwtrace.c `asmtest_hwtrace_skip_reason`](../../src/hwtrace.c)). A cascade is just
+  these probes tried in priority order, terminating at the emulator — which is always
+  available.
+- **A dynamic completeness signal.** `asmtest_trace_t.truncated` is set when a
+  backend could not record the whole path: AMD LBR window overflow (>16 taken
+  branches), Intel PT AUX-ring overflow, or single-step desync. It is the *runtime*
+  fallback trigger, distinct from the *init-time* availability probe.
+
+Both are safe to act on because **every backend normalizes to the same offset basis**
+(byte offset from routine entry `0`) and the **same block partition** (single-entry /
+ends-at-branch). A test asserting `covered(0)` or `block_offsets() == [...]` reads
+identically no matter which backend produced the trace — that data-shape parity is
+exactly what lets one backend stand in for another without rewriting assertions.
+
+**The boundary the cascade must not cross silently.** Data shape is preserved across
+every fallback; **execution fidelity is not.** The four native tiers (PT, AMD LBR,
+DynamoRIO, single-step) all trace *real in-process native execution*; the emulator
+traces *isolated guest bytes on a virtual CPU*. For the deterministic, branch-light
+compute kernels that are asm-test's common case the two are **coverage-equivalent**,
+but they diverge for anything environment-dependent (real addresses, syscalls, native
+faults, self-modifying code). So a native→native fallback (e.g. PT→DynamoRIO) is
+transparent, while a native→emulator fallback crosses a semantic line and should be an
+**explicit caller opt-in**, not an automatic last resort.
+
+| Fallback step | Trace shape | Execution fidelity | Treat as |
+|---|---|---|---|
+| native → native (PT → LBR → DynamoRIO → single-step) | identical | preserved (real CPU, in-process) | transparent |
+| native → emulator | identical | **changes** (virtual CPU, isolated guest) | opt-in; coverage-equivalent only for pure-compute routines |
+
+### Static vs dynamic fallback
+
+| Trigger | Signal | Fires at | Canonical example |
+|---|---|---|---|
+| Static (capability) | `available()` == 0 + skip reason | init | PT on AMD; DynamoRIO on macOS; LBR on Zen 2 |
+| Dynamic (completeness) | `trace.truncated` == true | after `end()` | AMD LBR routine exceeding 16 taken branches |
+
+### Matrix 8 — Hardware / microarchitecture fallback chain (Linux x86-64, native runtime)
+
+| CPU | Resolution order (first `available()` wins) |
+|---|---|
+| Intel, bare-metal | Intel PT → DynamoRIO → single-step *(planned)* → emulator |
+| Intel, VM / cloud | DynamoRIO → single-step *(planned)* → emulator *(PT self-skips: no `intel_pt` PMU)* |
+| AMD Zen 3 / Zen 4, bare-metal, ≤16 branches | AMD LBR → DynamoRIO → single-step *(planned)* → emulator |
+| AMD Zen 3 / Zen 4, routine > 16 branches | *(LBR sets `truncated`)* → DynamoRIO → single-step *(planned)* → emulator |
+| AMD Zen 2 | DynamoRIO → single-step *(planned)* → emulator *(no branch facility exists)* |
+| AMD, VM / cloud | DynamoRIO → single-step *(planned)* → emulator |
+
+### Matrix 9 — OS / architecture fallback chain
+
+| OS / arch | Resolution order |
+|---|---|
+| Linux x86-64 | *(full native cascade — see Matrix 8)* → emulator |
+| Linux AArch64 | CoreSight *(scaffold → self-skips)* → out-of-proc ptrace single-step (W2, *planned*) → emulator |
+| macOS Intel | single-step (macOS-Intel, *planned* Ph5) → emulator |
+| macOS Apple Silicon | **emulator only** |
+| Windows x64 | single-step (VEH, *planned* Ph5) → emulator |
+
+Today every non-Linux-x86-64 row collapses to the **emulator** in practice, because
+the native tiers above it are either follow-ups or scaffolds. The Win64 ABI is traced
+by the emulator via `emu_call_win64_traced`.
+
+### Matrix 10 — Language-runtime fallback chain (within a host that has native tiers)
+
+| Runtime class | Resolution order |
+|---|---|
+| Native / compiled (C, C++, Rust, Go, Zig, Ruby, Lua) | in-process DynamoRIO (+ HW trace where the hardware row allows) → emulator |
+| CPython (GIL-serialized, no JIT) | in-process DynamoRIO *(supported managed target)* → emulator |
+| JVM | DynamoRIO *(best-effort, guarded)* → out-of-band Intel PT / W2 ptrace *(planned)* → emulator |
+| Node / .NET | out-of-band Intel PT (Intel) / W2 ptrace single-step *(planned)* → emulator *(in-process DynamoRIO self-skips: cannot take over JIT/GC threads)* |
+
+The language axis is **orthogonal** to hardware: it does not change *whether* a trace
+facility exists, only whether *in-process* attach is viable. A managed JIT/GC runtime
+forces the cascade toward **out-of-band** observation (hardware trace, or the planned
+out-of-process ptrace stepper) before reaching the emulator floor.
+
+### Composed resolution
+
+The three axes compose as a filter pipeline, not three independent choices:
+
+```
+resolve(os, arch, vendor, uarch, runtime, routine_profile):
+    chain = []
+    if os == Linux and arch == x86-64:
+        if runtime is managed (Node/.NET/JVM):
+            # in-process DBI is hostile → prefer out-of-band first
+            if vendor == Intel: chain += [INTEL_PT]
+            chain += [PTRACE_SINGLESTEP_W2]          # planned; out-of-band, any x86
+            if runtime == JVM:  chain += [DYNAMORIO] # best-effort, guarded
+        else:                                        # native / GIL-serialized
+            if routine is small and branch-light:
+                if vendor == Intel:                  chain += [INTEL_PT]
+                elif vendor == AMD and uarch >= Zen3: chain += [AMD_LBR]   # Tier A
+            chain += [DYNAMORIO]                     # vendor/uarch-independent, no ceiling
+            chain += [SINGLESTEP]                    # planned; exact, unprivileged, CI-safe
+    chain += [EMULATOR]                              # universal floor (always available)
+
+    for b in chain:
+        if available(b): return b        # static capability fallback
+
+# After end(): if trace.truncated, re-resolve from the next ceiling-free backend
+# (DynamoRIO → single-step → emulator). This is the dynamic completeness fallback.
+```
+
+### Matrix 11 — Worked examples (composed tuples → resolved chain)
+
+| OS / arch | CPU | Language | Resolves to (chain) |
+|---|---|---|---|
+| Linux x86-64 | Intel bare-metal | Rust | **Intel PT** → DynamoRIO → emulator |
+| Linux x86-64 | Intel cloud VM | Python | **DynamoRIO** → emulator *(PT self-skips)* |
+| Linux x86-64 | AMD Zen 4 bare-metal | C, small kernel | **AMD LBR** → DynamoRIO → emulator |
+| Linux x86-64 | AMD Zen 4 bare-metal | C, looping kernel | LBR `truncated` → **DynamoRIO** → emulator |
+| Linux x86-64 | AMD Zen 2 (dev host) | Go | **DynamoRIO** → single-step *(planned)* → emulator |
+| Linux x86-64 | Intel bare-metal | Node | **Intel PT** → emulator *(DynamoRIO self-skips)* |
+| Linux x86-64 | AMD Zen 3 | .NET | W2 ptrace *(planned)* → **emulator** *(no PT on AMD; DR self-skips)* |
+| Linux AArch64 | — | Java | **emulator** *(CoreSight scaffold; no in-proc stepper on ARM)* |
+| macOS Apple Silicon | — | any | **emulator** only |
+| Windows x64 | any | .NET | **emulator** (`emu_call_win64_traced`) |
+
+### What is missing to automate this
+
+The framework ships the **primitives** — per-backend `available()`, the `truncated`
+completeness bit, and a single `asmtest_trace_t` shape every backend fills — but it
+does **not** ship an orchestrator that walks these chains automatically. Today the
+caller (or a per-binding helper) selects a backend by enum and, on `truncated`,
+chooses whether to re-run on a ceiling-free tier. The
+[AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md) makes this explicit: it
+defines the overflow→DynamoRIO routing rule "where a caller orchestrates backends,"
+i.e. the policy is specified but its automatic execution is left to the integrator. A
+natural follow-up is a thin `asmtest_trace_auto(...)` front-end that encodes
+Matrix 8–10 as the default cascade with a flag to forbid the native→emulator
+fidelity crossing.
+
+---
+
+## Packaging & target-architecture coverage
+
+There is a fourth axis the OS/hardware/language matrices do not capture: **what an
+installed package actually ships.** It matters because the answer collapses the
+fallback cascade dramatically — for a `pip install` / `npm install` / `gem install`
+consumer, only **one** trace tier is present out of the box on **every** platform.
+
+### What each package carries
+
+Per [packaging.md](../packaging.md), bindings reach the framework two ways and that
+decides what ships:
+
+- **dlopen bindings** (Python, Ruby, Lua, Node, Java, .NET) bundle the prebuilt
+  **`libasmtest_emu`** — the superset: capture trampoline + opaque-handle FFI +
+  **emulator** + Keystone assembler + Capstone disassembler, with Unicorn/Keystone/
+  Capstone vendored and rpath-rewritten so the package is self-contained.
+- **link / source bindings** (Rust, Zig, C++, Go) ship source and build against
+  `libasmtest` / `libasmtest_emu` on the consumer's host.
+
+Crucially, **neither native trace tier is in any package.** DynamoRIO ships as
+`libasmtest_drapp` + `libasmtest_drclient.so`, the hardware tier as
+`libasmtest_hwtrace`; none is bundled by `make <lang>-package`. The wrappers dlopen
+`libasmtest_drapp` at run time from `$ASMTEST_DRAPP_LIB` (else the repo `build/`), so
+`NativeTrace.available()` returns false until the consumer **builds them separately**
+and wires the env — exactly the clean self-skip the fallback model relies on.
+
+### Matrix 12 — Trace tier × packaging
+
+| Trace tier | Carrying library | In dlopen packages? | In source packages? | Otherwise obtained by |
+|---|---|---|---|---|
+| **Emulator** | `libasmtest_emu` (superset) | ✅ bundled, every platform slot | built from source | — (always present) |
+| **DynamoRIO** | `libasmtest_drapp` + `libasmtest_drclient.so` | ❌ not bundled | ❌ | `make shared-drtrace drtrace-client` + `DYNAMORIO_HOME` + env (no pkg-config) |
+| **Hardware** (PT / AMD LBR / CoreSight) | `libasmtest_hwtrace` | ❌ not bundled | ❌ | `make shared-hwtrace` + libipt/OpenCSD + bare metal + perf privilege |
+
+Why the native tiers stay out: DynamoRIO is a large runtime with **no pkg-config**
+(located by `DYNAMORIO_HOME`), impractical to vendor; the hardware tier needs
+bare-metal + lowered `perf_event_paranoid` that a package cannot grant. Their
+**BSD** licensing (DR core, libipt, OpenCSD) is therefore moot for the package
+license — only the bundled `libasmtest_emu` matters, which makes every dlopen package
+effectively **GPL-2.0** (Unicorn/Keystone GPL-2.0; Capstone + asm-test BSD/MIT).
+
+### Matrix 13 — Packaging platform slots × trace tiers reachable
+
+The CI `payloads` matrix stages four native slots (`<os>-<arch>`); there is **no
+Windows package slot** (the Win64 tier is cross-compile + Wine, not a published
+payload).
+
+| Platform slot | Built by (CI runner) | Emulator (packaged) | DynamoRIO (BYO build) | Hardware (BYO build) |
+|---|---|---|---|---|
+| `linux-x86_64` | ubuntu-latest | ✅ | buildable | PT (Intel) / AMD LBR (Zen 3+), bare-metal |
+| `linux-aarch64` | ubuntu-24.04-arm | ✅ | ✗ (DR is x86-64 only) | CoreSight scaffold only |
+| `darwin-arm64` | macos-latest | ✅ | ✗ | ✗ |
+| `darwin-x86_64` | macos-13 (nightly) | ✅ | ✗ | ✗ |
+| `windows-x64` | — (no slot) | source / Win64 tier only | ✗ | ✗ |
+
+Per-ecosystem the slot is named conventionally — Java `native/<os>-<arch>/`, .NET
+RIDs (`osx-arm64`, `linux-x64`, …), Python per-platform wheel tags repaired by
+`auditwheel`/`delocate`. The **emulator guest ISAs (Matrix 4) are independent of the
+slot**: a `linux-x86_64` package still traces AArch64/RISC-V/ARM32 *guests*, because
+the guest runs inside Unicorn, not on the host CPU.
+
+### Packaging as the fourth fallback axis
+
+Composing this with Matrix 8–11: an **installed package's effective cascade has a
+single rung — the emulator — on every platform**, because no native tier is bundled.
+The native tiers re-enter the cascade only when the consumer *leaves the package* and
+builds them, and even then only on `linux-x86_64` (DynamoRIO; PT/AMD LBR bare-metal).
+So three distinct "reachability" surfaces stack up:
+
+| Surface | What it can trace |
+|---|---|
+| **Platform capability** (Matrix 2–3) | every native tier the OS/CPU physically supports |
+| **Source checkout** (`make shared-drtrace` / `shared-hwtrace`) | the native tiers too, on `linux-x86_64`, with the toolchain installed |
+| **Installed package** (`pip`/`npm`/`gem`/…) | **emulator only**, on all four slots |
+
+The practical consequence: native-trace fidelity is a **build-from-source decision**,
+not an install-a-package one. A consumer who needs DynamoRIO or Intel PT must take the
+source/link path (or stage the libs and set `ASMTEST_DRAPP_LIB`/`ASMTEST_DRCLIENT`/
+`ASMTEST_DR_LIB`), and only on a `linux-x86_64` host; everyone else — and every
+out-of-the-box package install — lands on the emulator floor.
+
+---
+
 ## One-line synthesis
 
 DynamoRIO is the only vendor- and uarch-independent native backend shipping today
 (Linux x86-64, every Intel + Zen); hardware trace splits strictly
 **Intel → PT / Zen 3-4 → LBR (16-cap) / Zen 2 → nothing-yet**; the emulator is the
 universal floor for every OS, architecture, and language the native tiers do not
-reach.
+reach. Fallback between them is cheap and transparent **as data** (one trace shape,
+one offset basis) but must be deliberate **as fidelity** — native→native is free,
+native→emulator trades real-CPU execution for an isolated guest and should be opt-in.
+And packaging tightens the floor further: only the emulator tier is bundled, so every
+out-of-the-box package install — on all four platform slots — starts and ends on the
+emulator unless the consumer builds a native tier from source on `linux-x86_64`.
