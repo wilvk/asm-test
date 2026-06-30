@@ -187,6 +187,39 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern ulong asmtest_emu_trace_block_at(IntPtr trace, UIntPtr i);
         [DllImport(HWTRACE)] public static extern ulong asmtest_emu_trace_insn_at(IntPtr trace, UIntPtr i);
 
+        // ---- out-of-process / foreign-process tracing (asmtest_ptrace.h) ----
+        // The same libasmtest_hwtrace ships these. The C `long` in the trace_call /
+        // trace_attached args/result is 64-bit on Linux x86-64, so it marshals as
+        // long[] / out long. pid is a C int.
+        public const int ASMTEST_PTRACE_OK = 0;
+        public const int ASMTEST_PTRACE_ENOENT = -7; // region / symbol / method not found
+
+        // asmtest_jitdump_entry_t: four u64 fields, no padding — a method as recorded
+        // in a jitdump JIT_CODE_LOAD record (32 bytes).
+        [StructLayout(LayoutKind.Sequential)]
+        public struct JitEntry
+        {
+            public ulong CodeAddr;  // load address (the base to trace)
+            public ulong CodeSize;  // code length in bytes
+            public ulong Timestamp; // record timestamp (load order)
+            public ulong CodeIndex; // the JIT's unique index for this code
+        }
+
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_available();
+        [DllImport(HWTRACE)] public static extern void asmtest_ptrace_skip_reason(byte[] buf, UIntPtr buflen);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_call(
+            IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached(
+            int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_proc_region_by_addr(
+            int pid, IntPtr addr, out IntPtr baseOut, out UIntPtr lenOut);
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)] public static extern int asmtest_proc_perfmap_symbol(
+            int pid, [MarshalAs(UnmanagedType.LPStr)] string name, out IntPtr baseOut, out UIntPtr lenOut);
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)] public static extern int asmtest_jitdump_find(
+            [MarshalAs(UnmanagedType.LPStr)] string path, int pid,
+            [MarshalAs(UnmanagedType.LPStr)] string name,
+            out JitEntry @out, byte[] bytesOut, UIntPtr bytesCap, out UIntPtr bytesLen);
+
         // Whether libasmtest_hwtrace loaded at all. A missing lib (tier not built)
         // self-skips via HwTrace.Available() rather than crashing. Derived from the
         // handle resolved by LoadLib() above (resolver-free, so it is robust to the
@@ -481,6 +514,160 @@ namespace Asmtest
                 HwNative.asmtest_trace_free(_handle);
                 _handle = IntPtr.Zero;
             }
+        }
+
+        // The opaque trace handle, for the out-of-process tracer (which records into a
+        // trace it does not own the lifecycle of — the caller still Free()s it).
+        internal IntPtr Handle => _handle;
+    }
+
+    /// <summary>
+    /// A JIT method resolved from a jitdump (mirrors asmtest_jitdump_entry_t plus the
+    /// recorded code): the load address, size, the JIT's timestamp/index, and
+    /// (optionally) the recorded native code bytes.
+    /// </summary>
+    public readonly struct JitMethod
+    {
+        /// <summary>Load address — the base to hand <see cref="Ptrace.TraceAttached"/>.</summary>
+        public ulong CodeAddr { get; }
+
+        /// <summary>Code length in bytes.</summary>
+        public ulong CodeSize { get; }
+
+        /// <summary>Record timestamp (load order); the latest re-JIT body wins.</summary>
+        public ulong Timestamp { get; }
+
+        /// <summary>The JIT's unique index for this code.</summary>
+        public ulong CodeIndex { get; }
+
+        /// <summary>The recorded native code bytes (empty unless wantBytes &gt; 0 was requested).</summary>
+        public byte[] Code { get; }
+
+        public JitMethod(ulong codeAddr, ulong codeSize, ulong timestamp, ulong codeIndex, byte[] code)
+        {
+            CodeAddr = codeAddr;
+            CodeSize = codeSize;
+            Timestamp = timestamp;
+            CodeIndex = codeIndex;
+            Code = code;
+        }
+
+        public override string ToString() =>
+            $"JitMethod(code_addr=0x{CodeAddr:x}, code_size={CodeSize}, " +
+            $"timestamp={Timestamp}, code_index={CodeIndex}, code={Code.Length} bytes)";
+    }
+
+    /// <summary>
+    /// Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
+    /// forked or externally-attached target out of band, and resolve the code region
+    /// to trace from the OS — /proc/&lt;pid&gt;/maps, a JIT perf-map, or a binary
+    /// jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is
+    /// unavailable and in-process DynamoRIO cannot seize the runtime's threads).
+    /// Linux x86-64. All methods self-skip cleanly (Available()/SkipReason()) when the
+    /// lib is missing or the host is unsupported.
+    /// </summary>
+    public static class Ptrace
+    {
+        /// <summary>True if the out-of-process single-step tracer can run here (Linux x86-64).</summary>
+        public static bool Available()
+        {
+            if (!HwNative.LibAvailable) return false;
+            try { return HwNative.asmtest_ptrace_available() != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>Human-readable reason <see cref="Available"/> is false (or "available").</summary>
+        public static string SkipReason()
+        {
+            if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
+            var buf = new byte[160];
+            HwNative.asmtest_ptrace_skip_reason(buf, (UIntPtr)buf.Length);
+            int z = Array.IndexOf(buf, (byte)0);
+            return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
+        }
+
+        /// <summary>
+        /// Fork a tracee that calls the code at <paramref name="code"/>
+        /// (<paramref name="len"/> bytes, already executable in this process) with up to
+        /// six integer <paramref name="args"/>, single-step it OUT OF PROCESS, and fill
+        /// the trace; returns the routine's return value (the child's RAX at the ret).
+        /// </summary>
+        public static long TraceCall(IntPtr code, nuint len, long[] args, IntPtr trace)
+        {
+            // A null/empty array can't be P/Invoked as a sized pointer; pass a 1-elem
+            // placeholder with nargs = 0 (the native side ignores it).
+            var arr = (args == null || args.Length == 0) ? new long[1] : args;
+            int n = args == null ? 0 : args.Length;
+            int rc = HwNative.asmtest_ptrace_trace_call(
+                code, (UIntPtr)len, arr, n, out long result, trace);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_call failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
+        /// Trace a region <c>[base, base+len)</c> in a SEPARATE, already-ptrace-stopped
+        /// process (the caller owns PTRACE_ATTACH/DETACH). Reads the target's bytes via
+        /// process_vm_readv; returns the target's RAX at the region exit.
+        /// </summary>
+        public static long TraceAttached(int pid, IntPtr @base, nuint len, IntPtr trace)
+        {
+            int rc = HwNative.asmtest_ptrace_trace_attached(
+                pid, @base, (UIntPtr)len, out long result, trace);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_attached failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
+        /// The executable mapping in /proc/&lt;pid&gt;/maps containing
+        /// <paramref name="addr"/>, as (base, len), or <c>null</c> if no executable
+        /// mapping contains it.
+        /// </summary>
+        public static (IntPtr Base, nuint Len)? ProcRegionByAddr(int pid, IntPtr addr)
+        {
+            if (!HwNative.LibAvailable) return null;
+            int rc = HwNative.asmtest_proc_region_by_addr(pid, addr, out var baseOut, out var lenOut);
+            return rc == HwNative.ASMTEST_PTRACE_OK ? (baseOut, (nuint)lenOut) : ((IntPtr, nuint)?)null;
+        }
+
+        /// <summary>
+        /// A JIT method by <paramref name="name"/> in /tmp/perf-&lt;pid&gt;.map, as
+        /// (base, len), or <c>null</c>. The name is matched against the full symbol text
+        /// after the size field.
+        /// </summary>
+        public static (IntPtr Base, nuint Len)? ProcPerfmapSymbol(int pid, string name)
+        {
+            if (!HwNative.LibAvailable) return null;
+            int rc = HwNative.asmtest_proc_perfmap_symbol(pid, name, out var baseOut, out var lenOut);
+            return rc == HwNative.ASMTEST_PTRACE_OK ? (baseOut, (nuint)lenOut) : ((IntPtr, nuint)?)null;
+        }
+
+        /// <summary>
+        /// A JIT method by <paramref name="name"/> from a binary jitdump
+        /// (<paramref name="path"/>, or /tmp/jit-&lt;pid&gt;.dump when <paramref name="path"/>
+        /// is null) as a <see cref="JitMethod"/> carrying up to
+        /// <paramref name="wantBytes"/> of recorded code, or <c>null</c>. The latest
+        /// re-JIT body (highest timestamp) wins.
+        /// </summary>
+        public static JitMethod? JitdumpFind(string path, string name, int pid = 0, int wantBytes = 0)
+        {
+            if (!HwNative.LibAvailable) return null;
+            byte[] buf = wantBytes > 0 ? new byte[wantBytes] : null;
+            int rc = HwNative.asmtest_jitdump_find(
+                path, pid, name, out var e, buf, (UIntPtr)wantBytes, out var bytesLen);
+            if (rc != HwNative.ASMTEST_PTRACE_OK) return null;
+            byte[] code;
+            if (wantBytes > 0)
+            {
+                code = new byte[(int)bytesLen];
+                Array.Copy(buf, code, code.Length);
+            }
+            else
+            {
+                code = Array.Empty<byte>();
+            }
+            return new JitMethod(e.CodeAddr, e.CodeSize, e.Timestamp, e.CodeIndex, code);
         }
     }
 }

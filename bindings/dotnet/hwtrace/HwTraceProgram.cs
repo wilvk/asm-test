@@ -7,6 +7,7 @@
 // stays green. Otherwise it traces both fixtures live, prints TAP-style
 // "ok N - ..." lines, and returns nonzero on any assertion failure.
 using System;
+using System.IO;
 using Asmtest;
 
 static class HwTraceProgram
@@ -238,7 +239,145 @@ static class HwTraceProgram
             }
         }
 
+        // --- out-of-process / foreign-process toolkit (Asmtest.Ptrace) --- //
+        // Mirrors the four tests after the "foreign-process toolkit" banner in
+        // bindings/python/tests/test_hwtrace.py. Guarded by a ptrace-available skip
+        // (the lib is loaded here, but the host may not be Linux x86-64). trace_attached
+        // needs no live test — it is referenced (wrapped) by Ptrace.TraceAttached.
+        if (Ptrace.Available())
+            PtraceChecks();
+        else
+            Console.WriteLine($"# SKIP ptrace toolkit unavailable: {Ptrace.SkipReason()}");
+
         Console.WriteLine($"1..{_n}");
         return _failed ? 1 : 0;
+    }
+
+    static void PtraceChecks()
+    {
+        int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+        // (1) trace_call: fork a tracee, single-step it out of process, same offsets.
+        {
+            var code = NativeCode.FromBytes(ROUTINE);
+            var tr = HwTrace.Create(blocks: 64, instructions: 64);
+            long result = Ptrace.TraceCall(code.Base, (nuint)code.Length,
+                                           new long[] { 20, 22 }, tr.Handle);
+            Check(result == 42, $"ptrace: trace_call(20,22) == 42 (got {result})");
+            var insns = tr.InsnOffsets();
+            var wantInsns = new ulong[] { 0x0, 0x3, 0x6, 0xC, 0x11 };
+            Check(Eq(insns, wantInsns), $"ptrace: trace_call offsets {Hex(insns)} == {Hex(wantInsns)}");
+            Check(!tr.Truncated(), "ptrace: trace_call not truncated");
+            tr.Free();
+            code.Free();
+        }
+
+        // (2) region_by_addr: discover an executable region's extent by an interior
+        // address (this process); addr 1 maps nothing.
+        {
+            var code = NativeCode.FromBytes(ROUTINE);
+            var region = Ptrace.ProcRegionByAddr(pid, code.Base + 4);
+            Check(region.HasValue, "ptrace: region_by_addr finds the mapping");
+            if (region.HasValue)
+            {
+                Check(region.Value.Base == code.Base, "ptrace: region_by_addr base == code base");
+                Check(region.Value.Len >= (nuint)ROUTINE.Length,
+                      $"ptrace: region_by_addr len >= {ROUTINE.Length} (got {region.Value.Len})");
+            }
+            else
+            {
+                Check(false, "ptrace: region_by_addr base == code base");
+                Check(false, $"ptrace: region_by_addr len >= {ROUTINE.Length}");
+            }
+            Check(Ptrace.ProcRegionByAddr(pid, (IntPtr)1) == null,
+                  "ptrace: region_by_addr(addr 1) == null");
+            code.Free();
+        }
+
+        // (3) perfmap_symbol: write /tmp/perf-<pid>.map, resolve a method by name,
+        // and a miss returns null.
+        {
+            string path = $"/tmp/perf-{pid}.map";
+            File.WriteAllText(path, "400000 1a void demo(long, long)\n500000 8 other\n");
+            try
+            {
+                var hit = Ptrace.ProcPerfmapSymbol(pid, "void demo(long, long)");
+                Check(hit.HasValue && hit.Value.Base == (IntPtr)0x400000 && hit.Value.Len == (nuint)0x1A,
+                      "ptrace: perfmap_symbol resolves (base 0x400000, len 0x1a)");
+                Check(Ptrace.ProcPerfmapSymbol(pid, "missing") == null,
+                      "ptrace: perfmap_symbol(missing) == null");
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        // (4) jitdump_find: write a binary jitdump (little-endian) per the Python
+        // layout, resolve a method to (addr,size,index,ts) + bytes; a miss is null.
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"asmtest-jit-{pid}.dump");
+            byte[] name = System.Text.Encoding.ASCII.GetBytes("void demo(long, long)");
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+            using (var w = new BinaryWriter(fs))
+            {
+                // header: magic, version, total_size=40, elf_mach, pad1, pid, timestamp, flags
+                w.Write((uint)0x4A695444); // 'JiTD' (little-endian magic)
+                w.Write((uint)1);
+                w.Write((uint)40);
+                w.Write((uint)62);
+                w.Write((uint)0);
+                w.Write((uint)0);
+                w.Write((ulong)0);
+                w.Write((ulong)0);
+                // JIT_CODE_LOAD record: id, total, ts
+                uint total = (uint)(16 + 40 + (name.Length + 1) + ROUTINE.Length);
+                w.Write((uint)0);
+                w.Write(total);
+                w.Write((ulong)5);
+                // body: pid, tid, vma, code_addr, code_size, code_index
+                w.Write((uint)0);
+                w.Write((uint)0);
+                w.Write((ulong)0x2000);
+                w.Write((ulong)0x2000);
+                w.Write((ulong)ROUTINE.Length);
+                w.Write((ulong)9);
+                w.Write(name);
+                w.Write((byte)0);
+                w.Write(ROUTINE);
+            }
+            try
+            {
+                var m = Ptrace.JitdumpFind(path, "void demo(long, long)", wantBytes: 64);
+                Check(m.HasValue, "ptrace: jitdump_find resolves the method");
+                if (m.HasValue)
+                {
+                    var v = m.Value;
+                    Check(v.CodeAddr == 0x2000 && v.CodeSize == (ulong)ROUTINE.Length
+                          && v.CodeIndex == 9 && v.Timestamp == 5,
+                          $"ptrace: jitdump_find (addr 0x{v.CodeAddr:x}, size {v.CodeSize}, idx {v.CodeIndex}, ts {v.Timestamp})");
+                    Check(BytesEq(v.Code, ROUTINE), "ptrace: jitdump_find code bytes == ROUTINE");
+                }
+                else
+                {
+                    Check(false, "ptrace: jitdump_find (addr/size/index/ts)");
+                    Check(false, "ptrace: jitdump_find code bytes == ROUTINE");
+                }
+                Check(Ptrace.JitdumpFind(path, "missing") == null,
+                      "ptrace: jitdump_find(missing) == null");
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    static bool BytesEq(byte[] a, byte[] b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+            if (a[i] != b[i]) return false;
+        return true;
     }
 }

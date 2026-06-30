@@ -77,6 +77,17 @@ module Asmtest
     # asmtest_trace_choice_t — three packed C ints.
     TierChoice = Struct.new(:tier, :backend, :fidelity)
 
+    # asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
+    # PTRACE_OK is the shared success spirit; PTRACE_ENOENT is "region / symbol /
+    # method not found" (region_by_addr/perfmap_symbol/jitdump_find map it to nil).
+    PTRACE_OK     = 0
+    PTRACE_ENOENT = -7
+
+    # A JIT method resolved from a jitdump (asmtest_jitdump_entry_t): the load
+    # address (the base to trace), the code size, the JIT's record timestamp/index,
+    # and (optionally) the recorded native +code+ bytes as a binary String.
+    JitMethod = Struct.new(:code_addr, :code_size, :timestamp, :code_index, :code)
+
     VOIDP = Fiddle::TYPE_VOIDP
     LONG  = Fiddle::TYPE_LONG
     INT   = Fiddle::TYPE_INT
@@ -129,6 +140,14 @@ module Asmtest
         truncated:    func(LIB, "asmtest_emu_trace_truncated", [VOIDP], INT),
         block_at:     func(LIB, "asmtest_emu_trace_block_at", [VOIDP, SZ], LL),
         insn_at:      func(LIB, "asmtest_emu_trace_insn_at", [VOIDP, SZ], LL),
+        # ---- out-of-process / foreign-process tracing toolkit (asmtest_ptrace.h) ----
+        ptrace_available:    func(LIB, "asmtest_ptrace_available", [], INT),
+        ptrace_skip_reason:  func(LIB, "asmtest_ptrace_skip_reason", [VOIDP, SZ], VOID),
+        ptrace_trace_call:   func(LIB, "asmtest_ptrace_trace_call", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP], INT),
+        ptrace_trace_attached: func(LIB, "asmtest_ptrace_trace_attached", [INT, VOIDP, SZ, VOIDP, VOIDP], INT),
+        proc_region_by_addr: func(LIB, "asmtest_proc_region_by_addr", [INT, VOIDP, VOIDP, VOIDP], INT),
+        proc_perfmap_symbol: func(LIB, "asmtest_proc_perfmap_symbol", [INT, VOIDP, VOIDP, VOIDP], INT),
+        jitdump_find:        func(LIB, "asmtest_jitdump_find", [VOIDP, INT, VOIDP, VOIDP, VOIDP, SZ, VOIDP], INT),
       }.freeze
     rescue Fiddle::DLError
       LIB = nil
@@ -312,6 +331,138 @@ module Asmtest
       # Tear the tier down, returning to the uninitialized state.
       def self.shutdown
         Asmtest::HwTrace::FN[:shutdown].call
+      end
+
+      # ---- out-of-process / foreign-process tracing (asmtest_ptrace.h) ----
+      #
+      # Single-step a forked or externally-attached target OUT OF BAND, and resolve
+      # the code region to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a
+      # binary jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT
+      # is unavailable and in-process DynamoRIO cannot seize the runtime's threads).
+      # Linux x86-64. Class methods on this same HwTrace class, mirroring the Python
+      # Ptrace surface; they live in the SAME libasmtest_hwtrace this binding loads.
+
+      # True if the out-of-process single-step tracer can run on this host (Linux
+      # x86-64). Folds a load failure (FN nil) into a clean false so callers self-skip.
+      def self.ptrace_available?
+        return false if Asmtest::HwTrace::FN.nil?
+        Asmtest::HwTrace::FN[:ptrace_available].call != 0
+      end
+
+      # Human-readable reason ptrace_available? is false (or "available"). "" if the
+      # lib failed to load.
+      def self.ptrace_skip_reason
+        return "" if Asmtest::HwTrace::FN.nil?
+        buf = Fiddle::Pointer.new(Fiddle.malloc(160), 160)
+        buf[0, 160] = "\x00".b * 160
+        Asmtest::HwTrace::FN[:ptrace_skip_reason].call(buf, 160)
+        s = buf.to_s # up to first NUL
+        Fiddle.free(buf.to_i)
+        s
+      end
+
+      # Fork a tracee that calls +code+ (a NativeCode entry +code_base+ of length
+      # +code_len+) with up to six integer +args+, single-step it out of process, and
+      # fill +trace+ (a HwTrace). Returns the routine's return value (the child's RAX
+      # at the ret). +args+ is packed as an array of C longs; nargs is its length.
+      def self.ptrace_trace_call(code_base, code_len, args, trace)
+        n = args.length
+        argbuf = Fiddle::Pointer.new(Fiddle.malloc(8 * [n, 1].max), 8 * [n, 1].max)
+        argbuf[0, 8 * [n, 1].max] = "\x00".b * (8 * [n, 1].max)
+        argbuf[0, 8 * n] = args.pack("q*") if n > 0
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_call].call(
+          code_base, code_len, argbuf, n, res, trace.handle)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(argbuf.to_i)
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_call failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # Trace a region [+base+, +base+ + +len+) in a SEPARATE, already-ptrace-stopped
+      # process +pid+ (the caller owns PTRACE_ATTACH/DETACH); the target's bytes are
+      # read via process_vm_readv. Fills +trace+ and returns the target's RAX at the
+      # ret. +pid+ is a C int.
+      def self.ptrace_trace_attached(pid, base, len, trace)
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        base_p = Fiddle::Pointer.new(base)
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_attached].call(
+          pid, base_p, len, res, trace.handle)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_attached failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # The executable mapping in /proc/<pid>/maps containing +addr+, as [base, len],
+      # or nil if no executable mapping contains it (PTRACE_ENOENT). +pid+ is a C int;
+      # +addr+ is an integer address. base/len come back via two void* out-params.
+      def self.proc_region_by_addr(pid, addr)
+        base_p = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        len_p  = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        base_p[0, 8] = "\x00".b * 8
+        len_p[0, 8]  = "\x00".b * 8
+        rc = Asmtest::HwTrace::FN[:proc_region_by_addr].call(
+          pid, Fiddle::Pointer.new(addr), base_p, len_p)
+        out = rc == Asmtest::HwTrace::PTRACE_OK ?
+          [base_p[0, 8].unpack1("Q"), len_p[0, 8].unpack1("Q")] : nil
+        Fiddle.free(base_p.to_i)
+        Fiddle.free(len_p.to_i)
+        out
+      end
+
+      # A JIT method by +name+ in /tmp/perf-<pid>.map, as [base, len], or nil
+      # (PTRACE_ENOENT). +pid+ is a C int; +name+ is matched against the full symbol
+      # text after the size field.
+      def self.proc_perfmap_symbol(pid, name)
+        base_p = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        len_p  = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        base_p[0, 8] = "\x00".b * 8
+        len_p[0, 8]  = "\x00".b * 8
+        rc = Asmtest::HwTrace::FN[:proc_perfmap_symbol].call(pid, name, base_p, len_p)
+        out = rc == Asmtest::HwTrace::PTRACE_OK ?
+          [base_p[0, 8].unpack1("Q"), len_p[0, 8].unpack1("Q")] : nil
+        Fiddle.free(base_p.to_i)
+        Fiddle.free(len_p.to_i)
+        out
+      end
+
+      # A JIT method by +name+ from a jitdump (+path+, or /tmp/jit-<pid>.dump when
+      # +path+ is nil) as a JitMethod carrying up to +want_bytes+ of recorded code, or
+      # nil (PTRACE_ENOENT). The latest re-JIT body (highest timestamp) wins. The C
+      # entry fills an asmtest_jitdump_entry_t (four packed u64) and, when want_bytes
+      # > 0, copies up to want_bytes of code into a buffer and sets *bytes_len.
+      def self.jitdump_find(path, name, pid: 0, want_bytes: 0)
+        ent = Fiddle::Pointer.new(Fiddle.malloc(32), 32) # 4 u64
+        ent[0, 32] = "\x00".b * 32
+        buf = want_bytes > 0 ? Fiddle::Pointer.new(Fiddle.malloc(want_bytes), want_bytes) : nil
+        blen = want_bytes > 0 ? Fiddle::Pointer.new(Fiddle.malloc(8), 8) : nil
+        if want_bytes > 0
+          buf[0, want_bytes] = "\x00".b * want_bytes
+          blen[0, 8] = "\x00".b * 8
+        end
+        rc = Asmtest::HwTrace::FN[:jitdump_find].call(
+          path, pid, name, ent,
+          buf || Fiddle::NULL, want_bytes, blen || Fiddle::NULL)
+        method = nil
+        if rc == Asmtest::HwTrace::PTRACE_OK
+          code_addr, code_size, timestamp, code_index = ent[0, 32].unpack("Q4")
+          code = ""
+          if want_bytes > 0
+            n = blen[0, 8].unpack1("Q")
+            code = buf[0, n] if n > 0
+          end
+          method = JitMethod.new(code_addr, code_size, timestamp, code_index, code)
+        end
+        Fiddle.free(ent.to_i)
+        if want_bytes > 0
+          Fiddle.free(buf.to_i)
+          Fiddle.free(blen.to_i)
+        end
+        method
       end
 
       # ---- per-trace ----

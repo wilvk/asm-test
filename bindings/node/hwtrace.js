@@ -64,6 +64,10 @@ const TRACE_BEST = 0x0;         // most-faithful available; emulator floor allow
 const TRACE_CEILING_FREE = 0x1; // drop the fixed-window backend (AMD LBR)
 const TRACE_NATIVE_ONLY = 0x2;  // forbid the native->emulator fidelity crossing
 
+// asmtest_ptrace.h — out-of-process / foreign-process tracing status codes
+const ASMTEST_PTRACE_OK = 0;
+const ASMTEST_PTRACE_ENOENT = -7; // region / symbol / method not found
+
 // Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 // build); otherwise fall back to the build/ tree next to the repo root. The tier
 // may be absent, so the load is wrapped in try/catch and available() self-skips
@@ -134,6 +138,17 @@ let _loadError = null;
     truncated: lib.func('int asmtest_emu_trace_truncated(void*)'),
     blockAt: lib.func('uint64_t asmtest_emu_trace_block_at(void*, size_t)'),
     insnAt: lib.func('uint64_t asmtest_emu_trace_insn_at(void*, size_t)'),
+    // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. `pid` is
+    // a C int; the (long*) args/result are marshalled as raw little-endian buffers
+    // (readBigInt64LE/readInt32LE), exactly like resolve()/autoTier() above. The
+    // jitdump entry is four consecutive uint64s read at offsets 0/8/16/24.
+    ptraceAvailable: lib.func('int asmtest_ptrace_available()'),
+    ptraceSkipReason: lib.func('void asmtest_ptrace_skip_reason(_Out_ char*, size_t)'),
+    ptraceTraceCall: lib.func('int asmtest_ptrace_trace_call(const void*, size_t, const long*, int, _Out_ long*, void*)'),
+    ptraceTraceAttached: lib.func('int asmtest_ptrace_trace_attached(int, const void*, size_t, _Out_ long*, void*)'),
+    procRegionByAddr: lib.func('int asmtest_proc_region_by_addr(int, const void*, _Out_ void**, _Out_ size_t*)'),
+    procPerfmapSymbol: lib.func('int asmtest_proc_perfmap_symbol(int, const char*, _Out_ void**, _Out_ size_t*)'),
+    jitdumpFind: lib.func('int asmtest_jitdump_find(const char*, int, const char*, _Out_ uint8_t*, _Out_ uint8_t*, size_t, _Out_ size_t*)'),
   };
 })();
 
@@ -336,11 +351,102 @@ class HwTrace {
   }
 }
 
+/** Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
+ *  forked or externally-attached target out of band, and resolve the code region
+ *  to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary jitdump.
+ *  The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is unavailable
+ *  and in-process DynamoRIO cannot seize the runtime's threads). Linux x86-64.
+ *  Reuses the binding's NativeCode (executable bytes) and HwTrace (trace handle)
+ *  objects; static methods are camelCase like the rest of the surface. */
+class Ptrace {
+  /** True if the out-of-process single-step tracer can run on this host. */
+  static available() {
+    if (!_lib) return false;
+    return _fn.ptraceAvailable() !== 0;
+  }
+
+  /** Human-readable reason available() is false (or 'available'). */
+  static skipReason() {
+    if (!_lib) return _loadError ? `load failed: ${_loadError.message}` : 'load failed';
+    const buf = Buffer.alloc(160);
+    _fn.ptraceSkipReason(buf, buf.length);
+    const nul = buf.indexOf(0);
+    return buf.toString('utf8', 0, nul < 0 ? buf.length : nul);
+  }
+
+  /** Fork a tracee that calls `code` (a NativeCode) with up to six integer `args`,
+   *  single-step it out of process, and fill `trace` (a HwTrace). Returns the
+   *  routine's return value (the child's RAX at the ret) as a JS number. */
+  static traceCall(code, codeLen, args, trace) {
+    const n = args.length;
+    // long*: pack each arg as a 64-bit little-endian signed integer.
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const rc = _fn.ptraceTraceCall(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Trace a region in a SEPARATE, already-ptrace-stopped process (the caller owns
+   *  PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv. Returns
+   *  the target's RAX at the ret as a JS number. */
+  static traceAttached(pid, base, len, trace) {
+    const resultBuf = Buffer.alloc(8);
+    const rc = _fn.ptraceTraceAttached(pid, base, len, resultBuf, trace._handle);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** The executable mapping in /proc/<pid>/maps containing `addr`, as
+   *  { base, len }, or null if no executable mapping contains it. */
+  static procRegionByAddr(pid, addr) {
+    const baseOut = [null];
+    const lenOut = [0];
+    const rc = _fn.procRegionByAddr(pid, addr, baseOut, lenOut);
+    if (rc !== ASMTEST_PTRACE_OK) return null;
+    return { base: baseOut[0], len: Number(lenOut[0]) };
+  }
+
+  /** A JIT method by `name` in /tmp/perf-<pid>.map, as { base, len }, or null. */
+  static procPerfmapSymbol(pid, name) {
+    const baseOut = [null];
+    const lenOut = [0];
+    const rc = _fn.procPerfmapSymbol(pid, name, baseOut, lenOut);
+    if (rc !== ASMTEST_PTRACE_OK) return null;
+    return { base: baseOut[0], len: Number(lenOut[0]) };
+  }
+
+  /** A JIT method by `name` from a jitdump (`path`, or /tmp/jit-<pid>.dump when
+   *  path is null) as { codeAddr, codeSize, timestamp, codeIndex, code }, carrying
+   *  up to `wantBytes` of recorded code (a Buffer), or null. The latest re-JIT body
+   *  (highest timestamp) wins. The entry is four consecutive uint64s (offsets
+   *  0/8/16/24); they fit a JS number for the test fixtures but are read as BigInt
+   *  and converted, staying exact below 2^53. */
+  static jitdumpFind(path, name, pid = 0, wantBytes = 0) {
+    const entry = Buffer.alloc(32); // asmtest_jitdump_entry_t: 4 x uint64
+    const codeBuf = wantBytes ? Buffer.alloc(wantBytes) : null;
+    const lenOut = [0]; // size_t* out — koffi writes the byte count back here
+    const rc = _fn.jitdumpFind(path, pid, name, entry, codeBuf, wantBytes,
+      wantBytes ? lenOut : null);
+    if (rc !== ASMTEST_PTRACE_OK) return null;
+    const n = wantBytes ? Number(lenOut[0]) : 0;
+    return {
+      codeAddr: Number(entry.readBigUInt64LE(0)),
+      codeSize: Number(entry.readBigUInt64LE(8)),
+      timestamp: Number(entry.readBigUInt64LE(16)),
+      codeIndex: Number(entry.readBigUInt64LE(24)),
+      code: wantBytes ? Buffer.from(codeBuf.subarray(0, n)) : Buffer.alloc(0),
+    };
+  }
+}
+
 module.exports = {
-  HwTrace, NativeCode,
+  HwTrace, NativeCode, Ptrace,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
   TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,
   FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
+  ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT,
 };

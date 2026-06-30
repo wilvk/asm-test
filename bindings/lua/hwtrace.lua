@@ -45,10 +45,23 @@ uint64_t asmtest_emu_trace_insns_len(void* trace);
 int      asmtest_emu_trace_truncated(void* trace);
 uint64_t asmtest_emu_trace_block_at(void* trace, size_t i);
 uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
+/* asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. */
+int  asmtest_ptrace_available(void);
+void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
+int  asmtest_ptrace_trace_call(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
+int  asmtest_ptrace_trace_attached(int pid, const void* base, size_t len, long* result, void* trace);
+int  asmtest_proc_region_by_addr(int pid, const void* addr, void** base_out, size_t* len_out);
+int  asmtest_proc_perfmap_symbol(int pid, const char* name, void** base_out, size_t* len_out);
+typedef struct { uint64_t code_addr; uint64_t code_size; uint64_t timestamp; uint64_t code_index; } asmtest_jitdump_entry_t;
+int  asmtest_jitdump_find(const char* path, int pid, const char* name, asmtest_jitdump_entry_t* out, uint8_t* bytes_out, size_t bytes_cap, size_t* bytes_len);
 ]])
 
 local ASMTEST_HW_OK = 0
 local ASMTEST_HW_EUNAVAIL = -3  -- no hardware-trace backend available on this host
+
+-- asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
+local ASMTEST_PTRACE_OK = 0
+local ASMTEST_PTRACE_ENOENT = -7  -- region / symbol / method not found
 
 -- asmtest_trace_backend_t. SINGLESTEP is the portable default that runs on any
 -- x86-64 Linux; the rest self-skip off their specific bare-metal hardware.
@@ -330,6 +343,112 @@ function HwTrace:free()
     L.asmtest_trace_free(self.h)
     self.h = nil
   end
+end
+
+-- ---- Out-of-process / foreign-process tracing (asmtest_ptrace.h) ----
+--
+-- Single-step a forked or externally-attached target out of band, and resolve the
+-- code region to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary
+-- jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is
+-- unavailable and in-process DynamoRIO cannot seize the runtime's threads). Linux
+-- x86-64. These are static methods on HwTrace mirroring the Python `Ptrace` class.
+
+-- True if the out-of-process single-step tracer can run on this host (self-skip
+-- otherwise). False on a failed library load too.
+function HwTrace.ptrace_available()
+  if not L then return false end
+  return L.asmtest_ptrace_available() ~= 0
+end
+
+-- Human-readable reason ptrace_available() is false (or "available"). Returns a
+-- fixed message when the lib failed to load.
+function HwTrace.ptrace_skip_reason()
+  if not L then return "libasmtest_hwtrace not loaded" end
+  local buf = ffi.new("char[?]", 160)
+  L.asmtest_ptrace_skip_reason(buf, 160)
+  return ffi.string(buf)
+end
+
+-- Fork a tracee that calls `code` (a NativeCode, given as base + length) with up to
+-- six integer `args` (a 1-based Lua array), single-step it out of process, and fill
+-- `trace` (an HwTrace). Returns the routine's return value (the child's RAX at the
+-- ret) as a Lua number. error()s on a nonzero return.
+function HwTrace.ptrace_trace_call(code_base, code_len, args_table, trace)
+  assert(L, "libasmtest_hwtrace not loaded")
+  args_table = args_table or {}
+  local n = #args_table
+  local arr = ffi.new("long[?]", n > 0 and n or 1)
+  for i = 1, n do arr[i - 1] = args_table[i] end
+  local result = ffi.new("long[1]")
+  local rc = L.asmtest_ptrace_trace_call(ffi.cast("const void*", code_base),
+                                         code_len, arr, n, result, trace.h)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_call failed: " .. tonumber(rc))
+  end
+  return tonumber(result[0])
+end
+
+-- Trace a region in a SEPARATE, already-ptrace-stopped process (the caller owns
+-- PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv. `pid` is a
+-- C int, `base`/`len` the region in the target's address space, `trace` an HwTrace.
+-- Returns the target's RAX at the ret as a Lua number. error()s on a nonzero return.
+function HwTrace.ptrace_trace_attached(pid, base, len, trace)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local result = ffi.new("long[1]")
+  local rc = L.asmtest_ptrace_trace_attached(pid, ffi.cast("const void*", base),
+                                             len, result, trace.h)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_attached failed: " .. tonumber(rc))
+  end
+  return tonumber(result[0])
+end
+
+-- The executable mapping in /proc/<pid>/maps containing `addr`, as two return
+-- values base, len (Lua numbers), or nil if no executable mapping contains it.
+function HwTrace.proc_region_by_addr(pid, addr)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local base = ffi.new("void*[1]")
+  local len = ffi.new("size_t[1]")
+  local rc = L.asmtest_proc_region_by_addr(pid, ffi.cast("const void*", addr),
+                                           base, len)
+  if rc ~= ASMTEST_PTRACE_OK then return nil end
+  return tonumber(ffi.cast("uintptr_t", base[0])), tonumber(len[0])
+end
+
+-- A JIT method by `name` in /tmp/perf-<pid>.map, as two return values base, len
+-- (Lua numbers), or nil if no such symbol (or no map file).
+function HwTrace.proc_perfmap_symbol(pid, name)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local base = ffi.new("void*[1]")
+  local len = ffi.new("size_t[1]")
+  local rc = L.asmtest_proc_perfmap_symbol(pid, name, base, len)
+  if rc ~= ASMTEST_PTRACE_OK then return nil end
+  return tonumber(ffi.cast("uintptr_t", base[0])), tonumber(len[0])
+end
+
+-- A JIT method by `name` from a jitdump (`path`, or /tmp/jit-<pid>.dump when path is
+-- nil) as a table { code_addr=, code_size=, timestamp=, code_index=, code= } (the
+-- latest re-JIT body — highest timestamp — wins), or nil if no such method / no
+-- file. `want_bytes` (default 0) caps the recorded code bytes copied into `code` (a
+-- Lua string); 0 means no bytes (code == ""). Numeric fields are Lua numbers.
+function HwTrace.jitdump_find(path, name, pid, want_bytes)
+  assert(L, "libasmtest_hwtrace not loaded")
+  pid = pid or 0
+  want_bytes = want_bytes or 0
+  local e = ffi.new("asmtest_jitdump_entry_t")
+  local buf = want_bytes > 0 and ffi.new("uint8_t[?]", want_bytes) or nil
+  local blen = want_bytes > 0 and ffi.new("size_t[1]") or nil
+  local rc = L.asmtest_jitdump_find(path, pid, name, e, buf, want_bytes, blen)
+  if rc ~= ASMTEST_PTRACE_OK then return nil end
+  local code = ""
+  if want_bytes > 0 then code = ffi.string(buf, tonumber(blen[0])) end
+  return {
+    code_addr  = tonumber(e.code_addr),
+    code_size  = tonumber(e.code_size),
+    timestamp  = tonumber(e.timestamp),
+    code_index = tonumber(e.code_index),
+    code       = code,
+  }
 end
 
 return M

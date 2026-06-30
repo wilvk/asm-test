@@ -203,4 +203,85 @@ ensure
   HwTrace.shutdown
 end
 
+# ---- Out-of-process / foreign-process toolkit (asmtest_ptrace.h) ----
+# The same libasmtest_hwtrace this binding already loaded exposes the ptrace tier:
+# single-step a forked/attached target out of band, and resolve the (base,len) to
+# trace from the OS. Inline-guard on ptrace_available? rather than the process-
+# exiting skip() — the harness is one linear script and earlier tests have run.
+require "tmpdir"
+
+if HwTrace.ptrace_available?
+  # Fork a tracee, single-step it out of process, get the same offsets as the
+  # in-process stepper for the shared ROUTINE fixture.
+  pt_code = NativeCode.from_bytes(ROUTINE)
+  pt_trace = HwTrace.create(blocks: 64, instructions: 64)
+  pt_result = HwTrace.ptrace_trace_call(pt_code.base, pt_code.length, [20, 22], pt_trace)
+  ok(pt_result == 42, "ptrace trace_call(20,22) == 42 (got #{pt_result})")
+  ok(pt_trace.insn_offsets == [0x0, 0x3, 0x6, 0xC, 0x11],
+     "ptrace trace_call insn_offsets == [0,3,6,12,17] (got #{pt_trace.insn_offsets.inspect})")
+  ok(!pt_trace.truncated?, "ptrace trace_call not truncated")
+  pt_trace.free
+
+  # Discover an executable region's extent from /proc/<pid>/maps by an interior
+  # address (this process); addr 1 maps nothing.
+  region = HwTrace.proc_region_by_addr(Process.pid, pt_code.base + 4)
+  ok(!region.nil?, "region_by_addr finds the mapping for an interior address")
+  if region
+    rbase, rlen = region
+    ok(rbase == pt_code.base && rlen >= ROUTINE.bytesize,
+       "region_by_addr base == code base and len >= 18 (got #{rbase}/#{rlen})")
+  else
+    ok(false, "region_by_addr base == code base and len >= 18 (no region)")
+  end
+  ok(HwTrace.proc_region_by_addr(Process.pid, 0x1).nil?,
+     "region_by_addr(addr 1) is nil (nothing maps addr 1)")
+  pt_code.free
+
+  # Parse a JIT perf-map (/tmp/perf-<pid>.map) and resolve a method by name.
+  pid = Process.pid
+  perf_path = "/tmp/perf-#{pid}.map"
+  File.write(perf_path, "400000 1a void demo(long, long)\n500000 8 other\n")
+  begin
+    sym = HwTrace.proc_perfmap_symbol(pid, "void demo(long, long)")
+    ok(sym == [0x400000, 0x1A],
+       "perfmap_symbol resolves [0x400000, 0x1a] (got #{sym.inspect})")
+    ok(HwTrace.proc_perfmap_symbol(pid, "missing").nil?,
+       "perfmap_symbol(missing) is nil")
+  ensure
+    File.delete(perf_path) if File.exist?(perf_path)
+  end
+
+  # Read a binary jitdump (little-endian: V for u32, Q< for u64) and resolve a
+  # method to (addr,size,index,timestamp) + recorded code bytes; missing -> nil.
+  Dir.mktmpdir do |dir|
+    jit_path = File.join(dir, "jit.dump")
+    name = "void demo(long, long)"
+    File.open(jit_path, "wb") do |f|
+      # header: magic, version, total_size=40, elf_mach, pad1, pid, timestamp, flags
+      f.write([0x4A695444, 1, 40, 62, 0, 0].pack("V6") + [0, 0].pack("Q<2"))
+      total = 16 + 40 + (name.bytesize + 1) + ROUTINE.bytesize
+      # JIT_CODE_LOAD record header: id, total_size, timestamp
+      f.write([0, total].pack("V2") + [5].pack("Q<"))
+      # body: pid, tid, vma, code_addr, code_size, code_index
+      f.write([0, 0].pack("V2") + [0x2000, 0x2000, ROUTINE.bytesize, 9].pack("Q<4"))
+      f.write(name + "\x00")
+      f.write(ROUTINE)
+    end
+    m = HwTrace.jitdump_find(jit_path, "void demo(long, long)", want_bytes: 64)
+    ok(!m.nil?, "jitdump_find resolves the method")
+    if m
+      ok([m.code_addr, m.code_size, m.code_index, m.timestamp] ==
+           [0x2000, ROUTINE.bytesize, 9, 5],
+         "jitdump_find (addr,size,index,ts) == (0x2000,18,9,5) (got #{[m.code_addr, m.code_size, m.code_index, m.timestamp].inspect})")
+      ok(m.code == ROUTINE, "jitdump_find code bytes == ROUTINE")
+    else
+      ok(false, "jitdump_find (addr,size,index,ts) (no method)")
+      ok(false, "jitdump_find code bytes == ROUTINE (no method)")
+    end
+    ok(HwTrace.jitdump_find(jit_path, "missing").nil?, "jitdump_find(missing) is nil")
+  end
+else
+  puts "# SKIP out-of-process ptrace toolkit (unavailable): #{HwTrace.ptrace_skip_reason}"
+end
+
 exit($failed ? 1 : 0)

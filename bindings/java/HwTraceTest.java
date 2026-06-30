@@ -14,6 +14,12 @@
  * Compile with `--release 21 --enable-preview`, run with `--enable-preview
  * --enable-native-access=ALL-UNNAMED`.
  */
+import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -52,6 +58,20 @@ public final class HwTraceTest {
             crossTierResolveInvariants();
             crossTierNativeOnlyResolvesOnLinuxX86_64();
             autoResolveTracesLive();
+        } catch (Throwable t) {
+            System.out.println("Bail out! " + t);
+            t.printStackTrace();
+            System.exit(1);
+        }
+
+        // Out-of-process / foreign-process toolkit (HwTrace ptrace* surface). These
+        // own their own resources and need no hwtrace init; they self-skip when the
+        // ptrace backend is unavailable.
+        try {
+            ptraceTraceCall();
+            procRegionByAddr();
+            procPerfmapSymbol();
+            jitdumpFind();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -245,6 +265,127 @@ public final class HwTraceTest {
             code.free();
         } finally {
             HwTrace.shutdown();
+        }
+    }
+
+    // ---- Out-of-process / foreign-process toolkit (mirrors the Python Ptrace tests) ----
+
+    private static boolean ptraceUnavailable() {
+        if (!HwTrace.ptraceAvailable()) {
+            System.out.println("# SKIP ptrace backend unavailable: " + HwTrace.ptraceSkipReason());
+            return true;
+        }
+        return false;
+    }
+
+    // Mirrors test_ptrace_trace_call: fork a tracee, single-step it out of process,
+    // get the same offsets.
+    private static void ptraceTraceCall() {
+        if (ptraceUnavailable()) return;
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        HwTrace.NativeTrace trace = HwTrace.create(64, 64);
+
+        long result = HwTrace.ptraceTraceCall(MemorySegment.ofAddress(code.base()),
+            code.length(), new long[] {20, 22}, trace.handle());
+        ok(result == 42, "ptraceTraceCall(20,22): result == 42 (got " + result + ")");
+
+        long[] insns = trace.insnOffsets();
+        long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
+        ok(Arrays.equals(insns, wantInsns),
+            "ptrace insnOffsets == [0,3,6,12,17] (got " + Arrays.toString(insns) + ")");
+        ok(!trace.truncated(), "ptrace !truncated");
+
+        trace.free();
+        code.free();
+    }
+
+    // Mirrors test_proc_region_by_addr: discover an executable region's extent from
+    // /proc/<pid>/maps by an interior address (this process).
+    private static void procRegionByAddr() {
+        if (ptraceUnavailable()) return;
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        int pid = (int) ProcessHandle.current().pid();
+
+        long[] region = HwTrace.procRegionByAddr(pid, code.base() + 4);
+        ok(region != null, "procRegionByAddr finds the mapping for an interior addr");
+        ok(region != null && region[0] == code.base() && region[1] >= ROUTINE.length,
+            "procRegionByAddr base == code.base && len >= " + ROUTINE.length
+                + " (got " + (region == null ? "null" : Arrays.toString(region)) + ")");
+        ok(HwTrace.procRegionByAddr(pid, 0x1) == null, "procRegionByAddr(addr 1) == null");
+
+        code.free();
+    }
+
+    // Mirrors test_proc_perfmap_symbol: parse a JIT perf-map (/tmp/perf-<pid>.map) and
+    // resolve a method by name.
+    private static void procPerfmapSymbol() {
+        if (ptraceUnavailable()) return;
+        int pid = (int) ProcessHandle.current().pid();
+        Path path = Path.of("/tmp/perf-" + pid + ".map");
+        try {
+            Files.writeString(path, "400000 1a void demo(long, long)\n500000 8 other\n");
+
+            long[] m = HwTrace.procPerfmapSymbol(pid, "void demo(long, long)");
+            ok(m != null && m[0] == 0x400000L && m[1] == 0x1AL,
+                "procPerfmapSymbol resolves (0x400000, 0x1a) (got "
+                    + (m == null ? "null" : Arrays.toString(m)) + ")");
+            ok(HwTrace.procPerfmapSymbol(pid, "missing") == null,
+                "procPerfmapSymbol(missing) == null");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } finally {
+            try { Files.deleteIfExists(path); } catch (IOException ignored) {}
+        }
+    }
+
+    // Mirrors test_jitdump_find: read a binary jitdump and resolve a method to
+    // (addr,size,index) + bytes. The file is little-endian; the entry struct is four
+    // u64. Byte layout matches the Python struct.pack formats exactly.
+    private static void jitdumpFind() {
+        if (ptraceUnavailable()) return;
+        Path path = null;
+        try {
+            path = Files.createTempFile("jit", ".dump");
+            byte[] name = "void demo(long, long)".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+
+            int headerLen = 40;        // <IIIIIIQQ : 6*u32 + 2*u64
+            int recHeaderLen = 16;     // <IIQ      : 2*u32 + 1*u64
+            int bodyLen = 40;          // <IIQQQQ   : 2*u32 + 4*u64
+            int total = recHeaderLen + bodyLen + (name.length + 1) + ROUTINE.length;
+            int fileLen = headerLen + total;
+
+            ByteBuffer buf = ByteBuffer.allocate(fileLen).order(ByteOrder.LITTLE_ENDIAN);
+            // header: magic, version, total_size=40, elf_mach=62, pad1, pid, timestamp, flags
+            buf.putInt(0x4A695444).putInt(1).putInt(40).putInt(62).putInt(0).putInt(0)
+               .putLong(0).putLong(0);
+            // JIT_CODE_LOAD record header: id=0, total, ts=5
+            buf.putInt(0).putInt(total).putLong(5);
+            // body: pid, tid, vma, code_addr, code_size, code_index
+            buf.putInt(0).putInt(0).putLong(0x2000).putLong(0x2000)
+               .putLong(ROUTINE.length).putLong(9);
+            // name + NUL, then the recorded code bytes
+            buf.put(name).put((byte) 0).put(ROUTINE);
+
+            Files.write(path, buf.array());
+
+            Optional<HwTrace.JitMethod> m = HwTrace.jitdumpFind(
+                path.toString(), "void demo(long, long)", 0, 64);
+            ok(m.isPresent(), "jitdumpFind resolves the method");
+            HwTrace.JitMethod jm = m.orElseThrow();
+            ok(jm.codeAddr() == 0x2000L && jm.codeSize() == ROUTINE.length
+                && jm.codeIndex() == 9L && jm.timestamp() == 5L,
+                "jitdumpFind (addr,size,index,ts) == (0x2000," + ROUTINE.length + ",9,5) (got ("
+                    + Long.toHexString(jm.codeAddr()) + "," + jm.codeSize() + ","
+                    + jm.codeIndex() + "," + jm.timestamp() + "))");
+            ok(Arrays.equals(jm.code(), ROUTINE),
+                "jitdumpFind code == ROUTINE (got " + Arrays.toString(jm.code()) + ")");
+
+            ok(HwTrace.jitdumpFind(path.toString(), "missing", 0, 0).isEmpty(),
+                "jitdumpFind(missing) is empty");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } finally {
+            if (path != null) try { Files.deleteIfExists(path); } catch (IOException ignored) {}
         }
     }
 }

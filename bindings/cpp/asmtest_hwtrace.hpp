@@ -46,6 +46,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "asmtest_hwtrace.h"
@@ -97,6 +98,14 @@ enum TracePolicy {
     TRACE_NATIVE_ONLY = ASMTEST_TRACE_NATIVE_ONLY,
 };
 
+/* asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
+ * Defined here (not via the C header) so this wrapper keeps depending only on the
+ * hwtrace headers, exactly as the Python wrapper redeclares them. */
+enum PtraceStatus {
+    ASMTEST_PTRACE_OK = 0,
+    ASMTEST_PTRACE_ENOENT = -7,  // region / symbol / method not found
+};
+
 /// A resolved cross-tier trace option: which `tier` to use, which hardware
 /// `backend` within it (meaningful only when tier == TIER_HWTRACE; otherwise
 /// 0/ignore), and the `fidelity` class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL) so a
@@ -139,6 +148,20 @@ struct HwApi {
     int (*trace_truncated)(void *) = nullptr;
     uint64_t (*trace_block_at)(void *, size_t) = nullptr;
     uint64_t (*trace_insn_at)(void *, size_t) = nullptr;
+
+    /* asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. pid_t
+     * is `int` on Linux x86-64; the trace handle is the same opaque void* as
+     * above; the jitdump entry is four consecutive uint64 (see PtraceJitEntry). */
+    int (*ptrace_available)() = nullptr;
+    void (*ptrace_skip_reason)(char *, size_t) = nullptr;
+    int (*ptrace_trace_call)(const void *, size_t, const long *, int, long *,
+                             void *) = nullptr;
+    int (*ptrace_trace_attached)(int, const void *, size_t, long *,
+                                 void *) = nullptr;
+    int (*proc_region_by_addr)(int, const void *, void **, size_t *) = nullptr;
+    int (*proc_perfmap_symbol)(int, const char *, void **, size_t *) = nullptr;
+    int (*jitdump_find)(const char *, int, const char *, void *, uint8_t *,
+                        size_t, size_t *) = nullptr;
 
     /* True if the library loaded and every symbol resolved. */
     bool loaded() const { return handle != nullptr; }
@@ -203,6 +226,16 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_emu_trace_truncated", t.trace_truncated);
         ok &= dlsym_into(h, "asmtest_emu_trace_block_at", t.trace_block_at);
         ok &= dlsym_into(h, "asmtest_emu_trace_insn_at", t.trace_insn_at);
+        ok &= dlsym_into(h, "asmtest_ptrace_available", t.ptrace_available);
+        ok &= dlsym_into(h, "asmtest_ptrace_skip_reason", t.ptrace_skip_reason);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_call", t.ptrace_trace_call);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_attached",
+                         t.ptrace_trace_attached);
+        ok &= dlsym_into(h, "asmtest_proc_region_by_addr",
+                         t.proc_region_by_addr);
+        ok &= dlsym_into(h, "asmtest_proc_perfmap_symbol",
+                         t.proc_perfmap_symbol);
+        ok &= dlsym_into(h, "asmtest_jitdump_find", t.jitdump_find);
         if (!ok) {
             ::dlclose(h);
             return HwApi{};  // a fresh, empty table -> available() == false
@@ -522,9 +555,150 @@ class HwTrace {
     }
 
   private:
+    friend class Ptrace;
+    /// The opaque asmtest_trace_t* handle, as the out-of-process tracer needs it
+    /// (mirrors the Python wrapper reading trace._handle).
+    void *raw() const { return handle_; }
+
     explicit HwTrace(void *h) : handle_(h) {}
 
     void *handle_ = nullptr;
+};
+
+/// Mirrors asmtest_jitdump_entry_t: four consecutive uint64, no padding. The
+/// `code` bytes are carried alongside in JitMethod, not in this layout struct.
+struct PtraceJitEntry {
+    std::uint64_t code_addr;
+    std::uint64_t code_size;
+    std::uint64_t timestamp;
+    std::uint64_t code_index;
+};
+
+/// A JIT method resolved from a jitdump: load address, size, the JIT's
+/// timestamp/index, and (optionally) the recorded native code bytes. Mirrors the
+/// Python wrapper's JitMethod.
+struct JitMethod {
+    std::uint64_t code_addr = 0;
+    std::uint64_t code_size = 0;
+    std::uint64_t timestamp = 0;
+    std::uint64_t code_index = 0;
+    std::vector<std::uint8_t> code;  // the recorded bytes (empty unless requested)
+};
+
+/// Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
+/// forked or externally-attached target out of band, and resolve the code region
+/// to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary jitdump.
+/// The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is unavailable
+/// and in-process DynamoRIO cannot seize the runtime's threads). Linux x86-64.
+/// All-static, mirroring HwTrace's process-wide lifecycle methods; the trace
+/// handle and exec-allocated code are the same HwTrace / NativeCode types.
+class Ptrace {
+  public:
+    /// True if the out-of-process single-step tracer can run on this host
+    /// (Linux x86-64). Never crashes or throws — a missing library reports false.
+    static bool available() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return false;
+        return a.ptrace_available() != 0;
+    }
+
+    /// Human-readable reason available() is false (or "available"). Returns a
+    /// fixed string when the library itself is missing.
+    static std::string skipReason() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return "libasmtest_hwtrace not found (set ASMTEST_HWTRACE_LIB)";
+        char buf[256] = {0};
+        a.ptrace_skip_reason(buf, sizeof(buf));
+        return std::string(buf);
+    }
+
+    /// Fork a tracee that calls `code` (`len` bytes already executable at `code`)
+    /// with up to six integer `args`, single-step it out of process, and fill
+    /// `trace`; returns the routine's return value (the child's RAX at the ret).
+    /// Throws std::runtime_error on a nonzero status.
+    static long traceCall(const void *code, std::size_t len,
+                          const std::vector<long> &args, const HwTrace &trace) {
+        long result = 0;
+        int rc = detail::api().ptrace_trace_call(
+            code, len, args.data(), static_cast<int>(args.size()), &result,
+            trace.raw());
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error("asmtest_ptrace_trace_call failed: " +
+                                     std::to_string(rc));
+        return result;
+    }
+
+    /// Same, taking a NativeCode (uses its base/length).
+    static long traceCall(const NativeCode &code, const std::vector<long> &args,
+                          const HwTrace &trace) {
+        return traceCall(code.base(), code.length(), args, trace);
+    }
+
+    /// Trace a region in a SEPARATE, already-ptrace-stopped process (the caller
+    /// owns PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv.
+    /// Returns the target's RAX at the region exit. Throws on a nonzero status.
+    static long traceAttached(int pid, const void *base, std::size_t len,
+                              const HwTrace &trace) {
+        long result = 0;
+        int rc = detail::api().ptrace_trace_attached(pid, base, len, &result,
+                                                     trace.raw());
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error("asmtest_ptrace_trace_attached failed: " +
+                                     std::to_string(rc));
+        return result;
+    }
+
+    /// The executable mapping in /proc/<pid>/maps containing `addr`, as
+    /// (base, len), or std::nullopt if no executable mapping contains it.
+    static std::optional<std::pair<void *, std::size_t>>
+    regionByAddr(int pid, const void *addr) {
+        void *base = nullptr;
+        std::size_t len = 0;
+        int rc = detail::api().proc_region_by_addr(pid, addr, &base, &len);
+        if (rc != ASMTEST_PTRACE_OK)
+            return std::nullopt;
+        return std::make_pair(base, len);
+    }
+
+    /// A JIT method by `name` in /tmp/perf-<pid>.map, as (base, len), or nullopt.
+    static std::optional<std::pair<void *, std::size_t>>
+    perfmapSymbol(int pid, const std::string &name) {
+        void *base = nullptr;
+        std::size_t len = 0;
+        int rc = detail::api().proc_perfmap_symbol(pid, name.c_str(), &base,
+                                                   &len);
+        if (rc != ASMTEST_PTRACE_OK)
+            return std::nullopt;
+        return std::make_pair(base, len);
+    }
+
+    /// A JIT method by `name` from a jitdump (`path`, or /tmp/jit-<pid>.dump when
+    /// `path` is empty) as a JitMethod carrying up to `wantBytes` of recorded
+    /// code, or std::nullopt. The latest re-JIT body (highest timestamp) wins.
+    static std::optional<JitMethod> jitdumpFind(const std::string &path,
+                                                const std::string &name,
+                                                int pid = 0,
+                                                std::size_t wantBytes = 0) {
+        PtraceJitEntry e{};
+        std::vector<std::uint8_t> buf(wantBytes);
+        std::size_t blen = 0;
+        const char *p = path.empty() ? nullptr : path.c_str();
+        int rc = detail::api().jitdump_find(
+            p, pid, name.c_str(), &e, wantBytes ? buf.data() : nullptr,
+            wantBytes, wantBytes ? &blen : nullptr);
+        if (rc != ASMTEST_PTRACE_OK)
+            return std::nullopt;
+        JitMethod m;
+        m.code_addr = e.code_addr;
+        m.code_size = e.code_size;
+        m.timestamp = e.timestamp;
+        m.code_index = e.code_index;
+        if (wantBytes)
+            m.code.assign(buf.begin(), buf.begin() + blen);
+        return m;
+    }
 };
 
 }  // namespace asmtest

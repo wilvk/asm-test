@@ -129,7 +129,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     re-emitted at a reused address (tiered/OSR recompilation) resolves to the **latest**
     body — the temporal same-address-different-bytes problem; endianness is
     auto-detected and non-`LOAD` records skipped. (The text perf-map remains the
-    portable lowest common denominator for JITs that only emit symbols.)
+    portable lowest common denominator for JITs that only emit symbols.) The full
+    foreign-process toolkit — `available`/`skip_reason`, `trace_call`,
+    `trace_attached`, `region_by_addr`, `perfmap_symbol`, `jitdump_find` — is exposed
+    through **every language wrapper** (a `Ptrace` class / module surfacing the same
+    methods, idiomatic per language), each with a per-binding self-test of the
+    live-testable subset (out-of-process `trace_call` parity, `/proc/maps` and
+    perf-map resolution, and a binary-jitdump round-trip), and `asmtest_ptrace.h` is
+    now covered by the binding function-surface parity gate.
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

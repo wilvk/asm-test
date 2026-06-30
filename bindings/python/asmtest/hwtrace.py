@@ -70,6 +70,10 @@ TRACE_BEST = 0x0          # most-faithful available; emulator floor allowed
 TRACE_CEILING_FREE = 0x1  # drop the fixed-window backend (AMD LBR)
 TRACE_NATIVE_ONLY = 0x2   # forbid the native->emulator fidelity crossing
 
+# asmtest_ptrace.h — out-of-process / foreign-process tracing status codes
+ASMTEST_PTRACE_OK = 0
+ASMTEST_PTRACE_ENOENT = -7  # region / symbol / method not found
+
 
 class _Options(C.Structure):
     """Mirrors asmtest_hwtrace_options_t."""
@@ -103,6 +107,34 @@ class TierChoice(C.Structure):
     def __repr__(self):
         return (f"TierChoice(tier={self.tier}, backend={self.backend}, "
                 f"fidelity={self.fidelity})")
+
+
+class _JitEntry(C.Structure):
+    """Mirrors asmtest_jitdump_entry_t (four u64 fields)."""
+
+    _fields_ = [
+        ("code_addr", C.c_uint64),
+        ("code_size", C.c_uint64),
+        ("timestamp", C.c_uint64),
+        ("code_index", C.c_uint64),
+    ]
+
+
+class JitMethod:
+    """A JIT method resolved from a jitdump: load address, size, the JIT's
+    timestamp/index, and (optionally) the recorded native code bytes."""
+
+    def __init__(self, code_addr, code_size, timestamp, code_index, code=b""):
+        self.code_addr = code_addr
+        self.code_size = code_size
+        self.timestamp = timestamp
+        self.code_index = code_index
+        self.code = code
+
+    def __repr__(self):
+        return (f"JitMethod(code_addr={self.code_addr:#x}, "
+                f"code_size={self.code_size}, timestamp={self.timestamp}, "
+                f"code_index={self.code_index}, code={len(self.code)} bytes)")
 
 
 def _lib_name():
@@ -169,6 +201,21 @@ def _declare(lib):
     lib.asmtest_emu_trace_block_at.restype = u64
     lib.asmtest_emu_trace_insn_at.argtypes = [v, sz]
     lib.asmtest_emu_trace_insn_at.restype = u64
+    # asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
+    pl = C.POINTER(C.c_long)
+    lib.asmtest_ptrace_available.restype = ci
+    lib.asmtest_ptrace_skip_reason.argtypes = [cc, sz]
+    lib.asmtest_ptrace_trace_call.argtypes = [v, sz, pl, ci, pl, v]
+    lib.asmtest_ptrace_trace_call.restype = ci
+    lib.asmtest_ptrace_trace_attached.argtypes = [ci, v, sz, pl, v]
+    lib.asmtest_ptrace_trace_attached.restype = ci
+    lib.asmtest_proc_region_by_addr.argtypes = [ci, v, C.POINTER(v), C.POINTER(sz)]
+    lib.asmtest_proc_region_by_addr.restype = ci
+    lib.asmtest_proc_perfmap_symbol.argtypes = [ci, cc, C.POINTER(v), C.POINTER(sz)]
+    lib.asmtest_proc_perfmap_symbol.restype = ci
+    lib.asmtest_jitdump_find.argtypes = [
+        cc, ci, cc, C.POINTER(_JitEntry), C.POINTER(C.c_ubyte), sz, C.POINTER(sz)]
+    lib.asmtest_jitdump_find.restype = ci
     return lib
 
 
@@ -363,3 +410,82 @@ class HwTrace:
         if self._handle:
             self._lib.asmtest_trace_free(self._handle)
             self._handle = None
+
+
+class Ptrace:
+    """Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
+    forked or externally-attached target out of band, and resolve the code region to
+    trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary jitdump. The
+    managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is unavailable and
+    in-process DynamoRIO cannot seize the runtime's threads). Linux x86-64."""
+
+    @staticmethod
+    def available() -> bool:
+        return bool(_get().asmtest_ptrace_available())
+
+    @staticmethod
+    def skip_reason() -> str:
+        buf = C.create_string_buffer(160)
+        _get().asmtest_ptrace_skip_reason(buf, len(buf))
+        return buf.value.decode()
+
+    @staticmethod
+    def trace_call(code: NativeCode, args, trace: "HwTrace") -> int:
+        """Fork a tracee that calls `code` (a NativeCode) with up to six integer
+        `args`, single-step it out of process, and fill `trace`; returns the routine's
+        return value (the child's RAX at the ret)."""
+        n = len(args)
+        arr = (C.c_long * max(n, 1))(*args)
+        result = C.c_long()
+        rc = _get().asmtest_ptrace_trace_call(
+            code.base, code.length, arr, n, C.byref(result), trace._handle)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_call failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def trace_attached(pid: int, base: int, length: int, trace: "HwTrace") -> int:
+        """Trace a region in a SEPARATE, already-ptrace-stopped process (the caller
+        owns PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv."""
+        result = C.c_long()
+        rc = _get().asmtest_ptrace_trace_attached(
+            pid, C.c_void_p(base), length, C.byref(result), trace._handle)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_attached failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def region_by_addr(pid: int, addr: int):
+        """The executable mapping in /proc/<pid>/maps containing `addr`, as
+        (base, len), or None if no executable mapping contains it."""
+        base = C.c_void_p()
+        length = C.c_size_t()
+        rc = _get().asmtest_proc_region_by_addr(
+            pid, C.c_void_p(addr), C.byref(base), C.byref(length))
+        return (base.value, length.value) if rc == ASMTEST_PTRACE_OK else None
+
+    @staticmethod
+    def perfmap_symbol(pid: int, name: str):
+        """A JIT method by `name` in /tmp/perf-<pid>.map, as (base, len), or None."""
+        base = C.c_void_p()
+        length = C.c_size_t()
+        rc = _get().asmtest_proc_perfmap_symbol(
+            pid, name.encode(), C.byref(base), C.byref(length))
+        return (base.value, length.value) if rc == ASMTEST_PTRACE_OK else None
+
+    @staticmethod
+    def jitdump_find(path, name: str, pid: int = 0, want_bytes: int = 0):
+        """A JIT method by `name` from a jitdump (`path`, or /tmp/jit-<pid>.dump when
+        path is None) as a JitMethod carrying up to `want_bytes` of recorded code, or
+        None. The latest re-JIT body (highest timestamp) wins."""
+        e = _JitEntry()
+        buf = (C.c_ubyte * want_bytes)() if want_bytes else None
+        blen = C.c_size_t()
+        p = path.encode() if path is not None else None
+        rc = _get().asmtest_jitdump_find(
+            p, pid, name.encode(), C.byref(e), buf, want_bytes,
+            C.byref(blen) if want_bytes else None)
+        if rc != ASMTEST_PTRACE_OK:
+            return None
+        code = bytes(buf[:blen.value]) if want_bytes else b""
+        return JitMethod(e.code_addr, e.code_size, e.timestamp, e.code_index, code)

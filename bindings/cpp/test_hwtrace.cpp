@@ -18,9 +18,13 @@
  * IMPORTANT: under SINGLESTEP, EFLAGS.TF is armed across begin..call..end — the
  * region scopes below keep that window tight (no I/O between begin and end).
  */
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "asmtest_hwtrace.hpp"
@@ -244,6 +248,124 @@ int main() {
                 has_singlestep = true;
         ok(has_singlestep,
            "cross-tier: NATIVE_ONLY cascade includes the single-step floor");
+    }
+
+    // ---- Out-of-process / foreign-process toolkit (asmtest::Ptrace) ----
+    // Mirrors test_hwtrace.py's tests after the same banner: a forked-tracee live
+    // single-step (trace_call), region discovery from /proc/<pid>/maps, perf-map
+    // and binary-jitdump symbol resolution. Guarded by a ptrace-available skip.
+    // trace_attached has no live test (forking + ptrace from the harness is
+    // impractical), but the symbol is wrapped (Ptrace::traceAttached) so the
+    // binding-surface parity gate sees it; we touch skipReason() here too.
+    if (!Ptrace::available()) {
+        std::printf("# SKIP ptrace backend unavailable: %s\n",
+                    Ptrace::skipReason().c_str());
+    } else {
+        // trace_call: fork a tracee, single-step it out of process, same offsets.
+        {
+            NativeCode code = NativeCode::from_bytes(ROUTINE);
+            HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+            long result = Ptrace::traceCall(code, {20, 22}, tr);
+            ok(result == 42, "ptrace: trace_call(20, 22) == 42");
+            const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
+            ok(tr.insn_offsets() == expect,
+               "ptrace: trace_call insn_offsets() == {0, 3, 6, 0xC, 0x11}");
+            ok(!tr.truncated(), "ptrace: trace_call !truncated()");
+            tr.free();
+            code.free();
+        }
+
+        // region_by_addr: discover an executable region's extent from
+        // /proc/<pid>/maps by an interior address (this process).
+        {
+            NativeCode code = NativeCode::from_bytes(ROUTINE);
+            const std::uint8_t *p = static_cast<const std::uint8_t *>(code.base());
+            auto region = Ptrace::regionByAddr(getpid(), p + 4);
+            ok(region.has_value() && region->first == code.base() &&
+                   region->second >= ROUTINE.size(),
+               "ptrace: region_by_addr base==code base, len>=18");
+            // Nothing maps address 1.
+            ok(!Ptrace::regionByAddr(getpid(),
+                                     reinterpret_cast<const void *>(0x1))
+                    .has_value(),
+               "ptrace: region_by_addr(addr 1) is empty");
+            code.free();
+        }
+
+        // perfmap_symbol: parse /tmp/perf-<pid>.map and resolve a method by name.
+        {
+            int pid = getpid();
+            std::string path = "/tmp/perf-" + std::to_string(pid) + ".map";
+            FILE *f = std::fopen(path.c_str(), "w");
+            std::fputs("400000 1a void demo(long, long)\n500000 8 other\n", f);
+            std::fclose(f);
+
+            auto hit = Ptrace::perfmapSymbol(pid, "void demo(long, long)");
+            ok(hit.has_value() &&
+                   hit->first == reinterpret_cast<void *>(0x400000) &&
+                   hit->second == 0x1A,
+               "ptrace: perfmap_symbol resolves to (0x400000, 0x1A)");
+            ok(!Ptrace::perfmapSymbol(pid, "missing").has_value(),
+               "ptrace: perfmap_symbol(missing) is empty");
+            std::remove(path.c_str());
+        }
+
+        // jitdump_find: write a binary jitdump per the Python byte layout and
+        // resolve a method to (addr, size, index, ts) + recorded bytes.
+        {
+            const std::string name = "void demo(long, long)";
+            std::vector<std::uint8_t> img;
+            auto u32 = [&img](std::uint32_t x) {
+                for (int i = 0; i < 4; ++i)
+                    img.push_back(static_cast<std::uint8_t>(x >> (8 * i)));
+            };
+            auto u64 = [&img](std::uint64_t x) {
+                for (int i = 0; i < 8; ++i)
+                    img.push_back(static_cast<std::uint8_t>(x >> (8 * i)));
+            };
+            // header: magic, version, total_size=40, elf_mach, pad1, pid, ts, flags
+            u32(0x4A695444);  // "DTiJ" jitdump magic
+            u32(1);
+            u32(40);
+            u32(62);
+            u32(0);
+            u32(0);
+            u64(0);
+            u64(0);
+            // JIT_CODE_LOAD record: id=0, total_size, timestamp=5
+            std::uint64_t total = 16 + 40 + (name.size() + 1) + ROUTINE.size();
+            u32(0);
+            u32(static_cast<std::uint32_t>(total));
+            u64(5);
+            // body: pid, tid, vma, code_addr, code_size, code_index
+            u32(0);
+            u32(0);
+            u64(0x2000);
+            u64(0x2000);
+            u64(ROUTINE.size());
+            u64(9);
+            // name (NUL-terminated) + the recorded code bytes
+            img.insert(img.end(), name.begin(), name.end());
+            img.push_back(0);
+            img.insert(img.end(), ROUTINE.begin(), ROUTINE.end());
+
+            std::string path = "/tmp/asmtest-jit-" + std::to_string(getpid()) +
+                               ".dump";
+            FILE *f = std::fopen(path.c_str(), "wb");
+            std::fwrite(img.data(), 1, img.size(), f);
+            std::fclose(f);
+
+            auto m = Ptrace::jitdumpFind(path, name, /*pid=*/0, /*wantBytes=*/64);
+            ok(m.has_value() && m->code_addr == 0x2000 &&
+                   m->code_size == ROUTINE.size() && m->code_index == 9 &&
+                   m->timestamp == 5,
+               "ptrace: jitdump_find resolves (addr 0x2000, size 18, index 9, ts 5)");
+            ok(m.has_value() && m->code == ROUTINE,
+               "ptrace: jitdump_find returns the recorded ROUTINE bytes");
+            ok(!Ptrace::jitdumpFind(path, "missing").has_value(),
+               "ptrace: jitdump_find(missing) is empty");
+            std::remove(path.c_str());
+        }
     }
 
     std::printf("1..%d\n", g_test);

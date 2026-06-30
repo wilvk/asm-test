@@ -150,6 +150,137 @@ fn checkCrossTierNativeOnly() Failure!void {
     try check(found, "single-step is in the native-only cascade on x86-64 Linux");
 }
 
+// ---- Out-of-process / foreign-process toolkit (hwtrace.Ptrace) ---- //
+// The Zig analogue of test_hwtrace.py's tests after the "foreign-process toolkit"
+// banner. Each self-skips (returns without failing) when the ptrace backend is
+// unavailable, exactly like Python's `_skip_if_no_ptrace`.
+
+const Ptrace = hwtrace.Ptrace;
+
+// Little-endian integer writers (std.mem.writeInt(.little) into the image stream),
+// matching the Python struct.pack("<...") jitdump layout.
+fn writeU32(writer: anytype, v: u32) !void {
+    var b: [4]u8 = undefined;
+    std.mem.writeInt(u32, &b, v, .little);
+    try writer.writeAll(&b);
+}
+fn writeU64(writer: anytype, v: u64) !void {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b, v, .little);
+    try writer.writeAll(&b);
+}
+
+// Fork a tracee, single-step it out of process, get the same offsets as the
+// in-process stepper. Mirrors Python's `test_ptrace_trace_call`.
+fn checkPtraceTraceCall(alloc: std.mem.Allocator) !void {
+    var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+    defer code.free();
+    var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
+    defer tr.free();
+
+    const args = [_]i64{ 20, 22 };
+    const result = try Ptrace.traceCall(code.base, code.len, &args, &tr);
+    try check(result == 42, "ptrace trace_call returns 42 (forked + single-stepped)");
+
+    const insns = try tr.insnOffsets(alloc);
+    defer alloc.free(insns);
+    try check(std.mem.eql(u64, insns, &[_]u64{ 0x0, 0x3, 0x6, 0xC, 0x11 }), "ptrace trace_call yields the exact shared offset stream");
+    try check(!tr.truncated(), "ptrace trace_call not truncated");
+}
+
+// Discover an executable region's extent from /proc/<pid>/maps by an interior
+// address (this process). Mirrors Python's `test_proc_region_by_addr`.
+fn checkProcRegionByAddr() !void {
+    var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+    defer code.free();
+    const base = @intFromPtr(code.base);
+
+    const region = Ptrace.regionByAddr(std.os.linux.getpid(), base + 4);
+    try check(region != null, "region_by_addr finds the mapping containing an interior addr");
+    try check(region.?.base == base, "region_by_addr base == the code mapping base");
+    try check(region.?.len >= ROUTINE.len, "region_by_addr len covers the whole region");
+    try check(Ptrace.regionByAddr(std.os.linux.getpid(), 0x1) == null, "nothing maps addr 1");
+}
+
+// Parse a JIT perf-map (/tmp/perf-<pid>.map) and resolve a method by name.
+// Mirrors Python's `test_proc_perfmap_symbol`.
+fn checkProcPerfmapSymbol() !void {
+    const pid = std.os.linux.getpid();
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/perf-{d}.map", .{pid});
+
+    {
+        const f = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("400000 1a void demo(long, long)\n500000 8 other\n");
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    const hit = Ptrace.perfmapSymbol(pid, "void demo(long, long)");
+    try check(hit != null, "perfmap_symbol resolves the named method");
+    try check(hit.?.base == 0x400000 and hit.?.len == 0x1A, "perfmap_symbol returns the method's (base, len)");
+    try check(Ptrace.perfmapSymbol(pid, "missing") == null, "perfmap_symbol misses an absent name");
+}
+
+// Read a binary jitdump and resolve a method to (addr,size,index,ts) + bytes,
+// the same little-endian byte layout as Python's `test_jitdump_find`, written
+// here with std.mem.writeInt(.little).
+fn checkJitdumpFind(alloc: std.mem.Allocator) !void {
+    const name = "void demo(long, long)";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/asmtest-zig-jit-{d}.dump", .{std.os.linux.getpid()});
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    // Build the jitdump image byte-for-byte like the Python struct.pack layout.
+    var img = std.ArrayList(u8).init(alloc);
+    defer img.deinit();
+    const w = img.writer();
+    // header: magic, version, total_size=40, elf_mach, pad1, pid, timestamp, flags
+    //   struct.pack("<IIIIIIQQ", 0x4A695444, 1, 40, 62, 0, 0, 0, 0)
+    try writeU32(w, 0x4A695444); // magic "DTit" (little-endian)
+    try writeU32(w, 1); // version
+    try writeU32(w, 40); // total_size (header size)
+    try writeU32(w, 62); // elf_mach (EM_X86_64)
+    try writeU32(w, 0); // pad1
+    try writeU32(w, 0); // pid
+    try writeU64(w, 0); // timestamp
+    try writeU64(w, 0); // flags
+    // JIT_CODE_LOAD record: id=0, total_size, timestamp=5
+    //   struct.pack("<IIQ", 0, total, 5)
+    const total: u64 = 16 + 40 + (name.len + 1) + ROUTINE.len;
+    try writeU32(w, 0); // id = JIT_CODE_LOAD
+    try writeU32(w, @intCast(total)); // record total_size
+    try writeU64(w, 5); // record timestamp
+    // body: pid, tid, vma, code_addr, code_size, code_index
+    //   struct.pack("<IIQQQQ", 0, 0, 0x2000, 0x2000, len(ROUTINE), 9)
+    try writeU32(w, 0); // pid
+    try writeU32(w, 0); // tid
+    try writeU64(w, 0x2000); // vma
+    try writeU64(w, 0x2000); // code_addr
+    try writeU64(w, ROUTINE.len); // code_size
+    try writeU64(w, 9); // code_index
+    try w.writeAll(name);
+    try w.writeByte(0); // NUL-terminate the symbol name
+    try w.writeAll(&ROUTINE);
+
+    {
+        const f = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(img.items);
+    }
+
+    var bytes_buf: [64]u8 = undefined;
+    const m = Ptrace.jitdumpFind(path, name, 0, &bytes_buf);
+    try check(m != null, "jitdump_find resolves the named method");
+    try check(m.?.code_addr == 0x2000, "jitdump_find code_addr == 0x2000");
+    try check(m.?.code_size == ROUTINE.len, "jitdump_find code_size == len(ROUTINE)");
+    try check(m.?.code_index == 9, "jitdump_find code_index == 9");
+    try check(m.?.timestamp == 5, "jitdump_find timestamp == 5");
+    try check(std.mem.eql(u8, m.?.code, &ROUTINE), "jitdump_find returns the recorded code bytes");
+
+    try check(Ptrace.jitdumpFind(path, "missing", 0, &bytes_buf) == null, "jitdump_find misses an absent name");
+}
+
 pub fn main() !void {
     try checkAutoResolveInvariants();
     try checkCrossTierResolveInvariants();
@@ -241,6 +372,20 @@ pub fn main() !void {
         try check(tr.covered(0) and tr.covered(0x7), "covered(0) and covered(0x7)");
         try check(tr.blocksLen() == 2, "blocks_len == 2");
         try check(!tr.truncated(), "not truncated");
+    }
+
+    // ---- Out-of-process / foreign-process toolkit (hwtrace.Ptrace) ---- //
+    // Self-skip cleanly when the ptrace backend is unavailable, like Python's
+    // `_skip_if_no_ptrace`; otherwise run the four foreign-process tests.
+    if (!Ptrace.available()) {
+        var buf: [192]u8 = undefined;
+        const reason = Ptrace.skipReason(&buf);
+        std.debug.print("# SKIP: ptrace backend unavailable: {s}\n", .{reason});
+    } else {
+        try checkPtraceTraceCall(alloc);
+        try checkProcRegionByAddr();
+        try checkProcPerfmapSymbol();
+        try checkJitdumpFind(alloc);
     }
 
     std.debug.print("PASS\n", .{});

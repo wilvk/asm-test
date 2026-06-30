@@ -79,6 +79,27 @@ typedef int                (*hw_trace_truncated_fn)(void *);
 typedef unsigned long long (*hw_trace_block_at_fn)(void *, size_t);
 typedef unsigned long long (*hw_trace_insn_at_fn)(void *, size_t);
 
+// The jitdump entry struct, redefined here (mirrors asmtest_jitdump_entry_t from
+// include/asmtest_ptrace.h): exactly four uint64 fields, no padding, so it
+// marshals as four consecutive little-endian u64s — a JIT method's load address,
+// size, timestamp, and the JIT's unique index.
+typedef struct {
+    uint64_t code_addr;
+    uint64_t code_size;
+    uint64_t timestamp;
+    uint64_t code_index;
+} asmtest_jitdump_entry_t;
+
+// asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit, from the
+// SAME libasmtest_hwtrace. One typedef per exported symbol.
+typedef int  (*pt_available_fn)(void);
+typedef void (*pt_skip_reason_fn)(char *, size_t);
+typedef int  (*pt_trace_call_fn)(const void *, size_t, const long *, int, long *, void *);
+typedef int  (*pt_trace_attached_fn)(int, const void *, size_t, long *, void *);
+typedef int  (*proc_region_by_addr_fn)(int, const void *, void **, size_t *);
+typedef int  (*proc_perfmap_symbol_fn)(int, const char *, void **, size_t *);
+typedef int  (*jitdump_find_fn)(const char *, int, const char *, asmtest_jitdump_entry_t *, uint8_t *, size_t, size_t *);
+
 static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
 static hw_resolve_fn          p_hw_resolve;
@@ -101,6 +122,14 @@ static hw_trace_insns_len_fn  p_hw_trace_insns_len;
 static hw_trace_truncated_fn  p_hw_trace_truncated;
 static hw_trace_block_at_fn   p_hw_trace_block_at;
 static hw_trace_insn_at_fn    p_hw_trace_insn_at;
+// asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
+static pt_available_fn        p_pt_available;
+static pt_skip_reason_fn      p_pt_skip_reason;
+static pt_trace_call_fn       p_pt_trace_call;
+static pt_trace_attached_fn   p_pt_trace_attached;
+static proc_region_by_addr_fn p_proc_region_by_addr;
+static proc_perfmap_symbol_fn p_proc_perfmap_symbol;
+static jitdump_find_fn        p_jitdump_find;
 
 static int g_hw_loaded;   // 1 once dlopen + every dlsym succeeded.
 
@@ -138,13 +167,24 @@ static void asmtest_hw_resolve(void) {
     p_hw_trace_truncated   = (hw_trace_truncated_fn)dlsym(h, "asmtest_emu_trace_truncated");
     p_hw_trace_block_at    = (hw_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
     p_hw_trace_insn_at     = (hw_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
+    // asmtest_ptrace.h — resolved from the same already-loaded handle.
+    p_pt_available         = (pt_available_fn)dlsym(h, "asmtest_ptrace_available");
+    p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
+    p_pt_trace_call        = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call");
+    p_pt_trace_attached    = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached");
+    p_proc_region_by_addr  = (proc_region_by_addr_fn)dlsym(h, "asmtest_proc_region_by_addr");
+    p_proc_perfmap_symbol  = (proc_perfmap_symbol_fn)dlsym(h, "asmtest_proc_perfmap_symbol");
+    p_jitdump_find         = (jitdump_find_fn)dlsym(h, "asmtest_jitdump_find");
     g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
                   p_hw_auto && p_trace_resolve && p_trace_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
                   p_hw_exec_alloc && p_hw_exec_free && p_hw_trace_new &&
                   p_hw_trace_free && p_hw_trace_covered && p_hw_trace_blocks_len &&
                   p_hw_trace_insns_total && p_hw_trace_insns_len &&
-                  p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at;
+                  p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
+                  p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
+                  p_pt_trace_attached && p_proc_region_by_addr &&
+                  p_proc_perfmap_symbol && p_jitdump_find;
 }
 
 static int asmtest_hw_is_loaded(void) { return g_hw_loaded; }
@@ -219,6 +259,35 @@ static unsigned long long asmtest_hw_go_insn_at(void *t, size_t i) {
 // pointer under the SysV integer ABI (two long args -> long result).
 static long asmtest_hw_call2(void *p, long a, long b) {
     return ((long (*)(long, long))p)(a, b);
+}
+
+// asmtest_ptrace.h bridges — each NULL-guards its (already-resolved) pointer so a
+// partial load can never dereference NULL.
+static int asmtest_go_pt_available(void) { return p_pt_available ? p_pt_available() : 0; }
+static void asmtest_go_pt_skip_reason(char *buf, size_t buflen) {
+    if (p_pt_skip_reason) p_pt_skip_reason(buf, buflen);
+    else if (buflen) buf[0] = 0;
+}
+static int asmtest_go_pt_trace_call(const void *code, size_t len, const long *args,
+                                    int nargs, long *result, void *trace) {
+    return p_pt_trace_call ? p_pt_trace_call(code, len, args, nargs, result, trace) : -1;
+}
+static int asmtest_go_pt_trace_attached(int pid, const void *base, size_t len,
+                                        long *result, void *trace) {
+    return p_pt_trace_attached ? p_pt_trace_attached(pid, base, len, result, trace) : -1;
+}
+static int asmtest_go_proc_region_by_addr(int pid, const void *addr,
+                                          void **base_out, size_t *len_out) {
+    return p_proc_region_by_addr ? p_proc_region_by_addr(pid, addr, base_out, len_out) : -1;
+}
+static int asmtest_go_proc_perfmap_symbol(int pid, const char *name,
+                                          void **base_out, size_t *len_out) {
+    return p_proc_perfmap_symbol ? p_proc_perfmap_symbol(pid, name, base_out, len_out) : -1;
+}
+static int asmtest_go_jitdump_find(const char *path, int pid, const char *name,
+                                   asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
+                                   size_t bytes_cap, size_t *bytes_len) {
+    return p_jitdump_find ? p_jitdump_find(path, pid, name, out, bytes_out, bytes_cap, bytes_len) : -1;
 }
 */
 import "C"
@@ -532,4 +601,155 @@ func (t *HwTrace) Free() {
 		C.asmtest_hw_go_trace_free(t.h)
 		t.h = nil
 	}
+}
+
+// ---- Out-of-process / foreign-process tracing (asmtest_ptrace.h) ----
+//
+// Single-step a forked or externally-attached target OUT OF BAND, and resolve
+// the code region to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a
+// binary jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT
+// is unavailable and in-process DynamoRIO cannot seize the runtime's threads).
+// Linux x86-64. Mirrors the Python wrapper's Ptrace class. These share the same
+// already-dlopen'd libasmtest_hwtrace as the hardware-trace surface above.
+
+// ptraceOK is the success status returned by the ptrace toolkit calls (mirrors
+// the C macro ASMTEST_PTRACE_OK).
+const ptraceOK = 0
+
+// PtraceENOENT is the status meaning a region / symbol / method was not found
+// (mirrors the C macro ASMTEST_PTRACE_ENOENT).
+const PtraceENOENT = -7
+
+// PtraceAvailable reports whether the out-of-process single-step tracer can run
+// on this host (Linux x86-64) AND libasmtest_hwtrace loaded. It never panics, so
+// callers (and the test) self-skip cleanly when the lib or the host is unfit.
+func PtraceAvailable() bool {
+	return C.asmtest_hw_is_loaded() != 0 && C.asmtest_go_pt_available() != 0
+}
+
+// PtraceSkipReason is a human-readable reason PtraceAvailable() is false (or
+// "available"). Useful for the self-skip message.
+func PtraceSkipReason() string {
+	if C.asmtest_hw_is_loaded() == 0 {
+		return "libasmtest_hwtrace not loaded (set ASMTEST_HWTRACE_LIB or build with `make shared-hwtrace`)"
+	}
+	buf := make([]byte, 160)
+	C.asmtest_go_pt_skip_reason((*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+}
+
+// PtraceTraceCall forks a tracee that calls the code at codeBase (codeLen bytes,
+// already executable in this process — e.g. an HwNativeCode's Base()/Len()) with
+// up to six integer args per the SysV ABI, single-steps it OUT OF PROCESS, and
+// fills trace. It returns the routine's return value (the child's RAX at the ret).
+func PtraceTraceCall(codeBase unsafe.Pointer, codeLen int, args []int64, trace *HwTrace) (int64, error) {
+	n := len(args)
+	// asmtest_ptrace_trace_call reads `nargs` longs; pass a valid pointer even
+	// for the zero-arg case.
+	arr := make([]C.long, n)
+	if n == 0 {
+		arr = make([]C.long, 1)
+	}
+	for i, a := range args {
+		arr[i] = C.long(a)
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_call(codeBase, C.size_t(codeLen), &arr[0],
+		C.int(n), &result, trace.h)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_call failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// PtraceTraceAttached traces a region [base, base+length) in a SEPARATE,
+// already-ptrace-stopped process (the caller owns PTRACE_ATTACH/DETACH). The
+// target's bytes are read via process_vm_readv. Returns the target's RAX at the
+// region exit.
+func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int64, error) {
+	var result C.long
+	rc := C.asmtest_go_pt_trace_attached(C.int(pid), unsafe.Pointer(base),
+		C.size_t(length), &result, trace.h)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_attached failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// ProcRegionByAddr finds the executable mapping in /proc/<pid>/maps that contains
+// addr and returns its extent (base, len). ok is false when no executable mapping
+// contains addr (or on a read failure).
+func ProcRegionByAddr(pid int, addr uintptr) (base, length uintptr, ok bool) {
+	var b unsafe.Pointer
+	var l C.size_t
+	rc := C.asmtest_go_proc_region_by_addr(C.int(pid), unsafe.Pointer(addr), &b, &l)
+	if rc != ptraceOK {
+		return 0, 0, false
+	}
+	return uintptr(b), uintptr(l), true
+}
+
+// ProcPerfmapSymbol resolves a JIT method by name in /tmp/perf-<pid>.map and
+// returns its extent (base, len). ok is false when there is no such symbol or no
+// map file.
+func ProcPerfmapSymbol(pid int, name string) (base, length uintptr, ok bool) {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	var b unsafe.Pointer
+	var l C.size_t
+	rc := C.asmtest_go_proc_perfmap_symbol(C.int(pid), cs, &b, &l)
+	if rc != ptraceOK {
+		return 0, 0, false
+	}
+	return uintptr(b), uintptr(l), true
+}
+
+// JitMethod is a JIT method resolved from a jitdump: its load address, size, the
+// JIT's timestamp/index, and (optionally) the recorded native code bytes. Mirrors
+// asmtest_jitdump_entry_t + the Python wrapper's JitMethod.
+type JitMethod struct {
+	CodeAddr  uint64
+	CodeSize  uint64
+	Timestamp uint64
+	CodeIndex uint64
+	Code      []byte
+}
+
+// JitdumpFind reads the Linux perf jitdump at path (or /tmp/jit-<pid>.dump when
+// path is empty) and resolves a method by name to its load address, size,
+// timestamp/index, and — when wantBytes > 0 — up to wantBytes of the recorded
+// native code. The latest re-JIT body (highest timestamp) wins. ok is false when
+// no such method / no file / not a jitdump.
+func JitdumpFind(path string, name string, pid int, wantBytes int) (JitMethod, bool) {
+	var cPath *C.char
+	if path != "" {
+		cPath = C.CString(path)
+		defer C.free(unsafe.Pointer(cPath))
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	var entry C.asmtest_jitdump_entry_t
+	var bytesOut *C.uint8_t
+	var blen C.size_t
+	var buf []byte
+	if wantBytes > 0 {
+		buf = make([]byte, wantBytes)
+		bytesOut = (*C.uint8_t)(unsafe.Pointer(&buf[0]))
+	}
+	rc := C.asmtest_go_jitdump_find(cPath, C.int(pid), cName, &entry, bytesOut,
+		C.size_t(wantBytes), &blen)
+	if rc != ptraceOK {
+		return JitMethod{}, false
+	}
+	m := JitMethod{
+		CodeAddr:  uint64(entry.code_addr),
+		CodeSize:  uint64(entry.code_size),
+		Timestamp: uint64(entry.timestamp),
+		CodeIndex: uint64(entry.code_index),
+	}
+	if wantBytes > 0 {
+		m.Code = append([]byte(nil), buf[:int(blen)]...)
+	}
+	return m, true
 }

@@ -113,6 +113,36 @@ pub const CEILING_FREE: Policy = .ceiling_free;
 /// value `auto` returns in that case.
 pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
 
+/// asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
+/// `OK` is success; `ENOENT` means a region / symbol / method was not found
+/// (the not-found wrappers map it onto `null`).
+pub const ASMTEST_PTRACE_OK: c_int = 0;
+pub const ASMTEST_PTRACE_ENOENT: c_int = -7;
+
+/// asmtest_jitdump_entry_t — a JIT method as recorded in a jitdump
+/// `JIT_CODE_LOAD` record: exactly four consecutive `u64` fields (no padding),
+/// so it marshals as the raw C struct across the FFI.
+pub const JitEntry = extern struct {
+    code_addr: u64,
+    code_size: u64,
+    timestamp: u64,
+    code_index: u64,
+};
+
+/// A JIT method resolved from a jitdump (the safe wrapper over `JitEntry`): its
+/// load address, byte size, the JIT's timestamp/index, and — unlike the text
+/// perf-map — optionally the recorded native code bytes. `code` is a slice into
+/// the caller-provided buffer passed to `jitdumpFind` (empty when no bytes were
+/// requested or copied), mirroring how `skipReason` writes into a caller buffer
+/// rather than allocating.
+pub const JitMethod = struct {
+    code_addr: u64,
+    code_size: u64,
+    timestamp: u64,
+    code_index: u64,
+    code: []const u8 = &.{},
+};
+
 /// Errors surfaced by the wrapper. `LibUnavailable` means the tier can't run
 /// (lib missing or the backend self-skips) — callers should self-skip on it; the
 /// rest map nonzero C return codes onto an error.
@@ -122,6 +152,7 @@ pub const Error = error{
     AllocFailed,
     RegisterFailed,
     TraceNewFailed,
+    TraceFailed,
 };
 
 // ---- function-pointer prototypes (mirror the exported C symbols) ---- //
@@ -148,6 +179,15 @@ const FnInsnsLen = *const fn (?*anyopaque) callconv(.C) c_ulonglong;
 const FnTruncated = *const fn (?*anyopaque) callconv(.C) c_int;
 const FnBlockAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
 const FnInsnAt = *const fn (?*anyopaque, usize) callconv(.C) c_ulonglong;
+// asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. Same lib,
+// same resolve-at-runtime idiom; `long` marshals as `c_long`, `pid_t` as `c_int`.
+const FnPtraceAvailable = *const fn () callconv(.C) c_int;
+const FnPtraceSkipReason = *const fn ([*c]u8, usize) callconv(.C) void;
+const FnPtraceTraceCall = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, ?*c_long, ?*anyopaque) callconv(.C) c_int;
+const FnPtraceTraceAttached = *const fn (c_int, ?*const anyopaque, usize, ?*c_long, ?*anyopaque) callconv(.C) c_int;
+const FnProcRegionByAddr = *const fn (c_int, ?*const anyopaque, *?*anyopaque, *usize) callconv(.C) c_int;
+const FnProcPerfmapSymbol = *const fn (c_int, [*:0]const u8, *?*anyopaque, *usize) callconv(.C) c_int;
+const FnJitdumpFind = *const fn ([*c]const u8, c_int, [*:0]const u8, *JitEntry, [*c]u8, usize, ?*usize) callconv(.C) c_int;
 
 /// The resolved entry points. Populated once on first `load()`; held in a
 /// process-global because the DynLib handle and its symbols outlive any one
@@ -176,6 +216,14 @@ const Api = struct {
     truncated: FnTruncated,
     block_at: FnBlockAt,
     insn_at: FnInsnAt,
+    // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
+    ptrace_available: FnPtraceAvailable,
+    ptrace_skip_reason: FnPtraceSkipReason,
+    ptrace_trace_call: FnPtraceTraceCall,
+    ptrace_trace_attached: FnPtraceTraceAttached,
+    proc_region_by_addr: FnProcRegionByAddr,
+    proc_perfmap_symbol: FnProcPerfmapSymbol,
+    jitdump_find: FnJitdumpFind,
 };
 
 var g_api: ?Api = null;
@@ -231,6 +279,14 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .truncated = lib.lookup(FnTruncated, "asmtest_emu_trace_truncated") orelse return null,
         .block_at = lib.lookup(FnBlockAt, "asmtest_emu_trace_block_at") orelse return null,
         .insn_at = lib.lookup(FnInsnAt, "asmtest_emu_trace_insn_at") orelse return null,
+        // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
+        .ptrace_available = lib.lookup(FnPtraceAvailable, "asmtest_ptrace_available") orelse return null,
+        .ptrace_skip_reason = lib.lookup(FnPtraceSkipReason, "asmtest_ptrace_skip_reason") orelse return null,
+        .ptrace_trace_call = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call") orelse return null,
+        .ptrace_trace_attached = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached") orelse return null,
+        .proc_region_by_addr = lib.lookup(FnProcRegionByAddr, "asmtest_proc_region_by_addr") orelse return null,
+        .proc_perfmap_symbol = lib.lookup(FnProcPerfmapSymbol, "asmtest_proc_perfmap_symbol") orelse return null,
+        .jitdump_find = lib.lookup(FnJitdumpFind, "asmtest_jitdump_find") orelse return null,
     };
 }
 
@@ -528,5 +584,156 @@ pub const HwTrace = struct {
             api.trace_free(h);
             self.handle = null;
         }
+    }
+};
+
+/// An executable code region's extent, as returned by `procRegionByAddr` /
+/// `procPerfmapSymbol`: the mapping/method base address and its byte length —
+/// the `(base, len)` to hand `ptraceTraceAttached`. Mirrors the Python wrappers'
+/// `(base, length)` tuple.
+pub const Region = struct {
+    base: usize,
+    len: usize,
+};
+
+/// Out-of-process / foreign-process tracing (`asmtest_ptrace.h`): single-step a
+/// forked or externally-attached target out of band, and resolve the code region
+/// to trace from the OS — `/proc/<pid>/maps`, a JIT perf-map, or a binary
+/// jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is
+/// unavailable and in-process DynamoRIO cannot seize the runtime's threads).
+/// Linux x86-64.
+///
+/// Wraps the same `libasmtest_hwtrace` the `HwTrace` tier loads, so the same
+/// self-skip applies: gate on `Ptrace.available()` (it is `false` when the lib or
+/// the backend is absent) before tracing. The Zig analogue of Python's `Ptrace`.
+pub const Ptrace = struct {
+    /// True if the out-of-process single-step tracer can run on this host: the
+    /// hwtrace lib opens AND `asmtest_ptrace_available()` reports a Linux x86-64
+    /// host. Never errors, so callers (and the test) self-skip cleanly. Mirrors
+    /// `Ptrace.available()`.
+    pub fn available() bool {
+        const api = load() orelse return false;
+        return api.ptrace_available() != 0;
+    }
+
+    /// Human-readable reason `available()` is false (or "available"), written into
+    /// `buf` (always NUL-terminated). Returns the slice up to the NUL. If the lib
+    /// can't load, reports that so the self-skip message is still useful. Mirrors
+    /// `Ptrace.skip_reason()`.
+    pub fn skipReason(buf: []u8) []const u8 {
+        const api = load() orelse {
+            const msg = "libasmtest_hwtrace not loadable";
+            const n = @min(msg.len, buf.len);
+            @memcpy(buf[0..n], msg[0..n]);
+            return buf[0..n];
+        };
+        api.ptrace_skip_reason(buf.ptr, buf.len);
+        return std.mem.sliceTo(buf, 0);
+    }
+
+    /// Fork a tracee that calls the code range at `code_ptr` (`code_len` bytes,
+    /// already executable in this process — e.g. a `NativeCode`) with up to six
+    /// integer `args`, single-step it OUT OF PROCESS, and fill `trace`; returns
+    /// the routine's return value (the child's RAX at the `ret`). Returns
+    /// `Error.LibUnavailable` if the lib isn't loadable, `Error.TraceFailed` on a
+    /// nonzero C return — gate on `available()` first. Mirrors `Ptrace.trace_call()`.
+    pub fn traceCall(
+        code_ptr: ?*anyopaque,
+        code_len: usize,
+        args: []const i64,
+        trace: *const HwTrace,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        // `i64` and `c_long` are the same width on x86-64 Linux, but reinterpret
+        // explicitly so the FFI sees the C `long` the contract declares.
+        const cargs: [*c]const c_long = @ptrCast(args.ptr);
+        var result: c_long = 0;
+        const rc = api.ptrace_trace_call(
+            code_ptr,
+            code_len,
+            cargs,
+            @intCast(args.len),
+            &result,
+            trace.handle,
+        );
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// Trace a region `[base, base+len)` in a SEPARATE, already-ptrace-stopped
+    /// process `pid` (the caller owns PTRACE_ATTACH/DETACH); reads the target's
+    /// bytes via `process_vm_readv` and returns the region's return value (the
+    /// target's RAX at the `ret`). Returns `Error.LibUnavailable` if the lib isn't
+    /// loadable, `Error.TraceFailed` on a nonzero C return. Mirrors
+    /// `Ptrace.trace_attached()`.
+    pub fn traceAttached(
+        pid: c_int,
+        base: ?*const anyopaque,
+        len: usize,
+        trace: *const HwTrace,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        var result: c_long = 0;
+        const rc = api.ptrace_trace_attached(pid, base, len, &result, trace.handle);
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// The executable mapping in `/proc/<pid>/maps` that CONTAINS `addr`, as a
+    /// `Region` (`base`, `len`), or `null` if no executable mapping contains it
+    /// (or the lib is absent). A pure file read; no ptrace, so it may be called
+    /// before attaching. Mirrors `Ptrace.region_by_addr()`.
+    pub fn regionByAddr(pid: c_int, addr: usize) ?Region {
+        const api = load() orelse return null;
+        var base: ?*anyopaque = null;
+        var len: usize = 0;
+        const rc = api.proc_region_by_addr(pid, @ptrFromInt(addr), &base, &len);
+        if (rc != ASMTEST_PTRACE_OK) return null;
+        return Region{ .base = @intFromPtr(base), .len = len };
+    }
+
+    /// A JIT method by `name` in the perf map at `/tmp/perf-<pid>.map`, as a
+    /// `Region` (`base`, `len`), or `null` (no such symbol, no map file, or the
+    /// lib is absent). `name` (NUL-terminated) matches the full symbol text after
+    /// the size field. Mirrors `Ptrace.perfmap_symbol()`.
+    pub fn perfmapSymbol(pid: c_int, name: [:0]const u8) ?Region {
+        const api = load() orelse return null;
+        var base: ?*anyopaque = null;
+        var len: usize = 0;
+        const rc = api.proc_perfmap_symbol(pid, name.ptr, &base, &len);
+        if (rc != ASMTEST_PTRACE_OK) return null;
+        return Region{ .base = @intFromPtr(base), .len = len };
+    }
+
+    /// A JIT method by `name` from a binary jitdump (`path`, or
+    /// `/tmp/jit-<pid>.dump` when `path` is `null`) as a `JitMethod`, or `null`
+    /// (no such method, no file, not a jitdump, or the lib is absent). The latest
+    /// re-JIT body (highest timestamp) wins. Up to `out_bytes` of the recorded
+    /// code is copied into the caller-provided buffer, and the returned
+    /// `JitMethod.code` is the `out_bytes[0..bytes_len]` sub-slice of it (empty
+    /// when `out_bytes` is empty) — the same caller-buffer idiom as `skipReason`.
+    /// Mirrors `Ptrace.jitdump_find()`.
+    pub fn jitdumpFind(
+        path: ?[:0]const u8,
+        name: [:0]const u8,
+        pid: c_int,
+        out_bytes: []u8,
+    ) ?JitMethod {
+        const api = load() orelse return null;
+        const path_ptr: [*c]const u8 = if (path) |p| p.ptr else null;
+        var entry: JitEntry = .{ .code_addr = 0, .code_size = 0, .timestamp = 0, .code_index = 0 };
+        const want = out_bytes.len;
+        var bytes_len: usize = 0;
+        const buf_ptr: [*c]u8 = if (want != 0) out_bytes.ptr else null;
+        const blen_ptr: ?*usize = if (want != 0) &bytes_len else null;
+        const rc = api.jitdump_find(path_ptr, pid, name.ptr, &entry, buf_ptr, want, blen_ptr);
+        if (rc != ASMTEST_PTRACE_OK) return null;
+        return JitMethod{
+            .code_addr = entry.code_addr,
+            .code_size = entry.code_size,
+            .timestamp = entry.timestamp,
+            .code_index = entry.code_index,
+            .code = if (want != 0) out_bytes[0..bytes_len] else &.{},
+        };
     }
 };

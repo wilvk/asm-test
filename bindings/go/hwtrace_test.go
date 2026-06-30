@@ -8,7 +8,14 @@
 // is not built / resolvable via $ASMTEST_HWTRACE_LIB).
 package asmtest
 
-import "testing"
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"testing"
+	"unsafe"
+)
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
 var hwtraceRoutine = []byte{
@@ -306,4 +313,178 @@ func TestHwtraceAutoLive(t *testing.T) {
 
 	tr.Free()
 	code.Free()
+}
+
+// ---- Out-of-process / foreign-process toolkit (asmtest_ptrace.h) ----
+//
+// Mirrors the four tests after the "foreign-process toolkit" banner in the Python
+// suite (bindings/python/tests/test_hwtrace.py). They self-skip when the ptrace
+// backend is unavailable (off x86-64 Linux, or when libasmtest_hwtrace is absent).
+
+func skipIfNoPtrace(t *testing.T) {
+	t.Helper()
+	if !PtraceAvailable() {
+		t.Skipf("ptrace backend unavailable: %s", PtraceSkipReason())
+	}
+}
+
+// TestPtraceTraceCall forks a tracee, single-steps it out of process, and asserts
+// the same offsets as the in-process stepper (Unicorn/DynamoRIO/PT/AMD parity).
+func TestPtraceTraceCall(t *testing.T) {
+	skipIfNoPtrace(t)
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+	tr := NewHwTrace(64, 64) // blocks=64, instructions=64
+	defer tr.Free()
+
+	result, err := PtraceTraceCall(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, tr)
+	if err != nil {
+		t.Fatalf("PtraceTraceCall: %v", err)
+	}
+	if result != 42 {
+		t.Fatalf("PtraceTraceCall(20,22): got %d, want 42", result)
+	}
+	wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}
+	gotInsns := tr.InsnOffsets()
+	if len(gotInsns) != len(wantInsns) {
+		t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+	}
+	for i := range wantInsns {
+		if gotInsns[i] != wantInsns[i] {
+			t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+		}
+	}
+	if tr.Truncated() {
+		t.Fatalf("Truncated: got true, want false")
+	}
+}
+
+// TestProcRegionByAddr discovers an executable region's extent from
+// /proc/<pid>/maps by an interior address (this process).
+func TestProcRegionByAddr(t *testing.T) {
+	skipIfNoPtrace(t)
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+
+	base, length, ok := ProcRegionByAddr(os.Getpid(), code.Base()+4)
+	if !ok {
+		t.Fatalf("ProcRegionByAddr returned !ok for an interior address")
+	}
+	if base != code.Base() {
+		t.Fatalf("ProcRegionByAddr base: got %#x, want %#x", base, code.Base())
+	}
+	if length < uintptr(len(hwtraceRoutine)) {
+		t.Fatalf("ProcRegionByAddr len: got %d, want >= %d", length, len(hwtraceRoutine))
+	}
+	if _, _, ok := ProcRegionByAddr(os.Getpid(), 0x1); ok { // nothing maps addr 1
+		t.Fatalf("ProcRegionByAddr(addr=1): got ok, want !ok")
+	}
+}
+
+// TestProcPerfmapSymbol parses a JIT perf-map (/tmp/perf-<pid>.map) and resolves a
+// method by name.
+func TestProcPerfmapSymbol(t *testing.T) {
+	skipIfNoPtrace(t)
+	pid := os.Getpid()
+	path := filepath.Join("/tmp", "perf-"+itoa(pid)+".map")
+	if err := os.WriteFile(path, []byte("400000 1a void demo(long, long)\n500000 8 other\n"), 0o644); err != nil {
+		t.Fatalf("write perf-map: %v", err)
+	}
+	defer os.Remove(path)
+
+	base, length, ok := ProcPerfmapSymbol(pid, "void demo(long, long)")
+	if !ok || base != 0x400000 || length != 0x1A {
+		t.Fatalf("ProcPerfmapSymbol: got (%#x, %#x, %v), want (0x400000, 0x1a, true)", base, length, ok)
+	}
+	if _, _, ok := ProcPerfmapSymbol(pid, "missing"); ok {
+		t.Fatalf("ProcPerfmapSymbol(missing): got ok, want !ok")
+	}
+}
+
+// TestJitdumpFind writes a binary jitdump (little-endian) per the Python layout
+// and resolves a method to (addr,size,index,ts) + recorded code bytes.
+func TestJitdumpFind(t *testing.T) {
+	skipIfNoPtrace(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jit.dump")
+	name := []byte("void demo(long, long)")
+
+	var buf bytes.Buffer
+	le := binary.LittleEndian
+	w32 := func(v uint32) {
+		var b [4]byte
+		le.PutUint32(b[:], v)
+		buf.Write(b[:])
+	}
+	w64 := func(v uint64) {
+		var b [8]byte
+		le.PutUint64(b[:], v)
+		buf.Write(b[:])
+	}
+	// header: magic, version, total_size=40, elf_mach=62, pad1=0, pid=0, timestamp=0, flags=0
+	w32(0x4A695444)
+	w32(1)
+	w32(40)
+	w32(62)
+	w32(0)
+	w32(0)
+	w64(0)
+	w64(0)
+	// JIT_CODE_LOAD record: id=0, total_size, timestamp=5
+	total := uint32(16 + 40 + (len(name) + 1) + len(hwtraceRoutine))
+	w32(0)
+	w32(total)
+	w64(5)
+	// body: pid=0, tid=0, vma=0x2000, code_addr=0x2000, code_size, code_index=9
+	w32(0)
+	w32(0)
+	w64(0x2000)
+	w64(0x2000)
+	w64(uint64(len(hwtraceRoutine)))
+	w64(9)
+	buf.Write(name)
+	buf.WriteByte(0)
+	buf.Write(hwtraceRoutine)
+
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write jitdump: %v", err)
+	}
+
+	m, ok := JitdumpFind(path, "void demo(long, long)", 0, 64)
+	if !ok {
+		t.Fatalf("JitdumpFind: got !ok, want a method")
+	}
+	if m.CodeAddr != 0x2000 || m.CodeSize != uint64(len(hwtraceRoutine)) ||
+		m.CodeIndex != 9 || m.Timestamp != 5 {
+		t.Fatalf("JitdumpFind: got (addr=%#x, size=%d, index=%d, ts=%d), want (0x2000, %d, 9, 5)",
+			m.CodeAddr, m.CodeSize, m.CodeIndex, m.Timestamp, len(hwtraceRoutine))
+	}
+	if !bytes.Equal(m.Code, hwtraceRoutine) {
+		t.Fatalf("JitdumpFind code: got %x, want %x", m.Code, hwtraceRoutine)
+	}
+	if _, ok := JitdumpFind(path, "missing", 0, 0); ok {
+		t.Fatalf("JitdumpFind(missing): got ok, want !ok")
+	}
+}
+
+// itoa renders a non-negative int as decimal (small helper to avoid pulling in
+// strconv just for the perf-map path).
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
 }

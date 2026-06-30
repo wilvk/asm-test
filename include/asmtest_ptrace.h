@@ -59,9 +59,9 @@ extern "C" {
 #define ASMTEST_PTRACE_ETRACE (-8)   /* fork / ptrace / wait failure             */
 
 /* 1 if the out-of-process single-step tracer can run on this host (Linux x86-64),
- * else 0. Block normalization additionally wants the Capstone length-decoder
- * (asmtest_disas_available()); without it instruction offsets are still exact but
- * blocks degrade. */
+ * else 0. Block normalization additionally uses the Capstone length-decoder already
+ * linked into the tier; without it instruction offsets are still exact but blocks
+ * degrade. */
 int asmtest_ptrace_available(void);
 
 /* A human-readable reason asmtest_ptrace_available() returned 0, into buf (always

@@ -12,7 +12,8 @@
 //!       cargo test --test hwtrace -- --nocapture`
 
 use asmtest::hwtrace::{
-    Backend, Fidelity, HwTrace, NativeCode, Policy, Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
+    Backend, Fidelity, HwTrace, NativeCode, Policy, Ptrace, Tier, TracePolicy,
+    ASMTEST_HW_EUNAVAIL,
 };
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
@@ -265,4 +266,143 @@ fn backend_of(b: i32) -> Backend {
         3 => Backend::Singlestep,
         other => panic!("unexpected backend enum {other}"),
     }
+}
+
+// ---- Out-of-process / foreign-process toolkit (asmtest::hwtrace::Ptrace) ----
+//
+// The ptrace toolkit ships in the same libasmtest_hwtrace the wrapper above
+// loads. Each test self-skips (with a printed note) when the backend is absent,
+// matching the live-trace self-skip above. `trace_attached` has no live test
+// (forking + ptrace of a foreign process is impractical), but the symbol IS
+// wrapped in src/hwtrace.rs so the binding-parity gate is satisfied.
+
+/// True (printing a skip note) when the ptrace backend is unavailable, so each
+/// ptrace test can `return` early exactly like `singlestep_live_trace`.
+fn skip_if_no_ptrace() -> bool {
+    if !Ptrace::available() {
+        eprintln!("# SKIP: ptrace backend unavailable: {}", Ptrace::skip_reason());
+        return true;
+    }
+    false
+}
+
+#[test]
+fn ptrace_trace_call() {
+    // Fork a tracee, single-step it OUT OF PROCESS, get the same offsets.
+    if skip_if_no_ptrace() {
+        return;
+    }
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let tr = HwTrace::new_trace(64, 64);
+
+    let result = Ptrace::trace_call(&code, &[20, 22], &tr);
+
+    assert_eq!(result, 42, "out-of-process traced call returns 20+22");
+    assert_eq!(
+        tr.insn_offsets(),
+        vec![0x0, 0x3, 0x6, 0xC, 0x11],
+        "out-of-process offsets match the in-process / Python stream"
+    );
+    assert!(!tr.truncated(), "stream not truncated");
+    eprintln!("# PASS: Ptrace::trace_call (out-of-process single-step)");
+}
+
+#[test]
+fn proc_region_by_addr() {
+    // Discover an executable region's extent from /proc/<pid>/maps by an interior
+    // address (this process).
+    if skip_if_no_ptrace() {
+        return;
+    }
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let pid = std::process::id() as i32;
+
+    let region = Ptrace::region_by_addr(pid, code.base() + 4);
+    let (base, len) = region.expect("an executable mapping contains an interior address");
+    assert_eq!(base, code.base(), "region base is the mapping start");
+    assert!(len >= ROUTINE.len(), "region spans at least the routine bytes");
+
+    // Nothing maps address 1.
+    assert!(
+        Ptrace::region_by_addr(pid, 0x1).is_none(),
+        "no executable mapping contains addr 1"
+    );
+    eprintln!("# PASS: Ptrace::region_by_addr (/proc/<pid>/maps resolve)");
+}
+
+#[test]
+fn proc_perfmap_symbol() {
+    // Parse a JIT perf-map (/tmp/perf-<pid>.map) and resolve a method by name.
+    if skip_if_no_ptrace() {
+        return;
+    }
+    let pid = std::process::id() as i32;
+    let path = format!("/tmp/perf-{pid}.map");
+    std::fs::write(&path, "400000 1a void demo(long, long)\n500000 8 other\n")
+        .expect("write perf map");
+
+    let found = Ptrace::perfmap_symbol(pid, "void demo(long, long)");
+    let missing = Ptrace::perfmap_symbol(pid, "missing");
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(found, Some((0x400000, 0x1A)), "resolve a perf-map symbol by name");
+    assert!(missing.is_none(), "an absent perf-map symbol resolves to None");
+    eprintln!("# PASS: Ptrace::perfmap_symbol (perf-map resolve)");
+}
+
+#[test]
+fn jitdump_find() {
+    // Read a binary jitdump and resolve a method to (addr,size,index,ts) + bytes.
+    if skip_if_no_ptrace() {
+        return;
+    }
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("asmtest-jitdump-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create jitdump dir");
+    let path = dir.join("jit.dump");
+    let name: &[u8] = b"void demo(long, long)";
+
+    // Little-endian binary jitdump, mirroring the Python test's struct.pack layout.
+    let mut buf: Vec<u8> = Vec::new();
+    // header: magic, version, total_size=40, elf_mach, pad1 (all u32), then
+    // pid, timestamp, flags (u64) — "<IIIIIIQQ".
+    buf.extend_from_slice(&0x4A69_5444u32.to_le_bytes()); // magic
+    buf.extend_from_slice(&1u32.to_le_bytes()); // version
+    buf.extend_from_slice(&40u32.to_le_bytes()); // total_size (header)
+    buf.extend_from_slice(&62u32.to_le_bytes()); // elf_mach
+    buf.extend_from_slice(&0u32.to_le_bytes()); // pad1
+    buf.extend_from_slice(&0u32.to_le_bytes()); // pid
+    buf.extend_from_slice(&0u64.to_le_bytes()); // timestamp
+    buf.extend_from_slice(&0u64.to_le_bytes()); // flags
+    // JIT_CODE_LOAD record header: id=0, total_size, timestamp=5 — "<IIQ".
+    let total: u64 = 16 + 40 + (name.len() as u64 + 1) + ROUTINE.len() as u64;
+    buf.extend_from_slice(&0u32.to_le_bytes()); // id (JIT_CODE_LOAD)
+    buf.extend_from_slice(&(total as u32).to_le_bytes()); // total_size
+    buf.extend_from_slice(&5u64.to_le_bytes()); // timestamp
+    // body: pid, tid (u32), vma, code_addr, code_size, code_index (u64) — "<IIQQQQ".
+    buf.extend_from_slice(&0u32.to_le_bytes()); // pid
+    buf.extend_from_slice(&0u32.to_le_bytes()); // tid
+    buf.extend_from_slice(&0x2000u64.to_le_bytes()); // vma
+    buf.extend_from_slice(&0x2000u64.to_le_bytes()); // code_addr
+    buf.extend_from_slice(&(ROUTINE.len() as u64).to_le_bytes()); // code_size
+    buf.extend_from_slice(&9u64.to_le_bytes()); // code_index
+    buf.extend_from_slice(name);
+    buf.push(0); // NUL-terminated symbol name
+    buf.extend_from_slice(&ROUTINE);
+    std::fs::write(&path, &buf).expect("write jitdump");
+
+    let path_str = path.to_str().expect("utf-8 jitdump path");
+    let found = Ptrace::jitdump_find(Some(path_str), "void demo(long, long)", 0, 64);
+    let missing = Ptrace::jitdump_find(Some(path_str), "missing", 0, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let m = found.expect("resolve a jitdump method by name");
+    assert_eq!(
+        (m.code_addr, m.code_size, m.code_index, m.timestamp),
+        (0x2000, ROUTINE.len() as u64, 9, 5),
+        "jitdump method resolves to the recorded (addr,size,index,ts)"
+    );
+    assert_eq!(m.code, ROUTINE.to_vec(), "jitdump copies the recorded code bytes");
+    assert!(missing.is_none(), "an absent jitdump method resolves to None");
+    eprintln!("# PASS: Ptrace::jitdump_find (binary jitdump resolve + bytes)");
 }

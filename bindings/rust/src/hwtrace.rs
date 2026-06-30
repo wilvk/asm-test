@@ -186,6 +186,16 @@ struct TraceChoice {
     fidelity: c_int,
 }
 
+/// Mirrors `asmtest_jitdump_entry_t` (four `u64` fields, no padding) — a JIT
+/// method as recorded in a jitdump `JIT_CODE_LOAD` record.
+#[repr(C)]
+struct JitEntryRaw {
+    code_addr: u64,
+    code_size: u64,
+    timestamp: u64,
+    code_index: u64,
+}
+
 // --- Resolved entry points (libasmtest_hwtrace) --------------------------- //
 //
 // Each is `None` when the lib can't be loaded or the symbol is missing, so every
@@ -214,6 +224,40 @@ type TraceU64Fn = unsafe extern "C" fn(*mut c_void) -> u64;
 type TraceIntFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 type TraceAtFn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
 
+// --- Out-of-process / foreign-process tracing (asmtest_ptrace.h) ---------- //
+//
+// The same `libasmtest_hwtrace` already loaded above also ships the out-of-band
+// ptrace toolkit: single-step a forked or externally-attached target out of
+// band, and resolve the (base,len) to trace from the OS — /proc/<pid>/maps, a
+// JIT perf-map, or a binary jitdump. Same resolve-at-run-time idiom; each entry
+// is `None` when the symbol is absent so callers self-skip.
+
+type PtraceAvailableFn = unsafe extern "C" fn() -> c_int;
+type PtraceSkipReasonFn = unsafe extern "C" fn(*mut c_char, usize);
+type PtraceTraceCallFn = unsafe extern "C" fn(
+    *const c_void,
+    usize,
+    *const c_long,
+    c_int,
+    *mut c_long,
+    *mut c_void,
+) -> c_int;
+type PtraceTraceAttachedFn =
+    unsafe extern "C" fn(c_int, *const c_void, usize, *mut c_long, *mut c_void) -> c_int;
+type ProcRegionByAddrFn =
+    unsafe extern "C" fn(c_int, *const c_void, *mut *mut c_void, *mut usize) -> c_int;
+type ProcPerfmapSymbolFn =
+    unsafe extern "C" fn(c_int, *const c_char, *mut *mut c_void, *mut usize) -> c_int;
+type JitdumpFindFn = unsafe extern "C" fn(
+    *const c_char,
+    c_int,
+    *const c_char,
+    *mut JitEntryRaw,
+    *mut u8,
+    usize,
+    *mut usize,
+) -> c_int;
+
 struct HwFns {
     available: Option<AvailableFn>,
     skip_reason: Option<SkipReasonFn>,
@@ -237,6 +281,14 @@ struct HwFns {
     truncated: Option<TraceIntFn>,
     block_at: Option<TraceAtFn>,
     insn_at: Option<TraceAtFn>,
+    // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
+    ptrace_available: Option<PtraceAvailableFn>,
+    ptrace_skip_reason: Option<PtraceSkipReasonFn>,
+    ptrace_trace_call: Option<PtraceTraceCallFn>,
+    ptrace_trace_attached: Option<PtraceTraceAttachedFn>,
+    proc_region_by_addr: Option<ProcRegionByAddrFn>,
+    proc_perfmap_symbol: Option<ProcPerfmapSymbolFn>,
+    jitdump_find: Option<JitdumpFindFn>,
 }
 
 // The function pointers come from the process's own libraries and outlive any
@@ -293,6 +345,10 @@ fn hw_fns() -> &'static HwFns {
                 trace_new: None, trace_free: None, trace_covered: None,
                 blocks_len: None, insns_total: None, insns_len: None,
                 truncated: None, block_at: None, insn_at: None,
+                ptrace_available: None, ptrace_skip_reason: None,
+                ptrace_trace_call: None, ptrace_trace_attached: None,
+                proc_region_by_addr: None, proc_perfmap_symbol: None,
+                jitdump_find: None,
             };
         }
         let sym = |name: &str| -> *mut c_void {
@@ -335,6 +391,13 @@ fn hw_fns() -> &'static HwFns {
             truncated: load!("asmtest_emu_trace_truncated", TraceIntFn),
             block_at: load!("asmtest_emu_trace_block_at", TraceAtFn),
             insn_at: load!("asmtest_emu_trace_insn_at", TraceAtFn),
+            ptrace_available: load!("asmtest_ptrace_available", PtraceAvailableFn),
+            ptrace_skip_reason: load!("asmtest_ptrace_skip_reason", PtraceSkipReasonFn),
+            ptrace_trace_call: load!("asmtest_ptrace_trace_call", PtraceTraceCallFn),
+            ptrace_trace_attached: load!("asmtest_ptrace_trace_attached", PtraceTraceAttachedFn),
+            proc_region_by_addr: load!("asmtest_proc_region_by_addr", ProcRegionByAddrFn),
+            proc_perfmap_symbol: load!("asmtest_proc_perfmap_symbol", ProcPerfmapSymbolFn),
+            jitdump_find: load!("asmtest_jitdump_find", JitdumpFindFn),
         }
     })
 }
@@ -710,5 +773,195 @@ impl Drop for Trace {
             }
             self.handle = std::ptr::null_mut();
         }
+    }
+}
+
+/// `ASMTEST_PTRACE_OK` from `asmtest_ptrace.h`; nonzero is an error.
+const ASMTEST_PTRACE_OK: c_int = 0;
+/// `ASMTEST_PTRACE_ENOENT` from `asmtest_ptrace.h`: region / symbol / method not
+/// found (the `None`-returning resolve path).
+pub const ASMTEST_PTRACE_ENOENT: c_int = -7;
+
+/// A JIT method resolved from a jitdump (the safe wrapper over
+/// `asmtest_jitdump_entry_t`): its load address, byte size, the JIT's
+/// timestamp/index, and — unlike the text perf-map — optionally the recorded
+/// native code bytes.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct JitMethod {
+    /// Load address (the base to trace).
+    pub code_addr: u64,
+    /// Code length in bytes.
+    pub code_size: u64,
+    /// Record timestamp (load order; the latest re-JIT wins).
+    pub timestamp: u64,
+    /// The JIT's unique index for this code.
+    pub code_index: u64,
+    /// The recorded native code bytes, when requested (else empty).
+    pub code: Vec<u8>,
+}
+
+/// Out-of-process / foreign-process tracing (`asmtest_ptrace.h`): single-step a
+/// forked or externally-attached target out of band, and resolve the code region
+/// to trace from the OS — `/proc/<pid>/maps`, a JIT perf-map, or a binary
+/// jitdump. The managed-runtime path (JVM/.NET/Node on AMD, where Intel PT is
+/// unavailable and in-process DynamoRIO cannot seize the runtime's threads).
+/// Linux x86-64.
+///
+/// Wraps the same `libasmtest_hwtrace` the [`HwTrace`] tier loads, so the same
+/// self-skip applies: gate on [`Ptrace::available`] (it is `false` when the lib
+/// or the backend is absent) before tracing.
+pub struct Ptrace;
+
+impl Ptrace {
+    /// True if the out-of-process single-step tracer can run on this host (the
+    /// lib loaded **and** `asmtest_ptrace_available()` reports a Linux x86-64
+    /// host). Never panics, so callers (and the test) self-skip cleanly.
+    pub fn available() -> bool {
+        match hw_fns().ptrace_available {
+            Some(f) => unsafe { f() != 0 },
+            None => false,
+        }
+    }
+
+    /// A human-readable reason [`available`](Ptrace::available) is false. Empty
+    /// string when the lib is absent.
+    pub fn skip_reason() -> String {
+        match hw_fns().ptrace_skip_reason {
+            Some(f) => {
+                let mut buf = [0u8; 160];
+                unsafe {
+                    f(buf.as_mut_ptr() as *mut c_char, buf.len());
+                    std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char)
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Fork a tracee that calls `code` (a [`NativeCode`] range) with up to six
+    /// integer `args`, single-step it OUT OF PROCESS, and fill `trace`; returns
+    /// the routine's return value (the child's RAX at the `ret`). Panics on a
+    /// fork/ptrace failure or when the lib is absent — gate on
+    /// [`available`](Ptrace::available) first.
+    pub fn trace_call(code: &NativeCode, args: &[i64], trace: &Trace) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_call
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let cargs: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
+        let mut result: c_long = 0;
+        let rc = unsafe {
+            f(
+                code.base,
+                code.len,
+                cargs.as_ptr(),
+                cargs.len() as c_int,
+                &mut result,
+                trace.handle,
+            )
+        };
+        assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_call failed: {rc}");
+        result as i64
+    }
+
+    /// Trace a region `[base, base+len)` in a SEPARATE, already-ptrace-stopped
+    /// process `pid` (the caller owns PTRACE_ATTACH/DETACH); reads the target's
+    /// bytes via `process_vm_readv` and returns the region's return value (the
+    /// target's RAX at the `ret`). Panics on a ptrace failure or when the lib is
+    /// absent — gate on [`available`](Ptrace::available) first.
+    pub fn trace_attached(pid: i32, base: usize, len: usize, trace: &Trace) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_attached
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let mut result: c_long = 0;
+        let rc = unsafe {
+            f(pid as c_int, base as *const c_void, len, &mut result, trace.handle)
+        };
+        assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_attached failed: {rc}");
+        result as i64
+    }
+
+    /// The executable mapping in `/proc/<pid>/maps` that CONTAINS `addr`, as
+    /// `(base, len)`, or `None` if no executable mapping contains it (or the lib
+    /// is absent). A pure file read; no ptrace, so it may be called before
+    /// attaching.
+    pub fn region_by_addr(pid: i32, addr: usize) -> Option<(usize, usize)> {
+        let f = hw_fns().proc_region_by_addr?;
+        let mut base: *mut c_void = std::ptr::null_mut();
+        let mut len: usize = 0;
+        let rc = unsafe {
+            f(pid as c_int, addr as *const c_void, &mut base, &mut len)
+        };
+        if rc == ASMTEST_PTRACE_OK {
+            Some((base as usize, len))
+        } else {
+            None
+        }
+    }
+
+    /// A JIT method by `name` in the perf map at `/tmp/perf-<pid>.map`, as
+    /// `(base, len)`, or `None` (no such symbol, no map file, or the lib is
+    /// absent). `name` matches the full symbol text after the size field.
+    pub fn perfmap_symbol(pid: i32, name: &str) -> Option<(usize, usize)> {
+        let f = hw_fns().proc_perfmap_symbol?;
+        let cname = CString::new(name).ok()?;
+        let mut base: *mut c_void = std::ptr::null_mut();
+        let mut len: usize = 0;
+        let rc = unsafe {
+            f(pid as c_int, cname.as_ptr(), &mut base, &mut len)
+        };
+        if rc == ASMTEST_PTRACE_OK {
+            Some((base as usize, len))
+        } else {
+            None
+        }
+    }
+
+    /// A JIT method by `name` from a binary jitdump (`path`, or
+    /// `/tmp/jit-<pid>.dump` when `path` is `None`) as a [`JitMethod`], or `None`
+    /// (no such method, no file, not a jitdump, or the lib is absent). The latest
+    /// re-JIT body (highest timestamp) wins. Up to `want_bytes` of the recorded
+    /// code is copied into [`JitMethod::code`]; pass `0` to skip the bytes.
+    pub fn jitdump_find(
+        path: Option<&str>,
+        name: &str,
+        pid: i32,
+        want_bytes: usize,
+    ) -> Option<JitMethod> {
+        let f = hw_fns().jitdump_find?;
+        let cpath = match path {
+            Some(p) => Some(CString::new(p).ok()?),
+            None => None,
+        };
+        let path_ptr = cpath.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        let cname = CString::new(name).ok()?;
+        let mut entry = JitEntryRaw { code_addr: 0, code_size: 0, timestamp: 0, code_index: 0 };
+        let mut buf: Vec<u8> = vec![0u8; want_bytes];
+        let mut bytes_len: usize = 0;
+        let (buf_ptr, blen_ptr) = if want_bytes > 0 {
+            (buf.as_mut_ptr(), &mut bytes_len as *mut usize)
+        } else {
+            (std::ptr::null_mut(), std::ptr::null_mut())
+        };
+        let rc = unsafe {
+            f(path_ptr, pid as c_int, cname.as_ptr(), &mut entry, buf_ptr, want_bytes, blen_ptr)
+        };
+        if rc != ASMTEST_PTRACE_OK {
+            return None;
+        }
+        let code = if want_bytes > 0 {
+            buf.truncate(bytes_len);
+            buf
+        } else {
+            Vec::new()
+        };
+        Some(JitMethod {
+            code_addr: entry.code_addr,
+            code_size: entry.code_size,
+            timestamp: entry.timestamp,
+            code_index: entry.code_index,
+            code,
+        })
     }
 }

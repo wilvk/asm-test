@@ -13,8 +13,12 @@
 //     NODE_PATH=$(npm root -g) node test_hwtrace.js
 'use strict';
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const koffi = require('koffi');
 const {
-  HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
+  HwTrace, NativeCode, Ptrace, SINGLESTEP, AMD_LBR,
   BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
@@ -194,6 +198,107 @@ function main() {
       tr.free();
     } finally {
       HwTrace.shutdown();
+    }
+  }
+
+  // --- Out-of-process / foreign-process toolkit (Ptrace). Mirrors the four
+  //     tests after the "foreign-process toolkit" banner in test_hwtrace.py.
+  //     Each self-skips when the ptrace backend is unavailable. ---
+  if (!Ptrace.available()) {
+    console.log(`# SKIP ptrace backend unavailable: ${Ptrace.skipReason()}`);
+  } else {
+    // Fork a tracee, single-step it out of process, get the same offsets.
+    {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+      const r = Ptrace.traceCall(code, code.length, [20, 22], tr);
+      ok(Number(r) === 42, 'ptrace traceCall returns 42');
+      assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
+      ok(true, 'ptrace traceCall insnOffsets() == [0, 3, 6, 12, 17]');
+      ok(!tr.truncated(), 'ptrace traceCall !truncated()');
+      code.free();
+      tr.free();
+    }
+
+    // Discover an executable region's extent from /proc/<pid>/maps by an interior
+    // address (this process). traceAttached needs no live test — it is declared in
+    // hwtrace.js (the parity gate references the symbol); only assert it exists.
+    {
+      ok(typeof Ptrace.traceAttached === 'function', 'ptrace traceAttached is declared');
+      const code = NativeCode.fromBytes(ROUTINE);
+      // koffi external pointers don't compare by value, so work in numeric
+      // addresses: koffi.address() resolves a pointer to its BigInt address, and a
+      // numeric/BigInt address marshals straight into a void* parameter.
+      const baseAddr = koffi.address(code.base);
+      const region = Ptrace.procRegionByAddr(process.pid, baseAddr + 4n); // interior addr
+      ok(region !== null, 'procRegionByAddr finds the mapping containing base+4');
+      ok(koffi.address(region.base) === baseAddr, 'procRegionByAddr base == code base');
+      ok(region.len >= ROUTINE.length, 'procRegionByAddr length >= 18');
+      ok(Ptrace.procRegionByAddr(process.pid, 1) === null,
+        'procRegionByAddr(addr=1) is null (nothing maps it)');
+      code.free();
+    }
+
+    // Parse a JIT perf-map (/tmp/perf-<pid>.map) and resolve a method by name.
+    {
+      const pid = process.pid;
+      const mapPath = `/tmp/perf-${pid}.map`;
+      fs.writeFileSync(mapPath, '400000 1a void demo(long, long)\n500000 8 other\n');
+      try {
+        const m = Ptrace.procPerfmapSymbol(pid, 'void demo(long, long)');
+        ok(m !== null && koffi.address(m.base) === 0x400000n && m.len === 0x1A,
+          'procPerfmapSymbol resolves demo to (0x400000, 0x1a)');
+        ok(Ptrace.procPerfmapSymbol(pid, 'missing') === null,
+          'procPerfmapSymbol(missing) is null');
+      } finally {
+        fs.unlinkSync(mapPath);
+      }
+    }
+
+    // Read a binary jitdump and resolve a method to (addr,size,index) + bytes.
+    {
+      const dumpPath = path.join(os.tmpdir(), `asmtest-jit-${process.pid}.dump`);
+      const name = Buffer.from('void demo(long, long)', 'utf8');
+      // header: magic, version, total_size=40, elf_mach, pad1, pid, timestamp, flags
+      const header = Buffer.alloc(40);
+      header.writeUInt32LE(0x4A695444, 0); // magic 'JiTD' (little-endian read order)
+      header.writeUInt32LE(1, 4);          // version
+      header.writeUInt32LE(40, 8);         // total_size (header)
+      header.writeUInt32LE(62, 12);        // elf_mach (EM_X86_64)
+      header.writeUInt32LE(0, 16);         // pad1
+      header.writeUInt32LE(0, 20);         // pid
+      header.writeBigUInt64LE(0n, 24);     // timestamp
+      header.writeBigUInt64LE(0n, 32);     // flags
+      // JIT_CODE_LOAD record header: id=0, total_size, timestamp=5
+      const total = 16 + 40 + (name.length + 1) + ROUTINE.length;
+      const recHdr = Buffer.alloc(16);
+      recHdr.writeUInt32LE(0, 0);          // id (JIT_CODE_LOAD)
+      recHdr.writeUInt32LE(total, 4);      // total_size
+      recHdr.writeBigUInt64LE(5n, 8);      // timestamp
+      // body: pid, tid, vma, code_addr, code_size, code_index
+      const body = Buffer.alloc(8 + 8 * 4);
+      body.writeUInt32LE(0, 0);            // pid
+      body.writeUInt32LE(0, 4);            // tid
+      body.writeBigUInt64LE(0x2000n, 8);   // vma
+      body.writeBigUInt64LE(0x2000n, 16);  // code_addr
+      body.writeBigUInt64LE(BigInt(ROUTINE.length), 24); // code_size
+      body.writeBigUInt64LE(9n, 32);       // code_index
+      const nameNul = Buffer.concat([name, Buffer.from([0])]);
+      fs.writeFileSync(dumpPath,
+        Buffer.concat([header, recHdr, body, nameNul, ROUTINE]));
+      try {
+        const m = Ptrace.jitdumpFind(dumpPath, 'void demo(long, long)', 0, 64);
+        ok(m !== null, 'jitdumpFind resolves the method');
+        ok(m.codeAddr === 0x2000 && m.codeSize === ROUTINE.length
+          && m.codeIndex === 9 && m.timestamp === 5,
+          'jitdumpFind (codeAddr,codeSize,codeIndex,timestamp) == (0x2000,18,9,5)');
+        assert.deepStrictEqual(m.code, ROUTINE);
+        ok(true, 'jitdumpFind code bytes == ROUTINE');
+        ok(Ptrace.jitdumpFind(dumpPath, 'missing') === null,
+          'jitdumpFind(missing) is null');
+      } finally {
+        fs.unlinkSync(dumpPath);
+      }
     }
   }
 

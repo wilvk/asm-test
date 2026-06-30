@@ -494,6 +494,16 @@ wrapper needs a DynamoRIO install and the PT/AMD wrappers self-skip.
 | Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
 | Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
 
+The **out-of-process / foreign-process toolkit** above is exposed through every wrapper
+too — a `Ptrace` class (or, where idiomatic, `HwTrace.ptrace_*` methods) surfacing
+`available`/`skipReason`, `traceCall`, `traceAttached`, `regionByAddr`, `perfmapSymbol`,
+and `jitdumpFind` (with a `JitMethod` value type carrying the recorded code bytes). Each
+binding's hwtrace test exercises the live-testable subset — out-of-process `traceCall`
+to the same `[0,3,6,c,11]` stream, `/proc/maps` and perf-map resolution, and a
+binary-jitdump round-trip — and `asmtest_ptrace.h` is covered by the
+`check-bindings-parity` gate (36 tier symbols × 10 bindings). All ten are validated
+live in plain unprivileged containers.
+
 ## Auto-selecting a backend (the hardware-tier cascade)
 
 All four hardware backends fill the same `asmtest_trace_t`, self-skip cleanly via

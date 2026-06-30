@@ -5,10 +5,13 @@ backends (which need specific bare-metal hardware), the SINGLESTEP backend runs 
 ANY x86-64 Linux — so this asserts a real, live trace here and in CI/containers,
 self-skipping only off x86-64 Linux or without Capstone.
 """
+import os
+import struct
+
 import pytest
 
 from asmtest.hwtrace import (
-    HwTrace, NativeCode, SINGLESTEP, AMD_LBR,
+    HwTrace, NativeCode, Ptrace, SINGLESTEP, AMD_LBR,
     BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
     TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
     TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
@@ -158,3 +161,72 @@ def test_auto_resolve_traces_live():
         code.free()
     finally:
         HwTrace.shutdown()
+
+
+# ---- Out-of-process / foreign-process toolkit (asmtest.hwtrace.Ptrace) ----
+
+def _skip_if_no_ptrace():
+    if not Ptrace.available():
+        pytest.skip(f"ptrace backend unavailable: {Ptrace.skip_reason()}")
+
+
+def test_ptrace_trace_call():
+    """Fork a tracee, single-step it out of process, get the same offsets."""
+    _skip_if_no_ptrace()
+    code = NativeCode.from_bytes(ROUTINE)
+    trace = HwTrace.new(blocks=64, instructions=64)
+    result = Ptrace.trace_call(code, [20, 22], trace)
+    assert result == 42
+    assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xC, 0x11]
+    assert not trace.truncated()
+    trace.free()
+    code.free()
+
+
+def test_proc_region_by_addr():
+    """Discover an executable region's extent from /proc/<pid>/maps by an interior
+    address (this process)."""
+    _skip_if_no_ptrace()
+    code = NativeCode.from_bytes(ROUTINE)
+    region = Ptrace.region_by_addr(os.getpid(), code.base + 4)
+    assert region is not None
+    base, length = region
+    assert base == code.base and length >= len(ROUTINE)
+    assert Ptrace.region_by_addr(os.getpid(), 0x1) is None  # nothing maps addr 1
+    code.free()
+
+
+def test_proc_perfmap_symbol():
+    """Parse a JIT perf-map (/tmp/perf-<pid>.map) and resolve a method by name."""
+    _skip_if_no_ptrace()
+    pid = os.getpid()
+    path = f"/tmp/perf-{pid}.map"
+    with open(path, "w") as f:
+        f.write("400000 1a void demo(long, long)\n500000 8 other\n")
+    try:
+        assert Ptrace.perfmap_symbol(pid, "void demo(long, long)") == (0x400000, 0x1A)
+        assert Ptrace.perfmap_symbol(pid, "missing") is None
+    finally:
+        os.remove(path)
+
+
+def test_jitdump_find(tmp_path):
+    """Read a binary jitdump and resolve a method to (addr,size,index) + bytes."""
+    _skip_if_no_ptrace()
+    path = str(tmp_path / "jit.dump")
+    name = b"void demo(long, long)"
+    with open(path, "wb") as f:
+        # header: magic, version, total_size=40, elf_mach, pad1, pid, timestamp, flags
+        f.write(struct.pack("<IIIIIIQQ", 0x4A695444, 1, 40, 62, 0, 0, 0, 0))
+        total = 16 + 40 + (len(name) + 1) + len(ROUTINE)
+        f.write(struct.pack("<IIQ", 0, total, 5))  # JIT_CODE_LOAD: id, total, ts
+        # body: pid, tid, vma, code_addr, code_size, code_index
+        f.write(struct.pack("<IIQQQQ", 0, 0, 0x2000, 0x2000, len(ROUTINE), 9))
+        f.write(name + b"\x00")
+        f.write(ROUTINE)
+    m = Ptrace.jitdump_find(path, "void demo(long, long)", want_bytes=64)
+    assert m is not None
+    assert (m.code_addr, m.code_size, m.code_index, m.timestamp) == (
+        0x2000, len(ROUTINE), 9, 5)
+    assert m.code == ROUTINE
+    assert Ptrace.jitdump_find(path, "missing") is None

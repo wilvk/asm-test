@@ -265,5 +265,119 @@ do
   HwTrace.shutdown()
 end
 
+-- ---- Out-of-process / foreign-process toolkit (HwTrace ptrace_* methods) ----
+--
+-- Mirrors the four tests after the "foreign-process toolkit" banner in
+-- bindings/python/tests/test_hwtrace.py. Guarded by the binding's ptrace
+-- availability skip pattern (HwTrace.ptrace_available()), matching _skip_if_no_ptrace.
+
+-- A small little-endian byte builder (LuaJIT host is x86-64 LE). string.char of each
+-- byte, low byte first; the FFI uint64 cast keeps 64-bit values exact.
+local ffi = require("ffi")
+ffi.cdef("int getpid(void);")  -- this process's pid, for the per-pid fixture paths
+local function le(value, nbytes)
+  local v = ffi.cast("uint64_t", value)
+  local out = {}
+  for i = 1, nbytes do
+    out[i] = string.char(tonumber(v % 256))
+    v = v / 256
+  end
+  return table.concat(out)
+end
+local u32 = function(x) return le(x, 4) end
+local u64 = function(x) return le(x, 8) end
+
+-- ROUTINE as a byte string, for jitdump body + comparison.
+local ROUTINE_STR = string.char(unpack(ROUTINE))
+
+if not HwTrace.ptrace_available() then
+  print("# SKIP out-of-process ptrace tier unavailable: "
+        .. HwTrace.ptrace_skip_reason())
+else
+  -- test_ptrace_trace_call — fork a tracee, single-step it out of process, get the
+  -- same offsets/return value as the in-process single-step backend.
+  do
+    local code = NativeCode.from_bytes(ROUTINE)
+    local tr = HwTrace.create(64, 64)
+    local result = HwTrace.ptrace_trace_call(code.base, code.len, { 20, 22 }, tr)
+    eq(result, 42, "ptrace_trace_call: call(20,22) == 42")
+    list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
+            "ptrace_trace_call: insn_offsets == {0,3,6,12,17}")
+    ok(not tr:truncated(), "ptrace_trace_call: not truncated")
+    tr:free()
+    code:free()
+  end
+
+  -- test_proc_region_by_addr — discover an executable region's extent from
+  -- /proc/<pid>/maps by an interior address (this process). addr 1 maps nothing.
+  do
+    local code = NativeCode.from_bytes(ROUTINE)
+    local pid = tonumber(ffi.C.getpid())
+    local base, len = HwTrace.proc_region_by_addr(pid,
+      tonumber(ffi.cast("uintptr_t", code.base)) + 4)
+    eq(base, tonumber(ffi.cast("uintptr_t", code.base)),
+       "region_by_addr: base == code base")
+    ok(base ~= nil and len ~= nil and len >= #ROUTINE,
+       "region_by_addr: len >= region size")
+    eq(HwTrace.proc_region_by_addr(pid, 1), nil,
+       "region_by_addr: addr 1 maps nothing -> nil")
+    code:free()
+  end
+
+  -- test_proc_perfmap_symbol — parse a JIT perf-map (/tmp/perf-<pid>.map) and
+  -- resolve a method by name; a missing name resolves to nil.
+  do
+    local pid = tonumber(ffi.C.getpid())
+    local path = "/tmp/perf-" .. pid .. ".map"
+    local f = assert(io.open(path, "w"))
+    f:write("400000 1a void demo(long, long)\n500000 8 other\n")
+    f:close()
+    local base, len = HwTrace.proc_perfmap_symbol(pid, "void demo(long, long)")
+    eq(base, 0x400000, "perfmap_symbol: base == 0x400000")
+    eq(len, 0x1A, "perfmap_symbol: len == 0x1a")
+    eq(HwTrace.proc_perfmap_symbol(pid, "missing"), nil,
+       "perfmap_symbol: missing -> nil")
+    os.remove(path)
+  end
+
+  -- test_jitdump_find — write a binary jitdump (little-endian, matching the Python
+  -- struct.pack layout) and resolve a method to (addr,size,index,ts) + bytes; a
+  -- missing name resolves to nil.
+  do
+    local path = "/tmp/asmtest-lua-jit-" .. tonumber(ffi.C.getpid()) .. ".dump"
+    local name = "void demo(long, long)"
+    -- header: <IIIIIIQQ> magic, version, total_size=40, elf_mach=62, pad1, pid,
+    -- timestamp, flags.
+    local header = u32(0x4A695444) .. u32(1) .. u32(40) .. u32(62)
+                 .. u32(0) .. u32(0) .. u64(0) .. u64(0)
+    local total = 16 + 40 + (#name + 1) + #ROUTINE_STR
+    -- JIT_CODE_LOAD record header: <IIQ> id=0, total, timestamp=5.
+    local rec = u32(0) .. u32(total) .. u64(5)
+    -- body: <IIQQQQ> pid, tid, vma, code_addr, code_size, code_index.
+    local body = u32(0) .. u32(0) .. u64(0x2000) .. u64(0x2000)
+               .. u64(#ROUTINE_STR) .. u64(9)
+    local f = assert(io.open(path, "wb"))
+    f:write(header)
+    f:write(rec)
+    f:write(body)
+    f:write(name .. "\0")
+    f:write(ROUTINE_STR)
+    f:close()
+
+    local m = HwTrace.jitdump_find(path, "void demo(long, long)", 0, 64)
+    ok(m ~= nil, "jitdump_find: method found")
+    if m then
+      eq(m.code_addr, 0x2000, "jitdump_find: code_addr == 0x2000")
+      eq(m.code_size, #ROUTINE_STR, "jitdump_find: code_size == 18")
+      eq(m.code_index, 9, "jitdump_find: code_index == 9")
+      eq(m.timestamp, 5, "jitdump_find: timestamp == 5")
+      ok(m.code == ROUTINE_STR, "jitdump_find: code == ROUTINE")
+    end
+    eq(HwTrace.jitdump_find(path, "missing", 0, 0), nil,
+       "jitdump_find: missing -> nil")
+    os.remove(path)
+  end
+end
+
 print(string.format("# %d tests, %d failed", count, failed))
 os.exit(failed == 0 and 0 or 1)
