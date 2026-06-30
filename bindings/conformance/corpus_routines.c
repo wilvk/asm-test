@@ -19,6 +19,7 @@ extern long read_fault(const long *);
 extern double int_to_double(long);
 #if defined(__x86_64__)
 extern void vec_add4d(void); /* AVX2 256-bit (Track D); x86-64 only */
+extern void vec_add8d(void); /* AVX-512 512-bit (Track D); x86-64 only */
 #endif
 
 void *asmtest_corpus_routine(const char *name) {

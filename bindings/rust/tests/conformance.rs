@@ -26,6 +26,7 @@ extern "C" {
 #[cfg(target_arch = "x86_64")]
 extern "C" {
     fn vec_add4d(); // AVX2 256-bit (Track D); x86-64 only
+    fn vec_add8d(); // AVX-512 512-bit (Track D); x86-64 only
 }
 
 fn pm(addr: usize) -> *mut c_void {
@@ -285,4 +286,20 @@ fn vec256_avx2() {
     let b = asmtest::Vec256::from_f64([10.0, 20.0, 30.0, 40.0]);
     let out = asmtest::capture_vec256(pm(vec_add4d as usize), &[a, b]);
     assert_eq!(out[0].f64(), [11.0, 22.0, 33.0, 44.0]);
+}
+
+// Track D: AVX-512 512-bit capture (self-skips off-AVX-512F).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn vec512_avx512() {
+    if !asmtest::cpu_has_avx512f() {
+        return; // self-skip where AVX-512F is unavailable
+    }
+    let a = asmtest::Vec512::from_f64([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    let b = asmtest::Vec512::from_f64([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]);
+    let out = asmtest::capture_vec512(pm(vec_add8d as usize), &[a, b]);
+    assert_eq!(
+        out[0].f64(),
+        [11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0]
+    );
 }

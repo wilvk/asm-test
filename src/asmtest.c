@@ -408,6 +408,25 @@ void asmtest_assert_vec256_eq(const char *file, int line, const char *idxexpr,
                  idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
 }
 
+void asmtest_assert_vec512_eq(const char *file, int line, const char *idxexpr,
+                              const unsigned char *actual,
+                              const unsigned char *expected) {
+    size_t i = 0;
+    while (i < 64 && actual[i] == expected[i])
+        i++;
+    if (i == 64)
+        return;
+    char expect_hex[256], actual_hex[256];
+    hexdump_window(expect_hex, sizeof expect_hex, expected, 0, 64);
+    hexdump_window(actual_hex, sizeof actual_hex, actual, 0, 64);
+    asmtest_fail(file, line,
+                 "ASSERT_VEC512_EQ(vec[%s]): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       expect: %s\n"
+                 "       actual: %s",
+                 idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
+}
+
 /* CPU feature probes (x86-64). AVX/AVX2/AVX-512 each need both the CPUID
  * feature bit AND OS enablement of the wider register state (OSXSAVE + the
  * matching XCR0 bits), so a kernel that doesn't save the state can't be used. */

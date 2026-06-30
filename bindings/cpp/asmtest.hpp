@@ -121,6 +121,22 @@ inline void capture_vec256(void *fn, std::initializer_list<vec256_t> vargs,
     asm_call_capture_vec256(out, fn, ia, va.data());
 }
 
+/// AVX-512 512-bit capture (Track D): marshal up to 8 `vec512_t` args into zmm0..7
+/// and capture the whole zmm file into `out` (out[0] = the vector return).
+/// x86-64 + AVX-512F only — gate on `asmtest_cpu_has_avx512f()`.
+inline void capture_vec512(void *fn, std::initializer_list<vec512_t> vargs,
+                           vec512_t out[32]) {
+    long ia[6] = {0, 0, 0, 0, 0, 0};
+    std::array<vec512_t, 8> va{};
+    std::size_t i = 0;
+    for (const vec512_t &v : vargs) {
+        if (i == va.size())
+            break;
+        va[i++] = v;
+    }
+    asm_call_capture_vec512(out, fn, ia, va.data());
+}
+
 /// All callee-saved registers restored — via the native non-jumping verdict shim.
 inline bool abi_preserved(const regs_t &r) {
     return asmtest_check_abi(&r, nullptr, 0) == 0;

@@ -143,6 +143,9 @@ namespace Asmtest
         // AVX2 256-bit capture (Track D).
         [DllImport(EMU)] public static extern void asm_call_capture_vec256([Out] byte[] vec, IntPtr fn, long[] iargs, byte[] vargs);
         [DllImport(EMU)] public static extern int asmtest_cpu_has_avx2();
+        // AVX-512 512-bit capture (Track D).
+        [DllImport(EMU)] public static extern void asm_call_capture_vec512([Out] byte[] vec, IntPtr fn, long[] iargs, byte[] vargs);
+        [DllImport(EMU)] public static extern int asmtest_cpu_has_avx512f();
 
         /// <summary>The Keystone diagnostic from the most recent assemble (thread-local; "" on success).</summary>
         public static string AsmError()
@@ -177,6 +180,11 @@ namespace Asmtest
         // fixtures, not framework functionality — like Ruby/Node, which only
         // dlopen it when ASMTEST_CORPUS_LIB is set). Probe so Corpus.Routine can
         // raise a clear, actionable error instead of a raw DllNotFoundException.
+        // The loaded corpus-lib handle (IntPtr.Zero if unavailable). Kept so a
+        // routine the name-resolver doesn't map can still be reached by its
+        // exported dynamic symbol (e.g. vec_add8d, exported but not in
+        // asmtest_corpus_routine's table).
+        public static IntPtr CorpusHandle { get; private set; }
         public static readonly bool CorpusAvailable = ProbeCorpus();
         static bool ProbeCorpus()
         {
@@ -186,6 +194,7 @@ namespace Asmtest
                 var h = string.IsNullOrEmpty(p)
                     ? NativeLibrary.Load(COR, typeof(Native).Assembly, null)
                     : NativeLibrary.Load(p);
+                CorpusHandle = h;
                 return NativeLibrary.TryGetExport(h, "asmtest_corpus_routine", out _);
             }
             catch { return false; }
@@ -249,7 +258,13 @@ namespace Asmtest
                 throw new AsmtestException(
                     "corpus fixtures lib not available — set ASMTEST_CORPUS_LIB to a built " +
                     "libasmtest_corpus.{so,dylib} (it is not bundled in the NuGet package)");
-            return Native.asmtest_corpus_routine(name);
+            var fn = Native.asmtest_corpus_routine(name);
+            // Fall back to the exported dynamic symbol for routines the name
+            // resolver's table doesn't map (e.g. vec_add8d).
+            if (fn == IntPtr.Zero && Native.CorpusHandle != IntPtr.Zero
+                && NativeLibrary.TryGetExport(Native.CorpusHandle, name, out var sym))
+                fn = sym;
+            return fn;
         }
     }
 
@@ -514,7 +529,7 @@ namespace Asmtest
         public void Dispose() { if (_h != IntPtr.Zero) { Native.asmtest_emu_reg_guard_free(_h); _h = IntPtr.Zero; } }
     }
 
-    /// <summary>AVX2 256-bit capture (Track D) + the CPUID probe that gates it.</summary>
+    /// <summary>AVX2 256-bit + AVX-512 512-bit capture (Track D) + the CPUID probes that gate them.</summary>
     public static class Avx
     {
         /// <summary>True if the host CPU + OS support AVX2.</summary>
@@ -532,6 +547,24 @@ namespace Asmtest
             Native.asm_call_capture_vec256(outv, fn, new long[6], va);
             var ret = new double[4];
             for (int l = 0; l < 4; l++) ret[l] = BitConverter.ToDouble(outv, l * 8);
+            return ret;
+        }
+
+        /// <summary>True if the host CPU + OS support AVX-512F.</summary>
+        public static bool CpuHasAvx512f() => Native.asmtest_cpu_has_avx512f() != 0;
+
+        /// <summary>Run <paramref name="fn"/> with 512-bit vector args (each eight
+        /// f64 lanes) and return the eight f64 lanes of zmm0 (the vector return).</summary>
+        public static double[] CaptureVec512(IntPtr fn, double[][] vargs)
+        {
+            var outv = new byte[32 * 64];
+            var va = new byte[8 * 64];
+            for (int i = 0; i < Math.Min(vargs.Length, 8); i++)
+                for (int l = 0; l < 8; l++)
+                    BitConverter.GetBytes(vargs[i][l]).CopyTo(va, i * 64 + l * 8);
+            Native.asm_call_capture_vec512(outv, fn, new long[6], va);
+            var ret = new double[8];
+            for (int l = 0; l < 8; l++) ret[l] = BitConverter.ToDouble(outv, l * 8);
             return ret;
         }
     }

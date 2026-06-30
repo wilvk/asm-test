@@ -216,6 +216,17 @@ static class Conformance
         }
         else { Console.WriteLine("ok - vec256.add4d # SKIP no AVX2"); }
 
+        // Track D: AVX-512 512-bit capture (self-skips off-AVX-512).
+        if (Avx.CpuHasAvx512f())
+        {
+            var outv = Avx.CaptureVec512(Routine("vec_add8d"),
+                new[] { new double[] { 1, 2, 3, 4, 5, 6, 7, 8 },
+                        new double[] { 10, 20, 30, 40, 50, 60, 70, 80 } });
+            Check("vec512.add8d", outv[0] == 11 && outv[1] == 22 && outv[2] == 33 && outv[3] == 44
+                && outv[4] == 55 && outv[5] == 66 && outv[6] == 77 && outv[7] == 88);
+        }
+        else { Console.WriteLine("ok - vec512.add8d # SKIP no AVX-512"); }
+
         Console.WriteLine($"# {total - fails} passed, {fails} failed, {total} total");
         return fails == 0 ? 0 : 1;
     }

@@ -93,6 +93,12 @@ unsigned long long asmtest_emu_mutation_survived(void *s);
 // AVX2 256-bit capture (Track D)
 void asm_call_capture_vec256(void *vec, void *fn, const long *iargs, const void *vargs);
 int  asmtest_cpu_has_avx2(void);
+// AVX-512 512-bit capture (Track D)
+void asm_call_capture_vec512(void *vec, void *fn, const long *iargs, const void *vargs);
+int  asmtest_cpu_has_avx512f(void);
+// vec_add8d is linked into libasmtest_corpus but the asmtest_corpus_routine()
+// name table does not register it, so resolve its address directly (Track D).
+void vec_add8d(void);
 ]])
 
 -- Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
@@ -127,10 +133,16 @@ local HAS_DISAS = pcall(function() return L.emu_disas end)
 
 local M = {}
 
--- Resolve a canonical corpus routine (e.g. "add_signed") to its address.
+-- Resolve a canonical corpus routine (e.g. "add_signed") to its address. Some
+-- routines (e.g. vec_add8d, the AVX-512 fixture) are linked into the corpus lib
+-- but absent from the asmtest_corpus_routine() name table, so fall back to a
+-- direct symbol lookup when the table yields null.
 function M.corpus_routine(name)
   assert(C, "set ASMTEST_CORPUS_LIB to use corpus_routine")
-  return C.asmtest_corpus_routine(name)
+  local fn = C.asmtest_corpus_routine(name)
+  if fn ~= nil then return fn end
+  local ok, sym = pcall(function() return C[name] end)
+  return ok and ffi.cast("void *", sym) or fn
 end
 
 -- A captured register/flags snapshot. Call :free() when done.
@@ -313,6 +325,21 @@ function M.capture_vec256(fn, vargs)
   L.asm_call_capture_vec256(out, fn, ia, va)
   local dout = ffi.cast("double *", out)
   return { dout[0], dout[1], dout[2], dout[3] }
+end
+-- AVX-512 512-bit capture (Track D): vargs = array of eight-double arrays;
+-- returns the 8 f64 lanes of zmm0 (the vector return). Gate on M.cpu_has_avx512f().
+function M.cpu_has_avx512f() return L.asmtest_cpu_has_avx512f() ~= 0 end
+function M.capture_vec512(fn, vargs)
+  local out = ffi.new("uint8_t[?]", 32 * 64)
+  local va = ffi.new("uint8_t[?]", 8 * 64)
+  local dv = ffi.cast("double *", va)
+  for i = 1, math.min(#vargs, 8) do
+    for l = 1, 8 do dv[(i - 1) * 8 + (l - 1)] = vargs[i][l] or 0 end
+  end
+  local ia = ffi.new("long[6]")
+  L.asm_call_capture_vec512(out, fn, ia, va)
+  local dout = ffi.cast("double *", out)
+  return { dout[0], dout[1], dout[2], dout[3], dout[4], dout[5], dout[6], dout[7] }
 end
 -- Whether the loaded native lib carries the in-line assembler.
 function Emu:asm_available() return HAS_ASM end

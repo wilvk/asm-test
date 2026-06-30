@@ -251,5 +251,16 @@ else
   puts "ok - vec256.add4d # SKIP no AVX2"
 end
 
+# --- Track D: AVX-512 512-bit capture (self-skips off-AVX-512) --------------
+if Asmtest.cpu_has_avx512f?
+  out = Asmtest.capture_vec512(routine("vec_add8d"),
+                               [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                                [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]])
+  check("vec512.add8d",
+        out[0].unpack("d8") == [11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0])
+else
+  puts "ok - vec512.add8d # SKIP no AVX-512"
+end
+
 puts "# #{$total - $fail} passed, #{$fail} failed, #{$total} total"
 exit($fail == 0 ? 0 : 1)

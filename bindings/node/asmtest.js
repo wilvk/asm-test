@@ -146,6 +146,9 @@ const fn = {
   // AVX2 256-bit capture (Track D)
   captureVec256: L.func('void asm_call_capture_vec256(void *, void *, void *, void *)'),
   cpuAvx2: L.func('int asmtest_cpu_has_avx2()'),
+  // AVX-512 512-bit capture (Track D)
+  captureVec512: L.func('void asm_call_capture_vec512(void *, void *, void *, void *)'),
+  cpuAvx512f: L.func('int asmtest_cpu_has_avx512f()'),
 };
 
 // Pack helpers: marshal JS numbers into native arrays as Buffers (koffi passes a
@@ -173,12 +176,19 @@ function packVecs(vargs) {
 /** Invalid-access kind reported by EmuResult.faultKind() (mirrors emu_fault_kind_t). */
 const FaultKind = { None: 0, Read: 1, Write: 2, Fetch: 3 };
 
-/** Resolve a canonical corpus routine (e.g. "add_signed") to its address. */
+/** Resolve a canonical corpus routine (e.g. "add_signed") to its address. The
+ * name table (asmtest_corpus_routine) covers the catalogued routines; when it
+ * misses (null), fall back to the corpus lib's exported symbol of that name —
+ * e.g. vec_add8d, which lives in the fixture lib but isn't in the table. */
 function corpusRoutine(name) {
   if (!fn.corpusRoutine) {
     throw new Error('set ASMTEST_CORPUS_LIB to use corpusRoutine()');
   }
-  return fn.corpusRoutine(name);
+  const p = fn.corpusRoutine(name);
+  if (p == null && C) {
+    try { return C.symbol(name, 'void'); } catch (_e) { /* not exported either */ }
+  }
+  return p;
 }
 
 /** A captured register/flags snapshot. Call free() when done. */
@@ -375,6 +385,22 @@ function captureVec256(fnAddr, vargs) {
   return [0, 8, 16, 24].map((o) => out.readDoubleLE(o));
 }
 
+/** True if the host CPU + OS support AVX-512F (gate captureVec512). */
+function cpuHasAvx512f() { return fn.cpuAvx512f() !== 0; }
+
+/** AVX-512 512-bit capture (Track D): `vargs` = array of [8 doubles]; returns the
+ * 8 f64 lanes of zmm0 (the vector return). x86-64 + AVX-512F only. */
+function captureVec512(fnAddr, vargs) {
+  const out = Buffer.alloc(64 * 32);
+  const va = Buffer.alloc(64 * 8);
+  vargs.slice(0, 8).forEach((v, i) => {
+    for (let l = 0; l < 8; l++) va.writeDoubleLE(v[l] || 0, i * 64 + l * 8);
+  });
+  const ia = Buffer.alloc(6 * 8);
+  fn.captureVec512(out, fnAddr, ia, va);
+  return [0, 8, 16, 24, 32, 40, 48, 56].map((o) => out.readDoubleLE(o));
+}
+
 /** The Keystone diagnostic from the most recent assemble (thread-local; '' on success). */
 function asmError() { return fn.asmLastError ? fn.asmLastError() : ''; }
 
@@ -500,7 +526,7 @@ const Syntax = { INTEL: 0, ATT: 1, NASM: 2, MASM: 3, GAS: 4 };
 module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, Trace, Guest, GuestResult, AsmtestError, FaultKind,
-  Watch, RegGuard, cpuHasAvx2, captureVec256,
+  Watch, RegGuard, cpuHasAvx2, captureVec256, cpuHasAvx512f, captureVec512,
   assemble, asmError, disas, disasAvailable, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
   assertNoFault, assertFault, assertEmuReg, assertGuestReg, assertCovered,

@@ -31,6 +31,7 @@ extern fn vec_add4f() void;
 extern fn read_fault(?*const c_long) c_long; // loads *p; faults if p is unmapped
 extern fn int_to_double(c_long) f64; // (double)n into xmm0 from an integer arg
 extern fn vec_add4d() void; // AVX2 256-bit (Track D); x86-64 only
+extern fn vec_add8d() void; // AVX-512 512-bit (Track D); x86-64 only
 
 /// Address of a routine as the opaque pointer the trampoline expects.
 fn fnPtr(p: anytype) ?*anyopaque {
@@ -385,6 +386,29 @@ test "vec256.add4d (AVX2)" {
         var ia = [_]c_long{ 0, 0, 0, 0, 0, 0 };
         c.asm_call_capture_vec256(&out, fnPtr(&vec_add4d), &ia, &varr);
         try std.testing.expect(out[0].f64[0] == 11 and out[0].f64[3] == 44);
+    } else {
+        return error.SkipZigTest;
+    }
+}
+
+// Track D: AVX-512 512-bit capture (x86-64 + AVX-512F; comptime-gated, runtime self-skip).
+test "vec512.add8d (AVX-512)" {
+    if (comptime builtin.cpu.arch == .x86_64) {
+        if (c.asmtest_cpu_has_avx512f() == 0) return error.SkipZigTest;
+        var a: c.vec512_t = std.mem.zeroes(c.vec512_t);
+        var b: c.vec512_t = std.mem.zeroes(c.vec512_t);
+        a.f64[0] = 1; a.f64[1] = 2; a.f64[2] = 3; a.f64[3] = 4;
+        a.f64[4] = 5; a.f64[5] = 6; a.f64[6] = 7; a.f64[7] = 8;
+        b.f64[0] = 10; b.f64[1] = 20; b.f64[2] = 30; b.f64[3] = 40;
+        b.f64[4] = 50; b.f64[5] = 60; b.f64[6] = 70; b.f64[7] = 80;
+        var varr = [_]c.vec512_t{ a, b };
+        var out: [32]c.vec512_t = std.mem.zeroes([32]c.vec512_t);
+        var ia = [_]c_long{ 0, 0, 0, 0, 0, 0 };
+        c.asm_call_capture_vec512(&out, fnPtr(&vec_add8d), &ia, &varr);
+        const want = [8]f64{ 11, 22, 33, 44, 55, 66, 77, 88 };
+        for (want, 0..) |w, i| {
+            try std.testing.expect(out[0].f64[i] == w);
+        }
     } else {
         return error.SkipZigTest;
     }

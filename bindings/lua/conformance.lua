@@ -234,5 +234,15 @@ else
   print("ok - vec256.add4d # SKIP no AVX2")
 end
 
+-- Track D: AVX-512 512-bit capture (self-skips off-AVX-512F).
+if asmtest.cpu_has_avx512f() then
+  local lanes = asmtest.capture_vec512(routine("vec_add8d"),
+    { { 1, 2, 3, 4, 5, 6, 7, 8 }, { 10, 20, 30, 40, 50, 60, 70, 80 } })
+  check("vec512.add8d", lanes[1] == 11 and lanes[2] == 22 and lanes[3] == 33 and lanes[4] == 44
+    and lanes[5] == 55 and lanes[6] == 66 and lanes[7] == 77 and lanes[8] == 88)
+else
+  print("ok - vec512.add8d # SKIP no AVX512F")
+end
+
 print(string.format("# %d passed, %d failed, %d total", total - fails, fails, total))
 os.exit(fails == 0 and 0 or 1)

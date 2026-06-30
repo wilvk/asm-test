@@ -388,3 +388,15 @@ func TestVec256(t *testing.T) {
 		t.Fatalf("vec256: got %v, want %v", out, want)
 	}
 }
+
+// Track D: AVX-512 512-bit capture (self-skips off-AVX-512F).
+func TestVec512(t *testing.T) {
+	if !CPUHasAVX512F() {
+		t.Skip("AVX-512F not available on this host")
+	}
+	out := CaptureVec512(vecAdd8dRoutine(),
+		[][8]float64{{1, 2, 3, 4, 5, 6, 7, 8}, {10, 20, 30, 40, 50, 60, 70, 80}})
+	if want := [8]float64{11, 22, 33, 44, 55, 66, 77, 88}; out != want {
+		t.Fatalf("vec512: got %v, want %v", out, want)
+	}
+}

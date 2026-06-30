@@ -105,6 +105,23 @@ typedef union {
  * so a vec256_t[16] is the 512-byte ymm file the trampoline writes. */
 ASMTEST_STATIC_ASSERT(sizeof(vec256_t) == 32, "vec256_t is 32 bytes");
 
+/* One 512-bit vector register (AVX-512 ZMM), same lane-view idiom at twice the
+ * width again — captured by asm_call_capture_vec512 (x86-64 + AVX-512F). The low
+ * 256 bits alias the matching ymm/vec256_t and the low 128 the xmm/vec128_t, so a
+ * 512-bit capture subsumes both narrower views (vec512.u8[0..31] / [0..15]). AVX-512
+ * also doubles the register *count* — the trampoline captures zmm0..31, not 0..15. */
+typedef union {
+    unsigned char u8[64];
+    uint32_t u32[16];
+    uint64_t u64[8];
+    float f32[16];
+    double f64[8];
+} vec512_t;
+
+/* Layout pin: asm_call_capture_vec512 stores each zmm as 64 contiguous bytes,
+ * so a vec512_t[32] is the 2048-byte zmm file the trampoline writes. */
+ASMTEST_STATIC_ASSERT(sizeof(vec512_t) == 64, "vec512_t is 64 bytes");
+
 #if defined(ASMTEST_ABI_WIN64)
 
 /* --- Microsoft x64 ("Win64") ABI on x86-64 ---------------------------------
@@ -289,6 +306,15 @@ int asmtest_cpu_has_avx512f(void);
  * GP/flags capture. */
 void asm_call_capture_vec256(vec256_t *vec, void *fn, const long *iargs,
                              const vec256_t *vargs);
+
+/* The AVX-512 analog: marshal 8 full 512-bit vector args into zmm0-7 and capture the
+ * whole zmm file (zmm0..31 — AVX-512 doubles the count) into vec[0..31] (a
+ * caller-provided array of 32; vec[0] = the vector return). x86-64 + AVX-512F only —
+ * guard the call with asmtest_cpu_has_avx512f(), or use the ASM_VCALL512* macros,
+ * which self-skip. Captures the vector file only; use the 128-bit path for the
+ * GP/flags capture. */
+void asm_call_capture_vec512(vec512_t *vec, void *fn, const long *iargs,
+                             const vec512_t *vargs);
 
 /* Like asm_call_capture_fp, but with an arbitrary number of double args: the
  * first 8 go in the FP argument registers (xmm0-7 / d0-7), the rest spill onto
@@ -507,6 +533,11 @@ void asmtest_assert_vec256_eq(const char *file, int line, const char *idxexpr,
                               const unsigned char *actual,
                               const unsigned char *expected);
 
+/* 64-byte (512-bit) variant, for vec512_t lanes captured by the AVX-512 path. */
+void asmtest_assert_vec512_eq(const char *file, int line, const char *idxexpr,
+                              const unsigned char *actual,
+                              const unsigned char *expected);
+
 /* Allocate n writable bytes followed by an inaccessible guard page, so a
  * one-past-the-end access faults (and is reported as a test failure). Free
  * with the same n that was passed to alloc. */
@@ -716,6 +747,24 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
                                 (vec256_t[8]){(v0), (v1)});                    \
     } while (0)
 
+/* ASM_VCALL512n: like ASM_VCALL256n but with 512-bit (AVX-512 zmm) args; `out` is a
+ * vec512_t[32] receiving the zmm file (out[0] = return). SELF-SKIPS the test (SKIP)
+ * when AVX-512F is unavailable, so the same suite runs on any host. */
+#define ASM_VCALL512_1(out, fn, v0)                                           \
+    do {                                                                      \
+        if (!asmtest_cpu_has_avx512f())                                       \
+            SKIP("AVX-512 not available on this host");                       \
+        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},            \
+                                (vec512_t[8]){(v0)});                         \
+    } while (0)
+#define ASM_VCALL512_2(out, fn, v0, v1)                                       \
+    do {                                                                      \
+        if (!asmtest_cpu_has_avx512f())                                       \
+            SKIP("AVX-512 not available on this host");                       \
+        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},            \
+                                (vec512_t[8]){(v0), (v1)});                    \
+    } while (0)
+
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
@@ -828,6 +877,13 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
  * usual, e.g. ASSERT_DEQ(out[0].f64[3], 4.0). */
 #define ASSERT_VEC256_EQ(vec, idx, expect_ptr)                                \
     asmtest_assert_vec256_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,         \
+                             (const unsigned char *)(expect_ptr))
+
+/* 512-bit variant: `vec` is the vec512_t[32] array filled by
+ * asm_call_capture_vec512, so the lane is vec[idx]. Lane scalars use ASSERT_DEQ/FEQ
+ * as usual, e.g. ASSERT_DEQ(out[0].f64[7], 8.0) (the 8th lane needs the full 512). */
+#define ASSERT_VEC512_EQ(vec, idx, expect_ptr)                                \
+    asmtest_assert_vec512_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,         \
                              (const unsigned char *)(expect_ptr))
 
 /* Differential / property assertions: assert the asm routine `fn` matches the

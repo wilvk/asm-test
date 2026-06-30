@@ -153,6 +153,9 @@ module Asmtest
     # AVX2 256-bit capture (Track D) + the CPUID probe that gates it.
     capture_vec256:  func(L, "asm_call_capture_vec256", [VOIDP, VOIDP, VOIDP, VOIDP], VOID),
     cpu_avx2:        func(L, "asmtest_cpu_has_avx2", [], INT),
+    # AVX-512 512-bit capture (Track D) + the CPUID probe that gates it.
+    capture_vec512:  func(L, "asm_call_capture_vec512", [VOIDP, VOIDP, VOIDP, VOIDP], VOID),
+    cpu_avx512f:     func(L, "asmtest_cpu_has_avx512f", [], INT),
   }.freeze
 
   # Invalid-access kind reported by EmuResult#fault_kind (mirrors emu_fault_kind_t).
@@ -205,10 +208,19 @@ module Asmtest
     n.zero? ? "" : buf.unpack1("Z*")
   end
 
-  # Resolve a canonical corpus routine (e.g. "add_signed") to its address.
+  # Resolve a canonical corpus routine (e.g. "add_signed") to its address. The
+  # registry (asmtest_corpus_routine) is the fast path; if it doesn't know the
+  # name (returns NULL) we fall back to a direct dlsym on the corpus lib, which
+  # carries every routine as a global ASM_FUNC symbol.
   def self.corpus_routine(name)
     raise "set ASMTEST_CORPUS_LIB to use corpus_routine" unless FN[:corpus_routine]
-    FN[:corpus_routine].call(name)
+    ptr = FN[:corpus_routine].call(name)
+    return ptr unless ptr.to_i.zero?
+    begin
+      C[name.to_s]
+    rescue Fiddle::DLError
+      ptr
+    end
   end
 
   # Pack integer args into a native long array (a binary String Fiddle passes as a
@@ -491,6 +503,24 @@ module Asmtest
     ia = ("\0".b * (6 * 8)) # the trampoline reads six integer-arg slots
     FN[:capture_vec256].call(out, fn, ia, va)
     (0...16).map { |i| out[i * 32, 32] }
+  end
+
+  # True if the host CPU + OS support AVX-512F (gate .capture_vec512).
+  def self.cpu_has_avx512f?
+    FN[:cpu_avx512f].call != 0
+  end
+
+  # AVX-512 512-bit capture (Track D): +vargs+ is an array of [8 doubles]; returns
+  # the 32 zmm registers as 64-byte binary Strings (out[0] = the vector return).
+  def self.capture_vec512(fn, vargs)
+    out = ("\0".b * (32 * 64))
+    va = ("\0".b * (8 * 64))
+    vargs.first(8).each_with_index do |v, i|
+      va[i * 64, 64] = v.map(&:to_f).pack("d8")
+    end
+    ia = ("\0".b * (6 * 8)) # the trampoline reads six integer-arg slots
+    FN[:capture_vec512].call(out, fn, ia, va)
+    (0...32).map { |i| out[i * 64, 64] }
   end
 
   # An opaque execution-trace / basic-block coverage recorder.

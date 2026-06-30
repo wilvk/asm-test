@@ -294,6 +294,94 @@ ASM_FUNC asm_call_capture_vec256
     ret
 ASM_ENDFUNC asm_call_capture_vec256
 
+; void asm_call_capture_vec512(vec512_t *vec, void *fn, const long iargs[6],
+;                              const vec512_t vargs[8]);
+;   vec -> rdi, fn -> rsi, iargs -> rdx, vargs -> rcx
+; AVX-512: marshals 8 full 512-bit vectors into zmm0-7 and captures zmm0-31 (AVX-512
+; doubles the count) into vec[0..31] (64 bytes each; vec[0] = return). x86-64 +
+; AVX-512F only — gated by the C wrapper / ASM_VCALL512* on asmtest_cpu_has_avx512f().
+; vmovdqu64 is the EVEX-encoded unaligned move (required to reach zmm16..31).
+; Captures the vector file only (the 128-bit path covers GP/flags). vzeroupper on exit.
+ASM_FUNC asm_call_capture_vec512
+    push    rbx
+    push    rbp
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 24
+    mov     [rsp + 0], rdi          ; save vec out ptr
+    mov     [rsp + 8], rsi          ; save fn
+
+    ; Vector args: vargs (rcx) -> zmm0..zmm7
+    vmovdqu64 zmm0, [rcx + 0]
+    vmovdqu64 zmm1, [rcx + 64]
+    vmovdqu64 zmm2, [rcx + 128]
+    vmovdqu64 zmm3, [rcx + 192]
+    vmovdqu64 zmm4, [rcx + 256]
+    vmovdqu64 zmm5, [rcx + 320]
+    vmovdqu64 zmm6, [rcx + 384]
+    vmovdqu64 zmm7, [rcx + 448]
+
+    ; Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9
+    mov     rax, rdx
+    mov     rdi, [rax + 0]
+    mov     rsi, [rax + 8]
+    mov     rcx, [rax + 24]
+    mov     r8,  [rax + 32]
+    mov     r9,  [rax + 40]
+    mov     rdx, [rax + 16]
+
+    mov     r11, [rsp + 8]
+    mov     eax, 8                  ; variadic ABI: 8 vector registers
+    call    r11
+
+    mov     r11, [rsp + 0]          ; vec out ptr
+    ; Full zmm file: zmm0..31 -> vec[0..31] (64 bytes each)
+    vmovdqu64 [r11 + 0],    zmm0
+    vmovdqu64 [r11 + 64],   zmm1
+    vmovdqu64 [r11 + 128],  zmm2
+    vmovdqu64 [r11 + 192],  zmm3
+    vmovdqu64 [r11 + 256],  zmm4
+    vmovdqu64 [r11 + 320],  zmm5
+    vmovdqu64 [r11 + 384],  zmm6
+    vmovdqu64 [r11 + 448],  zmm7
+    vmovdqu64 [r11 + 512],  zmm8
+    vmovdqu64 [r11 + 576],  zmm9
+    vmovdqu64 [r11 + 640],  zmm10
+    vmovdqu64 [r11 + 704],  zmm11
+    vmovdqu64 [r11 + 768],  zmm12
+    vmovdqu64 [r11 + 832],  zmm13
+    vmovdqu64 [r11 + 896],  zmm14
+    vmovdqu64 [r11 + 960],  zmm15
+    vmovdqu64 [r11 + 1024], zmm16
+    vmovdqu64 [r11 + 1088], zmm17
+    vmovdqu64 [r11 + 1152], zmm18
+    vmovdqu64 [r11 + 1216], zmm19
+    vmovdqu64 [r11 + 1280], zmm20
+    vmovdqu64 [r11 + 1344], zmm21
+    vmovdqu64 [r11 + 1408], zmm22
+    vmovdqu64 [r11 + 1472], zmm23
+    vmovdqu64 [r11 + 1536], zmm24
+    vmovdqu64 [r11 + 1600], zmm25
+    vmovdqu64 [r11 + 1664], zmm26
+    vmovdqu64 [r11 + 1728], zmm27
+    vmovdqu64 [r11 + 1792], zmm28
+    vmovdqu64 [r11 + 1856], zmm29
+    vmovdqu64 [r11 + 1920], zmm30
+    vmovdqu64 [r11 + 1984], zmm31
+    vzeroupper
+
+    add     rsp, 24
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbp
+    pop     rbx
+    ret
+ASM_ENDFUNC asm_call_capture_vec512
+
 ; void asm_call_capture_fp_n(regs_t *out, void *fn, const long iargs[6],
 ;                            const double *fargs, int nfargs);
 ;   out -> rdi, fn -> rsi, iargs -> rdx, fargs -> rcx, nfargs -> r8

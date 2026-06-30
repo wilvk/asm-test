@@ -61,4 +61,22 @@ TEST(simd, avx2_adds_four_doubles_256bit) {
     vec256_t expect = {.f64 = {11.0, 22.0, 33.0, 44.0}};
     ASSERT_VEC256_EQ(out, 0, expect.u8);
 }
+
+/* AVX-512 512-bit capture: asm_call_capture_vec512 marshals vec512_t args into
+ * zmm0..7 and captures the whole zmm file zmm0..31 (out[0] = return). x86-64 only;
+ * ASM_VCALL512* self-skips a host without AVX-512F. */
+extern void vec_add8d(void); /* vec512 vec_add8d(vec512 a, vec512 b), AVX-512 */
+
+TEST(simd, avx512_adds_eight_doubles_512bit) {
+    vec512_t a = {.f64 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}};
+    vec512_t b = {.f64 = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0}};
+    vec512_t out[32];
+    ASM_VCALL512_2(out, vec_add8d, a, b); /* self-skips without AVX-512 */
+    ASSERT_DEQ(out[0].f64[0], 11.0);
+    ASSERT_DEQ(out[0].f64[3], 44.0);
+    ASSERT_DEQ(out[0].f64[7], 88.0); /* the 8th lane needs the FULL 512 bits */
+
+    vec512_t expect = {.f64 = {11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0}};
+    ASSERT_VEC512_EQ(out, 0, expect.u8);
+}
 #endif

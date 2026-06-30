@@ -76,6 +76,9 @@ def declare(lib):
     # AVX2 256-bit capture (Track D) + the CPUID feature probes that gate it.
     lib.asm_call_capture_vec256.argtypes = [v, v, v, v]
     lib.asm_call_capture_vec256.restype = None
+    # AVX-512 512-bit capture (Track D) — the analog over the full zmm file.
+    lib.asm_call_capture_vec512.argtypes = [v, v, v, v]
+    lib.asm_call_capture_vec512.restype = None
     lib.asmtest_cpu_has_avx2.restype = C.c_int
     lib.asmtest_cpu_has_avx512f.restype = C.c_int
     # Non-jumping verdict shim (Track 0.2): returns 0 when ABI-preserved.

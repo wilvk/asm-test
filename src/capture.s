@@ -1124,6 +1124,106 @@ ASM_FUNC asm_call_capture_vec256
 ASM_ENDFUNC asm_call_capture_vec256
 
 /*
+ * void asm_call_capture_vec512(vec512_t *vec, void *fn, const long iargs[6],
+ *                              const vec512_t vargs[8]);
+ * The AVX-512 analog of asm_call_capture_vec256: marshal 8 full 512-bit vector args
+ * into zmm0..7 and capture the zmm file (zmm0..31 — AVX-512 doubles the register
+ * count) into vec[0..31] (64 bytes each; vec[0] = return). x86-64 + AVX-512F only —
+ * the C wrapper / ASM_VCALL512* macros gate it on asmtest_cpu_has_avx512f(), so a
+ * host without AVX-512 never reaches the EVEX-encoded body. vmovdqu64 is the
+ * EVEX-encoded unaligned move (required to reach zmm16..31). vzeroupper on exit.
+ */
+ASM_FUNC asm_call_capture_vec512
+
+#if defined(__x86_64__)
+/* vec -> %rdi, fn -> %rsi, iargs -> %rdx, vargs -> %rcx */
+    pushq   %rbx
+    pushq   %rbp
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+    subq    $24, %rsp
+    movq    %rdi, 0(%rsp)          /* save vec out ptr */
+    movq    %rsi, 8(%rsp)          /* save fn */
+
+    /* Vector args: vargs (rcx) -> zmm0..zmm7 (full 512 bits). */
+    vmovdqu64 0(%rcx),   %zmm0
+    vmovdqu64 64(%rcx),  %zmm1
+    vmovdqu64 128(%rcx), %zmm2
+    vmovdqu64 192(%rcx), %zmm3
+    vmovdqu64 256(%rcx), %zmm4
+    vmovdqu64 320(%rcx), %zmm5
+    vmovdqu64 384(%rcx), %zmm6
+    vmovdqu64 448(%rcx), %zmm7
+
+    /* Integer args: iargs (rdx) -> rdi,rsi,rdx,rcx,r8,r9. */
+    movq    %rdx, %rax
+    movq    0(%rax),  %rdi
+    movq    8(%rax),  %rsi
+    movq    24(%rax), %rcx
+    movq    32(%rax), %r8
+    movq    40(%rax), %r9
+    movq    16(%rax), %rdx
+
+    movq    8(%rsp), %r11
+    movl    $8, %eax               /* variadic ABI: 8 vector registers */
+    call    *%r11
+
+    movq    0(%rsp), %r11          /* vec out ptr */
+    /* Full zmm file: zmm0..31 -> vec[0..31] (64 bytes each). */
+    vmovdqu64 %zmm0,  0(%r11)
+    vmovdqu64 %zmm1,  64(%r11)
+    vmovdqu64 %zmm2,  128(%r11)
+    vmovdqu64 %zmm3,  192(%r11)
+    vmovdqu64 %zmm4,  256(%r11)
+    vmovdqu64 %zmm5,  320(%r11)
+    vmovdqu64 %zmm6,  384(%r11)
+    vmovdqu64 %zmm7,  448(%r11)
+    vmovdqu64 %zmm8,  512(%r11)
+    vmovdqu64 %zmm9,  576(%r11)
+    vmovdqu64 %zmm10, 640(%r11)
+    vmovdqu64 %zmm11, 704(%r11)
+    vmovdqu64 %zmm12, 768(%r11)
+    vmovdqu64 %zmm13, 832(%r11)
+    vmovdqu64 %zmm14, 896(%r11)
+    vmovdqu64 %zmm15, 960(%r11)
+    vmovdqu64 %zmm16, 1024(%r11)
+    vmovdqu64 %zmm17, 1088(%r11)
+    vmovdqu64 %zmm18, 1152(%r11)
+    vmovdqu64 %zmm19, 1216(%r11)
+    vmovdqu64 %zmm20, 1280(%r11)
+    vmovdqu64 %zmm21, 1344(%r11)
+    vmovdqu64 %zmm22, 1408(%r11)
+    vmovdqu64 %zmm23, 1472(%r11)
+    vmovdqu64 %zmm24, 1536(%r11)
+    vmovdqu64 %zmm25, 1600(%r11)
+    vmovdqu64 %zmm26, 1664(%r11)
+    vmovdqu64 %zmm27, 1728(%r11)
+    vmovdqu64 %zmm28, 1792(%r11)
+    vmovdqu64 %zmm29, 1856(%r11)
+    vmovdqu64 %zmm30, 1920(%r11)
+    vmovdqu64 %zmm31, 1984(%r11)
+    vzeroupper
+
+    addq    $24, %rsp
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %rbp
+    popq    %rbx
+    ret
+
+#else
+/* AVX-512 is x86-only; a stub so the symbol resolves on other arches. Never called:
+ * asmtest_cpu_has_avx512f() is false off x86, so the macros self-skip. */
+    ret
+#endif
+
+ASM_ENDFUNC asm_call_capture_vec512
+
+/*
  * void asm_call_capture_args(regs_t *out, void *fn, const long *args,
  *                            int nargs);
  * Passes `nargs` integer args: the first 6 (x86-64) / 8 (AArch64) in registers,

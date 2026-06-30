@@ -136,3 +136,12 @@ ASM_FUNC win64_vaddpd_ymm
     vaddpd  ymm0, ymm0, ymm1
     ret
 ASM_ENDFUNC win64_vaddpd_ymm
+
+; __m512 win64_vaddpd_zmm(__m512 a, __m512 b) -> a + b (8 packed doubles).
+; The AVX-512 analog of win64_vaddpd_ymm: the trampoline puts the two 512-bit vector
+; args in zmm0/zmm1 and the full-width sum returns in zmm0. AVX-512 only — reached
+; solely through asm_call_capture_vec512_win64 under a cpu-has-avx512f gate.
+ASM_FUNC win64_vaddpd_zmm
+    vaddpd  zmm0, zmm0, zmm1
+    ret
+ASM_ENDFUNC win64_vaddpd_zmm

@@ -241,5 +241,15 @@ if (asmtest.cpuHasAvx2()) {
   console.log('ok - vec256.add4d # SKIP no AVX2');
 }
 
+// Track D: AVX-512 512-bit capture (self-skips off-AVX-512F).
+if (asmtest.cpuHasAvx512f()) {
+  const out = asmtest.captureVec512(routine('vec_add8d'),
+    [[1, 2, 3, 4, 5, 6, 7, 8], [10, 20, 30, 40, 50, 60, 70, 80]]);
+  check('vec512.add8d', out[0] === 11 && out[1] === 22 && out[2] === 33 && out[3] === 44 &&
+    out[4] === 55 && out[5] === 66 && out[6] === 77 && out[7] === 88);
+} else {
+  console.log('ok - vec512.add8d # SKIP no AVX-512F');
+}
+
 console.log(`# ${total - fails} passed, ${fails} failed, ${total} total`);
 process.exit(fails === 0 ? 0 : 1);

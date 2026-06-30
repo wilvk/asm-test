@@ -221,12 +221,20 @@ on both the native `ms_abi` lane and the PE/Wine lane (real AVX2 — Wine runs P
 instructions on the host CPU); and **vec256 binding parity** (round 2, `capture_vec256`
 across all ten bindings).
 
-**Still staged:** AVX-512 (`zmm`) native capture and AArch64 **SVE**. Both are
-**hardware-gated and unverifiable on the current host** — there is no AVX-512 silicon
-(qemu-user `-cpu max` doesn't expose the AVX-512 `XCR0` state either, so it can't stand
-in), and SVE needs an AArch64+SVE target. The `_avx512f` probe + type groundwork are in
-place; the work waits on an AVX-512 / SVE runner so the trampoline can be *executed*, not
-just assembled. The **emulator** wide path is the *documented self-skip* case
+**Done since (AVX-512 `zmm`):** native 512-bit capture shipped and is **validated on a
+real AVX-512 host** (this Zen 5 / Ryzen 9 9950X, `avx512f`). `vec512_t` (64 bytes) +
+`asm_call_capture_vec512` marshal 8 `zmm` args and capture the **full zmm0..31 file** (32
+registers — AVX-512 doubles the count) into `vec[0..31]`, in both the GAS and NASM
+trampolines and the **Win64** path (`asm_call_capture_vec512_win64`, Wine PE lane); gated
+on `asmtest_cpu_has_avx512f()` (CPUID + `XCR0` `0xe6`), with `ASM_VCALL512*` / the per-
+binding wrappers self-skipping where AVX-512 is absent. Rolled out across **all ten
+bindings** with parity tests. The `vaddpd zmm` corpus routine `vec_add8d` exercises the
+8th double lane (the bits neither the 128- nor 256-bit path can see).
+
+**Still staged:** AArch64 **SVE** — hardware-gated and unverifiable on the current host
+(needs an AArch64+SVE target). The type/probe groundwork pattern is established by the
+AVX-512 work above; the SVE trampoline waits on an SVE runner to be *executed*, not just
+assembled. The **emulator** wide path is the *documented self-skip* case
 (deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not execute** AVX
 (`UC_ERR_INSN_INVALID`, even with an AVX-capable CPU model set), so wide-vector capture
 is native-only until Unicorn ships AVX execution.

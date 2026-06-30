@@ -35,6 +35,19 @@ static int has_avx2(void) {
     return (xcr0_lo & 0x6) == 0x6;                         /* XMM + YMM state on */
 }
 
+/* AVX-512F probe, mirrors asmtest_cpu_has_avx512f() in src/asmtest.c (Wine runs PE
+ * instructions on the host CPU, so this reflects real silicon). */
+static int has_avx512f(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
+    if (!(c & (1u << 27))) return 0;                      /* OSXSAVE */
+    unsigned xcr0_lo, xcr0_hi;
+    __asm__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+    if ((xcr0_lo & 0xe6) != 0xe6) return 0;               /* opmask+ZMM_Hi256+Hi16_ZMM */
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return 0;
+    return (b & (1u << 16)) != 0;                         /* AVX-512F (leaf 7 EBX) */
+}
+
 #if defined(_WIN32)
 #  define WIN64ABI /* mingw target is already Microsoft x64 */
 #else
@@ -71,6 +84,9 @@ extern WIN64ABI void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
 extern WIN64ABI void asm_call_capture_vec256_win64(vec256_t *vec, void *fn,
                                                    const long long *iargs,
                                                    const vec256_t *vargs);
+extern WIN64ABI void asm_call_capture_vec512_win64(vec512_t *vec, void *fn,
+                                                   const long long *iargs,
+                                                   const vec512_t *vargs);
 
 /* Routines under test — addresses only; never called through these C types. */
 extern void win64_ret_arg0(void);
@@ -87,6 +103,7 @@ extern void win64_sret_make(void);
 extern void win64_vaddsd5(void);
 extern void win64_struct_sum(void);
 extern void win64_vaddpd_ymm(void);
+extern void win64_vaddpd_zmm(void);
 
 static int fails = 0;
 
@@ -227,6 +244,25 @@ int main(void) {
               "win64_vaddpd_ymm via _vec256: full 256-bit ymm0 sum (incl upper 128)");
     } else {
         printf("ok   - win64_vaddpd_ymm via _vec256 # SKIP no AVX2\n");
+    }
+
+    /* asm_call_capture_vec512_win64: AVX-512 512-bit (zmm) capture under Win64,
+     * the wide-vector analog at twice the width again. Self-skips on a non-AVX-512
+     * host. Checks the full 512-bit return (all eight doubles, so the upper lanes
+     * neither the 128- nor 256-bit path can see are exercised). */
+    if (has_avx512f()) {
+        vec512_t v512[2] = {{{0}}};
+        for (int i = 0; i < 8; i++) {
+            v512[0].f64[i] = i + 1;        /* 1..8   */
+            v512[1].f64[i] = (i + 1) * 10; /* 10..80 */
+        }
+        vec512_t out512[32] = {{{0}}};
+        asm_call_capture_vec512_win64(out512, (void *)win64_vaddpd_zmm, args, v512);
+        CHECK(out512[0].f64[0] == 11 && out512[0].f64[3] == 44 &&
+              out512[0].f64[7] == 88,
+              "win64_vaddpd_zmm via _vec512: full 512-bit zmm0 sum (incl upper lanes)");
+    } else {
+        printf("ok   - win64_vaddpd_zmm via _vec512 # SKIP no AVX-512\n");
     }
 
     /* asm_call_capture_bigstruct_win64: large struct passed by reference. */

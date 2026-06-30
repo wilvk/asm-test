@@ -204,6 +204,37 @@ def capture_vec256(fn, vargs=()):
     return [raw[i * 32 : i * 32 + 32] for i in range(16)]
 
 
+def cpu_has_avx512f():
+    """True if the host CPU and OS support AVX-512F (gate :func:`capture_vec512`)."""
+    return bool(load().lib.asmtest_cpu_has_avx512f())
+
+
+def vec512_f64(a, b, c, d, e, f, g, h):
+    """Pack eight float64 lanes into a 64-byte 512-bit (AVX-512) vector arg."""
+    return struct.pack("<8d", a, b, c, d, e, f, g, h)
+
+
+def capture_vec512(fn, vargs=()):
+    """AVX-512 512-bit capture (Track D): marshal up to 8 ``vec512_t`` args (64-byte
+    ``bytes`` each) into zmm0..7 and capture the whole zmm file. Returns a list
+    of 32 64-byte ``bytes`` (``out[0]`` = the vector return). x86-64 + AVX-512F only
+    — gate on :func:`cpu_has_avx512f`."""
+    c = load()
+    out = (C.c_ubyte * (32 * 64))()
+    vb = (C.c_ubyte * (8 * 64))()
+    for i, vec in enumerate(list(vargs)[:8]):
+        raw = bytes(vec)
+        if len(raw) != 64:
+            raise ValueError("each 512-bit vector arg must be exactly 64 bytes")
+        vb[i * 64 : i * 64 + 64] = raw
+    c.lib.asm_call_capture_vec512(
+        C.cast(out, C.c_void_p), C.c_void_p(_addr(fn)),
+        C.cast(_longs([], 6), C.c_void_p), C.cast(vb, C.c_void_p),
+    )
+    raw = bytes(out)
+    return [raw[i * 64 : i * 64 + 64] for i in range(32)]
+
+
 # ------------------------------------------------------------------ #
 # Emulator tier                                                       #
 # ------------------------------------------------------------------ #

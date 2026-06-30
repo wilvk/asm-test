@@ -28,4 +28,15 @@ ASM_FUNC vec_add4d
     vaddpd  %ymm1, %ymm0, %ymm0 /* ymm0 = ymm0 + ymm1, packed double */
     ret
 ASM_ENDFUNC vec_add4d
+
+/*
+ * vec512 vec_add8d(vec512 a, vec512 b);  lane-wise add of EIGHT 64-bit doubles
+ * (AVX-512): a -> %zmm0, b -> %zmm1, result -> %zmm0. x86-64 only — AVX-512 is x86's;
+ * the native vec512 capture path (asm_call_capture_vec512) is AVX-512F-gated, and
+ * the matching test self-skips where AVX-512 is absent.
+ */
+ASM_FUNC vec_add8d
+    vaddpd  %zmm1, %zmm0, %zmm0 /* zmm0 = zmm0 + zmm1, packed double (8 lanes) */
+    ret
+ASM_ENDFUNC vec_add8d
 #endif

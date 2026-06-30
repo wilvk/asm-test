@@ -77,7 +77,7 @@ public final class Asmtest {
         GUARD_REG_CLEAR, WATCH_NEW, WATCH_FREE, WATCH_VIOLATED, WATCH_ADDR, WATCH_RIP,
         RGUARD_NEW, RGUARD_FREE, RGUARD_VIOLATED, RGUARD_GOT, FUZZ_COVER1, MUTATION_TEST1,
         FUZZ_NEW, FUZZ_FREE, FUZZ_BLOCKS, FUZZ_CORPUS, MUT_NEW, MUT_FREE, MUT_KILLED,
-        MUT_SURVIVED, CAPTURE_VEC256, CPU_AVX2;
+        MUT_SURVIVED, CAPTURE_VEC256, CPU_AVX2, CAPTURE_VEC512, CPU_AVX512F;
 
     // Resolve libasmtest_emu: an explicit ASMTEST_LIB wins (dev / custom build);
     // otherwise extract the bundled native payload for this platform from the jar.
@@ -273,6 +273,9 @@ public final class Asmtest {
         // AVX2 256-bit capture (Track D).
         CAPTURE_VEC256 = h(emu, "asm_call_capture_vec256", FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, ADDRESS));
         CPU_AVX2 = h(emu, "asmtest_cpu_has_avx2", FunctionDescriptor.of(JAVA_INT));
+        // AVX-512 512-bit capture (Track D).
+        CAPTURE_VEC512 = h(emu, "asm_call_capture_vec512", FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+        CPU_AVX512F = h(emu, "asmtest_cpu_has_avx512f", FunctionDescriptor.of(JAVA_INT));
     }
 
     // ---- helpers for marshalling Java arrays into native memory ---- //
@@ -319,13 +322,19 @@ public final class Asmtest {
 
     private static MemorySegment str(String s) { return ARENA.allocateUtf8String(s); }
 
-    /** Resolve a canonical corpus routine (e.g. "add_signed") to its address. */
+    /** Resolve a canonical corpus routine (e.g. "add_signed") to its address.
+     *  Goes through the name dispatcher first; if that does not know the routine
+     *  (NULL), falls back to a direct symbol lookup in the corpus library, so a
+     *  globally-exported routine resolves even when the dispatcher lags it. */
     public static MemorySegment corpusRoutine(String name) {
         if (CORPUS_ROUTINE == null) {
             throw new IllegalStateException("set ASMTEST_CORPUS_LIB to use corpusRoutine");
         }
         try {
-            return (MemorySegment) CORPUS_ROUTINE.invoke(str(name));
+            MemorySegment addr = (MemorySegment) CORPUS_ROUTINE.invoke(str(name));
+            if (addr.address() == 0)
+                return CORPUS.find(name).orElse(MemorySegment.NULL);
+            return addr;
         } catch (Throwable t) { throw rethrow(t); }
     }
 
@@ -654,6 +663,28 @@ public final class Asmtest {
             CAPTURE_VEC256.invoke(out, fn, ia, va);
             double[] ret = new double[4];
             for (int l = 0; l < 4; l++) ret[l] = out.getAtIndex(JAVA_DOUBLE, l);
+            return ret;
+        } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** True if the host CPU + OS support AVX-512F (gate {@link #captureVec512}). */
+    public static boolean cpuHasAvx512f() {
+        try { return (int) CPU_AVX512F.invoke() != 0; } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** AVX-512 512-bit capture (Track D): {@code vargs} is an array of eight-double
+     *  lanes; returns the eight f64 lanes of zmm0 (the vector return). */
+    public static double[] captureVec512(MemorySegment fn, double[][] vargs) {
+        try {
+            MemorySegment out = ARENA.allocate(32L * 64);
+            MemorySegment va = ARENA.allocate(8L * 64);
+            for (int i = 0; i < Math.min(vargs.length, 8); i++)
+                for (int l = 0; l < 8; l++)
+                    va.setAtIndex(JAVA_DOUBLE, (long) i * 8 + l, vargs[i][l]);
+            MemorySegment ia = ARENA.allocate(6L * 8);
+            CAPTURE_VEC512.invoke(out, fn, ia, va);
+            double[] ret = new double[8];
+            for (int l = 0; l < 8; l++) ret[l] = out.getAtIndex(JAVA_DOUBLE, l);
             return ret;
         } catch (Throwable t) { throw rethrow(t); }
     }

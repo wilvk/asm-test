@@ -19,6 +19,7 @@ long clobbers_rbx(long, long);
 double fp_add(double, double);
 void vec_add4f(void);  // vec128 in/out; only its address is needed
 void vec_add4d(void);  // vec256 in/out (AVX2); only its address is needed
+void vec_add8d(void);  // vec512 in/out (AVX-512); only its address is needed
 long read_fault(const long *);  // loads *p; faults if p is unmapped
 double int_to_double(long);     // (double)n into xmm0 from an integer arg
 }
@@ -173,6 +174,21 @@ TEST(cpp, vec256_avx2) {
     capture_vec256(reinterpret_cast<void *>(vec_add4d), {a, b}, out);
     ASSERT_EQ(out[0].f64[0], 11.0);
     ASSERT_EQ(out[0].f64[3], 44.0);  // upper-128 lane — proves full 256-bit
+}
+
+// AVX-512 512-bit capture (Track D): self-skips where the host lacks AVX-512F.
+TEST(cpp, vec512_avx512) {
+    if (!asmtest_cpu_has_avx512f())
+        SKIP("AVX-512F not available on this host");
+    vec512_t a{}, b{}, out[32]{};
+    for (int i = 0; i < 8; ++i) {
+        a.f64[i] = i + 1;          // {1, 2, ..., 8}
+        b.f64[i] = (i + 1) * 10;   // {10, 20, ..., 80}
+    }
+    capture_vec512(reinterpret_cast<void *>(vec_add8d), {a, b}, out);
+    ASSERT_EQ(out[0].f64[0], 11.0);
+    ASSERT_EQ(out[0].f64[6], 77.0);
+    ASSERT_EQ(out[0].f64[7], 88.0);  // 8th lane — proves full 512-bit
 }
 
 // Cross-arch guests run raw machine-code bytes through their ISA's Unicorn guest,

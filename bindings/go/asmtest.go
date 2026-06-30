@@ -122,6 +122,13 @@ extern unsigned long long asmtest_emu_mutation_survived(void *s);
 // AVX2 256-bit capture (Track D).
 extern void asm_call_capture_vec256(void *vec, void *fn, long *iargs, void *vargs);
 extern int asmtest_cpu_has_avx2(void);
+// AVX-512 512-bit capture (Track D).
+extern void asm_call_capture_vec512(void *vec, void *fn, long *iargs, void *vargs);
+extern int asmtest_cpu_has_avx512f(void);
+// vec_add8d (AVX-512 corpus routine) is linked in via -lasmtest_corpus, but the
+// shared asmtest_corpus_routine() name table does not register it; take its
+// address directly so the go binding can drive it without touching corpus glue.
+extern void vec_add8d(void);
 
 // In-line assembler entry points live in libasmtest_emu (now the full superset:
 // emulator + Keystone assembler + Capstone disassembler), which the binding loads.
@@ -391,6 +398,33 @@ func CaptureVec256(fn Routine, vargs [][4]float64) [4]float64 {
 		unsafe.Pointer(&va[0]))
 	return *(*[4]float64)(unsafe.Pointer(&out[0]))
 }
+
+// --- AVX-512 512-bit capture (Track D) --- //
+
+// CPUHasAVX512F reports whether the host supports AVX-512F (gate CaptureVec512).
+func CPUHasAVX512F() bool { return C.asmtest_cpu_has_avx512f() != 0 }
+
+// CaptureVec512 runs an AVX-512 routine with 512-bit vector args (each [8]float64)
+// and returns the 8 f64 lanes of zmm0 (the vector return). x86-64 + AVX-512F only.
+func CaptureVec512(fn Routine, vargs [][8]float64) [8]float64 {
+	out := make([]byte, 32*64)
+	va := make([]float64, 8*8)
+	for i, v := range vargs {
+		if i >= 8 {
+			break
+		}
+		copy(va[i*8:], v[:])
+	}
+	ia := make([]int64, 6)
+	C.asm_call_capture_vec512(unsafe.Pointer(&out[0]), fn, clongPtr(ia),
+		unsafe.Pointer(&va[0]))
+	return *(*[8]float64)(unsafe.Pointer(&out[0]))
+}
+
+// vecAdd8dRoutine returns the address of the AVX-512 corpus routine vec_add8d.
+// It is taken directly rather than via CorpusRoutine because the shared
+// asmtest_corpus_routine() name table does not register vec_add8d.
+func vecAdd8dRoutine() Routine { return Routine(C.vec_add8d) }
 
 // --- helpers for passing Go slices to C (no Go pointers inside the slices) --- //
 

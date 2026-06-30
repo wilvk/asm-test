@@ -209,8 +209,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   native `ms_abi` lane and the PE/Wine lane (Wine runs PE instructions on the host
   CPU, so it is real AVX2). Track D of the
   [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md)
-  (the "Win64 wide path" follow-on); AVX-512 (`zmm`) and AArch64 SVE remain staged,
-  hardware-gated on a runner that can execute those instructions.
+  (the "Win64 wide path" follow-on); AArch64 SVE remains staged, hardware-gated on a
+  runner that can execute it.
+
+- **AVX-512 512-bit (`zmm`) capture — across the core, Win64, and all ten bindings.**
+  The wide-vector path now reaches 512 bits, validated on real AVX-512 silicon (a Zen 5
+  / Ryzen 9 9950X). A new `vec512_t` (64 bytes) and `asm_call_capture_vec512` marshal
+  eight `zmm` args into `zmm0..7` and capture the **full `zmm0..31` file** — AVX-512
+  doubles the register *count* as well as the width, so the capture is a `vec512_t[32]`
+  (vs `vec256_t[16]` for AVX2) — using the EVEX-encoded `vmovdqu64` (required to reach
+  `zmm16..31`). It is gated on a real `asmtest_cpu_has_avx512f()` (CPUID + `XCR0` `0xe6`:
+  opmask + `ZMM_Hi256` + `Hi16_ZMM`); the `ASM_VCALL512*` macros and every binding
+  wrapper self-skip where AVX-512 is absent, so the same suite runs everywhere. Shipped
+  in **both** the GAS and NASM trampolines (`src/capture.{s,asm}`) and the **Win64** path
+  (`asm_call_capture_vec512_win64`, Microsoft x64 ABI, low-128 `xmm6..15` saved/restored),
+  with `ASSERT_VEC512_EQ` + `asmtest_assert_vec512_eq` for the 64-byte lane compare. A
+  `vec_add8d` corpus routine (`vaddpd zmm`, 8 packed doubles) and `win64_vaddpd_zmm`
+  assert the full 512-bit return — the 8th double lane proves the bits neither the 128-
+  nor 256-bit path can see. Exposed across **all ten** language bindings (Python, C++,
+  Rust, Go, Node, Java, .NET, Ruby, Lua, Zig) as `capture_vec512`/`cpu_has_avx512f`
+  analogs with per-binding parity tests. Closes the AVX-512 half of gap #4 in the
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md)
+  (its "no AVX-512 silicon" caveat is now lifted on this host); AArch64 SVE remains the
+  staged remainder.
 
 - **Publishable packages (Track A): library-exposing artifacts, self-locating
   native libs, and a dry-run release workflow.** The packaging scaffolding now

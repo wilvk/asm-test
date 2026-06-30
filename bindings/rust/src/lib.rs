@@ -311,6 +311,31 @@ impl Vec256 {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Vec512 {
+    pub bytes: [u8; 64],
+}
+
+impl Vec512 {
+    /// Pack eight f64 lanes into a 512-bit vector.
+    pub fn from_f64(lanes: [f64; 8]) -> Self {
+        let mut v = Vec512 { bytes: [0; 64] };
+        for (i, x) in lanes.iter().enumerate() {
+            v.bytes[i * 8..i * 8 + 8].copy_from_slice(&x.to_le_bytes());
+        }
+        v
+    }
+    /// The eight f64 lanes of the vector.
+    pub fn f64(&self) -> [f64; 8] {
+        let mut out = [0.0; 8];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f64::from_le_bytes(self.bytes[i * 8..i * 8 + 8].try_into().unwrap());
+        }
+        out
+    }
+}
+
 extern "C" {
     fn asm_call_capture(out: *mut Regs, f: *mut c_void, args: *const c_long);
     fn asm_call_capture_fp(
@@ -354,6 +379,9 @@ extern "C" {
     // AVX2 256-bit capture (Track D).
     fn asm_call_capture_vec256(out: *mut Vec256, f: *mut c_void, iargs: *const c_long, vargs: *const Vec256);
     fn asmtest_cpu_has_avx2() -> c_int;
+    // AVX-512 512-bit capture (Track D).
+    fn asm_call_capture_vec512(out: *mut Vec512, f: *mut c_void, iargs: *const c_long, vargs: *const Vec512);
+    fn asmtest_cpu_has_avx512f() -> c_int;
 }
 
 fn args6(args: &[i64]) -> [c_long; 6] {
@@ -493,6 +521,24 @@ pub fn capture_vec256(f: *mut c_void, vargs: &[Vec256]) -> [Vec256; 16] {
     let ia = [0 as c_long; 6];
     let mut out = [Vec256 { bytes: [0; 32] }; 16];
     unsafe { asm_call_capture_vec256(out.as_mut_ptr(), f, ia.as_ptr(), va.as_ptr()) };
+    out
+}
+
+/// True if the host CPU + OS support AVX-512F (gate [`capture_vec512`]).
+pub fn cpu_has_avx512f() -> bool {
+    unsafe { asmtest_cpu_has_avx512f() != 0 }
+}
+
+/// AVX-512 512-bit capture (Track D): run `f` with `vargs` (each a [`Vec512`]) and
+/// return the zmm file as 32 [`Vec512`] (out[0] = the vector return).
+pub fn capture_vec512(f: *mut c_void, vargs: &[Vec512]) -> [Vec512; 32] {
+    let mut va = [Vec512 { bytes: [0; 64] }; 8];
+    for (i, v) in vargs.iter().take(8).enumerate() {
+        va[i] = *v;
+    }
+    let ia = [0 as c_long; 6];
+    let mut out = [Vec512 { bytes: [0; 64] }; 32];
+    unsafe { asm_call_capture_vec512(out.as_mut_ptr(), f, ia.as_ptr(), va.as_ptr()) };
     out
 }
 

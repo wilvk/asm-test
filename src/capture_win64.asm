@@ -1071,3 +1071,111 @@ ASM_FUNC asm_call_capture_vec256_win64
     pop     rbp
     ret
 ASM_ENDFUNC asm_call_capture_vec256_win64
+
+; void asm_call_capture_vec512_win64(vec512_t *vec, void *fn,
+;                                    const long long *iargs,
+;                                    const vec512_t *vargs);
+;
+; The Win64 AVX-512 analog of asm_call_capture_vec512: marshals 4 integer args
+; (rcx/rdx/r8/r9) and 4 full 512-bit vector args (zmm0..3), calls fn, then captures
+; the whole zmm file zmm0..31 (AVX-512 doubles the count) into vec[0..31] (64 bytes
+; each; vec[0] = the return). The callee-saved low 128 of xmm6..15 is saved/restored
+; so this trampoline honours Win64 to its own caller (the upper bits of zmm6..15 are
+; volatile per the ABI, and vzeroupper clears the ymm uppers on exit). Captures the
+; vector file only — the 128-bit path covers GP/flags. AVX-512F only: the caller gates
+; on asmtest_cpu_has_avx512f(), so a non-AVX-512 host never reaches the EVEX body.
+;
+; Inbound (Win64): vec = rcx, fn = rdx, iargs = r8, vargs = r9.
+ASM_FUNC asm_call_capture_vec512_win64
+    push    rbp
+    mov     rbp, rsp                ; entry rsp == 8; after push rbp == 0 (mod 16)
+    ; Reserve 224 (== 0 mod 16) so rsp stays 16-aligned at the call:
+    ;   [rsp+0..31]    shadow space
+    ;   [rsp+32]       stash vec (out)
+    ;   [rsp+40]       stash fn
+    ;   [rsp+48..207]  xmm6..15 save (10 * 16, low 128 only)
+    ;   [rsp+208..223] padding
+    sub     rsp, 224
+    mov     [rsp+32], rcx           ; vec out
+    mov     [rsp+40], rdx           ; fn
+
+    ; Preserve the callee-saved vector registers (low 128) we are about to use.
+    movdqu  [rsp+48],  xmm6
+    movdqu  [rsp+64],  xmm7
+    movdqu  [rsp+80],  xmm8
+    movdqu  [rsp+96],  xmm9
+    movdqu  [rsp+112], xmm10
+    movdqu  [rsp+128], xmm11
+    movdqu  [rsp+144], xmm12
+    movdqu  [rsp+160], xmm13
+    movdqu  [rsp+176], xmm14
+    movdqu  [rsp+192], xmm15
+
+    ; Vector args: vargs (r9) -> zmm0..3 (full 512 bits).
+    vmovdqu64 zmm0, [r9+0]
+    vmovdqu64 zmm1, [r9+64]
+    vmovdqu64 zmm2, [r9+128]
+    vmovdqu64 zmm3, [r9+192]
+
+    ; Integer args: iargs (r8) -> rcx, rdx, r8, r9 (load the r8/r9 bases last).
+    mov     rax, r8
+    mov     rcx, [rax+0]
+    mov     rdx, [rax+8]
+    mov     r9,  [rax+24]
+    mov     r8,  [rax+16]
+
+    mov     r11, [rsp+40]           ; fn
+    call    r11
+
+    ; Full zmm file: zmm0..31 -> vec[0..31] (64 bytes each).
+    mov     r11, [rsp+32]           ; vec out
+    vmovdqu64 [r11+0],    zmm0
+    vmovdqu64 [r11+64],   zmm1
+    vmovdqu64 [r11+128],  zmm2
+    vmovdqu64 [r11+192],  zmm3
+    vmovdqu64 [r11+256],  zmm4
+    vmovdqu64 [r11+320],  zmm5
+    vmovdqu64 [r11+384],  zmm6
+    vmovdqu64 [r11+448],  zmm7
+    vmovdqu64 [r11+512],  zmm8
+    vmovdqu64 [r11+576],  zmm9
+    vmovdqu64 [r11+640],  zmm10
+    vmovdqu64 [r11+704],  zmm11
+    vmovdqu64 [r11+768],  zmm12
+    vmovdqu64 [r11+832],  zmm13
+    vmovdqu64 [r11+896],  zmm14
+    vmovdqu64 [r11+960],  zmm15
+    vmovdqu64 [r11+1024], zmm16
+    vmovdqu64 [r11+1088], zmm17
+    vmovdqu64 [r11+1152], zmm18
+    vmovdqu64 [r11+1216], zmm19
+    vmovdqu64 [r11+1280], zmm20
+    vmovdqu64 [r11+1344], zmm21
+    vmovdqu64 [r11+1408], zmm22
+    vmovdqu64 [r11+1472], zmm23
+    vmovdqu64 [r11+1536], zmm24
+    vmovdqu64 [r11+1600], zmm25
+    vmovdqu64 [r11+1664], zmm26
+    vmovdqu64 [r11+1728], zmm27
+    vmovdqu64 [r11+1792], zmm28
+    vmovdqu64 [r11+1856], zmm29
+    vmovdqu64 [r11+1920], zmm30
+    vmovdqu64 [r11+1984], zmm31
+
+    ; Restore the callee-saved low 128 of xmm6..15 for our caller.
+    movdqu  xmm6,  [rsp+48]
+    movdqu  xmm7,  [rsp+64]
+    movdqu  xmm8,  [rsp+80]
+    movdqu  xmm9,  [rsp+96]
+    movdqu  xmm10, [rsp+112]
+    movdqu  xmm11, [rsp+128]
+    movdqu  xmm12, [rsp+144]
+    movdqu  xmm13, [rsp+160]
+    movdqu  xmm14, [rsp+176]
+    movdqu  xmm15, [rsp+192]
+    vzeroupper
+
+    mov     rsp, rbp
+    pop     rbp
+    ret
+ASM_ENDFUNC asm_call_capture_vec512_win64
