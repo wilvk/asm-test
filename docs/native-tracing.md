@@ -422,10 +422,11 @@ single-step form possible on **AArch64**, whose single-step bit (`MDSCR_EL1.SS`)
 kernel-only with no in-process form. It runs on **Linux x86-64 and AArch64** off one
 body — the AArch64 arm reads the PC + return register via `PTRACE_GETREGSET`/`NT_PRSTATUS`
 (no `PTRACE_GETREGS` there) and decodes block lengths with `ASMTEST_ARCH_ARM64` Capstone.
-(The AArch64 single-step *stream* is validated on a real AArch64 host, not under
-qemu-user, which cannot emulate the ptrace tracer/tracee relationship — `available()`
-self-probes and self-skips there; the `/proc`+jitdump readers, being pure file parsing,
-run on any Linux arch and are validated live on AArch64.) The supported target is a
+(The AArch64 single-step *stream* can **only** be validated on a real AArch64 host —
+not under qemu-user, which cannot emulate the ptrace tracer/tracee relationship — so it
+is code-implemented and build/self-skip-validated, with the live stream **pending real
+hardware**; `available()` self-probes and self-skips under qemu. The `/proc`+jitdump
+readers, being pure file parsing, run on any Linux arch and are validated live on AArch64.) The supported target is a
 deterministic, single-threaded routine (≤6 integer args) that **may call out to helpers**
 outside the registered region — call-outs (runtime helpers, GC barriers, PLT stubs) are
 **stepped over at native speed** and not recorded, so a real method that calls helpers
@@ -630,7 +631,7 @@ binding's hwtrace test exercises the live-testable subset — out-of-process `tr
 to the same `[0,3,6,c,11]` stream, `/proc/maps` and perf-map resolution, a
 binary-jitdump round-trip, and `runTo`'s FFI round-trip (a NULL-addr → `EINVAL` probe;
 the live foreign attach is covered by the C suite) — and `asmtest_ptrace.h` is covered by
-the `check-bindings-parity` gate (37 tier symbols × 10 bindings). All ten are validated
+the `check-bindings-parity` gate (51 tier symbols × 10 bindings). All ten are validated
 live in plain unprivileged containers.
 
 ## Auto-selecting a backend (the hardware-tier cascade)

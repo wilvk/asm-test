@@ -46,9 +46,11 @@ Two facts worth stating up front because they are easy to get wrong:
   tracer parent `PTRACE_SINGLESTEP`s a forked tracee and reconstructs the *same*
   exact offsets out of band (the managed-runtime path). The AArch64 arm rides the same
   seam (PC via `PTRACE_GETREGSET`/`NT_PRSTATUS`, `ASMTEST_ARCH_ARM64` length decode);
-  its single-step *stream* is validated on real AArch64 hardware, not under qemu-user
-  (which cannot emulate ptrace — the backend self-probes and self-skips there), while
-  its `/proc`+jitdump readers run on any Linux arch and are validated live on AArch64.
+  its single-step *stream* can **only** be validated on real AArch64 hardware (not under
+  qemu-user, which cannot emulate ptrace — the backend self-probes and self-skips there),
+  so the stream is **pending real hardware** while the rest is code-implemented and
+  build/self-skip-validated; its `/proc`+jitdump readers run on any Linux arch and are
+  validated live on AArch64.
   Only the *cross-OS* fronts (Windows VEH, macOS-Intel) remain Phase-5 *(planned)* — so
   single-step rows below read *implemented* for Linux x86-64/AArch64 and carry
   *(planned)* only where they name one of those fronts. See the
@@ -276,7 +278,7 @@ transparent, while a native→emulator fallback crosses a semantic line and shou
 | OS / arch | Resolution order |
 |---|---|
 | Linux x86-64 | *(full native cascade — see Matrix 8)* → emulator |
-| Linux AArch64 | CoreSight *(scaffold → self-skips)* → out-of-proc ptrace single-step (W2, *planned*) → emulator |
+| Linux AArch64 | CoreSight *(scaffold → self-skips)* → out-of-proc ptrace single-step (W2; code-implemented, stream HW-pending) → emulator |
 | macOS Intel | single-step (macOS-Intel, *planned* Ph5) → emulator |
 | macOS Apple Silicon | **emulator only** |
 | Windows x64 | single-step (VEH, *planned* Ph5) → emulator |
@@ -291,8 +293,8 @@ by the emulator via `emu_call_win64_traced`.
 |---|---|
 | Native / compiled (C, C++, Rust, Go, Zig, Ruby, Lua) | in-process DynamoRIO (+ HW trace where the hardware row allows) → emulator |
 | CPython (GIL-serialized, no JIT) | in-process DynamoRIO *(supported managed target)* → emulator |
-| JVM | DynamoRIO *(best-effort, guarded)* → out-of-band Intel PT / W2 ptrace *(planned)* → emulator |
-| Node / .NET | out-of-band Intel PT (Intel) / W2 ptrace single-step *(planned)* → emulator *(in-process DynamoRIO self-skips: cannot take over JIT/GC threads)* |
+| JVM | DynamoRIO *(best-effort, guarded)* → out-of-band Intel PT / W2 ptrace *(shipped, Linux x86-64)* → emulator |
+| Node / .NET | out-of-band Intel PT (Intel) / W2 ptrace single-step *(shipped, Linux x86-64)* → emulator *(in-process DynamoRIO self-skips: cannot take over JIT/GC threads)* |
 
 The language axis is **orthogonal** to hardware: it does not change *whether* a trace
 facility exists, only whether *in-process* attach is viable. A managed JIT/GC runtime

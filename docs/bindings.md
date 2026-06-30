@@ -18,11 +18,16 @@ Both extra tiers now ship inside `libasmtest_emu` itself — it is the full
 superset (emulator + Keystone assembler + Capstone disassembler), so they are on
 by default (see [The optional native tiers](#the-optional-native-tiers) below).
 
-A further **in-process native-trace** tier (DynamoRIO) is a *separate*, advanced
-opt-in that ships as its own `libasmtest_drapp` (not part of the superset) with a
-Python wrapper, `asmtest.drtrace`. See [Native runtime tracing](native-tracing.md).
-A binding still keeps an `asm_available` / `disas_available` probe so it can
-self-skip if pointed at an older/leaner lib that lacks them.
+Two further **native-trace** tiers — in-process **DynamoRIO** (`libasmtest_drapp`)
+and the **hardware / single-step** tier (`libasmtest_hwtrace`) — are *separate*,
+advanced opt-ins (neither is part of the superset). **Every** binding ships a
+wrapper for both: a `drtrace` (`NativeTrace`) and an `hwtrace` (`HwTrace`) module,
+each dlopen-loading its library at run time and self-skipping when it is absent. The
+single-step backend in particular traces live on any x86-64 Linux with no engine
+install, so each language page works it end to end. See
+[Native runtime tracing](native-tracing.md). A binding still keeps an
+`asm_available` / `disas_available` probe so it can self-skip if pointed at an
+older/leaner lib that lacks them.
 
 This page is the **shared overview** — architecture, one-time setup, and the
 capability map common to every binding. Each language then has its own page with

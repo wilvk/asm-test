@@ -174,6 +174,51 @@ NativeTrace::shutdown();                   // dr_app_stop_and_cleanup (back to n
 Linux x86-64 only, self-skips when DynamoRIO is absent; full reference in
 [Native runtime tracing](../native-tracing.md).
 
+### Hardware / single-step tracing — `HwTrace` (optional)
+
+A sibling native tier (`asmtest_hwtrace.hpp`) records the **same**
+`asmtest_trace_t` coverage from the real CPU, but needs no separate engine
+install: it defaults to the **single-step** backend (the CPU's `EFLAGS.TF` trap
+flag), so `HwTrace::available(SINGLESTEP)` is true and it **traces live on any
+x86-64 Linux** — CI and plain containers included — where the DynamoRIO tier needs
+a DynamoRIO install. Intel PT and AMD LBR are picked automatically on the
+bare-metal hardware that has them.
+
+```cpp
+#include "asmtest_hwtrace.hpp"
+using namespace asmtest;
+
+if (!HwTrace::available(SINGLESTEP)) return;   // self-skip off x86-64 Linux
+HwTrace::init(SINGLESTEP);
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks)
+std::vector<std::uint8_t> bytes = {
+    0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+    0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3};
+NativeCode code = NativeCode::from_bytes(bytes);
+
+HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+tr.register_region("add2", code);
+{
+    auto s = tr.region("add2");            // EFLAGS.TF armed across begin..call..end
+    long r = code.call(20, 22);            // r == 42; jle taken, dec skipped
+}
+// Byte-for-byte the Unicorn / DynamoRIO / Intel PT result for this fixture.
+tr.insn_offsets();                         // == {0x0, 0x3, 0x6, 0xc, 0x11}
+tr.covered(0);                             // entry basic block entered?
+tr.free(); code.free();
+
+HwTrace::shutdown();
+```
+
+`HwTrace::resolve(BEST)` / `HwTrace::auto_select(BEST)` pick the host's
+most-faithful available backend (Intel PT → AMD LBR → single-step). A cross-tier
+resolver (spanning the DynamoRIO and emulator tiers) and an out-of-process
+`Ptrace` surface — which traces a method in a **separate** process (fork-and-step,
+foreign-process attach + run-to-method, and `/proc`-map / jitdump resolution), the
+managed-runtime path — round out the tier. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```cpp

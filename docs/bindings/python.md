@@ -270,6 +270,53 @@ This tier is Linux x86-64 only and self-skips when DynamoRIO is absent; the full
 reference (lifecycle, env vars, the managed-runtime caveat) lives in
 [Native runtime tracing](../native-tracing.md).
 
+### Hardware / single-step tracing — `HwTrace` (optional)
+
+A sibling native tier (`asmtest.hwtrace`) records the **same** `asmtest_trace_t`
+coverage from the real CPU, but needs no separate engine: it defaults to the
+**single-step** backend (the CPU's `EFLAGS.TF` trap flag), so
+`HwTrace.available(SINGLESTEP)` is true and it **traces live on any x86-64 Linux** —
+including CI and plain containers — where the DynamoRIO tier needs a DynamoRIO
+install. Intel PT and AMD LBR are picked automatically on the bare-metal hardware
+that has them. Build it with `make shared-hwtrace` and point `ASMTEST_HWTRACE_LIB`
+at `build/libasmtest_hwtrace.so`.
+
+```python
+from asmtest.hwtrace import HwTrace, NativeCode, Ptrace, SINGLESTEP, BEST
+
+if not HwTrace.available(SINGLESTEP):
+    pytest.skip(HwTrace.skip_reason(SINGLESTEP))
+HwTrace.init(SINGLESTEP)
+
+# mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks)
+code = NativeCode.from_bytes(
+    bytes([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0,
+           0, 0, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3]))
+trace = HwTrace.new(blocks=64, instructions=64)
+trace.register("add2", code)
+with trace.region("add2"):                 # EFLAGS.TF armed across begin..call..end
+    result = code.call(20, 22)             # 42; jle taken, dec skipped
+assert result == 42
+assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xc, 0x11]   # == Unicorn/DynamoRIO/PT
+assert trace.covered(0) and not trace.truncated()
+trace.free(); code.free()
+HwTrace.shutdown()
+
+# Pick the host's most-faithful backend without hard-coding an enum:
+backend = HwTrace.auto(BEST)               # >= 0 backend, or ASMTEST_HW_EUNAVAIL
+
+# Out-of-process / foreign-JIT: fork-and-step a tracee for the same offsets out of band.
+result = Ptrace.trace_call(code, [20, 22], trace)
+```
+
+* `HwTrace.resolve(policy)` / `HwTrace.auto(policy)` return the available cascade /
+  its head (`BEST` or `CEILING_FREE`); `HwTrace.resolve_tiers` / `auto_tier` extend
+  it across the DynamoRIO and emulator tiers (`TRACE_BEST` / `TRACE_NATIVE_ONLY` / …).
+* The `Ptrace` surface (`trace_call`, `trace_attached`, `run_to`, `region_by_addr`,
+  `perfmap_symbol`, `jitdump_find`) and the `CodeImage` recorder trace a method in a
+  **separate** process — the managed-runtime path. Full reference in
+  [Native runtime tracing](../native-tracing.md).
+
 ### Mid-execution guards (Track F)
 
 Assert a property *while* a routine runs, not just on its result (x86-64 guest).

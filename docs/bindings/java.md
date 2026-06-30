@@ -177,6 +177,47 @@ Linux x86-64 only; self-skips without DynamoRIO (and the JVM can be flaky for
 in-process takeover — prefer Intel PT, see the central doc). Full reference in
 [Native runtime tracing](../native-tracing.md).
 
+### Hardware / single-step tracing — `HwTrace` (optional)
+
+A sibling native tier ([`HwTrace.java`](https://github.com/wilvk/asm-test/blob/main/bindings/java/HwTrace.java))
+records the **same** `asmtest_trace_t` coverage from the real CPU, but needs no
+separate engine install: it defaults to the **single-step** backend (the CPU's
+`EFLAGS.TF` trap flag), so `HwTrace.available(...)` is true and it **traces live on
+any x86-64 Linux** — CI and plain containers included — where the in-process
+DynamoRIO tier can be flaky under the JVM. Intel PT and AMD LBR are picked
+automatically on the bare-metal hardware that has them.
+
+```java
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+byte[] routine = {
+    0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x01, (byte) 0xF0, 0x48, 0x3D,
+    0x64, 0x00, 0x00, 0x00, 0x7E, 0x03, 0x48, (byte) 0xFF, (byte) 0xC8, (byte) 0xC3
+};
+
+if (!HwTrace.available(HwTrace.SINGLESTEP)) return;   // self-skip off x86-64 Linux
+HwTrace.init(HwTrace.SINGLESTEP);
+try {
+    HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(routine);
+    HwTrace.NativeTrace tr = HwTrace.create(64, 64);   // blocks=64, instructions=64
+    tr.register("add2", code);
+
+    long[] r = {0};
+    tr.region("add2", () -> r[0] = code.call(20, 22));  // 42; jle taken, dec skipped
+    tr.insnOffsets();    // [0, 3, 6, 12, 17] — byte-for-byte the Unicorn/DynamoRIO/PT result
+    tr.covered(0);       // entry basic block entered?
+} finally {
+    HwTrace.shutdown();
+}
+```
+
+`HwTrace.resolve(HwTrace.BEST)` / `HwTrace.auto(HwTrace.BEST)` pick the host's
+most-faithful available backend (Intel PT → AMD LBR → single-step), and
+`HwTrace.resolveTiers` / `autoTier` extend the cascade across the DynamoRIO and
+emulator tiers. An out-of-process `Ptrace` surface traces a method in a **separate**
+process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map /
+jitdump resolution) — the managed-runtime path. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```java

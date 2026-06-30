@@ -91,20 +91,37 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
   is exposed through every language binding (`disas`/`disas_available`), via
   `libasmtest_emu` (the full superset lib carries it). ([Disassembly](disassembly.md))
 
-### Native runtime trace tiers (optional, Linux x86-64)
+### Native runtime trace tiers (optional, Linux)
 
-Trace code as it runs **natively, in-process** — the third execution tier
-alongside native capture and the emulator. Both fill the same `asmtest_trace_t`
-shape as the emulator trace and self-skip when their toolchain is absent.
+Trace code as it runs **natively, in-process** — a third family of execution tiers
+alongside native capture and the emulator. Every backend fills the same
+`asmtest_trace_t` shape as the emulator trace and self-skips when its toolchain or
+hardware is absent. All are exposed through **all ten language wrappers**
+(`drtrace` / `hwtrace`) and held in sync by the binding function-parity gate.
 ([Native runtime tracing](native-tracing.md))
 
 - **DynamoRIO native trace**: in-process attach (`dr_app_*`), begin/end region
   markers, basic-block + instruction coverage for native or Keystone-generated
   host-native code (W^X executable memory). BSD-only (raw DynamoRIO core API; no
-  drwrap/LGPL). Python wrapper (`asmtest.drtrace`).
-- **Hardware trace**: Intel PT / ARM CoreSight via `perf_event_open` + libipt /
-  OpenCSD, near-zero capture overhead, with branch-boundary block normalization.
-  Bare-metal only; the recommended backend for JIT/GC-heavy managed runtimes.
+  drwrap/LGPL). Linux x86-64.
+- **Hardware trace** — four backends behind one API and one `available()` gate:
+  **Intel PT** (`perf_event_open` + libipt) and **AMD LBR** (Zen 3 BRS / Zen 4–5
+  LbrExtV2, 16-deep, live-verified on Zen 5) on bare metal; an **ARM CoreSight**
+  (OpenCSD) scaffold; and **single-step** (`EFLAGS.TF` → `SIGTRAP`) — the universal
+  backend recording the same exact offsets on **any x86-64 Linux** host (CI,
+  containers, VMs) with no PMU / perf / privilege / decoder. Branch-boundary block
+  normalization keeps the partition identical across backends.
+- **Out-of-process single-step (W2, `ptrace`)**: a tracer parent single-steps a
+  tracee, so it touches none of the target's signals or code cache — the path for
+  **managed runtimes** (JVM/.NET/Node) and the only single-step form on **AArch64**.
+  It comes with a foreign-JIT toolkit: attach to a live PID, `run_to` a method
+  (software *or* hardware breakpoint), resolve regions from `/proc/maps`, perf-maps,
+  or binary **jitdump**, and a time-aware **code-image recorder** (`asmtest_codeimage`)
+  for correct bytes under re-JIT / address reuse. Validated against live V8 and CoreCLR.
+- **Backend auto-selection**: `asmtest_hwtrace_auto` / `resolve` pick the host's
+  most-faithful available backend, and `asmtest_trace_auto` extends the cascade across
+  all three tiers (Intel PT → AMD LBR → DynamoRIO → single-step → CoreSight → emulator),
+  with a `NATIVE_ONLY` policy that guards the native→emulator fidelity line.
 
 ### In-line assembler (optional, Keystone)
 

@@ -201,6 +201,52 @@ st.unregister("asmtest_symbol_demo");
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
 [Native runtime tracing](../native-tracing.md).
 
+### Hardware / single-step tracing — `HwTrace` (optional)
+
+A sibling native tier (`src/hwtrace.zig`) records the **same** `asmtest_trace_t`
+coverage from the real CPU, but needs no separate engine install: it defaults to
+the **single-step** backend (the CPU's `EFLAGS.TF` trap flag), so
+`hwtrace.available(SINGLESTEP)` is true and it **traces live on any x86-64 Linux** —
+CI and plain containers included — where the DynamoRIO tier needs a DynamoRIO
+install. Intel PT and AMD LBR are picked automatically on the bare-metal hardware
+that has them.
+
+```zig
+const hwtrace = @import("hwtrace.zig");
+const SINGLESTEP = hwtrace.SINGLESTEP;
+
+if (!hwtrace.available(SINGLESTEP)) return;       // self-skip off x86-64 Linux
+try hwtrace.init(SINGLESTEP);
+defer hwtrace.shutdown();
+
+// mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
+const routine = [_]u8{
+    0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
+    0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+};
+var code = try hwtrace.NativeCode.fromBytes(&routine);
+defer code.free();
+
+var tr = try hwtrace.HwTrace.create(64, 64);      // blocks=64, instructions=64
+defer tr.free();
+try tr.register("add2", &code);
+// region(name, call-args tuple, body fn) wraps the begin/end pair (TF stays armed).
+tr.region("add2", .{ &code, @as(c_long, 20), @as(c_long, 22) }, callBody);  // 42
+_ = tr.covered(0);                                // entry block entered?
+
+const insns = try tr.insnOffsets(std.heap.page_allocator);
+defer std.heap.page_allocator.free(insns);
+// insns == { 0x0, 0x3, 0x6, 0xc, 0x11 } — byte-for-byte the Unicorn/DynamoRIO/PT result
+```
+
+`hwtrace.resolve(BEST)` / `hwtrace.auto(BEST)` pick the host's most-faithful
+available backend (Intel PT → AMD LBR → single-step), and `hwtrace.resolveTiers` /
+`autoTier` extend the cascade across the DynamoRIO and emulator tiers. An
+out-of-process `Ptrace` surface traces a method in a **separate** process
+(fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
+resolution) — the managed-runtime path. Full reference in
+[Native runtime tracing](../native-tracing.md).
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```zig
