@@ -63,7 +63,7 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Emulator** | Unicorn virtual CPU (isolated guest) | Capstone (annotate) | (Unicorn) | n/a (interpreted) | exact, unbounded | **implemented** |
 | **DynamoRIO** | software DBI, native code cache | none | DR core BSD | low (cached) | exact, unbounded | **implemented** |
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
-| **AMD LBR** | 16-deep branch stack snapshot | Capstone (replay) | BSD | low (few PMIs) | exact ≤16 taken branches; else `truncated`→fallback | **impl. Ph0–4; live capture verified on Zen 5** (Ryzen 9 9950X, `amd_lbr_v2`) |
+| **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Ph0–5; live capture + Tier-B stitching verified on Zen 5** (Ryzen 9 9950X, `amd_lbr_v2`) |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **reconstruction core host-validated**; live OpenCSD decode awaits a board (self-skips) |
 | **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4, Linux x86-64; cross-OS Ph5 planned) |
 
@@ -184,7 +184,7 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 |---|---|---|---|
 | Intel bare-metal, small routine | **Intel PT** | DynamoRIO | complete + near-zero overhead |
 | Intel/AMD, long or looping routine | **DynamoRIO** | — | native-speed code cache, no depth ceiling, vendor-independent |
-| AMD Zen 3 / Zen 4, small routine | **AMD LBR (Tier A)** | DynamoRIO (on `truncated`) | HW-attributed, exact within 16 branches |
+| AMD Zen 3 / Zen 4, small routine | **AMD LBR (Tier A; Tier-B stitches past 16 live)** | DynamoRIO (on `truncated`) | HW-attributed, exact within 16 branches; Tier-B extends reach, bounded by ring + throttling |
 | AMD Zen 2 | **DynamoRIO** | single-step | no branch facility exists on Zen 2 |
 | Any x86, exact + unprivileged + on CI | **single-step** | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
 | Managed runtime (JVM/.NET/Node), Intel | **Intel PT** | — | observes out-of-band; no thread takeover, no signal collision |

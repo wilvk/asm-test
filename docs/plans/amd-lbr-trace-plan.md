@@ -246,10 +246,11 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
 
 ## Phase 5 — Tier B (stitching) & MSR-direct snapshot
 
-- **LBR stitching for arbitrary length. _Algorithm implemented + host-validated._**
+- **LBR stitching for arbitrary length. _Algorithm + live wiring shipped (Zen 5-validated)._**
   Sample at every taken branch (`sample_period = 1`) and splice the overlapping
   16-entry stacks (15-entry overlap) into one gapless taken-branch sequence,
-  reconstructing a complete trace past the window.
+  reconstructing a trace past the window — host-validated complete, and now wired into
+  the live capture (escalating Tier-A → Tier-B on window overflow, with all loss flagged).
   - _Done._ The stitching core ships in [src/amd_backend.c](../../src/amd_backend.c):
     `asmtest_amd_stitch(samples, nrs, n_samples, out, cap, &gap)` merges the windows
     in execution order — for each new window it takes the **smallest shift that still
