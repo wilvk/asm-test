@@ -398,8 +398,8 @@ The stepper above is **in-process**: it installs a `SIGTRAP` handler and sets `T
 its own thread, so the traced routine and the collector share one process. The
 out-of-process sibling (`asmtest_ptrace.h`, `src/ptrace_backend.c`) gets the **same
 exact offsets** a different way — a tracer **parent** `PTRACE_SINGLESTEP`s a forked
-tracee that runs the routine, reading `RIP` from the child's register file at each
-stop and reconstructing the trace in the parent (no shared memory — the parent
+tracee that runs the routine, reading the program counter from the child's register
+file at each stop and reconstructing the trace in the parent (no shared memory — the parent
 observes every step). Block normalization is byte-identical to the in-process stepper,
 so the output matches every other backend.
 
@@ -419,8 +419,13 @@ runtime** (JVM/.NET/Node) — where the in-process stepper's `SIGTRAP`/`TF` coll
 the runtime, exactly as in-process DynamoRIO cannot take over its threads — and the
 recommended managed-runtime path on **AMD** (no Intel PT). It is also the **only**
 single-step form possible on **AArch64**, whose single-step bit (`MDSCR_EL1.SS`) is
-kernel-only with no in-process form; this implementation is Linux/x86-64, riding the
-same `PTRACE_SINGLESTEP` seam the ARM64 tracer will. The supported target is the same
+kernel-only with no in-process form. It runs on **Linux x86-64 and AArch64** off one
+body — the AArch64 arm reads the PC + return register via `PTRACE_GETREGSET`/`NT_PRSTATUS`
+(no `PTRACE_GETREGS` there) and decodes block lengths with `ASMTEST_ARCH_ARM64` Capstone.
+(The AArch64 single-step *stream* is validated on a real AArch64 host, not under
+qemu-user, which cannot emulate the ptrace tracer/tracee relationship — `available()`
+self-probes and self-skips there; the `/proc`+jitdump readers, being pure file parsing,
+run on any Linux arch and are validated live on AArch64.) The supported target is the same
 deterministic pure-compute routine (≤6 integer args, no calls out to other regions) as
 the in-process stepper. `make hwtrace-test` exercises it live (it works in a **plain
 unprivileged container** — ptrace of one's own child needs no extra capability).

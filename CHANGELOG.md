@@ -89,8 +89,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ([asmtest_ptrace.h](https://github.com/wilvk/asm-test/blob/main/include/asmtest_ptrace.h),
     `src/ptrace_backend.c`) is the out-of-process sibling of the in-process
     `EFLAGS.TF` stepper: a tracer **parent** `PTRACE_SINGLESTEP`s a forked tracee
-    that runs the registered routine, reads `RIP` from the child's register file at
-    each stop, and reconstructs the **same exact offsets** in the parent — ordered
+    that runs the registered routine, reads the program counter from the child's
+    register file at each stop, and reconstructs the **same exact offsets** in the
+    parent — ordered
     in-region instruction offsets and the identical single-entry/ends-at-branch block
     partition the in-process stepper, Unicorn, DynamoRIO, and Intel PT produce — with
     no shared memory (the parent observes every step) and no library or privilege
@@ -98,8 +99,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     disposition or code cache, it is the exact path for a **JIT/GC managed runtime**
     (JVM/.NET/Node) and the recommended managed-runtime backend on **AMD** (no Intel
     PT), and is the only single-step form possible on **AArch64** (whose
-    `MDSCR_EL1.SS` is kernel-only); this implementation is Linux/x86-64, riding the
-    same `PTRACE_SINGLESTEP` seam the AArch64 tracer will. Built into
+    `MDSCR_EL1.SS` is kernel-only). It runs on **Linux x86-64 and AArch64** off one
+    body: the AArch64 arm reads the program counter + integer return register via
+    `PTRACE_GETREGSET`/`NT_PRSTATUS` (AArch64 has no `PTRACE_GETREGS`) and decodes block
+    lengths with `ASMTEST_ARCH_ARM64` Capstone, while the fork/SIGSTOP/step/wait flow and
+    the SysV/AAPCS64 register-arg call are shared. Built into
     `libasmtest_hwtrace`; `make hwtrace-test` exercises it live — including in a
     **plain unprivileged container** — asserting byte-for-byte parity with the
     in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
@@ -136,7 +140,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     methods, idiomatic per language), each with a per-binding self-test of the
     live-testable subset (out-of-process `trace_call` parity, `/proc/maps` and
     perf-map resolution, and a binary-jitdump round-trip), and `asmtest_ptrace.h` is
-    now covered by the binding function-surface parity gate.
+    now covered by the binding function-surface parity gate. The `/proc` + jitdump
+    **code-region readers** (`asmtest_proc_*`, `asmtest_jitdump_find`) are pure file
+    parsing, so they build and run on **any Linux arch** and are **validated live on
+    AArch64** (in a `linux/arm64` container, where the perfmap and jitdump tests pass).
+    The single-step **trace capture** on AArch64 awaits a real host:
+    `asmtest_ptrace_available()` is a cached, hang-proof self-probe (bounded `WNOHANG`
+    polling) that returns 0 under qemu-user — which does not emulate the ptrace
+    tracer/tracee relationship at all — so the stepper self-skips on emulation just as
+    the PT/CoreSight tiers self-skip off their hardware; the AArch64 fixtures are
+    decode- and execute-validated under qemu, with only the live single-step stream
+    pending Apple-Silicon / Linux-ARM64 / Windows-on-ARM hardware.
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

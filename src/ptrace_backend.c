@@ -3,15 +3,28 @@
  * See asmtest_ptrace.h and docs/plans/zen2-singlestep-trace-plan.md (Phase 5, W2).
  *
  * A tracer PARENT PTRACE_SINGLESTEPs a forked tracee that calls the registered code,
- * reading RIP from the child's register file at each stop. It produces the same
- * exact/complete asmtest_trace_t offsets as the in-process EFLAGS.TF stepper
+ * reading the program counter from the child's register file at each stop. It produces
+ * the same exact/complete asmtest_trace_t offsets as the in-process EFLAGS.TF stepper
  * (src/ss_backend.c) — and reuses that backend's single-entry/ends-at-branch block
  * normalization — but collects them entirely out of band, so the tracee's signal
  * disposition and code cache are never touched (the property a JIT/GC managed
- * runtime needs, and the only single-step form available on AArch64).
+ * runtime needs, and — because the AArch64 single-step bit MDSCR_EL1.SS is kernel-only,
+ * with no in-process form — the ONLY single-step form available on AArch64).
  *
  * The parent observes every step through ptrace, so no shared memory is needed: it
  * fills the caller-owned trace directly from the register reads.
+ *
+ * Two arch seams keep the stepper one body across x86-64 and AArch64:
+ *   - read_pc_ret(): PC + integer return register. x86-64 has PTRACE_GETREGS; AArch64
+ *     does not, so it reads the GP set via PTRACE_GETREGSET/NT_PRSTATUS.
+ *   - PTRACE_TRACE_ARCH: the Capstone arch the block-normalizer decodes lengths with.
+ * The fork/SIGSTOP/SINGLESTEP/wait control flow and the SysV/AAPCS64 register-arg call
+ * are otherwise identical.
+ *
+ * The OS code-region readers below it (asmtest_proc_* and asmtest_jitdump_find) are
+ * pure /proc + perf-file parsing — arch-INDEPENDENT — so they build and run on ANY
+ * Linux (they are the resolve-a-foreign-JIT building blocks, useful on AArch64 hosts
+ * whether or not the single-step stepper is exercisable there).
  */
 #define _GNU_SOURCE
 
@@ -22,246 +35,13 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__linux__) && defined(__x86_64__)
+/* ================================================================= */
+/* OS code-region readers — arch-independent; any Linux.             */
+/* ================================================================= */
+#if defined(__linux__)
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ptrace.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <sys/user.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-/* Ordered in-region RIP-offset capture buffer; overflow is flagged truncated, never
- * emitted as complete. Sized for the small-routine envelope, like ss_backend. */
-#ifndef PTRACE_STREAM_CAP
-#define PTRACE_STREAM_CAP (1u << 16) /* 65536 offsets */
-#endif
-
-int asmtest_ptrace_available(void) { return 1; }
-
-void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
-    if (buf == NULL || buflen == 0)
-        return;
-    const char *msg = "available";
-    strncpy(buf, msg, buflen - 1);
-    buf[buflen - 1] = '\0';
-}
-
-/* Replay the captured ordered offsets into the trace, deriving blocks from
- * fall-through discontinuities — byte-identical to ss_backend.c's ss_normalize. */
-static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
-                      size_t len, const uint64_t *stream, uint32_t n,
-                      int overflow) {
-    if (t == NULL)
-        return;
-    int have_prev = 0;
-    uint64_t expected_next = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        uint64_t off = stream[i];
-        if (!have_prev || off != expected_next)
-            trace_append_block(t, off);
-        trace_append_insn(t, off);
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, base, len, base_ip, off, NULL,
-                                 0);
-        if (l == 0) {
-            t->truncated = true;
-            return;
-        }
-        expected_next = off + l;
-        have_prev = 1;
-    }
-    if (overflow)
-        t->truncated = true;
-}
-
-typedef long (*fn6_t)(long, long, long, long, long, long);
-
-int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
-                              int nargs, long *result, asmtest_trace_t *trace) {
-    if (code == NULL || len == 0 || nargs < 0 || nargs > 6 ||
-        (nargs > 0 && args == NULL))
-        return ASMTEST_PTRACE_EINVAL;
-
-    long a[6] = {0, 0, 0, 0, 0, 0};
-    for (int i = 0; i < nargs; i++)
-        a[i] = args[i];
-
-    uint64_t *stream =
-        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
-    if (stream == NULL)
-        return ASMTEST_PTRACE_ETRACE;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(stream);
-        return ASMTEST_PTRACE_ETRACE;
-    }
-
-    if (pid == 0) {
-        /* Tracee: request tracing, stop so the parent can attach the stepper, then
-         * call the registered code (inherited at the same address via fork) with up
-         * to six integer args. Extra register args are ignored by the callee per the
-         * SysV ABI. _exit avoids running atexit/stdio in the stepped child. */
-        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)
-            _exit(127);
-        raise(SIGSTOP);
-        volatile long r = ((fn6_t)code)(a[0], a[1], a[2], a[3], a[4], a[5]);
-        (void)r;
-        _exit(0);
-    }
-
-    /* Tracer parent. */
-    const uint64_t base_ip = (uint64_t)(uintptr_t)code;
-    uint32_t n = 0;
-    int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
-    int status = 0;
-
-    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
-        /* Could not reach the initial SIGSTOP. */
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-        free(stream);
-        return ASMTEST_PTRACE_ETRACE;
-    }
-    ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(uintptr_t)PTRACE_O_EXITKILL);
-
-    for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        if (waitpid(pid, &status, 0) < 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        if (WIFEXITED(status) || WIFSIGNALED(status))
-            break; /* tracee finished */
-        if (!WIFSTOPPED(status))
-            continue;
-        if (WSTOPSIG(status) != SIGTRAP) {
-            /* The tracee took a real signal (e.g. a faulting routine). Record what we
-             * have as truncated and let it die. */
-            if (entered)
-                overflow = 1; /* incomplete in-region capture */
-            break;
-        }
-
-        struct user_regs_struct regs;
-        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        uint64_t rip = (uint64_t)regs.rip;
-
-        if (rip >= base_ip && rip < base_ip + len) {
-            entered = 1;
-            if (n < PTRACE_STREAM_CAP)
-                stream[n++] = rip - base_ip;
-            else
-                overflow = 1;
-        } else if (entered && !returned) {
-            /* First step out of the region after entering = the routine returned
-             * (supported target is a pure-compute routine that does not call out, so
-             * this transition is the ret). RAX holds the return value. */
-            if (result != NULL)
-                *result = (long)regs.rax;
-            returned = 1;
-            ptrace(PTRACE_CONT, pid, NULL, NULL);
-            waitpid(pid, &status, 0);
-            break;
-        }
-    }
-
-    if (rc == ASMTEST_PTRACE_OK)
-        normalize(trace, (const uint8_t *)code, base_ip, len, stream, n, overflow);
-    else {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-    }
-    free(stream);
-    return rc;
-}
-
-int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
-                                  long *result, asmtest_trace_t *trace) {
-    if (base == NULL || len == 0 || trace == NULL)
-        return ASMTEST_PTRACE_EINVAL;
-
-    /* Read the region bytes FROM THE TARGET (not a shared mapping) so this works on a
-     * foreign process — the same way a debugger reads a tracee's text. */
-    uint8_t *code = (uint8_t *)malloc(len);
-    if (code == NULL)
-        return ASMTEST_PTRACE_ETRACE;
-    struct iovec liov = {code, len};
-    struct iovec riov = {(void *)(uintptr_t)base, len};
-    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
-        free(code);
-        return ASMTEST_PTRACE_ETRACE;
-    }
-
-    uint64_t *stream =
-        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
-    if (stream == NULL) {
-        free(code);
-        return ASMTEST_PTRACE_ETRACE;
-    }
-
-    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
-    uint32_t n = 0;
-    int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
-    int status = 0;
-
-    /* `pid` is already in a ptrace-stop (the caller attached). Single-step it from
-     * here; record only in-region offsets. The target is foreign, so we neither
-     * attach nor detach — that is the caller's policy. */
-    for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        if (waitpid(pid, &status, 0) < 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        if (WIFEXITED(status) || WIFSIGNALED(status))
-            break; /* target ended before/while in the region */
-        if (!WIFSTOPPED(status))
-            continue;
-        if (WSTOPSIG(status) != SIGTRAP) {
-            if (entered)
-                overflow = 1;
-            break;
-        }
-
-        struct user_regs_struct regs;
-        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
-        uint64_t rip = (uint64_t)regs.rip;
-
-        if (rip >= base_ip && rip < base_ip + len) {
-            entered = 1;
-            if (n < PTRACE_STREAM_CAP)
-                stream[n++] = rip - base_ip;
-            else
-                overflow = 1;
-        } else if (entered && !returned) {
-            if (result != NULL)
-                *result = (long)regs.rax;
-            returned = 1;
-            break; /* leave the target stopped past the region for the caller */
-        }
-    }
-
-    if (rc == ASMTEST_PTRACE_OK)
-        normalize(trace, code, base_ip, len, stream, n, overflow);
-    free(stream);
-    free(code);
-    return rc;
-}
 
 int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
                                 size_t *len_out) {
@@ -457,38 +237,7 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
     return rc;
 }
 
-#else /* not Linux x86-64 — link-compatible stubs */
-
-int asmtest_ptrace_available(void) { return 0; }
-
-void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
-    if (buf == NULL || buflen == 0)
-        return;
-    const char *msg = "out-of-process ptrace stepper is Linux x86-64 only";
-    strncpy(buf, msg, buflen - 1);
-    buf[buflen - 1] = '\0';
-}
-
-int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
-                              int nargs, long *result, asmtest_trace_t *trace) {
-    (void)code;
-    (void)len;
-    (void)args;
-    (void)nargs;
-    (void)result;
-    (void)trace;
-    return ASMTEST_PTRACE_ENOSYS;
-}
-
-int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
-                                  long *result, asmtest_trace_t *trace) {
-    (void)pid;
-    (void)base;
-    (void)len;
-    (void)result;
-    (void)trace;
-    return ASMTEST_PTRACE_ENOSYS;
-}
+#else /* readers need Linux /proc + perf files */
 
 int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
                                 size_t *len_out) {
@@ -521,4 +270,375 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
     return ASMTEST_PTRACE_ENOSYS;
 }
 
+#endif /* __linux__ readers */
+
+/* ================================================================= */
+/* Out-of-process single-step stepper — Linux x86-64 / AArch64.      */
+/* ================================================================= */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+
+#include <elf.h> /* NT_PRSTATUS */
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/ptrace.h>
+#include <sys/uio.h>
+#include <sys/user.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+/* Ordered in-region PC-offset capture buffer; overflow is flagged truncated, never
+ * emitted as complete. Sized for the small-routine envelope, like ss_backend. */
+#ifndef PTRACE_STREAM_CAP
+#define PTRACE_STREAM_CAP (1u << 16) /* 65536 offsets */
 #endif
+
+/* Capstone arch for the in-region instruction-length decode used by block
+ * normalization. (Instruction offsets are exact regardless; only block boundaries
+ * need the length decode.) */
+#if defined(__x86_64__)
+#define PTRACE_TRACE_ARCH ASMTEST_ARCH_X86_64
+#else
+#define PTRACE_TRACE_ARCH ASMTEST_ARCH_ARM64
+#endif
+
+/* Read the tracee's program counter (the about-to-execute instruction) and the integer
+ * return register. x86-64 has PTRACE_GETREGS; AArch64 does not, so it reads the GP set
+ * via PTRACE_GETREGSET/NT_PRSTATUS. Returns 0 on success, -1 on a ptrace failure. */
+static int read_pc_ret(pid_t pid, uint64_t *pc, uint64_t *ret) {
+    struct user_regs_struct regs;
+#if defined(__x86_64__)
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
+        return -1;
+    *pc = (uint64_t)regs.rip;
+    if (ret != NULL)
+        *ret = (uint64_t)regs.rax;
+#else /* __aarch64__ */
+    struct iovec iov = {&regs, sizeof regs};
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_PRSTATUS, &iov) != 0)
+        return -1;
+    *pc = (uint64_t)regs.pc;
+    if (ret != NULL)
+        *ret = (uint64_t)regs.regs[0];
+#endif
+    return 0;
+}
+
+#if defined(__aarch64__)
+/* Hang-proof capability self-probe: the out-of-process stepper needs PTRACE_SINGLESTEP
+ * to actually advance a traced child. It does on real AArch64 Linux, but NOT under
+ * qemu-user emulation, which does not emulate the ptrace tracer/tracee relationship at
+ * all (a blocking waitpid for a PTRACE_TRACEME child never returns there). Every wait
+ * here is WNOHANG with a short deadline, so this returns 0 quickly where single-step is
+ * unsupported instead of hanging. (x86-64 always has it, so this probe is AArch64-only.)
+ */
+static int probe_singlestep(void) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return 0;
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(0);
+    }
+    int st, got = 0, stepped = 0;
+    for (int i = 0; i < 200; i++) { /* up to ~200 ms for the initial stop */
+        pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid && WIFSTOPPED(st)) {
+            got = 1;
+            break;
+        }
+        if (w < 0)
+            break;
+        struct timespec ts = {0, 1000000};
+        nanosleep(&ts, NULL);
+    }
+    if (got && ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == 0) {
+        for (int i = 0; i < 200; i++) {
+            pid_t w = waitpid(pid, &st, WNOHANG);
+            if (w == pid) {
+                stepped = WIFSTOPPED(st) && WSTOPSIG(st) == SIGTRAP;
+                break;
+            }
+            if (w < 0)
+                break;
+            struct timespec ts = {0, 1000000};
+            nanosleep(&ts, NULL);
+        }
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return stepped;
+}
+#endif /* __aarch64__ */
+
+int asmtest_ptrace_available(void) {
+#if defined(__x86_64__)
+    return 1;
+#else /* __aarch64__: require a functional PTRACE_SINGLESTEP (probed once, hang-proof) */
+    static int cached = -1;
+    if (cached < 0)
+        cached = probe_singlestep();
+    return cached;
+#endif
+}
+
+void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
+    if (buf == NULL || buflen == 0)
+        return;
+    const char *msg =
+        asmtest_ptrace_available()
+            ? "available"
+            : "AArch64 PTRACE_SINGLESTEP is non-functional here (e.g. qemu-user "
+              "emulation); the out-of-process stepper needs a real AArch64 host";
+    strncpy(buf, msg, buflen - 1);
+    buf[buflen - 1] = '\0';
+}
+
+/* Replay the captured ordered offsets into the trace, deriving blocks from
+ * fall-through discontinuities — byte-identical to ss_backend.c's ss_normalize. */
+static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
+                      size_t len, const uint64_t *stream, uint32_t n,
+                      int overflow) {
+    if (t == NULL)
+        return;
+    int have_prev = 0;
+    uint64_t expected_next = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t off = stream[i];
+        if (!have_prev || off != expected_next)
+            trace_append_block(t, off);
+        trace_append_insn(t, off);
+        size_t l = asmtest_disas(PTRACE_TRACE_ARCH, base, len, base_ip, off, NULL, 0);
+        if (l == 0) {
+            t->truncated = true;
+            return;
+        }
+        expected_next = off + l;
+        have_prev = 1;
+    }
+    if (overflow)
+        t->truncated = true;
+}
+
+typedef long (*fn6_t)(long, long, long, long, long, long);
+
+int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
+                              int nargs, long *result, asmtest_trace_t *trace) {
+    if (code == NULL || len == 0 || nargs < 0 || nargs > 6 ||
+        (nargs > 0 && args == NULL))
+        return ASMTEST_PTRACE_EINVAL;
+
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs; i++)
+        a[i] = args[i];
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        free(stream);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    if (pid == 0) {
+        /* Tracee: request tracing, stop so the parent can attach the stepper, then
+         * call the registered code (inherited at the same address via fork) with up
+         * to six integer args, passed in the SysV / AAPCS64 argument registers. Extra
+         * register args are ignored by the callee. _exit avoids running atexit/stdio
+         * in the stepped child. */
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)
+            _exit(127);
+        raise(SIGSTOP);
+        volatile long r = ((fn6_t)code)(a[0], a[1], a[2], a[3], a[4], a[5]);
+        (void)r;
+        _exit(0);
+    }
+
+    /* Tracer parent. */
+    const uint64_t base_ip = (uint64_t)(uintptr_t)code;
+    uint32_t n = 0;
+    int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
+    int status = 0;
+
+    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+        /* Could not reach the initial SIGSTOP. */
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        free(stream);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+    ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(uintptr_t)PTRACE_O_EXITKILL);
+
+    for (;;) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break; /* tracee finished */
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            /* The tracee took a real signal (e.g. a faulting routine). Record what we
+             * have as truncated and let it die. */
+            if (entered)
+                overflow = 1; /* incomplete in-region capture */
+            break;
+        }
+
+        uint64_t pc, retval;
+        if (read_pc_ret(pid, &pc, &retval) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+
+        if (pc >= base_ip && pc < base_ip + len) {
+            entered = 1;
+            if (n < PTRACE_STREAM_CAP)
+                stream[n++] = pc - base_ip;
+            else
+                overflow = 1;
+        } else if (entered && !returned) {
+            /* First step out of the region after entering = the routine returned
+             * (supported target is a pure-compute routine that does not call out, so
+             * this transition is the ret). The integer return register holds the
+             * value. */
+            if (result != NULL)
+                *result = (long)retval;
+            returned = 1;
+            ptrace(PTRACE_CONT, pid, NULL, NULL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+    }
+
+    if (rc == ASMTEST_PTRACE_OK)
+        normalize(trace, (const uint8_t *)code, base_ip, len, stream, n, overflow);
+    else {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+    }
+    free(stream);
+    return rc;
+}
+
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace) {
+    if (base == NULL || len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+
+    /* Read the region bytes FROM THE TARGET (not a shared mapping) so this works on a
+     * foreign process — the same way a debugger reads a tracee's text. */
+    uint8_t *code = (uint8_t *)malloc(len);
+    if (code == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    struct iovec liov = {code, len};
+    struct iovec riov = {(void *)(uintptr_t)base, len};
+    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
+    uint32_t n = 0;
+    int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
+    int status = 0;
+
+    /* `pid` is already in a ptrace-stop (the caller attached). Single-step it from
+     * here; record only in-region offsets. The target is foreign, so we neither
+     * attach nor detach — that is the caller's policy. */
+    for (;;) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break; /* target ended before/while in the region */
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            if (entered)
+                overflow = 1;
+            break;
+        }
+
+        uint64_t pc, retval;
+        if (read_pc_ret(pid, &pc, &retval) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+
+        if (pc >= base_ip && pc < base_ip + len) {
+            entered = 1;
+            if (n < PTRACE_STREAM_CAP)
+                stream[n++] = pc - base_ip;
+            else
+                overflow = 1;
+        } else if (entered && !returned) {
+            if (result != NULL)
+                *result = (long)retval;
+            returned = 1;
+            break; /* leave the target stopped past the region for the caller */
+        }
+    }
+
+    if (rc == ASMTEST_PTRACE_OK)
+        normalize(trace, code, base_ip, len, stream, n, overflow);
+    free(stream);
+    free(code);
+    return rc;
+}
+
+#else /* stepper unsupported: not Linux, or not x86-64 / AArch64 */
+
+int asmtest_ptrace_available(void) { return 0; }
+
+void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
+    if (buf == NULL || buflen == 0)
+        return;
+    const char *msg = "out-of-process ptrace stepper needs Linux x86-64 or AArch64";
+    strncpy(buf, msg, buflen - 1);
+    buf[buflen - 1] = '\0';
+}
+
+int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
+                              int nargs, long *result, asmtest_trace_t *trace) {
+    (void)code;
+    (void)len;
+    (void)args;
+    (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace) {
+    (void)pid;
+    (void)base;
+    (void)len;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+#endif /* stepper */

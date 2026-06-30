@@ -257,9 +257,10 @@ Linux/x86-64 backend.
   out-of-band managed-runtime path: in-process DynamoRIO cannot take over a JIT/GC
   runtime's threads, IBS only samples statistically, and Intel PT is Intel-only — so on
   AMD (and for exact ARM64 single-step) this `ptrace` route is the way in. A tracer
-  parent `PTRACE_SINGLESTEP`s the target and reads `RIP` per stop, reconstructing the
-  same exact stream as the in-process stepper. The Linux/x86-64 core has landed in
-  stages ([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`):
+  parent `PTRACE_SINGLESTEP`s the target and reads the program counter per stop,
+  reconstructing the same exact stream as the in-process stepper. The Linux core has
+  landed in stages on **x86-64 and AArch64**
+  ([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`):
   - _Done._ `asmtest_ptrace_trace_call` — fork a tracee, single-step it, reconstruct
     the same offsets out of band (verified byte-for-byte incl. a 62-instruction loop).
   - _Done._ `asmtest_ptrace_trace_attached(pid, base, len, …)` — trace a region in a
@@ -283,20 +284,35 @@ Linux/x86-64 backend.
     needs.) Endianness auto-detected; non-`LOAD` records skipped; verified by a
     synthetic 2-record-plus-re-JIT fixture.
 
-  Suggested remaining W2 fronts (priority order):
-  - _Next — per-binding surface._ The `asmtest_ptrace_*` / `asmtest_proc_*` /
-    `asmtest_jitdump_*` C surface
-    is C-only today: its one-shot `trace_call`/`trace_attached` shape differs from the
-    uniform `begin`/`end` tier surface the binding function-parity gate covers, so it
-    was deliberately kept out of that gate. Expose it across the ten language bindings
-    — most valuably the managed ones (Java/.NET/Node) it most serves — as a focused,
-    tested follow-on, mirroring the cross-tier `resolve_tiers`/`auto_tier` fan-out.
-    *(Not previously tracked in any plan; recorded here.)*
-  - _Forward-look — AArch64 tracer._ ARM64 single-step (`MDSCR_EL1.SS`) is kernel-only,
-    so out-of-process `ptrace` is its **only** single-step form (Apple Silicon,
-    Windows-on-ARM, Linux/ARM64). The tracer rides the same `PTRACE_SINGLESTEP` seam,
-    decoding instruction lengths with `ASMTEST_ARCH_ARM64` Capstone; needs an AArch64
-    Linux host to validate.
+  - _Done._ Per-binding surface — the `asmtest_ptrace_*` / `asmtest_proc_*` /
+    `asmtest_jitdump_*` C surface is exposed across **all ten** language bindings (a
+    `Ptrace` class, or `HwTrace.ptrace_*` methods where idiomatic, surfacing
+    `available`/`skip_reason`, `trace_call`, `trace_attached`, `region_by_addr`,
+    `perfmap_symbol`, `jitdump_find` with a `JitMethod` value type), each wrapping the
+    seven C symbols from the already-loaded `libasmtest_hwtrace`; the live-testable
+    subset is self-tested in every binding and the surface is now covered by the binding
+    function-parity gate (36 tier symbols × 10 bindings).
+  - _Done — AArch64 tracer (Linux x86-64 **and** AArch64)._ ARM64 single-step
+    (`MDSCR_EL1.SS`) is kernel-only, so out-of-process `ptrace` is its **only**
+    single-step form (Apple Silicon, Windows-on-ARM, Linux/ARM64). The stepper rides the
+    same `PTRACE_SINGLESTEP` seam on both arches, differing only in two seams: PC + the
+    integer return register are read via `PTRACE_GETREGSET`/`NT_PRSTATUS` (AArch64 has no
+    `PTRACE_GETREGS`), and block lengths decode with `ASMTEST_ARCH_ARM64` Capstone; the
+    fork/SIGSTOP/step/wait control flow and the SysV/AAPCS64 register-arg call are one
+    body. The `/proc` + jitdump **code-region readers** (`asmtest_proc_*`,
+    `asmtest_jitdump_find`) — pure file parsing — became Linux-**any-arch** in the same
+    change and are **validated live on AArch64** (in a `linux/arm64` container, where
+    they pass). The single-step **trace capture** itself awaits a real AArch64 host:
+    `asmtest_ptrace_available()` is a cached, hang-proof self-probe that returns 0 under
+    qemu-user — which does not emulate the ptrace tracer/tracee relationship at all (a
+    blocking `waitpid` for a `PTRACE_TRACEME` child never returns there) — so the stepper
+    self-skips on emulation exactly as the PT/CoreSight tiers self-skip off their
+    hardware. The AArch64 code fixtures are decode- and execute-validated under qemu;
+    only the live single-step *stream* is pending real Apple-Silicon / Linux-ARM64 /
+    Windows-on-ARM hardware. (The ten binding wrappers call the same C entry points and
+    gate on `available()`, so they self-skip under emulation with no per-binding change;
+    their own live AArch64 fixtures are a small follow-on alongside real-hardware
+    validation.)
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
   feedable into [amd_backend.c](../../src/amd_backend.c)'s replay loop as `(from,to)`

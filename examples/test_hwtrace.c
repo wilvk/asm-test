@@ -18,13 +18,19 @@
 #include <string.h>
 #include <sys/mman.h>
 
-#if defined(__linux__) && defined(__x86_64__)
-#include <linux/perf_event.h>
+/* POSIX + ptrace headers: needed by the out-of-process stepper tests (x86-64 AND
+ * AArch64) and the any-Linux /proc + jitdump reader tests (getpid, etc.). */
+#if defined(__linux__)
 #include <signal.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#endif
+
+/* AMD branch-stack decoder declarations + perf_event are x86-64-only. */
+#if defined(__linux__) && defined(__x86_64__)
+#include <linux/perf_event.h>
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 int asmtest_amd_decoder_present(void);
@@ -52,6 +58,21 @@ static const unsigned char ROUTINE[] = {
     0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0x48, 0x3d, 0x64, 0x00,
     0x00, 0x00, 0x7e, 0x03, 0x48, 0xff, 0xc8, 0xc3};
 typedef long (*add2_fn)(long, long);
+
+#if defined(__aarch64__)
+/* AArch64 equivalents for the out-of-process ptrace stepper, which (unlike the
+ * x86-only EFLAGS.TF / PT / AMD backends) runs on this arch too. add2(20,22)=42 takes
+ * the b.le, skipping the sub at 0xc — executed stream {0,4,8,10}, two blocks {0,0x10}.
+ *   add x0,x0,x1 ; cmp x0,#100 ; b.le 0x10 ; sub x0,x0,#1 ; ret  */
+static const unsigned char ROUTINE_A64[] = {
+    0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+    0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6};
+/* loop(1,20)=20 over 63 insns (1 + 20*3 + 2), past any 16-deep branch window.
+ *   mov x9,#0 ; L: add x9,x9,x0 ; subs x1,x1,#1 ; b.ne L ; mov x0,x9 ; ret  */
+static const unsigned char LOOP_A64[] = {
+    0x09, 0x00, 0x80, 0xd2, 0x29, 0x01, 0x00, 0x8b, 0x21, 0x04, 0x00, 0xf1,
+    0xc1, 0xff, 0xff, 0x54, 0xe0, 0x03, 0x09, 0xaa, 0xc0, 0x03, 0x5f, 0xd6};
+#endif
 
 static int checks, failures;
 #define CHECK(c, m)                                                            \
@@ -635,57 +656,78 @@ static void test_ptrace_oop(void) {
         return;
     }
 
-    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    /* Arch-selected fixture: x86-64 and AArch64 both run the out-of-process stepper
+     * (the only single-step form on AArch64), each yielding its own exact stream. */
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTN = sizeof ROUTINE_A64;
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8, 0x10};
+    const uint64_t RET_OFF = 0x10;
+    const unsigned char *LP = LOOP_A64;
+    const size_t LPN = sizeof LOOP_A64;
+    const unsigned long long LOOP_INSNS = 63; /* 1 + 20*3 + (mov,ret) */
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    const uint64_t RET_OFF = 0x11;
+    static const unsigned char LOOP_X86[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
+                                             0x48, 0x01, 0xf8, 0x48, 0xff, 0xce, 0x75,
+                                             0xf8, 0xc3};
+    const unsigned char *LP = LOOP_X86;
+    const size_t LPN = sizeof LOOP_X86;
+    const unsigned long long LOOP_INSNS = 62; /* 1 + 20*3 + ret */
+#endif
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+
+    void *p = mmap(NULL, RTN, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                   -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP ptrace oop: mmap failed\n");
         return;
     }
-    memcpy(p, ROUTINE, sizeof ROUTINE);
-    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
-    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    memcpy(p, RT, RTN);
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     long args[2] = {20, 22};
     long result = 0;
-    int rc = asmtest_ptrace_trace_call(p, sizeof ROUTINE, args, 2, &result, tr);
+    int rc = asmtest_ptrace_trace_call(p, RTN, args, 2, &result, tr);
     CHECK(rc == ASMTEST_PTRACE_OK, "ptrace oop trace_call succeeds");
-    CHECK(result == 42, "ptrace oop traced call returns 20+22 (RAX read via ptrace)");
-    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
-    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
-    for (size_t i = 0; seq && i < 5; i++)
+    CHECK(result == 42,
+          "ptrace oop traced call returns 20+22 (ret reg read via ptrace)");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
         seq = (tr->insns[i] == EXPECT[i]);
-    CHECK(seq, "ptrace oop yields the exact stream [0,3,6,c,11] (== in-process)");
-    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
-          "ptrace oop block partition {0, 0x11} matches every other backend");
+    CHECK(seq, "ptrace oop yields the exact in-process instruction stream");
+    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, RET_OFF),
+          "ptrace oop block partition matches every other backend");
     CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
           "ptrace oop records exactly two blocks");
     CHECK(!asmtest_emu_trace_truncated(tr), "ptrace oop trace is complete");
     asmtest_trace_free(tr);
-    munmap(p, sizeof ROUTINE);
+    munmap(p, RTN);
 
     /* No depth ceiling: a 20-trip loop (19 back-edges, past AMD LBR's 16) captured
      * exactly — the property an out-of-band hardware branch window cannot match. */
-    static const unsigned char LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
-                                         0x48, 0x01, 0xf8, 0x48, 0xff, 0xce, 0x75,
-                                         0xf8, 0xc3};
-    void *q = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *q = mmap(NULL, LPN, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                   -1, 0);
     if (q == MAP_FAILED)
         return;
-    memcpy(q, LOOP, sizeof LOOP);
-    mprotect(q, sizeof LOOP, PROT_READ | PROT_EXEC);
-    __builtin___clear_cache((char *)q, (char *)q + sizeof LOOP);
+    memcpy(q, LP, LPN);
+    mprotect(q, LPN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + LPN);
     asmtest_trace_t *lt = asmtest_trace_new(256, 64);
     long largs[2] = {1, 20};
     long lresult = 0;
-    asmtest_ptrace_trace_call(q, sizeof LOOP, largs, 2, &lresult, lt);
+    asmtest_ptrace_trace_call(q, LPN, largs, 2, &lresult, lt);
     CHECK(lresult == 20, "ptrace oop loop returns 20 (sum of 1, 20 times)");
-    CHECK(asmtest_emu_trace_insns_total(lt) == 62,
-          "ptrace oop loop captures all 62 insns (1 + 20*3 + 1), no depth ceiling");
+    CHECK(asmtest_emu_trace_insns_total(lt) == LOOP_INSNS,
+          "ptrace oop loop captures all loop insns, no depth ceiling");
     CHECK(!asmtest_emu_trace_truncated(lt), "ptrace oop loop is complete");
     asmtest_trace_free(lt);
-    munmap(q, sizeof LOOP);
+    munmap(q, LPN);
 }
 
 /* W2 live ATTACH: trace a region in a SEPARATE, externally-attached process — the
@@ -695,23 +737,35 @@ static void test_ptrace_oop(void) {
  * asmtest_ptrace_trace_attached (which reads the child's code via process_vm_readv,
  * not a shared mapping), and asserts the SAME offsets the in-process stepper yields. */
 static void test_ptrace_attach(void) {
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     if (!asmtest_ptrace_available()) {
-        printf("# SKIP ptrace attach: not Linux x86-64\n");
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace attach: %s\n", why);
         return;
     }
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTN = sizeof ROUTINE_A64;
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8, 0x10};
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+#endif
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
     volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+    void *p = mmap(NULL, RTN, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (go == MAP_FAILED || p == MAP_FAILED) {
         printf("# SKIP ptrace attach: mmap failed\n");
         return;
     }
     *go = 0;
-    memcpy(p, ROUTINE, sizeof ROUTINE);
-    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
-    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    memcpy(p, RT, RTN);
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -740,27 +794,26 @@ static void test_ptrace_attach(void) {
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     long result = 0;
-    int rc = asmtest_ptrace_trace_attached(pid, p, sizeof ROUTINE, &result, tr);
+    int rc = asmtest_ptrace_trace_attached(pid, p, RTN, &result, tr);
     ptrace(PTRACE_DETACH, pid, NULL, NULL);
     waitpid(pid, &status, 0);
 
     CHECK(rc == ASMTEST_PTRACE_OK,
           "ptrace attach: trace_attached succeeds on an externally-attached PID");
     CHECK(result == 42,
-          "ptrace attach: result 42 read from the foreign process's RAX");
-    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
-    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
-    for (size_t i = 0; seq && i < 5; i++)
+          "ptrace attach: result 42 read from the foreign process's return reg");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
         seq = (tr->insns[i] == EXPECT[i]);
     CHECK(seq,
-          "ptrace attach: foreign-process trace == in-process stream [0,3,6,c,11]");
+          "ptrace attach: foreign-process trace == the in-process stream");
     CHECK(asmtest_emu_trace_blocks_len(tr) == 2 && !asmtest_emu_trace_truncated(tr),
           "ptrace attach: two blocks, complete (bytes read via process_vm_readv)");
     asmtest_trace_free(tr);
-    munmap(p, sizeof ROUTINE);
+    munmap(p, RTN);
     munmap((void *)go, sizeof(int));
 #else
-    printf("# SKIP ptrace attach: not Linux x86-64\n");
+    printf("# SKIP ptrace attach: not Linux x86-64/AArch64\n");
 #endif
 }
 
@@ -769,23 +822,35 @@ static void test_ptrace_attach(void) {
  * /proc/<pid>/maps using only an interior address (what you'd have from a function
  * pointer or a jitdump), then attach and trace THAT region — no hardcoded base. */
 static void test_proc_resolve_and_trace(void) {
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     if (!asmtest_ptrace_available()) {
-        printf("# SKIP proc resolve: not Linux x86-64\n");
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP proc resolve: %s\n", why);
         return;
     }
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTN = sizeof ROUTINE_A64;
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8, 0x10};
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+#endif
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
     volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+    void *p = mmap(NULL, RTN, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (go == MAP_FAILED || p == MAP_FAILED) {
         printf("# SKIP proc resolve: mmap failed\n");
         return;
     }
     *go = 0;
-    memcpy(p, ROUTINE, sizeof ROUTINE);
-    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
-    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    memcpy(p, RT, RTN);
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -804,7 +869,7 @@ static void test_proc_resolve_and_trace(void) {
     int found = asmtest_proc_region_by_addr(pid, (char *)p + 4, &base, &rlen);
     CHECK(found == ASMTEST_PTRACE_OK,
           "proc maps: resolved the foreign region from an interior address");
-    CHECK(base == p && rlen >= sizeof ROUTINE,
+    CHECK(base == p && rlen >= RTN,
           "proc maps: discovered base == region start, len spans the routine");
 
     int status = 0;
@@ -826,17 +891,16 @@ static void test_proc_resolve_and_trace(void) {
 
     CHECK(rc == ASMTEST_PTRACE_OK && result == 42,
           "proc resolve+trace: traced the OS-discovered region (result 42)");
-    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
-    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
-    for (size_t i = 0; seq && i < 5; i++)
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
         seq = (tr->insns[i] == EXPECT[i]);
     CHECK(seq,
-          "proc resolve+trace: same [0,3,6,c,11] stream from the discovered region");
+          "proc resolve+trace: same stream from the OS-discovered region");
     asmtest_trace_free(tr);
-    munmap(p, sizeof ROUTINE);
+    munmap(p, RTN);
     munmap((void *)go, sizeof(int));
 #else
-    printf("# SKIP proc resolve: not Linux x86-64\n");
+    printf("# SKIP proc resolve: not Linux x86-64/AArch64\n");
 #endif
 }
 
@@ -844,11 +908,9 @@ static void test_proc_resolve_and_trace(void) {
  * generated code; we parse it to recover a method's (base,len) for trace_attached.
  * Emulate one entry (with a spaces-bearing symbol) and resolve it by name. */
 static void test_perfmap_resolve(void) {
-#if defined(__linux__) && defined(__x86_64__)
-    if (!asmtest_ptrace_available()) {
-        printf("# SKIP perfmap: not Linux x86-64\n");
-        return;
-    }
+    /* Pure /proc + perf-file parsing — arch-independent, so it runs on ANY Linux
+     * (it needs no PTRACE_SINGLESTEP, unlike the stepper above). */
+#if defined(__linux__)
     char path[64];
     snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)getpid());
     FILE *f = fopen(path, "w");
@@ -871,11 +933,11 @@ static void test_perfmap_resolve(void) {
     CHECK(rc2 == ASMTEST_PTRACE_ENOENT, "perfmap: missing symbol -> ENOENT");
     remove(path);
 #else
-    printf("# SKIP perfmap: not Linux x86-64\n");
+    printf("# SKIP perfmap: not Linux\n");
 #endif
 }
 
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__)
 /* Serialize one jitdump JIT_CODE_LOAD record (host is little-endian, which the reader
  * detects from the header magic). Layout: prefix{id,total,ts} + body{pid,tid,vma,
  * code_addr,code_size,code_index} + name(NUL) + native code. */
@@ -906,11 +968,9 @@ static void write_jit_load(FILE *f, uint64_t ts, uint64_t addr, uint64_t idx,
  * (addr, size, code_index) AND the recorded native bytes (which the text perf-map
  * cannot give), latest-timestamp wins. */
 static void test_jitdump_reader(void) {
-#if defined(__linux__) && defined(__x86_64__)
-    if (!asmtest_ptrace_available()) {
-        printf("# SKIP jitdump: not Linux x86-64\n");
-        return;
-    }
+    /* Arch-independent binary parsing (the recorded code bytes are an opaque payload),
+     * so it validates on ANY Linux — no single-step needed. */
+#if defined(__linux__)
     char path[80];
     snprintf(path, sizeof path, "/tmp/asmtest-jit-%d.dump", (int)getpid());
     FILE *f = fopen(path, "wb");
@@ -962,7 +1022,7 @@ static void test_jitdump_reader(void) {
     CHECK(rc2 == ASMTEST_PTRACE_ENOENT, "jitdump: missing method -> ENOENT");
     remove(path);
 #else
-    printf("# SKIP jitdump: not Linux x86-64\n");
+    printf("# SKIP jitdump: not Linux\n");
 #endif
 }
 

@@ -156,7 +156,10 @@ static long perf_open(struct perf_event_attr *a, pid_t pid, int cpu, int group,
     return syscall(SYS_perf_event_open, a, pid, cpu, group, flags);
 }
 
-/* AMD capability probe outcomes (no sysfs PMU node exists for branch records). */
+/* AMD capability probe outcomes (no sysfs PMU node exists for branch records).
+ * AMD LBR is x86-only and amd_branch_probe is called only from the x86-64 arms
+ * below, so gate it to x86-64 to keep the AArch64 build -Wunused-function clean. */
+#if defined(__x86_64__)
 enum { AMD_OK = 0, AMD_NOHW = 1, AMD_NOPERM = 2 };
 
 /* Probe AMD branch-record support by attempting a branch-stack sampling open
@@ -182,7 +185,8 @@ static int amd_branch_probe(void) {
         return AMD_NOPERM;
     return AMD_NOHW; /* EOPNOTSUPP/EINVAL: no Zen 3 BRS / Zen 4 LbrExtV2 */
 }
-#endif
+#endif /* __x86_64__ */
+#endif /* __linux__ */
 
 /* A real privilege probe: try to open the AUX PMU event disabled, then close it
  * (Intel PT / CoreSight). AMD uses amd_branch_probe instead. */

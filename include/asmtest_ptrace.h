@@ -18,8 +18,10 @@
  * none of the tracee's state, so it is the recommended exact path for managed
  * runtimes on AMD (where Intel PT is unavailable), and — because the ARM64
  * single-step bit (MDSCR_EL1.SS) is kernel-only with no in-process form — the only
- * single-step variant that can exist on AArch64 at all. This implementation is
- * Linux/x86-64; the AArch64 tracer rides the same PTRACE_SINGLESTEP seam.
+ * single-step variant that can exist on AArch64 at all. Implemented for Linux x86-64
+ * AND AArch64: the AArch64 tracer rides the same PTRACE_SINGLESTEP seam, differing
+ * only in the register read (PC + return reg via PTRACE_GETREGSET/NT_PRSTATUS, since
+ * AArch64 has no PTRACE_GETREGS) and the Capstone arch used for block normalization.
  *
  * Call model. Unlike the begin/end region markers of the other backends (which run
  * the routine in the collector's own process), the out-of-process tracer must own
@@ -53,15 +55,18 @@ extern "C" {
 /* Status codes (shared spirit with asmtest_hwtrace.h). */
 #define ASMTEST_PTRACE_OK 0
 #define ASMTEST_PTRACE_EINVAL (-1)
-#define ASMTEST_PTRACE_EUNAVAIL (-3) /* not a Linux x86-64 host                  */
+#define ASMTEST_PTRACE_EUNAVAIL (-3) /* not a Linux x86-64 / AArch64 host         */
 #define ASMTEST_PTRACE_ENOSYS (-5)   /* backend not compiled in                  */
 #define ASMTEST_PTRACE_ENOENT (-7)   /* region/symbol not found                  */
 #define ASMTEST_PTRACE_ETRACE (-8)   /* fork / ptrace / wait failure             */
 
-/* 1 if the out-of-process single-step tracer can run on this host (Linux x86-64),
- * else 0. Block normalization additionally uses the Capstone length-decoder already
- * linked into the tier; without it instruction offsets are still exact but blocks
- * degrade. */
+/* 1 if the out-of-process single-step tracer can run on this host (Linux x86-64, or
+ * Linux AArch64 with a functional PTRACE_SINGLESTEP), else 0. On AArch64 this is a
+ * cached runtime self-probe: x86-64 always supports single-step, but qemu-user
+ * emulation does NOT emulate the ptrace tracer/tracee relationship, so the tracer
+ * needs a real AArch64 host — the probe detects that without ever blocking. Block
+ * normalization additionally uses the Capstone length-decoder already linked into the
+ * tier; without it instruction offsets are still exact but blocks degrade. */
 int asmtest_ptrace_available(void);
 
 /* A human-readable reason asmtest_ptrace_available() returned 0, into buf (always

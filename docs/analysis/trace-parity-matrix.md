@@ -41,14 +41,17 @@ Two facts worth stating up front because they are easy to get wrong:
   ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)), and `src/ss_backend.c`
   drives `EFLAGS.TF`→`#DB`/`SIGTRAP` to record every executed `RIP` **live on any
   x86-64 Linux host** (no PMU, no perf, no privilege, no decoder beyond Capstone).
-  The **out-of-process `ptrace` variant (W2) also now ships for Linux x86-64**
+  The **out-of-process `ptrace` variant (W2) now ships for Linux x86-64 and AArch64**
   ([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`): a
   tracer parent `PTRACE_SINGLESTEP`s a forked tracee and reconstructs the *same*
-  exact offsets out of band (the managed-runtime path, and the seam the AArch64
-  tracer will ride). Only the *cross-OS / cross-arch* fronts (Windows VEH,
-  macOS-Intel, the **AArch64** ptrace tracer) remain Phase-5 *(planned)* — so
-  single-step rows below read *implemented* for Linux x86-64 and carry *(planned)*
-  only where they name one of those fronts. See the
+  exact offsets out of band (the managed-runtime path). The AArch64 arm rides the same
+  seam (PC via `PTRACE_GETREGSET`/`NT_PRSTATUS`, `ASMTEST_ARCH_ARM64` length decode);
+  its single-step *stream* is validated on real AArch64 hardware, not under qemu-user
+  (which cannot emulate ptrace — the backend self-probes and self-skips there), while
+  its `/proc`+jitdump readers run on any Linux arch and are validated live on AArch64.
+  Only the *cross-OS* fronts (Windows VEH, macOS-Intel) remain Phase-5 *(planned)* — so
+  single-step rows below read *implemented* for Linux x86-64/AArch64 and carry
+  *(planned)* only where they name one of those fronts. See the
   [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
 
 ---
@@ -79,11 +82,14 @@ Keystone) is not asserted here.
 | Intel PT | ✓ bare-metal | ✗ | ✗ | — | — |
 | AMD LBR | ✓ (Zen 3+) | ✗ | ✗ | — | — |
 | CoreSight | — | — | — | scaffold (board) | ✗ |
-| Single-step | ✓ **shipped** | macOS-Intel (Ph5) | ✗ → Ph5 (VEH, ~6×) | ptrace-only (W2) | ptrace-only (W2) |
+| Single-step | ✓ **shipped** | macOS-Intel (Ph5) | ✗ → Ph5 (VEH, ~6×) | ptrace W2 ✓ (stream HW-pending) | ptrace-only (W2) |
 
-Windows-x64 and all of macOS/AArch64 are served **only by the emulator tier** today
-(`emu_call_win64_traced` for the Win64 ABI). The two implemented native tiers are
-Linux-x86-64-only.
+Windows-x64 and macOS are served **only by the emulator tier** today
+(`emu_call_win64_traced` for the Win64 ABI). On AArch64 Linux the out-of-process W2
+`ptrace` single-step tier is code-implemented and builds/self-skips correctly there
+(its `/proc`+jitdump readers validate live), but its single-step *stream* awaits a real
+AArch64 host — so for AArch64 the emulator remains the validated trace tier today.
+The DynamoRIO native tier is Linux-x86-64-only.
 
 ---
 
@@ -182,7 +188,7 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 | AMD Zen 2 | **DynamoRIO** | single-step | no branch facility exists on Zen 2 |
 | Any x86, exact + unprivileged + on CI | **single-step** | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
 | Managed runtime (JVM/.NET/Node), Intel | **Intel PT** | — | observes out-of-band; no thread takeover, no signal collision |
-| Managed runtime, AMD | **W2 out-of-proc `ptrace` single-step** *(Linux x86-64 shipped)* | DynamoRIO (best-effort) | PT is Intel-only; in-proc DR cannot seize JIT/GC threads |
+| Managed runtime, AMD | **W2 out-of-proc `ptrace` single-step** *(Linux x86-64 + AArch64; AArch64 stream pending real hardware)* | DynamoRIO (best-effort) | PT is Intel-only; in-proc DR cannot seize JIT/GC threads |
 | Windows-x64 / macOS / AArch64 (any) | **Emulator (Unicorn)** | — | only tier covering these hosts today; CoreSight is a scaffold |
 | Cross-ISA / isolation / faults-as-data | **Emulator (Unicorn)** | — | the only tier with isolated guests + 5 ISAs + precise faults |
 
