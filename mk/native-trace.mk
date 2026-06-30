@@ -181,13 +181,20 @@ hwtrace-test: $(BUILD)/test_hwtrace
 $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
 
-.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet
+.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-jitdump
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
 hwtrace-jit-node: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-node (real Node.js V8 JIT method) =="
 	./$(BUILD)/jit_trace node
+
+# Binary jitdump path (asmtest_jitdump_find) against a real V8 jit-<pid>.dump
+# (node --perf-prof): recover a method's recorded bytes and validate them vs the perf-map
+# address and the live code. Needs node + Capstone.
+hwtrace-jit-jitdump: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-jitdump (real V8 jitdump byte recovery) =="
+	./$(BUILD)/jit_trace jitdump
 
 # .NET (CoreCLR): build the bare console app (offline, from the SDK packs) and trace its
 # `Program::Add` body. DOTNET_TieredCompilation=0 (set by the harness) gives a stable

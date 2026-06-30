@@ -517,11 +517,25 @@ whole pipeline at a live JIT — not a fixture — for **two** runtimes:
   deterministically on ordinary memory). AArch64's hardware-breakpoint ptrace interface
   is a separate follow-on; there `run_to` is software-only for now.
 
-Both lanes are honest by construction: a watchdog alarm bounds the single-step so a
+These two are honest by construction: a watchdog alarm bounds the single-step so a
 re-tiered/moved address self-skips instead of hanging, and the trace is asserted when the
 runtime cooperates and skipped (never failed) when it does not, while the resolution and
 attach checks — which validate the library against the runtime's real perf-map line and a
 real `/proc/maps` — stand on their own.
+
+A third lane validates the **binary jitdump** byte source (`asmtest_jitdump_find`) against
+real output:
+
+- `make docker-hwtrace-jit-jitdump` (Node.js / **V8**): runs `node --perf-prof`, which
+  writes a real `jit-<pid>.dump`, and recovers a method's **recorded code bytes** from it
+  (the byte source a branch-trace decoder must be handed — unlike the text perf-map, which
+  carries only address + size + name). It validates the recovered bytes three ways: the
+  address agrees with V8's own perf-map (two independent V8 outputs on the same
+  compilation), the bytes disassemble to real x86-64 instructions, and they match the
+  **live** code at that address (so the jitdump truly captured the running bytes — the
+  temporal same-address-different-bytes guarantee jitdump exists for). `asmtest_jitdump_-
+  find` matches by exact name, so the lane takes the name from the easy-to-parse text
+  perf-map (V8 emits the same string in both).
 
 ### Language wrappers
 

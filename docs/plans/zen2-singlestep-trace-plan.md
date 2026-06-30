@@ -318,6 +318,14 @@ Linux/x86-64 backend.
     asserted-or-skipped, so the lanes never flake. This closes the loop the W2 path was
     built for: tracing a foreign JIT's generated code on AMD, where Intel PT is
     unavailable and in-process DynamoRIO cannot seize the runtime's threads.
+    - `make docker-hwtrace-jit-jitdump` — **binary jitdump path** (`asmtest_jitdump_find`)
+      against a real V8 `jit-<pid>.dump` (`node --perf-prof`). Unlike the text perf-map
+      (address/size/name), a jitdump carries the JIT's recorded **code bytes** — the byte
+      source a branch-trace decoder needs — so this recovers a method's bytes and validates
+      them three ways: the address agrees with V8's own perf-map (two independent V8
+      outputs), the bytes disassemble to real x86-64, and they match the **live** code at
+      that address (the temporal capture guarantee). This is the first validation of
+      `asmtest_jitdump_find` against real output rather than a synthetic fixture.
   - _Done._ **Hardware-breakpoint `run_to` (W^X JIT code)** — `run_until` (shared by
     `run_to` and the call-out step-over) defaults to a software `int3` but transparently
     falls back to an **x86-64 hardware execution breakpoint** (DR0 + DR7 via

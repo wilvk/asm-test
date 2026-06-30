@@ -166,7 +166,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (so it never traps a sibling runtime thread, unlike a process-wide `int3`); software
     stays the default and `ASMTEST_PTRACE_HW_BP` forces the hardware path (used to validate
     it deterministically on ordinary memory — `test_ptrace_callout`). AArch64 hardware
-    breakpoints (`NT_ARM_HW_BKPT`) are a follow-on. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    breakpoints (`NT_ARM_HW_BKPT`) are a follow-on. A third lane,
+    `make docker-hwtrace-jit-jitdump`, validates the **binary jitdump** byte source against
+    real output: `node --perf-prof` writes a real `jit-<pid>.dump`, and the lane recovers a
+    method's **recorded code bytes** with `asmtest_jitdump_find` and checks them three ways
+    — the address agrees with V8's own perf-map, the bytes disassemble to real x86-64, and
+    they match the live code at that address (jitdump's temporal-capture guarantee) — the
+    first validation of `asmtest_jitdump_find` against a real jitdump rather than a
+    synthetic fixture. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

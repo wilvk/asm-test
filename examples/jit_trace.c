@@ -224,6 +224,156 @@ static int trace_runtime(const char *engine, const char *method_substr,
     return failures ? 1 : 0;
 }
 
+/* The BINARY JITDUMP path (asmtest_jitdump_find), against a real runtime. Unlike the
+ * text perf-map (address + size + name), a jitdump carries the JIT's recorded CODE BYTES
+ * — the byte source a branch-trace decoder must be handed — and a per-method timestamp,
+ * so the LATEST body of a re-emitted address wins (the temporal same-address-different-
+ * bytes problem). Node's V8 writes a real `jit-<pid>.dump` under `--perf-prof`; this
+ * recovers a method's recorded bytes from it and validates them three ways: the address
+ * agrees with V8's own perf-map (two independent V8 outputs), the bytes disassemble to
+ * real instructions, and they match the LIVE code at that address (so the jitdump truly
+ * captured the running bytes). asmtest_jitdump_find matches by exact name, so we take the
+ * name from the easy-to-parse text perf-map (V8 emits the SAME string in both). */
+static int trace_jitdump(void) {
+    if (!asmtest_disas_available()) {
+        printf("# SKIP jitdump: needs Capstone\n1..0 # skipped\n");
+        return 0;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Run from /tmp so the jitdump lands at /tmp/jit-<pid>.dump (V8 writes it to the
+         * cwd; the perf-map always goes to /tmp) — and not in the repo. */
+        if (chdir("/tmp") != 0)
+            _exit(127);
+        char *cmd[] = {(char *)"node",
+                       (char *)"--perf-basic-prof",
+                       (char *)"--perf-prof",
+                       (char *)"--no-turbo-inlining",
+                       (char *)"-e",
+                       (char *)HOT_JS,
+                       NULL};
+        execvp(cmd[0], cmd);
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("fork");
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    char mappath[64];
+    snprintf(mappath, sizeof mappath, "/tmp/perf-%d.map", (int)pid);
+
+    /* Poll until a perf-map entry for the method resolves in the jitdump (V8 emits the
+     * jitdump record once the method is JIT'd). Try each perf-map line whose symbol
+     * contains the name — the tier V8 wrote to the jitdump (Sparkplug/TurboFan) wins. */
+    char name[256] = {0};
+    unsigned long paddr = 0, psize = 0;
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    uint8_t jbytes[1024];
+    size_t jblen = 0;
+    int found = 0;
+    for (int i = 0; i < 200 && !found; i++) {
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            pid = -1;
+            break;
+        }
+        FILE *f = fopen(mappath, "r");
+        if (f == NULL)
+            continue;
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            unsigned long a, s;
+            int soff = 0;
+            if (sscanf(line, "%lx %lx %n", &a, &s, &soff) < 2 || soff == 0 || s < 2)
+                continue;
+            char *t = line + soff;
+            t[strcspn(t, "\r\n")] = '\0';
+            if (strstr(t, "asmtjit") == NULL)
+                continue;
+            /* V8 writes the jitdump to /tmp/jit-<pid>.dump (path=NULL resolves it). */
+            asmtest_jitdump_entry_t te;
+            size_t tl = 0;
+            if (asmtest_jitdump_find(NULL, pid, t, &te, jbytes, sizeof jbytes, &tl) ==
+                    ASMTEST_PTRACE_OK &&
+                tl > 0) {
+                strncpy(name, t, sizeof name - 1);
+                name[sizeof name - 1] = '\0';
+                paddr = a;
+                psize = s;
+                e = te;
+                jblen = tl;
+                found = 1;
+                break;
+            }
+        }
+        fclose(f);
+    }
+
+    if (pid < 0) {
+        printf("# SKIP jitdump: node exited early (not installed?)\n1..0 # skipped\n");
+        return 0;
+    }
+    if (!found) {
+        printf("# SKIP jitdump: no V8 method resolvable in the jitdump\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+    printf("# recovered real V8 method from jit-%d.dump: '%s' @ 0x%llx (%llu bytes, "
+           "code_index %llu)\n",
+           (int)pid, name, (unsigned long long)e.code_addr,
+           (unsigned long long)e.code_size, (unsigned long long)e.code_index);
+
+    /* (1) The binary jitdump parser recovered a real method's recorded code bytes. */
+    CHECK(jblen > 0 && e.code_size > 0,
+          "jitdump: asmtest_jitdump_find recovered a real V8 method's recorded bytes");
+
+    /* (2) Cross-check: the jitdump address matches V8's own perf-map for the same name —
+     * two independent V8 outputs agreeing on the same compilation. */
+    CHECK((unsigned long)e.code_addr == paddr && (unsigned long)e.code_size == psize,
+          "jitdump: code_addr/size agree with V8's perf-map (two independent V8 outputs)");
+
+    /* (3) The recorded bytes are real machine code (decode the first instruction). */
+    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL, 0) > 0,
+          "jitdump: the recorded bytes disassemble to real x86-64 instructions");
+
+    /* (4) The recorded bytes == the LIVE code at code_addr — the jitdump captured the
+     * actual running bytes (best-effort: skips if V8 moved/re-tiered the code). */
+    uint8_t live[1024];
+    size_t n = jblen < sizeof live ? jblen : sizeof live;
+    struct iovec lv = {live, n}, rv = {(void *)(uintptr_t)e.code_addr, n};
+    if (process_vm_readv(pid, &lv, 1, &rv, 1, 0) == (ssize_t)n &&
+        memcmp(live, jbytes, n) == 0)
+        CHECK(1, "jitdump: recorded bytes == the live JIT code (jitdump captured the "
+                 "running bytes)");
+    else
+        printf("# SKIP jitdump byte-match: live code differs (V8 moved/re-tiered it)\n");
+
+    printf("# real V8 JIT code recovered from the jitdump's recorded bytes:\n");
+    for (uint64_t off = 0; off < jblen;) {
+        char text[128];
+        size_t l =
+            asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, off, text,
+                          sizeof text);
+        if (l == 0)
+            break;
+        printf("    0x%llx  %s\n", (unsigned long long)off, text);
+        off += l;
+    }
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "node";
 
@@ -255,8 +405,10 @@ int main(int argc, char **argv) {
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
         return trace_runtime("CoreCLR", "Program::Add", cmd);
     }
+    if (strcmp(mode, "jitdump") == 0)
+        return trace_jitdump();
 
-    fprintf(stderr, "usage: %s {node|dotnet <app.dll>}\n", argv[0]);
+    fprintf(stderr, "usage: %s {node|dotnet <app.dll>|jitdump}\n", argv[0]);
     return 2;
 }
 

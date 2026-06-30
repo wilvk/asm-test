@@ -188,10 +188,11 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-<lang>     just one (e.g. docker-hwtrace-rust)
 #   make docker-hwtrace-jit        trace a live Node.js V8 JIT method out of band
 #   make docker-hwtrace-jit-dotnet trace a live .NET CoreCLR JIT method out of band
+#   make docker-hwtrace-jit-jitdump recover a real V8 jitdump method's bytes (binary path)
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
 .PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-bindings \
-        docker-hwtrace-jit docker-hwtrace-jit-dotnet \
+        docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-jitdump \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
@@ -209,6 +210,9 @@ docker-hwtrace-jit: docker-node
 
 docker-hwtrace-jit-dotnet: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet
+
+docker-hwtrace-jit-jitdump: docker-node
+	$(DOCKER) run --rm $(_docker_plat) asmtest-node make hwtrace-jit-jitdump
 
 # AMD LBR live lane: same image, but with perf access so the AMD branch-stack
 # backend actually runs instead of self-skipping. Unlike the single-step lane this
