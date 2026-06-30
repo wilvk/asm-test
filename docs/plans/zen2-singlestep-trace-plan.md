@@ -308,12 +308,9 @@ Linux/x86-64 backend.
       29 instructions).
     - `make docker-hwtrace-jit-dotnet` — **.NET (CoreCLR)**: traces `Program::Add`,
       recovering the JIT's `lea eax, [rdi+rsi]; ret`. `DOTNET_TieredCompilation=0` gives a
-      stable single compilation; `[MethodImpl(NoInlining)]` keeps it a real call target;
-      **`DOTNET_EnableWriteXorExecute=0`** is required because .NET's default **W^X**
-      double-maps the code heap, so a software breakpoint (`PTRACE_POKETEXT`) is refused
-      with `EIO`. (Tracing a W^X runtime as-shipped would need **hardware** breakpoints —
-      debug registers — instead of a software `int3`: a noted follow-on. The rest of the
-      pipeline is identical.)
+      stable single compilation; `[MethodImpl(NoInlining)]` keeps it a real call target.
+      It traces .NET's **W^X** code heap **as-shipped** (no `DOTNET_EnableWriteXorExecute=0`)
+      via the hardware-breakpoint fallback below.
 
     Both are honest by construction: a watchdog bounds the step so a re-tiered/moved
     address self-skips rather than hangs; the resolve + attach checks (library vs. the
@@ -321,6 +318,19 @@ Linux/x86-64 backend.
     asserted-or-skipped, so the lanes never flake. This closes the loop the W2 path was
     built for: tracing a foreign JIT's generated code on AMD, where Intel PT is
     unavailable and in-process DynamoRIO cannot seize the runtime's threads.
+  - _Done._ **Hardware-breakpoint `run_to` (W^X JIT code)** — `run_until` (shared by
+    `run_to` and the call-out step-over) defaults to a software `int3` but transparently
+    falls back to an **x86-64 hardware execution breakpoint** (DR0 + DR7 via
+    `PTRACE_POKEUSER`) when `PTRACE_POKETEXT` is refused — i.e. when the executable page is
+    not writable, the case for a hardened **W^X** JIT code heap (.NET's default
+    double-maps it, so POKETEXT fails with `EIO`). A hardware breakpoint writes no code, so
+    it traces W^X code as-shipped, and is per-thread, so it never traps a sibling runtime
+    thread the way a process-wide `int3` can. Software stays the default (no debug-register
+    budget, no risk to the existing tests); `ASMTEST_PTRACE_HW_BP` forces the hardware path,
+    which `test_ptrace_callout("hardware bp", …)` uses to validate it deterministically on
+    ordinary memory (real DR0/DR7, in a plain container). AArch64's hardware-breakpoint
+    ptrace interface (`NT_ARM_HW_BKPT`) is a separate follow-on; there `run_to` is
+    software-only for now.
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the

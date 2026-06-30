@@ -154,12 +154,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the entry, and single-stepping one invocation to recover the **actual TurboFan code**
     for `(a+b)|0`; `make docker-hwtrace-jit-dotnet` traces **.NET (CoreCLR)** —
     `Program::Add` → `lea eax,[rdi+rsi]; ret` (with `DOTNET_TieredCompilation=0` for a
-    stable address and `DOTNET_EnableWriteXorExecute=0` because .NET's default W^X
-    double-maps the code heap so a software breakpoint is refused — a W^X runtime as-shipped
-    would need hardware breakpoints, a noted follow-on). A watchdog makes a re-tiered/moved
-    address self-skip rather than hang, so the lanes never flake (resolve + attach are
-    asserted against the runtime's real output; the trace is asserted-or-skipped).
-    `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    stable address), tracing .NET's **W^X** code heap **as-shipped** via the hardware-
+    breakpoint fallback below. A watchdog makes a re-tiered/moved address self-skip rather
+    than hang, so the lanes never flake (resolve + attach are asserted against the runtime's
+    real output; the trace is asserted-or-skipped). **Hardware-breakpoint `run_to`:**
+    `run_until` (behind `run_to` and the call-out step-over) defaults to a software `int3`
+    but transparently falls back to an **x86-64 hardware execution breakpoint** (DR0/DR7 via
+    `PTRACE_POKEUSER`) when `PTRACE_POKETEXT` is refused — i.e. on a W^X JIT code heap whose
+    executable page is not writable (.NET's default double-maps it; POKETEXT fails `EIO`).
+    The hardware breakpoint writes no code (so it traces W^X as-shipped) and is per-thread
+    (so it never traps a sibling runtime thread, unlike a process-wide `int3`); software
+    stays the default and `ASMTEST_PTRACE_HW_BP` forces the hardware path (used to validate
+    it deterministically on ordinary memory — `test_ptrace_callout`). AArch64 hardware
+    breakpoints (`NT_ARM_HW_BKPT`) are a follow-on. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

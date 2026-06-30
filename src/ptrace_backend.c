@@ -348,6 +348,31 @@ static int set_pc(pid_t pid, uint64_t pc) {
     regs.rip = pc;
     return ptrace(PTRACE_SETREGS, pid, NULL, &regs);
 }
+
+/* The x86 debug registers are reached through `struct user`'s u_debugreg[] via
+ * PTRACE_POKEUSER. DR0..3 hold breakpoint addresses; DR7 enables them and selects the
+ * condition/length. */
+#define DR_OFFSET(n) (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
+
+/* Arm a HARDWARE execution breakpoint at `addr` in DR0 (per-thread). Unlike a software
+ * int3 it writes no code, so it works on a W^X JIT code heap whose executable page is not
+ * writable — and being per-thread, it never traps a sibling thread the way a process-wide
+ * int3 can. DR7: L0=1 (enable DR0), R/W0=00 (execute), LEN0=00 (required for execute).
+ * Returns 0 on success, -1 on a ptrace failure. */
+static int set_hw_bp(pid_t pid, uint64_t addr) {
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(0),
+               (void *)(uintptr_t)addr) != 0)
+        return -1;
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(7), (void *)(uintptr_t)0x1UL) != 0)
+        return -1;
+    return 0;
+}
+
+/* Disarm the DR0 hardware breakpoint (clear DR7 enable, then DR0). Best-effort. */
+static void clear_hw_bp(pid_t pid) {
+    ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(7), (void *)(uintptr_t)0UL);
+    ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(0), (void *)(uintptr_t)0UL);
+}
 #endif
 
 #if defined(__aarch64__)
@@ -457,16 +482,49 @@ static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
  * loops (run native-speed OVER a call-out to its return address). Unrelated signals are
  * forwarded so the tracee's own signal flow is undisturbed. */
 static int run_until(pid_t pid, uint64_t target) {
-    errno = 0;
-    long orig = ptrace(PTRACE_PEEKTEXT, pid, (void *)(uintptr_t)target, NULL);
-    if (orig == -1 && errno != 0)
-        return ASMTEST_PTRACE_ETRACE;
-    const unsigned long mask = PTRACE_BP_LEN >= (int)sizeof(long)
-                                   ? ~0UL
-                                   : ((1UL << (PTRACE_BP_LEN * 8)) - 1);
-    long planted = (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
-    if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)planted) != 0)
-        return ASMTEST_PTRACE_ETRACE;
+    /* Default to a software int3, which works on ordinary executable memory and needs no
+     * debug-register budget. Fall back to a HARDWARE execution breakpoint when the code
+     * is W^X (the executable page is not writable, so PTRACE_POKETEXT is refused with
+     * EIO) — the case for a hardened JIT code heap (e.g. .NET's default). A hardware
+     * breakpoint writes no code and is per-thread, so it traces W^X code as-shipped and
+     * never traps a sibling thread. ASMTEST_PTRACE_HW_BP forces the hardware path (used to
+     * exercise it deterministically on ordinary memory). x86-64 only; AArch64 keeps the
+     * software brk (its hardware-breakpoint ptrace interface is a separate follow-on). */
+    int hw = 0;
+    long orig = 0;
+#if defined(__x86_64__)
+    const int force_hw = getenv("ASMTEST_PTRACE_HW_BP") != NULL;
+#else
+    const int force_hw = 0;
+#endif
+
+    if (!force_hw) {
+        errno = 0;
+        orig = ptrace(PTRACE_PEEKTEXT, pid, (void *)(uintptr_t)target, NULL);
+        if (orig == -1 && errno != 0)
+            return ASMTEST_PTRACE_ETRACE;
+        const unsigned long mask = PTRACE_BP_LEN >= (int)sizeof(long)
+                                       ? ~0UL
+                                       : ((1UL << (PTRACE_BP_LEN * 8)) - 1);
+        long planted = (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
+        if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
+                   (void *)planted) != 0) {
+#if defined(__x86_64__)
+            if (set_hw_bp(pid, target) != 0) /* W^X / unwritable text: try hardware */
+                return ASMTEST_PTRACE_ETRACE;
+            hw = 1;
+#else
+            return ASMTEST_PTRACE_ETRACE;
+#endif
+        }
+    }
+#if defined(__x86_64__)
+    else {
+        if (set_hw_bp(pid, target) != 0)
+            return ASMTEST_PTRACE_ETRACE;
+        hw = 1;
+    }
+#endif
 
     int rc = ASMTEST_PTRACE_OK, status = 0, sig = 0;
     for (;;) {
@@ -494,26 +552,47 @@ static int run_until(pid_t pid, uint64_t target) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
+        /* A hardware execution breakpoint and an AArch64 brk are FAULTS: the stop-PC is
+         * AT the instruction. A software int3 is a TRAP: the stop-PC is one past the
+         * byte, so back it up to find the hit and rewind before resuming. */
+        uint64_t hit;
+        if (hw)
+            hit = pc;
+        else
 #if defined(__x86_64__)
-        uint64_t hit = pc - PTRACE_BP_LEN; /* int3 trap: PC is one past the byte */
+            hit = pc - PTRACE_BP_LEN;
 #else
-        uint64_t hit = pc; /* brk fault: PC is AT the instruction */
+            hit = pc;
 #endif
         if (hit != target)
             continue; /* a SIGTRAP that is not our breakpoint; keep going */
 
-        if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig) != 0) {
-            rc = ASMTEST_PTRACE_ETRACE;
-            break;
-        }
+        if (hw) {
 #if defined(__x86_64__)
-        if (set_pc(pid, target) != 0)
-            rc = ASMTEST_PTRACE_ETRACE;
+            clear_hw_bp(pid); /* PC is already at target; nothing to rewind */
 #endif
+        } else {
+            if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
+                       (void *)orig) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+#if defined(__x86_64__)
+            if (set_pc(pid, target) != 0)
+                rc = ASMTEST_PTRACE_ETRACE;
+#endif
+        }
         break;
     }
-    if (rc == ASMTEST_PTRACE_ETRACE)
-        ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig);
+    if (rc == ASMTEST_PTRACE_ETRACE) {
+        if (hw) {
+#if defined(__x86_64__)
+            clear_hw_bp(pid);
+#endif
+        } else {
+            ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig);
+        }
+    }
     return rc;
 }
 

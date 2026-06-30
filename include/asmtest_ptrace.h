@@ -114,11 +114,14 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
  * the missing step between resolving a foreign method and tracing it. asmtest_ptrace_-
  * trace_attached requires `pid` to be stopped AT the region entry; against a real
  * managed runtime you do not control WHEN the program calls the method, so you cannot
- * just attach at the right instant. This plants a software breakpoint at `addr`
- * (PTRACE_POKETEXT, which patches even an r-x text page the way a debugger does),
- * PTRACE_CONTs the target until the program ITSELF calls into `addr`, then removes the
- * breakpoint and rewinds the program counter so the target is left ptrace-stopped with
- * its PC exactly at `addr` — precisely the precondition trace_attached expects. The
+ * just attach at the right instant. This plants a breakpoint at `addr`, PTRACE_CONTs the
+ * target until the program ITSELF calls into `addr`, then removes the breakpoint and
+ * leaves the target ptrace-stopped with its PC exactly at `addr` — precisely the
+ * precondition trace_attached expects. It uses a software int3 (PTRACE_POKETEXT, which
+ * patches even an r-x text page the way a debugger does); when the code is W^X and the
+ * executable page is not writable (POKETEXT refused with EIO — e.g. a hardened JIT code
+ * heap like .NET's default), it transparently falls back to a HARDWARE execution
+ * breakpoint (x86-64 debug registers), which writes no code and is per-thread. The
  * caller still owns attach/detach: PTRACE_ATTACH + wait, then run_to(addr), then
  * trace_attached(addr, len, …), then PTRACE_DETACH. Unrelated signals delivered while
  * running are forwarded to the target. Returns ASMTEST_PTRACE_OK (stopped at addr),

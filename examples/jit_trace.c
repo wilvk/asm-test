@@ -244,15 +244,13 @@ int main(int argc, char **argv) {
             return 2;
         }
         /* The Makefile builds the app; set CoreCLR to JIT each method ONCE at a stable
-         * address (no tiering churn), emit a perf-map, and — crucially —
-         * EnableWriteXorExecute=0 so the JIT code heap is a single mapping a software
-         * breakpoint (PTRACE_POKETEXT) can patch. With .NET's default W^X the executable
-         * code is double-mapped and POKETEXT fails with EIO; tracing a W^X runtime would
-         * need hardware breakpoints (debug registers) instead, a separate enhancement. */
+         * address (no tiering churn) and emit a perf-map. Note we do NOT disable W^X:
+         * .NET's default double-maps the JIT code heap so a software breakpoint
+         * (PTRACE_POKETEXT) is refused with EIO — run_until detects that and falls back to
+         * a HARDWARE execution breakpoint, so we trace the W^X code as-shipped. */
         setenv("DOTNET_TieredCompilation", "0", 1);
         setenv("DOTNET_TC_QuickJitForLoops", "0", 1);
         setenv("DOTNET_PerfMapEnabled", "1", 1);
-        setenv("DOTNET_EnableWriteXorExecute", "0", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
         return trace_runtime("CoreCLR", "Program::Add", cmd);

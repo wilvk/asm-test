@@ -506,12 +506,16 @@ whole pipeline at a live JIT — not a fixture — for **two** runtimes:
 - `make docker-hwtrace-jit-dotnet` (.NET / **CoreCLR**, `asmtest-dotnet` image): builds a
   tiny console app and traces its `Program::Add`, recovering the JIT's `lea eax, [rdi +
   rsi]; ret`. `DOTNET_TieredCompilation=0` gives a single compilation at a stable address
-  (no churn), `[MethodImpl(NoInlining)]` keeps it a real call target, and
-  **`DOTNET_EnableWriteXorExecute=0`** is required: with .NET's default **W^X** the JIT
-  code heap is double-mapped, so a software breakpoint (`PTRACE_POKETEXT`) is refused
-  (`EIO`). Tracing a W^X runtime in its hardened configuration would need **hardware**
-  breakpoints (debug registers) instead of a software `int3` — a noted follow-on; the
-  rest of the pipeline (resolve, attach, run_to, single-step) is unchanged.
+  (no churn) and `[MethodImpl(NoInlining)]` keeps it a real call target. Notably it traces
+  .NET's **W^X** code heap **as-shipped** (no `DOTNET_EnableWriteXorExecute=0`): the JIT
+  code is double-mapped so a software breakpoint (`PTRACE_POKETEXT`) is refused with
+  `EIO`, and `run_to` transparently falls back to a **hardware** execution breakpoint
+  (x86-64 debug registers DR0/DR7), which writes no code. Hardware breakpoints are also
+  per-thread, so they never trap a sibling runtime thread the way a process-wide `int3`
+  can. The fallback engages automatically when `POKETEXT` is refused; `ASMTEST_PTRACE_HW_BP`
+  forces it (the `hwtrace-test` suite uses that to exercise the hardware path
+  deterministically on ordinary memory). AArch64's hardware-breakpoint ptrace interface
+  is a separate follow-on; there `run_to` is software-only for now.
 
 Both lanes are honest by construction: a watchdog alarm bounds the single-step so a
 re-tiered/moved address self-skips instead of hanging, and the trace is asserted when the

@@ -1041,20 +1041,30 @@ static void test_run_to_and_trace(void) {
  * the call, runs the callee at native speed to its return, and resumes — so the trace
  * holds the region's OWN instructions only (helper skipped), and still finds the real
  * return. Uses trace_call (self-contained: fork + single-step), exercising the same
- * call-out path trace_attached shares. */
-static void test_ptrace_callout(void) {
+ * call-out path trace_attached shares.
+ *
+ * Runs twice: once normally (software int3 over the call-out) and once with
+ * ASMTEST_PTRACE_HW_BP forcing the HARDWARE-breakpoint path — the path that traces W^X
+ * JIT code (e.g. .NET as-shipped), exercised here deterministically on ordinary memory,
+ * on real x86-64 debug registers, in a plain container. Both must yield the same trace. */
+static void test_ptrace_callout(const char *label, int force_hw) {
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
-        printf("# SKIP ptrace callout: %s\n", why);
+        printf("# SKIP ptrace callout (%s): %s\n", label, why);
         return;
     }
     if (!asmtest_disas_available()) {
-        printf("# SKIP ptrace callout: needs Capstone (call detection)\n");
+        printf("# SKIP ptrace callout (%s): needs Capstone (call detection)\n", label);
         return;
     }
 #if defined(__aarch64__)
+    if (force_hw) { /* the hardware-breakpoint path is x86-64 only for now */
+        printf("# SKIP ptrace callout (%s): hardware breakpoints are x86-64 only\n",
+               label);
+        return;
+    }
     /* R: bl H ; add x0,x0,x1 ; ret    H@0xc: add x0,x0,#1 ; ret */
     static const unsigned char BLOB[] = {
         0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b, 0xc0, 0x03, 0x5f, 0xd6,
@@ -1069,11 +1079,17 @@ static void test_ptrace_callout(void) {
 #endif
     const size_t REGION = 0xc; /* trace R only; the helper H at 0xc is outside it */
     const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+    char msg[96];
+
+    if (force_hw)
+        setenv("ASMTEST_PTRACE_HW_BP", "1", 1);
 
     void *p = mmap(NULL, sizeof BLOB, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
-        printf("# SKIP ptrace callout: mmap failed\n");
+        printf("# SKIP ptrace callout (%s): mmap failed\n", label);
+        if (force_hw)
+            unsetenv("ASMTEST_PTRACE_HW_BP");
         return;
     }
     memcpy(p, BLOB, sizeof BLOB);
@@ -1085,20 +1101,28 @@ static void test_ptrace_callout(void) {
     long result = 0;
     int rc = asmtest_ptrace_trace_call(p, REGION, args, 2, &result, tr);
 
-    CHECK(rc == ASMTEST_PTRACE_OK,
-          "ptrace callout: trace_call over a region that calls out");
-    CHECK(result == 43, "ptrace callout: result 43 (helper ran: 20 +1 +22)");
+    snprintf(msg, sizeof msg, "ptrace callout (%s): trace_call over a region that calls out",
+             label);
+    CHECK(rc == ASMTEST_PTRACE_OK, msg);
+    snprintf(msg, sizeof msg, "ptrace callout (%s): result 43 (helper ran: 20 +1 +22)",
+             label);
+    CHECK(result == 43, msg);
     int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
     for (size_t i = 0; seq && i < NEXP; i++)
         seq = (tr->insns[i] == EXPECT[i]);
-    CHECK(seq,
-          "ptrace callout: in-region stream only (helper stepped over, not recorded)");
-    CHECK(!asmtest_emu_trace_truncated(tr),
-          "ptrace callout: complete (call-out not mistaken for the return)");
+    snprintf(msg, sizeof msg, "ptrace callout (%s): in-region stream only (helper skipped)",
+             label);
+    CHECK(seq, msg);
+    snprintf(msg, sizeof msg, "ptrace callout (%s): complete (call-out not a false return)",
+             label);
+    CHECK(!asmtest_emu_trace_truncated(tr), msg);
     asmtest_trace_free(tr);
     munmap(p, sizeof BLOB);
+    if (force_hw)
+        unsetenv("ASMTEST_PTRACE_HW_BP");
 #else
-    printf("# SKIP ptrace callout: not Linux x86-64/AArch64\n");
+    (void)force_hw;
+    printf("# SKIP ptrace callout (%s): not Linux x86-64/AArch64\n", label);
 #endif
 }
 
@@ -1260,8 +1284,11 @@ int main(void) {
     test_run_to_and_trace();
 
     /* Live: call-depth awareness — trace a region that calls OUT to a helper, stepping
-     * over the callee at native speed instead of mistaking the call for the return. */
-    test_ptrace_callout();
+     * over the callee at native speed instead of mistaking the call for the return. Run
+     * the step-over with a software int3 (default) and with a forced HARDWARE breakpoint
+     * (the path that traces W^X JIT code as-shipped), asserting identical results. */
+    test_ptrace_callout("software int3", 0);
+    test_ptrace_callout("hardware bp", 1);
 
     test_perfmap_resolve();
     test_jitdump_reader();
