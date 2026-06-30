@@ -267,18 +267,28 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
     back to the gapless 18-edge sequence, and proves the decode is **complete** (all
     55 instructions, two blocks, not truncated) where a single Tier-A 16-window
     honestly truncates — plus a gap-detection case.
-  - _Remaining (bounded integration)._ Wiring it into the **live** capture
-    ([hwtrace.c](../../src/hwtrace.c) `hwtrace_end_amd`, today picks the single
-    richest sample) means collecting *all* in-region ring samples and stitching on
-    overflow. Its reach is bounded by the same two hardware realities this plan
-    flagged: the perf **data-ring size** (a long loop emits more `sample_period=1`
-    samples than the ring holds → the early ones are overwritten → a stitch gap) and
-    **sample-rate throttling** (`kernel.perf_event_max_sample_rate` dropping ≥16
-    consecutive samples → a real gap). So even with the algorithm, the live path
-    stays complete only for routines whose taken-branch count fits the ring; beyond
-    that DynamoRIO (no ceiling) remains the answer — which is why this stays the
-    worse-overhead trade and the live wiring is deliberately not forced onto the
-    delicate, hardware-tuned Tier-A capture path.
+  - _Done — live wiring (Zen 5-validated)._ `hwtrace_end_amd`
+    ([hwtrace.c](../../src/hwtrace.c)) now collects **every** branch-stack sample in the
+    perf data ring (time order) alongside the single richest-in-region window. When that
+    window overflowed (`best_nr >= 16` — the routine took more taken branches than the
+    stack is deep) it escalates from Tier-A to Tier-B: `asmtest_amd_stitch` splices the
+    windows and `asmtest_amd_decode_stitched` decodes the result past the ceiling. The
+    small-routine path (`best_nr < 16`) is unchanged. Completeness is gated on the
+    precise loss signals: a stitch **gap**, OR a `PERF_RECORD_LOST`/`PERF_RECORD_THROTTLE`
+    record (the data ring is non-overwrite, so on overflow the kernel drops the *newest*
+    samples and emits `LOST` — the signal the surviving windows alone cannot show, since
+    they stitch gaplessly yet are missing the tail). Either → honestly `truncated`.
+    **Validated live on a Zen 5** (Ryzen 9 9950X, `make docker-hwtrace-amd`): a
+    20000-trip loop reconstructs ~290 instructions — ≈95 stitched taken branches, far
+    past a single 16-deep window (which caps ~49) — and stays truncated, as the two
+    hardware realities this plan flagged require: the perf **data-ring size** (a long
+    loop emits more `sample_period=1` samples than the ring holds → drops) and
+    **sample-rate throttling** (`kernel.perf_event_max_sample_rate` → `≥16`-consecutive
+    drops). So the live path is **complete only for runs whose taken-branch count fits
+    the ring and survives throttling**; beyond that it stitches as far as it can and
+    flags the loss, with DynamoRIO (no ceiling) the answer for whole-program reach. The
+    *complete*, drop-free reconstruction is proven host-independently by `test_amd_stitch`
+    (synthetic `sample_period=1` windows → the exact 55-instruction trace, not truncated).
 - **MSR-direct snapshot.** Read the LBR/BRS MSRs directly around the region to get
   an exact Tier-A snapshot with *zero* interrupts (vs Phase 1's per-branch PMIs).
   Needs privilege (a kernel helper / `CAP_SYS_ADMIN` or a tiny module), so it is a

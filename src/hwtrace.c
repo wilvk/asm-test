@@ -44,6 +44,18 @@ int asmtest_cs_decode(const uint8_t *aux, size_t aux_len, const void *base,
 #if defined(__linux__) && defined(__x86_64__)
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
+/* Tier-B: stitch the overlapping sample_period=1 branch-stack windows into one
+ * gapless sequence (asmtest_amd_stitch), then decode it without the 16-entry ceiling
+ * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
+size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
+                          const size_t *nrs, size_t n_samples,
+                          struct perf_branch_entry *out, size_t out_cap, int *gap);
+int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
+                                const void *base, size_t len, asmtest_trace_t *trace,
+                                int gap);
+/* AMD branch stack depth: a richest-window count at the ceiling means the routine
+ * overflowed one snapshot, so escalate from Tier-A to Tier-B stitching. */
+#define AMD_LBR_DEPTH 16
 #endif
 
 /* Single-step (EFLAGS.TF / SIGTRAP) stepper (ss_backend.c). Unlike the trace
@@ -466,14 +478,43 @@ static void hwtrace_end_amd(void) {
     struct perf_branch_entry *best = NULL;
     uint64_t best_nr = 0;
     size_t best_inregion = 0;
+    int lost = 0;          /* a dropped-sample record: the ring could not hold the run */
+    size_t n_samples = 0;  /* branch-stack samples, time order (tail -> head) */
+    struct perf_branch_entry **samples = NULL;
+    size_t *nrs = NULL;
     uint8_t *buf = NULL;
     if (span > 0 && span <= dsz) {
         buf = (uint8_t *)malloc(span);
         if (buf != NULL) {
             for (size_t i = 0; i < span; i++)
                 buf[i] = data[(tail + i) % dsz];
-            size_t off = 0;
-            while (off + sizeof(struct perf_event_header) <= span) {
+
+            /* Pass 1: count samples and detect drops (ring overflow / rate throttle).
+             * The data ring is non-overwrite, so on overflow the kernel drops the
+             * NEWEST samples and emits PERF_RECORD_LOST — the precise "the run did not
+             * fit" signal that the surviving windows alone cannot show (they stitch
+             * gaplessly yet are missing the tail). */
+            for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
+                struct perf_event_header *h = (struct perf_event_header *)(buf + off);
+                if (h->size == 0 || off + h->size > span)
+                    break;
+                if (h->type == PERF_RECORD_SAMPLE)
+                    n_samples++;
+                else if (h->type == PERF_RECORD_LOST ||
+                         h->type == PERF_RECORD_THROTTLE)
+                    lost = 1;
+                off += h->size;
+            }
+            if (n_samples > 0) {
+                samples = (struct perf_branch_entry **)malloc(n_samples *
+                                                              sizeof *samples);
+                nrs = (size_t *)malloc(n_samples * sizeof *nrs);
+            }
+
+            /* Pass 2: record each sample in time order (for Tier-B stitching) and
+             * track the single richest-in-region window (Tier-A pick / fallback). */
+            size_t si = 0;
+            for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
                 struct perf_event_header *h = (struct perf_event_header *)(buf + off);
                 if (h->size == 0 || off + h->size > span)
                     break;
@@ -488,6 +529,11 @@ static void hwtrace_end_amd(void) {
                             h->size) {
                         struct perf_branch_entry *e =
                             (struct perf_branch_entry *)(body + sizeof(uint64_t));
+                        if (samples != NULL && nrs != NULL) {
+                            samples[si] = e;
+                            nrs[si] = (size_t)nr;
+                            si++;
+                        }
                         size_t inregion = 0;
                         for (uint64_t i = 0; i < nr; i++)
                             if ((e[i].from >= base_ip && e[i].from < end_ip) ||
@@ -504,14 +550,47 @@ static void hwtrace_end_amd(void) {
                 }
                 off += h->size;
             }
+            n_samples = si; /* only well-formed samples retained */
         }
     }
 
-    if (best != NULL && best_nr > 0 && best_inregion > 0)
-        asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len, r->trace);
-    else if (r->trace != NULL)
+    /* Decode. Tier-A (the single richest in-region window) is complete when the
+     * routine's branches fit one 16-deep stack (best_nr < AMD_LBR_DEPTH) — the common
+     * small-routine case, unchanged. When that window overflowed (best_nr >= depth)
+     * the routine took more taken branches than the stack is deep, so escalate to
+     * Tier-B: stitch the overlapping sample_period=1 windows (collected above, time
+     * order) into one gapless sequence and decode THAT past the ceiling. A stitch gap
+     * or a dropped-sample record (`lost`) means the ring could not hold the whole run,
+     * so the result is honestly truncated; otherwise Tier-B reconstructs the full
+     * >16-branch trace where a single window cannot. */
+    int done = 0;
+    if (best != NULL && best_nr > 0 && best_inregion > 0) {
+        if (best_nr >= AMD_LBR_DEPTH && n_samples > 1 && samples != NULL &&
+            nrs != NULL) {
+            size_t out_cap = n_samples + AMD_LBR_DEPTH;
+            struct perf_branch_entry *out =
+                (struct perf_branch_entry *)malloc(out_cap * sizeof *out);
+            if (out != NULL) {
+                int gap = 0;
+                size_t st = asmtest_amd_stitch(
+                    (const struct perf_branch_entry *const *)samples, nrs, n_samples,
+                    out, out_cap, &gap);
+                if (st > 0) {
+                    asmtest_amd_decode_stitched(out, st, r->base, r->len, r->trace,
+                                                gap || lost);
+                    done = 1;
+                }
+                free(out);
+            }
+        }
+        if (!done)
+            asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len, r->trace);
+    } else if (r->trace != NULL) {
         r->trace->truncated = true; /* no in-region branches captured: not complete */
+    }
 
+    free(samples);
+    free(nrs);
     free(buf);
     mp->data_tail = head; /* consume */
     munmap(g_base_map, g_base_sz);

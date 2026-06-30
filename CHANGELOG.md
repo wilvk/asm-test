@@ -181,10 +181,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     without hardware (like the Tier-A reconstruction): `test_amd_stitch` synthesizes
     an 18-iteration loop's windows, stitches them, and reconstructs the **complete**
     trace (55 instructions, two blocks, not truncated) where a single Tier-A 16-window
-    truncates — plus gap detection. Wiring it into the live capture (collecting all
-    ring samples, stitching on overflow) is bounded by the perf ring size and
-    sample-rate throttling, so it stays a deliberate follow-on; beyond the ring,
-    DynamoRIO (no ceiling) remains the answer. (AMD LBR plan, Phase 5.)
+    truncates — plus gap detection. **Now wired into the live capture and Zen 5-validated:**
+    `hwtrace_end_amd` collects every branch-stack sample in the perf data ring (time
+    order) and, when the richest single window overflowed (`best_nr >= 16`), stitches
+    them and decodes past the ceiling; the small-routine path (`best_nr < 16`) is
+    unchanged. Completeness is gated on the precise loss signals — a stitch gap OR a
+    `PERF_RECORD_LOST`/`PERF_RECORD_THROTTLE` record (the non-overwrite ring drops the
+    *newest* samples on overflow and emits `LOST`, the signal the gaplessly-stitching
+    survivors cannot otherwise reveal) → honestly `truncated`. On a Zen 5 (Ryzen 9 9950X,
+    `make docker-hwtrace-amd`) a 20000-trip loop reconstructs ~290 instructions (≈95
+    stitched branches, far past one 16-deep window's ~49) and stays truncated, as the
+    perf ring size and `sample_period=1` throttling require; the live path is complete
+    only for runs that fit the ring and survive throttling, beyond which DynamoRIO (no
+    ceiling) remains the answer. (AMD LBR plan, Phase 5.)
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft

@@ -259,28 +259,42 @@ static void test_amd_live(void) {
         munmap(p, sizeof ROUTINE);
     }
 
-    /* (b) Branch-heavy loop: runs long enough that PMU samples fire INSIDE the
-     * region, so AMD LbrExtV2 delivers a full 16-deep in-region branch stack and the
-     * decoder reconstructs it. Sampling is statistical, so retry a few times and
-     * assert the reconstruction once captured. */
+    /* (b) Branch-heavy loop past the 16-deep window — the LIVE Tier-B path. With
+     * sample_period=1 perf emits one branch-stack window per taken branch; the live
+     * capture now COLLECTS them all and STITCHES the overlapping windows
+     * (asmtest_amd_stitch), so the reconstruction runs far past a single 16-deep
+     * snapshot — which alone caps at ~49 insns for this loop. The long run overflows
+     * the perf data ring and sample_period=1 is heavily throttled, so the live result
+     * stays truncated (an end-to-end *complete* stitch with no drops is what the
+     * host-independent test_amd_stitch below proves); what we assert LIVE is that
+     * stitching reached BEYOND one window. Sampling is statistical — retry, keep best. */
     void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (q != MAP_FAILED) {
         memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
         mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
         __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
-        int cov7 = 0, trunc = 0;
-        uint64_t insns = 0;
-        for (int attempt = 0; attempt < 8 && insns == 0; attempt++)
-            insns = amd_capture_loop(q, 20000, &cov7, &trunc);
-        printf("# AMD LBR live loop: insns_total=%llu covered(0x7)=%d truncated=%d\n",
-               (unsigned long long)insns, cov7, trunc);
-        CHECK(insns > 0,
+        int cov7 = 0, trunc = 0, best_cov7 = 0, best_trunc = 0;
+        uint64_t best = 0;
+        for (int attempt = 0; attempt < 12; attempt++) {
+            uint64_t n = amd_capture_loop(q, 20000, &cov7, &trunc);
+            if (n >= best) {
+                best = n;
+                best_cov7 = cov7;
+                best_trunc = trunc;
+            }
+        }
+        printf("# AMD LBR live loop (Tier-B): best_insns=%llu covered(0x7)=%d "
+               "truncated=%d (one 16-window caps ~49)\n",
+               (unsigned long long)best, best_cov7, best_trunc);
+        CHECK(best > 0,
               "AMD LBR live loop: reconstructs in-region branches from the real LBR");
-        CHECK(insns == 0 || cov7,
+        CHECK(best == 0 || best_cov7,
               "AMD LBR live loop: reconstructs the loop-body block 0x7");
-        CHECK(insns == 0 || trunc,
-              "AMD LBR live loop: >16-branch window flagged truncated");
+        CHECK(best > 50,
+              "AMD LBR live loop: Tier-B stitched BEYOND a single 16-deep window");
+        CHECK(best == 0 || best_trunc,
+              "AMD LBR live loop: the over-ring run stays honestly truncated");
         munmap(q, sizeof AMD_LOOP);
     }
 }
