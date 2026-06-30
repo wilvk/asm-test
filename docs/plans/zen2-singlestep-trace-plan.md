@@ -298,6 +298,19 @@ Linux/x86-64 backend.
     return is still found. Verified live (`test_ptrace_callout`: a region that calls an
     out-of-region helper). Falls back to leaf-only without Capstone (the previous
     contract).
+  - _Done._ **Real-runtime validation lane** — `make docker-hwtrace-jit`
+    (`examples/jit_trace_node.c`) points the whole pipeline at a live **Node.js (V8)**
+    process, not a fixture: it spawns `node --perf-basic-prof --no-turbo-inlining` on a
+    hot function, lets V8 optimize it, resolves the method from V8's real perf-map,
+    attaches to the live multi-threaded GC'd runtime, `run_to`s the entry, and
+    single-steps one invocation — recovering the **actual TurboFan machine code** for
+    `(a+b)|0` (frame setup, stack-limit check, smi type-guards, `add edx, ecx`, `ret`).
+    A watchdog bounds the step so a re-tiered/moved address self-skips rather than hangs;
+    the resolve + attach checks (library vs. V8's real perf-map line and a real
+    `/proc/maps`) are firm while the trace is asserted-or-skipped, so the lane never
+    flakes. This closes the loop the W2 path was built for: tracing a foreign JIT's
+    generated code on AMD, where Intel PT is unavailable and in-process DynamoRIO cannot
+    seize the runtime's threads.
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the

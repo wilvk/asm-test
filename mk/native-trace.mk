@@ -173,6 +173,19 @@ hwtrace-test: $(BUILD)/test_hwtrace
 	@echo "== hwtrace-test =="
 	./$(BUILD)/test_hwtrace
 
+# Real managed-runtime trace: attach to a live Node.js (V8) process and trace a genuine
+# JIT-compiled JS function out of band (resolve from V8's --perf-basic-prof perf-map ->
+# attach -> run_to -> single-step). Self-skips (never hangs/flakes) when node is absent,
+# ptrace is denied, or V8 re-tiered the code. Driven in a plain container by
+# `make docker-hwtrace-jit` (the asmtest-node image, which has node + Capstone).
+$(BUILD)/jit_trace_node: $(HWTRACE_OBJS) $(BUILD)/jit_trace_node.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
+
+.PHONY: hwtrace-jit
+hwtrace-jit: $(BUILD)/jit_trace_node
+	@echo "== hwtrace-jit (real Node.js V8 JIT method) =="
+	./$(BUILD)/jit_trace_node
+
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.
 # Self-skips when DynamoRIO is absent. Runs on a dev box (DYNAMORIO_HOME=...) and

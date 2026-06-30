@@ -186,15 +186,23 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace            C smoke + Python wrapper, in a plain container
 #   make docker-hwtrace-bindings   every language wrapper, in a plain container
 #   make docker-hwtrace-<lang>     just one (e.g. docker-hwtrace-rust)
+#   make docker-hwtrace-jit        trace a live Node.js V8 JIT method out of band
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-bindings docker-hwtrace-jit \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace
+
+# Real managed-runtime trace: trace a live Node.js V8 JIT method out of band. Reuses the
+# asmtest-node image (node + Capstone + source) and runs the `hwtrace-jit` harness, which
+# attaches to a Node child it spawns — a plain `docker run`, no privilege (ptrace of one's
+# own child needs none). Self-skips cleanly if V8 does not cooperate.
+docker-hwtrace-jit: docker-node
+	$(DOCKER) run --rm $(_docker_plat) asmtest-node make hwtrace-jit
 
 # AMD LBR live lane: same image, but with perf access so the AMD branch-stack
 # backend actually runs instead of self-skipping. Unlike the single-step lane this

@@ -60,3 +60,6 @@ bindings/**/*.gem
 
 # macOS Finder metadata
 .DS_Store
+
+# V8 isolate logs from the hwtrace-jit lane (node --perf-basic-prof)
+isolate-*.log
