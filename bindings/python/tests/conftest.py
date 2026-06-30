@@ -10,6 +10,16 @@ import pytest
 
 _CORPUS_LIB = os.environ.get("ASMTEST_CORPUS_LIB")
 
+# test_hwtrace.py exercises the standalone libasmtest_hwtrace shared library, which
+# is built and located only by the dedicated `make hwtrace-python-test` lane (it sets
+# ASMTEST_HWTRACE_LIB). The general `make python-test` run builds only the emulator
+# superset + corpus, so its loader can't find libasmtest_hwtrace — skip-collect the
+# hwtrace module there. This mirrors the other nine bindings, whose hwtrace test is a
+# separate target outside the general bindings lane (see mk/native-trace.mk).
+collect_ignore = []
+if "ASMTEST_HWTRACE_LIB" not in os.environ:
+    collect_ignore.append("test_hwtrace.py")
+
 
 @pytest.fixture(scope="session")
 def routines():
