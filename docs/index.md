@@ -139,6 +139,7 @@ benchmarks
 emulator
 traces
 native-tracing
+hardware-tracing
 disassembly
 win64
 ```

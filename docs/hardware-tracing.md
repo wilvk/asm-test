@@ -1,0 +1,366 @@
+# Hardware tracing
+
+The **hardware-trace tier** ([asmtest_hwtrace.h](../include/asmtest_hwtrace.h),
+`src/hwtrace.c`) records which instructions and basic blocks a routine actually
+executes on the **real CPU** with near-zero *capture* overhead: the processor
+emits a compressed branch-trace packet stream into a kernel ring, and a software
+decoder reconstructs the ordered instruction stream afterward. It is one member
+of asm-test's native-trace family — see [Native runtime tracing](native-tracing.md)
+for how it sits alongside the DynamoRIO and emulator tiers and for the
+out-of-process / foreign-JIT toolkit built on the same single-step machinery.
+
+Like every other backend, it fills the **same** `asmtest_trace_t` shape (ordered
+instruction offsets, distinct basic-block offsets, totals, a truncation bit — see
+[Execution traces](traces.md)), so a test can switch backends without changing how
+it reads coverage, and the optional [Capstone annotation layer](disassembly.md)
+renders any backend's offsets back to instruction text.
+
+This tier is **optional, advanced, and self-skipping**: it is kept out of the core
+`libasmtest` and the `libasmtest_emu` superset, builds only when its toolchain is
+present (the PT/CoreSight decoders are only linked when libipt/OpenCSD are found;
+the AMD and single-step backends need no extra library), and degrades to a clear
+"skipped" message on hosts that cannot run it. There is no DynamoRIO or `drwrap`
+dependency — libipt and OpenCSD are BSD.
+
+---
+
+## The four backends
+
+All four backends fill one `asmtest_trace_t` (one offset basis, one block
+partition) and gate behind one `asmtest_hwtrace_available()` predicate, so a
+caller can pick whichever the host can run without changing the rest of its code.
+
+| Backend (`asmtest_trace_backend_t`) | Mechanism | Decoder | Runs where | Completeness ceiling |
+|---|---|---|---|---|
+| `ASMTEST_HWTRACE_INTEL_PT` | Intel PT TNT/TIP/PSB packets → kernel AUX ring (`perf_event_open`) | libipt | bare-metal **Intel** x86-64 + perf privilege | ring size |
+| `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 3 BRS / Zen 4–5 LbrExtV2 branch stack | built-in | bare-metal **AMD** (Zen 3+) + perf branch-stack | **16 taken branches** |
+| `ASMTEST_HWTRACE_CORESIGHT` | ARM ETM/ETE waypoints → AUX ring | OpenCSD | specific **AArch64** boards (scaffold) | ring size |
+| `ASMTEST_HWTRACE_SINGLESTEP` | `EFLAGS.TF` → `#DB` → `SIGTRAP` after every instruction | Capstone length-decoder | **any x86-64 Linux** (no PMU/perf/privilege/decoder) | none — exact + complete |
+
+The PT and CoreSight backends observe *out of band* and are the recommended
+backends for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where in-process
+[DynamoRIO](native-tracing.md#dynamorio-tier) collides with the runtime's signal
+and code-cache machinery. AMD LBR delivers its branch stack only at a PMU sample,
+so it captures branch-heavy routines well and honestly marks a too-fast single-shot
+routine `truncated`. The **single-step backend is the universal floor** — it
+produces the same exact, complete offsets on every x86-64 Linux host (Intel, AMD
+of any generation, VMs, CI, plain unprivileged containers); see
+[Single-step: the portable backend](#single-step-the-portable-backend) below.
+
+> The Intel PT capture + libipt decode and the AMD LBR backend are implemented and
+> live-verified (AMD LBR on a Zen 5 Ryzen 9 9950X via `make docker-hwtrace-amd`).
+> The CoreSight backend is a documented scaffold pending AArch64 board access — it
+> always self-skips until completed.
+
+---
+
+## Availability and self-skip
+
+The PT/CoreSight backends need bare metal: Intel PT is Intel-x86-64-only (absent on
+AMD, ARM, Apple Silicon, and almost all cloud/VM/CI guests); CoreSight self-hosted
+trace needs a specific AArch64 board (Juno, Kria, Jetson, Pixel, …) and is
+prohibited in KVM guests. Both also need `perf_event_paranoid` lowered (effectively
+`-1` for a default-size PT buffer) or `CAP_PERFMON` — a host knob the process cannot
+grant itself.
+
+`asmtest_hwtrace_available(backend)` collapses that whole chain into a single
+detect-and-skip predicate. It returns `1` only when **(a)** this build links the
+backend's decoder, **(b)** the right CPU/ISA/vendor is present, **(c)** the kernel
+exposes the backend's PMU (`intel_pt` / `cs_etm`), and **(d)** `perf_event` capture
+is permitted for this process — and `0` (self-skip) otherwise, which is the common
+case off bare metal. `asmtest_hwtrace_skip_reason()` fills a human-readable reason
+for the skip message, e.g. *"no intel_pt PMU (needs bare-metal Intel; absent on
+AMD/VM)"*.
+
+The idiom is to gate every use on `available()` so a suite self-skips cleanly
+instead of failing on a host that lacks the backend:
+
+```c
+#include "asmtest_hwtrace.h"
+
+if (asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+    asmtest_hwtrace_options_t opts = {.backend = ASMTEST_HWTRACE_INTEL_PT};
+    asmtest_hwtrace_init(&opts);
+    asmtest_hwtrace_register_region("add2", base, len, tr);
+    asmtest_hwtrace_begin("add2");
+    fn(20, 22);                          /* runs on the real CPU; PT captures it */
+    asmtest_hwtrace_end("add2");         /* drains the AUX ring + decodes into tr */
+    asmtest_hwtrace_shutdown();
+} else {
+    char why[128];
+    asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_INTEL_PT, why, sizeof why);
+    /* SKIP(why) — e.g. "no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)" */
+}
+```
+
+---
+
+## The region lifecycle
+
+The tier reuses the native-trace begin/end region model. The five calls are:
+
+| Call | Role |
+|---|---|
+| `asmtest_hwtrace_init(opts)` | bring the chosen backend up; size the AUX/data rings |
+| `asmtest_hwtrace_register_region(name, base, len, trace)` | bind a named code range to an app-owned `asmtest_trace_t` |
+| `asmtest_hwtrace_begin(name)` | enable capture for that region |
+| `asmtest_hwtrace_end(name)` | disable capture and decode the captured packets into the trace |
+| `asmtest_hwtrace_shutdown()` | tear the backend down |
+
+`asmtest_hwtrace_options_t` controls the rings: `aux_size` (trace ring bytes,
+rounded up to a power-of-two pages, `0` → 64 KB), `data_size` (base perf ring, `0` →
+8 KB), `snapshot` (nonzero for a circular snapshot ring, `0` for a linear drain),
+and an optional `object_hint` path for hardware address filters.
+
+Only the `backend` field is required; the rest default sensibly when zero-initialized.
+
+> **MVP limitation.** Capture state is a single process-global slot — only **one**
+> region may be active at a time (a `begin` while another is active is ignored), and
+> the markers are not yet per-thread. Bracket one registered routine per begin/end
+> pair.
+
+---
+
+## Single-step: the portable backend
+
+`ASMTEST_HWTRACE_SINGLESTEP` is the member of this tier that runs **everywhere**. It
+produces the **same exact, complete** `asmtest_trace_t` offsets as Intel PT —
+byte-for-byte the Unicorn/DynamoRIO instruction and block streams — but needs no
+PMU, no `perf_event`, no privilege, no decoder library, and no specific CPU.
+
+With `EFLAGS.TF` set, the CPU raises a trap-class `#DB` after every instruction,
+which Linux delivers as `SIGTRAP`. `begin(name)` installs a `SIGTRAP` handler and
+arms `TF` on the calling thread; the handler records each in-region `RIP` (offsets
+outside the registered region — callees, the begin/end glue — are stepped but not
+recorded). `end(name)` clears `TF`, restores the handler, and derives the block
+partition from fall-through discontinuities (a new block at the entry and after
+every taken branch) with the Capstone length-decoder. The handler does only
+async-signal-safe work (a bounds-checked store of each offset); all decoding happens
+in the post-pass.
+
+The trade is **exact-cheap (a hardware trace ring) vs. exact-slow (a fault per
+instruction)** — roughly a couple of microseconds per instruction. So single-step is
+the right tool for **small registered routines** (asm-test's common case): a handful
+to a few hundred instructions cost microseconds to low milliseconds. Unlike AMD LBR
+there is **no depth ceiling** — a loop of any length reconstructs exactly. It is
+**not** for whole-program or hot-loop tracing; that is the DynamoRIO tier's job.
+
+```c
+#include "asmtest_hwtrace.h"
+
+if (asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+    asmtest_hwtrace_options_t opts = {.backend = ASMTEST_HWTRACE_SINGLESTEP};
+    asmtest_hwtrace_init(&opts);
+    asmtest_hwtrace_register_region("add2", base, len, tr);
+    asmtest_hwtrace_begin("add2");
+    fn(20, 22);                          /* stepped on the real CPU */
+    asmtest_hwtrace_end("add2");         /* trace already filled; blocks normalized */
+    asmtest_hwtrace_shutdown();
+}
+```
+
+The supported target is a **well-behaved compute routine**: no in-routine
+`POPF`/`IRET`/signal handlers or self-modifying code, which break naive stepping and
+are flagged `truncated` rather than emitted as complete (the same "registered bytes
+must be stable" contract the PT/AMD backends carry). Single active region, single
+thread, like the rest of the tier.
+
+An **out-of-process** sibling (`asmtest_ptrace.h`) gets the same exact offsets a
+different way — a tracer parent `PTRACE_SINGLESTEP`s a forked or attached tracee — so
+it touches none of the target's signal disposition or code cache. That is the path
+for managed runtimes and the only single-step form on AArch64, and it carries the
+foreign-JIT resolution toolkit (`/proc/maps`, perf-maps, binary jitdump, the
+time-aware code-image recorder). It is documented in full under
+[Native runtime tracing](native-tracing.md#out-of-process-variant-w2--ptrace).
+
+---
+
+## Block normalization
+
+Hardware records branch *decisions* only, so the block partition a PT/CoreSight
+decoder yields is **coarser** than Unicorn/DynamoRIO basic blocks (a decoded block
+can span direct branches). The backend therefore **normalizes**: it walks the
+reconstructed per-instruction stream and starts a new block at the first instruction
+and after every branch — the same single-entry/ends-at-branch model the other
+backends use. The single-step backend derives the identical partition from
+fall-through discontinuities. The upshot is that **block offsets match across every
+backend** for the same routine.
+
+---
+
+## Auto-selecting a backend
+
+Because all four backends fill the same trace and self-skip identically, the
+**most-faithful available** one can be chosen for the host without hard-coding an
+enum. Two calls do that:
+
+- `asmtest_hwtrace_resolve(policy, out, cap)` writes the available backends,
+  most-faithful first (`Intel PT > AMD LBR > single-step > CoreSight`), and returns
+  the count.
+- `asmtest_hwtrace_auto(policy)` returns just the head as an `int` — a valid
+  `asmtest_trace_backend_t` when `>= 0`, or a negative `ASMTEST_HW_*` status
+  (`ASMTEST_HW_EUNAVAIL`) when no backend is available.
+
+The `policy` is one of:
+
+- **`ASMTEST_HWTRACE_BEST`** — the most faithful backend the host can run.
+- **`ASMTEST_HWTRACE_CEILING_FREE`** — the same, but skipping the one backend with a
+  fixed completeness window (AMD LBR, 16 taken branches). Re-resolve under this after
+  a trace comes back `truncated`, so the second attempt has no depth ceiling.
+
+```c
+#include "asmtest_hwtrace.h"
+
+int b = asmtest_hwtrace_auto(ASMTEST_HWTRACE_BEST);   /* >=0 backend, or <0 status */
+if (b >= 0) {
+    asmtest_hwtrace_options_t opts = {.backend = (asmtest_trace_backend_t)b};
+    asmtest_hwtrace_init(&opts);
+    asmtest_hwtrace_register_region("fn", base, len, tr);
+    asmtest_hwtrace_begin("fn");  fn(20, 22);  asmtest_hwtrace_end("fn");
+    asmtest_hwtrace_shutdown();
+
+    /* Dynamic fallback: if the chosen backend could not record the whole path
+     * (AMD LBR overflowed its 16-branch window, a PT ring overflowed), re-resolve
+     * to a ceiling-free backend and re-run. */
+    if (tr->truncated) {
+        int b2 = asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE);
+        if (b2 >= 0 && b2 != b) { /* re-init under b2, begin/call/end again */ }
+    }
+}
+```
+
+On **any x86-64 Linux host the cascade is non-empty** — the single-step backend is
+the floor — so `auto()` never fails there; it only returns a negative status off
+x86-64 Linux (and a non-CoreSight host). On a bare-metal Intel host `auto(BEST)`
+resolves to Intel PT; on a Zen 3+ host with perf permitted it resolves to AMD LBR
+(`CEILING_FREE` falling to single-step); otherwise it resolves to single-step.
+
+This call orchestrates only the **hardware tier's own** backends — one library, one
+API. To extend the choice *across* the hardware, DynamoRIO, and emulator tiers
+(which cross a real-CPU vs. virtual-guest fidelity line), use
+`asmtest_trace_auto` — see
+[Cross-tier orchestration](native-tracing.md#cross-tier-orchestration-over-all-three-tiers).
+
+---
+
+## W^X executable memory
+
+A caller — notably a language binding — often needs to turn raw host-native machine
+code into callable, W^X-correct executable memory before registering and tracing it.
+`asmtest_hwtrace_exec_alloc(bytes, len, &base_out, &len_out)` does the
+mmap/mprotect dance (`PROT_NONE` → RW to copy the bytes in → RX, icache flushed) and
+returns the executable address; cast `base_out` to a function pointer to call it, and
+free it with `asmtest_hwtrace_exec_free(base, len)`. It is self-contained — no
+dependency on the DynamoRIO tier's `asmtest_exec_alloc`.
+
+```c
+void *code; size_t clen;
+if (asmtest_hwtrace_exec_alloc(bytes, n, &code, &clen) == ASMTEST_HW_OK) {
+    asmtest_hwtrace_register_region("blob", code, clen, tr);
+    asmtest_hwtrace_begin("blob");
+    ((long (*)(long, long))code)(20, 22);
+    asmtest_hwtrace_end("blob");
+    asmtest_hwtrace_exec_free(code, clen);
+}
+```
+
+---
+
+## Running it
+
+```sh
+make hwtrace-test             # C smoke test — runs the single-step backend LIVE here
+make hwtrace-bindings-test    # every language wrapper, live (Python + the nine others)
+make docker-hwtrace           # C + Python in a PLAIN unprivileged container
+make docker-hwtrace-bindings  # every language wrapper, in plain containers
+make docker-hwtrace-amd       # AMD LBR, live (PERFMON cap + seccomp=unconfined)
+```
+
+`make hwtrace-test` executes the single-step backend live on the dev host (where
+Intel PT and AMD LBR self-skip), asserting the same `[0x0, 0x3, 0x6, 0xc, 0x11]` /
+`{0, 0x11}` partition the other backends produce, plus a 20-trip loop (62
+instructions, past LBR's 16-branch window) to prove completeness. This is the
+hardware tier's first regression that **runs** on standard CI instead of
+self-skipping. The Intel-PT/CoreSight hardware capture cannot run on standard CI — it
+needs a self-hosted bare-metal runner — but the single-step backend removes that
+limitation for x86-64, recording the same offsets on CI and in containers with full
+automated regression protection. The live foreign-JIT lanes
+(`make docker-hwtrace-jit`, `…-jit-dotnet`, `…-jit-java`, `…-jit-jitdump`) are
+described in [Native runtime tracing](native-tracing.md#out-of-process-variant-w2--ptrace).
+
+---
+
+## Language wrappers
+
+Every binding ships an `hwtrace` wrapper alongside its `drtrace` one, exposing the
+same small surface — `HwTrace.available/init/shutdown`, per-trace
+`register`/`region`/`covered`/block+instruction accessors, `resolve(policy)` /
+`auto(policy)` for backend selection, and a `NativeCode` for materializing
+host-native bytes via `asmtest_hwtrace_exec_alloc`. Each wrapper dlopens
+`libasmtest_hwtrace` (resolved from `$ASMTEST_HWTRACE_LIB`, else the repo `build/`)
+and defaults to the single-step backend, so `available()` is true and the test
+**traces live** on any x86-64 Linux — including CI and plain containers. The
+out-of-process / foreign-JIT toolkit is surfaced through every wrapper too. The set
+is held in sync by the binding function-parity gate.
+
+| Language | Wrapper module / header | Test target |
+|---|---|---|
+| Python | `asmtest.hwtrace` | `hwtrace-python-test` |
+| C++ | `bindings/cpp/asmtest_hwtrace.hpp` (`asmtest::HwTrace`) | `hwtrace-cpp-test` |
+| Rust | `asmtest::hwtrace` | `hwtrace-rust-test` |
+| Go | `asmtest` (`hwtrace.go`) | `hwtrace-go-test` |
+| Node | `bindings/node/hwtrace.js` | `hwtrace-node-test` |
+| Java | `HwTrace` (Panama FFM) | `hwtrace-java-test` |
+| .NET | `Asmtest.HwTrace` | `hwtrace-dotnet-test` |
+| Ruby | `Asmtest::HwTrace` | `hwtrace-ruby-test` |
+| Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
+| Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
+
+See [Language bindings](bindings.md) for the shared binding overview.
+
+---
+
+## Status codes
+
+The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
+
+| Code | Meaning |
+|---|---|
+| `ASMTEST_HW_EINVAL` | bad argument |
+| `ASMTEST_HW_ESTATE` | wrong lifecycle state (e.g. begin without init) |
+| `ASMTEST_HW_EUNAVAIL` | backend / PMU / privilege unavailable |
+| `ASMTEST_HW_ENOSYS` | decoder library not compiled in |
+| `ASMTEST_HW_EFULL` | trace storage full |
+| `ASMTEST_HW_EDECODE` | capture / decode failure |
+
+---
+
+## Known limitations
+
+- **Single active region, single thread** in the MVP — capture state is one
+  process-global slot; bracket one routine per begin/end pair.
+- **Bare-metal capture needs perf privilege.** Intel PT needs a bare-metal Intel
+  host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
+  runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its
+  branch stack at the PMU, so it `truncated`s a too-fast single-shot routine —
+  single-step is the deterministic in-process backend for that case.
+- **AMD LBR has a 16-taken-branch window.** Re-resolve under `CEILING_FREE` after a
+  `truncated` trace.
+- **CoreSight is a scaffold** pending AArch64 board access — it always self-skips.
+- **Single-step is Linux x86-64 only** for now (macOS/Windows planned); the
+  out-of-process ptrace form adds AArch64. It targets well-behaved compute routines
+  with stable bytes — self-modifying code, `POPF`/`IRET`, and in-routine signal
+  handlers are flagged `truncated`, not emitted as complete.
+
+---
+
+## See also
+
+- [Native runtime tracing](native-tracing.md) — the full native-trace family: the
+  DynamoRIO tier, the out-of-process W2 / ptrace stepper, the foreign-JIT resolution
+  toolkit, the time-aware code-image recorder, and cross-tier auto-selection.
+- [Execution traces](traces.md) — the shared `asmtest_trace_t` shape and the
+  emulator trace model.
+- [Disassembly](disassembly.md) — rendering recorded offsets back to instruction text.
+- [Language bindings](bindings.md) — driving the tier from another language.
+- [asmtest_hwtrace.h](../include/asmtest_hwtrace.h) — the API header.

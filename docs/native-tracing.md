@@ -269,6 +269,12 @@ isolation and the `-jN` pool.
 
 ## Hardware-trace tier (Intel PT / ARM CoreSight)
 
+> For a focused, standalone reference to this tier — the four backends, the
+> `available()` gating chain, the region lifecycle, backend auto-selection, the
+> W^X exec-memory helper, and the per-language wrappers — see
+> [Hardware tracing](hardware-tracing.md). This section covers it in the context of
+> the wider native-trace family.
+
 The hardware tier records the same `asmtest_trace_t` offsets with near-zero
 *capture* overhead: the CPU emits a compressed branch-trace packet stream (Intel
 PT, or ARM ETM/ETE waypoints) into a kernel AUX ring via `perf_event_open`, and
@@ -562,7 +568,7 @@ For a live JIT that is wrong the moment the code is patched, freed, or has its a
 reused mid-trace: a late snapshot returns whatever bytes are there *now*, not the bytes
 that were live when the trace ran. The kernel solves this for its own self-modifying code
 with `PERF_RECORD_TEXT_POKE` (old+new bytes, timestamped); `asmtest_codeimage`
-([asmtest_codeimage.h](../../include/asmtest_codeimage.h)) is the userspace equivalent — a
+([asmtest_codeimage.h](../include/asmtest_codeimage.h)) is the userspace equivalent — a
 **timestamped code-image timeline**.
 
 ```c
