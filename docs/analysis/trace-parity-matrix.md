@@ -61,7 +61,7 @@ Two facts worth stating up front because they are easy to get wrong:
 | **DynamoRIO** | software DBI, native code cache | none | DR core BSD | low (cached) | exact, unbounded | **implemented** |
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
 | **AMD LBR** | 16-deep branch stack snapshot | Capstone (replay) | BSD | low (few PMIs) | exact ≤16 taken branches; else `truncated`→fallback | **impl. Ph0–4; live capture verified on Zen 5** (Ryzen 9 9950X, `amd_lbr_v2`) |
-| **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **scaffold** — always self-skips |
+| **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **reconstruction core host-validated**; live OpenCSD decode awaits a board (self-skips) |
 | **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4, Linux x86-64; cross-OS Ph5 planned) |
 
 DynamoRIO core is BSD (the tier deliberately avoids `drwrap`'s LGPL-2.1); libipt and

@@ -25,6 +25,17 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_decoder_present(void);
 #endif
 
+/* CoreSight reconstruction-core interface (decoder-independent half of
+ * src/cs_backend.c). KEEP THIS STRUCT IN SYNC with asmtest_cs_range_t there. */
+typedef struct {
+    uint64_t start_off;
+    uint64_t end_off;
+    int ends_in_branch;
+} cs_range_t;
+int asmtest_cs_reconstruct(asmtest_arch_t arch, const cs_range_t *ranges,
+                           size_t nranges, const void *base, size_t len,
+                           asmtest_trace_t *trace);
+
 /* mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks). */
 static const unsigned char ROUTINE[] = {
     0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0x48, 0x3d, 0x64, 0x00,
@@ -88,6 +99,51 @@ static void test_amd_reconstruction(void) {
 #else
     printf("# SKIP AMD reconstruction: not Linux x86-64\n");
 #endif
+}
+
+/* CoreSight reconstruction is validated WITHOUT a CoreSight board (exactly as the
+ * AMD reconstruction is validated without Zen hardware): feed asmtest_cs_reconstruct
+ * the instruction RANGES an ETM/ETE would emit for a known path and assert it
+ * rebuilds the same offsets/blocks the PT/AMD/single-step backends produce. The core
+ * is arch-independent, so we use the shared x86-64 fixture (ASMTEST_ARCH_X86_64) for
+ * byte-for-byte comparability; the live path passes ASMTEST_ARCH_ARM64. Runs on any
+ * host with Capstone. */
+static void test_cs_reconstruction(void) {
+    if (!asmtest_disas_available()) {
+        printf("# SKIP CoreSight reconstruction: built without Capstone\n");
+        return;
+    }
+    /* fn(20,22)=42: range 1 covers [0,0xe) (mov;add;cmp;jle) ending at the taken
+     * jle; range 2 covers [0x11,0x12) (ret). Both end in a branch waypoint. */
+    cs_range_t ranges[2] = {
+        {0x0, 0xe, 1},
+        {0x11, 0x12, 1},
+    };
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    int rc = asmtest_cs_reconstruct(ASMTEST_ARCH_X86_64, ranges, 2, ROUTINE,
+                                    sizeof ROUTINE, tr);
+    CHECK(rc == ASMTEST_HW_OK, "CoreSight reconstruct succeeds on synthetic ranges");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "CoreSight reconstruction yields the exact PT/AMD instruction stream");
+    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
+          "CoreSight reconstruction yields the matching block partition {0, 0x11}");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
+          "CoreSight reconstruction records exactly two blocks");
+    CHECK(!asmtest_emu_trace_truncated(tr), "CoreSight reconstruction is complete");
+    asmtest_trace_free(tr);
+
+    /* A single straight-line range (no branch) reconstructs every instruction as one
+     * block — the degenerate ETM range. */
+    cs_range_t one[1] = {{0x0, 0x6, 0}}; /* mov; add (two insns, no branch) */
+    asmtest_trace_t *st = asmtest_trace_new(64, 64);
+    asmtest_cs_reconstruct(ASMTEST_ARCH_X86_64, one, 1, ROUTINE, sizeof ROUTINE, st);
+    CHECK(asmtest_emu_trace_insns_total(st) == 2 &&
+              asmtest_emu_trace_blocks_len(st) == 1,
+          "CoreSight straight-line range = 2 insns, 1 block");
+    asmtest_trace_free(st);
 }
 
 /* mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  — loop body block at 0x7, the
@@ -541,6 +597,10 @@ int main(void) {
 
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_reconstruction();
+
+    /* Backend-independent: validate the CoreSight reconstruction core (synthetic
+     * ranges; the live OpenCSD decode tree awaits a board). */
+    test_cs_reconstruction();
 
     /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */

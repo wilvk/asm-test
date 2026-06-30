@@ -105,6 +105,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
     Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/zen2-singlestep-trace-plan.md)
     Phase 5 (W2).
+  - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
+    split like the AMD backend: its decoder-independent **reconstruction core**
+    `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered
+    instruction *ranges* an ETM/ETE decoder emits (`OCSD_GEN_TRC_ELEM_INSTR_RANGE`)
+    into the same instruction-offset stream and single-entry/ends-at-branch block
+    partition the Intel PT backend produces. It is **host-validated without a
+    CoreSight board** (`examples/test_hwtrace.c` `test_cs_reconstruction`, the
+    analogue of the AMD synthetic-branch-stack test), asserting byte-for-byte parity
+    with the PT/AMD/single-step backends over the shared fixture. The remaining half
+    — the live OpenCSD decode tree (`ocsd_create_dcd_tree` + ETMv4/ETE decoder +
+    memory accessor feeding ranges to the core) — needs libopencsd *and* a real
+    AArch64 CoreSight board to write and validate, so per the project's no-untested-
+    hardware-code rule it is not yet implemented; `asmtest_cs_decoder_present()` still
+    returns 0 and the tier self-skips on every host, but the half the board glue will
+    feed is now proven (CoreSight advances from bare scaffold to validated
+    reconstruction).
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft

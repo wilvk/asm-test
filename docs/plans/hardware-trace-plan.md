@@ -34,9 +34,20 @@ Phase 1 is **implemented** for **Intel PT**: the `perf_event_open` AUX capture
 (`src/hwtrace.c`), the libipt instruction decode + branch-boundary block
 normalization (`src/pt_backend.c`), the full `asmtest_hwtrace_available()` gating
 chain, and the `hwtrace-test` / `shared-hwtrace` targets all ship behind
-`asmtest_hwtrace.h`. **ARM CoreSight** is a documented scaffold
-(`src/cs_backend.c`): `asmtest_cs_decoder_present()` returns 0 so it self-skips
-until completed on a real AArch64 board.
+`asmtest_hwtrace.h`. **ARM CoreSight** (`src/cs_backend.c`) is now **split like the
+AMD backend**: its decoder-independent **reconstruction core**
+(`asmtest_cs_reconstruct`) — ordered ETM/ETE instruction *ranges* → the same
+instruction/block partition the PT backend produces — is **implemented and
+host-validated** with synthetic ranges (`examples/test_hwtrace.c`
+`test_cs_reconstruction`, the CoreSight analogue of `test_amd_reconstruction`),
+asserting byte-for-byte parity with the PT/AMD/single-step backends over the shared
+fixture. Only the **live OpenCSD decode tree** (`ocsd_create_dcd_tree` + ETMv4/ETE
+decoder + memory accessor feeding ranges to the core) remains: it needs libopencsd
+*and* a real AArch64 CoreSight board to write and validate, so per the project's
+"no untested hardware code" rule it is not yet implemented and
+`asmtest_cs_decoder_present()` returns 0 — the tier still self-skips on every host
+until the tree is completed on a board, but the half that the board glue will feed
+is now proven.
 
 Overflow/loss now uses the precise signal: `asmtest_hwtrace_end` scans the perf
 data ring for `PERF_RECORD_AUX` records and sets `truncated` on
