@@ -93,10 +93,23 @@ Make "install fresh, no `ASMTEST_LIB`" mean what it says, on **every** binding a
   [`release.yml`](../../.github/workflows/release.yml) with `source scripts/clean-env.sh
   && <smoke> && <assert-path>`, so the published-artifact lane proves clean resolution.
 
-## Track B — Static universal-binary / Mach-O assertions — **planned**
+## Track B — Static universal-binary / Mach-O assertions — **done**
 
 Catch the most common portability regression (wrong/missing arch slice, absolute
 install-name) at **build time**, on the existing Linux collector — no macOS needed.
+
+> **Status: implemented.** `make package-libs-verify-macho`
+> ([scripts/verify-macho.sh](../../scripts/verify-macho.sh)) runs over every
+> `build/dist/native/darwin-*/` slot with `llvm-otool` / `llvm-lipo`, and is folded into
+> [`package-libs-verify`](../../mk/bindings.mk) (which the `package-libs-collect` CI job
+> runs after installing `llvm`). It asserts each `.dylib` carries the slot's arch, uses
+> `@rpath`/`@loader_path` install-names with no leaked `/Users`, `/opt/homebrew`, or
+> `/usr/local` path, and has a min-OS load command (and `<= MACOS_MIN_FLOOR` when that var
+> is set). It self-skips cleanly where the llvm tools are absent (a dev host), so
+> `package-libs-verify` stays green everywhere. Proven against real Linux-built universal
+> Mach-O fixtures (`clang --target=…-apple-macos -fuse-ld=lld` + `llvm-lipo`): it passes a
+> correct universal/thin payload and fails a wrong-arch slice, an absolute install-name, and
+> an over-floor min-OS.
 
 - **`make package-libs-verify-macho`** (new; folded into or called beside
   [`package-libs-verify`](../../Makefile)) — for every `build/dist/native/<darwin-*>`

@@ -524,6 +524,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scaffolding stopped short of — no registry credentials or extra hardware needed.
   See [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md).
 
+- **Static Mach-O verification of the macOS payloads, on Linux.** `make
+  package-libs-verify-macho` ([scripts/verify-macho.sh](https://github.com/wilvk/asm-test/blob/main/scripts/verify-macho.sh),
+  folded into `package-libs-verify`) catches the most common macOS packaging regressions —
+  a wrong/missing arch slice or a leaked absolute install-name/dependency — at build time on
+  the Linux release collector, **with no Mac needed**, via `llvm-otool` / `llvm-lipo`. For
+  every `build/dist/native/darwin-*/` `.dylib` it asserts: the slot's arch is present
+  (`llvm-lipo -archs`), the install-name (`LC_ID_DYLIB`) is `@rpath`/`@loader_path`-relative
+  and neither it nor any dependency bakes in `/Users`, `/opt/homebrew`, or `/usr/local`
+  (a dev-build or Homebrew leak; system `/usr/lib` and `/System` are fine), and a min-OS load
+  command is present (and `<= MACOS_MIN_FLOOR` when that var is set). It self-skips where the
+  llvm tools are absent (a dev host), so `package-libs-verify` stays green everywhere; the
+  `package-libs-collect` CI job installs `llvm` so it runs there for real. This is Track B of
+  the [macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/macos-clean-test-plan.md)
+  — the independent cross-check that `scripts/package-native.sh`'s macOS-side install-name
+  rewrites actually produced correct Mach-O.
+
 - **The full emulator surface reaches every binding.** A review found four core
   emulator capabilities that no binding could reach (the FFI lacked an
   opaque-handle wrapper), plus an assembler tier the corpus did not anchor. All

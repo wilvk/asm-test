@@ -491,6 +491,11 @@ jobs:
           path: build/dist/native/
           merge-multiple: true
 
+      # llvm-otool / llvm-lipo drive the static Mach-O assertions on the darwin payloads
+      # (package-libs-verify-macho, folded into package-libs-verify) — no macOS needed.
+      - name: Install llvm (Mach-O inspection tools)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends llvm
+
       - name: Verify the cross-platform native set
         run: make package-libs-verify
 

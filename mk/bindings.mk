@@ -220,7 +220,8 @@ PYBUILD  ?= python3 -m build
 pkg_emu_name  := $(notdir $(call shlib_dev,libasmtest_emu))
 pkg_core_name := $(notdir $(call shlib_dev,libasmtest))
 
-.PHONY: packages package-libs package-libs-verify native-payload-check \
+.PHONY: packages package-libs package-libs-verify package-libs-verify-macho \
+        native-payload-check \
         python-package rust-package zig-package cpp-package node-package \
         java-package dotnet-package ruby-package lua-package go-package
 
@@ -419,5 +420,28 @@ package-libs-verify:
 	  fi; \
 	done; \
 	echo "package-libs-verify: $$n platform(s) in $$dir"; \
+	$(MAKE) --no-print-directory package-libs-verify-macho || rc=1; \
+	exit $$rc
+
+# Static Mach-O assertions over the collected darwin payloads (Track B of the macOS
+# clean-test plan): for each build/dist/native/darwin-*/ slot, assert every .dylib carries
+# the slot's arch, uses @rpath/@loader_path install-names with no leaked /Users, /opt/homebrew,
+# or /usr/local path, and has a min-OS load command. Runs on the Linux collector via llvm-otool
+# / llvm-lipo (no macOS needed); self-skips per slot when those tools are absent, so it is safe
+# on a dev host. Set MACOS_MIN_FLOOR (e.g. 11.0) to also enforce min-OS <= floor.
+MACOS_MIN_FLOOR ?=
+package-libs-verify-macho:
+	@dir=$(PKG_DIST)/native; \
+	slots=$$(ls -d "$$dir"/darwin-*/ 2>/dev/null | sed 's#/$$##'); \
+	if [ -z "$$slots" ]; then \
+	  echo "package-libs-verify-macho: no darwin-* payload in $$dir (nothing to check)"; \
+	  exit 0; \
+	fi; \
+	rc=0; \
+	for s in $$slots; do \
+	  case "$${s##*-}" in x86_64) a=x86_64;; arm64|aarch64) a=arm64;; *) a=$${s##*-};; esac; \
+	  echo "package-libs-verify-macho: $$(basename $$s) (expect arch $$a)"; \
+	  sh scripts/verify-macho.sh "$$s" "$$a" "$(MACOS_MIN_FLOOR)" || rc=1; \
+	done; \
 	exit $$rc
 
