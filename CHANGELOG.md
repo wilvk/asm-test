@@ -121,8 +121,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     JIT method's `(base, len)` by name. A live test discovers a foreign process's
     region from `/proc/<pid>/maps` using only an interior address and traces *that*
     region (no hardcoded base), completing the managed-runtime flow: resolve → attach
-    → `trace_attached` → detach. (The binary jitdump format remains a follow-on; the
-    text perf-map is the portable lowest common denominator.)
+    → `trace_attached` → detach. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
+    HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
+    `(code_addr, code_size)` **and its recorded native code bytes** (which the text
+    perf-map cannot give). Because each `JIT_CODE_LOAD` record is timestamped, a method
+    re-emitted at a reused address (tiered/OSR recompilation) resolves to the **latest**
+    body — the temporal same-address-different-bytes problem; endianness is
+    auto-detected and non-`LOAD` records skipped. (The text perf-map remains the
+    portable lowest common denominator for JITs that only emit symbols.)
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

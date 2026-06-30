@@ -449,13 +449,26 @@ resolvers that read it from the OS the way `perf` and a debugger do:
   OpenJDK (+perf-map-agent) write so `perf` can symbolize **generated code**, and
   returns a JIT method's `(base, len)` by name.
 
+For JITs that emit the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
+HotSpot, V8; what `perf inject --jit` consumes), `asmtest_jitdump_find(path, pid, name,
+&entry, bytes, cap, &len)` resolves a method to its `(code_addr, code_size)` **and its
+recorded native code bytes** — which the text perf-map cannot give. Because each
+`JIT_CODE_LOAD` record is timestamped, a method re-emitted at a reused address (tiered
+or OSR recompilation) resolves to the **latest** body — the temporal
+same-address-different-bytes problem the
+[JIT runtime tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)
+centres on. The bytes
+matter because a hardware/branch trace records only control flow; the decoder must be
+handed the exact bytes that were live, and jitdump carries them.
+
 So the full managed-runtime flow is: resolve the method's region from the runtime's
-perf-map (or an address via `/proc/maps`) → `PTRACE_ATTACH` → `trace_attached` →
-`PTRACE_DETACH`. `make hwtrace-test` runs it end to end: it discovers a foreign
-process's region from `/proc/<pid>/maps` using only an interior address and traces
-*that* region (no hardcoded base), and parses a JIT perf-map entry by name. The richer
-binary jitdump format is the remaining follow-on; the text perf-map is the portable
-lowest common denominator.
+jitdump or perf-map (or an address via `/proc/maps`) → `PTRACE_ATTACH` →
+`trace_attached` → `PTRACE_DETACH`. `make hwtrace-test` runs it end to end: it discovers
+a foreign process's region from `/proc/<pid>/maps` using only an interior address and
+traces *that* region (no hardcoded base), parses a JIT perf-map entry by name, and reads
+a jitdump image — skipping non-`LOAD` records, picking the latest re-JIT body, and
+recovering the recorded code bytes. The text perf-map remains the portable lowest common
+denominator for JITs that only emit symbols.
 
 ### Language wrappers
 

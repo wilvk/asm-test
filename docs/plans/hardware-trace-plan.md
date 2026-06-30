@@ -72,14 +72,16 @@ grade: PT-attach-to-PID + a time-aware jitdump/eBPF code-image recorder, then th
 hypervisor/EPT frontier — see the analysis doc); it needs PT hardware to build and
 validate and is intentionally not implemented as untested code.
 
-Two of Phase 2's building blocks have, however, already landed out of the
-[single-step plan's W2 work](zen2-singlestep-trace-plan.md) (Phase 5)
-and are reusable here: the **code-region resolvers** `asmtest_proc_region_by_addr`
-(`/proc/<pid>/maps`) and `asmtest_proc_perfmap_symbol` (`/tmp/perf-<pid>.map`, the JIT
-text format). What Phase 2 still needs beyond them is the **binary jitdump reader**
-(the bytes-accurate, time-aware code image the perf-map cannot give) — the same
-explicitly-planned next step the W2 roadmap names, shared by the PT-attach and
-ptrace-single-step managed-runtime paths.
+Phase 2's **code-image building blocks have, however, already landed** out of the
+[single-step plan's W2 work](zen2-singlestep-trace-plan.md) (Phase 5) and are reusable
+here: the code-region resolvers `asmtest_proc_region_by_addr` (`/proc/<pid>/maps`) and
+`asmtest_proc_perfmap_symbol` (`/tmp/perf-<pid>.map`), **and** `asmtest_jitdump_find` —
+the binary jitdump reader that recovers a JIT method's recorded **code bytes** and load
+timestamps (the bytes a branch-trace decoder must be handed). What Phase 2 still needs
+on top of them is the hardware half: **PT-attach-to-live-PID** capture
+(`perf record -p <pid>` / `perf_event_open` on a running process) and feeding the
+jitdump-recovered bytes into the libipt decoder at the right point in the trace — which
+needs PT hardware to build and validate, so it stays the forward-look.
 
 ---
 

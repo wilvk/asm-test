@@ -41,6 +41,7 @@
 #define ASMTEST_PTRACE_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h> /* pid_t */
 
 #include "asmtest_trace.h"
@@ -125,6 +126,31 @@ int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
  * is the portable lowest common denominator.) */
 int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
                                 size_t *len_out);
+
+/* A JIT method as recorded in a jitdump JIT_CODE_LOAD record. */
+typedef struct {
+    uint64_t code_addr;  /* load address (the base to trace)                     */
+    uint64_t code_size;  /* code length in bytes                                 */
+    uint64_t timestamp;  /* record timestamp (load order)                        */
+    uint64_t code_index; /* the JIT's unique index for this code                 */
+} asmtest_jitdump_entry_t;
+
+/* Read the Linux perf **jitdump** image (`jit-<pid>.dump`) a JIT writes and resolve a
+ * method by `name` to its load address, size, and — unlike the text perf-map — its
+ * actual recorded native code BYTES. jitdump is the bytes-accurate, time-stamped
+ * format (CoreCLR/HotSpot/V8 emit it; `perf inject --jit` consumes it); because each
+ * JIT_CODE_LOAD record carries a timestamp, a method re-emitted at a reused address
+ * (tiered/OSR recompilation) resolves to the **latest** body — the temporal
+ * same-address-different-bytes problem. Reads from `path`, or from `/tmp/jit-<pid>.dump`
+ * when `path` is NULL. Endianness is auto-detected from the header magic.
+ *
+ * On the most recent JIT_CODE_LOAD matching `name`: fills *out (if non-NULL) and, if
+ * `bytes_out` is non-NULL, copies up to `bytes_cap` of the recorded code into it and
+ * sets *bytes_len. Returns ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT (no such method /
+ * no file), ASMTEST_PTRACE_EINVAL (not a jitdump), or a negative status. */
+int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
+                         asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
+                         size_t bytes_cap, size_t *bytes_len);
 
 #ifdef __cplusplus
 }

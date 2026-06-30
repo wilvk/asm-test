@@ -784,6 +784,97 @@ static void test_perfmap_resolve(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+/* Serialize one jitdump JIT_CODE_LOAD record (host is little-endian, which the reader
+ * detects from the header magic). Layout: prefix{id,total,ts} + body{pid,tid,vma,
+ * code_addr,code_size,code_index} + name(NUL) + native code. */
+static void write_jit_load(FILE *f, uint64_t ts, uint64_t addr, uint64_t idx,
+                           const char *name, const void *code, uint32_t code_size,
+                           uint32_t pid) {
+    uint32_t id = 0; /* JIT_CODE_LOAD */
+    uint32_t namelen = (uint32_t)strlen(name) + 1;
+    uint32_t total = 16 + 40 + namelen + code_size;
+    uint64_t vma = addr, code_addr = addr, csz = code_size;
+    fwrite(&id, 4, 1, f);
+    fwrite(&total, 4, 1, f);
+    fwrite(&ts, 8, 1, f);
+    fwrite(&pid, 4, 1, f);
+    fwrite(&pid, 4, 1, f); /* tid */
+    fwrite(&vma, 8, 1, f);
+    fwrite(&code_addr, 8, 1, f);
+    fwrite(&csz, 8, 1, f);
+    fwrite(&idx, 8, 1, f);
+    fwrite(name, 1, namelen, f);
+    fwrite(code, 1, code_size, f);
+}
+#endif
+
+/* Binary jitdump reader: the bytes-accurate, time-stamped code image a JIT writes
+ * (jit-<pid>.dump). Synthesize one with a skipped non-LOAD record and the SAME method
+ * re-JITted at a new address, and assert the reader resolves the latest body — name ->
+ * (addr, size, code_index) AND the recorded native bytes (which the text perf-map
+ * cannot give), latest-timestamp wins. */
+static void test_jitdump_reader(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP jitdump: not Linux x86-64\n");
+        return;
+    }
+    char path[80];
+    snprintf(path, sizeof path, "/tmp/asmtest-jit-%d.dump", (int)getpid());
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        printf("# SKIP jitdump: cannot write %s\n", path);
+        return;
+    }
+    uint32_t magic = 0x4A695444u, version = 1, hsize = 40, elf_mach = 62, pad1 = 0,
+             mpid = (uint32_t)getpid();
+    uint64_t z = 0;
+    fwrite(&magic, 4, 1, f);
+    fwrite(&version, 4, 1, f);
+    fwrite(&hsize, 4, 1, f);
+    fwrite(&elf_mach, 4, 1, f);
+    fwrite(&pad1, 4, 1, f);
+    fwrite(&mpid, 4, 1, f);
+    fwrite(&z, 8, 1, f); /* timestamp */
+    fwrite(&z, 8, 1, f); /* flags */
+    /* A non-LOAD record (id=4, JIT_CODE_UNWINDING_INFO) with an 8-byte payload, to
+     * exercise record skipping. */
+    {
+        uint32_t id = 4, tot = 24;
+        uint64_t ts = 1, payload = 0;
+        fwrite(&id, 4, 1, f);
+        fwrite(&tot, 4, 1, f);
+        fwrite(&ts, 8, 1, f);
+        fwrite(&payload, 8, 1, f);
+    }
+    const char *name = "void asmtest::jit::method(long, long)";
+    write_jit_load(f, 2, 0x1000, 7, name, ROUTINE, (uint32_t)sizeof ROUTINE, mpid);
+    /* The SAME method re-JITted at a new address (tiered/OSR) — latest must win. */
+    write_jit_load(f, 3, 0x2000, 9, name, ROUTINE, (uint32_t)sizeof ROUTINE, mpid);
+    fclose(f);
+
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    uint8_t bytes[64];
+    size_t blen = 0;
+    int rc = asmtest_jitdump_find(path, 0, name, &e, bytes, sizeof bytes, &blen);
+    CHECK(rc == ASMTEST_PTRACE_OK,
+          "jitdump: found the method by name (non-LOAD record skipped)");
+    CHECK(e.code_addr == 0x2000 && e.timestamp == 3,
+          "jitdump: re-JIT latest body wins (addr 0x2000, ts 3)");
+    CHECK(e.code_size == sizeof ROUTINE && e.code_index == 9,
+          "jitdump: code_size/code_index parsed from the record");
+    CHECK(blen == sizeof ROUTINE && memcmp(bytes, ROUTINE, sizeof ROUTINE) == 0,
+          "jitdump: captured the recorded native bytes (not just symbol+size)");
+    int rc2 = asmtest_jitdump_find(path, 0, "no_such", &e, NULL, 0, NULL);
+    CHECK(rc2 == ASMTEST_PTRACE_ENOENT, "jitdump: missing method -> ENOENT");
+    remove(path);
+#else
+    printf("# SKIP jitdump: not Linux x86-64\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -812,6 +903,7 @@ int main(void) {
      * parse a JIT perf-map (the "point W2 at a running process" layer). */
     test_proc_resolve_and_trace();
     test_perfmap_resolve();
+    test_jitdump_reader();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

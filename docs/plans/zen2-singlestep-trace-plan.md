@@ -273,16 +273,19 @@ Linux/x86-64 backend.
     the full flow **resolve → attach → trace → detach** runs end to end, live, on a
     foreign process.
 
-  Suggested remaining W2 fronts (priority order):
-  - _Next — binary jitdump reader._ Parse the `jit-<pid>.dump` image format CoreCLR/
-    HotSpot/V8 emit. Richer than the text perf-map already supported: it carries the
-    code **bytes** and per-method load **timestamps**, so it resolves the *temporal*
+  - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
+    image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
+    code **bytes** and per-method load **timestamps**, so a method re-emitted at a
+    reused address (tiered/OSR) resolves to the **latest** body — the *temporal*
     same-address-different-bytes problem the [JIT runtime tracing
-    analysis](../analysis/jit-runtime-tracing.md) centres on. The perf-map is the
-    portable lowest common denominator; jitdump is the bytes-accurate upgrade and the
-    explicitly-planned continuation (it is also the byte source the
-    [hardware-trace plan, Phase 2](hardware-trace-plan.md) PT-attach path needs).
-  - _Next — per-binding surface._ The `asmtest_ptrace_*` / `asmtest_proc_*` C surface
+    analysis](../analysis/jit-runtime-tracing.md) centres on. (It is also the byte
+    source the [hardware-trace plan, Phase 2](hardware-trace-plan.md) PT-attach path
+    needs.) Endianness auto-detected; non-`LOAD` records skipped; verified by a
+    synthetic 2-record-plus-re-JIT fixture.
+
+  Suggested remaining W2 fronts (priority order):
+  - _Next — per-binding surface._ The `asmtest_ptrace_*` / `asmtest_proc_*` /
+    `asmtest_jitdump_*` C surface
     is C-only today: its one-shot `trace_call`/`trace_attached` shape differs from the
     uniform `begin`/`end` tier surface the binding function-parity gate covers, so it
     was deliberately kept out of that gate. Expose it across the ten language bindings

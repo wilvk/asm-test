@@ -333,6 +333,130 @@ int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
     return rc;
 }
 
+/* jitdump readers: assemble little-endian, byte-swap when the file is big-endian. */
+static uint32_t jd_rd32(const unsigned char *p, int swap) {
+    uint32_t v = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+                 (uint32_t)p[3] << 24;
+    return swap ? __builtin_bswap32(v) : v;
+}
+static uint64_t jd_rd64(const unsigned char *p, int swap) {
+    uint64_t v = (uint64_t)jd_rd32(p, 0) | (uint64_t)jd_rd32(p + 4, 0) << 32;
+    return swap ? __builtin_bswap64(v) : v;
+}
+
+#define JITDUMP_MAGIC 0x4A695444u    /* 'JiTD'           */
+#define JITDUMP_MAGIC_SW 0x4454694Au /* byte-swapped     */
+#define JIT_CODE_LOAD 0
+
+int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
+                         asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
+                         size_t bytes_cap, size_t *bytes_len) {
+    if (name == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    char buf[64];
+    const char *p = path;
+    if (p == NULL) {
+        snprintf(buf, sizeof buf, "/tmp/jit-%d.dump", (int)pid);
+        p = buf;
+    }
+    FILE *f = fopen(p, "rb");
+    if (f == NULL)
+        return ASMTEST_PTRACE_ENOENT;
+
+    /* File header: magic, version, total_size, elf_mach, pad1, pid, timestamp,
+     * flags (40 bytes for v1). */
+    unsigned char hdr[40];
+    if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr) {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+    uint32_t magic = jd_rd32(hdr, 0);
+    int swap;
+    if (magic == JITDUMP_MAGIC)
+        swap = 0;
+    else if (magic == JITDUMP_MAGIC_SW)
+        swap = 1;
+    else {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+    uint32_t header_size = jd_rd32(hdr + 8, swap);
+    if (fseek(f, (long)header_size, SEEK_SET) != 0) {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+
+    int rc = ASMTEST_PTRACE_ENOENT;
+    /* Records are written in timestamp order, so the LAST matching JIT_CODE_LOAD is
+     * the most recent body — just overwrite on each match. */
+    for (;;) {
+        unsigned char pre[16]; /* id, total_size, timestamp */
+        if (fread(pre, 1, sizeof pre, f) != sizeof pre)
+            break; /* EOF */
+        uint32_t id = jd_rd32(pre, swap);
+        uint32_t total = jd_rd32(pre + 4, swap);
+        uint64_t ts = jd_rd64(pre + 8, swap);
+        if (total < sizeof pre)
+            break; /* malformed */
+
+        if (id != JIT_CODE_LOAD) {
+            if (fseek(f, (long)(total - sizeof pre), SEEK_CUR) != 0)
+                break;
+            continue;
+        }
+
+        /* jr_code_load body: pid, tid, vma, code_addr, code_size, code_index. */
+        unsigned char fx[40];
+        if (fread(fx, 1, sizeof fx, f) != sizeof fx)
+            break;
+        uint64_t code_addr = jd_rd64(fx + 16, swap);
+        uint64_t code_size = jd_rd64(fx + 24, swap);
+        uint64_t code_index = jd_rd64(fx + 32, swap);
+        long name_len = (long)total - 56 - (long)code_size;
+        if (name_len <= 0) /* total = 16 prefix + 40 body + name + code */
+            break;
+
+        char *nm = (char *)malloc((size_t)name_len);
+        if (nm == NULL) {
+            fclose(f);
+            return ASMTEST_PTRACE_ETRACE;
+        }
+        if (fread(nm, 1, (size_t)name_len, f) != (size_t)name_len) {
+            free(nm);
+            break;
+        }
+        nm[name_len - 1] = '\0';
+        int match = (strcmp(nm, name) == 0);
+        free(nm);
+
+        if (match) {
+            rc = ASMTEST_PTRACE_OK;
+            if (out) {
+                out->code_addr = code_addr;
+                out->code_size = code_size;
+                out->timestamp = ts;
+                out->code_index = code_index;
+            }
+            if (bytes_out != NULL && bytes_cap > 0) {
+                size_t cpy = code_size < bytes_cap ? (size_t)code_size : bytes_cap;
+                if (fread(bytes_out, 1, cpy, f) != cpy)
+                    break;
+                if (bytes_len)
+                    *bytes_len = cpy;
+                if (code_size > cpy &&
+                    fseek(f, (long)(code_size - cpy), SEEK_CUR) != 0)
+                    break;
+            } else if (fseek(f, (long)code_size, SEEK_CUR) != 0) {
+                break;
+            }
+        } else if (fseek(f, (long)code_size, SEEK_CUR) != 0) {
+            break;
+        }
+    }
+    fclose(f);
+    return rc;
+}
+
 #else /* not Linux x86-64 — link-compatible stubs */
 
 int asmtest_ptrace_available(void) { return 0; }
@@ -381,6 +505,19 @@ int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
     (void)name;
     (void)base_out;
     (void)len_out;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
+                         asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
+                         size_t bytes_cap, size_t *bytes_len) {
+    (void)path;
+    (void)pid;
+    (void)name;
+    (void)out;
+    (void)bytes_out;
+    (void)bytes_cap;
+    (void)bytes_len;
     return ASMTEST_PTRACE_ENOSYS;
 }
 
