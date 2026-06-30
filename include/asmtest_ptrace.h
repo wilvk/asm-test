@@ -104,6 +104,23 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
 
+/* Run an already-attached target forward until it reaches `addr`, then stop it there —
+ * the missing step between resolving a foreign method and tracing it. asmtest_ptrace_-
+ * trace_attached requires `pid` to be stopped AT the region entry; against a real
+ * managed runtime you do not control WHEN the program calls the method, so you cannot
+ * just attach at the right instant. This plants a software breakpoint at `addr`
+ * (PTRACE_POKETEXT, which patches even an r-x text page the way a debugger does),
+ * PTRACE_CONTs the target until the program ITSELF calls into `addr`, then removes the
+ * breakpoint and rewinds the program counter so the target is left ptrace-stopped with
+ * its PC exactly at `addr` — precisely the precondition trace_attached expects. The
+ * caller still owns attach/detach: PTRACE_ATTACH + wait, then run_to(addr), then
+ * trace_attached(addr, len, …), then PTRACE_DETACH. Unrelated signals delivered while
+ * running are forwarded to the target. Returns ASMTEST_PTRACE_OK (stopped at addr),
+ * ASMTEST_PTRACE_ENOENT if the target exited before reaching `addr`, ASMTEST_PTRACE_-
+ * EINVAL on a NULL `addr`, or ASMTEST_PTRACE_ETRACE on a ptrace/wait failure (the
+ * breakpoint is best-effort removed). */
+int asmtest_ptrace_run_to(pid_t pid, const void *addr);
+
 /* ------------------------------------------------------------------ */
 /* Code-region resolution — turn the foreign-attach primitive above   */
 /* into "point it at a running process" by discovering the (base,len)  */

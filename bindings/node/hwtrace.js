@@ -146,6 +146,7 @@ let _loadError = null;
     ptraceSkipReason: lib.func('void asmtest_ptrace_skip_reason(_Out_ char*, size_t)'),
     ptraceTraceCall: lib.func('int asmtest_ptrace_trace_call(const void*, size_t, const long*, int, _Out_ long*, void*)'),
     ptraceTraceAttached: lib.func('int asmtest_ptrace_trace_attached(int, const void*, size_t, _Out_ long*, void*)'),
+    ptraceRunTo: lib.func('int asmtest_ptrace_run_to(int, const void*)'),
     procRegionByAddr: lib.func('int asmtest_proc_region_by_addr(int, const void*, _Out_ void**, _Out_ size_t*)'),
     procPerfmapSymbol: lib.func('int asmtest_proc_perfmap_symbol(int, const char*, _Out_ void**, _Out_ size_t*)'),
     jitdumpFind: lib.func('int asmtest_jitdump_find(const char*, int, const char*, _Out_ uint8_t*, _Out_ uint8_t*, size_t, _Out_ size_t*)'),
@@ -396,6 +397,16 @@ class Ptrace {
     const rc = _fn.ptraceTraceAttached(pid, base, len, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached failed: ${rc}`);
     return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Run an already-attached, ptrace-stopped target forward until it reaches `addr`
+   *  (a software breakpoint that fires when the program itself next calls in),
+   *  leaving it stopped there ready for traceAttached — the step that makes a resolved
+   *  JIT method traceable when you don't control call timing. Returns the status code
+   *  (ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first). The
+   *  caller owns PTRACE_ATTACH/DETACH. */
+  static runTo(pid, addr) {
+    return _fn.ptraceRunTo(pid, addr);
   }
 
   /** The executable mapping in /proc/<pid>/maps containing `addr`, as

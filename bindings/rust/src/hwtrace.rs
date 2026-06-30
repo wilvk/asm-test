@@ -244,6 +244,7 @@ type PtraceTraceCallFn = unsafe extern "C" fn(
 ) -> c_int;
 type PtraceTraceAttachedFn =
     unsafe extern "C" fn(c_int, *const c_void, usize, *mut c_long, *mut c_void) -> c_int;
+type PtraceRunToFn = unsafe extern "C" fn(c_int, *const c_void) -> c_int;
 type ProcRegionByAddrFn =
     unsafe extern "C" fn(c_int, *const c_void, *mut *mut c_void, *mut usize) -> c_int;
 type ProcPerfmapSymbolFn =
@@ -286,6 +287,7 @@ struct HwFns {
     ptrace_skip_reason: Option<PtraceSkipReasonFn>,
     ptrace_trace_call: Option<PtraceTraceCallFn>,
     ptrace_trace_attached: Option<PtraceTraceAttachedFn>,
+    ptrace_run_to: Option<PtraceRunToFn>,
     proc_region_by_addr: Option<ProcRegionByAddrFn>,
     proc_perfmap_symbol: Option<ProcPerfmapSymbolFn>,
     jitdump_find: Option<JitdumpFindFn>,
@@ -347,6 +349,7 @@ fn hw_fns() -> &'static HwFns {
                 truncated: None, block_at: None, insn_at: None,
                 ptrace_available: None, ptrace_skip_reason: None,
                 ptrace_trace_call: None, ptrace_trace_attached: None,
+                ptrace_run_to: None,
                 proc_region_by_addr: None, proc_perfmap_symbol: None,
                 jitdump_find: None,
             };
@@ -395,6 +398,7 @@ fn hw_fns() -> &'static HwFns {
             ptrace_skip_reason: load!("asmtest_ptrace_skip_reason", PtraceSkipReasonFn),
             ptrace_trace_call: load!("asmtest_ptrace_trace_call", PtraceTraceCallFn),
             ptrace_trace_attached: load!("asmtest_ptrace_trace_attached", PtraceTraceAttachedFn),
+            ptrace_run_to: load!("asmtest_ptrace_run_to", PtraceRunToFn),
             proc_region_by_addr: load!("asmtest_proc_region_by_addr", ProcRegionByAddrFn),
             proc_perfmap_symbol: load!("asmtest_proc_perfmap_symbol", ProcPerfmapSymbolFn),
             jitdump_find: load!("asmtest_jitdump_find", JitdumpFindFn),
@@ -880,6 +884,19 @@ impl Ptrace {
         };
         assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_attached failed: {rc}");
         result as i64
+    }
+
+    /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
+    /// `addr` (a software breakpoint that fires when the program itself next calls
+    /// in), leaving it stopped there ready for [`trace_attached`](Ptrace::trace_attached)
+    /// — the step that makes a resolved JIT method traceable when you don't control
+    /// call timing. Returns the status: `ASMTEST_PTRACE_OK`, or `ASMTEST_PTRACE_ENOENT`
+    /// if the target exited first. The caller owns PTRACE_ATTACH/DETACH.
+    pub fn run_to(pid: i32, addr: usize) -> i32 {
+        let f = hw_fns()
+            .ptrace_run_to
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        unsafe { f(pid as c_int, addr as *const c_void) as i32 }
     }
 
     /// The executable mapping in `/proc/<pid>/maps` that CONTAINS `addr`, as

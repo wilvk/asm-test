@@ -918,6 +918,123 @@ static void test_proc_resolve_and_trace(void) {
 #endif
 }
 
+/* W2 END-TO-END, UNCONTROLLED TIMING — the real managed-runtime flow. Every test above
+ * arranges the stop with a cooperative go-flag (the parent releases the child so it calls
+ * the region next); a real JIT gives you no such flag — the program calls the method on
+ * its own schedule. Here a child publishes its generated routine to /tmp/perf-<pid>.map
+ * (the format V8/Node/.NET/OpenJDK emit) and then calls it in a LOOP the parent does not
+ * gate. The parent attaches from the outside, resolves the method by NAME, then
+ * asmtest_ptrace_run_to()s the target to the method entry — a software breakpoint that
+ * fires when the program ITSELF next calls in — and traces that one invocation. This is
+ * the step that turns the W2 primitives into "attach to a live JIT and trace a method
+ * whose call timing you do not control." */
+static void test_run_to_and_trace(void) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP run_to: %s\n", why);
+        return;
+    }
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTN = sizeof ROUTINE_A64;
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8, 0x10};
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+#endif
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+    const char *METHOD = "void asmtest::jit::run_to_demo(long, long)";
+
+    void *p = mmap(NULL, RTN, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP run_to: mmap failed\n");
+        return;
+    }
+    memcpy(p, RT, RTN);
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Publish the JIT method the way a managed runtime does, then call it forever on
+         * OUR schedule — the parent never signals when. */
+        char mp[64];
+        snprintf(mp, sizeof mp, "/tmp/perf-%d.map", (int)getpid());
+        FILE *mf = fopen(mp, "w");
+        if (mf != NULL) {
+            fprintf(mf, "%lx %zx %s\n", (unsigned long)(uintptr_t)p, RTN, METHOD);
+            fclose(mf);
+        }
+        for (;;) {
+            volatile long r = ((add2_fn)p)(20, 22);
+            (void)r;
+            struct timespec t = {0, 1 * 1000 * 1000}; /* 1 ms between calls */
+            nanosleep(&t, NULL);
+        }
+        _exit(0);
+    }
+
+    /* Give the child time to publish its perf-map and start looping. */
+    struct timespec ts = {0, 10 * 1000 * 1000}; /* 10 ms */
+    nanosleep(&ts, NULL);
+
+    /* Resolve the method by NAME from the foreign perf-map (no hardcoded address) —
+     * exactly what a tracer holds when pointed at a live JIT. */
+    void *base = NULL;
+    size_t rlen = 0;
+    int found = asmtest_proc_perfmap_symbol(pid, METHOD, &base, &rlen);
+    CHECK(found == ASMTEST_PTRACE_OK && base == p && rlen == RTN,
+          "run_to: resolved the JIT method by name from the foreign perf-map");
+
+    char mp[64];
+    snprintf(mp, sizeof mp, "/tmp/perf-%d.map", (int)pid);
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 ||
+        waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP run_to: PTRACE_ATTACH not permitted (yama ptrace_scope)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        remove(mp);
+        munmap(p, RTN);
+        return;
+    }
+
+    /* Run the target forward until IT next calls the method (timing we do not control),
+     * leaving it stopped at the entry, then trace that one invocation. */
+    int rc_run = asmtest_ptrace_run_to(pid, base);
+    CHECK(rc_run == ASMTEST_PTRACE_OK,
+          "run_to: target reached the method entry via a software breakpoint");
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = (rc_run == ASMTEST_PTRACE_OK)
+                 ? asmtest_ptrace_trace_attached(pid, base, rlen, &result, tr)
+                 : ASMTEST_PTRACE_ETRACE;
+
+    /* The child loops forever, so end it rather than detach-and-resume. */
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+
+    CHECK(rc == ASMTEST_PTRACE_OK && result == 42,
+          "run_to: traced the JIT method at its next real call (result 42)");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "run_to: same exact stream as the in-process stepper");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 && !asmtest_emu_trace_truncated(tr),
+          "run_to: two blocks, complete (breakpoint removed, PC rewound)");
+    asmtest_trace_free(tr);
+    remove(mp);
+    munmap(p, RTN);
+#else
+    printf("# SKIP run_to: not Linux x86-64/AArch64\n");
+#endif
+}
+
 /* JIT method resolution: a JIT writes /tmp/perf-<pid>.map so perf can symbolize its
  * generated code; we parse it to recover a method's (base,len) for trace_attached.
  * Emulate one entry (with a spaces-bearing symbol) and resolve it by name. */
@@ -1070,6 +1187,11 @@ int main(void) {
     /* Live: discover a foreign region from /proc/<pid>/maps then attach+trace it, and
      * parse a JIT perf-map (the "point W2 at a running process" layer). */
     test_proc_resolve_and_trace();
+
+    /* Live: the full uncontrolled-timing managed-runtime flow — resolve a JIT method by
+     * name, run the target to it (software breakpoint), then trace that invocation. */
+    test_run_to_and_trace();
+
     test_perfmap_resolve();
     test_jitdump_reader();
 

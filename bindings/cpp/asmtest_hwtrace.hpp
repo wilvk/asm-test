@@ -158,6 +158,7 @@ struct HwApi {
                              void *) = nullptr;
     int (*ptrace_trace_attached)(int, const void *, size_t, long *,
                                  void *) = nullptr;
+    int (*ptrace_run_to)(int, const void *) = nullptr;
     int (*proc_region_by_addr)(int, const void *, void **, size_t *) = nullptr;
     int (*proc_perfmap_symbol)(int, const char *, void **, size_t *) = nullptr;
     int (*jitdump_find)(const char *, int, const char *, void *, uint8_t *,
@@ -231,6 +232,7 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_ptrace_trace_call", t.ptrace_trace_call);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_attached",
                          t.ptrace_trace_attached);
+        ok &= dlsym_into(h, "asmtest_ptrace_run_to", t.ptrace_run_to);
         ok &= dlsym_into(h, "asmtest_proc_region_by_addr",
                          t.proc_region_by_addr);
         ok &= dlsym_into(h, "asmtest_proc_perfmap_symbol",
@@ -648,6 +650,15 @@ class Ptrace {
             throw std::runtime_error("asmtest_ptrace_trace_attached failed: " +
                                      std::to_string(rc));
         return result;
+    }
+
+    /// Run an already-attached, ptrace-stopped target forward until it reaches
+    /// `addr` (a software breakpoint that fires when the program itself next calls
+    /// in), leaving it stopped there ready for traceAttached. Returns the status:
+    /// ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first. The
+    /// caller owns PTRACE_ATTACH/DETACH.
+    static int runTo(int pid, const void *addr) {
+        return detail::api().ptrace_run_to(pid, addr);
     }
 
     /// The executable mapping in /proc/<pid>/maps containing `addr`, as

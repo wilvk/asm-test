@@ -220,6 +220,12 @@ function main() {
       tr.free();
     }
 
+    // run_to drives an attached target to a resolved method (software breakpoint). A
+    // live foreign attach is covered by the C suite; exercise the FFI round-trip safely
+    // — a NULL target address is rejected (EINVAL, non-zero) before any ptrace call.
+    ok(Ptrace.runTo(process.pid, 0) !== 0,
+      'ptrace runTo(NULL addr) rejected (EINVAL) via the FFI round-trip');
+
     // Discover an executable region's extent from /proc/<pid>/maps by an interior
     // address (this process). traceAttached needs no live test — it is declared in
     // hwtrace.js (the parity gate references the symbol); only assert it exists.

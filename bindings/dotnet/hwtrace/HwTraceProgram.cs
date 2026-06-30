@@ -272,6 +272,13 @@ static class HwTraceProgram
             code.Free();
         }
 
+        // (1b) run_to drives an attached target to a resolved method (software
+        // breakpoint). A live foreign attach is covered by the C suite; exercise the FFI
+        // round-trip safely — a NULL target address is rejected (EINVAL, non-zero)
+        // before any ptrace call.
+        Check(Ptrace.RunTo(pid, IntPtr.Zero) != 0,
+              "ptrace: run_to(NULL addr) rejected (EINVAL) via the FFI round-trip");
+
         // (2) region_by_addr: discover an executable region's extent by an interior
         // address (this process); addr 1 maps nothing.
         {

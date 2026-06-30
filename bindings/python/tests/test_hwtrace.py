@@ -183,6 +183,16 @@ def test_ptrace_trace_call():
     code.free()
 
 
+def test_ptrace_run_to_rejects_null():
+    """run_to wraps the foreign-process software-breakpoint primitive (run an attached
+    target to a resolved method, then trace it). A live foreign attach is covered by the
+    C suite — driving PTRACE_ATTACH from this harness is impractical, same as
+    trace_attached — so here exercise the FFI round-trip safely: a NULL target address is
+    rejected (EINVAL) before any ptrace call."""
+    _skip_if_no_ptrace()
+    assert Ptrace.run_to(os.getpid(), 0) != 0  # ASMTEST_PTRACE_OK == 0
+
+
 def test_proc_region_by_addr():
     """Discover an executable region's extent from /proc/<pid>/maps by an interior
     address (this process)."""

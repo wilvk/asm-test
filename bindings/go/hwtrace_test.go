@@ -362,6 +362,18 @@ func TestPtraceTraceCall(t *testing.T) {
 	}
 }
 
+// TestPtraceRunTo probes the run-to-address primitive's FFI round-trip. run_to drives
+// an attached target to a resolved method (software breakpoint); a live foreign attach
+// is covered by the C suite (forking + ptrace of a foreign process is impractical here,
+// same as PtraceTraceAttached), so this just confirms a NULL target address is rejected
+// (EINVAL, non-zero) before any ptrace call.
+func TestPtraceRunTo(t *testing.T) {
+	skipIfNoPtrace(t)
+	if rc := PtraceRunTo(os.Getpid(), 0); rc == 0 {
+		t.Fatalf("PtraceRunTo(NULL addr): got OK, want a non-OK (EINVAL) rejection")
+	}
+}
+
 // TestProcRegionByAddr discovers an executable region's extent from
 // /proc/<pid>/maps by an interior address (this process).
 func TestProcRegionByAddr(t *testing.T) {

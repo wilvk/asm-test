@@ -127,6 +127,7 @@ public final class HwTrace {
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
         PTRACE_AVAILABLE, PTRACE_SKIP_REASON, PTRACE_TRACE_CALL, PTRACE_TRACE_ATTACHED,
+        PTRACE_RUN_TO,
         PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND;
 
     // The load error, kept for diagnostics; null on success.
@@ -153,7 +154,8 @@ public final class HwTrace {
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
             traceBlockAt = null, traceInsnAt = null,
             ptraceAvailable = null, ptraceSkipReason = null, ptraceTraceCall = null,
-            ptraceTraceAttached = null, procRegionByAddr = null, procPerfmapSymbol = null,
+            ptraceTraceAttached = null, ptraceRunTo = null,
+            procRegionByAddr = null, procPerfmapSymbol = null,
             jitdumpFind = null;
         Throwable loadError = null;
         try {
@@ -215,6 +217,9 @@ public final class HwTrace {
             ptraceTraceAttached = h(lib, "asmtest_ptrace_trace_attached",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
                     ADDRESS));
+            // asmtest_ptrace_run_to(pid, addr).
+            ptraceRunTo = h(lib, "asmtest_ptrace_run_to",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
             // asmtest_proc_region_by_addr(pid, addr, base_out, len_out).
             procRegionByAddr = h(lib, "asmtest_proc_region_by_addr",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -239,6 +244,7 @@ public final class HwTrace {
         TRACE_TRUNCATED = traceTruncated; TRACE_BLOCK_AT = traceBlockAt; TRACE_INSN_AT = traceInsnAt;
         PTRACE_AVAILABLE = ptraceAvailable; PTRACE_SKIP_REASON = ptraceSkipReason;
         PTRACE_TRACE_CALL = ptraceTraceCall; PTRACE_TRACE_ATTACHED = ptraceTraceAttached;
+        PTRACE_RUN_TO = ptraceRunTo;
         PROC_REGION_BY_ADDR = procRegionByAddr; PROC_PERFMAP_SYMBOL = procPerfmapSymbol;
         JITDUMP_FIND = jitdumpFind;
         LOAD_ERROR = loadError;
@@ -612,6 +618,21 @@ public final class HwTrace {
             if (rc != ASMTEST_PTRACE_OK)
                 throw new RuntimeException("asmtest_ptrace_trace_attached failed: " + rc);
             return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Run an already-attached, ptrace-stopped target {@code pid} forward until it
+     *  reaches {@code addr} (a software breakpoint that fires when the program itself
+     *  next calls in), leaving it stopped there ready for
+     *  {@link #ptraceTraceAttached} — the step that makes a resolved JIT method
+     *  traceable when you don't control call timing. Returns the status
+     *  ({@code ASMTEST_PTRACE_OK}, or {@code ASMTEST_PTRACE_ENOENT} if the target
+     *  exited first). The caller owns PTRACE_ATTACH/DETACH. */
+    public static int ptraceRunTo(int pid, long addr) {
+        if (PTRACE_RUN_TO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try {
+            return (int) PTRACE_RUN_TO.invoke(pid, MemorySegment.ofAddress(addr));
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
     }

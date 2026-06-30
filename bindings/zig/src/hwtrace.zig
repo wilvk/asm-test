@@ -185,6 +185,7 @@ const FnPtraceAvailable = *const fn () callconv(.C) c_int;
 const FnPtraceSkipReason = *const fn ([*c]u8, usize) callconv(.C) void;
 const FnPtraceTraceCall = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, ?*c_long, ?*anyopaque) callconv(.C) c_int;
 const FnPtraceTraceAttached = *const fn (c_int, ?*const anyopaque, usize, ?*c_long, ?*anyopaque) callconv(.C) c_int;
+const FnPtraceRunTo = *const fn (c_int, ?*const anyopaque) callconv(.C) c_int;
 const FnProcRegionByAddr = *const fn (c_int, ?*const anyopaque, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnProcPerfmapSymbol = *const fn (c_int, [*:0]const u8, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnJitdumpFind = *const fn ([*c]const u8, c_int, [*:0]const u8, *JitEntry, [*c]u8, usize, ?*usize) callconv(.C) c_int;
@@ -221,6 +222,7 @@ const Api = struct {
     ptrace_skip_reason: FnPtraceSkipReason,
     ptrace_trace_call: FnPtraceTraceCall,
     ptrace_trace_attached: FnPtraceTraceAttached,
+    ptrace_run_to: FnPtraceRunTo,
     proc_region_by_addr: FnProcRegionByAddr,
     proc_perfmap_symbol: FnProcPerfmapSymbol,
     jitdump_find: FnJitdumpFind,
@@ -284,6 +286,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .ptrace_skip_reason = lib.lookup(FnPtraceSkipReason, "asmtest_ptrace_skip_reason") orelse return null,
         .ptrace_trace_call = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call") orelse return null,
         .ptrace_trace_attached = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached") orelse return null,
+        .ptrace_run_to = lib.lookup(FnPtraceRunTo, "asmtest_ptrace_run_to") orelse return null,
         .proc_region_by_addr = lib.lookup(FnProcRegionByAddr, "asmtest_proc_region_by_addr") orelse return null,
         .proc_perfmap_symbol = lib.lookup(FnProcPerfmapSymbol, "asmtest_proc_perfmap_symbol") orelse return null,
         .jitdump_find = lib.lookup(FnJitdumpFind, "asmtest_jitdump_find") orelse return null,
@@ -677,6 +680,18 @@ pub const Ptrace = struct {
         const rc = api.ptrace_trace_attached(pid, base, len, &result, trace.handle);
         if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
         return @intCast(result);
+    }
+
+    /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
+    /// `addr` (a software breakpoint that fires when the program itself next calls in),
+    /// leaving it stopped there ready for `traceAttached` — the step that makes a
+    /// resolved JIT method traceable when you don't control call timing. Returns the
+    /// status code (`ASMTEST_PTRACE_OK`, or `ASMTEST_PTRACE_ENOENT` if the target
+    /// exited first), or `Error.LibUnavailable` if the lib isn't loadable. The caller
+    /// owns PTRACE_ATTACH/DETACH. Mirrors `Ptrace.run_to()`.
+    pub fn runTo(pid: c_int, addr: usize) Error!c_int {
+        const api = load() orelse return Error.LibUnavailable;
+        return api.ptrace_run_to(pid, @ptrFromInt(addr));
     }
 
     /// The executable mapping in `/proc/<pid>/maps` that CONTAINS `addr`, as a

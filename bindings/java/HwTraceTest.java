@@ -69,6 +69,7 @@ public final class HwTraceTest {
         // ptrace backend is unavailable.
         try {
             ptraceTraceCall();
+            ptraceRunTo();
             procRegionByAddr();
             procPerfmapSymbol();
             jitdumpFind();
@@ -297,6 +298,18 @@ public final class HwTraceTest {
 
         trace.free();
         code.free();
+    }
+
+    // run_to drives an attached target to a resolved method (software breakpoint). A
+    // live foreign attach is covered by the C suite (forking + ptrace of a foreign
+    // process is impractical here, same as ptraceTraceAttached); exercise the FFI
+    // round-trip safely — a NULL target address is rejected (EINVAL, non-zero) before
+    // any ptrace call.
+    private static void ptraceRunTo() {
+        if (ptraceUnavailable()) return;
+        int pid = (int) ProcessHandle.current().pid();
+        int rc = HwTrace.ptraceRunTo(pid, 0L);
+        ok(rc != 0, "ptraceRunTo(NULL addr) rejected (EINVAL) via the FFI round-trip (got " + rc + ")");
     }
 
     // Mirrors test_proc_region_by_addr: discover an executable region's extent from

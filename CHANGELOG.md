@@ -124,8 +124,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (+perf-map-agent) write so `perf` can symbolize **generated code** — to recover a
     JIT method's `(base, len)` by name. A live test discovers a foreign process's
     region from `/proc/<pid>/maps` using only an interior address and traces *that*
-    region (no hardcoded base), completing the managed-runtime flow: resolve → attach
-    → `trace_attached` → detach. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    region (no hardcoded base). `asmtest_ptrace_run_to(pid, addr)` closes the
+    **uncontrolled-timing** gap that the rest of the flow left open: `trace_attached`
+    needs the target stopped *at* the method entry, but a real managed runtime calls a
+    JIT method on its own schedule, so you cannot attach at the right instant. `run_to`
+    plants a software breakpoint at `addr` (`PTRACE_POKETEXT` — `int3` on x86-64, `brk`
+    on AArch64 — which patches an r-x text page the way a debugger does), `PTRACE_CONT`s
+    until the program *itself* next calls in, then removes the breakpoint and rewinds the
+    PC, leaving the target stopped exactly at `addr` for `trace_attached` (also hardened
+    to record the entry instruction from either stop convention). A live test now drives
+    the **complete real-JIT flow with no cooperative go-flag** — a child publishes a
+    perf-map and calls its routine in a loop, the tracer resolves it by name, attaches,
+    `run_to`s the entry, and traces that invocation to the exact `[0,3,6,c,11]` stream —
+    completing the managed-runtime flow: resolve → attach → `run_to` → `trace_attached` →
+    detach. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text
@@ -135,7 +147,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     auto-detected and non-`LOAD` records skipped. (The text perf-map remains the
     portable lowest common denominator for JITs that only emit symbols.) The full
     foreign-process toolkit — `available`/`skip_reason`, `trace_call`,
-    `trace_attached`, `region_by_addr`, `perfmap_symbol`, `jitdump_find` — is exposed
+    `trace_attached`, `run_to`, `region_by_addr`, `perfmap_symbol`, `jitdump_find` — is exposed
     through **every language wrapper** (a `Ptrace` class / module surfacing the same
     methods, idiomatic per language), each with a per-binding self-test of the
     live-testable subset (out-of-process `trace_call` parity, `/proc/maps` and

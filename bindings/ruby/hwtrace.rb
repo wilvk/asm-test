@@ -145,6 +145,7 @@ module Asmtest
         ptrace_skip_reason:  func(LIB, "asmtest_ptrace_skip_reason", [VOIDP, SZ], VOID),
         ptrace_trace_call:   func(LIB, "asmtest_ptrace_trace_call", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP], INT),
         ptrace_trace_attached: func(LIB, "asmtest_ptrace_trace_attached", [INT, VOIDP, SZ, VOIDP, VOIDP], INT),
+        ptrace_run_to:       func(LIB, "asmtest_ptrace_run_to", [INT, VOIDP], INT),
         proc_region_by_addr: func(LIB, "asmtest_proc_region_by_addr", [INT, VOIDP, VOIDP, VOIDP], INT),
         proc_perfmap_symbol: func(LIB, "asmtest_proc_perfmap_symbol", [INT, VOIDP, VOIDP, VOIDP], INT),
         jitdump_find:        func(LIB, "asmtest_jitdump_find", [VOIDP, INT, VOIDP, VOIDP, VOIDP, SZ, VOIDP], INT),
@@ -395,6 +396,16 @@ module Asmtest
         Fiddle.free(res.to_i)
         raise "asmtest_ptrace_trace_attached failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
         result
+      end
+
+      # Run an already-attached, ptrace-stopped target forward until it reaches +addr+
+      # (a software breakpoint that fires when the program itself next calls in),
+      # leaving it stopped there ready for ptrace_trace_attached -- the step that makes a
+      # resolved JIT method traceable when you don't control call timing. Returns the
+      # status code (PTRACE_OK, or PTRACE_ENOENT if the target exited first). +pid+ is a
+      # C int; +addr+ is an integer address. The caller owns PTRACE_ATTACH/DETACH.
+      def self.ptrace_run_to(pid, addr)
+        Asmtest::HwTrace::FN[:ptrace_run_to].call(pid, Fiddle::Pointer.new(addr))
       end
 
       # The executable mapping in /proc/<pid>/maps containing +addr+, as [base, len],

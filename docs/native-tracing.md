@@ -466,14 +466,27 @@ centres on. The bytes
 matter because a hardware/branch trace records only control flow; the decoder must be
 handed the exact bytes that were live, and jitdump carries them.
 
+One piece sits between resolution and tracing: `trace_attached` needs the target stopped
+*at* the method entry, but a real managed runtime calls a JIT method on its own schedule,
+so you cannot attach at exactly the right instant. `asmtest_ptrace_run_to(pid, addr)`
+closes that **uncontrolled-timing** gap — it plants a software breakpoint at `addr`
+(`PTRACE_POKETEXT`: `int3` on x86-64, `brk` on AArch64, which patches an r-x text page the
+way a debugger does), `PTRACE_CONT`s until the program *itself* next calls in, then
+removes the breakpoint and rewinds the PC, leaving the target stopped exactly at `addr`
+ready for `trace_attached` (which also records the entry instruction from either stop
+convention).
+
 So the full managed-runtime flow is: resolve the method's region from the runtime's
-jitdump or perf-map (or an address via `/proc/maps`) → `PTRACE_ATTACH` →
+jitdump or perf-map (or an address via `/proc/maps`) → `PTRACE_ATTACH` → `run_to` →
 `trace_attached` → `PTRACE_DETACH`. `make hwtrace-test` runs it end to end: it discovers
 a foreign process's region from `/proc/<pid>/maps` using only an interior address and
-traces *that* region (no hardcoded base), parses a JIT perf-map entry by name, and reads
-a jitdump image — skipping non-`LOAD` records, picking the latest re-JIT body, and
-recovering the recorded code bytes. The text perf-map remains the portable lowest common
-denominator for JITs that only emit symbols.
+traces *that* region (no hardcoded base), and — with **no cooperative go-flag** — has a
+child publish a perf-map and call its routine in a loop while the tracer resolves it by
+name, `run_to`s the entry, and traces that invocation to the exact `[0,3,6,c,11]` stream;
+it also parses a JIT perf-map entry by name and reads a jitdump image — skipping
+non-`LOAD` records, picking the latest re-JIT body, and recovering the recorded code
+bytes. The text perf-map remains the portable lowest common denominator for JITs that
+only emit symbols.
 
 ### Language wrappers
 
@@ -501,12 +514,16 @@ wrapper needs a DynamoRIO install and the PT/AMD wrappers self-skip.
 
 The **out-of-process / foreign-process toolkit** above is exposed through every wrapper
 too — a `Ptrace` class (or, where idiomatic, `HwTrace.ptrace_*` methods) surfacing
-`available`/`skipReason`, `traceCall`, `traceAttached`, `regionByAddr`, `perfmapSymbol`,
-and `jitdumpFind` (with a `JitMethod` value type carrying the recorded code bytes). Each
+`available`/`skipReason`, `traceCall`, `traceAttached`, `runTo`, `regionByAddr`,
+`perfmapSymbol`, and `jitdumpFind` (with a `JitMethod` value type carrying the recorded
+code bytes). `runTo(pid, addr)` runs an already-attached target forward to a resolved
+method via a software breakpoint — the step that makes a JIT method traceable when you
+don't control its call timing — leaving it stopped at `addr` for `traceAttached`. Each
 binding's hwtrace test exercises the live-testable subset — out-of-process `traceCall`
-to the same `[0,3,6,c,11]` stream, `/proc/maps` and perf-map resolution, and a
-binary-jitdump round-trip — and `asmtest_ptrace.h` is covered by the
-`check-bindings-parity` gate (36 tier symbols × 10 bindings). All ten are validated
+to the same `[0,3,6,c,11]` stream, `/proc/maps` and perf-map resolution, a
+binary-jitdump round-trip, and `runTo`'s FFI round-trip (a NULL-addr → `EINVAL` probe;
+the live foreign attach is covered by the C suite) — and `asmtest_ptrace.h` is covered by
+the `check-bindings-parity` gate (37 tier symbols × 10 bindings). All ten are validated
 live in plain unprivileged containers.
 
 ## Auto-selecting a backend (the hardware-tier cascade)

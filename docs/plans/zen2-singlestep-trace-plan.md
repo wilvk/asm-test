@@ -273,6 +273,19 @@ Linux/x86-64 backend.
     (`/tmp/perf-<pid>.map`, the JIT text format → a method's `(base,len)` by name) — so
     the full flow **resolve → attach → trace → detach** runs end to end, live, on a
     foreign process.
+  - _Done._ **Run-to-method** — `asmtest_ptrace_run_to(pid, addr)`, the glue that closes
+    the *uncontrolled-timing* gap. `trace_attached` requires the target stopped **at** the
+    region entry; against a real managed runtime you do not control **when** the program
+    calls the method, so you cannot just attach at the right instant. `run_to` plants a
+    software breakpoint at `addr` (`PTRACE_POKETEXT`, which patches even an r-x text page
+    the way a debugger does — `int3` on x86, `brk #0` on AArch64), `PTRACE_CONT`s until the
+    program **itself** next calls in, then removes the breakpoint and rewinds the PC,
+    leaving the target stopped exactly at `addr` — the precondition `trace_attached`
+    expects. `trace_attached` was also made robust to **either** entry convention (it now
+    records the initial in-region PC, so a stop *at* the entry yields the identical stream
+    as a stop *before* it). The complete real-JIT flow — **publish a perf-map → resolve by
+    name → attach → run_to → trace** with **no cooperative go-flag** — is verified live in
+    a plain unprivileged container (`make hwtrace-test`, `test_run_to_and_trace`).
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
@@ -287,11 +300,13 @@ Linux/x86-64 backend.
   - _Done._ Per-binding surface — the `asmtest_ptrace_*` / `asmtest_proc_*` /
     `asmtest_jitdump_*` C surface is exposed across **all ten** language bindings (a
     `Ptrace` class, or `HwTrace.ptrace_*` methods where idiomatic, surfacing
-    `available`/`skip_reason`, `trace_call`, `trace_attached`, `region_by_addr`,
+    `available`/`skip_reason`, `trace_call`, `trace_attached`, `run_to`, `region_by_addr`,
     `perfmap_symbol`, `jitdump_find` with a `JitMethod` value type), each wrapping the
-    seven C symbols from the already-loaded `libasmtest_hwtrace`; the live-testable
-    subset is self-tested in every binding and the surface is now covered by the binding
-    function-parity gate (36 tier symbols × 10 bindings).
+    eight C symbols from the already-loaded `libasmtest_hwtrace`; the live-testable
+    subset is self-tested in every binding (`run_to`'s FFI round-trip via a NULL-addr →
+    `EINVAL` probe, since a live foreign attach is impractical from a managed harness — the
+    C suite covers that) and the surface is covered by the binding function-parity gate
+    (now 37 tier symbols × 10 bindings).
   - _Done — AArch64 tracer (Linux x86-64 **and** AArch64)._ ARM64 single-step
     (`MDSCR_EL1.SS`) is kernel-only, so out-of-process `ptrace` is its **only**
     single-step form (Apple Silicon, Windows-on-ARM, Linux/ARM64). The stepper rides the

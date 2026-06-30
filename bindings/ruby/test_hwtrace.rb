@@ -222,6 +222,13 @@ if HwTrace.ptrace_available?
   ok(!pt_trace.truncated?, "ptrace trace_call not truncated")
   pt_trace.free
 
+  # run_to drives an attached target to a resolved method (software breakpoint). A live
+  # foreign attach is covered by the C suite (forking + ptrace of a foreign process is
+  # impractical here, same as ptrace_trace_attached); exercise the FFI round-trip safely
+  # — a NULL target address is rejected (EINVAL, non-zero) before any ptrace call.
+  ok(HwTrace.ptrace_run_to(Process.pid, 0) != Asmtest::HwTrace::PTRACE_OK,
+     "ptrace run_to(NULL addr) rejected (EINVAL) via the FFI round-trip")
+
   # Discover an executable region's extent from /proc/<pid>/maps by an interior
   # address (this process); addr 1 maps nothing.
   region = HwTrace.proc_region_by_addr(Process.pid, pt_code.base + 4)

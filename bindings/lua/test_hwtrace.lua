@@ -308,6 +308,16 @@ else
     code:free()
   end
 
+  -- ptrace_run_to drives an attached target to a resolved method (software
+  -- breakpoint). A live foreign attach is covered by the C suite (forking + ptrace of a
+  -- foreign process is impractical here, same as ptrace_trace_attached); exercise the
+  -- FFI round-trip safely — a NULL target address is rejected (EINVAL, non-zero) before
+  -- any ptrace call.
+  do
+    local rc = HwTrace.ptrace_run_to(tonumber(ffi.C.getpid()), 0)
+    ok(rc ~= 0, "ptrace_run_to(NULL addr) rejected (EINVAL) via the FFI round-trip")
+  end
+
   -- test_proc_region_by_addr — discover an executable region's extent from
   -- /proc/<pid>/maps by an interior address (this process). addr 1 maps nothing.
   do

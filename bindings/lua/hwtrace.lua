@@ -50,6 +50,7 @@ int  asmtest_ptrace_available(void);
 void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
 int  asmtest_ptrace_trace_call(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
 int  asmtest_ptrace_trace_attached(int pid, const void* base, size_t len, long* result, void* trace);
+int  asmtest_ptrace_run_to(int pid, const void* addr);
 int  asmtest_proc_region_by_addr(int pid, const void* addr, void** base_out, size_t* len_out);
 int  asmtest_proc_perfmap_symbol(int pid, const char* name, void** base_out, size_t* len_out);
 typedef struct { uint64_t code_addr; uint64_t code_size; uint64_t timestamp; uint64_t code_index; } asmtest_jitdump_entry_t;
@@ -401,6 +402,17 @@ function HwTrace.ptrace_trace_attached(pid, base, len, trace)
     error("asmtest_ptrace_trace_attached failed: " .. tonumber(rc))
   end
   return tonumber(result[0])
+end
+
+-- Run an already-attached, ptrace-stopped target forward until it reaches `addr` (a
+-- software breakpoint that fires when the program itself next calls in), leaving it
+-- stopped there ready for ptrace_trace_attached -- the step that makes a resolved JIT
+-- method traceable when you don't control call timing. Returns the status code
+-- (ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first) as a Lua
+-- number. `pid` is a C int, `addr` an integer address. Caller owns PTRACE_ATTACH/DETACH.
+function HwTrace.ptrace_run_to(pid, addr)
+  assert(L, "libasmtest_hwtrace not loaded")
+  return tonumber(L.asmtest_ptrace_run_to(pid, ffi.cast("const void*", addr)))
 end
 
 -- The executable mapping in /proc/<pid>/maps containing `addr`, as two return

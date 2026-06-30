@@ -96,6 +96,7 @@ typedef int  (*pt_available_fn)(void);
 typedef void (*pt_skip_reason_fn)(char *, size_t);
 typedef int  (*pt_trace_call_fn)(const void *, size_t, const long *, int, long *, void *);
 typedef int  (*pt_trace_attached_fn)(int, const void *, size_t, long *, void *);
+typedef int  (*pt_run_to_fn)(int, const void *);
 typedef int  (*proc_region_by_addr_fn)(int, const void *, void **, size_t *);
 typedef int  (*proc_perfmap_symbol_fn)(int, const char *, void **, size_t *);
 typedef int  (*jitdump_find_fn)(const char *, int, const char *, asmtest_jitdump_entry_t *, uint8_t *, size_t, size_t *);
@@ -127,6 +128,7 @@ static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
 static pt_trace_call_fn       p_pt_trace_call;
 static pt_trace_attached_fn   p_pt_trace_attached;
+static pt_run_to_fn           p_pt_run_to;
 static proc_region_by_addr_fn p_proc_region_by_addr;
 static proc_perfmap_symbol_fn p_proc_perfmap_symbol;
 static jitdump_find_fn        p_jitdump_find;
@@ -172,6 +174,7 @@ static void asmtest_hw_resolve(void) {
     p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
     p_pt_trace_call        = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call");
     p_pt_trace_attached    = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached");
+    p_pt_run_to            = (pt_run_to_fn)dlsym(h, "asmtest_ptrace_run_to");
     p_proc_region_by_addr  = (proc_region_by_addr_fn)dlsym(h, "asmtest_proc_region_by_addr");
     p_proc_perfmap_symbol  = (proc_perfmap_symbol_fn)dlsym(h, "asmtest_proc_perfmap_symbol");
     p_jitdump_find         = (jitdump_find_fn)dlsym(h, "asmtest_jitdump_find");
@@ -183,7 +186,7 @@ static void asmtest_hw_resolve(void) {
                   p_hw_trace_insns_total && p_hw_trace_insns_len &&
                   p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
                   p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
-                  p_pt_trace_attached && p_proc_region_by_addr &&
+                  p_pt_trace_attached && p_pt_run_to && p_proc_region_by_addr &&
                   p_proc_perfmap_symbol && p_jitdump_find;
 }
 
@@ -275,6 +278,9 @@ static int asmtest_go_pt_trace_call(const void *code, size_t len, const long *ar
 static int asmtest_go_pt_trace_attached(int pid, const void *base, size_t len,
                                         long *result, void *trace) {
     return p_pt_trace_attached ? p_pt_trace_attached(pid, base, len, result, trace) : -1;
+}
+static int asmtest_go_pt_run_to(int pid, const void *addr) {
+    return p_pt_run_to ? p_pt_run_to(pid, addr) : -1;
 }
 static int asmtest_go_proc_region_by_addr(int pid, const void *addr,
                                           void **base_out, size_t *len_out) {
@@ -674,6 +680,16 @@ func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached failed: %d", int(rc))
 	}
 	return int64(result), nil
+}
+
+// PtraceRunTo runs an already-attached, ptrace-stopped target forward until it
+// reaches addr (a software breakpoint that fires when the program itself next calls
+// in), leaving it stopped there ready for PtraceTraceAttached — the step that makes a
+// resolved JIT method traceable when you don't control call timing. It returns the
+// status code (PTRACE_OK, or PTRACE_ENOENT if the target exited first). The caller
+// owns PTRACE_ATTACH/DETACH.
+func PtraceRunTo(pid int, addr uintptr) int {
+	return int(C.asmtest_go_pt_run_to(C.int(pid), unsafe.Pointer(addr)))
 }
 
 // ProcRegionByAddr finds the executable mapping in /proc/<pid>/maps that contains

@@ -209,6 +209,8 @@ def _declare(lib):
     lib.asmtest_ptrace_trace_call.restype = ci
     lib.asmtest_ptrace_trace_attached.argtypes = [ci, v, sz, pl, v]
     lib.asmtest_ptrace_trace_attached.restype = ci
+    lib.asmtest_ptrace_run_to.argtypes = [ci, v]
+    lib.asmtest_ptrace_run_to.restype = ci
     lib.asmtest_proc_region_by_addr.argtypes = [ci, v, C.POINTER(v), C.POINTER(sz)]
     lib.asmtest_proc_region_by_addr.restype = ci
     lib.asmtest_proc_perfmap_symbol.argtypes = [ci, cc, C.POINTER(v), C.POINTER(sz)]
@@ -453,6 +455,16 @@ class Ptrace:
         if rc != ASMTEST_PTRACE_OK:
             raise RuntimeError(f"asmtest_ptrace_trace_attached failed: {rc}")
         return result.value
+
+    @staticmethod
+    def run_to(pid: int, addr: int) -> int:
+        """Run an already-attached, ptrace-stopped target forward until it reaches
+        `addr` (a software breakpoint that fires when the program itself next calls in),
+        leaving it stopped there ready for trace_attached — the step that turns a
+        resolved JIT method into a traceable one when you don't control call timing.
+        Returns ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first.
+        The caller owns PTRACE_ATTACH/DETACH."""
+        return _get().asmtest_ptrace_run_to(pid, C.c_void_p(addr))
 
     @staticmethod
     def region_by_addr(pid: int, addr: int):

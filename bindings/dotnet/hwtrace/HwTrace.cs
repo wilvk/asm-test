@@ -211,6 +211,7 @@ namespace Asmtest
             IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached(
             int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_run_to(int pid, IntPtr addr);
         [DllImport(HWTRACE)] public static extern int asmtest_proc_region_by_addr(
             int pid, IntPtr addr, out IntPtr baseOut, out UIntPtr lenOut);
         [DllImport(HWTRACE, CharSet = CharSet.Ansi)] public static extern int asmtest_proc_perfmap_symbol(
@@ -617,6 +618,20 @@ namespace Asmtest
             if (rc != HwNative.ASMTEST_PTRACE_OK)
                 throw new HwTraceException($"asmtest_ptrace_trace_attached failed: {rc}");
             return result;
+        }
+
+        /// <summary>
+        /// Run an already-attached, ptrace-stopped target forward until it reaches
+        /// <paramref name="addr"/> (a software breakpoint that fires when the program
+        /// itself next calls in), leaving it stopped there ready for
+        /// <see cref="TraceAttached"/> — the step that makes a resolved JIT method
+        /// traceable when you don't control call timing. Returns the status code
+        /// (<c>ASMTEST_PTRACE_OK</c>, or <c>ASMTEST_PTRACE_ENOENT</c> if the target
+        /// exited first). The caller owns PTRACE_ATTACH/DETACH.
+        /// </summary>
+        public static int RunTo(int pid, IntPtr addr)
+        {
+            return HwNative.asmtest_ptrace_run_to(pid, addr);
         }
 
         /// <summary>

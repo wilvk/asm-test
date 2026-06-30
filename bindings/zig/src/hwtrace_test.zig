@@ -188,6 +188,15 @@ fn checkPtraceTraceCall(alloc: std.mem.Allocator) !void {
     try check(!tr.truncated(), "ptrace trace_call not truncated");
 }
 
+// run_to drives an attached target to a resolved method (software breakpoint). A live
+// foreign attach is covered by the C suite (forking + ptrace of a foreign process is
+// impractical here, same as traceAttached); exercise the FFI round-trip safely — a NULL
+// target address is rejected (EINVAL, non-zero) before any ptrace call.
+fn checkPtraceRunTo() !void {
+    const rc = try Ptrace.runTo(std.os.linux.getpid(), 0);
+    try check(rc != 0, "ptrace run_to(NULL addr) rejected (EINVAL) via the FFI round-trip");
+}
+
 // Discover an executable region's extent from /proc/<pid>/maps by an interior
 // address (this process). Mirrors Python's `test_proc_region_by_addr`.
 fn checkProcRegionByAddr() !void {
@@ -383,6 +392,7 @@ pub fn main() !void {
         std.debug.print("# SKIP: ptrace backend unavailable: {s}\n", .{reason});
     } else {
         try checkPtraceTraceCall(alloc);
+        try checkPtraceRunTo();
         try checkProcRegionByAddr();
         try checkProcPerfmapSymbol();
         try checkJitdumpFind(alloc);

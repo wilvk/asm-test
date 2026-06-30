@@ -272,9 +272,10 @@ fn backend_of(b: i32) -> Backend {
 //
 // The ptrace toolkit ships in the same libasmtest_hwtrace the wrapper above
 // loads. Each test self-skips (with a printed note) when the backend is absent,
-// matching the live-trace self-skip above. `trace_attached` has no live test
-// (forking + ptrace of a foreign process is impractical), but the symbol IS
-// wrapped in src/hwtrace.rs so the binding-parity gate is satisfied.
+// matching the live-trace self-skip above. `trace_attached` and `run_to` have no
+// live test (forking + ptrace of a foreign process is impractical; the C suite
+// covers them live), but both symbols ARE wrapped in src/hwtrace.rs so the
+// binding-parity gate is satisfied, and `run_to`'s FFI round-trip is probed below.
 
 /// True (printing a skip note) when the ptrace backend is unavailable, so each
 /// ptrace test can `return` early exactly like `singlestep_live_trace`.
@@ -305,6 +306,19 @@ fn ptrace_trace_call() {
     );
     assert!(!tr.truncated(), "stream not truncated");
     eprintln!("# PASS: Ptrace::trace_call (out-of-process single-step)");
+}
+
+#[test]
+fn ptrace_run_to_rejects_null() {
+    // run_to drives an attached target to a resolved method (software breakpoint). A
+    // live foreign attach is covered by the C suite; here exercise the FFI round-trip
+    // safely — a NULL target address is rejected (EINVAL, non-OK) before any ptrace call.
+    if skip_if_no_ptrace() {
+        return;
+    }
+    let rc = Ptrace::run_to(std::process::id() as i32, 0);
+    assert_ne!(rc, 0, "run_to(NULL addr) is rejected (EINVAL) via the FFI round-trip");
+    eprintln!("# PASS: Ptrace::run_to FFI round-trip (NULL addr -> EINVAL)");
 }
 
 #[test]

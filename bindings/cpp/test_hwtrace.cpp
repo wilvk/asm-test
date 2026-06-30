@@ -254,9 +254,10 @@ int main() {
     // Mirrors test_hwtrace.py's tests after the same banner: a forked-tracee live
     // single-step (trace_call), region discovery from /proc/<pid>/maps, perf-map
     // and binary-jitdump symbol resolution. Guarded by a ptrace-available skip.
-    // trace_attached has no live test (forking + ptrace from the harness is
-    // impractical), but the symbol is wrapped (Ptrace::traceAttached) so the
-    // binding-surface parity gate sees it; we touch skipReason() here too.
+    // trace_attached and run_to have no live test (forking + ptrace of a foreign
+    // process from the harness is impractical; the C suite covers them live), but the
+    // symbols are wrapped (Ptrace::traceAttached / Ptrace::runTo) so the binding-surface
+    // parity gate sees them, and we exercise runTo's FFI round-trip safely below.
     if (!Ptrace::available()) {
         std::printf("# SKIP ptrace backend unavailable: %s\n",
                     Ptrace::skipReason().c_str());
@@ -274,6 +275,12 @@ int main() {
             tr.free();
             code.free();
         }
+
+        // run_to: a live foreign attach is covered by the C suite; here exercise the
+        // FFI round-trip safely — a NULL target address is rejected (EINVAL, non-OK)
+        // before any ptrace call.
+        ok(Ptrace::runTo(getpid(), nullptr) != 0,
+           "ptrace: run_to(NULL addr) rejected (EINVAL) via the FFI round-trip");
 
         // region_by_addr: discover an executable region's extent from
         // /proc/<pid>/maps by an interior address (this process).

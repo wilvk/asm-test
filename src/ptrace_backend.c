@@ -278,6 +278,7 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 
 #include <elf.h> /* NT_PRSTATUS */
+#include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/ptrace.h>
@@ -302,6 +303,18 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #define PTRACE_TRACE_ARCH ASMTEST_ARCH_ARM64
 #endif
 
+/* Software-breakpoint encoding for asmtest_ptrace_run_to. x86 int3 is a one-byte trap
+ * whose stop-PC lands one past the byte; AArch64 brk #0 is a four-byte fault whose
+ * stop-PC lands AT the instruction. Both are spliced into the low bytes of a peeked
+ * word and removed before handing the stop to the stepper. */
+#if defined(__x86_64__)
+#define PTRACE_BP_INSN 0xccULL       /* int3                 */
+#define PTRACE_BP_LEN 1
+#else /* __aarch64__ */
+#define PTRACE_BP_INSN 0xd4200000ULL /* brk #0 (little-endian) */
+#define PTRACE_BP_LEN 4
+#endif
+
 /* Read the tracee's program counter (the about-to-execute instruction) and the integer
  * return register. x86-64 has PTRACE_GETREGS; AArch64 does not, so it reads the GP set
  * via PTRACE_GETREGSET/NT_PRSTATUS. Returns 0 on success, -1 on a ptrace failure. */
@@ -323,6 +336,19 @@ static int read_pc_ret(pid_t pid, uint64_t *pc, uint64_t *ret) {
 #endif
     return 0;
 }
+
+#if defined(__x86_64__)
+/* Rewind the tracee's program counter to `pc` (only x86 needs this: int3 is a trap, so
+ * the stop-PC is one past the breakpoint byte and must be backed up before resuming).
+ * Returns 0 on success, -1 on a ptrace failure. */
+static int set_pc(pid_t pid, uint64_t pc) {
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
+        return -1;
+    regs.rip = pc;
+    return ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+}
+#endif
 
 #if defined(__aarch64__)
 /* Hang-proof capability self-probe: the out-of-process stepper needs PTRACE_SINGLESTEP
@@ -559,6 +585,27 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
     int status = 0;
 
+    /* The loop below records the PC AFTER each single-step (the next about-to-execute
+     * instruction), which captures offset 0 only when the target was stopped BEFORE the
+     * region so the entering step lands on it (the resolve+attach path stops in call glue
+     * / a spin loop). When the caller instead stopped the target EXACTLY at the region
+     * entry — what asmtest_ptrace_run_to leaves — offset 0 is the current PC and must be
+     * recorded before the first step, or it is missed. Recording the initial in-region PC
+     * here makes both entry conventions yield the identical stream; it is a no-op for a
+     * before-the-region start (that initial PC is out of region). */
+    {
+        uint64_t pc0, ret0;
+        if (read_pc_ret(pid, &pc0, &ret0) != 0) {
+            free(code);
+            free(stream);
+            return ASMTEST_PTRACE_ETRACE;
+        }
+        if (pc0 >= base_ip && pc0 < base_ip + len) {
+            entered = 1;
+            stream[n++] = pc0 - base_ip;
+        }
+    }
+
     /* `pid` is already in a ptrace-stop (the caller attached). Single-step it from
      * here; record only in-region offsets. The target is foreign, so we neither
      * attach nor detach — that is the caller's policy. */
@@ -608,6 +655,86 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     return rc;
 }
 
+int asmtest_ptrace_run_to(pid_t pid, const void *addr) {
+    if (addr == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+
+    const uint64_t target = (uint64_t)(uintptr_t)addr;
+
+    /* Plant a software breakpoint at addr. PTRACE_POKETEXT bypasses the page write
+     * protection on the tracee's executable text — process_vm_writev would be refused
+     * on an r-x mapping — so this is how a debugger patches code. Splice the breakpoint
+     * into the low PTRACE_BP_LEN bytes of the peeked word, preserving the rest. */
+    errno = 0;
+    long orig = ptrace(PTRACE_PEEKTEXT, pid, (void *)(uintptr_t)target, NULL);
+    if (orig == -1 && errno != 0)
+        return ASMTEST_PTRACE_ETRACE;
+    const unsigned long mask = PTRACE_BP_LEN >= (int)sizeof(long)
+                                   ? ~0UL
+                                   : ((1UL << (PTRACE_BP_LEN * 8)) - 1);
+    long planted = (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
+    if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)planted) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+
+    /* Let the target run (it is in a ptrace-stop on entry) until it reaches addr — i.e.
+     * until the program ITSELF calls the method, with timing we do not control, which is
+     * the whole point versus a cooperative go-flag. Unrelated signals are forwarded. */
+    int rc = ASMTEST_PTRACE_OK, status = 0, sig = 0;
+    for (;;) {
+        if (ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)sig) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        sig = 0;
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            rc = ASMTEST_PTRACE_ENOENT; /* target ended before reaching addr */
+            break;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            sig = WSTOPSIG(status); /* forward an unrelated signal and keep running */
+            continue;
+        }
+
+        uint64_t pc;
+        if (read_pc_ret(pid, &pc, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+#if defined(__x86_64__)
+        uint64_t hit = pc - PTRACE_BP_LEN; /* int3 trap: PC is one past the byte */
+#else
+        uint64_t hit = pc; /* brk fault: PC is AT the instruction */
+#endif
+        if (hit != target)
+            continue; /* a SIGTRAP that is not our breakpoint; keep going */
+
+        /* Hit. Remove the breakpoint and (x86) rewind the PC so the next single-step
+         * executes the method's real first instruction. Leaves the target stopped at
+         * addr, ready to hand to asmtest_ptrace_trace_attached. */
+        if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+#if defined(__x86_64__)
+        if (set_pc(pid, target) != 0)
+            rc = ASMTEST_PTRACE_ETRACE;
+#endif
+        break;
+    }
+
+    /* On any failure where the target may still be alive, best-effort uninstall the
+     * breakpoint so we never leave patched bytes behind (a no-op if it already exited). */
+    if (rc == ASMTEST_PTRACE_ETRACE)
+        ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig);
+    return rc;
+}
+
 #else /* stepper unsupported: not Linux, or not x86-64 / AArch64 */
 
 int asmtest_ptrace_available(void) { return 0; }
@@ -638,6 +765,12 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     (void)len;
     (void)result;
     (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_run_to(pid_t pid, const void *addr) {
+    (void)pid;
+    (void)addr;
     return ASMTEST_PTRACE_ENOSYS;
 }
 
