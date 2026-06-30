@@ -104,7 +104,10 @@ DOCKER_APT_cpp    :=
 DOCKER_APT_rust   := cargo rustc
 DOCKER_APT_zig    :=
 DOCKER_APT_node   := nodejs npm
-DOCKER_APT_java   := openjdk-21-jdk-headless
+# linux-tools-generic ships libperf-jvmti.so (HotSpot's jitdump encoder for the
+# java-jitdump lane). It is a userspace JVMTI agent, so a kernel-version-mismatched
+# package still works in the container; the other java lanes simply ignore it.
+DOCKER_APT_java   := openjdk-21-jdk-headless linux-tools-generic
 DOCKER_APT_dotnet := dotnet-sdk-8.0
 DOCKER_APT_ruby   := ruby
 DOCKER_APT_lua    := luajit
@@ -190,11 +193,12 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-dotnet trace a live .NET CoreCLR JIT method out of band
 #   make docker-hwtrace-jit-java   trace a live OpenJDK HotSpot JIT method out of band
 #   make docker-hwtrace-jit-jitdump recover a real V8 jitdump method's bytes (binary path)
+#   make docker-hwtrace-jit-java-jitdump recover a real HotSpot jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
 .PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
-        docker-hwtrace-jit-jitdump \
+        docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
@@ -215,6 +219,9 @@ docker-hwtrace-jit-dotnet: docker-dotnet
 
 docker-hwtrace-jit-java: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java
+
+docker-hwtrace-jit-java-jitdump: docker-java
+	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java-jitdump
 
 docker-hwtrace-jit-jitdump: docker-node
 	$(DOCKER) run --rm $(_docker_plat) asmtest-node make hwtrace-jit-jitdump

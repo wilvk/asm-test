@@ -335,6 +335,13 @@ Linux/x86-64 backend.
       outputs), the bytes disassemble to real x86-64, and they match the **live** code at
       that address (the temporal capture guarantee). This is the first validation of
       `asmtest_jitdump_find` against real output rather than a synthetic fixture.
+    - `make docker-hwtrace-jit-java-jitdump` — a **second jitdump producer**: OpenJDK
+      **HotSpot** via the perf JVMTI agent (`libperf-jvmti.so`, from `linux-tools`, loaded
+      with `-agentpath`). A different runtime *and* encoder than V8 — it names methods in
+      JVM descriptor form (`LHot;asmtjit(II)I`) and interleaves debug/unwinding records the
+      reader skips — so it exercises `asmtest_jitdump_find` on genuinely independent output.
+      Same three checks, with the cross-check against HotSpot's own `jcmd Compiler.perfmap`
+      address (two independent HotSpot outputs). Self-skips if the agent is absent.
   - _Done._ **Hardware-breakpoint `run_to` (W^X JIT code)** — `run_until` (shared by
     `run_to` and the call-out step-over) defaults to a software `int3` but transparently
     falls back to an **x86-64 hardware execution breakpoint** (DR0 + DR7 via

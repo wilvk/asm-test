@@ -547,8 +547,8 @@ runtime cooperates and skipped (never failed) when it does not, while the resolu
 attach checks — which validate the library against the runtime's real perf-map line and a
 real `/proc/maps` — stand on their own.
 
-A further lane validates the **binary jitdump** byte source (`asmtest_jitdump_find`) against
-real output:
+Two further lanes validate the **binary jitdump** byte source (`asmtest_jitdump_find`)
+against real output from **two independent producers**:
 
 - `make docker-hwtrace-jit-jitdump` (Node.js / **V8**): runs `node --perf-prof`, which
   writes a real `jit-<pid>.dump`, and recovers a method's **recorded code bytes** from it
@@ -560,6 +560,23 @@ real output:
   temporal same-address-different-bytes guarantee jitdump exists for). `asmtest_jitdump_-
   find` matches by exact name, so the lane takes the name from the easy-to-parse text
   perf-map (V8 emits the same string in both).
+- `make docker-hwtrace-jit-java-jitdump` (OpenJDK / **HotSpot**): a *second, independent*
+  jitdump producer — a different runtime **and** a different encoder. HotSpot has no native
+  jitdump, so the lane loads the perf project's JVMTI agent (`libperf-jvmti.so`, from
+  `linux-tools` — a userspace agent, so a kernel-version-mismatched copy still runs) with
+  `-agentpath`; it records every C2 method to a real `jit-<pid>.dump` under
+  `$JITDUMPDIR/.debug/jit/<session>/`. This stresses `asmtest_jitdump_find` on output it did
+  not see from V8: methods are named in JVM **descriptor** form (`LHot;asmtjit(II)I`, not
+  V8's symbol), and `JIT_CODE_DEBUG_INFO`/unwinding records are interleaved between the
+  `JIT_CODE_LOAD` records the reader must skip past. Unlike V8 (which writes its jitdump
+  record-by-record), the agent **buffers** and flushes the tail only when it is unloaded on
+  a clean JVM shutdown — the `perf record` workflow reads the dump post-exit. So the lane
+  resolves asmtjit's address from the live `jcmd Compiler.perfmap` and snapshots its live
+  bytes, then **`SIGTERM`s** the JVM (the orderly shutdown flushes the dump; `SIGKILL`
+  would lose it) before reading the completed dump. The recovered bytes are checked three
+  ways — they disassemble to real x86-64, match the **live** nmethod snapshot, and the
+  jitdump `code_addr`/size agree with HotSpot's perf-map (two independent HotSpot outputs).
+  The lane self-skips cleanly when the agent or Capstone is absent.
 
 ### Time-aware code-image recorder (the foreign-JIT byte source)
 

@@ -233,8 +233,15 @@ codeimage-test: $(BUILD)/test_codeimage
 $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
-.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java hwtrace-jit-jitdump
+.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
+        hwtrace-jit-java-jitdump hwtrace-jit-jitdump
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
+
+# The perf JVMTI agent (libperf-jvmti.so, from linux-tools) — HotSpot's de-facto jitdump
+# encoder. Userspace, so a kernel-version-mismatched copy still runs; resolve by glob.
+PERF_JVMTI := $(firstword $(wildcard /usr/lib/linux-tools*/*/libperf-jvmti.so \
+                                     /usr/lib/linux-tools/*/libperf-jvmti.so \
+                                     /usr/lib/*/libperf-jvmti.so))
 
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
 hwtrace-jit-node: $(BUILD)/jit_trace
@@ -267,6 +274,18 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	./$(BUILD)/jit_trace java $(BUILD)/jit_java
+
+# Binary jitdump path against a SECOND producer: OpenJDK HotSpot via the perf JVMTI agent
+# (libperf-jvmti.so). The agent records each C2 method's bytes to a real jitdump; the lane
+# recovers asmtjit's bytes with asmtest_jitdump_find and validates them against the live
+# code and HotSpot's own jcmd perf-map. Needs the JDK, Capstone, and libperf-jvmti.so
+# (self-skips if the agent is absent). Drives jcmd, so it also needs jcmd on PATH.
+hwtrace-jit-java-jitdump: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-java-jitdump (real HotSpot jitdump byte recovery) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	@rm -rf /tmp/.debug/jit 2>/dev/null || true
+	./$(BUILD)/jit_trace java-jitdump $(BUILD)/jit_java "$(PERF_JVMTI)"
 
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.

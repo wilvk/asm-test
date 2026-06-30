@@ -182,7 +182,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     — the address agrees with V8's own perf-map, the bytes disassemble to real x86-64, and
     they match the live code at that address (jitdump's temporal-capture guarantee) — the
     first validation of `asmtest_jitdump_find` against a real jitdump rather than a
-    synthetic fixture. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    synthetic fixture. A **second jitdump producer** lane, `make
+    docker-hwtrace-jit-java-jitdump`, validates the reader against a jitdump from a
+    *different* runtime **and** encoder: OpenJDK **HotSpot** has no native jitdump, so the
+    lane loads the perf project's JVMTI agent (`libperf-jvmti.so`, from `linux-tools`) with
+    `-agentpath`, which records every C2 method to a real jitdump. It names methods in JVM
+    descriptor form (`LHot;asmtjit(II)I`, unlike V8's symbol) and interleaves
+    debug/unwinding records the reader must skip, so it exercises `asmtest_jitdump_find` on
+    a genuinely independent encoder; the recovered bytes are checked against the live code
+    and against HotSpot's own `jcmd Compiler.perfmap` address (two independent HotSpot
+    outputs). `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

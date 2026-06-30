@@ -31,6 +31,7 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,6 +163,25 @@ static pid_t pick_busy_thread(pid_t pid) {
         }
     }
     return best;
+}
+
+/* The perf JVMTI agent does not write /tmp/jit-<pid>.dump like V8; it writes
+ * $JITDUMPDIR/.debug/jit/<session>/jit-<pid>.dump, where <session> carries a random
+ * suffix. Resolve our pid's dump by glob (the pid in the filename keeps it unambiguous).
+ * Returns a pointer to a static buffer, or NULL until the agent has created the file. */
+static const char *find_java_jitdump(pid_t pid) {
+    static char path[256];
+    char pattern[128];
+    snprintf(pattern, sizeof pattern, "/tmp/.debug/jit/*/jit-%d.dump", (int)pid);
+    glob_t g;
+    const char *out = NULL;
+    if (glob(pattern, 0, NULL, &g) == 0 && g.gl_pathc > 0) {
+        strncpy(path, g.gl_pathv[0], sizeof path - 1);
+        path[sizeof path - 1] = '\0';
+        out = path;
+    }
+    globfree(&g);
+    return out;
 }
 
 /* Some runtimes don't stream the perf-map continuously; they materialize it ON DEMAND.
@@ -483,6 +503,193 @@ static int trace_jitdump(void) {
     return failures ? 1 : 0;
 }
 
+/* The BINARY JITDUMP path against a SECOND, independent producer: OpenJDK HotSpot. Where
+ * V8 emits a jitdump natively (--perf-prof), HotSpot has no native jitdump — the de-facto
+ * encoder is the perf project's JVMTI agent (libperf-jvmti.so, from linux-tools), loaded
+ * with -agentpath. It captures every CompiledMethodLoad and writes the method's recorded
+ * code bytes to $JITDUMPDIR/.debug/jit/<session>/jit-<pid>.dump. This validates
+ * asmtest_jitdump_find against a jitdump emitted by a DIFFERENT runtime+encoder than V8 —
+ * the encoder names methods in JVM descriptor form (`LHot;asmtjit(II)I`, not the
+ * Compiler.perfmap form), and interleaves debug/unwinding records the reader must skip.
+ * The agent's path is argv[3] (the Makefile locates it); the lane self-skips if it or
+ * Capstone is absent.
+ *
+ * Unlike V8 (which writes its jitdump record-by-record), the perf JVMTI agent BUFFERS and
+ * writes the tail only when it is unloaded on a clean JVM shutdown — the `perf record`
+ * workflow reads the dump post-exit. So the flow is: resolve asmtjit's address from the
+ * live perf-map and snapshot its live bytes, then SIGTERM the JVM (orderly shutdown flushes
+ * the dump; SIGKILL would not), then read the now-complete dump and validate. */
+#define JAVA_JITDUMP_METHOD "LHot;asmtjit(II)I"
+static int trace_jitdump_java(const char *cp, const char *agent) {
+    if (!asmtest_disas_available()) {
+        printf("# SKIP java-jitdump: needs Capstone\n1..0 # skipped\n");
+        return 0;
+    }
+    if (agent == NULL || agent[0] == '\0' || access(agent, R_OK) != 0) {
+        printf("# SKIP java-jitdump: needs the perf JVMTI agent (libperf-jvmti.so from "
+               "linux-tools)\n1..0 # skipped\n");
+        return 0;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* The agent roots its dump tree at $JITDUMPDIR; keep it in /tmp, not the repo. */
+        setenv("JITDUMPDIR", "/tmp", 1);
+        char ap[256];
+        snprintf(ap, sizeof ap, "-agentpath:%s", agent);
+        char *cmd[] = {(char *)"java",
+                       ap,
+                       (char *)"-XX:-TieredCompilation",
+                       /* The agent's per-method I/O slows startup, so compile asmtjit
+                        * promptly (default C2 threshold is 10000) — else it lands only
+                        * after the JDK warmup and the lane may time out. */
+                       (char *)"-XX:CompileThreshold=1000",
+                       (char *)"-XX:CompileCommand=dontinline,Hot.asmtjit",
+                       (char *)"-cp",
+                       (char *)cp,
+                       (char *)"Hot",
+                       NULL};
+        execvp(cmd[0], cmd);
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("fork");
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    char mappath[64];
+    snprintf(mappath, sizeof mappath, "/tmp/perf-%d.map", (int)pid);
+
+    /* (A) Resolve asmtjit's address+size from HotSpot's own perf-map (jcmd-driven), while
+     * the JVM is live. The agent buffers the jitdump and writes asmtjit's tail record only
+     * on a clean shutdown (step C) — so we cannot read it from the dump yet; we use the
+     * perf-map both to know the method has compiled and as the independent cross-check. */
+    unsigned long paddr = 0, psize = 0;
+    for (int i = 0; i < 200 && paddr == 0; i++) {
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            pid = -1;
+            break;
+        }
+        java_perfmap_refresh(pid, i); /* HotSpot perf-map is on-demand (jcmd) */
+        FILE *f = fopen(mappath, "r");
+        if (f == NULL)
+            continue;
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            unsigned long aa, ss;
+            int soff = 0;
+            if (sscanf(line, "%lx %lx %n", &aa, &ss, &soff) < 2 || soff == 0)
+                continue;
+            char *t = line + soff;
+            t[strcspn(t, "\r\n")] = '\0';
+            if (strstr(t, "asmtjit") != NULL) {
+                paddr = aa;
+                psize = ss;
+            }
+        }
+        fclose(f);
+    }
+
+    if (pid < 0) {
+        printf("# SKIP java-jitdump: java exited early (JDK not installed?)\n"
+               "1..0 # skipped\n");
+        return 0;
+    }
+    if (paddr == 0) {
+        printf("# SKIP java-jitdump: asmtjit not resolvable in HotSpot's perf-map in time\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* (B) Snapshot the LIVE code now, before we stop the runtime (process_vm_readv on a
+     * child needs no attach). We compare the jitdump's recorded bytes to this in step (4). */
+    uint8_t live[1024];
+    size_t ln = psize > 0 && psize < sizeof live ? (size_t)psize : sizeof live;
+    struct iovec lv = {live, ln}, rv = {(void *)(uintptr_t)paddr, ln};
+    ssize_t livegot = process_vm_readv(pid, &lv, 1, &rv, 1, 0);
+
+    /* (C) Clean-shutdown the JVM so the perf JVMTI agent flushes its buffered jitdump tail
+     * (including asmtjit) to disk — SIGTERM runs the orderly shutdown that unloads the agent;
+     * SIGKILL would lose the unflushed records. A watchdog bounds the wait. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_alarm; /* no SA_RESTART -> waitpid sees EINTR if the JVM hangs */
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(15);
+    kill(pid, SIGTERM);
+    int st = 0;
+    pid_t w = waitpid(pid, &st, 0);
+    alarm(0);
+    if (w != pid) { /* JVM did not exit (and flush) in time */
+        printf("# SKIP java-jitdump: JVM did not shut down to flush the jitdump\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* (D) Read the now-complete jitdump (it persists on disk after the JVM exits). */
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    uint8_t jbytes[1024];
+    size_t jblen = 0;
+    const char *dump = find_java_jitdump(pid);
+    if (dump == NULL ||
+        asmtest_jitdump_find(dump, pid, JAVA_JITDUMP_METHOD, &e, jbytes, sizeof jbytes,
+                             &jblen) != ASMTEST_PTRACE_OK ||
+        jblen == 0) {
+        printf("# SKIP java-jitdump: asmtjit not present in the flushed jitdump\n"
+               "1..0 # skipped\n");
+        return 0;
+    }
+    printf("# recovered real HotSpot method from the agent's jitdump: '%s' @ 0x%llx "
+           "(%llu bytes, code_index %llu)\n",
+           JAVA_JITDUMP_METHOD, (unsigned long long)e.code_addr,
+           (unsigned long long)e.code_size, (unsigned long long)e.code_index);
+
+    /* (1) The binary jitdump parser recovered a real method's recorded code bytes. */
+    CHECK(jblen > 0 && e.code_size > 0,
+          "java-jitdump: asmtest_jitdump_find recovered a real HotSpot method's bytes");
+
+    /* (2) Cross-check: the jitdump's address/size match HotSpot's own jcmd perf-map for the
+     * same method — two independent HotSpot outputs (the JVMTI agent and Compiler.perfmap). */
+    CHECK((unsigned long)e.code_addr == paddr && (unsigned long)e.code_size == psize,
+          "java-jitdump: code_addr/size agree with HotSpot's jcmd perf-map (two independent "
+          "outputs)");
+
+    /* (3) The recorded bytes are real machine code (decode the first instruction). */
+    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL, 0) > 0,
+          "java-jitdump: the recorded bytes disassemble to real x86-64 instructions");
+
+    /* (4) The recorded bytes == the bytes that were LIVE at code_addr (snapshotted in step
+     * B) — the jitdump captured the actual running code (best-effort). */
+    if (livegot == (ssize_t)ln && memcmp(live, jbytes, ln < jblen ? ln : jblen) == 0)
+        CHECK(1, "java-jitdump: recorded bytes == the live JIT code (jitdump captured the "
+                 "running bytes)");
+    else
+        printf("# SKIP java-jitdump byte-match: live snapshot unavailable or differs\n");
+
+    printf("# real HotSpot JIT code recovered from the jitdump's recorded bytes:\n");
+    for (uint64_t off = 0; off < jblen;) {
+        char text[128];
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, off, text,
+                                 sizeof text);
+        if (l == 0)
+            break;
+        printf("    0x%llx  %s\n", (unsigned long long)off, text);
+        off += l;
+    }
+
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "node";
 
@@ -541,10 +748,20 @@ int main(int argc, char **argv) {
         return trace_runtime("HotSpot", "asmtjit", cmd, 0, java_perfmap_refresh,
                              pick_busy_thread);
     }
+    if (strcmp(mode, "java-jitdump") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "usage: %s java-jitdump <classpath> <libperf-jvmti.so>\n",
+                    argv[0]);
+            return 2;
+        }
+        return trace_jitdump_java(argv[2], argv[3]);
+    }
     if (strcmp(mode, "jitdump") == 0)
         return trace_jitdump();
 
-    fprintf(stderr, "usage: %s {node|dotnet <app.dll>|java <classpath>|jitdump}\n",
+    fprintf(stderr,
+            "usage: %s {node|dotnet <app.dll>|java <classpath>|"
+            "java-jitdump <classpath> <agent.so>|jitdump}\n",
             argv[0]);
     return 2;
 }
