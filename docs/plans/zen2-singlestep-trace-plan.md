@@ -342,6 +342,13 @@ Linux/x86-64 backend.
       reader skips — so it exercises `asmtest_jitdump_find` on genuinely independent output.
       Same three checks, with the cross-check against HotSpot's own `jcmd Compiler.perfmap`
       address (two independent HotSpot outputs). Self-skips if the agent is absent.
+    - `make docker-hwtrace-jit-dotnet-jitdump` — a **third jitdump producer**: .NET
+      **CoreCLR**, which writes a real `/tmp/jit-<pid>.dump` *natively* (no agent) under
+      `DOTNET_PerfMapEnabled=1`, naming the method identically in the perf-map and the
+      jitdump — so it reuses the same `trace_jitdump` path as V8 (parameterized by runtime).
+      Recovers `Program::Add`'s bytes (`lea eax,[rdi+rsi]; ret`) and runs the same four
+      checks. The binary jitdump reader is now validated against all three managed runtimes
+      (V8, HotSpot, CoreCLR).
   - _Done._ **Hardware-breakpoint `run_to` (W^X JIT code)** — `run_until` (shared by
     `run_to` and the call-out step-over) defaults to a software `int3` but transparently
     falls back to an **x86-64 hardware execution breakpoint** (DR0 + DR7 via

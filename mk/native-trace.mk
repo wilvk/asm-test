@@ -234,7 +234,7 @@ $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
-        hwtrace-jit-java-jitdump hwtrace-jit-jitdump
+        hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 
 # The perf JVMTI agent (libperf-jvmti.so, from linux-tools) — HotSpot's de-facto jitdump
@@ -263,6 +263,18 @@ hwtrace-jit-dotnet: $(BUILD)/jit_trace
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
+
+# Binary jitdump path against a THIRD producer: .NET CoreCLR. Unlike HotSpot, CoreCLR writes
+# a real /tmp/jit-<pid>.dump NATIVELY (no agent) under DOTNET_PerfMapEnabled=1 (set by the
+# harness), naming the method identically in the perf-map and the jitdump — so it reuses the
+# same trace_jitdump path as V8. Recovers `Program::Add`'s bytes and validates them vs the
+# perf-map and the live code. The dll path is absolute (the harness chdirs to /tmp). Needs
+# the dotnet SDK + Capstone.
+hwtrace-jit-dotnet-jitdump: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet-jitdump (real .NET CoreCLR jitdump byte recovery) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	./$(BUILD)/jit_trace dotnet-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
 
 # OpenJDK (HotSpot): compile the one-method hot loop and trace its `Hot.asmtjit` C2 body.
 # -XX:-TieredCompilation + CompileCommand dontinline (set by the harness) give a stable,

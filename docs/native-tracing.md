@@ -547,8 +547,8 @@ runtime cooperates and skipped (never failed) when it does not, while the resolu
 attach checks — which validate the library against the runtime's real perf-map line and a
 real `/proc/maps` — stand on their own.
 
-Two further lanes validate the **binary jitdump** byte source (`asmtest_jitdump_find`)
-against real output from **two independent producers**:
+Three further lanes validate the **binary jitdump** byte source (`asmtest_jitdump_find`)
+against real output from **three independent producers** (V8, HotSpot, CoreCLR):
 
 - `make docker-hwtrace-jit-jitdump` (Node.js / **V8**): runs `node --perf-prof`, which
   writes a real `jit-<pid>.dump`, and recovers a method's **recorded code bytes** from it
@@ -577,6 +577,13 @@ against real output from **two independent producers**:
   ways — they disassemble to real x86-64, match the **live** nmethod snapshot, and the
   jitdump `code_addr`/size agree with HotSpot's perf-map (two independent HotSpot outputs).
   The lane self-skips cleanly when the agent or Capstone is absent.
+- `make docker-hwtrace-jit-dotnet-jitdump` (.NET / **CoreCLR**): the third producer, and the
+  simplest. Unlike HotSpot, CoreCLR writes a real `/tmp/jit-<pid>.dump` **natively** (no
+  agent) under `DOTNET_PerfMapEnabled=1`, record-by-record, naming the method *identically*
+  in the perf-map and the jitdump — so it reuses the exact same `trace_jitdump` path as V8
+  (one routine parameterized by runtime and method name). It recovers `Program::Add`'s
+  recorded bytes (`lea eax,[rdi+rsi]; ret`) and runs the same four checks. With this, the
+  binary jitdump reader is validated against all three managed runtimes.
 
 ### Time-aware code-image recorder (the foreign-JIT byte source)
 

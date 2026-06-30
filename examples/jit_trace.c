@@ -353,35 +353,33 @@ static int trace_runtime(const char *engine, const char *method_substr,
     return failures ? 1 : 0;
 }
 
-/* The BINARY JITDUMP path (asmtest_jitdump_find), against a real runtime. Unlike the
- * text perf-map (address + size + name), a jitdump carries the JIT's recorded CODE BYTES
- * — the byte source a branch-trace decoder must be handed — and a per-method timestamp,
- * so the LATEST body of a re-emitted address wins (the temporal same-address-different-
- * bytes problem). Node's V8 writes a real `jit-<pid>.dump` under `--perf-prof`; this
- * recovers a method's recorded bytes from it and validates them three ways: the address
- * agrees with V8's own perf-map (two independent V8 outputs), the bytes disassemble to
- * real instructions, and they match the LIVE code at that address (so the jitdump truly
- * captured the running bytes). asmtest_jitdump_find matches by exact name, so we take the
- * name from the easy-to-parse text perf-map (V8 emits the SAME string in both). */
-static int trace_jitdump(void) {
+/* The BINARY JITDUMP path (asmtest_jitdump_find), against a real runtime that emits a
+ * *native* perf jitdump. Unlike the text perf-map (address + size + name), a jitdump carries
+ * the JIT's recorded CODE BYTES — the byte source a branch-trace decoder must be handed —
+ * and a per-method timestamp, so the LATEST body of a re-emitted address wins (the temporal
+ * same-address-different-bytes problem). Both V8 (`node --perf-prof`) and CoreCLR
+ * (`DOTNET_PerfMapEnabled=1`) write a real `/tmp/jit-<pid>.dump` natively and name the method
+ * *identically* in the perf-map and the jitdump, so one routine drives both: resolve the
+ * method by `method_substr` from the easy-to-parse text perf-map (asmtest_jitdump_find
+ * matches by exact name), recover its recorded bytes, and validate them four ways — the
+ * address/size agree with the runtime's own perf-map (two independent runtime outputs), the
+ * bytes disassemble to real x86-64, and they match the LIVE code at that address. (HotSpot,
+ * which has no native jitdump, is the separate trace_jitdump_java lane.) Callers pass any
+ * runtime path argument (e.g. the .dll) as an ABSOLUTE path, since the child chdirs to /tmp. */
+static int trace_jitdump(const char *engine, const char *method_substr,
+                         char *const cmd[]) {
     if (!asmtest_disas_available()) {
-        printf("# SKIP jitdump: needs Capstone\n1..0 # skipped\n");
+        printf("# SKIP jitdump (%s): needs Capstone\n1..0 # skipped\n", engine);
         return 0;
     }
 
     pid_t pid = fork();
     if (pid == 0) {
-        /* Run from /tmp so the jitdump lands at /tmp/jit-<pid>.dump (V8 writes it to the
-         * cwd; the perf-map always goes to /tmp) — and not in the repo. */
+        /* Run from /tmp so a cwd-relative jitdump (V8 writes it to the cwd) lands at
+         * /tmp/jit-<pid>.dump and not in the repo; CoreCLR writes /tmp/jit-<pid>.dump
+         * regardless. The perf-map always goes to /tmp. */
         if (chdir("/tmp") != 0)
             _exit(127);
-        char *cmd[] = {(char *)"node",
-                       (char *)"--perf-basic-prof",
-                       (char *)"--perf-prof",
-                       (char *)"--no-turbo-inlining",
-                       (char *)"-e",
-                       (char *)HOT_JS,
-                       NULL};
         execvp(cmd[0], cmd);
         _exit(127);
     }
@@ -394,9 +392,9 @@ static int trace_jitdump(void) {
     char mappath[64];
     snprintf(mappath, sizeof mappath, "/tmp/perf-%d.map", (int)pid);
 
-    /* Poll until a perf-map entry for the method resolves in the jitdump (V8 emits the
-     * jitdump record once the method is JIT'd). Try each perf-map line whose symbol
-     * contains the name — the tier V8 wrote to the jitdump (Sparkplug/TurboFan) wins. */
+    /* Poll until a perf-map entry for the method resolves in the jitdump (the runtime emits
+     * the jitdump record once the method is JIT'd). Try each perf-map line whose symbol
+     * contains the name — the highest tier that the runtime wrote to the jitdump wins. */
     char name[256] = {0};
     unsigned long paddr = 0, psize = 0;
     asmtest_jitdump_entry_t e;
@@ -423,9 +421,9 @@ static int trace_jitdump(void) {
                 continue;
             char *t = line + soff;
             t[strcspn(t, "\r\n")] = '\0';
-            if (strstr(t, "asmtjit") == NULL)
+            if (strstr(t, method_substr) == NULL)
                 continue;
-            /* V8 writes the jitdump to /tmp/jit-<pid>.dump (path=NULL resolves it). */
+            /* The runtime writes the jitdump to /tmp/jit-<pid>.dump (path=NULL resolves it). */
             asmtest_jitdump_entry_t te;
             size_t tl = 0;
             if (asmtest_jitdump_find(NULL, pid, t, &te, jbytes, sizeof jbytes, &tl) ==
@@ -445,36 +443,39 @@ static int trace_jitdump(void) {
     }
 
     if (pid < 0) {
-        printf("# SKIP jitdump: node exited early (not installed?)\n1..0 # skipped\n");
+        printf("# SKIP jitdump (%s): runtime exited early (not installed?)\n"
+               "1..0 # skipped\n",
+               engine);
         return 0;
     }
     if (!found) {
-        printf("# SKIP jitdump: no V8 method resolvable in the jitdump\n");
+        printf("# SKIP jitdump (%s): no method resolvable in the jitdump\n", engine);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
         printf("1..0 # skipped\n");
         return 0;
     }
-    printf("# recovered real V8 method from jit-%d.dump: '%s' @ 0x%llx (%llu bytes, "
+    printf("# recovered real %s method from jit-%d.dump: '%s' @ 0x%llx (%llu bytes, "
            "code_index %llu)\n",
-           (int)pid, name, (unsigned long long)e.code_addr,
+           engine, (int)pid, name, (unsigned long long)e.code_addr,
            (unsigned long long)e.code_size, (unsigned long long)e.code_index);
 
     /* (1) The binary jitdump parser recovered a real method's recorded code bytes. */
     CHECK(jblen > 0 && e.code_size > 0,
-          "jitdump: asmtest_jitdump_find recovered a real V8 method's recorded bytes");
+          "jitdump: asmtest_jitdump_find recovered a real JIT method's recorded bytes");
 
-    /* (2) Cross-check: the jitdump address matches V8's own perf-map for the same name —
-     * two independent V8 outputs agreeing on the same compilation. */
+    /* (2) Cross-check: the jitdump address matches the runtime's own perf-map for the same
+     * name — two independent runtime outputs agreeing on the same compilation. */
     CHECK((unsigned long)e.code_addr == paddr && (unsigned long)e.code_size == psize,
-          "jitdump: code_addr/size agree with V8's perf-map (two independent V8 outputs)");
+          "jitdump: code_addr/size agree with the runtime's perf-map (two independent "
+          "outputs)");
 
     /* (3) The recorded bytes are real machine code (decode the first instruction). */
     CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL, 0) > 0,
           "jitdump: the recorded bytes disassemble to real x86-64 instructions");
 
     /* (4) The recorded bytes == the LIVE code at code_addr — the jitdump captured the
-     * actual running bytes (best-effort: skips if V8 moved/re-tiered the code). */
+     * actual running bytes (best-effort: skips if the runtime moved/re-tiered the code). */
     uint8_t live[1024];
     size_t n = jblen < sizeof live ? jblen : sizeof live;
     struct iovec lv = {live, n}, rv = {(void *)(uintptr_t)e.code_addr, n};
@@ -483,9 +484,9 @@ static int trace_jitdump(void) {
         CHECK(1, "jitdump: recorded bytes == the live JIT code (jitdump captured the "
                  "running bytes)");
     else
-        printf("# SKIP jitdump byte-match: live code differs (V8 moved/re-tiered it)\n");
+        printf("# SKIP jitdump byte-match: live code differs (runtime moved/re-tiered it)\n");
 
-    printf("# real V8 JIT code recovered from the jitdump's recorded bytes:\n");
+    printf("# real %s JIT code recovered from the jitdump's recorded bytes:\n", engine);
     for (uint64_t off = 0; off < jblen;) {
         char text[128];
         size_t l =
@@ -756,12 +757,38 @@ int main(int argc, char **argv) {
         }
         return trace_jitdump_java(argv[2], argv[3]);
     }
-    if (strcmp(mode, "jitdump") == 0)
-        return trace_jitdump();
+    if (strcmp(mode, "jitdump") == 0) {
+        /* V8: `--perf-prof` writes the binary jitdump, `--perf-basic-prof` the text perf-map
+         * (same symbol in both); `--no-turbo-inlining` keeps asmtjit a standalone body. */
+        char *cmd[] = {(char *)"node",
+                       (char *)"--perf-basic-prof",
+                       (char *)"--perf-prof",
+                       (char *)"--no-turbo-inlining",
+                       (char *)"-e",
+                       (char *)HOT_JS,
+                       NULL};
+        return trace_jitdump("V8", "asmtjit", cmd);
+    }
+    if (strcmp(mode, "dotnet-jitdump") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: %s dotnet-jitdump <app.dll-abspath>\n", argv[0]);
+            return 2;
+        }
+        /* CoreCLR writes a native perf jitdump (/tmp/jit-<pid>.dump) AND the text perf-map
+         * under DOTNET_PerfMapEnabled=1, naming the method identically in both. TC=0 gives a
+         * single optimized compilation at a stable address. The dll path must be absolute
+         * (trace_jitdump's child chdirs to /tmp). */
+        setenv("DOTNET_TieredCompilation", "0", 1);
+        setenv("DOTNET_TC_QuickJitForLoops", "0", 1);
+        setenv("DOTNET_PerfMapEnabled", "1", 1);
+        setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
+        char *cmd[] = {(char *)"dotnet", argv[2], NULL};
+        return trace_jitdump("CoreCLR", "Program::Add", cmd);
+    }
 
     fprintf(stderr,
             "usage: %s {node|dotnet <app.dll>|java <classpath>|"
-            "java-jitdump <classpath> <agent.so>|jitdump}\n",
+            "java-jitdump <classpath> <agent.so>|jitdump|dotnet-jitdump <app.dll>}\n",
             argv[0]);
     return 2;
 }

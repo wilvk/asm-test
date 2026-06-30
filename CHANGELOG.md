@@ -191,7 +191,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     debug/unwinding records the reader must skip, so it exercises `asmtest_jitdump_find` on
     a genuinely independent encoder; the recovered bytes are checked against the live code
     and against HotSpot's own `jcmd Compiler.perfmap` address (two independent HotSpot
-    outputs). `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    outputs). A **third jitdump producer** lane, `make docker-hwtrace-jit-dotnet-jitdump`,
+    covers **.NET CoreCLR** — which, unlike HotSpot, writes a real `/tmp/jit-<pid>.dump`
+    **natively** (no agent) under `DOTNET_PerfMapEnabled=1`, naming the method identically in
+    the perf-map and the jitdump. So it shares the same `trace_jitdump` path as V8 (one
+    routine parameterized by runtime): recover `Program::Add`'s recorded bytes (`lea
+    eax,[rdi+rsi]; ret`) and validate them four ways — disassemble, match the live code, and
+    agree with CoreCLR's own perf-map address/size. The binary jitdump is now validated
+    against **all three** managed runtimes (V8, HotSpot, CoreCLR). `asmtest_jitdump_find(path,
+    pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

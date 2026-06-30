@@ -194,11 +194,13 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-java   trace a live OpenJDK HotSpot JIT method out of band
 #   make docker-hwtrace-jit-jitdump recover a real V8 jitdump method's bytes (binary path)
 #   make docker-hwtrace-jit-java-jitdump recover a real HotSpot jitdump method's bytes
+#   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
 .PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
+        docker-hwtrace-jit-dotnet-jitdump \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
@@ -216,6 +218,9 @@ docker-hwtrace-jit: docker-node
 
 docker-hwtrace-jit-dotnet: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet
+
+docker-hwtrace-jit-dotnet-jitdump: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-jitdump
 
 docker-hwtrace-jit-java: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java
