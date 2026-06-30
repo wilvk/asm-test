@@ -155,7 +155,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     for `(a+b)|0`; `make docker-hwtrace-jit-dotnet` traces **.NET (CoreCLR)** —
     `Program::Add` → `lea eax,[rdi+rsi]; ret` (with `DOTNET_TieredCompilation=0` for a
     stable address), tracing .NET's **W^X** code heap **as-shipped** via the hardware-
-    breakpoint fallback below. A watchdog makes a re-tiered/moved address self-skip rather
+    breakpoint fallback below; and `make docker-hwtrace-jit-java` traces **OpenJDK
+    (HotSpot)** — `Hot.asmtjit` → `lea eax,[rsi+rdx]` inside the real C2 nmethod (entry
+    barrier and stack-bang and all), JIT'd once via `-XX:-TieredCompilation` and kept a
+    standalone callable body with `-XX:CompileCommand=dontinline`. HotSpot needs two
+    wrinkles the others don't, both handled in the harness: it does not stream a perf-map,
+    so the lane drives `jcmd <pid> Compiler.perfmap` to materialize one for the live
+    process; and the `java` launcher runs Java `main()` on a *secondary* OS thread (not the
+    primordial one V8/CoreCLR use), so the harness picks the spinning loop thread by CPU
+    delta and `PTRACE_ATTACH`es exactly it — a software-breakpoint trap on an un-traced
+    thread is fatal. A watchdog makes a re-tiered/moved address self-skip rather
     than hang, so the lanes never flake (resolve + attach are asserted against the runtime's
     real output; the trace is asserted-or-skipped). **Hardware-breakpoint `run_to`:**
     `run_until` (behind `run_to` and the call-out step-over) defaults to a software `int3`

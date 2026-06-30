@@ -3,11 +3,14 @@
  * genuine JIT-compiled method out of band, driving the whole W2 pipeline (resolve ->
  * attach -> run_to -> single-step) against a real process rather than a fixture.
  *
- * Two runtimes share one harness, selected by argv[1]:
+ * Three runtimes share one harness, selected by argv[1]:
  *   jit_trace node            — spawn Node.js (V8), trace the optimized `asmtjit` body
  *   jit_trace dotnet <dll>    — spawn .NET (CoreCLR), trace `Program::Add`
- * Both publish a text perf-map at /tmp/perf-<pid>.map (V8 via --perf-basic-prof; CoreCLR
- * via DOTNET_PerfMapEnabled, set below). The harness polls that map for the method's
+ *   jit_trace java <cp>       — spawn OpenJDK (HotSpot), trace `Hot.asmtjit`
+ * All publish a text perf-map at /tmp/perf-<pid>.map (V8 via --perf-basic-prof; CoreCLR
+ * via DOTNET_PerfMapEnabled, set below; HotSpot on demand via `jcmd <pid>
+ * Compiler.perfmap`, materialized by the perfmap-refresh hook below). The harness polls
+ * that map for the method's
  * OPTIMIZED entry, resolves it with the library's own parser (asmtest_proc_perfmap_-
  * symbol) — validating it against the runtime's REAL output — confirms the address
  * against the live /proc/<pid>/maps, PTRACE_ATTACHes the multi-threaded GC'd runtime,
@@ -26,6 +29,8 @@
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 
+#include <dirent.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,7 +65,9 @@ static void on_alarm(int sig) { (void)sig; }
 
 /* Optimization tier of a perf-map symbol: 2 = fully optimized (V8 TurboFan ":*",
  * CoreCLR "[Optimized]"), 1 = baseline (V8 Sparkplug ":^", CoreCLR "[QuickJitted]"),
- * 0 = interpreted / unknown. Higher is the real machine-code body we want to trace. */
+ * 0 = interpreted / unknown. Higher is the real machine-code body we want to trace.
+ * HotSpot's Compiler.perfmap symbols carry no tier marker, so they read as 0 — the Java
+ * lane runs with -XX:-TieredCompilation (one C2 body) and a target_tier of 0 to match. */
 static int tier_of(const char *sym) {
     if (strstr(sym, ":*") || strstr(sym, "[Optimized]"))
         return 2;
@@ -69,8 +76,103 @@ static int tier_of(const char *sym) {
     return 0;
 }
 
+/* HotSpot, unlike V8/CoreCLR, does not stream a perf-map as it JITs — but JDK 17+ ships a
+ * `Compiler.perfmap` diagnostic command that dumps /tmp/perf-<pid>.map for a LIVE process.
+ * jcmd is itself a short-lived JVM (~half a second to start), so rate-limit: dump once
+ * every ~8 polls (~0.8s), which is plenty given the loop calls the method millions of
+ * times a second. jcmd's stdout/stderr is redirected to /dev/null to keep the TAP clean;
+ * if jcmd is absent the map never appears and the lane self-skips like any other. */
+static void java_perfmap_refresh(pid_t pid, int iter) {
+    if (iter % 8 != 0)
+        return;
+    pid_t j = fork();
+    if (j == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+        }
+        char pidbuf[16];
+        snprintf(pidbuf, sizeof pidbuf, "%d", (int)pid);
+        execlp("jcmd", "jcmd", pidbuf, "Compiler.perfmap", (char *)NULL);
+        _exit(127);
+    }
+    if (j > 0)
+        waitpid(j, NULL, 0);
+}
+
+/* The OS thread that runs the JIT'd method need not be the process's primordial thread:
+ * V8 and CoreCLR run their hot body on it (tid == pid), but the `java` launcher runs Java
+ * main() on a *secondary* thread. We must ptrace exactly that thread — its int3 trap would
+ * be fatal on a thread no tracer owns (the kernel's default action kills the process). A
+ * thread picker returns the right tid to attach; NULL means "the process itself" (pid). */
+typedef pid_t (*trace_thread_fn)(pid_t pid);
+
+/* utime (clock ticks, /proc stat field 14) of one thread. comm (field 2) is parenthesized
+ * and may contain spaces, so scan from the last ')'. */
+static unsigned long long thread_utime(pid_t pid, pid_t tid) {
+    char path[96];
+    snprintf(path, sizeof path, "/proc/%d/task/%d/stat", (int)pid, (int)tid);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return 0;
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    char *p = strrchr(buf, ')');
+    if (p == NULL)
+        return 0;
+    int field = 2; /* the ')' closes field 2 (comm) */
+    for (char *tok = strtok(p + 1, " "); tok != NULL; tok = strtok(NULL, " "))
+        if (++field == 14)
+            return strtoull(tok, NULL, 10);
+    return 0;
+}
+
+/* Pick the thread burning the most user CPU over a short sample — the one spinning in the
+ * hot loop, hence the one that calls the JIT'd method and will hit the entry breakpoint.
+ * Falls back to the process itself if nothing is obviously busy (then the lane self-skips
+ * cleanly rather than tracing the wrong thread). */
+static pid_t pick_busy_thread(pid_t pid) {
+    char dpath[64];
+    snprintf(dpath, sizeof dpath, "/proc/%d/task", (int)pid);
+    pid_t tids[256];
+    unsigned long long t0[256];
+    int nt = 0;
+    DIR *d = opendir(dpath);
+    if (d == NULL)
+        return pid;
+    for (struct dirent *e; nt < 256 && (e = readdir(d)) != NULL;)
+        if (e->d_name[0] >= '0' && e->d_name[0] <= '9') {
+            tids[nt] = (pid_t)atoi(e->d_name);
+            t0[nt] = thread_utime(pid, tids[nt]);
+            nt++;
+        }
+    closedir(d);
+    struct timespec ts = {0, 80 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    pid_t best = pid;
+    unsigned long long best_delta = 0;
+    for (int i = 0; i < nt; i++) {
+        unsigned long long delta = thread_utime(pid, tids[i]) - t0[i];
+        if (delta > best_delta) {
+            best_delta = delta;
+            best = tids[i];
+        }
+    }
+    return best;
+}
+
+/* Some runtimes don't stream the perf-map continuously; they materialize it ON DEMAND.
+ * The refresh hook (if any) is called each poll iteration to (re)write /tmp/perf-<pid>.map
+ * for the live child — NULL for V8/CoreCLR (which write it as they JIT). HotSpot uses it
+ * to drive `jcmd <pid> Compiler.perfmap`. `iter` lets the hook rate-limit itself. */
+typedef void (*perfmap_refresh_fn)(pid_t pid, int iter);
+
 static int trace_runtime(const char *engine, const char *method_substr,
-                         char *const cmd[]) {
+                         char *const cmd[], int target_tier,
+                         perfmap_refresh_fn refresh, trace_thread_fn pick_thread) {
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
@@ -106,6 +208,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
             pid = -1;
             break;
         }
+        if (refresh != NULL)
+            refresh(pid, i);
         FILE *f = fopen(mappath, "r");
         if (f == NULL)
             continue;
@@ -130,8 +234,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
             found = 1;
         }
         fclose(f);
-        if (found && best_tier == 2)
-            break; /* got the fully-optimized body — stop warming up */
+        if (found && best_tier >= target_tier)
+            break; /* got the best body this runtime tiers to — stop warming up */
     }
 
     if (pid < 0) {
@@ -167,9 +271,14 @@ static int trace_runtime(const char *engine, const char *method_substr,
               (char *)base < (char *)rbase + rlen,
           "proc maps: the JIT address falls in an executable mapping of the live runtime");
 
-    /* (3) Attach to the real, multi-threaded, GC'd runtime from the outside. */
+    /* (3) Attach to the real, multi-threaded, GC'd runtime from the outside. We trace the
+     * specific thread that runs the method (see trace_thread_fn): for V8/CoreCLR that is
+     * the process itself; for HotSpot it is the secondary thread the launcher runs main()
+     * on. ptrace's "pid" argument is really a tid, so the resolve/maps checks above stay on
+     * the process pid while attach/run_to/trace operate on this tid. */
+    pid_t ttid = pick_thread != NULL ? pick_thread(pid) : pid;
     int st = 0;
-    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || waitpid(pid, &st, 0) < 0) {
+    if (ptrace(PTRACE_ATTACH, ttid, NULL, NULL) != 0 || waitpid(ttid, &st, 0) < 0) {
         printf("# SKIP jit-trace (%s): PTRACE_ATTACH denied (yama ptrace_scope?)\n",
                engine);
         kill(pid, SIGKILL);
@@ -188,9 +297,9 @@ static int trace_runtime(const char *engine, const char *method_substr,
 
     asmtest_trace_t *tr = asmtest_trace_new(128, 512);
     long result = 0;
-    rc = asmtest_ptrace_run_to(pid, base);
+    rc = asmtest_ptrace_run_to(ttid, base);
     if (rc == ASMTEST_PTRACE_OK)
-        rc = asmtest_ptrace_trace_attached(pid, base, len, &result, tr);
+        rc = asmtest_ptrace_trace_attached(ttid, base, len, &result, tr);
     alarm(0);
 
     uint64_t insns = asmtest_emu_trace_insns_total(tr);
@@ -217,7 +326,7 @@ static int trace_runtime(const char *engine, const char *method_substr,
     }
 
     asmtest_trace_free(tr);
-    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    ptrace(PTRACE_DETACH, ttid, NULL, NULL);
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
     printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
@@ -386,7 +495,7 @@ int main(int argc, char **argv) {
                        (char *)"-e",
                        (char *)HOT_JS,
                        NULL};
-        return trace_runtime("V8", "asmtjit", cmd);
+        return trace_runtime("V8", "asmtjit", cmd, 2, NULL, NULL);
     }
     if (strcmp(mode, "dotnet") == 0) {
         if (argc < 3) {
@@ -403,12 +512,40 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
-        return trace_runtime("CoreCLR", "Program::Add", cmd);
+        return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL);
+    }
+    if (strcmp(mode, "java") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: %s java <classpath>\n", argv[0]);
+            return 2;
+        }
+        /* The Makefile compiles Hot.java to the classpath dir we're passed. Two knobs make
+         * the body traceable, mirroring the V8/CoreCLR lanes:
+         *   -XX:-TieredCompilation  — straight to C2: ONE optimized nmethod at a stable
+         *                             address, no tier churn (the dotnet TC=0 analogue).
+         *   CompileCommand dontinline,Hot.asmtjit — keep asmtjit a REAL standalone callable
+         *                             body (else C2 inlines the tiny method into main's
+         *                             compiled loop and its nmethod is never entered — the
+         *                             same trap the V8 lane dodges with --no-turbo-inlining).
+         * asmtjit is `static` so its verified entry is at code_begin (no receiver inline-
+         * cache check), i.e. the very address Compiler.perfmap reports — so run_to lands.
+         * HotSpot's JIT code is plain RWX-then-RX; the software breakpoint applies cleanly
+         * (no W^X hardware-breakpoint fallback needed, unlike CoreCLR). */
+        char *cmd[] = {(char *)"java",
+                       (char *)"-XX:-TieredCompilation",
+                       (char *)"-XX:CompileCommand=dontinline,Hot.asmtjit",
+                       (char *)"-cp",
+                       argv[2],
+                       (char *)"Hot",
+                       NULL};
+        return trace_runtime("HotSpot", "asmtjit", cmd, 0, java_perfmap_refresh,
+                             pick_busy_thread);
     }
     if (strcmp(mode, "jitdump") == 0)
         return trace_jitdump();
 
-    fprintf(stderr, "usage: %s {node|dotnet <app.dll>|jitdump}\n", argv[0]);
+    fprintf(stderr, "usage: %s {node|dotnet <app.dll>|java <classpath>|jitdump}\n",
+            argv[0]);
     return 2;
 }
 

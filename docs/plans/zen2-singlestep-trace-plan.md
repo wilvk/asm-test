@@ -298,7 +298,7 @@ Linux/x86-64 backend.
     return is still found. Verified live (`test_ptrace_callout`: a region that calls an
     out-of-region helper). Falls back to leaf-only without Capstone (the previous
     contract).
-  - _Done._ **Real-runtime validation lanes (two engines)** — one argv-driven harness
+  - _Done._ **Real-runtime validation lanes (three engines)** — one argv-driven harness
     (`examples/jit_trace.c`) points the whole pipeline at a live JIT, not a fixture:
     - `make docker-hwtrace-jit` — **Node.js (V8)**: `node --perf-basic-prof
       --no-turbo-inlining` on a hot function; resolves the optimized method from V8's real
@@ -311,8 +311,17 @@ Linux/x86-64 backend.
       stable single compilation; `[MethodImpl(NoInlining)]` keeps it a real call target.
       It traces .NET's **W^X** code heap **as-shipped** (no `DOTNET_EnableWriteXorExecute=0`)
       via the hardware-breakpoint fallback below.
+    - `make docker-hwtrace-jit-java` — **OpenJDK (HotSpot)**: traces `Hot.asmtjit`,
+      recovering the C2 nmethod's `lea eax, [rsi+rdx]` (the `a+b` body, plus the nmethod
+      entry barrier and stack-bang). `-XX:-TieredCompilation` gives one stable C2 body and
+      `-XX:CompileCommand=dontinline,Hot.asmtjit` keeps it a real call target. Two HotSpot-
+      only wrinkles, both absorbed by the harness: HotSpot does not stream a perf-map, so
+      the lane drives `jcmd <pid> Compiler.perfmap` (JDK 17+) to dump one for the live
+      process; and the `java` launcher runs `main()` on a **secondary** OS thread, so the
+      harness finds the spinning loop thread by CPU-time delta and attaches that tid — an
+      `int3` trap on a thread no tracer owns kills the process.
 
-    Both are honest by construction: a watchdog bounds the step so a re-tiered/moved
+    All three are honest by construction: a watchdog bounds the step so a re-tiered/moved
     address self-skips rather than hangs; the resolve + attach checks (library vs. the
     runtime's real perf-map line and a real `/proc/maps`) are firm while the trace is
     asserted-or-skipped, so the lanes never flake. This closes the loop the W2 path was

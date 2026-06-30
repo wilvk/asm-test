@@ -495,7 +495,7 @@ bytes. The text perf-map remains the portable lowest common denominator for JITs
 only emit symbols.
 
 **Against real runtimes.** One argv-driven harness (`examples/jit_trace.c`) points the
-whole pipeline at a live JIT — not a fixture — for **two** runtimes:
+whole pipeline at a live JIT — not a fixture — for **three** runtimes:
 
 - `make docker-hwtrace-jit` (Node.js / **V8**, `asmtest-node` image): spawns
   `node --perf-basic-prof --no-turbo-inlining` on a hot function, resolves the optimized
@@ -517,14 +517,31 @@ whole pipeline at a live JIT — not a fixture — for **two** runtimes:
   forces it (the `hwtrace-test` suite uses that to exercise the hardware path
   deterministically on ordinary memory). AArch64's hardware-breakpoint ptrace interface
   is a separate follow-on; there `run_to` is software-only for now.
+- `make docker-hwtrace-jit-java` (OpenJDK / **HotSpot**, `asmtest-java` image): compiles a
+  one-method hot loop and traces its `Hot.asmtjit`, recovering the C2 JIT's `lea eax, [rsi
+  + rdx]` (the `a + b` body, wrapped by HotSpot's nmethod entry barrier and stack-bang).
+  `-XX:-TieredCompilation` gives a single C2 compilation at a stable address and
+  `-XX:CompileCommand=dontinline,Hot.asmtjit` keeps it a standalone call target (else C2
+  inlines the tiny method into the caller's compiled loop and its nmethod is never
+  entered — the trap the V8 lane dodges with `--no-turbo-inlining`). HotSpot needs two
+  things the other two don't, both handled in the harness. First, it does **not** stream a
+  perf-map as it JITs, so the lane drives `jcmd <pid> Compiler.perfmap` (JDK 17+) to
+  materialize `/tmp/perf-<pid>.map` for the *live* process — a second, on-demand perf-map
+  producer the library's parser is now exercised against. Second, the `java` launcher runs
+  Java `main()` on a **secondary** OS thread, not the primordial thread V8/CoreCLR use, so
+  the harness identifies the spinning loop thread by a short CPU-time sample and
+  `PTRACE_ATTACH`es exactly *that* tid — a software-breakpoint (`int3`) trap delivered on a
+  thread no tracer owns is fatal to the process. `asmtjit` is `static`, so its verified
+  entry sits at the nmethod's `code_begin` (no receiver inline-cache check) — exactly the
+  address the perf-map reports, which is where `run_to` plants the breakpoint.
 
-These two are honest by construction: a watchdog alarm bounds the single-step so a
+These three are honest by construction: a watchdog alarm bounds the single-step so a
 re-tiered/moved address self-skips instead of hanging, and the trace is asserted when the
 runtime cooperates and skipped (never failed) when it does not, while the resolution and
 attach checks — which validate the library against the runtime's real perf-map line and a
 real `/proc/maps` — stand on their own.
 
-A third lane validates the **binary jitdump** byte source (`asmtest_jitdump_find`) against
+A further lane validates the **binary jitdump** byte source (`asmtest_jitdump_find`) against
 real output:
 
 - `make docker-hwtrace-jit-jitdump` (Node.js / **V8**): runs `node --perf-prof`, which

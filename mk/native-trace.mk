@@ -226,13 +226,14 @@ codeimage-test: $(BUILD)/test_codeimage
 
 # Real managed-runtime trace: attach to a LIVE JIT runtime and trace a genuine
 # JIT-compiled method out of band (resolve from the runtime's perf-map -> attach ->
-# run_to -> single-step). One argv-driven harness drives both runtimes; each self-skips
-# (never hangs/flakes) when the runtime is absent, ptrace is denied, or the JIT re-tiered
-# the code. Driven in plain containers by `make docker-hwtrace-jit{,-dotnet}`.
+# run_to -> single-step). One argv-driven harness drives all three runtimes (V8, CoreCLR,
+# HotSpot); each self-skips (never hangs/flakes) when the runtime is absent, ptrace is
+# denied, or the JIT re-tiered the code. Driven in plain containers by
+# `make docker-hwtrace-jit{,-dotnet,-java}`.
 $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
-.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-jitdump
+.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java hwtrace-jit-jitdump
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
@@ -255,6 +256,17 @@ hwtrace-jit-dotnet: $(BUILD)/jit_trace
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
+
+# OpenJDK (HotSpot): compile the one-method hot loop and trace its `Hot.asmtjit` C2 body.
+# -XX:-TieredCompilation + CompileCommand dontinline (set by the harness) give a stable,
+# standalone nmethod; the harness drives `jcmd <pid> Compiler.perfmap` to materialize the
+# perf-map on a live process (HotSpot does not stream one). Needs the JDK (javac + jcmd) +
+# Capstone.
+hwtrace-jit-java: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-java (real OpenJDK HotSpot JIT method) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	./$(BUILD)/jit_trace java $(BUILD)/jit_java
 
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.
