@@ -146,15 +146,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     callee, not a per-instruction step), resuming recording after it; only a genuine
     return ends the trace. The region's own instructions are recorded, the helper skipped,
     the real return still found (`test_ptrace_callout`); without Capstone it falls back to
-    the prior leaf-only behaviour. A **real-runtime validation lane**
-    (`make docker-hwtrace-jit`, `examples/jit_trace_node.c`) points the whole pipeline at a
-    live **Node.js (V8)** process — it spawns `node --perf-basic-prof --no-turbo-inlining`
-    on a hot function, lets V8 JIT-optimize it, resolves the method from V8's real
-    perf-map, attaches to the live multi-threaded GC'd runtime, `run_to`s the entry, and
-    single-steps one invocation, recovering the **actual TurboFan machine code** for
-    `(a+b)|0`; a watchdog makes a re-tiered/moved address self-skip rather than hang, so
-    the lane never flakes (resolve + attach are asserted against V8's real output; the
-    trace is asserted-or-skipped). `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    the prior leaf-only behaviour. **Real-runtime validation lanes** point the whole
+    pipeline at a live JIT (not a fixture) via one argv-driven harness
+    (`examples/jit_trace.c`): `make docker-hwtrace-jit` traces **Node.js (V8)** —
+    `node --perf-basic-prof --no-turbo-inlining` on a hot function, resolving the method
+    from V8's real perf-map, attaching to the live multi-threaded GC'd runtime, `run_to`ing
+    the entry, and single-stepping one invocation to recover the **actual TurboFan code**
+    for `(a+b)|0`; `make docker-hwtrace-jit-dotnet` traces **.NET (CoreCLR)** —
+    `Program::Add` → `lea eax,[rdi+rsi]; ret` (with `DOTNET_TieredCompilation=0` for a
+    stable address and `DOTNET_EnableWriteXorExecute=0` because .NET's default W^X
+    double-maps the code heap so a software breakpoint is refused — a W^X runtime as-shipped
+    would need hardware breakpoints, a noted follow-on). A watchdog makes a re-tiered/moved
+    address self-skip rather than hang, so the lanes never flake (resolve + attach are
+    asserted against the runtime's real output; the trace is asserted-or-skipped).
+    `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

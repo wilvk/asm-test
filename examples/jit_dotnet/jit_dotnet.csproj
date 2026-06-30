@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A bare console app (no NuGet dependencies) so `dotnet build` restores entirely
+       from the SDK's bundled packs — offline, in the asmtest-dotnet image. Built and
+       run by `make hwtrace-jit-dotnet`. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>jit_dotnet</AssemblyName>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>

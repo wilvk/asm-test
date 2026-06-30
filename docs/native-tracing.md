@@ -493,20 +493,31 @@ non-`LOAD` records, picking the latest re-JIT body, and recovering the recorded 
 bytes. The text perf-map remains the portable lowest common denominator for JITs that
 only emit symbols.
 
-**Against a real runtime.** `make docker-hwtrace-jit` (the `examples/jit_trace_node.c`
-harness, run in the `asmtest-node` image) points the same pipeline at a live **Node.js
-(V8)** process — not a fixture. It spawns `node --perf-basic-prof --no-turbo-inlining`
-running a hot JS function, lets V8 JIT-optimize it, resolves the optimized method from
-V8's real perf-map, `PTRACE_ATTACH`es the live multi-threaded GC'd runtime, `run_to`s the
-method entry, and single-steps one invocation — recovering the actual TurboFan machine
-code for `(a+b)|0` (frame setup, the stack-limit check, the smi type-guards, `add edx,
-ecx`, `ret`). It is honest by construction: a watchdog alarm bounds the single-step so a
-re-tiered/moved address self-skips instead of hanging, and the trace is asserted when V8
-cooperates and skipped (never failed) when it does not, while the resolution and attach
-checks — which validate the library against V8's real perf-map line and a real
-`/proc/maps` — stand on their own. `--no-turbo-inlining` keeps the function a real
-standalone callable body (else TurboFan inlines the tiny function and its perf-map entry
-is never actually called).
+**Against real runtimes.** One argv-driven harness (`examples/jit_trace.c`) points the
+whole pipeline at a live JIT — not a fixture — for **two** runtimes:
+
+- `make docker-hwtrace-jit` (Node.js / **V8**, `asmtest-node` image): spawns
+  `node --perf-basic-prof --no-turbo-inlining` on a hot function, resolves the optimized
+  method from V8's real perf-map, attaches, `run_to`s the entry, and single-steps one
+  invocation — recovering the actual **TurboFan** machine code for `(a+b)|0` (frame setup,
+  stack-limit check, smi type-guards, `add edx, ecx`, `ret`; 29 instructions).
+  `--no-turbo-inlining` keeps the function a real standalone callable body (else TurboFan
+  inlines the tiny function and its perf-map entry is never actually called).
+- `make docker-hwtrace-jit-dotnet` (.NET / **CoreCLR**, `asmtest-dotnet` image): builds a
+  tiny console app and traces its `Program::Add`, recovering the JIT's `lea eax, [rdi +
+  rsi]; ret`. `DOTNET_TieredCompilation=0` gives a single compilation at a stable address
+  (no churn), `[MethodImpl(NoInlining)]` keeps it a real call target, and
+  **`DOTNET_EnableWriteXorExecute=0`** is required: with .NET's default **W^X** the JIT
+  code heap is double-mapped, so a software breakpoint (`PTRACE_POKETEXT`) is refused
+  (`EIO`). Tracing a W^X runtime in its hardened configuration would need **hardware**
+  breakpoints (debug registers) instead of a software `int3` — a noted follow-on; the
+  rest of the pipeline (resolve, attach, run_to, single-step) is unchanged.
+
+Both lanes are honest by construction: a watchdog alarm bounds the single-step so a
+re-tiered/moved address self-skips instead of hanging, and the trace is asserted when the
+runtime cooperates and skipped (never failed) when it does not, while the resolution and
+attach checks — which validate the library against the runtime's real perf-map line and a
+real `/proc/maps` — stand on their own.
 
 ### Language wrappers
 

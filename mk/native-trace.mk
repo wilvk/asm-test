@@ -173,18 +173,30 @@ hwtrace-test: $(BUILD)/test_hwtrace
 	@echo "== hwtrace-test =="
 	./$(BUILD)/test_hwtrace
 
-# Real managed-runtime trace: attach to a live Node.js (V8) process and trace a genuine
-# JIT-compiled JS function out of band (resolve from V8's --perf-basic-prof perf-map ->
-# attach -> run_to -> single-step). Self-skips (never hangs/flakes) when node is absent,
-# ptrace is denied, or V8 re-tiered the code. Driven in a plain container by
-# `make docker-hwtrace-jit` (the asmtest-node image, which has node + Capstone).
-$(BUILD)/jit_trace_node: $(HWTRACE_OBJS) $(BUILD)/jit_trace_node.o
+# Real managed-runtime trace: attach to a LIVE JIT runtime and trace a genuine
+# JIT-compiled method out of band (resolve from the runtime's perf-map -> attach ->
+# run_to -> single-step). One argv-driven harness drives both runtimes; each self-skips
+# (never hangs/flakes) when the runtime is absent, ptrace is denied, or the JIT re-tiered
+# the code. Driven in plain containers by `make docker-hwtrace-jit{,-dotnet}`.
+$(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
 
-.PHONY: hwtrace-jit
-hwtrace-jit: $(BUILD)/jit_trace_node
-	@echo "== hwtrace-jit (real Node.js V8 JIT method) =="
-	./$(BUILD)/jit_trace_node
+.PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet
+hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
+
+# Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
+hwtrace-jit-node: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-node (real Node.js V8 JIT method) =="
+	./$(BUILD)/jit_trace node
+
+# .NET (CoreCLR): build the bare console app (offline, from the SDK packs) and trace its
+# `Program::Add` body. DOTNET_TieredCompilation=0 (set by the harness) gives a stable
+# single-compilation address. Needs the dotnet SDK + Capstone.
+hwtrace-jit-dotnet: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet (real .NET CoreCLR JIT method) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
 
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.

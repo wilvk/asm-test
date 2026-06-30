@@ -298,19 +298,29 @@ Linux/x86-64 backend.
     return is still found. Verified live (`test_ptrace_callout`: a region that calls an
     out-of-region helper). Falls back to leaf-only without Capstone (the previous
     contract).
-  - _Done._ **Real-runtime validation lane** — `make docker-hwtrace-jit`
-    (`examples/jit_trace_node.c`) points the whole pipeline at a live **Node.js (V8)**
-    process, not a fixture: it spawns `node --perf-basic-prof --no-turbo-inlining` on a
-    hot function, lets V8 optimize it, resolves the method from V8's real perf-map,
-    attaches to the live multi-threaded GC'd runtime, `run_to`s the entry, and
-    single-steps one invocation — recovering the **actual TurboFan machine code** for
-    `(a+b)|0` (frame setup, stack-limit check, smi type-guards, `add edx, ecx`, `ret`).
-    A watchdog bounds the step so a re-tiered/moved address self-skips rather than hangs;
-    the resolve + attach checks (library vs. V8's real perf-map line and a real
-    `/proc/maps`) are firm while the trace is asserted-or-skipped, so the lane never
-    flakes. This closes the loop the W2 path was built for: tracing a foreign JIT's
-    generated code on AMD, where Intel PT is unavailable and in-process DynamoRIO cannot
-    seize the runtime's threads.
+  - _Done._ **Real-runtime validation lanes (two engines)** — one argv-driven harness
+    (`examples/jit_trace.c`) points the whole pipeline at a live JIT, not a fixture:
+    - `make docker-hwtrace-jit` — **Node.js (V8)**: `node --perf-basic-prof
+      --no-turbo-inlining` on a hot function; resolves the optimized method from V8's real
+      perf-map, attaches to the live multi-threaded GC'd runtime, `run_to`s the entry, and
+      single-steps one invocation — recovering the **actual TurboFan machine code** for
+      `(a+b)|0` (frame setup, stack-limit check, smi type-guards, `add edx, ecx`, `ret`;
+      29 instructions).
+    - `make docker-hwtrace-jit-dotnet` — **.NET (CoreCLR)**: traces `Program::Add`,
+      recovering the JIT's `lea eax, [rdi+rsi]; ret`. `DOTNET_TieredCompilation=0` gives a
+      stable single compilation; `[MethodImpl(NoInlining)]` keeps it a real call target;
+      **`DOTNET_EnableWriteXorExecute=0`** is required because .NET's default **W^X**
+      double-maps the code heap, so a software breakpoint (`PTRACE_POKETEXT`) is refused
+      with `EIO`. (Tracing a W^X runtime as-shipped would need **hardware** breakpoints —
+      debug registers — instead of a software `int3`: a noted follow-on. The rest of the
+      pipeline is identical.)
+
+    Both are honest by construction: a watchdog bounds the step so a re-tiered/moved
+    address self-skips rather than hangs; the resolve + attach checks (library vs. the
+    runtime's real perf-map line and a real `/proc/maps`) are firm while the trace is
+    asserted-or-skipped, so the lanes never flake. This closes the loop the W2 path was
+    built for: tracing a foreign JIT's generated code on AMD, where Intel PT is
+    unavailable and in-process DynamoRIO cannot seize the runtime's threads.
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
