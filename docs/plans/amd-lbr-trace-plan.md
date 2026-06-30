@@ -96,7 +96,12 @@ routine, decoding to nothing yet flagged complete — and now keeps the sample
 still self-skips on **Zen 2** (no branch facility — `EOPNOTSUPP`), non-AMD, VMs, and
 CI's default sandbox; the Intel-PT gating is unchanged (AMD still self-skips PT).
 
-**Phase 5** (Tier-B stitching / MSR-direct) remains **forward-look**.
+**Phase 5 Tier-B stitching is now implemented as a host-validated algorithm**
+(`asmtest_amd_stitch` + `asmtest_amd_decode_stitched` in
+[src/amd_backend.c](../../src/amd_backend.c), proven by `test_amd_stitch` against an
+18-iteration loop past the 16-deep window); only the live multi-sample capture wiring
+(bounded by perf ring size + throttling) and the MSR-direct snapshot remain
+forward-look (see Phase 5 below).
 
 ---
 
@@ -239,18 +244,41 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
 
 ---
 
-## Phase 5 — Tier B (stitching) & MSR-direct snapshot *(forward-look)*
+## Phase 5 — Tier B (stitching) & MSR-direct snapshot
 
-Two optional extensions, neither required for the shippable Tier-A backend:
-
-- **LBR stitching for arbitrary length.** Sample at every taken branch
-  (`sample_period = 1`) and splice the overlapping 16-entry stacks (15-entry
-  overlap) into one gapless taken-branch sequence, reconstructing a complete trace
-  past the window. Keeps completeness, loses near-zero overhead, and risks perf
-  sample-rate throttling (`kernel.perf_event_max_sample_rate`) dropping ≥16
-  consecutive samples → a real gap. Only worth it for hardware-attributed traces of
-  long routines where DynamoRIO is undesirable; otherwise DynamoRIO is simpler and
-  more reliable.
+- **LBR stitching for arbitrary length. _Algorithm implemented + host-validated._**
+  Sample at every taken branch (`sample_period = 1`) and splice the overlapping
+  16-entry stacks (15-entry overlap) into one gapless taken-branch sequence,
+  reconstructing a complete trace past the window.
+  - _Done._ The stitching core ships in [src/amd_backend.c](../../src/amd_backend.c):
+    `asmtest_amd_stitch(samples, nrs, n_samples, out, cap, &gap)` merges the windows
+    in execution order — for each new window it takes the **smallest shift that still
+    overlaps the accumulated tail** (the contiguous, largest-overlap assumption) and
+    appends only the genuinely new edges, so a loop's repeated identical edges stitch
+    correctly (each window contributes one). Lost overlap (≥ a full window dropped to
+    throttling) sets `*gap`. `asmtest_amd_decode_stitched(...)` then replays the
+    stitched sequence through the shared `amd_replay` loop **without** the 16-entry
+    overflow flag (stitching, not window depth, established completeness), honoring
+    `gap` as the loss signal. The `amd_replay` body is factored out of
+    `asmtest_amd_decode`, so Tier-A and Tier-B share one decoder.
+  - _Done._ Host-validated without hardware (like the Tier-A reconstruction):
+    [examples/test_hwtrace.c](../../examples/test_hwtrace.c) `test_amd_stitch`
+    synthesizes the `sample_period=1` windows of an 18-iteration loop, stitches them
+    back to the gapless 18-edge sequence, and proves the decode is **complete** (all
+    55 instructions, two blocks, not truncated) where a single Tier-A 16-window
+    honestly truncates — plus a gap-detection case.
+  - _Remaining (bounded integration)._ Wiring it into the **live** capture
+    ([hwtrace.c](../../src/hwtrace.c) `hwtrace_end_amd`, today picks the single
+    richest sample) means collecting *all* in-region ring samples and stitching on
+    overflow. Its reach is bounded by the same two hardware realities this plan
+    flagged: the perf **data-ring size** (a long loop emits more `sample_period=1`
+    samples than the ring holds → the early ones are overwritten → a stitch gap) and
+    **sample-rate throttling** (`kernel.perf_event_max_sample_rate` dropping ≥16
+    consecutive samples → a real gap). So even with the algorithm, the live path
+    stays complete only for routines whose taken-branch count fits the ring; beyond
+    that DynamoRIO (no ceiling) remains the answer — which is why this stays the
+    worse-overhead trade and the live wiring is deliberately not forced onto the
+    delicate, hardware-tuned Tier-A capture path.
 - **MSR-direct snapshot.** Read the LBR/BRS MSRs directly around the region to get
   an exact Tier-A snapshot with *zero* interrupts (vs Phase 1's per-branch PMIs).
   Needs privilege (a kernel helper / `CAP_SYS_ADMIN` or a tiny module), so it is a

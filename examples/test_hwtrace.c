@@ -28,6 +28,12 @@
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 int asmtest_amd_decoder_present(void);
+size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
+                          const size_t *nrs, size_t n_samples,
+                          struct perf_branch_entry *out, size_t out_cap, int *gap);
+int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
+                                const void *base, size_t len,
+                                asmtest_trace_t *trace, int gap);
 #endif
 
 /* CoreSight reconstruction-core interface (decoder-independent half of
@@ -256,6 +262,91 @@ static void test_amd_live(void) {
               "AMD LBR live loop: >16-branch window flagged truncated");
         munmap(q, sizeof AMD_LOOP);
     }
+}
+
+/* AMD Tier-B STITCHING (host-validated, no hardware — like test_amd_reconstruction):
+ * a routine that loops past the 16-deep window. With sample_period=1, perf emits one
+ * branch-stack sample per taken branch, consecutive windows overlapping by 15 edges.
+ * Synthesize those overlapping windows for an 18-iteration loop, stitch them back into
+ * the gapless 18-edge sequence, and prove the decode is COMPLETE — where a single
+ * Tier-A 16-window honestly truncates. Plus gap detection when overlap is lost. */
+static void test_amd_stitch(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD stitch: built without Capstone\n");
+        return;
+    }
+    const uint64_t b = (uint64_t)(uintptr_t)AMD_LOOP;
+    enum { K = 18 }; /* taken back-edges, past the 16-deep window */
+    /* The loop's only taken branch is the back-edge jnz @0xd -> L @0x7. */
+    struct perf_branch_entry full[K];
+    memset(full, 0, sizeof full);
+    for (int i = 0; i < K; i++) {
+        full[i].from = b + 0xd;
+        full[i].to = b + 0x7;
+    }
+    /* sample_period=1 windows: sample j holds the last min(16, j+1) edges, newest-
+     * first (window fills to 16, then slides one edge per sample). */
+    struct perf_branch_entry windows[K][16];
+    const struct perf_branch_entry *samples[K];
+    size_t nrs[K];
+    for (int j = 0; j < K; j++) {
+        int depth = (j + 1 < 16) ? (j + 1) : 16;
+        for (int e = 0; e < depth; e++)
+            windows[j][e] = full[j - e]; /* newest-first */
+        samples[j] = windows[j];
+        nrs[j] = (size_t)depth;
+    }
+
+    struct perf_branch_entry stitched[64];
+    int gap = 0;
+    size_t n = asmtest_amd_stitch(samples, nrs, K, stitched, 64, &gap);
+    CHECK(n == K && gap == 0,
+          "AMD stitch recovers all 18 branches past the 16-deep window");
+
+    /* Tier-A on the richest single (full, depth-16) window honestly truncates. */
+    asmtest_trace_t *ta = asmtest_trace_new(64, 64);
+    asmtest_amd_decode(samples[K - 1], nrs[K - 1], AMD_LOOP, sizeof AMD_LOOP, ta);
+    CHECK(asmtest_emu_trace_truncated(ta),
+          "Tier-A single 16-entry window truncates (overflow)");
+    asmtest_trace_free(ta);
+
+    /* Tier-B stitched decode is COMPLETE — no depth ceiling. */
+    asmtest_trace_t *tb = asmtest_trace_new(256, 64);
+    int rc = asmtest_amd_decode_stitched(stitched, n, AMD_LOOP, sizeof AMD_LOOP, tb,
+                                         gap);
+    CHECK(rc == ASMTEST_HW_OK, "AMD Tier-B stitched decode succeeds");
+    CHECK(!asmtest_emu_trace_truncated(tb),
+          "AMD Tier-B stitched trace is COMPLETE (not truncated)");
+    CHECK(asmtest_emu_trace_insns_total(tb) == 55,
+          "AMD Tier-B reconstructs all 55 loop instructions (4 + 17*3)");
+    CHECK(asmtest_trace_covered(tb, 0) && asmtest_trace_covered(tb, 0x7),
+          "AMD Tier-B covers entry(0) and loop body(0x7)");
+    CHECK(asmtest_emu_trace_blocks_len(tb) == 2,
+          "AMD Tier-B records exactly two blocks {0, 0x7}");
+    asmtest_trace_free(tb);
+
+    /* Gap detection: a second window sharing no edge with the accumulated tail
+     * (>= a full window of samples dropped to perf throttling) flags a real gap. */
+    struct perf_branch_entry e0[1], e1[16];
+    memset(e0, 0, sizeof e0);
+    memset(e1, 0, sizeof e1);
+    e0[0].from = b + 0xd;
+    e0[0].to = b + 0x7;
+    for (int e = 0; e < 16; e++) {
+        e1[e].from = b + 0x100 + (uint64_t)e; /* disjoint from the seed edge */
+        e1[e].to = b + 0x200 + (uint64_t)e;
+    }
+    const struct perf_branch_entry *gsamples[2] = {e0, e1};
+    size_t gnrs[2] = {1, 16};
+    struct perf_branch_entry gout[64];
+    int gap2 = 0;
+    asmtest_amd_stitch(gsamples, gnrs, 2, gout, 64, &gap2);
+    CHECK(gap2 == 1,
+          "AMD stitch flags a gap when windows lose overlap (throttled drop)");
+#else
+    printf("# SKIP AMD stitch: not Linux x86-64\n");
+#endif
 }
 
 /* Single-step (EFLAGS.TF) LIVE capture: unlike PT/AMD this runs on ANY x86-64
@@ -888,6 +979,9 @@ int main(void) {
     /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
     test_amd_live();
+
+    /* AMD Tier-B stitching past the 16-deep window (host-validated, synthetic). */
+    test_amd_stitch();
 
     /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
     test_singlestep_live();

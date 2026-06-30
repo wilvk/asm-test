@@ -153,6 +153,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     returns 0 and the tier self-skips on every host, but the half the board glue will
     feed is now proven (CoreSight advances from bare scaffold to validated
     reconstruction).
+  - **AMD LBR Tier-B stitching (host-validated).** AMD's branch stack is 16 deep, so
+    a single-snapshot (Tier-A) reconstruction sets `truncated` past 16 taken
+    branches. Tier-B lifts that ceiling: `asmtest_amd_stitch(samples, nrs, n, out,
+    cap, &gap)` splices the overlapping windows `sample_period=1` emits (one per
+    taken branch, consecutive windows overlapping by 15 edges) into one gapless
+    taken-branch sequence — for each window it takes the smallest shift that still
+    overlaps the accumulated tail and appends only the new edges, so a loop's
+    repeated identical edges stitch correctly; lost overlap (≥ a full window dropped
+    to throttling) sets `*gap`. `asmtest_amd_decode_stitched(...)` replays the
+    stitched sequence through the shared `amd_replay` loop (factored out of
+    `asmtest_amd_decode`) **without** the 16-entry overflow flag. Host-validated
+    without hardware (like the Tier-A reconstruction): `test_amd_stitch` synthesizes
+    an 18-iteration loop's windows, stitches them, and reconstructs the **complete**
+    trace (55 instructions, two blocks, not truncated) where a single Tier-A 16-window
+    truncates — plus gap detection. Wiring it into the live capture (collecting all
+    ring samples, stitching on overflow) is bounded by the perf ring size and
+    sample-rate throttling, so it stays a deliberate follow-on; beyond the ring,
+    DynamoRIO (no ceiling) remains the answer. (AMD LBR plan, Phase 5.)
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft
