@@ -137,7 +137,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     perf-map and calls its routine in a loop, the tracer resolves it by name, attaches,
     `run_to`s the entry, and traces that invocation to the exact `[0,3,6,c,11]` stream —
     completing the managed-runtime flow: resolve → attach → `run_to` → `trace_attached` →
-    detach. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
+    detach. **Call-depth awareness** removes the last "leaf only" restriction: `trace_call`
+    and `trace_attached` previously treated the first step out of the region as the return,
+    so a routine that called a **runtime helper** (GC barrier, allocation, PLT stub — the
+    norm for real JIT methods) truncated at the first call. The stepper now decodes the
+    region-exit instruction (`asmtest_disas_is_call`, Capstone `CS_GRP_CALL`) and runs a
+    **call**-out to its return address at **native speed** (a breakpoint-cont over the
+    callee, not a per-instruction step), resuming recording after it; only a genuine
+    return ends the trace. The region's own instructions are recorded, the helper skipped,
+    the real return still found (`test_ptrace_callout`); without Capstone it falls back to
+    the prior leaf-only behaviour. `asmtest_jitdump_find(path, pid, name, &entry, bytes,
     cap, &len)` reads the richer **binary jitdump** image (`jit-<pid>.dump` — CoreCLR,
     HotSpot, V8; what `perf inject --jit` consumes), resolving a method to its
     `(code_addr, code_size)` **and its recorded native code bytes** (which the text

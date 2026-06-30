@@ -29,11 +29,15 @@
  * registered code in the child, and reconstructs the trace in the parent from
  * ptrace register reads — no shared memory, because the parent observes every step.
  *
- * Supported target (same contract as the in-process stepper): a deterministic,
- * single-threaded, pure-compute routine of up to six integer arguments that does
- * not call out into other traced regions. The code bytes must already live in
- * executable memory in THIS process (e.g. via asmtest_hwtrace_exec_alloc); the
- * forked child inherits that mapping at the same address.
+ * Supported target: a deterministic, single-threaded routine of up to six integer
+ * arguments. The routine MAY call out to helper functions outside the registered
+ * region — those call-outs (runtime helpers, GC barriers, PLT stubs) are stepped OVER
+ * at native speed and not recorded, so a real method that calls helpers traces
+ * correctly, not just a pure-compute leaf. (Call-out detection uses the Capstone
+ * is-call query; without Capstone the region must be a leaf, the previous contract.)
+ * The code bytes must already live in executable memory in THIS process (e.g. via
+ * asmtest_hwtrace_exec_alloc); the forked child inherits that mapping at the same
+ * address.
  *
  * No external library and no privilege beyond ptrace of one's own child (no
  * perf_event, no PMU, no decoder beyond the existing Capstone length-decoder used
@@ -99,8 +103,10 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * then used for the same block normalization as the other backends. On success
  * *result receives the routine's return value (the target's RAX at the ret); `result`
  * may be NULL. The target is left ptrace-stopped just past the region exit for the
- * caller to PTRACE_DETACH. Supported target: a deterministic pure-compute region that
- * does not call out to other regions (same contract as the in-process stepper). */
+ * caller to PTRACE_DETACH. The region MAY call out to helpers outside [base, base+len)
+ * — call-outs are stepped over at native speed and not recorded (call-depth aware), so a
+ * real JIT method that calls runtime helpers traces correctly; the body must still be
+ * deterministic and single-threaded. */
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
 

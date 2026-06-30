@@ -180,6 +180,12 @@ bool asmtest_disas_available(void);
 size_t asmtest_disas(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
                      uint64_t base_addr, uint64_t off, char *buf, size_t buflen);
 
+/* 1 if the instruction at code[off] is a CALL (x86 `call`; AArch64 `bl`/`blr`), else 0
+ * (and always 0 without Capstone). The out-of-process ptrace stepper uses this to step
+ * OVER a call-out to a runtime helper rather than mistaking it for the routine's return. */
+int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                          uint64_t off);
+
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
                           const uint8_t *code, size_t code_len,

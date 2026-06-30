@@ -425,10 +425,15 @@ body — the AArch64 arm reads the PC + return register via `PTRACE_GETREGSET`/`
 (The AArch64 single-step *stream* is validated on a real AArch64 host, not under
 qemu-user, which cannot emulate the ptrace tracer/tracee relationship — `available()`
 self-probes and self-skips there; the `/proc`+jitdump readers, being pure file parsing,
-run on any Linux arch and are validated live on AArch64.) The supported target is the same
-deterministic pure-compute routine (≤6 integer args, no calls out to other regions) as
-the in-process stepper. `make hwtrace-test` exercises it live (it works in a **plain
-unprivileged container** — ptrace of one's own child needs no extra capability).
+run on any Linux arch and are validated live on AArch64.) The supported target is a
+deterministic, single-threaded routine (≤6 integer args) that **may call out to helpers**
+outside the registered region — call-outs (runtime helpers, GC barriers, PLT stubs) are
+**stepped over at native speed** and not recorded, so a real method that calls helpers
+traces correctly, not just a pure-compute leaf (the stepper decodes the region-exit
+instruction via Capstone's is-call query; without Capstone it falls back to leaf-only).
+`make hwtrace-test` exercises it live, including a region that calls an out-of-region
+helper (it all works in a **plain unprivileged container** — ptrace of one's own child
+needs no extra capability).
 
 `trace_call` forks its own tracee, which is enough to trace a code blob out of process
 but is not yet the managed-runtime case. The building block for *that* is

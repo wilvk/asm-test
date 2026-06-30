@@ -1035,6 +1035,73 @@ static void test_run_to_and_trace(void) {
 #endif
 }
 
+/* CALL-DEPTH AWARENESS: a registered region that CALLS OUT to a helper OUTSIDE it (a
+ * runtime helper / GC barrier / PLT stub — what a real managed-runtime method does). The
+ * old "first region exit == return" model truncated at that call; the stepper now decodes
+ * the call, runs the callee at native speed to its return, and resumes — so the trace
+ * holds the region's OWN instructions only (helper skipped), and still finds the real
+ * return. Uses trace_call (self-contained: fork + single-step), exercising the same
+ * call-out path trace_attached shares. */
+static void test_ptrace_callout(void) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace callout: %s\n", why);
+        return;
+    }
+    if (!asmtest_disas_available()) {
+        printf("# SKIP ptrace callout: needs Capstone (call detection)\n");
+        return;
+    }
+#if defined(__aarch64__)
+    /* R: bl H ; add x0,x0,x1 ; ret    H@0xc: add x0,x0,#1 ; ret */
+    static const unsigned char BLOB[] = {
+        0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b, 0xc0, 0x03, 0x5f, 0xd6,
+        0x00, 0x04, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6};
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8};
+#else
+    /* R: mov rax,rdi ; call H ; add rax,rsi ; ret    H@0xc: inc rax ; ret */
+    static const unsigned char BLOB[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00,
+                                         0x00, 0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff,
+                                         0xc0, 0xc3};
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x8, 0xb};
+#endif
+    const size_t REGION = 0xc; /* trace R only; the helper H at 0xc is outside it */
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+
+    void *p = mmap(NULL, sizeof BLOB, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace callout: mmap failed\n");
+        return;
+    }
+    memcpy(p, BLOB, sizeof BLOB);
+    mprotect(p, sizeof BLOB, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof BLOB);
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    const long args[2] = {20, 22};
+    long result = 0;
+    int rc = asmtest_ptrace_trace_call(p, REGION, args, 2, &result, tr);
+
+    CHECK(rc == ASMTEST_PTRACE_OK,
+          "ptrace callout: trace_call over a region that calls out");
+    CHECK(result == 43, "ptrace callout: result 43 (helper ran: 20 +1 +22)");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq,
+          "ptrace callout: in-region stream only (helper stepped over, not recorded)");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "ptrace callout: complete (call-out not mistaken for the return)");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof BLOB);
+#else
+    printf("# SKIP ptrace callout: not Linux x86-64/AArch64\n");
+#endif
+}
+
 /* JIT method resolution: a JIT writes /tmp/perf-<pid>.map so perf can symbolize its
  * generated code; we parse it to recover a method's (base,len) for trace_attached.
  * Emulate one entry (with a spaces-bearing symbol) and resolve it by name. */
@@ -1191,6 +1258,10 @@ int main(void) {
     /* Live: the full uncontrolled-timing managed-runtime flow — resolve a JIT method by
      * name, run the target to it (software breakpoint), then trace that invocation. */
     test_run_to_and_trace();
+
+    /* Live: call-depth awareness — trace a region that calls OUT to a helper, stepping
+     * over the callee at native speed instead of mistaking the call for the return. */
+    test_ptrace_callout();
 
     test_perfmap_resolve();
     test_jitdump_reader();

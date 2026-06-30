@@ -286,6 +286,18 @@ Linux/x86-64 backend.
     as a stop *before* it). The complete real-JIT flow — **publish a perf-map → resolve by
     name → attach → run_to → trace** with **no cooperative go-flag** — is verified live in
     a plain unprivileged container (`make hwtrace-test`, `test_run_to_and_trace`).
+  - _Done._ **Call-depth awareness** — `trace_call`/`trace_attached` no longer require a
+    pure-compute *leaf*. The old model treated the first step out of the region as the
+    return, so a routine that called a **runtime helper** (GC barrier, allocation, PLT
+    stub — what real managed-runtime methods do) truncated at the first call. The stepper
+    now decodes the region-exit instruction (`asmtest_disas_is_call`, Capstone
+    `CS_GRP_CALL`): a **call** out of the region is run to its return address at **native
+    speed** (the shared `run_until` breakpoint-cont, not a per-instruction step through the
+    callee) and recording resumes after it; only a genuine return/tail-jump ends the
+    trace. The region's own instructions are recorded, the helper is skipped, and the real
+    return is still found. Verified live (`test_ptrace_callout`: a region that calls an
+    out-of-region helper). Falls back to leaf-only without Capstone (the previous
+    contract).
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
