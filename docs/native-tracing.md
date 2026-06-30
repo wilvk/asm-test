@@ -392,6 +392,39 @@ and AMD LBR self-skip), asserting the same `[0x0, 0x3, 0x6, 0xc, 0x11]` /
 past LBR's 16-branch window) to prove completeness. This is the hardware tier's first
 regression that **runs** on standard CI instead of self-skipping.
 
+### Out-of-process variant (W2 — ptrace)
+
+The stepper above is **in-process**: it installs a `SIGTRAP` handler and sets `TF` on
+its own thread, so the traced routine and the collector share one process. The
+out-of-process sibling (`asmtest_ptrace.h`, `src/ptrace_backend.c`) gets the **same
+exact offsets** a different way — a tracer **parent** `PTRACE_SINGLESTEP`s a forked
+tracee that runs the routine, reading `RIP` from the child's register file at each
+stop and reconstructing the trace in the parent (no shared memory — the parent
+observes every step). Block normalization is byte-identical to the in-process stepper,
+so the output matches every other backend.
+
+```c
+#include "asmtest_ptrace.h"
+
+long args[2] = {20, 22}, result = 0;
+asmtest_trace_t *t = asmtest_trace_new(64, 64);
+/* `code` is host-native bytes already executable in this process (the forked child
+ * inherits the mapping). The parent traces; *result is the routine's RAX at ret. */
+asmtest_ptrace_trace_call(code, len, args, 2, &result, t);   /* result == 42 */
+```
+
+Why a second single-step path: an out-of-band tracer touches none of the tracee's
+signal disposition or code cache, so it is the exact path for a **JIT/GC managed
+runtime** (JVM/.NET/Node) — where the in-process stepper's `SIGTRAP`/`TF` collide with
+the runtime, exactly as in-process DynamoRIO cannot take over its threads — and the
+recommended managed-runtime path on **AMD** (no Intel PT). It is also the **only**
+single-step form possible on **AArch64**, whose single-step bit (`MDSCR_EL1.SS`) is
+kernel-only with no in-process form; this implementation is Linux/x86-64, riding the
+same `PTRACE_SINGLESTEP` seam the ARM64 tracer will. The supported target is the same
+deterministic pure-compute routine (≤6 integer args, no calls out to other regions) as
+the in-process stepper. `make hwtrace-test` exercises it live (it works in a **plain
+unprivileged container** — ptrace of one's own child needs no extra capability).
+
 ### Language wrappers
 
 Every binding ships an `hwtrace` wrapper alongside its `drtrace` one, exposing the same

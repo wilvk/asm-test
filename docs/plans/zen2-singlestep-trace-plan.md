@@ -84,10 +84,18 @@ variant), a **live** cross-backend parity test in
 20-trip loop proving no depth ceiling), an `hwtrace` language wrapper + live test for
 **all ten bindings** (`make hwtrace-bindings-test`), and **plain-container** Docker
 lanes (`make docker-hwtrace` / `docker-hwtrace-bindings` — no privilege, no
-`CAP_PERFMON`, no seccomp change). Phase 5 (Windows/macOS/ARM/out-of-process ptrace)
-remains a forward-look. The existing hardware-trace backends (Intel PT / CoreSight /
-AMD LBR) are unaffected — this is a fourth, perf-free backend behind the same
-`asmtest_hwtrace_*` API, selected by enum exactly as PT and AMD LBR are.
+`CAP_PERFMON`, no seccomp change). The existing hardware-trace backends (Intel PT /
+CoreSight / AMD LBR) are unaffected — this is a fourth, perf-free backend behind the
+same `asmtest_hwtrace_*` API, selected by enum exactly as PT and AMD LBR are.
+
+**Phase 5, W2 (out-of-process `ptrace`) now ships for Linux x86-64**
+([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`,
+`asmtest_ptrace_trace_call`): a tracer parent `PTRACE_SINGLESTEP`s a forked tracee
+and reconstructs the *same* exact offsets out of band (verified byte-for-byte against
+the in-process stepper, including a 62-instruction loop, live in a plain unprivileged
+container by `make hwtrace-test`). The remaining Phase-5 fronts (Windows VEH,
+macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
+so out-of-process is its *only* single-step form) stay forward-look.
 
 ---
 
@@ -233,13 +241,16 @@ Linux/x86-64 backend.
 - **macOS (Intel).** The BSD signal layer delivers `SIGTRAP` in-process like Linux;
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
   entitlement. Slots into the [macOS clean-test plan](macos-clean-test-plan.md).
-- **W2 — out-of-process `ptrace` single-step.** A tracer parent `PTRACE_SINGLESTEP`s
-  the tracee and reads `RIP` per stop: same exact stream, but **out-of-band** — so it
-  traces **managed runtimes (.NET / JVM / Node) exactly**, where in-process
-  DynamoRIO cannot take over threads and IBS could only sample statistically. This is
-  the recommended managed-runtime path on AMD, and the **only** single-step variant
-  available on **ARM64** (Apple Silicon, Windows-on-ARM, Linux/ARM64), whose
-  single-step (`MDSCR_EL1.SS`) is kernel-only and thus has no in-process form.
+- **W2 — out-of-process `ptrace` single-step. _Implemented (Linux x86-64)_** —
+  [asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`,
+  `asmtest_ptrace_trace_call`. A tracer parent `PTRACE_SINGLESTEP`s the tracee and
+  reads `RIP` per stop: same exact stream, but **out-of-band** — so it traces
+  **managed runtimes (.NET / JVM / Node) exactly**, where in-process DynamoRIO cannot
+  take over threads and IBS could only sample statistically. This is the recommended
+  managed-runtime path on AMD, and the **only** single-step variant available on
+  **ARM64** (Apple Silicon, Windows-on-ARM, Linux/ARM64), whose single-step
+  (`MDSCR_EL1.SS`) is kernel-only and thus has no in-process form — the AArch64
+  tracer rides the same `PTRACE_SINGLESTEP` seam and remains the open front.
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
   feedable into [amd_backend.c](../../src/amd_backend.c)'s replay loop as `(from,to)`

@@ -84,6 +84,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     self-test of the cross-tier invariants. This is the cross-tier front-end the
     [trace parity matrix](https://github.com/wilvk/asm-test/blob/main/docs/analysis/trace-parity-matrix.md)
     flagged as the remaining gap.
+  - **Out-of-process single-step backend (W2).** `asmtest_ptrace_trace_call(code,
+    len, args, nargs, &result, trace)`
+    ([asmtest_ptrace.h](https://github.com/wilvk/asm-test/blob/main/include/asmtest_ptrace.h),
+    `src/ptrace_backend.c`) is the out-of-process sibling of the in-process
+    `EFLAGS.TF` stepper: a tracer **parent** `PTRACE_SINGLESTEP`s a forked tracee
+    that runs the registered routine, reads `RIP` from the child's register file at
+    each stop, and reconstructs the **same exact offsets** in the parent — ordered
+    in-region instruction offsets and the identical single-entry/ends-at-branch block
+    partition the in-process stepper, Unicorn, DynamoRIO, and Intel PT produce — with
+    no shared memory (the parent observes every step) and no library or privilege
+    beyond ptrace of one's own child. Because it touches none of the tracee's signal
+    disposition or code cache, it is the exact path for a **JIT/GC managed runtime**
+    (JVM/.NET/Node) and the recommended managed-runtime backend on **AMD** (no Intel
+    PT), and is the only single-step form possible on **AArch64** (whose
+    `MDSCR_EL1.SS` is kernel-only); this implementation is Linux/x86-64, riding the
+    same `PTRACE_SINGLESTEP` seam the AArch64 tracer will. Built into
+    `libasmtest_hwtrace`; `make hwtrace-test` exercises it live — including in a
+    **plain unprivileged container** — asserting byte-for-byte parity with the
+    in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
+    Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/zen2-singlestep-trace-plan.md)
+    Phase 5 (W2).
 
 - **Win64 wide-vector (AVX2 256-bit) capture.** The Win64 capture trampoline
   topped out at 128-bit (`xmm`); a routine's full `ymm` result under the Microsoft

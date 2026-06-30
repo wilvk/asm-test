@@ -41,10 +41,15 @@ Two facts worth stating up front because they are easy to get wrong:
   ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)), and `src/ss_backend.c`
   drives `EFLAGS.TF`→`#DB`/`SIGTRAP` to record every executed `RIP` **live on any
   x86-64 Linux host** (no PMU, no perf, no privilege, no decoder beyond Capstone).
-  Only the *cross-OS* variants (Windows VEH, macOS-Intel, out-of-process `ptrace`
-  W2, AArch64) remain Phase-5 *(planned)* — so single-step rows below read
-  *implemented* for Linux x86-64 and carry *(planned)* only where they name a
-  Phase-5 front. See the [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
+  The **out-of-process `ptrace` variant (W2) also now ships for Linux x86-64**
+  ([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`): a
+  tracer parent `PTRACE_SINGLESTEP`s a forked tracee and reconstructs the *same*
+  exact offsets out of band (the managed-runtime path, and the seam the AArch64
+  tracer will ride). Only the *cross-OS / cross-arch* fronts (Windows VEH,
+  macOS-Intel, the **AArch64** ptrace tracer) remain Phase-5 *(planned)* — so
+  single-step rows below read *implemented* for Linux x86-64 and carry *(planned)*
+  only where they name one of those fronts. See the
+  [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
 
 ---
 
@@ -177,7 +182,7 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 | AMD Zen 2 | **DynamoRIO** | single-step | no branch facility exists on Zen 2 |
 | Any x86, exact + unprivileged + on CI | **single-step** | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
 | Managed runtime (JVM/.NET/Node), Intel | **Intel PT** | — | observes out-of-band; no thread takeover, no signal collision |
-| Managed runtime, AMD | **W2 out-of-proc `ptrace` single-step** *(planned)* | DynamoRIO (best-effort) | PT is Intel-only; in-proc DR cannot seize JIT/GC threads |
+| Managed runtime, AMD | **W2 out-of-proc `ptrace` single-step** *(Linux x86-64 shipped)* | DynamoRIO (best-effort) | PT is Intel-only; in-proc DR cannot seize JIT/GC threads |
 | Windows-x64 / macOS / AArch64 (any) | **Emulator (Unicorn)** | — | only tier covering these hosts today; CoreSight is a scaffold |
 | Cross-ISA / isolation / faults-as-data | **Emulator (Unicorn)** | — | the only tier with isolated guests + 5 ISAs + precise faults |
 
@@ -286,7 +291,7 @@ resolve(os, arch, vendor, uarch, runtime, routine_profile):
         if runtime is managed (Node/.NET/JVM):
             # in-process DBI is hostile → prefer out-of-band first
             if vendor == Intel: chain += [INTEL_PT]
-            chain += [PTRACE_SINGLESTEP_W2]          # planned; out-of-band, any x86
+            chain += [PTRACE_SINGLESTEP_W2]          # Linux x86-64 shipped; out-of-band
             if runtime == JVM:  chain += [DYNAMORIO] # best-effort, guarded
         else:                                        # native / GIL-serialized
             if routine is small and branch-light:
@@ -314,7 +319,7 @@ resolve(os, arch, vendor, uarch, runtime, routine_profile):
 | Linux x86-64 | AMD Zen 5 (dev host) bare-metal | C, looping kernel | **AMD LBR** *(live-verified)* → DynamoRIO → single-step → emulator |
 | Linux x86-64 | AMD Zen 2 | Go | **DynamoRIO** → single-step → emulator *(no branch facility)* |
 | Linux x86-64 | Intel bare-metal | Node | **Intel PT** → emulator *(DynamoRIO self-skips)* |
-| Linux x86-64 | AMD Zen 3 | .NET | W2 ptrace *(planned)* → **emulator** *(no PT on AMD; DR self-skips)* |
+| Linux x86-64 | AMD Zen 3 | .NET | **W2 ptrace** *(out-of-band, shipped)* → emulator *(no PT on AMD; DR self-skips)* |
 | Linux AArch64 | — | Java | **emulator** *(CoreSight scaffold; no in-proc stepper on ARM)* |
 | macOS Apple Silicon | — | any | **emulator** only |
 | Windows x64 | any | .NET | **emulator** (`emu_call_win64_traced`) |

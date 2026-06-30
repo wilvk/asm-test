@@ -9,6 +9,7 @@
  * instruction stream — matching the Unicorn/DynamoRIO output for the same bytes.
  */
 #include "asmtest_hwtrace.h"
+#include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 #include "asmtest_trace_auto.h"
 
@@ -469,6 +470,72 @@ static void test_cross_tier_resolve(void) {
 #endif
 }
 
+/* Out-of-process single-step (W2): a tracer parent PTRACE_SINGLESTEPs a forked
+ * tracee that runs the routine, collecting the same exact offsets out of band. Prove
+ * it is byte-identical to the in-process stepper for the shared fixture, and that a
+ * 20-trip loop reconstructs with no depth ceiling (it never touches a branch-record
+ * window). Runs live on any x86-64 Linux host. */
+static void test_ptrace_oop(void) {
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP out-of-process ptrace stepper: %s\n", why);
+        return;
+    }
+
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace oop: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long args[2] = {20, 22};
+    long result = 0;
+    int rc = asmtest_ptrace_trace_call(p, sizeof ROUTINE, args, 2, &result, tr);
+    CHECK(rc == ASMTEST_PTRACE_OK, "ptrace oop trace_call succeeds");
+    CHECK(result == 42, "ptrace oop traced call returns 20+22 (RAX read via ptrace)");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "ptrace oop yields the exact stream [0,3,6,c,11] (== in-process)");
+    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
+          "ptrace oop block partition {0, 0x11} matches every other backend");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
+          "ptrace oop records exactly two blocks");
+    CHECK(!asmtest_emu_trace_truncated(tr), "ptrace oop trace is complete");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+
+    /* No depth ceiling: a 20-trip loop (19 back-edges, past AMD LBR's 16) captured
+     * exactly — the property an out-of-band hardware branch window cannot match. */
+    static const unsigned char LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
+                                         0x48, 0x01, 0xf8, 0x48, 0xff, 0xce, 0x75,
+                                         0xf8, 0xc3};
+    void *q = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED)
+        return;
+    memcpy(q, LOOP, sizeof LOOP);
+    mprotect(q, sizeof LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof LOOP);
+    asmtest_trace_t *lt = asmtest_trace_new(256, 64);
+    long largs[2] = {1, 20};
+    long lresult = 0;
+    asmtest_ptrace_trace_call(q, sizeof LOOP, largs, 2, &lresult, lt);
+    CHECK(lresult == 20, "ptrace oop loop returns 20 (sum of 1, 20 times)");
+    CHECK(asmtest_emu_trace_insns_total(lt) == 62,
+          "ptrace oop loop captures all 62 insns (1 + 20*3 + 1), no depth ceiling");
+    CHECK(!asmtest_emu_trace_truncated(lt), "ptrace oop loop is complete");
+    asmtest_trace_free(lt);
+    munmap(q, sizeof LOOP);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -482,6 +549,9 @@ int main(void) {
     /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
     test_singlestep_live();
     test_singlestep_loop();
+
+    /* Live: the out-of-process ptrace single-step backend (W2). */
+    test_ptrace_oop();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

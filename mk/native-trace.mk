@@ -154,10 +154,15 @@ $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                        include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# Out-of-process ptrace single-step backend (W2): no external library, just the
+# same Capstone length-decoder (disasm.o) for block normalization.
+$(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
+                          include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
-                $(BUILD)/trace_auto.o \
+                $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
@@ -418,6 +423,9 @@ $(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/p
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
+                               include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
@@ -426,6 +434,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/amd_backend.o \
                                        $(BUILD)/pic/ss_backend.o \
                                        $(BUILD)/pic/trace_auto.o \
+                                       $(BUILD)/pic/ptrace_backend.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
