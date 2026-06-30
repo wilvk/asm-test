@@ -436,10 +436,26 @@ its current stop, **reads the region bytes from the target via `process_vm_readv
 the tracer need not share the target's memory — the honest foreign-process read), and
 records the same in-region offsets. `make hwtrace-test` exercises it live: a child that
 never called `PTRACE_TRACEME` is attached externally and its region traced to the exact
-same `[0x0, 0x3, 0x6, 0xc, 0x11]` stream. This is the foundation a managed-runtime
-tracer builds on (attach to the JVM/.NET/Node process, resolve the JIT code region from
-its maps/jitdump, trace it out of band); resolving a live runtime's generated-code
-image is the larger follow-on layered on top of this primitive.
+same `[0x0, 0x3, 0x6, 0xc, 0x11]` stream.
+
+The last piece — finding *which* `(base, len)` to trace in a live process — is two
+resolvers that read it from the OS the way `perf` and a debugger do:
+
+- `asmtest_proc_region_by_addr(pid, addr, &base, &len)` walks `/proc/<pid>/maps` for
+  the executable mapping containing `addr` and returns its extent — the "I have one
+  address inside a foreign routine, give me the whole region to trace" step.
+- `asmtest_proc_perfmap_symbol(pid, name, &base, &len)` parses `/tmp/perf-<pid>.map`,
+  the de-facto text format (`<hex start> <hex size> <symbol>`) that V8/Node, .NET, and
+  OpenJDK (+perf-map-agent) write so `perf` can symbolize **generated code**, and
+  returns a JIT method's `(base, len)` by name.
+
+So the full managed-runtime flow is: resolve the method's region from the runtime's
+perf-map (or an address via `/proc/maps`) → `PTRACE_ATTACH` → `trace_attached` →
+`PTRACE_DETACH`. `make hwtrace-test` runs it end to end: it discovers a foreign
+process's region from `/proc/<pid>/maps` using only an interior address and traces
+*that* region (no hardcoded base), and parses a JIT perf-map entry by name. The richer
+binary jitdump format is the remaining follow-on; the text perf-map is the portable
+lowest common denominator.
 
 ### Language wrappers
 

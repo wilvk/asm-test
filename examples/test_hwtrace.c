@@ -673,6 +673,117 @@ static void test_ptrace_attach(void) {
 #endif
 }
 
+/* Region resolution + trace: the step that turns the attach primitive into "point it
+ * at a running process". Discover a foreign process's executable region from
+ * /proc/<pid>/maps using only an interior address (what you'd have from a function
+ * pointer or a jitdump), then attach and trace THAT region — no hardcoded base. */
+static void test_proc_resolve_and_trace(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP proc resolve: not Linux x86-64\n");
+        return;
+    }
+    volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (go == MAP_FAILED || p == MAP_FAILED) {
+        printf("# SKIP proc resolve: mmap failed\n");
+        return;
+    }
+    *go = 0;
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        while (!*go) {
+        }
+        volatile long r = ((add2_fn)p)(20, 22);
+        (void)r;
+        _exit(0);
+    }
+    struct timespec ts = {0, 3 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+
+    /* Discover the region from the OS given only an interior address. */
+    void *base = NULL;
+    size_t rlen = 0;
+    int found = asmtest_proc_region_by_addr(pid, (char *)p + 4, &base, &rlen);
+    CHECK(found == ASMTEST_PTRACE_OK,
+          "proc maps: resolved the foreign region from an interior address");
+    CHECK(base == p && rlen >= sizeof ROUTINE,
+          "proc maps: discovered base == region start, len spans the routine");
+
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 ||
+        waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP proc resolve: PTRACE_ATTACH not permitted\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        munmap(p, sizeof ROUTINE);
+        munmap((void *)go, sizeof(int));
+        return;
+    }
+    *go = 1;
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_ptrace_trace_attached(pid, base, rlen, &result, tr);
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+
+    CHECK(rc == ASMTEST_PTRACE_OK && result == 42,
+          "proc resolve+trace: traced the OS-discovered region (result 42)");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq,
+          "proc resolve+trace: same [0,3,6,c,11] stream from the discovered region");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+    munmap((void *)go, sizeof(int));
+#else
+    printf("# SKIP proc resolve: not Linux x86-64\n");
+#endif
+}
+
+/* JIT method resolution: a JIT writes /tmp/perf-<pid>.map so perf can symbolize its
+ * generated code; we parse it to recover a method's (base,len) for trace_attached.
+ * Emulate one entry (with a spaces-bearing symbol) and resolve it by name. */
+static void test_perfmap_resolve(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP perfmap: not Linux x86-64\n");
+        return;
+    }
+    char path[64];
+    snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)getpid());
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        printf("# SKIP perfmap: cannot write %s\n", path);
+        return;
+    }
+    fprintf(f, "400000 1a void asmtest::jit::demo(long, long)\n");
+    fprintf(f, "500000 8 other_stub\n");
+    fclose(f);
+
+    void *base = NULL;
+    size_t len = 0;
+    int rc = asmtest_proc_perfmap_symbol(
+        getpid(), "void asmtest::jit::demo(long, long)", &base, &len);
+    CHECK(rc == ASMTEST_PTRACE_OK, "perfmap: resolved the JIT method by name");
+    CHECK(base == (void *)0x400000 && len == 0x1a,
+          "perfmap: base/len match the entry (symbol with spaces parsed whole)");
+    int rc2 = asmtest_proc_perfmap_symbol(getpid(), "no_such_method", &base, &len);
+    CHECK(rc2 == ASMTEST_PTRACE_ENOENT, "perfmap: missing symbol -> ENOENT");
+    remove(path);
+#else
+    printf("# SKIP perfmap: not Linux x86-64\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -696,6 +807,11 @@ int main(void) {
 
     /* Live: tracing a region in a SEPARATE, externally-attached process (W2 attach). */
     test_ptrace_attach();
+
+    /* Live: discover a foreign region from /proc/<pid>/maps then attach+trace it, and
+     * parse a JIT perf-map (the "point W2 at a running process" layer). */
+    test_proc_resolve_and_trace();
+    test_perfmap_resolve();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

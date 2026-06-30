@@ -54,6 +54,7 @@ extern "C" {
 #define ASMTEST_PTRACE_EINVAL (-1)
 #define ASMTEST_PTRACE_EUNAVAIL (-3) /* not a Linux x86-64 host                  */
 #define ASMTEST_PTRACE_ENOSYS (-5)   /* backend not compiled in                  */
+#define ASMTEST_PTRACE_ENOENT (-7)   /* region/symbol not found                  */
 #define ASMTEST_PTRACE_ETRACE (-8)   /* fork / ptrace / wait failure             */
 
 /* 1 if the out-of-process single-step tracer can run on this host (Linux x86-64),
@@ -96,6 +97,34 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * does not call out to other regions (same contract as the in-process stepper). */
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
+/* Code-region resolution — turn the foreign-attach primitive above   */
+/* into "point it at a running process" by discovering the (base,len)  */
+/* to trace from the OS, the way a debugger or `perf` does. Pure file  */
+/* reads; no ptrace, so they may be called before attaching.           */
+/* ------------------------------------------------------------------ */
+
+/* Find the executable mapping in /proc/<pid>/maps that CONTAINS `addr` and return its
+ * extent: *base_out = the mapping start, *len_out = its byte length. The common
+ * "I have one address inside a foreign routine, I need the whole region to trace it"
+ * step. Returns ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT if no executable mapping
+ * contains `addr`, or a negative status on a read failure. Either out-pointer may be
+ * NULL. */
+int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
+                                size_t *len_out);
+
+/* Find a JIT method by `name` in the perf map a JIT writes at /tmp/perf-<pid>.map —
+ * the de-facto text format `<hex start> <hex size> <symbol>` per line that V8/Node,
+ * .NET, and OpenJDK (+perf-map-agent) emit so `perf` can symbolize generated code.
+ * Returns the method's [*base_out, *len_out) — the (base,len) to hand
+ * asmtest_ptrace_trace_attached, completing "attach to a JIT and trace a method out of
+ * band". `name` is matched against the full symbol text after the size field. Returns
+ * ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT (no such symbol or no map file), or a
+ * negative status. (The richer binary jitdump format is a follow-on; the text perf-map
+ * is the portable lowest common denominator.) */
+int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
+                                size_t *len_out);
 
 #ifdef __cplusplus
 }

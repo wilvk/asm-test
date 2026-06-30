@@ -112,6 +112,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     bytes **from the target via `process_vm_readv`** (so the tracer does not share the
     target's memory). A live test attaches to a child that never called
     `PTRACE_TRACEME` and reconstructs the same `[0,3,6,c,11]` stream out of band.
+    Two **region resolvers** turn the attach primitive into "point it at a running
+    process": `asmtest_proc_region_by_addr(pid, addr, &base, &len)` finds the
+    executable mapping containing `addr` in `/proc/<pid>/maps` (one interior address →
+    the whole region to trace), and `asmtest_proc_perfmap_symbol(pid, name, &base,
+    &len)` parses `/tmp/perf-<pid>.map` — the text format V8/Node, .NET, and OpenJDK
+    (+perf-map-agent) write so `perf` can symbolize **generated code** — to recover a
+    JIT method's `(base, len)` by name. A live test discovers a foreign process's
+    region from `/proc/<pid>/maps` using only an interior address and traces *that*
+    region (no hardcoded base), completing the managed-runtime flow: resolve → attach
+    → `trace_attached` → detach. (The binary jitdump format remains a follow-on; the
+    text perf-map is the portable lowest common denominator.)
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

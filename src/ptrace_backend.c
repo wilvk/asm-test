@@ -24,6 +24,7 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -262,6 +263,76 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     return rc;
 }
 
+int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
+                                size_t *len_out) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+
+    uint64_t want = (uint64_t)(uintptr_t)addr;
+    char *line = NULL;
+    size_t cap = 0;
+    int rc = ASMTEST_PTRACE_ENOENT;
+    while (getline(&line, &cap, f) != -1) {
+        unsigned long start, end;
+        char perms[8];
+        if (sscanf(line, "%lx-%lx %7s", &start, &end, perms) != 3)
+            continue;
+        /* perms is "rwxp"; index 2 is the execute bit. */
+        if (perms[2] == 'x' && want >= start && want < end) {
+            if (base_out)
+                *base_out = (void *)(uintptr_t)start;
+            if (len_out)
+                *len_out = (size_t)(end - start);
+            rc = ASMTEST_PTRACE_OK;
+            break;
+        }
+    }
+    free(line);
+    fclose(f);
+    return rc;
+}
+
+int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
+                                size_t *len_out) {
+    if (name == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    char path[64];
+    snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return ASMTEST_PTRACE_ENOENT;
+
+    char *line = NULL;
+    size_t cap = 0;
+    int rc = ASMTEST_PTRACE_ENOENT;
+    while (getline(&line, &cap, f) != -1) {
+        unsigned long start, size;
+        int soff = 0;
+        /* "<hex start> <hex size> <symbol...>"; %n yields the symbol's offset. */
+        if (sscanf(line, "%lx %lx %n", &start, &size, &soff) < 2 || soff == 0)
+            continue;
+        char *sym = line + soff;
+        size_t sl = strlen(sym);
+        while (sl > 0 && (sym[sl - 1] == '\n' || sym[sl - 1] == '\r' ||
+                          sym[sl - 1] == ' ' || sym[sl - 1] == '\t'))
+            sym[--sl] = '\0';
+        if (strcmp(sym, name) == 0) {
+            if (base_out)
+                *base_out = (void *)(uintptr_t)start;
+            if (len_out)
+                *len_out = (size_t)size;
+            rc = ASMTEST_PTRACE_OK;
+            break;
+        }
+    }
+    free(line);
+    fclose(f);
+    return rc;
+}
+
 #else /* not Linux x86-64 — link-compatible stubs */
 
 int asmtest_ptrace_available(void) { return 0; }
@@ -292,6 +363,24 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     (void)len;
     (void)result;
     (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
+                                size_t *len_out) {
+    (void)pid;
+    (void)addr;
+    (void)base_out;
+    (void)len_out;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
+                                size_t *len_out) {
+    (void)pid;
+    (void)name;
+    (void)base_out;
+    (void)len_out;
     return ASMTEST_PTRACE_ENOSYS;
 }
 

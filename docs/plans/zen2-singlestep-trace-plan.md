@@ -99,11 +99,15 @@ reads the region bytes from the target via `process_vm_readv` (no shared mapping
 Both reconstruct the *same* exact offsets out of band, verified byte-for-byte against
 the in-process stepper — `trace_call` including a 62-instruction loop, `trace_attached`
 by attaching to a child that never called `PTRACE_TRACEME` — live in a plain
-unprivileged container by `make hwtrace-test`. The remaining Phase-5 fronts (Windows
-VEH, macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is
+unprivileged container by `make hwtrace-test`. The **region resolvers**
+`asmtest_proc_region_by_addr` (`/proc/<pid>/maps`) and `asmtest_proc_perfmap_symbol`
+(`/tmp/perf-<pid>.map`, the JIT text format V8/Node/.NET/OpenJDK emit) discover the
+`(base, len)` to hand `trace_attached`, completing the managed-runtime flow (resolve →
+attach → trace → detach) end to end in the live test. The remaining Phase-5 fronts
+(Windows VEH, macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is
 kernel-only, so out-of-process is its *only* single-step form) stay forward-look, as
-does resolving a live managed runtime's generated-code image (jitdump/`/proc/pid/maps`)
-that `trace_attached` would then trace.
+does the richer **binary jitdump** code-image reader (the text perf-map is the portable
+lowest common denominator already supported).
 
 ---
 
