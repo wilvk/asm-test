@@ -253,16 +253,47 @@ Linux/x86-64 backend.
 - **macOS (Intel).** The BSD signal layer delivers `SIGTRAP` in-process like Linux;
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
   entitlement. Slots into the [macOS clean-test plan](macos-clean-test-plan.md).
-- **W2 — out-of-process `ptrace` single-step. _Implemented (Linux x86-64)_** —
-  [asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`,
-  `asmtest_ptrace_trace_call`. A tracer parent `PTRACE_SINGLESTEP`s the tracee and
-  reads `RIP` per stop: same exact stream, but **out-of-band** — so it traces
-  **managed runtimes (.NET / JVM / Node) exactly**, where in-process DynamoRIO cannot
-  take over threads and IBS could only sample statistically. This is the recommended
-  managed-runtime path on AMD, and the **only** single-step variant available on
-  **ARM64** (Apple Silicon, Windows-on-ARM, Linux/ARM64), whose single-step
-  (`MDSCR_EL1.SS`) is kernel-only and thus has no in-process form — the AArch64
-  tracer rides the same `PTRACE_SINGLESTEP` seam and remains the open front.
+- **W2 — out-of-process `ptrace` single-step + foreign-process tracing.** The
+  out-of-band managed-runtime path: in-process DynamoRIO cannot take over a JIT/GC
+  runtime's threads, IBS only samples statistically, and Intel PT is Intel-only — so on
+  AMD (and for exact ARM64 single-step) this `ptrace` route is the way in. A tracer
+  parent `PTRACE_SINGLESTEP`s the target and reads `RIP` per stop, reconstructing the
+  same exact stream as the in-process stepper. The Linux/x86-64 core has landed in
+  stages ([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`):
+  - _Done._ `asmtest_ptrace_trace_call` — fork a tracee, single-step it, reconstruct
+    the same offsets out of band (verified byte-for-byte incl. a 62-instruction loop).
+  - _Done._ `asmtest_ptrace_trace_attached(pid, base, len, …)` — trace a region in a
+    **separate, externally-attached** process; reads the target's bytes via
+    `process_vm_readv` (no shared mapping); the caller owns the `PTRACE_ATTACH`/
+    `DETACH` policy. Verified by attaching to a child that never called
+    `PTRACE_TRACEME`.
+  - _Done._ Region resolvers — `asmtest_proc_region_by_addr` (`/proc/<pid>/maps`, an
+    address → its executable region) and `asmtest_proc_perfmap_symbol`
+    (`/tmp/perf-<pid>.map`, the JIT text format → a method's `(base,len)` by name) — so
+    the full flow **resolve → attach → trace → detach** runs end to end, live, on a
+    foreign process.
+
+  Suggested remaining W2 fronts (priority order):
+  - _Next — binary jitdump reader._ Parse the `jit-<pid>.dump` image format CoreCLR/
+    HotSpot/V8 emit. Richer than the text perf-map already supported: it carries the
+    code **bytes** and per-method load **timestamps**, so it resolves the *temporal*
+    same-address-different-bytes problem the [JIT runtime tracing
+    analysis](../analysis/jit-runtime-tracing.md) centres on. The perf-map is the
+    portable lowest common denominator; jitdump is the bytes-accurate upgrade and the
+    explicitly-planned continuation (it is also the byte source the
+    [hardware-trace plan, Phase 2](hardware-trace-plan.md) PT-attach path needs).
+  - _Next — per-binding surface._ The `asmtest_ptrace_*` / `asmtest_proc_*` C surface
+    is C-only today: its one-shot `trace_call`/`trace_attached` shape differs from the
+    uniform `begin`/`end` tier surface the binding function-parity gate covers, so it
+    was deliberately kept out of that gate. Expose it across the ten language bindings
+    — most valuably the managed ones (Java/.NET/Node) it most serves — as a focused,
+    tested follow-on, mirroring the cross-tier `resolve_tiers`/`auto_tier` fan-out.
+    *(Not previously tracked in any plan; recorded here.)*
+  - _Forward-look — AArch64 tracer._ ARM64 single-step (`MDSCR_EL1.SS`) is kernel-only,
+    so out-of-process `ptrace` is its **only** single-step form (Apple Silicon,
+    Windows-on-ARM, Linux/ARM64). The tracer rides the same `PTRACE_SINGLESTEP` seam,
+    decoding instruction lengths with `ASMTEST_ARCH_ARM64` Capstone; needs an AArch64
+    Linux host to validate.
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
   feedable into [amd_backend.c](../../src/amd_backend.c)'s replay loop as `(from,to)`
