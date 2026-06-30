@@ -16,6 +16,23 @@ DynamoRIO-based tier is addressed here.
 
 > Status legend: **planned** unless noted. Update as phases land.
 
+> **Phase M0 status (2026-06-30): BLOCKED UPSTREAM — no-go via the documented path.**
+> The Step-0 prerequisite — an official macOS DynamoRIO *release* — **does not
+> exist and never has.** A scan of the DynamoRIO GitHub releases API across **all
+> ~295 releases** (cronbuilds + stable tags back to `8.0.x`) returns only four
+> asset platforms — `DynamoRIO-AArch64-Linux`, `DynamoRIO-ARM-Linux-EABIHF`,
+> `DynamoRIO-Linux` (x86-64), and `DynamoRIO-Windows` — and **zero**
+> macOS/Mac/Darwin assets. DynamoRIO's own README still reads *"Mac OSX support is
+> in progress"* and its [releases page](https://dynamorio.org/page_releases.html)
+> lists only the Windows + Linux variants. Per Step 0's own instruction ("if the
+> macOS tarball does not exist … **stop** — the port is blocked upstream") this
+> phase cannot proceed on a prebuilt release. The only remaining avenue is a
+> **from-source macOS build of DynamoRIO** (out of scope here; "in progress"
+> upstream, with the `dr_app_*` all-thread Mach takeover historically its weakest
+> path), so M1/M2 stay **held** as the plan directs. See [Phase M0 → Step 0
+> result](#phase-m0--x86-64-attach--compiled-function-tracing-planned) below. The
+> Linux Phase 1–7 tier is unaffected.
+
 ---
 
 ## The dominant risk, stated first
@@ -139,6 +156,30 @@ against the unpacked tree and **record the findings in this doc**:
 If the macOS tarball does not exist or does not ship the Application Interface
 + client CMake support, **stop** — the port is blocked upstream.
 
+> **Step 0 result — recorded 2026-06-30: the macOS tarball does not exist.**
+> Queried the DynamoRIO GitHub releases API
+> (`/repos/DynamoRIO/dynamorio/releases`) across every page. The complete set of
+> release-asset platform prefixes, over **all ~295 releases** (latest cronbuild at
+> the time was `11.91.20630`; stable tags back to `8.0.x`), is exactly:
+>
+> | Asset prefix | Count (approx.) |
+> |---|---|
+> | `DynamoRIO-AArch64-Linux-` | ~295 |
+> | `DynamoRIO-ARM-Linux-EABIHF-` | ~295 |
+> | `DynamoRIO-Linux-` (x86-64) | ~295 |
+> | `DynamoRIO-Windows-` | ~293 |
+> | `DynamoRIO-MacOS-` / `-Mac-` / `-Darwin-` | **0** |
+>
+> There is **no** macOS/Mac/Darwin release asset, in any release, ever. The
+> `DynamoRIO-MacOS-<ver>.tar.gz` name this step assumed is hypothetical. The
+> project README confirms the status — *"Mac OSX support is in progress"* — and the
+> [releases page](https://dynamorio.org/page_releases.html) advertises only the
+> Windows + Linux variants. **Conclusion: Step 0 fails its own gate → STOP.** A
+> prebuilt-release M0 is impossible. The only path forward is building DynamoRIO
+> from source for macOS (separate, larger effort; not scoped by this plan), and
+> even then the Application Interface is the least-maintained DR macOS path — so it
+> is a research spike, not plumbing. M1/M2 remain held.
+
 **Step 1 — A compiled-function smoke test (`examples/test_drtrace_macos.c`).**
 
 Do **not** start from the existing `test_drtrace.c` (it depends on the
@@ -238,6 +279,13 @@ not the code. Could be an immediate no-go.
 **Go/no-go.** If attach crashes, or markers don't resolve, file the root cause and
 **hold M1/M2** until DR's macOS support is good enough. The Phase 1–5 Linux work
 is unaffected either way.
+
+> **Resolved 2026-06-30: NO-GO.** The spike never reached attach — it stops at
+> Step 0, because no macOS DynamoRIO release exists to attach *with* (see the
+> Step-0 result above). Root cause filed: **blocked upstream**, not a defect in
+> this repo. M1/M2 held. Revisit only if DynamoRIO begins publishing a macOS
+> release that ships the Application Interface + client CMake support, **or** a
+> separately-scoped from-source macOS DR build is undertaken.
 
 ---
 
