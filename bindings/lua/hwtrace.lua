@@ -55,6 +55,23 @@ int  asmtest_proc_region_by_addr(int pid, const void* addr, void** base_out, siz
 int  asmtest_proc_perfmap_symbol(int pid, const char* name, void** base_out, size_t* len_out);
 typedef struct { uint64_t code_addr; uint64_t code_size; uint64_t timestamp; uint64_t code_index; } asmtest_jitdump_entry_t;
 int  asmtest_jitdump_find(const char* path, int pid, const char* name, asmtest_jitdump_entry_t* out, uint8_t* bytes_out, size_t bytes_cap, size_t* bytes_len);
+/* Trace an attached target reading versioned code-image bytes (asmtest_ptrace.h). */
+int  asmtest_ptrace_trace_attached_versioned(int pid, const void* base, size_t len, void* img, uint64_t when, long* result, void* trace);
+/* asmtest_codeimage.h — time-aware code-image recorder (a userspace PERF_RECORD_TEXT_POKE). */
+struct asmtest_codeimage_event { uint64_t addr; uint64_t len; uint64_t timestamp; uint32_t pid; uint32_t tid; uint32_t kind; int32_t fd; };
+int   asmtest_codeimage_available(void);
+void  asmtest_codeimage_skip_reason(char* buf, size_t buflen);
+void* asmtest_codeimage_new(int pid);
+void  asmtest_codeimage_free(void* img);
+int   asmtest_codeimage_track(void* img, const void* base, size_t len);
+int   asmtest_codeimage_refresh(void* img);
+uint64_t asmtest_codeimage_now(const void* img);
+int   asmtest_codeimage_bytes_at(const void* img, const void* addr, uint64_t when, const uint8_t** out, size_t* out_len);
+int   asmtest_codeimage_bpf_available(void);
+void  asmtest_codeimage_bpf_skip_reason(char* buf, size_t buflen);
+int   asmtest_codeimage_watch_bpf(void* img);
+int   asmtest_codeimage_poll_bpf(void* img, int timeout_ms);
+int   asmtest_codeimage_next(void* img, struct asmtest_codeimage_event* out);
 ]])
 
 local ASMTEST_HW_OK = 0
@@ -63,6 +80,13 @@ local ASMTEST_HW_EUNAVAIL = -3  -- no hardware-trace backend available on this h
 -- asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
 local ASMTEST_PTRACE_OK = 0
 local ASMTEST_PTRACE_ENOENT = -7  -- region / symbol / method not found
+
+-- asmtest_codeimage.h — time-aware code-image recorder status codes / event kinds.
+local ASMTEST_CI_OK = 0
+local ASMTEST_CI_ENOENT = -7  -- addr never tracked / no version at-or-before when
+local ASMTEST_CI_KIND_MPROTECT = 1  -- mprotect(...PROT_EXEC...) — the common JIT edge
+local ASMTEST_CI_KIND_MMAP = 2      -- mmap(...PROT_EXEC...); addr is the real base
+local ASMTEST_CI_KIND_MEMFD = 3     -- memfd_create — staging hint; correlate via fd
 
 -- asmtest_trace_backend_t. SINGLESTEP is the portable default that runs on any
 -- x86-64 Linux; the rest self-skip off their specific bare-metal hardware.
@@ -123,6 +147,9 @@ M.TRACE_BEST = TRACE_BEST
 M.TRACE_CEILING_FREE = TRACE_CEILING_FREE
 M.TRACE_NATIVE_ONLY = TRACE_NATIVE_ONLY
 M.ASMTEST_HW_EUNAVAIL = ASMTEST_HW_EUNAVAIL
+M.ASMTEST_CI_KIND_MPROTECT = ASMTEST_CI_KIND_MPROTECT
+M.ASMTEST_CI_KIND_MMAP = ASMTEST_CI_KIND_MMAP
+M.ASMTEST_CI_KIND_MEMFD = ASMTEST_CI_KIND_MEMFD
 
 -- ---- Host-native machine code in real executable (W^X) memory ----
 local NativeCode = {}
@@ -404,6 +431,24 @@ function HwTrace.ptrace_trace_attached(pid, base, len, trace)
   return tonumber(result[0])
 end
 
+-- Like ptrace_trace_attached, but resolve the region's code bytes from a CodeImage
+-- timeline as of capture sequence `when` (when == 0 => latest) instead of a single
+-- live snapshot — so a method whose address was reused mid-trace is reconstructed
+-- from the bytes that were live then, not the bytes there at read time. `img` is a
+-- CodeImage, `trace` an HwTrace. Returns the target's RAX at the ret as a Lua number.
+-- error()s on a nonzero return. Pass img == nil to fall back to the live snapshot.
+function HwTrace.ptrace_trace_attached_versioned(pid, base, len, img, when, trace)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local result = ffi.new("long[1]")
+  local rc = L.asmtest_ptrace_trace_attached_versioned(
+    pid, ffi.cast("const void*", base), len,
+    img and img.img or nil, ffi.cast("uint64_t", when or 0), result, trace.h)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_attached_versioned failed: " .. tonumber(rc))
+  end
+  return tonumber(result[0])
+end
+
 -- Run an already-attached, ptrace-stopped target forward until it reaches `addr` (a
 -- software breakpoint that fires when the program itself next calls in), leaving it
 -- stopped there ready for ptrace_trace_attached -- the step that makes a resolved JIT
@@ -461,6 +506,154 @@ function HwTrace.jitdump_find(path, name, pid, want_bytes)
     code_index = tonumber(e.code_index),
     code       = code,
   }
+end
+
+-- ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
+--
+-- A userspace PERF_RECORD_TEXT_POKE: a timestamped code-image timeline for one
+-- target process. track() snapshots a region's bytes (version 0) and arms write-
+-- protect-async; refresh() re-snapshots only the pages written since the last arm,
+-- appending a new version stamped with the next monotonic sequence; bytes_at(addr,
+-- when) answers "what bytes were live at addr as of sequence `when`" — the query a
+-- W2 block-normalizer needs to reconstruct a JIT method whose address was reused.
+-- pid 0 records THIS process. An optional eBPF emission detector (watch_bpf /
+-- poll_bpf / next_event) self-skips without libbpf / CAP_BPF.
+local CodeImage = {}
+CodeImage.__index = CodeImage
+M.CodeImage = CodeImage
+
+-- True if the userspace recorder can detect page changes on this host (PAGEMAP_SCAN
+-- or the soft-dirty fallback). False on a failed library load too (self-skip).
+function CodeImage.available()
+  if not L then return false end
+  return L.asmtest_codeimage_available() ~= 0
+end
+
+-- Human-readable reason available() is false (or "available"). Returns a fixed
+-- message when the lib failed to load.
+function CodeImage.skip_reason()
+  if not L then return "libasmtest_hwtrace not loaded" end
+  local buf = ffi.new("char[?]", 160)
+  L.asmtest_codeimage_skip_reason(buf, 160)
+  return ffi.string(buf)
+end
+
+-- True if the eBPF emission detector can load and attach on this host (built with
+-- libbpf, kernel BTF present, sufficient privilege). False on a failed load too.
+function CodeImage.bpf_available()
+  if not L then return false end
+  return L.asmtest_codeimage_bpf_available() ~= 0
+end
+
+-- Human-readable reason bpf_available() is false (or "available").
+function CodeImage.bpf_skip_reason()
+  if not L then return "libasmtest_hwtrace not loaded" end
+  local buf = ffi.new("char[?]", 160)
+  L.asmtest_codeimage_bpf_skip_reason(buf, 160)
+  return ffi.string(buf)
+end
+
+-- Create a timeline recording `pid`'s memory (pid == 0 => this process). The wrapper
+-- holds the opaque handle and frees it via a finalizer (ffi.gc) so the timeline is
+-- released even if free() is not called explicitly. error()s on allocation failure.
+function CodeImage.new(pid)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local img = L.asmtest_codeimage_new(pid or 0)
+  if img == nil then error("asmtest_codeimage_new failed") end
+  return setmetatable({ img = ffi.gc(img, L.asmtest_codeimage_free) }, CodeImage)
+end
+
+-- Begin tracking [base, base+len) in the target: snapshot version 0 now and arm
+-- write-protect on its pages. May be called for several disjoint regions. error()s
+-- on a negative status.
+function CodeImage:track(base, len)
+  local rc = L.asmtest_codeimage_track(self.img, ffi.cast("const void*", base), len)
+  if rc ~= ASMTEST_CI_OK then
+    error("asmtest_codeimage_track failed: " .. tonumber(rc))
+  end
+  return self
+end
+
+-- Scan the tracked ranges for changed pages, re-snapshot each as a new version, and
+-- re-arm. Returns the number of new versions recorded (>= 0) as a Lua number.
+-- error()s on a negative status.
+function CodeImage:refresh()
+  local rc = tonumber(L.asmtest_codeimage_refresh(self.img))
+  if rc < 0 then
+    error("asmtest_codeimage_refresh failed: " .. rc)
+  end
+  return rc
+end
+
+-- The current capture sequence — a monotonic logical timestamp. Advances by one for
+-- every version recorded (track + each refresh change). 0 before anything is tracked.
+-- Converts the uint64_t cdata result to a Lua number.
+function CodeImage:now()
+  return tonumber(L.asmtest_codeimage_now(self.img))
+end
+
+-- The bytes live at `addr` as of capture sequence `when` (when == 0 => latest), as a
+-- Lua string, or nil when addr is not in any tracked region / there is no version
+-- at-or-before `when` (ASMTEST_CI_ENOENT). error()s on any other negative status.
+function CodeImage:bytes_at(addr, when)
+  local out = ffi.new("const uint8_t*[1]")
+  local out_len = ffi.new("size_t[1]")
+  local rc = L.asmtest_codeimage_bytes_at(self.img, ffi.cast("const void*", addr),
+                                          ffi.cast("uint64_t", when or 0),
+                                          out, out_len)
+  if rc == ASMTEST_CI_ENOENT then return nil end
+  if rc ~= ASMTEST_CI_OK then
+    error("asmtest_codeimage_bytes_at failed: " .. tonumber(rc))
+  end
+  return ffi.string(out[0], tonumber(out_len[0]))
+end
+
+-- Load and attach the eBPF emission detector, filtered to this timeline's pid.
+-- Returns the status code (ASMTEST_CI_OK, or a negative status when unavailable) as
+-- a Lua number, so the caller can self-skip without an error.
+function CodeImage:watch_bpf()
+  return tonumber(L.asmtest_codeimage_watch_bpf(self.img))
+end
+
+-- Drain ready emission events from the BPF ring buffer into the internal queue.
+-- timeout_ms == 0 is a non-blocking drain; > 0 waits up to that long. Returns the
+-- number of events queued (>= 0) as a Lua number. error()s on a negative status.
+function CodeImage:poll_bpf(timeout_ms)
+  local rc = tonumber(L.asmtest_codeimage_poll_bpf(self.img, timeout_ms or 0))
+  if rc < 0 then
+    error("asmtest_codeimage_poll_bpf failed: " .. rc)
+  end
+  return rc
+end
+
+-- Pop one queued emission event as a table { addr=, len=, timestamp=, pid=, tid=,
+-- kind=, fd= } (numeric fields are Lua numbers), or nil when the queue is empty.
+-- error()s on a negative status.
+function CodeImage:next_event()
+  local e = ffi.new("struct asmtest_codeimage_event")
+  local rc = tonumber(L.asmtest_codeimage_next(self.img, e))
+  if rc < 0 then
+    error("asmtest_codeimage_next failed: " .. rc)
+  end
+  if rc == 0 then return nil end
+  return {
+    addr      = tonumber(e.addr),
+    len       = tonumber(e.len),
+    timestamp = tonumber(e.timestamp),
+    pid       = tonumber(e.pid),
+    tid       = tonumber(e.tid),
+    kind      = tonumber(e.kind),
+    fd        = tonumber(e.fd),
+  }
+end
+
+-- Free the timeline and detach any eBPF watch. Idempotent; cancels the finalizer.
+function CodeImage:free()
+  if self.img ~= nil then
+    ffi.gc(self.img, nil)  -- cancel the finalizer; we free explicitly below
+    L.asmtest_codeimage_free(self.img)
+    self.img = nil
+  end
 end
 
 return M

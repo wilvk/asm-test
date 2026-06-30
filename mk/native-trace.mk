@@ -133,6 +133,37 @@ ifeq ($(shell pkg-config --exists libopencsd 2>/dev/null && echo 1),1)
 OPENCSD_DEF := -DASMTEST_HAVE_OPENCSD
 endif
 
+# Optional eBPF JIT code-emission detector (libbpf CO-RE) — the sideband accelerator for
+# the code-image recorder (src/codeimage.c): it detects mprotect/mmap PROT_EXEC +
+# memfd_create for a target PID and raises events into a bpf_ringbuf the recorder drains.
+# The .bpf.o + libbpf skeleton are built ONLY when clang + bpftool + libbpf are ALL present
+# (the `make docker-hwtrace-codeimage` lane). On a bare host without them CODEIMAGE_SKEL is
+# empty, so codeimage.o has no skeleton prerequisite, clang/bpftool are never invoked, the
+# TU compiles WITHOUT -DASMTEST_HAVE_LIBBPF, and asmtest_codeimage_bpf_available() returns 0
+# (self-skip) — exactly how an empty LIBIPT_DEF makes pt_backend.o compile decoder-free.
+CLANG         ?= clang
+BPFTOOL       ?= bpftool
+LIBBPF_CFLAGS ?= $(shell pkg-config --cflags libbpf 2>/dev/null)
+LIBBPF_LIBS   ?= $(shell pkg-config --libs libbpf 2>/dev/null)
+ifeq ($(shell pkg-config --exists libbpf 2>/dev/null && command -v $(CLANG) >/dev/null 2>&1 && command -v $(BPFTOOL) >/dev/null 2>&1 && echo 1),1)
+LIBBPF_DEF     := -DASMTEST_HAVE_LIBBPF
+CODEIMAGE_SKEL := $(BUILD)/codeimage.skel.h
+CODEIMAGE_INC  := -I$(BUILD)
+LINK_LIBBPF    := $(LIBBPF_LIBS)
+endif
+
+# CO-RE build chain (only reached when CODEIMAGE_SKEL is non-empty). vmlinux.h comes from
+# the running kernel's BTF (the container shares the host kernel at `docker run` time);
+# fall back to the checked-in minimal header. clang is BPF's only front end; -g emits the
+# BTF CO-RE relocations need, -O2 is required by the verifier.
+$(BUILD)/vmlinux.h: | $(BUILD)
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@ 2>/dev/null \
+	  || cp bpf/vmlinux_min.h $@
+$(BUILD)/codeimage.bpf.o: bpf/codeimage.bpf.c bpf/codeimage_event.h $(BUILD)/vmlinux.h | $(BUILD)
+	$(CLANG) -target bpf -D__TARGET_ARCH_x86 -g -O2 -Wall -I$(BUILD) -Ibpf -c $< -o $@
+$(BUILD)/codeimage.skel.h: $(BUILD)/codeimage.bpf.o | $(BUILD)
+	$(BPFTOOL) gen skeleton $< > $@
+
 $(BUILD)/hwtrace.o: src/hwtrace.c include/asmtest_hwtrace.h \
                     include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -159,19 +190,39 @@ $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 $(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                           include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# Time-aware code-image recorder (asmtest_codeimage.h): a userspace soft-dirty timeline
+# (the foreign-JIT byte source) + an OPTIONAL eBPF emission detector. The userspace path
+# needs no external library; the eBPF half is compiled in only when built
+# -DASMTEST_HAVE_LIBBPF (the LIBBPF_* probe below, which the bare host leaves empty so the
+# detector self-skips). $(LIBBPF_DEF)/$(LIBBPF_CFLAGS)/$(CODEIMAGE_INC) are empty unless
+# that probe fires (see Phase C).
+$(BUILD)/codeimage.o: src/codeimage.c include/asmtest_codeimage.h $(CODEIMAGE_SKEL) | $(BUILD)
+	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
+                $(BUILD)/codeimage.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
-	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 .PHONY: hwtrace-test
 hwtrace-test: $(BUILD)/test_hwtrace
 	@echo "== hwtrace-test =="
 	./$(BUILD)/test_hwtrace
+
+# Code-image recorder self-test (same-address-different-bytes temporal proof; runs live on
+# any Linux with soft-dirty — no privilege). When built with libbpf it additionally
+# exercises the eBPF emission detector, which self-skips without CAP_BPF.
+$(BUILD)/test_codeimage: $(HWTRACE_OBJS) $(BUILD)/test_codeimage.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
+
+.PHONY: codeimage-test
+codeimage-test: $(BUILD)/test_codeimage
+	@echo "== codeimage-test =="
+	./$(BUILD)/test_codeimage
 
 # Real managed-runtime trace: attach to a LIVE JIT runtime and trace a genuine
 # JIT-compiled method out of band (resolve from the runtime's perf-map -> attach ->
@@ -179,7 +230,7 @@ hwtrace-test: $(BUILD)/test_hwtrace
 # (never hangs/flakes) when the runtime is absent, ptrace is denied, or the JIT re-tiered
 # the code. Driven in plain containers by `make docker-hwtrace-jit{,-dotnet}`.
 $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
-	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-jitdump
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
@@ -458,6 +509,9 @@ $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                                include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
+                          $(CODEIMAGE_SKEL) | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -fPIC -c $< -o $@
 
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
@@ -467,10 +521,11 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/ss_backend.o \
                                        $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/ptrace_backend.o \
+                                       $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
-	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) -ldl -o $@
+	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 $(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_hwtrace)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_hwtrace)) $@

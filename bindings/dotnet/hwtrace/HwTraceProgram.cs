@@ -249,8 +249,74 @@ static class HwTraceProgram
         else
             Console.WriteLine($"# SKIP ptrace toolkit unavailable: {Ptrace.SkipReason()}");
 
+        // --- time-aware code-image recorder (Asmtest.CodeImage) --- //
+        // The userspace PERF_RECORD_TEXT_POKE: snapshot a region, then read back the bytes
+        // that were live at a logical timestamp. Self-skips off a host without
+        // PAGEMAP_SCAN / soft-dirty. The bpf detector is probed separately (it self-skips
+        // without libbpf / CAP_BPF).
+        if (CodeImage.Available())
+            CodeImageChecks();
+        else
+            Console.WriteLine($"# SKIP codeimage recorder unavailable: {CodeImage.SkipReason()}");
+
         Console.WriteLine($"1..{_n}");
         return _failed ? 1 : 0;
+    }
+
+    // mov rax,rdi; add rax,rsi; ret  (the bytes round-tripped through the code image)
+    static readonly byte[] CI_ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3 };
+
+    static void CodeImageChecks()
+    {
+        // Track a real exec region (this process, pid 0) and round-trip its bytes through
+        // the timeline: track snapshots version 0, Now() advances to >= 1, Refresh() is a
+        // cheap no-op (>= 0 new versions), and BytesAt(base, 0) returns the latest live
+        // bytes — which must equal what we put there.
+        var code = NativeCode.FromBytes(CI_ROUTINE);
+        try
+        {
+            using (var img = new CodeImage(0))
+            {
+                img.Track(code.Base, (nuint)code.Length);
+                Check(img.Now() >= 1, $"codeimage: Now() >= 1 after Track (got {img.Now()})");
+
+                int refreshed = img.Refresh();
+                Check(refreshed >= 0, $"codeimage: Refresh() >= 0 (got {refreshed})");
+
+                byte[] live = img.BytesAt(code.Base, 0);
+                Check(live != null && live.Length >= CI_ROUTINE.Length
+                      && PrefixEq(live, CI_ROUTINE),
+                      $"codeimage: BytesAt(base, 0) round-trips CI_ROUTINE (got {(live == null ? "null" : live.Length + " bytes")})");
+            }
+        }
+        finally
+        {
+            code.Free();
+        }
+
+        // bpf emission detector: SIDEBAND-only probe. Skip without libbpf / CAP_BPF;
+        // otherwise attaching to our own pid must succeed (ASMTEST_CI_OK == 0).
+        if (!CodeImage.BpfAvailable())
+        {
+            Console.WriteLine($"# SKIP codeimage bpf detector unavailable: {CodeImage.BpfSkipReason()}");
+        }
+        else
+        {
+            using (var img = new CodeImage(0))
+            {
+                int rc = img.WatchBpf();
+                Check(rc == 0, $"codeimage: WatchBpf() == 0 (got {rc})");
+            }
+        }
+    }
+
+    // True if a[0..b.Length) equals b (the timeline may report more bytes to the region end).
+    static bool PrefixEq(byte[] a, byte[] b)
+    {
+        if (a.Length < b.Length) return false;
+        for (int i = 0; i < b.Length; i++)
+            if (a[i] != b[i]) return false;
+        return true;
     }
 
     static void PtraceChecks()

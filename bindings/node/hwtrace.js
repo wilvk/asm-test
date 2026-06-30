@@ -68,6 +68,14 @@ const TRACE_NATIVE_ONLY = 0x2;  // forbid the native->emulator fidelity crossing
 const ASMTEST_PTRACE_OK = 0;
 const ASMTEST_PTRACE_ENOENT = -7; // region / symbol / method not found
 
+// asmtest_codeimage.h — time-aware code-image recorder status codes + event kinds
+const ASMTEST_CI_OK = 0;
+const ASMTEST_CI_ENOENT = -7; // address never tracked / no version at-or-before when
+// asmtest_codeimage_event_t kind field
+const ASMTEST_CI_KIND_MPROTECT = 1;
+const ASMTEST_CI_KIND_MMAP = 2;
+const ASMTEST_CI_KIND_MEMFD = 3;
+
 // Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
 // build); otherwise fall back to the build/ tree next to the repo root. The tier
 // may be absent, so the load is wrapped in try/catch and available() self-skips
@@ -87,6 +95,18 @@ const Options = koffi.struct('asmtest_hwtrace_options_t', {
   data_size: 'size_t',
   snapshot: 'int',
   object_hint: 'str',
+});
+
+// koffi struct layout mirroring asmtest_codeimage_event_t (40 bytes): three
+// uint64s then three uint32s and an int32, all naturally packed.
+const CodeImageEvent = koffi.struct('asmtest_codeimage_event_t', {
+  addr: 'uint64',
+  len: 'uint64',
+  timestamp: 'uint64',
+  pid: 'uint32',
+  tid: 'uint32',
+  kind: 'uint32',
+  fd: 'int32',
 });
 
 // The generated code is invoked through this function-pointer prototype: each
@@ -146,10 +166,31 @@ let _loadError = null;
     ptraceSkipReason: lib.func('void asmtest_ptrace_skip_reason(_Out_ char*, size_t)'),
     ptraceTraceCall: lib.func('int asmtest_ptrace_trace_call(const void*, size_t, const long*, int, _Out_ long*, void*)'),
     ptraceTraceAttached: lib.func('int asmtest_ptrace_trace_attached(int, const void*, size_t, _Out_ long*, void*)'),
+    // Version-aware attach: traces a foreign region but resolves the bytes from a
+    // code-image timeline (`img`) as of capture sequence `when`, not a late snapshot.
+    ptraceTraceAttachedVersioned: lib.func('int asmtest_ptrace_trace_attached_versioned(int, const void*, size_t, void*, uint64_t, _Out_ long*, void*)'),
     ptraceRunTo: lib.func('int asmtest_ptrace_run_to(int, const void*)'),
     procRegionByAddr: lib.func('int asmtest_proc_region_by_addr(int, const void*, _Out_ void**, _Out_ size_t*)'),
     procPerfmapSymbol: lib.func('int asmtest_proc_perfmap_symbol(int, const char*, _Out_ void**, _Out_ size_t*)'),
     jitdumpFind: lib.func('int asmtest_jitdump_find(const char*, int, const char*, _Out_ uint8_t*, _Out_ uint8_t*, size_t, _Out_ size_t*)'),
+    // asmtest_codeimage.h — time-aware code-image recorder (a userspace
+    // PERF_RECORD_TEXT_POKE). The img handle is an opaque void*. bytes_at borrows
+    // bytes owned by the timeline: it writes a const uint8_t* through `out` (read
+    // as a pointer-to-pointer) and the available length through `out_len`. The
+    // event drain pops one asmtest_codeimage_event_t (40 bytes) per next().
+    codeimageAvailable: lib.func('int asmtest_codeimage_available()'),
+    codeimageSkipReason: lib.func('void asmtest_codeimage_skip_reason(_Out_ char*, size_t)'),
+    codeimageNew: lib.func('void* asmtest_codeimage_new(int)'),
+    codeimageFree: lib.func('void asmtest_codeimage_free(void*)'),
+    codeimageTrack: lib.func('int asmtest_codeimage_track(void*, const void*, size_t)'),
+    codeimageRefresh: lib.func('int asmtest_codeimage_refresh(void*)'),
+    codeimageNow: lib.func('uint64_t asmtest_codeimage_now(void*)'),
+    codeimageBytesAt: lib.func('int asmtest_codeimage_bytes_at(void*, const void*, uint64_t, _Out_ void**, _Out_ size_t*)'),
+    codeimageBpfAvailable: lib.func('int asmtest_codeimage_bpf_available()'),
+    codeimageBpfSkipReason: lib.func('void asmtest_codeimage_bpf_skip_reason(_Out_ char*, size_t)'),
+    codeimageWatchBpf: lib.func('int asmtest_codeimage_watch_bpf(void*)'),
+    codeimagePollBpf: lib.func('int asmtest_codeimage_poll_bpf(void*, int)'),
+    codeimageNext: lib.func('int asmtest_codeimage_next(void*, _Out_ asmtest_codeimage_event_t*)'),
   };
 })();
 
@@ -399,6 +440,20 @@ class Ptrace {
     return Number(resultBuf.readBigInt64LE(0));
   }
 
+  /** Like traceAttached, but reconstruct the region's bytes from a CodeImage
+   *  timeline (`img`) as of capture sequence `when` (0 => latest) instead of a
+   *  late process_vm_readv snapshot — the W2 fix for a JIT method whose address
+   *  was patched or reused mid-trace. Returns the target's RAX at the ret. */
+  static traceAttachedVersioned(pid, base, len, img, when, trace) {
+    const resultBuf = Buffer.alloc(8);
+    const rc = _fn.ptraceTraceAttachedVersioned(
+      pid, base, len, img ? img._handle : null, BigInt(when), resultBuf, trace._handle);
+    if (rc !== ASMTEST_PTRACE_OK) {
+      throw new Error(`asmtest_ptrace_trace_attached_versioned failed: ${rc}`);
+    }
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
   /** Run an already-attached, ptrace-stopped target forward until it reaches `addr`
    *  (a software breakpoint that fires when the program itself next calls in),
    *  leaving it stopped there ready for traceAttached — the step that makes a resolved
@@ -452,12 +507,136 @@ class Ptrace {
   }
 }
 
+/** A time-aware code-image recorder (asmtest_codeimage.h): a userspace
+ *  PERF_RECORD_TEXT_POKE. track() snapshots a region's bytes (version 0) and arms
+ *  write-protect; refresh() re-snapshots only changed pages as new versions stamped
+ *  with a monotonic logical timestamp; bytesAt(addr, when) answers "what bytes were
+ *  live at addr as of sequence `when`" — the query a branch-trace decoder needs to
+ *  reconstruct a JIT method whose address was patched, freed, or reused mid-trace.
+ *  Records THIS process (pid 0) or a foreign one. Linux. Reuses koffi external
+ *  pointers; static probes are camelCase like the rest of the surface. */
+class CodeImage {
+  constructor(pid = 0) {
+    this._handle = _fn.codeimageNew(pid);
+    if (!this._handle) throw new Error('asmtest_codeimage_new failed');
+  }
+
+  /** True if the userspace page-change recorder can run on this host (PAGEMAP_SCAN
+   *  or the soft-dirty fallback). False on load failure. Self-skip otherwise. */
+  static available() {
+    if (!_lib) return false;
+    return _fn.codeimageAvailable() !== 0;
+  }
+
+  /** Human-readable reason available() is false (or 'available'). */
+  static skipReason() {
+    if (!_lib) return _loadError ? `load failed: ${_loadError.message}` : 'load failed';
+    const buf = Buffer.alloc(160);
+    _fn.codeimageSkipReason(buf, buf.length);
+    const nul = buf.indexOf(0);
+    return buf.toString('utf8', 0, nul < 0 ? buf.length : nul);
+  }
+
+  /** True if the optional eBPF emission detector (Phase C) can load and attach on
+   *  this host (libbpf, BTF, privilege). False on load failure. */
+  static bpfAvailable() {
+    if (!_lib) return false;
+    return _fn.codeimageBpfAvailable() !== 0;
+  }
+
+  /** Human-readable reason bpfAvailable() is false (or 'available'). */
+  static bpfSkipReason() {
+    if (!_lib) return _loadError ? `load failed: ${_loadError.message}` : 'load failed';
+    const buf = Buffer.alloc(160);
+    _fn.codeimageBpfSkipReason(buf, buf.length);
+    const nul = buf.indexOf(0);
+    return buf.toString('utf8', 0, nul < 0 ? buf.length : nul);
+  }
+
+  /** Begin tracking [base, base+len): snapshot version 0 and arm write-protect on
+   *  its pages. `base` may be a NativeCode's external pointer or a numeric/BigInt
+   *  address. Returns the status code (ASMTEST_CI_OK on success). */
+  track(base, len) {
+    return _fn.codeimageTrack(this._handle, base, len);
+  }
+
+  /** Scan tracked ranges for changed pages and re-snapshot each as a new version.
+   *  Returns the number of new versions recorded (>= 0), or a negative status. */
+  refresh() {
+    return _fn.codeimageRefresh(this._handle);
+  }
+
+  /** The current capture sequence — a monotonic logical timestamp. 0 before
+   *  anything is tracked, advancing by one per version recorded. */
+  now() {
+    return Number(_fn.codeimageNow(this._handle));
+  }
+
+  /** The bytes live at `addr` as of capture sequence `when` (0 => latest) as a
+   *  Buffer (a copy of the borrowed timeline bytes), or null on ASMTEST_CI_ENOENT /
+   *  any non-OK status. `addr` may be a NativeCode external pointer or a numeric
+   *  address. The C side writes a const uint8_t* through `out` and the available
+   *  length through `out_len`; koffi decodes the borrowed pointer into a Buffer. */
+  bytesAt(addr, when = 0) {
+    const outPtr = [null];
+    const outLen = [0];
+    const rc = _fn.codeimageBytesAt(this._handle, addr, BigInt(when), outPtr, outLen);
+    if (rc !== ASMTEST_CI_OK) return null;
+    const n = Number(outLen[0]);
+    if (!outPtr[0] || n === 0) return Buffer.alloc(0);
+    // outPtr[0] is a borrowed pointer owned by the timeline (valid until free()).
+    // Decode n bytes out of it and copy into an owned Buffer.
+    const view = koffi.decode(outPtr[0], 'uint8_t', n);
+    return Buffer.from(view);
+  }
+
+  /** Load and attach the eBPF emission detector, filtered to this image's pid.
+   *  Subsequent pollBpf() drains events. Returns the status code (0 on success). */
+  watchBpf() {
+    return _fn.codeimageWatchBpf(this._handle);
+  }
+
+  /** Drain ready emission events from the BPF ring buffer into the internal queue.
+   *  timeout_ms == 0 is a non-blocking drain. Returns the number queued (>= 0) or a
+   *  negative status. */
+  pollBpf(timeoutMs = 0) {
+    return _fn.codeimagePollBpf(this._handle, timeoutMs);
+  }
+
+  /** Pop one queued emission event as { addr, len, timestamp, pid, tid, kind, fd },
+   *  or null when the queue is empty (or on a negative status). */
+  nextEvent() {
+    const ev = {};
+    const rc = _fn.codeimageNext(this._handle, ev);
+    if (rc !== 1) return null;
+    return {
+      addr: Number(ev.addr),
+      len: Number(ev.len),
+      timestamp: Number(ev.timestamp),
+      pid: ev.pid,
+      tid: ev.tid,
+      kind: ev.kind,
+      fd: ev.fd,
+    };
+  }
+
+  /** Free the timeline and all recorded versions; detaches any eBPF watch. */
+  free() {
+    if (this._handle) {
+      _fn.codeimageFree(this._handle);
+      this._handle = null;
+    }
+  }
+}
+
 module.exports = {
-  HwTrace, NativeCode, Ptrace,
+  HwTrace, NativeCode, Ptrace, CodeImage,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
   TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,
   FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
   ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT,
+  ASMTEST_CI_OK, ASMTEST_CI_ENOENT,
+  ASMTEST_CI_KIND_MPROTECT, ASMTEST_CI_KIND_MMAP, ASMTEST_CI_KIND_MEMFD,
 };

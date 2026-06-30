@@ -258,6 +258,56 @@ type JitdumpFindFn = unsafe extern "C" fn(
     usize,
     *mut usize,
 ) -> c_int;
+type PtraceTraceAttachedVersionedFn = unsafe extern "C" fn(
+    c_int,
+    *const c_void,
+    usize,
+    *mut c_void,
+    u64,
+    *mut c_long,
+    *mut c_void,
+) -> c_int;
+
+// --- Time-aware code-image recorder (asmtest_codeimage.h) ----------------- //
+//
+// The userspace PERF_RECORD_TEXT_POKE: a timestamped code-image timeline that
+// snapshots a (possibly foreign) region's bytes and re-snapshots only the pages
+// that changed, so a branch-trace decoder can ask "what bytes were live at addr
+// as of sequence `when`". Same `libasmtest_hwtrace`, same resolve-at-run-time
+// idiom; each entry is `None` when the symbol is absent so callers self-skip.
+
+type CodeImageAvailableFn = unsafe extern "C" fn() -> c_int;
+type CodeImageSkipReasonFn = unsafe extern "C" fn(*mut c_char, usize);
+type CodeImageNewFn = unsafe extern "C" fn(c_int) -> *mut c_void;
+type CodeImageFreeFn = unsafe extern "C" fn(*mut c_void);
+type CodeImageTrackFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> c_int;
+type CodeImageRefreshFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+type CodeImageNowFn = unsafe extern "C" fn(*mut c_void) -> u64;
+type CodeImageBytesAtFn = unsafe extern "C" fn(
+    *mut c_void,
+    *const c_void,
+    u64,
+    *mut *const u8,
+    *mut usize,
+) -> c_int;
+type CodeImageBpfAvailableFn = unsafe extern "C" fn() -> c_int;
+type CodeImageBpfSkipReasonFn = unsafe extern "C" fn(*mut c_char, usize);
+type CodeImageWatchBpfFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+type CodeImagePollBpfFn = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
+type CodeImageNextFn = unsafe extern "C" fn(*mut c_void, *mut CodeEventRaw) -> c_int;
+
+/// Mirrors `asmtest_codeimage_event_t` (40 bytes, no padding) — a code-emission
+/// event from the optional eBPF detector.
+#[repr(C)]
+struct CodeEventRaw {
+    addr: u64,
+    len: u64,
+    timestamp: u64,
+    pid: u32,
+    tid: u32,
+    kind: u32,
+    fd: i32,
+}
 
 struct HwFns {
     available: Option<AvailableFn>,
@@ -288,9 +338,24 @@ struct HwFns {
     ptrace_trace_call: Option<PtraceTraceCallFn>,
     ptrace_trace_attached: Option<PtraceTraceAttachedFn>,
     ptrace_run_to: Option<PtraceRunToFn>,
+    ptrace_trace_attached_versioned: Option<PtraceTraceAttachedVersionedFn>,
     proc_region_by_addr: Option<ProcRegionByAddrFn>,
     proc_perfmap_symbol: Option<ProcPerfmapSymbolFn>,
     jitdump_find: Option<JitdumpFindFn>,
+    // asmtest_codeimage.h — time-aware code-image recorder.
+    ci_available: Option<CodeImageAvailableFn>,
+    ci_skip_reason: Option<CodeImageSkipReasonFn>,
+    ci_new: Option<CodeImageNewFn>,
+    ci_free: Option<CodeImageFreeFn>,
+    ci_track: Option<CodeImageTrackFn>,
+    ci_refresh: Option<CodeImageRefreshFn>,
+    ci_now: Option<CodeImageNowFn>,
+    ci_bytes_at: Option<CodeImageBytesAtFn>,
+    ci_bpf_available: Option<CodeImageBpfAvailableFn>,
+    ci_bpf_skip_reason: Option<CodeImageBpfSkipReasonFn>,
+    ci_watch_bpf: Option<CodeImageWatchBpfFn>,
+    ci_poll_bpf: Option<CodeImagePollBpfFn>,
+    ci_next: Option<CodeImageNextFn>,
 }
 
 // The function pointers come from the process's own libraries and outlive any
@@ -349,9 +414,14 @@ fn hw_fns() -> &'static HwFns {
                 truncated: None, block_at: None, insn_at: None,
                 ptrace_available: None, ptrace_skip_reason: None,
                 ptrace_trace_call: None, ptrace_trace_attached: None,
-                ptrace_run_to: None,
+                ptrace_run_to: None, ptrace_trace_attached_versioned: None,
                 proc_region_by_addr: None, proc_perfmap_symbol: None,
                 jitdump_find: None,
+                ci_available: None, ci_skip_reason: None,
+                ci_new: None, ci_free: None, ci_track: None,
+                ci_refresh: None, ci_now: None, ci_bytes_at: None,
+                ci_bpf_available: None, ci_bpf_skip_reason: None,
+                ci_watch_bpf: None, ci_poll_bpf: None, ci_next: None,
             };
         }
         let sym = |name: &str| -> *mut c_void {
@@ -399,9 +469,29 @@ fn hw_fns() -> &'static HwFns {
             ptrace_trace_call: load!("asmtest_ptrace_trace_call", PtraceTraceCallFn),
             ptrace_trace_attached: load!("asmtest_ptrace_trace_attached", PtraceTraceAttachedFn),
             ptrace_run_to: load!("asmtest_ptrace_run_to", PtraceRunToFn),
+            ptrace_trace_attached_versioned: load!(
+                "asmtest_ptrace_trace_attached_versioned",
+                PtraceTraceAttachedVersionedFn
+            ),
             proc_region_by_addr: load!("asmtest_proc_region_by_addr", ProcRegionByAddrFn),
             proc_perfmap_symbol: load!("asmtest_proc_perfmap_symbol", ProcPerfmapSymbolFn),
             jitdump_find: load!("asmtest_jitdump_find", JitdumpFindFn),
+            ci_available: load!("asmtest_codeimage_available", CodeImageAvailableFn),
+            ci_skip_reason: load!("asmtest_codeimage_skip_reason", CodeImageSkipReasonFn),
+            ci_new: load!("asmtest_codeimage_new", CodeImageNewFn),
+            ci_free: load!("asmtest_codeimage_free", CodeImageFreeFn),
+            ci_track: load!("asmtest_codeimage_track", CodeImageTrackFn),
+            ci_refresh: load!("asmtest_codeimage_refresh", CodeImageRefreshFn),
+            ci_now: load!("asmtest_codeimage_now", CodeImageNowFn),
+            ci_bytes_at: load!("asmtest_codeimage_bytes_at", CodeImageBytesAtFn),
+            ci_bpf_available: load!("asmtest_codeimage_bpf_available", CodeImageBpfAvailableFn),
+            ci_bpf_skip_reason: load!(
+                "asmtest_codeimage_bpf_skip_reason",
+                CodeImageBpfSkipReasonFn
+            ),
+            ci_watch_bpf: load!("asmtest_codeimage_watch_bpf", CodeImageWatchBpfFn),
+            ci_poll_bpf: load!("asmtest_codeimage_poll_bpf", CodeImagePollBpfFn),
+            ci_next: load!("asmtest_codeimage_next", CodeImageNextFn),
         }
     })
 }
@@ -886,6 +976,47 @@ impl Ptrace {
         result as i64
     }
 
+    /// Like [`trace_attached`](Ptrace::trace_attached), but decode the region
+    /// against TIME-CORRECT bytes from a [`CodeImage`] recorder instead of a single
+    /// live `process_vm_readv` snapshot: for a JIT whose code at `base` was patched,
+    /// freed, or had its address reused during the run, passing the recorder plus the
+    /// logical timestamp `when` (`0` = latest) the region was live at makes block
+    /// normalization use the bytes that were actually executing. `img` must already
+    /// be tracking a region covering `[base, base+len)`
+    /// ([`CodeImage::track`]); the call returns
+    /// [`ASMTEST_PTRACE_ENOENT`] otherwise. Returns the routine's return value (the
+    /// target's RAX at the `ret`). Panics on a ptrace failure or when the lib is
+    /// absent — gate on [`available`](Ptrace::available) first.
+    pub fn trace_attached_versioned(
+        pid: i32,
+        base: usize,
+        len: usize,
+        img: &CodeImage,
+        when: u64,
+        trace: &Trace,
+    ) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_attached_versioned
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let mut result: c_long = 0;
+        let rc = unsafe {
+            f(
+                pid as c_int,
+                base as *const c_void,
+                len,
+                img.handle,
+                when,
+                &mut result,
+                trace.handle,
+            )
+        };
+        assert!(
+            rc == ASMTEST_PTRACE_OK,
+            "asmtest_ptrace_trace_attached_versioned failed: {rc}"
+        );
+        result as i64
+    }
+
     /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
     /// `addr` (a software breakpoint that fires when the program itself next calls
     /// in), leaving it stopped there ready for [`trace_attached`](Ptrace::trace_attached)
@@ -982,3 +1113,256 @@ impl Ptrace {
         })
     }
 }
+
+/// `ASMTEST_CI_OK` from `asmtest_codeimage.h`; nonzero is an error/status.
+const ASMTEST_CI_OK: c_int = 0;
+/// `ASMTEST_CI_ENOENT` from `asmtest_codeimage.h`: address never tracked, or no
+/// version at-or-before `when` (the `None`-returning [`CodeImage::bytes_at`] path).
+pub const ASMTEST_CI_ENOENT: c_int = -7;
+
+/// How a code-emission event was observed (mirrors the `ASMTEST_CI_KIND_*` macros).
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodeKind {
+    /// `mprotect(...PROT_EXEC...)` — the common JIT edge.
+    Mprotect = 1,
+    /// `mmap(...PROT_EXEC...)`; `addr` is the real base.
+    Mmap = 2,
+    /// `memfd_create` — staging hint; correlate via `fd`.
+    Memfd = 3,
+}
+
+/// A code-emission event from the optional eBPF detector (the safe wrapper over
+/// `asmtest_codeimage_event_t`): where/when new executable code appeared for the
+/// tracked pid. Sideband only — never the instruction stream.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CodeEmission {
+    /// Published base address (`0` for a memfd hint).
+    pub addr: u64,
+    /// Byte length (`0` for a memfd hint).
+    pub len: u64,
+    /// `bpf_ktime_get_ns()` at emission.
+    pub timestamp: u64,
+    /// The tgid that published.
+    pub pid: u32,
+    /// The thread that published.
+    pub tid: u32,
+    /// How the emission was observed.
+    pub kind: CodeKind,
+    /// The memfd fd, or `-1`.
+    pub fd: i32,
+}
+
+/// Map a raw `asmtest_codeimage_event_t.kind` (a C macro value) to [`CodeKind`].
+/// Any value outside the known set is a contract break and panics.
+fn code_kind_of(kind: u32) -> CodeKind {
+    match kind {
+        1 => CodeKind::Mprotect,
+        2 => CodeKind::Mmap,
+        3 => CodeKind::Memfd,
+        other => panic!("unexpected codeimage event kind {other}"),
+    }
+}
+
+/// A time-aware code-image recorder (`asmtest_codeimage.h`): a userspace
+/// `PERF_RECORD_TEXT_POKE`. [`track`](CodeImage::track) snapshots a (possibly
+/// foreign) region's bytes and arms write-protect-async on its pages;
+/// [`refresh`](CodeImage::refresh) re-snapshots only the pages that changed,
+/// appending a new version stamped with the next monotonic sequence; and
+/// [`bytes_at`](CodeImage::bytes_at) answers "what bytes were live at `addr` as of
+/// sequence `when`" — the query a branch-trace decoder or the W2 block-normalizer
+/// needs to reconstruct a method whose address was reused. Owns the underlying
+/// `asmtest_codeimage_t`; dropping the value frees it (detaching any eBPF watch).
+///
+/// Wraps the same `libasmtest_hwtrace` the [`HwTrace`] tier loads, so the same
+/// self-skip applies: gate on [`CodeImage::available`] (it is `false` when the lib
+/// or the host support is absent) before recording.
+pub struct CodeImage {
+    handle: *mut c_void,
+}
+
+impl CodeImage {
+    /// True if the userspace recorder can detect page changes on this host
+    /// (`PAGEMAP_SCAN` or the soft-dirty fallback) and the lib loaded. Never panics,
+    /// so callers (and the test) self-skip cleanly.
+    pub fn available() -> bool {
+        match hw_fns().ci_available {
+            Some(f) => unsafe { f() != 0 },
+            None => false,
+        }
+    }
+
+    /// A human-readable reason [`available`](CodeImage::available) is false. Empty
+    /// string when the lib is absent.
+    pub fn skip_reason() -> String {
+        match hw_fns().ci_skip_reason {
+            Some(f) => {
+                let mut buf = [0u8; 160];
+                unsafe {
+                    f(buf.as_mut_ptr() as *mut c_char, buf.len());
+                    std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char)
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Create a timeline recording `pid`'s memory (`pid == 0` => this process).
+    /// Panics if the lib is unavailable or the allocation fails — gate on
+    /// [`available`](CodeImage::available) first.
+    pub fn new(pid: i32) -> CodeImage {
+        let f = hw_fns()
+            .ci_new
+            .expect("libasmtest_hwtrace not loaded (CodeImage::available() is false)");
+        let h = unsafe { f(pid as c_int) };
+        assert!(!h.is_null(), "asmtest_codeimage_new failed");
+        CodeImage { handle: h }
+    }
+
+    /// Begin tracking `[base, base+len)` in the target: snapshot version 0 now and
+    /// arm write-protect-async on its pages so the next [`refresh`](CodeImage::refresh)
+    /// sees changes. May be called for several disjoint regions.
+    pub fn track(&self, base: usize, len: usize) -> Result<(), String> {
+        let f = hw_fns().ci_track.ok_or("libasmtest_hwtrace not loaded")?;
+        let rc = unsafe { f(self.handle, base as *const c_void, len) };
+        if rc != ASMTEST_CI_OK {
+            return Err(format!("asmtest_codeimage_track failed: {rc}"));
+        }
+        Ok(())
+    }
+
+    /// Scan the tracked ranges for pages changed since the last arm, re-snapshot each
+    /// as a NEW version, and re-arm. Returns the number of new versions recorded
+    /// (`>= 0`), or a negative status. Cheap when nothing changed.
+    pub fn refresh(&self) -> i32 {
+        match hw_fns().ci_refresh {
+            Some(f) => unsafe { f(self.handle) as i32 },
+            None => 0,
+        }
+    }
+
+    /// The current capture sequence — a monotonic logical timestamp the caller stamps
+    /// trace positions against. Advances by one for every version recorded (track +
+    /// each refresh change). `0` before anything is tracked.
+    pub fn now(&self) -> u64 {
+        match hw_fns().ci_now {
+            Some(f) => unsafe { f(self.handle) },
+            None => 0,
+        }
+    }
+
+    /// The bytes live at `addr` as of capture sequence `when` (`when == 0` => the
+    /// latest version), copied out, or `None` when `addr` is in no tracked region /
+    /// no version exists at-or-before `when` (`ASMTEST_CI_ENOENT`) or the lib is
+    /// absent. The returned bytes run from `addr` to the end of that version's region.
+    pub fn bytes_at(&self, addr: usize, when: u64) -> Option<Vec<u8>> {
+        let f = hw_fns().ci_bytes_at?;
+        let mut out: *const u8 = std::ptr::null();
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            f(self.handle, addr as *const c_void, when, &mut out, &mut out_len)
+        };
+        if rc != ASMTEST_CI_OK || out.is_null() {
+            return None;
+        }
+        // *out borrows bytes owned by the timeline (valid until free); copy them out
+        // so the returned Vec doesn't outlive the borrow.
+        Some(unsafe { std::slice::from_raw_parts(out, out_len) }.to_vec())
+    }
+
+    /// True if the optional eBPF emission detector can load and attach on this host
+    /// (built with libbpf, kernel BTF present, sufficient privilege) and the lib
+    /// loaded. Self-skips cleanly without it.
+    pub fn bpf_available() -> bool {
+        match hw_fns().ci_bpf_available {
+            Some(f) => unsafe { f() != 0 },
+            None => false,
+        }
+    }
+
+    /// A human-readable reason [`bpf_available`](CodeImage::bpf_available) is false.
+    /// Empty string when the lib is absent.
+    pub fn bpf_skip_reason() -> String {
+        match hw_fns().ci_bpf_skip_reason {
+            Some(f) => {
+                let mut buf = [0u8; 160];
+                unsafe {
+                    f(buf.as_mut_ptr() as *mut c_char, buf.len());
+                    std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char)
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Load the CO-RE program, filter it to this image's pid, and attach it.
+    /// Subsequent [`poll_bpf`](CodeImage::poll_bpf) calls drain emission events.
+    /// Returns `ASMTEST_CI_OK`, or a negative status (`ASMTEST_CI_ENOSYS` built
+    /// without libbpf, `ASMTEST_CI_EUNAVAIL` no privilege / no BTF,
+    /// `ASMTEST_CI_ELOAD`); also a negative status when the lib is absent.
+    pub fn watch_bpf(&self) -> i32 {
+        match hw_fns().ci_watch_bpf {
+            Some(f) => unsafe { f(self.handle) as i32 },
+            None => ASMTEST_CI_ENOENT,
+        }
+    }
+
+    /// Drain ready emission events from the BPF ring buffer into this image's queue.
+    /// `timeout_ms == 0` is a NON-BLOCKING drain (so it interleaves with a single-step
+    /// loop); `> 0` waits up to that long. Returns the number of events queued
+    /// (`>= 0`) or a negative status.
+    pub fn poll_bpf(&self, timeout_ms: i32) -> i32 {
+        match hw_fns().ci_poll_bpf {
+            Some(f) => unsafe { f(self.handle, timeout_ms as c_int) as i32 },
+            None => ASMTEST_CI_ENOENT,
+        }
+    }
+
+    /// Pop one queued emission event, or `None` when the queue is empty / on a
+    /// negative status / when the lib is absent.
+    pub fn next_event(&self) -> Option<CodeEmission> {
+        let f = hw_fns().ci_next?;
+        let mut raw = CodeEventRaw {
+            addr: 0,
+            len: 0,
+            timestamp: 0,
+            pid: 0,
+            tid: 0,
+            kind: 0,
+            fd: 0,
+        };
+        let rc = unsafe { f(self.handle, &mut raw) };
+        if rc != 1 {
+            return None;
+        }
+        Some(CodeEmission {
+            addr: raw.addr,
+            len: raw.len,
+            timestamp: raw.timestamp,
+            pid: raw.pid,
+            tid: raw.tid,
+            kind: code_kind_of(raw.kind),
+            fd: raw.fd,
+        })
+    }
+}
+
+impl Drop for CodeImage {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            if let Some(f) = hw_fns().ci_free {
+                unsafe { f(self.handle) };
+            }
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
+// The handle is an owned C allocation used only behind &self / Drop; the
+// recorder's reads + pagemap scans don't share mutable state across threads, so
+// the wrapper is Send (matches the crate's other owned-handle wrappers).
+unsafe impl Send for CodeImage {}

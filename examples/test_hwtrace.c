@@ -8,6 +8,7 @@
  * host-native routine and asserts block offset 0 plus a deterministic ordered
  * instruction stream — matching the Unicorn/DynamoRIO output for the same bytes.
  */
+#include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
@@ -1035,6 +1036,123 @@ static void test_run_to_and_trace(void) {
 #endif
 }
 
+/* Phase B (codeimage x W2): asmtest_ptrace_trace_attached_versioned decodes the region
+ * against TIME-CORRECT bytes from the code-image recorder rather than a single live
+ * snapshot. The recorder is given two versions at ONE address — the real body A and a
+ * stale wrong body (NOPs) — captured before the trace. The child executes A; the executed
+ * instruction stream comes from single-stepping (so it is identical regardless of the
+ * byte version), but the BLOCK partition is derived by decoding instruction lengths from
+ * the supplied bytes. Decoding A's stream against the tA snapshot yields the correct
+ * 2-block partition; decoding the SAME stream against the stale bytes misreads every
+ * instruction as a new block — exactly the corruption a single late process_vm_readv would
+ * suffer once the address was re-JITted, and the reason a time-aware byte source exists. */
+static void test_ptrace_versioned(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available() || !asmtest_codeimage_available()) {
+        printf("# SKIP ptrace versioned: %s\n",
+               asmtest_ptrace_available() ? "no soft-dirty page tracking"
+                                          : "no ptrace single-step");
+        return;
+    }
+    if (!asmtest_disas_available()) {
+        printf("# SKIP ptrace versioned: needs Capstone for block normalization\n");
+        return;
+    }
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+    unsigned char NOPS[sizeof ROUTINE];
+    memset(NOPS, 0x90, sizeof NOPS); /* a different-length encoding of the same byte span */
+
+    /* MAP_PRIVATE: the child keeps an untouched copy of A (COW), so the parent's later
+     * rewrites build the timeline WITHOUT ever changing what the child executes. */
+    unsigned char *p = (unsigned char *)mmap(NULL, RTN, PROT_READ | PROT_WRITE,
+                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace versioned: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, RTN);
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        for (;;) { /* call the real body forever; the parent traces one invocation */
+            volatile long r = ((add2_fn)p)(20, 22);
+            (void)r;
+            struct timespec t = {0, 1000 * 1000}; /* 1 ms */
+            nanosleep(&t, NULL);
+        }
+        _exit(0);
+    }
+
+    /* Build the timeline on the PARENT's own copy (codeimage tracks self, so soft-dirty —
+     * which is per-process — reflects the parent's writes). The recorder is an
+     * address-keyed byte source, so its pid need not be the traced pid. */
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    int okT = (asmtest_codeimage_track(img, p, RTN) == ASMTEST_CI_OK);
+    uint64_t tA = asmtest_codeimage_now(img);
+    mprotect(p, RTN, PROT_READ | PROT_WRITE);
+    memcpy(p, NOPS, RTN); /* re-JIT the SAME address to a different body (COW: child keeps A) */
+    mprotect(p, RTN, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTN);
+    int nvB = asmtest_codeimage_refresh(img);
+    uint64_t tB = asmtest_codeimage_now(img);
+    CHECK(okT && nvB >= 1 && tB > tA,
+          "ptrace versioned: recorder holds A@tA and a stale body @tB at one address");
+
+    struct timespec ts5 = {0, 5 * 1000 * 1000};
+    nanosleep(&ts5, NULL); /* let the child get into its call loop */
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP ptrace versioned: PTRACE_ATTACH not permitted (yama ptrace_scope)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        asmtest_codeimage_free(img);
+        munmap(p, RTN);
+        return;
+    }
+
+    asmtest_trace_t *trA = asmtest_trace_new(64, 64);
+    asmtest_trace_t *trB = asmtest_trace_new(64, 64);
+    long resA = 0, resB = 0;
+    int rcA = (asmtest_ptrace_run_to(pid, p) == ASMTEST_PTRACE_OK)
+                  ? asmtest_ptrace_trace_attached_versioned(pid, p, RTN, img, tA, &resA, trA)
+                  : ASMTEST_PTRACE_ETRACE;
+    int rcB = (asmtest_ptrace_run_to(pid, p) == ASMTEST_PTRACE_OK)
+                  ? asmtest_ptrace_trace_attached_versioned(pid, p, RTN, img, tB, &resB, trB)
+                  : ASMTEST_PTRACE_ETRACE;
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+
+    CHECK(rcA == ASMTEST_PTRACE_OK && resA == 42,
+          "ptrace versioned: traced the live method decoding against tA (result 42)");
+    int seqA = (asmtest_emu_trace_insns_total(trA) == NEXP);
+    for (size_t i = 0; seqA && i < NEXP; i++)
+        seqA = (trA->insns[i] == EXPECT[i]);
+    CHECK(seqA, "ptrace versioned: tA (time-correct) bytes reconstruct the exact A stream");
+    CHECK(asmtest_emu_trace_blocks_len(trA) == 2 && !asmtest_emu_trace_truncated(trA),
+          "ptrace versioned: tA bytes -> the correct 2-block partition");
+
+    int seqB = (asmtest_emu_trace_insns_total(trB) == NEXP);
+    for (size_t i = 0; seqB && i < NEXP; i++)
+        seqB = (trB->insns[i] == EXPECT[i]);
+    CHECK(rcB == ASMTEST_PTRACE_OK && seqB,
+          "ptrace versioned: the SAME executed stream decodes against the stale tB bytes");
+    CHECK(asmtest_emu_trace_blocks_len(trB) == NEXP &&
+              asmtest_emu_trace_blocks_len(trB) != asmtest_emu_trace_blocks_len(trA),
+          "ptrace versioned: stale bytes MISREAD the block partition (the temporal bug)");
+
+    asmtest_trace_free(trA);
+    asmtest_trace_free(trB);
+    asmtest_codeimage_free(img);
+    munmap(p, RTN);
+#else
+    printf("# SKIP ptrace versioned: not Linux x86-64\n");
+#endif
+}
+
 /* CALL-DEPTH AWARENESS: a registered region that CALLS OUT to a helper OUTSIDE it (a
  * runtime helper / GC barrier / PLT stub — what a real managed-runtime method does). The
  * old "first region exit == return" model truncated at that call; the stepper now decodes
@@ -1282,6 +1400,10 @@ int main(void) {
     /* Live: the full uncontrolled-timing managed-runtime flow — resolve a JIT method by
      * name, run the target to it (software breakpoint), then trace that invocation. */
     test_run_to_and_trace();
+
+    /* Live: the time-aware code-image recorder feeding the W2 stepper — decode a foreign
+     * method against the bytes that were live when it ran, not a single late snapshot. */
+    test_ptrace_versioned();
 
     /* Live: call-depth awareness — trace a region that calls OUT to a helper, stepping
      * over the callee at native speed instead of mistaking the call for the return. Run

@@ -13,6 +13,7 @@ package.path = (debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "./")
   .. "?.lua;" .. package.path
 local hwtrace = require("hwtrace")
 local HwTrace = hwtrace.HwTrace
+local CodeImage = hwtrace.CodeImage
 local NativeCode = hwtrace.NativeCode
 local SINGLESTEP = hwtrace.SINGLESTEP
 local AMD_LBR = hwtrace.AMD_LBR
@@ -386,6 +387,49 @@ else
     eq(HwTrace.jitdump_find(path, "missing", 0, 0), nil,
        "jitdump_find: missing -> nil")
     os.remove(path)
+  end
+end
+
+-- ---- Time-aware code-image recorder (CodeImage / asmtest_codeimage.h) ----
+--
+-- A userspace PERF_RECORD_TEXT_POKE: track a region, stamp a monotonic capture
+-- sequence, and read back the bytes that were live as of a given sequence. Self-skip
+-- when the userspace recorder can't detect page changes on this host (no PAGEMAP_SCAN
+-- and no soft-dirty), mirroring the other tiers' availability skips.
+
+-- The 7-byte routine the codeimage round-trip tracks: mov rax,rdi; add rax,rsi; ret.
+local CI_ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3 }
+local CI_ROUTINE_STR = string.char(unpack(CI_ROUTINE))
+
+if not CodeImage.available() then
+  print("# SKIP code-image recorder unavailable: " .. CodeImage.skip_reason())
+else
+  -- test_codeimage_track_and_bytes_at — track a live region in this process, assert a
+  -- monotonic sequence is stamped, refresh is cheap-and-nonnegative when nothing
+  -- changed, and bytes_at(base, 0) round-trips the tracked bytes byte-for-byte.
+  do
+    local code = NativeCode.from_bytes(CI_ROUTINE)
+    local img = CodeImage.new(0)  -- 0 => this process
+    img:track(code.base, #CI_ROUTINE)
+
+    ok(img:now() >= 1, "codeimage: now() >= 1 after track (version 0 stamped)")
+    ok(img:refresh() >= 0, "codeimage: refresh() >= 0 (cheap when nothing changed)")
+    eq(img:bytes_at(code.base, 0), CI_ROUTINE_STR,
+       "codeimage: bytes_at(base, 0) round-trips the tracked bytes")
+
+    img:free()
+    code:free()
+  end
+
+  -- test_codeimage_bpf_probe — the optional eBPF emission detector self-skips without
+  -- libbpf / CAP_BPF / kernel BTF; where it can load, watch_bpf() attaches cleanly.
+  if not CodeImage.bpf_available() then
+    print("# SKIP code-image eBPF detector unavailable: "
+          .. CodeImage.bpf_skip_reason())
+  else
+    local img = CodeImage.new(0)
+    eq(img:watch_bpf(), 0, "codeimage: watch_bpf() == 0 (loads and attaches)")
+    img:free()
   end
 end
 

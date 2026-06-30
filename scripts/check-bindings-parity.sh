@@ -35,7 +35,7 @@ cd "$ROOT"
 
 # Overridable so the gate can be widened later (e.g. add a tier header) without
 # touching the logic.
-TIER_HEADERS=${TIER_HEADERS:-"include/asmtest_hwtrace.h include/asmtest_drtrace.h include/asmtest_trace_auto.h include/asmtest_ptrace.h"}
+TIER_HEADERS=${TIER_HEADERS:-"include/asmtest_hwtrace.h include/asmtest_drtrace.h include/asmtest_trace_auto.h include/asmtest_ptrace.h include/asmtest_codeimage.h"}
 BINDINGS=${BINDINGS:-"python cpp rust zig node java dotnet ruby lua go"}
 ALLOW=${ALLOW:-scripts/bindings-parity-allow.txt}
 

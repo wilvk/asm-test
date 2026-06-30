@@ -106,6 +106,26 @@ enum PtraceStatus {
     ASMTEST_PTRACE_ENOENT = -7,  // region / symbol / method not found
 };
 
+/* asmtest_codeimage.h — time-aware code-image recorder status codes. Redeclared
+ * here (not via the C header) so this wrapper keeps depending only on the hwtrace
+ * headers, exactly as PtraceStatus above and the Python wrapper do. */
+enum CodeImageStatus {
+    ASMTEST_CI_OK = 0,
+    ASMTEST_CI_EINVAL = -1,    // bad argument
+    ASMTEST_CI_EUNAVAIL = -3,  // no PAGEMAP_SCAN / soft-dirty / BPF privilege
+    ASMTEST_CI_ENOSYS = -5,    // built without the needed support (e.g. no libbpf)
+    ASMTEST_CI_ENOENT = -7,    // address never tracked / no version at-or-before when
+    ASMTEST_CI_ELOAD = -8,     // libbpf load/attach failure (Phase C)
+};
+
+/* How a code-emission event was observed (the event's `kind` field). Mirrors the
+ * ASMTEST_CI_KIND_* macros in asmtest_codeimage.h. */
+enum CodeImageKind {
+    ASMTEST_CI_KIND_MPROTECT = 1,  // mprotect(...PROT_EXEC...) — the common JIT edge
+    ASMTEST_CI_KIND_MMAP = 2,      // mmap(...PROT_EXEC...); addr is the real base
+    ASMTEST_CI_KIND_MEMFD = 3,     // memfd_create — staging hint; correlate via fd
+};
+
 /// A resolved cross-tier trace option: which `tier` to use, which hardware
 /// `backend` within it (meaningful only when tier == TIER_HWTRACE; otherwise
 /// 0/ignore), and the `fidelity` class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL) so a
@@ -163,6 +183,27 @@ struct HwApi {
     int (*proc_perfmap_symbol)(int, const char *, void **, size_t *) = nullptr;
     int (*jitdump_find)(const char *, int, const char *, void *, uint8_t *,
                         size_t, size_t *) = nullptr;
+
+    /* asmtest_codeimage.h — the time-aware code-image recorder (a userspace
+     * PERF_RECORD_TEXT_POKE). The timeline handle is the same opaque void* as
+     * everything else here; the event is the 40-byte mirror below. The
+     * versioned-decode bridge into the ptrace tracer lives here too. */
+    int (*ci_available)() = nullptr;
+    void (*ci_skip_reason)(char *, size_t) = nullptr;
+    void *(*ci_new)(int) = nullptr;
+    void (*ci_free)(void *) = nullptr;
+    int (*ci_track)(void *, const void *, size_t) = nullptr;
+    int (*ci_refresh)(void *) = nullptr;
+    uint64_t (*ci_now)(const void *) = nullptr;
+    int (*ci_bytes_at)(const void *, const void *, uint64_t, const uint8_t **,
+                       size_t *) = nullptr;
+    int (*ci_bpf_available)() = nullptr;
+    void (*ci_bpf_skip_reason)(char *, size_t) = nullptr;
+    int (*ci_watch_bpf)(void *) = nullptr;
+    int (*ci_poll_bpf)(void *, int) = nullptr;
+    int (*ci_next)(void *, void *) = nullptr;
+    int (*ptrace_trace_attached_versioned)(int, const void *, size_t, void *,
+                                           uint64_t, long *, void *) = nullptr;
 
     /* True if the library loaded and every symbol resolved. */
     bool loaded() const { return handle != nullptr; }
@@ -238,6 +279,24 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_proc_perfmap_symbol",
                          t.proc_perfmap_symbol);
         ok &= dlsym_into(h, "asmtest_jitdump_find", t.jitdump_find);
+        ok &= dlsym_into(h, "asmtest_codeimage_available", t.ci_available);
+        ok &= dlsym_into(h, "asmtest_codeimage_skip_reason",
+                         t.ci_skip_reason);
+        ok &= dlsym_into(h, "asmtest_codeimage_new", t.ci_new);
+        ok &= dlsym_into(h, "asmtest_codeimage_free", t.ci_free);
+        ok &= dlsym_into(h, "asmtest_codeimage_track", t.ci_track);
+        ok &= dlsym_into(h, "asmtest_codeimage_refresh", t.ci_refresh);
+        ok &= dlsym_into(h, "asmtest_codeimage_now", t.ci_now);
+        ok &= dlsym_into(h, "asmtest_codeimage_bytes_at", t.ci_bytes_at);
+        ok &= dlsym_into(h, "asmtest_codeimage_bpf_available",
+                         t.ci_bpf_available);
+        ok &= dlsym_into(h, "asmtest_codeimage_bpf_skip_reason",
+                         t.ci_bpf_skip_reason);
+        ok &= dlsym_into(h, "asmtest_codeimage_watch_bpf", t.ci_watch_bpf);
+        ok &= dlsym_into(h, "asmtest_codeimage_poll_bpf", t.ci_poll_bpf);
+        ok &= dlsym_into(h, "asmtest_codeimage_next", t.ci_next);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_attached_versioned",
+                         t.ptrace_trace_attached_versioned);
         if (!ok) {
             ::dlclose(h);
             return HwApi{};  // a fresh, empty table -> available() == false
@@ -587,6 +646,10 @@ struct JitMethod {
     std::vector<std::uint8_t> code;  // the recorded bytes (empty unless requested)
 };
 
+/// Forward declaration: traceAttachedVersioned() decodes against a CodeImage,
+/// which is defined below (it in turn does not depend on Ptrace).
+class CodeImage;
+
 /// Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
 /// forked or externally-attached target out of band, and resolve the code region
 /// to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary jitdump.
@@ -652,6 +715,17 @@ class Ptrace {
         return result;
     }
 
+    /// Like traceAttached, but decode the target's instructions against the bytes
+    /// the CodeImage recorder captured at capture sequence `when` (when == 0 =>
+    /// the latest version) instead of a live process_vm_readv snapshot — so a JIT
+    /// method whose address was patched or reused mid-trace decodes against the
+    /// bytes that were live then, not whatever happens to be mapped at read time.
+    /// Returns the target's RAX at the region exit. Throws on a nonzero status.
+    /// (Defined out-of-line below, after CodeImage.)
+    static long traceAttachedVersioned(int pid, const void *base,
+                                       std::size_t len, const CodeImage &img,
+                                       std::uint64_t when, const HwTrace &trace);
+
     /// Run an already-attached, ptrace-stopped target forward until it reaches
     /// `addr` (a software breakpoint that fires when the program itself next calls
     /// in), leaving it stopped there ready for traceAttached. Returns the status:
@@ -711,6 +785,197 @@ class Ptrace {
         return m;
     }
 };
+
+/// A code-emission event from the optional eBPF detector. Byte-compatible mirror
+/// of asmtest_codeimage_event_t (40 bytes: three uint64, three uint32, one int32 —
+/// no trailing padding on x86-64): when and where new executable code appeared for
+/// the watched pid, never the instruction stream itself.
+struct CodeImageEvent {
+    std::uint64_t addr = 0;       // published base address (0 for a memfd hint)
+    std::uint64_t len = 0;        // byte length (0 for a memfd hint)
+    std::uint64_t timestamp = 0;  // bpf_ktime_get_ns() at emission
+    std::uint32_t pid = 0;        // tgid that published
+    std::uint32_t tid = 0;        // thread that published
+    std::uint32_t kind = 0;       // ASMTEST_CI_KIND_*
+    std::int32_t fd = -1;         // memfd fd, or -1
+};
+
+/// The time-aware code-image recorder (asmtest_codeimage.h): a userspace
+/// PERF_RECORD_TEXT_POKE. track() snapshots a region's bytes (version 0) and arms
+/// write-protect-async on its pages; refresh() re-snapshots only the pages written
+/// since the last arm as new versions stamped with a monotonic sequence; and
+/// bytes_at(addr, when) answers "what bytes were live at addr as of sequence
+/// `when`" — the query a branch-trace decoder or the W2 block-normalizer needs to
+/// reconstruct a JIT method whose address was reused. Change detection is pure
+/// userspace and works on a FOREIGN process (pid 0 records this process). The
+/// optional eBPF emission detector self-skips cleanly without libbpf / CAP_BPF.
+/// Move-only; the ctor opens a timeline (asmtest_codeimage_new), the dtor frees it.
+class CodeImage {
+  public:
+    /// Open a timeline recording `pid`'s memory (pid == 0 => this process). Throws
+    /// std::runtime_error if the recorder is unavailable or allocation fails (call
+    /// available() first to self-skip). Like the C API, the caller owns any ptrace
+    /// attach policy for a foreign pid; the recorder only reads memory.
+    explicit CodeImage(int pid = 0) {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            throw std::runtime_error(
+                "libasmtest_hwtrace not found (set ASMTEST_HWTRACE_LIB)");
+        img_ = a.ci_new(pid);
+        if (!img_)
+            throw std::runtime_error("asmtest_codeimage_new returned NULL");
+    }
+
+    CodeImage(const CodeImage &) = delete;
+    CodeImage &operator=(const CodeImage &) = delete;
+    CodeImage(CodeImage &&o) noexcept : img_(o.img_) { o.img_ = nullptr; }
+    CodeImage &operator=(CodeImage &&o) noexcept {
+        if (this != &o) {
+            free();
+            img_ = o.img_;
+            o.img_ = nullptr;
+        }
+        return *this;
+    }
+    ~CodeImage() { free(); }
+
+    // ---- userspace recorder (always available on a supporting host) ----
+
+    /// True if the userspace recorder can detect page changes on this host
+    /// (PAGEMAP_SCAN, or the soft-dirty fallback). Never crashes or throws — a
+    /// missing library reports false. Like HwTrace::available().
+    static bool available() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return false;
+        return a.ci_available() != 0;
+    }
+
+    /// Human-readable reason available() is false. Returns a fixed string when the
+    /// library itself is missing.
+    static std::string skip_reason() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return "libasmtest_hwtrace not found (set ASMTEST_HWTRACE_LIB)";
+        char buf[256] = {0};
+        a.ci_skip_reason(buf, sizeof(buf));
+        return std::string(buf);
+    }
+
+    /// Begin tracking [base, base+len): snapshot version 0 now and arm
+    /// write-protect-async on its pages. May be called for several disjoint
+    /// regions. Returns ASMTEST_CI_OK or a negative CodeImageStatus.
+    int track(const void *base, std::size_t len) {
+        return detail::api().ci_track(img_, base, len);
+    }
+
+    /// Re-snapshot pages changed since the last arm as new versions and re-arm.
+    /// Returns the number of new versions recorded (>= 0), or a negative status.
+    int refresh() { return detail::api().ci_refresh(img_); }
+
+    /// The current capture sequence — a monotonic logical timestamp. Advances by
+    /// one for every version recorded (track + each refresh change). 0 before
+    /// anything is tracked.
+    std::uint64_t now() const { return detail::api().ci_now(img_); }
+
+    /// The bytes live at `addr` as of capture sequence `when` (when == 0 => the
+    /// latest version), as a copy. Empty when `addr` is not in any tracked region
+    /// or there is no version at/before `when` (ASMTEST_CI_ENOENT). On a different
+    /// negative status this throws.
+    std::vector<std::uint8_t> bytes_at(const void *addr,
+                                       std::uint64_t when = 0) const {
+        const std::uint8_t *out = nullptr;
+        std::size_t out_len = 0;
+        int rc = detail::api().ci_bytes_at(img_, addr, when, &out, &out_len);
+        if (rc == ASMTEST_CI_ENOENT)
+            return {};
+        if (rc != ASMTEST_CI_OK)
+            throw std::runtime_error("asmtest_codeimage_bytes_at failed: " +
+                                     std::to_string(rc));
+        return std::vector<std::uint8_t>(out, out + out_len);
+    }
+
+    // ---- optional eBPF emission detector (self-skips without libbpf) ----
+
+    /// True if the eBPF emission detector can load and attach on this host (built
+    /// with libbpf, kernel BTF present, sufficient privilege). Never throws.
+    static bool bpf_available() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return false;
+        return a.ci_bpf_available() != 0;
+    }
+
+    /// Human-readable reason bpf_available() is false. Fixed string when the
+    /// library itself is missing.
+    static std::string bpf_skip_reason() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return "libasmtest_hwtrace not found (set ASMTEST_HWTRACE_LIB)";
+        char buf[256] = {0};
+        a.ci_bpf_skip_reason(buf, sizeof(buf));
+        return std::string(buf);
+    }
+
+    /// Load the CO-RE program, filter it to this timeline's pid, and attach it.
+    /// Returns ASMTEST_CI_OK, ASMTEST_CI_ENOSYS, ASMTEST_CI_EUNAVAIL, or
+    /// ASMTEST_CI_ELOAD.
+    int watch_bpf() { return detail::api().ci_watch_bpf(img_); }
+
+    /// Drain ready emission events into the internal queue. timeout_ms == 0 is a
+    /// non-blocking drain. Returns the number of events queued (>= 0) or a negative
+    /// status.
+    int poll_bpf(int timeout_ms) {
+        return detail::api().ci_poll_bpf(img_, timeout_ms);
+    }
+
+    /// Pop one queued emission event. Returns the event if one was available, else
+    /// std::nullopt (queue empty). Throws on a negative status.
+    std::optional<CodeImageEvent> next_event() {
+        /* The C struct is the 40-byte mirror of CodeImageEvent; fill it directly
+         * (no separate POD type needed since the layout matches field-for-field). */
+        CodeImageEvent ev{};
+        int rc = detail::api().ci_next(img_, &ev);
+        if (rc < 0)
+            throw std::runtime_error("asmtest_codeimage_next failed: " +
+                                     std::to_string(rc));
+        if (rc == 0)
+            return std::nullopt;
+        return ev;
+    }
+
+    void free() {
+        if (img_) {
+            detail::api().ci_free(img_);
+            img_ = nullptr;
+        }
+    }
+
+  private:
+    friend class Ptrace;
+    /// The opaque asmtest_codeimage* handle, as the versioned tracer needs it.
+    void *raw() const { return img_; }
+
+    void *img_ = nullptr;
+};
+
+/// Out-of-line because it references CodeImage, which is defined above only after
+/// Ptrace. Mirrors traceAttached but passes the recorder + `when` so the decoder
+/// reads versioned bytes instead of a live snapshot.
+inline long Ptrace::traceAttachedVersioned(int pid, const void *base,
+                                           std::size_t len,
+                                           const CodeImage &img,
+                                           std::uint64_t when,
+                                           const HwTrace &trace) {
+    long result = 0;
+    int rc = detail::api().ptrace_trace_attached_versioned(
+        pid, base, len, img.raw(), when, &result, trace.raw());
+    if (rc != ASMTEST_PTRACE_OK)
+        throw std::runtime_error(
+            "asmtest_ptrace_trace_attached_versioned failed: " +
+            std::to_string(rc));
+    return result;
+}
 
 }  // namespace asmtest
 

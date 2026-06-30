@@ -156,6 +156,12 @@ fn checkCrossTierNativeOnly() Failure!void {
 // unavailable, exactly like Python's `_skip_if_no_ptrace`.
 
 const Ptrace = hwtrace.Ptrace;
+const CodeImage = hwtrace.CodeImage;
+
+// Seven native-code bytes: mov rax,rdi; add rax,rsi; ret. A minimal tracked
+// region for the code-image recorder round-trip (the bytes are immaterial — the
+// test asserts byte-exact round-trip through the timeline, not execution).
+const CODEIMAGE_BYTES = [_]u8{ 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3 };
 
 // Little-endian integer writers (std.mem.writeInt(.little) into the image stream),
 // matching the Python struct.pack("<...") jitdump layout.
@@ -290,6 +296,48 @@ fn checkJitdumpFind(alloc: std.mem.Allocator) !void {
     try check(Ptrace.jitdumpFind(path, "missing", 0, &bytes_buf) == null, "jitdump_find misses an absent name");
 }
 
+// ---- Time-aware code-image recorder (hwtrace.CodeImage) ---- //
+// The Zig analogue of test_hwtrace.py's code-image tests. Each self-skips
+// (returns without failing) when the recorder / BPF detector is unavailable.
+
+// Track a real native-code region in THIS process (pid 0), then round-trip its
+// bytes back out of the timeline: now() advances to >= 1 on the version-0
+// snapshot, refresh() is cheap and non-negative, and bytes_at(base, 0) returns
+// the exact bytes we tracked. Mirrors Python's code-image round-trip test.
+fn checkCodeImageRoundTrip() !void {
+    var code = try hwtrace.NativeCode.fromBytes(&CODEIMAGE_BYTES);
+    defer code.free();
+
+    var img = try CodeImage.init(0); // pid 0 => this process
+    defer img.deinit();
+
+    try check(img.track(code.base, CODEIMAGE_BYTES.len) == hwtrace.ASMTEST_CI_OK,
+        "code-image track([base, base+7)) succeeds");
+    try check(img.now() >= 1, "code-image now() >= 1 after tracking version 0");
+    try check(img.refresh() >= 0, "code-image refresh() is non-negative");
+
+    const live = img.bytesAt(code.base, 0);
+    try check(live != null, "code-image bytes_at(base, 0) finds the tracked region");
+    try check(live.?.len >= CODEIMAGE_BYTES.len, "code-image bytes_at slice covers the region");
+    try check(std.mem.eql(u8, live.?[0..CODEIMAGE_BYTES.len], &CODEIMAGE_BYTES),
+        "code-image bytes_at round-trips the exact tracked bytes");
+}
+
+// eBPF emission detector probe: when available, watch_bpf() loads and attaches
+// the CO-RE program for this timeline's pid (returns ASMTEST_CI_OK). Self-skips
+// without libbpf / BTF / privilege.
+fn checkCodeImageBpf() !void {
+    if (!CodeImage.bpfAvailable()) {
+        var buf: [192]u8 = undefined;
+        const reason = CodeImage.bpfSkipReason(&buf);
+        std.debug.print("# SKIP: code-image eBPF detector unavailable: {s}\n", .{reason});
+        return;
+    }
+    var img = try CodeImage.init(0);
+    defer img.deinit();
+    try check(img.watchBpf() == hwtrace.ASMTEST_CI_OK, "code-image watch_bpf() loads + attaches");
+}
+
 pub fn main() !void {
     try checkAutoResolveInvariants();
     try checkCrossTierResolveInvariants();
@@ -396,6 +444,19 @@ pub fn main() !void {
         try checkProcRegionByAddr();
         try checkProcPerfmapSymbol();
         try checkJitdumpFind(alloc);
+    }
+
+    // ---- Time-aware code-image recorder (hwtrace.CodeImage) ---- //
+    // Self-skip cleanly when the userspace recorder is unavailable (no
+    // PAGEMAP_SCAN / soft-dirty); otherwise run the round-trip + the eBPF probe
+    // (which itself self-skips without libbpf / privilege).
+    if (!CodeImage.available()) {
+        var buf: [192]u8 = undefined;
+        const reason = CodeImage.skipReason(&buf);
+        std.debug.print("# SKIP: code-image recorder unavailable: {s}\n", .{reason});
+    } else {
+        try checkCodeImageRoundTrip();
+        try checkCodeImageBpf();
     }
 
     std.debug.print("PASS\n", .{});

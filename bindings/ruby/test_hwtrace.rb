@@ -14,6 +14,7 @@ require_relative "hwtrace"
 
 HwTrace      = Asmtest::HwTrace::HwTrace
 NativeCode   = Asmtest::HwTrace::NativeCode
+CodeImage    = Asmtest::HwTrace::CodeImage
 SINGLESTEP   = Asmtest::HwTrace::SINGLESTEP
 AMD_LBR      = Asmtest::HwTrace::AMD_LBR
 BEST         = Asmtest::HwTrace::BEST
@@ -289,6 +290,47 @@ if HwTrace.ptrace_available?
   end
 else
   puts "# SKIP out-of-process ptrace toolkit (unavailable): #{HwTrace.ptrace_skip_reason}"
+end
+
+# ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
+# A userspace PERF_RECORD_TEXT_POKE: track() snapshots a region's bytes and arms
+# write-protect; bytes_at(addr, when) answers "what bytes were live at addr as of
+# sequence when". Round-trip a tracked region's bytes through version 0 (pid 0 =
+# this process). Inline-guard on CodeImage.available? — the recorder self-skips
+# where there is no PAGEMAP_SCAN / soft-dirty support.
+CI_BYTES = [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3].pack("C*") # mov rax,rdi; add rax,rsi; ret
+
+if CodeImage.available?
+  ci_code = NativeCode.from_bytes(CI_BYTES)
+  img = CodeImage.new(0)
+  begin
+    rc = img.track(ci_code.base, CI_BYTES.bytesize)
+    ok(rc == Asmtest::HwTrace::CI_OK, "codeimage track(base, 7) == CI_OK (got #{rc})")
+    ok(img.now >= 1, "codeimage now >= 1 after track (got #{img.now})")
+    ok(img.refresh >= 0, "codeimage refresh >= 0 (got #{img.refresh})")
+    got = img.bytes_at(ci_code.base, 0)
+    ok(!got.nil? && got[0, CI_BYTES.bytesize] == CI_BYTES,
+       "codeimage bytes_at(base, 0) round-trips the 7 code bytes (got #{got.inspect})")
+  ensure
+    img.free
+    ci_code.free
+  end
+
+  # eBPF emission detector (Phase C) — optional; self-skips without libbpf /
+  # CAP_BPF / BTF. When available, watch_bpf loads + attaches and returns CI_OK.
+  if CodeImage.bpf_available?
+    bpf_img = CodeImage.new(0)
+    begin
+      ok(bpf_img.watch_bpf == Asmtest::HwTrace::CI_OK,
+         "codeimage watch_bpf == CI_OK")
+    ensure
+      bpf_img.free
+    end
+  else
+    puts "# SKIP codeimage eBPF detector (unavailable): #{CodeImage.bpf_skip_reason}"
+  end
+else
+  puts "# SKIP code-image recorder (unavailable): #{CodeImage.skip_reason}"
 end
 
 exit($failed ? 1 : 0)

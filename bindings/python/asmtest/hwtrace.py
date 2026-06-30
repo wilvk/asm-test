@@ -74,6 +74,15 @@ TRACE_NATIVE_ONLY = 0x2   # forbid the native->emulator fidelity crossing
 ASMTEST_PTRACE_OK = 0
 ASMTEST_PTRACE_ENOENT = -7  # region / symbol / method not found
 
+# asmtest_codeimage.h — time-aware code-image recorder status codes
+ASMTEST_CI_OK = 0
+ASMTEST_CI_ENOENT = -7  # address never tracked / no version at/before `when`
+
+# Code-emission event kinds (eBPF detector)
+ASMTEST_CI_KIND_MPROTECT = 1
+ASMTEST_CI_KIND_MMAP = 2
+ASMTEST_CI_KIND_MEMFD = 3
+
 
 class _Options(C.Structure):
     """Mirrors asmtest_hwtrace_options_t."""
@@ -135,6 +144,39 @@ class JitMethod:
         return (f"JitMethod(code_addr={self.code_addr:#x}, "
                 f"code_size={self.code_size}, timestamp={self.timestamp}, "
                 f"code_index={self.code_index}, code={len(self.code)} bytes)")
+
+
+class _CodeimageEvent(C.Structure):
+    """Mirrors asmtest_codeimage_event_t / bpf/codeimage_event.h (40 bytes)."""
+
+    _fields_ = [
+        ("addr", C.c_uint64),
+        ("len", C.c_uint64),
+        ("timestamp", C.c_uint64),
+        ("pid", C.c_uint32),
+        ("tid", C.c_uint32),
+        ("kind", C.c_uint32),
+        ("fd", C.c_int32),
+    ]
+
+
+class CodeEmission:
+    """A code-emission event from the eBPF detector: a published executable region
+    (addr/len), its kind (ASMTEST_CI_KIND_*), the publishing pid/tid, a kernel
+    timestamp, and the memfd fd (or -1)."""
+
+    def __init__(self, addr, length, timestamp, pid, tid, kind, fd):
+        self.addr = addr
+        self.len = length
+        self.timestamp = timestamp
+        self.pid = pid
+        self.tid = tid
+        self.kind = kind
+        self.fd = fd
+
+    def __repr__(self):
+        return (f"CodeEmission(addr={self.addr:#x}, len={self.len}, kind={self.kind}, "
+                f"pid={self.pid}, tid={self.tid}, fd={self.fd})")
 
 
 def _lib_name():
@@ -218,6 +260,32 @@ def _declare(lib):
     lib.asmtest_jitdump_find.argtypes = [
         cc, ci, cc, C.POINTER(_JitEntry), C.POINTER(C.c_ubyte), sz, C.POINTER(sz)]
     lib.asmtest_jitdump_find.restype = ci
+    lib.asmtest_ptrace_trace_attached_versioned.argtypes = [ci, v, sz, v, u64, pl, v]
+    lib.asmtest_ptrace_trace_attached_versioned.restype = ci
+
+    # asmtest_codeimage.h — time-aware code-image recorder + optional eBPF detector.
+    lib.asmtest_codeimage_available.restype = ci
+    lib.asmtest_codeimage_skip_reason.argtypes = [cc, sz]
+    lib.asmtest_codeimage_new.argtypes = [ci]
+    lib.asmtest_codeimage_new.restype = v
+    lib.asmtest_codeimage_free.argtypes = [v]
+    lib.asmtest_codeimage_track.argtypes = [v, v, sz]
+    lib.asmtest_codeimage_track.restype = ci
+    lib.asmtest_codeimage_refresh.argtypes = [v]
+    lib.asmtest_codeimage_refresh.restype = ci
+    lib.asmtest_codeimage_now.argtypes = [v]
+    lib.asmtest_codeimage_now.restype = u64
+    lib.asmtest_codeimage_bytes_at.argtypes = [
+        v, v, u64, C.POINTER(C.POINTER(C.c_ubyte)), C.POINTER(sz)]
+    lib.asmtest_codeimage_bytes_at.restype = ci
+    lib.asmtest_codeimage_bpf_available.restype = ci
+    lib.asmtest_codeimage_bpf_skip_reason.argtypes = [cc, sz]
+    lib.asmtest_codeimage_watch_bpf.argtypes = [v]
+    lib.asmtest_codeimage_watch_bpf.restype = ci
+    lib.asmtest_codeimage_poll_bpf.argtypes = [v, ci]
+    lib.asmtest_codeimage_poll_bpf.restype = ci
+    lib.asmtest_codeimage_next.argtypes = [v, C.POINTER(_CodeimageEvent)]
+    lib.asmtest_codeimage_next.restype = ci
     return lib
 
 
@@ -457,6 +525,20 @@ class Ptrace:
         return result.value
 
     @staticmethod
+    def trace_attached_versioned(pid: int, base: int, length: int,
+                                 image: "CodeImage", when: int, trace: "HwTrace") -> int:
+        """Like trace_attached, but decode the region against TIME-CORRECT bytes from a
+        :class:`CodeImage` at logical timestamp `when` (0 = latest) instead of a single
+        live snapshot — the right bytes when the address was re-JITted/reused mid-run."""
+        result = C.c_long()
+        rc = _get().asmtest_ptrace_trace_attached_versioned(
+            pid, C.c_void_p(base), length, image._handle, when, C.byref(result),
+            trace._handle)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_attached_versioned failed: {rc}")
+        return result.value
+
+    @staticmethod
     def run_to(pid: int, addr: int) -> int:
         """Run an already-attached, ptrace-stopped target forward until it reaches
         `addr` (a software breakpoint that fires when the program itself next calls in),
@@ -501,3 +583,88 @@ class Ptrace:
             return None
         code = bytes(buf[:blen.value]) if want_bytes else b""
         return JitMethod(e.code_addr, e.code_size, e.timestamp, e.code_index, code)
+
+
+class CodeImage:
+    """Time-aware code-image recorder (asmtest_codeimage.h): a userspace
+    PERF_RECORD_TEXT_POKE. Records a timestamped timeline of a process's code regions so
+    :meth:`bytes_at` returns the bytes that were live at trace-position `when` — the right
+    answer for a JIT whose code is patched/freed/reused, where a single late snapshot
+    returns the wrong bytes. ``pid == 0`` records this process. The optional eBPF emission
+    detector (:meth:`watch_bpf`/:meth:`poll_bpf`/:meth:`next_event`) self-skips without
+    libbpf/CAP_BPF. Linux."""
+
+    def __init__(self, pid: int = 0):
+        self._handle = _get().asmtest_codeimage_new(pid)
+        if not self._handle:
+            raise RuntimeError("asmtest_codeimage_new failed")
+
+    @staticmethod
+    def available() -> bool:
+        """True if soft-dirty page tracking works on this host (else self-skip)."""
+        return bool(_get().asmtest_codeimage_available())
+
+    @staticmethod
+    def skip_reason() -> str:
+        buf = C.create_string_buffer(200)
+        _get().asmtest_codeimage_skip_reason(buf, len(buf))
+        return buf.value.decode()
+
+    def track(self, base: int, length: int) -> int:
+        """Begin tracking [base, base+length): snapshot version 0 and arm change
+        detection. Returns ASMTEST_CI_OK (0) or a negative status."""
+        return int(_get().asmtest_codeimage_track(self._handle, C.c_void_p(base), length))
+
+    def refresh(self) -> int:
+        """Re-snapshot any changed tracked pages as new versions; returns the number of
+        new versions recorded (>= 0) or a negative status."""
+        return int(_get().asmtest_codeimage_refresh(self._handle))
+
+    def now(self) -> int:
+        """The current capture sequence (a monotonic logical timestamp)."""
+        return int(_get().asmtest_codeimage_now(self._handle))
+
+    def bytes_at(self, addr: int, when: int = 0):
+        """The bytes live at `addr` as of sequence `when` (0 = latest), or None if the
+        address was never tracked / had no version at-or-before `when`."""
+        out = C.POINTER(C.c_ubyte)()
+        outlen = C.c_size_t()
+        rc = _get().asmtest_codeimage_bytes_at(
+            self._handle, C.c_void_p(addr), when, C.byref(out), C.byref(outlen))
+        if rc != ASMTEST_CI_OK:
+            return None
+        return bytes(out[i] for i in range(outlen.value))
+
+    # ---- optional eBPF emission detector ----
+    @staticmethod
+    def bpf_available() -> bool:
+        return bool(_get().asmtest_codeimage_bpf_available())
+
+    @staticmethod
+    def bpf_skip_reason() -> str:
+        buf = C.create_string_buffer(200)
+        _get().asmtest_codeimage_bpf_skip_reason(buf, len(buf))
+        return buf.value.decode()
+
+    def watch_bpf(self) -> int:
+        """Load + attach the CO-RE emission detector, filtered to this image's pid.
+        Returns ASMTEST_CI_OK (0), or a negative status (self-skips without libbpf)."""
+        return int(_get().asmtest_codeimage_watch_bpf(self._handle))
+
+    def poll_bpf(self, timeout_ms: int) -> int:
+        """Drain ready emission events (timeout_ms == 0 is non-blocking); returns the
+        number queued (>= 0) or a negative status."""
+        return int(_get().asmtest_codeimage_poll_bpf(self._handle, timeout_ms))
+
+    def next_event(self):
+        """Pop one queued :class:`CodeEmission`, or None if the queue is empty."""
+        ev = _CodeimageEvent()
+        rc = _get().asmtest_codeimage_next(self._handle, C.byref(ev))
+        if rc != 1:
+            return None
+        return CodeEmission(ev.addr, ev.len, ev.timestamp, ev.pid, ev.tid, ev.kind, ev.fd)
+
+    def free(self):
+        if self._handle:
+            _get().asmtest_codeimage_free(self._handle)
+            self._handle = None

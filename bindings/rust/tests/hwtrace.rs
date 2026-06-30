@@ -12,7 +12,7 @@
 //!       cargo test --test hwtrace -- --nocapture`
 
 use asmtest::hwtrace::{
-    Backend, Fidelity, HwTrace, NativeCode, Policy, Ptrace, Tier, TracePolicy,
+    Backend, CodeImage, Fidelity, HwTrace, NativeCode, Policy, Ptrace, Tier, TracePolicy,
     ASMTEST_HW_EUNAVAIL,
 };
 
@@ -419,4 +419,55 @@ fn jitdump_find() {
     assert_eq!(m.code, ROUTINE.to_vec(), "jitdump copies the recorded code bytes");
     assert!(missing.is_none(), "an absent jitdump method resolves to None");
     eprintln!("# PASS: Ptrace::jitdump_find (binary jitdump resolve + bytes)");
+}
+
+// ---- Time-aware code-image recorder (asmtest::hwtrace::CodeImage) ----
+//
+// The userspace PERF_RECORD_TEXT_POKE ships in the same libasmtest_hwtrace. Each
+// test self-skips (with a printed note) when the host support is absent, matching
+// the live-trace self-skip above.
+
+// mov rax,rdi; add rax,rsi; ret  (the canonical add2(a,b))
+const ADD2: [u8; 7] = [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3];
+
+#[test]
+fn codeimage_track_and_bytes_at() {
+    // Track a real native-code region and round-trip its bytes back out of the
+    // timeline at the version-0 timestamp.
+    if !CodeImage::available() {
+        eprintln!("# SKIP: code-image recorder unavailable: {}", CodeImage::skip_reason());
+        return;
+    }
+    // A real W^X executable region (the same exec-alloc helper the other tests use).
+    let code = NativeCode::from_bytes(&ADD2);
+
+    let img = CodeImage::new(0); // pid 0 => this process
+    img.track(code.base(), ADD2.len()).expect("track the add2 region");
+
+    // track() snapshots version 0, so the logical clock advances to >= 1.
+    assert!(img.now() >= 1, "track records version 0 (now advances to >= 1)");
+    // No writes since the arm => refresh is cheap and non-negative.
+    assert!(img.refresh() >= 0, "refresh returns a non-negative new-version count");
+
+    // bytes_at(base, 0 => latest) round-trips the recorded code bytes.
+    let bytes = img.bytes_at(code.base(), 0).expect("version-0 bytes at the region base");
+    assert_eq!(&bytes[..ADD2.len()], &ADD2, "bytes_at round-trips the tracked code");
+
+    eprintln!("# PASS: CodeImage track + bytes_at (timestamped round-trip)");
+}
+
+#[test]
+fn codeimage_watch_bpf_probe() {
+    // The optional eBPF emission detector: where libbpf/CAP_BPF/BTF are present,
+    // watch_bpf loads and attaches (== ASMTEST_CI_OK). Self-skip otherwise.
+    if !CodeImage::bpf_available() {
+        eprintln!(
+            "# SKIP: code-image eBPF detector unavailable: {}",
+            CodeImage::bpf_skip_reason()
+        );
+        return;
+    }
+    let img = CodeImage::new(0);
+    assert_eq!(img.watch_bpf(), 0, "watch_bpf loads + attaches the CO-RE program (OK)");
+    eprintln!("# PASS: CodeImage watch_bpf (eBPF emission detector attach)");
 }

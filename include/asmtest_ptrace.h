@@ -110,6 +110,19 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
 
+/* Like asmtest_ptrace_trace_attached, but decode the region against TIME-CORRECT bytes
+ * from a code-image recorder (asmtest_codeimage.h) instead of a single live snapshot. For
+ * a JIT whose code at `base` was patched, freed, or had its address reused during the run,
+ * a fresh process_vm_readv returns the WRONG bytes; passing the recorder + the logical
+ * timestamp `when` (0 = latest) that the region was live at makes block normalization use
+ * the bytes that were actually executing. `img` must already be tracking a region covering
+ * [base, base+len) (asmtest_codeimage_track); returns ASMTEST_PTRACE_ENOENT if it is not.
+ * With img == NULL this is exactly asmtest_ptrace_trace_attached. */
+struct asmtest_codeimage; /* forward decl; full type in asmtest_codeimage.h */
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
+                                            struct asmtest_codeimage *img, uint64_t when,
+                                            long *result, asmtest_trace_t *trace);
+
 /* Run an already-attached target forward until it reaches `addr`, then stop it there —
  * the missing step between resolving a foreign method and tracing it. asmtest_ptrace_-
  * trace_attached requires `pid` to be stopped AT the region entry; against a real

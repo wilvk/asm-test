@@ -485,6 +485,83 @@ func TestJitdumpFind(t *testing.T) {
 	}
 }
 
+// ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
+//
+// Mirrors the code-image tests in the Python suite. They self-skip when the userspace
+// recorder cannot detect page changes on this host (no PAGEMAP_SCAN / soft-dirty), or
+// when libasmtest_hwtrace is absent.
+
+// codeimageRoutine is mov rax,rdi; add rax,rsi; ret — the smallest two-arg adder, used
+// to assert a byte-for-byte Track -> BytesAt round-trip on the recording process.
+var codeimageRoutine = []byte{0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3}
+
+// TestHwtraceCodeImage tracks a freshly-materialized native region in THIS process
+// (pid 0) and round-trips its bytes back through the timeline.
+func TestHwtraceCodeImage(t *testing.T) {
+	if !CodeImageAvailable() {
+		t.Skipf("code-image recorder unavailable: %s", CodeImageSkipReason())
+	}
+
+	code, err := HwNativeCodeFromBytes(codeimageRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+
+	img := NewCodeImage(0) // 0 => this process
+	if img == nil {
+		t.Fatalf("NewCodeImage(0): got nil")
+	}
+	defer img.Close()
+
+	if err := img.Track(code.Base(), len(codeimageRoutine)); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+
+	// Tracking snapshots version 0, so the logical clock has advanced past 0.
+	if now := img.Now(); now < 1 {
+		t.Fatalf("Now after Track: got %d, want >= 1", now)
+	}
+
+	// A refresh with nothing changed is cheap and never negative.
+	if n, err := img.Refresh(); err != nil || n < 0 {
+		t.Fatalf("Refresh: got (%d, %v), want (>= 0, nil)", n, err)
+	}
+
+	// BytesAt(base, 0) returns the bytes live at base as of the latest version — the
+	// ones we just tracked, byte-for-byte.
+	got := img.BytesAt(code.Base(), 0)
+	if got == nil {
+		t.Fatalf("BytesAt(base, 0): got nil, want the tracked bytes")
+	}
+	if len(got) < len(codeimageRoutine) || !bytes.Equal(got[:len(codeimageRoutine)], codeimageRoutine) {
+		t.Fatalf("BytesAt round-trip: got %x, want a prefix of %x", got, codeimageRoutine)
+	}
+
+	// An address that was never tracked has no version (nil round-trip).
+	if b := img.BytesAt(0x1, 0); b != nil {
+		t.Fatalf("BytesAt(untracked addr): got %x, want nil", b)
+	}
+}
+
+// TestHwtraceCodeImageBpf probes the optional eBPF emission detector's FFI round-trip:
+// when it is available, WatchBpf must load and attach cleanly (ASMTEST_CI_OK).
+func TestHwtraceCodeImageBpf(t *testing.T) {
+	if !CodeImageBpfAvailable() {
+		t.Skipf("code-image eBPF detector unavailable: %s", CodeImageBpfSkipReason())
+	}
+
+	img := NewCodeImage(0)
+	if img == nil {
+		t.Fatalf("NewCodeImage(0): got nil")
+	}
+	defer img.Close()
+
+	if rc := img.WatchBpf(); rc != 0 {
+		t.Fatalf("WatchBpf: got %d, want 0 (ASMTEST_CI_OK)", rc)
+	}
+}
+
 // itoa renders a non-negative int as decimal (small helper to avoid pulling in
 // strconv just for the perf-map path).
 func itoa(n int) string {

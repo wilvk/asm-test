@@ -73,6 +73,8 @@ public final class HwTraceTest {
             procRegionByAddr();
             procPerfmapSymbol();
             jitdumpFind();
+            codeImageRoundTrip();
+            codeImageBpfProbe();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -399,6 +401,55 @@ public final class HwTraceTest {
             throw new RuntimeException(e);
         } finally {
             if (path != null) try { Files.deleteIfExists(path); } catch (IOException ignored) {}
+        }
+    }
+
+    // ---- Time-aware code-image recorder (HwTrace.CodeImage surface) ----
+
+    // mov rax,rdi; add rax,rsi; ret — 7 bytes of host-native code to track and round-trip.
+    private static final byte[] ADD2 = {
+        0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x01, (byte) 0xF0, (byte) 0xC3
+    };
+
+    // Track a self-process region, then read its bytes back at sequence 0 — the
+    // userspace TEXT_POKE round-trip. Self-skips when the recorder is unavailable.
+    private static void codeImageRoundTrip() {
+        if (!HwTrace.CodeImage.available()) {
+            System.out.println("# SKIP code-image recorder unavailable: "
+                + HwTrace.CodeImage.skipReason());
+            return;
+        }
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ADD2);
+        try (HwTrace.CodeImage img = new HwTrace.CodeImage(0)) { // pid 0 == self
+            int rc = img.track(code.base(), ADD2.length);
+            ok(rc == HwTrace.ASMTEST_CI_OK,
+                "CodeImage.track(base, " + ADD2.length + ") == OK (got " + rc + ")");
+            ok(img.now() >= 1, "CodeImage.now() >= 1 after track (got " + img.now() + ")");
+            ok(img.refresh() >= 0, "CodeImage.refresh() >= 0");
+
+            byte[] got = img.bytesAt(code.base(), 0); // when 0 == latest version
+            ok(got != null && got.length >= ADD2.length
+                && Arrays.equals(Arrays.copyOf(got, ADD2.length), ADD2),
+                "CodeImage.bytesAt(base, 0) round-trips ADD2 (got "
+                    + (got == null ? "null" : Arrays.toString(Arrays.copyOf(got, ADD2.length)))
+                    + ")");
+        } finally {
+            code.free();
+        }
+    }
+
+    // Probe the optional eBPF emission detector. Skips without libbpf / CAP_BPF / BTF;
+    // where it is available, watch_bpf() loads and attaches the CO-RE program.
+    private static void codeImageBpfProbe() {
+        if (!HwTrace.CodeImage.bpfAvailable()) {
+            System.out.println("# SKIP code-image eBPF detector unavailable: "
+                + HwTrace.CodeImage.bpfSkipReason());
+            return;
+        }
+        try (HwTrace.CodeImage img = new HwTrace.CodeImage(0)) {
+            int rc = img.watchBpf();
+            ok(rc == HwTrace.ASMTEST_CI_OK,
+                "CodeImage.watchBpf() == OK (got " + rc + ")");
         }
     }
 }

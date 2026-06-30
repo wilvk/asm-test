@@ -9,6 +9,24 @@ sequel to the DynamoRIO plan's [Language runtime support](../plans/dynamorio-nat
 section: that section explains why in-process DBI fights managed runtimes; this
 one asks how to trace a **foreign** JIT's generated code anyway.*
 
+> **Update — approach #2's core has shipped.** The "time-aware code-image recorder"
+> (below, [§2](#2-general-case--ebpf--userfaultfd-time-aware-recorder-no-runtime-cooperation))
+> — the piece this document calls *"the innovative, buildable core of a generic tracer"* —
+> is now implemented as `asmtest_codeimage` ([include/asmtest_codeimage.h](../../include/asmtest_codeimage.h),
+> `src/codeimage.c`): a userspace `PERF_RECORD_TEXT_POKE` that builds the timestamped
+> code-image timeline cross-process via **soft-dirty + `PAGEMAP_SCAN`** (the practical,
+> foreign-process-capable equivalent of the uffd-WP-async sketch below — note uffd-WP
+> needs the *owning* process to register, so it cannot watch a foreign JIT), with bytes
+> read via `process_vm_readv`. The W2 ptrace stepper consumes it
+> (`asmtest_ptrace_trace_attached_versioned`), and the **eBPF emission detector** (§2's
+> "detect emission" bullet — a CO-RE program on `mprotect`/`mmap`/`memfd_create`) ships as
+> the optional, container-validated acceleration layer. What remains forward-look is the
+> hardware half: feeding this byte timeline into the **Intel PT / libipt** decoder
+> ([hardware-trace plan Phase 2](../plans/hardware-trace-plan.md)), which needs PT
+> hardware (this dev host is AMD); the recorder is already paired with the on-host
+> ptrace stepper instead. Read the rest of this document as the design rationale; the
+> [CHANGELOG](../../CHANGELOG.md) tracks the shipped surface.
+
 ## Question
 
 Given full control of the OS (root/admin), is there a way **around** the

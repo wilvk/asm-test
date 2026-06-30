@@ -191,7 +191,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-jitdump recover a real V8 jitdump method's bytes (binary path)
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-jitdump \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
@@ -225,6 +225,23 @@ docker-hwtrace-amd: docker-bindings-base
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
 	  --cap-add=PERFMON asmtest-hwtrace make hwtrace-test
+
+# Optional eBPF code-emission detector lane. Builds an image WITH the eBPF toolchain
+# (clang + libbpf-dev + bpftool — which the plain hwtrace image omits), compiles the CO-RE
+# program + skeleton, and runs `make codeimage-test`: the userspace soft-dirty recorder
+# (always) plus the eBPF emission test. The detector needs CAP_BPF (load) + CAP_PERFMON
+# (attach tracepoints), and Docker's default seccomp profile blocks bpf(2)/perf_event_open(2),
+# so this runs with specific caps + seccomp=unconfined (NOT --privileged); SYS_PTRACE is
+# added so the same image can also drive the recorder end to end. Needs a BTF-enabled
+# kernel (CONFIG_DEBUG_INFO_BTF); the eBPF test self-skips otherwise.
+docker-hwtrace-codeimage: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace-codeimage \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace-codeimage .
+	$(DOCKER) run --rm $(_docker_plat) \
+	  --cap-add=BPF --cap-add=PERFMON --cap-add=SYS_PTRACE \
+	  --security-opt seccomp=unconfined --ulimit memlock=-1:-1 \
+	  -v /sys/kernel/tracing:/sys/kernel/tracing:ro \
+	  asmtest-hwtrace-codeimage
 
 # Reuse each already-built per-language image (asmtest-<lang>: full source +
 # toolchain + Capstone) and just run its hwtrace test target — no extra image

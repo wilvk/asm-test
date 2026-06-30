@@ -119,6 +119,32 @@ pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
 pub const ASMTEST_PTRACE_OK: c_int = 0;
 pub const ASMTEST_PTRACE_ENOENT: c_int = -7;
 
+/// asmtest_codeimage.h — time-aware code-image recorder status codes (its own
+/// namespace, mirroring the ptrace ones). `OK` is success; `ENOENT` means the
+/// address was never tracked, or no version exists at-or-before `when` (the
+/// `bytesAt` wrapper maps it onto `null`).
+pub const ASMTEST_CI_OK: c_int = 0;
+pub const ASMTEST_CI_ENOENT: c_int = -7;
+
+/// asmtest_codeimage.h — how a code-emission event was observed (event `kind`).
+pub const ASMTEST_CI_KIND_MPROTECT: u32 = 1;
+pub const ASMTEST_CI_KIND_MMAP: u32 = 2;
+pub const ASMTEST_CI_KIND_MEMFD: u32 = 3;
+
+/// asmtest_codeimage_event_t — a code-emission event from the optional eBPF
+/// detector. A byte-compatible mirror of the C struct (40 bytes: three `u64`,
+/// three `u32`, one `i32`, no padding), so it marshals as the raw C struct
+/// across the FFI.
+pub const Event = extern struct {
+    addr: u64, // published base address (0 for a memfd hint)
+    len: u64, // byte length (0 for a memfd hint)
+    timestamp: u64, // bpf_ktime_get_ns() at emission
+    pid: u32, // tgid that published
+    tid: u32, // thread that published
+    kind: u32, // ASMTEST_CI_KIND_*
+    fd: i32, // memfd fd, or -1
+};
+
 /// asmtest_jitdump_entry_t — a JIT method as recorded in a jitdump
 /// `JIT_CODE_LOAD` record: exactly four consecutive `u64` fields (no padding),
 /// so it marshals as the raw C struct across the FFI.
@@ -185,10 +211,31 @@ const FnPtraceAvailable = *const fn () callconv(.C) c_int;
 const FnPtraceSkipReason = *const fn ([*c]u8, usize) callconv(.C) void;
 const FnPtraceTraceCall = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, ?*c_long, ?*anyopaque) callconv(.C) c_int;
 const FnPtraceTraceAttached = *const fn (c_int, ?*const anyopaque, usize, ?*c_long, ?*anyopaque) callconv(.C) c_int;
+// The versioned variant: it consults a code-image timeline (`*anyopaque`, the
+// opaque `struct asmtest_codeimage`) at logical timestamp `when` for the bytes
+// to step, instead of one late `process_vm_readv` snapshot.
+const FnPtraceTraceAttachedVersioned = *const fn (c_int, ?*const anyopaque, usize, ?*anyopaque, u64, ?*c_long, ?*anyopaque) callconv(.C) c_int;
 const FnPtraceRunTo = *const fn (c_int, ?*const anyopaque) callconv(.C) c_int;
 const FnProcRegionByAddr = *const fn (c_int, ?*const anyopaque, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnProcPerfmapSymbol = *const fn (c_int, [*:0]const u8, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnJitdumpFind = *const fn ([*c]const u8, c_int, [*:0]const u8, *JitEntry, [*c]u8, usize, ?*usize) callconv(.C) c_int;
+// asmtest_codeimage.h — time-aware code-image recorder. Same lib, same
+// resolve-at-runtime idiom; the opaque `asmtest_codeimage_t*` marshals as
+// `?*anyopaque`, `pid_t` as `c_int`, `size_t` as `usize`, the logical timestamp
+// as `u64`, and the borrowed byte pointer out-param as `*[*c]const u8`.
+const FnCiAvailable = *const fn () callconv(.C) c_int;
+const FnCiSkipReason = *const fn ([*c]u8, usize) callconv(.C) void;
+const FnCiNew = *const fn (c_int) callconv(.C) ?*anyopaque;
+const FnCiFree = *const fn (?*anyopaque) callconv(.C) void;
+const FnCiTrack = *const fn (?*anyopaque, ?*const anyopaque, usize) callconv(.C) c_int;
+const FnCiRefresh = *const fn (?*anyopaque) callconv(.C) c_int;
+const FnCiNow = *const fn (?*const anyopaque) callconv(.C) u64;
+const FnCiBytesAt = *const fn (?*const anyopaque, ?*const anyopaque, u64, *[*c]const u8, *usize) callconv(.C) c_int;
+const FnCiBpfAvailable = *const fn () callconv(.C) c_int;
+const FnCiBpfSkipReason = *const fn ([*c]u8, usize) callconv(.C) void;
+const FnCiWatchBpf = *const fn (?*anyopaque) callconv(.C) c_int;
+const FnCiPollBpf = *const fn (?*anyopaque, c_int) callconv(.C) c_int;
+const FnCiNext = *const fn (?*anyopaque, *Event) callconv(.C) c_int;
 
 /// The resolved entry points. Populated once on first `load()`; held in a
 /// process-global because the DynLib handle and its symbols outlive any one
@@ -222,10 +269,25 @@ const Api = struct {
     ptrace_skip_reason: FnPtraceSkipReason,
     ptrace_trace_call: FnPtraceTraceCall,
     ptrace_trace_attached: FnPtraceTraceAttached,
+    ptrace_trace_attached_versioned: FnPtraceTraceAttachedVersioned,
     ptrace_run_to: FnPtraceRunTo,
     proc_region_by_addr: FnProcRegionByAddr,
     proc_perfmap_symbol: FnProcPerfmapSymbol,
     jitdump_find: FnJitdumpFind,
+    // asmtest_codeimage.h — time-aware code-image recorder.
+    ci_available: FnCiAvailable,
+    ci_skip_reason: FnCiSkipReason,
+    ci_new: FnCiNew,
+    ci_free: FnCiFree,
+    ci_track: FnCiTrack,
+    ci_refresh: FnCiRefresh,
+    ci_now: FnCiNow,
+    ci_bytes_at: FnCiBytesAt,
+    ci_bpf_available: FnCiBpfAvailable,
+    ci_bpf_skip_reason: FnCiBpfSkipReason,
+    ci_watch_bpf: FnCiWatchBpf,
+    ci_poll_bpf: FnCiPollBpf,
+    ci_next: FnCiNext,
 };
 
 var g_api: ?Api = null;
@@ -286,10 +348,25 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .ptrace_skip_reason = lib.lookup(FnPtraceSkipReason, "asmtest_ptrace_skip_reason") orelse return null,
         .ptrace_trace_call = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call") orelse return null,
         .ptrace_trace_attached = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached") orelse return null,
+        .ptrace_trace_attached_versioned = lib.lookup(FnPtraceTraceAttachedVersioned, "asmtest_ptrace_trace_attached_versioned") orelse return null,
         .ptrace_run_to = lib.lookup(FnPtraceRunTo, "asmtest_ptrace_run_to") orelse return null,
         .proc_region_by_addr = lib.lookup(FnProcRegionByAddr, "asmtest_proc_region_by_addr") orelse return null,
         .proc_perfmap_symbol = lib.lookup(FnProcPerfmapSymbol, "asmtest_proc_perfmap_symbol") orelse return null,
         .jitdump_find = lib.lookup(FnJitdumpFind, "asmtest_jitdump_find") orelse return null,
+        // asmtest_codeimage.h — time-aware code-image recorder.
+        .ci_available = lib.lookup(FnCiAvailable, "asmtest_codeimage_available") orelse return null,
+        .ci_skip_reason = lib.lookup(FnCiSkipReason, "asmtest_codeimage_skip_reason") orelse return null,
+        .ci_new = lib.lookup(FnCiNew, "asmtest_codeimage_new") orelse return null,
+        .ci_free = lib.lookup(FnCiFree, "asmtest_codeimage_free") orelse return null,
+        .ci_track = lib.lookup(FnCiTrack, "asmtest_codeimage_track") orelse return null,
+        .ci_refresh = lib.lookup(FnCiRefresh, "asmtest_codeimage_refresh") orelse return null,
+        .ci_now = lib.lookup(FnCiNow, "asmtest_codeimage_now") orelse return null,
+        .ci_bytes_at = lib.lookup(FnCiBytesAt, "asmtest_codeimage_bytes_at") orelse return null,
+        .ci_bpf_available = lib.lookup(FnCiBpfAvailable, "asmtest_codeimage_bpf_available") orelse return null,
+        .ci_bpf_skip_reason = lib.lookup(FnCiBpfSkipReason, "asmtest_codeimage_bpf_skip_reason") orelse return null,
+        .ci_watch_bpf = lib.lookup(FnCiWatchBpf, "asmtest_codeimage_watch_bpf") orelse return null,
+        .ci_poll_bpf = lib.lookup(FnCiPollBpf, "asmtest_codeimage_poll_bpf") orelse return null,
+        .ci_next = lib.lookup(FnCiNext, "asmtest_codeimage_next") orelse return null,
     };
 }
 
@@ -682,6 +759,29 @@ pub const Ptrace = struct {
         return @intCast(result);
     }
 
+    /// Like `traceAttached`, but VERSION-AWARE: instead of one late
+    /// `process_vm_readv` snapshot (wrong the moment the JIT patches or frees the
+    /// region), it consults a code-image timeline (`img`, a `CodeImage`) for the
+    /// bytes that were live at logical timestamp `when` (`when == 0` => the latest
+    /// version) — the fix for tracing a region whose address was reused mid-run.
+    /// Returns the target's RAX at the `ret`. Returns `Error.LibUnavailable` if the
+    /// lib isn't loadable, `Error.TraceFailed` on a nonzero C return. Mirrors
+    /// `Ptrace.trace_attached_versioned()`.
+    pub fn traceAttachedVersioned(
+        pid: c_int,
+        base: ?*const anyopaque,
+        len: usize,
+        img: *const CodeImage,
+        when: u64,
+        trace: *const HwTrace,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        var result: c_long = 0;
+        const rc = api.ptrace_trace_attached_versioned(pid, base, len, img.handle, when, &result, trace.handle);
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
     /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
     /// `addr` (a software breakpoint that fires when the program itself next calls in),
     /// leaving it stopped there ready for `traceAttached` — the step that makes a
@@ -750,5 +850,159 @@ pub const Ptrace = struct {
             .code_index = entry.code_index,
             .code = if (want != 0) out_bytes[0..bytes_len] else &.{},
         };
+    }
+};
+
+/// Time-aware code-image recorder (`asmtest_codeimage.h`): a userspace
+/// PERF_RECORD_TEXT_POKE. A single `process_vm_readv` snapshot of a live JIT
+/// region is wrong the moment the code is patched, freed, or its address reused
+/// mid-trace; this keeps a TIMESTAMPED CODE-IMAGE TIMELINE so a branch-trace
+/// decoder (or `Ptrace.traceAttachedVersioned`) can ask "what bytes were live at
+/// `addr` as of logical timestamp `when`". Works on a FOREIGN process (the JIT
+/// case) or this one (`init(0)`); change detection is pure userspace and
+/// arch-independent (soft-dirty / PAGEMAP_SCAN).
+///
+/// Wraps the opaque `asmtest_codeimage_t*` and resolves the same
+/// `libasmtest_hwtrace` the rest of this module loads, so the same self-skip
+/// applies: gate on `CodeImage.available()` before recording. The Zig analogue of
+/// Python's `CodeImage`.
+pub const CodeImage = struct {
+    handle: ?*anyopaque,
+
+    /// True if the userspace recorder can detect page changes on this host
+    /// (PAGEMAP_SCAN, or the soft-dirty fallback): the hwtrace lib opens AND
+    /// `asmtest_codeimage_available()` reports the detect chain passes. Never
+    /// errors, so callers (and the test) self-skip cleanly. Mirrors
+    /// `asmtest_codeimage_available()`.
+    pub fn available() bool {
+        const api = load() orelse return false;
+        return api.ci_available() != 0;
+    }
+
+    /// Human-readable reason `available()` is false (or "available"), written into
+    /// `buf` (always NUL-terminated). Returns the slice up to the NUL. If the lib
+    /// can't load, reports that so the self-skip message is still useful. Mirrors
+    /// `asmtest_codeimage_skip_reason()`.
+    pub fn skipReason(buf: []u8) []const u8 {
+        const api = load() orelse {
+            const msg = "libasmtest_hwtrace not loadable";
+            const n = @min(msg.len, buf.len);
+            @memcpy(buf[0..n], msg[0..n]);
+            return buf[0..n];
+        };
+        api.ci_skip_reason(buf.ptr, buf.len);
+        return std.mem.sliceTo(buf, 0);
+    }
+
+    /// Create a timeline recording `pid`'s memory (`pid == 0` => this process).
+    /// Returns `Error.LibUnavailable` if the lib isn't loadable,
+    /// `Error.AllocFailed` on a NULL C return. Mirrors `asmtest_codeimage_new()`.
+    pub fn init(pid: c_int) Error!CodeImage {
+        const api = load() orelse return Error.LibUnavailable;
+        const h = api.ci_new(pid) orelse return Error.AllocFailed;
+        return CodeImage{ .handle = h };
+    }
+
+    /// Free the timeline and all recorded versions (detaches any eBPF watch).
+    /// Idempotent. Mirrors `asmtest_codeimage_free()`.
+    pub fn deinit(self: *CodeImage) void {
+        if (self.handle) |h| {
+            const api = load() orelse {
+                self.handle = null;
+                return;
+            };
+            api.ci_free(h);
+            self.handle = null;
+        }
+    }
+
+    /// Begin tracking `[base, base+len)`: snapshot version 0 now and arm
+    /// write-protect on its pages. May be called for several disjoint regions.
+    /// Returns the C status (`ASMTEST_CI_OK`, or a negative status). Mirrors
+    /// `asmtest_codeimage_track()`.
+    pub fn track(self: *CodeImage, base: ?*const anyopaque, len: usize) c_int {
+        const api = load() orelse return ASMTEST_CI_ENOENT;
+        return api.ci_track(self.handle, base, len);
+    }
+
+    /// Scan the tracked ranges for changed pages, re-snapshot each as a NEW
+    /// version, and re-arm. Returns the number of new versions recorded (>= 0), or
+    /// a negative status. Mirrors `asmtest_codeimage_refresh()`.
+    pub fn refresh(self: *CodeImage) c_int {
+        const api = load() orelse return ASMTEST_CI_ENOENT;
+        return api.ci_refresh(self.handle);
+    }
+
+    /// The current capture sequence — a monotonic logical timestamp. Advances by
+    /// one for every version recorded (track + each refresh change); 0 before
+    /// anything is tracked. Mirrors `asmtest_codeimage_now()`.
+    pub fn now(self: *const CodeImage) u64 {
+        const api = load() orelse return 0;
+        return api.ci_now(self.handle);
+    }
+
+    /// The bytes live at `addr` as of capture sequence `when` (`when == 0` => the
+    /// latest version), as a borrowed slice owned by the timeline (valid until
+    /// `deinit`), or `null` if `addr` is not in any tracked region / no version
+    /// exists at-or-before `when` (`ASMTEST_CI_ENOENT`) or the lib is absent. The
+    /// slice runs from `addr` to the end of that version's region. Mirrors
+    /// `asmtest_codeimage_bytes_at()`.
+    pub fn bytesAt(self: *const CodeImage, addr: ?*const anyopaque, when: u64) ?[]const u8 {
+        const api = load() orelse return null;
+        var out: [*c]const u8 = null;
+        var out_len: usize = 0;
+        const rc = api.ci_bytes_at(self.handle, addr, when, &out, &out_len);
+        if (rc != ASMTEST_CI_OK) return null;
+        if (out == null) return null;
+        return out[0..out_len];
+    }
+
+    /// True if the optional eBPF emission detector can load and attach on this host
+    /// (built with libbpf, kernel BTF present, sufficient privilege), else false.
+    /// Self-skips cleanly. Mirrors `asmtest_codeimage_bpf_available()`.
+    pub fn bpfAvailable() bool {
+        const api = load() orelse return false;
+        return api.ci_bpf_available() != 0;
+    }
+
+    /// Human-readable reason `bpfAvailable()` is false (or "available"), written
+    /// into `buf` (always NUL-terminated). Returns the slice up to the NUL.
+    /// Mirrors `asmtest_codeimage_bpf_skip_reason()`.
+    pub fn bpfSkipReason(buf: []u8) []const u8 {
+        const api = load() orelse {
+            const msg = "libasmtest_hwtrace not loadable";
+            const n = @min(msg.len, buf.len);
+            @memcpy(buf[0..n], msg[0..n]);
+            return buf[0..n];
+        };
+        api.ci_bpf_skip_reason(buf.ptr, buf.len);
+        return std.mem.sliceTo(buf, 0);
+    }
+
+    /// Load the CO-RE program, filter it to this timeline's pid, and attach it so
+    /// `pollBpf` can drain emission events. Returns the C status (`ASMTEST_CI_OK`,
+    /// or a negative status — e.g. `ENOSYS` without libbpf). Mirrors
+    /// `asmtest_codeimage_watch_bpf()`.
+    pub fn watchBpf(self: *CodeImage) c_int {
+        const api = load() orelse return ASMTEST_CI_ENOENT;
+        return api.ci_watch_bpf(self.handle);
+    }
+
+    /// Drain ready emission events from the BPF ring buffer into the internal
+    /// queue. `timeout_ms == 0` is a NON-BLOCKING drain; `> 0` waits up to that
+    /// long. Returns the number of events queued (>= 0) or a negative status.
+    /// Mirrors `asmtest_codeimage_poll_bpf()`.
+    pub fn pollBpf(self: *CodeImage, timeout_ms: c_int) c_int {
+        const api = load() orelse return ASMTEST_CI_ENOENT;
+        return api.ci_poll_bpf(self.handle, timeout_ms);
+    }
+
+    /// Pop one queued emission event, or `null` if the queue is empty / on a
+    /// negative status / the lib is absent. Mirrors `asmtest_codeimage_next()`.
+    pub fn nextEvent(self: *CodeImage) ?Event {
+        const api = load() orelse return null;
+        var out: Event = undefined;
+        if (api.ci_next(self.handle, &out) != 1) return null;
+        return out;
     }
 };

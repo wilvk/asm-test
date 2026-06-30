@@ -1,0 +1,29 @@
+# Dockerfile.hwtrace-codeimage — the OPTIONAL eBPF code-emission detector lane.
+#
+# Unlike Dockerfile.hwtrace (the plain, unprivileged single-step lane), this image carries
+# the eBPF BUILD toolchain the bare host lacks — clang (the BPF front end), libbpf-dev
+# (headers + .so + pkg-config), and bpftool (skeleton generation) — so codeimage.c is built
+# WITH -DASMTEST_HAVE_LIBBPF and the CO-RE program + skeleton are compiled. The eBPF detector
+# needs privilege (CAP_BPF to load, CAP_PERFMON to attach tracepoints) and Docker's default
+# seccomp profile blocks bpf(2)/perf_event_open(2), so the `make docker-hwtrace-codeimage`
+# lane runs this with specific --cap-add flags + seccomp=unconfined (NOT --privileged).
+#
+# vmlinux.h is generated at `docker run` time from /sys/kernel/btf/vmlinux (the container
+# shares the host kernel), falling back to bpf/vmlinux_min.h.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+# clang/llvm: the BPF front end. libbpf-dev: headers + .so + pkg-config. bpftool: on Ubuntu
+# Noble it is a virtual package provided only by kernel-versioned linux-tools, and the
+# /usr/sbin/bpftool wrapper execs the binary matching `uname -r` (the HOST kernel inside a
+# container, which won't match) — so install linux-tools-generic and symlink its real
+# versioned binary into PATH, bypassing the wrapper. A 6.8 bpftool reads the host's BTF
+# file and generates skeletons fine (the format is stable).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      clang llvm libbpf-dev linux-tools-common linux-tools-generic \
+ && ln -sf "$(find /usr/lib/linux-tools* -name bpftool 2>/dev/null | head -1)" \
+      /usr/local/bin/bpftool \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+CMD ["make", "codeimage-test"]

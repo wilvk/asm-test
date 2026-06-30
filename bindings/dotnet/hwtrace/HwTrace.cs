@@ -221,6 +221,54 @@ namespace Asmtest
             [MarshalAs(UnmanagedType.LPStr)] string name,
             out JitEntry @out, byte[] bytesOut, UIntPtr bytesCap, out UIntPtr bytesLen);
 
+        // Version-aware out-of-process trace (asmtest_ptrace.h): like trace_attached, but
+        // it reconstructs the region's bytes from a code-image timeline (img) as of capture
+        // sequence `when` rather than from a single late snapshot — the temporally-correct
+        // read for a live JIT. img/when may be NULL/0 to fall back to a fresh read. pid is a
+        // C int, len a size_t, the C `long` result a 64-bit long on Linux x86-64.
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_versioned(
+            int pid, IntPtr @base, UIntPtr len, IntPtr img, ulong when, out long result, IntPtr trace);
+
+        // ---- time-aware code-image recorder (asmtest_codeimage.h) ----
+        // A userspace PERF_RECORD_TEXT_POKE: track() snapshots a region and arms
+        // write-protect; refresh() re-snapshots only changed pages as new versions;
+        // bytes_at(addr, when) answers what bytes were live at a logical timestamp. The
+        // optional eBPF emission detector self-skips without libbpf / CAP_BPF. pid is a C
+        // int (0 == self); the opaque img handle is an IntPtr; out-pointer reads marshal by
+        // hand (see CodeImage.BytesAt).
+        public const int ASMTEST_CI_OK = 0;
+        public const int ASMTEST_CI_ENOENT = -7; // addr never tracked / no version at-or-before when
+
+        // asmtest_codeimage_event_t: three u64 + three u32 + one i32, no padding (a
+        // _Static_assert in src/codeimage.c pins the 40-byte size), so it marshals as a
+        // flat sequential struct.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CodeImageEvent
+        {
+            public ulong Addr;      // published base address (0 for a memfd hint)
+            public ulong Len;       // byte length (0 for a memfd hint)
+            public ulong Timestamp; // bpf_ktime_get_ns() at emission
+            public uint Pid;        // tgid that published
+            public uint Tid;        // thread that published
+            public uint Kind;       // ASMTEST_CI_KIND_*
+            public int Fd;          // memfd fd, or -1
+        }
+
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_available();
+        [DllImport(HWTRACE)] public static extern void asmtest_codeimage_skip_reason(byte[] buf, UIntPtr buflen);
+        [DllImport(HWTRACE)] public static extern IntPtr asmtest_codeimage_new(int pid);
+        [DllImport(HWTRACE)] public static extern void asmtest_codeimage_free(IntPtr img);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_track(IntPtr img, IntPtr @base, UIntPtr len);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_refresh(IntPtr img);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_codeimage_now(IntPtr img);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_bytes_at(
+            IntPtr img, IntPtr addr, ulong when, out IntPtr @out, out UIntPtr outLen);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_bpf_available();
+        [DllImport(HWTRACE)] public static extern void asmtest_codeimage_bpf_skip_reason(byte[] buf, UIntPtr buflen);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_watch_bpf(IntPtr img);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_poll_bpf(IntPtr img, int timeoutMs);
+        [DllImport(HWTRACE)] public static extern int asmtest_codeimage_next(IntPtr img, out CodeImageEvent @out);
+
         // Whether libasmtest_hwtrace loaded at all. A missing lib (tier not built)
         // self-skips via HwTrace.Available() rather than crashing. Derived from the
         // handle resolved by LoadLib() above (resolver-free, so it is robust to the
@@ -621,6 +669,26 @@ namespace Asmtest
         }
 
         /// <summary>
+        /// Like <see cref="TraceAttached"/>, but reconstructs the region's bytes from a
+        /// <see cref="CodeImage"/> timeline as of capture sequence <paramref name="when"/>
+        /// (<paramref name="when"/> == 0 =&gt; latest) instead of from a single late
+        /// snapshot — the temporally-correct read for a live JIT whose code is patched,
+        /// freed, or has its address reused mid-trace. Pass a default
+        /// <paramref name="img"/> (no timeline) to fall back to a fresh read. Returns the
+        /// target's RAX at the region exit; the caller owns PTRACE_ATTACH/DETACH.
+        /// </summary>
+        public static long TraceAttachedVersioned(
+            int pid, IntPtr @base, nuint len, CodeImage img = null, ulong when = 0, IntPtr trace = default)
+        {
+            IntPtr imgHandle = img != null ? img.Handle : IntPtr.Zero;
+            int rc = HwNative.asmtest_ptrace_trace_attached_versioned(
+                pid, @base, (UIntPtr)len, imgHandle, when, out long result, trace);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_attached_versioned failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
         /// Run an already-attached, ptrace-stopped target forward until it reaches
         /// <paramref name="addr"/> (a software breakpoint that fires when the program
         /// itself next calls in), leaving it stopped there ready for
@@ -684,5 +752,236 @@ namespace Asmtest
             }
             return new JitMethod(e.CodeAddr, e.CodeSize, e.Timestamp, e.CodeIndex, code);
         }
+    }
+
+    /// <summary>
+    /// How a code-emission event was observed (mirrors the ASMTEST_CI_KIND_* macros).
+    /// MProtect is the common JIT edge (mprotect ...PROT_EXEC...); Mmap's addr is the
+    /// real base; Memfd is a staging hint correlated via the fd.
+    /// </summary>
+    public enum CodeImageKind { MProtect = 1, Mmap = 2, Memfd = 3 }
+
+    /// <summary>
+    /// A code-emission event from the optional eBPF detector (mirrors
+    /// asmtest_codeimage_event_t): where/when executable code appeared, never the
+    /// instruction stream.
+    /// </summary>
+    public readonly struct CodeImageEvent
+    {
+        /// <summary>Published base address (0 for a memfd hint).</summary>
+        public ulong Addr { get; }
+
+        /// <summary>Byte length (0 for a memfd hint).</summary>
+        public ulong Len { get; }
+
+        /// <summary>bpf_ktime_get_ns() at emission.</summary>
+        public ulong Timestamp { get; }
+
+        /// <summary>The tgid that published the code.</summary>
+        public uint Pid { get; }
+
+        /// <summary>The thread that published the code.</summary>
+        public uint Tid { get; }
+
+        /// <summary>How the emission was observed.</summary>
+        public CodeImageKind Kind { get; }
+
+        /// <summary>The memfd fd, or -1.</summary>
+        public int Fd { get; }
+
+        public CodeImageEvent(ulong addr, ulong len, ulong timestamp, uint pid, uint tid, CodeImageKind kind, int fd)
+        {
+            Addr = addr;
+            Len = len;
+            Timestamp = timestamp;
+            Pid = pid;
+            Tid = tid;
+            Kind = kind;
+            Fd = fd;
+        }
+
+        public override string ToString() =>
+            $"CodeImageEvent(addr=0x{Addr:x}, len={Len}, ts={Timestamp}, " +
+            $"pid={Pid}, tid={Tid}, kind={Kind}, fd={Fd})";
+    }
+
+    /// <summary>
+    /// A time-aware code-image recorder (asmtest_codeimage.h) — a userspace
+    /// PERF_RECORD_TEXT_POKE. <see cref="Track"/> snapshots a region's bytes (version 0)
+    /// and arms write-protect on its pages; <see cref="Refresh"/> re-snapshots only the
+    /// pages changed since the last arm as a NEW version stamped with the next monotonic
+    /// sequence; <see cref="BytesAt"/> answers what bytes were live at an address as of a
+    /// logical timestamp — the query a branch-trace decoder needs to reconstruct a JIT
+    /// method whose address was reused. Works on a foreign process (pid &gt; 0, needs only
+    /// ptrace permission) or this one (pid 0). The optional eBPF emission detector
+    /// (<see cref="WatchBpf"/>/<see cref="PollBpf"/>/<see cref="NextEvent"/>) self-skips
+    /// without libbpf / CAP_BPF. Self-skips cleanly via <see cref="Available"/> /
+    /// <see cref="SkipReason"/> when the lib is missing or the host is unsupported.
+    /// Dispose (or <see cref="Free"/>) to release the timeline and detach any eBPF watch.
+    /// </summary>
+    public sealed class CodeImage : IDisposable
+    {
+        IntPtr _img;
+
+        /// <summary>
+        /// Create a timeline recording <paramref name="pid"/>'s memory (0 =&gt; this
+        /// process). Throws <see cref="HwTraceException"/> on allocation failure.
+        /// </summary>
+        public CodeImage(int pid = 0)
+        {
+            _img = HwNative.asmtest_codeimage_new(pid);
+            if (_img == IntPtr.Zero)
+                throw new HwTraceException("asmtest_codeimage_new failed");
+        }
+
+        /// <summary>
+        /// True if the userspace recorder can detect page changes on this host
+        /// (PAGEMAP_SCAN, or the soft-dirty fallback). Never throws — a missing lib or
+        /// unsupported host returns false so callers self-skip.
+        /// </summary>
+        public static bool Available()
+        {
+            if (!HwNative.LibAvailable) return false;
+            try { return HwNative.asmtest_codeimage_available() != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>Human-readable reason <see cref="Available"/> is false (or "available").</summary>
+        public static string SkipReason()
+        {
+            if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
+            var buf = new byte[160];
+            HwNative.asmtest_codeimage_skip_reason(buf, (UIntPtr)buf.Length);
+            int z = Array.IndexOf(buf, (byte)0);
+            return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
+        }
+
+        /// <summary>
+        /// Begin tracking <c>[base, base+len)</c>: snapshot version 0 now and arm
+        /// write-protect on its pages so the next <see cref="Refresh"/> sees changes. May
+        /// be called for several disjoint regions. Throws on a negative native status.
+        /// </summary>
+        public void Track(IntPtr @base, nuint len)
+        {
+            int rc = HwNative.asmtest_codeimage_track(_img, @base, (UIntPtr)len);
+            if (rc != HwNative.ASMTEST_CI_OK)
+                throw new HwTraceException($"asmtest_codeimage_track failed: {rc}");
+        }
+
+        /// <summary>
+        /// Scan the tracked ranges for changed pages, re-snapshot each as a new version,
+        /// and re-arm. Returns the number of new versions recorded (&gt;= 0). Throws on a
+        /// negative native status.
+        /// </summary>
+        public int Refresh()
+        {
+            int rc = HwNative.asmtest_codeimage_refresh(_img);
+            if (rc < 0)
+                throw new HwTraceException($"asmtest_codeimage_refresh failed: {rc}");
+            return rc;
+        }
+
+        /// <summary>
+        /// The current capture sequence — a monotonic logical timestamp. Advances by one
+        /// for every version recorded (track + each refresh change). 0 before anything is
+        /// tracked.
+        /// </summary>
+        public ulong Now() => HwNative.asmtest_codeimage_now(_img);
+
+        /// <summary>
+        /// The bytes live at <paramref name="addr"/> as of capture sequence
+        /// <paramref name="when"/> (<paramref name="when"/> == 0 =&gt; the latest
+        /// version), copied out of the timeline's borrowed buffer. Returns <c>null</c> when
+        /// the address was never tracked or has no version at-or-before
+        /// <paramref name="when"/> (ASMTEST_CI_ENOENT). Throws on any other negative
+        /// status.
+        /// </summary>
+        public byte[] BytesAt(IntPtr addr, ulong when = 0)
+        {
+            int rc = HwNative.asmtest_codeimage_bytes_at(_img, addr, when, out IntPtr outPtr, out UIntPtr outLen);
+            if (rc == HwNative.ASMTEST_CI_ENOENT) return null;
+            if (rc != HwNative.ASMTEST_CI_OK)
+                throw new HwTraceException($"asmtest_codeimage_bytes_at failed: {rc}");
+            int n = (int)outLen;
+            var bytes = new byte[n];
+            if (n > 0 && outPtr != IntPtr.Zero)
+                Marshal.Copy(outPtr, bytes, 0, n);
+            return bytes;
+        }
+
+        // ---- optional eBPF emission detector (Phase C) ----
+
+        /// <summary>
+        /// True if the eBPF emission detector can load and attach on this host (built with
+        /// libbpf, kernel BTF present, sufficient privilege). Never throws.
+        /// </summary>
+        public static bool BpfAvailable()
+        {
+            if (!HwNative.LibAvailable) return false;
+            try { return HwNative.asmtest_codeimage_bpf_available() != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>Human-readable reason <see cref="BpfAvailable"/> is false (or "available").</summary>
+        public static string BpfSkipReason()
+        {
+            if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
+            var buf = new byte[160];
+            HwNative.asmtest_codeimage_bpf_skip_reason(buf, (UIntPtr)buf.Length);
+            int z = Array.IndexOf(buf, (byte)0);
+            return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
+        }
+
+        /// <summary>
+        /// Load the CO-RE program, filter it to this timeline's pid, and attach it.
+        /// Returns the native status (<c>ASMTEST_CI_OK</c> = 0 on success; a negative
+        /// status — ENOSYS/EUNAVAIL/ELOAD — when the detector cannot run).
+        /// </summary>
+        public int WatchBpf() => HwNative.asmtest_codeimage_watch_bpf(_img);
+
+        /// <summary>
+        /// Drain ready emission events from the BPF ring buffer into the internal queue.
+        /// <paramref name="timeoutMs"/> == 0 is a non-blocking drain; &gt; 0 waits up to
+        /// that long. Returns the number of events queued (&gt;= 0). Throws on a negative
+        /// native status.
+        /// </summary>
+        public int PollBpf(int timeoutMs = 0)
+        {
+            int rc = HwNative.asmtest_codeimage_poll_bpf(_img, timeoutMs);
+            if (rc < 0)
+                throw new HwTraceException($"asmtest_codeimage_poll_bpf failed: {rc}");
+            return rc;
+        }
+
+        /// <summary>
+        /// Pop one queued emission event, or <c>null</c> when the queue is empty. Throws
+        /// on a negative native status.
+        /// </summary>
+        public CodeImageEvent? NextEvent()
+        {
+            int rc = HwNative.asmtest_codeimage_next(_img, out HwNative.CodeImageEvent e);
+            if (rc < 0)
+                throw new HwTraceException($"asmtest_codeimage_next failed: {rc}");
+            if (rc == 0) return null;
+            return new CodeImageEvent(
+                e.Addr, e.Len, e.Timestamp, e.Pid, e.Tid, (CodeImageKind)e.Kind, e.Fd);
+        }
+
+        // The opaque timeline handle, for the version-aware out-of-process tracer
+        // (Ptrace.TraceAttachedVersioned), which reads but does not own it.
+        internal IntPtr Handle => _img;
+
+        /// <summary>Free the timeline and all recorded versions; detaches any eBPF watch.</summary>
+        public void Free()
+        {
+            if (_img != IntPtr.Zero)
+            {
+                HwNative.asmtest_codeimage_free(_img);
+                _img = IntPtr.Zero;
+            }
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/>.</summary>
+        public void Dispose() => Free();
     }
 }

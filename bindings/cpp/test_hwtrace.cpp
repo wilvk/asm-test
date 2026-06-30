@@ -375,6 +375,68 @@ int main() {
         }
     }
 
+    // ---- Time-aware code-image recorder (asmtest::CodeImage) ----
+    // The userspace PERF_RECORD_TEXT_POKE: track a region, advance the capture
+    // sequence, and round-trip the live bytes back out through bytes_at(). Records
+    // THIS process (pid 0). Self-skips off a host without PAGEMAP_SCAN / soft-dirty.
+    {
+        // mov rax,rdi; add rax,rsi; ret  (a tiny self-contained method body)
+        const std::vector<std::uint8_t> CIBODY = {0x48, 0x89, 0xf8, 0x48,
+                                                  0x01, 0xf0, 0xc3};
+        if (!CodeImage::available()) {
+            std::printf("# SKIP codeimage recorder unavailable: %s\n",
+                        CodeImage::skip_reason().c_str());
+        } else {
+            NativeCode code = NativeCode::from_bytes(CIBODY);
+            const void *base = code.base();
+
+            CodeImage img(0);
+            ok(img.track(base, CIBODY.size()) == 0,
+               "codeimage: track(base, 7) == OK");
+            // track() snapshots version 0, advancing the sequence to >= 1.
+            ok(img.now() >= 1, "codeimage: now() >= 1 after track");
+            // Nothing was written, so refresh records no new versions (>= 0).
+            ok(img.refresh() >= 0, "codeimage: refresh() >= 0");
+
+            // Round-trip: the bytes the recorder captured at version 0 are exactly
+            // the body we wrote, and the latest (when == now()) version too.
+            std::vector<std::uint8_t> at0 = img.bytes_at(base, 0);
+            ok(at0.size() >= CIBODY.size() &&
+                   std::vector<std::uint8_t>(at0.begin(),
+                                             at0.begin() + CIBODY.size()) ==
+                       CIBODY,
+               "codeimage: bytes_at(base, 0) round-trips the 7 body bytes");
+            std::vector<std::uint8_t> atnow = img.bytes_at(base, img.now());
+            ok(atnow.size() >= CIBODY.size() &&
+                   std::vector<std::uint8_t>(atnow.begin(),
+                                             atnow.begin() + CIBODY.size()) ==
+                       CIBODY,
+               "codeimage: bytes_at(base, now()) round-trips the 7 body bytes");
+
+            // An address never tracked yields no bytes (ASMTEST_CI_ENOENT -> empty).
+            ok(img.bytes_at(reinterpret_cast<const void *>(0x1)).empty(),
+               "codeimage: bytes_at(untracked addr) is empty");
+
+            img.free();
+            code.free();
+        }
+    }
+
+    // ---- CodeImage optional eBPF emission detector probe ----
+    // Sideband only (when/where code appears, never the instruction stream).
+    // Self-skips without libbpf / CAP_BPF / kernel BTF; when available, the watch
+    // loads and attaches (ASMTEST_CI_OK).
+    {
+        if (!CodeImage::bpf_available()) {
+            std::printf("# SKIP codeimage eBPF detector unavailable: %s\n",
+                        CodeImage::bpf_skip_reason().c_str());
+        } else {
+            CodeImage img(0);
+            ok(img.watch_bpf() == 0, "codeimage: watch_bpf() == OK");
+            img.free();
+        }
+    }
+
     std::printf("1..%d\n", g_test);
     return g_failed == 0 ? 0 : 1;
 }

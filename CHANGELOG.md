@@ -199,6 +199,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the PT/CoreSight tiers self-skip off their hardware; the AArch64 fixtures are
     decode- and execute-validated under qemu, with only the live single-step stream
     pending Apple-Silicon / Linux-ARM64 / Windows-on-ARM hardware.
+  - **Time-aware code-image recorder (`asmtest_codeimage`).** A userspace
+    `PERF_RECORD_TEXT_POKE`: it records a **timestamped timeline** of a process's code
+    regions so `asmtest_codeimage_bytes_at(img, addr, when, …)` returns the bytes that
+    were live at trace-position `when` — the correct answer for a JIT whose code is
+    patched, freed, or has its address reused mid-trace, where a single late
+    `process_vm_readv` snapshot returns the **wrong** bytes (the temporal problem the
+    [JIT-runtime-tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)
+    calls "the innovative, buildable core", approach #2). Change detection is **soft-dirty**
+    (`/proc/<pid>/clear_refs` to arm + the soft-dirty PTE bit to detect, read via the
+    `PAGEMAP_SCAN` ioctl where available, else by parsing `/proc/<pid>/pagemap`), which
+    works **cross-process** — the foreign-JIT case — needing only permission to read the
+    target. The W2 stepper consumes it: `asmtest_ptrace_trace_attached_versioned(pid,
+    base, len, img, when, &result, trace)` decodes a foreign region's blocks against the
+    time-correct bytes instead of a live snapshot (the existing `trace_attached` is the
+    `img == NULL` case, unchanged). An **optional eBPF emission detector** (a CO-RE
+    program on `mprotect`/`mmap`/`memfd_create`, filtered to the target PID namespace via
+    `bpf_get_ns_current_pid_tgid`, events drained from a `bpf_ringbuf`) tells the recorder
+    *when* code appears so it snapshots on the `PROT_EXEC` edge instead of polling; it is
+    built only when `clang`+`libbpf`+`bpftool` are present (`-DASMTEST_HAVE_LIBBPF`) and
+    self-skips otherwise, with the userspace soft-dirty path as the always-available
+    fallback. Validated live: the same-address-different-bytes temporal proof and the
+    versioned W2 trace run in `make hwtrace-test` / `make codeimage-test` on any x86-64
+    Linux host (no privilege); the eBPF detector is validated in `make
+    docker-hwtrace-codeimage` (a `--cap-add=BPF,PERFMON` container — **not** privileged),
+    observing a real `mprotect(PROT_EXEC)` emission edge. Exposed across **all ten**
+    language bindings (a `CodeImage` wrapper) and covered by the binding
+    function-surface parity gate. ([asmtest_codeimage.h](https://github.com/wilvk/asm-test/blob/main/include/asmtest_codeimage.h),
+    `src/codeimage.c`, `bpf/codeimage.bpf.c`)
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

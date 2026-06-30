@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 const koffi = require('koffi');
 const {
-  HwTrace, NativeCode, Ptrace, SINGLESTEP, AMD_LBR,
+  HwTrace, NativeCode, Ptrace, CodeImage, SINGLESTEP, AMD_LBR,
   BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
@@ -304,6 +304,54 @@ function main() {
           'jitdumpFind(missing) is null');
       } finally {
         fs.unlinkSync(dumpPath);
+      }
+    }
+  }
+
+  // --- Time-aware code-image recorder (CodeImage, asmtest_codeimage.h): a userspace
+  //     PERF_RECORD_TEXT_POKE. Self-skips when the userspace page-change recorder
+  //     can't run on this host (no PAGEMAP_SCAN / soft-dirty). ---
+  if (!CodeImage.available()) {
+    console.log(`# SKIP codeimage recorder unavailable: ${CodeImage.skipReason()}`);
+  } else {
+    // Track a NativeCode region in THIS process (pid 0) and round-trip its bytes
+    // back out of the version-0 snapshot. The 7-byte routine is mov rax,rdi;
+    // add rax,rsi; ret.
+    const SNIPPET = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3]);
+    {
+      const code = NativeCode.fromBytes(SNIPPET);
+      // koffi external pointers don't compare by value; work in numeric addresses.
+      const baseAddr = koffi.address(code.base);
+      const img = new CodeImage(0); // 0 => this process
+      try {
+        ok(img.track(baseAddr, SNIPPET.length) === 0, 'codeimage track(base, 7) == OK');
+        ok(img.now() >= 1, 'codeimage now() >= 1 after track (version 0 recorded)');
+        ok(img.refresh() >= 0, 'codeimage refresh() >= 0 (no error)');
+
+        const bytes = img.bytesAt(baseAddr, 0); // when 0 => latest
+        ok(bytes !== null && bytes.length >= SNIPPET.length,
+          'codeimage bytesAt(base, 0) returns at least 7 bytes');
+        let same = bytes !== null;
+        for (let i = 0; same && i < SNIPPET.length; i++) {
+          if (bytes[i] !== SNIPPET[i]) same = false;
+        }
+        ok(same, 'codeimage bytesAt(base, 0) round-trips the 7 snippet bytes');
+      } finally {
+        img.free();
+        code.free();
+      }
+    }
+
+    // eBPF emission detector (Phase C) probe: skip without libbpf / CAP_BPF, else
+    // the program loads and attaches (watchBpf() == OK).
+    if (!CodeImage.bpfAvailable()) {
+      console.log(`# SKIP codeimage eBPF detector unavailable: ${CodeImage.bpfSkipReason()}`);
+    } else {
+      const img = new CodeImage(0);
+      try {
+        ok(img.watchBpf() === 0, 'codeimage watchBpf() == OK (eBPF program loaded + attached)');
+      } finally {
+        img.free();
       }
     }
   }

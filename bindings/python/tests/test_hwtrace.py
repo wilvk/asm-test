@@ -11,10 +11,11 @@ import struct
 import pytest
 
 from asmtest.hwtrace import (
-    HwTrace, NativeCode, Ptrace, SINGLESTEP, AMD_LBR,
+    HwTrace, NativeCode, Ptrace, CodeImage, SINGLESTEP, AMD_LBR,
     BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
     TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
     TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
+    ASMTEST_CI_KIND_MPROTECT,
 )
 
 # mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two blocks)
@@ -240,3 +241,51 @@ def test_jitdump_find(tmp_path):
         0x2000, len(ROUTINE), 9, 5)
     assert m.code == ROUTINE
     assert Ptrace.jitdump_find(path, "missing") is None
+
+
+# ---- Time-aware code-image recorder (asmtest.hwtrace.CodeImage) ----
+
+# Two 7-byte routines sharing an address; they differ at one byte (add vs sub).
+_BLOB_A = b"\x48\x89\xf8\x48\x01\xf0\xc3"
+_BLOB_B = b"\x48\x89\xf8\x48\x29\xf0\xc3"
+
+
+def test_codeimage_temporal():
+    """The same-address-different-bytes proof: track a region, rewrite it in place, and
+    confirm bytes_at(t0) still returns the OLD bytes where a late snapshot would see B."""
+    if not CodeImage.available():
+        pytest.skip(f"codeimage unavailable: {CodeImage.skip_reason()}")
+    import ctypes
+    import mmap as _mmap
+
+    mm = _mmap.mmap(-1, _mmap.PAGESIZE, prot=_mmap.PROT_READ | _mmap.PROT_WRITE)
+    mm[:len(_BLOB_A)] = _BLOB_A
+    addr = ctypes.addressof(ctypes.c_char.from_buffer(mm))
+
+    img = CodeImage(0)
+    try:
+        assert img.track(addr, len(_BLOB_A)) == 0
+        t0 = img.now()
+        assert t0 >= 1
+        mm[:len(_BLOB_B)] = _BLOB_B          # re-JIT in place
+        assert img.refresh() >= 1
+        assert img.bytes_at(addr, t0) == _BLOB_A   # the temporal fix
+        assert img.bytes_at(addr, 0) == _BLOB_B    # latest
+        assert img.bytes_at(addr + len(_BLOB_A), 0) is None  # untracked
+    finally:
+        img.free()
+        del addr
+        mm.close()
+
+
+def test_codeimage_bpf_probe():
+    """The eBPF emission detector round-trips through FFI; it self-skips without
+    libbpf/CAP_BPF (the live path is exercised by the C suite / docker-hwtrace-codeimage)."""
+    if not CodeImage.bpf_available():
+        pytest.skip(f"codeimage bpf unavailable: {CodeImage.bpf_skip_reason()}")
+    img = CodeImage(0)
+    try:
+        assert img.watch_bpf() == 0
+        assert ASMTEST_CI_KIND_MPROTECT == 1
+    finally:
+        img.free()

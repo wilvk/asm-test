@@ -28,6 +28,7 @@
  */
 #define _GNU_SOURCE
 
+#include "asmtest_codeimage.h"
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 
@@ -756,27 +757,45 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     return rc;
 }
 
-int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
-                                  long *result, asmtest_trace_t *trace) {
+/* Shared body for the live-snapshot and time-versioned variants below. The ONLY
+ * difference between them is the byte source handed to the block normalizer: a single
+ * process_vm_readv (img == NULL) versus the time-correct bytes the code-image recorder
+ * had live at sequence `when` (img != NULL). The single-step loop is identical. */
+static int trace_attached_impl(pid_t pid, const void *base, size_t len,
+                               struct asmtest_codeimage *img, uint64_t when,
+                               long *result, asmtest_trace_t *trace) {
     if (base == NULL || len == 0 || trace == NULL)
         return ASMTEST_PTRACE_EINVAL;
 
-    /* Read the region bytes FROM THE TARGET (not a shared mapping) so this works on a
-     * foreign process — the same way a debugger reads a tracee's text. */
-    uint8_t *code = (uint8_t *)malloc(len);
-    if (code == NULL)
-        return ASMTEST_PTRACE_ETRACE;
-    struct iovec liov = {code, len};
-    struct iovec riov = {(void *)(uintptr_t)base, len};
-    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
-        free(code);
-        return ASMTEST_PTRACE_ETRACE;
+    /* Obtain the region bytes. Versioned: borrow the recorder's time-correct copy (the
+     * right bytes even if the address was re-JITted/reused). Live: read FROM THE TARGET
+     * via process_vm_readv (a debugger-style foreign read), owning a fresh buffer. */
+    const uint8_t *code = NULL;
+    uint8_t *owned = NULL; /* freed iff we allocated it (the live path) */
+    if (img != NULL) {
+        const uint8_t *vb = NULL;
+        size_t avail = 0;
+        if (asmtest_codeimage_bytes_at(img, base, when, &vb, &avail) != ASMTEST_CI_OK ||
+            avail < len)
+            return ASMTEST_PTRACE_ENOENT; /* region not tracked at/by `when` */
+        code = vb;
+    } else {
+        owned = (uint8_t *)malloc(len);
+        if (owned == NULL)
+            return ASMTEST_PTRACE_ETRACE;
+        struct iovec liov = {owned, len};
+        struct iovec riov = {(void *)(uintptr_t)base, len};
+        if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+            free(owned);
+            return ASMTEST_PTRACE_ETRACE;
+        }
+        code = owned;
     }
 
     uint64_t *stream =
         (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
     if (stream == NULL) {
-        free(code);
+        free(owned);
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -796,7 +815,7 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     {
         uint64_t pc0, ret0;
         if (read_pc_ret(pid, &pc0, &ret0) != 0) {
-            free(code);
+            free(owned);
             free(stream);
             return ASMTEST_PTRACE_ETRACE;
         }
@@ -868,8 +887,19 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     if (rc == ASMTEST_PTRACE_OK)
         normalize(trace, code, base_ip, len, stream, n, overflow);
     free(stream);
-    free(code);
+    free(owned);
     return rc;
+}
+
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace) {
+    return trace_attached_impl(pid, base, len, NULL, 0, result, trace);
+}
+
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
+                                            struct asmtest_codeimage *img, uint64_t when,
+                                            long *result, asmtest_trace_t *trace) {
+    return trace_attached_impl(pid, base, len, img, when, result, trace);
 }
 
 int asmtest_ptrace_run_to(pid_t pid, const void *addr) {
@@ -910,6 +940,19 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     (void)pid;
     (void)base;
     (void)len;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
+                                            struct asmtest_codeimage *img, uint64_t when,
+                                            long *result, asmtest_trace_t *trace) {
+    (void)pid;
+    (void)base;
+    (void)len;
+    (void)img;
+    (void)when;
     (void)result;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;

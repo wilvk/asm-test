@@ -350,16 +350,41 @@ Linux/x86-64 backend.
     needs.) Endianness auto-detected; non-`LOAD` records skipped; verified by a
     synthetic 2-record-plus-re-JIT fixture.
 
+  - _Done._ **Time-aware code-image recorder + versioned tracing** — the jitdump reader
+    above resolves the *latest* body at a reused address, but a foreign JIT's bytes can
+    change *during* a trace; `trace_attached`'s single `process_vm_readv` then decodes
+    against the wrong bytes. `asmtest_codeimage` ([asmtest_codeimage.h](../../include/asmtest_codeimage.h),
+    `src/codeimage.c`) is the general fix: a userspace `PERF_RECORD_TEXT_POKE` that
+    records a **timestamped code-image timeline** — `track`/`refresh` snapshot a region's
+    bytes as versions (change detection via cross-process **soft-dirty + `PAGEMAP_SCAN`**,
+    bytes via `process_vm_readv`), and `asmtest_codeimage_bytes_at(addr, when)` returns the
+    bytes that were live at trace-position `when`. The stepper consumes it via
+    `asmtest_ptrace_trace_attached_versioned(pid, base, len, img, when, …)` (the existing
+    `trace_attached` is the `img == NULL` case). An **optional eBPF emission detector**
+    (CO-RE on `mprotect`/`mmap`/`memfd_create`, PID-namespace-filtered via
+    `bpf_get_ns_current_pid_tgid`, `bpf_ringbuf`) snapshots on the `PROT_EXEC` edge;
+    built only with `clang`+`libbpf`+`bpftool` (`-DASMTEST_HAVE_LIBBPF`), self-skipping to
+    the soft-dirty fallback otherwise. Live-validated: the same-address-different-bytes
+    proof and the versioned W2 trace in `make codeimage-test` / `make hwtrace-test` (any
+    x86-64 Linux, no privilege), the eBPF detector in `make docker-hwtrace-codeimage` (a
+    `--cap-add=BPF,PERFMON` container — not privileged). This is approach #2 of the [JIT
+    runtime tracing analysis](../analysis/jit-runtime-tracing.md) and the byte-source half
+    of [hardware-trace Phase 2](hardware-trace-plan.md); the remaining Phase-2 piece is
+    feeding this timeline into the Intel PT decoder (needs PT hardware — this host is AMD).
+
   - _Done._ Per-binding surface — the `asmtest_ptrace_*` / `asmtest_proc_*` /
     `asmtest_jitdump_*` C surface is exposed across **all ten** language bindings (a
     `Ptrace` class, or `HwTrace.ptrace_*` methods where idiomatic, surfacing
-    `available`/`skip_reason`, `trace_call`, `trace_attached`, `run_to`, `region_by_addr`,
-    `perfmap_symbol`, `jitdump_find` with a `JitMethod` value type), each wrapping the
-    eight C symbols from the already-loaded `libasmtest_hwtrace`; the live-testable
-    subset is self-tested in every binding (`run_to`'s FFI round-trip via a NULL-addr →
-    `EINVAL` probe, since a live foreign attach is impractical from a managed harness — the
-    C suite covers that) and the surface is covered by the binding function-parity gate
-    (now 37 tier symbols × 10 bindings).
+    `available`/`skip_reason`, `trace_call`, `trace_attached`, `trace_attached_versioned`,
+    `run_to`, `region_by_addr`, `perfmap_symbol`, `jitdump_find` with a `JitMethod` value
+    type), as is the `asmtest_codeimage_*` recorder (a `CodeImage` wrapper:
+    `available`/`skip_reason`, `new`/`free`, `track`, `refresh`, `now`, `bytes_at`, and the
+    `bpf_*` probes), each wrapping the C symbols of the already-loaded `libasmtest_hwtrace`;
+    the live-testable subset is self-tested in every binding (`run_to`'s FFI round-trip via
+    a NULL-addr → `EINVAL` probe + the code-image recorder's track→`bytes_at` round-trip,
+    since a live foreign attach is impractical from a managed harness — the C suite covers
+    that) and the surface is covered by the binding function-parity gate (now **51 tier
+    symbols × 10 bindings**, validated live in all ten `docker-hwtrace-<lang>` lanes).
   - _Done — AArch64 tracer (Linux x86-64 **and** AArch64)._ ARM64 single-step
     (`MDSCR_EL1.SS`) is kernel-only, so out-of-process `ptrace` is its **only**
     single-step form (Apple Silicon, Windows-on-ARM, Linux/ARM64). The stepper rides the

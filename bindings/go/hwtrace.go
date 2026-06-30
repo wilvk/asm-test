@@ -90,16 +90,46 @@ typedef struct {
     uint64_t code_index;
 } asmtest_jitdump_entry_t;
 
+// The eBPF emission-event struct, redefined here (mirrors asmtest_codeimage_event_t
+// from include/asmtest_codeimage.h): three u64s, three u32s, one i32 — no padding,
+// so it marshals as a 40-byte record matching the kernel-side struct.
+typedef struct {
+    uint64_t addr;      // published base address (0 for a memfd hint)
+    uint64_t len;       // byte length (0 for a memfd hint)
+    uint64_t timestamp; // bpf_ktime_get_ns() at emission
+    uint32_t pid;       // tgid that published
+    uint32_t tid;       // thread that published
+    uint32_t kind;      // ASMTEST_CI_KIND_*
+    int32_t  fd;        // memfd fd, or -1
+} asmtest_codeimage_event_t;
+
 // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit, from the
 // SAME libasmtest_hwtrace. One typedef per exported symbol.
 typedef int  (*pt_available_fn)(void);
 typedef void (*pt_skip_reason_fn)(char *, size_t);
 typedef int  (*pt_trace_call_fn)(const void *, size_t, const long *, int, long *, void *);
 typedef int  (*pt_trace_attached_fn)(int, const void *, size_t, long *, void *);
+typedef int  (*pt_trace_attached_versioned_fn)(int, const void *, size_t, void *, uint64_t, long *, void *);
 typedef int  (*pt_run_to_fn)(int, const void *);
 typedef int  (*proc_region_by_addr_fn)(int, const void *, void **, size_t *);
 typedef int  (*proc_perfmap_symbol_fn)(int, const char *, void **, size_t *);
 typedef int  (*jitdump_find_fn)(const char *, int, const char *, asmtest_jitdump_entry_t *, uint8_t *, size_t, size_t *);
+
+// asmtest_codeimage.h — time-aware code-image recorder, from the SAME
+// libasmtest_hwtrace. One typedef per exported symbol.
+typedef int      (*ci_available_fn)(void);
+typedef void     (*ci_skip_reason_fn)(char *, size_t);
+typedef void *   (*ci_new_fn)(int);
+typedef void     (*ci_free_fn)(void *);
+typedef int      (*ci_track_fn)(void *, const void *, size_t);
+typedef int      (*ci_refresh_fn)(void *);
+typedef uint64_t (*ci_now_fn)(const void *);
+typedef int      (*ci_bytes_at_fn)(const void *, const void *, uint64_t, const uint8_t **, size_t *);
+typedef int      (*ci_bpf_available_fn)(void);
+typedef void     (*ci_bpf_skip_reason_fn)(char *, size_t);
+typedef int      (*ci_watch_bpf_fn)(void *);
+typedef int      (*ci_poll_bpf_fn)(void *, int);
+typedef int      (*ci_next_fn)(void *, asmtest_codeimage_event_t *);
 
 static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
@@ -128,10 +158,25 @@ static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
 static pt_trace_call_fn       p_pt_trace_call;
 static pt_trace_attached_fn   p_pt_trace_attached;
+static pt_trace_attached_versioned_fn p_pt_trace_attached_versioned;
 static pt_run_to_fn           p_pt_run_to;
 static proc_region_by_addr_fn p_proc_region_by_addr;
 static proc_perfmap_symbol_fn p_proc_perfmap_symbol;
 static jitdump_find_fn        p_jitdump_find;
+// asmtest_codeimage.h — time-aware code-image recorder.
+static ci_available_fn        p_ci_available;
+static ci_skip_reason_fn      p_ci_skip_reason;
+static ci_new_fn              p_ci_new;
+static ci_free_fn             p_ci_free;
+static ci_track_fn            p_ci_track;
+static ci_refresh_fn          p_ci_refresh;
+static ci_now_fn              p_ci_now;
+static ci_bytes_at_fn         p_ci_bytes_at;
+static ci_bpf_available_fn    p_ci_bpf_available;
+static ci_bpf_skip_reason_fn  p_ci_bpf_skip_reason;
+static ci_watch_bpf_fn        p_ci_watch_bpf;
+static ci_poll_bpf_fn         p_ci_poll_bpf;
+static ci_next_fn             p_ci_next;
 
 static int g_hw_loaded;   // 1 once dlopen + every dlsym succeeded.
 
@@ -174,10 +219,25 @@ static void asmtest_hw_resolve(void) {
     p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
     p_pt_trace_call        = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call");
     p_pt_trace_attached    = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached");
+    p_pt_trace_attached_versioned = (pt_trace_attached_versioned_fn)dlsym(h, "asmtest_ptrace_trace_attached_versioned");
     p_pt_run_to            = (pt_run_to_fn)dlsym(h, "asmtest_ptrace_run_to");
     p_proc_region_by_addr  = (proc_region_by_addr_fn)dlsym(h, "asmtest_proc_region_by_addr");
     p_proc_perfmap_symbol  = (proc_perfmap_symbol_fn)dlsym(h, "asmtest_proc_perfmap_symbol");
     p_jitdump_find         = (jitdump_find_fn)dlsym(h, "asmtest_jitdump_find");
+    // asmtest_codeimage.h — resolved from the same already-loaded handle.
+    p_ci_available         = (ci_available_fn)dlsym(h, "asmtest_codeimage_available");
+    p_ci_skip_reason       = (ci_skip_reason_fn)dlsym(h, "asmtest_codeimage_skip_reason");
+    p_ci_new               = (ci_new_fn)dlsym(h, "asmtest_codeimage_new");
+    p_ci_free              = (ci_free_fn)dlsym(h, "asmtest_codeimage_free");
+    p_ci_track             = (ci_track_fn)dlsym(h, "asmtest_codeimage_track");
+    p_ci_refresh           = (ci_refresh_fn)dlsym(h, "asmtest_codeimage_refresh");
+    p_ci_now               = (ci_now_fn)dlsym(h, "asmtest_codeimage_now");
+    p_ci_bytes_at          = (ci_bytes_at_fn)dlsym(h, "asmtest_codeimage_bytes_at");
+    p_ci_bpf_available     = (ci_bpf_available_fn)dlsym(h, "asmtest_codeimage_bpf_available");
+    p_ci_bpf_skip_reason   = (ci_bpf_skip_reason_fn)dlsym(h, "asmtest_codeimage_bpf_skip_reason");
+    p_ci_watch_bpf         = (ci_watch_bpf_fn)dlsym(h, "asmtest_codeimage_watch_bpf");
+    p_ci_poll_bpf          = (ci_poll_bpf_fn)dlsym(h, "asmtest_codeimage_poll_bpf");
+    p_ci_next              = (ci_next_fn)dlsym(h, "asmtest_codeimage_next");
     g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
                   p_hw_auto && p_trace_resolve && p_trace_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
@@ -186,8 +246,13 @@ static void asmtest_hw_resolve(void) {
                   p_hw_trace_insns_total && p_hw_trace_insns_len &&
                   p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
                   p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
-                  p_pt_trace_attached && p_pt_run_to && p_proc_region_by_addr &&
-                  p_proc_perfmap_symbol && p_jitdump_find;
+                  p_pt_trace_attached && p_pt_trace_attached_versioned &&
+                  p_pt_run_to && p_proc_region_by_addr &&
+                  p_proc_perfmap_symbol && p_jitdump_find &&
+                  p_ci_available && p_ci_skip_reason && p_ci_new && p_ci_free &&
+                  p_ci_track && p_ci_refresh && p_ci_now && p_ci_bytes_at &&
+                  p_ci_bpf_available && p_ci_bpf_skip_reason && p_ci_watch_bpf &&
+                  p_ci_poll_bpf && p_ci_next;
 }
 
 static int asmtest_hw_is_loaded(void) { return g_hw_loaded; }
@@ -279,6 +344,12 @@ static int asmtest_go_pt_trace_attached(int pid, const void *base, size_t len,
                                         long *result, void *trace) {
     return p_pt_trace_attached ? p_pt_trace_attached(pid, base, len, result, trace) : -1;
 }
+static int asmtest_go_pt_trace_attached_versioned(int pid, const void *base, size_t len,
+                                                  void *img, uint64_t when,
+                                                  long *result, void *trace) {
+    return p_pt_trace_attached_versioned
+        ? p_pt_trace_attached_versioned(pid, base, len, img, when, result, trace) : -1;
+}
 static int asmtest_go_pt_run_to(int pid, const void *addr) {
     return p_pt_run_to ? p_pt_run_to(pid, addr) : -1;
 }
@@ -294,6 +365,37 @@ static int asmtest_go_jitdump_find(const char *path, int pid, const char *name,
                                    asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
                                    size_t bytes_cap, size_t *bytes_len) {
     return p_jitdump_find ? p_jitdump_find(path, pid, name, out, bytes_out, bytes_cap, bytes_len) : -1;
+}
+
+// asmtest_codeimage.h bridges — each NULL-guards its (already-resolved) pointer so a
+// partial load can never dereference NULL.
+static int asmtest_go_ci_available(void) { return p_ci_available ? p_ci_available() : 0; }
+static void asmtest_go_ci_skip_reason(char *buf, size_t buflen) {
+    if (p_ci_skip_reason) p_ci_skip_reason(buf, buflen);
+    else if (buflen) buf[0] = 0;
+}
+static void *asmtest_go_ci_new(int pid) { return p_ci_new ? p_ci_new(pid) : NULL; }
+static void asmtest_go_ci_free(void *img) { if (p_ci_free) p_ci_free(img); }
+static int asmtest_go_ci_track(void *img, const void *base, size_t len) {
+    return p_ci_track ? p_ci_track(img, base, len) : -1;
+}
+static int asmtest_go_ci_refresh(void *img) { return p_ci_refresh ? p_ci_refresh(img) : -1; }
+static uint64_t asmtest_go_ci_now(const void *img) { return p_ci_now ? p_ci_now(img) : 0; }
+static int asmtest_go_ci_bytes_at(const void *img, const void *addr, uint64_t when,
+                                  const uint8_t **out, size_t *out_len) {
+    return p_ci_bytes_at ? p_ci_bytes_at(img, addr, when, out, out_len) : -1;
+}
+static int asmtest_go_ci_bpf_available(void) { return p_ci_bpf_available ? p_ci_bpf_available() : 0; }
+static void asmtest_go_ci_bpf_skip_reason(char *buf, size_t buflen) {
+    if (p_ci_bpf_skip_reason) p_ci_bpf_skip_reason(buf, buflen);
+    else if (buflen) buf[0] = 0;
+}
+static int asmtest_go_ci_watch_bpf(void *img) { return p_ci_watch_bpf ? p_ci_watch_bpf(img) : -1; }
+static int asmtest_go_ci_poll_bpf(void *img, int timeout_ms) {
+    return p_ci_poll_bpf ? p_ci_poll_bpf(img, timeout_ms) : -1;
+}
+static int asmtest_go_ci_next(void *img, asmtest_codeimage_event_t *out) {
+    return p_ci_next ? p_ci_next(img, out) : -1;
 }
 */
 import "C"
@@ -682,6 +784,28 @@ func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int
 	return int64(result), nil
 }
 
+// PtraceTraceAttachedVersioned is PtraceTraceAttached decoded against TIME-CORRECT
+// bytes from a CodeImage recorder instead of a single live snapshot. For a JIT whose
+// code at base was patched, freed, or had its address reused during the run, a fresh
+// read returns the WRONG bytes; passing img + the logical timestamp when (0 = latest)
+// the region was live at makes block normalization use the bytes that were actually
+// executing. img must already be tracking a region covering [base, base+length)
+// (CodeImage.Track); a nil img is exactly PtraceTraceAttached. Returns the target's
+// RAX at the region exit.
+func PtraceTraceAttachedVersioned(pid int, base uintptr, length int, img *CodeImage, when uint64, trace *HwTrace) (int64, error) {
+	var imgPtr unsafe.Pointer
+	if img != nil {
+		imgPtr = img.h
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_attached_versioned(C.int(pid), unsafe.Pointer(base),
+		C.size_t(length), imgPtr, C.uint64_t(when), &result, trace.h)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_versioned failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
 // PtraceRunTo runs an already-attached, ptrace-stopped target forward until it
 // reaches addr (a software breakpoint that fires when the program itself next calls
 // in), leaving it stopped there ready for PtraceTraceAttached — the step that makes a
@@ -769,3 +893,189 @@ func JitdumpFind(path string, name string, pid int, wantBytes int) (JitMethod, b
 	}
 	return m, true
 }
+
+// ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
+//
+// A userspace PERF_RECORD_TEXT_POKE: a TIMESTAMPED CODE-IMAGE TIMELINE for one
+// target process. Track() snapshots a region's bytes (version 0) and arms
+// write-protect-async on its pages; Refresh() re-snapshots only the pages written
+// since the last arm, appending a new version stamped with the next monotonic
+// sequence; BytesAt(addr, when) answers "what bytes were live at addr as of
+// sequence when" — exactly what a branch-trace decoder or the W2 block-normalizer
+// needs to reconstruct a JIT method whose address was reused mid-trace. Change
+// detection is pure userspace (soft-dirty / PAGEMAP_SCAN) and works on a FOREIGN
+// process; pid == 0 records THIS process. Shares the same already-dlopen'd
+// libasmtest_hwtrace as the surfaces above. Mirrors the Python wrapper's CodeImage.
+
+// ciOK is the success status returned by the code-image calls (mirrors the C macro
+// ASMTEST_CI_OK).
+const ciOK = 0
+
+// CodeImageENOENT is the status meaning an address was never tracked, or there is no
+// version at/before the requested sequence (mirrors the C macro ASMTEST_CI_ENOENT).
+const CodeImageENOENT = -7
+
+// CodeImage event kinds — how a code-emission event was observed by the eBPF detector
+// (mirror the C macros ASMTEST_CI_KIND_*).
+const (
+	CodeImageKindMprotect = 1 // mprotect(...PROT_EXEC...) — the common JIT edge
+	CodeImageKindMmap     = 2 // mmap(...PROT_EXEC...); addr is the real base
+	CodeImageKindMemfd    = 3 // memfd_create — staging hint; correlate via fd
+)
+
+// CodeImageAvailable reports whether the userspace recorder can detect page changes
+// on this host (PAGEMAP_SCAN, or the soft-dirty fallback) AND libasmtest_hwtrace
+// loaded. It never panics, so callers (and the test) self-skip cleanly when the lib
+// or the host is unfit.
+func CodeImageAvailable() bool {
+	return C.asmtest_hw_is_loaded() != 0 && C.asmtest_go_ci_available() != 0
+}
+
+// CodeImageSkipReason is a human-readable reason CodeImageAvailable() is false (or
+// "available"). Useful for the self-skip message.
+func CodeImageSkipReason() string {
+	if C.asmtest_hw_is_loaded() == 0 {
+		return "libasmtest_hwtrace not loaded (set ASMTEST_HWTRACE_LIB or build with `make shared-hwtrace`)"
+	}
+	buf := make([]byte, 160)
+	C.asmtest_go_ci_skip_reason((*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+}
+
+// CodeImageBpfAvailable reports whether the optional eBPF emission detector can load
+// and attach on this host (built with libbpf, kernel BTF present, sufficient
+// privilege) AND libasmtest_hwtrace loaded. The userspace poll path is the
+// always-available fallback when this is false.
+func CodeImageBpfAvailable() bool {
+	return C.asmtest_hw_is_loaded() != 0 && C.asmtest_go_ci_bpf_available() != 0
+}
+
+// CodeImageBpfSkipReason is a human-readable reason CodeImageBpfAvailable() is false
+// (or "available").
+func CodeImageBpfSkipReason() string {
+	if C.asmtest_hw_is_loaded() == 0 {
+		return "libasmtest_hwtrace not loaded (set ASMTEST_HWTRACE_LIB or build with `make shared-hwtrace`)"
+	}
+	buf := make([]byte, 160)
+	C.asmtest_go_ci_bpf_skip_reason((*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+}
+
+// CodeImageEvent is a code-emission event from the eBPF detector — when and where new
+// executable code appeared for the target. Mirrors asmtest_codeimage_event_t.
+type CodeImageEvent struct {
+	Addr      uint64 // published base address (0 for a memfd hint)
+	Len       uint64 // byte length (0 for a memfd hint)
+	Timestamp uint64 // bpf_ktime_get_ns() at emission
+	Pid       uint32 // tgid that published
+	Tid       uint32 // thread that published
+	Kind      uint32 // CodeImageKind*
+	Fd        int32  // memfd fd, or -1
+}
+
+// CodeImage is a timestamped code-image timeline for one target process. Release it
+// with Close (or the alias Free).
+type CodeImage struct{ h unsafe.Pointer }
+
+// NewCodeImage creates a timeline recording pid's memory (pid == 0 => this process).
+// The caller owns any ptrace attach policy for a foreign pid; the recorder itself
+// only reads memory and scans pagemap. Returns nil on allocation failure (or when
+// libasmtest_hwtrace is not loaded).
+func NewCodeImage(pid int) *CodeImage {
+	if C.asmtest_hw_is_loaded() == 0 {
+		return nil
+	}
+	h := C.asmtest_go_ci_new(C.int(pid))
+	if h == nil {
+		return nil
+	}
+	return &CodeImage{h: h}
+}
+
+// Track begins tracking [base, base+length) in the target: snapshot version 0 now and
+// arm write-protect-async on its pages so the next Refresh sees changes. May be called
+// for several disjoint regions.
+func (c *CodeImage) Track(base uintptr, length int) error {
+	rc := C.asmtest_go_ci_track(c.h, unsafe.Pointer(base), C.size_t(length))
+	if rc != ciOK {
+		return fmt.Errorf("asmtest_codeimage_track failed: %d", int(rc))
+	}
+	return nil
+}
+
+// Refresh scans the tracked ranges for pages changed since the last arm, re-snapshots
+// each changed page as a NEW version, and re-arms write-protect. Returns the number of
+// new versions recorded (>= 0), or an error on a negative status.
+func (c *CodeImage) Refresh() (int, error) {
+	rc := int(C.asmtest_go_ci_refresh(c.h))
+	if rc < 0 {
+		return rc, fmt.Errorf("asmtest_codeimage_refresh failed: %d", rc)
+	}
+	return rc, nil
+}
+
+// Now is the current capture sequence — a monotonic logical timestamp the caller
+// stamps trace positions against. Advances by one for every version recorded (Track +
+// each Refresh change). 0 before anything is tracked.
+func (c *CodeImage) Now() uint64 { return uint64(C.asmtest_go_ci_now(c.h)) }
+
+// BytesAt returns the bytes live at addr as of capture sequence when (when == 0 =>
+// the latest version), as a freshly-copied slice from addr to the end of that
+// version's region. It is nil when addr is not in any tracked region or there is no
+// version at/before when (ASMTEST_CI_ENOENT) — and on any other failure.
+func (c *CodeImage) BytesAt(addr uintptr, when uint64) []byte {
+	var out *C.uint8_t
+	var outLen C.size_t
+	rc := C.asmtest_go_ci_bytes_at(c.h, unsafe.Pointer(addr), C.uint64_t(when), &out, &outLen)
+	if rc != ciOK || out == nil {
+		return nil
+	}
+	// *out points at borrowed bytes owned by the timeline; copy them out so the
+	// returned slice does not alias C memory freed by Close.
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+}
+
+// WatchBpf loads the CO-RE eBPF program, filters it to this image's pid, and attaches
+// it; subsequent PollBpf calls drain emission events. Returns the status code
+// (ciOK on success, or a negative ASMTEST_CI_* status — ENOSYS without libbpf,
+// EUNAVAIL without privilege/BTF, ELOAD on load/attach failure).
+func (c *CodeImage) WatchBpf() int { return int(C.asmtest_go_ci_watch_bpf(c.h)) }
+
+// PollBpf drains ready emission events from the BPF ring buffer into the image's
+// internal queue. timeoutMs == 0 is a NON-BLOCKING drain (so it interleaves with a
+// single-step loop); > 0 waits up to that long. Returns the number of events queued
+// (>= 0), or a negative status.
+func (c *CodeImage) PollBpf(timeoutMs int) int {
+	return int(C.asmtest_go_ci_poll_bpf(c.h, C.int(timeoutMs)))
+}
+
+// NextEvent pops one queued emission event. ok is true when an event was returned,
+// false when the queue is empty (or on a negative status).
+func (c *CodeImage) NextEvent() (CodeImageEvent, bool) {
+	var ev C.asmtest_codeimage_event_t
+	if C.asmtest_go_ci_next(c.h, &ev) != 1 {
+		return CodeImageEvent{}, false
+	}
+	return CodeImageEvent{
+		Addr:      uint64(ev.addr),
+		Len:       uint64(ev.len),
+		Timestamp: uint64(ev.timestamp),
+		Pid:       uint32(ev.pid),
+		Tid:       uint32(ev.tid),
+		Kind:      uint32(ev.kind),
+		Fd:        int32(ev.fd),
+	}, true
+}
+
+// Close frees the timeline and all recorded versions, detaching any eBPF watch. Safe
+// to call more than once.
+func (c *CodeImage) Close() {
+	if c.h != nil {
+		C.asmtest_go_ci_free(c.h)
+		c.h = nil
+	}
+}
+
+// Free is an alias for Close, matching the Free naming of the other handle types in
+// this package (HwNativeCode, HwTrace).
+func (c *CodeImage) Free() { c.Close() }

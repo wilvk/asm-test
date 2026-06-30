@@ -53,6 +53,19 @@ Two facts worth stating up front because they are easy to get wrong:
   single-step rows below read *implemented* for Linux x86-64/AArch64 and carry
   *(planned)* only where they name one of those fronts. See the
   [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
+- **Time-aware code-image recorder (`asmtest_codeimage`).** The byte-source half of
+  foreign-JIT tracing: a userspace `PERF_RECORD_TEXT_POKE` that time-versions a process's
+  code (cross-process **soft-dirty + `PAGEMAP_SCAN`**, bytes via `process_vm_readv`) so the
+  W2 stepper (`asmtest_ptrace_trace_attached_versioned`) decodes against the bytes that
+  were live when the method ran — correct under re-JIT/address-reuse, where a single late
+  snapshot is wrong. An optional **eBPF emission detector** (CO-RE on
+  `mprotect`/`mmap`/`memfd_create`, PID-namespace-filtered) snapshots on the `PROT_EXEC`
+  edge; it self-skips without `libbpf`/`CAP_BPF` (the soft-dirty poll is the fallback).
+  Implemented + live-validated on Linux x86-64 (`make codeimage-test`, `hwtrace-test`); the
+  eBPF lane runs in a `--cap-add=BPF,PERFMON` container (`make docker-hwtrace-codeimage`).
+  Pairs with the on-host ptrace stepper today; feeding the timeline into the **Intel PT**
+  decoder is the hardware-half forward-look. See the
+  [JIT-runtime-tracing analysis](jit-runtime-tracing.md).
 
 ---
 

@@ -77,11 +77,27 @@ Phase 2's **code-image building blocks have, however, already landed** out of th
 here: the code-region resolvers `asmtest_proc_region_by_addr` (`/proc/<pid>/maps`) and
 `asmtest_proc_perfmap_symbol` (`/tmp/perf-<pid>.map`), **and** `asmtest_jitdump_find` —
 the binary jitdump reader that recovers a JIT method's recorded **code bytes** and load
-timestamps (the bytes a branch-trace decoder must be handed). What Phase 2 still needs
-on top of them is the hardware half: **PT-attach-to-live-PID** capture
-(`perf record -p <pid>` / `perf_event_open` on a running process) and feeding the
-jitdump-recovered bytes into the libipt decoder at the right point in the trace — which
-needs PT hardware to build and validate, so it stays the forward-look.
+timestamps (the bytes a branch-trace decoder must be handed).
+
+**The time-aware code-image recorder itself now ships** —
+`asmtest_codeimage` ([asmtest_codeimage.h](../../include/asmtest_codeimage.h),
+`src/codeimage.c`), the byte-source half of Phase 2 and approach #2 of the
+[JIT-runtime-tracing analysis](../analysis/jit-runtime-tracing.md). It is the userspace
+`PERF_RECORD_TEXT_POKE` the decoder's image callback needs: a **timestamped code-image
+timeline** built cross-process from soft-dirty + `PAGEMAP_SCAN` (bytes via
+`process_vm_readv`), queryable by `asmtest_codeimage_bytes_at(img, addr, when, …)`, plus
+an **optional eBPF emission detector** (a CO-RE program on
+`mprotect`/`mmap`/`memfd_create`, PID-namespace-filtered) that snapshots on the
+`PROT_EXEC` edge. It is live-validated on x86-64 Linux (`make codeimage-test`, the
+versioned W2 trace in `make hwtrace-test`, and the eBPF lane `make
+docker-hwtrace-codeimage`) and is already paired with the on-host W2 ptrace stepper
+(`asmtest_ptrace_trace_attached_versioned`) — the AMD-host route that does not need PT.
+
+What Phase 2 still needs on top of all this is the **hardware half**:
+**PT-attach-to-live-PID** capture (`perf record -p <pid>` / `perf_event_open` on a
+running process) and feeding the recorder's (or jitdump's) bytes into the libipt decoder
+at the right point in the trace — which needs PT hardware to build and validate, so it
+stays the forward-look.
 
 ---
 
@@ -245,7 +261,7 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 
 ---
 
-## Phase 2 - Attach-to-foreign-JIT tracing *(planned, forward-look)*
+## Phase 2 - Attach-to-foreign-JIT tracing *(byte-source recorder done; PT-attach decode forward-look)*
 
 **Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
 3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
@@ -269,12 +285,21 @@ position.
 
 - Runtime attach: `perf_event_open` against an existing PID (vs Phase 1's `pid=0`
   self-trace of asm-test's own region).
-- A **time-aware code-image recorder** that replaces Phase 1's "asm-test owns the
-  bytes" saving grace, via either (a) **runtime-enabled jitdump** where the
-  runtime cooperates (.NET `DiagnosticsClient.EnablePerfMap(JitDump)`; JVM
-  jitdump agent + `GenerateEvents`) + `perf inject --jit`, or (b) an **eBPF +
-  userfaultfd-WP** recorder feeding libipt's `pt_image_set_callback` keyed to
-  trace position.
+- _Done._ A **time-aware code-image recorder** that replaces Phase 1's "asm-test owns
+  the bytes" saving grace — `asmtest_codeimage` ([asmtest_codeimage.h](../../include/asmtest_codeimage.h),
+  `src/codeimage.c`): a userspace `PERF_RECORD_TEXT_POKE` building a timestamped
+  code-image timeline cross-process (soft-dirty + `PAGEMAP_SCAN`, bytes via
+  `process_vm_readv`), queryable by `asmtest_codeimage_bytes_at(addr, when)`, with an
+  **optional eBPF emission detector** (CO-RE on `mprotect`/`mmap`/`memfd_create`,
+  PID-namespace-filtered, `bpf_ringbuf`) for snapshotting on the `PROT_EXEC` edge.
+  Live-validated (`make codeimage-test`, `make docker-hwtrace-codeimage`), exposed across
+  all ten bindings, and already wired into the W2 stepper
+  (`asmtest_ptrace_trace_attached_versioned`). This is the foreign-process equivalent of
+  approach #2's "eBPF + userfaultfd-WP" sketch (uffd-WP needs the owning process to
+  register, so soft-dirty is the cross-process primitive). Runtime-enabled **jitdump**
+  (a) — .NET `DiagnosticsClient.EnablePerfMap(JitDump)` / JVM jitdump agent + `perf inject
+  --jit` — and feeding the recorder's bytes into libipt's `pt_image_set_callback` keyed
+  to trace position remain the PT-hardware half below.
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
 - The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
@@ -287,11 +312,15 @@ position.
 least one JIT-generated routine into a deterministic disassembled instruction
 trace that matches a ground-truth disassembly of the same bytes.
 
-**Status.** Forward-look only; distinct from the Phase 0-8 work of the native-trace
-plan, which traces code asm-test generates itself. Depends on this plan's Phase 1
-(PT substrate) and **native-trace Phase 5** (instruction-mode semantics). See
-the analysis doc for the ranked approaches, per-runtime enablement matrix, prior
-art, and caveats.
+**Status.** The **byte-source half is implemented and live-validated** — the
+`asmtest_codeimage` time-aware recorder + its eBPF emission detector, paired with the W2
+ptrace stepper (the AMD-host route that needs no PT). What remains forward-look is the
+**PT hardware half**: attach-to-live-PID PT capture + libipt decode keyed to the
+recorder's timeline, which needs PT hardware to build and validate. Distinct from the
+Phase 0-8 work of the native-trace plan, which traces code asm-test generates itself;
+depends on this plan's Phase 1 (PT substrate) and **native-trace Phase 5**
+(instruction-mode semantics). See the analysis doc for the ranked approaches, per-runtime
+enablement matrix, prior art, and caveats.
 
 **Effort.** PT-attach + jitdump-live slice 3-5 days on PT hardware; the eBPF+uffd
 time-aware recorder a further 1-2 weeks; the hypervisor/EPT frontier is

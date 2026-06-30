@@ -83,6 +83,22 @@ module Asmtest
     PTRACE_OK     = 0
     PTRACE_ENOENT = -7
 
+    # asmtest_codeimage.h — time-aware code-image recorder status codes (own
+    # namespace, like the ptrace ones). CI_OK is success; CI_ENOENT is "address
+    # never tracked / no version at-or-before when" (bytes_at maps it to nil).
+    CI_OK     = 0
+    CI_ENOENT = -7
+
+    # asmtest_codeimage_event_t.kind — how a code-emission event was observed.
+    CI_KIND_MPROTECT = 1 # mprotect(...PROT_EXEC...) — the common JIT edge
+    CI_KIND_MMAP     = 2 # mmap(...PROT_EXEC...); addr is the real base
+    CI_KIND_MEMFD    = 3 # memfd_create — staging hint; correlate via fd
+
+    # A code-emission event popped from the eBPF detector (asmtest_codeimage_event_t):
+    # the published base +addr+ and +len+, the bpf_ktime_get_ns() +timestamp+, the
+    # publishing +pid+/+tid+, the +kind+ (CI_KIND_*), and the memfd +fd+ (or -1).
+    CodeImageEvent = Struct.new(:addr, :len, :timestamp, :pid, :tid, :kind, :fd)
+
     # A JIT method resolved from a jitdump (asmtest_jitdump_entry_t): the load
     # address (the base to trace), the code size, the JIT's record timestamp/index,
     # and (optionally) the recorded native +code+ bytes as a binary String.
@@ -149,6 +165,24 @@ module Asmtest
         proc_region_by_addr: func(LIB, "asmtest_proc_region_by_addr", [INT, VOIDP, VOIDP, VOIDP], INT),
         proc_perfmap_symbol: func(LIB, "asmtest_proc_perfmap_symbol", [INT, VOIDP, VOIDP, VOIDP], INT),
         jitdump_find:        func(LIB, "asmtest_jitdump_find", [VOIDP, INT, VOIDP, VOIDP, VOIDP, SZ, VOIDP], INT),
+        # ---- decode a foreign region against TIME-CORRECT bytes (asmtest_ptrace.h) ----
+        ptrace_trace_attached_versioned:
+          func(LIB, "asmtest_ptrace_trace_attached_versioned",
+               [INT, VOIDP, SZ, VOIDP, LL, VOIDP, VOIDP], INT),
+        # ---- time-aware code-image recorder (asmtest_codeimage.h) ----
+        ci_available:      func(LIB, "asmtest_codeimage_available", [], INT),
+        ci_skip_reason:    func(LIB, "asmtest_codeimage_skip_reason", [VOIDP, SZ], VOID),
+        ci_new:            func(LIB, "asmtest_codeimage_new", [INT], VOIDP),
+        ci_free:           func(LIB, "asmtest_codeimage_free", [VOIDP], VOID),
+        ci_track:          func(LIB, "asmtest_codeimage_track", [VOIDP, VOIDP, SZ], INT),
+        ci_refresh:        func(LIB, "asmtest_codeimage_refresh", [VOIDP], INT),
+        ci_now:            func(LIB, "asmtest_codeimage_now", [VOIDP], LL),
+        ci_bytes_at:       func(LIB, "asmtest_codeimage_bytes_at", [VOIDP, VOIDP, LL, VOIDP, VOIDP], INT),
+        ci_bpf_available:  func(LIB, "asmtest_codeimage_bpf_available", [], INT),
+        ci_bpf_skip_reason: func(LIB, "asmtest_codeimage_bpf_skip_reason", [VOIDP, SZ], VOID),
+        ci_watch_bpf:      func(LIB, "asmtest_codeimage_watch_bpf", [VOIDP], INT),
+        ci_poll_bpf:       func(LIB, "asmtest_codeimage_poll_bpf", [VOIDP, INT], INT),
+        ci_next:           func(LIB, "asmtest_codeimage_next", [VOIDP, VOIDP], INT),
       }.freeze
     rescue Fiddle::DLError
       LIB = nil
@@ -398,6 +432,25 @@ module Asmtest
         result
       end
 
+      # Like ptrace_trace_attached, but decode the region against TIME-CORRECT bytes
+      # from a CodeImage recorder (+img+) at logical timestamp +when+ (0 = latest)
+      # instead of a single live process_vm_readv snapshot — the temporal
+      # same-address-different-bytes fix for a JIT patched/freed/reused mid-trace.
+      # +img+ must already be tracking a region covering [+base+, +base+ + +len+);
+      # with +img+ nil this is exactly ptrace_trace_attached. +pid+ is a C int.
+      def self.ptrace_trace_attached_versioned(pid, base, len, img, when_seq, trace)
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        base_p = Fiddle::Pointer.new(base)
+        img_p  = img ? img.handle : Fiddle::NULL
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_attached_versioned].call(
+          pid, base_p, len, img_p, when_seq, res, trace.handle)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_attached_versioned failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
       # Run an already-attached, ptrace-stopped target forward until it reaches +addr+
       # (a software breakpoint that fires when the program itself next calls in),
       # leaving it stopped there ready for ptrace_trace_attached -- the step that makes a
@@ -550,6 +603,151 @@ module Asmtest
       def free
         return unless @handle
         Asmtest::HwTrace::FN[:trace_free].call(@handle)
+        @handle = nil
+      end
+    end
+
+    # A time-aware code-image recorder (asmtest_codeimage.h) — a userspace
+    # PERF_RECORD_TEXT_POKE. track() snapshots a region and arms write-protect;
+    # refresh() re-snapshots only the pages that changed since the last arm,
+    # appending a new version stamped with the next monotonic sequence; bytes_at
+    # answers "what bytes were live at addr as of sequence +when+" — the bytes a
+    # branch-trace decoder or the W2 block-normalizer needs to reconstruct a JIT
+    # method whose address was reused mid-trace. Wraps the opaque
+    # asmtest_codeimage_t handle. pid 0 == this process. Mirrors the Fiddle FFI
+    # style of the HwTrace/NativeCode wrappers above.
+    class CodeImage
+      attr_reader :handle
+
+      # True if the userspace recorder can detect page changes on this host
+      # (PAGEMAP_SCAN, or the soft-dirty fallback). Folds a load failure (FN nil)
+      # into a clean false so callers self-skip without a rescue.
+      def self.available?
+        return false if Asmtest::HwTrace::FN.nil?
+        Asmtest::HwTrace::FN[:ci_available].call != 0
+      end
+
+      # Human-readable reason available? is false (or "available"). "" if the lib
+      # failed to load.
+      def self.skip_reason
+        return "" if Asmtest::HwTrace::FN.nil?
+        buf = Fiddle::Pointer.new(Fiddle.malloc(160), 160)
+        buf[0, 160] = "\x00".b * 160
+        Asmtest::HwTrace::FN[:ci_skip_reason].call(buf, 160)
+        s = buf.to_s # up to first NUL
+        Fiddle.free(buf.to_i)
+        s
+      end
+
+      # True if the optional eBPF emission detector can load and attach here
+      # (built with libbpf, kernel BTF present, sufficient privilege). Folds a load
+      # failure into a clean false.
+      def self.bpf_available?
+        return false if Asmtest::HwTrace::FN.nil?
+        Asmtest::HwTrace::FN[:ci_bpf_available].call != 0
+      end
+
+      # Human-readable reason bpf_available? is false (or "available"). "" if the
+      # lib failed to load.
+      def self.bpf_skip_reason
+        return "" if Asmtest::HwTrace::FN.nil?
+        buf = Fiddle::Pointer.new(Fiddle.malloc(160), 160)
+        buf[0, 160] = "\x00".b * 160
+        Asmtest::HwTrace::FN[:ci_bpf_skip_reason].call(buf, 160)
+        s = buf.to_s # up to first NUL
+        Fiddle.free(buf.to_i)
+        s
+      end
+
+      # Create a timeline recording +pid+'s memory (+pid+ == 0 => this process).
+      # +pid+ is a C int. Raises if allocation fails (the C side returns NULL).
+      def initialize(pid = 0)
+        @handle = Asmtest::HwTrace::FN[:ci_new].call(pid)
+        raise "asmtest_codeimage_new failed" if @handle.null?
+      end
+
+      # Begin tracking [+base+, +base+ + +len+) in the target: snapshot version 0
+      # now and arm write-protect on its pages. +base+ is an integer address.
+      # Returns the C status (CI_OK on success).
+      def track(base, len)
+        Asmtest::HwTrace::FN[:ci_track].call(@handle, Fiddle::Pointer.new(base), len)
+      end
+
+      # Scan tracked ranges for pages changed since the last arm, re-snapshot each
+      # as a new version, re-arm. Returns the number of new versions recorded
+      # (>= 0), or a negative status.
+      def refresh
+        Asmtest::HwTrace::FN[:ci_refresh].call(@handle)
+      end
+
+      # The current capture sequence — a monotonic logical timestamp. Advances by
+      # one per version recorded (track + each refresh change). 0 before anything
+      # is tracked.
+      def now
+        Asmtest::HwTrace::FN[:ci_now].call(@handle)
+      end
+
+      # The bytes live at +addr+ as of capture sequence +when_seq+ (0 => latest),
+      # as a binary String, or nil if +addr+ was never tracked / there is no
+      # version at-or-before +when_seq+ (CI_ENOENT). +addr+ is an integer address.
+      # On success the C side hands back borrowed bytes via *out / *out_len; we
+      # copy them out into a fresh String (the borrow is owned by the timeline).
+      def bytes_at(addr, when_seq = 0)
+        out_p   = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # const uint8_t **out
+        len_p   = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # size_t *out_len
+        out_p[0, 8] = "\x00".b * 8
+        len_p[0, 8] = "\x00".b * 8
+        rc = Asmtest::HwTrace::FN[:ci_bytes_at].call(
+          @handle, Fiddle::Pointer.new(addr), when_seq, out_p, len_p)
+        bytes = nil
+        if rc == Asmtest::HwTrace::CI_OK
+          ptr = out_p[0, 8].unpack1("Q")
+          len = len_p[0, 8].unpack1("Q")
+          bytes = len > 0 ? Fiddle::Pointer.new(ptr)[0, len] : "".b
+        end
+        Fiddle.free(out_p.to_i)
+        Fiddle.free(len_p.to_i)
+        bytes
+      end
+
+      # Load the CO-RE eBPF program, filter it to this image's pid, and attach it.
+      # Returns the C status (CI_OK on success; CI_ENOSYS/CI_EUNAVAIL/CI_ELOAD when
+      # libbpf / BTF / privilege are missing).
+      def watch_bpf
+        Asmtest::HwTrace::FN[:ci_watch_bpf].call(@handle)
+      end
+
+      # Drain ready emission events from the BPF ring buffer into the internal
+      # queue. +timeout_ms+ == 0 is a non-blocking drain; > 0 waits up to that
+      # long. Returns the number of events queued (>= 0) or a negative status.
+      def poll_bpf(timeout_ms = 0)
+        Asmtest::HwTrace::FN[:ci_poll_bpf].call(@handle, timeout_ms)
+      end
+
+      # Pop one queued emission event as a CodeImageEvent, or nil if the queue is
+      # empty. The C entry fills an asmtest_codeimage_event_t (u64 addr/len/
+      # timestamp, u32 pid/tid/kind, i32 fd = 40 bytes) and returns 1 if an event
+      # was returned, 0 if empty, or a negative status.
+      def next_event
+        ev = Fiddle::Pointer.new(Fiddle.malloc(40), 40)
+        ev[0, 40] = "\x00".b * 40
+        rc = Asmtest::HwTrace::FN[:ci_next].call(@handle, ev)
+        out = nil
+        if rc == 1
+          addr, len, timestamp = ev[0, 24].unpack("Q3")
+          pid, tid, kind = ev[24, 12].unpack("L3")
+          fd = ev[36, 4].unpack1("l")
+          out = CodeImageEvent.new(addr, len, timestamp, pid, tid, kind, fd)
+        end
+        Fiddle.free(ev.to_i)
+        out
+      end
+
+      # Free the timeline and all recorded versions (detaches any eBPF watch).
+      # NULL-safe and idempotent.
+      def free
+        return unless @handle
+        Asmtest::HwTrace::FN[:ci_free].call(@handle)
         @handle = nil
       end
     end

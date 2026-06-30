@@ -537,6 +537,64 @@ real output:
   find` matches by exact name, so the lane takes the name from the easy-to-parse text
   perf-map (V8 emits the same string in both).
 
+### Time-aware code-image recorder (the foreign-JIT byte source)
+
+`trace_attached` reads the region's bytes with a **single** `process_vm_readv` snapshot.
+For a live JIT that is wrong the moment the code is patched, freed, or has its address
+reused mid-trace: a late snapshot returns whatever bytes are there *now*, not the bytes
+that were live when the trace ran. The kernel solves this for its own self-modifying code
+with `PERF_RECORD_TEXT_POKE` (old+new bytes, timestamped); `asmtest_codeimage`
+([asmtest_codeimage.h](../../include/asmtest_codeimage.h)) is the userspace equivalent — a
+**timestamped code-image timeline**.
+
+```c
+#include "asmtest_codeimage.h"
+
+asmtest_codeimage_t *img = asmtest_codeimage_new(pid);   /* 0 = self */
+asmtest_codeimage_track(img, base, len);   /* snapshot v0, arm change detection */
+uint64_t t0 = asmtest_codeimage_now(img);  /* a logical timestamp */
+/* ... the JIT re-emits code at `base` ... */
+asmtest_codeimage_refresh(img);            /* re-snapshot changed pages as a new version */
+
+const uint8_t *bytes; size_t n;
+asmtest_codeimage_bytes_at(img, base, t0, &bytes, &n);   /* the bytes live AT t0 */
+asmtest_codeimage_free(img);
+```
+
+Change detection is **soft-dirty** — arm by clearing the soft-dirty PTE bit
+(`/proc/<pid>/clear_refs`), detect set bits via the `PAGEMAP_SCAN` ioctl
+(`PAGE_IS_SOFT_DIRTY`) where available else by parsing `/proc/<pid>/pagemap` — which works
+**cross-process**, the foreign-JIT case. (`PAGEMAP_SCAN`'s precise write-protect-async mode
+is *not* used: it requires the owning process to register the range with `userfaultfd`, so
+it cannot monitor a foreign JIT.) The W2 stepper consumes the timeline:
+
+```c
+/* like trace_attached, but decode against the bytes that were live at `t0` */
+asmtest_ptrace_trace_attached_versioned(pid, base, len, img, t0, &result, trace);
+```
+
+An **optional eBPF emission detector** (built only with `clang`+`libbpf`+`bpftool`, i.e.
+`-DASMTEST_HAVE_LIBBPF`) tells the recorder *when* code appears so it can snapshot on the
+`PROT_EXEC` edge instead of polling: a CO-RE program on `mprotect`/`mmap`/`memfd_create`,
+filtered to the target's PID namespace (`bpf_get_ns_current_pid_tgid`, so it is correct
+inside containers), draining `{addr,len,kind,…}` events from a `bpf_ringbuf`:
+
+```c
+if (asmtest_codeimage_bpf_available()) {        /* self-skips without libbpf / CAP_BPF */
+    asmtest_codeimage_watch_bpf(img);
+    asmtest_codeimage_poll_bpf(img, 0);         /* non-blocking drain (interleaves stepping) */
+    asmtest_codeimage_event_t ev;
+    while (asmtest_codeimage_next(img, &ev)) { /* ev.addr was just published; snapshot it */ }
+}
+```
+
+Validation: the same-address-different-bytes temporal proof and the versioned W2 trace run
+live (no privilege) in `make codeimage-test` and `make hwtrace-test` on any x86-64 Linux
+host; the eBPF detector runs in `make docker-hwtrace-codeimage` — a `--cap-add=BPF,PERFMON`
+container (not `--privileged`) that observes a real `mprotect(PROT_EXEC)` edge. On a host
+without soft-dirty / libbpf, the recorder / detector self-skip, so nothing here is a hard
+dependency of the base tier.
+
 ### Language wrappers
 
 Every binding ships an `hwtrace` wrapper alongside its `drtrace` one, exposing the same

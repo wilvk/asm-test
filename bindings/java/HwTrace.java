@@ -83,6 +83,18 @@ public final class HwTrace {
     /** ASMTEST_PTRACE_ENOENT — region / symbol / method not found. */
     public static final int ASMTEST_PTRACE_ENOENT = -7;
 
+    // asmtest_codeimage.h — time-aware code-image recorder status codes / event kinds.
+    /** ASMTEST_CI_OK — the success status returned by the code-image calls. */
+    public static final int ASMTEST_CI_OK = 0;
+    /** ASMTEST_CI_ENOENT — address never tracked / no version at-or-before {@code when}. */
+    public static final int ASMTEST_CI_ENOENT = -7;
+    /** ASMTEST_CI_KIND_MPROTECT — mprotect(...PROT_EXEC...), the common JIT edge. */
+    public static final int ASMTEST_CI_KIND_MPROTECT = 1;
+    /** ASMTEST_CI_KIND_MMAP — mmap(...PROT_EXEC...); addr is the real base. */
+    public static final int ASMTEST_CI_KIND_MMAP = 2;
+    /** ASMTEST_CI_KIND_MEMFD — memfd_create staging hint; correlate via fd. */
+    public static final int ASMTEST_CI_KIND_MEMFD = 3;
+
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
 
@@ -127,8 +139,12 @@ public final class HwTrace {
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
         PTRACE_AVAILABLE, PTRACE_SKIP_REASON, PTRACE_TRACE_CALL, PTRACE_TRACE_ATTACHED,
-        PTRACE_RUN_TO,
-        PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND;
+        PTRACE_TRACE_ATTACHED_VERSIONED, PTRACE_RUN_TO,
+        PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND,
+        // asmtest_codeimage.h — time-aware code-image recorder (a userspace TEXT_POKE).
+        CI_AVAILABLE, CI_SKIP_REASON, CI_NEW, CI_FREE, CI_TRACK, CI_REFRESH, CI_NOW,
+        CI_BYTES_AT, CI_BPF_AVAILABLE, CI_BPF_SKIP_REASON, CI_WATCH_BPF, CI_POLL_BPF,
+        CI_NEXT;
 
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
@@ -154,9 +170,13 @@ public final class HwTrace {
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
             traceBlockAt = null, traceInsnAt = null,
             ptraceAvailable = null, ptraceSkipReason = null, ptraceTraceCall = null,
-            ptraceTraceAttached = null, ptraceRunTo = null,
+            ptraceTraceAttached = null, ptraceTraceAttachedVersioned = null, ptraceRunTo = null,
             procRegionByAddr = null, procPerfmapSymbol = null,
-            jitdumpFind = null;
+            jitdumpFind = null,
+            ciAvailable = null, ciSkipReason = null, ciNew = null, ciFree = null,
+            ciTrack = null, ciRefresh = null, ciNow = null, ciBytesAt = null,
+            ciBpfAvailable = null, ciBpfSkipReason = null, ciWatchBpf = null,
+            ciPollBpf = null, ciNext = null;
         Throwable loadError = null;
         try {
             SymbolLookup lib = SymbolLookup.libraryLookup(resolveHwtraceLib(), ARENA);
@@ -217,6 +237,12 @@ public final class HwTrace {
             ptraceTraceAttached = h(lib, "asmtest_ptrace_trace_attached",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
                     ADDRESS));
+            // asmtest_ptrace_trace_attached_versioned(pid, base, len, img, when, result,
+            // trace) — like trace_attached but decode against a code-image timeline. img
+            // is the asmtest_codeimage_t* (NULL => exactly trace_attached); when is u64.
+            ptraceTraceAttachedVersioned = h(lib, "asmtest_ptrace_trace_attached_versioned",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
+                    JAVA_LONG, ADDRESS, ADDRESS));
             // asmtest_ptrace_run_to(pid, addr).
             ptraceRunTo = h(lib, "asmtest_ptrace_run_to",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
@@ -230,6 +256,40 @@ public final class HwTrace {
             jitdumpFind = h(lib, "asmtest_jitdump_find",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS,
                     ADDRESS, JAVA_LONG, ADDRESS));
+            // asmtest_codeimage.h — time-aware code-image recorder. pid is a C int
+            // (JAVA_INT); the timeline handle is an opaque asmtest_codeimage_t* (ADDRESS).
+            ciAvailable = h(lib, "asmtest_codeimage_available",
+                FunctionDescriptor.of(JAVA_INT));
+            ciSkipReason = h(lib, "asmtest_codeimage_skip_reason",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
+            // asmtest_codeimage_new(pid) -> asmtest_codeimage_t*; _free(img).
+            ciNew = h(lib, "asmtest_codeimage_new",
+                FunctionDescriptor.of(ADDRESS, JAVA_INT));
+            ciFree = h(lib, "asmtest_codeimage_free", FunctionDescriptor.ofVoid(ADDRESS));
+            // asmtest_codeimage_track(img, base, len); _refresh(img); _now(img) -> u64.
+            ciTrack = h(lib, "asmtest_codeimage_track",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+            ciRefresh = h(lib, "asmtest_codeimage_refresh",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            ciNow = h(lib, "asmtest_codeimage_now",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            // asmtest_codeimage_bytes_at(img, addr, when, out, out_len) — out is a
+            // const uint8_t** (ADDRESS to a pointer cell), out_len a size_t* (ADDRESS).
+            ciBytesAt = h(lib, "asmtest_codeimage_bytes_at",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS,
+                    ADDRESS));
+            // Optional eBPF emission detector (Phase C).
+            ciBpfAvailable = h(lib, "asmtest_codeimage_bpf_available",
+                FunctionDescriptor.of(JAVA_INT));
+            ciBpfSkipReason = h(lib, "asmtest_codeimage_bpf_skip_reason",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
+            ciWatchBpf = h(lib, "asmtest_codeimage_watch_bpf",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            ciPollBpf = h(lib, "asmtest_codeimage_poll_bpf",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            // asmtest_codeimage_next(img, out) — out is the 40-byte event struct (ADDRESS).
+            ciNext = h(lib, "asmtest_codeimage_next",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
         } catch (Throwable t) {
             // The library may be absent (not built) — degrade to available() == false
             // rather than failing class init.
@@ -244,9 +304,14 @@ public final class HwTrace {
         TRACE_TRUNCATED = traceTruncated; TRACE_BLOCK_AT = traceBlockAt; TRACE_INSN_AT = traceInsnAt;
         PTRACE_AVAILABLE = ptraceAvailable; PTRACE_SKIP_REASON = ptraceSkipReason;
         PTRACE_TRACE_CALL = ptraceTraceCall; PTRACE_TRACE_ATTACHED = ptraceTraceAttached;
-        PTRACE_RUN_TO = ptraceRunTo;
+        PTRACE_TRACE_ATTACHED_VERSIONED = ptraceTraceAttachedVersioned; PTRACE_RUN_TO = ptraceRunTo;
         PROC_REGION_BY_ADDR = procRegionByAddr; PROC_PERFMAP_SYMBOL = procPerfmapSymbol;
         JITDUMP_FIND = jitdumpFind;
+        CI_AVAILABLE = ciAvailable; CI_SKIP_REASON = ciSkipReason; CI_NEW = ciNew;
+        CI_FREE = ciFree; CI_TRACK = ciTrack; CI_REFRESH = ciRefresh; CI_NOW = ciNow;
+        CI_BYTES_AT = ciBytesAt; CI_BPF_AVAILABLE = ciBpfAvailable;
+        CI_BPF_SKIP_REASON = ciBpfSkipReason; CI_WATCH_BPF = ciWatchBpf;
+        CI_POLL_BPF = ciPollBpf; CI_NEXT = ciNext;
         LOAD_ERROR = loadError;
     }
 
@@ -622,6 +687,30 @@ public final class HwTrace {
         catch (Throwable t) { throw rethrow(t); }
     }
 
+    /** Like {@link #ptraceTraceAttached} but decode the region against TIME-CORRECT
+     *  bytes from a code-image recorder {@code img} (a {@link CodeImage} handle) at the
+     *  logical timestamp {@code when} ({@code 0} = latest) instead of a single live
+     *  snapshot — the fix for a JIT whose code at {@code base} was patched, freed, or had
+     *  its address reused during the run. {@code img} must already be tracking a region
+     *  covering {@code [base, base+len)}; pass {@link MemorySegment#NULL} for {@code img}
+     *  to fall back to exactly {@link #ptraceTraceAttached}. Returns the target's RAX at
+     *  the ret. Throws on a nonzero status. */
+    public static long ptraceTraceAttachedVersioned(int pid, MemorySegment base, long len,
+                                                    MemorySegment img, long when,
+                                                    MemorySegment trace) {
+        if (PTRACE_TRACE_ATTACHED_VERSIONED == null)
+            throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try {
+            MemorySegment result = ARENA.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_ATTACHED_VERSIONED.invoke(pid, base, len,
+                img == null ? MemorySegment.NULL : img, when, result, trace);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_attached_versioned failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
     /** Run an already-attached, ptrace-stopped target {@code pid} forward until it
      *  reaches {@code addr} (a software breakpoint that fires when the program itself
      *  next calls in), leaving it stopped there ready for
@@ -704,5 +793,191 @@ public final class HwTrace {
                 new JitMethod(codeAddr, codeSize, timestamp, codeIndex, code));
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
+    }
+
+    // ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
+    //
+    // A userspace PERF_RECORD_TEXT_POKE: a TIMESTAMPED CODE-IMAGE TIMELINE for a target
+    // process. track() snapshots a region (version 0) and arms write-protect; refresh()
+    // re-snapshots only the pages that changed since the last arm, appending a new version
+    // stamped with the next monotonic sequence; bytesAt(addr, when) answers "what bytes
+    // were live at addr as of sequence `when`" — the query the versioned W2 decoder needs
+    // to reconstruct a JIT method whose address was reused mid-trace. The change detection
+    // is pure userspace (soft-dirty / PAGEMAP_SCAN) and works on a FOREIGN process; pid 0
+    // records THIS process. Mirrors the Ptrace wrapper above.
+
+    /** A code-emission event from the optional eBPF detector (asmtest_codeimage_event_t):
+     *  the published base {@code addr} and {@code len}, the {@code timestamp}
+     *  (bpf_ktime_get_ns), the {@code pid}/{@code tid} that published, the {@code kind}
+     *  ({@code ASMTEST_CI_KIND_*}), and a memfd {@code fd} (or -1). */
+    public record CodeEvent(long addr, long len, long timestamp, int pid, int tid,
+                            int kind, int fd) {}
+
+    // asmtest_codeimage_event_t {u64 addr; u64 len; u64 timestamp; u32 pid; u32 tid;
+    //   u32 kind; i32 fd;} — three u64 then four u32, naturally aligned, no padding: 40
+    // bytes (a _Static_assert in src/codeimage.c pins the size).
+    private static final MemoryLayout CI_EVENT_LAYOUT = MemoryLayout.structLayout(
+        JAVA_LONG.withName("addr"),
+        JAVA_LONG.withName("len"),
+        JAVA_LONG.withName("timestamp"),
+        JAVA_INT.withName("pid"),
+        JAVA_INT.withName("tid"),
+        JAVA_INT.withName("kind"),
+        JAVA_INT.withName("fd"));
+
+    /** A timestamped code-image timeline for one target process (asmtest_codeimage_t). */
+    public static final class CodeImage implements AutoCloseable {
+        private MemorySegment handle; // an asmtest_codeimage_t*
+
+        /** Create a timeline recording {@code pid}'s memory ({@code pid == 0} => this
+         *  process). Throws if the library is not loaded or allocation fails. */
+        public CodeImage(int pid) {
+            if (CI_NEW == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            try {
+                MemorySegment h = (MemorySegment) CI_NEW.invoke(pid);
+                if (MemorySegment.NULL.equals(h))
+                    throw new RuntimeException("asmtest_codeimage_new failed");
+                this.handle = h;
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** True if the userspace recorder can detect page changes on this host
+         *  (PAGEMAP_SCAN or the soft-dirty fallback). Never throws: a load failure or a
+         *  zero return → false, so callers self-skip cleanly. */
+        public static boolean available() {
+            if (CI_AVAILABLE == null) return false;
+            try { return (int) CI_AVAILABLE.invoke() != 0; }
+            catch (Throwable t) { return false; }
+        }
+
+        /** Human-readable reason {@link #available()} is false (or "available"). */
+        public static String skipReason() {
+            if (CI_SKIP_REASON == null) {
+                Throwable e = LOAD_ERROR;
+                return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
+            }
+            try {
+                MemorySegment buf = ARENA.allocate(160);
+                CI_SKIP_REASON.invoke(buf, 160L);
+                return buf.getUtf8String(0);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Begin tracking {@code [base, base+len)}: snapshot version 0 now and arm
+         *  write-protect on its pages. Returns the status ({@code ASMTEST_CI_OK} or a
+         *  negative code). */
+        public int track(long base, long len) {
+            try { return (int) CI_TRACK.invoke(handle, MemorySegment.ofAddress(base), len); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Scan the tracked ranges for changed pages, re-snapshot each as a new version,
+         *  and re-arm. Returns the number of new versions recorded ({@code >= 0}) or a
+         *  negative status. */
+        public int refresh() {
+            try { return (int) CI_REFRESH.invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The current capture sequence — a monotonic logical timestamp. 0 before
+         *  anything is tracked; advances by one per recorded version. */
+        public long now() {
+            try { return (long) CI_NOW.invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The bytes live at {@code addr} as of capture sequence {@code when}
+         *  ({@code when == 0} => the latest version), copied into a fresh {@code byte[]},
+         *  or {@code null} when {@code addr} is in no tracked region / no version exists
+         *  at-or-before {@code when} ({@code ASMTEST_CI_ENOENT}). */
+        public byte[] bytesAt(long addr, long when) {
+            try {
+                // The C call fills *out with a pointer to BORROWED bytes and *out_len with
+                // how many are available; allocate two pointer-sized out cells, then copy.
+                MemorySegment outPtr = ARENA.allocate(ADDRESS);   // const uint8_t**
+                MemorySegment outLen = ARENA.allocate(JAVA_LONG); // size_t*
+                int rc = (int) CI_BYTES_AT.invoke(handle, MemorySegment.ofAddress(addr),
+                    when, outPtr, outLen);
+                if (rc != ASMTEST_CI_OK) return null;
+                long n = outLen.get(JAVA_LONG, 0);
+                MemorySegment src = outPtr.get(ADDRESS, 0).reinterpret(n);
+                byte[] bytes = new byte[(int) n];
+                MemorySegment.copy(src, JAVA_BYTE, 0, bytes, 0, (int) n);
+                return bytes;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** True if the optional eBPF emission detector can load and attach on this host.
+         *  Never throws: a load failure or a zero return → false. */
+        public static boolean bpfAvailable() {
+            if (CI_BPF_AVAILABLE == null) return false;
+            try { return (int) CI_BPF_AVAILABLE.invoke() != 0; }
+            catch (Throwable t) { return false; }
+        }
+
+        /** Human-readable reason {@link #bpfAvailable()} is false (or "available"). */
+        public static String bpfSkipReason() {
+            if (CI_BPF_SKIP_REASON == null) {
+                Throwable e = LOAD_ERROR;
+                return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
+            }
+            try {
+                MemorySegment buf = ARENA.allocate(160);
+                CI_BPF_SKIP_REASON.invoke(buf, 160L);
+                return buf.getUtf8String(0);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Load, filter to this timeline's pid, and attach the CO-RE eBPF program;
+         *  subsequent {@link #pollBpf(int)} calls drain emission events. Returns the
+         *  status ({@code ASMTEST_CI_OK} or a negative code). */
+        public int watchBpf() {
+            try { return (int) CI_WATCH_BPF.invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Drain ready emission events from the BPF ring buffer into the internal queue.
+         *  {@code timeoutMs == 0} is a non-blocking drain. Returns the number queued
+         *  ({@code >= 0}) or a negative status. */
+        public int pollBpf(int timeoutMs) {
+            try { return (int) CI_POLL_BPF.invoke(handle, timeoutMs); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Pop one queued emission event, or {@code null} when the queue is empty (or on
+         *  a negative status). */
+        public CodeEvent nextEvent() {
+            try {
+                MemorySegment out = ARENA.allocate(CI_EVENT_LAYOUT);
+                int rc = (int) CI_NEXT.invoke(handle, out);
+                if (rc != 1) return null;
+                return new CodeEvent(
+                    out.get(JAVA_LONG, ofs("addr")),
+                    out.get(JAVA_LONG, ofs("len")),
+                    out.get(JAVA_LONG, ofs("timestamp")),
+                    out.get(JAVA_INT, ofs("pid")),
+                    out.get(JAVA_INT, ofs("tid")),
+                    out.get(JAVA_INT, ofs("kind")),
+                    out.get(JAVA_INT, ofs("fd")));
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        private static long ofs(String field) {
+            return CI_EVENT_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement(field));
+        }
+
+        /** The underlying {@code asmtest_codeimage_t*} handle — pass to
+         *  {@link HwTrace#ptraceTraceAttachedVersioned} as its {@code img} argument. */
+        public MemorySegment handle() { return handle; }
+
+        /** Free the timeline and all recorded versions (detaches any eBPF watch). */
+        public void free() {
+            if (handle == null || CI_FREE == null) return;
+            try { CI_FREE.invoke(handle); } catch (Throwable t) { throw rethrow(t); }
+            finally { handle = null; }
+        }
+
+        @Override public void close() { free(); }
     }
 }
