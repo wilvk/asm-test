@@ -41,6 +41,7 @@
 #define ASMTEST_PTRACE_H
 
 #include <stddef.h>
+#include <sys/types.h> /* pid_t */
 
 #include "asmtest_trace.h"
 
@@ -77,6 +78,24 @@ void asmtest_ptrace_skip_reason(char *buf, size_t buflen);
  * or capture-buffer overflow, never emitting a partial trace as complete. */
 int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
                               int nargs, long *result, asmtest_trace_t *trace);
+
+/* Trace a region in a SEPARATE, already-running process you have attached to — the
+ * foreign / managed-runtime path (the building block for tracing a JVM/.NET/Node on
+ * a host without Intel PT). `pid` must already be in a ptrace-stop: the caller owns
+ * the attach/detach policy (PTRACE_ATTACH or PTRACE_SEIZE+INTERRUPT, then wait for
+ * the stop, before this call; PTRACE_DETACH after), because *which* process to attach
+ * and *when* are integrator decisions. This single-steps `pid` from its current stop,
+ * reading RIP at each stop, and records every in-region instruction/block offset for
+ * [base, base+len) IN THE TARGET'S address space into `trace` — until the region is
+ * entered and exited (or the target exits). The registered code bytes are read FROM
+ * THE TARGET via process_vm_readv (so the tracer need not share the target's memory),
+ * then used for the same block normalization as the other backends. On success
+ * *result receives the routine's return value (the target's RAX at the ret); `result`
+ * may be NULL. The target is left ptrace-stopped just past the region exit for the
+ * caller to PTRACE_DETACH. Supported target: a deterministic pure-compute region that
+ * does not call out to other regions (same contract as the in-process stepper). */
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace);
 
 #ifdef __cplusplus
 }

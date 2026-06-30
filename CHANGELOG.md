@@ -104,7 +104,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     **plain unprivileged container** — asserting byte-for-byte parity with the
     in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
     Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/zen2-singlestep-trace-plan.md)
-    Phase 5 (W2).
+    Phase 5 (W2). `asmtest_ptrace_trace_attached(pid, base, len, &result, trace)`
+    extends it to the **foreign-process** case — the building block for tracing a
+    managed runtime: it traces a region in a **separate, already-running process you
+    have attached to externally** (the caller owns the `PTRACE_ATTACH`/`DETACH`
+    policy), single-stepping the target from its current stop and reading the region
+    bytes **from the target via `process_vm_readv`** (so the tracer does not share the
+    target's memory). A live test attaches to a child that never called
+    `PTRACE_TRACEME` and reconstructs the same `[0,3,6,c,11]` stream out of band.
   - **ARM CoreSight reconstruction core (host-validated).** `src/cs_backend.c` is now
     split like the AMD backend: its decoder-independent **reconstruction core**
     `asmtest_cs_reconstruct(arch, ranges, n, base, len, trace)` turns the ordered

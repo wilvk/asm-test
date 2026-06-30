@@ -89,13 +89,21 @@ CoreSight / AMD LBR) are unaffected — this is a fourth, perf-free backend behi
 same `asmtest_hwtrace_*` API, selected by enum exactly as PT and AMD LBR are.
 
 **Phase 5, W2 (out-of-process `ptrace`) now ships for Linux x86-64**
-([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`,
-`asmtest_ptrace_trace_call`): a tracer parent `PTRACE_SINGLESTEP`s a forked tracee
-and reconstructs the *same* exact offsets out of band (verified byte-for-byte against
-the in-process stepper, including a 62-instruction loop, live in a plain unprivileged
-container by `make hwtrace-test`). The remaining Phase-5 fronts (Windows VEH,
-macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
-so out-of-process is its *only* single-step form) stay forward-look.
+([asmtest_ptrace.h](../../include/asmtest_ptrace.h), `src/ptrace_backend.c`). Two
+entry points: `asmtest_ptrace_trace_call` forks its own tracee and traces a code blob;
+`asmtest_ptrace_trace_attached(pid, base, len, &result, trace)` traces a region in a
+**separate, already-running process attached to from the outside** — the
+foreign-process primitive a managed-runtime tracer builds on. It single-steps the
+target from its current ptrace-stop (the caller owns `PTRACE_ATTACH`/`DETACH`) and
+reads the region bytes from the target via `process_vm_readv` (no shared mapping).
+Both reconstruct the *same* exact offsets out of band, verified byte-for-byte against
+the in-process stepper — `trace_call` including a 62-instruction loop, `trace_attached`
+by attaching to a child that never called `PTRACE_TRACEME` — live in a plain
+unprivileged container by `make hwtrace-test`. The remaining Phase-5 fronts (Windows
+VEH, macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is
+kernel-only, so out-of-process is its *only* single-step form) stay forward-look, as
+does resolving a live managed runtime's generated-code image (jitdump/`/proc/pid/maps`)
+that `trace_attached` would then trace.
 
 ---
 

@@ -20,6 +20,11 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <linux/perf_event.h>
+#include <signal.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 int asmtest_amd_decoder_present(void);
@@ -592,6 +597,82 @@ static void test_ptrace_oop(void) {
     munmap(q, sizeof LOOP);
 }
 
+/* W2 live ATTACH: trace a region in a SEPARATE, externally-attached process — the
+ * building block for tracing a managed runtime out of band. A child spins on a shared
+ * flag, then calls the fixture; the parent PTRACE_ATTACHes it (the child never called
+ * TRACEME — a true external attach), traces the region with
+ * asmtest_ptrace_trace_attached (which reads the child's code via process_vm_readv,
+ * not a shared mapping), and asserts the SAME offsets the in-process stepper yields. */
+static void test_ptrace_attach(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP ptrace attach: not Linux x86-64\n");
+        return;
+    }
+    volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (go == MAP_FAILED || p == MAP_FAILED) {
+        printf("# SKIP ptrace attach: mmap failed\n");
+        return;
+    }
+    *go = 0;
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        while (!*go) {
+            /* user-space spin (no syscall) so the external attach catches us cleanly */
+        }
+        volatile long r = ((add2_fn)p)(20, 22);
+        (void)r;
+        _exit(0);
+    }
+
+    /* Let the child reach the spin, then attach from the OUTSIDE (it never opted in
+     * via TRACEME). The attach stops the child; only then do we release it, so it
+     * cannot run the region before we are tracing. */
+    struct timespec ts = {0, 3 * 1000 * 1000}; /* 3 ms */
+    nanosleep(&ts, NULL);
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 ||
+        waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP ptrace attach: PTRACE_ATTACH not permitted (yama ptrace_scope)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return;
+    }
+    *go = 1;
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_ptrace_trace_attached(pid, p, sizeof ROUTINE, &result, tr);
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+
+    CHECK(rc == ASMTEST_PTRACE_OK,
+          "ptrace attach: trace_attached succeeds on an externally-attached PID");
+    CHECK(result == 42,
+          "ptrace attach: result 42 read from the foreign process's RAX");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq,
+          "ptrace attach: foreign-process trace == in-process stream [0,3,6,c,11]");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 && !asmtest_emu_trace_truncated(tr),
+          "ptrace attach: two blocks, complete (bytes read via process_vm_readv)");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+    munmap((void *)go, sizeof(int));
+#else
+    printf("# SKIP ptrace attach: not Linux x86-64\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -612,6 +693,9 @@ int main(void) {
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
+
+    /* Live: tracing a region in a SEPARATE, externally-attached process (W2 attach). */
+    test_ptrace_attach();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

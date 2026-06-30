@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -182,6 +183,85 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     return rc;
 }
 
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace) {
+    if (base == NULL || len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+
+    /* Read the region bytes FROM THE TARGET (not a shared mapping) so this works on a
+     * foreign process — the same way a debugger reads a tracee's text. */
+    uint8_t *code = (uint8_t *)malloc(len);
+    if (code == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    struct iovec liov = {code, len};
+    struct iovec riov = {(void *)(uintptr_t)base, len};
+    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
+    uint32_t n = 0;
+    int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
+    int status = 0;
+
+    /* `pid` is already in a ptrace-stop (the caller attached). Single-step it from
+     * here; record only in-region offsets. The target is foreign, so we neither
+     * attach nor detach — that is the caller's policy. */
+    for (;;) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break; /* target ended before/while in the region */
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            if (entered)
+                overflow = 1;
+            break;
+        }
+
+        struct user_regs_struct regs;
+        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        uint64_t rip = (uint64_t)regs.rip;
+
+        if (rip >= base_ip && rip < base_ip + len) {
+            entered = 1;
+            if (n < PTRACE_STREAM_CAP)
+                stream[n++] = rip - base_ip;
+            else
+                overflow = 1;
+        } else if (entered && !returned) {
+            if (result != NULL)
+                *result = (long)regs.rax;
+            returned = 1;
+            break; /* leave the target stopped past the region for the caller */
+        }
+    }
+
+    if (rc == ASMTEST_PTRACE_OK)
+        normalize(trace, code, base_ip, len, stream, n, overflow);
+    free(stream);
+    free(code);
+    return rc;
+}
+
 #else /* not Linux x86-64 — link-compatible stubs */
 
 int asmtest_ptrace_available(void) { return 0; }
@@ -200,6 +280,16 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     (void)len;
     (void)args;
     (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
+                                  long *result, asmtest_trace_t *trace) {
+    (void)pid;
+    (void)base;
+    (void)len;
     (void)result;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;

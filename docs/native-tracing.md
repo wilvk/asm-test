@@ -425,6 +425,22 @@ deterministic pure-compute routine (≤6 integer args, no calls out to other reg
 the in-process stepper. `make hwtrace-test` exercises it live (it works in a **plain
 unprivileged container** — ptrace of one's own child needs no extra capability).
 
+`trace_call` forks its own tracee, which is enough to trace a code blob out of process
+but is not yet the managed-runtime case. The building block for *that* is
+`asmtest_ptrace_trace_attached(pid, base, len, &result, trace)`: it traces a region in
+a **separate, already-running process you have attached to from the outside** — the
+foreign path. The caller owns the attach/detach policy (which PID, and when:
+`PTRACE_ATTACH`/`PTRACE_SEIZE` then wait for the stop before the call, `PTRACE_DETACH`
+after), because those are integrator decisions; asm-test single-steps the target from
+its current stop, **reads the region bytes from the target via `process_vm_readv`** (so
+the tracer need not share the target's memory — the honest foreign-process read), and
+records the same in-region offsets. `make hwtrace-test` exercises it live: a child that
+never called `PTRACE_TRACEME` is attached externally and its region traced to the exact
+same `[0x0, 0x3, 0x6, 0xc, 0x11]` stream. This is the foundation a managed-runtime
+tracer builds on (attach to the JVM/.NET/Node process, resolve the JIT code region from
+its maps/jitdump, trace it out of band); resolving a live runtime's generated-code
+image is the larger follow-on layered on top of this primitive.
+
 ### Language wrappers
 
 Every binding ships an `hwtrace` wrapper alongside its `drtrace` one, exposing the same
