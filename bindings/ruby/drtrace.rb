@@ -13,8 +13,10 @@
 #
 # Advanced, Linux-x86-64-only, and opt-in. NativeTrace.available? reports whether the
 # tier can run (built + libdynamorio resolvable) so callers self-skip cleanly. The
-# lib path comes from env ASMTEST_DRAPP_LIB, else <repo>/build/libasmtest_drapp.so;
-# a load failure is caught so available? returns false rather than raising.
+# lib path comes from env ASMTEST_DRAPP_LIB, else the gem-bundled slot
+# native/<os>-<cpu>/libasmtest_drapp.<ext> next to this file, else
+# <repo>/build/libasmtest_drapp.so; a load failure is caught so available? returns
+# false rather than raising.
 #
 # Example:
 #   require_relative "drtrace"
@@ -43,12 +45,63 @@ module Asmtest
     LL    = Fiddle::TYPE_LONG_LONG
     VOID  = Fiddle::TYPE_VOID
 
-    # Resolve libasmtest_drapp: an explicit ASMTEST_DRAPP_LIB wins; otherwise fall
-    # back to <repo>/build/libasmtest_drapp.so (the in-tree build artifact).
+    # The gem-bundled native slot next to this file (how the gem ships payloads),
+    # mirroring Asmtest.resolve_emu_lib in asmtest.rb: native/<os>-<cpu>/.
+    def self.bundled_slot
+      os  = RbConfig::CONFIG["host_os"] =~ /darwin/ ? "darwin" : "linux"
+      cpu = RbConfig::CONFIG["host_cpu"] =~ /arm|aarch64/ ? "arm64" : "x86_64"
+      ext = os == "darwin" ? "dylib" : "so"
+      [os, cpu, ext]
+    end
+
+    # The absolute path libasmtest_drapp actually resolved to (set by
+    # resolve_drapp_lib), for library_path below.
+    @resolved_path = nil
+
+    # Resolve libasmtest_drapp. Order: an explicit ASMTEST_DRAPP_LIB wins (dev /
+    # custom build); else the gem-bundled slot native/<os>-<cpu>/ next to this file
+    # (how the gem ships it); else <repo>/build/libasmtest_drapp.so (the in-tree
+    # build artifact). The build/ fallback stays BELOW the bundled path so an
+    # installed gem never prefers a leaked checkout.
     def self.resolve_drapp_lib
       env = ENV["ASMTEST_DRAPP_LIB"].to_s
+      unless env.empty?
+        @resolved_path = env
+        return env
+      end
+      os, cpu, ext = bundled_slot
+      bundled = File.expand_path("native/#{os}-#{cpu}/libasmtest_drapp.#{ext}", __dir__)
+      if File.exist?(bundled)
+        @resolved_path = bundled
+        return bundled
+      end
+      repo = File.expand_path("../../build/libasmtest_drapp.so", __dir__)
+      @resolved_path = repo
+      repo
+    end
+
+    # The gem-bundled DR client shipped alongside libasmtest_drapp, if present:
+    # $ASMTEST_DRCLIENT wins, else native/<os>-<cpu>/libasmtest_drclient.<ext> next
+    # to this file, else the <repo>/build tree; nil when none exists (the C side
+    # then takes its own $ASMTEST_DRCLIENT / repo-build fallback). Mirrors
+    # drtrace.py's _default_client.
+    def self.default_client
+      env = ENV["ASMTEST_DRCLIENT"].to_s
       return env unless env.empty?
-      File.expand_path("../../build/libasmtest_drapp.so", __dir__)
+      os, cpu, ext = bundled_slot
+      cands = [
+        File.expand_path("native/#{os}-#{cpu}/libasmtest_drclient.#{ext}", __dir__),
+        File.expand_path("../../build/libasmtest_drclient.so", __dir__),
+      ]
+      cands.find { |c| File.exist?(c) }
+    end
+
+    # The absolute path of the libasmtest_drapp this process resolved (resolving it
+    # if it hasn't been yet). Lets a clean-room test assert the bundled tier — not a
+    # leaked build/ tree — satisfied the load. Mirrors drtrace.py's library_path().
+    def self.library_path
+      resolve_drapp_lib if @resolved_path.nil?
+      @resolved_path
     end
 
     def self.func(lib, name, args, ret)
@@ -168,7 +221,8 @@ module Asmtest
       end
 
       # Bring DynamoRIO up in-process and take over (init then start). +client+ is the
-      # path to libasmtest_drclient.so (else $ASMTEST_DRCLIENT on the C side);
+      # path to libasmtest_drclient.so (else DrTrace.default_client: $ASMTEST_DRCLIENT,
+      # then the gem-bundled slot / repo build; else the C side's own fallback);
       # +dynamorio_home+ lets the C side find libdynamorio (else $ASMTEST_DR_LIB /
       # rpath); +client_options+ are extra client options; +mode+ is the process-init
       # default recording mode. Raises on a nonzero rc.
@@ -176,6 +230,7 @@ module Asmtest
       # Named #start (not Ruby's reserved #initialize, and distinct from the instance
       # region begin) to read as a lifecycle verb at the class level.
       def self.start(client: nil, dynamorio_home: nil, client_options: nil, mode: 0)
+        client ||= DrTrace.default_client # prefer the bundled DR client in a gem
         opts = DrTrace.build_options(client, dynamorio_home, client_options, mode)
         rc = DrTrace::FN[:init].call(opts)
         raise "asmtest_dr_init failed: #{rc}" if rc != DrTrace::OK

@@ -99,28 +99,53 @@ const Api = struct {
 var g_api: ?Api = null;
 var g_load_failed = false;
 
+// The library string `openLib` actually opened, captured so `libraryPath()` can
+// report which candidate satisfied the load (env override first, else the build/
+// default, else the bare soname). Length 0 until a successful open.
+var g_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var g_path_len: usize = 0;
+
 fn libName() [*:0]const u8 {
     return if (builtin.os.tag == .macos) "libasmtest_drapp.dylib" else "libasmtest_drapp.so";
+}
+
+/// Record `s` as the resolved library path for `libraryPath()` to report, then
+/// return the NUL-terminated form for `std.DynLib.open`. Only the winning (opened)
+/// candidate is committed by the caller, so this is called just before a
+/// successful open.
+fn rememberPath(s: []const u8) void {
+    const n = @min(s.len, g_path_buf.len);
+    @memcpy(g_path_buf[0..n], s[0..n]);
+    g_path_len = n;
 }
 
 /// Resolve the drapp library path: `$ASMTEST_DRAPP_LIB` if set, else
 /// `<repo>/build/libasmtest_drapp.so`. The repo root is three levels above this
 /// file's `bindings/zig/src` location at build time; at runtime we only have an
 /// env var or the bare name, so fall back to the plain soname (resolved via the
-/// loader search path) when no env var is present.
+/// loader search path) when no env var is present. Records the opened candidate in
+/// `g_path_buf` (via `rememberPath`) so the self-report reflects the exact search
+/// order without changing it.
 fn openLib(buf: []u8) ?std.DynLib {
     if (std.posix.getenv("ASMTEST_DRAPP_LIB")) |p| {
         // env-provided absolute/relative path; pass it through verbatim.
         const z = std.fmt.bufPrintZ(buf, "{s}", .{p}) catch return null;
-        return std.DynLib.open(z) catch null;
+        const lib = std.DynLib.open(z) catch return null;
+        rememberPath(std.mem.sliceTo(z, 0));
+        return lib;
     }
     // No env var: try the conventional repo build dir relative to cwd, then the
     // bare soname (loader search path). `make zig-test`/callers normally set the
     // env var, so this is a best-effort convenience.
     const z = std.fmt.bufPrintZ(buf, "build/{s}", .{libName()}) catch return null;
-    if (std.DynLib.open(z)) |lib| return lib else |_| {}
+    if (std.DynLib.open(z)) |lib| {
+        rememberPath(std.mem.sliceTo(z, 0));
+        return lib;
+    } else |_| {}
     const z2 = std.fmt.bufPrintZ(buf, "{s}", .{libName()}) catch return null;
-    return std.DynLib.open(z2) catch null;
+    const lib2 = std.DynLib.open(z2) catch return null;
+    rememberPath(std.mem.sliceTo(z2, 0));
+    return lib2;
 }
 
 fn lookupAll(lib: *std.DynLib) ?Api {
@@ -177,6 +202,22 @@ fn load() ?*Api {
 pub fn available() bool {
     const api = load() orelse return false;
     return api.available() != 0;
+}
+
+/// The `libasmtest_drapp` string this process actually opened — the
+/// `$ASMTEST_DRAPP_LIB` override if set, else the `build/` default, else the bare
+/// soname (the resolver's search order, env-override first). Returns an empty
+/// slice until the tier resolves. Counterpart of the Python wrapper's
+/// `drtrace.library_path()`, letting a clean-room test assert which candidate
+/// satisfied the load.
+///
+/// NOTE: this binding is a SOURCE distribution — the consumer builds/links
+/// libasmtest themselves, so there is no bundled `native/` directory to point at.
+/// The value is the exact string handed to `std.DynLib.open`, resolved at RUN TIME
+/// (this tier is DynLib-based, not one of the binding's `linkSystemLibrary` libs).
+pub fn libraryPath() []const u8 {
+    _ = load(); // ensure the loader has run so g_path_buf is populated
+    return g_path_buf[0..g_path_len];
 }
 
 /// Process-init options. Null fields fall back to the C side's defaults: a null

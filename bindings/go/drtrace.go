@@ -26,6 +26,7 @@ package asmtest
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <dlfcn.h>
 
 // The two tiny structs the API takes by pointer, redefined here so this file
@@ -90,6 +91,7 @@ static dr_trace_block_at_fn     p_dr_trace_block_at;
 static dr_trace_insn_at_fn      p_dr_trace_insn_at;
 
 static int g_dr_loaded;   // 1 once dlopen + every dlsym succeeded.
+static char g_dr_path[4096]; // the lib string this process dlopen()ed (for LibraryPath).
 
 // Resolve libasmtest_drapp from $ASMTEST_DRAPP_LIB, else build/libasmtest_drapp.so
 // (relative to the cwd, like the Python loader's last candidate). dlopen it
@@ -99,9 +101,13 @@ static int g_dr_loaded;   // 1 once dlopen + every dlsym succeeded.
 static void asmtest_dr_resolve(void) {
     if (g_dr_loaded) return;
     const char *env = getenv("ASMTEST_DRAPP_LIB");
-    void *h = dlopen(env && *env ? env : "build/libasmtest_drapp.so",
-                     RTLD_NOW | RTLD_GLOBAL);
+    const char *name = env && *env ? env : "build/libasmtest_drapp.so";
+    void *h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
     if (!h) return;
+    // Record the string we resolved (env override first, else the build/ default)
+    // so LibraryPath() can report which candidate satisfied the load. This is the
+    // string passed to dlopen — a source distribution has no bundled native/ dir.
+    snprintf(g_dr_path, sizeof(g_dr_path), "%s", name);
     p_dr_available       = (dr_available_fn)dlsym(h, "asmtest_dr_available");
     p_dr_init            = (dr_init_fn)dlsym(h, "asmtest_dr_init");
     p_dr_start           = (dr_start_fn)dlsym(h, "asmtest_dr_start");
@@ -135,6 +141,9 @@ static void asmtest_dr_resolve(void) {
 }
 
 static int asmtest_dr_is_loaded(void) { return g_dr_loaded; }
+
+// The lib string dlopen() resolved (empty until asmtest_dr_resolve succeeds).
+static const char *asmtest_dr_go_library_path(void) { return g_dr_path; }
 
 // static wrappers Go calls — each guards the (already-resolved) pointer so a
 // partial load can never dereference NULL.
@@ -220,6 +229,17 @@ func init() { C.asmtest_dr_resolve() }
 // self-skip cleanly when the lib or DynamoRIO is absent.
 func NativeTraceAvailable() bool {
 	return C.asmtest_dr_is_loaded() != 0 && C.asmtest_dr_go_available() != 0
+}
+
+// NativeTraceLibraryPath is the libasmtest_drapp string this process actually
+// dlopen()ed — the $ASMTEST_DRAPP_LIB override if set, else the build/ default
+// (the resolver's search order, env-override first). It is the counterpart of the
+// Python wrapper's drtrace.library_path(), letting a clean-room test assert which
+// candidate satisfied the load. Empty until the tier resolves; unlike the
+// prebuilt-payload bindings this is a SOURCE distribution, so there is no bundled
+// native/ directory — the reported path is whatever dlopen() was handed.
+func NativeTraceLibraryPath() string {
+	return C.GoString(C.asmtest_dr_go_library_path())
 }
 
 // NativeTraceInitialize brings DynamoRIO up in-process and takes over: it fills

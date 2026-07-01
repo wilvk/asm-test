@@ -99,10 +99,15 @@ namespace Asmtest
         // this already-loaded handle.
         public static readonly IntPtr LibHandle = LoadLib();
 
+        // The absolute path of the libasmtest_hwtrace actually loaded (null if none
+        // loaded). Lets a clean-room test assert the bundled tier — not a leaked
+        // build/ tree — satisfied the load; exposed via HwTrace.LibraryPath().
+        public static string ResolvedPath { get; private set; }
+
         static IntPtr LoadLib()
         {
             foreach (var cand in Candidates())
-                if (NativeLibrary.TryLoad(cand, out var h)) return h;
+                if (NativeLibrary.TryLoad(cand, out var h)) { ResolvedPath = cand; return h; }
             return IntPtr.Zero;
         }
 
@@ -114,15 +119,42 @@ namespace Asmtest
                 name == HWTRACE && LibHandle != IntPtr.Zero ? LibHandle : IntPtr.Zero);
         }
 
-        // Candidate paths, in priority order: ASMTEST_HWTRACE_LIB, then the in-tree
-        // build dir (<repo>/build/libasmtest_hwtrace.so), then the bare soname.
+        // Candidate paths, in priority order: ASMTEST_HWTRACE_LIB, then the NuGet
+        // bundled slot (runtimes/<rid>/native/, staged by `make dotnet-package`),
+        // then the in-tree build dir (<repo>/build/libasmtest_hwtrace.so), then the
+        // bare soname. The bundled slot is tried BEFORE the dev build/ tree, so an
+        // installed package never prefers a leaked checkout; system search is last.
         static System.Collections.Generic.IEnumerable<string> Candidates()
         {
             var env = Environment.GetEnvironmentVariable("ASMTEST_HWTRACE_LIB");
             if (!string.IsNullOrEmpty(env)) yield return env;
+            var bundled = BundledPath(LibFileName());
+            if (bundled != null) yield return bundled;
             var repo = RepoRoot();
-            if (repo != null) yield return Path.Combine(repo, "build", "libasmtest_hwtrace.so");
-            yield return "libasmtest_hwtrace.so";
+            if (repo != null) yield return Path.Combine(repo, "build", LibFileName());
+            yield return LibFileName();
+        }
+
+        // The platform-specific libasmtest_hwtrace file name (mirrors the Python
+        // wrapper: .dylib on macOS, .so elsewhere).
+        static string LibFileName() =>
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? "libasmtest_hwtrace.dylib" : "libasmtest_hwtrace.so";
+
+        // The NuGet-bundled native slot next to the loaded assembly:
+        // <AppContext.BaseDirectory>/runtimes/<rid>/native/<fileName>, where <rid>
+        // is this process's RuntimeIdentifier — the RID layout `make dotnet-package`
+        // stages and the .NET loader restores. Returns null if the file is absent.
+        static string BundledPath(string fileName)
+        {
+            try
+            {
+                var rid = RuntimeInformation.RuntimeIdentifier;
+                if (string.IsNullOrEmpty(rid)) return null;
+                var p = Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", fileName);
+                return File.Exists(p) ? p : null;
+            }
+            catch { return null; }
         }
 
         // Walk up from the assembly's directory looking for the repo root (the dir
@@ -386,6 +418,13 @@ namespace Asmtest
             try { return HwNative.asmtest_hwtrace_available((int)backend) != 0; }
             catch { return false; }
         }
+
+        /// <summary>
+        /// The absolute path of the libasmtest_hwtrace this process loaded (null if
+        /// the lib is not available). Lets a clean-room test assert the bundled tier —
+        /// not a leaked build/ tree — satisfied the load.
+        /// </summary>
+        public static string LibraryPath() => HwNative.ResolvedPath;
 
         /// <summary>Human-readable reason <see cref="Available"/> is false (or "available").</summary>
         public static string SkipReason(HwBackend backend = HwBackend.SingleStep)

@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+# Native lib bundled into the wheel by `make python-package` (mirrors asmtest._native).
+_LIBS = Path(__file__).resolve().parent / "_libs"
 
 ASMTEST_HW_OK = 0
 ASMTEST_HW_EUNAVAIL = -3  # no hardware-trace backend available on this host
@@ -183,16 +185,24 @@ def _lib_name():
     return "libasmtest_hwtrace.dylib" if sys.platform == "darwin" else "libasmtest_hwtrace.so"
 
 
+_resolved_path = None
+
+
 def _load():
+    global _resolved_path
     cands = []
     env = os.environ.get("ASMTEST_HWTRACE_LIB")
     if env:
         cands.append(Path(env))
-    cands += [_REPO_ROOT / "build" / _lib_name(), Path(_lib_name())]
+    # Bundled (published wheel) is tried BEFORE the dev build/ tree, so an installed
+    # package never prefers a leaked checkout; system search is the last resort.
+    cands += [_LIBS / _lib_name(), _REPO_ROOT / "build" / _lib_name(), Path(_lib_name())]
     errors = []
     for c in cands:
         try:
-            return C.CDLL(str(c))
+            lib = C.CDLL(str(c))
+            _resolved_path = str(c)
+            return lib
         except OSError as e:  # noqa: PERF203
             errors.append(f"  {c}: {e}")
     raise OSError(
@@ -297,6 +307,14 @@ def _get():
     if _lib is None:
         _lib = _declare(_load())
     return _lib
+
+
+def library_path():
+    """Absolute path of the libasmtest_hwtrace this process resolved (loading it if
+    needed). Lets a clean-room test assert the bundled tier — not a leaked build/
+    tree — satisfied the load."""
+    _get()
+    return _resolved_path
 
 
 class NativeCode:

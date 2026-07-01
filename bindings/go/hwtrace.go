@@ -33,6 +33,7 @@ package asmtest
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <dlfcn.h>
 
 // The one struct the API takes by pointer, redefined here so this file needs no
@@ -179,6 +180,7 @@ static ci_poll_bpf_fn         p_ci_poll_bpf;
 static ci_next_fn             p_ci_next;
 
 static int g_hw_loaded;   // 1 once dlopen + every dlsym succeeded.
+static char g_hw_path[4096]; // the lib string this process dlopen()ed (for LibraryPath).
 
 // Resolve libasmtest_hwtrace from $ASMTEST_HWTRACE_LIB, else
 // build/libasmtest_hwtrace.so (relative to the cwd, like the Python loader's last
@@ -189,9 +191,13 @@ static int g_hw_loaded;   // 1 once dlopen + every dlsym succeeded.
 static void asmtest_hw_resolve(void) {
     if (g_hw_loaded) return;
     const char *env = getenv("ASMTEST_HWTRACE_LIB");
-    void *h = dlopen(env && *env ? env : "build/libasmtest_hwtrace.so",
-                     RTLD_NOW | RTLD_GLOBAL);
+    const char *name = env && *env ? env : "build/libasmtest_hwtrace.so";
+    void *h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
     if (!h) return;
+    // Record the string we resolved (env override first, else the build/ default)
+    // so LibraryPath() can report which candidate satisfied the load. This is the
+    // string passed to dlopen — a source distribution has no bundled native/ dir.
+    snprintf(g_hw_path, sizeof(g_hw_path), "%s", name);
     p_hw_available       = (hw_available_fn)dlsym(h, "asmtest_hwtrace_available");
     p_hw_skip_reason     = (hw_skip_reason_fn)dlsym(h, "asmtest_hwtrace_skip_reason");
     p_hw_resolve         = (hw_resolve_fn)dlsym(h, "asmtest_hwtrace_resolve");
@@ -256,6 +262,9 @@ static void asmtest_hw_resolve(void) {
 }
 
 static int asmtest_hw_is_loaded(void) { return g_hw_loaded; }
+
+// The lib string dlopen() resolved (empty until asmtest_hw_resolve succeeds).
+static const char *asmtest_hw_go_library_path(void) { return g_hw_path; }
 
 // static wrappers Go calls — each guards the (already-resolved) pointer so a
 // partial load can never dereference NULL.
@@ -467,6 +476,17 @@ func init() { C.asmtest_hw_resolve() }
 // (and the test) self-skip cleanly when the lib or the hardware is absent.
 func HwTraceAvailable(backend int) bool {
 	return C.asmtest_hw_is_loaded() != 0 && C.asmtest_hw_go_available(C.int(backend)) != 0
+}
+
+// HwTraceLibraryPath is the libasmtest_hwtrace string this process actually
+// dlopen()ed — the $ASMTEST_HWTRACE_LIB override if set, else the build/ default
+// (the resolver's search order, env-override first). It is the counterpart of the
+// Python wrapper's hwtrace.library_path(), letting a clean-room test assert which
+// candidate satisfied the load. Empty until the tier resolves; unlike the
+// prebuilt-payload bindings this is a SOURCE distribution, so there is no bundled
+// native/ directory — the reported path is whatever dlopen() was handed.
+func HwTraceLibraryPath() string {
+	return C.GoString(C.asmtest_hw_go_library_path())
 }
 
 // HwTraceSkipReason is a human-readable reason HwTraceAvailable(backend) is false

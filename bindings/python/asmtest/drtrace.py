@@ -35,6 +35,9 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+# Native libs bundled into the wheel by `make python-package` (mirrors asmtest._native):
+# libasmtest_drapp + its DR client + the vendored libdynamorio all land here.
+_LIBS = Path(__file__).resolve().parent / "_libs"
 
 ASMTEST_DR_OK = 0
 
@@ -60,22 +63,54 @@ def _lib_name():
     return "libasmtest_drapp.dylib" if sys.platform == "darwin" else "libasmtest_drapp.so"
 
 
+_resolved_path = None
+
+
 def _load():
+    global _resolved_path
     cands = []
     env = os.environ.get("ASMTEST_DRAPP_LIB")
     if env:
         cands.append(Path(env))
-    cands += [_REPO_ROOT / "build" / _lib_name(), Path(_lib_name())]
+    # Bundled (published wheel) is tried BEFORE the dev build/ tree, so an installed
+    # package never prefers a leaked checkout; system search is the last resort.
+    cands += [_LIBS / _lib_name(), _REPO_ROOT / "build" / _lib_name(), Path(_lib_name())]
     errors = []
     for c in cands:
         try:
-            return C.CDLL(str(c))
+            lib = C.CDLL(str(c))
+            _resolved_path = str(c)
+            return lib
         except OSError as e:  # noqa: PERF203
             errors.append(f"  {c}: {e}")
     raise OSError(
         "libasmtest_drapp not found; build it with `make shared-drtrace "
         "DYNAMORIO_HOME=...` or set ASMTEST_DRAPP_LIB.\n" + "\n".join(errors)
     )
+
+
+def _client_name():
+    return "libasmtest_drclient.dylib" if sys.platform == "darwin" else "libasmtest_drclient.so"
+
+
+def _default_client():
+    """Bundled DR client shipped alongside libasmtest_drapp, if present (else None
+    → the C side falls back to $ASMTEST_DRCLIENT / the repo build tree)."""
+    env = os.environ.get("ASMTEST_DRCLIENT")
+    if env:
+        return env
+    for c in (_LIBS / _client_name(), _REPO_ROOT / "build" / _client_name()):
+        if c.is_file():
+            return str(c)
+    return None
+
+
+def library_path():
+    """Absolute path of the libasmtest_drapp this process resolved (loading it if
+    needed). Lets a clean-room test assert the bundled tier — not a leaked build/
+    tree — satisfied the load."""
+    _get()
+    return _resolved_path
 
 
 def _declare(lib):
@@ -207,6 +242,8 @@ class NativeTrace:
         ``start=False`` DR is configured but not taken over yet — use start()/stop()
         to bracket only the calls into traced code (the managed-runtime model)."""
         lib = _get()
+        if client is None:
+            client = _default_client()  # prefer the bundled DR client in a wheel
         opts = _Options()
         opts.client_path = (client or "").encode() or None
         opts.dynamorio_home = (dynamorio_home or "").encode() or None

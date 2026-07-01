@@ -63,10 +63,15 @@ namespace Asmtest
         // hands back this already-loaded handle.
         public static readonly IntPtr LibHandle = LoadLib();
 
+        // The absolute path of the libasmtest_drapp actually loaded (null if none
+        // loaded). Lets a clean-room test assert the bundled tier — not a leaked
+        // build/ tree — satisfied the load; exposed via DrTrace.LibraryPath().
+        public static string ResolvedPath { get; private set; }
+
         static IntPtr LoadLib()
         {
             foreach (var cand in Candidates())
-                if (NativeLibrary.TryLoad(cand, out var h)) return h;
+                if (NativeLibrary.TryLoad(cand, out var h)) { ResolvedPath = cand; return h; }
             return IntPtr.Zero;
         }
 
@@ -78,16 +83,50 @@ namespace Asmtest
                 name == DRAPP && LibHandle != IntPtr.Zero ? LibHandle : IntPtr.Zero);
         }
 
-        // Candidate paths, in priority order: ASMTEST_DRAPP_LIB, then the in-tree
-        // build dir (<repo>/build/libasmtest_drapp.so), then the bare soname.
+        // Candidate paths, in priority order: ASMTEST_DRAPP_LIB, then the NuGet
+        // bundled slot (runtimes/<rid>/native/, staged by `make dotnet-package`),
+        // then the in-tree build dir (<repo>/build/libasmtest_drapp.so), then the
+        // bare soname. The bundled slot is tried BEFORE the dev build/ tree, so an
+        // installed package never prefers a leaked checkout; system search is last.
         static System.Collections.Generic.IEnumerable<string> Candidates()
         {
             var env = Environment.GetEnvironmentVariable("ASMTEST_DRAPP_LIB");
             if (!string.IsNullOrEmpty(env)) yield return env;
+            var bundled = BundledPath(LibFileName());
+            if (bundled != null) yield return bundled;
             var repo = RepoRoot();
-            if (repo != null) yield return Path.Combine(repo, "build", "libasmtest_drapp.so");
-            yield return "libasmtest_drapp.so";
+            if (repo != null) yield return Path.Combine(repo, "build", LibFileName());
+            yield return LibFileName();
         }
+
+        // The platform-specific libasmtest_drapp file name (mirrors the Python
+        // wrapper: .dylib on macOS, .so elsewhere).
+        static string LibFileName() =>
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? "libasmtest_drapp.dylib" : "libasmtest_drapp.so";
+
+        // The NuGet-bundled native slot next to the loaded assembly:
+        // <AppContext.BaseDirectory>/runtimes/<rid>/native/<fileName>, where <rid>
+        // is this process's RuntimeIdentifier — the RID layout `make dotnet-package`
+        // stages and the .NET loader restores. Returns null if the file is absent.
+        static string BundledPath(string fileName)
+        {
+            try
+            {
+                var rid = RuntimeInformation.RuntimeIdentifier;
+                if (string.IsNullOrEmpty(rid)) return null;
+                var p = Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", fileName);
+                return File.Exists(p) ? p : null;
+            }
+            catch { return null; }
+        }
+
+        // The bundled DR client (libasmtest_drclient) shipped in the same NuGet
+        // runtimes/<rid>/native/ slot as libasmtest_drapp, or null if not present.
+        // Used by DrTrace.Initialize to default the client to the bundled one.
+        public static string BundledClientPath() =>
+            BundledPath(RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? "libasmtest_drclient.dylib" : "libasmtest_drclient.so");
 
         // Walk up from the assembly's directory looking for the repo root (the dir
         // holding "build/"). The binding's bin/ output sits several levels under the
@@ -185,6 +224,13 @@ namespace Asmtest
         }
 
         /// <summary>
+        /// The absolute path of the libasmtest_drapp this process loaded (null if the
+        /// lib is not available). Lets a clean-room test assert the bundled tier — not
+        /// a leaked build/ tree — satisfied the load.
+        /// </summary>
+        public static string LibraryPath() => DrNative.ResolvedPath;
+
+        /// <summary>
         /// Bring DynamoRIO up in-process and take over (dr_app_setup + dr_app_start).
         /// <paramref name="client"/> is the path to libasmtest_drclient.so (null ->
         /// NULL -> the C side falls back to $ASMTEST_DRCLIENT);
@@ -194,6 +240,11 @@ namespace Asmtest
         public static void Initialize(string client = null, string dynamorioHome = null,
                                       string clientOptions = null, int mode = 0)
         {
+            // When no client is passed, prefer the bundled DR client shipped alongside
+            // libasmtest_drapp (honoring $ASMTEST_DRCLIENT first) — mirroring the
+            // Python wrapper's _default_client(). Falls through to null (the C side's
+            // $ASMTEST_DRCLIENT / repo-build fallback) when nothing is bundled.
+            client ??= DefaultClient();
             // Marshal the (optional) strings to native ANSI; a null/empty string maps
             // to IntPtr.Zero so the C side hits its env-var fallback. Free them after
             // init copies what it needs.
@@ -238,6 +289,18 @@ namespace Asmtest
         static void FreeNative(IntPtr p)
         {
             if (p != IntPtr.Zero) Marshal.FreeHGlobal(p);
+        }
+
+        // The DR client to hand asmtest_dr_init when the caller passes none: honor
+        // $ASMTEST_DRCLIENT first, else the bundled libasmtest_drclient shipped next
+        // to libasmtest_drapp in the NuGet runtimes/<rid>/native/ slot (else null →
+        // the C side's own $ASMTEST_DRCLIENT / repo-build fallback). Mirrors the
+        // Python wrapper's _default_client().
+        static string DefaultClient()
+        {
+            var env = Environment.GetEnvironmentVariable("ASMTEST_DRCLIENT");
+            if (!string.IsNullOrEmpty(env)) return env;
+            return DrNative.BundledClientPath();
         }
     }
 

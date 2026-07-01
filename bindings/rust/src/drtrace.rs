@@ -130,9 +130,15 @@ fn lib_name() -> &'static str {
     }
 }
 
+/// The candidate string that satisfied the last successful [`open_lib`], captured
+/// so [`NativeTrace::library_path`] can report which one the loader used.
+static RESOLVED_PATH: OnceLock<Option<String>> = OnceLock::new();
+
 /// dlopen `libasmtest_drapp` from `ASMTEST_DRAPP_LIB`, else `<repo>/build/<lib>`,
 /// else the bare name (let the loader search). Returns a null handle if none load
-/// — the resolver then leaves every pointer `None`.
+/// — the resolver then leaves every pointer `None`. Records the winning candidate
+/// string in `RESOLVED_PATH` (env override first, else the build/ default), so the
+/// self-report reflects the exact search order without changing it.
 fn open_lib() -> *mut c_void {
     let mut cands: Vec<String> = Vec::new();
     if let Ok(p) = std::env::var("ASMTEST_DRAPP_LIB") {
@@ -145,13 +151,15 @@ fn open_lib() -> *mut c_void {
     cands.push(format!("{}/../../build/{}", env!("CARGO_MANIFEST_DIR"), lib_name()));
     cands.push(lib_name().to_string());
     for c in cands {
-        if let Ok(cs) = CString::new(c) {
+        if let Ok(cs) = CString::new(c.clone()) {
             let h = unsafe { dlopen(cs.as_ptr(), RTLD_NOW) };
             if !h.is_null() {
+                let _ = RESOLVED_PATH.set(Some(c));
                 return h;
             }
         }
     }
+    let _ = RESOLVED_PATH.set(None);
     std::ptr::null_mut()
 }
 
@@ -347,6 +355,23 @@ impl NativeTrace {
             Some(f) => unsafe { f() != 0 },
             None => false,
         }
+    }
+
+    /// The `libasmtest_drapp` candidate string this process actually dlopen()ed —
+    /// the `ASMTEST_DRAPP_LIB` override if set, else the `<repo>/build/` default
+    /// (the resolver's search order, env-override first). Returns `None` when no
+    /// candidate loaded. Counterpart of the Python wrapper's
+    /// `drtrace.library_path()`, letting a clean-room test assert which candidate
+    /// satisfied the load.
+    ///
+    /// NOTE: this binding is a **source distribution** — the consumer builds/links
+    /// libasmtest themselves, so there is no bundled `native/` directory to point
+    /// at. The value is the exact string handed to `dlopen`, resolved at RUN TIME
+    /// (this tier is dlopen-based, not one of the crate's link-time core libs).
+    pub fn library_path() -> Option<String> {
+        // Ensure the loader has run so RESOLVED_PATH is populated, then report it.
+        let _ = dr_fns();
+        RESOLVED_PATH.get().cloned().flatten()
     }
 
     /// Bring DynamoRIO up in-process and take over: fill the options, run

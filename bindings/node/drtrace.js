@@ -31,18 +31,57 @@
 'use strict';
 const koffi = require('koffi');
 const path = require('path');
+const fs = require('fs');
 
 const ASMTEST_DR_OK = 0;
 
-// Resolve libasmtest_drapp: an explicit ASMTEST_DRAPP_LIB wins (dev / custom
-// build); otherwise fall back to the build/ tree next to the repo root. The tier
-// requires DynamoRIO and may be absent, so the load is wrapped in try/catch and
-// available() self-skips cleanly when it can't resolve.
-function resolveDrappLib() {
-  if (process.env.ASMTEST_DRAPP_LIB) return process.env.ASMTEST_DRAPP_LIB;
+// The native-payload slot the published npm package ships (mirrors asmtest.js's
+// core loader): native/<os>-<arch>/lib<name>.<ext> next to this module. `name`
+// is the bare library stem, e.g. 'libasmtest_drapp'.
+function bundledSlot(name) {
+  const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64'; // node 'x64' -> x86_64
   const ext = process.platform === 'darwin' ? 'dylib' : 'so';
+  return path.join(__dirname, 'native', `${os}-${arch}`, `${name}.${ext}`);
+}
+
+// Ordered candidate paths for libasmtest_drapp: an explicit ASMTEST_DRAPP_LIB
+// wins (dev / custom build); then the native payload bundled in the published
+// package at native/<os>-<arch>/ next to this module; then the dev build/ tree
+// next to the repo root; then a bare name for the system loader. The bundled
+// slot is tried BEFORE the dev build/ tree so an installed package never prefers
+// a leaked checkout. The tier requires DynamoRIO and may be absent, so the load
+// is wrapped in try/catch and available() self-skips cleanly when it can't resolve.
+function drappCandidates() {
+  const ext = process.platform === 'darwin' ? 'dylib' : 'so';
+  const cands = [];
+  if (process.env.ASMTEST_DRAPP_LIB) cands.push(process.env.ASMTEST_DRAPP_LIB);
+  cands.push(bundledSlot('libasmtest_drapp'));
   // bindings/node/ -> repo root is two levels up.
-  return path.join(__dirname, '..', '..', 'build', `libasmtest_drapp.${ext}`);
+  cands.push(path.join(__dirname, '..', '..', 'build', `libasmtest_drapp.${ext}`));
+  cands.push(`libasmtest_drapp.${ext}`);
+  return cands;
+}
+
+// Absolute path of the libasmtest_drapp this process resolved (null until a
+// successful load), captured for libraryPath().
+let _resolvedPath = null;
+
+// The bundled DR client shipped alongside libasmtest_drapp, if present: honor
+// $ASMTEST_DRCLIENT first, then the bundled native/<slot>/ payload, then the dev
+// build/ tree. Returns null when none exists (the C side then falls back to
+// $ASMTEST_DRCLIENT / rpath), matching the Python wrapper's _default_client().
+function defaultClient() {
+  if (process.env.ASMTEST_DRCLIENT) return process.env.ASMTEST_DRCLIENT;
+  const ext = process.platform === 'darwin' ? 'dylib' : 'so';
+  const cands = [
+    bundledSlot('libasmtest_drclient'),
+    path.join(__dirname, '..', '..', 'build', `libasmtest_drclient.${ext}`),
+  ];
+  for (const c of cands) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
 }
 
 // koffi struct layouts mirroring the C API (the one place we mirror C structs;
@@ -68,13 +107,17 @@ let _fn = null;
 let _loadError = null;
 
 (function load() {
-  let lib;
-  try {
-    lib = koffi.load(resolveDrappLib());
-  } catch (e) {
-    _loadError = e;
-    return;
+  let lib = null;
+  for (const cand of drappCandidates()) {
+    try {
+      lib = koffi.load(cand);
+      _resolvedPath = path.isAbsolute(cand) ? cand : path.resolve(cand);
+      break;
+    } catch (e) {
+      _loadError = e;
+    }
   }
+  if (!lib) return;
   _lib = lib;
   _fn = {
     available: lib.func('int asmtest_dr_available()'),
@@ -158,6 +201,11 @@ class NativeTrace {
     return _fn.available() !== 0;
   }
 
+  /** Absolute path of the libasmtest_drapp this process resolved, or null if the
+   *  load failed. Lets a clean-room test assert the bundled tier — not a leaked
+   *  build/ tree — satisfied the load. */
+  static libraryPath() { return _resolvedPath; }
+
   /**
    * Bring DynamoRIO up in-process and take over: fill the options struct, run
    * asmtest_dr_init then asmtest_dr_start, throwing on a nonzero rc. `client` is
@@ -166,8 +214,11 @@ class NativeTrace {
    * libdynamorio (else $ASMTEST_DR_LIB / rpath).
    */
   static initialize({ client, dynamorioHome, clientOptions, mode = 0 } = {}) {
+    // Default to the bundled DR client (honoring $ASMTEST_DRCLIENT first) when the
+    // caller passes none, so a published package finds its client next to the app lib.
+    const clientPath = client || defaultClient();
     const opts = {
-      client_path: client || null,
+      client_path: clientPath || null,
       dynamorio_home: dynamorioHome || null,
       client_options: clientOptions || null,
       mode,

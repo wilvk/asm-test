@@ -13,8 +13,10 @@
 -- reports whether it can run so callers self-skip cleanly. The load itself is
 -- wrapped in pcall, so a missing libasmtest_drapp (no DynamoRIO) self-skips too.
 --
--- The shared library is taken from the environment, matching the Makefile:
---   ASMTEST_DRAPP_LIB   libasmtest_drapp.{so,dylib}  (else <repo>/build/...)
+-- The shared library is resolved in the same order as asmtest.lua's core loader:
+--   ASMTEST_DRAPP_LIB   an explicit path wins (dev / custom build)
+--   native/<os>-<arch>/ the rock-bundled slot next to this file (published rock)
+--   <repo>/build/...     the in-tree build artifact (below the bundled path)
 local ffi = require("ffi")
 
 ffi.cdef([[
@@ -46,15 +48,39 @@ uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
 
 local ASMTEST_DR_OK = 0
 
--- Resolve libasmtest_drapp: an explicit ASMTEST_DRAPP_LIB wins (dev / custom
--- build); otherwise fall back to <repo>/build/ next to this binding. This file
--- lives at bindings/lua/, so the repo root is two directories up.
+-- This module's own directory, so the rock-bundled slot + repo build/ resolve
+-- relative to the file (mirrors asmtest.lua). This file lives at bindings/lua/,
+-- so the repo root is two directories up.
+local MODULE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)")) or "./"
+
+-- The rock-bundled native slot (os, arch, ext), mirroring asmtest.lua's core
+-- loader: native/<os>-<arch>/lib*.<ext> next to this file (how the rock ships it).
+local function bundled_slot()
+  local os_name = ffi.os == "OSX" and "darwin" or "linux"
+  local arch = ffi.arch == "arm64" and "arm64" or "x86_64" -- LuaJIT 'x64' -> x86_64
+  local ext = ffi.os == "OSX" and "dylib" or "so"
+  return os_name, arch, ext
+end
+
+-- The absolute path libasmtest_drapp actually resolved to (set by drapp_path),
+-- for M.library_path below.
+local resolved_path = nil
+
+-- Resolve libasmtest_drapp. Order: an explicit ASMTEST_DRAPP_LIB wins (dev /
+-- custom build); else the rock-bundled slot native/<os>-<arch>/ next to this file
+-- (how the rock ships it); else <repo>/build/ (the in-tree build artifact). The
+-- build/ fallback stays BELOW the bundled path so an installed rock never prefers
+-- a leaked checkout.
 local function drapp_path()
   local p = os.getenv("ASMTEST_DRAPP_LIB")
-  if p and p ~= "" then return p end
-  local ext = ffi.os == "OSX" and "dylib" or "so"
-  local dir = (debug.getinfo(1, "S").source:sub(2):match("(.*/)")) or "./"
-  return dir .. "../../build/libasmtest_drapp." .. ext
+  if p and p ~= "" then resolved_path = p; return p end
+  local os_name, arch, ext = bundled_slot()
+  local bundled = MODULE_DIR .. "native/" .. os_name .. "-" .. arch .. "/libasmtest_drapp." .. ext
+  local f = io.open(bundled, "r")
+  if f then f:close(); resolved_path = bundled; return bundled end
+  local repo = MODULE_DIR .. "../../build/libasmtest_drapp." .. ext
+  resolved_path = repo
+  return repo
 end
 
 -- Load the lib defensively: requires DynamoRIO and may be absent, so a failed
@@ -64,6 +90,31 @@ local ok, lib = pcall(ffi.load, drapp_path())
 if ok then L = lib end
 
 local M = {}
+
+-- The absolute path of the libasmtest_drapp this module resolved (env override,
+-- else the rock-bundled slot, else the repo build/ tree). Lets a clean-room test
+-- assert the bundled tier — not a leaked build/ tree — satisfied the load.
+function M.library_path() return resolved_path end
+
+-- The rock-bundled DR client shipped alongside libasmtest_drapp, if present:
+-- $ASMTEST_DRCLIENT wins, else native/<os>-<arch>/libasmtest_drclient.<ext> next
+-- to this file, else the <repo>/build tree; nil when none exists (the C side then
+-- takes its own $ASMTEST_DRCLIENT / repo-build fallback). Mirrors drtrace.py's
+-- _default_client.
+local function default_client()
+  local env = os.getenv("ASMTEST_DRCLIENT")
+  if env and env ~= "" then return env end
+  local os_name, arch, ext = bundled_slot()
+  local cands = {
+    MODULE_DIR .. "native/" .. os_name .. "-" .. arch .. "/libasmtest_drclient." .. ext,
+    MODULE_DIR .. "../../build/libasmtest_drclient." .. ext,
+  }
+  for _, c in ipairs(cands) do
+    local f = io.open(c, "r")
+    if f then f:close(); return c end
+  end
+  return nil
+end
 
 -- ---- Host-native machine code in real executable (W^X) memory ----
 local NativeCode = {}
@@ -122,9 +173,10 @@ function NativeTrace.initialize(opts)
   assert(L, "libasmtest_drapp not loaded")
   opts = opts or {}
   local o = ffi.new("asmtest_drtrace_options_t")
-  -- Leave unset paths as NULL so the C side falls back to its env defaults
-  -- (e.g. a nil client_path -> $ASMTEST_DRCLIENT).
-  o.client_path = opts.client
+  -- Default the client to the rock-bundled libasmtest_drclient (honoring
+  -- $ASMTEST_DRCLIENT first) when none is passed; a still-nil client_path stays
+  -- NULL so the C side takes its own env / repo-build fallback.
+  o.client_path = opts.client or default_client()
   o.dynamorio_home = opts.dynamorio_home
   o.client_options = opts.client_options
   o.mode = opts.mode or 0

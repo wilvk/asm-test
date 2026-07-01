@@ -76,16 +76,36 @@ const ASMTEST_CI_KIND_MPROTECT = 1;
 const ASMTEST_CI_KIND_MMAP = 2;
 const ASMTEST_CI_KIND_MEMFD = 3;
 
-// Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
-// build); otherwise fall back to the build/ tree next to the repo root. The tier
-// may be absent, so the load is wrapped in try/catch and available() self-skips
-// cleanly when it can't resolve.
-function resolveHwtraceLib() {
-  if (process.env.ASMTEST_HWTRACE_LIB) return process.env.ASMTEST_HWTRACE_LIB;
+// The native-payload slot the published npm package ships (mirrors asmtest.js's
+// core loader): native/<os>-<arch>/lib<name>.<ext> next to this module.
+function bundledSlot(name) {
+  const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64'; // node 'x64' -> x86_64
   const ext = process.platform === 'darwin' ? 'dylib' : 'so';
-  // bindings/node/ -> repo root is two levels up.
-  return path.join(__dirname, '..', '..', 'build', `libasmtest_hwtrace.${ext}`);
+  return path.join(__dirname, 'native', `${os}-${arch}`, `${name}.${ext}`);
 }
+
+// Ordered candidate paths for libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB
+// wins (dev / custom build); then the native payload bundled in the published
+// package at native/<os>-<arch>/ next to this module; then the dev build/ tree
+// next to the repo root; then a bare name for the system loader. The bundled slot
+// is tried BEFORE the dev build/ tree so an installed package never prefers a
+// leaked checkout. The tier may be absent, so the load is wrapped in try/catch and
+// available() self-skips cleanly when it can't resolve.
+function hwtraceCandidates() {
+  const ext = process.platform === 'darwin' ? 'dylib' : 'so';
+  const cands = [];
+  if (process.env.ASMTEST_HWTRACE_LIB) cands.push(process.env.ASMTEST_HWTRACE_LIB);
+  cands.push(bundledSlot('libasmtest_hwtrace'));
+  // bindings/node/ -> repo root is two levels up.
+  cands.push(path.join(__dirname, '..', '..', 'build', `libasmtest_hwtrace.${ext}`));
+  cands.push(`libasmtest_hwtrace.${ext}`);
+  return cands;
+}
+
+// Absolute path of the libasmtest_hwtrace this process resolved (null until a
+// successful load), captured for libraryPath().
+let _resolvedPath = null;
 
 // koffi struct layout mirroring the C API (the one place we mirror a C struct;
 // the rest of the surface is opaque handles, like asmtest.js).
@@ -122,13 +142,17 @@ let _fn = null;
 let _loadError = null;
 
 (function load() {
-  let lib;
-  try {
-    lib = koffi.load(resolveHwtraceLib());
-  } catch (e) {
-    _loadError = e;
-    return;
+  let lib = null;
+  for (const cand of hwtraceCandidates()) {
+    try {
+      lib = koffi.load(cand);
+      _resolvedPath = path.isAbsolute(cand) ? cand : path.resolve(cand);
+      break;
+    } catch (e) {
+      _loadError = e;
+    }
   }
+  if (!lib) return;
   _lib = lib;
   _fn = {
     available: lib.func('int asmtest_hwtrace_available(int)'),
@@ -249,6 +273,11 @@ class HwTrace {
     if (!_lib) return false;
     return _fn.available(backend) !== 0;
   }
+
+  /** Absolute path of the libasmtest_hwtrace this process resolved, or null if the
+   *  load failed. Lets a clean-room test assert the bundled tier — not a leaked
+   *  build/ tree — satisfied the load. */
+  static libraryPath() { return _resolvedPath; }
 
   /** Human-readable reason available() is false (or 'available'). */
   static skipReason(backend = SINGLESTEP) {

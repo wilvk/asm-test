@@ -149,16 +149,105 @@ public final class HwTrace {
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
 
-    // Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
-    // build), else <repo>/build/libasmtest_hwtrace.{so,dylib}. The test always sets
-    // the env, matching how the Python wrapper resolves the repo build/ dir.
-    private static String resolveHwtraceLib() {
-        String env = System.getenv("ASMTEST_HWTRACE_LIB");
-        if (env != null && !env.isEmpty()) return env;
+    // Absolute path of the libasmtest_hwtrace actually loaded; null until it loads.
+    // Captured for libraryPath() so a clean-room test can assert the bundled tier —
+    // not a leaked build/ tree — satisfied the load.
+    private static String RESOLVED_PATH;
+
+    // The published-jar native-payload slot, e.g. native/linux-x86_64. The payload
+    // dirs follow `uname -m`: macOS arm is "arm64", Linux is "aarch64" (mirrors the
+    // core loader in Asmtest.java).
+    private static String bundledSlotDir() {
         boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
-        String name = mac ? "libasmtest_hwtrace.dylib" : "libasmtest_hwtrace.so";
-        // Best-effort default: cwd-relative build/ (the test always sets the env).
-        return "build/" + name;
+        String os = mac ? "darwin" : "linux";
+        String a = System.getProperty("os.arch", "").toLowerCase();
+        boolean arm = a.contains("aarch64") || a.contains("arm64");
+        String arch = arm ? (mac ? "arm64" : "aarch64") : "x86_64";
+        return "native/" + os + "-" + arch;
+    }
+
+    private static String libExt() {
+        return System.getProperty("os.name", "").toLowerCase().contains("mac") ? "dylib" : "so";
+    }
+
+    // Extract the bundled native/<os>-<arch>/ payload from the jar to a temp dir and
+    // return the absolute path of <stem>.<ext> there, or null if the jar carries no
+    // such slot / library. The WHOLE slot dir is co-extracted so a lib's vendored deps
+    // (@loader_path/$ORIGIN rpath) resolve next to it, mirroring Asmtest.resolveEmuLib.
+    private static String bundledLib(String stem) {
+        String slot = bundledSlotDir();
+        String name = stem + "." + libExt();
+        try {
+            java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("asmtest-native");
+            tmpDir.toFile().deleteOnExit();
+            int n = extractResourceDir(slot, tmpDir);
+            java.nio.file.Path lib = tmpDir.resolve(name);
+            if (n == 0 || !java.nio.file.Files.exists(lib)) return null;
+            lib.toFile().deleteOnExit();
+            return lib.toAbsolutePath().toString();
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
+    // Extract every file directly under the jar resource dir `dir` into `tmpDir`
+    // (top-level files only; the THIRD-PARTY-LICENSES subdir is skipped). Works from a
+    // jar (enumerate the zip) or exploded classes on disk (copy the dir). Returns the
+    // count extracted. Mirrors Asmtest.extractResourceDir.
+    private static int extractResourceDir(String dir, java.nio.file.Path tmpDir)
+            throws java.io.IOException {
+        java.net.URL loc = HwTrace.class.getProtectionDomain().getCodeSource().getLocation();
+        if (loc == null) return 0;
+        java.io.File src;
+        try { src = new java.io.File(loc.toURI()); }
+        catch (java.net.URISyntaxException e) { src = new java.io.File(loc.getPath()); }
+        int n = 0;
+        if (src.isFile()) { // a jar
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(src)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> en = zip.entries();
+                while (en.hasMoreElements()) {
+                    java.util.zip.ZipEntry e = en.nextElement();
+                    String name = e.getName();
+                    if (e.isDirectory() || !name.startsWith(dir + "/")) continue;
+                    String base = name.substring(dir.length() + 1);
+                    if (base.isEmpty() || base.contains("/")) continue; // top-level files only
+                    try (java.io.InputStream in = zip.getInputStream(e)) {
+                        java.nio.file.Files.copy(in, tmpDir.resolve(base),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    tmpDir.resolve(base).toFile().deleteOnExit();
+                    n++;
+                }
+            }
+        } else { // exploded classes directory
+            java.io.File[] files = new java.io.File(src, dir).listFiles();
+            if (files != null) for (java.io.File f : files) {
+                if (!f.isFile()) continue;
+                java.nio.file.Files.copy(f.toPath(), tmpDir.resolve(f.getName()),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                tmpDir.resolve(f.getName()).toFile().deleteOnExit();
+                n++;
+            }
+        }
+        return n;
+    }
+
+    // Resolve libasmtest_hwtrace, in order: an explicit ASMTEST_HWTRACE_LIB wins (dev /
+    // custom build); then the native payload bundled in the published jar at
+    // native/<os>-<arch>/ (extracted to a temp dir); then <repo>/build/... ; then a
+    // bare name for the system loader. The bundled slot is tried BEFORE the dev build/
+    // tree so an installed jar never prefers a leaked checkout. Each candidate is tried
+    // in turn by the static initializer; the first that links wins.
+    private static java.util.List<String> resolveHwtraceCandidates() {
+        java.util.List<String> cands = new java.util.ArrayList<>();
+        String env = System.getenv("ASMTEST_HWTRACE_LIB");
+        if (env != null && !env.isEmpty()) cands.add(env);
+        String bundled = bundledLib("libasmtest_hwtrace");
+        if (bundled != null) cands.add(bundled);
+        String name = "libasmtest_hwtrace." + libExt();
+        cands.add("build/" + name); // cwd-relative dev build/ (the test usually sets the env)
+        cands.add(name);            // bare name → the system loader
+        return cands;
     }
 
     static {
@@ -178,8 +267,26 @@ public final class HwTrace {
             ciBpfAvailable = null, ciBpfSkipReason = null, ciWatchBpf = null,
             ciPollBpf = null, ciNext = null;
         Throwable loadError = null;
+        String resolvedPath = null;
         try {
-            SymbolLookup lib = SymbolLookup.libraryLookup(resolveHwtraceLib(), ARENA);
+            // Try each candidate in order; the first that links wins (bundled slot
+            // before the dev build/ tree). Keep the last failure for diagnostics.
+            SymbolLookup lib = null;
+            for (String cand : resolveHwtraceCandidates()) {
+                try {
+                    lib = SymbolLookup.libraryLookup(cand, ARENA);
+                    resolvedPath = new java.io.File(cand).getAbsolutePath();
+                    break;
+                } catch (RuntimeException le) {
+                    // IllegalArgumentException (lib not found) or any other link failure:
+                    // keep it for diagnostics and fall through to the next candidate.
+                    loadError = le;
+                }
+            }
+            if (lib == null)
+                throw (loadError != null ? loadError
+                    : new RuntimeException("libasmtest_hwtrace not found"));
+            loadError = null;
             hwAvailable = h(lib, "asmtest_hwtrace_available", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
             hwSkipReason = h(lib, "asmtest_hwtrace_skip_reason",
                 FunctionDescriptor.ofVoid(JAVA_INT, ADDRESS, JAVA_LONG));
@@ -313,6 +420,7 @@ public final class HwTrace {
         CI_BPF_SKIP_REASON = ciBpfSkipReason; CI_WATCH_BPF = ciWatchBpf;
         CI_POLL_BPF = ciPollBpf; CI_NEXT = ciNext;
         LOAD_ERROR = loadError;
+        RESOLVED_PATH = loadError == null ? resolvedPath : null;
     }
 
     private static MethodHandle h(SymbolLookup lk, String name, FunctionDescriptor fd) {
@@ -429,6 +537,11 @@ public final class HwTrace {
 
     /** Diagnostic for why the library failed to load, or null if it loaded. */
     public static Throwable loadError() { return LOAD_ERROR; }
+
+    /** Absolute path of the libasmtest_hwtrace this process resolved, or null if it
+     *  failed to load. Lets a clean-room test assert the bundled tier — not a leaked
+     *  build/ tree — satisfied the load. */
+    public static String libraryPath() { return RESOLVED_PATH; }
 
     /** Select {@code backend} and initialize the tier (asmtest_hwtrace_init);
      *  throws RuntimeException on a nonzero status. SINGLESTEP is the portable

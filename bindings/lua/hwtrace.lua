@@ -16,8 +16,10 @@
 -- chosen backend can run so callers self-skip cleanly; the load itself is wrapped
 -- in pcall, so a missing libasmtest_hwtrace self-skips too.
 --
--- The shared library is taken from the environment, matching the Makefile:
---   ASMTEST_HWTRACE_LIB  libasmtest_hwtrace.{so,dylib}  (else <repo>/build/...)
+-- The shared library is resolved in the same order as asmtest.lua's core loader:
+--   ASMTEST_HWTRACE_LIB  an explicit path wins (dev / custom build)
+--   native/<os>-<arch>/  the rock-bundled slot next to this file (published rock)
+--   <repo>/build/...     the in-tree build artifact (below the bundled path)
 local ffi = require("ffi")
 
 ffi.cdef([[
@@ -114,15 +116,32 @@ local TRACE_BEST = 0x0          -- most-faithful available; emulator floor allow
 local TRACE_CEILING_FREE = 0x1  -- drop the fixed-window backend (AMD LBR)
 local TRACE_NATIVE_ONLY = 0x2   -- forbid the native->emulator fidelity crossing
 
--- Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins (dev / custom
--- build); otherwise fall back to <repo>/build/ next to this binding. This file
--- lives at bindings/lua/, so the repo root is two directories up.
+-- This module's own directory, so the rock-bundled slot + repo build/ resolve
+-- relative to the file (mirrors asmtest.lua). This file lives at bindings/lua/,
+-- so the repo root is two directories up.
+local MODULE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)")) or "./"
+
+-- The absolute path libasmtest_hwtrace actually resolved to (set by
+-- hwtrace_path), for M.library_path below.
+local resolved_path = nil
+
+-- Resolve libasmtest_hwtrace. Order: an explicit ASMTEST_HWTRACE_LIB wins (dev /
+-- custom build); else the rock-bundled slot native/<os>-<arch>/ next to this file
+-- (how the rock ships it); else <repo>/build/ (the in-tree build artifact). The
+-- build/ fallback stays BELOW the bundled path so an installed rock never prefers
+-- a leaked checkout.
 local function hwtrace_path()
   local p = os.getenv("ASMTEST_HWTRACE_LIB")
-  if p and p ~= "" then return p end
+  if p and p ~= "" then resolved_path = p; return p end
+  local os_name = ffi.os == "OSX" and "darwin" or "linux"
+  local arch = ffi.arch == "arm64" and "arm64" or "x86_64" -- LuaJIT 'x64' -> x86_64
   local ext = ffi.os == "OSX" and "dylib" or "so"
-  local dir = (debug.getinfo(1, "S").source:sub(2):match("(.*/)")) or "./"
-  return dir .. "../../build/libasmtest_hwtrace." .. ext
+  local bundled = MODULE_DIR .. "native/" .. os_name .. "-" .. arch .. "/libasmtest_hwtrace." .. ext
+  local f = io.open(bundled, "r")
+  if f then f:close(); resolved_path = bundled; return bundled end
+  local repo = MODULE_DIR .. "../../build/libasmtest_hwtrace." .. ext
+  resolved_path = repo
+  return repo
 end
 
 -- Load the lib defensively: the tier may be absent (not built / wrong host), so a
@@ -150,6 +169,11 @@ M.ASMTEST_HW_EUNAVAIL = ASMTEST_HW_EUNAVAIL
 M.ASMTEST_CI_KIND_MPROTECT = ASMTEST_CI_KIND_MPROTECT
 M.ASMTEST_CI_KIND_MMAP = ASMTEST_CI_KIND_MMAP
 M.ASMTEST_CI_KIND_MEMFD = ASMTEST_CI_KIND_MEMFD
+
+-- The absolute path of the libasmtest_hwtrace this module resolved (env override,
+-- else the rock-bundled slot, else the repo build/ tree). Lets a clean-room test
+-- assert the bundled tier — not a leaked build/ tree — satisfied the load.
+function M.library_path() return resolved_path end
 
 -- ---- Host-native machine code in real executable (W^X) memory ----
 local NativeCode = {}

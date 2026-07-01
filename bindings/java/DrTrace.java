@@ -70,16 +70,120 @@ public final class DrTrace {
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
 
-    // Resolve libasmtest_drapp: an explicit ASMTEST_DRAPP_LIB wins (dev / custom build),
-    // else <repo>/build/libasmtest_drapp.{so,dylib}. <repo> is two levels up from this
-    // source dir (bindings/java/), matching how the Python wrapper resolves _REPO_ROOT.
-    private static String resolveDrappLib() {
-        String env = System.getenv("ASMTEST_DRAPP_LIB");
-        if (env != null && !env.isEmpty()) return env;
+    // Absolute path of the libasmtest_drapp actually loaded; null until it loads.
+    // Captured for libraryPath() so a clean-room test can assert the bundled tier —
+    // not a leaked build/ tree — satisfied the load.
+    private static String RESOLVED_PATH;
+
+    // The published-jar native-payload slot, e.g. native/linux-x86_64. The payload
+    // dirs follow `uname -m`: macOS arm is "arm64", Linux is "aarch64" (mirrors the
+    // core loader in Asmtest.java).
+    private static String bundledSlotDir() {
         boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
-        String name = mac ? "libasmtest_drapp.dylib" : "libasmtest_drapp.so";
-        // Best-effort default: cwd-relative build/ (the test always sets the env).
-        return "build/" + name;
+        String os = mac ? "darwin" : "linux";
+        String a = System.getProperty("os.arch", "").toLowerCase();
+        boolean arm = a.contains("aarch64") || a.contains("arm64");
+        String arch = arm ? (mac ? "arm64" : "aarch64") : "x86_64";
+        return "native/" + os + "-" + arch;
+    }
+
+    private static String libExt() {
+        return System.getProperty("os.name", "").toLowerCase().contains("mac") ? "dylib" : "so";
+    }
+
+    // Extract the bundled native/<os>-<arch>/ payload from the jar to a temp dir and
+    // return the absolute path of <stem>.<ext> there, or null if the jar carries no
+    // such slot / library. The WHOLE slot dir is co-extracted so a lib's vendored deps
+    // (@loader_path/$ORIGIN rpath) resolve next to it, mirroring Asmtest.resolveEmuLib.
+    private static String bundledLib(String stem) {
+        String slot = bundledSlotDir();
+        String name = stem + "." + libExt();
+        try {
+            java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("asmtest-native");
+            tmpDir.toFile().deleteOnExit();
+            int n = extractResourceDir(slot, tmpDir);
+            java.nio.file.Path lib = tmpDir.resolve(name);
+            if (n == 0 || !java.nio.file.Files.exists(lib)) return null;
+            lib.toFile().deleteOnExit();
+            return lib.toAbsolutePath().toString();
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
+    // Extract every file directly under the jar resource dir `dir` into `tmpDir`
+    // (top-level files only; the THIRD-PARTY-LICENSES subdir is skipped). Works from a
+    // jar (enumerate the zip) or exploded classes on disk (copy the dir). Returns the
+    // count extracted. Mirrors Asmtest.extractResourceDir.
+    private static int extractResourceDir(String dir, java.nio.file.Path tmpDir)
+            throws java.io.IOException {
+        java.net.URL loc = DrTrace.class.getProtectionDomain().getCodeSource().getLocation();
+        if (loc == null) return 0;
+        java.io.File src;
+        try { src = new java.io.File(loc.toURI()); }
+        catch (java.net.URISyntaxException e) { src = new java.io.File(loc.getPath()); }
+        int n = 0;
+        if (src.isFile()) { // a jar
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(src)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> en = zip.entries();
+                while (en.hasMoreElements()) {
+                    java.util.zip.ZipEntry e = en.nextElement();
+                    String name = e.getName();
+                    if (e.isDirectory() || !name.startsWith(dir + "/")) continue;
+                    String base = name.substring(dir.length() + 1);
+                    if (base.isEmpty() || base.contains("/")) continue; // top-level files only
+                    try (java.io.InputStream in = zip.getInputStream(e)) {
+                        java.nio.file.Files.copy(in, tmpDir.resolve(base),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    tmpDir.resolve(base).toFile().deleteOnExit();
+                    n++;
+                }
+            }
+        } else { // exploded classes directory
+            java.io.File[] files = new java.io.File(src, dir).listFiles();
+            if (files != null) for (java.io.File f : files) {
+                if (!f.isFile()) continue;
+                java.nio.file.Files.copy(f.toPath(), tmpDir.resolve(f.getName()),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                tmpDir.resolve(f.getName()).toFile().deleteOnExit();
+                n++;
+            }
+        }
+        return n;
+    }
+
+    // Resolve libasmtest_drapp, in order: an explicit ASMTEST_DRAPP_LIB wins (dev /
+    // custom build); then the native payload bundled in the published jar at
+    // native/<os>-<arch>/ (extracted to a temp dir); then <repo>/build/... (two levels
+    // up from this source dir, matching the Python wrapper's _REPO_ROOT); then a bare
+    // name for the system loader. The bundled slot is tried BEFORE the dev build/ tree
+    // so an installed jar never prefers a leaked checkout. Each candidate is tried in
+    // turn by the static initializer; the first that links wins.
+    private static java.util.List<String> resolveDrappCandidates() {
+        java.util.List<String> cands = new java.util.ArrayList<>();
+        String env = System.getenv("ASMTEST_DRAPP_LIB");
+        if (env != null && !env.isEmpty()) cands.add(env);
+        String bundled = bundledLib("libasmtest_drapp");
+        if (bundled != null) cands.add(bundled);
+        String name = "libasmtest_drapp." + libExt();
+        cands.add("build/" + name); // cwd-relative dev build/ (the test usually sets the env)
+        cands.add(name);            // bare name → the system loader
+        return cands;
+    }
+
+    /** The bundled DR client shipped alongside libasmtest_drapp, if present: honor
+     *  $ASMTEST_DRCLIENT first, then the bundled native/<slot>/ payload, then the dev
+     *  build/ tree. Returns null when none exists (the C side then falls back to
+     *  $ASMTEST_DRCLIENT / rpath), mirroring the Python wrapper's _default_client(). */
+    private static String defaultClient() {
+        String env = System.getenv("ASMTEST_DRCLIENT");
+        if (env != null && !env.isEmpty()) return env;
+        String bundled = bundledLib("libasmtest_drclient");
+        if (bundled != null) return bundled;
+        java.io.File dev = new java.io.File("build/libasmtest_drclient." + libExt());
+        if (dev.isFile()) return dev.getAbsolutePath();
+        return null;
     }
 
     static {
@@ -90,8 +194,26 @@ public final class DrTrace {
             traceBlocksLen = null, traceInsnsTotal = null, traceInsnsLen = null,
             traceBlockAt = null, traceInsnAt = null, registerSymbol = null, symbolDemo = null;
         Throwable loadError = null;
+        String resolvedPath = null;
         try {
-            SymbolLookup lib = SymbolLookup.libraryLookup(resolveDrappLib(), ARENA);
+            // Try each candidate in order; the first that links wins (bundled slot
+            // before the dev build/ tree). Keep the last failure for diagnostics.
+            SymbolLookup lib = null;
+            for (String cand : resolveDrappCandidates()) {
+                try {
+                    lib = SymbolLookup.libraryLookup(cand, ARENA);
+                    resolvedPath = new java.io.File(cand).getAbsolutePath();
+                    break;
+                } catch (RuntimeException le) {
+                    // IllegalArgumentException (lib not found) or any other link failure:
+                    // keep it for diagnostics and fall through to the next candidate.
+                    loadError = le;
+                }
+            }
+            if (lib == null)
+                throw (loadError != null ? loadError
+                    : new RuntimeException("libasmtest_drapp not found"));
+            loadError = null;
             drAvailable = h(lib, "asmtest_dr_available", FunctionDescriptor.of(JAVA_INT));
             drInit = h(lib, "asmtest_dr_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             drStart = h(lib, "asmtest_dr_start", FunctionDescriptor.of(JAVA_INT));
@@ -142,6 +264,7 @@ public final class DrTrace {
         TRACE_INSNS_LEN = traceInsnsLen; TRACE_BLOCK_AT = traceBlockAt;
         TRACE_INSN_AT = traceInsnAt; REGISTER_SYMBOL = registerSymbol; SYMBOL_DEMO = symbolDemo;
         LOAD_ERROR = loadError;
+        RESOLVED_PATH = loadError == null ? resolvedPath : null;
     }
 
     private static MethodHandle h(SymbolLookup lk, String name, FunctionDescriptor fd) {
@@ -171,6 +294,11 @@ public final class DrTrace {
     /** Diagnostic for why the library failed to load, or null if it loaded. */
     public static Throwable loadError() { return LOAD_ERROR; }
 
+    /** Absolute path of the libasmtest_drapp this process resolved, or null if it
+     *  failed to load. Lets a clean-room test assert the bundled tier — not a leaked
+     *  build/ tree — satisfied the load. */
+    public static String libraryPath() { return RESOLVED_PATH; }
+
     /**
      * Bring DynamoRIO up in-process and take over. {@code client} is the path to
      * libasmtest_drclient.so (null → NULL pointer → C falls back to
@@ -181,6 +309,10 @@ public final class DrTrace {
     public static void initialize(String client, String dynamorioHome,
                                   String clientOptions, int mode) {
         if (DR_INIT == null) throw new RuntimeException("libasmtest_drapp not loaded", LOAD_ERROR);
+        // Default the client to the bundled libasmtest_drclient (honoring
+        // $ASMTEST_DRCLIENT first) when the caller passes none; a still-null client is
+        // a NULL pointer, so the C side falls back to $ASMTEST_DRCLIENT / rpath.
+        if (client == null || client.isEmpty()) client = defaultClient();
         try {
             MemorySegment opts = ARENA.allocate(OPTIONS_LAYOUT);
             opts.set(ADDRESS, OPTIONS_LAYOUT.byteOffset(

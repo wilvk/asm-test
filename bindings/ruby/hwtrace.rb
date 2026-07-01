@@ -16,9 +16,10 @@
 #   off the specific bare-metal hardware they need.
 #
 # Like drtrace.rb it keeps all Fiddle FFI inside and loads a *separate* shared object
-# — libasmtest_hwtrace — whose path comes from env ASMTEST_HWTRACE_LIB, else
-# <repo>/build/libasmtest_hwtrace.so; a load failure is caught so HwTrace.available?
-# returns false rather than raising.
+# — libasmtest_hwtrace — whose path comes from env ASMTEST_HWTRACE_LIB, else the
+# gem-bundled slot native/<os>-<cpu>/libasmtest_hwtrace.<ext> next to this file,
+# else <repo>/build/libasmtest_hwtrace.so; a load failure is caught so
+# HwTrace.available? returns false rather than raising.
 #
 # Example:
 #   require_relative "hwtrace"
@@ -111,12 +112,47 @@ module Asmtest
     LL    = Fiddle::TYPE_LONG_LONG
     VOID  = Fiddle::TYPE_VOID
 
-    # Resolve libasmtest_hwtrace: an explicit ASMTEST_HWTRACE_LIB wins; otherwise
-    # fall back to <repo>/build/libasmtest_hwtrace.so (the in-tree build artifact).
+    # The gem-bundled native slot next to this file (how the gem ships payloads),
+    # mirroring Asmtest.resolve_emu_lib in asmtest.rb: native/<os>-<cpu>/.
+    def self.bundled_slot
+      os  = RbConfig::CONFIG["host_os"] =~ /darwin/ ? "darwin" : "linux"
+      cpu = RbConfig::CONFIG["host_cpu"] =~ /arm|aarch64/ ? "arm64" : "x86_64"
+      ext = os == "darwin" ? "dylib" : "so"
+      [os, cpu, ext]
+    end
+
+    # The absolute path libasmtest_hwtrace actually resolved to (set by
+    # resolve_hwtrace_lib), for library_path below.
+    @resolved_path = nil
+
+    # Resolve libasmtest_hwtrace. Order: an explicit ASMTEST_HWTRACE_LIB wins (dev /
+    # custom build); else the gem-bundled slot native/<os>-<cpu>/ next to this file
+    # (how the gem ships it); else <repo>/build/libasmtest_hwtrace.so (the in-tree
+    # build artifact). The build/ fallback stays BELOW the bundled path so an
+    # installed gem never prefers a leaked checkout.
     def self.resolve_hwtrace_lib
       env = ENV["ASMTEST_HWTRACE_LIB"].to_s
-      return env unless env.empty?
-      File.expand_path("../../build/libasmtest_hwtrace.so", __dir__)
+      unless env.empty?
+        @resolved_path = env
+        return env
+      end
+      os, cpu, ext = bundled_slot
+      bundled = File.expand_path("native/#{os}-#{cpu}/libasmtest_hwtrace.#{ext}", __dir__)
+      if File.exist?(bundled)
+        @resolved_path = bundled
+        return bundled
+      end
+      repo = File.expand_path("../../build/libasmtest_hwtrace.so", __dir__)
+      @resolved_path = repo
+      repo
+    end
+
+    # The absolute path of the libasmtest_hwtrace this process resolved (resolving it
+    # if it hasn't been yet). Lets a clean-room test assert the bundled tier — not a
+    # leaked build/ tree — satisfied the load. Mirrors hwtrace.py's library_path().
+    def self.library_path
+      resolve_hwtrace_lib if @resolved_path.nil?
+      @resolved_path
     end
 
     def self.func(lib, name, args, ret)
