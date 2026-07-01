@@ -21,20 +21,25 @@ jobs:
   native:
     name: native (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v5
-      - name: Install build deps (unicorn, pkg-config) + patchelf
+      - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
         run: |
           make deps DEPS_ARGS=--asm
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
+          # Linux slots also bundle the native-trace tiers: patchelf (rpath), cmake
+          # (the DynamoRIO client), and the hwtrace "full" decoders (libipt / OpenCSD;
+          # DynamoRIO itself is auto-fetched by package-libs). Absent → hwtrace still
+          # bundles decoder-free and the PT/CoreSight backends self-skip.
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev || true
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
-      - name: Stage the host's native payload (superset + vendored deps + licenses)
+      - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
         run: make package-libs
       - uses: actions/upload-artifact@v5
         with:
@@ -126,18 +131,28 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - name: Install build deps + patchelf, build Keystone + Capstone from source
+      - name: Install build deps + patchelf + tier deps, build Keystone + Capstone
         run: |
           make deps DEPS_ARGS=--asm
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev || true
           ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
-      - name: Build the platform-tagged wheel (superset + vendored deps)
+      - name: Build the platform-tagged wheel (superset + tiers + vendored deps)
         run: pip install build twine auditwheel delocate && make python-package
       - name: Repair -> manylinux / macOS (vendor libunicorn)
         run: |
           mkdir -p wheelhouse
           if [ "$RUNNER_OS" = "Linux" ]; then
-            python -m auditwheel repair build/dist/python/*.whl -w wheelhouse
+            # The native-trace tier libs (libasmtest_hwtrace/_drapp/_drclient +
+            # libdynamorio) are already self-contained in _libs/ ($ORIGIN rpath,
+            # libdynamorio co-located). Exclude them from repair so auditwheel does
+            # not relocate/rename them — renaming libdynamorio would break drapp's
+            # dladdr sibling lookup — nor fail the manylinux policy on the prebuilt
+            # DynamoRIO lib. They dlopen at run time, so they need no dep vendoring.
+            python -m auditwheel repair \
+              --exclude libasmtest_hwtrace.so --exclude libasmtest_drapp.so \
+              --exclude libasmtest_drclient.so --exclude libdynamorio.so \
+              build/dist/python/*.whl -w wheelhouse
           else
             delocate-wheel -w wheelhouse build/dist/python/*.whl
           fi
@@ -149,6 +164,32 @@ jobs:
           python -m venv /tmp/venv && . /tmp/venv/bin/activate
           pip install wheelhouse/*.whl
           cd /tmp && python -c "import asmtest; assert asmtest.asm_available() and asmtest.disas_available(), 'optional tiers not available from the self-contained wheel'; print('python ok: asm + disas available')"
+      - name: Clean-room assert the native-trace tiers resolve from the wheel (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          . /tmp/venv/bin/activate
+          # Env scrubbed + cwd outside any checkout: the tiers MUST resolve from the
+          # installed package, never a dev build/ tree.
+          cd /tmp
+          env -u ASMTEST_LIB -u ASMTEST_HWTRACE_LIB -u ASMTEST_DRAPP_LIB \
+              -u ASMTEST_DR_LIB -u ASMTEST_DRCLIENT -u DYNAMORIO_HOME \
+            python -m asmtest --where
+          env -u ASMTEST_LIB -u ASMTEST_HWTRACE_LIB -u ASMTEST_DRAPP_LIB \
+              -u ASMTEST_DR_LIB -u ASMTEST_DRCLIENT -u DYNAMORIO_HOME python - <<'PY'
+          import os, sysconfig
+          from asmtest import hwtrace, drtrace
+          site = sysconfig.get_paths()["purelib"]
+          hp, dp = hwtrace.library_path(), drtrace.library_path()
+          for who, p in (("hwtrace", hp), ("drtrace", dp)):
+              assert p and p.startswith(site), f"{who} resolved OUTSIDE the wheel: {p}"
+              assert "/build/" not in p, f"{who} leaked to a dev build/ tree: {p}"
+          assert hwtrace.HwTrace.available(hwtrace.SINGLESTEP), "hwtrace SINGLESTEP not available from the wheel"
+          # drtrace is linux-x86_64 only; assert it self-locates its bundled libdynamorio there.
+          import platform
+          if platform.machine() in ("x86_64", "AMD64"):
+              assert drtrace.NativeTrace.available(), "drtrace not available from the wheel (bundled libdynamorio not found)"
+          print("python clean-room ok: native-trace tiers resolve from the wheel")
+          PY
       - uses: actions/upload-artifact@v5
         with:
           name: wheel-${{ matrix.os }}

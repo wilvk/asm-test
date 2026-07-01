@@ -225,7 +225,11 @@ in-process DynamoRIO can't take over a JIT/GC runtime's background threads
 complete and identical in surface; the recommended backend for Node/.NET (and a
 flaky JVM) is hardware-trace (Intel PT), which observes out-of-band.
 
-Python is the canonical reference. Build the libraries
+Python is the canonical reference. From a **published package** (`pip install`, gem,
+npm, nupkg, jar, rock) on `linux-x86_64` this tier is bundled, so no build or
+`DYNAMORIO_HOME` is needed — `NativeTrace.initialize()` with no arguments picks up the
+bundled DR client and `libdynamorio` automatically (see
+[packaging](packaging.md)). From a **source checkout**, build the libraries
 (`make shared-drtrace drtrace-client DYNAMORIO_HOME=...`) and point the env at
 them (`ASMTEST_DRCLIENT`, and `ASMTEST_DR_LIB` or `dynamorio_home=`):
 

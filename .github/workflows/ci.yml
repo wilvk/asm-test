@@ -415,7 +415,7 @@ jobs:
   package-libs:
     name: payloads (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -423,15 +423,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install build deps (unicorn, pkg-config) + patchelf
+      - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
         run: |
           make deps DEPS_ARGS=--asm
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
+          # Linux slots bundle the native-trace tiers: patchelf (rpath), cmake (the
+          # DynamoRIO client), libipt/OpenCSD (hwtrace "full"). DynamoRIO auto-fetches.
+          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev || true
 
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
 
-      - name: Stage the host's native payload (superset + vendored deps + licenses)
+      - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
         run: make package-libs
 
       - name: Upload native payload

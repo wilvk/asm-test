@@ -20,6 +20,7 @@
  * pattern the language bindings use. No DynamoRIO headers are needed (dr_app.h
  * pulls in dr_defines.h, whose `bool` clashes with <stdbool.h>).
  */
+#define _GNU_SOURCE 1 /* dladdr / Dl_info — locate a package-bundled libdynamorio */
 #include "asmtest_drtrace.h"
 
 #include <dlfcn.h>
@@ -44,10 +45,29 @@ static void (*p_dr_app_stop)(void);
 static void (*p_dr_app_stop_and_cleanup)(void);
 static char (*p_dr_app_running)(void); /* dr_app_running_under_dynamorio (bool) */
 
-/* Resolve the libdynamorio path: explicit option, the ASMTEST_DR_LIB / the
- * DYNAMORIO_HOME env vars, then a bare soname (found via rpath / LD_LIBRARY_PATH).
- * The DYNAMORIO_HOME branch must stay in lock-step with asmtest_dr_available(),
- * which advertises the tier usable when DYNAMORIO_HOME is set. Writes into buf. */
+/* When drapp is shipped inside a package payload (wheel/gem/jar/...), libdynamorio
+ * is vendored right next to it. dlopen() does NOT consult drapp's own RUNPATH for
+ * that call, so locate the sibling explicitly via dladdr on one of our own symbols
+ * and write "<drapp-dir>/libdynamorio.so" into buf (return NULL if undeterminable
+ * or the sibling is absent). Lets a bundled tier self-locate with no env/opts. */
+static const char *dr_bundled_lib(char *buf, size_t buflen) {
+    Dl_info info;
+    if (dladdr((void *)dr_bundled_lib, &info) && info.dli_fname != NULL) {
+        const char *slash = strrchr(info.dli_fname, '/');
+        if (slash != NULL) {
+            snprintf(buf, buflen, "%.*s/libdynamorio.so",
+                     (int)(slash - info.dli_fname), info.dli_fname);
+            if (access(buf, R_OK) == 0)
+                return buf;
+        }
+    }
+    return NULL;
+}
+
+/* Resolve the libdynamorio path: explicit option, the ASMTEST_DR_LIB env var, a
+ * copy bundled next to drapp (a published package), the DYNAMORIO_HOME env var,
+ * then a bare soname (found via rpath / LD_LIBRARY_PATH). Kept in lock-step with
+ * asmtest_dr_available(), which advertises the same cascade. Writes into buf. */
 static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
                                size_t buflen) {
     const char *env = getenv("ASMTEST_DR_LIB");
@@ -62,6 +82,8 @@ static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
         snprintf(buf, buflen, "%s", env);
         return buf;
     }
+    if (dr_bundled_lib(buf, buflen) != NULL)
+        return buf;
     if (home != NULL && home[0] != '\0') {
         snprintf(buf, buflen, "%s/lib64/release/libdynamorio.so", home);
         return buf;
@@ -129,6 +151,8 @@ int asmtest_dr_available(void) {
     const char *env = getenv("ASMTEST_DR_LIB");
     if (env != NULL && env[0] != '\0')
         return access(env, R_OK) == 0;
+    if (dr_bundled_lib(buf, sizeof buf) != NULL)  /* a package-bundled libdynamorio */
+        return 1;
     const char *home = getenv("DYNAMORIO_HOME");
     if (home != NULL && home[0] != '\0') {
         snprintf(buf, sizeof buf, "%s/lib64/release/libdynamorio.so", home);

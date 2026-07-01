@@ -217,10 +217,17 @@ JAR      ?= jar
 LUAROCKS ?= luarocks
 PYBUILD  ?= python3 -m build
 # The unversioned names the dlopen bindings look up (libasmtest_emu.dylib, ...).
-pkg_emu_name  := $(notdir $(call shlib_dev,libasmtest_emu))
-pkg_core_name := $(notdir $(call shlib_dev,libasmtest))
+pkg_emu_name     := $(notdir $(call shlib_dev,libasmtest_emu))
+pkg_core_name    := $(notdir $(call shlib_dev,libasmtest))
+# Optional native-trace tier libs (Linux-only) staged into the same slot.
+pkg_hwtrace_name := $(notdir $(call shlib_dev,libasmtest_hwtrace))
+pkg_drapp_name   := $(notdir $(call shlib_dev,libasmtest_drapp))
+# Pinned DynamoRIO release for the bundled drtrace tier (see scripts/fetch-dynamorio.sh
+# + Dockerfile.drtrace). Kept in one place so the version shows up in THIRD-PARTY-LICENSES.
+DR_VERSION ?= 11.91.20630
 
 .PHONY: packages package-libs package-libs-verify package-libs-verify-macho \
+        package-libs-tiers package-libs-hwtrace package-libs-drtrace \
         native-payload-check \
         python-package rust-package zig-package cpp-package node-package \
         java-package dotnet-package ruby-package lua-package go-package
@@ -247,7 +254,43 @@ package-libs: shared shared-emu
 	cp -f $(call shlib_real,libasmtest)     $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
 	cp -f $(call shlib_real,libasmtest_emu) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
 	sh scripts/package-native.sh $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_emu_name)
+	$(MAKE) --no-print-directory package-libs-tiers
 	@echo "package-libs: staged $(PKG_PLAT) full payload in $(PKG_DIST)/native/$(PKG_PLAT)"
+
+# Stage the optional native-trace tiers into the SAME slot when this host can build
+# them: hwtrace on any Linux, drtrace on linux-x86_64 (with DynamoRIO, auto-fetched if
+# DYNAMORIO_HOME is unset). Both self-skip on macOS / where unbuildable, so package-libs
+# stays green everywhere; a re-run of collect-licenses folds any tier deps' notices in.
+# The multi-platform packers pick the staged libs up for free (they glob lib*.so*).
+package-libs-tiers:
+	@case "$(PKG_PLAT)" in \
+	  linux-*) $(MAKE) --no-print-directory package-libs-hwtrace package-libs-drtrace; \
+	           ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/collect-licenses.sh \
+	             $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES ;; \
+	  *) echo "package-libs: native-trace tiers are Linux-only — none staged for $(PKG_PLAT)" ;; \
+	esac
+
+package-libs-hwtrace: shared-hwtrace
+	cp -f $(call shlib_real,libasmtest_hwtrace) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_hwtrace_name)
+	sh scripts/package-native.sh --tier hwtrace $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_hwtrace_name)
+
+# drtrace: linux-x86_64 only, needs DynamoRIO. Uses $DYNAMORIO_HOME if set, else fetches
+# the pinned release into the local cache. Self-skips (never fails package-libs) off
+# linux-x86_64 or when DynamoRIO can't be obtained (e.g. offline dev box).
+package-libs-drtrace:
+	@case "$(PKG_PLAT)" in linux-x86_64) ;; *) \
+	   echo "package-libs: drtrace is linux-x86_64 only — skipped on $(PKG_PLAT)"; exit 0 ;; esac; \
+	 drhome="$(DYNAMORIO_HOME)"; \
+	 if [ -z "$$drhome" ]; then \
+	   drhome=$$(DR_VERSION=$(DR_VERSION) sh scripts/fetch-dynamorio.sh) || { \
+	     echo "package-libs: could not obtain DynamoRIO — drtrace NOT staged"; exit 0; }; \
+	 fi; \
+	 $(MAKE) --no-print-directory shared-drtrace drtrace-client DYNAMORIO_HOME="$$drhome" && \
+	 slot=$(PKG_DIST)/native/$(PKG_PLAT) && \
+	 cp -f $(call shlib_real,libasmtest_drapp) $$slot/$(pkg_drapp_name) && \
+	 cp -f $(BUILD)/libasmtest_drclient.so $$slot/ && \
+	 cp -fL "$$drhome/lib64/release/libdynamorio.so" $$slot/ && \
+	 ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/package-native.sh --tier drtrace $$slot $(pkg_drapp_name)
 
 # dlopen bindings: bundle the prebuilt libasmtest_emu (the superset) + its vendored
 # native deps + THIRD-PARTY-LICENSES in the package's payload. Python's wheel is
@@ -265,6 +308,16 @@ python-package: package-libs manifest
 	cp -f $(call shlib_real,libasmtest_emu) bindings/python/asmtest/_libs/$(pkg_emu_name)
 	cp -f $(call shlib_real,libasmtest)     bindings/python/asmtest/_libs/$(pkg_core_name)
 	cp -f asmtest_abi.json bindings/python/asmtest/_libs/
+	# Native-trace tiers (Linux slots only): copy the SLOT copies — already
+	# $$ORIGIN-rpath'd with libdynamorio co-located — so they are self-contained
+	# within _libs/. auditwheel/delocate must EXCLUDE these (see release.yml): they
+	# need no system-dep vendoring, and repairing the dlopen'd DR libs would
+	# relocate/rename libdynamorio and break drapp's sibling lookup. Absent on
+	# non-Linux slots, so the loop simply copies nothing there.
+	@for f in $(pkg_hwtrace_name) $(pkg_drapp_name) libasmtest_drclient.so libdynamorio.so; do \
+	  cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$$f bindings/python/asmtest/_libs/ 2>/dev/null \
+	    && echo "  python: bundled tier lib $$f" || true; \
+	done
 	cp -Rf $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES bindings/python/asmtest/_libs/ 2>/dev/null || true
 	cd bindings/python && $(PYBUILD) --wheel --outdir $(abspath $(PKG_DIST))/python
 
@@ -413,8 +466,25 @@ package-libs-verify:
 	    ls "$$pd"/lib$$d.* >/dev/null 2>&1 || miss="$$miss $$d"; \
 	  done; \
 	  [ -d "$$pd/THIRD-PARTY-LICENSES" ] || miss="$$miss licenses"; \
+	  case "$$p" in \
+	    linux-*) ls "$$pd"/libasmtest_hwtrace.so* >/dev/null 2>&1 || miss="$$miss hwtrace"; ;; \
+	  esac; \
+	  case "$$p" in \
+	    linux-x86_64) for t in libasmtest_drapp libasmtest_drclient libdynamorio; do \
+	                    ls "$$pd"/$$t.so* >/dev/null 2>&1 || miss="$$miss $$t"; done; ;; \
+	  esac; \
+	  case "$$p" in \
+	    darwin-*) for t in libasmtest_hwtrace libasmtest_drapp libdynamorio; do \
+	                ! ls "$$pd"/$$t.* >/dev/null 2>&1 || miss="$$miss LINUX-TIER-LEAKED:$$t"; done; ;; \
+	  esac; \
+	  if command -v readelf >/dev/null 2>&1; then \
+	    for t in libasmtest_hwtrace libasmtest_drapp libasmtest_drclient; do \
+	      so=$$(ls "$$pd"/$$t.so* 2>/dev/null | head -1); [ -n "$$so" ] || continue; \
+	      readelf -d "$$so" 2>/dev/null | grep -Eq 'R(UN)?PATH.*ORIGIN' || miss="$$miss rpath:$$t"; \
+	    done; \
+	  fi; \
 	  if [ -z "$$miss" ]; then \
-	    echo "  ok   $$p   (core, emu, unicorn, keystone, capstone, licenses)"; \
+	    echo "  ok   $$p   (core, emu, deps, licenses; Linux native-trace tiers where applicable)"; \
 	  else \
 	    echo "  MISS $$p  missing:$$miss"; rc=1; \
 	  fi; \

@@ -8,6 +8,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The native-trace tiers now ship *inside* the packages.** Both optional tiers —
+  DynamoRIO (`libasmtest_drapp` + `libasmtest_drclient` + the pinned `libdynamorio`)
+  and hardware trace (`libasmtest_hwtrace`) — are staged into the Linux payload slots
+  by `make package-libs`, so a fresh `pip install` / gem / npm / nupkg / jar / rock runs
+  `NativeTrace` / `HwTrace` on a capable host with **no manual `make shared-*` and no
+  `DYNAMORIO_HOME`**, exactly as the emulator/Keystone/Capstone tiers already do. drtrace
+  is `linux-x86_64` only (DynamoRIO auto-fetched via
+  [`scripts/fetch-dynamorio.sh`](scripts/fetch-dynamorio.sh)); hwtrace bundles on every
+  Linux slot (single-step + ptrace always; the Intel PT / AMD / CoreSight decoders
+  self-skip off the hardware they need). macOS/arm64 slots simply omit the Linux-only
+  tier and the wrapper self-skips (`available()` → false) — **no API or `available()`
+  behavior change**, bundling only removes the build step.
+  - Every binding's `drtrace`/`hwtrace` loader learned a **bundled-package candidate**
+    (env override → bundled slot → dev `build/` → system) and a **`library_path()`**
+    self-report (`python -m asmtest --where`, and the equivalent accessor in the Go /
+    Rust / Ruby / Node / Java / .NET / Lua / Zig wrappers) so a clean-room test can
+    assert the tier resolved from the package, not a leaked checkout.
+  - A **package-bundled `libdynamorio` self-locates next to `libasmtest_drapp`** (via
+    `dladdr`), so the DynamoRIO tier works with zero configuration — `dlopen` does not
+    consult a library's own `RUNPATH`, so drapp finds its sibling explicitly.
+  - Licensing unchanged in character: DynamoRIO (BSD-3-Clause core), and the "full"
+    hwtrace's libipt/OpenCSD/libbpf, are all permissive — `collect-licenses.sh` emits
+    each only when the lib is actually staged, adding no copyleft beyond the existing
+    Unicorn/Keystone GPL-2.0. The four **source-distributed** bindings (Rust/Zig/C++/Go)
+    ship no binary payload, so their consumers build `shared-drtrace`/`shared-hwtrace`
+    themselves (documented, not bundled). ([bundle-native-trace-tiers
+    plan](docs/plans/bundle-native-trace-tiers-plan.md))
 - **Native runtime tracing (two optional tiers).** A third execution tier that
   traces code running *natively, in-process*, complementing the Unicorn emulator
   trace. Both fill the same engine-neutral `asmtest_trace_t` shape (now extracted

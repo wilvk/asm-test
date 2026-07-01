@@ -47,6 +47,25 @@ package ships:
   `scripts/build-capstone.sh`); the per-binding `make <lang>-package` targets just
   consume the staged `build/dist/native/` tree and do not rebuild it.
 
+  **Native-trace tiers ride along on the Linux slots.** `make package-libs` also stages
+  the two optional runtime-trace tiers into each Linux slot, so a fresh install runs
+  `HwTrace` / `NativeTrace` on a capable host with no manual build and no
+  `DYNAMORIO_HOME`: `libasmtest_hwtrace` on every Linux slot (single-step + ptrace
+  always; the Intel PT / AMD / CoreSight decoders self-skip off their hardware), and —
+  on `linux-x86_64` only — the DynamoRIO tier (`libasmtest_drapp` +
+  `libasmtest_drclient` + the pinned `libdynamorio`, auto-fetched by
+  [`scripts/fetch-dynamorio.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/fetch-dynamorio.sh)).
+  Each binding's `drtrace`/`hwtrace` loader resolves these from the bundled slot before
+  the dev `build/` tree, and exposes a `library_path()` self-report (`python -m asmtest
+  --where`, and the equivalent accessor per language) so a clean-room test can assert the
+  tier resolved from the package. The bundled `libdynamorio` self-locates next to drapp
+  (via `dladdr`), so the DynamoRIO tier needs zero configuration. macOS/arm64 slots omit
+  the Linux-only tier and the wrapper self-skips — the API is unchanged. In the Python
+  wheel these dlopen'd libs are already self-contained (`$ORIGIN` rpath, `libdynamorio`
+  co-located), so `auditwheel repair` **excludes** them (renaming `libdynamorio` would
+  break the sibling lookup). `package-libs-verify` enforces the tiers on the Linux slots
+  and forbids them on darwin slots.
+
   **Licensing.** asm-test's own source is MIT, but because the payload conveys the
   GPL-2.0 engines (Unicorn, Keystone) as binaries dynamically linked into
   `libasmtest_emu`, **each package as distributed is effectively GPL-2.0** (MIT is
@@ -65,7 +84,11 @@ package ships:
   build script builds/locates it), so the package is **source** and the consumer
   builds or installs `libasmtest` (`make install-shared`) — nothing prebuilt is
   bundled. Their "package" is a source distribution: a crate, a Zig package, a
-  CMake/header tarball, a Go module.
+  CMake/header tarball, a Go module. The native-trace tiers are **not bundled** for
+  these either: a consumer who wants them builds `make shared-drtrace` /
+  `make shared-hwtrace` and points `$ASMTEST_DRAPP_LIB` / `$ASMTEST_HWTRACE_LIB` (or
+  installs the libs) — their wrappers still expose `library_path()` and self-skip
+  (`available()` → false) when the tier lib is absent.
 
 ## Versioning
 
