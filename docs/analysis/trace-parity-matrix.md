@@ -399,9 +399,16 @@ rule) — now expressed as a policy flag rather than left to each caller to hand
 ## Packaging & target-architecture coverage
 
 There is a fourth axis the OS/hardware/language matrices do not capture: **what an
-installed package actually ships.** It matters because the answer collapses the
-fallback cascade dramatically — for a `pip install` / `npm install` / `gem install`
-consumer, only **one** trace tier is present out of the box on **every** platform.
+installed package actually ships.** For a long time the answer collapsed the fallback
+cascade to a single rung — only the emulator tier was bundled, so a `pip install` /
+`npm install` / `gem install` consumer had exactly **one** trace tier out of the box on
+every platform. **That changed with the [bundle-native-trace-tiers
+work](../plans/bundle-native-trace-tiers-plan.md):** the two native tiers now ship
+*inside* the packages on the **Linux** slots, so a fresh install runs
+`NativeTrace` / `HwTrace` on a capable Linux host with no manual `make shared-*` and no
+`DYNAMORIO_HOME`. The macOS slots still carry the emulator only — both native tiers are
+Linux-only and self-skip there — so the answer is now **platform-dependent**, not a flat
+"emulator everywhere".
 
 ### What each package carries
 
@@ -415,27 +422,45 @@ decides what ships:
 - **link / source bindings** (Rust, Zig, C++, Go) ship source and build against
   `libasmtest` / `libasmtest_emu` on the consumer's host.
 
-Crucially, **neither native trace tier is in any package.** DynamoRIO ships as
-`libasmtest_drapp` + `libasmtest_drclient.so`, the hardware tier as
-`libasmtest_hwtrace`; none is bundled by `make <lang>-package`. The wrappers dlopen
-`libasmtest_drapp` at run time from `$ASMTEST_DRAPP_LIB` (else the repo `build/`), so
-`NativeTrace.available()` returns false until the consumer **builds them separately**
-and wires the env — exactly the clean self-skip the fallback model relies on.
+Crucially, **both native trace tiers now ship in the six dlopen packages on the Linux
+slots.** `make package-libs` stages `libasmtest_hwtrace` into **every** Linux slot (its
+single-step + out-of-process ptrace paths work on any Linux host; the Intel PT / AMD
+LBR / CoreSight decoders compile in but self-skip off the hardware they need) and — on
+`linux-x86_64` only — the DynamoRIO tier (`libasmtest_drapp` + `libasmtest_drclient` +
+the pinned `libdynamorio`, auto-fetched by
+[`scripts/fetch-dynamorio.sh`](../../scripts/fetch-dynamorio.sh)). Because the
+Ruby/Node/Java/Lua/.NET packers copy the slot by `lib*.so*` glob they pick the libs up
+for free; the Python wheel stages them explicitly and `auditwheel` leaves them alone —
+they are already self-contained (`$ORIGIN` rpath, `libdynamorio` co-located next to
+`drapp` and located at run time via `dladdr`). Each binding's `drtrace`/`hwtrace` loader
+resolves the lib from the **bundled slot** first (env override → bundled → dev `build/`
+→ system) and exposes a `library_path()` self-report, so `NativeTrace.available()` /
+`HwTrace.available()` now returns true out of the box on a capable Linux host — no
+separate build, no `DYNAMORIO_HOME`. The **source bindings** (Rust/Zig/C++/Go) carry no
+payload, so their consumers still build `make shared-drtrace` / `shared-hwtrace` and
+point `$ASMTEST_DRAPP_LIB` / `$ASMTEST_HWTRACE_LIB` themselves — the same clean
+self-skip when a tier is absent.
 
 ### Matrix 12 — Trace tier × packaging
 
 | Trace tier | Carrying library | In dlopen packages? | In source packages? | Otherwise obtained by |
 |---|---|---|---|---|
 | **Emulator** | `libasmtest_emu` (superset) | ✅ bundled, every platform slot | built from source | — (always present) |
-| **DynamoRIO** | `libasmtest_drapp` + `libasmtest_drclient.so` | ❌ not bundled | ❌ | `make shared-drtrace drtrace-client` + `DYNAMORIO_HOME` + env (no pkg-config) |
-| **Hardware** (PT / AMD LBR / CoreSight) | `libasmtest_hwtrace` | ❌ not bundled | ❌ | `make shared-hwtrace` + libipt/OpenCSD + bare metal + perf privilege |
+| **DynamoRIO** | `libasmtest_drapp` + `libasmtest_drclient` + `libdynamorio` | ✅ bundled, `linux-x86_64` slot | ❌ (build it) | `make shared-drtrace drtrace-client` (source bindings / macOS; other slots self-skip) |
+| **Hardware** (single-step + ptrace always; PT / AMD LBR / CoreSight decoders self-skip) | `libasmtest_hwtrace` | ✅ bundled, every Linux slot | ❌ (build it) | `make shared-hwtrace` (source bindings / macOS; decoders still need bare metal + perf) |
 
-Why the native tiers stay out: DynamoRIO is a large runtime with **no pkg-config**
-(located by `DYNAMORIO_HOME`), impractical to vendor; the hardware tier needs
-bare-metal + lowered `perf_event_paranoid` that a package cannot grant. Their
-**BSD** licensing (DR core, libipt, OpenCSD) is therefore moot for the package
-license — only the bundled `libasmtest_emu` matters, which makes every dlopen package
-effectively **GPL-2.0** (Unicorn/Keystone GPL-2.0; Capstone + asm-test BSD/MIT).
+The two concerns that once kept the native tiers *out* are now handled at package-build
+time rather than pushed onto the consumer: DynamoRIO has **no pkg-config** (it is located
+by `DYNAMORIO_HOME`), so `fetch-dynamorio.sh` pins and vendors `libdynamorio` into the
+slot with an `$ORIGIN` rpath and `dladdr` sibling-resolution; and the hardware tier's
+bare-metal / `perf_event_paranoid` needs are a **run-time** gate, not a packaging one —
+the lib ships on every Linux slot and each decoder self-skips where its hardware or
+privilege is absent (single-step + ptrace always work). Licensing is unchanged in
+character: DynamoRIO core (BSD-3), libipt (BSD), OpenCSD (BSD-3) and — in the full
+hwtrace lane — libbpf (conveyed under its BSD-2 option) are all **permissive**, so the
+package stays effectively **GPL-2.0** on the strength of the already-bundled
+Unicorn/Keystone alone (Capstone + asm-test BSD/MIT); `collect-licenses.sh` emits each
+note only when the lib is actually staged.
 
 ### Matrix 13 — Packaging platform slots × trace tiers reachable
 
@@ -443,12 +468,12 @@ The CI `payloads` matrix stages four native slots (`<os>-<arch>`); there is **no
 Windows package slot** (the Win64 tier is cross-compile + Wine, not a published
 payload).
 
-| Platform slot | Built by (CI runner) | Emulator (packaged) | DynamoRIO (BYO build) | Hardware (BYO build) |
+| Platform slot | Built by (CI runner) | Emulator (packaged) | DynamoRIO (packaged) | Hardware (packaged) |
 |---|---|---|---|---|
-| `linux-x86_64` | ubuntu-latest | ✅ | buildable | PT (Intel) / AMD LBR (Zen 3+), bare-metal |
-| `linux-aarch64` | ubuntu-24.04-arm | ✅ | ✗ (DR is x86-64 only) | CoreSight scaffold only |
-| `darwin-arm64` | macos-latest | ✅ | ✗ | ✗ |
-| `darwin-x86_64` | macos-13 (nightly) | ✅ | ✗ | ✗ |
+| `linux-x86_64` | ubuntu-latest | ✅ | ✅ bundled | ✅ bundled (single-step/ptrace live; PT/AMD/CoreSight decoders self-skip off their hw) |
+| `linux-aarch64` | ubuntu-24.04-arm | ✅ | ✗ (DR is x86-64 only) | ✅ bundled (single-step/ptrace; stream HW-pending, CoreSight scaffold) |
+| `darwin-arm64` | macos-latest | ✅ | ✗ (Linux-only → self-skips) | ✗ (Linux-only → self-skips) |
+| `darwin-x86_64` | macos-13 (nightly) | ✅ | ✗ (Linux-only → self-skips) | ✗ (Linux-only → self-skips) |
 | `windows-x64` | — (no slot) | source / Win64 tier only | ✗ | ✗ |
 
 Per-ecosystem the slot is named conventionally — Java `native/<os>-<arch>/`, .NET
@@ -459,23 +484,30 @@ the guest runs inside Unicorn, not on the host CPU.
 
 ### Packaging as the fourth fallback axis
 
-Composing this with Matrix 8–11: an **installed package's effective cascade has a
-single rung — the emulator — on every platform**, because no native tier is bundled.
-The native tiers re-enter the cascade only when the consumer *leaves the package* and
-builds them, and even then only on `linux-x86_64` (DynamoRIO; PT/AMD LBR bare-metal).
-So three distinct "reachability" surfaces stack up:
+Composing this with Matrix 8–11: an **installed package's effective cascade now depends
+on the slot.** On the **Linux slots** the native tiers are bundled, so the cascade is
+multi-rung out of the box — `linux-x86_64` resolves DynamoRIO → single-step → emulator
+(plus Intel PT / AMD LBR where the hardware and `perf_event_paranoid` allow), and
+`linux-aarch64` resolves the out-of-process ptrace single-step tier → emulator (its
+stream still HW-pending). On the **macOS slots** the native tiers are Linux-only and
+self-skip, so the cascade there is still the single emulator rung. So the "reachability"
+surfaces now stack up differently by slot:
 
 | Surface | What it can trace |
 |---|---|
 | **Platform capability** (Matrix 2–3) | every native tier the OS/CPU physically supports |
-| **Source checkout** (`make shared-drtrace` / `shared-hwtrace`) | the native tiers too, on `linux-x86_64`, with the toolchain installed |
-| **Installed package** (`pip`/`npm`/`gem`/…) | **emulator only**, on all four slots |
+| **Source checkout** (`make shared-drtrace` / `shared-hwtrace`) | the native tiers, on `linux-x86_64`, with the toolchain installed |
+| **Installed package, Linux slot** (`pip`/`npm`/`gem`/…) | emulator **+ the bundled native tiers** — hwtrace on any Linux, DynamoRIO on `linux-x86_64` |
+| **Installed package, macOS slot** | **emulator only** (native tiers are Linux-only → self-skip) |
 
-The practical consequence: native-trace fidelity is a **build-from-source decision**,
-not an install-a-package one. A consumer who needs DynamoRIO or Intel PT must take the
-source/link path (or stage the libs and set `ASMTEST_DRAPP_LIB`/`ASMTEST_DRCLIENT`/
-`ASMTEST_DR_LIB`), and only on a `linux-x86_64` host; everyone else — and every
-out-of-the-box package install — lands on the emulator floor.
+The practical consequence has **flipped for Linux**: native-trace fidelity is no longer a
+build-from-source decision on a Linux host — a plain `pip`/`npm`/`gem` install now
+resolves DynamoRIO (on `linux-x86_64`) and the single-step/ptrace hardware tier (on any
+Linux) with no extra steps. It remains a build-from-source decision for the **source
+bindings** (Rust/Zig/C++/Go, which ship no payload) and on **macOS** (where both native
+tiers are Linux-only). The env overrides
+(`ASMTEST_DRAPP_LIB`/`ASMTEST_DRCLIENT`/`ASMTEST_DR_LIB`/`ASMTEST_HWTRACE_LIB`) still
+take precedence, for an advanced user pointing at a hand-built lib.
 
 ---
 
@@ -489,6 +521,8 @@ universal floor for every OS, architecture, and language the native tiers do not
 reach. Fallback between them is cheap and transparent **as data** (one trace shape,
 one offset basis) but must be deliberate **as fidelity** — native→native is free,
 native→emulator trades real-CPU execution for an isolated guest and should be opt-in.
-And packaging tightens the floor further: only the emulator tier is bundled, so every
-out-of-the-box package install — on all four platform slots — starts and ends on the
-emulator unless the consumer builds a native tier from source on `linux-x86_64`.
+And packaging no longer tightens the floor the way it once did: the native tiers now
+ship in the Linux package slots (hwtrace on every Linux slot, DynamoRIO on
+`linux-x86_64`), so an out-of-the-box install resolves the native cascade on a capable
+Linux host — while the macOS slots, and the source-only bindings (Rust/Zig/C++/Go),
+still start and end on the emulator unless a native tier is built from source.
