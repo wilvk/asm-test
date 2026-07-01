@@ -33,7 +33,7 @@ source_suffix = {
 master_doc = "index"
 language = "en"
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "plans/*", "analysis/*"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "plans/*", "analysis/*", "reviews/*"]
 
 # -- MyST (Markdown) configuration -------------------------------------------
 
