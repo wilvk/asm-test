@@ -32,7 +32,7 @@ jobs:
         #   macos-latest      aarch64 macOS  (clang, Mach-O)
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Toolchain versions
         run: |
@@ -66,7 +66,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Toolchain versions
         run: |
@@ -102,7 +102,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Ensure Rosetta 2
         run: softwareupdate --install-rosetta --agree-to-license
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install nasm
         run: make deps DEPS_ARGS=--nasm
@@ -160,7 +160,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -185,7 +185,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -208,7 +208,7 @@ jobs:
     env:
       DR_VERSION: 11.91.20630
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (python3 + pytest for the wrapper)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake python3 python3-pytest
@@ -237,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Capstone (AMD reconstruction) + libipt (PT decode) + OpenCSD
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config
@@ -264,7 +264,7 @@ jobs:
       matrix:
         lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua, go]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
@@ -288,7 +288,7 @@ jobs:
       matrix:
         lang: [ruby, node, java, dotnet, lua]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Clean-room install-test the ${{ matrix.lang }} binding
         run: make docker-clean-${{ matrix.lang }}
 
@@ -302,7 +302,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Check every binding wraps every native-trace tier symbol
         run: make check-bindings-parity
 
@@ -318,7 +318,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Win64 capture via the native ms_abi lane
         run: |
@@ -344,7 +344,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -360,7 +360,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build and run under sanitizers
         run: make sanitize
 
@@ -373,7 +373,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install valgrind
         run: make deps DEPS_ARGS=--valgrind
       - name: Memcheck the routines under test
@@ -386,7 +386,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install clang-tidy
         run: make deps DEPS_ARGS=--tidy
       - name: Run clang-tidy
@@ -402,7 +402,7 @@ jobs:
     timeout-minutes: 15
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install clang-format
         run: make deps DEPS_ARGS=--format
       - name: Report clang-format drift
@@ -415,11 +415,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Generate coverage
         run: make coverage
       - name: Upload coverage report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: asmtest-coverage
           path: asmtest.c.gcov
@@ -445,7 +445,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
         run: |
@@ -462,7 +462,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-payload-${{ matrix.os }}
           path: build/dist/native/
@@ -476,7 +476,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (unicorn, pkg-config) + patchelf
         run: |
@@ -490,7 +490,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-payload-macos-13
           path: build/dist/native/
@@ -509,10 +509,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download every per-OS/arch payload
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: native-payload-*
           path: build/dist/native/
@@ -527,7 +527,7 @@ jobs:
         run: make package-libs-verify
 
       - name: Upload the combined cross-platform payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-all
           path: build/dist/native/
