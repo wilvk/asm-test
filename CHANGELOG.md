@@ -8,6 +8,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **macOS clean-room install test (`make macos-clean-test`).** A darwin-only host
+  target that packages each binding, installs it **fresh** into a throwaway prefix,
+  loads it with every `ASMTEST_*`/`DYLD_*`/`LD_*` override scrubbed and the cwd
+  outside the checkout, then **asserts the native library it actually resolved lives
+  under that fresh install** — never a leaked dev `build/` tree, a Homebrew dylib, or
+  `/usr/local`. So "install fresh, no `ASMTEST_LIB`" is *proven*, not trusted: the
+  prior per-binding smokes only checked a tier was *available*, which a leaked
+  `build/` or Homebrew dylib also satisfies. Bindings whose toolchain is absent
+  self-skip with a specific reason; a real leak fails the run.
+  - New reusable pieces: [`scripts/clean-env.sh`](scripts/clean-env.sh) — a sourceable
+    env scrubber that **pins** `DYLD_FALLBACK_LIBRARY_PATH` to `/usr/lib` rather than
+    unsetting it (unsetting reverts to a dyld default that *includes* `/usr/local/lib`,
+    where a Homebrew copy could still satisfy a bare-leaf load);
+    [`scripts/assert-clean-path.sh`](scripts/assert-clean-path.sh) — the leak guard
+    (rejects the checkout, `/opt/homebrew`, `$HOMEBREW_PREFIX`, `/usr/local`; allows the
+    jar's temp extraction); and [`scripts/macos-clean-test.sh`](scripts/macos-clean-test.sh)
+    — the per-binding orchestrator (the first reusable *local* one; the release.yml
+    smokes can call it next, per the plan's Track E).
+  - Each core dlopen loader (**Ruby/Node/Java/Lua**) gained a **`library_path`** accessor
+    reporting the absolute native-lib path it loaded (Python already exposes
+    `python -m asmtest --where`), so the clean-room test can assert the resolved path.
+    ([macOS clean-test plan](docs/plans/macos-clean-test-plan.md), Track A)
 - **The native-trace tiers now ship *inside* the packages.** Both optional tiers —
   DynamoRIO (`libasmtest_drapp` + `libasmtest_drclient` + the pinned `libdynamorio`)
   and hardware trace (`libasmtest_hwtrace`) — are staged into the Linux payload slots

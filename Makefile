@@ -103,6 +103,7 @@ help:
 	@echo '  package-libs    stage the host shared libs into build/dist/native/<plat>'
 	@echo '  package-libs-verify  check a collected native tree has both libs per platform'
 	@echo '  package-libs-verify-macho  static Mach-O checks on darwin payloads (llvm-otool/lipo)'
+	@echo '  macos-clean-test  (darwin) install each binding fresh + assert it loads the bundled lib, not a leak'
 	@echo '  sync-version    write VERSION into every binding manifest'
 	@echo '  check-version   verify every manifest matches VERSION (CI)'
 	@echo '  check-bindings-parity  every binding wraps every native-trace tier symbol'

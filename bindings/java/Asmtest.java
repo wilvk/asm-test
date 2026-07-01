@@ -34,6 +34,14 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 public final class Asmtest {
     private Asmtest() {}
 
+    /** Absolute path of the native library actually loaded — for clean-room
+     *  install tests to assert it came from the bundled jar payload, not a
+     *  leaked build/ tree, a Homebrew dylib, or an ASMTEST_LIB override. The jar
+     *  extracts its bundled payload to a fresh temp dir, so this is that temp
+     *  path (macos-clean-test asserts it is not a dev-build or Homebrew path).
+     *  See docs/plans/macos-clean-test-plan.md, Track A. */
+    public static String libraryPath() { return EMU_PATH; }
+
     /** Thrown by the assert* helpers on a failed check. */
     public static final class AsmtestException extends RuntimeException {
         public AsmtestException(String message) { super(message); }
@@ -54,6 +62,7 @@ public final class Asmtest {
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
     private static final SymbolLookup CORPUS;
+    private static final String EMU_PATH;  // resolved native-lib path (see libraryPath())
 
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
         CAPTURE_FP2, CAPTURE_VEC_F32, REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
@@ -156,6 +165,7 @@ public final class Asmtest {
 
     static {
         String emuPath = resolveEmuLib();
+        EMU_PATH = emuPath;
         SymbolLookup emu = SymbolLookup.libraryLookup(emuPath, ARENA);
         String corpusPath = System.getenv("ASMTEST_CORPUS_LIB");
         CORPUS = corpusPath != null ? SymbolLookup.libraryLookup(corpusPath, ARENA) : null;

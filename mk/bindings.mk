@@ -228,7 +228,7 @@ DR_VERSION ?= 11.91.20630
 
 .PHONY: packages package-libs package-libs-verify package-libs-verify-macho \
         package-libs-tiers package-libs-hwtrace package-libs-drtrace \
-        native-payload-check \
+        macos-clean-test native-payload-check \
         python-package rust-package zig-package cpp-package node-package \
         java-package dotnet-package ruby-package lua-package go-package
 
@@ -514,4 +514,19 @@ package-libs-verify-macho:
 	  sh scripts/verify-macho.sh "$$s" "$$a" "$(MACOS_MIN_FLOOR)" || rc=1; \
 	done; \
 	exit $$rc
+
+# macos-clean-test — Track A of the macOS clean-room plan
+# (docs/plans/macos-clean-test-plan.md). Package each binding, install it FRESH
+# into a throwaway prefix, load it with every ASMTEST_*/DYLD_*/LD_* override
+# scrubbed and the cwd outside the checkout (scripts/clean-env.sh), then ASSERT
+# the native lib it resolved lives under that install — never a leaked dev build/
+# tree, a Homebrew dylib, or /usr/local (scripts/assert-clean-path.sh). Bindings
+# whose toolchain is absent self-skip; a real leak fails the run. Darwin-only (the
+# scrub + dyld-fallback semantics are macOS-specific; the Linux clean-room runs
+# from release.yml). Builds the host's native slot (package-libs) first, on Darwin.
+macos-clean-test:
+	@case "$(UNAME_S)" in Darwin) ;; *) \
+	  echo "macos-clean-test: darwin-only (host is $(UNAME_S)) — skipped"; exit 0 ;; esac; \
+	$(MAKE) --no-print-directory package-libs && \
+	ASMTEST_REPO_ROOT="$(CURDIR)" sh scripts/macos-clean-test.sh
 

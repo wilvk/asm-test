@@ -133,6 +133,12 @@ local HAS_DISAS = pcall(function() return L.emu_disas end)
 
 local M = {}
 
+-- Absolute-ish path of the native library actually loaded — for clean-room
+-- install tests to assert it came from the bundled rock payload, not a leaked
+-- build/ tree, a Homebrew dylib, or an ASMTEST_LIB override (the macos-clean-test
+-- asserter normalizes it). See docs/plans/macos-clean-test-plan.md, Track A.
+function M.library_path() return emu_path end
+
 -- Resolve a canonical corpus routine (e.g. "add_signed") to its address. Some
 -- routines (e.g. vec_add8d, the AVX-512 fixture) are linked into the corpus lib
 -- but absent from the asmtest_corpus_routine() name table, so fall back to a

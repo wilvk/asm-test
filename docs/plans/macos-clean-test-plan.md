@@ -66,15 +66,40 @@ thing that could have satisfied the load. Two concrete leaks in the current code
 
 ---
 
-## Track A — Scrubbed-env clean-room smoke — **planned**
+## Track A — Scrubbed-env clean-room smoke — **done (local harness); release.yml wiring pending (Track E)**
+
+> **Status: implemented (local harness), 2026-07-01.** `make macos-clean-test`
+> ([scripts/macos-clean-test.sh](../../scripts/macos-clean-test.sh)) packages each
+> binding, installs it fresh into a throwaway prefix, and — under
+> [`scripts/clean-env.sh`](../../scripts/clean-env.sh) (env scrubbed, cwd outside the
+> checkout) — asserts via
+> [`scripts/assert-clean-path.sh`](../../scripts/assert-clean-path.sh) that the
+> resolved native lib lives under the fresh install, never a leaked `build/` tree, a
+> Homebrew dylib, or `/usr/local`. The core dlopen loaders (Ruby/Node/Java/Lua) gained
+> a `library_path` accessor (Python already had `python -m asmtest --where`); a binding
+> whose toolchain is absent self-skips with a specific reason. Verified live on an
+> **Intel macOS** host: **ruby PASS** (loads from the installed gem under the throwaway
+> prefix), the negative guard correctly rejects the dev `build/` path, and
+> python/node/lua/java self-skip (no delocate / no toolchain / macOS JRE-less `java`
+> stub). **Remaining:** replacing the release.yml `cd /tmp && <smoke>` blocks with
+> `source clean-env.sh` (the 4th bullet below) is folded into **Track E**; the Go/Rust
+> link bindings and .NET are not wired here (link bindings compile the lib in; .NET's
+> loader surfaces no resolved path to assert).
 
 Make "install fresh, no `ASMTEST_LIB`" mean what it says, on **every** binding and
 **both** hosted arches, at zero extra infra.
 
 - **`scripts/clean-env.sh`** (new) — a sourceable shim that hardens the current
   process before the smoke import:
-  - `unset ASMTEST_LIB ASMTEST_MANIFEST` (no override may pre-satisfy the load);
-  - `unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES`;
+  - `unset ASMTEST_LIB ASMTEST_MANIFEST` (plus the tier + corpus overrides
+    `ASMTEST_CORPUS_LIB`/`ASMTEST_HWTRACE_LIB`/`ASMTEST_DRAPP_LIB`/… — no override may
+    pre-satisfy the load);
+  - `unset DYLD_LIBRARY_PATH DYLD_INSERT_LIBRARIES` and **pin**
+    `DYLD_FALLBACK_LIBRARY_PATH=/usr/lib` — *not* unset it: an unset
+    `DYLD_FALLBACK_LIBRARY_PATH` reverts to dyld's built-in default
+    (`$HOME/lib:/usr/local/lib:/lib:/usr/lib`), which *includes* `/usr/local/lib`, so a
+    Homebrew copy there could still satisfy a bare-leaf-name load. Pinning to the system
+    dir is the correct scrub (implemented this way in `clean-env.sh`);
   - strip `/opt/homebrew/bin` and `/usr/local/bin` from `PATH`;
   - `cd "$(mktemp -d)"` so the working dir is **outside any checkout** (kills the
     `_REPO_ROOT/build/` fall-through).

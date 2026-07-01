@@ -523,11 +523,16 @@ function assertCovered(trace, off) {
 const Arch = { X86_64: 0, ARM64: 1, RISCV64: 2, ARM32: 3 };
 const Syntax = { INTEL: 0, ATT: 1, NASM: 2, MASM: 3, GAS: 4 };
 
+// Absolute path of the native library actually loaded — for clean-room install
+// tests to assert it came from the bundled package payload, not a leaked build/
+// tree, a Homebrew dylib, or an ASMTEST_LIB override (macos-clean-test, Track A).
+function libraryPath() { return fs.realpathSync(emuPath); }
+
 module.exports = {
   corpusRoutine,
   Regs, Emu, EmuResult, Trace, Guest, GuestResult, AsmtestError, FaultKind,
   Watch, RegGuard, cpuHasAvx2, captureVec256, cpuHasAvx512f, captureVec512,
-  assemble, asmError, disas, disasAvailable, Arch, Syntax,
+  assemble, asmError, disas, disasAvailable, Arch, Syntax, libraryPath,
   assertRet, assertAbiPreserved, assertFlag, assertFp, assertVecF32,
   assertNoFault, assertFault, assertEmuReg, assertGuestReg, assertCovered,
 };
