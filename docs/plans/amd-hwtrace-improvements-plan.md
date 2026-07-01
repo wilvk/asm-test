@@ -136,7 +136,10 @@ silently *not* end at region exit — yet `hwtrace_end_amd` trusts it today.
 **Acceptance.** On a freeze-present host (`amd_lbr_v2`, the dev box) behavior is
 unchanged and `make docker-hwtrace-amd` still reconstructs the branch-heavy loop; a
 unit fixture simulating a freeze-absent, exit-missing window sets `truncated` instead
-of emitting a short "complete" trace.
+of emitting a short "complete" trace. The freeze-**absent** branch cannot be exercised
+live on the Zen 5 box (which reports freeze present), so it ships behind the Phase-0
+self-skip + this synthetic fixture and stays **pending real freeze-absent Zen 4
+hardware**, per the house "no untested hardware code" rule (see Risks).
 
 ---
 
@@ -166,7 +169,11 @@ them).
   `trace_attached_impl` ([ptrace_backend.c:764](../../src/ptrace_backend.c)) and the
   `trace_call` tracee loop ([ptrace_backend.c:633](../../src/ptrace_backend.c)) rather
   than duplicating the loop. In block-step mode issue `PTRACE_SINGLEBLOCK` in place of
-  `PTRACE_SINGLESTEP`.
+  `PTRACE_SINGLESTEP`. `PTRACE_SINGLEBLOCK` (request `33`) is frequently **absent from
+  glibc's `<sys/ptrace.h>`** even though the x86 kernel wires it, so provide a local
+  `#ifndef PTRACE_SINGLEBLOCK` / `#define PTRACE_SINGLEBLOCK 33` (or include
+  `<linux/ptrace.h>`) — otherwise the build fails looking like an unsupported host
+  rather than a missing constant.
 - **Reconstruct intra-block instructions.** A `PTRACE_SINGLEBLOCK` stop lands only at
   the **target** of each taken control transfer — one PC per basic block, not per
   instruction, and `#DB` is trap-class so the stop RIP is the *target*, not the
@@ -174,13 +181,31 @@ them).
   ([ptrace_backend.c:452](../../src/ptrace_backend.c)) as the per-insn path, walk
   forward from the previous block-entry PC with `asmtest_disas(PTRACE_TRACE_ARCH, …)`
   lengths ([the only reconstruction primitive](../../include/asmtest_trace.h), also
-  used by `normalize`), appending each reconstructed insn offset until the recorded
-  next-stop PC. This is the load-bearing extra work; a decode desync (`asmtest_disas`
+  used by `normalize`), appending each reconstructed insn offset, then feed that
+  **reconstructed per-instruction stream** (not the block-entry PCs) to `normalize`,
+  which re-derives `blocks[]` — so `blocks[]` parity follows from `insns[]` being
+  correct. This is the load-bearing extra work; a decode desync (`asmtest_disas`
   length 0) sets `truncated` exactly as `normalize` does at
   [ptrace_backend.c:465-468](../../src/ptrace_backend.c).
+- **Block-terminator rule — get this exactly right.** BTF traps **only on taken
+  transfers**, so the recorded next-stop PC is the taken branch's *target* (an
+  arbitrary address, generally **not** the block's fall-through), and a block may
+  contain *not-taken* conditional branches mid-run (a not-taken `Jcc` raises no `#DB`).
+  The walk therefore must **not** terminate on "PC == next-stop"; it terminates at the
+  control-transfer instruction that actually reaches next-stop: unconditional branches
+  / indirect branches / `ret` always end the block (their taken target *is* next-stop),
+  while a direct conditional ends it only when its static taken target == next-stop —
+  otherwise that `Jcc` was not taken, so append it and keep walking the fall-through.
+- **Same-target-conditional ambiguity → `truncated`.** Two direct conditionals to the
+  *same* target in one block (first not taken, second taken — `je T; …; je T`) are
+  statically indistinguishable: BTF gives no signal for *which* was taken, so a greedy
+  "first `Jcc` whose target == next-stop" terminates the block early and desyncs
+  `insns[]`. When more than one candidate terminator in the straight-line run targets
+  next-stop, treat the block as ambiguous and set `truncated` (the block-step analogue
+  of the documented POPF/IRET single-step edge) rather than guessing.
 - Reuse the two existing arch seams unchanged — `read_pc_ret`
   ([ptrace_backend.c:322](../../src/ptrace_backend.c)) to read the target RIP at each
-  `#DB`, and `PTRACE_TRACE_ARCH` ([ptrace_backend.c:301](../../src/ptrace_backend.c))
+  `#DB`, and `PTRACE_TRACE_ARCH` ([ptrace_backend.c:302](../../src/ptrace_backend.c))
   for the Capstone arch — and preserve the initial-in-region-PC capture
   ([ptrace_backend.c:815](../../src/ptrace_backend.c)) so offset 0 is not missed.
 - **Filter non-branch stops.** The `#DB` also fires on interrupts/exceptions (AMD APM
@@ -198,7 +223,11 @@ them).
   stubs in the non-supported-host block ([ptrace_backend.c:915](../../src/ptrace_backend.c))
   for symbol parity. (New signature over an opts-flag on the existing entries, which
   would ABI-break the shipped 4-symbol family.) Follow the `ASMTEST_PTRACE_*` return
-  codes ([asmtest_ptrace.h:60](../../include/asmtest_ptrace.h)).
+  codes ([asmtest_ptrace.h:60](../../include/asmtest_ptrace.h)). **Scoped out:** no
+  `_trace_attached_versioned_blockstep` mirror of the JIT/time-correct-bytes lane
+  ([ptrace_backend.c:948](../../src/ptrace_backend.c)) — the HW-attributed
+  managed-runtime lane is Phase 3's eBPF snapshot; add a versioned block-step only if a
+  rootless JIT-on-Zen-2 need surfaces.
 
 **Acceptance.** `make hwtrace-test` (or a new `blockstep-test` mirroring the W2
 single-step test) shows the block-step stream is **byte-identical** — `insns[]` and
@@ -294,9 +323,12 @@ end).
   `kernel.perf_event_max_sample_rate` raised and `kernel.perf_cpu_time_max_percent=0`
   on the self-hosted runner. Must **not** remove the `PERF_RECORD_LOST` /
   `PERF_RECORD_THROTTLE` → `lost` detection ([hwtrace.c:503-505](../../src/hwtrace.c)),
-  which is the only "run did not fit" signal surviving windows cannot show. Update the
+  which is the only "run did not fit" signal surviving windows cannot show. Fix the
   `data_size` header comment ([asmtest_hwtrace.h:65](../../include/asmtest_hwtrace.h)),
-  which already mismatches the AMD 64 KB default.
+  which says `0=8KB` but is backend-dependent — the AMD default is 64 KB
+  ([hwtrace.c:433](../../src/hwtrace.c)) while Intel PT keeps 8 KB
+  ([hwtrace.c:645](../../src/hwtrace.c)); document **both** defaults rather than flipping
+  the single number (which would then be wrong for Intel PT).
 
 **Acceptance.** A synthetic self-overlapping-loop fixture that the current
 smallest-overlap heuristic mis-stitches now either stitches correctly or reports an
@@ -319,7 +351,7 @@ Tier-B stitch and the richest-in-region heuristic
 [amd_backend.c:129-131](../../src/amd_backend.c)) assume a sample at *every* taken
 branch so consecutive 16-deep windows overlap by 15 edges. A fixed BRS period breaks
 that overlap. So this is **not** a blanket change to `hwtrace_begin_amd`
-([hwtrace.c:420](../../src/hwtrace.c)) — it must be a **distinct Tier-A capture mode**,
+([hwtrace.c:414](../../src/hwtrace.c)) — it must be a **distinct Tier-A capture mode**,
 selected only when the region is known-small and the Tier-B path is not needed, and
 kept off Zen 4/5 (where the Phase-3 software-event snapshot is the better lever). The
 `period=1` appears in two places (probe [hwtrace.c:186](../../src/hwtrace.c), capture
@@ -412,9 +444,11 @@ the block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_
 - **Block-step reconstruction fidelity.** The intra-block insn reconstruction (walking
   `asmtest_disas` lengths between `#DB` targets) is the load-bearing new work; get it
   wrong and `insns[]` diverges from the other tiers while `blocks[]` can still look
-  right. The byte-parity acceptance test is the guard. Self-modifying / non-well-
-  behaved routines (POPF/IRET, in-routine signals) remain the documented single-step
-  edge and set `truncated`.
+  right. The byte-parity acceptance test is the guard, and the block-terminator rule +
+  same-target-conditional ambiguity (both spelled out in Phase 2) are the specific
+  traps. Self-modifying / non-well-behaved routines (POPF/IRET, in-routine signals),
+  and the ambiguous same-target-`Jcc` block, remain the documented edge and set
+  `truncated`.
 - **BRS period vs stitching conflict (Phase 6).** A fixed BRS period breaks the
   `sample_period=1` overlap the Tier-B stitch and richest-in-region heuristic depend
   on; it must be a separate Tier-A-only mode, hence forward-look.
