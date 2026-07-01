@@ -869,6 +869,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   guest exposes no vector registers, so it stays scalar-FP (documented in
   `src/emu.c` and `docs/emulator.md`). Closes Track C's open C items.
 
+### Changed
+
+- **Consolidated the AMD native-tracing docs (design-doc curation).** The AMD tracing
+  story was split across four overlapping files; the three genuinely-AMD ones — the AMD
+  LBR snapshot backend plan, the improvement analysis, and the improvement
+  implementation plan — are merged into a single [`docs/plans/amd-tracing-plan.md`](https://github.com/wilvk/asm-test/blob/main/docs/plans/amd-tracing-plan.md)
+  with three parts (shipped LBR backend / improvement analysis / improvement roadmap),
+  collapsing two duplicated "governing constraint" + "implementation status" preambles
+  into one. All ~9 references (the `src/amd_backend.c` header comment and the sibling
+  plans / parity matrix) repoint to the merged file; the vendor-neutral single-step
+  ("Zen 2") plan stays separate. The `docs/analysis/trace-parity-matrix.md` overlap the
+  review also flagged was assessed and **left intact**: its matrices are
+  trace-specialized (not restatements of `docs/features.md`) and its "Matrix N"
+  numbering is cited from `src/trace_auto.c` / `include/asmtest_trace_auto.h`, so
+  trimming would lose detail and dangle those code references. Addresses review
+  finding #15.
+
 ### Fixed
 
 - **`DRAPP_KEYSTONE` is now part of `drtrace_app.o`'s build identity.** The app-side

@@ -9,7 +9,7 @@ of record — [src/hwtrace.c](../../src/hwtrace.c)'s gating chain,
 each tier. Narrative docs: [native runtime tracing](../native-tracing.md),
 [emulator traces](../traces.md), [portability](../portability.md). Roadmaps:
 [hardware-trace](../plans/hardware-trace-plan.md),
-[AMD LBR](../plans/amd-lbr-trace-plan.md),
+[AMD LBR](../plans/amd-tracing-plan.md),
 [Zen 2 single-step](../plans/zen2-singlestep-trace-plan.md),
 [DynamoRIO native-trace](../plans/dynamorio-native-trace-plan.md).*
 
@@ -391,7 +391,7 @@ native tier (e.g. macOS arm64) the cascade resolves to *nothing*
 (`ASMTEST_HW_EUNAVAIL`) rather than silently downgrading real-CPU execution to an
 isolated guest. So the native→emulator fall stays an explicit, fidelity-aware
 integrator decision (consistent with the
-[AMD LBR plan, Phase 4](../plans/amd-lbr-trace-plan.md) overflow→DynamoRIO routing
+[AMD LBR plan, Phase 4](../plans/amd-tracing-plan.md) overflow→DynamoRIO routing
 rule) — now expressed as a policy flag rather than left to each caller to hand-roll.
 
 ---

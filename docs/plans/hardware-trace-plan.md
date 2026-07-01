@@ -54,7 +54,7 @@ data ring for `PERF_RECORD_AUX` records and sets `truncated` on
 `PERF_AUX_FLAG_TRUNCATED` (with the AUX-ring-full heuristic as a backstop).
 
 A **third, AMD-specific** hardware backend was added as a sibling plan,
-[amd-lbr-trace-plan.md](amd-lbr-trace-plan.md) (`ASMTEST_HWTRACE_AMD_LBR`,
+[amd-tracing-plan.md](amd-tracing-plan.md) (`ASMTEST_HWTRACE_AMD_LBR`,
 `src/amd_backend.c`): AMD has no PT equivalent, so it reconstructs from the 16-deep
 branch-record stack (Zen 3 BRS / Zen 4 LbrExtV2). Its reconstruction is
 host-validated with synthetic branch records; live capture needs Zen 3+.
@@ -337,7 +337,7 @@ research-grade.
   be a default or a portable CI gate. AMD has **no Intel PT equivalent** (no
   continuous control-flow trace ring on Zen); the closest AMD-native approximation
   and its hard 16-branch limit are specified in the sibling
-  [AMD LBR snapshot plan](amd-lbr-trace-plan.md), with DynamoRIO as the fallback
+  [AMD LBR snapshot plan](amd-tracing-plan.md), with DynamoRIO as the fallback
   beyond that window.
 - **Hardware-trace privilege.** Both backends need `perf_event_paranoid`
   lowered (effectively `-1` for a default-size PT buffer) or

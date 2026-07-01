@@ -1,6 +1,6 @@
 /*
  * amd_backend.c — AMD branch-record decode backend for the hardware-trace tier.
- * See docs/plans/amd-lbr-trace-plan.md, asmtest_hwtrace.h, docs/native-tracing.md.
+ * See docs/plans/amd-tracing-plan.md, asmtest_hwtrace.h, docs/native-tracing.md.
  *
  * AMD has no Intel-PT-style continuous trace ring; the closest native trace is
  * reconstruction from the shallow (16-entry) branch-record stack — Zen 3 BRS or

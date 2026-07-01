@@ -4,7 +4,7 @@ A phased roadmap for a **debug-exception** native-trace backend that delivers
 **exact, complete** `asmtest_trace_t` offsets on hardware that has *no* branch-trace
 facility at all — most importantly **AMD Zen 2** (Family 17h), the project's primary
 dev host. Where the [Intel PT](hardware-trace-plan.md) and
-[AMD LBR](amd-lbr-trace-plan.md) backends reconstruct the instruction stream from a
+[AMD LBR](amd-tracing-plan.md) backends reconstruct the instruction stream from a
 hardware *trace* (a PT AUX ring, or a 16-deep branch stack), this backend
 reconstructs it from the x86 **single-step debug exception** (`#DB`) driven by the
 `EFLAGS.TF` trap flag — a baseline ISA feature present on *every* x86 CPU since
@@ -14,7 +14,7 @@ matching the Unicorn emulator, the DynamoRIO native tier, and Intel PT, and bloc
 offsets that match after the same branch-edge normalization.
 
 This plan is a **sibling** of the [hardware-trace plan](hardware-trace-plan.md)
-(Intel PT / ARM CoreSight), the [AMD LBR plan](amd-lbr-trace-plan.md) (Zen 3 BRS /
+(Intel PT / ARM CoreSight), the [AMD LBR plan](amd-tracing-plan.md) (Zen 3 BRS /
 Zen 4 LbrExtV2), and the [DynamoRIO native-trace plan](dynamorio-native-trace-plan.md).
 It exists because of a hardware fact established while validating the AMD LBR
 backend: **Zen 2 has no branch-trace facility of any kind** — no Intel-PT-style ring
@@ -28,7 +28,7 @@ its single hard limit (overhead, not completeness), and its portability story.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [hardware-trace-plan.md](hardware-trace-plan.md) and
-> [amd-lbr-trace-plan.md](amd-lbr-trace-plan.md) track theirs.
+> [amd-tracing-plan.md](amd-tracing-plan.md) track theirs.
 
 ---
 
@@ -66,7 +66,7 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 > project's primary dev host is an AMD **Zen 2** box with no branch facility — making
 > single-step "the only exact native option here." The host is in fact a **Ryzen 9
 > 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)**, on which **AMD LBR is available and
-> live-verified** (see the [AMD LBR plan](amd-lbr-trace-plan.md) and
+> live-verified** (see the [AMD LBR plan](amd-tracing-plan.md) and
 > [trace-parity-matrix](../analysis/trace-parity-matrix.md)). The single-step
 > backend's value is **unchanged** — it is the portable, no-PMU/perf/privilege,
 > depth-unbounded backend that runs on *any* x86-64 Linux host (including a true
