@@ -1,13 +1,22 @@
 #!/bin/sh
 # package-native.sh — finish a native payload slot for a fully-featured package.
 #
-# Two modes:
+# Three modes:
 #
 #   package-native.sh <slot_dir> <emu_lib_filename>
 #     The emulator superset (libasmtest_emu — emu + Keystone + Capstone). Asserts it
 #     exports the optional asm + disas entry points, vendors Unicorn/Keystone/Capstone
 #     next to it with a self-referential runtime search path ($ORIGIN / @loader_path),
 #     and assembles THIRD-PARTY-LICENSES/.
+#
+#   package-native.sh --core <slot_dir> <core_lib_filename>
+#     The self-contained core lib (libasmtest — no third-party deps, links only the
+#     platform C library, no license file of its own). On Darwin the build bakes an
+#     absolute install-name ($(libdir)/libasmtest.N.dylib); rewrite its LC_ID_DYLIB to a
+#     relocatable @loader_path id so the bundled payload carries no /usr/local leak
+#     (scripts/verify-macho.sh enforces this). A no-op on Linux, where the .so soname is
+#     already relative. Kept out of the emulator mode above because the core lib has no
+#     exports to assert, no deps to vendor, and no NOTICE to write.
 #
 #   package-native.sh --tier <role> <slot_dir> <tier_lib_filename>
 #     An optional native-trace tier staged into the SAME slot (Linux-only):
@@ -26,12 +35,16 @@ set -eu
 prog=$(basename "$0")
 
 tier=
+core=
 if [ "${1:-}" = "--tier" ]; then
     tier="${2:?usage: $prog --tier <role> <slot_dir> <lib>}"
     shift 2
+elif [ "${1:-}" = "--core" ]; then
+    core=1
+    shift
 fi
-slot="${1:?usage: $prog [--tier <role>] <slot_dir> <lib>}"
-lib_name="${2:?usage: $prog [--tier <role>] <slot_dir> <lib>}"
+slot="${1:?usage: $prog [--tier <role> | --core] <slot_dir> <lib>}"
+lib_name="${2:?usage: $prog [--tier <role> | --core] <slot_dir> <lib>}"
 lib="$slot/$lib_name"
 PREFIX="${ASMTEST_DEP_PREFIX:-/usr/local}"
 # Repo root: this script lives in scripts/.
@@ -106,6 +119,23 @@ vendor_and_rpath() { # vendor_and_rpath <lib_path> <dep-substr...>  (extra rpath
         done
     fi
 }
+
+# ===========================================================================
+# Core mode: the self-contained core lib. Nothing to vendor or license — only its
+# own install-name needs to become relocatable so the bundled Mach-O carries no
+# absolute /usr/local path.
+# ===========================================================================
+if [ -n "$core" ]; then
+    if [ "$uname_s" = "Darwin" ]; then
+        command -v install_name_tool >/dev/null 2>&1 || {
+            echo "$prog: install_name_tool not found (Xcode CLT)" >&2; exit 1; }
+        install_name_tool -id "@loader_path/$lib_name" "$lib"
+        echo "$prog: core — set @loader_path install-name on $lib_name"
+    else
+        echo "$prog: core — $lib_name needs no relocation on $uname_s (relative soname)"
+    fi
+    exit 0
+fi
 
 # ===========================================================================
 # Tier mode: one native-trace tier lib, no license rewrite.

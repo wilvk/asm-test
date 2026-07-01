@@ -33,17 +33,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     job (which loads the dev `build/` tree). Python's clean-room stays in the existing
     release.yml python job (which asserts on the repaired wheel — self-containing the
     wheel needs `auditwheel`/`build` the lean test image omits).
-  - New reusable pieces: [`scripts/clean-env.sh`](scripts/clean-env.sh) — a sourceable
+  - New reusable pieces: [`scripts/clean-env.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/clean-env.sh) — a sourceable
     env scrubber that **pins** `DYLD_FALLBACK_LIBRARY_PATH` to `/usr/lib` rather than
     unsetting it (unsetting reverts to a dyld default that *includes* `/usr/local/lib`,
     where a Homebrew copy could still satisfy a bare-leaf load);
-    [`scripts/assert-clean-path.sh`](scripts/assert-clean-path.sh) — the leak guard
+    [`scripts/assert-clean-path.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/assert-clean-path.sh) — the leak guard
     (rejects the checkout, `/opt/homebrew`, `$HOMEBREW_PREFIX`, `/usr/local`; allows a
     temp extraction, e.g. the jar's); and
-    [`scripts/clean-room-test.sh`](scripts/clean-room-test.sh) — the cross-platform
+    [`scripts/clean-room-test.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/clean-room-test.sh) — the cross-platform
     per-binding orchestrator (the first reusable *local* one; the release.yml smokes can
     call it next, per the plan's Track E).
-    ([macOS clean-test plan](docs/plans/macos-clean-test-plan.md), Track A)
+    ([macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/macos-clean-test-plan.md), Track A)
 - **The native-trace tiers now ship *inside* the packages.** Both optional tiers —
   DynamoRIO (`libasmtest_drapp` + `libasmtest_drclient` + the pinned `libdynamorio`)
   and hardware trace (`libasmtest_hwtrace`) — are staged into the Linux payload slots
@@ -51,7 +51,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `NativeTrace` / `HwTrace` on a capable host with **no manual `make shared-*` and no
   `DYNAMORIO_HOME`**, exactly as the emulator/Keystone/Capstone tiers already do. drtrace
   is `linux-x86_64` only (DynamoRIO auto-fetched via
-  [`scripts/fetch-dynamorio.sh`](scripts/fetch-dynamorio.sh)); hwtrace bundles on every
+  [`scripts/fetch-dynamorio.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/fetch-dynamorio.sh)); hwtrace bundles on every
   Linux slot (single-step + ptrace always; the Intel PT / AMD / CoreSight decoders
   self-skip off the hardware they need). macOS/arm64 slots simply omit the Linux-only
   tier and the wrapper self-skips (`available()` → false) — **no API or `available()`
@@ -70,7 +70,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Unicorn/Keystone GPL-2.0. The four **source-distributed** bindings (Rust/Zig/C++/Go)
     ship no binary payload, so their consumers build `shared-drtrace`/`shared-hwtrace`
     themselves (documented, not bundled). ([bundle-native-trace-tiers
-    plan](docs/plans/bundle-native-trace-tiers-plan.md))
+    plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/bundle-native-trace-tiers-plan.md))
 - **Native runtime tracing (two optional tiers).** A third execution tier that
   traces code running *natively, in-process*, complementing the Unicorn emulator
   trace. Both fill the same engine-neutral `asmtest_trace_t` shape (now extracted

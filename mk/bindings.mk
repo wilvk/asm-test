@@ -253,6 +253,7 @@ package-libs: shared shared-emu
 	mkdir -p $(PKG_DIST)/native/$(PKG_PLAT)
 	cp -f $(call shlib_real,libasmtest)     $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_core_name)
 	cp -f $(call shlib_real,libasmtest_emu) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_emu_name)
+	sh scripts/package-native.sh --core $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_core_name)
 	sh scripts/package-native.sh $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_emu_name)
 	$(MAKE) --no-print-directory package-libs-tiers
 	@echo "package-libs: staged $(PKG_PLAT) full payload in $(PKG_DIST)/native/$(PKG_PLAT)"
