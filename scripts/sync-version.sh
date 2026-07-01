@@ -14,6 +14,18 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 VERSION="$(cat VERSION | tr -d '[:space:]')"
 [ -n "$VERSION" ] || { echo "sync-version: VERSION file is empty" >&2; exit 2; }
 
+# The C header (include/asmtest.h) pins the version in four macros and is a SECOND
+# source of truth: scripts/amalgamate.sh derives the single-header version from it.
+# It needs the numeric MAJOR/MINOR/PATCH split, so require an exact 3-part numeric
+# semver here (a pre-release suffix couldn't populate the numeric macros anyway).
+MAJOR=${VERSION%%.*}; rest=${VERSION#*.}; MINOR=${rest%%.*}; PATCH=${rest#*.}
+if [ "$MAJOR.$MINOR.$PATCH" != "$VERSION" ]; then
+  echo "sync-version: VERSION '$VERSION' is not MAJOR.MINOR.PATCH" >&2; exit 2
+fi
+case "$MAJOR$MINOR$PATCH" in
+  *[!0-9]*) echo "sync-version: VERSION '$VERSION' has non-numeric parts" >&2; exit 2;;
+esac
+
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
@@ -56,6 +68,8 @@ DN=bindings/dotnet/asmtest-lib.csproj
 ZG=bindings/zig/build.zig.zon
 # lua: rockspec carries the version in BOTH its body and its filename
 LUA_DIR=bindings/lua
+# C header: ASMTEST_VERSION_{MAJOR,MINOR,PATCH} (numeric) + ASMTEST_VERSION (string)
+HDR=include/asmtest.h
 
 if [ "$CHECK" -eq 1 ]; then
   check_has "$PY" "^version = \"$VERSION\"$"
@@ -65,6 +79,10 @@ if [ "$CHECK" -eq 1 ]; then
   check_has "$JV" "^  <version>$VERSION</version>$"
   check_has "$DN" "<Version>$VERSION</Version>"
   check_has "$ZG" "^    \.version = \"$VERSION\","
+  check_has "$HDR" "^#define ASMTEST_VERSION_MAJOR $MAJOR$"
+  check_has "$HDR" "^#define ASMTEST_VERSION_MINOR $MINOR$"
+  check_has "$HDR" "^#define ASMTEST_VERSION_PATCH $PATCH$"
+  check_has "$HDR" "^#define ASMTEST_VERSION \"$VERSION\"$"
   rock="$LUA_DIR/asmtest-$VERSION-1.rockspec"
   if [ -f "$rock" ] && grep -Eq "^version = \"$VERSION-1\"$" "$rock"; then
     :
@@ -83,6 +101,10 @@ replace_in "$RB" "s|^(  s\.version  *= )\".*\"|\1\"$VERSION\"|"
 replace_in "$JV" "s|^  <version>.*</version>$|  <version>$VERSION</version>|"
 replace_in "$DN" "s|<Version>.*</Version>|<Version>$VERSION</Version>|"
 replace_in "$ZG" "s|^(    \.version = )\".*\",|\1\"$VERSION\",|"
+replace_in "$HDR" "s|^#define ASMTEST_VERSION_MAJOR .*|#define ASMTEST_VERSION_MAJOR $MAJOR|"
+replace_in "$HDR" "s|^#define ASMTEST_VERSION_MINOR .*|#define ASMTEST_VERSION_MINOR $MINOR|"
+replace_in "$HDR" "s|^#define ASMTEST_VERSION_PATCH .*|#define ASMTEST_VERSION_PATCH $PATCH|"
+replace_in "$HDR" "s|^#define ASMTEST_VERSION \".*\"|#define ASMTEST_VERSION \"$VERSION\"|"
 
 # Lua rockspec: the filename encodes name-version-revision, so rename it when the
 # version changes, then rewrite the `version` field inside.

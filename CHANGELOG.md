@@ -871,6 +871,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Version sync now covers the C header, not just the binding manifests.**
+  `include/asmtest.h` pins the version in four macros (`ASMTEST_VERSION_MAJOR/MINOR/
+  PATCH` + the `ASMTEST_VERSION` string), and `scripts/amalgamate.sh` derives the
+  single-header version *from that header* — but `scripts/sync-version.sh` /
+  `make check-version` only touched the nine binding manifests. So a version bump plus
+  `make sync-version && make check-version` passed **green** while `ASMTEST_VERSION`,
+  `ASMTEST_VERSION_NUM`, and the amalgamated `asmtest_single.h` all stayed at the old
+  version — an unchecked second source of truth. `sync-version.sh` now writes and
+  checks the four header macros too (splitting `VERSION` into numeric MAJOR/MINOR/PATCH,
+  and requiring an exact 3-part numeric semver). Verified by round-tripping a bump: the
+  header, `ASMTEST_VERSION_NUM`, and the amalgamation all follow, and `check-version`
+  fails on a stale header.
+
 - **RNG `asmtest_rng_range` divided by zero on ranges wider than `LONG_MAX`.**
   `asmtest_rng_range(rng, LONG_MIN, LONG_MAX)` — a natural draw in differential /
   property testing — computed the span as `(uint64_t)(hi - lo) + 1`, where `hi - lo`
