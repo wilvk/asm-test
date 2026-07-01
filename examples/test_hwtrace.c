@@ -22,6 +22,7 @@
 /* POSIX + ptrace headers: needed by the out-of-process stepper tests (x86-64 AND
  * AArch64) and the any-Linux /proc + jitdump reader tests (getpid, etc.). */
 #if defined(__linux__)
+#include <errno.h>
 #include <signal.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
@@ -745,6 +746,69 @@ static void test_ptrace_oop(void) {
     munmap(q, LPN);
 }
 
+/* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
+ * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
+ * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
+ * on the non-SIGTRAP stop with rc==OK, so unless that path reaps the tracee it stays
+ * a stopped, unreaped child (PTRACE_O_EXITKILL fires only when the *tracer* exits),
+ * and a suite of faulting routines exhausts PIDs. Fixture: `ud2` (SIGILL) — enter the
+ * region, record offset 0, fault on the next step. We assert (a) the call still
+ * returns OK with a truncated trace, and (b) after each of several traces there is no
+ * child left to reap (waitpid(-1) -> ECHILD), which fails loudly if the tracee leaks. */
+static void test_ptrace_faulting_no_leak(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace faulting no-leak: %s\n", why);
+        return;
+    }
+
+    /* Drain any straggler children so the ECHILD assertion below measures only what
+     * this test forks (peer tests reap their own tracees, but be defensive). */
+    while (waitpid(-1, NULL, WNOHANG | WUNTRACED) > 0) {
+    }
+
+    static const unsigned char FAULT[] = {0x0f, 0x0b}; /* ud2 -> SIGILL */
+    void *p = mmap(NULL, sizeof FAULT, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace faulting no-leak: mmap failed\n");
+        return;
+    }
+    memcpy(p, FAULT, sizeof FAULT);
+    mprotect(p, sizeof FAULT, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof FAULT);
+
+    int all_ok = 1, all_truncated = 1, no_leak = 1;
+    long args[2] = {1, 2};
+    for (int i = 0; i < 8; i++) {
+        asmtest_trace_t *tr = asmtest_trace_new(16, 16);
+        long result = 0;
+        int rc = asmtest_ptrace_trace_call(p, sizeof FAULT, args, 2, &result, tr);
+        if (rc != ASMTEST_PTRACE_OK)
+            all_ok = 0;
+        if (!asmtest_emu_trace_truncated(tr))
+            all_truncated = 0;
+        asmtest_trace_free(tr);
+        /* The tracee must already be reaped: with no children left waitpid returns
+         * -1/ECHILD. A leaked (stopped, still-traced) child would instead be reported
+         * here — WUNTRACED surfaces the stop — so this is 0/pid, not ECHILD. */
+        errno = 0;
+        pid_t w = waitpid(-1, NULL, WNOHANG | WUNTRACED);
+        if (!(w == -1 && errno == ECHILD))
+            no_leak = 0;
+    }
+    munmap(p, sizeof FAULT);
+
+    CHECK(all_ok, "ptrace faulting routine still returns OK (records what it has)");
+    CHECK(all_truncated, "ptrace faulting trace is flagged truncated");
+    CHECK(no_leak, "ptrace faulting routine leaves no unreaped tracee (no PID leak)");
+#else
+    printf("# SKIP ptrace faulting no-leak: x86-64 Linux only\n");
+#endif
+}
+
 /* W2 live ATTACH: trace a region in a SEPARATE, externally-attached process — the
  * building block for tracing a managed runtime out of band. A child spins on a shared
  * flag, then calls the fixture; the parent PTRACE_ATTACHes it (the child never called
@@ -1389,6 +1453,9 @@ int main(void) {
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
+
+    /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
+    test_ptrace_faulting_no_leak();
 
     /* Live: tracing a region in a SEPARATE, externally-attached process (W2 attach). */
     test_ptrace_attach();

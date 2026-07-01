@@ -871,6 +871,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Out-of-process ptrace stepper leaked the tracee when the traced routine
+  faulted.** Tracing a routine that takes a real signal (SIGILL/SIGSEGV) — exactly
+  what the out-of-process single-step tier exists to trace — hit a break in the
+  step loop (`src/ptrace_backend.c`) that returned `ASMTEST_PTRACE_OK` without
+  reaping the forked tracee. Because `PTRACE_O_EXITKILL` fires only when the
+  *tracer* exits (not when the trace function returns), the child was left stopped
+  in signal-delivery and unreaped, so a suite of faulting routines slowly exhausted
+  PIDs. The non-SIGTRAP break now `kill(SIGKILL)` + `waitpid`s the tracee like every
+  other exit path, still recording the partial trace as `truncated`. New live
+  regression `test_ptrace_faulting_no_leak` traces a `ud2` fixture eight times and
+  asserts each leaves no child to reap (`waitpid(-1) → ECHILD`); it fails on the old
+  code and passes on the fix (`make docker-hwtrace`, 95 tests green).
+
 - **AMD LBR live capture (first verified on real hardware, Zen 5).** Running the
   branch-record capture on an actual AMD LbrExtV2 host (Ryzen 9 9950X, Zen 5 — the
   project's real dev box, long mis-documented as Zen 2) surfaced a capture bug:

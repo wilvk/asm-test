@@ -695,9 +695,14 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
             /* The tracee took a real signal (e.g. a faulting routine). Record what we
-             * have as truncated and let it die. */
+             * have as truncated and reap it — the tracee is stopped in signal-delivery,
+             * not exited, and PTRACE_O_EXITKILL only fires when the *tracer* exits, so
+             * without this the stopped child leaks (a suite of faulting routines would
+             * exhaust PIDs). */
             if (entered)
                 overflow = 1; /* incomplete in-region capture */
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
             break;
         }
 
