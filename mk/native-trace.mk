@@ -234,7 +234,8 @@ $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
-        hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump
+        hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump \
+        hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 
 # The perf JVMTI agent (libperf-jvmti.so, from linux-tools) — HotSpot's de-facto jitdump
@@ -264,6 +265,17 @@ hwtrace-jit-dotnet: $(BUILD)/jit_trace
 	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
 
+# .NET (CoreCLR) FRAMEWORK method: trace System.Console::WriteLine — BCL code that ships as
+# ReadyToRun precompiled native, so the JIT never emits it by default. The harness sets
+# DOTNET_ReadyToRun=0 to force the whole BCL to JIT on demand, then single-steps WriteLine
+# like any user method. Reuses the jit_dotnet app (invoked with the "bcl" arg). Needs the
+# dotnet SDK + Capstone.
+hwtrace-jit-dotnet-bcl: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet-bcl (real .NET CoreCLR BCL method: Console.WriteLine) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	./$(BUILD)/jit_trace dotnet-bcl $(BUILD)/jit_dotnet/jit_dotnet.dll
+
 # Binary jitdump path against a THIRD producer: .NET CoreCLR. Unlike HotSpot, CoreCLR writes
 # a real /tmp/jit-<pid>.dump NATIVELY (no agent) under DOTNET_PerfMapEnabled=1 (set by the
 # harness), naming the method identically in the perf-map and the jitdump — so it reuses the
@@ -286,6 +298,16 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	./$(BUILD)/jit_trace java $(BUILD)/jit_java
+
+# OpenJDK (HotSpot) LIBRARY method: trace java.lang.Math::floorDiv. Unlike .NET, HotSpot JITs
+# JDK methods on demand BY DEFAULT — no precompilation-disable flag — so this needs only the
+# same dontinline nudge as the user-method lane (added by the harness) plus the jcmd perf-map
+# refresh. Reuses Hot (invoked with the "bcl" arg). Needs the JDK (javac + jcmd) + Capstone.
+hwtrace-jit-java-bcl: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-java-bcl (real OpenJDK HotSpot JDK method: Math.floorDiv) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	./$(BUILD)/jit_trace java-bcl $(BUILD)/jit_java
 
 # Binary jitdump path against a SECOND producer: OpenJDK HotSpot via the perf JVMTI agent
 # (libperf-jvmti.so). The agent records each C2 method's bytes to a real jitdump; the lane

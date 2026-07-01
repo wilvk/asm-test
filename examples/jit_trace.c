@@ -722,6 +722,29 @@ int main(int argc, char **argv) {
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
         return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL);
     }
+    if (strcmp(mode, "dotnet-bcl") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: %s dotnet-bcl <app.dll>\n", argv[0]);
+            return 2;
+        }
+        /* Trace a REAL .NET *framework* method — System.Console::WriteLine — not user code.
+         * Console.WriteLine ships as ReadyToRun PRECOMPILED native, so the JIT never emits it
+         * and it is in no jitdump by default. DOTNET_ReadyToRun=0 disables R2R so CoreCLR JITs
+         * the BCL on demand; Console::WriteLine then resolves in the perf-map and single-steps
+         * exactly like Program::Add — the same W^X hardware-breakpoint fallback applies. Its
+         * body is short (WriteLine just calls Out.WriteLine) and the tracer steps OVER that
+         * call-out, so we capture Console::WriteLine's OWN JITted instructions: the assembly of
+         * a framework method recovered from a live process. The app sinks Out to Stream.Null so
+         * the hot loop stays quiet. target_tier 0: with TC=0 there is a single body — take it as
+         * soon as it resolves (R2R-off startup JITs much of the BCL, so avoid extra warmup). */
+        setenv("DOTNET_ReadyToRun", "0", 1);
+        setenv("DOTNET_TieredCompilation", "0", 1);
+        setenv("DOTNET_TC_QuickJitForLoops", "0", 1);
+        setenv("DOTNET_PerfMapEnabled", "1", 1);
+        setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
+        char *cmd[] = {(char *)"dotnet", argv[2], (char *)"bcl", NULL};
+        return trace_runtime("CoreCLR-BCL", "Console::WriteLine", cmd, 0, NULL, NULL);
+    }
     if (strcmp(mode, "java") == 0) {
         if (argc < 3) {
             fprintf(stderr, "usage: %s java <classpath>\n", argv[0]);
@@ -747,6 +770,29 @@ int main(int argc, char **argv) {
                        (char *)"Hot",
                        NULL};
         return trace_runtime("HotSpot", "asmtjit", cmd, 0, java_perfmap_refresh,
+                             pick_busy_thread);
+    }
+    if (strcmp(mode, "java-bcl") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: %s java-bcl <classpath>\n", argv[0]);
+            return 2;
+        }
+        /* Trace a REAL JDK library method — java.lang.Math::floorDiv — not user code. The
+         * contrast with .NET (dotnet-bcl) is the point: HotSpot JITs JDK methods on demand BY
+         * DEFAULT — there is no ReadyToRun-style precompilation to disable — so this needs only
+         * the same dontinline nudge the user-method lane uses. -XX:-TieredCompilation gives a
+         * single C2 body at a stable address; dontinline keeps floorDiv a standalone nmethod
+         * (else C2 inlines the tiny method into the caller). Runs Hot with the "bcl" arg; the
+         * thread picker + jcmd perf-map refresh are shared with the plain java lane. */
+        char *cmd[] = {(char *)"java",
+                       (char *)"-XX:-TieredCompilation",
+                       (char *)"-XX:CompileCommand=dontinline,java/lang/Math.floorDiv",
+                       (char *)"-cp",
+                       argv[2],
+                       (char *)"Hot",
+                       (char *)"bcl",
+                       NULL};
+        return trace_runtime("HotSpot-BCL", "floorDiv", cmd, 0, java_perfmap_refresh,
                              pick_busy_thread);
     }
     if (strcmp(mode, "java-jitdump") == 0) {
@@ -787,8 +833,9 @@ int main(int argc, char **argv) {
     }
 
     fprintf(stderr,
-            "usage: %s {node|dotnet <app.dll>|java <classpath>|"
-            "java-jitdump <classpath> <agent.so>|jitdump|dotnet-jitdump <app.dll>}\n",
+            "usage: %s {node|dotnet <app.dll>|dotnet-bcl <app.dll>|java <classpath>|"
+            "java-bcl <classpath>|java-jitdump <classpath> <agent.so>|jitdump|"
+            "dotnet-jitdump <app.dll>}\n",
             argv[0]);
     return 2;
 }

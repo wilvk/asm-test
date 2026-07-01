@@ -551,6 +551,95 @@ runtime cooperates and skipped (never failed) when it does not, while the resolu
 attach checks — which validate the library against the runtime's real perf-map line and a
 real `/proc/maps` — stand on their own.
 
+**Framework / standard-library methods, not just user code.** The three lanes above trace a
+method *you wrote*; two further lanes trace a method the **runtime ships** — the direct answer
+to "can I trace `Console.WriteLine`?". The catch is precompilation, and it differs by runtime:
+
+- `make docker-hwtrace-jit-dotnet-bcl` (.NET / **CoreCLR**): traces `System.Console::WriteLine`.
+  The BCL ships as **ReadyToRun** (R2R) *precompiled* native code, so the JIT never emits it and
+  it appears in no jitdump by default — a late snapshot would return the R2R body, not JIT
+  output. The lane sets **`DOTNET_ReadyToRun=0`** so CoreCLR JITs the whole BCL on demand;
+  `Console::WriteLine` then resolves in the perf-map and single-steps exactly like `Program::Add`
+  (same W^X hardware-breakpoint fallback). Because `WriteLine` is a call *tree* (it just calls
+  `Out.WriteLine`), the tracer steps **over** that call-out and records `Console::WriteLine`'s
+  own body; the app sinks `Out` to `Stream.Null` so the hot loop stays quiet — the traced body
+  is identical whatever `Out` points to.
+- `make docker-hwtrace-jit-java-bcl` (OpenJDK / **HotSpot**): traces `java.lang.Math::floorDiv`.
+  The contrast is the point — HotSpot JITs JDK methods on demand **by default** (no R2R-style
+  precompilation to disable), so this needs only the same `dontinline` nudge as the user-method
+  lane. Once the hot loop makes `floorDiv` C2-hot it resolves in `Compiler.perfmap` and
+  single-steps like `Hot.asmtjit`.
+
+There is deliberately **no V8 framework lane**: JavaScript built-ins (`Array.prototype.push`,
+`String.prototype.indexOf`, …) are precompiled **C++/Torque builtins** baked into the V8
+snapshot, not JIT-compiled JS — so the JIT-trace path has nothing to recover there. V8's JIT
+only ever compiles *user* JS, which the `hwtrace-jit` lane already covers.
+
+Both BCL lanes disassemble what they trace. `Console.WriteLine(string)` is a thin wrapper — its
+body is just `Out.WriteLine(value)` — so the 16 recovered instructions are dominated by the two
+call-outs the tracer steps **over**: `get_Out` at `0xb` and the virtual `TextWriter.WriteLine`
+at `0x1e`. This is the literal output of `make docker-hwtrace-jit-dotnet-bcl` (addresses are
+from one run; they vary with ASLR):
+
+```
+# resolved real CoreCLR-BCL JIT method: 'void [System.Console] System.Console::WriteLine(string)[Optimized]' @ 0x7f8560b55a20 (41 bytes, tier 2)
+# traced 16 instructions of real CoreCLR-BCL JIT code
+trace: 16 instructions
+    0x0  push rbp
+    0x1  push rbx
+    0x2  push rax
+    0x3  lea rbp, [rsp + 0x10]
+    0x8  mov rbx, rdi
+    0xb  call qword ptr [rip + 0x12668f]
+    0x11  mov rdi, rax
+    0x14  mov rsi, rbx
+    0x17  mov rax, qword ptr [rax]
+    0x1a  mov rax, qword ptr [rax + 0x68]
+    0x1e  call qword ptr [rax + 0x30]
+    0x21  nop
+    0x22  add rsp, 8
+    0x26  pop rbx
+    0x27  pop rbp
+    0x28  ret
+```
+
+`Math.floorDiv(int, int)` is a leaf computation, so its 24 instructions are the whole method
+inline — HotSpot's nmethod entry barrier (`cmp dword ptr [r15 + 0x20], 1` at `0xc`), the signed
+`idiv` at `0x36`, the floor correction that decrements the quotient when the operands' signs
+differ (`xor ebp, r11d` / `test` / `jl` at `0x3b`–`0x42`), and the safepoint-poll epilogue
+(`cmp rsp, qword ptr [r15 + 0x450]` at `0x49`). The literal output of
+`make docker-hwtrace-jit-java-bcl`:
+
+```
+# resolved real HotSpot-BCL JIT method: 'int java.lang.Math.floorDiv(int, int)' @ 0x7fc5f8889300 (200 bytes, tier 0)
+# traced 24 instructions of real HotSpot-BCL JIT code
+trace: 24 instructions
+    0x0  mov dword ptr [rsp - 0x14000], eax
+    0x7  push rbp
+    0x8  sub rsp, 0x20
+    0xc  cmp dword ptr [r15 + 0x20], 1
+    0x14  jne 0x7fc5f88893a2
+    0x1a  mov r11d, edx
+    0x1d  nop
+    0x20  test edx, edx
+    0x22  je 0x7fc5f8889357
+    0x24  mov eax, esi
+    0x26  cmp eax, 0x80000000
+    0x2b  jne 0x7fc5f8889335
+    0x35  cdq
+    0x36  idiv r11d
+    0x39  mov ebp, esi
+    0x3b  xor ebp, r11d
+    0x3e  nop
+    0x40  test ebp, ebp
+    0x42  jl 0x7fc5f888936c
+    0x44  add rsp, 0x20
+    0x48  pop rbp
+    0x49  cmp rsp, qword ptr [r15 + 0x450]
+    0x50  ja 0x7fc5f888938c
+    0x56  ret
+```
+
 Three further lanes validate the **binary jitdump** byte source (`asmtest_jitdump_find`)
 against real output from **three independent producers** (V8, HotSpot, CoreCLR):
 
