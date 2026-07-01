@@ -121,12 +121,14 @@ The lane scalars use the same `ASSERT_DEQ`/`FEQ` macros; `ASSERT_VEC256_EQ(out,
 idx, expect)` is the 32-byte whole-register compare. Lane counts double versus
 `vec128_t` — `f64[0..3]`, `f32[0..7]`, `u64[0..3]`.
 
-> **AVX-512 (`zmm`), SVE, and the emulator.** The `asmtest_cpu_has_avx512f()`
-> probe is in place, but native 512-bit capture, AArch64 SVE, and a Win64 wide
-> path are not yet wired. The [emulator tier](emulator.md) exposes the YMM/ZMM
-> registers but its bundled Unicorn does not *execute* AVX instructions
-> (`UC_ERR_INSN_INVALID`), so wide-vector capture is **native-only** for now;
-> the emulator path self-skips until Unicorn ships AVX execution.
+> **AVX-512 (`zmm`), SVE, and the emulator.** Native 512-bit capture is wired:
+> `asm_call_capture_vec512` with the `ASM_VCALL512_*` macros and
+> `ASSERT_VEC512_EQ`, gated at runtime by `asmtest_cpu_has_avx512f()` — on both
+> System V and the Win64 tier (`asm_call_capture_vec512_win64`). **AArch64 SVE is
+> not yet wired.** The [emulator tier](emulator.md) exposes the YMM/ZMM registers
+> but its bundled Unicorn does not *execute* AVX/AVX-512 instructions
+> (`UC_ERR_INSN_INVALID`), so wide-vector capture is **native-only** for now; the
+> emulator path self-skips until Unicorn ships wide-vector execution.
 
 ## Mixed integer and FP arguments
 

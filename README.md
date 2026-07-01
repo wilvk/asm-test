@@ -6,9 +6,14 @@ A **C-hosted unit-testing framework for assembly language**. Write assembly
 routines, call them from C test cases through the real ABI, and assert on the
 results. Tests are auto-discovered and reported TAP-style.
 
-Every planned capability ships today — through to the breadth work (additional
-calling conventions and targets). See [DESIGN.md](DESIGN.md) for the full design
-and roadmap.
+Every capability documented below is implemented and exercised in CI. The core —
+capture, the assertion library, differential testing, the runner, and the Unicorn
+emulator — runs on any supported host. The native-trace tiers layer on top:
+DynamoRIO in-process tracing needs Linux x86-64 (and a DynamoRIO install), and
+the hardware-assisted backends (Intel PT, AMD LBR, ARM CoreSight) plus the eBPF
+code-image detector compile everywhere but **self-skip** where their hardware,
+permissions, or (for CoreSight) a live trace decoder are unavailable. See
+[DESIGN.md](DESIGN.md) for the full design and roadmap.
 
 **Available now:**
 

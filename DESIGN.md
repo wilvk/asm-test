@@ -6,8 +6,15 @@ a single binary, runs every test through the real ABI, and asserts on **return
 values, register state, CPU flags, and memory** — with test discovery, colored
 reporting, and a nonzero exit on failure.
 
-Target host (initial): **x86-64 macOS**, System V AMD64 ABI, GAS syntax via Apple
-`clang`/`as`. AArch64 (Apple Silicon) is a later phase.
+Targets: **x86-64 and AArch64** on **Linux and macOS** (System V AMD64 and
+AAPCS64 ABIs), assembled with GAS (via `clang`/`gcc`) or NASM (x86-64 only). The
+Windows x64 ABI is also covered — on any host through the emulator, and natively
+through a MinGW-built Win64 capture tier.
+
+> **Note (historical doc).** This is the original design plan; the phased roadmap
+> in §7 is now complete (each phase is annotated _done_). For current, verified
+> usage see the published documentation (the `docs/` site on Read the Docs); this
+> file is kept for design background.
 
 ---
 
@@ -45,8 +52,8 @@ TEST(arith, adds_two_numbers) {
 
 TEST(arith, preserves_callee_saved) {
     regs_t r;
-    asm_call2_capture(&r, (void*)add_signed, 2, 3);
-    ASSERT_EQ(r.rax, 5);
+    ASM_CALL2(&r, add_signed, 2, 3);
+    ASSERT_EQ(r.ret, 5);
     ASSERT_ABI_PRESERVED(&r);     // rbx, rbp, r12–r15 restored
     ASSERT_FLAG_CLEAR(&r, CF);
 }
@@ -58,13 +65,18 @@ TEST(arith, preserves_callee_saved) {
 
 ```
 asm-test/
-├── include/asmtest.h        # public API: TEST, ASSERT_*, fixtures, regs_t
-├── src/asmtest.c            # runner, registry, reporting, failure model
-├── src/capture.s            # register/flags capture trampoline (x86-64 SysV)
-├── examples/                # sample routines (.s) + their tests (.c)
+├── include/                 # public headers: asmtest.h (core) + emu/trace tiers
+├── src/                     # runner, capture trampolines, emulator, trace backends
+│   ├── asmtest.c            #   runner, registry, reporting, failure model
+│   ├── capture.s / .asm     #   register/flags capture trampolines (GAS + NASM)
+│   ├── emu.c                #   Unicorn emulator tier
+│   └── …                    #   ffi, fuzz, hwtrace, ptrace, drtrace, disasm, …
+├── examples/                # sample routines (.s/.asm) + their tests (.c)
 ├── tests/                   # the framework's own self-tests
-├── Makefile                 # assemble + compile + link + run
-└── DESIGN.md
+├── bindings/                # language bindings (Python, Rust, Go, …)
+├── docs/                    # Sphinx / Read the Docs documentation
+├── mk/ · scripts/           # split Makefiles + build/packaging scripts
+└── Makefile · DESIGN.md
 ```
 
 ---
@@ -90,14 +102,15 @@ asm-test/
 - Simple path: direct call, assert on the return value.
 
 ### 4.4 Register & flag inspection (the differentiator)
-- `src/capture.s` provides trampolines (`asm_call0_capture` … `asm_callN_capture`)
-  that: seed callee-saved registers with sentinels → marshal args into the ABI
-  argument registers → `call` the routine → snapshot all GP registers + RFLAGS
-  into a `regs_t` struct.
+- `src/capture.s` (GAS) / `src/capture.asm` (NASM) provide the capture
+  trampolines (`asm_call_capture` / `asm_call_capture_args`, wrapped by the
+  `ASM_CALLn` macros) that: seed callee-saved registers with sentinels → marshal
+  args into the ABI argument registers → `call` the routine → snapshot all GP
+  registers + RFLAGS into a `regs_t` struct.
 - Enables:
   - `ASSERT_ABI_PRESERVED(&r)` — verifies rbx, rbp, r12–r15 (and rsp) restored.
   - `ASSERT_FLAG_SET(&r, CF)` / `ASSERT_FLAG_CLEAR(&r, ZF)` etc.
-  - Return-register checks (`r.rax`, `r.rdx`).
+  - Return-register checks (`r.ret`, `r.rdx`).
 
 ### 4.5 Memory assertions
 - `ASSERT_MEM_EQ(ptr, expect, len)` with a hexdump diff on failure.
@@ -133,11 +146,10 @@ ASSERT_ABI_PRESERVED(&r)
 ASSERT_FLAG_SET(&r, CF|PF|ZF|SF|OF|...)
 ASSERT_FLAG_CLEAR(&r, ...)
 
-// Capture trampolines
-void asm_call0_capture(regs_t *out, void *fn);
-void asm_call1_capture(regs_t *out, void *fn, long a);
-void asm_call2_capture(regs_t *out, void *fn, long a, long b);
-// ... up to the 6 SysV integer arg registers
+// Capture trampolines — wrapped by the ASM_CALLn macros (n = 0..6):
+ASM_CALL2(&r, fn, a, b);      // → r.ret, r.rdx, r.flags, callee-saved regs
+void asm_call_capture(regs_t *out, void *fn, const long *args /* [6] */);
+void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
 ```
 
 ---
@@ -193,12 +205,13 @@ void asm_call2_capture(regs_t *out, void *fn, long a, long b);
   the distributed package effectively GPL-2.0 — see
   [the fully-featured-packages plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/fully-featured-packages-plan.md).
 
-The phases below are **planned**, ordered to deepen the framework's core
-promise — calling assembly through the real ABI and inspecting the result —
-before broadening reach. The current testable surface is narrow: a routine's
-whole signature must be ≤6 integer arguments (all `long`) with an integer
-return. Phases 5–7 widen *what can be tested*; 8–9 mature *the runner*; 10–11
-add reach.
+The phases below **are complete** (each is annotated _done_), ordered to deepen
+the framework's core promise — calling assembly through the real ABI and
+inspecting the result — before broadening reach. They started from a narrow
+surface — a routine's whole signature limited to ≤6 integer arguments (all
+`long`) with an integer return — and progressively widened it: Phases 5–7
+widened *what can be tested* (floating-point, SIMD, the full ABI call model,
+differential testing); 8–9 matured *the runner*; 10–11 added reach.
 
 - **Phase 5 — Floating-point & SIMD: _done._** `asm_call_capture_fp` marshals
   `double` args into the FP argument registers (`xmm0–7` / `d0–7`) and captures
