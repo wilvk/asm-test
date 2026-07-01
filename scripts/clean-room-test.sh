@@ -1,47 +1,54 @@
 #!/bin/sh
-# macos-clean-test.sh — Track A of the macOS clean-room & portability plan.
+# clean-room-test.sh — Track A of the macOS clean-room & portability plan, run on
+# Linux or macOS (the leak vectors differ per OS; the assertion is the same).
 #
-# For every binding whose toolchain is present, package it, install it FRESH into
-# a throwaway prefix, load it with every ASMTEST_*/DYLD_*/LD_* override scrubbed
-# and the cwd outside the checkout (scripts/clean-env.sh), then ASSERT the native
-# library it actually resolved lives under that fresh install — never a leaked
-# dev build/ tree, a Homebrew dylib, or /usr/local (scripts/assert-clean-path.sh).
+# For every dlopen binding whose toolchain is present, package it, install it
+# FRESH into a throwaway prefix, load it with every ASMTEST_*/DYLD_*/LD_* override
+# scrubbed and the cwd outside the checkout (scripts/clean-env.sh), then ASSERT the
+# native library it actually resolved lives under that fresh install — never a
+# leaked dev build/ tree, a Homebrew dylib, or /usr/local (scripts/assert-clean-path.sh).
 # So "install fresh, no ASMTEST_LIB" is proven, not trusted. Bindings whose
 # toolchain is absent self-skip; a real leak fails the run.
 #
-# Driven by `make macos-clean-test`. See docs/plans/macos-clean-test-plan.md.
+# Driven by `make clean-room-test` (any host) and `make macos-clean-test` (darwin),
+# and by the Docker per-language lanes (each image runs it and self-skips to its own
+# binding). See docs/plans/macos-clean-test-plan.md.
 set -u
 
 REPO=${ASMTEST_REPO_ROOT:-$(pwd)}
 REPO=$(cd "$REPO" && pwd -P)
 export ASMTEST_REPO_ROOT="$REPO"
 PLAT="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-EMU_SLOT="$REPO/build/dist/native/$PLAT/libasmtest_emu.dylib"
+case "$(uname -s)" in Darwin) EXT=dylib ;; *) EXT=so ;; esac
+EMU_SLOT="$REPO/build/dist/native/$PLAT/libasmtest_emu.$EXT"
 CLEAN_ENV="$REPO/scripts/clean-env.sh"
 ASSERT="$REPO/scripts/assert-clean-path.sh"
 
 [ -f "$EMU_SLOT" ] || {
-    echo "macos-clean-test: no staged payload at $EMU_SLOT — run 'make package-libs' first" >&2
+    echo "clean-room-test: no staged payload at $EMU_SLOT — run 'make package-libs' first" >&2
     exit 1
 }
 
 WORK="$(mktemp -d 2>/dev/null || mktemp -d -t asmtest-cleanroom)"
 trap 'rm -rf "$WORK"' EXIT
 
+ONLY=${ASMTEST_CLEANROOM_ONLY:-}   # single-binding mode (set by docker-clean-<lang>)
 fail=0
 summary=""
-record()  { summary="${summary}  ${1}\t${2}\t${3}\n"; }
+record()  { summary="${summary}  ${1}\t${2}\t${3}\n"; eval "verdict_${1}=\$2"; }
 pass_b()  { echo "  PASS $1: $2";        record "$1" PASS "$2"; }
 skip_b()  { echo "  SKIP $1: $2";        record "$1" SKIP "$2"; }
 fail_b()  { echo "  FAIL $1: $2" >&2;    record "$1" FAIL "$2"; fail=1; }
 
-# assert_path <binding> <resolved-path> <install-prefix>
+# assert_path <binding> <resolved-path> <install-prefix-or-empty>
+# An empty prefix means "leak checks only" (used where the bundled lib legitimately
+# lives outside a single install dir, e.g. .NET's per-user NuGet cache).
 assert_path() {
     _out="$(sh "$ASSERT" "$2" "$3" 2>&1)"
     if [ $? -eq 0 ]; then pass_b "$1" "$_out"; else fail_b "$1" "$_out"; fi
 }
 
-echo "macos-clean-test: clean-room install tests on $PLAT"
+echo "clean-room-test: clean-room install tests on $PLAT"
 echo "  repo=$REPO"
 echo "  work=$WORK"
 echo
@@ -64,18 +71,27 @@ ruby_clean_test() {
     assert_path ruby "$path" "$dest"
 }
 
-# ---- python (needs delocate to self-contain the local wheel) --------------
+# ---- python (needs delocate on macOS / auditwheel on Linux to self-contain) --
 python_clean_test() {
     PY="$(command -v python3 2>/dev/null)" || { skip_b python "no python3 toolchain"; return; }
-    "$PY" -c "import delocate" 2>/dev/null \
-        || { skip_b python "no delocate (pip install delocate); release.yml covers the python clean-room"; return; }
+    repair=""
+    if "$PY" -c "import delocate" 2>/dev/null; then repair=delocate
+    elif "$PY" -c "import auditwheel" 2>/dev/null; then repair=auditwheel
+    else skip_b python "no delocate/auditwheel to self-contain the wheel; release.yml covers python"; return; fi
     ( cd "$REPO" && make -s python-package ) >/dev/null 2>&1 \
         || { fail_b python "make python-package failed"; return; }
     raw="$(ls "$REPO"/build/dist/python/*.whl 2>/dev/null | head -1)"
     [ -n "$raw" ] || { fail_b python "no wheel built"; return; }
     wh="$WORK/wheelhouse"; mkdir -p "$wh"
-    "$PY" -m delocate.cmd.delocate_wheel -w "$wh" "$raw" >/dev/null 2>&1 \
-        || { fail_b python "delocate-wheel failed"; return; }
+    if [ "$repair" = delocate ]; then
+        "$PY" -m delocate.cmd.delocate_wheel -w "$wh" "$raw" >/dev/null 2>&1 \
+            || { fail_b python "delocate-wheel failed"; return; }
+    else
+        "$PY" -m auditwheel repair --exclude libasmtest_hwtrace.so \
+            --exclude libasmtest_drapp.so --exclude libasmtest_drclient.so \
+            --exclude libdynamorio.so -w "$wh" "$raw" >/dev/null 2>&1 \
+            || { fail_b python "auditwheel repair failed"; return; }
+    fi
     whl="$(ls "$wh"/*.whl 2>/dev/null | head -1)"
     "$PY" -m venv "$WORK/pyvenv" >/dev/null 2>&1 || { fail_b python "venv failed"; return; }
     "$WORK/pyvenv/bin/pip" install -q "$whl" >/dev/null 2>&1 || { fail_b python "pip install failed"; return; }
@@ -139,18 +155,65 @@ java_clean_test() {
     assert_path java "$path" "$smoke"
 }
 
-ruby_clean_test
-python_clean_test
-node_clean_test
-lua_clean_test
-java_clean_test
+# ---- dotnet ---------------------------------------------------------------
+# .NET restores the nupkg into the per-user NuGet cache and copies the RID's native
+# asset into the app's build output; the loader resolves it there. Build the
+# throwaway app OUTSIDE the scrub (build needs the full env), then run it UNDER the
+# scrub and read Emu.LibraryPath (Process.Modules -> the actual loaded path). The
+# bundled lib legitimately lives under the app output OR the NuGet cache, so assert
+# leak-only (empty prefix): not the dev build/, not Homebrew, not /usr/local.
+dotnet_clean_test() {
+    DOTNET="$(command -v dotnet 2>/dev/null)" || { skip_b dotnet "no dotnet toolchain"; return; }
+    ( cd "$REPO" && make -s dotnet-package ) >/dev/null 2>&1 \
+        || { fail_b dotnet "make dotnet-package failed"; return; }
+    src="$REPO/build/dist/dotnet"
+    ls "$src"/*.nupkg >/dev/null 2>&1 || { fail_b dotnet "no nupkg built"; return; }
+    ver="$(cd "$REPO" && make -s print-version 2>/dev/null)"
+    app="$WORK/dotnet"; mkdir -p "$app"
+    export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+    if ! ( cd "$app" && "$DOTNET" new console -o app >/dev/null 2>&1 \
+        && cd app \
+        && "$DOTNET" nuget add source "$src" -n asmtest-local >/dev/null 2>&1 \
+        && "$DOTNET" add app.csproj package AsmTest --version "$ver" >/dev/null 2>&1 ); then
+        fail_b dotnet "nuget restore/add failed"; return
+    fi
+    printf 'using Asmtest; class P { static void Main(){ System.Console.Write(Emu.LibraryPath); } }\n' \
+        > "$app/app/Program.cs"
+    ( cd "$app/app" && "$DOTNET" build -c Release --nologo -v q >/dev/null 2>&1 ) \
+        || { fail_b dotnet "dotnet build failed"; return; }
+    dll="$(ls "$app"/app/bin/Release/*/app.dll 2>/dev/null | head -1)"
+    [ -n "$dll" ] || { fail_b dotnet "no built app.dll"; return; }
+    path="$(
+        . "$CLEAN_ENV" 1>&2
+        "$DOTNET" exec "$dll" 2>/dev/null
+    )"
+    assert_path dotnet "$path" ""
+}
+
+# In single-binding mode (docker-clean-<lang>) run only that binding; else all.
+should_run() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+should_run ruby   && ruby_clean_test
+should_run python && python_clean_test
+should_run node   && node_clean_test
+should_run lua    && lua_clean_test
+should_run java   && java_clean_test
+should_run dotnet && dotnet_clean_test
 
 echo
-echo "macos-clean-test summary ($PLAT):"
+echo "clean-room-test summary ($PLAT):"
 printf "$summary" | while IFS='	' read -r b s m; do printf "  %-8s %-5s %s\n" "$b" "$s" "$m"; done
 echo
+# Single-binding mode: the dedicated image MUST be able to run its binding. A skip
+# there means the toolchain is missing from the image — a false green — so fail loudly.
+if [ -n "$ONLY" ]; then
+    v=$(eval "printf '%s' \"\${verdict_${ONLY}:-}\"")
+    if [ "$v" != PASS ]; then
+        echo "clean-room-test: FAILED — target binding '$ONLY' did not PASS (verdict: ${v:-not run}); its dedicated image must carry the toolchain to run the clean-room test." >&2
+        exit 1
+    fi
+fi
 if [ "$fail" -ne 0 ]; then
-    echo "macos-clean-test: FAILED — a binding resolved its native lib OUTSIDE its fresh install (see LEAK above)."
+    echo "clean-room-test: FAILED — a binding resolved its native lib OUTSIDE its fresh install (see LEAK above)."
     exit 1
 fi
-echo "macos-clean-test: OK — every present binding resolved its native lib from its fresh install."
+echo "clean-room-test: OK — every present binding resolved its native lib from its fresh install."

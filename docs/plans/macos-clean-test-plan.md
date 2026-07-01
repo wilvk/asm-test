@@ -66,25 +66,35 @@ thing that could have satisfied the load. Two concrete leaks in the current code
 
 ---
 
-## Track A — Scrubbed-env clean-room smoke — **done (local harness); release.yml wiring pending (Track E)**
+## Track A — Scrubbed-env clean-room smoke — **done (harness + all dlopen bindings + Docker + CI); release.yml consolidation pending (Track E)**
 
-> **Status: implemented (local harness), 2026-07-01.** `make macos-clean-test`
-> ([scripts/macos-clean-test.sh](../../scripts/macos-clean-test.sh)) packages each
-> binding, installs it fresh into a throwaway prefix, and — under
+> **Status: implemented, 2026-07-01.** `make clean-room-test` (any host;
+> `make macos-clean-test` is the darwin alias),
+> [scripts/clean-room-test.sh](../../scripts/clean-room-test.sh), packages each binding,
+> installs it fresh into a throwaway prefix, and — under
 > [`scripts/clean-env.sh`](../../scripts/clean-env.sh) (env scrubbed, cwd outside the
 > checkout) — asserts via
-> [`scripts/assert-clean-path.sh`](../../scripts/assert-clean-path.sh) that the
-> resolved native lib lives under the fresh install, never a leaked `build/` tree, a
-> Homebrew dylib, or `/usr/local`. The core dlopen loaders (Ruby/Node/Java/Lua) gained
-> a `library_path` accessor (Python already had `python -m asmtest --where`); a binding
-> whose toolchain is absent self-skips with a specific reason. Verified live on an
-> **Intel macOS** host: **ruby PASS** (loads from the installed gem under the throwaway
-> prefix), the negative guard correctly rejects the dev `build/` path, and
-> python/node/lua/java self-skip (no delocate / no toolchain / macOS JRE-less `java`
-> stub). **Remaining:** replacing the release.yml `cd /tmp && <smoke>` blocks with
-> `source clean-env.sh` (the 4th bullet below) is folded into **Track E**; the Go/Rust
-> link bindings and .NET are not wired here (link bindings compile the lib in; .NET's
-> loader surfaces no resolved path to assert).
+> [`scripts/assert-clean-path.sh`](../../scripts/assert-clean-path.sh) that the resolved
+> native lib lives under the fresh install, never a leaked `build/` tree, a Homebrew
+> dylib, or `/usr/local`. A binding whose toolchain is absent self-skips.
+>
+> **All six dlopen bindings are covered:** Python (`-m asmtest --where`), Ruby/Lua
+> (`library_path`), Node/Java (`libraryPath()`), and **.NET** (`Emu.LibraryPath`, read
+> from `Process.Modules` so it reports the real loaded path however P/Invoke resolved the
+> bundled name). The **link** bindings (C++/Rust/Go/Zig) ship source and link
+> `libasmtest` themselves — no bundled payload to leak-check — so they are intentionally
+> out of scope.
+>
+> **Verified:** ruby live on an **Intel macOS** host (loads from the installed gem under
+> the throwaway prefix; the negative guard correctly rejects the dev `build/` path);
+> **Ruby/Node/Java/.NET/Lua in Docker** via `make docker-clean-<lang>` /
+> `make docker-clean-room`, each run with `CLEANROOM_ONLY=<lang>` so a self-skip **fails**
+> the lane rather than passing vacuously (a missing toolchain can't be mistaken for a
+> pass). A **`clean-room` CI job** over those five now gates every push, alongside the
+> conformance `bindings` job; python's clean-room stays in the release.yml python job.
+>
+> **Remaining:** replacing the release.yml `cd /tmp && <smoke>` blocks with
+> `source clean-env.sh` (the 4th bullet below) is folded into **Track E**.
 
 Make "install fresh, no `ASMTEST_LIB`" mean what it says, on **every** binding and
 **both** hosted arches, at zero extra infra.

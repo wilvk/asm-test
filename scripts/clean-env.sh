@@ -7,7 +7,7 @@
 #
 #   . scripts/clean-env.sh && <install-and-smoke-that-prints-the-resolved-path>
 #
-# Used by `make macos-clean-test` (scripts/macos-clean-test.sh) and intended for
+# Used by `make clean-room-test` (scripts/clean-room-test.sh) and intended for
 # the release.yml per-binding smokes. Portable across macOS and Linux; POSIX sh.
 # See docs/plans/macos-clean-test-plan.md (Track A).
 
@@ -31,7 +31,7 @@ unset LD_LIBRARY_PATH LD_PRELOAD 2>/dev/null || true
 # 3. PATH: drop Homebrew and /usr/local so no brew tool — nor its lib dir via a
 #    PATH-adjacent search — can leak in. Callers that need an interpreter must
 #    invoke it by the absolute path they resolved BEFORE sourcing this (that is
-#    exactly what scripts/macos-clean-test.sh does).
+#    exactly what scripts/clean-room-test.sh does).
 _ce_path=""
 _ce_oldifs=$IFS
 IFS=:

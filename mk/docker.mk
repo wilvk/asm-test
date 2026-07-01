@@ -124,24 +124,44 @@ DOCKER_RUNENV_node   := -e NODE_PATH=/usr/local/lib/node_modules:/usr/lib/node_m
 DOCKER_RUNENV_go     := -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e GOPROXY=off
 DOCKER_RUNENV_dotnet := -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1
 
-.PHONY: docker-bindings-base docker-bindings docker-bindings-clean \
-        $(addprefix docker-,$(BINDING_LANGS))
+.PHONY: docker-bindings-base docker-bindings docker-bindings-clean docker-clean-room \
+        $(addprefix docker-,$(BINDING_LANGS)) \
+        $(addprefix docker-build-,$(BINDING_LANGS)) \
+        $(addprefix docker-clean-,$(BINDING_LANGS))
 
 docker-bindings-base:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-base \
 	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_BASE) .
 
-# Generate `docker-<lang>`: build the per-language image on the base, then run it.
+# Generate, per language: `docker-build-<lang>` (build the image on the base),
+# `docker-<lang>` (build, then run the default CMD = `make <lang>-test`), and
+# `docker-clean-<lang>` (build, then run the cross-binding clean-room INSTALL test —
+# scrubbed env, fresh install into a throwaway prefix, resolved-path assertion — which
+# self-skips to this image's one binding). Splitting build from run lets the clean-room
+# lane reuse the built image without also running the dev test.
 define docker_lang_rule
-docker-$(1): docker-bindings-base
+docker-build-$(1): docker-bindings-base
 	$$(DOCKER) build $$(_docker_plat) -f bindings/Dockerfile.lang \
 	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_BASE) \
 	  --build-arg APT_PKGS='$$(DOCKER_APT_$(1))' \
 	  --build-arg SETUP='$$(DOCKER_SETUP_$(1))' \
 	  --build-arg TARGET=$(1) -t asmtest-$(1) .
+docker-$(1): docker-build-$(1)
 	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-$(1)
+docker-clean-$(1): docker-build-$(1)
+	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-$(1) make clean-room-test CLEANROOM_ONLY=$(1)
 endef
 $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
+
+# The dlopen bindings whose isolated image bundles both the language toolchain AND a
+# self-contained native payload (@loader_path/$$ORIGIN-vendored deps), so the clean-room
+# install test genuinely runs in-container. CLEANROOM_ONLY=<lang> makes the run FAIL if
+# that binding self-skips (a missing toolchain would otherwise pass vacuously). python is
+# excluded — self-containing its wheel needs auditwheel/build/venv that its lean test image
+# omits, and the release.yml python job already runs the clean-room asserts on the repaired
+# wheel. The link bindings (cpp/rust/go/zig) ship source (no bundled payload) — out of scope.
+CLEANROOM_LANGS := ruby node java dotnet lua
+docker-clean-room: $(addprefix docker-clean-,$(CLEANROOM_LANGS))
 
 docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 
@@ -192,6 +212,8 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit        trace a live Node.js V8 JIT method out of band
 #   make docker-hwtrace-jit-dotnet trace a live .NET CoreCLR JIT method out of band
 #   make docker-hwtrace-jit-java   trace a live OpenJDK HotSpot JIT method out of band
+#   make docker-hwtrace-jit-dotnet-bcl trace a live .NET Console.WriteLine (BCL) out of band
+#   make docker-hwtrace-jit-java-bcl trace a live OpenJDK Math.floorDiv (JDK lib) out of band
 #   make docker-hwtrace-jit-jitdump recover a real V8 jitdump method's bytes (binary path)
 #   make docker-hwtrace-jit-java-jitdump recover a real HotSpot jitdump method's bytes
 #   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
@@ -201,6 +223,7 @@ HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump \
+        docker-hwtrace-jit-dotnet-bcl docker-hwtrace-jit-java-bcl \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
@@ -219,11 +242,17 @@ docker-hwtrace-jit: docker-node
 docker-hwtrace-jit-dotnet: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet
 
+docker-hwtrace-jit-dotnet-bcl: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-bcl
+
 docker-hwtrace-jit-dotnet-jitdump: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-jitdump
 
 docker-hwtrace-jit-java: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java
+
+docker-hwtrace-jit-java-bcl: docker-java
+	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java-bcl
 
 docker-hwtrace-jit-java-jitdump: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java-jitdump

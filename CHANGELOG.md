@@ -8,27 +8,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **macOS clean-room install test (`make macos-clean-test`).** A darwin-only host
-  target that packages each binding, installs it **fresh** into a throwaway prefix,
-  loads it with every `ASMTEST_*`/`DYLD_*`/`LD_*` override scrubbed and the cwd
-  outside the checkout, then **asserts the native library it actually resolved lives
-  under that fresh install** — never a leaked dev `build/` tree, a Homebrew dylib, or
-  `/usr/local`. So "install fresh, no `ASMTEST_LIB`" is *proven*, not trusted: the
-  prior per-binding smokes only checked a tier was *available*, which a leaked
-  `build/` or Homebrew dylib also satisfies. Bindings whose toolchain is absent
-  self-skip with a specific reason; a real leak fails the run.
+- **Clean-room install test — every bundled binding, on Linux and macOS, in CI.**
+  `make clean-room-test` (any host) / `make macos-clean-test` (darwin alias) packages
+  each binding that ships a native payload, installs it **fresh** into a throwaway
+  prefix, loads it with every `ASMTEST_*`/`DYLD_*`/`LD_*` override scrubbed and the
+  cwd outside the checkout, then **asserts the native library it actually resolved
+  lives under that fresh install** — never a leaked dev `build/` tree, a Homebrew
+  dylib, or `/usr/local`. So "install fresh, no `ASMTEST_LIB`" is *proven*, not
+  trusted: the prior per-binding smokes only checked a tier was *available*, which a
+  leaked `build/` or Homebrew dylib also satisfies. Bindings whose toolchain is absent
+  self-skip; a real leak fails the run.
+  - **All six dlopen bindings** are covered — **Python, Ruby, Node, Java, Lua, and
+    .NET**. Each core loader gained a resolved-path accessor: `library_path`
+    (Ruby/Lua), `libraryPath()` (Node/Java), `Emu.LibraryPath` (.NET, via
+    `Process.Modules` so it reports the real loaded path however P/Invoke resolved the
+    name), and Python's existing `python -m asmtest --where`. The **link** bindings
+    (C++/Rust/Go/Zig) ship source and link `libasmtest` themselves — no bundled payload
+    to leak-check — so they are intentionally out of scope.
+  - **Verified in Docker** per language: `make docker-clean-<lang>` builds the binding's
+    isolated image and runs the clean-room test in it with `CLEANROOM_ONLY=<lang>` — so a
+    self-skip **fails** the lane (a missing toolchain can't pass vacuously); `make
+    docker-clean-room` runs the set. A new **`clean-room` CI job** (matrix over
+    Ruby/Node/Java/.NET/Lua) gates every push, complementing the conformance `bindings`
+    job (which loads the dev `build/` tree). Python's clean-room stays in the existing
+    release.yml python job (which asserts on the repaired wheel — self-containing the
+    wheel needs `auditwheel`/`build` the lean test image omits).
   - New reusable pieces: [`scripts/clean-env.sh`](scripts/clean-env.sh) — a sourceable
     env scrubber that **pins** `DYLD_FALLBACK_LIBRARY_PATH` to `/usr/lib` rather than
     unsetting it (unsetting reverts to a dyld default that *includes* `/usr/local/lib`,
     where a Homebrew copy could still satisfy a bare-leaf load);
     [`scripts/assert-clean-path.sh`](scripts/assert-clean-path.sh) — the leak guard
-    (rejects the checkout, `/opt/homebrew`, `$HOMEBREW_PREFIX`, `/usr/local`; allows the
-    jar's temp extraction); and [`scripts/macos-clean-test.sh`](scripts/macos-clean-test.sh)
-    — the per-binding orchestrator (the first reusable *local* one; the release.yml
-    smokes can call it next, per the plan's Track E).
-  - Each core dlopen loader (**Ruby/Node/Java/Lua**) gained a **`library_path`** accessor
-    reporting the absolute native-lib path it loaded (Python already exposes
-    `python -m asmtest --where`), so the clean-room test can assert the resolved path.
+    (rejects the checkout, `/opt/homebrew`, `$HOMEBREW_PREFIX`, `/usr/local`; allows a
+    temp extraction, e.g. the jar's); and
+    [`scripts/clean-room-test.sh`](scripts/clean-room-test.sh) — the cross-platform
+    per-binding orchestrator (the first reusable *local* one; the release.yml smokes can
+    call it next, per the plan's Track E).
     ([macOS clean-test plan](docs/plans/macos-clean-test-plan.md), Track A)
 - **The native-trace tiers now ship *inside* the packages.** Both optional tiers —
   DynamoRIO (`libasmtest_drapp` + `libasmtest_drclient` + the pinned `libdynamorio`)

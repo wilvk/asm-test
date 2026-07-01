@@ -11,7 +11,7 @@
 #
 # If [install-prefix] is given, the path must ALSO live under it — or under a
 # system temp dir, since the Java jar extracts its bundled payload to one before
-# loading. Used by scripts/macos-clean-test.sh and directly as the guard's own
+# loading. Used by scripts/clean-room-test.sh and directly as the guard's own
 # sanity-check (feed it a build/ path and confirm it is rejected).
 #
 # See docs/plans/macos-clean-test-plan.md (Track A).

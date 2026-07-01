@@ -268,6 +268,30 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
+  # Clean-room install test (docs/plans/macos-clean-test-plan.md, Track A). For each
+  # binding that BUNDLES a native payload, package it, install it FRESH into a
+  # throwaway prefix, and — with every ASMTEST_*/DYLD_*/LD_* override scrubbed and the
+  # cwd outside the checkout — assert the native lib it resolved came from that install,
+  # never a leaked dev build/ tree, a Homebrew dylib, or /usr/local. Runs in each
+  # language's isolated image (`make docker-clean-<lang>`, run with CLEANROOM_ONLY=<lang>
+  # so the run FAILS if that binding self-skips — a missing toolchain can't pass
+  # vacuously), so "install fresh, no ASMTEST_LIB" is proven rather than trusted. python
+  # is covered by the release.yml python job (asserts on the repaired wheel). The link
+  # bindings (cpp/rust/go/zig) ship source with no bundled payload, so they are out of
+  # scope. Complements the conformance replay above (which loads the dev build/ tree).
+  clean-room:
+    name: clean-room (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [ruby, node, java, dotnet, lua]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Clean-room install-test the ${{ matrix.lang }} binding
+        run: make docker-clean-${{ matrix.lang }}
+
   # Binding function-surface parity: every language binding must wrap every symbol
   # in the native-trace tier headers (asmtest_hwtrace.h / asmtest_drtrace.h), so a
   # contract change can't reach nine bindings and silently miss the tenth. Pure

@@ -25,6 +25,13 @@ namespace Asmtest
         // libasmtest_emu, the full superset carrying the emulator + Keystone
         // assembler + Capstone disassembler — and ASMTEST_CORPUS_LIB selects the
         // fixtures lib. Falls back to default name-based resolution when unset.
+
+        // Absolute path of the emu native lib when we resolved it explicitly (an
+        // ASMTEST_LIB override). For the bundled runtimes/<rid>/native/ case the
+        // runtime resolves the name itself, so EmuLibraryPath() recovers the path
+        // from the loaded-module list. Used by Emu.LibraryPath (clean-room tests).
+        internal static string EmuPathOverride;
+
         static Native()
         {
             NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, asm, paths) =>
@@ -32,8 +39,36 @@ namespace Asmtest
                 string env = name == EMU ? "ASMTEST_LIB"
                            : name == COR ? "ASMTEST_CORPUS_LIB" : null;
                 var p = env is null ? null : Environment.GetEnvironmentVariable(env);
-                return string.IsNullOrEmpty(p) ? IntPtr.Zero : NativeLibrary.Load(p);
+                if (string.IsNullOrEmpty(p)) return IntPtr.Zero;
+                var h = NativeLibrary.Load(p);
+                if (name == EMU) EmuPathOverride = System.IO.Path.GetFullPath(p);
+                return h;
             });
+        }
+
+        // The absolute path of the loaded emu native lib — for clean-room install
+        // tests to assert it came from the bundled package payload
+        // (runtimes/<rid>/native/), not a leaked build/ tree, a Homebrew dylib, or
+        // an ASMTEST_LIB override. Forces the load (a cheap EMU call), then reports
+        // the override path if we resolved it, else finds the module in the
+        // process's loaded-module list (works no matter how the runtime resolved
+        // the bundled name). See docs/plans/macos-clean-test-plan.md, Track A.
+        internal static string EmuLibraryPath()
+        {
+            try { var r = asmtest_regs_new(); if (r != IntPtr.Zero) asmtest_regs_free(r); }
+            catch { /* a load failure surfaces at the first real call */ }
+            if (!string.IsNullOrEmpty(EmuPathOverride)) return EmuPathOverride;
+            try
+            {
+                foreach (System.Diagnostics.ProcessModule m in
+                         System.Diagnostics.Process.GetCurrentProcess().Modules)
+                {
+                    var name = m.ModuleName ?? "";
+                    if (name.Contains("asmtest_emu")) return m.FileName;
+                }
+            }
+            catch { /* Process.Modules can be restricted; fall through */ }
+            return EmuPathOverride;
         }
 
         [DllImport(COR)] public static extern IntPtr asmtest_corpus_routine(string name);
@@ -436,6 +471,12 @@ namespace Asmtest
         /// runtime Capstone check (safe to call here: the DllImport resolver is
         /// registered by now).</summary>
         public static bool DisasAvailable => Native.DisasAvailable && Native.emu_disas_available();
+
+        /// <summary>Absolute path of the native library actually loaded — for clean-room
+        /// install tests to assert it came from the bundled package payload
+        /// (runtimes/&lt;rid&gt;/native/), not a leaked build/ tree, a Homebrew dylib, or an
+        /// ASMTEST_LIB override. See docs/plans/macos-clean-test-plan.md, Track A.</summary>
+        public static string LibraryPath => Native.EmuLibraryPath();
 
         /// <summary>
         /// Disassemble the one instruction at byte <paramref name="off"/> of
