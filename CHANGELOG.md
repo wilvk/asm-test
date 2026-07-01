@@ -871,6 +871,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`DRAPP_KEYSTONE` is now part of `drtrace_app.o`'s build identity.** The app-side
+  object was compiled with `$(DRAPP_KS_DEF)` (`-DASMTEST_HAVE_KEYSTONE`, gated by the
+  `DRAPP_KEYSTONE` knob) but that flag was not among the rule's prerequisites, so
+  flipping the knob between sub-makes in the **same** `build/` tree reused the stale
+  object. This is not hypothetical: the per-binding native-trace lanes invoke
+  `$(MAKE) shared-drtrace … DRAPP_KEYSTONE=0` precisely because a Keystone-enabled
+  drapp `.so` has unresolved `emu_*` symbols and won't `dlopen` — so a reused
+  Keystone-on object silently breaks exactly those lanes (CI only escaped it by running
+  each in a clean tree). Both `drtrace_app.o` rules (static + PIC) now depend on a
+  `$(BUILD)/.drapp-flags` sentinel that records the full compile-flag string and is
+  rewritten only when it changes (`cmp` guard, so no spurious rebuilds), folding
+  Keystone — and by extension `SAN`/`COV` via `CFLAGS` — into the object's identity.
+  Verified: no rebuild when nothing changes, a rebuild the moment the Keystone define
+  or any `CFLAGS` knob flips. (The related `make -j` race on the aggregate
+  `drtrace-bindings-test` targets — concurrent sub-makes sharing one `build/` — is a
+  separate concern and not addressed here.)
+
 - **Version sync now covers the C header, not just the binding manifests.**
   `include/asmtest.h` pins the version in four macros (`ASMTEST_VERSION_MAJOR/MINOR/
   PATCH` + the `ASMTEST_VERSION` string), and `scripts/amalgamate.sh` derives the

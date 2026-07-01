@@ -43,11 +43,28 @@ DRAPP_KS_PIC_OBJ := $(BUILD)/pic/assemble.o
 DRAPP_KS_LIBS    := $(KEYSTONE_LIBS)
 endif
 
+# Flag-identity tripwire for drtrace_app.o. The object is compiled with
+# $(DRAPP_KS_DEF) (Keystone on/off), but that flag is NOT among the rule's
+# prerequisites, so flipping DRAPP_KEYSTONE between sub-makes in the SAME build tree
+# would silently reuse a stale object. That is not hypothetical: the per-binding
+# lanes below invoke `$(MAKE) shared-drtrace ... DRAPP_KEYSTONE=0` because a
+# Keystone-enabled drapp .so has unresolved emu_* symbols and won't dlopen — so a
+# reused Keystone-on object breaks exactly those lanes (CI only escapes it by running
+# each in a clean tree). Record the full compile-flag string in a sentinel that
+# changes only when the flags do (Keystone, and by extension SAN/COV via CFLAGS), and
+# make the objects depend on it so they rebuild precisely when a knob flips.
+DRAPP_FLAGS := $(strip $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS))
+$(BUILD)/.drapp-flags: FORCE | $(BUILD)
+	@printf '%s\n' '$(DRAPP_FLAGS)' | cmp -s - $@ || printf '%s\n' '$(DRAPP_FLAGS)' > $@
+.PHONY: FORCE
+FORCE:
+
 # App-side library object (lifecycle + markers + W^X exec memory). No DR headers
 # or link dependency (it dlopen()s libdynamorio and declares dr_app_* via dlsym),
 # so it always compiles regardless of whether DynamoRIO is installed.
 $(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
-                        include/asmtest_trace.h include/asmtest_assemble.h | $(BUILD)
+                        include/asmtest_trace.h include/asmtest_assemble.h \
+                        $(BUILD)/.drapp-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -c $< -o $@
 
 # DynamoRIO client (.so) via CMake. Real target shape: shells out to cmake.
@@ -75,7 +92,8 @@ $(call shlib_dev,libasmtest_drapp): $(call shlib_real,libasmtest_drapp)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_drapp)) $@
 
 $(BUILD)/pic/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
-                            include/asmtest_trace.h include/asmtest_assemble.h | $(BUILD)/pic
+                            include/asmtest_trace.h include/asmtest_assemble.h \
+                            $(BUILD)/.drapp-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -fPIC -c $< -o $@
 
 # Standalone smoke harness (run directly: --no-fork, single job). -rdynamic puts
