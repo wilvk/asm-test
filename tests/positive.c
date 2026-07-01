@@ -11,6 +11,8 @@
  */
 #include "asmtest.h"
 
+#include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -121,6 +123,51 @@ TEST(posit, feq) { ASSERT_FEQ(2.25f, 2.25f); }
 TEST(posit, fnear) {
     float a = 1.0f, b = nextafterf(1.0f, 2.0f);
     ASSERT_FNEAR(a, b, 1);
+}
+/* Far-apart operands: the ULP distance across the whole representable range
+ * (DBL_MAX vs -DBL_MAX ~= 1.84e19 apart) must be COMPUTED without signed-overflow
+ * UB. The gap exceeds INT64_MAX, so the old signed subtraction tripped this repo's
+ * own `make sanitize` UBSan lane (halt_on_error=1); the assert passes with a
+ * ULONG_MAX tolerance — the point is that evaluating the distance is well-defined. */
+TEST(posit, near_full_range_no_overflow) {
+    ASSERT_DNEAR(DBL_MAX, -DBL_MAX, ULONG_MAX);
+    ASSERT_FNEAR(FLT_MAX, -FLT_MAX, ULONG_MAX);
+    /* Signed zeros still collapse to a zero-ULP distance (the transform's intent). */
+    ASSERT_DNEAR(0.0, -0.0, 0);
+    ASSERT_FNEAR(0.0f, -0.0f, 0);
+}
+
+/* ---- RNG ---- */
+
+/* asmtest_rng_range over a range wider than LONG_MAX must not divide by zero.
+ * `[LONG_MIN, LONG_MAX]` made the old `(uint64_t)(hi-lo)+1` wrap to 0, so `% span`
+ * was a division by zero (SIGFPE) that crashed the runner; a merely-wide range hit
+ * the signed `hi-lo` overflow first. The unsigned span + full-width special case
+ * fixes both. Also spot-check that the common narrow path still stays in bounds. */
+TEST(posit, rng_range_full_width_no_sigfpe) {
+    asmtest_rng_t rng = {.s = 0x1234567890abcdefULL};
+    for (int i = 0; i < 1000; i++) {
+        long v = asmtest_rng_range(&rng, LONG_MIN, LONG_MAX); /* full width: span wraps to 0 */
+        ASSERT_TRUE(v >= LONG_MIN && v <= LONG_MAX);
+    }
+}
+TEST(posit, rng_range_wide_in_bounds) {
+    asmtest_rng_t rng = {.s = 0xfeedfacecafebeefULL};
+    for (int i = 0; i < 1000; i++) {
+        long v = asmtest_rng_range(&rng, LONG_MIN, 0); /* wider than LONG_MAX */
+        ASSERT_TRUE(v >= LONG_MIN && v <= 0);
+    }
+}
+TEST(posit, rng_range_narrow_in_bounds) {
+    asmtest_rng_t rng = {.s = 42};
+    int seen_lo = 0, seen_hi = 0;
+    for (int i = 0; i < 1000; i++) {
+        long v = asmtest_rng_range(&rng, 5, 10);
+        ASSERT_TRUE(v >= 5 && v <= 10);
+        seen_lo |= (v == 5);
+        seen_hi |= (v == 10); /* endpoints are inclusive */
+    }
+    ASSERT_TRUE(seen_lo && seen_hi);
 }
 
 /* ---- SKIP ---- */

@@ -871,6 +871,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **RNG `asmtest_rng_range` divided by zero on ranges wider than `LONG_MAX`.**
+  `asmtest_rng_range(rng, LONG_MIN, LONG_MAX)` — a natural draw in differential /
+  property testing — computed the span as `(uint64_t)(hi - lo) + 1`, where `hi - lo`
+  signed-overflows `long` (UB) and the wrap makes `(uint64_t)(hi-lo)+1` evaluate to
+  `0`, so the following `% span` was an integer division by zero → **SIGFPE** (a hard
+  crash, or a spurious "crashed by signal 8" under `--fork`). The span is now computed
+  entirely in `uint64_t` (wraps to 0 only for the full 2^64 width, which is special-
+  cased to "every value is in range"), and the offset is added in `uint64_t` too so a
+  large offset can't overflow the `lo + …` back through signed. New self-tests
+  `posit.rng_range_full_width_no_sigfpe` / `_wide_in_bounds` / `_narrow_in_bounds`.
+
+- **Signed-overflow UB in the floating-point ULP-distance helpers.** `fp_ulp_distance`
+  / `fp_ulp_distance_f` computed the gap between the sign-magnitude-mapped keys with a
+  signed `ia - ib`, which overflows `int64_t`/`int32_t` for far-apart operands (e.g.
+  `ASSERT_DNEAR(-DBL_MAX, DBL_MAX, …)`, ~1.84e19 ULPs). It yielded the right magnitude
+  on two's-complement hardware but is UB — and **halted this repo's own `make sanitize`
+  (UBSan, `halt_on_error=1`) lane**, so it was self-inconsistent. The larger-minus-
+  smaller gap is now taken in `uint64_t`/`uint32_t` (bit-identical result, no UB; the
+  signed comparison that picks the larger key is unchanged, so `-0.0`/`+0.0` still
+  collapse to a zero-ULP distance). New self-test `posit.near_full_range_no_overflow`.
+
 - **Out-of-process ptrace stepper leaked the tracee when the traced routine
   faulted.** Tracing a routine that takes a real signal (SIGILL/SIGSEGV) — exactly
   what the out-of-process single-step tier exists to trace — hit a break in the

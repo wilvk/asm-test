@@ -307,10 +307,14 @@ static uint64_t fp_ulp_distance(double a, double b) {
         ia = (int64_t)0x8000000000000000ULL - ia;
     if (ib < 0)
         ib = (int64_t)0x8000000000000000ULL - ib;
-    return ia > ib ? (uint64_t)(ia - ib) : (uint64_t)(ib - ia);
+    /* Take the gap in uint64_t. For the larger-minus-smaller key the true distance is
+     * in [0, 2^64) and equals the modular unsigned subtraction exactly, whereas the
+     * signed `ia - ib` overflows int64_t for far-apart operands (e.g. ASSERT_DNEAR(
+     * -DBL_MAX, DBL_MAX)) — UB that trips this repo's own `make sanitize` UBSan lane. */
+    return ia > ib ? (uint64_t)ia - (uint64_t)ib : (uint64_t)ib - (uint64_t)ia;
 }
 
-/* 32-bit float ULP distance, analogous to fp_ulp_distance. */
+/* 32-bit float ULP distance, analogous to fp_ulp_distance (same unsigned-gap rule). */
 static uint32_t fp_ulp_distance_f(float a, float b) {
     int32_t ia, ib;
     memcpy(&ia, &a, sizeof ia);
@@ -319,7 +323,7 @@ static uint32_t fp_ulp_distance_f(float a, float b) {
         ia = (int32_t)0x80000000U - ia;
     if (ib < 0)
         ib = (int32_t)0x80000000U - ib;
-    return ia > ib ? (uint32_t)(ia - ib) : (uint32_t)(ib - ia);
+    return ia > ib ? (uint32_t)ia - (uint32_t)ib : (uint32_t)ib - (uint32_t)ia;
 }
 
 void asmtest_assert_double_eq(const char *file, int line, double actual,
@@ -585,8 +589,16 @@ long asmtest_rng_long(asmtest_rng_t *rng) {
 long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi) {
     if (hi <= lo)
         return lo;
-    uint64_t span = (uint64_t)(hi - lo) + 1; /* inclusive of both endpoints */
-    return lo + (long)(asmtest_rng_u64(rng) % span);
+    /* Span in uint64_t: `hi - lo` as signed longs overflows for ranges wider than
+     * LONG_MAX (e.g. [LONG_MIN, LONG_MAX]) — UB, and the wrap makes `(uint64_t)(hi-lo)+1`
+     * evaluate to 0, so the `% span` below is a division by zero (SIGFPE). Both operands
+     * unsigned keeps it defined; span wraps to 0 iff the range is the full 2^64 width. */
+    uint64_t span = (uint64_t)hi - (uint64_t)lo + 1; /* inclusive of both endpoints */
+    if (span == 0)                                   /* whole range — every value is in */
+        return (long)asmtest_rng_u64(rng);
+    /* Offset added in uint64_t too: lo + offset is in [lo, hi] so it never truly
+     * overflows, but the signed form `lo + (long)offset` can when offset > LONG_MAX. */
+    return (long)((uint64_t)lo + asmtest_rng_u64(rng) % span);
 }
 
 /* asmtest_seed + the differential helpers + the POSIX signal-based crash/timeout
