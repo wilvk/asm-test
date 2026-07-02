@@ -14,7 +14,7 @@
 # Without main(), the runner-only static helpers (install_handlers, run_forked,
 # the JUnit/TAP printers, the CLI parser, ...) are legitimately unused, so quiet
 # that one warning for this build only.
-$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h | $(BUILD)
+$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) -DASMTEST_NO_MAIN -Wno-unused-function -c $< -o $@
 
 $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
@@ -383,7 +383,7 @@ dotnet-package: native-payload-check
 lua-package: native-payload-check
 	rm -rf bindings/lua/native && mkdir -p $(PKG_DIST)/lua
 	$(call emu_lib_slots,bindings/lua/native)
-	cp -f bindings/lua/asmtest-1.0.0-1.rockspec $(PKG_DIST)/lua/
+	cp -f bindings/lua/asmtest-$(ASMTEST_VERSION)-1.rockspec $(PKG_DIST)/lua/
 	@echo "lua-package: staged rockspec + native in $(PKG_DIST)/lua (luarocks pack/upload to publish)"
 
 # link bindings: source distributions (the consumer builds/installs libasmtest).

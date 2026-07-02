@@ -206,7 +206,7 @@ $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 # Out-of-process ptrace single-step backend (W2): no external library, just the
 # same Capstone length-decoder (disasm.o) for block normalization.
 $(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
-                          include/asmtest_trace.h | $(BUILD)
+                          include/asmtest_trace.h include/asmtest_codeimage.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Time-aware code-image recorder (asmtest_codeimage.h): a userspace soft-dirty timeline
 # (the foreign-JIT byte source) + an OPTIONAL eBPF emission detector. The userspace path
@@ -590,7 +590,7 @@ $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
-                               include/asmtest_trace.h | $(BUILD)/pic
+                               include/asmtest_trace.h include/asmtest_codeimage.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
                           $(CODEIMAGE_SKEL) | $(BUILD)/pic

@@ -35,8 +35,11 @@ jobs:
           # (the DynamoRIO client), and the hwtrace "full" decoders (libipt / OpenCSD;
           # DynamoRIO itself is auto-fetched by package-libs). Absent → hwtrace still
           # bundles decoder-free and the PT/CoreSight backends self-skip.
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev || true
+          # `if` (not `&& … || true`) so a genuine Linux apt failure fails the
+          # step — else the payload silently ships hwtrace without PT/CoreSight
+          # decoders — while still no-op'ing on the non-Linux (macOS) slots.
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev; fi
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
       - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
@@ -59,6 +62,8 @@ jobs:
         with:
           pattern: native-payload-*
           path: payloads
+      - name: Install llvm (so the darwin Mach-O checks actually run, not self-skip)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends llvm
       - name: Merge into one build/dist/native/ tree
         run: |
           mkdir -p build/dist/native
@@ -81,6 +86,10 @@ jobs:
     needs: [native-all]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Uploading release assets needs contents:write (the global default is
+    # contents:read); scope the elevation to this job only.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
@@ -102,7 +111,14 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" corresponding-source/*.tar.gz corresponding-source/SOURCES.txt --clobber
+        run: |
+          # A pushed tag creates no release object, and `gh release upload`
+          # cannot create one — ensure the release exists first (idempotent).
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" --verify-tag \
+                 --title "${GITHUB_REF_NAME}" --notes "Release ${GITHUB_REF_NAME}"
+          gh release upload "${GITHUB_REF_NAME}" \
+            corresponding-source/*.tar.gz corresponding-source/SOURCES.txt --clobber
 
   # ---- Per-binding: package -> install fresh -> smoke -> dry-run publish ----- #
   # Each job downloads native-all into build/dist/native/, builds the package
@@ -125,8 +141,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
-    env:
-      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -134,8 +148,9 @@ jobs:
       - name: Install build deps + patchelf + tier deps, build Keystone + Capstone
         run: |
           make deps DEPS_ARGS=--asm
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev || true
+          # `if` so a real Linux apt failure fails the step (see native job).
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev; fi
           ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
       - name: Build the platform-tagged wheel (superset + tiers + vendored deps)
         run: pip install build twine auditwheel delocate && make python-package
@@ -195,9 +210,13 @@ jobs:
           name: wheel-${{ matrix.os }}
           path: wheelhouse/*.whl
       - name: Publish to PyPI (only with a token)
-        if: ${{ startsWith(github.ref, 'refs/tags/') && env.PYPI_TOKEN != '' }}
+        # Token scoped to this step only (not the whole job's env), so build/smoke
+        # steps can't read it; skip gracefully when the secret is unset.
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         env: { TWINE_USERNAME: __token__, TWINE_PASSWORD: "${{ secrets.PYPI_TOKEN }}" }
-        run: twine upload wheelhouse/*.whl
+        run: |
+          [ -n "$TWINE_PASSWORD" ] || { echo "no PYPI_TOKEN; skip"; exit 0; }
+          twine upload wheelhouse/*.whl
 
   # node / ruby / lua / java / dotnet all share one flow: download native-all,
   # `make <lang>-package`, install the artifact fresh (ASMTEST_LIB unset) and load
@@ -243,10 +262,6 @@ jobs:
               dotnet add app.csproj package AsmTest --version "$ver"
               printf 'using Asmtest; class P { static void Main(){ if(!Emu.DisasAvailable) throw new System.Exception("disassembler tier not available from the self-contained nupkg"); System.Console.WriteLine("dotnet ok: disas available"); } }' > Program.cs
               dotnet run
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - if: ${{ matrix.lang == 'node' }}
@@ -275,6 +290,12 @@ jobs:
       # no registry here, so they fall through.
       - name: Publish to the registry (only with a token; once, from Linux)
         if: ${{ matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/') }}
+        # Tokens scoped to the publish step only, so the build/smoke steps that run
+        # the just-built package can't read them.
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           case "${{ matrix.lang }}" in
             node)
@@ -298,8 +319,6 @@ jobs:
     needs: [native-all]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       # libasmtest_emu is the superset, so building/linking it needs Keystone +
@@ -309,8 +328,13 @@ jobs:
       - name: cargo publish --dry-run
         run: cd bindings/rust && cargo publish --dry-run --allow-dirty
       - name: Publish to crates.io (only with a token)
-        if: ${{ startsWith(github.ref, 'refs/tags/') && env.CARGO_REGISTRY_TOKEN != '' }}
-        run: cd bindings/rust && cargo publish --allow-dirty
+        # Token scoped to this step only (not the whole job).
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "no CARGO_REGISTRY_TOKEN; skip"; exit 0; }
+          cd bindings/rust && cargo publish --allow-dirty
 
   go:
     name: go (module)

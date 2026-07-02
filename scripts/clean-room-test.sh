@@ -201,7 +201,7 @@ should_run dotnet && dotnet_clean_test
 
 echo
 echo "clean-room-test summary ($PLAT):"
-printf "$summary" | while IFS='	' read -r b s m; do printf "  %-8s %-5s %s\n" "$b" "$s" "$m"; done
+printf '%b' "$summary" | while IFS='	' read -r b s m; do printf "  %-8s %-5s %s\n" "$b" "$s" "$m"; done
 echo
 # Single-binding mode: the dedicated image MUST be able to run its binding. A skip
 # there means the toolchain is missing from the image — a false green — so fail loudly.

@@ -1,0 +1,5 @@
+# Canonicalize the author identities that all belong to one person, so
+# `git shortlog -sne`, `git log`, and forge contributor views collapse them into a
+# single entry (repo-review S3). Format: Canonical Name <canonical@email> <other@email>
+Willem van Ketwich <willvk@gmail.com> <willemvanketwich@Willems-MacBook-Pro.local>
+Willem van Ketwich <willvk@gmail.com> Will <wilvk@gmail.com>

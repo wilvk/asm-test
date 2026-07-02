@@ -303,6 +303,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+      - name: Check every binding manifest matches VERSION
+        # Catch a VERSION bump made without `make sync-version` here, instead of
+        # only when the release workflow's packaging steps explode on a real tag.
+        run: make check-version
+      - name: Check pinned third-party engine versions are consistent
+        # DynamoRIO/Keystone/Capstone versions must agree across the Make layer,
+        # CI, the Dockerfiles, and the GPL corresponding-source script (B3/B4).
+        run: sh scripts/check-thirdparty-versions.sh
       - name: Check every binding wraps every native-trace tier symbol
         run: make check-bindings-parity
 
@@ -452,8 +460,10 @@ jobs:
           make deps DEPS_ARGS=--asm
           # Linux slots bundle the native-trace tiers: patchelf (rpath), cmake (the
           # DynamoRIO client), libipt/OpenCSD (hwtrace "full"). DynamoRIO auto-fetches.
-          [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev || true
+          # `if` (not `&& … || true`) so a genuine Linux apt failure fails the step
+          # rather than silently shipping hwtrace without PT/CoreSight decoders.
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
+            patchelf cmake libipt-dev libopencsd-dev; fi
 
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh

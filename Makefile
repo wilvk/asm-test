@@ -47,6 +47,8 @@ endif
 
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
+# Suites are NOT auto-discovered: to add a new examples/test_*.c pair, append its
+# binary here AND add a matching link rule below (see $(BUILD)/test_arith).
 SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
                   $(BUILD)/test_struct $(BUILD)/test_structparam \
@@ -198,15 +200,35 @@ endif
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# C objects (backend-independent).
-$(BUILD)/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)
+# Header prerequisites (no auto-dep generation, so these are the only rebuild
+# edges). asmtest.c pulls in platform.h -> glob_match.h + platform_win32.h; test
+# TUs may include any tier header (asmtest_emu.h / asmtest_assemble.h / …) whose
+# struct layout they mirror, so a tier-header edit must rebuild them too.
+PLATFORM_HDRS := src/platform.h src/glob_match.h src/platform_win32.h
+TIER_HDRS     := $(wildcard include/asmtest_*.h)
+
+# Fold the active build knobs into core-object identity (mirrors the .drapp-flags
+# sentinel in mk/native-trace.mk). GNU make compares mtimes, not recipe text, so
+# without this `make test && make SAN=1 test` reuses the non-instrumented objects
+# and the sanitizer pass exercises nothing; likewise ASM_SYNTAX=nasm after a GAS
+# build. The sentinel's contents change only when a knob flips, so objects
+# depending on it rebuild exactly then.
+BUILD_FLAGS := $(strip $(CFLAGS) ASM_SYNTAX=$(ASM_SYNTAX))
+$(BUILD)/.build-flags: FORCE | $(BUILD)
+	@printf '%s\n' '$(BUILD_FLAGS)' | cmp -s - $@ || printf '%s\n' '$(BUILD_FLAGS)' > $@
+.PHONY: FORCE
+FORCE:
+
+# C objects (backend-independent). All depend on .build-flags so a knob flip
+# (SAN/COV via CFLAGS, ASM_SYNTAX) forces a rebuild instead of reusing stale objs.
+$(BUILD)/asmtest.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/%.o: examples/%.c include/asmtest.h | $(BUILD)
+$(BUILD)/%.o: examples/%.c include/asmtest.h $(TIER_HDRS) $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Framework self-tests (Track A) live in tests/; same compile, different dir.
-$(BUILD)/%.o: tests/%.c include/asmtest.h | $(BUILD)
+$(BUILD)/%.o: tests/%.c include/asmtest.h $(TIER_HDRS) $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ifeq ($(ASM_SYNTAX),nasm)
@@ -218,17 +240,17 @@ else
 NASMFLAGS := -f elf64 -Iinclude/
 endif
 
-$(BUILD)/capture.o: src/capture.asm include/asm_nasm.inc | $(BUILD)
+$(BUILD)/capture.o: src/capture.asm include/asm_nasm.inc $(BUILD)/.build-flags | $(BUILD)
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(BUILD)/%.o: examples/%.asm include/asm_nasm.inc | $(BUILD)
+$(BUILD)/%.o: examples/%.asm include/asm_nasm.inc $(BUILD)/.build-flags | $(BUILD)
 	$(NASM) $(NASMFLAGS) $< -o $@
 else
 # --- GAS backend (default; x86-64 and AArch64) ----------------------------
-$(BUILD)/capture.o: src/capture.s include/asm.h | $(BUILD)
+$(BUILD)/capture.o: src/capture.s include/asm.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/%.o: examples/%.s include/asm.h | $(BUILD)
+$(BUILD)/%.o: examples/%.s include/asm.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 endif
 
@@ -339,10 +361,10 @@ $(BUILD)/pic:
 
 # Position-independent objects (separate tree so they never collide with the
 # non-PIC objects the test/static-lib builds use).
-$(BUILD)/pic/asmtest.o: src/asmtest.c include/asmtest.h | $(BUILD)/pic
+$(BUILD)/pic/asmtest.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-$(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
+$(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # Engine-neutral trace substrate (trace allocate/report/coverage + FFI handle
@@ -351,12 +373,12 @@ $(BUILD)/pic/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h | $(BUILD)
 $(BUILD)/pic/trace.o: src/trace.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-$(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h | $(BUILD)/pic
+$(BUILD)/pic/emu.o: src/emu.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -fPIC -c $< -o $@
 
 # Coverage-guided fuzzing + mutation testing (Track E) in the emu shared lib, so
 # bindings can reach it. No Unicorn include (calls emu_* from pic/emu.o).
-$(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h | $(BUILD)/pic
+$(BUILD)/pic/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # Disassembly (Track C) for the emu shared lib (the superset). Gated on Capstone
@@ -444,6 +466,7 @@ asmtest_single.h: scripts/amalgamate.sh include/asmtest.h src/asmtest.c
 install: lib
 	mkdir -p $(incdir) $(libdir) $(pcdir)
 	cp include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h \
+	   include/asmtest_assemble.h \
 	   include/asm.h include/asm_nasm.inc $(incdir)/
 	cp $(BUILD)/libasmtest.a $(libdir)/
 	$(pc_subst) asmtest.pc.in > $(pcdir)/asmtest.pc
@@ -451,7 +474,8 @@ install: lib
 
 uninstall:
 	rm -f $(incdir)/asmtest.h $(incdir)/asmtest_emu.h \
-	      $(incdir)/asmtest_trace.h $(incdir)/asm.h $(incdir)/asm_nasm.inc
+	      $(incdir)/asmtest_trace.h $(incdir)/asmtest_assemble.h \
+	      $(incdir)/asm.h $(incdir)/asm_nasm.inc
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
 	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest)) \
@@ -630,27 +654,27 @@ endif
 
 # Engine-neutral trace substrate (see src/trace.c). No Unicorn/Capstone
 # dependency; linked by every binary that links emu.o or ffi.o.
-$(BUILD)/trace.o: src/trace.c include/asmtest_trace.h | $(BUILD)
+$(BUILD)/trace.o: src/trace.c include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/emu.o: src/emu.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
+$(BUILD)/emu.o: src/emu.c include/asmtest_emu.h include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 # Disassembly helpers (emu_disas + the *_disasm reports). No Unicorn dependency;
 # includes only asmtest_emu.h + (optionally) Capstone.
-$(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
+$(BUILD)/disasm.o: src/disasm.c include/asmtest_emu.h include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
 # Coverage-guided fuzzing + mutation testing (Track E). Drives the emulator
 # (emu_call/_traced) with the framework's RNG; no extra dependency, its own TU.
-$(BUILD)/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
+$(BUILD)/fuzz.o: src/fuzz.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # The opaque-handle FFI accessor layer (regs/emu-result/trace handles + readers).
 # Pulled into the conformance reference so it drives the exact binding-ABI surface
 # a foreign binding uses. No Unicorn dependency, but built with its include path
 # so the emu struct decls resolve identically to the shared-lib build.
-$(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h | $(BUILD)
+$(BUILD)/ffi.o: src/ffi.c include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
 $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \

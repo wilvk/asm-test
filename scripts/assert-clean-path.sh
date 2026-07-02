@@ -16,8 +16,13 @@
 #
 # See docs/plans/macos-clean-test-plan.md (Track A).
 
-p=$1
-prefix=$2
+# set -u so an unset variable is a hard error, not a silent empty string — an
+# unset $TMPDIR must NOT let the temp-path escape hatch below degrade to the glob
+# `*` (which matches any path and would accept a leaked library as "clean").
+set -u
+
+p=${1:-}
+prefix=${2:-}
 
 case "$p" in
     "" | unavailable* )
@@ -39,7 +44,7 @@ fail() { echo "LEAK: $1 -> $rp" >&2; exit 1; }
 # 1. Inside the dev checkout (covers build/ and any in-tree copy). A clean install
 #    lives in a throwaway prefix OUTSIDE the checkout, so this is never a false
 #    positive; a fall-through to the developer's build/ is exactly what it catches.
-if [ -n "$ASMTEST_REPO_ROOT" ]; then
+if [ -n "${ASMTEST_REPO_ROOT:-}" ]; then
     rr=$(cd "$ASMTEST_REPO_ROOT" 2>/dev/null && pwd -P)
     case "$rp" in "$rr"/*) fail "resolved inside the dev checkout ($rr)";; esac
 else
@@ -50,7 +55,7 @@ fi
 case "$rp" in
     /opt/homebrew/*) fail "resolved through Homebrew (/opt/homebrew)";;
 esac
-if [ -n "$HOMEBREW_PREFIX" ]; then
+if [ -n "${HOMEBREW_PREFIX:-}" ]; then
     hb=$(cd "$HOMEBREW_PREFIX" 2>/dev/null && pwd -P)
     [ -n "$hb" ] && case "$rp" in "$hb"/*) fail "resolved through Homebrew ($hb)";; esac
 fi
@@ -64,10 +69,14 @@ esac
 #    extracts its bundled payload to one before loading).
 if [ -n "$prefix" ]; then
     pp=$(cd "$prefix" 2>/dev/null && pwd -P)
+    # An unresolvable prefix leaves $pp empty, so "$pp"/* would degrade to the
+    # glob /* and match ANY absolute path — the same accept-anything hazard the
+    # $TMPDIR guard above avoids. Treat it as a hard error.
+    [ -n "$pp" ] || fail "install prefix ($prefix) does not resolve"
     case "$rp" in
         "$pp"/*) : ;;
         /var/folders/* | /private/var/folders/* | /tmp/* | /private/tmp/* ) : ;;
-        "$TMPDIR"* ) : ;;
+        "${TMPDIR:-/nonexistent}"* ) : ;;
         *) fail "resolved outside the install prefix ($pp) and not a temp extraction";;
     esac
 fi
