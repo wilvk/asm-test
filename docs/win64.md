@@ -143,9 +143,14 @@ ones:
 - **In-process crash-to-failure.** `asmtest_win32_guard` runs a body under a
   vectored exception handler that, on a fatal fault, redirects the thread to a
   landing pad that `__builtin_longjmp`s back — a minimal sp/fp/pc restore with no
-  SEH unwinding, sidestepping the MinGW `longjmp`+unwind hazard. Recovery through
-  frames lacking unwind data is best-effort; the forked path is the unconditional
-  containment.
+  SEH unwinding, sidestepping the MinGW `longjmp`+unwind hazard. Before diverting,
+  the handler **normalises ABI-required CPU state** in the resumed context —
+  clearing the direction flag (`DF`) and resetting `MxCsr` — because a Windows VEH
+  resumes with the *faulting* routine's flags (unlike a POSIX signal handler,
+  which the kernel enters with `DF=0`); a routine that executed `std` or faulted
+  mid-descending-copy would otherwise leave `DF=1` for the recovered C code and
+  the CRT's `rep movs/stos`. Recovery through frames lacking unwind data is
+  best-effort; the forked path is the unconditional containment.
 
 **Integration status.** A thin platform seam (`src/platform.h`) now backs the
 runner: `src/asmtest.c` routes `--filter` through an `ASMTEST_FNMATCH` shim
@@ -191,3 +196,24 @@ on a **genuine Windows host with no Wine** for authoritative real-OS sign-off.
   convention passes `__m128` by reference; these variants deliberately model the
   `__vectorcall` xmm0–3 convention, the useful capture model for SIMD routines
   that read their inputs from xmm registers.
+- **`--no-fork` watchdog cannot recover a kernel-blocked test.** The in-process
+  watchdog un-hangs a test by rewriting its thread context (`SetThreadContext`)
+  to a landing pad, which only takes effect when the thread next returns to user
+  mode. A **spin-loop** hang is recovered cleanly; a test wedged in a **kernel
+  wait** (`WaitForSingleObject` on a never-signaled handle, `Sleep(INFINITE)`, a
+  deadlocked lock) never returns, so the redirect can't fire. Rather than wedge
+  the whole run, the watchdog polls briefly for the landing pad and, if it is not
+  reached, **fails hard with exit code `124`** (`ASMTEST_WIN32_HANG_EXIT`) after
+  printing a diagnostic. The **default forked mode** contains any such hang by
+  killing the child at the deadline and is the recommended mode when a routine
+  under test may block; the POSIX runner (where `SIGALRM` interrupts a blocking
+  syscall) has no equivalent gap. Full in-process interruption of arbitrary
+  kernel waits is not safely achievable on Windows and is intentionally not
+  attempted.
+- **`SETUP`/`TEARDOWN` parity on Win64.** The Win64 in-process runner mirrors the
+  POSIX `run_one` semantics: `TEARDOWN` hooks run whenever `SETUP` succeeded —
+  even after the body fails an assertion, `SKIP()`s, crashes, or times out — and a
+  teardown that itself crashes/times-out/fails marks the test failed (a `SKIP()`
+  in teardown downgrades a passing test to skipped). Teardown does **not** run
+  when setup itself failed or skipped, matching POSIX. This keeps external cleanup
+  (temp files) and global-state resets from leaking across tests in `--no-fork`.

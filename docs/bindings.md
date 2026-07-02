@@ -127,9 +127,11 @@ both. The dynamic-FFI bindings still keep runtime `asm_available()` /
 `disas_available()` (or `AsmAvailable` / `DisasAvailable`) probes as defensive
 checks — if a consumer points `ASMTEST_LIB` at an older/leaner lib without these
 tiers, those calls
-self-skip. The statically compiled bindings (C++ and Zig) compile the tiers in by
-default; C++ still honours the `-DASMTEST_ENABLE_ASM` / `-DASMTEST_ENABLE_DISAS`
-opt-outs.
+self-skip. Of the statically compiled bindings, Zig compiles the tiers in by
+default, whereas the C++ binding gates the emulator/assembler/disassembler tiers
+behind **opt-in** defines — `-DASMTEST_ENABLE_EMU` / `-DASMTEST_ENABLE_ASM` /
+`-DASMTEST_ENABLE_DISAS` — so without them `asmtest.hpp` declares only the core
+surface.
 
 ## Capabilities at a glance
 

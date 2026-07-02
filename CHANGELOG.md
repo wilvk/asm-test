@@ -6,6 +6,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Review-driven defect sweep (2026-07-02).** Resolved the full backlog from the
+  [code-level review](docs/analysis/2026-07-02-code-review.md) (54 findings) and the
+  still-open [2026-07-01](docs/reviews/2026-07-01-repo-review.md) /
+  [2026-07-02](docs/reviews/2026-07-02-repo-review.md) repo-review items, with a
+  per-batch implementation note under [`docs/summaries/`](docs/summaries/). Highlights:
+  AArch64 callee-saved `d8`–`d15` ABI checking + a corrected `vm.s`/`structparam.s`;
+  `SKIP()` in SETUP/TEARDOWN reported as skip; JUnit XML made well-formed and no longer
+  preceded by test stdout; hardware-trace truncation contract honored across the
+  single-step / AMD-LBR / Intel-PT / code-image backends (block partition matches
+  Unicorn/PT/DR); emulator SysV/AArch64 stack-and-register argument marshaling and a
+  deterministic register reset per call on a reused handle; ptrace signal-forwarding,
+  jitdump-truncation and tracee-reaping fixes; memory-safety and 64-bit-precision fixes
+  across the Rust/Python/Node/Lua/C++/Java bindings; and Win64 runner teardown/DF/watchdog
+  fixes. Build/CI: knob-aware object identity (`SAN`/`COV`/`ASM_SYNTAX`), header-prerequisite
+  and PIC-object completeness, a `check-version` + third-party-version CI gate, publish
+  tokens scoped to their step, the GPL corresponding-source release step, and a
+  self-sufficient BTF-less eBPF fallback header. Added `.mailmap`.
+
 ### Added
 
 - **Clean-room install test — every bundled binding, on Linux and macOS, in CI.**
@@ -446,20 +466,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runner gained native checks over the same byte-literal routines, verified on
   the host (Python/C++/Ruby) or the Docker matrix (the other seven).
 
-- **Track C disassembly reaches all ten bindings (via a single "full" lib).**
+- **Track C disassembly reaches all ten bindings (via one superset lib).**
   Capstone disassembly was C-core-only — binding it naïvely would pull Capstone
-  into every binding lib, or spawn a combinatorial lib matrix. Instead one
-  `libasmtest_emu_full` carries *both* optional native tiers (Keystone assembler
-  **and** Capstone disassembler) on top of the emulator (`make shared-emu-full`);
-  the lean `libasmtest_emu` stays Unicorn-only, and a binding points `ASMTEST_LIB`
-  at the full lib when it wants disassembly (and gets the assembler for free).
+  into every binding lib, or spawn a combinatorial lib matrix. Instead a single
+  `libasmtest_emu` is the superset: `make shared-emu` links the emulator
+  (`-lunicorn`) plus *both* optional native tiers (Keystone assembler **and**
+  Capstone disassembler) into that one lib, so any binding that points
+  `ASMTEST_LIB` at it gets disassembly and the assembler with no extra flag.
   Every binding gained `disas` / `disas_available` in its own idiom — **Python**
   (`ctypes`), **C++** (header, gated `ASMTEST_ENABLE_DISAS`), **Ruby** (`Fiddle`),
   **Lua** (LuaJIT `ffi`), **Node** (`koffi`), **Go** (`cgo` dlsym), **Rust**
   (`dlsym` + `extern`), **Zig** (`@cImport`, free), **Java** (FFM/Panama),
   **.NET** (P/Invoke) — wrapping `emu_disas` (decode one instruction at an offset
-  to `"mnemonic operands"`) with a probe that self-skips against the lean lib.
-  The per-binding `*-asm-test` checks now drive `libasmtest_emu_full`, so a single
+  to `"mnemonic operands"`) with a probe that self-skips against an older lib
+  that lacks the tier.
+  The per-binding `*-asm-test` checks now drive `libasmtest_emu`, so a single
   run exercises CallAsm **and** disas; the `bindings-asm` base image and
   `install-deps --asm` gained Capstone. Each binding's conformance decodes known
   x86-64 bytes (`xor rax, rax` / `ret` / `nop`), verified on the host
@@ -634,9 +655,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   / `emu_arm64_call_asm` / `emu_riscv_call_asm` / `emu_arm_call_asm` assemble at
   the emulator's load base (so PC-relative and branch targets resolve) and run
   through the matching `emu_*_call` in one call. Optional and pkg-config gated
-  like the emulator tier, and kept **separate from `libasmtest_emu`** so the
-  Unicorn-only binding images are unaffected: `make asm-test` (links `libkeystone`
-  + `libunicorn`), `make docker-asm`, and a CI `asm` job on both x86-64 and arm64.
+  like the emulator tier, and folded into the superset `libasmtest_emu` (built by
+  `make shared-emu`, which links `libkeystone` + `libcapstone` + `libunicorn`):
+  `make asm-test` builds the standalone in-line-assembler suite, with
+  `make docker-asm` and a CI `asm` job on both x86-64 and arm64.
   Keystone has no Linux distro package, so `make deps DEPS_ARGS=--asm` points at
   `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
   use). RISC-V in-line assembly self-skips until a Keystone release ships a
@@ -646,10 +668,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **In-line assembler reaches every binding, with a widened shim.** All **ten**
   bindings now expose the assembler — the original five (.NET, Ruby, Lua, Node,
   Java) plus Python, Go, Rust, C++, and Zig — bound *optionally* so they self-skip
-  against the Keystone-free `libasmtest_emu` and pay no cost in the normal binding
-  images. The dlopen bindings probe the symbol; Go and Rust resolve it through the
-  libc dynamic loader (they statically link the plain lib); C++ and Zig link the
-  assembler lib directly. The opaque-handle shim is widened from the original
+  against an older lib that lacks the assembler and pay no cost in the normal
+  binding images. The dlopen bindings probe the symbol; Go and Rust resolve it
+  through the libc dynamic loader (they statically link the plain lib); C++ and
+  Zig link the assembler-carrying `libasmtest_emu` directly. The opaque-handle shim is widened from the original
   Intel-only, two-integer-arg, error-blind `asmtest_emu_call_asm`: the new
   `asmtest_emu_call_asm6` takes **Intel *or* AT&T syntax**, **up to six** integer
   args, and an **instruction cap** (`max_insns`); `asmtest_asm_last_error()`

@@ -105,11 +105,14 @@ TEST(emu, reveals_clobbered_callee_saved) {
 Map a guest region, write to it, run a routine that reads it, and read the result
 back:
 
+Use an address distinct from the internal code/stack regions — `0x100000` is
+`EMU_CODE_BASE` (the routine's own bytes), so map somewhere clear like `0x300000`:
+
 ```c
-emu_map(E, 0x100000, 0x1000);
-emu_write(E, 0x100000, &value, sizeof value);
-/* call a routine that loads from 0x100000 … */
-emu_read(E, 0x100000, &out, sizeof out);
+emu_map(E, 0x300000, 0x1000);
+emu_write(E, 0x300000, &value, sizeof value);
+/* call a routine that loads from 0x300000 … */
+emu_read(E, 0x300000, &out, sizeof out);
 ```
 
 ### Faults

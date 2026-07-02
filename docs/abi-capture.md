@@ -104,11 +104,20 @@ arbitrary *mid-routine* snapshot of the full register file, use the
 
 ## ABI preservation
 
-`ASSERT_ABI_PRESERVED(&r)` verifies the routine restored every callee-saved
-register (and the stack pointer). The trampoline seeds those registers with
-distinctive sentinels (`0x1111…`, `0x2222…`, …) before the call, so a routine
-that clobbers `rbx` without restoring it is caught even if it happened to leave a
-plausible-looking value.
+`ASSERT_ABI_PRESERVED(&r)` verifies the routine restored the callee-saved
+*general-purpose* registers (System V: `rbx`, `rbp`, `r12`–`r15`; AArch64:
+`x19`–`x28`). The trampoline seeds those registers with distinctive sentinels
+(`0x1111…`, `0x2222…`, …) before the call, so a routine that clobbers `rbx`
+without restoring it is caught even if it happened to leave a plausible-looking
+value. It does **not** check the stack pointer (no `sp`/`rsp` is captured); a
+stack-pointer imbalance instead surfaces as a crash from the forked runner.
+
+Callee-saved *vector* registers are checked separately by
+`ASSERT_ABI_PRESERVED_VEC(&r)` after a `_vec`/`_vec_n` capture: Win64 `xmm6`–`xmm15`,
+or AArch64 `d8`–`d15` (only the low 64 bits are callee-saved per AAPCS64 6.1.2).
+System V x86-64 has no callee-saved vector registers, so the macro is not
+defined there. The `_vec` trampolines seed these registers too, so a NEON/SSE
+routine that clobbers `d8`/`xmm6` without restoring it is caught.
 
 ## Flags
 

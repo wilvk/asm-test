@@ -39,12 +39,14 @@ make docker-shell       # interactive shell in the CI image
 
 Pass `DOCKER_PLATFORM=linux/arm64` to emulate the `ubuntu-24.04-arm` runner.
 Docker Desktop ships the emulation; on Linux run
-`docker run --privileged tonistiigi/binfmt` once first. On arm64, CI only runs
-the `test` and `emu` jobs:
+`docker run --privileged tonistiigi/binfmt` once first. On arm64
+(`ubuntu-24.04-arm`), CI runs the `test`, `emu`, and `asm` jobs, plus the
+`payloads` (`package-libs`) leg that stages the native libs:
 
 ```sh
 make docker-test DOCKER_PLATFORM=linux/arm64
 make docker-emu  DOCKER_PLATFORM=linux/arm64
+make docker-asm  DOCKER_PLATFORM=linux/arm64
 ```
 
 ### Other distributions
