@@ -307,6 +307,20 @@ inline HwApi &api() {
     return a;
 }
 
+/* Like api() but enforces the load contract for entry points that dereference a
+ * resolved symbol: throws std::runtime_error (matching skip_reason's guidance)
+ * instead of calling through a null function pointer when the optional library is
+ * absent. available()/skip_reason()/resolve/auto keep using api() so they can
+ * report the missing-lib case without throwing. */
+inline HwApi &require() {
+    HwApi &a = api();
+    if (!a.loaded())
+        throw std::runtime_error(
+            "libasmtest_hwtrace not found; build it with `make shared-hwtrace` "
+            "or set ASMTEST_HWTRACE_LIB");
+    return a;
+}
+
 }  // namespace detail
 
 /// Host-native machine code in real executable (W^X) memory. Move-only; frees
@@ -340,7 +354,7 @@ class NativeCode {
     /// Map executable memory and copy `len` bytes of host-native machine code
     /// into it. Throws std::runtime_error on failure.
     static NativeCode from_bytes(const uint8_t *bytes, std::size_t len) {
-        detail::HwApi &a = detail::api();
+        detail::HwApi &a = detail::require();
         void *base = nullptr;
         std::size_t out_len = 0;
         int rc = a.exec_alloc(bytes, len, &base, &out_len);
@@ -408,7 +422,7 @@ class RegionScope {
     friend class HwTrace;
     explicit RegionScope(std::string name)
         : name_(std::move(name)), active_(true) {
-        detail::api().begin(name_.c_str());
+        detail::require().begin(name_.c_str());
     }
 
     std::string name_;
@@ -526,13 +540,19 @@ class HwTrace {
     static void init(int backend = SINGLESTEP) {
         asmtest_hwtrace_options_t opts{};
         opts.backend = static_cast<asmtest_trace_backend_t>(backend);
-        int rc = detail::api().init(&opts);
+        int rc = detail::require().init(&opts);
         if (rc != ASMTEST_HW_OK)
             throw std::runtime_error("asmtest_hwtrace_init failed: " +
                                      std::to_string(rc));
     }
 
-    static void shutdown() { detail::api().shutdown(); }
+    // Safe no-op when the library never loaded, so an unconditional teardown path
+    // after a self-skip cannot dereference a null pointer.
+    static void shutdown() {
+        detail::HwApi &a = detail::api();
+        if (a.loaded())
+            a.shutdown();
+    }
 
     // ---- per-trace ----
 
@@ -542,7 +562,7 @@ class HwTrace {
     /// (`new` is reserved, so this is `create`.)
     static HwTrace create(std::size_t blocks = 64,
                           std::size_t instructions = 64) {
-        void *h = detail::api().trace_new(instructions, blocks);
+        void *h = detail::require().trace_new(instructions, blocks);
         if (!h)
             throw std::runtime_error("asmtest_trace_new returned NULL");
         return HwTrace(h);
@@ -551,8 +571,8 @@ class HwTrace {
     /// Register a non-overlapping native code range under `name`, recording
     /// coverage into this trace. Throws std::runtime_error on failure.
     void register_region(const std::string &name, const NativeCode &code) {
-        int rc = detail::api().register_region(name.c_str(), code.base(),
-                                               code.length(), handle_);
+        int rc = detail::require().register_region(name.c_str(), code.base(),
+                                                   code.length(), handle_);
         if (rc != ASMTEST_HW_OK)
             throw std::runtime_error("register_region(" + name +
                                      ") failed: " + std::to_string(rc));
@@ -686,7 +706,7 @@ class Ptrace {
     static long traceCall(const void *code, std::size_t len,
                           const std::vector<long> &args, const HwTrace &trace) {
         long result = 0;
-        int rc = detail::api().ptrace_trace_call(
+        int rc = detail::require().ptrace_trace_call(
             code, len, args.data(), static_cast<int>(args.size()), &result,
             trace.raw());
         if (rc != ASMTEST_PTRACE_OK)
@@ -707,8 +727,8 @@ class Ptrace {
     static long traceAttached(int pid, const void *base, std::size_t len,
                               const HwTrace &trace) {
         long result = 0;
-        int rc = detail::api().ptrace_trace_attached(pid, base, len, &result,
-                                                     trace.raw());
+        int rc = detail::require().ptrace_trace_attached(pid, base, len, &result,
+                                                         trace.raw());
         if (rc != ASMTEST_PTRACE_OK)
             throw std::runtime_error("asmtest_ptrace_trace_attached failed: " +
                                      std::to_string(rc));
@@ -732,7 +752,7 @@ class Ptrace {
     /// ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first. The
     /// caller owns PTRACE_ATTACH/DETACH.
     static int runTo(int pid, const void *addr) {
-        return detail::api().ptrace_run_to(pid, addr);
+        return detail::require().ptrace_run_to(pid, addr);
     }
 
     /// The executable mapping in /proc/<pid>/maps containing `addr`, as
@@ -741,7 +761,7 @@ class Ptrace {
     regionByAddr(int pid, const void *addr) {
         void *base = nullptr;
         std::size_t len = 0;
-        int rc = detail::api().proc_region_by_addr(pid, addr, &base, &len);
+        int rc = detail::require().proc_region_by_addr(pid, addr, &base, &len);
         if (rc != ASMTEST_PTRACE_OK)
             return std::nullopt;
         return std::make_pair(base, len);
@@ -752,8 +772,8 @@ class Ptrace {
     perfmapSymbol(int pid, const std::string &name) {
         void *base = nullptr;
         std::size_t len = 0;
-        int rc = detail::api().proc_perfmap_symbol(pid, name.c_str(), &base,
-                                                   &len);
+        int rc = detail::require().proc_perfmap_symbol(pid, name.c_str(), &base,
+                                                       &len);
         if (rc != ASMTEST_PTRACE_OK)
             return std::nullopt;
         return std::make_pair(base, len);
@@ -770,7 +790,7 @@ class Ptrace {
         std::vector<std::uint8_t> buf(wantBytes);
         std::size_t blen = 0;
         const char *p = path.empty() ? nullptr : path.c_str();
-        int rc = detail::api().jitdump_find(
+        int rc = detail::require().jitdump_find(
             p, pid, name.c_str(), &e, wantBytes ? buf.data() : nullptr,
             wantBytes, wantBytes ? &blen : nullptr);
         if (rc != ASMTEST_PTRACE_OK)
@@ -968,7 +988,7 @@ inline long Ptrace::traceAttachedVersioned(int pid, const void *base,
                                            std::uint64_t when,
                                            const HwTrace &trace) {
     long result = 0;
-    int rc = detail::api().ptrace_trace_attached_versioned(
+    int rc = detail::require().ptrace_trace_attached_versioned(
         pid, base, len, img.raw(), when, &result, trace.raw());
     if (rc != ASMTEST_PTRACE_OK)
         throw std::runtime_error(

@@ -156,6 +156,46 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
 #endif
 }
 
+/* 1 if the instruction at `code+off` is any control-transfer instruction — a
+ * (conditional or unconditional) jump, a call, or a return — matching the block
+ * partition the PT/DR/Unicorn backends produce (a block ends after every CTI).
+ * 0 otherwise, or always when built without Capstone. */
+int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
+                            size_t code_len, uint64_t off) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    int is_branch = 0;
+    if (count > 0) {
+        is_branch = (cs_insn_group(h, &insn[0], CS_GRP_JUMP) ||
+                     cs_insn_group(h, &insn[0], CS_GRP_CALL) ||
+                     cs_insn_group(h, &insn[0], CS_GRP_RET) ||
+                     cs_insn_group(h, &insn[0], CS_GRP_IRET))
+                        ? 1
+                        : 0;
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return is_branch;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return 0;
+#endif
+}
+
 /* Copy `n` block offsets into a freshly malloc'd ascending array (caller frees);
  * *out_n receives the count. NULL on empty/oom. Mirrors trace.c's sorted_blocks
  * so the disassembling reports list blocks in the same order as the plain ones. */

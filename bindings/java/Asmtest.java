@@ -289,26 +289,30 @@ public final class Asmtest {
     }
 
     // ---- helpers for marshalling Java arrays into native memory ---- //
-    private static MemorySegment bytesSeg(byte[] b) {
-        MemorySegment seg = ARENA.allocate(Math.max(b.length, 1));
+    // Each takes a per-call confined Arena (try-with-resources) so the transient
+    // copy is freed when the call returns; only the process-lifetime library
+    // lookup uses the shared ARENA. Otherwise every call would leak its buffers
+    // for the JVM's lifetime (native RSS grows unboundedly under high iteration).
+    private static MemorySegment bytesSeg(Arena a, byte[] b) {
+        MemorySegment seg = a.allocate(Math.max(b.length, 1));
         MemorySegment.copy(b, 0, seg, JAVA_BYTE, 0, b.length);
         return seg;
     }
-    private static MemorySegment longsSeg(long[] a) {
-        if (a == null || a.length == 0) return MemorySegment.NULL;
-        MemorySegment seg = ARENA.allocate(JAVA_LONG.byteSize() * a.length);
-        for (int i = 0; i < a.length; i++) seg.setAtIndex(JAVA_LONG, i, a[i]);
+    private static MemorySegment longsSeg(Arena a, long[] arr) {
+        if (arr == null || arr.length == 0) return MemorySegment.NULL;
+        MemorySegment seg = a.allocate(JAVA_LONG.byteSize() * arr.length);
+        for (int i = 0; i < arr.length; i++) seg.setAtIndex(JAVA_LONG, i, arr[i]);
         return seg;
     }
-    private static MemorySegment doublesSeg(double[] a) {
-        if (a == null || a.length == 0) return MemorySegment.NULL;
-        MemorySegment seg = ARENA.allocate(JAVA_DOUBLE.byteSize() * a.length);
-        for (int i = 0; i < a.length; i++) seg.setAtIndex(JAVA_DOUBLE, i, a[i]);
+    private static MemorySegment doublesSeg(Arena a, double[] arr) {
+        if (arr == null || arr.length == 0) return MemorySegment.NULL;
+        MemorySegment seg = a.allocate(JAVA_DOUBLE.byteSize() * arr.length);
+        for (int i = 0; i < arr.length; i++) seg.setAtIndex(JAVA_DOUBLE, i, arr[i]);
         return seg;
     }
-    private static MemorySegment vecsSeg(float[][] vectors) {
+    private static MemorySegment vecsSeg(Arena a, float[][] vectors) {
         if (vectors.length == 0) return MemorySegment.NULL;
-        MemorySegment seg = ARENA.allocate(JAVA_FLOAT.byteSize() * 4 * vectors.length);
+        MemorySegment seg = a.allocate(JAVA_FLOAT.byteSize() * 4 * vectors.length);
         for (int i = 0; i < vectors.length; i++)
             for (int l = 0; l < 4; l++) seg.setAtIndex(JAVA_FLOAT, (long) i * 4 + l, vectors[i][l]);
         return seg;
@@ -330,7 +334,7 @@ public final class Asmtest {
         return t instanceof RuntimeException re ? re : new RuntimeException(t);
     }
 
-    private static MemorySegment str(String s) { return ARENA.allocateUtf8String(s); }
+    private static MemorySegment str(Arena a, String s) { return a.allocateUtf8String(s); }
 
     /** Resolve a canonical corpus routine (e.g. "add_signed") to its address.
      *  Goes through the name dispatcher first; if that does not know the routine
@@ -340,8 +344,8 @@ public final class Asmtest {
         if (CORPUS_ROUTINE == null) {
             throw new IllegalStateException("set ASMTEST_CORPUS_LIB to use corpusRoutine");
         }
-        try {
-            MemorySegment addr = (MemorySegment) CORPUS_ROUTINE.invoke(str(name));
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment addr = (MemorySegment) CORPUS_ROUTINE.invoke(str(a, name));
             if (addr.address() == 0)
                 return CORPUS.find(name).orElse(MemorySegment.NULL);
             return addr;
@@ -365,11 +369,11 @@ public final class Asmtest {
      */
     public static byte[] assemble(String src, AsmArch arch, AsmSyntax syntax, long addr) {
         if (ASM_BYTES == null) throw new AsmtestException("in-line assembler not in this build");
-        try {
-            MemorySegment buf = ARENA.allocate(256);
-            int n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(src), addr, buf, 256);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment buf = a.allocate(256);
+            int n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(a, src), addr, buf, 256);
             if (n == 0) throw new AsmtestException("assemble failed: " + asmError());
-            if (n > 256) { buf = ARENA.allocate(n); n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(src), addr, buf, n); }
+            if (n > 256) { buf = a.allocate(n); n = (int) ASM_BYTES.invoke(arch.v, syntax.v, str(a, src), addr, buf, n); }
             byte[] out = new byte[n];
             MemorySegment.copy(buf, JAVA_BYTE, 0, out, 0, n);
             return out;
@@ -398,10 +402,10 @@ public final class Asmtest {
      */
     public static String disas(byte[] code, long off, AsmArch arch, long base) {
         if (!disasAvailable()) return "";
-        try {
-            MemorySegment in = ARENA.allocate(Math.max(code.length, 1));
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment in = a.allocate(Math.max(code.length, 1));
             MemorySegment.copy(code, 0, in, JAVA_BYTE, 0, code.length);
-            MemorySegment buf = ARENA.allocate(160);
+            MemorySegment buf = a.allocate(160);
             long n = (long) EMU_DISAS.invoke(arch.v, in, (long) code.length, base, off, buf, 160L);
             return n == 0 ? "" : buf.getUtf8String(0);
         } catch (Throwable t) { throw rethrow(t); }
@@ -431,8 +435,8 @@ public final class Asmtest {
          *  capturing the vector register file. Read the vector return with vecF32(0). */
         public void captureVecF32(MemorySegment fn, float[][] vectors) {
             int nvec = vectors.length;
-            try {
-                MemorySegment lanes = ARENA.allocate(JAVA_FLOAT.byteSize() * 4 * Math.max(nvec, 1));
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment lanes = a.allocate(JAVA_FLOAT.byteSize() * 4 * Math.max(nvec, 1));
                 for (int i = 0; i < nvec; i++) {
                     for (int l = 0; l < 4; l++) lanes.setAtIndex(JAVA_FLOAT, (long) i * 4 + l, vectors[i][l]);
                 }
@@ -453,7 +457,7 @@ public final class Asmtest {
             return out;
         }
         public boolean flagSet(String name) {
-            try { return (int) REGS_FLAG_SET.invoke(h, str(name)) == 1; } catch (Throwable t) { throw rethrow(t); }
+            try (Arena a = Arena.ofConfined()) { return (int) REGS_FLAG_SET.invoke(h, str(a, name)) == 1; } catch (Throwable t) { throw rethrow(t); }
         }
         public boolean abiPreserved() {
             try { return (int) CHECK_ABI.invoke(h, MemorySegment.NULL, 0L) == 0; } catch (Throwable t) { throw rethrow(t); }
@@ -491,7 +495,7 @@ public final class Asmtest {
         }
         /** Read an x86-64 guest register by name — GP plus "rip" / "rflags". */
         public long reg(String name) {
-            try { return (long) EMU_REG.invoke(h, str(name)); } catch (Throwable t) { throw rethrow(t); }
+            try (Arena a = Arena.ofConfined()) { return (long) EMU_REG.invoke(h, str(a, name)); } catch (Throwable t) { throw rethrow(t); }
         }
         /** Lane (0..1) of guest XMM register {@code index} as a double (scalar return = xmmF64(0, 0)). */
         public double xmmF64(int index, int lane) {
@@ -521,7 +525,7 @@ public final class Asmtest {
         /** Run raw x86-64 machine-code bytes with up to six integer args. */
         public EmuResult callBytes(byte[] code, long... args) {
             EmuResult res = new EmuResult();
-            try { EMU_CALL.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            try (Arena a = Arena.ofConfined()) { EMU_CALL.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, args), args.length, 0L, res.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
@@ -530,7 +534,7 @@ public final class Asmtest {
         public EmuResult callFp(byte[] code, long[] iargs, double[] fargs) {
             EmuResult res = new EmuResult();
             int ni = iargs == null ? 0 : iargs.length, nf = fargs == null ? 0 : fargs.length;
-            try { EMU_CALL_FP.invoke(h, bytesSeg(code), (long) code.length, longsSeg(iargs), ni, doublesSeg(fargs), nf, 0L, res.h); }
+            try (Arena a = Arena.ofConfined()) { EMU_CALL_FP.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, iargs), ni, doublesSeg(a, fargs), nf, 0L, res.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
@@ -538,14 +542,14 @@ public final class Asmtest {
         public EmuResult callVec(byte[] code, long[] iargs, float[][] vargs) {
             EmuResult res = new EmuResult();
             int ni = iargs == null ? 0 : iargs.length;
-            try { EMU_CALL_VEC.invoke(h, bytesSeg(code), (long) code.length, longsSeg(iargs), ni, vecsSeg(vargs), vargs.length, 0L, res.h); }
+            try (Arena a = Arena.ofConfined()) { EMU_CALL_VEC.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, iargs), ni, vecsSeg(a, vargs), vargs.length, 0L, res.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
         /** Run raw bytes under the Microsoft x64 (Win64) convention. */
         public EmuResult callWin64(byte[] code, long... args) {
             EmuResult res = new EmuResult();
-            try { EMU_CALL_WIN64.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            try (Arena a = Arena.ofConfined()) { EMU_CALL_WIN64.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, args), args.length, 0L, res.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
@@ -553,7 +557,7 @@ public final class Asmtest {
         public EmuResult callTraced(byte[] code, long[] args, Trace tr) {
             EmuResult res = new EmuResult();
             int n = args == null ? 0 : args.length;
-            try { EMU_CALL_TRACED.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), n, 0L, res.h, tr.h); }
+            try (Arena a = Arena.ofConfined()) { EMU_CALL_TRACED.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, args), n, 0L, res.h, tr.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
@@ -573,8 +577,8 @@ public final class Asmtest {
             for (int i = 0; i < nargs; i++) a[i] = args[i];
             EmuResult res = new EmuResult();
             int ok;
-            try {
-                ok = (int) EMU_CALL_ASM6.invoke(h, str(src), syntax.v,
+            try (Arena ar = Arena.ofConfined()) {
+                ok = (int) EMU_CALL_ASM6.invoke(h, str(ar, src), syntax.v,
                     a[0], a[1], a[2], a[3], a[4], a[5], nargs, maxInsns, res.h);
             } catch (Throwable t) { throw rethrow(t); }
             if (ok == 0) { res.close(); throw new AsmtestException("in-line assembly failed: " + asmError()); }
@@ -601,8 +605,8 @@ public final class Asmtest {
         /** Arm a register invariant; null for an unknown register name. */
         public RegGuard guardReg(String name, long want) {
             RegGuard g = new RegGuard();
-            try {
-                if (!(boolean) GUARD_REG.invoke(h, str(name), want, g.h)) { g.close(); return null; }
+            try (Arena a = Arena.ofConfined()) {
+                if (!(boolean) GUARD_REG.invoke(h, str(a, name), want, g.h)) { g.close(); return null; }
             } catch (Throwable t) { throw rethrow(t); }
             return g;
         }
@@ -611,10 +615,10 @@ public final class Asmtest {
         // --- Coverage-guided fuzzing + mutation testing (Track E) --- //
         /** Coverage-guided input search over one-int-arg code; {blocks, corpus}. */
         public long[] fuzzCover(byte[] code, long lo, long hi, long iters) {
-            try {
+            try (Arena a = Arena.ofConfined()) {
                 MemorySegment uni = (MemorySegment) TRACE_NEW.invoke(0L, 256L);
                 MemorySegment st = (MemorySegment) FUZZ_NEW.invoke();
-                FUZZ_COVER1.invoke(h, bytesSeg(code), (long) code.length, lo, hi, iters, 0xC0FFEEL, uni, st);
+                FUZZ_COVER1.invoke(h, bytesSeg(a, code), (long) code.length, lo, hi, iters, 0xC0FFEEL, uni, st);
                 long[] out = { (long) FUZZ_BLOCKS.invoke(st), (long) FUZZ_CORPUS.invoke(st) };
                 FUZZ_FREE.invoke(st); TRACE_FREE.invoke(uni);
                 return out;
@@ -622,9 +626,9 @@ public final class Asmtest {
         }
         /** Bit-flip mutation testing of code against inputs; {killed, survived}. */
         public long[] mutationTest(byte[] code, long[] inputs) {
-            try {
+            try (Arena a = Arena.ofConfined()) {
                 MemorySegment st = (MemorySegment) MUT_NEW.invoke();
-                MUTATION_TEST1.invoke(h, bytesSeg(code), (long) code.length, longsSeg(inputs), (long) inputs.length, 0L, 0xABCDL, st);
+                MUTATION_TEST1.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, inputs), (long) inputs.length, 0L, 0xABCDL, st);
                 long[] out = { (long) MUT_KILLED.invoke(st), (long) MUT_SURVIVED.invoke(st) };
                 MUT_FREE.invoke(st);
                 return out;
@@ -663,13 +667,13 @@ public final class Asmtest {
     /** AVX2 256-bit capture (Track D): {@code vargs} is an array of four-double
      *  lanes; returns the four f64 lanes of ymm0 (the vector return). */
     public static double[] captureVec256(MemorySegment fn, double[][] vargs) {
-        try {
-            MemorySegment out = ARENA.allocate(16L * 32);
-            MemorySegment va = ARENA.allocate(8L * 32);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment out = a.allocate(16L * 32);
+            MemorySegment va = a.allocate(8L * 32);
             for (int i = 0; i < Math.min(vargs.length, 8); i++)
                 for (int l = 0; l < 4; l++)
                     va.setAtIndex(JAVA_DOUBLE, (long) i * 4 + l, vargs[i][l]);
-            MemorySegment ia = ARENA.allocate(6L * 8);
+            MemorySegment ia = a.allocate(6L * 8);
             CAPTURE_VEC256.invoke(out, fn, ia, va);
             double[] ret = new double[4];
             for (int l = 0; l < 4; l++) ret[l] = out.getAtIndex(JAVA_DOUBLE, l);
@@ -685,13 +689,13 @@ public final class Asmtest {
     /** AVX-512 512-bit capture (Track D): {@code vargs} is an array of eight-double
      *  lanes; returns the eight f64 lanes of zmm0 (the vector return). */
     public static double[] captureVec512(MemorySegment fn, double[][] vargs) {
-        try {
-            MemorySegment out = ARENA.allocate(32L * 64);
-            MemorySegment va = ARENA.allocate(8L * 64);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment out = a.allocate(32L * 64);
+            MemorySegment va = a.allocate(8L * 64);
             for (int i = 0; i < Math.min(vargs.length, 8); i++)
                 for (int l = 0; l < 8; l++)
                     va.setAtIndex(JAVA_DOUBLE, (long) i * 8 + l, vargs[i][l]);
-            MemorySegment ia = ARENA.allocate(6L * 8);
+            MemorySegment ia = a.allocate(6L * 8);
             CAPTURE_VEC512.invoke(out, fn, ia, va);
             double[] ret = new double[8];
             for (int l = 0; l < 8; l++) ret[l] = out.getAtIndex(JAVA_DOUBLE, l);
@@ -780,7 +784,7 @@ public final class Asmtest {
                 case "arm64" -> ARM64_REG; case "riscv" -> RISCV_REG; case "arm" -> ARM_REG;
                 default -> throw new AsmtestException("unknown guest: " + arch);
             };
-            try { return (long) mh.invoke(h, str(name)); } catch (Throwable t) { throw rethrow(t); }
+            try (Arena a = Arena.ofConfined()) { return (long) mh.invoke(h, str(a, name)); } catch (Throwable t) { throw rethrow(t); }
         }
         @Override public void close() {
             MethodHandle mh = switch (arch) {
@@ -811,7 +815,7 @@ public final class Asmtest {
                 case "arm64" -> ARM64_CALL; case "riscv" -> RISCV_CALL; case "arm" -> ARM_CALL;
                 default -> throw new AsmtestException("unknown guest: " + arch);
             };
-            try { mh.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), args.length, 0L, res.h); }
+            try (Arena a = Arena.ofConfined()) { mh.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, args), args.length, 0L, res.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }
@@ -820,7 +824,7 @@ public final class Asmtest {
             if (!arch.equals("arm64")) throw new AsmtestException("traced guest run only wired for arm64");
             GuestResult res = new GuestResult(arch);
             int n = args == null ? 0 : args.length;
-            try { ARM64_CALL_TRACED.invoke(h, bytesSeg(code), (long) code.length, longsSeg(args), n, 0L, res.h, tr.h); }
+            try (Arena a = Arena.ofConfined()) { ARM64_CALL_TRACED.invoke(h, bytesSeg(a, code), (long) code.length, longsSeg(a, args), n, 0L, res.h, tr.h); }
             catch (Throwable t) { throw rethrow(t); }
             return res;
         }

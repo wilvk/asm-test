@@ -263,11 +263,26 @@ class EmuResult:
         off = load().offset("emu_result_t", "fault_kind")
         return struct.unpack_from("<i", self._raw, off)[0]
 
+    # The GP file plus rip/rflags is a contiguous uint64[18] starting at rax, so
+    # any name resolves by index off the (manifest-published) rax offset — the
+    # manifest only lists rax/rip/rflags/xmm, matching src/ffi.c asmtest_emu_x86_reg.
+    _X86_GP_REGS = (
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+        "rip", "rflags",
+    )
+
     def reg(self, name):
-        """Read an x86-64 guest register from the result — the GP file plus
-        ``rip`` / ``rflags`` (e.g. ``rax``, ``rip``, ``rflags``)."""
-        base = load().offset("emu_result_t", "regs") + load().offset(
-            "emu_x86_regs_t", name
+        """Read an x86-64 guest register from the result — the full GP file
+        (``rax``..``r15``) plus ``rip`` / ``rflags``."""
+        try:
+            index = self._X86_GP_REGS.index(name)
+        except ValueError:
+            raise KeyError(f"unknown x86-64 register {name!r}") from None
+        base = (
+            load().offset("emu_result_t", "regs")
+            + load().offset("emu_x86_regs_t", "rax")
+            + index * 8
         )
         return struct.unpack_from("<Q", self._raw, base)[0]
 

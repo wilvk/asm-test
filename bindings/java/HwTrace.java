@@ -432,8 +432,11 @@ public final class HwTrace {
         return t instanceof RuntimeException re ? re : new RuntimeException(t);
     }
 
-    private static MemorySegment str(String s) {
-        return s == null ? MemorySegment.NULL : ARENA.allocateUtf8String(s);
+    // Per-call confined Arena (try-with-resources) so the transient C-string copy is
+    // freed when the call returns; the shared ARENA is reserved for the process-
+    // lifetime library lookup. Otherwise every call would leak its buffer forever.
+    private static MemorySegment str(Arena a, String s) {
+        return s == null ? MemorySegment.NULL : a.allocateUtf8String(s);
     }
 
     // ---- process-wide lifecycle ----
@@ -456,8 +459,8 @@ public final class HwTrace {
             Throwable e = LOAD_ERROR;
             return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
         }
-        try {
-            MemorySegment buf = ARENA.allocate(160);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment buf = a.allocate(160);
             HW_SKIP_REASON.invoke(backend, buf, 160L);
             return buf.getUtf8String(0);
         } catch (Throwable t) { throw rethrow(t); }
@@ -472,12 +475,12 @@ public final class HwTrace {
      *  {@code CEILING_FREE} drops the depth-bounded backend (AMD LBR). */
     public static int[] resolve(int policy) {
         if (HW_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
+        try (Arena a = Arena.ofConfined()) {
             // up to 4 backend ints. A sequence layout sizes by element count
-            // unambiguously (ARENA.allocate(JAVA_INT, n) sizes to one int on this
+            // unambiguously (a.allocate(JAVA_INT, n) sizes to one int on this
             // JDK, which only ever sufficed because this host exposes a single
             // backend — it would truncate on a multi-backend Intel-PT host).
-            MemorySegment out = ARENA.allocate(MemoryLayout.sequenceLayout(4, JAVA_INT));
+            MemorySegment out = a.allocate(MemoryLayout.sequenceLayout(4, JAVA_INT));
             int n = (int) (long) HW_RESOLVE.invoke(policy, out, 4L);
             int[] backends = new int[n];
             for (int i = 0; i < n; i++) backends[i] = out.getAtIndex(JAVA_INT, i);
@@ -502,10 +505,10 @@ public final class HwTrace {
      *  {@code TRACE_CEILING_FREE} drops AMD LBR. */
     public static java.util.List<TierChoice> resolveTiers(int policy) {
         if (TRACE_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
+        try (Arena a = Arena.ofConfined()) {
             final int cap = 8; // the cascade is at most 6 entries; headroom
             // 3 consecutive JAVA_INT per choice (asmtest_trace_choice_t, no padding).
-            MemorySegment out = ARENA.allocate(
+            MemorySegment out = a.allocate(
                 MemoryLayout.sequenceLayout((long) CHOICE_INTS * cap, JAVA_INT));
             int n = (int) (long) TRACE_RESOLVE.invoke(policy, out, (long) cap);
             java.util.List<TierChoice> choices = new java.util.ArrayList<>(n);
@@ -524,8 +527,8 @@ public final class HwTrace {
      *  off a native host under {@code TRACE_NATIVE_ONLY}). */
     public static java.util.Optional<TierChoice> autoTier(int policy) {
         if (TRACE_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment out = ARENA.allocate(
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment out = a.allocate(
                 MemoryLayout.sequenceLayout(CHOICE_INTS, JAVA_INT));
             int rc = (int) TRACE_AUTO.invoke(policy, out);
             if (rc != ASMTEST_HW_OK) return java.util.Optional.empty();
@@ -548,8 +551,8 @@ public final class HwTrace {
      *  default that runs on any x86-64 Linux. */
     public static void init(int backend) {
         if (HW_INIT == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment opts = ARENA.allocate(OPTIONS_LAYOUT);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment opts = a.allocate(OPTIONS_LAYOUT);
             opts.set(JAVA_INT, OPTIONS_LAYOUT.byteOffset(
                 MemoryLayout.PathElement.groupElement("backend")), backend);
             int rc = (int) HW_INIT.invoke(opts);
@@ -592,11 +595,11 @@ public final class HwTrace {
         /** Map executable memory and copy {@code bytes} of host-native code into it. */
         public static NativeCode fromBytes(byte[] bytes) {
             if (EXEC_ALLOC == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-            try {
-                MemorySegment in = ARENA.allocate(Math.max(bytes.length, 1));
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment in = a.allocate(Math.max(bytes.length, 1));
                 MemorySegment.copy(bytes, 0, in, JAVA_BYTE, 0, bytes.length);
-                MemorySegment baseOut = ARENA.allocate(ADDRESS); // void**
-                MemorySegment lenOut = ARENA.allocate(JAVA_LONG); // size_t*
+                MemorySegment baseOut = a.allocate(ADDRESS); // void**
+                MemorySegment lenOut = a.allocate(JAVA_LONG); // size_t*
                 int rc = (int) EXEC_ALLOC.invoke(in, (long) bytes.length, baseOut, lenOut);
                 if (rc != ASMTEST_HW_OK) throw new RuntimeException("asmtest_hwtrace_exec_alloc failed: " + rc);
                 return new NativeCode(baseOut.get(ADDRESS, 0).address(), lenOut.get(JAVA_LONG, 0));
@@ -640,8 +643,8 @@ public final class HwTrace {
         /** Register a non-overlapping native code range under {@code name}, recording
          *  coverage into this trace. */
         public NativeTrace register(String name, NativeCode code) {
-            try {
-                int rc = (int) REGISTER_REGION.invoke(str(name),
+            try (Arena a = Arena.ofConfined()) {
+                int rc = (int) REGISTER_REGION.invoke(str(a, name),
                     MemorySegment.ofAddress(code.base()), code.length(), handle);
                 if (rc != ASMTEST_HW_OK)
                     throw new RuntimeException("register_region(" + name + ") failed: " + rc);
@@ -654,8 +657,8 @@ public final class HwTrace {
          *  The markers are always balanced (end runs in a finally), so a throw from
          *  the body still closes the region. */
         public void region(String name, Runnable body) {
-            MemorySegment n = str(name);
-            try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment n = str(a, name);
                 HW_BEGIN.invoke(n);
                 try { body.run(); }
                 finally { HW_END.invoke(n); }
@@ -751,8 +754,8 @@ public final class HwTrace {
             Throwable e = LOAD_ERROR;
             return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
         }
-        try {
-            MemorySegment buf = ARENA.allocate(160);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment buf = a.allocate(160);
             PTRACE_SKIP_REASON.invoke(buf, 160L);
             return buf.getUtf8String(0);
         } catch (Throwable t) { throw rethrow(t); }
@@ -766,15 +769,15 @@ public final class HwTrace {
     public static long ptraceTraceCall(MemorySegment code, long len, long[] args,
                                        MemorySegment trace) {
         if (PTRACE_TRACE_CALL == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
+        try (Arena a = Arena.ofConfined()) {
             int n = args.length;
             // Per-call scratch: the args[] (size to element COUNT via a sequence layout,
             // NOT allocate(JAVA_LONG, n) which sizes to one element on this JDK) and a
             // long* result cell.
-            MemorySegment argSeg = ARENA.allocate(
+            MemorySegment argSeg = a.allocate(
                 MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
             for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
-            MemorySegment result = ARENA.allocate(JAVA_LONG);
+            MemorySegment result = a.allocate(JAVA_LONG);
             int rc = (int) PTRACE_TRACE_CALL.invoke(code, len, argSeg, n, result, trace);
             if (rc != ASMTEST_PTRACE_OK)
                 throw new RuntimeException("asmtest_ptrace_trace_call failed: " + rc);
@@ -790,8 +793,8 @@ public final class HwTrace {
     public static long ptraceTraceAttached(int pid, MemorySegment base, long len,
                                            MemorySegment trace) {
         if (PTRACE_TRACE_ATTACHED == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment result = ARENA.allocate(JAVA_LONG);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment result = a.allocate(JAVA_LONG);
             int rc = (int) PTRACE_TRACE_ATTACHED.invoke(pid, base, len, result, trace);
             if (rc != ASMTEST_PTRACE_OK)
                 throw new RuntimeException("asmtest_ptrace_trace_attached failed: " + rc);
@@ -813,8 +816,8 @@ public final class HwTrace {
                                                     MemorySegment trace) {
         if (PTRACE_TRACE_ATTACHED_VERSIONED == null)
             throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment result = ARENA.allocate(JAVA_LONG);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment result = a.allocate(JAVA_LONG);
             int rc = (int) PTRACE_TRACE_ATTACHED_VERSIONED.invoke(pid, base, len,
                 img == null ? MemorySegment.NULL : img, when, result, trace);
             if (rc != ASMTEST_PTRACE_OK)
@@ -843,9 +846,9 @@ public final class HwTrace {
      *  as {@code {base, len}}, or {@code null} if no executable mapping contains it. */
     public static long[] procRegionByAddr(int pid, long addr) {
         if (PROC_REGION_BY_ADDR == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment baseOut = ARENA.allocate(ADDRESS); // void**
-            MemorySegment lenOut = ARENA.allocate(JAVA_LONG); // size_t*
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment baseOut = a.allocate(ADDRESS); // void**
+            MemorySegment lenOut = a.allocate(JAVA_LONG); // size_t*
             int rc = (int) PROC_REGION_BY_ADDR.invoke(pid, MemorySegment.ofAddress(addr),
                 baseOut, lenOut);
             if (rc != ASMTEST_PTRACE_OK) return null;
@@ -858,10 +861,10 @@ public final class HwTrace {
      *  {@code {base, len}}, or {@code null} when no such symbol / no map file. */
     public static long[] procPerfmapSymbol(int pid, String name) {
         if (PROC_PERFMAP_SYMBOL == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
-            MemorySegment baseOut = ARENA.allocate(ADDRESS); // void**
-            MemorySegment lenOut = ARENA.allocate(JAVA_LONG); // size_t*
-            int rc = (int) PROC_PERFMAP_SYMBOL.invoke(pid, str(name), baseOut, lenOut);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment baseOut = a.allocate(ADDRESS); // void**
+            MemorySegment lenOut = a.allocate(JAVA_LONG); // size_t*
+            int rc = (int) PROC_PERFMAP_SYMBOL.invoke(pid, str(a, name), baseOut, lenOut);
             if (rc != ASMTEST_PTRACE_OK) return null;
             return new long[] { baseOut.get(ADDRESS, 0).address(), lenOut.get(JAVA_LONG, 0) };
         } catch (RuntimeException re) { throw re; }
@@ -876,18 +879,18 @@ public final class HwTrace {
     public static java.util.Optional<JitMethod> jitdumpFind(String path, String name,
                                                             int pid, int wantBytes) {
         if (JITDUMP_FIND == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
-        try {
+        try (Arena a = Arena.ofConfined()) {
             // asmtest_jitdump_entry_t — four consecutive JAVA_LONG (uint64), 32 bytes.
-            MemorySegment out = ARENA.allocate(
+            MemorySegment out = a.allocate(
                 MemoryLayout.sequenceLayout(4, JAVA_LONG));
             // bytes_out: size to wantBytes (sequence layout, NOT allocate(JAVA_BYTE, n));
             // bytes_len: size_t*. Both NULL when no bytes are requested.
             MemorySegment bytesOut = wantBytes > 0
-                ? ARENA.allocate(MemoryLayout.sequenceLayout(wantBytes, JAVA_BYTE))
+                ? a.allocate(MemoryLayout.sequenceLayout(wantBytes, JAVA_BYTE))
                 : MemorySegment.NULL;
-            MemorySegment bytesLen = wantBytes > 0 ? ARENA.allocate(JAVA_LONG)
+            MemorySegment bytesLen = wantBytes > 0 ? a.allocate(JAVA_LONG)
                 : MemorySegment.NULL;
-            int rc = (int) JITDUMP_FIND.invoke(str(path), pid, str(name), out, bytesOut,
+            int rc = (int) JITDUMP_FIND.invoke(str(a, path), pid, str(a, name), out, bytesOut,
                 (long) wantBytes, bytesLen);
             if (rc != ASMTEST_PTRACE_OK) return java.util.Optional.empty();
             long codeAddr = out.getAtIndex(JAVA_LONG, 0);
@@ -970,8 +973,8 @@ public final class HwTrace {
                 Throwable e = LOAD_ERROR;
                 return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
             }
-            try {
-                MemorySegment buf = ARENA.allocate(160);
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment buf = a.allocate(160);
                 CI_SKIP_REASON.invoke(buf, 160L);
                 return buf.getUtf8String(0);
             } catch (Throwable t) { throw rethrow(t); }
@@ -1005,11 +1008,11 @@ public final class HwTrace {
          *  or {@code null} when {@code addr} is in no tracked region / no version exists
          *  at-or-before {@code when} ({@code ASMTEST_CI_ENOENT}). */
         public byte[] bytesAt(long addr, long when) {
-            try {
+            try (Arena a = Arena.ofConfined()) {
                 // The C call fills *out with a pointer to BORROWED bytes and *out_len with
                 // how many are available; allocate two pointer-sized out cells, then copy.
-                MemorySegment outPtr = ARENA.allocate(ADDRESS);   // const uint8_t**
-                MemorySegment outLen = ARENA.allocate(JAVA_LONG); // size_t*
+                MemorySegment outPtr = a.allocate(ADDRESS);   // const uint8_t**
+                MemorySegment outLen = a.allocate(JAVA_LONG); // size_t*
                 int rc = (int) CI_BYTES_AT.invoke(handle, MemorySegment.ofAddress(addr),
                     when, outPtr, outLen);
                 if (rc != ASMTEST_CI_OK) return null;
@@ -1035,8 +1038,8 @@ public final class HwTrace {
                 Throwable e = LOAD_ERROR;
                 return "libasmtest_hwtrace not loaded" + (e != null ? ": " + e : "");
             }
-            try {
-                MemorySegment buf = ARENA.allocate(160);
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment buf = a.allocate(160);
                 CI_BPF_SKIP_REASON.invoke(buf, 160L);
                 return buf.getUtf8String(0);
             } catch (Throwable t) { throw rethrow(t); }
@@ -1061,8 +1064,8 @@ public final class HwTrace {
         /** Pop one queued emission event, or {@code null} when the queue is empty (or on
          *  a negative status). */
         public CodeEvent nextEvent() {
-            try {
-                MemorySegment out = ARENA.allocate(CI_EVENT_LAYOUT);
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment out = a.allocate(CI_EVENT_LAYOUT);
                 int rc = (int) CI_NEXT.invoke(handle, out);
                 if (rc != 1) return null;
                 return new CodeEvent(

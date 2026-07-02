@@ -236,8 +236,9 @@ bool emu_arm64_write(emu_arm64_t *e, uint64_t addr, const void *data,
                      size_t len);
 bool emu_arm64_read(emu_arm64_t *e, uint64_t addr, void *data, size_t len);
 
-/* Run raw AArch64 machine code with integer args in x0..x5. Stops when the
- * routine's `ret` branches to the sentinel LR, or after max_insns. */
+/* Run raw AArch64 machine code with integer args in x0..x7 (AAPCS64 assigns the
+ * first eight integer args to x0..x7). Stops when the routine's `ret` branches
+ * to the sentinel LR, or after max_insns. */
 bool emu_arm64_call(emu_arm64_t *e, const void *code, size_t code_len,
                     const long *args, int nargs, uint64_t max_insns,
                     emu_arm64_result_t *out);

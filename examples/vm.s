@@ -102,11 +102,12 @@ ASM_FUNC vm_eval
     popq    %rbx
     ret
 #elif defined(__aarch64__)
-    stp     x29, x30, [sp, #-272]! /* 16 (fp/lr) + 256 operand stack */
+    stp     x29, x30, [sp, #-320]! /* 16 (fp/lr) + 48 (x19-x24) + 256 operand stack */
     mov     x29, sp
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
-    add     x23, sp, #48           /* operand-stack base        */
+    stp     x23, x24, [sp, #48]    /* save callee-saved x23 (base); x24 pads pair */
+    add     x23, sp, #64           /* operand-stack base (256 bytes, to sp+320) */
     mov     x19, x0                /* code pointer              */
     mov     x20, x1                /* n                         */
     mov     x21, xzr               /* i                         */
@@ -171,9 +172,10 @@ ASM_FUNC vm_eval
     sub     x5, x22, #1
     ldr     x0, [x23, x5, lsl #3]
 8:
+    ldp     x23, x24, [sp, #48]
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
-    ldp     x29, x30, [sp], #272
+    ldp     x29, x30, [sp], #320
     ret
 #endif
 ASM_ENDFUNC vm_eval

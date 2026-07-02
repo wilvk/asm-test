@@ -151,6 +151,19 @@ inline const char *or_null(const std::string &s) {
     return s.empty() ? nullptr : s.c_str();
 }
 
+/* Like api() but enforces the load contract for entry points that dereference a
+ * resolved symbol: throws std::runtime_error instead of calling through a null
+ * function pointer when libasmtest_drapp is absent. available() keeps using api()
+ * so it can report the missing-lib case without throwing. */
+inline DrApi &require() {
+    DrApi &a = api();
+    if (!a.loaded())
+        throw std::runtime_error(
+            "libasmtest_drapp not found; build it with `make shared-drtrace` "
+            "or set ASMTEST_DRAPP_LIB");
+    return a;
+}
+
 }  // namespace detail
 
 /// Host-native machine code in real executable (W^X) memory. Move-only; frees
@@ -179,7 +192,7 @@ class NativeCode {
     /// Map executable memory and copy `len` bytes of host-native machine code
     /// into it. Throws std::runtime_error on failure.
     static NativeCode from_bytes(const uint8_t *bytes, std::size_t len) {
-        detail::DrApi &a = detail::api();
+        detail::DrApi &a = detail::require();
         asmtest_exec_code_t ec{};
         int rc = a.exec_alloc(bytes, len, &ec);
         if (rc != ASMTEST_DR_OK)
@@ -241,7 +254,7 @@ class RegionScope {
     friend class NativeTrace;
     explicit RegionScope(std::string name)
         : name_(std::move(name)), active_(true) {
-        detail::api().trace_begin(name_.c_str());
+        detail::require().trace_begin(name_.c_str());
     }
 
     std::string name_;
@@ -288,7 +301,7 @@ class NativeTrace {
                            const std::string &dynamorio_home = "",
                            const std::string &client_options = "",
                            int mode = 0) {
-        detail::DrApi &a = detail::api();
+        detail::DrApi &a = detail::require();
         asmtest_drtrace_options_t opts{};
         opts.client_path = detail::or_null(client);
         opts.dynamorio_home = detail::or_null(dynamorio_home);
@@ -304,15 +317,21 @@ class NativeTrace {
                                      std::to_string(rc));
     }
 
-    static void shutdown() { detail::api().dr_shutdown(); }
+    // Safe no-op when the library never loaded, so an unconditional teardown path
+    // after a self-skip cannot dereference a null pointer.
+    static void shutdown() {
+        detail::DrApi &a = detail::api();
+        if (a.loaded())
+            a.dr_shutdown();
+    }
 
     /// Count of illegal marker operations since init (0 = every marker balanced).
-    static int marker_error() { return detail::api().dr_marker_error(); }
+    static int marker_error() { return detail::require().dr_marker_error(); }
 
     /// Call the exported asmtest_symbol_demo fixture (a*2+b) that the symbol-mode
     /// test traces by name.
     static long symbol_demo(long a, long b) {
-        return detail::api().symbol_demo(a, b);
+        return detail::require().symbol_demo(a, b);
     }
 
     // ---- per-trace ----
@@ -323,7 +342,7 @@ class NativeTrace {
     /// (`new` is reserved, so this is `create`.)
     static NativeTrace create(std::size_t blocks = 64,
                               std::size_t instructions = 0) {
-        asmtest_trace_t *h = detail::api().trace_new(instructions, blocks);
+        asmtest_trace_t *h = detail::require().trace_new(instructions, blocks);
         if (!h)
             throw std::runtime_error("asmtest_trace_new failed");
         return NativeTrace(h);
@@ -332,7 +351,7 @@ class NativeTrace {
     /// Register a non-overlapping native code range under `name`, recording
     /// coverage into this trace. Throws std::runtime_error on failure.
     void register_region(const std::string &name, const NativeCode &code) {
-        int rc = detail::api().dr_register_region(
+        int rc = detail::require().dr_register_region(
             name.c_str(), code.base(), code.length(), handle_);
         if (rc != ASMTEST_DR_OK)
             throw std::runtime_error("register_region(" + name +
@@ -344,7 +363,7 @@ class NativeTrace {
     /// entry+max_len). Throws std::runtime_error on failure.
     void register_symbol(const std::string &symbol, std::size_t max_len = 256) {
         int rc =
-            detail::api().dr_register_symbol(symbol.c_str(), max_len, handle_);
+            detail::require().dr_register_symbol(symbol.c_str(), max_len, handle_);
         if (rc != ASMTEST_DR_OK)
             throw std::runtime_error("register_symbol(" + symbol +
                                      ") failed: " + std::to_string(rc));

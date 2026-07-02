@@ -28,10 +28,20 @@ TEST(structparam, all_int_struct_in_int_regs) {
 }
 
 TEST(structparam, mixed_struct_int_plus_sse) {
-    /* struct{long; double} by value == one integer arg + one double arg. */
+    /* struct{long; double} by value: SysV classifies its eightbytes INTEGER +
+     * SSE (rdi + xmm0), but AAPCS64 passes the whole non-HFA composite in GP
+     * regs (x0 + x1, with b's bit pattern in x1). Marshal per the platform ABI
+     * so this asserts the real convention a C caller uses, not the harness's. */
     regs_t r;
-    asm_call_capture_fp(&r, (void *)pst_mixed, (long[6]){40},
-                        (double[8]){2.0});
+    struct mixed m = {40, 2.0};
+#if defined(__aarch64__)
+    long bbits;
+    __builtin_memcpy(&bbits, &m.b, sizeof bbits);
+    ASM_CALL2(&r, pst_mixed, m.a, bbits);
+#else
+    asm_call_capture_fp(&r, (void *)pst_mixed, (long[6]){m.a},
+                        (double[8]){m.b});
+#endif
     ASSERT_EQ(r.ret, 42);
 }
 

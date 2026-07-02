@@ -281,7 +281,27 @@ int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
         msg[0] = '\0';
     return 0;
 }
+#elif defined(__aarch64__)
+/* d8-d15 are callee-saved on AArch64, but only their low 64 bits (AAPCS64
+ * 6.1.2); the _vec trampolines seed d(8+k) low == 8+k, so a restored register
+ * reads back vec[i].u64[0] == i. The upper lane is caller-saved (not checked). */
+int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
+    for (unsigned i = 8; i <= 15; i++) {
+        if (r->vec[i].u64[0] != (uint64_t)i) {
+            if (msg && n)
+                snprintf(msg, n,
+                         "d%u not restored (got 0x%llx, expected 0x%x)",
+                         i, (unsigned long long)r->vec[i].u64[0], i);
+            return 1;
+        }
+    }
+    if (msg && n)
+        msg[0] = '\0';
+    return 0;
+}
+#endif
 
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
 void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r) {
     char msg[128];
     if (asmtest_check_abi_vec(r, msg, sizeof msg))
@@ -738,11 +758,25 @@ static void asmtest_on_signal(int sig) {
 }
 
 static void install_handlers(void) {
+    /* Alternate signal stack so a stack-overflow SIGSEGV in a routine under test
+     * can still run the handler — the thread's normal stack is unusable then, so
+     * without SA_ONSTACK the handler cannot run and the whole runner dies. This
+     * matters for the in-process paths (--no-fork, --bench, and the fork/pipe
+     * fallback), where the forked-child model is not containing the crash. A fixed
+     * 64 KiB (SIGSTKSZ is a runtime value on modern glibc, unusable as an array
+     * size). Registered once; harmless if re-installed. */
+    static char altstack[65536];
+    stack_t ss;
+    ss.ss_sp = altstack;
+    ss.ss_size = sizeof altstack;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, NULL);
+
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = asmtest_on_signal;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    sa.sa_flags = SA_ONSTACK;
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
@@ -778,10 +812,13 @@ static int run_one(asmtest_case_t *tc) {
         alarm((unsigned)asmtest_timeout_secs);
 
     /* setup */
-    if (sigsetjmp(asmtest_jmp, 1) != 0) {
+    int setup_rc = sigsetjmp(asmtest_jmp, 1);
+    if (setup_rc != 0) {
         alarm(0);
         asmtest_in_test = 0;
-        return ST_FAIL; /* setup failed/crashed: skip body and teardown */
+        /* SKIP() in a SETUP hook skips the whole test (GTEST_SKIP-in-SetUp
+         * idiom); any other longjmp is a genuine setup failure/crash. */
+        return setup_rc == JMP_SKIP ? ST_SKIP : ST_FAIL;
     }
     run_hooks(tc->suite, 0);
 
@@ -795,51 +832,100 @@ static int run_one(asmtest_case_t *tc) {
     else
         outcome = ST_FAIL;
 
-    /* teardown — runs because setup succeeded; may itself fail */
-    if (sigsetjmp(asmtest_jmp, 1) == 0)
-        run_hooks(tc->suite, 1);
-    else if (outcome != ST_FAIL)
-        outcome = ST_FAIL;
-
+    /* Cancel the per-test timeout as soon as the body is done — BEFORE the
+     * teardown sigsetjmp frame. Otherwise a late SIGALRM (the timer already
+     * expiring) could fire after that frame has returned but before alarm(0),
+     * siglongjmp-ing into a stack frame that no longer exists (UB). The teardown
+     * hooks run untimed; they are expected to be quick, and the default forked
+     * model still contains a hanging teardown. */
     alarm(0);
+
+    /* teardown — runs because setup succeeded; may itself fail or SKIP */
+    int td_rc = sigsetjmp(asmtest_jmp, 1);
+    if (td_rc == 0)
+        run_hooks(tc->suite, 1);
+    else if (td_rc == JMP_SKIP) {
+        if (outcome == ST_PASS)
+            outcome = ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
+    } else if (outcome != ST_FAIL)
+        outcome = ST_FAIL; /* teardown failed/crashed */
+
     asmtest_in_test = 0;
     return outcome;
 }
 #else
+/* Fill asmtest_msg/loc for a crash or timeout reason. A JMP_FAIL already has its
+ * message from asmtest_fail and a JMP_SKIP from asmtest_skip, so those are left
+ * untouched. */
+static void win32_set_reason_msg(int reason) {
+    if (reason == ASMTEST_WIN32_REASON_CRASH) {
+        snprintf(asmtest_msg, sizeof asmtest_msg, "caught fatal exception 0x%lx",
+                 asmtest_win32_test_fault.code);
+        asmtest_loc_file = "(exception)";
+        asmtest_loc_line = 0;
+    } else if (reason == ASMTEST_WIN32_REASON_TIMEOUT) {
+        snprintf(asmtest_msg, sizeof asmtest_msg, "timed out after %d s",
+                 asmtest_timeout_secs);
+        asmtest_loc_file = "(timeout)";
+        asmtest_loc_line = 0;
+    }
+}
+
 /* Win64 in-process run_one: the test facility arms a vectored exception handler
  * (crash) and a watchdog (timeout); a crash, timeout, or assertion failure all
- * land via __builtin_longjmp at the single recovery point with the reason set. */
+ * land via __builtin_longjmp at the single recovery point with the reason set.
+ * Mirrors the POSIX run_one's three-scope setup -> body -> teardown structure so
+ * teardown runs whenever setup succeeded — even after a body failure, skip,
+ * crash, or timeout (finding #33). Each phase re-establishes the recovery point;
+ * the body and teardown phases re-arm the crash/timeout facility (an assertion
+ * disarmed it) so a fault or hang in teardown is folded into the outcome. */
 static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 1;
     unsigned timeout_ms =
         asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u : 0;
     asmtest_win32_test_begin(timeout_ms);
 
-    int outcome;
+    /* setup */
+    if (__builtin_setjmp(asmtest_win32_test_recover) != 0) {
+        /* SKIP() in a SETUP hook skips the whole test (GTEST_SKIP-in-SetUp
+         * idiom); any other longjmp is a genuine setup failure/crash/timeout.
+         * Teardown does NOT run — setup did not complete — matching POSIX. */
+        int reason = asmtest_win32_test_reason;
+        int outcome = (reason == JMP_SKIP) ? ST_SKIP : ST_FAIL;
+        win32_set_reason_msg(reason);
+        asmtest_win32_test_end();
+        asmtest_in_test = 0;
+        return outcome;
+    }
+    run_hooks(tc->suite, 0);
+
+    /* body */
+    int outcome = ST_PASS;
+    asmtest_win32_test_rearm();
     if (__builtin_setjmp(asmtest_win32_test_recover) == 0) {
-        run_hooks(tc->suite, 0); /* setup */
-        tc->fn();                /* body  */
-        run_hooks(tc->suite, 1); /* teardown */
-        outcome = ST_PASS;
+        tc->fn();
     } else {
         int reason = asmtest_win32_test_reason;
         if (reason == JMP_SKIP) {
             outcome = ST_SKIP;
         } else {
             outcome = ST_FAIL;
-            if (reason == ASMTEST_WIN32_REASON_CRASH) {
-                snprintf(asmtest_msg, sizeof asmtest_msg,
-                         "caught fatal exception 0x%lx",
-                         asmtest_win32_test_fault.code);
-                asmtest_loc_file = "(exception)";
-                asmtest_loc_line = 0;
-            } else if (reason == ASMTEST_WIN32_REASON_TIMEOUT) {
-                snprintf(asmtest_msg, sizeof asmtest_msg, "timed out after %d s",
-                         asmtest_timeout_secs);
-                asmtest_loc_file = "(timeout)";
-                asmtest_loc_line = 0;
-            }
-            /* JMP_FAIL: message already set by asmtest_fail */
+            win32_set_reason_msg(reason);
+        }
+    }
+
+    /* teardown — runs because setup succeeded; may itself fail, skip, or crash */
+    asmtest_win32_test_rearm();
+    if (__builtin_setjmp(asmtest_win32_test_recover) == 0) {
+        run_hooks(tc->suite, 1);
+    } else {
+        int reason = asmtest_win32_test_reason;
+        if (reason == JMP_SKIP) {
+            if (outcome == ST_PASS)
+                outcome = ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
+        } else if (outcome != ST_FAIL) {
+            outcome = ST_FAIL; /* teardown failed/crashed/timed out */
+            win32_set_reason_msg(reason);
         }
     }
 
@@ -1362,13 +1448,23 @@ static int test_matches(const asmtest_case_t *tc, const char *glob) {
 
 static void xml_print_escaped(const char *s) {
     for (; *s; s++) {
-        switch (*s) {
+        unsigned char c = (unsigned char)*s;
+        switch (c) {
         case '&':  fputs("&amp;", stdout); break;
         case '<':  fputs("&lt;", stdout); break;
         case '>':  fputs("&gt;", stdout); break;
         case '"':  fputs("&quot;", stdout); break;
         case '\n': fputs("&#10;", stdout); break;
-        default:   fputc((unsigned char)*s, stdout);
+        case '\r': fputs("&#13;", stdout); break;
+        case '\t': fputc('\t', stdout); break;
+        default:
+            /* C0 control bytes other than tab/newline/CR are illegal in XML 1.0
+             * even when written as entities, so a stray byte in test data would
+             * make the whole report unparseable. Emit a visible \xNN escape. */
+            if (c < 0x20)
+                printf("\\x%02X", c);
+            else
+                fputc(c, stdout);
         }
     }
 }
@@ -1419,7 +1515,9 @@ static void render_junit(const test_result_t *results, int n) {
             if (r->outcome == ST_FAIL) {
                 printf("\n      <failure message=\"");
                 xml_print_escaped(r->msg);
-                printf("\">at %s:%d&#10;", r->file, r->line);
+                printf("\">at ");
+                xml_print_escaped(r->file); /* a path with &/< must be escaped */
+                printf(":%d&#10;", r->line);
                 xml_print_escaped(r->msg);
                 printf("</failure>\n    ");
             } else if (r->outcome == ST_SKIP) {
@@ -1748,9 +1846,16 @@ int main(int argc, char **argv) {
     }
 
     if (opt.shuffle) {
-        uint64_t seed = opt.has_seed
-                            ? opt.seed
-                            : ((uint64_t)time(NULL) ^ ((uint64_t)ASMTEST_GETPID() << 32));
+        /* --seed=N wins; else fall back to ASMTEST_SEED (decimal or 0x-hex) so a
+         * shuffled order is reproducible via the env var; else time^pid. */
+        uint64_t seed;
+        const char *seed_env = getenv("ASMTEST_SEED");
+        if (opt.has_seed)
+            seed = opt.seed;
+        else if (seed_env && *seed_env)
+            seed = (uint64_t)strtoull(seed_env, NULL, 0);
+        else
+            seed = (uint64_t)time(NULL) ^ ((uint64_t)ASMTEST_GETPID() << 32);
         asmtest_rng_t rng = {seed};
         for (int i = n - 1; i > 0; i--) { /* Fisher-Yates (sel + gidx together) */
             int j = (int)(asmtest_rng_u64(&rng) % (uint64_t)(i + 1));
@@ -1782,6 +1887,23 @@ int main(int argc, char **argv) {
     test_result_t *results = (test_result_t *)asmtest_xalloc(
         malloc((size_t)(n > 0 ? n : 1) * sizeof *results), "results buffer");
     int passed = 0, failed = 0, skipped = 0;
+
+    /* JUnit's `<?xml?>` declaration must be the first bytes of the document, but
+     * forked/in-process test bodies inherit stdout and may printf to it. Point
+     * the real stdout fd at /dev/null for the run phase (children inherit it),
+     * then restore it before rendering the XML. */
+    int junit_saved_out = -1;
+#if !defined(_WIN32)
+    if (opt.format_junit) {
+        fflush(stdout);
+        junit_saved_out = dup(STDOUT_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (junit_saved_out >= 0 && devnull >= 0)
+            dup2(devnull, STDOUT_FILENO);
+        if (devnull >= 0)
+            close(devnull);
+    }
+#endif
 
     /* Parallel needs fork isolation to contain children; --no-fork forces
      * serial. Run concurrently when -jN>1, otherwise run (and stream) serially.
@@ -1833,6 +1955,14 @@ int main(int argc, char **argv) {
 
         print_tap_result(i + 1, r, &pal);
     }
+
+#if !defined(_WIN32)
+    if (opt.format_junit && junit_saved_out >= 0) {
+        fflush(stdout); /* nothing should be buffered for /dev/null, but be safe */
+        dup2(junit_saved_out, STDOUT_FILENO);
+        close(junit_saved_out);
+    }
+#endif
 
     if (opt.format_junit) {
         render_junit(results, n);

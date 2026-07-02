@@ -163,6 +163,12 @@ if [ "$seln" = 1 ]; then ok "--filter selects one"; else bad "--filter selects o
 ord1=$("$POS" --shuffle --seed=123 2>/dev/null | grep '^ok')
 ord2=$("$POS" --shuffle --seed=123 2>/dev/null | grep '^ok')
 if [ "$ord1" = "$ord2" ]; then ok "--shuffle --seed deterministic"; else bad "--shuffle --seed deterministic"; fi
+# ...and it actually reorders: seed 123's permutation of the current suite differs
+# from registration (serial) order, so a no-op --shuffle would fail here. The seed
+# is fixed, so this is deterministic, not flaky. (If the suite ever shrinks so this
+# seed maps to the identity, pick another differing seed via the loop in the docs.)
+serial_ord=$("$POS" 2>/dev/null | grep '^ok')
+if [ "$ord1" != "$serial_ord" ]; then ok "--shuffle reorders vs serial (seed=123)"; else bad "--shuffle reorders vs serial (seed=123)" "shuffled order == serial order"; fi
 
 # --jobs=N runs concurrently but keeps output in registration order: the TAP
 # body (ok/not ok lines) must be byte-identical to a serial run.
@@ -170,9 +176,12 @@ serial=$("$POS" 2>/dev/null | grep '^ok')
 par=$("$POS" -j4 2>/dev/null | grep '^ok')
 if [ "$serial" = "$par" ]; then ok "-j4 output matches serial order"; else bad "-j4 output matches serial order"; fi
 # A parallel run still surfaces failures (nonzero exit) with the right diagnostic.
-expect_fail_msg "-j4 still reports failures" "ASSERT_EQ" "$NEG" --jobs=4
+# These are the only unfiltered negative-suite runs, so they include neg.timeout's
+# infinite spin loop: --timeout=1 bounds it (and overrides any ASMTEST_TIMEOUT=0 in
+# the environment) so the check can't waste ~10s each or hang forever.
+expect_fail_msg "-j4 still reports failures" "ASSERT_EQ" "$NEG" --jobs=4 --timeout=1
 # A crash in one child doesn't sink the run: it's reported and the run completes.
-expect_fail_re "-j4 contains a crash" "$CRASH_RE" "$NEG" -j4
+expect_fail_re "-j4 contains a crash" "$CRASH_RE" "$NEG" -j4 --timeout=1
 # Invalid job counts are rejected with the bad-CLI exit code.
 expect_exit "--jobs=0 exits 2" 2 "$POS" --jobs=0
 

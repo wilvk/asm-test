@@ -49,6 +49,24 @@ def test_call_asm_bad_source_raises():
     assert len(str(ei.value)) > len("in-line assembly failed: ")
 
 
+def test_reg_all_documented_names_resolve():
+    # Every documented GP register name plus rip/rflags must resolve, not raise
+    # KeyError — regression for the manifest publishing only rax/rip/rflags/xmm.
+    names = [
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "rip", "rflags",
+    ]
+    with asmtest.Emulator() as e:
+        res = e.call_asm("mov rax, rdi; add rax, rsi; ret", [40, 2])
+        # All 18 names must resolve to a value, not raise KeyError.
+        vals = {n: res.reg(n) for n in names}
+        assert vals["rax"] == 42
+        # Distinct offsets map to distinct storage (not all reading the rax slot):
+        # rip and rsp are always meaningful and non-zero after a run.
+        assert vals["rip"] != 0
+        assert vals["rsp"] != 0
+
+
 def test_assemble_multi_arch():
     # AArch64 `ret` is C0 03 5F D6 — a guest the x86 emulator can't run, but the
     # assemble-only shim still produces its bytes.

@@ -28,6 +28,7 @@
 
 #else /* POSIX */
 
+#include <fcntl.h>
 #include <fnmatch.h>
 #include <poll.h>
 #include <signal.h>

@@ -3,8 +3,12 @@
  *
  *   long pst2(struct pair p);            small all-int struct: 2 INTEGER
  *                                        eightbytes -> rdi,rsi / x0,x1
- *   long pst_mixed(struct mixed m);      {long; double}: INTEGER + SSE eightbyte
- *                                        -> rdi + xmm0 / x0 + d0
+ *   long pst_mixed(struct mixed m);      {long; double}: SysV classifies the two
+ *                                        eightbytes INTEGER + SSE -> rdi + xmm0;
+ *                                        AAPCS64 passes the whole non-HFA
+ *                                        composite in GP regs -> x0 + x1 (b's
+ *                                        bit pattern in x1, NOT d0; only HFAs
+ *                                        reach SIMD regs, rule C.2/C.12)
  *   long bigsum(struct big s);           24 bytes (memory class): x86-64 reads
  *                                        it from the stack, AArch64 via pointer
  */
@@ -27,6 +31,10 @@ ASM_FUNC pst_mixed
     addq    %rdi, %rax          /* + m.a     */
     ret
 #elif defined(__aarch64__)
+    /* AAPCS64: {long; double} is a non-HFA composite, so both eightbytes go in
+     * GP regs — m.a in x0, m.b's bit pattern in x1 (d0 holds nothing). Move the
+     * bits into an FP reg to convert to integer. */
+    fmov    d0, x1
     fcvtzs  x1, d0
     add     x0, x0, x1
     ret

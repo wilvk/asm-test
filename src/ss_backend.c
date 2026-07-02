@@ -149,15 +149,25 @@ static void ss_normalize(void) {
         return;
     uint32_t n = g_stream_len;
     int have_prev = 0;
+    int prev_was_branch = 0;    /* previous recorded insn was a CTI (jump/call/ret) */
     uint64_t expected_next = 0; /* fall-through offset of the previous insn */
+    uint64_t prev_off = 0;
 
     for (uint32_t i = 0; i < n; i++) {
         uint64_t off = g_stream[i];
 
-        /* Block boundary: region entry, or any offset that is not the fall-through
-         * of the previously recorded in-region instruction (a taken branch, or a
-         * re-entry from a callee at a non-fall-through address). */
-        if (!have_prev || off != expected_next)
+        /* Collapse consecutive identical offsets: a REP-prefixed string insn traps
+         * after every iteration under TF, recording the same offset repeatedly,
+         * whereas PT/DR record it once. Skip the duplicate (no insn, no block). */
+        if (have_prev && off == prev_off)
+            continue;
+
+        /* Block boundary, matching the PT/DR/Unicorn partition (a block ends after
+         * every branch-class instruction): region entry, a non-fall-through target
+         * (taken branch / callee re-entry), OR the fall-through immediately after a
+         * branch-class instruction — i.e. a NOT-taken conditional branch, which
+         * fall-through-discontinuity alone would miss. */
+        if (!have_prev || off != expected_next || prev_was_branch)
             trace_append_block(t, off);
 
         trace_append_insn(t, off);
@@ -171,9 +181,22 @@ static void ss_normalize(void) {
             t->truncated = true;
             return;
         }
+        prev_was_branch = asmtest_disas_is_branch(ASMTEST_ARCH_X86_64, g_base,
+                                                  g_len, off);
         expected_next = off + l;
+        prev_off = off;
         have_prev = 1;
     }
+
+    /* A well-formed routine leaves the region via a control transfer (its `ret`,
+     * or a jump out), so the last recorded in-region instruction is a branch (or
+     * its fall-through reaches the region end). If instead the last instruction is
+     * a non-branch whose fall-through is still strictly inside the region, stepping
+     * stopped early — e.g. the routine cleared EFLAGS.TF (popfq/iret of a flags
+     * image with TF=0), suppressing further #DB traps — so the tail ran unrecorded.
+     * Flag the partial trace rather than present a prefix as complete. */
+    if (have_prev && !prev_was_branch && expected_next < g_len)
+        t->truncated = true;
 
     if (g_overflow)
         t->truncated = true; /* in-region run exceeded the capture buffer */

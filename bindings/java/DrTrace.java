@@ -276,8 +276,11 @@ public final class DrTrace {
         return t instanceof RuntimeException re ? re : new RuntimeException(t);
     }
 
-    private static MemorySegment str(String s) {
-        return s == null ? MemorySegment.NULL : ARENA.allocateUtf8String(s);
+    // Per-call confined Arena (try-with-resources) so the transient C-string copy is
+    // freed when the call returns; the shared ARENA is reserved for the process-
+    // lifetime library lookup. Otherwise every call would leak its buffer forever.
+    private static MemorySegment str(Arena a, String s) {
+        return s == null ? MemorySegment.NULL : a.allocateUtf8String(s);
     }
 
     // ---- process-wide lifecycle ----
@@ -313,14 +316,14 @@ public final class DrTrace {
         // $ASMTEST_DRCLIENT first) when the caller passes none; a still-null client is
         // a NULL pointer, so the C side falls back to $ASMTEST_DRCLIENT / rpath.
         if (client == null || client.isEmpty()) client = defaultClient();
-        try {
-            MemorySegment opts = ARENA.allocate(OPTIONS_LAYOUT);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment opts = a.allocate(OPTIONS_LAYOUT);
             opts.set(ADDRESS, OPTIONS_LAYOUT.byteOffset(
-                MemoryLayout.PathElement.groupElement("dynamorio_home")), str(dynamorioHome));
+                MemoryLayout.PathElement.groupElement("dynamorio_home")), str(a, dynamorioHome));
             opts.set(ADDRESS, OPTIONS_LAYOUT.byteOffset(
-                MemoryLayout.PathElement.groupElement("client_path")), str(client));
+                MemoryLayout.PathElement.groupElement("client_path")), str(a, client));
             opts.set(ADDRESS, OPTIONS_LAYOUT.byteOffset(
-                MemoryLayout.PathElement.groupElement("client_options")), str(clientOptions));
+                MemoryLayout.PathElement.groupElement("client_options")), str(a, clientOptions));
             opts.set(JAVA_INT, OPTIONS_LAYOUT.byteOffset(
                 MemoryLayout.PathElement.groupElement("mode")), mode);
             int rc = (int) DR_INIT.invoke(opts);
@@ -354,22 +357,28 @@ public final class DrTrace {
 
     /** Host-native machine code in real executable (W^X) memory. */
     public static final class NativeCode implements AutoCloseable {
+        // The exec_code_t {base, len} struct is read by base()/length() and passed to
+        // exec_free, so it must outlive fromBytes(); it gets its own Arena closed in
+        // free() (bounding memory to live objects), rather than leaking from the
+        // shared ARENA. Shared (not confined) to keep the original cross-thread use.
+        private Arena arena;
         private MemorySegment code; // an asmtest_exec_code_t {base, len}
 
-        private NativeCode(MemorySegment code) { this.code = code; }
+        private NativeCode(Arena arena, MemorySegment code) { this.arena = arena; this.code = code; }
 
         /** Map executable memory and copy {@code bytes} of host-native code into it. */
         public static NativeCode fromBytes(byte[] bytes) {
             if (EXEC_ALLOC == null) throw new RuntimeException("libasmtest_drapp not loaded", LOAD_ERROR);
-            try {
-                MemorySegment in = ARENA.allocate(Math.max(bytes.length, 1));
+            Arena arena = Arena.ofShared();
+            try (Arena tmp = Arena.ofConfined()) {
+                MemorySegment in = tmp.allocate(Math.max(bytes.length, 1));
                 MemorySegment.copy(bytes, 0, in, JAVA_BYTE, 0, bytes.length);
-                MemorySegment ec = ARENA.allocate(EXEC_CODE_LAYOUT);
+                MemorySegment ec = arena.allocate(EXEC_CODE_LAYOUT);
                 int rc = (int) EXEC_ALLOC.invoke(in, (long) bytes.length, ec);
                 if (rc != ASMTEST_DR_OK) throw new RuntimeException("asmtest_exec_alloc failed: " + rc);
-                return new NativeCode(ec);
-            } catch (RuntimeException re) { throw re; }
-            catch (Throwable t) { throw rethrow(t); }
+                return new NativeCode(arena, ec);
+            } catch (RuntimeException re) { arena.close(); throw re; }
+            catch (Throwable t) { arena.close(); throw rethrow(t); }
         }
 
         /** Address of the executable mapping (offset 0 = entry). */
@@ -398,7 +407,7 @@ public final class DrTrace {
         public void free() {
             if (code == null || EXEC_FREE == null) return;
             try { EXEC_FREE.invoke(code); } catch (Throwable t) { throw rethrow(t); }
-            finally { code = null; }
+            finally { code = null; if (arena != null) { arena.close(); arena = null; } }
         }
 
         @Override public void close() { free(); }
@@ -427,8 +436,8 @@ public final class DrTrace {
         /** Register a non-overlapping native code range under {@code name}, recording
          *  coverage into this trace. */
         public NativeTrace register(String name, NativeCode code) {
-            try {
-                int rc = (int) REGISTER_REGION.invoke(str(name),
+            try (Arena a = Arena.ofConfined()) {
+                int rc = (int) REGISTER_REGION.invoke(str(a, name),
                     MemorySegment.ofAddress(code.base()), code.length(), handle);
                 if (rc != ASMTEST_DR_OK)
                     throw new RuntimeException("register_region(" + name + ") failed: " + rc);
@@ -439,15 +448,15 @@ public final class DrTrace {
 
         /** Drop the named region (the client drops its cached translation). */
         public void unregister(String name) {
-            try { UNREGISTER_REGION.invoke(str(name)); } catch (Throwable t) { throw rethrow(t); }
+            try (Arena a = Arena.ofConfined()) { UNREGISTER_REGION.invoke(str(a, name)); } catch (Throwable t) { throw rethrow(t); }
         }
 
         /** Symbol mode: trace a named exported function with no begin/end markers —
          *  always-on recording for [entry, entry+maxLen) of {@code symbol}, resolved
          *  by name across all loaded modules. */
         public NativeTrace registerSymbol(String symbol, long maxLen) {
-            try {
-                int rc = (int) REGISTER_SYMBOL.invoke(str(symbol), maxLen, handle);
+            try (Arena a = Arena.ofConfined()) {
+                int rc = (int) REGISTER_SYMBOL.invoke(str(a, symbol), maxLen, handle);
                 if (rc != ASMTEST_DR_OK)
                     throw new RuntimeException("register_symbol(" + symbol + ") failed: " + rc);
                 return this;
@@ -459,8 +468,8 @@ public final class DrTrace {
          *  The markers are always balanced (end runs in a finally), so a throw from
          *  the body still closes the region. */
         public void region(String name, Runnable body) {
-            MemorySegment n = str(name);
-            try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment n = str(a, name);
                 TRACE_BEGIN.invoke(n);
                 try { body.run(); }
                 finally { TRACE_END.invoke(n); }

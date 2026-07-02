@@ -84,11 +84,19 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                 trace_append_insn(trace, o);
                 if (o == from_off)
                     break; /* recorded the branch instruction itself */
+                /* An intermediate branch-class instruction in this straight-line
+                 * run is a NOT-taken conditional branch (a taken one would be the
+                 * recorded `from`); its fall-through starts a new block, matching
+                 * the PT/DR/Unicorn partition (a block ends after every CTI). */
+                int was_branch = asmtest_disas_is_branch(
+                    ASMTEST_ARCH_X86_64, (const uint8_t *)base, len, o);
                 o += l;
                 if (o > from_off) { /* walked past the branch: decode desync */
                     trace->truncated = true;
                     return;
                 }
+                if (was_branch)
+                    trace_append_block(trace, o);
             }
         }
 

@@ -309,6 +309,16 @@ def _get():
     return _lib
 
 
+def _try_get():
+    """Like _get() but folds a missing/unloadable library into None so the
+    documented available()/skip_reason() gates can self-skip cleanly (matching
+    the Node/Ruby/Lua bindings) instead of raising OSError."""
+    try:
+        return _get()
+    except OSError:
+        return None
+
+
 def library_path():
     """Absolute path of the libasmtest_hwtrace this process resolved (loading it if
     needed). Lets a clean-room test assert the bundled tier — not a leaked build/
@@ -385,13 +395,19 @@ class HwTrace:
     @staticmethod
     def available(backend=SINGLESTEP) -> bool:
         """True if the chosen backend can run on this host (self-skip otherwise)."""
-        return bool(_get().asmtest_hwtrace_available(backend))
+        lib = _try_get()
+        if lib is None:
+            return False
+        return bool(lib.asmtest_hwtrace_available(backend))
 
     @staticmethod
     def skip_reason(backend=SINGLESTEP) -> str:
         """Human-readable reason available() is false (or 'available')."""
+        lib = _try_get()
+        if lib is None:
+            return "libasmtest_hwtrace not found"
         buf = C.create_string_buffer(160)
-        _get().asmtest_hwtrace_skip_reason(backend, buf, len(buf))
+        lib.asmtest_hwtrace_skip_reason(backend, buf, len(buf))
         return buf.value.decode()
 
     @staticmethod
@@ -509,12 +525,18 @@ class Ptrace:
 
     @staticmethod
     def available() -> bool:
-        return bool(_get().asmtest_ptrace_available())
+        lib = _try_get()
+        if lib is None:
+            return False
+        return bool(lib.asmtest_ptrace_available())
 
     @staticmethod
     def skip_reason() -> str:
+        lib = _try_get()
+        if lib is None:
+            return "libasmtest_hwtrace not found"
         buf = C.create_string_buffer(160)
-        _get().asmtest_ptrace_skip_reason(buf, len(buf))
+        lib.asmtest_ptrace_skip_reason(buf, len(buf))
         return buf.value.decode()
 
     @staticmethod
@@ -620,12 +642,18 @@ class CodeImage:
     @staticmethod
     def available() -> bool:
         """True if soft-dirty page tracking works on this host (else self-skip)."""
-        return bool(_get().asmtest_codeimage_available())
+        lib = _try_get()
+        if lib is None:
+            return False
+        return bool(lib.asmtest_codeimage_available())
 
     @staticmethod
     def skip_reason() -> str:
+        lib = _try_get()
+        if lib is None:
+            return "libasmtest_hwtrace not found"
         buf = C.create_string_buffer(200)
-        _get().asmtest_codeimage_skip_reason(buf, len(buf))
+        lib.asmtest_codeimage_skip_reason(buf, len(buf))
         return buf.value.decode()
 
     def track(self, base: int, length: int) -> int:
@@ -656,12 +684,18 @@ class CodeImage:
     # ---- optional eBPF emission detector ----
     @staticmethod
     def bpf_available() -> bool:
-        return bool(_get().asmtest_codeimage_bpf_available())
+        lib = _try_get()
+        if lib is None:
+            return False
+        return bool(lib.asmtest_codeimage_bpf_available())
 
     @staticmethod
     def bpf_skip_reason() -> str:
+        lib = _try_get()
+        if lib is None:
+            return "libasmtest_hwtrace not found"
         buf = C.create_string_buffer(200)
-        _get().asmtest_codeimage_bpf_skip_reason(buf, len(buf))
+        lib.asmtest_codeimage_bpf_skip_reason(buf, len(buf))
         return buf.value.decode()
 
     def watch_bpf(self) -> int:

@@ -106,7 +106,13 @@ int main(int argc, char **argv) {
     long r2 = fn(60, 60); /* 120 > 100 -> dec -> 119 */
     asmtest_trace_end("add2");
     CHECK(r2 == 119, "second traced call takes the dec branch (60+60-1)");
-    CHECK(asmtest_emu_trace_blocks_len(tr) >= blocks_before,
+    /* The first run (20+22=42, <=100) never took the dec path, so the block at
+     * offset 0xe is new coverage from this run. Assert it directly, and require
+     * strict growth — >= against a monotonic counter can never fail even if the
+     * second run recorded nothing at all. */
+    CHECK(asmtest_trace_covered(tr, 0xe),
+          "re-running covers the dec-branch block (offset 0xe)");
+    CHECK(asmtest_emu_trace_blocks_len(tr) > blocks_before,
           "re-running the region accumulates coverage");
     CHECK(asmtest_dr_marker_error() == 0, "all begin/end markers balanced");
 

@@ -56,7 +56,13 @@ int asmtest_win32_guard(void (*fn)(void *), void *arg,
 /* Runner per-test in-process facility (the `--no-fork` execution path). Tests
  * run one at a time, so a single global recovery point suffices. `begin` arms a
  * vectored exception handler (a hardware fault) and, when timeout_ms > 0, a
- * watchdog (a hung test); a crash, a timeout, or an assertion failure
+ * watchdog that recovers a *user-mode* hang (e.g. a spin loop). NOTE: the
+ * watchdog redirects via SetThreadContext, which only takes effect on return to
+ * user mode, so a test blocked in a kernel wait (WaitForSingleObject on a
+ * never-signaled handle, Sleep(INFINITE), a deadlocked lock) cannot be recovered
+ * in-process; the watchdog then fails hard with ASMTEST_WIN32_HANG_EXIT rather
+ * than wedging (finding #36). The default forked mode contains any hang.
+ * A crash, a timeout, or an assertion failure
  * (asmtest_fail -> __builtin_longjmp on `asmtest_win32_test_recover`) all unwind
  * to the runner's `__builtin_setjmp` recovery, leaving `asmtest_win32_test_reason`
  * set. `disarm` is called by the assertion path before it longjmps; `end` tears
@@ -66,12 +72,22 @@ enum {
     ASMTEST_WIN32_REASON_TIMEOUT = 1000002
 };
 
+/* Process exit code used by the `--no-fork` watchdog when a test is wedged in a
+ * kernel wait that SetThreadContext cannot divert (finding #36): the runner fails
+ * hard with this distinctive code instead of hanging forever. The default forked
+ * mode contains such hangs by terminating the child, so this is a --no-fork-only
+ * last resort. */
+enum { ASMTEST_WIN32_HANG_EXIT = 124 };
+
 extern void *asmtest_win32_test_recover[5]; /* __builtin_setjmp/longjmp buffer */
 extern volatile int asmtest_win32_test_reason;
 extern asmtest_win32_fault_t asmtest_win32_test_fault;
 
 void asmtest_win32_test_begin(unsigned timeout_ms);
 void asmtest_win32_test_disarm(void);
+/* Re-arm the crash/timeout facility for a subsequent run_one phase (teardown)
+ * after an assertion disarmed it; see the definition (finding #33). */
+void asmtest_win32_test_rearm(void);
 void asmtest_win32_test_end(void);
 
 #endif /* _WIN32 */

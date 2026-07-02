@@ -150,6 +150,18 @@ local L = nil
 local ok, lib = pcall(ffi.load, hwtrace_path())
 if ok then L = lib end
 
+-- Preserve 64-bit precision on read-back: a Lua number (double) holds only 53 bits
+-- of integer exactly, so a plain tonumber() silently rounds any address or return
+-- value >= 2^53 (JIT code lives at ~0x7f..). Return a Lua number when the value
+-- fits the mantissa, otherwise the boxed uint64_t cdata (LuaJIT compares/prints it
+-- exactly). Callers needing a number regardless can tonumber() the result.
+local U64_EXACT = 2 ^ 53
+local function u64(v)
+  local n = tonumber(v)
+  if n >= 0 and n < U64_EXACT then return n end
+  return v
+end
+
 local M = {}
 M.INTEL_PT = INTEL_PT
 M.CORESIGHT = CORESIGHT
@@ -197,10 +209,11 @@ function NativeCode.from_bytes(bytes)
 end
 
 -- Invoke the code through a function pointer, passing two C longs and reading the
--- result back as a long (the SysV integer ABI). Returns a Lua number.
+-- result back as a long (the SysV integer ABI). Returns a Lua number, or the boxed
+-- 64-bit cdata when the result exceeds the double mantissa (see u64).
 function NativeCode:call(a, b)
   local fn = ffi.cast("long(*)(long,long)", self.base)
-  return tonumber(fn(a or 0, b or 0))
+  return u64(fn(a or 0, b or 0))
 end
 
 function NativeCode:free()
@@ -437,7 +450,7 @@ function HwTrace.ptrace_trace_call(code_base, code_len, args_table, trace)
   if rc ~= ASMTEST_PTRACE_OK then
     error("asmtest_ptrace_trace_call failed: " .. tonumber(rc))
   end
-  return tonumber(result[0])
+  return u64(result[0])
 end
 
 -- Trace a region in a SEPARATE, already-ptrace-stopped process (the caller owns
@@ -452,7 +465,7 @@ function HwTrace.ptrace_trace_attached(pid, base, len, trace)
   if rc ~= ASMTEST_PTRACE_OK then
     error("asmtest_ptrace_trace_attached failed: " .. tonumber(rc))
   end
-  return tonumber(result[0])
+  return u64(result[0])
 end
 
 -- Like ptrace_trace_attached, but resolve the region's code bytes from a CodeImage
@@ -470,7 +483,7 @@ function HwTrace.ptrace_trace_attached_versioned(pid, base, len, img, when, trac
   if rc ~= ASMTEST_PTRACE_OK then
     error("asmtest_ptrace_trace_attached_versioned failed: " .. tonumber(rc))
   end
-  return tonumber(result[0])
+  return u64(result[0])
 end
 
 -- Run an already-attached, ptrace-stopped target forward until it reaches `addr` (a
@@ -493,7 +506,7 @@ function HwTrace.proc_region_by_addr(pid, addr)
   local rc = L.asmtest_proc_region_by_addr(pid, ffi.cast("const void*", addr),
                                            base, len)
   if rc ~= ASMTEST_PTRACE_OK then return nil end
-  return tonumber(ffi.cast("uintptr_t", base[0])), tonumber(len[0])
+  return u64(ffi.cast("uintptr_t", base[0])), u64(len[0])
 end
 
 -- A JIT method by `name` in /tmp/perf-<pid>.map, as two return values base, len
@@ -504,7 +517,7 @@ function HwTrace.proc_perfmap_symbol(pid, name)
   local len = ffi.new("size_t[1]")
   local rc = L.asmtest_proc_perfmap_symbol(pid, name, base, len)
   if rc ~= ASMTEST_PTRACE_OK then return nil end
-  return tonumber(ffi.cast("uintptr_t", base[0])), tonumber(len[0])
+  return u64(ffi.cast("uintptr_t", base[0])), u64(len[0])
 end
 
 -- A JIT method by `name` from a jitdump (`path`, or /tmp/jit-<pid>.dump when path is
@@ -524,10 +537,10 @@ function HwTrace.jitdump_find(path, name, pid, want_bytes)
   local code = ""
   if want_bytes > 0 then code = ffi.string(buf, tonumber(blen[0])) end
   return {
-    code_addr  = tonumber(e.code_addr),
-    code_size  = tonumber(e.code_size),
-    timestamp  = tonumber(e.timestamp),
-    code_index = tonumber(e.code_index),
+    code_addr  = u64(e.code_addr),
+    code_size  = u64(e.code_size),
+    timestamp  = u64(e.timestamp),
+    code_index = u64(e.code_index),
     code       = code,
   }
 end
@@ -661,9 +674,9 @@ function CodeImage:next_event()
   end
   if rc == 0 then return nil end
   return {
-    addr      = tonumber(e.addr),
-    len       = tonumber(e.len),
-    timestamp = tonumber(e.timestamp),
+    addr      = u64(e.addr),
+    len       = u64(e.len),
+    timestamp = u64(e.timestamp),
     pid       = tonumber(e.pid),
     tid       = tonumber(e.tid),
     kind      = tonumber(e.kind),

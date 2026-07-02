@@ -295,7 +295,8 @@ function main() {
       try {
         const m = Ptrace.jitdumpFind(dumpPath, 'void demo(long, long)', 0, 64);
         ok(m !== null, 'jitdumpFind resolves the method');
-        ok(m.codeAddr === 0x2000 && m.codeSize === ROUTINE.length
+        // codeAddr/codeSize are BigInt (lossless 64-bit); codeIndex/timestamp stay Number.
+        ok(m.codeAddr === 0x2000n && m.codeSize === BigInt(ROUTINE.length)
           && m.codeIndex === 9 && m.timestamp === 5,
           'jitdumpFind (codeAddr,codeSize,codeIndex,timestamp) == (0x2000,18,9,5)');
         assert.deepStrictEqual(m.code, ROUTINE);

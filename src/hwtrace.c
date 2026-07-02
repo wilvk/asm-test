@@ -152,8 +152,12 @@ static int cpu_matches(asmtest_trace_backend_t b) {
     case ASMTEST_HWTRACE_AMD_LBR:
         return vendor_is("AuthenticAMD");
     case ASMTEST_HWTRACE_SINGLESTEP:
-        /* TF/#DB single-step is baseline x86-64 — any vendor, Intel or AMD. */
-#if defined(__x86_64__)
+        /* TF/#DB single-step is baseline x86-64 — any vendor, Intel or AMD — but
+         * the whole capture lifecycle (begin/end, asmtest_ss_*) is implemented only
+         * under Linux; off Linux it is a no-op stub. Gate on __linux__ too so
+         * available() self-skips (with the "Linux x86-64 only" reason) instead of
+         * reporting available and yielding an empty "complete" trace. */
+#if defined(__x86_64__) && defined(__linux__)
         return 1;
 #else
         return 0;
@@ -369,6 +373,14 @@ static size_t round_pages(size_t want, size_t dflt) {
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts) {
     if (opts == NULL)
         return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    /* Refuse to re-init while a capture is live: end() dispatches teardown on the
+     * CURRENT backend, so switching backend mid-capture would run the wrong end
+     * path and leak the old backend's perf fd/mmaps, permanently wedging the tier.
+     * The caller must end() the active capture first. */
+    if (g_fd >= 0 || g_active != NULL)
+        return ASMTEST_HW_ESTATE;
+#endif
     if (!asmtest_hwtrace_available(opts->backend))
         return ASMTEST_HW_EUNAVAIL;
     g_opts = *opts;
@@ -554,6 +566,21 @@ static void hwtrace_end_amd(void) {
         }
     }
 
+    /* The data ring is never drained mid-capture (data_tail only advances at the
+     * very end, line below), so the kernel never gets the next successful
+     * reservation needed to emit a pending PERF_RECORD_LOST — a ring that filled
+     * therefore shows NO loss record even though it dropped the newest samples
+     * (the run's tail, where sample_period=1 windows would otherwise stitch
+     * gaplessly). Treat a (near-)full ring as loss: if less than one maximum-size
+     * branch-stack sample of headroom remains, the tail was almost certainly
+     * dropped and the trace must be honestly truncated rather than claimed complete. */
+    {
+        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
+                            (size_t)AMD_LBR_DEPTH * sizeof(struct perf_branch_entry);
+        if (dsz > 0 && span + max_sample > dsz)
+            lost = 1;
+    }
+
     /* Decode. Tier-A (the single richest in-region window) is complete when the
      * routine's branches fit one 16-deep stack (best_nr < AMD_LBR_DEPTH) — the common
      * small-routine case, unchanged. When that window overflowed (best_nr >= depth)
@@ -588,6 +615,13 @@ static void hwtrace_end_amd(void) {
     } else if (r->trace != NULL) {
         r->trace->truncated = true; /* no in-region branches captured: not complete */
     }
+
+    /* A dropped-sample record, or a ring that filled (detected above), means the
+     * capture holds only a prefix of the run — flag it truncated regardless of
+     * which tier decoded, so the single-window Tier-A path can't report a
+     * ring-truncated capture as complete. */
+    if (lost && r->trace != NULL)
+        r->trace->truncated = true;
 
     free(samples);
     free(nrs);
@@ -713,8 +747,23 @@ static int aux_data_ring_truncated(void) {
 void asmtest_hwtrace_end(const char *name) {
 #if defined(__linux__)
     (void)name;
-    if (g_active == NULL)
+    if (g_active == NULL) {
+        /* No active region, but release any orphaned perf fd/mmaps (defensive:
+         * the init guard now prevents the mismatched-teardown path that could
+         * strand them) so the tier can't be permanently wedged. */
+        if (g_fd >= 0) {
+            ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
+            if (g_aux_map != NULL)
+                munmap(g_aux_map, g_aux_sz);
+            if (g_base_map != NULL)
+                munmap(g_base_map, g_base_sz);
+            close(g_fd);
+            g_aux_map = NULL;
+            g_base_map = NULL;
+            g_fd = -1;
+        }
         return;
+    }
 #if defined(__x86_64__)
     if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
         asmtest_ss_end(); /* disarms TF + restores SIGTRAP; trace already filled */

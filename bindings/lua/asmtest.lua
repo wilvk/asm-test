@@ -133,6 +133,20 @@ local HAS_DISAS = pcall(function() return L.emu_disas end)
 
 local M = {}
 
+-- Convert a 64-bit cdata read-back to a Lua value without losing precision. A Lua
+-- number is a double and holds only 53 bits of integer exactly, so a plain
+-- tonumber() silently rounds register/address values >= 2^53 (and makes two
+-- distinct 64-bit values compare equal). Return a Lua number when the value fits
+-- the mantissa exactly (so existing callers, %d formatting, and comparisons keep
+-- working), otherwise the boxed uint64_t cdata, which LuaJIT compares and prints
+-- exactly. Callers that require a number regardless can tonumber() the result.
+local U64_EXACT = 2 ^ 53
+local function u64(v)
+  local n = tonumber(v)
+  if n >= 0 and n < U64_EXACT then return n end
+  return v
+end
+
 -- Absolute-ish path of the native library actually loaded — for clean-room
 -- install tests to assert it came from the bundled rock payload, not a leaked
 -- build/ tree, a Homebrew dylib, or an ASMTEST_LIB override (the macos-clean-test
@@ -172,7 +186,7 @@ function Regs:capture_vec_f32(fn, vectors)
   end
   L.asmtest_capture_vec_f32(self.h, fn, lanes, n)
 end
-function Regs:ret() return tonumber(L.asmtest_regs_ret(self.h)) end       -- rax / x0
+function Regs:ret() return u64(L.asmtest_regs_ret(self.h)) end            -- rax / x0
 function Regs:fret() return L.asmtest_regs_fret(self.h) end               -- xmm0 / d0
 -- The four float32 lanes of vector register `index` (0 = the vector return).
 function Regs:vec_f32(index)
@@ -191,10 +205,10 @@ EmuResult.__index = EmuResult
 local function new_result() return setmetatable({ h = L.asmtest_emu_result_new() }, EmuResult) end
 function EmuResult:faulted() return L.asmtest_emu_result_faulted(self.h) ~= 0 end
 -- Faulting guest address; only meaningful when :faulted().
-function EmuResult:fault_addr() return tonumber(L.asmtest_emu_result_fault_addr(self.h)) end
+function EmuResult:fault_addr() return u64(L.asmtest_emu_result_fault_addr(self.h)) end
 -- Why the access was invalid (an M.FaultKind value); only meaningful when :faulted().
 function EmuResult:fault_kind() return L.asmtest_emu_result_fault_kind(self.h) end
-function EmuResult:reg(name) return tonumber(L.asmtest_emu_x86_reg(self.h, name)) end  -- GP reg + rip/rflags
+function EmuResult:reg(name) return u64(L.asmtest_emu_x86_reg(self.h, name)) end  -- GP reg + rip/rflags
 -- Lane (0..1) of guest XMM register index as a double (scalar return = :xmm_f64(0, 0)).
 function EmuResult:xmm_f64(index, lane) return tonumber(L.asmtest_emu_x86_xmm_f64(self.h, index or 0, lane or 0)) end
 -- Lane (0..3) of guest XMM register index as a float32.
@@ -209,14 +223,14 @@ M.FaultKind = { NONE = 0, READ = 1, WRITE = 2, FETCH = 3 }
 local Watch = {}
 Watch.__index = Watch
 function Watch:violated() return L.asmtest_emu_watch_violated(self.h) ~= 0 end
-function Watch:addr() return tonumber(L.asmtest_emu_watch_addr(self.h)) end
-function Watch:rip_off() return tonumber(L.asmtest_emu_watch_rip_off(self.h)) end
+function Watch:addr() return u64(L.asmtest_emu_watch_addr(self.h)) end
+function Watch:rip_off() return u64(L.asmtest_emu_watch_rip_off(self.h)) end
 function Watch:free() if self.h then L.asmtest_emu_watch_free(self.h); self.h = nil end end
 
 local RegGuard = {}
 RegGuard.__index = RegGuard
 function RegGuard:violated() return L.asmtest_emu_reg_guard_violated(self.h) ~= 0 end
-function RegGuard:got() return tonumber(L.asmtest_emu_reg_guard_got(self.h)) end
+function RegGuard:got() return u64(L.asmtest_emu_reg_guard_got(self.h)) end
 function RegGuard:free() if self.h then L.asmtest_emu_reg_guard_free(self.h); self.h = nil end end
 
 local Emu = {}
@@ -247,15 +261,21 @@ end
 function Emu:call_fp(code, opts)
   opts = opts or {}
   local fargs = opts.fargs or {}
+  local iargs = opts.iargs or {}
   local res = new_result()
   local fa = #fargs > 0 and ffi.new("double[?]", #fargs, fargs) or nil
-  L.emu_call_fp(self.h, code, #code, nil, 0, fa, #fargs, 0, res.h)
+  -- Integer args (e.g. a mixed routine f(long n, double x)) go in the GP arg
+  -- registers; peer bindings expose these and the C side supports them.
+  local ia = #iargs > 0 and ffi.new("long[?]", #iargs, iargs) or nil
+  L.emu_call_fp(self.h, code, #code, ia, #iargs, fa, #fargs, 0, res.h)
   return res
 end
--- Run raw bytes marshalling 128-bit vectors (opts.vargs = array of four-lane arrays).
+-- Run raw bytes marshalling 128-bit vectors (opts.vargs = array of four-lane arrays;
+-- opts.iargs = integer args in the GP registers).
 function Emu:call_vec(code, opts)
   opts = opts or {}
   local vargs = opts.vargs or {}
+  local iargs = opts.iargs or {}
   local nv = #vargs
   local res = new_result()
   local va = nil
@@ -263,7 +283,8 @@ function Emu:call_vec(code, opts)
     va = ffi.new("float[?]", nv * 4)
     for i = 1, nv do for l = 1, 4 do va[(i - 1) * 4 + (l - 1)] = vargs[i][l] or 0 end end
   end
-  L.emu_call_vec(self.h, code, #code, nil, 0, va, nv, 0, res.h)
+  local ia = #iargs > 0 and ffi.new("long[?]", #iargs, iargs) or nil
+  L.emu_call_vec(self.h, code, #code, ia, #iargs, va, nv, 0, res.h)
   return res
 end
 -- Run raw bytes under the Microsoft x64 (Win64) convention.
@@ -403,7 +424,7 @@ local function new_guest_result(arch)
 end
 function GuestResult:faulted() return L.asmtest_emu_result_faulted(self.h) ~= 0 end
 -- Guest register by name (e.g. "x0"/"sp", "a0"/"x10", "r0").
-function GuestResult:reg(name) return tonumber(L["asmtest_emu_" .. self.arch .. "_reg"](self.h, name)) end
+function GuestResult:reg(name) return u64(L["asmtest_emu_" .. self.arch .. "_reg"](self.h, name)) end
 function GuestResult:free()
   if self.h then L["asmtest_emu_" .. self.arch .. "_result_free"](self.h); self.h = nil end
 end

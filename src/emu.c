@@ -243,6 +243,28 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
 /* Shared System V setup: copy the routine in, plant the sentinel return address
  * on a 16-aligned-after-call stack, and load the integer args into the GP
  * argument registers. Returns false only if the code write fails. */
+/* Zero the GP + vector register file and reset RFLAGS before a call, so a routine
+ * that reads a register/lane the caller did not set gets a deterministic 0 rather
+ * than the previous call's state on a reused handle (all bindings hold one
+ * long-lived handle across many calls). Guest MAPPED memory is intentionally
+ * preserved — emu_map/emu_write preload data for the call — and the internal
+ * stack is re-based per call by the setup. */
+static void emu_x86_zero_regs(uc_engine *uc) {
+    static const int gp[] = {
+        UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
+        UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_RBP, UC_X86_REG_R8,
+        UC_X86_REG_R9,  UC_X86_REG_R10, UC_X86_REG_R11, UC_X86_REG_R12,
+        UC_X86_REG_R13, UC_X86_REG_R14, UC_X86_REG_R15};
+    uint64_t z = 0;
+    for (size_t i = 0; i < sizeof gp / sizeof gp[0]; i++)
+        uc_reg_write(uc, gp[i], &z);
+    uint8_t zv[16] = {0};
+    for (int i = 0; i < 16; i++)
+        uc_reg_write(uc, UC_X86_REG_XMM0 + i, zv);
+    uint64_t flags = 2; /* x86 EFLAGS reserved bit 1 is always set */
+    uc_reg_write(uc, UC_X86_REG_EFLAGS, &flags);
+}
+
 static bool emu_x86_setup_sysv(uc_engine *uc, const void *fn, size_t code_len,
                                const long *iargs, int niargs) {
     static const int arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
@@ -250,9 +272,20 @@ static bool emu_x86_setup_sysv(uc_engine *uc, const void *fn, size_t code_len,
                                     UC_X86_REG_R8,  UC_X86_REG_R9};
     if (!load_code(uc, fn, code_len))
         return false;
-    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 8;
+    emu_x86_zero_regs(uc); /* deterministic start: clear stale reg state */
+    /* SysV places INTEGER args beyond the sixth on the stack starting at
+     * [rsp+8] at entry (psABI §3.2.3). Reserve room above the return address for
+     * them, rounding the reservation to 16 bytes so rsp stays ≡ 8 (mod 16) at
+     * entry (16-aligned after the simulated call). */
+    int nstack = niargs > 6 ? niargs - 6 : 0;
+    uint64_t pad = ((uint64_t)nstack * 8 + 15) & ~(uint64_t)15;
+    uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 8 - pad;
     uint64_t ret = EMU_RET_MAGIC;
     uc_mem_write(uc, sp, &ret, sizeof ret);
+    for (int i = 6; i < niargs; i++) {
+        uint64_t v = (uint64_t)iargs[i];
+        uc_mem_write(uc, sp + 8 + 8 * (uint64_t)(i - 6), &v, sizeof v);
+    }
     uc_reg_write(uc, UC_X86_REG_RSP, &sp);
     for (int i = 0; i < niargs && i < 6; i++) {
         uint64_t v = (uint64_t)iargs[i];
@@ -456,6 +489,7 @@ bool emu_call_win64_traced(emu_t *e, const void *fn, size_t code_len,
         out->uc_err = -1;
         return false;
     }
+    emu_x86_zero_regs(uc); /* deterministic start: clear stale reg state */
 
     /* Frame from rsp on entry: [rsp]=retaddr, [rsp+8..39]=shadow space,
      * [rsp+40+8*i]=stack arg (4+i). Pick rsp so it is 8 (mod 16) on entry, as
@@ -632,19 +666,35 @@ static void read_all_regs_arm64(uc_engine *uc, emu_arm64_regs_t *r) {
 }
 
 /* Shared AAPCS64 setup: code + flush, sentinel lr, 16-aligned sp, integer args
- * in x0..x5. Returns false only on a code-write failure. */
+ * in x0..x7 (AAPCS64 stage C rule C.9 assigns the first eight to r0..r7). Returns
+ * false only on a code-write failure. */
+/* AArch64 analog of emu_x86_zero_regs: clear x0..x28, the frame pointer, NZCV, and
+ * the whole v0..v31 file before a call so a reused handle starts deterministic. */
+static void emu_arm64_zero_regs(uc_engine *uc) {
+    uint64_t z = 0;
+    for (int r = UC_ARM64_REG_X0; r <= UC_ARM64_REG_X28; r++)
+        uc_reg_write(uc, r, &z);
+    uc_reg_write(uc, UC_ARM64_REG_X29, &z); /* FP; x30/SP set by the setup */
+    uc_reg_write(uc, UC_ARM64_REG_NZCV, &z);
+    uint8_t zv[16] = {0};
+    for (int i = 0; i < 32; i++)
+        uc_reg_write(uc, UC_ARM64_REG_V0 + i, zv);
+}
+
 static bool emu_arm64_setup(uc_engine *uc, const void *code, size_t code_len,
                             const long *iargs, int niargs) {
-    static const int arg_regs[6] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
+    static const int arg_regs[8] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
                                     UC_ARM64_REG_X2, UC_ARM64_REG_X3,
-                                    UC_ARM64_REG_X4, UC_ARM64_REG_X5};
+                                    UC_ARM64_REG_X4, UC_ARM64_REG_X5,
+                                    UC_ARM64_REG_X6, UC_ARM64_REG_X7};
     if (!load_code(uc, code, code_len))
         return false;
+    emu_arm64_zero_regs(uc); /* deterministic start: clear stale reg state */
     uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
     uc_reg_write(uc, UC_ARM64_REG_SP, &sp);
     uint64_t lr = EMU_RET_MAGIC; /* `ret` branches to lr */
     uc_reg_write(uc, UC_ARM64_REG_X30, &lr);
-    for (int i = 0; i < niargs && i < 6; i++) {
+    for (int i = 0; i < niargs && i < 8; i++) {
         uint64_t v = (uint64_t)iargs[i];
         uc_reg_write(uc, arg_regs[i], &v);
     }

@@ -327,6 +327,38 @@ void asmtest_codeimage_free(asmtest_codeimage_t *img) {
 
 /* ---- track / refresh / query ---------------------------------------------- */
 
+/* Detect soft-dirty pages in regions [lo, hi) and snapshot a new version of each
+ * that changed. MUST be run over all existing regions before ci_arm(), since
+ * clear_refs is process-global and re-arming erases pending soft-dirty state.
+ * Returns the number of new versions (>= 0), or a negative ASMTEST_CI_* code. */
+static int ci_scan_range(asmtest_codeimage_t *img, size_t lo, size_t hi) {
+    int new_versions = 0;
+    for (size_t i = lo; i < hi; i++) {
+        ci_region_t *r = &img->regions[i];
+        unsigned char stackbuf[64];
+        unsigned char *dirty =
+            r->npages <= sizeof stackbuf ? stackbuf : (unsigned char *)malloc(r->npages);
+        if (dirty == NULL)
+            return ASMTEST_CI_EUNAVAIL;
+
+        int any = ci_region_dirty(img, r, dirty);
+        if (dirty != stackbuf)
+            free(dirty);
+        if (!any)
+            continue;
+
+        uint8_t *bytes = ci_read_region(img, r->base, r->len);
+        if (bytes == NULL)
+            continue; /* region vanished (freed/unmapped) — keep prior versions */
+        if (ci_region_add_version(img, r, bytes) != ASMTEST_CI_OK) {
+            free(bytes);
+            return ASMTEST_CI_EUNAVAIL;
+        }
+        new_versions++;
+    }
+    return new_versions;
+}
+
 int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t len) {
     if (img == NULL || base == NULL || len == 0)
         return ASMTEST_CI_EINVAL;
@@ -363,7 +395,17 @@ int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t l
     }
     img->nreg++;
 
-    /* Arm: any write after this point is detectable on the next refresh. */
+    /* Arm: any write after this point is detectable on the next refresh. But
+     * ci_arm() clears soft-dirty for the WHOLE process, so it would wipe any
+     * pending (as-yet-unsnapshotted) writes to previously-tracked regions. Scan
+     * and snapshot those existing regions first — the region added above was
+     * just snapshotted, so it is excluded to avoid a redundant version. This is
+     * the same scan-then-arm discipline refresh() uses. */
+    if (img->nreg > 1) {
+        int sc = ci_scan_range(img, 0, img->nreg - 1);
+        if (sc < 0)
+            return sc;
+    }
     return ci_arm(img);
 }
 
@@ -373,32 +415,11 @@ int asmtest_codeimage_refresh(asmtest_codeimage_t *img) {
     if (img->nreg == 0)
         return 0;
 
-    int new_versions = 0;
-    /* Detect + snapshot ALL regions BEFORE re-arming (clear_refs is global, so re-arming
-     * would wipe pending soft-dirty state for regions not yet scanned). */
-    for (size_t i = 0; i < img->nreg; i++) {
-        ci_region_t *r = &img->regions[i];
-        unsigned char stackbuf[64];
-        unsigned char *dirty =
-            r->npages <= sizeof stackbuf ? stackbuf : (unsigned char *)malloc(r->npages);
-        if (dirty == NULL)
-            return ASMTEST_CI_EUNAVAIL;
-
-        int any = ci_region_dirty(img, r, dirty);
-        if (dirty != stackbuf)
-            free(dirty);
-        if (!any)
-            continue;
-
-        uint8_t *bytes = ci_read_region(img, r->base, r->len);
-        if (bytes == NULL)
-            continue; /* region vanished (freed/unmapped) — keep prior versions */
-        if (ci_region_add_version(img, r, bytes) != ASMTEST_CI_OK) {
-            free(bytes);
-            return ASMTEST_CI_EUNAVAIL;
-        }
-        new_versions++;
-    }
+    /* Detect + snapshot ALL regions BEFORE re-arming (clear_refs is global, so
+     * re-arming would wipe pending soft-dirty state for regions not yet scanned). */
+    int new_versions = ci_scan_range(img, 0, img->nreg);
+    if (new_versions < 0)
+        return new_versions;
 
     int rc = ci_arm(img);
     if (rc != ASMTEST_CI_OK)

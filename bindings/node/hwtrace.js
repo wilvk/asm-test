@@ -76,6 +76,15 @@ const ASMTEST_CI_KIND_MPROTECT = 1;
 const ASMTEST_CI_KIND_MMAP = 2;
 const ASMTEST_CI_KIND_MEMFD = 3;
 
+// koffi truncates a JS Number passed to a `const void*` parameter via Int32Value
+// (32-bit), so a real 64-bit address (JIT code at ~0x7f..) would be silently
+// mangled. Route any numeric address through BigInt, whose lossless Int64Value
+// path preserves the full 64 bits. External pointers, BigInt, and null/undefined
+// pass through unchanged.
+function _addr(v) {
+  return typeof v === 'number' ? BigInt(v) : v;
+}
+
 // The native-payload slot the published npm package ships (mirrors asmtest.js's
 // core loader): native/<os>-<arch>/lib<name>.<ext> next to this module.
 function bundledSlot(name) {
@@ -464,7 +473,7 @@ class Ptrace {
    *  the target's RAX at the ret as a JS number. */
   static traceAttached(pid, base, len, trace) {
     const resultBuf = Buffer.alloc(8);
-    const rc = _fn.ptraceTraceAttached(pid, base, len, resultBuf, trace._handle);
+    const rc = _fn.ptraceTraceAttached(pid, _addr(base), len, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached failed: ${rc}`);
     return Number(resultBuf.readBigInt64LE(0));
   }
@@ -476,7 +485,7 @@ class Ptrace {
   static traceAttachedVersioned(pid, base, len, img, when, trace) {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceAttachedVersioned(
-      pid, base, len, img ? img._handle : null, BigInt(when), resultBuf, trace._handle);
+      pid, _addr(base), len, img ? img._handle : null, BigInt(when), resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) {
       throw new Error(`asmtest_ptrace_trace_attached_versioned failed: ${rc}`);
     }
@@ -490,7 +499,7 @@ class Ptrace {
    *  (ASMTEST_PTRACE_OK, or ASMTEST_PTRACE_ENOENT if the target exited first). The
    *  caller owns PTRACE_ATTACH/DETACH. */
   static runTo(pid, addr) {
-    return _fn.ptraceRunTo(pid, addr);
+    return _fn.ptraceRunTo(pid, _addr(addr));
   }
 
   /** The executable mapping in /proc/<pid>/maps containing `addr`, as
@@ -498,7 +507,7 @@ class Ptrace {
   static procRegionByAddr(pid, addr) {
     const baseOut = [null];
     const lenOut = [0];
-    const rc = _fn.procRegionByAddr(pid, addr, baseOut, lenOut);
+    const rc = _fn.procRegionByAddr(pid, _addr(addr), baseOut, lenOut);
     if (rc !== ASMTEST_PTRACE_OK) return null;
     return { base: baseOut[0], len: Number(lenOut[0]) };
   }
@@ -516,8 +525,9 @@ class Ptrace {
    *  path is null) as { codeAddr, codeSize, timestamp, codeIndex, code }, carrying
    *  up to `wantBytes` of recorded code (a Buffer), or null. The latest re-JIT body
    *  (highest timestamp) wins. The entry is four consecutive uint64s (offsets
-   *  0/8/16/24); they fit a JS number for the test fixtures but are read as BigInt
-   *  and converted, staying exact below 2^53. */
+   *  0/8/16/24). codeAddr/codeSize are returned as BigInt so a real 64-bit JIT
+   *  address survives intact and feeds runTo/traceAttached/track without truncation;
+   *  timestamp/codeIndex stay JS numbers (logical counters). */
   static jitdumpFind(path, name, pid = 0, wantBytes = 0) {
     const entry = Buffer.alloc(32); // asmtest_jitdump_entry_t: 4 x uint64
     const codeBuf = wantBytes ? Buffer.alloc(wantBytes) : null;
@@ -527,8 +537,8 @@ class Ptrace {
     if (rc !== ASMTEST_PTRACE_OK) return null;
     const n = wantBytes ? Number(lenOut[0]) : 0;
     return {
-      codeAddr: Number(entry.readBigUInt64LE(0)),
-      codeSize: Number(entry.readBigUInt64LE(8)),
+      codeAddr: entry.readBigUInt64LE(0),
+      codeSize: entry.readBigUInt64LE(8),
       timestamp: Number(entry.readBigUInt64LE(16)),
       codeIndex: Number(entry.readBigUInt64LE(24)),
       code: wantBytes ? Buffer.from(codeBuf.subarray(0, n)) : Buffer.alloc(0),
@@ -586,7 +596,7 @@ class CodeImage {
    *  its pages. `base` may be a NativeCode's external pointer or a numeric/BigInt
    *  address. Returns the status code (ASMTEST_CI_OK on success). */
   track(base, len) {
-    return _fn.codeimageTrack(this._handle, base, len);
+    return _fn.codeimageTrack(this._handle, _addr(base), len);
   }
 
   /** Scan tracked ranges for changed pages and re-snapshot each as a new version.
@@ -609,7 +619,7 @@ class CodeImage {
   bytesAt(addr, when = 0) {
     const outPtr = [null];
     const outLen = [0];
-    const rc = _fn.codeimageBytesAt(this._handle, addr, BigInt(when), outPtr, outLen);
+    const rc = _fn.codeimageBytesAt(this._handle, _addr(addr), BigInt(when), outPtr, outLen);
     if (rc !== ASMTEST_CI_OK) return null;
     const n = Number(outLen[0]);
     if (!outPtr[0] || n === 0) return Buffer.alloc(0);

@@ -236,6 +236,21 @@ fn emu_trace_coverage() {
     assert!(!tr.covered(4));
 }
 
+// call_traced must dispatch on the guest arch: the RISC-V/Arm result buffers are
+// smaller than arm64's, so the pre-fix unconditional emu_arm64_call_traced wrote
+// past the allocation (heap corruption) and ran on the wrong engine. Here a traced
+// RISC-V add must read back exactly, proving the correct emu call + result buffer.
+#[test]
+fn guest_call_traced_per_arch() {
+    use asmtest::{Guest, GuestArch, Trace};
+    let add = [0x33u8, 0x05, 0xB5, 0x00, 0x67, 0x80, 0x00, 0x00]; // add a0,a0,a1; ret
+    let g = Guest::new(GuestArch::Riscv).expect("open riscv guest");
+    let tr = Trace::new();
+    let res = g.call_traced(&add, &[40, 2], &tr);
+    assert!(!res.faulted());
+    assert_eq!(res.reg("a0"), 42);
+}
+
 // Track F: mid-execution guards (byte-literal routines).
 #[test]
 fn guards_watchpoint_and_reg_invariant() {

@@ -186,6 +186,15 @@ size_t asmtest_disas(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
 int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
                           uint64_t off);
 
+/* 1 if the instruction at code[off] is any control-transfer / branch-class
+ * instruction — conditional or unconditional jump, call, or return (the Capstone
+ * JUMP/CALL/RET/IRET groups). Used for block normalization: a block ends after
+ * every branch-class instruction, so the fall-through of a NOT-taken conditional
+ * branch (and a call-return re-entry) starts a new block, matching the PT /
+ * DynamoRIO / Unicorn partition. 0 otherwise, and always 0 without Capstone. */
+int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
+                            size_t code_len, uint64_t off);
+
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
                           const uint8_t *code, size_t code_len,

@@ -144,6 +144,11 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
     if (f == NULL)
         return ASMTEST_PTRACE_ENOENT;
 
+    /* Initialize the output length so a caller that ignores a non-OK return (or a
+     * path that never assigns it) cannot index bytes_out with stack garbage. */
+    if (bytes_len != NULL)
+        *bytes_len = 0;
+
     /* File header: magic, version, total_size, elf_mach, pad1, pid, timestamp,
      * flags (40 bytes for v1). */
     unsigned char hdr[40];
@@ -220,14 +225,22 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
             }
             if (bytes_out != NULL && bytes_cap > 0) {
                 size_t cpy = code_size < bytes_cap ? (size_t)code_size : bytes_cap;
-                if (fread(bytes_out, 1, cpy, f) != cpy)
+                if (fread(bytes_out, 1, cpy, f) != cpy) {
+                    /* Record's code bytes are truncated (a live JIT still flushing
+                     * the newest record) — do not return OK with an unset length
+                     * and partial bytes. */
+                    rc = ASMTEST_PTRACE_ETRACE;
                     break;
+                }
                 if (bytes_len)
                     *bytes_len = cpy;
                 if (code_size > cpy &&
-                    fseek(f, (long)(code_size - cpy), SEEK_CUR) != 0)
+                    fseek(f, (long)(code_size - cpy), SEEK_CUR) != 0) {
+                    rc = ASMTEST_PTRACE_ETRACE;
                     break;
+                }
             } else if (fseek(f, (long)code_size, SEEK_CUR) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
                 break;
             }
         } else if (fseek(f, (long)code_size, SEEK_CUR) != 0) {
@@ -670,6 +683,7 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     uint32_t n = 0;
     int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
     int status = 0;
+    int pending_sig = 0; /* signal to inject on the next step (forwarded, unrelated) */
 
     if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
         /* Could not reach the initial SIGSTOP. */
@@ -681,10 +695,12 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(uintptr_t)PTRACE_O_EXITKILL);
 
     for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, (void *)(uintptr_t)pending_sig) !=
+            0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
+        pending_sig = 0;
         if (waitpid(pid, &status, 0) < 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
@@ -694,16 +710,25 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
-            /* The tracee took a real signal (e.g. a faulting routine). Record what we
-             * have as truncated and reap it — the tracee is stopped in signal-delivery,
-             * not exited, and PTRACE_O_EXITKILL only fires when the *tracer* exits, so
-             * without this the stopped child leaks (a suite of faulting routines would
-             * exhaust PIDs). */
-            if (entered)
-                overflow = 1; /* incomplete in-region capture */
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            break;
+            int sig = WSTOPSIG(status);
+            /* A fault signal from the routine itself (SIGSEGV/BUS/ILL/FPE) is
+             * terminal: mark the capture incomplete and reap the tracee — it is
+             * stopped in signal-delivery, not exited, and PTRACE_O_EXITKILL only
+             * fires when the *tracer* exits, so otherwise the stopped child leaks
+             * (a suite of faulting routines would exhaust PIDs). Any OTHER signal
+             * (a process-group SIGWINCH/SIGINT/SIGTSTP delivered to the shared
+             * group) is unrelated to the routine — forward it and keep stepping,
+             * as run_until does, rather than killing a healthy tracee and returning
+             * an empty trace as complete. */
+            if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+                sig == SIGFPE) {
+                overflow = 1; /* faulted before returning: incomplete capture */
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                break;
+            }
+            pending_sig = sig; /* inject on the next PTRACE_SINGLESTEP */
+            continue;
         }
 
         uint64_t pc, retval;
@@ -746,8 +771,15 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
             if (result != NULL)
                 *result = (long)retval;
             returned = 1;
+            /* We have the return value; the child's only remaining work is _exit().
+             * CONT once, but if a signal stops it before it exits (a process-group
+             * signal in that window), kill+reap so it can't survive as a stopped,
+             * unreaped tracee (PTRACE_O_EXITKILL only fires on tracer exit). */
             ptrace(PTRACE_CONT, pid, NULL, NULL);
-            waitpid(pid, &status, 0);
+            if (waitpid(pid, &status, 0) >= 0 && WIFSTOPPED(status)) {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
             break;
         }
     }

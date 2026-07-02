@@ -38,7 +38,8 @@ double asmtest_regs_fret(const regs_t *r) {
 
 /* Read a single vector lane (float32) from a captured vector register. */
 float asmtest_regs_vec_f32(const regs_t *r, int index, int lane) {
-    if (index < 0 || lane < 0 || lane > 3)
+    if (index < 0 || (size_t)index >= sizeof r->vec / sizeof r->vec[0] ||
+        lane < 0 || lane > 3)
         return 0.0f;
     return r->vec[index].f32[lane];
 }

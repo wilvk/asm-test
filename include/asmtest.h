@@ -346,7 +346,11 @@ void asm_call_capture_args(regs_t *out, void *fn, const long *args, int nargs);
  * `result`; the `nargs` visible integer args follow the ABI (x86-64: rsi.. then
  * stack; AArch64: x0.. then stack). Inspect the returned struct via `result`.
  * Small (<=16-byte) structs are returned in registers instead and need no
- * special call: read them from regs_t (rax/rdx, or vec[0]/vec[1] for SSE). */
+ * special call: read them from regs_t (x86-64: rax/rdx, or vec[0]/vec[1] for
+ * SSE). NOTE: on AArch64 regs_t captures only x0 (ret) and d0 (fret), not the
+ * second integer return register x1, so the high eightbyte of a 9-16 byte
+ * integer-pair return (x0/x1) is not observable there — route such returns
+ * through asm_call_capture_sret, or assert only the x0 (ret) half. */
 void asm_call_capture_sret(regs_t *out, void *fn, void *result,
                            const long *args, int nargs);
 
@@ -354,8 +358,12 @@ void asm_call_capture_sret(regs_t *out, void *fn, void *result,
  * (memory-class) struct passed by value (`ssize` bytes at `sptr`). x86-64 copies
  * the struct inline onto the stack; AArch64 passes a pointer to it (per AAPCS64).
  * Small (<=16-byte) structs need no special call — pass their eightbytes as
- * ordinary integer/double args (e.g. struct{long,long} via ASM_CALL2, or
- * struct{long;double} via asm_call_capture_fp). */
+ * ordinary register args following the platform ABI. On x86-64/SysV that is the
+ * eightbyte classification (struct{long,long} via ASM_CALL2 -> rdi/rsi;
+ * struct{long;double} via asm_call_capture_fp -> rdi/xmm0). On AArch64 a non-HFA
+ * composite is passed entirely in GP registers, so struct{long;double} is two
+ * integer args — x0 plus the double's bit pattern in x1 — via ASM_CALL2, NOT
+ * asm_call_capture_fp (which would place the double in d0 and leave x1 = 0). */
 void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize);
 
@@ -493,11 +501,17 @@ int asmtest_check_abi(const regs_t *r, char *msg, size_t n);
 int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
                        const char *name, char *msg, size_t n);
 
-#if defined(ASMTEST_ABI_WIN64)
-/* Win64-only: the callee-saved vector registers xmm6-15 (System V has none).
- * Valid after a _vec/_vec_n capture, which fills vec[6..15]; the trampoline seeds
- * xmm(6+k) with both lanes == 6+k, so this verifies vec[i] == {i, i}. Verdict
- * shim + jumping wrapper, matching asmtest_check_abi / _assert_abi. */
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
+/* Verify the callee-saved vector registers were restored across the call, the
+ * FP/SIMD complement of asmtest_check_abi's integer check. Valid after a
+ * _vec/_vec_n capture, which fills vec[].
+ *   - Win64: xmm6-15 are callee-saved (System V x86-64 has none). The trampoline
+ *     seeds xmm(6+k) with both lanes == 6+k, so this verifies vec[i] == {i, i}
+ *     for i in 6..15.
+ *   - AArch64: only the low 64 bits of d8-d15 are callee-saved (AAPCS64 6.1.2).
+ *     The trampoline seeds d(8+k) low == 8+k, so this verifies vec[i].u64[0] == i
+ *     for i in 8..15 (the upper lane is caller-saved and not checked).
+ * Verdict shim + jumping wrapper, matching asmtest_check_abi / _assert_abi. */
 int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n);
 void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r);
 #endif
@@ -828,9 +842,10 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Verify the routine restored all callee-saved registers (ABI compliance). */
 #define ASSERT_ABI_PRESERVED(r) asmtest_assert_abi(__FILE__, __LINE__, (r))
 
-#if defined(ASMTEST_ABI_WIN64)
-/* Win64: verify the callee-saved vector registers xmm6-15 were restored (after a
- * _vec/_vec_n capture). Complements ASSERT_ABI_PRESERVED's integer check. */
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
+/* Verify the callee-saved vector registers were restored (after a _vec/_vec_n
+ * capture): Win64 xmm6-15, or AArch64 d8-d15 (low 64 bits). Complements
+ * ASSERT_ABI_PRESERVED's integer check. */
 #define ASSERT_ABI_PRESERVED_VEC(r)                                            \
     asmtest_assert_abi_vec(__FILE__, __LINE__, (r))
 #endif

@@ -803,6 +803,8 @@ extern "C" {
     fn emu_riscv_close(e: *mut c_void);
     fn emu_riscv_call(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
                       nargs: c_int, mi: u64, out: *mut c_void) -> bool;
+    fn emu_riscv_call_traced(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                             nargs: c_int, mi: u64, out: *mut c_void, trace: *mut c_void) -> bool;
     fn asmtest_emu_riscv_result_new() -> *mut c_void;
     fn asmtest_emu_riscv_result_free(r: *mut c_void);
     fn asmtest_emu_riscv_reg(r: *const c_void, name: *const c_char) -> u64;
@@ -811,6 +813,8 @@ extern "C" {
     fn emu_arm_close(e: *mut c_void);
     fn emu_arm_call(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
                     nargs: c_int, mi: u64, out: *mut c_void) -> bool;
+    fn emu_arm_call_traced(e: *mut c_void, code: *const c_void, len: usize, args: *const c_long,
+                           nargs: c_int, mi: u64, out: *mut c_void, trace: *mut c_void) -> bool;
     fn asmtest_emu_arm_result_new() -> *mut c_void;
     fn asmtest_emu_arm_result_free(r: *mut c_void);
     fn asmtest_emu_arm_reg(r: *const c_void, name: *const c_char) -> u64;
@@ -1004,14 +1008,21 @@ impl Guest {
         GuestResult { h: out, arch: self.arch }
     }
 
-    /// Like [`Guest::call`], but record an execution trace / coverage (AArch64).
+    /// Like [`Guest::call`], but record an execution trace / coverage.
     pub fn call_traced(&self, code: &[u8], args: &[i64], trace: &Trace) -> GuestResult {
         let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
         let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
         let out = self.new_result();
         unsafe {
-            emu_arm64_call_traced(self.h, code.as_ptr() as *const c_void, code.len(), ptr,
-                                  args.len() as c_int, 0, out, trace.h);
+            let cp = code.as_ptr() as *const c_void;
+            match self.arch {
+                GuestArch::Arm64 => emu_arm64_call_traced(self.h, cp, code.len(), ptr,
+                                                          args.len() as c_int, 0, out, trace.h),
+                GuestArch::Riscv => emu_riscv_call_traced(self.h, cp, code.len(), ptr,
+                                                          args.len() as c_int, 0, out, trace.h),
+                GuestArch::Arm => emu_arm_call_traced(self.h, cp, code.len(), ptr,
+                                                      args.len() as c_int, 0, out, trace.h),
+            };
         }
         GuestResult { h: out, arch: self.arch }
     }

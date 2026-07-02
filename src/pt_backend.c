@@ -94,6 +94,7 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
     pt_insn_set_image(dec, image);
 
     /* Sync to each PSB and walk instructions; normalize blocks at branch edges. */
+    size_t inregion = 0; /* in-region instructions actually decoded */
     for (;;) {
         int status = pt_insn_sync_forward(dec);
         if (status < 0)
@@ -111,6 +112,7 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
                 if (prev_was_branch)
                     trace_append_block(trace, off);
                 prev_was_branch = is_branch(insn.iclass);
+                inregion++;
             } else if (!insn.speculative) {
                 /* Left the region (e.g. a call out); the next in-range insn
                  * begins a fresh block. */
@@ -123,6 +125,15 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
 
     pt_insn_free_decoder(dec);
     pt_image_free(image);
+    /* A non-empty AUX stream that yields zero in-region instructions is not a
+     * complete empty trace — without a PT address filter the decoder dies with
+     * -pte_nomap at the first out-of-region IP (enable-time PSB is in libc/ioctl
+     * glue), so it never reaches the region. Report a decode failure so end()
+     * flags the trace truncated instead of "complete". (The full fix also programs
+     * a PERF_EVENT_IOC_SET_FILTER region filter on the capture side, which requires
+     * Intel PT hardware to validate — see docs/native-tracing.md.) */
+    if (inregion == 0)
+        return ASMTEST_HW_EDECODE;
     return ASMTEST_HW_OK;
 }
 

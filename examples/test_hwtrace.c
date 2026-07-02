@@ -475,9 +475,13 @@ static void test_singlestep_loop(void) {
     /* 1 (mov) + 20*(add,dec,jnz) + 1 (ret) = 62 instructions, all captured. */
     CHECK(asmtest_emu_trace_insns_total(tr) == 62,
           "single-step captures all 62 insns of a 20-trip loop (no depth ceiling)");
-    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 && asmtest_trace_covered(tr, 0) &&
-              asmtest_trace_covered(tr, 0x7),
-          "single-step loop block partition {0, 0x7}");
+    /* {0, 0x7, 0xf}: entry, the jnz back-edge target (loop body), AND the
+     * fall-through of the final NOT-taken jnz (the ret at 0xf) — the same
+     * partition Unicorn/PT/DynamoRIO produce (a block ends after every branch).
+     * Verified against the Unicorn emu backend, which yields exactly these three. */
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 3 && asmtest_trace_covered(tr, 0) &&
+              asmtest_trace_covered(tr, 0x7) && asmtest_trace_covered(tr, 0xf),
+          "single-step loop block partition {0, 0x7, 0xf} matches Unicorn/PT/DR");
     CHECK(!asmtest_emu_trace_truncated(tr),
           "single-step loop trace complete past LBR's 16-branch window");
 

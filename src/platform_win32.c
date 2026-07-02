@@ -18,6 +18,7 @@
 #if defined(_WIN32)
 
 #include <stddef.h>
+#include <stdio.h>
 #include <windows.h>
 
 #include "asmtest.h"
@@ -300,6 +301,21 @@ static int is_fatal_exc(DWORD code) {
     }
 }
 
+/* Finding #34: restore ABI-required CPU state in a resumed/redirected context.
+ * A POSIX signal handler is entered with the kernel-cleared flags (DF=0), but a
+ * Windows VEH / SetThreadContext resumes with the *faulting* frame's RFLAGS and
+ * SSE control word. The Microsoft x64 ABI requires the direction flag to be clear
+ * on entry and return, and the CRT/compilers emit `rep movs/stos` assuming DF=0;
+ * a routine under test may have executed `std` (a descending string copy is
+ * exactly the kind of assembly this framework exercises, and overrunning a guard
+ * page with DF=1 is a designed-for event) or perturbed MxCsr before it faulted.
+ * Normalise both before diverting control into recovered C code. */
+static void win32_normalize_abi_state(CONTEXT *ctx) {
+    ctx->EFlags &= ~(DWORD)0x400; /* clear DF (RFLAGS bit 10) */
+    ctx->MxCsr = 0x1F80;          /* default SSE control/status word */
+    ctx->FltSave.MxCsr = 0x1F80;  /* the FXSAVE-area mirror actually restored */
+}
+
 /* Reached via a redirected instruction pointer after a caught fault; jumps back
  * to the guard's recovery point without SEH unwinding. */
 static void asmtest_win32_landing(void) { __builtin_longjmp(tls_recover, 1); }
@@ -319,7 +335,9 @@ static LONG CALLBACK asmtest_win32_veh(EXCEPTION_POINTERS *info) {
     tls_armed = 0;
 
     /* Resume the thread at the landing pad (normal context, not nested in the
-     * exception dispatch) with a 16-aligned stack (rsp ≡ 8 mod 16 at entry). */
+     * exception dispatch) with a 16-aligned stack (rsp ≡ 8 mod 16 at entry) and
+     * ABI-normalised flags/SSE state (finding #34). */
+    win32_normalize_abi_state(info->ContextRecord);
     DWORD64 sp = info->ContextRecord->Rsp;
     sp = (sp & ~(DWORD64)15) - 8;
     info->ContextRecord->Rsp = sp;
@@ -355,12 +373,25 @@ volatile int asmtest_win32_test_reason;
 asmtest_win32_fault_t asmtest_win32_test_fault;
 
 static volatile LONG rt_armed;
+static volatile LONG rt_finishing;       /* main thread has entered test_end (#35) */
+static volatile LONG rt_landing_reached; /* landing pad executed (watchdog, #36) */
 static PVOID rt_veh;
 static HANDLE rt_timer_queue;
 static HANDLE rt_timer;
 static HANDLE rt_test_thread;
 
-static void rt_landing(void) { __builtin_longjmp(asmtest_win32_test_recover, 1); }
+/* Finding #36: the watchdog redirects a hung thread via SetThreadContext, which
+ * only takes effect when the thread next returns to user mode. A spin-loop hang
+ * reaches the landing pad almost immediately; a thread wedged in a kernel wait
+ * (WaitForSingleObject on a never-signaled handle, Sleep(INFINITE), a deadlocked
+ * lock) never returns and so is unrecoverable in-process. After redirecting, the
+ * watchdog polls for the landing pad up to this bound before failing hard. */
+enum { RT_LANDING_POLL_MS = 5, RT_LANDING_POLL_ITERS = 200 }; /* ~1s ceiling */
+
+static void rt_landing(void) {
+    InterlockedExchange(&rt_landing_reached, 1); /* watched by rt_timer_cb (#36) */
+    __builtin_longjmp(asmtest_win32_test_recover, 1);
+}
 
 static LONG CALLBACK rt_veh_cb(EXCEPTION_POINTERS *info) {
     DWORD code = info->ExceptionRecord->ExceptionCode;
@@ -376,6 +407,7 @@ static LONG CALLBACK rt_veh_cb(EXCEPTION_POINTERS *info) {
             : info->ExceptionRecord->ExceptionAddress;
     asmtest_win32_test_reason = ASMTEST_WIN32_REASON_CRASH;
 
+    win32_normalize_abi_state(info->ContextRecord); /* clear DF etc. (#34) */
     DWORD64 sp = info->ContextRecord->Rsp;
     sp = (sp & ~(DWORD64)15) - 8;
     info->ContextRecord->Rsp = sp;
@@ -390,13 +422,24 @@ static VOID CALLBACK rt_timer_cb(PVOID param, BOOLEAN fired) {
     (void)fired;
     if (!InterlockedExchange(&rt_armed, 0))
         return;
+    /* Finding #35: if the main thread has already entered test_end it is
+     * finishing (and may be blocked inside DeleteTimerQueueTimer waiting for
+     * THIS callback); hijacking it there would abandon that delete mid-call and
+     * double-free the timer, and flip a passing test to a bogus TIMEOUT. The
+     * test effectively completed — leave it alone. */
+    if (rt_finishing)
+        return;
     asmtest_win32_test_reason = ASMTEST_WIN32_REASON_TIMEOUT;
     if (rt_test_thread == NULL)
         return;
+
+    InterlockedExchange(&rt_landing_reached, 0);
     SuspendThread(rt_test_thread);
     CONTEXT ctx;
-    ctx.ContextFlags = CONTEXT_CONTROL;
+    /* CONTROL for Rip/Rsp/EFlags, FLOATING_POINT so MxCsr can be normalised. */
+    ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_FLOATING_POINT;
     if (GetThreadContext(rt_test_thread, &ctx)) {
+        win32_normalize_abi_state(&ctx); /* clear DF etc. (#34) */
         DWORD64 sp = ctx.Rsp;
         sp = (sp & ~(DWORD64)15) - 8;
         ctx.Rsp = sp;
@@ -404,12 +447,32 @@ static VOID CALLBACK rt_timer_cb(PVOID param, BOOLEAN fired) {
         SetThreadContext(rt_test_thread, &ctx);
     }
     ResumeThread(rt_test_thread);
+
+    /* Finding #36: wait for the redirect to actually take effect. A user-mode
+     * (spin-loop) hang reaches rt_landing at once; a kernel-blocked thread never
+     * does. If it does not land within the bound, it is unrecoverable in-process
+     * — fail hard with a distinctive exit code instead of wedging the whole run
+     * (the default forked mode contains such hangs by killing the child). */
+    for (int i = 0; i < RT_LANDING_POLL_ITERS; i++) {
+        if (InterlockedCompareExchange(&rt_landing_reached, 0, 0))
+            return; /* diverted successfully */
+        Sleep(RT_LANDING_POLL_MS);
+    }
+    fprintf(stderr,
+            "asmtest: --no-fork test blocked in an unrecoverable kernel wait; "
+            "forcing timeout exit (%d). Use the default forked mode to contain "
+            "such hangs.\n",
+            ASMTEST_WIN32_HANG_EXIT);
+    fflush(stderr);
+    ExitProcess(ASMTEST_WIN32_HANG_EXIT);
 }
 
 void asmtest_win32_test_begin(unsigned timeout_ms) {
     asmtest_win32_test_reason = 0;
     rt_timer = NULL;
     rt_test_thread = NULL;
+    rt_finishing = 0;
+    rt_landing_reached = 0;
     rt_armed = 1;
     rt_veh = AddVectoredExceptionHandler(1, rt_veh_cb);
     if (timeout_ms != 0) {
@@ -425,13 +488,31 @@ void asmtest_win32_test_begin(unsigned timeout_ms) {
 
 void asmtest_win32_test_disarm(void) { InterlockedExchange(&rt_armed, 0); }
 
+/* Re-arm the crash/timeout facility for the next run_one phase (finding #33):
+ * after an assertion the assertion path disarmed it, but teardown must run with
+ * the same crash/timeout protection so a fault or hang there is folded into the
+ * outcome (mirroring the always-installed POSIX signal handler + pending alarm).
+ * The one-shot watchdog timer, if it has not yet fired, keeps covering the whole
+ * test deadline across the re-arm. */
+void asmtest_win32_test_rearm(void) {
+    asmtest_win32_test_reason = 0;
+    InterlockedExchange(&rt_armed, 1);
+}
+
 void asmtest_win32_test_end(void) {
+    /* Finding #35: mark that we are wrapping up BEFORE retiring the arm, so a
+     * watchdog that fires now sees rt_finishing and declines to hijack us. */
+    rt_finishing = 1;
     InterlockedExchange(&rt_armed, 0);
-    if (rt_timer != NULL) {
+    /* Swap the timer handle out atomically so exactly one caller ever deletes it.
+     * If a watchdog hijack abandons this DeleteTimerQueueTimer mid-call and
+     * run_one re-enters test_end after the longjmp, the second call sees NULL and
+     * skips — no double-delete / use-after-free of the timer object. */
+    HANDLE t = (HANDLE)InterlockedExchangePointer((PVOID volatile *)&rt_timer,
+                                                  NULL);
+    if (t != NULL)
         /* INVALID_HANDLE_VALUE: wait for any in-flight callback to finish. */
-        DeleteTimerQueueTimer(rt_timer_queue, rt_timer, INVALID_HANDLE_VALUE);
-        rt_timer = NULL;
-    }
+        DeleteTimerQueueTimer(rt_timer_queue, t, INVALID_HANDLE_VALUE);
     if (rt_test_thread != NULL) {
         CloseHandle(rt_test_thread);
         rt_test_thread = NULL;

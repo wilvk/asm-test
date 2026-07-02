@@ -389,7 +389,7 @@ ASM_FUNC asm_call_capture_vec
 
 #elif defined(__aarch64__)
 /* out -> x0, fn -> x1, iargs -> x2, vargs -> x3 */
-    sub     sp, sp, #112
+    sub     sp, sp, #176
     stp     x19, x20, [sp, #0]
     stp     x21, x22, [sp, #16]
     stp     x23, x24, [sp, #32]
@@ -398,6 +398,14 @@ ASM_FUNC asm_call_capture_vec
     stp     x29, x30, [sp, #80]
     str     x0, [sp, #96]
     str     x1, [sp, #104]
+
+    /* Preserve the caller's callee-saved FP regs (low 64 bits of d8-d15 per
+     * AAPCS64 6.1.2); they are seeded below and restored after capture so a
+     * clobber by fn cannot leak into the C caller's live doubles. */
+    stp     d8, d9,   [sp, #112]
+    stp     d10, d11, [sp, #128]
+    stp     d12, d13, [sp, #144]
+    stp     d14, d15, [sp, #160]
 
     /* Vector args: vargs (x3) -> v0..v7 (full 128 bits). */
     ldr     q0, [x3, #0]
@@ -426,6 +434,25 @@ ASM_FUNC asm_call_capture_vec
     ldr     x27, =0x9999999999999999
     ldr     x28, =0xAAAAAAAAAAAAAAAA
     ldr     x29, =0xBBBBBBBBBBBBBBBB
+
+    /* Seed d8-d15 low 64 bits with sentinels 8..15 so ASSERT_ABI_PRESERVED_VEC
+     * detects a callee that fails to preserve them (mirrors Win64 xmm6-15). */
+    mov     x9, #8
+    fmov    d8, x9
+    mov     x9, #9
+    fmov    d9, x9
+    mov     x9, #10
+    fmov    d10, x9
+    mov     x9, #11
+    fmov    d11, x9
+    mov     x9, #12
+    fmov    d12, x9
+    mov     x9, #13
+    fmov    d13, x9
+    mov     x9, #14
+    fmov    d14, x9
+    mov     x9, #15
+    fmov    d15, x9
 
     ldr     x10, [sp, #104]
     blr     x10
@@ -481,13 +508,19 @@ ASM_FUNC asm_call_capture_vec
     str     q30, [x11, #592]
     str     q31, [x11, #608]
 
+    /* Restore the caller's d8-d15 (captured above into vec[8..15]). */
+    ldp     d8, d9,   [sp, #112]
+    ldp     d10, d11, [sp, #128]
+    ldp     d12, d13, [sp, #144]
+    ldp     d14, d15, [sp, #160]
+
     ldp     x19, x20, [sp, #0]
     ldp     x21, x22, [sp, #16]
     ldp     x23, x24, [sp, #32]
     ldp     x25, x26, [sp, #48]
     ldp     x27, x28, [sp, #64]
     ldp     x29, x30, [sp, #80]
-    add     sp, sp, #112
+    add     sp, sp, #176
     ret
 
 #else
@@ -888,7 +921,7 @@ ASM_FUNC asm_call_capture_vec_n
 
 #elif defined(__aarch64__)
 /* out -> x0, fn -> x1, iargs -> x2, vargs -> x3, nvargs -> x4 */
-    stp     x29, x30, [sp, #-160]!
+    stp     x29, x30, [sp, #-224]!
     mov     x29, sp
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
@@ -900,6 +933,13 @@ ASM_FUNC asm_call_capture_vec_n
     str     x2, [sp, #112]         /* iargs  */
     str     x3, [sp, #120]         /* vargs  */
     str     x4, [sp, #128]         /* nvargs */
+
+    /* Preserve the caller's callee-saved FP regs d8-d15 (x29-relative, above the
+     * variable overflow area); seeded below, restored after capture. */
+    stp     d8, d9,   [x29, #160]
+    stp     d10, d11, [x29, #176]
+    stp     d12, d13, [x29, #192]
+    stp     d14, d15, [x29, #208]
 
     /* n_stack = max(0, nvargs - 8) -> x9 (each slot is 16 bytes). */
     subs    x9, x4, #8
@@ -968,6 +1008,24 @@ ASM_FUNC asm_call_capture_vec_n
     ldr     x27, =0x9999999999999999
     ldr     x28, =0xAAAAAAAAAAAAAAAA
 
+    /* Seed d8-d15 low 64 bits with sentinels 8..15 (ASSERT_ABI_PRESERVED_VEC). */
+    mov     x9, #8
+    fmov    d8, x9
+    mov     x9, #9
+    fmov    d9, x9
+    mov     x9, #10
+    fmov    d10, x9
+    mov     x9, #11
+    fmov    d11, x9
+    mov     x9, #12
+    fmov    d12, x9
+    mov     x9, #13
+    fmov    d13, x9
+    mov     x9, #14
+    fmov    d14, x9
+    mov     x9, #15
+    fmov    d15, x9
+
     ldr     x10, [x29, #104]       /* fn */
     blr     x10
 
@@ -1023,13 +1081,19 @@ ASM_FUNC asm_call_capture_vec_n
     str     q30, [x11, #592]
     str     q31, [x11, #608]
 
+    /* Restore the caller's d8-d15 (captured above into vec[8..15]). */
+    ldp     d8, d9,   [x29, #160]
+    ldp     d10, d11, [x29, #176]
+    ldp     d12, d13, [x29, #192]
+    ldp     d14, d15, [x29, #208]
+
     mov     sp, x29
     ldp     x19, x20, [sp, #16]
     ldp     x21, x22, [sp, #32]
     ldp     x23, x24, [sp, #48]
     ldp     x25, x26, [sp, #64]
     ldp     x27, x28, [sp, #80]
-    ldp     x29, x30, [sp], #160
+    ldp     x29, x30, [sp], #224
     ret
 
 #else

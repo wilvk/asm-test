@@ -104,9 +104,13 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * *result receives the routine's return value (the target's RAX at the ret); `result`
  * may be NULL. The target is left ptrace-stopped just past the region exit for the
  * caller to PTRACE_DETACH. The region MAY call out to helpers outside [base, base+len)
- * — call-outs are stepped over at native speed and not recorded (call-depth aware), so a
- * real JIT method that calls runtime helpers traces correctly; the body must still be
- * deterministic and single-threaded. */
+ * — a call-out is stepped over at native speed (a breakpoint at its return address) and
+ * not recorded, so a real JIT method that calls runtime helpers traces correctly. NOTE:
+ * the step-over resumes at the FIRST arrival at that return address and is NOT
+ * re-entrancy aware — if the stepped-over helper calls BACK into the region (a callback
+ * or a tiering/OSR stub re-invoking the method), the tracer resumes in that nested
+ * invocation and reports its result/trace. Trace such re-entrant routines by their outer
+ * entry only; the body must be deterministic and single-threaded. */
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
 

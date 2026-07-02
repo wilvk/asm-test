@@ -6,7 +6,8 @@
  * binary exits nonzero and prints the expected diagnostic — i.e. that the
  * framework's assertions, crash handling, timeout, and fork-status synthesis
  * report failure when they should. Running the whole binary is expected to exit
- * nonzero; the harness never runs it unfiltered (the timeout case would stall).
+ * nonzero; when the harness runs it unfiltered it always passes a bounded
+ * --timeout so the neg.timeout spin loop can't stall the run.
  *
  * Pure C: register/flag/vector cases build a regs_t by hand, so no
  * routine-under-test or capture trampoline is needed.
