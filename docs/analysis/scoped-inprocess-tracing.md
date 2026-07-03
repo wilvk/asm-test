@@ -175,6 +175,62 @@ So the "handle everything" promise is real for the **dynamic-path** interpretati
 ("show me the asm of whatever executed in this scope"). It only leaks when the developer
 means something more specific (below).
 
+## What can go inside the scope
+
+Can the block body be *any valid C#*? Under the strong (hardware-trace) form, **yes —
+because the capture does not understand C# at all.** The CPU records whatever
+instructions the thread executes between `{` and `}`; there is no allowlist and no
+interpretation of what the code *is*. Reflection-emitted code, `dynamic`, lambdas,
+generics, exceptions and their unwinding, P/Invoke into native libraries, unsafe code —
+all of it is just executed instructions, and the decoder renders whatever ran. That
+language-blindness is *why* the whole-window model can assume no knowledge.
+
+Four qualifications shape what comes back — the first is a real semantic trap:
+
+1. **The scope is a *thread* scope, not a logical-operation scope.** The perf event
+   follows the calling thread (`pid == 0, cpu == -1`). Work that hops threads —
+   `await`, `Task.Run`, `Parallel.For`, thread-pool continuations — is **not captured**,
+   and an `await` inside the block can resume on a *different* thread, so `Dispose()`
+   runs somewhere other than where the constructor armed the event: the window silently
+   keeps recording thread A while the logical operation continues on thread B. Any valid
+   *synchronous* code is fully covered; async code contributes only the fragments that
+   happen to run on the original thread. A production `AsmTrace` should compare
+   `Environment.CurrentManagedThreadId` at `Dispose()` against the constructor's and
+   flag the trace on a mismatch — the same never-emit-partial-as-complete posture as
+   `truncated`.
+2. **You get everything that ran — including the runtime itself.** If the code inside
+   is not warm, the first call traces the *JIT compiling it* (thousands of RyuJIT
+   instructions), then the tier-0 body, then perhaps an OSR transition; a GC triggered
+   mid-scope is captured too. That is honest — it *is* the assembly path that executed —
+   but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
+   [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs) exists
+   precisely to get a *clean* single-method trace instead of the runtime's plumbing.
+3. **The window has a bandwidth budget, not a semantic limit.** PT emits ~100 MB/s
+   encoded; a scope around seconds of hot code overflows the AUX ring (snapshot mode
+   keeps the tail and sets `truncated`) or produces gigabytes (drain mode). Long-running
+   or I/O-blocked code is still *valid* — a thread parked in a syscall emits nothing —
+   but a huge dynamic window decodes to a huge trace.
+4. **Scopes do not nest (today).** Capture state is a single process-global slot — "only
+   ONE region may be active at a time (a begin while another is active is ignored)"
+   ([include/asmtest_hwtrace.h:144-146](../../include/asmtest_hwtrace.h#L144-L146)) — so
+   an `AsmTrace` inside an `AsmTrace`, or two threads scoping concurrently, degrades to
+   the outer/first one. Lifting this means per-thread capture slots, a known MVP
+   boundary.
+
+Under the **single-step fallback** the answer flips to **no** — the envelope narrows
+sharply. The scope body should be effectively single-threaded, non-blocking, and
+allocation-light, because whole-scope stepping is descent-L3 territory: allocation
+slow paths, contended locks, and blocking syscalls are the documented hazards
+(denylist / budget / watchdog, self-truncating —
+[jit-runtime-tracing.md, L3 section](jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)).
+"Any valid C#" is exactly what L3 cannot promise; "this one warm method region" is what
+it can.
+
+The one-line contract for the doc's opening example: `HotPath(data)` can be anything
+compilable under hardware trace — but what comes back is the *thread's* instruction
+stream, so the model is at its best bracketing synchronous, warmed, same-thread work,
+and it must self-flag when an async hop or window overflow breaks those assumptions.
+
 ## Non-intrusiveness, backend by backend (honest ranking)
 
 | Backend | In-process? | Intrusive? | Completeness | Precondition |
