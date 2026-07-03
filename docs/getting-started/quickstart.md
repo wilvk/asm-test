@@ -94,8 +94,8 @@ make demo-robust    # how a hang and a crash are contained and reported
 
 - [Writing tests](writing-tests.md) — discovery, fixtures, `SKIP`, and the
   `asm.h` shim in depth.
-- [Assertions](assertions.md) — the full comparison, string, and memory set.
-- [ABI capture & registers](abi-capture.md) — inspect registers, flags, and
+- [Assertions](../guides/assertions.md) — the full comparison, string, and memory set.
+- [ABI capture & registers](../guides/abi-capture.md) — inspect registers, flags, and
   callee-saved preservation through a real call.
-- [The test runner](runner.md) — filtering, shuffling, timeouts, parallelism,
+- [The test runner](../guides/runner.md) — filtering, shuffling, timeouts, parallelism,
   and CI output formats.

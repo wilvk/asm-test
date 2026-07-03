@@ -34,10 +34,10 @@ You write the assembly routines and the C tests; the Makefile assembles,
 compiles, and links them into one binary per suite; the framework's runner
 discovers the tests and drives each routine through the **real calling
 convention** — either natively (a capture trampoline on the real CPU) or, opting
-in, inside a virtual CPU (the [emulator tier](emulator.md)) — then asserts on the
+in, inside a virtual CPU (the [emulator tier](guides/emulator.md)) — then asserts on the
 result and reports.
 
-> **Diagram:** [Framework build and run pipeline](diagrams.md#framework-build-and-run-pipeline)
+> **Diagram:** [Framework build and run pipeline](reference/diagrams.md#framework-build-and-run-pipeline)
 
 ## Why asm-test
 
@@ -45,7 +45,7 @@ Existing tools either run a whole binary per case and only see *exit status and
 stdout*, or assert from inside the assembly itself. asm-test fills the open
 niche: a **C-hosted** framework that calls assembly through the **real calling
 convention** and inspects registers, flags, and memory afterward — with proper
-discovery and reporting. See [Design & background](design.md) for the prior-art
+discovery and reporting. See [Design & background](project/design.md) for the prior-art
 comparison and roadmap.
 
 ## What you get
@@ -65,23 +65,23 @@ comparison and roadmap.
 - An optional **emulator tier** (Unicorn) that runs a routine inside a virtual
   CPU — x86-64, AArch64, RISC-V, ARM32, and the Windows x64 ABI — to read the
   *full* register file, catch precise faults, and record
-  [execution traces and coverage](tracing/traces.md).
+  [execution traces and coverage](guides/tracing/traces.md).
 - **Portability** across x86-64 and AArch64, Linux and macOS, with GAS and NASM
   assembler backends.
 
 ## Where to start
 
-- New here? Read [Installation](installation.md) then the
-  [Quick start](quickstart.md).
-- Writing your first suite? See [Writing tests](writing-tests.md) and the
-  [Assertion reference](assertions.md).
-- Want to see it in action by use case? See [Examples](examples.md) — correctness
+- New here? Read [Installation](getting-started/installation.md) then the
+  [Quick start](getting-started/quickstart.md).
+- Writing your first suite? See [Writing tests](getting-started/writing-tests.md) and the
+  [Assertion reference](guides/assertions.md).
+- Want to see it in action by use case? See [Examples](getting-started/examples.md) — correctness
   & ABI capture, differential testing, benchmarking, and crash/hang containment.
 - Want the full capability list and what's available across architectures, OSes,
-  and languages? See [Features & support matrix](features.md).
+  and languages? See [Features & support matrix](reference/features.md).
 - Consuming the framework from another project? See
-  [Using asm-test in your project](integration.md).
-- Driving it from another language? See [Language bindings](bindings.md) for the
+  [Using asm-test in your project](reference/integration.md).
+- Driving it from another language? See [Language bindings](bindings/index.md) for the
   shared overview, then the per-language page (Python, .NET, Go, Rust, C++, Zig,
   Node, Java, Ruby, Lua).
 
@@ -90,10 +90,10 @@ comparison and roadmap.
 :caption: Getting started
 :hidden:
 
-installation
-quickstart
-writing-tests
-examples
+getting-started/installation
+getting-started/quickstart
+getting-started/writing-tests
+getting-started/examples
 ```
 
 ```{toctree}
@@ -101,18 +101,18 @@ examples
 :caption: Guides
 :hidden:
 
-assertions
-abi-capture
-floating-point-simd
-property-testing
-runner
-benchmarks
-emulator
-tracing/traces
-tracing/native-tracing
-tracing/hardware-tracing
-disassembly
-win64
+guides/assertions
+guides/abi-capture
+guides/floating-point-simd
+guides/property-testing
+guides/runner
+guides/benchmarks
+guides/emulator
+guides/tracing/traces
+guides/tracing/native-tracing
+guides/tracing/hardware-tracing
+guides/disassembly
+guides/win64
 ```
 
 ```{toctree}
@@ -120,14 +120,14 @@ win64
 :caption: Reference
 :hidden:
 
-features
-portability
-integration
-packaging
-releasing
-ci
-api-reference
-diagrams
+reference/features
+reference/portability
+reference/integration
+reference/packaging
+reference/releasing
+reference/ci
+reference/api-reference
+reference/diagrams
 ```
 
 ```{toctree}
@@ -135,7 +135,7 @@ diagrams
 :caption: Language bindings
 :hidden:
 
-bindings
+bindings/index
 ```
 
 ```{toctree}
@@ -143,7 +143,7 @@ bindings
 :caption: Project
 :hidden:
 
-design
-glossary
-changelog
+project/design
+project/glossary
+project/changelog
 ```

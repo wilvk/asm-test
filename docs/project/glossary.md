@@ -119,7 +119,7 @@ Capstone
   A disassembler *library* asm-test optionally uses to turn machine-code bytes
   back into readable instruction text — annotating {term}`fault`s, traces, and
   coverage reports. The {term}`single-step` and {term}`hardware trace` backends
-  also use it as an instruction length-decoder. See [Disassembly](disassembly.md).
+  also use it as an instruction length-decoder. See [Disassembly](../guides/disassembly.md).
   (Its emulator/assembler siblings are {term}`Unicorn` and {term}`Keystone`.)
 
 capture trampoline
@@ -135,7 +135,7 @@ CF
 
 CI
   *Continuous Integration.* Automated systems (such as GitHub Actions) that build
-  the project and run its tests on every change. See the [CI guide](ci.md).
+  the project and run its tests on every change. See the [CI guide](../reference/ci.md).
 
 conformance corpus
   A shared set of canonical routines and their expected captures that **every**
@@ -198,7 +198,7 @@ DynamoRIO
   An open-source {term}`DBI` engine. asm-test's DynamoRIO tier attaches it
   **in-process** to trace native code as it runs on the real {term}`CPU` at
   native speed. It is a {term}`native tier`-trace back-end, distinct from the
-  {term}`emulator`. See [Native runtime tracing](tracing/native-tracing.md).
+  {term}`emulator`. See [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 eBPF
   *extended Berkeley Packet Filter.* A mechanism for running small,
@@ -226,7 +226,7 @@ emulator
   runs your assembly inside a controlled virtual machine. This optional "emulator
   tier" can read the full register file, pinpoint faults precisely, measure
   {term}`branch coverage`, and run architectures your real machine isn't. See the
-  [emulator guide](emulator.md).
+  [emulator guide](../guides/emulator.md).
 
 fault
   A hardware-detected error during execution, such as accessing forbidden memory.
@@ -297,7 +297,7 @@ hardware trace
   hardware — {term}`Intel PT`, AMD {term}`LBR`, or ARM {term}`CoreSight` — read
   through the {term}`PMU` with near-zero capture overhead. It needs bare metal and
   perf privilege; the portable {term}`single-step` backend is the universal
-  fallback. See [Hardware tracing](tracing/hardware-tracing.md).
+  fallback. See [Hardware tracing](../guides/tracing/hardware-tracing.md).
 
 hexdump
   A side-by-side display of raw bytes in hexadecimal. asm-test prints one when a
@@ -469,7 +469,7 @@ property testing
   Testing that a routine upholds a stated *property* (for example, "sorting twice
   gives the same result as sorting once") across many generated inputs, rather
   than checking hand-written examples one at a time. See
-  [Property testing](property-testing.md).
+  [Property testing](../guides/property-testing.md).
 
 program counter
   The {term}`CPU register` holding the address of the instruction being executed —
@@ -666,7 +666,7 @@ Win64 ABI
   The {term}`calling convention` Microsoft Windows uses on {term}`x86-64`. It
   differs from the {term}`System V AMD64 ABI` (different argument registers, a
   shadow-stack area, etc.). asm-test has a dedicated tier for it — see the
-  [Win64 guide](win64.md).
+  [Win64 guide](../guides/win64.md).
 
 W^X
   *Write-xor-execute.* A memory-protection rule that a page may be writable *or*

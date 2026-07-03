@@ -48,7 +48,7 @@ buggy code without falling over:
 The child ships its outcome (PASS/FAIL/SKIP plus message and location) back to
 the parent over a pipe:
 
-> **Diagram:** [Runner fork-per-test lifecycle](diagrams.md#runner-fork-per-test-lifecycle)
+> **Diagram:** [Runner fork-per-test lifecycle](../reference/diagrams.md#runner-fork-per-test-lifecycle)
 
 Run the demo to watch a hang and a crash get contained:
 
@@ -89,5 +89,5 @@ routine writes and that it stays *in bounds*.
 
 The default is **colored TAP** — human-readable and consumable by any TAP
 harness. `--format=junit` emits suite-grouped JUnit XML for CI systems that
-ingest it (Jenkins, GitLab, GitHub test reporters). See [CI & Docker](ci.md) for
+ingest it (Jenkins, GitLab, GitHub test reporters). See [CI & Docker](../reference/ci.md) for
 how the project wires this into its own pipeline.

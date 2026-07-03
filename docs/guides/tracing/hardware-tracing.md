@@ -1,6 +1,6 @@
 # Hardware tracing
 
-The **hardware-trace tier** ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h),
+The **hardware-trace tier** ([asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h),
 `src/hwtrace.c`) records which instructions and basic blocks a routine actually
 executes on the **real CPU** with near-zero *capture* overhead: the processor
 emits a compressed branch-trace packet stream into a kernel ring, and a software
@@ -332,7 +332,7 @@ is held in sync by the binding function-parity gate.
 | Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
 | Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
 
-See [Language bindings](../bindings.md) for the shared binding overview.
+See [Language bindings](../../bindings/index.md) for the shared binding overview.
 
 ---
 
@@ -380,5 +380,5 @@ The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
 - [Execution traces](traces.md) — the shared `asmtest_trace_t` shape and the
   emulator trace model.
 - [Disassembly](../disassembly.md) — rendering recorded offsets back to instruction text.
-- [Language bindings](../bindings.md) — driving the tier from another language.
-- [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h) — the API header.
+- [Language bindings](../../bindings/index.md) — driving the tier from another language.
+- [asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) — the API header.

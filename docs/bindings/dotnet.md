@@ -11,7 +11,7 @@ The entry points are the opaque-handle FFI layer, so no C struct layout is
 mirrored: `asmtest_corpus_routine` for routine addresses, `asmtest_capture6` /
 `_fp2` + `asmtest_regs_*` accessors for capture, and `asmtest_emu_call2` +
 accessors for the emulator (faults as data: `Faulted`, plus `FaultAddr` /
-`FaultKind` for where and why one hit). See [Language bindings](../bindings.md)
+`FaultKind` for where and why one hit). See [Language bindings](index.md)
 for the shared architecture.
 
 ## Setup
@@ -174,7 +174,7 @@ Asm.Assert.Covered(t, 0x0);            // the assertion form
 
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
-A separate, optional tier (see [Native runtime tracing](../tracing/native-tracing.md))
+A separate, optional tier (see [Native runtime tracing](../guides/tracing/native-tracing.md))
 traces **host-native code as it runs inside this process** via an in-process
 DynamoRIO client, rather than emulated guest bytes. Bring DynamoRIO up once with
 `DrTrace.Initialize`, materialize machine code as a `NativeCode`, register it
@@ -221,7 +221,7 @@ try {
 Under .NET — a managed runtime — this in-process tier **self-skips at run time**:
 in-process DynamoRIO can't take over the CLR's background threads, so prefer the
 out-of-band Intel PT path (see the central doc). Linux x86-64 only; full reference
-in [Native runtime tracing](../tracing/native-tracing.md).
+in [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -265,14 +265,14 @@ most-faithful available backend (Intel PT → AMD LBR → single-step), and
 emulator tiers. An out-of-process `Ptrace` surface traces a method in a **separate**
 process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map /
 jitdump resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 The `Descent` class (`IDisposable`) makes the tracer follow call-outs instead of stepping
 over them: `new Descent(DescentLevel.DescendKnown)`, optionally `AllowRegion(base, len)` or a
 `SetResolver(...)` delegate (a P/Invoke upcall, `GCHandle`-pinned for the handle's lifetime),
 then `Ptrace.TraceCallEx(code, args, trace, descent, region)`. Read `descent.Edges()` and
 `descent.FrameInsns(f)` for each nested frame. Level 3 (`DescendAll`) is default-off and
-best-effort on a live runtime — see [Call descent levels](../tracing/native-tracing.md#call-descent-levels).
+best-effort on a live runtime — see [Call descent levels](../guides/tracing/native-tracing.md#call-descent-levels).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -340,4 +340,4 @@ isolated container.
 A published NuGet package with `runtimes/<rid>/native/` payloads, a
 `LibraryImport` source generator, and xUnit/NUnit integration of the `Assert`
 helpers are future work; the reusable library module with Tier-2 assertions ships
-today. See [Packaging the bindings](../packaging.md) for the staging plan.
+today. See [Packaging the bindings](../reference/packaging.md) for the staging plan.

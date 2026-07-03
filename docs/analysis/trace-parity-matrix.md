@@ -6,8 +6,8 @@ system, CPU microarchitecture, and language binding. It is derived from the sour
 of record — [src/hwtrace.c](../../src/hwtrace.c)'s gating chain,
 [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h), and
 [mk/native-trace.mk](../../mk/native-trace.mk) — and the shipped/planned status of
-each tier. Narrative docs: [native runtime tracing](../tracing/native-tracing.md),
-[emulator traces](../tracing/traces.md), [portability](../portability.md). Roadmaps:
+each tier. Narrative docs: [native runtime tracing](../guides/tracing/native-tracing.md),
+[emulator traces](../guides/tracing/traces.md), [portability](../reference/portability.md). Roadmaps:
 [hardware-trace](../plans/hardware-trace-plan.md),
 [AMD LBR](../plans/amd-tracing-plan.md),
 [Zen 2 single-step](../plans/zen2-singlestep-trace-plan.md),
@@ -416,7 +416,7 @@ Linux-only and self-skip there — so the answer is now **platform-dependent**, 
 
 ### What each package carries
 
-Per [packaging.md](../packaging.md), bindings reach the framework two ways and that
+Per [packaging.md](../reference/packaging.md), bindings reach the framework two ways and that
 decides what ships:
 
 - **dlopen bindings** (Python, Ruby, Lua, Node, Java, .NET) bundle the prebuilt

@@ -291,7 +291,7 @@ the only deferred remainder).
   manifest, and a CI `win64` job. The POSIX runner is *not* ported to Win32 (the
   suite runs `--no-fork`); that remains scoped for on-demand pickup. See the
   [Native Win64 tier implementation plan](win64-native-tier-plan.md) for the full
-  build, [docs/win64.md](../win64.md) for usage, and [Track E.1 — Native Win64
+  build, [docs/win64.md](../guides/win64.md) for usage, and [Track E.1 — Native Win64
   trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for what
   the remaining runner port takes.
 - **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests

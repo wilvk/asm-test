@@ -32,7 +32,7 @@ observe a return value.
 
 `ASM_CALLn` drives the routine through the real ABI and captures the full
 register file and flags into a `regs_t`; you then assert on it. See
-[ABI capture & registers](abi-capture.md) for the complete model.
+[ABI capture & registers](../guides/abi-capture.md) for the complete model.
 
 ```c
 #include "asmtest.h"
@@ -85,7 +85,7 @@ TEST(guard, in_bounds_write_ok) {
 obvious-but-slow version in C as a *reference model*, write the fast version in
 assembly, then let the framework fuzz thousands of random inputs and report the
 first input where they disagree — with the seed, so the failure reproduces. This
-is the framework's signature capability; see [Property testing](property-testing.md).
+is the framework's signature capability; see [Property testing](../guides/property-testing.md).
 
 The routines under test use `cmov`/`csel` (branchy, conditional logic is where
 subtle bugs hide). The C models are the plain, obvious version:
@@ -192,7 +192,7 @@ TEST(bittricks, reverse_byte_is_its_own_inverse) {
 **Best for:** proving a routine is not just correct but actually *faster*. A
 `BENCH(...)` body is one measured call; the runner auto-calibrates a repeat count
 and reports min/median/mean cycles per call (`rdtsc` / `cntvct_el0`). See
-[Benchmarks](benchmarks.md).
+[Benchmarks](../guides/benchmarks.md).
 
 ```c
 #include "asmtest.h"
@@ -236,7 +236,7 @@ guards. Run with:
 you don't want it to take down the whole run. Each test runs in a forked child
 with an `alarm()` timeout, so a hang becomes a reported *timeout* and a crash a
 reported *failure* — and the next test still runs. See the
-[test runner](runner.md) for the isolation model.
+[test runner](../guides/runner.md) for the isolation model.
 
 ```c
 #include "asmtest.h"
@@ -290,7 +290,7 @@ with the framework code exact and the `extern` routine under test left to you.
 fast path equals a scalar reference. `ASM_VCALLn` marshals 128-bit vectors into
 the vector registers and captures the whole vector file; on x86-64 `ASM_VCALL256n`
 does the same for 256-bit AVX2 and self-skips a host without it. See
-[Floating-point & SIMD](floating-point-simd.md).
+[Floating-point & SIMD](../guides/floating-point-simd.md).
 
 ```c
 extern void vec_add4f(void);            /* vec128 vec_add4f(vec128 a, vec128 b) */
@@ -406,7 +406,7 @@ TEST(crypto, ct_eq_has_no_secret_dependent_branch) {
 **You need:** to validate hand-written primitives across ISAs and prove they
 honour the ABI. The emulator tier runs *the same algorithm* as raw machine code
 on four guest CPUs — x86-64, AArch64, RISC-V, ARM32 — regardless of the host, and
-asserts they all agree (one algorithm, four ISAs). See [the emulator tier](emulator.md).
+asserts they all agree (one algorithm, four ISAs). See [the emulator tier](../guides/emulator.md).
 
 ```c
 #include "asmtest_emu.h"
@@ -569,7 +569,7 @@ emu_trace_report_disasm(&tr, EMU_ARCH_X86_64, code, sizeof code, stdout);
 degrades to bare offsets when it doesn't, so the same call works either way), and
 `emu_disas` is exposed through every language binding (`disas` / `disas_available`).
 These live in the `test_emu` suite — run `make emu-test`; see the emulator's
-[disassembly section](emulator.md#disassembly-in-diagnostics-capstone) for the
+[disassembly section](../guides/emulator.md#disassembly-in-diagnostics-capstone) for the
 full helper set (`emu_disas`, `emu_fault_describe`, `emu_trace_disasm`,
 `emu_trace_report_disasm`, `emu_coverage_uncovered_disasm`).
 
@@ -621,7 +621,7 @@ actual — instead of a silent wrong answer, which is what makes the loop fast.
 ## Where next
 
 - [Quick start](quickstart.md) — build a suite of your own from scratch.
-- [Assertions](assertions.md) — the full comparison, string, memory, FP and SIMD set.
-- [Floating-point & SIMD](floating-point-simd.md) — `ASM_FCALLn` / `ASM_VCALLn` examples.
-- [The emulator tier](emulator.md) — run a routine inside a virtual CPU to read
+- [Assertions](../guides/assertions.md) — the full comparison, string, memory, FP and SIMD set.
+- [Floating-point & SIMD](../guides/floating-point-simd.md) — `ASM_FCALLn` / `ASM_VCALLn` examples.
+- [The emulator tier](../guides/emulator.md) — run a routine inside a virtual CPU to read
   the full register file, catch precise faults, and measure branch coverage.

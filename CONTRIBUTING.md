@@ -42,7 +42,7 @@ make docker-bindings  # build + run every language image
 ```
 
 Pass `DOCKER_PLATFORM=linux/arm64` to exercise the aarch64 lane. See the
-[CI guide](docs/ci.md) for the full mapping of jobs to targets.
+[CI guide](docs/reference/ci.md) for the full mapping of jobs to targets.
 
 ## How the build is organized
 
@@ -83,7 +83,7 @@ make bindings-parity-report  # the symbol x binding coverage matrix
 Record a deliberate omission in [scripts/bindings-parity-allow.txt](scripts/bindings-parity-allow.txt)
 with a reason (stale exemptions fail the gate, so the list stays honest).
 
-See [docs/bindings.md](docs/bindings.md) for the shared model and the per-language
+See [docs/bindings/index.md](docs/bindings/index.md) for the shared model and the per-language
 pages, and [docs/plans/binding-parity-plan.md](docs/plans/binding-parity-plan.md)
 for the parity checklist a new binding is held to. Keep the public surface and the
 conformance coverage at parity with the existing bindings.

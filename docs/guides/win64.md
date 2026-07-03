@@ -109,7 +109,7 @@ make manifest-win64     # -> asmtest_abi_win64.json
 ```
 
 emits the machine-readable Win64 `regs_t` layout (`"abi": "win64"`), the analog of
-the System V [manifest](integration.md) bindings mirror.
+the System V [manifest](../reference/integration.md) bindings mirror.
 
 ## The runner port
 

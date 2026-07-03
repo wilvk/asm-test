@@ -5,7 +5,7 @@ the ones you didn't: you supply a **C reference model** of what the routine
 *should* compute, plus a generator of random inputs, and the framework fuzzes
 many inputs through the real ABI and asserts the assembly agrees with the model.
 
-> **Diagram:** [Property and differential testing loop](diagrams.md#property-and-differential-testing-loop)
+> **Diagram:** [Property and differential testing loop](../reference/diagrams.md#property-and-differential-testing-loop)
 
 ## The assertion
 

@@ -12,7 +12,7 @@ It calls the opaque-handle FFI layer, so no C struct layout is mirrored in JS:
 `asmtest_regs_*` accessors for capture, and `asmtest_emu_call2` + accessors for
 the emulator (faults as data: `faulted()`, plus `faultAddr()` / `faultKind()` —
 against the `FaultKind` export — for where and why one hit). See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 ## Setup
 
@@ -174,7 +174,7 @@ NativeTrace.shutdown();
   time**: in-process DynamoRIO can't take over V8's background threads, so
   `available()` may return true yet tracing yields no coverage. Intel PT is the
   recommended backend on such hosts (see the central doc).
-* Linux x86-64 only; full reference in [Native runtime tracing](../tracing/native-tracing.md).
+* Linux x86-64 only; full reference in [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -215,7 +215,7 @@ available backend (Intel PT → AMD LBR → single-step), and `HwTrace.resolveTi
 out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -276,4 +276,4 @@ make docker-node      # or in an isolated container (koffi preinstalled)
 
 A published npm package with prebuilt binaries (and `vitest`/`jest` integration of
 the `assert*` helpers) is future work; the reusable module with Tier-2 assertions
-ships today. See [Packaging the bindings](../packaging.md).
+ships today. See [Packaging the bindings](../reference/packaging.md).

@@ -25,5 +25,5 @@ matching lib is actually staged into the slot — (a build-time capture from
 the dep was source-built). asm-test's own license is MIT — see the top-level
 [LICENSE](../LICENSE). Because the packages convey the GPL-2.0 engines, each package
 as distributed is effectively GPL-2.0; see
-[docs/packaging.md](../docs/packaging.md) and the
+[docs/packaging.md](../docs/reference/packaging.md) and the
 [fully-featured-packages plan](../docs/plans/fully-featured-packages-plan.md).

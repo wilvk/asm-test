@@ -13,8 +13,8 @@ targets) pull in extra tools you can install on demand.
 | x86-64 **or** AArch64 CPU | Running native tests | Both are first-class targets |
 | Linux **or** macOS | Everything | ELF and Mach-O handled by `asm.h` |
 | `nasm` | The NASM backend (`ASM_SYNTAX=nasm`) | x86-64 only, opt-in |
-| `pkg-config` | Installing/consuming `asmtest.pc` | See [Integration](integration.md) |
-| `libunicorn` | The [emulator tier](emulator.md) (`make emu-test`) | Optional |
+| `pkg-config` | Installing/consuming `asmtest.pc` | See [Integration](../reference/integration.md) |
+| `libunicorn` | The [emulator tier](../guides/emulator.md) (`make emu-test`) | Optional |
 | `clang-tidy`, `valgrind` | The analysis targets | Optional |
 
 ## Get the source

@@ -11,7 +11,7 @@ addresses, `asmtest_capture6` / `_fp2` + `asmtest_regs_*` for capture (with
 accessors for the emulator (faults as data: `EmuResult.Faulted()`, plus
 `FaultAddr()` / `FaultKind()` for where and why). The result handles are all
 C-allocated, so they are exempt from cgo's pointer-passing rules. See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 ## Setup
 
@@ -247,7 +247,7 @@ if !tr.Covered(0) {
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -293,7 +293,7 @@ available backend (Intel PT → AMD LBR → single-step), and `ResolveTiers` / `
 extend the cascade across the DynamoRIO and emulator tiers. An out-of-process
 `Ptrace` surface (`PtraceTraceCall`, `PtraceRunTo`, …) traces a method in a
 **separate** process — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -367,4 +367,4 @@ run it on an x86-64 target (e.g. `make docker-go DOCKER_PLATFORM=linux/amd64`).
 
 A published Go module (with the native libs bundled per platform) is future work;
 this is the Tier-1 + Tier-2 binding that proves the `cgo` path. See
-[Packaging the bindings](../packaging.md).
+[Packaging the bindings](../reference/packaging.md).

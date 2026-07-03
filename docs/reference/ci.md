@@ -10,10 +10,10 @@ The pipeline runs the suites across all four OS/architecture combinations
 (`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `macos-13`) and adds
 dedicated jobs for the NASM backend, the emulator tier, Valgrind, the
 sanitizers, clang-tidy, and gcov coverage. The framework's own
-[self-tests](writing-tests.md) (`tests/positive.c`, `tests/negative.c`, the
+[self-tests](../getting-started/writing-tests.md) (`tests/positive.c`, `tests/negative.c`, the
 `tests/expect.sh` black-box harness) run via `make check`.
 
-`--format=junit` ([runner](runner.md#output-formats)) emits JUnit XML for CI
+`--format=junit` ([runner](../guides/runner.md#output-formats)) emits JUnit XML for CI
 systems that ingest structured test results.
 
 ## Running the Linux CI locally with Docker
@@ -69,9 +69,9 @@ The same checks run directly on a suitably equipped host:
 | `make valgrind` | Valgrind memcheck over the routines under test |
 | `make tidy` | clang-tidy static analysis |
 | `make coverage` | gcov coverage of the runner |
-| `make emu-test` | the [emulator](emulator.md) suites (needs libunicorn) |
+| `make emu-test` | the [emulator](../guides/emulator.md) suites (needs libunicorn) |
 
-See [Installation](installation.md#installing-the-optional-tools) for installing
+See [Installation](../getting-started/installation.md#installing-the-optional-tools) for installing
 the tools these targets need.
 
 [`Dockerfile`]: https://github.com/wilvk/asm-test/blob/main/Dockerfile

@@ -127,7 +127,7 @@ machine can load it), and **license compliance** (ship the right notices). Today
 only the Python wheel is even self-contained — its CI step repairs the wheel with
 `auditwheel`/`delocate`, vendoring `libunicorn`; the other dlopen packages bundle
 only `libasmtest_emu` and declare a **system** `libunicorn` runtime dependency
-([packaging.md](../packaging.md)).
+([packaging.md](../reference/packaging.md)).
 
 ---
 
@@ -139,7 +139,7 @@ only `libasmtest_emu` and declare a **system** `libunicorn` runtime dependency
 slot name.** `package-libs` builds `shared-emu-full` and copies the real
 `libasmtest_emu_full` file into `build/dist/native/<plat>/` **renamed** to
 `libasmtest_emu.{so,dylib}`. Because the bindings dlopen by **absolute path**, the
-lib's embedded install-name/soname is irrelevant ([packaging.md](../packaging.md)),
+lib's embedded install-name/soname is irrelevant ([packaging.md](../reference/packaging.md)),
 and the superset symbol set satisfies both the required capture/emu symbols and the
 optional asm/disas ones. **Zero binding-code churn.**
 
@@ -217,7 +217,7 @@ is BSD-3-Clause, no copyleft.) Consequences:
 
 So this is no longer a "does GPL apply?" question — it does — only a mechanical
 checklist — **all mechanical items now done** (see
-[docs/releasing.md](../releasing.md)); only the human sign-off remains:
+[docs/releasing.md](../reference/releasing.md)); only the human sign-off remains:
 
 - [x] **SPDX** reflects the *binary*: `MIT AND GPL-2.0-only AND BSD-3-Clause` in
   every manifest. GPL-2.0-**only** confirmed.
@@ -320,9 +320,9 @@ matching notices.
   `disas_available()` **and** `asm_available()` are true plus one real
   `disas`/`CallAsm` round-trip. The Java/.NET smokes already print `disasAvailable`
   — flip them from "print a bool" to "assert".
-- **Docs** — update [packaging.md](../packaging.md) (the package now ships the
+- **Docs** — update [packaging.md](../reference/packaging.md) (the package now ships the
   superset lib + vendored deps + notices; no system runtime dep),
-  [bindings.md](../bindings.md) (tiers available out of the box),
+  [bindings.md](../bindings/index.md) (tiers available out of the box),
   [README.md](../../README.md), [DESIGN.md](../../DESIGN.md), and a new
   **Licensing** section noting asm-test's source is MIT while the published
   package redistributes GPL-2.0 engines (effectively GPL). Cite

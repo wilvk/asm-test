@@ -200,7 +200,7 @@ the case (never a missing-symbol crash). Each conformance replays the x86-64
 
 - [README.md](../../README.md): a "Pass assembly as a string (in-line)" subsection
   under the emulator tier, with an x86-64 example.
-- [DESIGN.md](../../DESIGN.md) / [docs/design.md](../design.md): a phase entry for
+- [DESIGN.md](../../DESIGN.md) / [docs/design.md](../project/design.md): a phase entry for
   the in-line assembler tier.
 - [CHANGELOG.md](../../CHANGELOG.md): the new API, `make asm-test`, and the `--asm`
   deps flag (source-built Keystone).

@@ -9,8 +9,8 @@ it a `ctypes` function or a raw integer address.
 Struct layouts are read from the `asmtest_abi.json` manifest (`make manifest`),
 so the binding is automatically correct for whatever architecture the shared
 library was built for; the C `_Static_assert`s guarantee the manifest matches the
-real structs. See [Language bindings](../bindings.md) for the shared architecture
-and the [capabilities-at-a-glance table](../bindings.md#capabilities-at-a-glance).
+real structs. See [Language bindings](index.md) for the shared architecture
+and the [capabilities-at-a-glance table](index.md#capabilities-at-a-glance).
 
 ## Setup
 
@@ -268,7 +268,7 @@ NativeTrace.shutdown()
 
 This tier is Linux x86-64 only and self-skips when DynamoRIO is absent; the full
 reference (lifecycle, env vars, the managed-runtime caveat) lives in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -315,7 +315,7 @@ result = Ptrace.trace_call(code, [20, 22], trace)
 * The `Ptrace` surface (`trace_call`, `trace_attached`, `run_to`, `region_by_addr`,
   `perfmap_symbol`, `jitdump_find`) and the `CodeImage` recorder trace a method in a
   **separate** process — the managed-runtime path. Full reference in
-  [Native runtime tracing](../tracing/native-tracing.md).
+  [Native runtime tracing](../guides/tracing/native-tracing.md).
 * **Call descent** (`Descent`) makes the tracer follow the call-outs it would otherwise
   step over. Create a `Descent(level)` (`DESCENT_RECORD_EDGES` / `DESCENT_DESCEND_KNOWN` /
   `DESCENT_DESCEND_ALL`), optionally `allow_region(base, len)` the callee regions to descend,
@@ -324,7 +324,7 @@ result = Ptrace.trace_call(code, [20, 22], trace)
   `set_resolver(fn)` callback is a ctypes upcall (kept alive against GC for the handle's
   lifetime). `region` is the traced region's length — pass it when the call target is an
   in-blob sibling that must stay outside the region. See
-  [Call descent levels](../tracing/native-tracing.md#call-descent-levels).
+  [Call descent levels](../guides/tracing/native-tracing.md#call-descent-levels).
 
 ```python
 from asmtest.hwtrace import Descent, DESCENT_DESCEND_KNOWN
@@ -489,4 +489,4 @@ invalid accesses into `EmuResult.faulted` data, or run native captures in a
 
 Python is the reference binding: packaged (`pyproject.toml` / wheel), `pytest`
 fixtures, and both tiers — the most turnkey today. For how the package is
-assembled and published, see [Packaging the bindings](../packaging.md).
+assembled and published, see [Packaging the bindings](../reference/packaging.md).

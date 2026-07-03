@@ -11,10 +11,10 @@ the emulator tier). Each entry links to the guide that explains it in context.
 | `SETUP(suite) { … }` | Per-test setup for a suite |
 | `TEARDOWN(suite) { … }` | Per-test teardown for a suite |
 | `SKIP(reason)` | Mark the current test skipped |
-| `BENCH(suite, name) { … }` | Define and auto-register a benchmark ([Benchmarks](benchmarks.md)) |
+| `BENCH(suite, name) { … }` | Define and auto-register a benchmark ([Benchmarks](../guides/benchmarks.md)) |
 | `BENCH_USE(x)` | Keep a pure-C result from being optimized away |
 
-See [Writing tests](writing-tests.md).
+See [Writing tests](../getting-started/writing-tests.md).
 
 ## Calling routines (capture macros)
 
@@ -28,7 +28,7 @@ See [Writing tests](writing-tests.md).
 | `ASM_VCALL1`…`ASM_VCALL3(&r, fn, …)` | 1–3 `vec128_t` args |
 | `ASM_VCALLN(&r, fn, …)` | Any number of `vec128_t` args |
 
-See [ABI capture](abi-capture.md) and [Floating-point & SIMD](floating-point-simd.md).
+See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guides/floating-point-simd.md).
 
 ## Assertions
 
@@ -66,7 +66,7 @@ See [ABI capture](abi-capture.md) and [Floating-point & SIMD](floating-point-sim
 |---|---|
 | `ASSERT_MATCHES_REF1/2/3(fn, ref, gen, n)` | fuzz `n` inputs, compare to a C model |
 
-See [Property testing](property-testing.md).
+See [Property testing](../guides/property-testing.md).
 
 (capture-functions)=
 ## Capture functions
@@ -99,7 +99,7 @@ register is reported preserved but not independently verified by
 
 | Type | Meaning |
 |---|---|
-| `regs_t` | Captured register/flag snapshot (arch-specific; see [ABI capture](abi-capture.md#the-register-snapshot)) |
+| `regs_t` | Captured register/flag snapshot (arch-specific; see [ABI capture](../guides/abi-capture.md#the-register-snapshot)) |
 | `vec128_t` | 128-bit vector with byte/int/float/double lane views |
 | `asmtest_rng_t` | Seedable splitmix64 RNG state |
 
@@ -122,7 +122,7 @@ long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi);
 | `asmtest_guarded_alloc(n)` / `asmtest_guarded_free(…)` | trailing page (overrun faults) |
 | `asmtest_guarded_alloc_under(n)` / `asmtest_guarded_free_under(…)` | leading page (underrun faults) |
 
-See [guard-page buffers](runner.md#guard-page-buffers).
+See [guard-page buffers](../guides/runner.md#guard-page-buffers).
 
 ## Versioning & environment
 
@@ -144,7 +144,7 @@ The emulator tier lives in `asmtest_emu.h`. Its functions
 `emu_riscv_*`, `emu_arm_*`, and `emu_call_win64`) and assertions
 (`ASSERT_NO_FAULT`, `ASSERT_FAULT`, `ASSERT_FAULT_AT`, `ASSERT_EMU_REG_EQ`,
 `ASSERT_EMU_FP_EQ`, `ASSERT_EMU_VEC_EQ`, `ASSERT_BLOCK_COVERED`,
-`ASSERT_BLOCKS_AT_LEAST`) are documented on the [Emulator tier](emulator.md)
+`ASSERT_BLOCKS_AT_LEAST`) are documented on the [Emulator tier](../guides/emulator.md)
 page.
 
 ## Binding ABI (multi-language)
@@ -182,7 +182,7 @@ consumer points at an older, leaner lib that lacks them.)
 | Scalar-arg emu wrappers | `asmtest_emu_call2`, `asmtest_emu_call6` (≤6 int args), `asmtest_emu_call_fp2`, `asmtest_emu_call_vec_f32`, `asmtest_emu_call_win64_6`, `asmtest_emu_call6_traced` | Drive the emulator over a 64-byte code window with scalar args — FP, vector, Win64, and traced runs — without marshalling C argument arrays. |
 | Cross-arch emu accessors | `asmtest_emu_{arm64,riscv,arm}_result_new`/`_free`, `asmtest_emu_{arm64,riscv,arm}_reg` (register by name), `asmtest_emu_arm64_vec_f64`/`_f32`, `asmtest_emu_riscv_f_f64`, `asmtest_emu_arm_q_f64`/`_f32` | Read a non-x86 guest's per-arch result struct without mirroring its layout; the shared `asmtest_emu_result_*` fault/ok accessors apply to every guest result. |
 | Trace handle | `asmtest_emu_trace_new`/`_free`, `asmtest_emu_trace_covered`, `_insns_total`/`_blocks_len`/`_blocks_total`/`_truncated`/`_block_at` | Opaque wrapper over `emu_trace_t` + its buffers, so a dynamic-FFI binding records execution trace / basic-block coverage. |
-| Call descent (`asmtest_ptrace.h`) | `asmtest_descent_new`/`_free`, `_set_max_depth`/`_set_insn_budget`/`_set_watchdog_ms`, `_allow_region`/`_deny_region`, `_set_resolver`/`_set_denylist`; readers `_edges_len`/`_edge_site`/`_edge_target`/`_edge_depth`, `_frames_len`/`_frame_base`/`_frame_len`/`_frame_depth`/`_frame_parent`/`_frame_insn_count`/`_frame_insn_at`/`_frame_block_count`/`_frame_block_at`, `_truncated`/`_depth_capped`; entry points `asmtest_ptrace_trace_call_ex`/`_trace_attached_ex`/`_trace_attached_versioned_ex` | Opaque descent handle: configure the four-level descent policy in, read edges + nested per-callee frames out through one-scalar-per-call accessors (address getters return `uint64`, so bindings must keep them 64-bit — `BigInt`/boxed `uint64` cdata/unsigned mask, not a lossy `Number`). The `_ex` entry points thread the handle through the ptrace loops. See [native-tracing.md](tracing/native-tracing.md) ("Call descent levels"). |
+| Call descent (`asmtest_ptrace.h`) | `asmtest_descent_new`/`_free`, `_set_max_depth`/`_set_insn_budget`/`_set_watchdog_ms`, `_allow_region`/`_deny_region`, `_set_resolver`/`_set_denylist`; readers `_edges_len`/`_edge_site`/`_edge_target`/`_edge_depth`, `_frames_len`/`_frame_base`/`_frame_len`/`_frame_depth`/`_frame_parent`/`_frame_insn_count`/`_frame_insn_at`/`_frame_block_count`/`_frame_block_at`, `_truncated`/`_depth_capped`; entry points `asmtest_ptrace_trace_call_ex`/`_trace_attached_ex`/`_trace_attached_versioned_ex` | Opaque descent handle: configure the four-level descent policy in, read edges + nested per-callee frames out through one-scalar-per-call accessors (address getters return `uint64`, so bindings must keep them 64-bit — `BigInt`/boxed `uint64` cdata/unsigned mask, not a lossy `Number`). The `_ex` entry points thread the handle through the ptrace loops. See [native-tracing.md](../guides/tracing/native-tracing.md) ("Call descent levels"). |
 | Mid-execution guards | `emu_watch_writes`/`emu_watch_clear`, `emu_guard_reg`/`emu_guard_reg_clear`; opaque handles `asmtest_emu_watch_new`/`_free`/`_violated`/`_addr`/`_size`/`_rip_off`, `asmtest_emu_reg_guard_new`/`_free`/`_violated`/`_got`/`_rip_off` | Arm a write-watchpoint or block-entry register invariant on the handle, run a call, then read the recorded violation by accessor (x86-64 guest, Track F). |
 | Coverage-guided fuzzing / mutation | `emu_fuzz_cover1`, `emu_mutation_test1`; opaque stats `asmtest_emu_fuzz_stat_new`/`_free`/`_blocks_reached`/`_corpus_len`/`_iterations`, `asmtest_emu_mutation_stat_new`/`_free`/`_mutants`/`_killed`/`_survived` | Run a one-int-arg routine's coverage-guided input search or bit-flip mutation set inside the emulator; read the result counts by accessor (Track E). |
 | Disassembly | `emu_disas`, `emu_disas_available` | Decode the one instruction at a code offset into text (Capstone). Writes into a caller buffer — no opaque handle — and self-skips to empty when absent. Carried by the superset `libasmtest_emu` (Track C). |

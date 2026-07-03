@@ -8,7 +8,7 @@ plus `extern "C"` declarations of the binding-ABI entry points, linked against t
 prebuilt shared libraries (`build.rs` locates them). `#[repr(C)]` makes the struct
 layout match the C structs by construction, and the no-GC model means sharing a
 buffer by pointer is trivial and lifetime-checked. See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 ## Setup
 
@@ -125,7 +125,7 @@ t.covered(0x0);                                 // bool: basic block at byte-off
 
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
-The optional in-process [native-trace tier](../tracing/native-tracing.md) traces
+The optional in-process [native-trace tier](../guides/tracing/native-tracing.md) traces
 **host-native** code as it runs inside this Rust process, rather than guest bytes
 in the emulator. Bring DynamoRIO up once, materialize machine code with
 `NativeCode`, mark a region, call into it, and read back basic-block coverage and
@@ -171,7 +171,7 @@ if NativeTrace::available() {
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -216,7 +216,7 @@ resolver (`TracePolicy`) extends the cascade across the DynamoRIO and emulator
 tiers. An out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -279,4 +279,4 @@ replays the conformance corpus and reproduces every case.
 The published-crate story (a `bindgen`-generated `-sys` crate, `cibuildwheel`-style
 prebuilt libs, crates.io) and a Tier-2 idiomatic assertion layer are future work;
 this is the Tier-1 binding that proves the no-GC native path. See
-[Packaging the bindings](../packaging.md).
+[Packaging the bindings](../reference/packaging.md).

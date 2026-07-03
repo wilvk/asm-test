@@ -338,7 +338,7 @@ document is its detailed treatment.
 ## When to use L3 call descent — and why it is hazardous on a live runtime
 
 The out-of-process single-step tracer can optionally **descend** into the call-outs it
-would otherwise step over (see [native-tracing.md](../tracing/native-tracing.md#call-descent-levels)).
+would otherwise step over (see [native-tracing.md](../guides/tracing/native-tracing.md#call-descent-levels)).
 Levels 0–2 are safe defaults: level 2 (`DESCEND_KNOWN`) only single-steps callees whose
 region you named in an allow-set, so it never wanders into runtime internals. **Level 3
 (`DESCEND_ALL`) is different, and default-off for a reason.** On a live managed runtime it is

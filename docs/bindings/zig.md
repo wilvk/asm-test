@@ -6,7 +6,7 @@ no separate binding layer, no generated code. `@cImport` translates `asmtest.h` 
 `asmtest_emu.h` into Zig declarations (the structs, the binding-ABI functions, and
 the integer-constant flag masks), and Zig's target selects the right architecture
 branch. No GC, so arg arrays are plain stack slices passed by pointer. See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 Like C++, Zig gates the assembler at **build time**, but it now defaults on — the
 assembler is compiled into `libasmtest_emu`, so no flag is needed.
@@ -65,7 +65,7 @@ const n = c.asmtest_asm_bytes(c.ASM_ARM64, c.ASM_SYNTAX_INTEL, "ret", 0x00100000
 
 Zig calls the binding-ABI entry points **directly** through `@cImport` (the `c.`
 prefix), so the "functions available" are the C contract from the
-[API reference](../api-reference.md), used Zig-idiomatically: `std.mem.zeroes` for
+[API reference](../reference/api-reference.md), used Zig-idiomatically: `std.mem.zeroes` for
 result structs, fixed-size stack arrays passed by pointer, and
 `@ptrFromInt(@intFromPtr(&fn))` to hand a routine address as `?*anyopaque`. Every
 emulator call returns its status as a value and writes the result into an
@@ -199,7 +199,7 @@ st.unregister("asmtest_symbol_demo");
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -245,7 +245,7 @@ available backend (Intel PT → AMD LBR → single-step), and `hwtrace.resolveTi
 out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests (raw bytes, any host)
 
@@ -298,4 +298,4 @@ shared libs.
 
 A published Zig package (`build.zig.zon` + module export for `@import("asmtest")`)
 and a Tier-2 idiomatic assertion layer are future work; this is the Tier-1 binding
-that proves the `@cImport` path. See [Packaging the bindings](../packaging.md).
+that proves the `@cImport` path. See [Packaging the bindings](../reference/packaging.md).

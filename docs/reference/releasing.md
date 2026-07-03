@@ -1,6 +1,6 @@
 # Releasing
 
-The [`release.yml`](../.github/workflows/release.yml) workflow assembles every
+The [`release.yml`](../../.github/workflows/release.yml) workflow assembles every
 binding's package from the cross-platform native payload, installs each one fresh
 (no `ASMTEST_LIB`, no system deps) and asserts the optional tiers resolve, then —
 **only on a tag and only when the matching secret is present** — publishes to each

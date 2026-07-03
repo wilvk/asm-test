@@ -90,7 +90,7 @@ per-language job, first instantiated for Python). Verified on x86-64 macOS:
   `asmtest_check_flag` *return* a verdict + reason instead of `longjmp`-ing into
   the runner, so a binding can validate a capture across the FFI boundary with no
   C runner present (the jumping `asmtest_assert_*` now delegate to them). The
-  contract symbol set is designated in the [API reference](../api-reference.md)
+  contract symbol set is designated in the [API reference](../reference/api-reference.md)
   (Binding ABI section) — every call path already has a non-variadic array form,
   so a generator needn't emulate cpp expansion. `ASMTEST_NO_MAIN` lets the
   runtime link without its `main()` for embedding/driver use.
@@ -425,7 +425,7 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   host subprocess), so the docs give one consistent crash-safety story.
 - **Pinning matrix.** Maintain a short per-language table of the correct
   buffer-pinning idiom (from Finding 4), referenced from each track.
-- **Packaging.** *Scaffolded — see [docs/packaging.md](../packaging.md).* Each
+- **Packaging.** *Scaffolded — see [docs/packaging.md](../reference/packaging.md).* Each
   ecosystem ships the prebuilt shared libs per platform (PyPI wheels, crates.io +
   build script, npm prebuilds, Maven classifiers, NuGet rids, gems, rocks); a
   binding must not require the end user to `make` the C core. Every binding now
@@ -467,7 +467,7 @@ Node, Java, .NET, Ruby, Lua, Go) — assertion helpers with legible failure mess
 panicking, or error-union), each verified on both the pass paths and the failure
 paths (the assertion actually fails when it should). Packaging each binding for
 its registry is now **scaffolded** (manifests + `make <lang>-package` +
-[docs/packaging.md](../packaging.md)); the remaining deferred work is a
+[docs/packaging.md](../reference/packaging.md)); the remaining deferred work is a
 credentialed, multi-platform publish.
 
 ---

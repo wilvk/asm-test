@@ -34,7 +34,7 @@ statement separators. Write architecture-specific bodies behind
 
 :::{note}
 The same routine can also be written in Intel syntax for the
-[NASM backend](portability.md#nasm-backend). The convention is `foo.s` (GAS) and
+[NASM backend](../reference/portability.md#nasm-backend). The convention is `foo.s` (GAS) and
 `foo.asm` (NASM) side by side; CI exercises both.
 :::
 
@@ -51,7 +51,7 @@ TEST(arith, adds_two_positives) {
 ```
 
 Declare each routine `extern` with its C prototype and call it directly, or
-through one of the [capture macros](abi-capture.md) when you want to inspect
+through one of the [capture macros](../guides/abi-capture.md) when you want to inspect
 registers and flags.
 
 ## `TEST` — define and auto-register
@@ -99,7 +99,7 @@ TEST(arith, avx512_path) {
 
 ## How a run is structured
 
-1. `main()` (provided) parses the [CLI](runner.md), then enumerates the
+1. `main()` (provided) parses the [CLI](../guides/runner.md), then enumerates the
    registry.
 2. Each selected test runs in a `fork()`ed child with an `alarm()` timeout, so a
    crash or infinite loop in the routine under test becomes a reported failure
@@ -111,9 +111,9 @@ Each test moves through the same lifecycle. An assertion failure, a `SKIP`, or a
 fatal signal all leave the body the same way — a non-local jump back into the
 runner — and the suite continues with the next test:
 
-> **Diagram:** [Test lifecycle states](diagrams.md#test-lifecycle-states)
+> **Diagram:** [Test lifecycle states](../reference/diagrams.md#test-lifecycle-states)
 
-See [The test runner](runner.md) for filtering, ordering, parallelism, and
+See [The test runner](../guides/runner.md) for filtering, ordering, parallelism, and
 timeouts.
 
 ## File and build conventions
@@ -127,4 +127,4 @@ timeouts.
 The Makefile globs `examples/test_*.c`, links each against the matching routine
 object, and produces `build/test_foo`. Drop in a new pair and `make test` builds
 and runs it — no Makefile edit required. To consume the framework from a
-separate project instead, see [Integration](integration.md).
+separate project instead, see [Integration](../reference/integration.md).

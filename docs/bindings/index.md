@@ -25,7 +25,7 @@ wrapper for both: a `drtrace` (`NativeTrace`) and an `hwtrace` (`HwTrace`) modul
 each dlopen-loading its library at run time and self-skipping when it is absent. The
 single-step backend in particular traces live on any x86-64 Linux with no engine
 install, so each language page works it end to end. See
-[Native runtime tracing](tracing/native-tracing.md). A binding still keeps an
+[Native runtime tracing](../guides/tracing/native-tracing.md). A binding still keeps an
 `asm_available` / `disas_available` probe so it can self-skip if pointed at an
 older/leaner lib that lacks them.
 
@@ -35,24 +35,24 @@ an end-to-end, idiomatic example:
 
 | Language | Page | FFI mechanism |
 |---|---|---|
-| Python | [Python binding](bindings/python.md) | `ctypes` |
-| .NET | [.NET binding](bindings/dotnet.md) | P/Invoke |
-| Go | [Go binding](bindings/go.md) | `cgo` |
-| Rust | [Rust binding](bindings/rust.md) | `extern` + build script |
-| C++ | [C++ binding](bindings/cpp.md) | direct `#include` |
-| Zig | [Zig binding](bindings/zig.md) | `@cImport` |
-| Node.js | [Node.js binding](bindings/node.md) | `koffi` |
-| Java | [Java binding](bindings/java.md) | FFM (Panama) |
-| Ruby | [Ruby binding](bindings/ruby.md) | `Fiddle` |
-| Lua | [Lua binding](bindings/lua.md) | LuaJIT `ffi` |
+| Python | [Python binding](python.md) | `ctypes` |
+| .NET | [.NET binding](dotnet.md) | P/Invoke |
+| Go | [Go binding](go.md) | `cgo` |
+| Rust | [Rust binding](rust.md) | `extern` + build script |
+| C++ | [C++ binding](cpp.md) | direct `#include` |
+| Zig | [Zig binding](zig.md) | `@cImport` |
+| Node.js | [Node.js binding](node.md) | `koffi` |
+| Java | [Java binding](java.md) | FFM (Panama) |
+| Ruby | [Ruby binding](ruby.md) | `Fiddle` |
+| Lua | [Lua binding](lua.md) | LuaJIT `ffi` |
 
 **Python** is the reference binding (start there if you're new); **.NET** and
 **Go** are the other two with worked, all-three-capability examples. For how each
-package is assembled and published, see [Packaging the bindings](packaging.md).
+package is assembled and published, see [Packaging the bindings](../reference/packaging.md).
 
 Every binding loads the shared library built from this repo and calls the
 **binding ABI** — the macro-free entry points catalogued in the
-[API reference](api-reference.md). The Python binding reads struct layout from
+[API reference](../reference/api-reference.md). The Python binding reads struct layout from
 the `asmtest_abi.json` manifest; the rest go through the opaque-handle accessors
 (`asmtest_regs_*`, `asmtest_emu_*`), so no `regs_t` layout is mirrored on their
 side.
@@ -61,7 +61,7 @@ The whole substrate hangs off one flat C-ABI surface, kept honest by the layout
 manifest and a shared conformance corpus — the single source of truth every
 binding must reproduce:
 
-> **Diagram:** [Language bindings architecture](diagrams.md#language-bindings-architecture)
+> **Diagram:** [Language bindings architecture](../reference/diagrams.md#language-bindings-architecture)
 
 ## One-time setup
 
@@ -80,7 +80,7 @@ Capstone). `make shared-emu` builds it with all three tiers, so every binding ge
 them with no extra flag. **The published packages bundle them out of the box** —
 `make <lang>-package` stages this lib and vendors the native deps, so a fresh `pip
 install` / `gem install` / `npm install` has both tiers working with no system
-libs (see [Packaging the bindings](packaging.md)).
+libs (see [Packaging the bindings](../reference/packaging.md)).
 
 `libasmtest_emu` is the **one lib carrying both optional tiers** (and what the
 packages ship): load it and you get the assembler *and* the disassembler from a
@@ -99,7 +99,7 @@ At run time the dynamic loader must find `libasmtest_emu` — point it at the
 build directory with `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS), or
 set `ASMTEST_LIB` for Python. The emulator tier additionally needs **libunicorn**,
 and the assembler/disassembler tiers need **libkeystone** + **libcapstone** (see
-[Emulator tier](emulator.md)).
+[Emulator tier](../guides/emulator.md)).
 
 Because `libasmtest_emu` carries both optional tiers, every binding gets the
 assembler *and* the disassembler from a single load — `make <lang>-test` exercises
@@ -159,8 +159,8 @@ Every binding also ships **Tier-2 assertions** over these results — `assert_re
 end-to-end — capture, the emulator, cross-arch guests, and the in-line assembler.
 The newer additions above (AVX2 256-bit capture, mid-execution guards,
 coverage-guided fuzzing / mutation testing, and the disassembler) are mapped in
-this table and catalogued in the [API reference](api-reference.md); the
-[Python reference page](bindings/python.md) documents each in full.
+this table and catalogued in the [API reference](../reference/api-reference.md); the
+[Python reference page](python.md) documents each in full.
 
 ## Every binding has a reusable module
 
@@ -187,7 +187,7 @@ Every module deliberately avoids mirroring `regs_t`: Python reads field offsets
 from the layout manifest, and the rest call the opaque-handle accessors. That
 binding-ABI surface — the array-form capture entry points, the verdict shims, and
 the opaque-handle accessors — is catalogued in the
-[API reference](api-reference.md).
+[API reference](../reference/api-reference.md).
 
 ## Maturity
 
@@ -196,7 +196,7 @@ fixtures, and both tiers — the most turnkey today. The others ship the same
 reusable module and Tier-2 assertions, and their packages now build, bundle the
 native lib, and **install + smoke-test in the release dry-run** (Linux + macOS) —
 they are simply **not published to registries yet** (only the credentialed
-go-live remains; see [Packaging the bindings](packaging.md)). Today you consume
+go-live remains; see [Packaging the bindings](../reference/packaging.md)). Today you consume
 them as shown on each language's page (referencing the module and pointing at the
 built shared libs) — exactly how the repo wires `make <lang>-test`.
 
@@ -204,14 +204,14 @@ built shared libs) — exactly how the repo wires `make <lang>-test`.
 :maxdepth: 1
 :hidden:
 
-bindings/python
-bindings/dotnet
-bindings/go
-bindings/rust
-bindings/cpp
-bindings/zig
-bindings/node
-bindings/java
-bindings/ruby
-bindings/lua
+python
+dotnet
+go
+rust
+cpp
+zig
+node
+java
+ruby
+lua
 ```

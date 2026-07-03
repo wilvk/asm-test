@@ -12,7 +12,7 @@ guests emulate even on an x86-64 host.
 All five guests share one shape — `*_open` → `*_map`/`*_write` → `*_call` → a
 result struct — over a single Unicorn engine:
 
-> **Diagram:** [Emulator guests](diagrams.md#emulator-guests)
+> **Diagram:** [Emulator guests](../reference/diagrams.md#emulator-guests)
 
 ## Building and running
 
@@ -180,7 +180,7 @@ ASSERT_BLOCKS_AT_LEAST(&tr, 3);      // the union covered all three paths
 Tracing **appends**, so re-running with the same struct unions coverage across
 inputs — that's how you answer *"did the tests exercise every branch?"*:
 
-> **Diagram:** [Emulator trace and coverage flow](diagrams.md#emulator-trace-and-coverage-flow)
+> **Diagram:** [Emulator trace and coverage flow](../reference/diagrams.md#emulator-trace-and-coverage-flow)
 
 Key fields:
 

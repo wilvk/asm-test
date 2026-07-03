@@ -196,7 +196,7 @@ The scaffolding stops short of a credentialed, multi-platform release:
    (built from `Asmtest.cs` by `asmtest-lib.csproj`) — joining the
    already-library-shaped Python wheel, Rust crate, C++ header, and Go module. Each
    binding's `conformance.*` test runner is no longer shipped.
-3. **A release workflow.** *Dry-run done* — [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+3. **A release workflow.** *Dry-run done* — [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
    builds the cross-platform `native-all`, then for each binding packages it,
    **installs the artifact fresh and runs a smoke test** that the bundled native
    lib resolves with `ASMTEST_LIB` unset (so an installed package works

@@ -9,7 +9,7 @@ and SIMD assertions have their own pages.
 The full assertion surface spans six families — this page is the first two; the
 rest are linked under [Related assertion families](#related-assertion-families):
 
-> **Diagram:** [Assertion families](diagrams.md#assertion-families)
+> **Diagram:** [Assertion families](../reference/diagrams.md#assertion-families)
 
 ## Boolean
 
@@ -96,4 +96,4 @@ faults precisely instead of silently corrupting the heap.
 | `ASSERT_MATCHES_REF{1,2,3}` | [Property testing](property-testing.md) |
 | `ASSERT_NO_FAULT`, `ASSERT_EMU_*`, `ASSERT_BLOCK_COVERED` | [Emulator tier](emulator.md) |
 
-A consolidated list of every macro is in the [API reference](api-reference.md).
+A consolidated list of every macro is in the [API reference](../reference/api-reference.md).

@@ -80,5 +80,5 @@ not supported — write the AArch64 body in the `.s` source under
 Native capture is defined as the **post-return** general-purpose registers plus
 flags, with sentinel-based callee-saved checks — not an arbitrary mid-routine
 snapshot, because the `call` itself touches state. When you need a mid-routine or
-full-file view (or a non-host architecture), use the [emulator tier](emulator.md),
+full-file view (or a non-host architecture), use the [emulator tier](../guides/emulator.md),
 which has no such constraint and adds RISC-V and ARM32 guests on top.

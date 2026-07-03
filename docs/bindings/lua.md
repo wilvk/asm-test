@@ -12,7 +12,7 @@ opens the shared libraries, so no C struct layout is mirrored:
 `asmtest_regs_*` for capture, and `asmtest_emu_call2` + accessors for the emulator
 (faults as data: `:faulted()`, plus `:fault_addr()` / `:fault_kind()` — against
 the `FaultKind` table — for where and why one hit). See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 ## Setup
 
@@ -128,7 +128,7 @@ t:free()
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
 Where `Trace` records isolated guest bytes under the emulator, the optional
-[native-trace tier](../tracing/native-tracing.md) traces **host-native code as it runs
+[native-trace tier](../guides/tracing/native-tracing.md) traces **host-native code as it runs
 inside this LuaJIT process**: DynamoRIO is brought up once, machine code is
 materialized into executable (W^X) memory, a region is marked, you call into it,
 and basic-block coverage / the ordered instruction stream is read back. It lives
@@ -171,7 +171,7 @@ NativeTrace.shutdown()
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -213,7 +213,7 @@ available backend (Intel PT → AMD LBR → single-step). A cross-tier resolver
 — which traces a method in a **separate** process (fork-and-step, foreign-process
 attach + run-to-method, and `/proc`-map / jitdump resolution), the managed-runtime
 path — round out the tier. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -274,4 +274,4 @@ make docker-lua       # or in an isolated container
 
 A published LuaRocks rock (and `busted` integration of the `assert_*` helpers) is
 future work; the reusable module with Tier-2 assertions ships today. See
-[Packaging the bindings](../packaging.md).
+[Packaging the bindings](../reference/packaging.md).

@@ -12,7 +12,7 @@ It uses the opaque-handle FFI layer, so no C struct layout is mirrored in Ruby:
 `asmtest_regs_*` accessors cover the capture tier, and `asmtest_emu_call2` +
 accessors cover the emulator (faults as data: `faulted?`, plus `fault_addr` /
 `fault_kind` — cf. `Asmtest::FaultKind` — for where and why one hit). See
-[Language bindings](../bindings.md) for the shared architecture.
+[Language bindings](index.md) for the shared architecture.
 
 ## Setup
 
@@ -170,7 +170,7 @@ NativeTrace.shutdown
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO; full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -213,7 +213,7 @@ available backend (Intel PT → AMD LBR → single-step), and `HwTrace.resolve_t
 out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -272,4 +272,4 @@ pointing `ASMTEST_LIB` / `ASMTEST_CORPUS_LIB` at the built libs.
 
 A published gem (and RSpec/minitest integration of the `assert_*` helpers) is
 future work; the reusable module with Tier-2 assertions ships today. See
-[Packaging the bindings](../packaging.md).
+[Packaging the bindings](../reference/packaging.md).

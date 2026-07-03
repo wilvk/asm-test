@@ -551,7 +551,7 @@ target, but only capability-gated and only for retired taken branches.)
 - [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md): the
   `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim is wrong (see the headline correction); it is
   what currently strands BTF block-step in "research only."
-- [native-tracing.md](../tracing/native-tracing.md) / [hardware-tracing.md](../tracing/hardware-tracing.md):
+- [native-tracing.md](../guides/tracing/native-tracing.md) / [hardware-tracing.md](../guides/tracing/hardware-tracing.md):
   AMD LBR is presented as *finished, no forward-look*. That is now inaccurate — the
   software-event snapshot fixes real documented live failures, and the freeze-availability
   probe closes a silent-correctness gap. The AMD row has genuine near-term work, not just
@@ -596,8 +596,8 @@ Phases 6–7 are forward-look.
 Two **documentation corrections** Part II surfaced ship alongside Phase 0/2 (see
 Deliverables): the `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim in
 [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md), and the "AMD LBR is
-finished, no forward-look" framing in [native-tracing.md](../tracing/native-tracing.md) /
-[hardware-tracing.md](../tracing/hardware-tracing.md).
+finished, no forward-look" framing in [native-tracing.md](../guides/tracing/native-tracing.md) /
+[hardware-tracing.md](../guides/tracing/hardware-tracing.md).
 
 ## Improvement Phase 0 — Feature detection & gating (`src/hwtrace.c`) *(planned)*
 
@@ -909,8 +909,8 @@ block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_PERF
   must hold).
 - **Docs:** correct the `PTRACE_SINGLEBLOCK` claim in
   [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) (Phase 2 makes it real);
-  update the "AMD LBR is finished" framing in [native-tracing.md](../tracing/native-tracing.md) /
-  [hardware-tracing.md](../tracing/hardware-tracing.md); refresh the
+  update the "AMD LBR is finished" framing in [native-tracing.md](../guides/tracing/native-tracing.md) /
+  [hardware-tracing.md](../guides/tracing/hardware-tracing.md); refresh the
   [trace-parity-matrix](../analysis/trace-parity-matrix.md) AMD rows.
 
 ## Validation (per lane, self-skipping)

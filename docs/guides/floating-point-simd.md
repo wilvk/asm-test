@@ -134,7 +134,7 @@ idx, expect)` is the 32-byte whole-register compare. Lane counts double versus
 
 A routine taking both integer and `double` arguments is handled by the FP capture
 path, which fills the integer **and** FP argument registers. The
-[API reference](api-reference.md#capture-functions) documents the underlying
+[API reference](../reference/api-reference.md#capture-functions) documents the underlying
 `asm_call_capture_fp` / `asm_call_capture_vec` (and their `_n` stack-spilling
 variants) for direct use.
 

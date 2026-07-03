@@ -54,7 +54,7 @@ their language's registry, with the native libraries bundled — the multi-langu
 analog of the existing `pkg-config` adoption story.
 
 **Why.** This is the largest gap between "built" and "adoptable." The framework is
-done; nobody can `pip install asmtest`. [docs/packaging.md](../packaging.md) already
+done; nobody can `pip install asmtest`. [docs/packaging.md](../reference/packaging.md) already
 scopes the remainder: credentials and cross-OS native-payload build matrices.
 
 **Status.** The whole release pipeline exists and is dry-run-proven end to end in
@@ -94,7 +94,7 @@ scopes the remainder: credentials and cross-OS native-payload build matrices.
   (no `make` of the C core) and passes the conformance corpus.
 
 **Effort:** ~3–5 days (mostly per-ecosystem CI toil). **Touches:** `.github/workflows/`,
-the per-language `Dockerfile`s, the registry manifests, [docs/packaging.md](../packaging.md).
+the per-language `Dockerfile`s, the registry manifests, [docs/packaging.md](../reference/packaging.md).
 
 ---
 
@@ -131,7 +131,7 @@ re-exec child mode + result plumbing + dispatch wiring.
 2. **Benchmark mode** on Win64 (currently POSIX-only).
 3. **Optional `windows-latest` CI** running the same suite for real-OS sign-off,
    kept thin since Wine carries the bulk (the Wine-fidelity caveat in
-   [docs/win64.md](../win64.md)).
+   [docs/win64.md](../guides/win64.md)).
 
 ### Acceptance criteria
 
@@ -140,7 +140,7 @@ re-exec child mode + result plumbing + dispatch wiring.
 
 **Effort:** ~1 week (the re-exec model) + ~0.5 day (`windows-latest`). **Touches:**
 `src/asmtest.c`, `src/platform_win32.c`, `.github/workflows/ci.yml`,
-[docs/win64.md](../win64.md).
+[docs/win64.md](../guides/win64.md).
 
 ---
 
@@ -189,7 +189,7 @@ a small surface and an already-familiar optional-dependency pattern.
   lists each block's first instruction. Both degrade to offsets when Capstone is absent.
 
 **Effort:** ~2–3 days. **Touches:** `src/emu.c`, `include/asmtest_emu.h`, `Makefile`,
-`examples/test_emu.c`, [docs/emulator.md](../emulator.md).
+`examples/test_emu.c`, [docs/emulator.md](../guides/emulator.md).
 
 ---
 
@@ -354,7 +354,7 @@ caught at the offending store with its instruction text, no host crash.
 
 **Effort:** ~3–4 days. **Touches:** `src/emu.c`, `include/asmtest_emu.h`,
 `src/disasm.c` (the describe helper, kept Capstone-side), `examples/test_emu.c`,
-[docs/emulator.md](../emulator.md).
+[docs/emulator.md](../guides/emulator.md).
 
 ---
 

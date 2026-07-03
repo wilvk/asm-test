@@ -6,7 +6,7 @@ the framework — `TEST`/`ASSERT_*`, the capture trampoline, the emulator —
 directly. The [C++ binding](https://github.com/wilvk/asm-test/tree/main/bindings/cpp)
 adds an *optional* header-only convenience layer
 ([`asmtest.hpp`](https://github.com/wilvk/asm-test/blob/main/bindings/cpp/asmtest.hpp));
-there is no separate binding to build. See [Language bindings](../bindings.md) for
+there is no separate binding to build. See [Language bindings](index.md) for
 the shared architecture.
 
 Unlike the dynamic-FFI bindings, C++ gates the optional emulator and assembler at
@@ -172,7 +172,7 @@ NativeTrace::shutdown();                   // dr_app_stop_and_cleanup (back to n
 ```
 
 Linux x86-64 only, self-skips when DynamoRIO is absent; full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -217,7 +217,7 @@ resolver (spanning the DynamoRIO and emulator tiers) and an out-of-process
 `Ptrace` surface — which traces a method in a **separate** process (fork-and-step,
 foreign-process attach + run-to-method, and `/proc`-map / jitdump resolution), the
 managed-runtime path — round out the tier. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests (raw bytes, any host)
 

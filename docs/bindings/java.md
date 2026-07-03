@@ -11,7 +11,7 @@ Downcall handles target the opaque-handle FFI layer, so no C struct layout is
 mirrored: `asmtest_corpus_routine` for addresses, `asmtest_capture6` / `_fp2` +
 `asmtest_regs_*` for capture, and `asmtest_emu_call2` + accessors for the emulator
 (faults as data: `faulted()`, plus `faultAddr()` / `faultKind()` — a `FaultKind`
-enum — for where and why one hit). See [Language bindings](../bindings.md) for the
+enum — for where and why one hit). See [Language bindings](index.md) for the
 shared architecture.
 
 ## Setup
@@ -175,7 +175,7 @@ try {
 
 Linux x86-64 only; self-skips without DynamoRIO (and the JVM can be flaky for
 in-process takeover — prefer Intel PT, see the central doc). Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -216,7 +216,7 @@ most-faithful available backend (Intel PT → AMD LBR → single-step), and
 emulator tiers. An out-of-process `Ptrace` surface traces a method in a **separate**
 process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map /
 jitdump resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../tracing/native-tracing.md).
+[Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
@@ -279,4 +279,4 @@ sources, and runs
 
 A published Maven/Gradle artifact (and JUnit integration of the `assert*` helpers)
 is future work; the reusable module with Tier-2 assertions ships today. See
-[Packaging the bindings](../packaging.md).
+[Packaging the bindings](../reference/packaging.md).

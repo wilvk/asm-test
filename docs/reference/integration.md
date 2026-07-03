@@ -50,7 +50,7 @@ All other translation units just `#include "asmtest_single.h"`.
 The register/flags capture trampoline is **assembly** (`capture.s`) and cannot
 live in a C header. So even with the single header you must assemble and link
 that trampoline (or just link `libasmtest.a`). The amalgamation covers the C
-surface only; the optional [emulator tier](emulator.md) is **not** included.
+surface only; the optional [emulator tier](../guides/emulator.md) is **not** included.
 :::
 
 ## Version macros
@@ -62,11 +62,11 @@ The installed header exposes compile-time version information:
 | `ASMTEST_VERSION` | `"1.0.0"` | human-readable version string |
 | `ASMTEST_VERSION_NUM` | integer | numeric compares in `#if` guards |
 
-See the [Changelog](changelog.md) for what changed between releases.
+See the [Changelog](../project/changelog.md) for what changed between releases.
 
 ## Requirements recap
 
 Consuming the library needs a C compiler and (for the pkg-config path)
 `pkg-config`. Your routines under test assemble with the same compiler via the
-installed `asm.h`. See [Installation](installation.md) for the full dependency
+installed `asm.h`. See [Installation](../getting-started/installation.md) for the full dependency
 matrix and the `make deps` helper.

@@ -10,10 +10,10 @@ the guide that covers it in depth.
 ### Test framework & runner
 
 - **Auto-discovered `TEST(suite, name)`** cases with a provided `main()` — no
-  manual registration. ([Writing tests](writing-tests.md))
+  manual registration. ([Writing tests](../getting-started/writing-tests.md))
 - **Fixtures**: per-suite `SETUP` / `TEARDOWN`, and `SKIP(reason)`.
 - **Per-test isolation**: each test runs in a forked child so a crash or hang is
-  contained; `--no-fork` opts into the in-process model. ([The runner](runner.md))
+  contained; `--no-fork` opts into the in-process model. ([The runner](../guides/runner.md))
 - **Timeouts**: per-test `alarm()` (`--timeout=SEC`) turns an infinite loop into
   a reported failure.
 - **Parallelism**: `-jN` runs up to N tests concurrently; output stays in
@@ -32,12 +32,12 @@ the guide that covers it in depth.
   forms `ASSERT_DEQ/DNEAR` and `ASSERT_FEQ/FNEAR`.
 - **SIMD**: `ASSERT_VEC_EQ` (and `ASSERT_VEC256_EQ`).
 - **Registers / flags / ABI**: `ASSERT_REG_EQ`, `ASSERT_FLAG_SET/CLEAR`
-  (CF/PF/ZF/SF/OF), `ASSERT_ABI_PRESERVED`. ([Assertions](assertions.md))
+  (CF/PF/ZF/SF/OF), `ASSERT_ABI_PRESERVED`. ([Assertions](../guides/assertions.md))
 
 ### ABI capture & call models
 
 Drive a routine through the **real calling convention** and snapshot the result.
-([ABI capture](abi-capture.md), [Floating-point & SIMD](floating-point-simd.md))
+([ABI capture](../guides/abi-capture.md), [Floating-point & SIMD](../guides/floating-point-simd.md))
 
 - **Register/flags capture** via `ASM_CALLn(&regs, fn, …)` into a `regs_t`.
 - **Arbitrary integer arity** via `ASM_CALLN` (stack-spills the overflow per ABI).
@@ -53,7 +53,7 @@ Drive a routine through the **real calling convention** and snapshot the result.
 - `ASSERT_MATCHES_REF{1,2,3}(fn, ref, gen, n)` — fuzz `n` random inputs through
   the routine and a C reference model, report the first disagreement.
 - Seedable splitmix64 RNG (`asmtest_rng_*`); fixed seed by default, overridable
-  with `ASMTEST_SEED`. ([Property testing](property-testing.md))
+  with `ASMTEST_SEED`. ([Property testing](../guides/property-testing.md))
 
 ### Robustness
 
@@ -66,11 +66,11 @@ Drive a routine through the **real calling convention** and snapshot the result.
 
 - `BENCH(suite, name)` — one measured call, auto-calibrated repeat count,
   min/median/mean **cycles per call** (`rdtsc` / `cntvct_el0`); `BENCH_USE(x)`
-  defeats dead-code elimination. ([Benchmarks](benchmarks.md))
+  defeats dead-code elimination. ([Benchmarks](../guides/benchmarks.md))
 
 ### Emulator tier (optional, Unicorn)
 
-Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulator.md))
+Run a routine in a virtual CPU to do what a real call can't. ([Emulator](../guides/emulator.md))
 
 - **Five guests**: x86-64 System V, x86-64 Win64 ABI, AArch64, RISC-V RV64, ARM32
   — all run on any host.
@@ -81,7 +81,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **FP & vector** marshalling/capture (`emu_call_fp` / `emu_call_vec`).
 - **Execution trace & basic-block coverage** (`emu_call_traced`), with union
   across inputs, lcov export, and **source-line coverage** via a caller-supplied
-  line map. ([Traces](tracing/traces.md))
+  line map. ([Traces](../guides/tracing/traces.md))
 - **Mid-execution guards**: memory-write watchpoints and block-entry register
   invariants (catch corruption even when restored before return).
 - **Coverage-guided fuzzing** (`emu_fuzz_cover1`) and **mutation testing**
@@ -89,7 +89,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **Fault/trace disassembly** (optional, Capstone): annotate offsets with the
   instruction text (`emu_disas`, `emu_fault_describe`, `…_disasm`). `emu_disas`
   is exposed through every language binding (`disas`/`disas_available`), via
-  `libasmtest_emu` (the full superset lib carries it). ([Disassembly](disassembly.md))
+  `libasmtest_emu` (the full superset lib carries it). ([Disassembly](../guides/disassembly.md))
 
 ### Native runtime trace tiers (optional, Linux)
 
@@ -98,7 +98,7 @@ alongside native capture and the emulator. Every backend fills the same
 `asmtest_trace_t` shape as the emulator trace and self-skips when its toolchain or
 hardware is absent. All are exposed through **all ten language wrappers**
 (`drtrace` / `hwtrace`) and held in sync by the binding function-parity gate.
-([Native runtime tracing](tracing/native-tracing.md))
+([Native runtime tracing](../guides/tracing/native-tracing.md))
 
 - **DynamoRIO native trace**: in-process attach (`dr_app_*`), begin/end region
   markers, basic-block + instruction coverage for native or Keystone-generated
@@ -128,7 +128,7 @@ hardware is absent. All are exposed through **all ten language wrappers**
 
 - Pass a routine as assembly **text** instead of a compiled address, then run it
   in the emulator or assemble to machine-code bytes (multi-arch). Available
-  through every language binding. ([Bindings overview](bindings.md))
+  through every language binding. ([Bindings overview](../bindings/index.md))
 
 ### Portability & assemblers
 
@@ -141,7 +141,7 @@ hardware is absent. All are exposed through **all ten language wrappers**
 
 - Ten bindings (Python, .NET, Go, Rust, C++, Zig, Node, Java, Ruby, Lua), each a
   reusable module exposing capture + emulator + optional in-line assembler, plus
-  Tier-2 assertions. ([Bindings](bindings.md))
+  Tier-2 assertions. ([Bindings](../bindings/index.md))
 
 ---
 
@@ -256,9 +256,9 @@ builds the superset `libasmtest_emu` with all three tiers.
 
 ## Where next
 
-- [Examples](examples.md) — these features in action, by use case and audience.
-- [Emulator tier](emulator.md) — the full guest API and diagnostics.
-- [Execution traces and coverage](tracing/traces.md) — trace buffers, coverage unions,
+- [Examples](../getting-started/examples.md) — these features in action, by use case and audience.
+- [Emulator tier](../guides/emulator.md) — the full guest API and diagnostics.
+- [Execution traces and coverage](../guides/tracing/traces.md) — trace buffers, coverage unions,
   source-line maps, and lcov export.
-- [Bindings](bindings.md) — the per-language capability map and setup.
+- [Bindings](../bindings/index.md) — the per-language capability map and setup.
 - [Portability](portability.md) — the architecture/OS/assembler details.

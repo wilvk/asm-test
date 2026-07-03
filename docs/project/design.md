@@ -6,5 +6,5 @@ all complete). It is included verbatim from
 [`DESIGN.md`](https://github.com/wilvk/asm-test/blob/main/DESIGN.md) in the
 repository root.
 
-```{include} ../DESIGN.md
+```{include} ../../DESIGN.md
 ```

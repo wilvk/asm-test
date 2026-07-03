@@ -210,8 +210,8 @@ convention.
   `clean-room` PR label), `runs-on: [self-hosted, macOS, arm64]` for tart and
   `[self-hosted, linux, kvm]` for Docker-OSX — never on the hosted pool.
 - **Docs:** new `docs/clean-room-testing.md` (the matrix above + how to run each lane
-  locally); cross-links from [`docs/portability.md`](../portability.md),
-  [`docs/packaging.md`](../packaging.md), and [`docs/ci.md`](../ci.md); a `make help`
+  locally); cross-links from [`docs/portability.md`](../reference/portability.md),
+  [`docs/packaging.md`](../reference/packaging.md), and [`docs/ci.md`](../reference/ci.md); a `make help`
   "Clean-room (macOS)" section; one `CHANGELOG.md` entry.
 
 ---

@@ -27,7 +27,7 @@ tier (Phases 0–8) plus the shared trace substrate all backends reuse.
 Phases 0–5 are **implemented and validated** on Linux x86-64 (against a prebuilt
 DynamoRIO release), shipping as `libasmtest_drapp` + `libasmtest_drclient` with the
 `drtrace-test` / `shared-drtrace` / `drtrace-client` Make targets and a Python
-wrapper (`asmtest.drtrace`). User-facing docs: [native-tracing.md](../tracing/native-tracing.md).
+wrapper (`asmtest.drtrace`). User-facing docs: [native-tracing.md](../guides/tracing/native-tracing.md).
 
 **One deliberate deviation from the original design.** The client uses DynamoRIO's
 **raw BSD core API** (`dr_register_bb_event`, clean calls, `dr_get_proc_address`),

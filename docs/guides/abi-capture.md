@@ -7,7 +7,7 @@ ABI argument registers, performs the real `call`, and snapshots **every
 general-purpose register plus the flags** into a `regs_t`. You then assert on
 that snapshot.
 
-> **Diagram:** [Capture trampoline](diagrams.md#capture-trampoline)
+> **Diagram:** [Capture trampoline](../reference/diagrams.md#capture-trampoline)
 
 ## Capturing a call
 
@@ -67,7 +67,7 @@ present everywhere so tests stay portable, while the named callee-saved fields
 (and a few others) differ by calling convention. The field offsets are fixed and
 `_Static_assert`-guarded so the bindings can mirror them.
 
-> **Diagram:** [Register snapshot layouts across ABIs](diagrams.md#register-snapshot-layouts-across-abis)
+> **Diagram:** [Register snapshot layouts across ABIs](../reference/diagrams.md#register-snapshot-layouts-across-abis)
 
 :::{note}
 Capture is defined as the **post-return** register state plus sentinel-based
@@ -143,7 +143,7 @@ A small struct (≤16 bytes) lands in the captured `r.ret`/`r.rdx`
 Small structs pass as their "eightbytes" through the integer/FP register paths —
 pass them with the ordinary `ASM_CALL2` / `ASM_FCALL*` macros. Large structs go
 through `asm_call_capture_bigstruct` (an inline stack copy on x86-64, by-pointer
-on AArch64). See the [API reference](api-reference.md#capture-functions) for the
+on AArch64). See the [API reference](../reference/api-reference.md#capture-functions) for the
 underlying function signatures.
 
 ## Underlying functions

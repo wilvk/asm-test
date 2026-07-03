@@ -7,7 +7,7 @@ links here.
 ## Framework build and run pipeline
 
 How the assembly routines, C tests, build, and runner fit together — from
-[asm-test](index.md).
+[asm-test](../index.md).
 
 ```mermaid
 flowchart TB
@@ -42,7 +42,7 @@ flowchart TB
 
 ## Test lifecycle states
 
-The states each test moves through in the runner — from [Writing tests](writing-tests.md).
+The states each test moves through in the runner — from [Writing tests](../getting-started/writing-tests.md).
 
 ```mermaid
 stateDiagram-v2
@@ -67,7 +67,7 @@ stateDiagram-v2
 ## Runner fork-per-test lifecycle
 
 How the parent runner and each forked child exchange a verdict — from
-[The test runner](runner.md).
+[The test runner](../guides/runner.md).
 
 ```mermaid
 sequenceDiagram
@@ -94,7 +94,7 @@ sequenceDiagram
 ## Capture trampoline
 
 How `ASM_CALLn` runs a routine through the real ABI and snapshots register state —
-from [ABI capture & registers](abi-capture.md).
+from [ABI capture & registers](../guides/abi-capture.md).
 
 ```mermaid
 flowchart LR
@@ -116,7 +116,7 @@ flowchart LR
 ## Register snapshot layouts across ABIs
 
 The `regs_t` shape under each calling convention — from
-[ABI capture & registers](abi-capture.md).
+[ABI capture & registers](../guides/abi-capture.md).
 
 ```mermaid
 flowchart LR
@@ -133,7 +133,7 @@ flowchart LR
 
 ## Assertion families
 
-The six families of `ASSERT_*` macros — from [Assertions](assertions.md).
+The six families of `ASSERT_*` macros — from [Assertions](../guides/assertions.md).
 
 ```mermaid
 flowchart LR
@@ -162,7 +162,7 @@ flowchart LR
 ## Property and differential testing loop
 
 The generate → call → compare-against-reference loop — from
-[Property / differential testing](property-testing.md).
+[Property / differential testing](../guides/property-testing.md).
 
 ```mermaid
 flowchart TB
@@ -181,7 +181,7 @@ flowchart TB
 ## Emulator guests
 
 The five emulator guests and the shared `*_open` → `*_call` → result shape — from
-[Emulator tier](emulator.md).
+[Emulator tier](../guides/emulator.md).
 
 ```mermaid
 flowchart TB
@@ -203,7 +203,7 @@ flowchart TB
 ## Emulator trace and coverage flow
 
 How `emu_call_traced` accumulates coverage and feeds the reporting/lcov helpers —
-from [Emulator tier](emulator.md).
+from [Emulator tier](../guides/emulator.md).
 
 ```mermaid
 flowchart TB
@@ -241,7 +241,7 @@ flowchart TB
 ## Language bindings architecture
 
 The C core, the flat binding ABI, and the per-language modules that reproduce a
-shared conformance corpus — from [Language bindings](bindings.md).
+shared conformance corpus — from [Language bindings](../bindings/index.md).
 
 ```mermaid
 flowchart TB
