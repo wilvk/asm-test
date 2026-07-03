@@ -107,17 +107,20 @@ five axes, each one a specific way a tracer *can* intrude on a managed runtime:
 
 There is a sixth, softer axis: **deployment intrusiveness** — whether observing requires
 changing *how the program is launched*. `DOTNET_PerfMapEnabled` is the canonical example:
-it barely perturbs execution, but it is launch-only and process-lifetime — you must
-restart with the flag set. The `using` model aims to be non-intrusive on this axis too:
+it barely perturbs execution, but the env var is read only at process start — you must
+restart with the flag set (.NET 8 added a runtime IPC toggle for the same facility; see
+the jitdump leak below). The `using` model aims to be non-intrusive on this axis too:
 attach nothing, restart nothing, cost confined to the scope.
 
 Only **out-of-band hardware trace** passes all five execution axes, because the recording
 happens in the CPU as a side effect of executing — the program cannot tell it is being
 traced short of probing MSRs. One honest caveat: the `using` block itself is code *in*
 the target, so the cooperative model is by definition not zero-footprint — but its
-intrusion is confined to the scope boundaries (two ioctls at `{` and `}`); the region
-*body* runs untouched at native speed. That is the precise sense in which this document
-claims the model is non-intrusive.
+intrusion is confined to the scope boundaries (today's `begin` opens the perf event and
+maps its rings each time, [src/hwtrace.c:671-704](../../src/hwtrace.c#L671-L704); with
+the fd held open by an import-time initializer that steady state shrinks to the
+enable/disable `ioctl` pair); the region *body* runs untouched at native speed. That is
+the precise sense in which this document claims the model is non-intrusive.
 
 ## Why the `using` block is the right shape
 
@@ -148,10 +151,14 @@ a scope that traces **whatever runs inside it** needs no method address at all �
 brackets a capture window. Each responsibility maps to something that already exists or
 is a thin shim:
 
-- **Arm on import, not on call.** A `[ModuleInitializer]` runs when the package's
-  assembly loads, so merely *importing* `AsmTest` can probe availability, pick a backend,
-  bring the tier up, and wire the self code-image recorder — the developer writes no
-  setup. (`[ModuleInitializer]` + `[CallerMemberName]`/`[CallerFilePath]`/`[CallerLineNumber]`
+- **Arm before first use, with no setup call.** A `[ModuleInitializer]` is guaranteed
+  to run before anything in the package's assembly is touched — in practice when the
+  first method mentioning an `AsmTest` type is itself JITted, since assemblies load
+  lazily and a `using` *directive* alone emits nothing at runtime. So arming (probe
+  availability, pick a backend, bring the tier up, wire the self code-image recorder)
+  happens just before the first `new AsmTrace()`, and the developer still writes no
+  setup — "arm on import" is the ergonomic effect, not the literal timing.
+  (`[ModuleInitializer]` + `[CallerMemberName]`/`[CallerFilePath]`/`[CallerLineNumber]`
   are compiler-supplied C# features; the caller types nothing.)
 - **Auto-name the region.** With no argument, `[CallerMemberName]`/`[CallerLineNumber]`
   give the scope a free, unique label — no name to invent.
@@ -205,9 +212,12 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
    [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs) exists
    precisely to get a *clean* single-method trace instead of the runtime's plumbing.
-3. **The window has a bandwidth budget, not a semantic limit.** PT emits ~100 MB/s
-   encoded; a scope around seconds of hot code overflows the AUX ring (snapshot mode
-   keeps the tail and sets `truncated`) or produces gigabytes (drain mode). Long-running
+3. **The window has a bandwidth budget, not a semantic limit.** PT emits hundreds of
+   MB/s per core encoded ([perf-intel-pt][perf-intel-pt]); a scope around seconds of hot
+   code overflows the AUX ring or produces gigabytes (drain mode). The `snapshot` option
+   maps a circular ring for exactly this (keep the tail, flag `truncated`), but its
+   decode-side drain is a named follow-up — `end()` today decodes the linear ring only
+   ([src/hwtrace.c:782-783](../../src/hwtrace.c#L782-L783)). Long-running
    or I/O-blocked code is still *valid* — a thread parked in a syscall emits nothing —
    but a huge dynamic window decodes to a huge trace.
 4. **Scopes do not nest (today).** Capture state is a single process-global slot — "only
@@ -288,8 +298,8 @@ What it is safe *for* depends on what is inside the scope:
   the **process-wide** SIGTRAP disposition for the window
   ([src/ss_backend.c:128](../../src/ss_backend.c#L128), restored at
   [:212](../../src/ss_backend.c#L212)) — during the scope, asm-test owns a signal
-  CoreCLR's PAL also claims. The handler unconditionally re-asserts TF in whatever
-  context it interrupted ([src/ss_backend.c:106](../../src/ss_backend.c#L106)), so a
+  CoreCLR's PAL also claims. Once the window is armed, the handler re-asserts TF in
+  whatever context it interrupted ([src/ss_backend.c:106](../../src/ss_backend.c#L106)), so a
   stray SIGTRAP from *another* runtime thread mid-window would put that thread into
   runaway single-step. The state is explicitly "single region, single thread — the
   hwtrace MVP contract" ([src/ss_backend.c:56](../../src/ss_backend.c#L56)); a
@@ -448,9 +458,12 @@ backends already filter to the region:
 
 - **PT**: the structural fix is the same **address filter** as Q2 — a region filter cuts
   emitted bandwidth by orders of magnitude for a small hot region inside a large window.
-  Buffer sizing (`aux_size`/`data_size`) and circular **snapshot** mode with a
-  flight-recorder drain are already first-class in the options
-  ([asmtest_hwtrace.h:62-68](../../include/asmtest_hwtrace.h#L62-L68)); PSB-period / cycle
+  Buffer sizing (`aux_size`/`data_size`) and the circular **snapshot** option are already
+  first-class in the options
+  ([asmtest_hwtrace.h:62-68](../../include/asmtest_hwtrace.h#L62-L68)) — though snapshot
+  is capture-side only so far: `end()` decodes the linear ring, and the circular-ring
+  walk from `aux_tail` is its own named follow-up
+  ([src/hwtrace.c:782-783](../../src/hwtrace.c#L782-L783)); PSB-period / cycle
   toggles trade detail for bytes. Overflow already maps onto `truncated`. All standard PT
   knobs — the only gate is PT hardware to validate the filter.
 - **Single-step** has no I/O bandwidth; its budget is the fixed 512 KiB offset buffer
@@ -500,7 +513,7 @@ picture:
 | Intel bare-metal Linux | **Intel PT** | PT | the full model, as designed |
 | AMD Zen 3/4/5 Linux | LBR (16-branch ceiling) | hidden ptrace stepper | no PT on AMD, ever |
 | **AMD Zen 2 Linux** | **none** — no PT, no BRS/LbrExtV2 ([src/hwtrace.c:182](../../src/hwtrace.c#L182)); IBS is sampling-only | hidden ptrace stepper | the host class the W2 stepper was built for (zen2-singlestep-trace-plan) |
-| **Apple Intel, macOS** | **none** — the CPU has PT silicon, but macOS exposes no `perf_event_open`/PT API and the whole tier is Linux-gated ([src/hwtrace.c:154-164](../../src/hwtrace.c#L154-L164)) | none (emulator only — virtual, different question) | the OS, not the CPU, is the blocker |
+| **Apple Intel, macOS** | **none** — the CPU has PT silicon, but macOS exposes no `perf_event_open`/PT API and the whole tier is Linux-gated (perf probe returns 0 off Linux, [src/hwtrace.c:226-229](../../src/hwtrace.c#L226-L229); single-step likewise, [:154-164](../../src/hwtrace.c#L154-L164)) | none (emulator only — virtual, different question) | the OS, not the CPU, is the blocker |
 | Apple Intel, bare-metal Linux | **Intel PT** | PT | pre-T2 Intel Macs boot standard Linux; full model |
 | Linux VM / Docker on the Mac | none — hypervisors don't pass PT through | ptrace stepper or single-step inside the VM | matches the repo's `docker-*` flow |
 | Bare-metal AArch64 with CoreSight | **CoreSight** | ptrace stepper (AArch64 is supported) | board-specific |
@@ -526,13 +539,19 @@ Three honest edges, in decreasing order of how often they bite:
    address) is the robust "assume no knowledge" default; when an address *is* needed,
    fall back to resolving the region from `/proc/self/maps`
    (`asmtest_proc_region_by_addr`) around a captured sample IP, or from the perf-map.
-3. **`.NET`'s own jitdump is launch-only.** `DOTNET_PerfMapEnabled` is read at process
-   start ([.NET runtime-config][dotnet-perfmap]); the in-process toggle is the
-   diagnostic **IPC port**, which is an out-of-process concept. A `[ModuleInitializer]`
-   runs too late to set the env var. Hence the design does **not** depend on jitdump for
-   the pure in-process case — it uses the self code-image recorder for bytes, which needs
-   no launch flag and no cooperation. (Enabling jitdump remains the *lowest-overhead*
-   byte source when you can set it at launch, per
+3. **`.NET`'s own jitdump is launch-flag-shaped — but no longer strictly launch-only.**
+   `DOTNET_PerfMapEnabled` is read at process start ([.NET runtime-config][dotnet-perfmap]),
+   and a `[ModuleInitializer]` runs too late to set it. But since **.NET 8** the
+   diagnostic IPC port accepts `EnablePerfMap`/`DisablePerfMap` process commands
+   ([IPC protocol][dotnet-ipc]; `DiagnosticsClient.EnablePerfMap(PerfMapType.JitDump)`,
+   [diagnostics client][dotnet-diag-client]) — and that port is a filesystem socket a
+   process can connect to **on itself**, so the initializer *could* switch jitdump on at
+   arm time with no launch flag. The design still does **not** depend on it for the pure
+   in-process case: it is .NET-8+-only, pulls in the diagnostics-client plumbing, emits
+   going *forward* only (no guaranteed rundown of methods JITted before the toggle), and
+   the temporal-bytes rule still applies across recompilation — the self code-image
+   recorder needs none of that. (Jitdump remains the *lowest-overhead* byte source when
+   you can enable it — at launch, or at arm time on .NET 8+ — per
    [jit-runtime-tracing.md](jit-runtime-tracing.md#1-cooperative--jitdump-enabled-at-runtime).)
 
 Tiered/OSR recompilation can also move a method to a new address mid-run; the code-image
@@ -565,7 +584,12 @@ bare `using`.
    in-process self case is the same forward-look
    [jit-runtime-tracing.md](jit-runtime-tracing.md) flags as PT Phase 2.
 3. The libipt decode-against-self-code-image glue (the remaining forward-look piece; the
-   recorder and Capstone rendering already exist).
+   recorder and Capstone rendering already exist). Note the shipped decoder is
+   region-scoped: with no image for an IP it stops at the first out-of-region
+   instruction ([src/pt_backend.c:128-136](../../src/pt_backend.c#L128-L136)), so
+   whole-window decode must hand libipt the *full* executed image set —
+   recorder-tracked JIT pages plus the file-backed DSOs enumerable from
+   `/proc/self/maps` — not just the JIT pages.
 4. Optionally, for hosts with no hardware trace (Zen 2, Docker-on-Mac): the concealed
    out-of-process stepper scope — spawn a bundled tracer helper, `PR_SET_PTRACER`,
    `PTRACE_SEIZE` the scoped thread, step between the scope sentinels. Exact, state-safe,
@@ -592,7 +616,9 @@ normalization step documented for the other backends. This is the same boundary
   self-skips when it is missing.
 - **AMD LBR truncates** past 16 taken branches; treat its trace as best-effort and
   re-resolve under `CEILING_FREE`.
-- **.NET specifics:** jitdump is launch-only (use the self code-image recorder instead);
+- **.NET specifics:** jitdump's env var is launch-only, and the .NET 8+ runtime toggle
+  (diagnostic-IPC `EnablePerfMap`, self-connectable) emits forward-only — the self
+  code-image recorder stays the default byte source;
   `PrepareMethod`+`GetFunctionPointer` is not a stable address contract post-.NET 7 (use
   whole-window capture / `/proc/self/maps` resolution); tiering can move code (pin it off
   for a stable single-method trace).
@@ -624,9 +650,12 @@ in-process `using` framing:
 - Intel PT self-monitoring (`pid == 0`, `cpu == -1`), address-range filtering, and the
   privileged-vs-unprivileged AUX buffer sizes: [perf-intel-pt(1)][perf-intel-pt],
   [perf_event_open(2)][perf-eo], [perf address range filtering][lwn-filter].
-- `.NET` perf-map / jitdump is a **launch-time** setting; the in-process route is the
-  diagnostic IPC port: [.NET debugging/profiling config][dotnet-perfmap],
-  [dotnet/runtime#82142 (separate perfmap/jitdump)][dotnet-82142].
+- `.NET` perf-map / jitdump: the env var is read at launch; since .NET 8 the diagnostic
+  IPC port can toggle it at runtime (`EnablePerfMap` — self-connectable):
+  [.NET debugging/profiling config][dotnet-perfmap],
+  [dotnet/runtime#82142 (separate perfmap/jitdump)][dotnet-82142],
+  [diagnostics IPC protocol — `EnablePerfMap` (since .NET 8)][dotnet-ipc],
+  [DiagnosticsClient.EnablePerfMap / PerfMapType][dotnet-diag-client].
 - In-process JIT'd-method address via `RuntimeHelpers.PrepareMethod` +
   `RuntimeMethodHandle.GetFunctionPointer` **and its .NET 7 behaviour change**:
   [PrepareMethod docs][dotnet-preparemethod], [dotnet/runtime#83042][dotnet-83042].
@@ -642,6 +671,8 @@ in-process `using` framing:
 [lwn-filter]: https://lwn.net/Articles/684666/
 [dotnet-perfmap]: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling
 [dotnet-82142]: https://github.com/dotnet/runtime/pull/82142
+[dotnet-ipc]: https://github.com/dotnet/diagnostics/blob/main/documentation/design-docs/ipc-protocol.md
+[dotnet-diag-client]: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/microsoft-diagnostics-netcore-client
 [dotnet-preparemethod]: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.runtimehelpers.preparemethod
 [dotnet-83042]: https://github.com/dotnet/runtime/issues/83042
 [prctl]: https://man7.org/linux/man-pages/man2/prctl.2.html
