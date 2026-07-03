@@ -6,6 +6,7 @@ repository root. The format follows [Keep a Changelog] and the project aims to
 follow [Semantic Versioning].
 
 ```{include} ../../CHANGELOG.md
+:heading-offset: 1
 ```
 
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/

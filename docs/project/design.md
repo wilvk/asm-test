@@ -7,4 +7,5 @@ all complete). It is included verbatim from
 repository root.
 
 ```{include} ../../DESIGN.md
+:heading-offset: 1
 ```
