@@ -61,6 +61,19 @@ static bool cs_target(asmtest_arch_t arch, cs_arch *a, cs_mode *m) {
     }
     return false;
 }
+
+/* True if `insn` (decoded for Capstone arch `a`) is a call. Capstone 5 tags AArch64
+ * `bl`/`blr` with CS_GRP_CALL, but Capstone 4 — the distro libcapstone-dev the decode
+ * lane installs — files them under CS_GRP_JUMP instead, so match those two opcodes by id
+ * as well. This keeps call detection identical on the apt (4.x) and from-source (5.x)
+ * builds. Needs CS_OPT_DETAIL on for the group query. */
+static int insn_is_call(csh h, cs_insn *insn, cs_arch a) {
+    if (cs_insn_group(h, insn, CS_GRP_CALL))
+        return 1;
+    if (a == CS_ARCH_ARM64 && (insn->id == ARM64_INS_BL || insn->id == ARM64_INS_BLR))
+        return 1;
+    return 0;
+}
 #endif /* ASMTEST_HAVE_CAPSTONE */
 
 bool asmtest_disas_available(void) {
@@ -142,7 +155,7 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
     size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
     int is_call = 0;
     if (count > 0) {
-        is_call = cs_insn_group(h, &insn[0], CS_GRP_CALL) ? 1 : 0;
+        is_call = insn_is_call(h, &insn[0], a);
         cs_free(insn, count);
     }
     cs_close(&h);
@@ -184,7 +197,7 @@ size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code
     size_t len = 0;
     if (count > 0) {
         if (is_call != NULL)
-            *is_call = cs_insn_group(h, &insn[0], CS_GRP_CALL) ? 1 : 0;
+            *is_call = insn_is_call(h, &insn[0], a);
         if (is_ret != NULL)
             *is_ret = cs_insn_group(h, &insn[0], CS_GRP_RET) ? 1 : 0;
         len = insn[0].size;
@@ -300,7 +313,7 @@ int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t c
         cs_disasm(h, code + off, code_len - (size_t)off, base_addr + off, 1, &insn);
     int ok = 0;
     if (count > 0) {
-        if (cs_insn_group(h, &insn[0], CS_GRP_CALL)) {
+        if (insn_is_call(h, &insn[0], a)) {
             const cs_detail *d = insn[0].detail;
             if (d != NULL) {
                 /* Both operand-enum sets are always available (capstone.h pulls in

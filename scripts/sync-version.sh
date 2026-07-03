@@ -52,8 +52,10 @@ check_has() {
 }
 
 # Each entry: FILE | sed rewrite expr | grep verify pat (verify uses $VERSION).
-# python: pyproject.toml -> version = "X"
+# python: pyproject.toml -> version = "X" and the package's __version__ (a SECOND
+# source of truth the smoke test checks against the loaded native lib's version)
 PY=bindings/python/pyproject.toml
+PYINIT=bindings/python/asmtest/__init__.py
 # rust: Cargo.toml [package] version (column-0 `version = "..."`)
 RS=bindings/rust/Cargo.toml
 # node: package.json -> "version": "X"
@@ -73,6 +75,7 @@ HDR=include/asmtest.h
 
 if [ "$CHECK" -eq 1 ]; then
   check_has "$PY" "^version = \"$VERSION\"$"
+  check_has "$PYINIT" "^__version__ = \"$VERSION\"$"
   check_has "$RS" "^version = \"$VERSION\"$"
   check_has "$ND" "^  \"version\": \"$VERSION\","
   check_has "$RB" "^  s\.version  *= \"$VERSION\""
@@ -95,6 +98,7 @@ if [ "$CHECK" -eq 1 ]; then
 fi
 
 replace_in "$PY" "s|^version = \".*\"$|version = \"$VERSION\"|"
+replace_in "$PYINIT" "s|^__version__ = \".*\"$|__version__ = \"$VERSION\"|"
 replace_in "$RS" "s|^version = \".*\"$|version = \"$VERSION\"|"
 replace_in "$ND" "s|^(  \"version\": )\".*\",|\1\"$VERSION\",|"
 replace_in "$RB" "s|^(  s\.version  *= )\".*\"|\1\"$VERSION\"|"

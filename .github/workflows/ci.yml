@@ -461,9 +461,13 @@ jobs:
           # Linux slots bundle the native-trace tiers: patchelf (rpath), cmake (the
           # DynamoRIO client), libipt/OpenCSD (hwtrace "full"). DynamoRIO auto-fetches.
           # `if` (not `&& … || true`) so a genuine Linux apt failure fails the step
-          # rather than silently shipping hwtrace without PT/CoreSight decoders.
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev; fi
+          # rather than silently shipping hwtrace without PT/CoreSight decoders. libipt
+          # (Intel PT decode) is x86-only — no libipt-dev exists on Ubuntu ports/arm64,
+          # so install it only on x86_64 and keep OpenCSD (CoreSight) on both.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y patchelf cmake libopencsd-dev
+            if [ "$(uname -m)" = "x86_64" ]; then sudo apt-get install -y libipt-dev; fi
+          fi
 
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
