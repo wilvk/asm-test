@@ -49,10 +49,11 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
  * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
-                          struct perf_branch_entry *out, size_t out_cap, int *gap);
+                          struct perf_branch_entry *out, size_t out_cap,
+                          int *gap);
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
-                                const void *base, size_t len, asmtest_trace_t *trace,
-                                int gap);
+                                const void *base, size_t len,
+                                asmtest_trace_t *trace, int gap);
 /* AMD branch stack depth: a richest-window count at the ceiling means the routine
  * overflowed one snapshot, so escalate from Tier-A to Tier-B stitching. */
 #define AMD_LBR_DEPTH 16
@@ -252,16 +253,18 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
         return;
     const char *r = "available";
     if (!decoder_present(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "built without libipt"
+        r = (backend == ASMTEST_HWTRACE_INTEL_PT)    ? "built without libipt"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "built without OpenCSD"
             : (backend == ASMTEST_HWTRACE_SINGLESTEP)
                 ? "built without Capstone (single-step block normalization)"
                 : "built without Capstone (AMD reconstruction)";
     else if (!cpu_matches(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)   ? "not a GenuineIntel x86-64 host"
+        r = (backend == ASMTEST_HWTRACE_INTEL_PT)
+                ? "not a GenuineIntel x86-64 host"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
             : (backend == ASMTEST_HWTRACE_SINGLESTEP)
-                ? "single-step backend is Linux x86-64 only (Windows/macOS planned)"
+                ? "single-step backend is Linux x86-64 only (Windows/macOS "
+                  "planned)"
                 : "not an AuthenticAMD x86-64 host";
     else if (backend == ASMTEST_HWTRACE_SINGLESTEP)
         r = "available"; /* decoder + x86-64 satisfied: no PMU/perf/privilege gate */
@@ -270,10 +273,10 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
         int p = amd_branch_probe();
         r = (p == AMD_NOHW)
                 ? "no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)"
-            : (p == AMD_NOPERM)
-                ? "perf branch-stack not permitted (lower perf_event_paranoid or "
-                  "grant CAP_PERFMON)"
-                : "available";
+            : (p == AMD_NOPERM) ? "perf branch-stack not permitted (lower "
+                                  "perf_event_paranoid or "
+                                  "grant CAP_PERFMON)"
+                                : "available";
 #else
         r = "AMD LBR is Linux x86-64 only";
 #endif
@@ -443,7 +446,8 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     if (pg <= 0)
         pg = 4096;
     g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 64 * 1024);
-    g_base_map = mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
+    g_base_map =
+        mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
     if (g_base_map == MAP_FAILED) {
         g_base_map = NULL;
         close(g_fd);
@@ -490,8 +494,8 @@ static void hwtrace_end_amd(void) {
     struct perf_branch_entry *best = NULL;
     uint64_t best_nr = 0;
     size_t best_inregion = 0;
-    int lost = 0;          /* a dropped-sample record: the ring could not hold the run */
-    size_t n_samples = 0;  /* branch-stack samples, time order (tail -> head) */
+    int lost = 0; /* a dropped-sample record: the ring could not hold the run */
+    size_t n_samples = 0; /* branch-stack samples, time order (tail -> head) */
     struct perf_branch_entry **samples = NULL;
     size_t *nrs = NULL;
     uint8_t *buf = NULL;
@@ -506,8 +510,10 @@ static void hwtrace_end_amd(void) {
              * NEWEST samples and emits PERF_RECORD_LOST — the precise "the run did not
              * fit" signal that the surviving windows alone cannot show (they stitch
              * gaplessly yet are missing the tail). */
-            for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h = (struct perf_event_header *)(buf + off);
+            for (size_t off = 0;
+                 off + sizeof(struct perf_event_header) <= span;) {
+                struct perf_event_header *h =
+                    (struct perf_event_header *)(buf + off);
                 if (h->size == 0 || off + h->size > span)
                     break;
                 if (h->type == PERF_RECORD_SAMPLE)
@@ -526,8 +532,10 @@ static void hwtrace_end_amd(void) {
             /* Pass 2: record each sample in time order (for Tier-B stitching) and
              * track the single richest-in-region window (Tier-A pick / fallback). */
             size_t si = 0;
-            for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h = (struct perf_event_header *)(buf + off);
+            for (size_t off = 0;
+                 off + sizeof(struct perf_event_header) <= span;) {
+                struct perf_event_header *h =
+                    (struct perf_event_header *)(buf + off);
                 if (h->size == 0 || off + h->size > span)
                     break;
                 if (h->type == PERF_RECORD_SAMPLE) {
@@ -540,7 +548,8 @@ static void hwtrace_end_amd(void) {
                                 nr * sizeof(struct perf_branch_entry) <=
                             h->size) {
                         struct perf_branch_entry *e =
-                            (struct perf_branch_entry *)(body + sizeof(uint64_t));
+                            (struct perf_branch_entry *)(body +
+                                                         sizeof(uint64_t));
                         if (samples != NULL && nrs != NULL) {
                             samples[si] = e;
                             nrs[si] = (size_t)nr;
@@ -575,8 +584,9 @@ static void hwtrace_end_amd(void) {
      * branch-stack sample of headroom remains, the tail was almost certainly
      * dropped and the trace must be honestly truncated rather than claimed complete. */
     {
-        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
-                            (size_t)AMD_LBR_DEPTH * sizeof(struct perf_branch_entry);
+        size_t max_sample =
+            sizeof(struct perf_event_header) + sizeof(uint64_t) +
+            (size_t)AMD_LBR_DEPTH * sizeof(struct perf_branch_entry);
         if (dsz > 0 && span + max_sample > dsz)
             lost = 1;
     }
@@ -600,20 +610,22 @@ static void hwtrace_end_amd(void) {
             if (out != NULL) {
                 int gap = 0;
                 size_t st = asmtest_amd_stitch(
-                    (const struct perf_branch_entry *const *)samples, nrs, n_samples,
-                    out, out_cap, &gap);
+                    (const struct perf_branch_entry *const *)samples, nrs,
+                    n_samples, out, out_cap, &gap);
                 if (st > 0) {
-                    asmtest_amd_decode_stitched(out, st, r->base, r->len, r->trace,
-                                                gap || lost);
+                    asmtest_amd_decode_stitched(out, st, r->base, r->len,
+                                                r->trace, gap || lost);
                     done = 1;
                 }
                 free(out);
             }
         }
         if (!done)
-            asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len, r->trace);
+            asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len,
+                               r->trace);
     } else if (r->trace != NULL) {
-        r->trace->truncated = true; /* no in-region branches captured: not complete */
+        r->trace->truncated =
+            true; /* no in-region branches captured: not complete */
     }
 
     /* A dropped-sample record, or a ring that filled (detected above), means the
@@ -649,7 +661,8 @@ void asmtest_hwtrace_begin(const char *name) {
         return;
 #if defined(__x86_64__)
     if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
-        g_active = r; /* set before arming TF: the handler reads it immediately */
+        g_active =
+            r; /* set before arming TF: the handler reads it immediately */
         asmtest_ss_begin(r->base, r->len, r->trace);
         return;
     }
@@ -677,7 +690,8 @@ void asmtest_hwtrace_begin(const char *name) {
     if (pg <= 0)
         pg = 4096;
     g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 8 * 1024);
-    g_base_map = mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
+    g_base_map =
+        mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
     if (g_base_map == MAP_FAILED) {
         g_base_map = NULL;
         close(g_fd);
@@ -722,7 +736,8 @@ static int aux_data_ring_truncated(void) {
     __sync_synchronize();
     uint64_t dtail = mp->data_tail;
     int trunc = 0;
-    for (uint64_t off = dtail; off + sizeof(struct perf_event_header) <= dhead;) {
+    for (uint64_t off = dtail;
+         off + sizeof(struct perf_event_header) <= dhead;) {
         struct perf_event_header h;
         for (size_t i = 0; i < sizeof h; i++)
             ((uint8_t *)&h)[i] = data[(off + i) % dsz];

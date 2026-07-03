@@ -34,14 +34,14 @@ extern "C" {
 #endif
 
 /* Status codes returned by the lifecycle and registration calls. */
-#define ASMTEST_DR_OK 0
-#define ASMTEST_DR_EINVAL (-1)  /* bad argument                              */
-#define ASMTEST_DR_ESTATE (-2)  /* called in the wrong lifecycle state       */
+#define ASMTEST_DR_OK      0
+#define ASMTEST_DR_EINVAL  (-1) /* bad argument                              */
+#define ASMTEST_DR_ESTATE  (-2) /* called in the wrong lifecycle state       */
 #define ASMTEST_DR_ETHREAD (-3) /* start not on the setup thread             */
-#define ASMTEST_DR_ENODR (-4)   /* built without DynamoRIO / DR unavailable  */
-#define ASMTEST_DR_ENOSYS (-5)  /* feature not compiled in (e.g. no Keystone)*/
-#define ASMTEST_DR_EFULL (-6)   /* region table full                         */
-#define ASMTEST_DR_ENOENT (-7)  /* named region not found                    */
+#define ASMTEST_DR_ENODR   (-4) /* built without DynamoRIO / DR unavailable  */
+#define ASMTEST_DR_ENOSYS  (-5) /* feature not compiled in (e.g. no Keystone)*/
+#define ASMTEST_DR_EFULL   (-6) /* region table full                         */
+#define ASMTEST_DR_ENOENT  (-7) /* named region not found                    */
 
 /* Recording mode. The process-init default; per-trace recording is actually
  * driven by the capacities of the registered asmtest_trace_t (instruction
@@ -54,10 +54,12 @@ typedef enum {
 } asmtest_drtrace_mode_t;
 
 typedef struct {
-    const char *dynamorio_home; /* DR runtime root (optional; diagnostics)     */
-    const char *client_path;    /* path to libasmtest_drclient.so              */
+    const char
+        *dynamorio_home;     /* DR runtime root (optional; diagnostics)     */
+    const char *client_path; /* path to libasmtest_drclient.so              */
     const char *client_options; /* extra client options (optional)            */
-    asmtest_drtrace_mode_t mode; /* process-init default recording mode        */
+    asmtest_drtrace_mode_t
+        mode; /* process-init default recording mode        */
 } asmtest_drtrace_options_t;
 
 /* 1 if this build includes the DynamoRIO tier AND libdynamorio is loadable at
@@ -144,7 +146,8 @@ typedef struct {
  * (mmap PROT_NONE -> mprotect RW to copy -> mprotect RX, icache flushed). The
  * code is materialized at its actual runtime address so PC-relative and branch
  * targets resolve. Returns ASMTEST_DR_OK; *out holds {base,len} on success. */
-int asmtest_exec_alloc(const uint8_t *bytes, size_t len, asmtest_exec_code_t *out);
+int asmtest_exec_alloc(const uint8_t *bytes, size_t len,
+                       asmtest_exec_code_t *out);
 
 /* Assemble host-native assembly text (x86-64) with Keystone and materialize it
  * via asmtest_exec_alloc. `syntax` matches asmtest_assemble.h's asm_syntax_t.

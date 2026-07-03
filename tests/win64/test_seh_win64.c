@@ -52,8 +52,7 @@ int main(void) {
     /* The process is still alive and the guard re-arms for the next run. */
     x = 0;
     r = asmtest_win32_guard(fn_again, &x, &f);
-    CHECK(r == 0 && x == 99,
-          "guard is reusable after a caught fault");
+    CHECK(r == 0 && x == 99, "guard is reusable after a caught fault");
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails,
            fails == 1 ? "" : "s");

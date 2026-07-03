@@ -46,8 +46,8 @@ typedef struct asmtest_trace {
      * execution order, up to insns_cap entries. */
     uint64_t *insns;
     size_t insns_cap;
-    size_t insns_len;      /* entries written to insns[] (<= insns_cap)      */
-    uint64_t insns_total;  /* instructions executed (counts past insns_cap)  */
+    size_t insns_len;     /* entries written to insns[] (<= insns_cap)      */
+    uint64_t insns_total; /* instructions executed (counts past insns_cap)  */
 
     /* Basic-block coverage: the DISTINCT block-start offsets entered,
      * de-duplicated, up to blocks_cap entries. */
@@ -56,7 +56,7 @@ typedef struct asmtest_trace {
     size_t blocks_len;     /* distinct blocks recorded (<= blocks_cap)       */
     uint64_t blocks_total; /* block entries; a loop counts each pass         */
 
-    bool truncated;        /* a buffer filled and at least one entry dropped */
+    bool truncated; /* a buffer filled and at least one entry dropped */
 } asmtest_trace_t;
 
 /* ------------------------------------------------------------------ */
@@ -101,8 +101,10 @@ unsigned long long asmtest_emu_trace_blocks_len(const asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_insns_len(const asmtest_trace_t *t);
 unsigned long long asmtest_emu_trace_blocks_total(const asmtest_trace_t *t);
 int asmtest_emu_trace_truncated(const asmtest_trace_t *t);
-unsigned long long asmtest_emu_trace_block_at(const asmtest_trace_t *t, size_t i);
-unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t, size_t i);
+unsigned long long asmtest_emu_trace_block_at(const asmtest_trace_t *t,
+                                              size_t i);
+unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t,
+                                             size_t i);
 /* Compatibility shim: same predicate as asmtest_trace_covered (int return). */
 int asmtest_emu_trace_covered(const asmtest_trace_t *t, unsigned long long off);
 
@@ -140,7 +142,8 @@ typedef struct {
     size_t count;
 } emu_line_map_t;
 
-const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map, uint64_t off);
+const emu_line_entry_t *emu_line_lookup(const emu_line_map_t *map,
+                                        uint64_t off);
 size_t emu_trace_source_report(const asmtest_trace_t *covered,
                                const emu_line_map_t *map, FILE *out);
 void emu_trace_lcov_source(const asmtest_trace_t *covered,
@@ -178,13 +181,14 @@ bool asmtest_disas_available(void);
  * Returns the instruction byte length, or 0 when Capstone is absent or the bytes
  * do not decode (buf set to "" so the caller can fall back to the offset). */
 size_t asmtest_disas(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                     uint64_t base_addr, uint64_t off, char *buf, size_t buflen);
+                     uint64_t base_addr, uint64_t off, char *buf,
+                     size_t buflen);
 
 /* 1 if the instruction at code[off] is a CALL (x86 `call`; AArch64 `bl`/`blr`), else 0
  * (and always 0 without Capstone). The out-of-process ptrace stepper uses this to step
  * OVER a call-out to a runtime helper rather than mistaking it for the routine's return. */
-int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                          uint64_t off);
+int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code,
+                          size_t code_len, uint64_t off);
 
 /* 1 if the instruction at code[off] is any control-transfer / branch-class
  * instruction — conditional or unconditional jump, call, or return (the Capstone
@@ -201,15 +205,16 @@ int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
  * is a return), so a mid-frame `jmp` back to a return address cannot be mistaken for the
  * callee's own return. 0 otherwise, and always 0 without Capstone. Not part of the
  * bindings-parity tier surface (this header is not a TIER_HEADER). */
-int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                         uint64_t off);
+int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code,
+                         size_t code_len, uint64_t off);
 
 /* Decode the instruction at code[off] ONCE, returning its byte length (0 if undecodable /
  * no Capstone) and, via the out-params (either may be NULL), whether it is a call and/or a
  * return. The call-descent step loop uses this to get length + is_call + is_ret in a single
  * Capstone decode per single-stepped instruction instead of three. Not a parity tier symbol. */
-size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                           uint64_t off, int *is_call, int *is_ret);
+size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code,
+                           size_t code_len, uint64_t off, int *is_call,
+                           int *is_ret);
 
 /* Resolve the DIRECT-call target of the instruction at code[off] for `arch` into
  * *target (an absolute address = base_addr + call displacement): x86 `E8` rel32 and
@@ -218,8 +223,9 @@ size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code
  * without Capstone — in which case the descent loop uses the live post-step PC as the
  * target instead. `base_addr` is the address the bytes run at, so the returned target is
  * absolute. Not part of the bindings-parity tier surface. */
-int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                              uint64_t base_addr, uint64_t off, uint64_t *target);
+int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code,
+                              size_t code_len, uint64_t base_addr, uint64_t off,
+                              uint64_t *target);
 
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,

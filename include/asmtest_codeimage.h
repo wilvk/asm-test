@@ -52,11 +52,16 @@ extern "C" {
 
 /* Status codes (own namespace, in the spirit of asmtest_ptrace.h's). */
 #define ASMTEST_CI_OK 0
-#define ASMTEST_CI_EINVAL (-1)   /* bad argument                                       */
-#define ASMTEST_CI_EUNAVAIL (-3) /* no PAGEMAP_SCAN and no soft-dirty / no BPF privilege */
-#define ASMTEST_CI_ENOSYS (-5)   /* built without the needed support (e.g. no libbpf)  */
-#define ASMTEST_CI_ENOENT (-7)   /* address never tracked / no version at-or-before when */
-#define ASMTEST_CI_ELOAD (-8)    /* libbpf load/attach failure (Phase C)               */
+#define ASMTEST_CI_EINVAL                                                      \
+    (-1) /* bad argument                                       */
+#define ASMTEST_CI_EUNAVAIL                                                    \
+    (-3) /* no PAGEMAP_SCAN and no soft-dirty / no BPF privilege */
+#define ASMTEST_CI_ENOSYS                                                      \
+    (-5) /* built without the needed support (e.g. no libbpf)  */
+#define ASMTEST_CI_ENOENT                                                      \
+    (-7) /* address never tracked / no version at-or-before when */
+#define ASMTEST_CI_ELOAD                                                       \
+    (-8) /* libbpf load/attach failure (Phase C)               */
 
 /* An opaque timestamped code-image timeline for one target process. */
 typedef struct asmtest_codeimage asmtest_codeimage_t;
@@ -82,7 +87,8 @@ void asmtest_codeimage_free(asmtest_codeimage_t *img);
  * and arm write-protect-async on its pages so the next refresh() sees changes. May be
  * called for several disjoint regions. Returns ASMTEST_CI_OK, ASMTEST_CI_EINVAL, or a
  * negative status on a read/scan failure. */
-int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t len);
+int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
+                            size_t len);
 
 /* Scan the tracked ranges for pages changed since the last arm, re-snapshot each changed
  * page as a NEW version stamped with the next sequence, and re-arm write-protect. Returns
@@ -102,7 +108,8 @@ uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img);
  * tracked region, or no version at/before `when`), or ASMTEST_CI_EINVAL. Either out
  * pointer may be NULL. */
 int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
-                               uint64_t when, const uint8_t **out, size_t *out_len);
+                               uint64_t when, const uint8_t **out,
+                               size_t *out_len);
 
 /* ------------------------------------------------------------------ */
 /* Optional eBPF emission detector (Phase C). Self-skips without       */
@@ -110,9 +117,12 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
 /* ------------------------------------------------------------------ */
 
 /* How a code-emission event was observed (kind field below). */
-#define ASMTEST_CI_KIND_MPROTECT 1 /* mprotect(...PROT_EXEC...) — the common JIT edge */
-#define ASMTEST_CI_KIND_MMAP 2     /* mmap(...PROT_EXEC...); addr is the real base    */
-#define ASMTEST_CI_KIND_MEMFD 3    /* memfd_create — staging hint; correlate via fd   */
+#define ASMTEST_CI_KIND_MPROTECT                                               \
+    1 /* mprotect(...PROT_EXEC...) — the common JIT edge */
+#define ASMTEST_CI_KIND_MMAP                                                   \
+    2 /* mmap(...PROT_EXEC...); addr is the real base    */
+#define ASMTEST_CI_KIND_MEMFD                                                  \
+    3 /* memfd_create — staging hint; correlate via fd   */
 
 /* A code-emission event from the eBPF detector. Byte-compatible mirror of the kernel-side
  * struct in bpf/codeimage_event.h (a _Static_assert in src/codeimage.c checks the size). */
@@ -148,7 +158,8 @@ int asmtest_codeimage_poll_bpf(asmtest_codeimage_t *img, int timeout_ms);
 
 /* Pop one queued emission event into *out. Returns 1 if an event was returned, 0 if the
  * queue is empty, or a negative status. */
-int asmtest_codeimage_next(asmtest_codeimage_t *img, asmtest_codeimage_event_t *out);
+int asmtest_codeimage_next(asmtest_codeimage_t *img,
+                           asmtest_codeimage_event_t *out);
 
 #ifdef __cplusplus
 }

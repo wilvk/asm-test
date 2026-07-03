@@ -31,7 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ASMTEST_HW_OK 0
+#define ASMTEST_HW_OK     0
 #define ASMTEST_HW_EINVAL (-1)
 #define ASMTEST_HW_ENOSYS (-5)
 
@@ -60,9 +60,10 @@ static const uint8_t *g_base;
 static uint64_t g_base_ip;
 static size_t g_len;
 static asmtest_trace_t *g_trace;
-static uint64_t *g_stream;          /* ordered in-region RIP offsets             */
+static uint64_t *g_stream; /* ordered in-region RIP offsets             */
 static volatile uint32_t g_stream_len;
-static volatile sig_atomic_t g_overflow; /* stream filled, entries dropped       */
+static volatile sig_atomic_t
+    g_overflow; /* stream filled, entries dropped       */
 static struct sigaction g_old_sa;
 static int g_installed;
 
@@ -149,7 +150,8 @@ static void ss_normalize(void) {
         return;
     uint32_t n = g_stream_len;
     int have_prev = 0;
-    int prev_was_branch = 0;    /* previous recorded insn was a CTI (jump/call/ret) */
+    int prev_was_branch =
+        0; /* previous recorded insn was a CTI (jump/call/ret) */
     uint64_t expected_next = 0; /* fall-through offset of the previous insn */
     uint64_t prev_off = 0;
 
@@ -175,14 +177,14 @@ static void ss_normalize(void) {
         /* Fall-through of THIS instruction = off + its length (Capstone). A zero
          * length means undecodable (self-modifying / relocated bytes): flag the
          * loss and stop — never trust the rest of the partition. */
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, g_base, g_len, g_base_ip, off,
-                                 NULL, 0);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, g_base, g_len, g_base_ip,
+                                 off, NULL, 0);
         if (l == 0) {
             t->truncated = true;
             return;
         }
-        prev_was_branch = asmtest_disas_is_branch(ASMTEST_ARCH_X86_64, g_base,
-                                                  g_len, off);
+        prev_was_branch =
+            asmtest_disas_is_branch(ASMTEST_ARCH_X86_64, g_base, g_len, off);
         expected_next = off + l;
         prev_off = off;
         have_prev = 1;

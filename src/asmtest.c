@@ -267,7 +267,8 @@ void asmtest_assert_abi(const char *file, int line, const regs_t *r) {
  * lanes == 6+k, so a restored register reads back vec[i] == {i, i}. */
 int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
     for (unsigned i = 6; i <= 15; i++) {
-        if (r->vec[i].u64[0] != (uint64_t)i || r->vec[i].u64[1] != (uint64_t)i) {
+        if (r->vec[i].u64[0] != (uint64_t)i ||
+            r->vec[i].u64[1] != (uint64_t)i) {
             if (msg && n)
                 snprintf(msg, n,
                          "xmm%u not restored (got {0x%llx, 0x%llx}, "
@@ -289,8 +290,7 @@ int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
     for (unsigned i = 8; i <= 15; i++) {
         if (r->vec[i].u64[0] != (uint64_t)i) {
             if (msg && n)
-                snprintf(msg, n,
-                         "d%u not restored (got 0x%llx, expected 0x%x)",
+                snprintf(msg, n, "d%u not restored (got 0x%llx, expected 0x%x)",
                          i, (unsigned long long)r->vec[i].u64[0], i);
             return 1;
         }
@@ -358,8 +358,9 @@ void asmtest_assert_double_near(const char *file, int line, double actual,
     if (isnan(actual) || isnan(expected)) {
         if (isnan(actual) && isnan(expected))
             return;
-        asmtest_fail(file, line, "ASSERT_*NEAR (double): NaN mismatch (%.17g "
-                                 "vs %.17g)",
+        asmtest_fail(file, line,
+                     "ASSERT_*NEAR (double): NaN mismatch (%.17g "
+                     "vs %.17g)",
                      actual, expected);
     }
     uint64_t d = fp_ulp_distance(actual, expected);
@@ -382,8 +383,9 @@ void asmtest_assert_float_near(const char *file, int line, float actual,
     if (isnan(actual) || isnan(expected)) {
         if (isnan(actual) && isnan(expected))
             return;
-        asmtest_fail(file, line, "ASSERT_FNEAR (float): NaN mismatch (%.9g vs "
-                                 "%.9g)",
+        asmtest_fail(file, line,
+                     "ASSERT_FNEAR (float): NaN mismatch (%.9g vs "
+                     "%.9g)",
                      (double)actual, (double)expected);
     }
     uint32_t d = fp_ulp_distance_f(actual, expected);
@@ -602,9 +604,7 @@ uint64_t asmtest_rng_u64(asmtest_rng_t *rng) {
     return z ^ (z >> 31);
 }
 
-long asmtest_rng_long(asmtest_rng_t *rng) {
-    return (long)asmtest_rng_u64(rng);
-}
+long asmtest_rng_long(asmtest_rng_t *rng) { return (long)asmtest_rng_u64(rng); }
 
 long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi) {
     if (hi <= lo)
@@ -613,8 +613,9 @@ long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi) {
      * LONG_MAX (e.g. [LONG_MIN, LONG_MAX]) — UB, and the wrap makes `(uint64_t)(hi-lo)+1`
      * evaluate to 0, so the `% span` below is a division by zero (SIGFPE). Both operands
      * unsigned keeps it defined; span wraps to 0 iff the range is the full 2^64 width. */
-    uint64_t span = (uint64_t)hi - (uint64_t)lo + 1; /* inclusive of both endpoints */
-    if (span == 0)                                   /* whole range — every value is in */
+    uint64_t span =
+        (uint64_t)hi - (uint64_t)lo + 1; /* inclusive of both endpoints */
+    if (span == 0)                       /* whole range — every value is in */
         return (long)asmtest_rng_u64(rng);
     /* Offset added in uint64_t too: lo + offset is in [lo, hi] so it never truly
      * overflows, but the signed form `lo + (long)offset` can when offset > LONG_MAX. */
@@ -649,10 +650,11 @@ void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
         long a[8] = {0};
         int n = gen(&rng, a, 8);
         if (n != 1)
-            asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF1(%s): generator returned arity %d, "
-                         "expected 1",
-                         fnexpr, n);
+            asmtest_fail(
+                file, line,
+                "ASSERT_MATCHES_REF1(%s): generator returned arity %d, "
+                "expected 1",
+                fnexpr, n);
         long expected = ref(a[0]);
         regs_t r;
         asm_call_capture_args(&r, fn, a, 1);
@@ -675,10 +677,11 @@ void asmtest_match_ref2(const char *file, int line, const char *fnexpr,
         long a[8] = {0};
         int n = gen(&rng, a, 8);
         if (n != 2)
-            asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF2(%s): generator returned arity %d, "
-                         "expected 2",
-                         fnexpr, n);
+            asmtest_fail(
+                file, line,
+                "ASSERT_MATCHES_REF2(%s): generator returned arity %d, "
+                "expected 2",
+                fnexpr, n);
         long expected = ref(a[0], a[1]);
         regs_t r;
         asm_call_capture_args(&r, fn, a, 2);
@@ -701,10 +704,11 @@ void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
         long a[8] = {0};
         int n = gen(&rng, a, 8);
         if (n != 3)
-            asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF3(%s): generator returned arity %d, "
-                         "expected 3",
-                         fnexpr, n);
+            asmtest_fail(
+                file, line,
+                "ASSERT_MATCHES_REF3(%s): generator returned arity %d, "
+                "expected 3",
+                fnexpr, n);
         long expected = ref(a[0], a[1], a[2]);
         regs_t r;
         asm_call_capture_args(&r, fn, a, 3);
@@ -727,13 +731,20 @@ void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
 
 static const char *sig_name(int sig) {
     switch (sig) {
-    case SIGSEGV: return "SIGSEGV";
-    case SIGBUS:  return "SIGBUS";
-    case SIGFPE:  return "SIGFPE";
-    case SIGILL:  return "SIGILL";
-    case SIGABRT: return "SIGABRT";
-    case SIGALRM: return "SIGALRM";
-    default:      return "signal";
+    case SIGSEGV:
+        return "SIGSEGV";
+    case SIGBUS:
+        return "SIGBUS";
+    case SIGFPE:
+        return "SIGFPE";
+    case SIGILL:
+        return "SIGILL";
+    case SIGABRT:
+        return "SIGABRT";
+    case SIGALRM:
+        return "SIGALRM";
+    default:
+        return "signal";
     }
 }
 
@@ -846,7 +857,8 @@ static int run_one(asmtest_case_t *tc) {
         run_hooks(tc->suite, 1);
     else if (td_rc == JMP_SKIP) {
         if (outcome == ST_PASS)
-            outcome = ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
+            outcome =
+                ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
     } else if (outcome != ST_FAIL)
         outcome = ST_FAIL; /* teardown failed/crashed */
 
@@ -859,8 +871,8 @@ static int run_one(asmtest_case_t *tc) {
  * untouched. */
 static void win32_set_reason_msg(int reason) {
     if (reason == ASMTEST_WIN32_REASON_CRASH) {
-        snprintf(asmtest_msg, sizeof asmtest_msg, "caught fatal exception 0x%lx",
-                 asmtest_win32_test_fault.code);
+        snprintf(asmtest_msg, sizeof asmtest_msg,
+                 "caught fatal exception 0x%lx", asmtest_win32_test_fault.code);
         asmtest_loc_file = "(exception)";
         asmtest_loc_line = 0;
     } else if (reason == ASMTEST_WIN32_REASON_TIMEOUT) {
@@ -922,7 +934,8 @@ static int run_one(asmtest_case_t *tc) {
         int reason = asmtest_win32_test_reason;
         if (reason == JMP_SKIP) {
             if (outcome == ST_PASS)
-                outcome = ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
+                outcome =
+                    ST_SKIP; /* SKIP() in TEARDOWN downgrades a pass to skip */
         } else if (outcome != ST_FAIL) {
             outcome = ST_FAIL; /* teardown failed/crashed/timed out */
             win32_set_reason_msg(reason);
@@ -1098,7 +1111,8 @@ static void apply_isolated(test_result_t *res, asmtest_win32_run_t verdict,
 }
 
 static unsigned isolation_timeout_ms(void) {
-    return asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u : 0;
+    return asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u
+                                    : 0;
 }
 
 /* Serial isolation: re-exec one child, wait, map. */
@@ -1131,7 +1145,10 @@ static int run_parallel_win32(asmtest_case_t **sel, const int *gidx,
         (asmtest_win32_run_t *)calloc((size_t)n, sizeof *verds);
     unsigned long *codes = (unsigned long *)calloc((size_t)n, sizeof *codes);
     if (!cmds || !outs || !verds || !codes) {
-        free(cmds); free(outs); free(verds); free(codes);
+        free(cmds);
+        free(outs);
+        free(verds);
+        free(codes);
         return -1;
     }
     for (int i = 0; i < n; i++) {
@@ -1152,7 +1169,10 @@ static int run_parallel_win32(asmtest_case_t **sel, const int *gidx,
         free(outs[i]);
         free(cmds[i]);
     }
-    free(cmds); free(outs); free(verds); free(codes);
+    free(cmds);
+    free(outs);
+    free(verds);
+    free(codes);
     return rc;
 }
 #endif /* _WIN32 (re-exec isolation) */
@@ -1175,8 +1195,8 @@ static void reap_child(test_result_t *res, size_t got, const wire_result_t *w,
     if (WIFSIGNALED(status)) {
         int sig = WTERMSIG(status);
         if (sig == SIGALRM)
-            snprintf(res->msg, sizeof res->msg,
-                     "timed out after %d s (killed)", asmtest_timeout_secs);
+            snprintf(res->msg, sizeof res->msg, "timed out after %d s (killed)",
+                     asmtest_timeout_secs);
         else
             snprintf(res->msg, sizeof res->msg,
                      "crashed: killed by signal %d (%s)", sig, sig_name(sig));
@@ -1393,10 +1413,10 @@ typedef struct {
     int has_seed;
     uint64_t seed;
     int format_junit;
-    int fork_tests; /* per-test fork isolation (default on) */
-    int jobs;       /* concurrent forked children; 1 = serial (default) */
-    int timeout;    /* seconds; <0 = leave the default in place */
-    int bench;      /* run benchmarks instead of tests */
+    int fork_tests;  /* per-test fork isolation (default on) */
+    int jobs;        /* concurrent forked children; 1 = serial (default) */
+    int timeout;     /* seconds; <0 = leave the default in place */
+    int bench;       /* run benchmarks instead of tests */
     long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
 } options_t;
 
@@ -1438,7 +1458,8 @@ static int opt_prefix(const char *a, const char *pre, const char **rest) {
 static int id_matches(const char *suite, const char *name, const char *glob) {
     char id[256];
     snprintf(id, sizeof id, "%s.%s", suite, name);
-    return ASMTEST_FNMATCH(glob, id) == 0 || ASMTEST_FNMATCH(glob, suite) == 0 ||
+    return ASMTEST_FNMATCH(glob, id) == 0 ||
+           ASMTEST_FNMATCH(glob, suite) == 0 ||
            ASMTEST_FNMATCH(glob, name) == 0;
 }
 
@@ -1450,13 +1471,27 @@ static void xml_print_escaped(const char *s) {
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
         switch (c) {
-        case '&':  fputs("&amp;", stdout); break;
-        case '<':  fputs("&lt;", stdout); break;
-        case '>':  fputs("&gt;", stdout); break;
-        case '"':  fputs("&quot;", stdout); break;
-        case '\n': fputs("&#10;", stdout); break;
-        case '\r': fputs("&#13;", stdout); break;
-        case '\t': fputc('\t', stdout); break;
+        case '&':
+            fputs("&amp;", stdout);
+            break;
+        case '<':
+            fputs("&lt;", stdout);
+            break;
+        case '>':
+            fputs("&gt;", stdout);
+            break;
+        case '"':
+            fputs("&quot;", stdout);
+            break;
+        case '\n':
+            fputs("&#10;", stdout);
+            break;
+        case '\r':
+            fputs("&#13;", stdout);
+            break;
+        case '\t':
+            fputc('\t', stdout);
+            break;
         default:
             /* C0 control bytes other than tab/newline/CR are illegal in XML 1.0
              * even when written as entities, so a stray byte in test data would
@@ -1516,7 +1551,8 @@ static void render_junit(const test_result_t *results, int n) {
                 printf("\n      <failure message=\"");
                 xml_print_escaped(r->msg);
                 printf("\">at ");
-                xml_print_escaped(r->file); /* a path with &/< must be escaped */
+                xml_print_escaped(
+                    r->file); /* a path with &/< must be escaped */
                 printf(":%d&#10;", r->line);
                 xml_print_escaped(r->msg);
                 printf("</failure>\n    ");
@@ -1562,7 +1598,7 @@ static double now_secs(void) {
  * at least BENCH_TARGET ticks (so the counter's resolution doesn't dominate),
  * capped at BENCH_REPS_CAP; then BENCH_ROUNDS rounds are measured. */
 enum {
-    BENCH_TARGET = 50000,    /* per-round counter delta to calibrate toward */
+    BENCH_TARGET = 50000,     /* per-round counter delta to calibrate toward */
     BENCH_REPS_CAP = 5000000, /* never loop more than this per round         */
     BENCH_ROUNDS = 11         /* measured rounds (odd, for a clean median)   */
 };
@@ -1671,7 +1707,6 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
     }
 }
 
-
 /* The framework provides main(). Define ASMTEST_NO_MAIN to omit it and supply
  * your own (embedding the runtime, or — as the conformance corpus does — reusing
  * only the capture/verdict/emulator entry points with a separate driver). */
@@ -1698,7 +1733,8 @@ int main(int argc, char **argv) {
             opt.fork_tests = 0;
 #if defined(_WIN32)
         } else if (opt_prefix(a, "--asmtest-child=", &v)) {
-            asmtest_child_index = atoi(v); /* internal: re-exec child selector */
+            asmtest_child_index =
+                atoi(v); /* internal: re-exec child selector */
         } else if (opt_prefix(a, "--asmtest-child-out=", &v)) {
             asmtest_child_out = v;
 #endif
@@ -1822,7 +1858,8 @@ int main(int argc, char **argv) {
     for (asmtest_case_t *tc = asmtest_head; tc != NULL; tc = tc->next)
         total++;
     asmtest_case_t **sel = (asmtest_case_t **)asmtest_xalloc(
-        malloc((size_t)(total > 0 ? total : 1) * sizeof *sel), "test selection");
+        malloc((size_t)(total > 0 ? total : 1) * sizeof *sel),
+        "test selection");
     /* Global registration index of each selected test, kept in lockstep with
      * sel[] (through the shuffle) so the Win64 re-exec child can select the same
      * test by index. Built everywhere; only read on the _WIN32 isolation path. */
@@ -1857,7 +1894,8 @@ int main(int argc, char **argv) {
         else
             seed = (uint64_t)time(NULL) ^ ((uint64_t)ASMTEST_GETPID() << 32);
         asmtest_rng_t rng = {seed};
-        for (int i = n - 1; i > 0; i--) { /* Fisher-Yates (sel + gidx together) */
+        for (int i = n - 1; i > 0;
+             i--) { /* Fisher-Yates (sel + gidx together) */
             int j = (int)(asmtest_rng_u64(&rng) % (uint64_t)(i + 1));
             asmtest_case_t *t = sel[i];
             sel[i] = sel[j];
@@ -1958,7 +1996,8 @@ int main(int argc, char **argv) {
 
 #if !defined(_WIN32)
     if (opt.format_junit && junit_saved_out >= 0) {
-        fflush(stdout); /* nothing should be buffered for /dev/null, but be safe */
+        fflush(
+            stdout); /* nothing should be buffered for /dev/null, but be safe */
         dup2(junit_saved_out, STDOUT_FILENO);
         close(junit_saved_out);
     }

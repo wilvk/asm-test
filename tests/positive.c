@@ -147,7 +147,8 @@ TEST(posit, near_full_range_no_overflow) {
 TEST(posit, rng_range_full_width_no_sigfpe) {
     asmtest_rng_t rng = {.s = 0x1234567890abcdefULL};
     for (int i = 0; i < 1000; i++) {
-        long v = asmtest_rng_range(&rng, LONG_MIN, LONG_MAX); /* full width: span wraps to 0 */
+        long v = asmtest_rng_range(&rng, LONG_MIN,
+                                   LONG_MAX); /* full width: span wraps to 0 */
         ASSERT_TRUE(v >= LONG_MIN && v <= LONG_MAX);
     }
 }

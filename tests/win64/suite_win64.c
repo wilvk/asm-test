@@ -56,7 +56,8 @@ TEST(win64, fp_preserved) {
         vargs[i].u64[1] = 0;
     }
     vargs[0].f64[0] = 2.5;
-    asm_call_capture_vec_win64(&r, (void *)win64_vec_preserve_xmm6, iargs, vargs);
+    asm_call_capture_vec_win64(&r, (void *)win64_vec_preserve_xmm6, iargs,
+                               vargs);
     WCHECK(r.fret == 2.5, "fret = %g, want 2.5", r.fret);
     /* The framework's Win64 vector ABI-preservation assertion (xmm6-15). */
     ASSERT_ABI_PRESERVED_VEC(&r);

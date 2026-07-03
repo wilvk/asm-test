@@ -22,7 +22,8 @@
 
 /* fnmatch returns 0 on a match; the portable matcher returns 1. Normalise to the
  * fnmatch convention so the runner's `== 0` call sites are unchanged. */
-#define ASMTEST_FNMATCH(pattern, str) (asmtest_glob_match((pattern), (str)) ? 0 : 1)
+#define ASMTEST_FNMATCH(pattern, str)                                          \
+    (asmtest_glob_match((pattern), (str)) ? 0 : 1)
 #define ASMTEST_ISATTY() _isatty(_fileno(stdout))
 #define ASMTEST_GETPID() ((long)GetCurrentProcessId())
 
@@ -37,8 +38,8 @@
 #include <unistd.h>
 
 #define ASMTEST_FNMATCH(pattern, str) fnmatch((pattern), (str), 0)
-#define ASMTEST_ISATTY() isatty(STDOUT_FILENO)
-#define ASMTEST_GETPID() ((long)getpid())
+#define ASMTEST_ISATTY()              isatty(STDOUT_FILENO)
+#define ASMTEST_GETPID()              ((long)getpid())
 
 #endif
 

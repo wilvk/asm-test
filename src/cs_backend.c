@@ -36,8 +36,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ASMTEST_HW_OK 0
-#define ASMTEST_HW_ENOSYS (-5)
+#define ASMTEST_HW_OK      0
+#define ASMTEST_HW_ENOSYS  (-5)
 #define ASMTEST_HW_EDECODE (-8)
 
 /* One executed instruction range, as an ETM/ETE INSTR_RANGE element resolves to:
@@ -61,8 +61,9 @@ typedef struct {
  * host test passes ASMTEST_ARCH_X86_64 so its offsets are directly comparable to the
  * PT/AMD/single-step backends over the shared fixture). Sets trace->truncated and
  * stops on an undecodable instruction, never emitting a partial trace as complete. */
-int asmtest_cs_reconstruct(asmtest_arch_t arch, const asmtest_cs_range_t *ranges,
-                           size_t nranges, const void *base, size_t len,
+int asmtest_cs_reconstruct(asmtest_arch_t arch,
+                           const asmtest_cs_range_t *ranges, size_t nranges,
+                           const void *base, size_t len,
                            asmtest_trace_t *trace) {
     if (ranges == NULL || base == NULL || len == 0 || trace == NULL)
         return ASMTEST_HW_EDECODE;

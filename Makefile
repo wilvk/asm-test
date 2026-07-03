@@ -577,9 +577,13 @@ tidy:
 # .clang-format). Scope: the C translation units + headers (the asm and C++/binding
 # sources keep their own conventions and are left out). Run `make fmt` on new code.
 CLANG_FORMAT ?= clang-format
-FMT_SOURCES  := $(wildcard src/*.c src/*.h include/*.h tests/*.c \
+# include/asm.h is a dual C/assembler header (GNU-as .macro/.endm directives that
+# clang-format would mangle into an unassemblable single line), so it is filtered
+# out of the otherwise-broad include/*.h glob — it keeps its own asm conventions.
+FMT_SOURCES  := $(filter-out include/asm.h, \
+                 $(wildcard src/*.c src/*.h include/*.h tests/*.c \
                  tests/win64/*.c tests/win64/*.h bindings/conformance/*.c \
-                 examples/*.c scripts/gen-manifest.c)
+                 examples/*.c scripts/gen-manifest.c))
 fmt:
 	$(CLANG_FORMAT) -i $(FMT_SOURCES)
 

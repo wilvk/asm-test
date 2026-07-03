@@ -96,7 +96,9 @@ TEST(neg, vec_eq) {
 /* ---- floating point ---- */
 
 TEST(neg, fp_eq) { ASSERT_DEQ(1.0, 2.0); }
-TEST(neg, fp_near) { ASSERT_DNEAR(1.0, 2.0, 4); } /* far more than 4 ULPs apart */
+TEST(neg, fp_near) {
+    ASSERT_DNEAR(1.0, 2.0, 4);
+} /* far more than 4 ULPs apart */
 TEST(neg, feq) { ASSERT_FEQ(1.0f, 2.0f); }
 
 /* ---- crash / timeout / abort containment ----

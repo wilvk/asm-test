@@ -24,11 +24,11 @@ extern "C" {
  * Lets the layout guards below compile in both languages (a binding may #include
  * this header from C++). */
 #ifndef ASMTEST_STATIC_ASSERT
-#  ifdef __cplusplus
-#    define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-#  else
-#    define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
-#  endif
+#ifdef __cplusplus
+#define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
 #endif
 
 /* Framework version (semantic). ASMTEST_VERSION is the dotted string; the
@@ -37,9 +37,9 @@ extern "C" {
 #define ASMTEST_VERSION_MAJOR 1
 #define ASMTEST_VERSION_MINOR 1
 #define ASMTEST_VERSION_PATCH 0
-#define ASMTEST_VERSION "1.1.0"
-#define ASMTEST_VERSION_NUM                                                   \
-    (ASMTEST_VERSION_MAJOR * 10000 + ASMTEST_VERSION_MINOR * 100 +            \
+#define ASMTEST_VERSION       "1.1.0"
+#define ASMTEST_VERSION_NUM                                                    \
+    (ASMTEST_VERSION_MAJOR * 10000 + ASMTEST_VERSION_MINOR * 100 +             \
      ASMTEST_VERSION_PATCH)
 
 /* ------------------------------------------------------------------ */
@@ -188,8 +188,8 @@ typedef struct {
     unsigned long r14;   /* 48 callee-saved           */
     unsigned long r15;   /* 56 callee-saved           */
     unsigned long flags; /* 64 = RFLAGS               */
-    double fret;         /* 72 = xmm0 (FP return); valid after asm_call_capture_fp */
-    vec128_t vec[16];    /* 80 = xmm0..15; valid after asm_call_capture_vec */
+    double fret; /* 72 = xmm0 (FP return); valid after asm_call_capture_fp */
+    vec128_t vec[16]; /* 80 = xmm0..15; valid after asm_call_capture_vec */
 } regs_t;
 
 #define ASMTEST_SENTINEL_RBX 0x1111111111111111UL
@@ -200,11 +200,11 @@ typedef struct {
 #define ASMTEST_SENTINEL_R15 0x6666666666666666UL
 
 /* RFLAGS bit masks. */
-#define ASMTEST_CF (1UL << 0)  /* carry    */
-#define ASMTEST_PF (1UL << 2)  /* parity   */
-#define ASMTEST_ZF (1UL << 6)  /* zero     */
-#define ASMTEST_SF (1UL << 7)  /* sign     */
-#define ASMTEST_OF (1UL << 11) /* overflow */
+#define ASMTEST_CF           (1UL << 0)  /* carry    */
+#define ASMTEST_PF           (1UL << 2)  /* parity   */
+#define ASMTEST_ZF           (1UL << 6)  /* zero     */
+#define ASMTEST_SF           (1UL << 7)  /* sign     */
+#define ASMTEST_OF           (1UL << 11) /* overflow */
 
 /* Layout contract (Track 0): these offsets are hard-coded in src/capture.s and
  * relied on by every language binding's mirror of regs_t. The asserts make the
@@ -234,8 +234,8 @@ typedef struct {
     unsigned long x28;   /* 80 */
     unsigned long x29;   /* 88 frame pointer          */
     unsigned long flags; /* 96 = NZCV                 */
-    double fret;         /* 104 = d0 (FP return); valid after asm_call_capture_fp */
-    vec128_t vec[32];    /* 112 = v0..31; valid after asm_call_capture_vec */
+    double fret; /* 104 = d0 (FP return); valid after asm_call_capture_fp */
+    vec128_t vec[32]; /* 112 = v0..31; valid after asm_call_capture_vec */
 } regs_t;
 
 #define ASMTEST_SENTINEL_X19 0x1111111111111111UL
@@ -251,16 +251,16 @@ typedef struct {
 #define ASMTEST_SENTINEL_X29 0xBBBBBBBBBBBBBBBBUL
 
 /* NZCV condition-flag bit masks (CF/ZF share names with x86). */
-#define ASMTEST_VF (1UL << 28) /* overflow */
-#define ASMTEST_CF (1UL << 29) /* carry    */
-#define ASMTEST_ZF (1UL << 30) /* zero     */
-#define ASMTEST_NF (1UL << 31) /* negative */
+#define ASMTEST_VF           (1UL << 28) /* overflow */
+#define ASMTEST_CF           (1UL << 29) /* carry    */
+#define ASMTEST_ZF           (1UL << 30) /* zero     */
+#define ASMTEST_NF           (1UL << 31) /* negative */
 
 /* x86 flag-name aliases for the portable subset, so a cross-arch routine (e.g.
  * examples/checked.s) and its test can assert OF/SF/CF/ZF uniformly: the AArch64
  * overflow flag is V (≡ x86 OF) and the sign flag is N (≡ x86 SF). */
-#define ASMTEST_OF ASMTEST_VF
-#define ASMTEST_SF ASMTEST_NF
+#define ASMTEST_OF           ASMTEST_VF
+#define ASMTEST_SF           ASMTEST_NF
 
 /* Layout contract (Track 0); see the x86-64 branch above. Offsets match the
  * stores in src/capture.s and the per-arch comments on the fields. */
@@ -378,33 +378,37 @@ void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
  * so both the prototypes here and the calls in ASM_CALL_WIN64* use the Win64 ABI
  * (and these declarations agree with a System V caller's own ms_abi externs). */
 #if defined(_WIN32)
-#  define ASMTEST_WIN64ABI /* native Win64 target: ms_abi is already the default */
+#define ASMTEST_WIN64ABI /* native Win64 target: ms_abi is already the default */
 #else
-#  define ASMTEST_WIN64ABI __attribute__((ms_abi))
+#define ASMTEST_WIN64ABI __attribute__((ms_abi))
 #endif
 ASMTEST_WIN64ABI void asm_call_capture_win64(regs_t *out, void *fn,
                                              const long long *args);
 ASMTEST_WIN64ABI void asm_call_capture_args_win64(regs_t *out, void *fn,
-                                                  const long long *args, int nargs);
+                                                  const long long *args,
+                                                  int nargs);
 ASMTEST_WIN64ABI void asm_call_capture_fp_win64(regs_t *out, void *fn,
                                                 const long long *iargs,
                                                 const double *fargs);
 ASMTEST_WIN64ABI void asm_call_capture_fp_n_win64(regs_t *out, void *fn,
                                                   const long long *iargs,
-                                                  const double *fargs, int nfargs);
+                                                  const double *fargs,
+                                                  int nfargs);
 ASMTEST_WIN64ABI void asm_call_capture_vec_win64(regs_t *out, void *fn,
                                                  const long long *iargs,
                                                  const vec128_t *vargs);
 ASMTEST_WIN64ABI void asm_call_capture_vec_n_win64(regs_t *out, void *fn,
                                                    const long long *iargs,
-                                                   const vec128_t *vargs, int nvargs);
+                                                   const vec128_t *vargs,
+                                                   int nvargs);
 ASMTEST_WIN64ABI void asm_call_capture_sret_win64(regs_t *out, void *fn,
                                                   void *result,
-                                                  const long long *args, int nargs);
-ASMTEST_WIN64ABI void asm_call_capture_bigstruct_win64(regs_t *out, void *fn,
-                                                       const long long *iargs,
-                                                       int niargs, const void *sptr,
-                                                       unsigned long long ssize);
+                                                  const long long *args,
+                                                  int nargs);
+ASMTEST_WIN64ABI void
+asm_call_capture_bigstruct_win64(regs_t *out, void *fn, const long long *iargs,
+                                 int niargs, const void *sptr,
+                                 unsigned long long ssize);
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -419,9 +423,10 @@ typedef struct {
     uint64_t s;
 } asmtest_rng_t;
 
-uint64_t asmtest_rng_u64(asmtest_rng_t *rng);     /* next 64 random bits      */
-long asmtest_rng_long(asmtest_rng_t *rng);        /* a random long (any value)*/
-long asmtest_rng_range(asmtest_rng_t *rng, long lo, long hi); /* in [lo,hi]    */
+uint64_t asmtest_rng_u64(asmtest_rng_t *rng); /* next 64 random bits      */
+long asmtest_rng_long(asmtest_rng_t *rng);    /* a random long (any value)*/
+long asmtest_rng_range(asmtest_rng_t *rng, long lo,
+                       long hi); /* in [lo,hi]    */
 
 /* An input generator: fill args[0..arity-1] with one random input tuple and
  * return the arity. `cap` is the number of writable slots in `args` (>= 8). The
@@ -526,7 +531,8 @@ unsigned long asmtest_regs_ret(const regs_t *r);
 unsigned long asmtest_regs_flags(const regs_t *r);
 double asmtest_regs_fret(const regs_t *r);
 float asmtest_regs_vec_f32(const regs_t *r, int index, int lane);
-int asmtest_regs_flag_set(const regs_t *r, const char *name); /* "CF","ZF",... */
+int asmtest_regs_flag_set(const regs_t *r,
+                          const char *name); /* "CF","ZF",... */
 void asmtest_capture6(regs_t *out, void *fn, long a0, long a1, long a2, long a3,
                       long a4, long a5);
 void asmtest_capture_fp2(regs_t *out, void *fn, double f0, double f1);
@@ -571,34 +577,33 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Test / fixture definition                                           */
 /* ------------------------------------------------------------------ */
 
-#define TEST(suite_, name_)                                                   \
-    static void asmtest_fn_##suite_##_##name_(void);                          \
-    static asmtest_case_t asmtest_tc_##suite_##_##name_ = {                   \
-        #suite_, #name_, asmtest_fn_##suite_##_##name_, 0};                   \
-    __attribute__((constructor)) static void                                  \
-    asmtest_reg_##suite_##_##name_(void) {                                    \
-        asmtest_register(&asmtest_tc_##suite_##_##name_);                     \
-    }                                                                         \
+#define TEST(suite_, name_)                                                    \
+    static void asmtest_fn_##suite_##_##name_(void);                           \
+    static asmtest_case_t asmtest_tc_##suite_##_##name_ = {                    \
+        #suite_, #name_, asmtest_fn_##suite_##_##name_, 0};                    \
+    __attribute__((constructor)) static void asmtest_reg_##suite_##_##name_(   \
+        void) {                                                                \
+        asmtest_register(&asmtest_tc_##suite_##_##name_);                      \
+    }                                                                          \
     static void asmtest_fn_##suite_##_##name_(void)
 
-#define SETUP(suite_)                                                         \
-    static void asmtest_setup_##suite_(void);                                 \
-    static asmtest_hook_t asmtest_setuphook_##suite_ = {                      \
-        #suite_, asmtest_setup_##suite_, 0, 0};                               \
-    __attribute__((constructor)) static void                                  \
-    asmtest_regsetup_##suite_(void) {                                         \
-        asmtest_register_hook(&asmtest_setuphook_##suite_);                   \
-    }                                                                         \
+#define SETUP(suite_)                                                          \
+    static void asmtest_setup_##suite_(void);                                  \
+    static asmtest_hook_t asmtest_setuphook_##suite_ = {                       \
+        #suite_, asmtest_setup_##suite_, 0, 0};                                \
+    __attribute__((constructor)) static void asmtest_regsetup_##suite_(void) { \
+        asmtest_register_hook(&asmtest_setuphook_##suite_);                    \
+    }                                                                          \
     static void asmtest_setup_##suite_(void)
 
-#define TEARDOWN(suite_)                                                      \
-    static void asmtest_teardown_##suite_(void);                             \
-    static asmtest_hook_t asmtest_teardownhook_##suite_ = {                   \
-        #suite_, asmtest_teardown_##suite_, 1, 0};                            \
-    __attribute__((constructor)) static void                                  \
-    asmtest_regteardown_##suite_(void) {                                      \
-        asmtest_register_hook(&asmtest_teardownhook_##suite_);                \
-    }                                                                         \
+#define TEARDOWN(suite_)                                                       \
+    static void asmtest_teardown_##suite_(void);                               \
+    static asmtest_hook_t asmtest_teardownhook_##suite_ = {                    \
+        #suite_, asmtest_teardown_##suite_, 1, 0};                             \
+    __attribute__((constructor)) static void asmtest_regteardown_##suite_(     \
+        void) {                                                                \
+        asmtest_register_hook(&asmtest_teardownhook_##suite_);                 \
+    }                                                                          \
     static void asmtest_teardown_##suite_(void)
 
 #define SKIP(reason) asmtest_skip(reason)
@@ -609,14 +614,14 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
  * only under `--bench` (so a normal `make test` is unaffected). Funnel any
  * pure-C result through BENCH_USE() so it is not optimized away; calls into the
  * asm routine under test need no such help. */
-#define BENCH(suite_, name_)                                                  \
-    static void asmtest_benchfn_##suite_##_##name_(void);                     \
-    static asmtest_bench_t asmtest_bc_##suite_##_##name_ = {                  \
-        #suite_, #name_, asmtest_benchfn_##suite_##_##name_, 0};              \
-    __attribute__((constructor)) static void                                  \
-    asmtest_regbench_##suite_##_##name_(void) {                               \
-        asmtest_register_bench(&asmtest_bc_##suite_##_##name_);               \
-    }                                                                         \
+#define BENCH(suite_, name_)                                                   \
+    static void asmtest_benchfn_##suite_##_##name_(void);                      \
+    static asmtest_bench_t asmtest_bc_##suite_##_##name_ = {                   \
+        #suite_, #name_, asmtest_benchfn_##suite_##_##name_, 0};               \
+    __attribute__((                                                            \
+        constructor)) static void asmtest_regbench_##suite_##_##name_(void) {  \
+        asmtest_register_bench(&asmtest_bc_##suite_##_##name_);                \
+    }                                                                          \
     static void asmtest_benchfn_##suite_##_##name_(void)
 
 #define BENCH_USE(x) (asmtest_bench_sink = (long)(x))
@@ -625,157 +630,154 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Capture-call convenience: ASM_CALLn(out, fn, args...)               */
 /* ------------------------------------------------------------------ */
 
-#define ASM_CALL0(out, fn)                                                    \
+#define ASM_CALL0(out, fn)                                                     \
     asm_call_capture((out), (void *)(fn), (long[6]){0, 0, 0, 0, 0, 0})
-#define ASM_CALL1(out, fn, a)                                                 \
-    asm_call_capture((out), (void *)(fn),                                     \
-                     (long[6]){(long)(a), 0, 0, 0, 0, 0})
-#define ASM_CALL2(out, fn, a, b)                                              \
-    asm_call_capture((out), (void *)(fn),                                     \
+#define ASM_CALL1(out, fn, a)                                                  \
+    asm_call_capture((out), (void *)(fn), (long[6]){(long)(a), 0, 0, 0, 0, 0})
+#define ASM_CALL2(out, fn, a, b)                                               \
+    asm_call_capture((out), (void *)(fn),                                      \
                      (long[6]){(long)(a), (long)(b), 0, 0, 0, 0})
-#define ASM_CALL3(out, fn, a, b, c)                                           \
-    asm_call_capture((out), (void *)(fn),                                     \
+#define ASM_CALL3(out, fn, a, b, c)                                            \
+    asm_call_capture((out), (void *)(fn),                                      \
                      (long[6]){(long)(a), (long)(b), (long)(c), 0, 0, 0})
-#define ASM_CALL4(out, fn, a, b, c, d)                                        \
-    asm_call_capture((out), (void *)(fn),                                     \
-                     (long[6]){(long)(a), (long)(b), (long)(c), (long)(d), 0, \
-                               0})
-#define ASM_CALL5(out, fn, a, b, c, d, e)                                     \
-    asm_call_capture((out), (void *)(fn),                                     \
-                     (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),    \
-                               (long)(e), 0})
-#define ASM_CALL6(out, fn, a, b, c, d, e, f)                                  \
-    asm_call_capture((out), (void *)(fn),                                     \
-                     (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),    \
+#define ASM_CALL4(out, fn, a, b, c, d)                                         \
+    asm_call_capture(                                                          \
+        (out), (void *)(fn),                                                   \
+        (long[6]){(long)(a), (long)(b), (long)(c), (long)(d), 0, 0})
+#define ASM_CALL5(out, fn, a, b, c, d, e)                                      \
+    asm_call_capture(                                                          \
+        (out), (void *)(fn),                                                   \
+        (long[6]){(long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0})
+#define ASM_CALL6(out, fn, a, b, c, d, e, f)                                   \
+    asm_call_capture((out), (void *)(fn),                                      \
+                     (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),     \
                                (long)(e), (long)(f)})
 
 /* ASM_CALLN: call fn with any number (>=1) of integer args, overflowing onto
  * the stack as the ABI requires. nargs is derived from the argument list. */
-#define ASM_CALLN(out, fn, ...)                                               \
-    asm_call_capture_args(                                                    \
-        (out), (void *)(fn), (long[]){__VA_ARGS__},                          \
-        (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+#define ASM_CALLN(out, fn, ...)                                                \
+    asm_call_capture_args((out), (void *)(fn), (long[]){__VA_ARGS__},          \
+                          (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
 
 #if defined(ASMTEST_ABI_WIN64)
 /* The Win64 counterparts of ASM_CALL0..6 / ASM_CALLN. Args are 64-bit (Win64 is
  * LLP64), so the marshalling arrays are `long long`. */
-#define ASM_CALL_WIN64_0(out, fn)                                             \
-    asm_call_capture_win64((out), (void *)(fn),                              \
+#define ASM_CALL_WIN64_0(out, fn)                                              \
+    asm_call_capture_win64((out), (void *)(fn),                                \
                            (long long[6]){0, 0, 0, 0, 0, 0})
-#define ASM_CALL_WIN64_1(out, fn, a)                                          \
-    asm_call_capture_win64((out), (void *)(fn),                              \
+#define ASM_CALL_WIN64_1(out, fn, a)                                           \
+    asm_call_capture_win64((out), (void *)(fn),                                \
                            (long long[6]){(long long)(a), 0, 0, 0, 0, 0})
-#define ASM_CALL_WIN64_2(out, fn, a, b)                                       \
-    asm_call_capture_win64(                                                   \
-        (out), (void *)(fn),                                                  \
+#define ASM_CALL_WIN64_2(out, fn, a, b)                                        \
+    asm_call_capture_win64(                                                    \
+        (out), (void *)(fn),                                                   \
         (long long[6]){(long long)(a), (long long)(b), 0, 0, 0, 0})
-#define ASM_CALL_WIN64_3(out, fn, a, b, c)                                    \
-    asm_call_capture_win64((out), (void *)(fn),                              \
-                           (long long[6]){(long long)(a), (long long)(b),     \
+#define ASM_CALL_WIN64_3(out, fn, a, b, c)                                     \
+    asm_call_capture_win64((out), (void *)(fn),                                \
+                           (long long[6]){(long long)(a), (long long)(b),      \
                                           (long long)(c), 0, 0, 0})
-#define ASM_CALL_WIN64_4(out, fn, a, b, c, d)                                 \
-    asm_call_capture_win64((out), (void *)(fn),                              \
-                           (long long[6]){(long long)(a), (long long)(b),     \
-                                          (long long)(c), (long long)(d), 0,  \
+#define ASM_CALL_WIN64_4(out, fn, a, b, c, d)                                  \
+    asm_call_capture_win64((out), (void *)(fn),                                \
+                           (long long[6]){(long long)(a), (long long)(b),      \
+                                          (long long)(c), (long long)(d), 0,   \
                                           0})
-#define ASM_CALL_WIN64_5(out, fn, a, b, c, d, e)                              \
-    asm_call_capture_win64((out), (void *)(fn),                              \
-                           (long long[6]){(long long)(a), (long long)(b),     \
-                                          (long long)(c), (long long)(d),     \
+#define ASM_CALL_WIN64_5(out, fn, a, b, c, d, e)                               \
+    asm_call_capture_win64((out), (void *)(fn),                                \
+                           (long long[6]){(long long)(a), (long long)(b),      \
+                                          (long long)(c), (long long)(d),      \
                                           (long long)(e), 0})
-#define ASM_CALL_WIN64_6(out, fn, a, b, c, d, e, f)                           \
-    asm_call_capture_win64((out), (void *)(fn),                              \
-                           (long long[6]){(long long)(a), (long long)(b),     \
-                                          (long long)(c), (long long)(d),     \
+#define ASM_CALL_WIN64_6(out, fn, a, b, c, d, e, f)                            \
+    asm_call_capture_win64((out), (void *)(fn),                                \
+                           (long long[6]){(long long)(a), (long long)(b),      \
+                                          (long long)(c), (long long)(d),      \
                                           (long long)(e), (long long)(f)})
 /* Any number (>=1) of integer args; nargs derived from the list. */
-#define ASM_CALL_WIN64_N(out, fn, ...)                                        \
-    asm_call_capture_args_win64(                                              \
-        (out), (void *)(fn), (long long[]){__VA_ARGS__},                     \
+#define ASM_CALL_WIN64_N(out, fn, ...)                                         \
+    asm_call_capture_args_win64(                                               \
+        (out), (void *)(fn), (long long[]){__VA_ARGS__},                       \
         (int)(sizeof((long long[]){__VA_ARGS__}) / sizeof(long long)))
 #endif /* ASMTEST_ABI_WIN64 */
 
 /* ASM_SRET: call fn that returns a large struct into *result, with >=1 visible
  * integer args. */
-#define ASM_SRET(out, fn, result, ...)                                        \
-    asm_call_capture_sret(                                                    \
-        (out), (void *)(fn), (result), (long[]){__VA_ARGS__},                \
-        (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+#define ASM_SRET(out, fn, result, ...)                                         \
+    asm_call_capture_sret((out), (void *)(fn), (result),                       \
+                          (long[]){__VA_ARGS__},                               \
+                          (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
 
 /* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the
  * double return lands in out->fret. For routines mixing integer and float
  * args, call asm_call_capture_fp directly. */
-#define ASM_FCALL1(out, fn, x)                                                \
-    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
+#define ASM_FCALL1(out, fn, x)                                                 \
+    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                     \
                         (double[8]){(double)(x), 0, 0, 0, 0, 0, 0, 0})
-#define ASM_FCALL2(out, fn, x, y)                                             \
-    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
-                        (double[8]){(double)(x), (double)(y), 0, 0, 0, 0, 0,  \
-                                    0})
-#define ASM_FCALL3(out, fn, x, y, z)                                          \
-    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                    \
-                        (double[8]){(double)(x), (double)(y), (double)(z), 0, \
-                                    0, 0, 0, 0})
+#define ASM_FCALL2(out, fn, x, y)                                              \
+    asm_call_capture_fp(                                                       \
+        (out), (void *)(fn), (long[6]){0},                                     \
+        (double[8]){(double)(x), (double)(y), 0, 0, 0, 0, 0, 0})
+#define ASM_FCALL3(out, fn, x, y, z)                                           \
+    asm_call_capture_fp(                                                       \
+        (out), (void *)(fn), (long[6]){0},                                     \
+        (double[8]){(double)(x), (double)(y), (double)(z), 0, 0, 0, 0, 0})
 
 /* ASM_VCALLn: call fn with n 128-bit vector args (vec128_t) and capture the
  * whole vector file; the vector return is out->vec[0]. */
-#define ASM_VCALL1(out, fn, v0)                                               \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
-                         (vec128_t[8]){(v0)})
-#define ASM_VCALL2(out, fn, v0, v1)                                           \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
+#define ASM_VCALL1(out, fn, v0)                                                \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0}, (vec128_t[8]){(v0)})
+#define ASM_VCALL2(out, fn, v0, v1)                                            \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                    \
                          (vec128_t[8]){(v0), (v1)})
-#define ASM_VCALL3(out, fn, v0, v1, v2)                                       \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                   \
+#define ASM_VCALL3(out, fn, v0, v1, v2)                                        \
+    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                    \
                          (vec128_t[8]){(v0), (v1), (v2)})
 
 /* ASM_FCALLN: call fn with any number (>=1) of double args, the 9th+ spilling
  * onto the stack as the ABI requires. The double return lands in out->fret. */
-#define ASM_FCALLN(out, fn, ...)                                              \
-    asm_call_capture_fp_n(                                                    \
-        (out), (void *)(fn), (long[6]){0}, (double[]){__VA_ARGS__},           \
+#define ASM_FCALLN(out, fn, ...)                                               \
+    asm_call_capture_fp_n(                                                     \
+        (out), (void *)(fn), (long[6]){0}, (double[]){__VA_ARGS__},            \
         (int)(sizeof((double[]){__VA_ARGS__}) / sizeof(double)))
 
 /* ASM_VCALLN: call fn with any number (>=1) of 128-bit vector args, the 9th+
  * spilling onto the stack. Captures the whole vector file (return = vec[0]). */
-#define ASM_VCALLN(out, fn, ...)                                              \
-    asm_call_capture_vec_n(                                                   \
-        (out), (void *)(fn), (long[6]){0}, (vec128_t[]){__VA_ARGS__},         \
+#define ASM_VCALLN(out, fn, ...)                                               \
+    asm_call_capture_vec_n(                                                    \
+        (out), (void *)(fn), (long[6]){0}, (vec128_t[]){__VA_ARGS__},          \
         (int)(sizeof((vec128_t[]){__VA_ARGS__}) / sizeof(vec128_t)))
 
 /* ASM_VCALL256n: like ASM_VCALLn but with 256-bit (AVX2 ymm) args; `out` is a
  * vec256_t[16] receiving the ymm file (out[0] = return). SELF-SKIPS the test
  * (SKIP) when AVX2 is unavailable, so the same suite runs on any host. */
-#define ASM_VCALL256_1(out, fn, v0)                                           \
-    do {                                                                      \
-        if (!asmtest_cpu_has_avx2())                                          \
-            SKIP("AVX2 not available on this host");                          \
-        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},            \
-                                (vec256_t[8]){(v0)});                         \
+#define ASM_VCALL256_1(out, fn, v0)                                            \
+    do {                                                                       \
+        if (!asmtest_cpu_has_avx2())                                           \
+            SKIP("AVX2 not available on this host");                           \
+        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},             \
+                                (vec256_t[8]){(v0)});                          \
     } while (0)
-#define ASM_VCALL256_2(out, fn, v0, v1)                                       \
-    do {                                                                      \
-        if (!asmtest_cpu_has_avx2())                                          \
-            SKIP("AVX2 not available on this host");                          \
-        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},            \
+#define ASM_VCALL256_2(out, fn, v0, v1)                                        \
+    do {                                                                       \
+        if (!asmtest_cpu_has_avx2())                                           \
+            SKIP("AVX2 not available on this host");                           \
+        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},             \
                                 (vec256_t[8]){(v0), (v1)});                    \
     } while (0)
 
 /* ASM_VCALL512n: like ASM_VCALL256n but with 512-bit (AVX-512 zmm) args; `out` is a
  * vec512_t[32] receiving the zmm file (out[0] = return). SELF-SKIPS the test (SKIP)
  * when AVX-512F is unavailable, so the same suite runs on any host. */
-#define ASM_VCALL512_1(out, fn, v0)                                           \
-    do {                                                                      \
-        if (!asmtest_cpu_has_avx512f())                                       \
-            SKIP("AVX-512 not available on this host");                       \
-        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},            \
-                                (vec512_t[8]){(v0)});                         \
+#define ASM_VCALL512_1(out, fn, v0)                                            \
+    do {                                                                       \
+        if (!asmtest_cpu_has_avx512f())                                        \
+            SKIP("AVX-512 not available on this host");                        \
+        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},             \
+                                (vec512_t[8]){(v0)});                          \
     } while (0)
-#define ASM_VCALL512_2(out, fn, v0, v1)                                       \
-    do {                                                                      \
-        if (!asmtest_cpu_has_avx512f())                                       \
-            SKIP("AVX-512 not available on this host");                       \
-        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},            \
+#define ASM_VCALL512_2(out, fn, v0, v1)                                        \
+    do {                                                                       \
+        if (!asmtest_cpu_has_avx512f())                                        \
+            SKIP("AVX-512 not available on this host");                        \
+        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},             \
                                 (vec512_t[8]){(v0), (v1)});                    \
     } while (0)
 
@@ -783,26 +785,26 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
 
-#define ASSERT_TRUE(x)                                                        \
-    do {                                                                      \
-        if (!(x))                                                             \
-            asmtest_fail(__FILE__, __LINE__, "ASSERT_TRUE(%s)", #x);          \
+#define ASSERT_TRUE(x)                                                         \
+    do {                                                                       \
+        if (!(x))                                                              \
+            asmtest_fail(__FILE__, __LINE__, "ASSERT_TRUE(%s)", #x);           \
     } while (0)
 
-#define ASSERT_FALSE(x)                                                       \
-    do {                                                                      \
-        if (x)                                                                \
-            asmtest_fail(__FILE__, __LINE__, "ASSERT_FALSE(%s)", #x);         \
+#define ASSERT_FALSE(x)                                                        \
+    do {                                                                       \
+        if (x)                                                                 \
+            asmtest_fail(__FILE__, __LINE__, "ASSERT_FALSE(%s)", #x);          \
     } while (0)
 
-#define ASMTEST_CMP_(a, op, b, opname)                                        \
-    do {                                                                      \
-        long asmtest_a_ = (long)(a);                                          \
-        long asmtest_b_ = (long)(b);                                          \
-        if (!(asmtest_a_ op asmtest_b_))                                      \
-            asmtest_fail(__FILE__, __LINE__,                                  \
-                         "ASSERT_" opname "(%s, %s): %ld vs %ld", #a, #b,     \
-                         asmtest_a_, asmtest_b_);                             \
+#define ASMTEST_CMP_(a, op, b, opname)                                         \
+    do {                                                                       \
+        long asmtest_a_ = (long)(a);                                           \
+        long asmtest_b_ = (long)(b);                                           \
+        if (!(asmtest_a_ op asmtest_b_))                                       \
+            asmtest_fail(__FILE__, __LINE__,                                   \
+                         "ASSERT_" opname "(%s, %s): %ld vs %ld", #a, #b,      \
+                         asmtest_a_, asmtest_b_);                              \
     } while (0)
 
 #define ASSERT_EQ(a, b) ASMTEST_CMP_(a, ==, b, "EQ")
@@ -815,14 +817,14 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Unsigned 64-bit comparisons — use these for addresses, register values, and
  * anything that may exceed LONG_MAX (the signed ASSERT_* would misorder and
  * misprint those). Compared and reported as unsigned hex. */
-#define ASMTEST_UCMP_(a, op, b, opname)                                       \
-    do {                                                                      \
-        unsigned long asmtest_ua_ = (unsigned long)(a);                      \
-        unsigned long asmtest_ub_ = (unsigned long)(b);                      \
-        if (!(asmtest_ua_ op asmtest_ub_))                                   \
-            asmtest_fail(__FILE__, __LINE__,                                  \
-                         "ASSERT_" opname "(%s, %s): 0x%lx vs 0x%lx", #a,     \
-                         #b, asmtest_ua_, asmtest_ub_);                       \
+#define ASMTEST_UCMP_(a, op, b, opname)                                        \
+    do {                                                                       \
+        unsigned long asmtest_ua_ = (unsigned long)(a);                        \
+        unsigned long asmtest_ub_ = (unsigned long)(b);                        \
+        if (!(asmtest_ua_ op asmtest_ub_))                                     \
+            asmtest_fail(__FILE__, __LINE__,                                   \
+                         "ASSERT_" opname "(%s, %s): 0x%lx vs 0x%lx", #a, #b,  \
+                         asmtest_ua_, asmtest_ub_);                            \
     } while (0)
 
 #define ASSERT_UEQ(a, b) ASMTEST_UCMP_(a, ==, b, "UEQ")
@@ -832,11 +834,11 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 #define ASSERT_UGT(a, b) ASMTEST_UCMP_(a, >, b, "UGT")
 #define ASSERT_UGE(a, b) ASMTEST_UCMP_(a, >=, b, "UGE")
 
-#define ASSERT_STREQ(a, b)                                                    \
+#define ASSERT_STREQ(a, b)                                                     \
     asmtest_assert_streq(__FILE__, __LINE__, #a, #b, (a), (b))
 
-#define ASSERT_MEM_EQ(ptr, expect, len)                                       \
-    asmtest_assert_mem_eq(__FILE__, __LINE__, #ptr, #expect, (ptr), (expect), \
+#define ASSERT_MEM_EQ(ptr, expect, len)                                        \
+    asmtest_assert_mem_eq(__FILE__, __LINE__, #ptr, #expect, (ptr), (expect),  \
                           (len))
 
 /* Verify the routine restored all callee-saved registers (ABI compliance). */
@@ -855,50 +857,50 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 #define ASSERT_REG_EQ(r, field, val) ASSERT_UEQ((r)->field, (val))
 
 /* Flag assertions take a short name: ASSERT_FLAG_SET(&r, CF). */
-#define ASSERT_FLAG_SET(r, FLG)                                               \
+#define ASSERT_FLAG_SET(r, FLG)                                                \
     asmtest_assert_flag(__FILE__, __LINE__, (r), ASMTEST_##FLG, 1, #FLG)
-#define ASSERT_FLAG_CLEAR(r, FLG)                                             \
+#define ASSERT_FLAG_CLEAR(r, FLG)                                              \
     asmtest_assert_flag(__FILE__, __LINE__, (r), ASMTEST_##FLG, 0, #FLG)
 
 /* Floating-point return assertions (read out->fret from asm_call_capture_fp).
  * ASSERT_FP_EQ is exact; ASSERT_FP_NEAR allows a distance in ULPs. */
-#define ASSERT_FP_EQ(r, expected)                                             \
+#define ASSERT_FP_EQ(r, expected)                                              \
     asmtest_assert_double_eq(__FILE__, __LINE__, (r)->fret, (expected))
-#define ASSERT_FP_NEAR(r, expected, ulps)                                     \
-    asmtest_assert_double_near(__FILE__, __LINE__, (r)->fret, (expected),     \
+#define ASSERT_FP_NEAR(r, expected, ulps)                                      \
+    asmtest_assert_double_near(__FILE__, __LINE__, (r)->fret, (expected),      \
                                (ulps))
 
 /* Raw scalar double/float assertions — handy for individual vector lanes,
  * e.g. ASSERT_DEQ(r.vec[0].f64[1], 2.0) or ASSERT_FNEAR(r.vec[0].f32[0], 1.0f,
  * 1). */
-#define ASSERT_DEQ(actual, expected)                                          \
+#define ASSERT_DEQ(actual, expected)                                           \
     asmtest_assert_double_eq(__FILE__, __LINE__, (actual), (expected))
-#define ASSERT_DNEAR(actual, expected, ulps)                                  \
+#define ASSERT_DNEAR(actual, expected, ulps)                                   \
     asmtest_assert_double_near(__FILE__, __LINE__, (actual), (expected), (ulps))
-#define ASSERT_FEQ(actual, expected)                                          \
+#define ASSERT_FEQ(actual, expected)                                           \
     asmtest_assert_float_eq(__FILE__, __LINE__, (actual), (expected))
-#define ASSERT_FNEAR(actual, expected, ulps)                                  \
+#define ASSERT_FNEAR(actual, expected, ulps)                                   \
     asmtest_assert_float_near(__FILE__, __LINE__, (actual), (expected), (ulps))
 
 /* Bytewise compare a captured 128-bit vector register to 16 expected bytes
  * (hexdump diff on failure): ASSERT_VEC_EQ(&r, 0, expected.u8). */
-#define ASSERT_VEC_EQ(r, idx, expect_ptr)                                     \
-    asmtest_assert_vec_eq(__FILE__, __LINE__, #idx, (r)->vec[idx].u8,         \
+#define ASSERT_VEC_EQ(r, idx, expect_ptr)                                      \
+    asmtest_assert_vec_eq(__FILE__, __LINE__, #idx, (r)->vec[idx].u8,          \
                           (const unsigned char *)(expect_ptr))
 
 /* 256-bit variant: `vec` is the vec256_t[16] array filled by
  * asm_call_capture_vec256, so the lane is vec[idx] (not r->vec[idx]):
  * ASSERT_VEC256_EQ(out, 0, expected.u8). Lane scalars use ASSERT_DEQ/FEQ as
  * usual, e.g. ASSERT_DEQ(out[0].f64[3], 4.0). */
-#define ASSERT_VEC256_EQ(vec, idx, expect_ptr)                                \
-    asmtest_assert_vec256_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,         \
+#define ASSERT_VEC256_EQ(vec, idx, expect_ptr)                                 \
+    asmtest_assert_vec256_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,          \
                              (const unsigned char *)(expect_ptr))
 
 /* 512-bit variant: `vec` is the vec512_t[32] array filled by
  * asm_call_capture_vec512, so the lane is vec[idx]. Lane scalars use ASSERT_DEQ/FEQ
  * as usual, e.g. ASSERT_DEQ(out[0].f64[7], 8.0) (the 8th lane needs the full 512). */
-#define ASSERT_VEC512_EQ(vec, idx, expect_ptr)                                \
-    asmtest_assert_vec512_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,         \
+#define ASSERT_VEC512_EQ(vec, idx, expect_ptr)                                 \
+    asmtest_assert_vec512_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,          \
                              (const unsigned char *)(expect_ptr))
 
 /* Differential / property assertions: assert the asm routine `fn` matches the
@@ -907,11 +909,11 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
  *   ASSERT_MATCHES_REF2(imax, ref_imax, gen_pair, 10000);
  * On a mismatch the failing input, both results, and the seed are reported, so
  * the case reproduces (set ASMTEST_SEED to replay a CI-randomized run). */
-#define ASSERT_MATCHES_REF1(fn, ref, gen, n)                                  \
+#define ASSERT_MATCHES_REF1(fn, ref, gen, n)                                   \
     asmtest_match_ref1(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
-#define ASSERT_MATCHES_REF2(fn, ref, gen, n)                                  \
+#define ASSERT_MATCHES_REF2(fn, ref, gen, n)                                   \
     asmtest_match_ref2(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
-#define ASSERT_MATCHES_REF3(fn, ref, gen, n)                                  \
+#define ASSERT_MATCHES_REF3(fn, ref, gen, n)                                   \
     asmtest_match_ref3(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
 
 #ifdef __cplusplus

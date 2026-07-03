@@ -45,6 +45,7 @@ TEST(structret, small_struct_in_registers) {
     ASM_CALL2(&r, make_pair, 7, 9);
     ASSERT_EQ(r.ret, 7); /* first eightbyte (rax / x0) */
 #if defined(__x86_64__)
-    ASSERT_EQ(r.rdx, 9); /* second eightbyte (rdx); x1 not captured on AArch64 */
+    ASSERT_EQ(r.rdx,
+              9); /* second eightbyte (rdx); x1 not captured on AArch64 */
 #endif
 }

@@ -73,7 +73,8 @@ void asmtest_descent_free(asmtest_descent_t *d) {
 
 void asmtest_descent_set_max_depth(asmtest_descent_t *d, uint32_t max_depth) {
     if (d != NULL)
-        d->max_depth = max_depth ? max_depth : ASMTEST_DESCENT_DEFAULT_MAX_DEPTH;
+        d->max_depth =
+            max_depth ? max_depth : ASMTEST_DESCENT_DEFAULT_MAX_DEPTH;
 }
 
 void asmtest_descent_set_insn_budget(asmtest_descent_t *d, uint64_t budget) {
@@ -96,28 +97,30 @@ static int region_add(asmtest_descent_region_t **arr, size_t *len, size_t *cap,
     return ASMTEST_PTRACE_OK;
 }
 
-int asmtest_descent_allow_region(asmtest_descent_t *d, const void *base, size_t len) {
+int asmtest_descent_allow_region(asmtest_descent_t *d, const void *base,
+                                 size_t len) {
     if (d == NULL)
         return ASMTEST_PTRACE_EINVAL;
     return region_add(&d->allow, &d->allow_len, &d->allow_cap, base, len);
 }
 
-int asmtest_descent_deny_region(asmtest_descent_t *d, const void *base, size_t len) {
+int asmtest_descent_deny_region(asmtest_descent_t *d, const void *base,
+                                size_t len) {
     if (d == NULL)
         return ASMTEST_PTRACE_EINVAL;
     return region_add(&d->deny, &d->deny_len, &d->deny_cap, base, len);
 }
 
-void asmtest_descent_set_resolver(asmtest_descent_t *d, asmtest_descent_resolver_fn fn,
-                                  void *user) {
+void asmtest_descent_set_resolver(asmtest_descent_t *d,
+                                  asmtest_descent_resolver_fn fn, void *user) {
     if (d != NULL) {
         d->resolver = fn;
         d->resolver_user = user;
     }
 }
 
-void asmtest_descent_set_denylist(asmtest_descent_t *d, asmtest_descent_denylist_fn fn,
-                                  void *user) {
+void asmtest_descent_set_denylist(asmtest_descent_t *d,
+                                  asmtest_descent_denylist_fn fn, void *user) {
     if (d != NULL) {
         d->denylist = fn;
         d->denylist_user = user;
@@ -128,8 +131,9 @@ void asmtest_descent_set_denylist(asmtest_descent_t *d, asmtest_descent_denylist
 /* Mutators driven by the step loop (asmtest_descent_internal.h)       */
 /* ------------------------------------------------------------------ */
 
-int asmtest_descent_region_contains(const asmtest_descent_region_t *arr, size_t n,
-                                    uint64_t addr, uint64_t *base_out, uint64_t *len_out) {
+int asmtest_descent_region_contains(const asmtest_descent_region_t *arr,
+                                    size_t n, uint64_t addr, uint64_t *base_out,
+                                    uint64_t *len_out) {
     for (size_t i = 0; i < n; i++)
         if (addr >= arr[i].base && addr < arr[i].base + arr[i].len) {
             if (base_out)
@@ -141,8 +145,9 @@ int asmtest_descent_region_contains(const asmtest_descent_region_t *arr, size_t 
     return 0;
 }
 
-int32_t asmtest_descent_push_frame(asmtest_descent_t *d, uint64_t base, uint64_t len,
-                                   uint32_t depth, int32_t parent) {
+int32_t asmtest_descent_push_frame(asmtest_descent_t *d, uint64_t base,
+                                   uint64_t len, uint32_t depth,
+                                   int32_t parent) {
     if (d == NULL)
         return -1;
     if (!pool_reserve((void **)&d->frames, &d->frames_cap, d->frames_len + 1,
@@ -174,8 +179,8 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
                 break;
             }
         if (!seen) {
-            if (pool_reserve((void **)&f->blocks, &f->blocks_cap, f->blocks_len + 1,
-                             sizeof *f->blocks))
+            if (pool_reserve((void **)&f->blocks, &f->blocks_cap,
+                             f->blocks_len + 1, sizeof *f->blocks))
                 f->blocks[f->blocks_len++] = off;
             else
                 d->truncated = 1;
@@ -187,7 +192,8 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
     else
         d->truncated = 1;
     if (insn_len == 0) {
-        d->truncated = 1; /* undecodable byte: cannot derive the next boundary */
+        d->truncated =
+            1; /* undecodable byte: cannot derive the next boundary */
         f->have_prev = 0;
     } else {
         f->expected_next = off + insn_len;
@@ -196,8 +202,9 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
     return new_block;
 }
 
-void asmtest_descent_add_edge(asmtest_descent_t *d, uint64_t site, uint64_t target,
-                              uint32_t depth, int32_t from_frame) {
+void asmtest_descent_add_edge(asmtest_descent_t *d, uint64_t site,
+                              uint64_t target, uint32_t depth,
+                              int32_t from_frame) {
     if (d == NULL)
         return;
     if (!pool_reserve((void **)&d->edges, &d->edges_cap, d->edges_len + 1,
@@ -256,7 +263,8 @@ int32_t asmtest_descent_frame_parent(const asmtest_descent_t *d, size_t f) {
 size_t asmtest_descent_frame_insn_count(const asmtest_descent_t *d, size_t f) {
     return (d != NULL && f < d->frames_len) ? d->frames[f].insns_len : 0;
 }
-uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f, size_t i) {
+uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f,
+                                       size_t i) {
     return (d != NULL && f < d->frames_len && i < d->frames[f].insns_len)
                ? d->frames[f].insns[i]
                : 0;
@@ -264,7 +272,8 @@ uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f, siz
 size_t asmtest_descent_frame_block_count(const asmtest_descent_t *d, size_t f) {
     return (d != NULL && f < d->frames_len) ? d->frames[f].blocks_len : 0;
 }
-uint64_t asmtest_descent_frame_block_at(const asmtest_descent_t *d, size_t f, size_t i) {
+uint64_t asmtest_descent_frame_block_at(const asmtest_descent_t *d, size_t f,
+                                        size_t i) {
     return (d != NULL && f < d->frames_len && i < d->frames[f].blocks_len)
                ? d->frames[f].blocks[i]
                : 0;

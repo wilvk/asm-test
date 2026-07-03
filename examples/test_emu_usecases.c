@@ -20,17 +20,17 @@
 
 #include <string.h>
 
-extern long sum_longs(const long *p, long n);  /* counted load loop  */
-extern void fill_longs(long *p, long n);        /* counted store loop */
-extern long add3(long a, long b, long c);       /* a + b + c          */
+extern long sum_longs(const long *p, long n); /* counted load loop  */
+extern void fill_longs(long *p, long n);      /* counted store loop */
+extern long add3(long a, long b, long c);     /* a + b + c          */
 
 #define CODE_WINDOW 64
 
 /* A caller-mapped guest page and the first address just past it. With 8-byte
  * longs, indices 0..511 fit in the page and index 512 lands exactly on PAGE_END. */
-#define PAGE_BASE 0x00300000UL
-#define PAGE_SIZE 0x1000UL
-#define PAGE_END (PAGE_BASE + PAGE_SIZE)
+#define PAGE_BASE      0x00300000UL
+#define PAGE_SIZE      0x1000UL
+#define PAGE_END       (PAGE_BASE + PAGE_SIZE)
 #define LONGS_PER_PAGE (PAGE_SIZE / sizeof(long)) /* 512 */
 
 /* ---------------- (1) the emulator as a security sandbox ----------------- */

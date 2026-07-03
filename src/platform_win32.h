@@ -36,8 +36,8 @@ int asmtest_win32_run_pool(const char *const *cmdlines, int n, int jobs,
 
 /* A hardware fault caught in-process by asmtest_win32_guard. */
 typedef struct {
-    unsigned long code;  /* the EXCEPTION_* / NTSTATUS code (e.g. 0xC0000005) */
-    void *address;       /* the faulting data address (AV) or instruction       */
+    unsigned long code; /* the EXCEPTION_* / NTSTATUS code (e.g. 0xC0000005) */
+    void *address; /* the faulting data address (AV) or instruction       */
 } asmtest_win32_fault_t;
 
 /* Run fn(arg) with a vectored exception handler installed, recovering from a
@@ -79,7 +79,8 @@ enum {
  * last resort. */
 enum { ASMTEST_WIN32_HANG_EXIT = 124 };
 
-extern void *asmtest_win32_test_recover[5]; /* __builtin_setjmp/longjmp buffer */
+extern void
+    *asmtest_win32_test_recover[5]; /* __builtin_setjmp/longjmp buffer */
 extern volatile int asmtest_win32_test_reason;
 extern asmtest_win32_fault_t asmtest_win32_test_fault;
 

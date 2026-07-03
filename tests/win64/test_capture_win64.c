@@ -26,32 +26,40 @@
  * real silicon. Mirrors asmtest_cpu_has_avx2() in src/asmtest.c. */
 static int has_avx2(void) {
     unsigned a, b, c, d;
-    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
-    if (!(c & (1u << 27)) || !(c & (1u << 28))) return 0; /* OSXSAVE + AVX */
-    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return 0;
-    if (!(b & (1u << 5))) return 0;                        /* AVX2 (leaf 7 EBX) */
+    if (!__get_cpuid(1, &a, &b, &c, &d))
+        return 0;
+    if (!(c & (1u << 27)) || !(c & (1u << 28)))
+        return 0; /* OSXSAVE + AVX */
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d))
+        return 0;
+    if (!(b & (1u << 5)))
+        return 0; /* AVX2 (leaf 7 EBX) */
     unsigned xcr0_lo, xcr0_hi;
     __asm__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
-    return (xcr0_lo & 0x6) == 0x6;                         /* XMM + YMM state on */
+    return (xcr0_lo & 0x6) == 0x6; /* XMM + YMM state on */
 }
 
 /* AVX-512F probe, mirrors asmtest_cpu_has_avx512f() in src/asmtest.c (Wine runs PE
  * instructions on the host CPU, so this reflects real silicon). */
 static int has_avx512f(void) {
     unsigned a, b, c, d;
-    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
-    if (!(c & (1u << 27))) return 0;                      /* OSXSAVE */
+    if (!__get_cpuid(1, &a, &b, &c, &d))
+        return 0;
+    if (!(c & (1u << 27)))
+        return 0; /* OSXSAVE */
     unsigned xcr0_lo, xcr0_hi;
     __asm__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
-    if ((xcr0_lo & 0xe6) != 0xe6) return 0;               /* opmask+ZMM_Hi256+Hi16_ZMM */
-    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return 0;
-    return (b & (1u << 16)) != 0;                         /* AVX-512F (leaf 7 EBX) */
+    if ((xcr0_lo & 0xe6) != 0xe6)
+        return 0; /* opmask+ZMM_Hi256+Hi16_ZMM */
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d))
+        return 0;
+    return (b & (1u << 16)) != 0; /* AVX-512F (leaf 7 EBX) */
 }
 
 #if defined(_WIN32)
-#  define WIN64ABI /* mingw target is already Microsoft x64 */
+#define WIN64ABI /* mingw target is already Microsoft x64 */
 #else
-#  define WIN64ABI __attribute__((ms_abi))
+#define WIN64ABI __attribute__((ms_abi))
 #endif
 
 extern WIN64ABI void asm_call_capture_win64(regs_t *out, void *fn,
@@ -67,7 +75,8 @@ extern WIN64ABI void asm_call_capture_fp_win64(regs_t *out, void *fn,
                                                const double *fargs);
 extern WIN64ABI void asm_call_capture_fp_n_win64(regs_t *out, void *fn,
                                                  const long long *iargs,
-                                                 const double *fargs, int nfargs);
+                                                 const double *fargs,
+                                                 int nfargs);
 extern WIN64ABI void asm_call_capture_sret_win64(regs_t *out, void *fn,
                                                  void *result,
                                                  const long long *args,
@@ -185,13 +194,16 @@ int main(void) {
     CHECK(xmm_callee_preserved(&r),
           "win64_addsd preserves the xmm6-15 callee-saved set");
 
-    asm_call_capture_vec_win64(&r, (void *)win64_vec_preserve_xmm6, args, vargs);
+    asm_call_capture_vec_win64(&r, (void *)win64_vec_preserve_xmm6, args,
+                               vargs);
     CHECK(r.fret == 1.5 && xmm_callee_preserved(&r),
           "win64_vec_preserve_xmm6: correct FP result and xmm6-15 intact");
 
     asm_call_capture_vec_win64(&r, (void *)win64_vec_clobber_xmm6, args, vargs);
-    CHECK(!xmm_callee_preserved(&r) && r.vec[6].u64[0] == 0 && r.vec[6].u64[1] == 0,
-          "win64_vec_clobber_xmm6: FP ABI violation detected (xmm6 not preserved)");
+    CHECK(!xmm_callee_preserved(&r) && r.vec[6].u64[0] == 0 &&
+              r.vec[6].u64[1] == 0,
+          "win64_vec_clobber_xmm6: FP ABI violation detected (xmm6 not "
+          "preserved)");
     CHECK(r.vec[7].u64[0] == 7 && r.vec[15].u64[0] == 15,
           "win64_vec_clobber_xmm6: the other xmm sentinels survive");
 
@@ -210,7 +222,8 @@ int main(void) {
     /* asm_call_capture_sret_win64: struct return via the hidden rcx pointer. */
     long long result[2] = {0, 0};
     const long long sret_args[2] = {1234, 5678};
-    asm_call_capture_sret_win64(&r, (void *)win64_sret_make, result, sret_args, 2);
+    asm_call_capture_sret_win64(&r, (void *)win64_sret_make, result, sret_args,
+                                2);
     CHECK(result[0] == 1234 && result[1] == 5678,
           "win64_sret_make via _sret: struct written through hidden pointer");
     CHECK(r.ret == (uint64_t)(uintptr_t)result,
@@ -235,13 +248,21 @@ int main(void) {
      * upper 128 lanes the 128-bit path can't see are exercised). */
     if (has_avx2()) {
         vec256_t v256[2] = {{{0}}};
-        v256[0].f64[0] = 1; v256[0].f64[1] = 2; v256[0].f64[2] = 3; v256[0].f64[3] = 4;
-        v256[1].f64[0] = 10; v256[1].f64[1] = 20; v256[1].f64[2] = 30; v256[1].f64[3] = 40;
+        v256[0].f64[0] = 1;
+        v256[0].f64[1] = 2;
+        v256[0].f64[2] = 3;
+        v256[0].f64[3] = 4;
+        v256[1].f64[0] = 10;
+        v256[1].f64[1] = 20;
+        v256[1].f64[2] = 30;
+        v256[1].f64[3] = 40;
         vec256_t out256[16] = {{{0}}};
-        asm_call_capture_vec256_win64(out256, (void *)win64_vaddpd_ymm, args, v256);
+        asm_call_capture_vec256_win64(out256, (void *)win64_vaddpd_ymm, args,
+                                      v256);
         CHECK(out256[0].f64[0] == 11 && out256[0].f64[1] == 22 &&
-              out256[0].f64[2] == 33 && out256[0].f64[3] == 44,
-              "win64_vaddpd_ymm via _vec256: full 256-bit ymm0 sum (incl upper 128)");
+                  out256[0].f64[2] == 33 && out256[0].f64[3] == 44,
+              "win64_vaddpd_ymm via _vec256: full 256-bit ymm0 sum (incl upper "
+              "128)");
     } else {
         printf("ok   - win64_vaddpd_ymm via _vec256 # SKIP no AVX2\n");
     }
@@ -257,10 +278,12 @@ int main(void) {
             v512[1].f64[i] = (i + 1) * 10; /* 10..80 */
         }
         vec512_t out512[32] = {{{0}}};
-        asm_call_capture_vec512_win64(out512, (void *)win64_vaddpd_zmm, args, v512);
+        asm_call_capture_vec512_win64(out512, (void *)win64_vaddpd_zmm, args,
+                                      v512);
         CHECK(out512[0].f64[0] == 11 && out512[0].f64[3] == 44 &&
-              out512[0].f64[7] == 88,
-              "win64_vaddpd_zmm via _vec512: full 512-bit zmm0 sum (incl upper lanes)");
+                  out512[0].f64[7] == 88,
+              "win64_vaddpd_zmm via _vec512: full 512-bit zmm0 sum (incl upper "
+              "lanes)");
     } else {
         printf("ok   - win64_vaddpd_zmm via _vec512 # SKIP no AVX-512\n");
     }

@@ -24,9 +24,9 @@ typedef struct {
 
 /* One recorded call the tracer did NOT follow (a stepped-over call-out at level >= 1). */
 typedef struct {
-    uint64_t site;     /* call-site byte offset within its calling frame  */
-    uint64_t target;   /* absolute callee address                         */
-    uint32_t depth;    /* depth of the calling frame (0 = root)           */
+    uint64_t site;      /* call-site byte offset within its calling frame  */
+    uint64_t target;    /* absolute callee address                         */
+    uint32_t depth;     /* depth of the calling frame (0 = root)           */
     int32_t from_frame; /* index of the calling frame                     */
 } asmtest_descent_edge_t;
 
@@ -69,7 +69,7 @@ struct asmtest_descent {
 
 /* Conservative defaults (used when a setter is passed 0, and at allocation). L3's budget
  * is deliberately far below PTRACE_STREAM_CAP so a runaway descend self-truncates fast. */
-#define ASMTEST_DESCENT_DEFAULT_MAX_DEPTH 8u
+#define ASMTEST_DESCENT_DEFAULT_MAX_DEPTH   8u
 #define ASMTEST_DESCENT_DEFAULT_INSN_BUDGET 4096ull
 #define ASMTEST_DESCENT_DEFAULT_WATCHDOG_MS 2000u
 
@@ -77,8 +77,9 @@ struct asmtest_descent {
 
 /* Push a new frame [base, base+len) at `depth` under `parent`. Returns the new frame's
  * index, or -1 on OOM (which also sets truncated). */
-int32_t asmtest_descent_push_frame(asmtest_descent_t *d, uint64_t base, uint64_t len,
-                                   uint32_t depth, int32_t parent);
+int32_t asmtest_descent_push_frame(asmtest_descent_t *d, uint64_t base,
+                                   uint64_t len, uint32_t depth,
+                                   int32_t parent);
 
 /* Record one executed instruction at offset `off` (bytes-relative to the frame base) in
  * frame `fi`, whose instruction is `insn_len` bytes (0 => undecodable, flags truncated).
@@ -89,14 +90,16 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
                                  size_t insn_len);
 
 /* Append a stepped-over call edge. */
-void asmtest_descent_add_edge(asmtest_descent_t *d, uint64_t site, uint64_t target,
-                              uint32_t depth, int32_t from_frame);
+void asmtest_descent_add_edge(asmtest_descent_t *d, uint64_t site,
+                              uint64_t target, uint32_t depth,
+                              int32_t from_frame);
 
 void asmtest_descent_mark_truncated(asmtest_descent_t *d);
 void asmtest_descent_mark_depth_capped(asmtest_descent_t *d);
 
 /* If `addr` lies in one of the `n` regions, return 1 and (optionally) its extent. */
-int asmtest_descent_region_contains(const asmtest_descent_region_t *arr, size_t n,
-                                    uint64_t addr, uint64_t *base_out, uint64_t *len_out);
+int asmtest_descent_region_contains(const asmtest_descent_region_t *arr,
+                                    size_t n, uint64_t addr, uint64_t *base_out,
+                                    uint64_t *len_out);
 
 #endif /* ASMTEST_DESCENT_INTERNAL_H */

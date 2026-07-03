@@ -57,12 +57,16 @@ extern "C" {
 #endif
 
 /* Status codes (shared spirit with asmtest_hwtrace.h). */
-#define ASMTEST_PTRACE_OK 0
+#define ASMTEST_PTRACE_OK     0
 #define ASMTEST_PTRACE_EINVAL (-1)
-#define ASMTEST_PTRACE_EUNAVAIL (-3) /* not a Linux x86-64 / AArch64 host         */
-#define ASMTEST_PTRACE_ENOSYS (-5)   /* backend not compiled in                  */
-#define ASMTEST_PTRACE_ENOENT (-7)   /* region/symbol not found                  */
-#define ASMTEST_PTRACE_ETRACE (-8)   /* fork / ptrace / wait failure             */
+#define ASMTEST_PTRACE_EUNAVAIL                                                \
+    (-3) /* not a Linux x86-64 / AArch64 host         */
+#define ASMTEST_PTRACE_ENOSYS                                                  \
+    (-5) /* backend not compiled in                  */
+#define ASMTEST_PTRACE_ENOENT                                                  \
+    (-7) /* region/symbol not found                  */
+#define ASMTEST_PTRACE_ETRACE                                                  \
+    (-8) /* fork / ptrace / wait failure             */
 
 /* 1 if the out-of-process single-step tracer can run on this host (Linux x86-64, or
  * Linux AArch64 with a functional PTRACE_SINGLESTEP), else 0. On AArch64 this is a
@@ -123,9 +127,11 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
  * [base, base+len) (asmtest_codeimage_track); returns ASMTEST_PTRACE_ENOENT if it is not.
  * With img == NULL this is exactly asmtest_ptrace_trace_attached. */
 struct asmtest_codeimage; /* forward decl; full type in asmtest_codeimage.h */
-int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
-                                            struct asmtest_codeimage *img, uint64_t when,
-                                            long *result, asmtest_trace_t *trace);
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base,
+                                            size_t len,
+                                            struct asmtest_codeimage *img,
+                                            uint64_t when, long *result,
+                                            asmtest_trace_t *trace);
 
 /* Run an already-attached target forward until it reaches `addr`, then stop it there —
  * the missing step between resolving a foreign method and tracing it. asmtest_ptrace_-
@@ -178,7 +184,8 @@ typedef struct asmtest_descent asmtest_descent_t;
  * extent is known, set *base_out and *len_out to the callee region), 0 to step over. `user`
  * is the pointer passed to asmtest_descent_set_resolver. */
 typedef int (*asmtest_descent_resolver_fn)(uint64_t callee_addr, void *user,
-                                           uint64_t *base_out, uint64_t *len_out);
+                                           uint64_t *base_out,
+                                           uint64_t *len_out);
 /* Optional level-3 denylist: return 1 to REFUSE descent into `callee_addr` (step over
  * it), 0 to allow it. Consulted in addition to the deny-region set. */
 typedef int (*asmtest_descent_denylist_fn)(uint64_t callee_addr, void *user);
@@ -201,31 +208,41 @@ void asmtest_descent_set_insn_budget(asmtest_descent_t *d, uint64_t budget);
 void asmtest_descent_set_watchdog_ms(asmtest_descent_t *d, uint32_t ms);
 /* Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).
  * Returns 0 on success, negative on OOM. */
-int asmtest_descent_allow_region(asmtest_descent_t *d, const void *base, size_t len);
+int asmtest_descent_allow_region(asmtest_descent_t *d, const void *base,
+                                 size_t len);
 /* Add [base, base+len) to the level-3 deny-set (never descend into it). 0 / negative. */
-int asmtest_descent_deny_region(asmtest_descent_t *d, const void *base, size_t len);
+int asmtest_descent_deny_region(asmtest_descent_t *d, const void *base,
+                                size_t len);
 /* Install the optional level-2/3 resolver (see asmtest_descent_resolver_fn). */
-void asmtest_descent_set_resolver(asmtest_descent_t *d, asmtest_descent_resolver_fn fn,
-                                  void *user);
+void asmtest_descent_set_resolver(asmtest_descent_t *d,
+                                  asmtest_descent_resolver_fn fn, void *user);
 /* Install the optional level-3 denylist callback (see asmtest_descent_denylist_fn). */
-void asmtest_descent_set_denylist(asmtest_descent_t *d, asmtest_descent_denylist_fn fn,
-                                  void *user);
+void asmtest_descent_set_denylist(asmtest_descent_t *d,
+                                  asmtest_descent_denylist_fn fn, void *user);
 
 /* Read accessors — one scalar per call, the opaque-handle idiom every binding speaks.
  * All are NULL-safe (return 0) and bounds-checked (out-of-range index returns 0). */
 size_t asmtest_descent_edges_len(const asmtest_descent_t *d);
-uint64_t asmtest_descent_edge_site(const asmtest_descent_t *d, size_t i);   /* call-site off */
-uint64_t asmtest_descent_edge_target(const asmtest_descent_t *d, size_t i); /* absolute addr */
-uint32_t asmtest_descent_edge_depth(const asmtest_descent_t *d, size_t i);  /* caller depth  */
+uint64_t asmtest_descent_edge_site(const asmtest_descent_t *d,
+                                   size_t i); /* call-site off */
+uint64_t asmtest_descent_edge_target(const asmtest_descent_t *d,
+                                     size_t i); /* absolute addr */
+uint32_t asmtest_descent_edge_depth(const asmtest_descent_t *d,
+                                    size_t i); /* caller depth  */
 size_t asmtest_descent_frames_len(const asmtest_descent_t *d);
-uint64_t asmtest_descent_frame_base(const asmtest_descent_t *d, size_t f);  /* absolute base */
+uint64_t asmtest_descent_frame_base(const asmtest_descent_t *d,
+                                    size_t f); /* absolute base */
 uint64_t asmtest_descent_frame_len(const asmtest_descent_t *d, size_t f);
-uint32_t asmtest_descent_frame_depth(const asmtest_descent_t *d, size_t f); /* 0 = frame 0   */
-int32_t asmtest_descent_frame_parent(const asmtest_descent_t *d, size_t f); /* -1 = root     */
+uint32_t asmtest_descent_frame_depth(const asmtest_descent_t *d,
+                                     size_t f); /* 0 = frame 0   */
+int32_t asmtest_descent_frame_parent(const asmtest_descent_t *d,
+                                     size_t f); /* -1 = root     */
 size_t asmtest_descent_frame_insn_count(const asmtest_descent_t *d, size_t f);
-uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f, size_t i);
+uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f,
+                                       size_t i);
 size_t asmtest_descent_frame_block_count(const asmtest_descent_t *d, size_t f);
-uint64_t asmtest_descent_frame_block_at(const asmtest_descent_t *d, size_t f, size_t i);
+uint64_t asmtest_descent_frame_block_at(const asmtest_descent_t *d, size_t f,
+                                        size_t i);
 /* 1 if a pool overflowed / a byte failed to decode (the record is incomplete). */
 int asmtest_descent_truncated(const asmtest_descent_t *d);
 /* 1 if descent stopped at a policy limit (max_depth / budget / recursion cap) — distinct
@@ -244,14 +261,18 @@ int asmtest_descent_depth_capped(const asmtest_descent_t *d);
  * pass — it deliberately differs from the recursion-folded trace the non-_ex (descent==NULL)
  * form produces; the recursive invocations are the depth>0 frames. Frame 0 is byte-identical
  * across descent levels 1..3. */
-int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args, int nargs,
-                                 long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args,
+                                 int nargs, long *result,
+                                 asmtest_trace_t *trace,
                                  asmtest_descent_t *descent);
-int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len, long *result,
-                                     asmtest_trace_t *trace, asmtest_descent_t *descent);
-int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base, size_t len,
-                                               struct asmtest_codeimage *img, uint64_t when,
-                                               long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len,
+                                     long *result, asmtest_trace_t *trace,
+                                     asmtest_descent_t *descent);
+int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base,
+                                               size_t len,
+                                               struct asmtest_codeimage *img,
+                                               uint64_t when, long *result,
+                                               asmtest_trace_t *trace,
                                                asmtest_descent_t *descent);
 
 /* ------------------------------------------------------------------ */
@@ -284,10 +305,14 @@ int asmtest_proc_perfmap_symbol(pid_t pid, const char *name, void **base_out,
 
 /* A JIT method as recorded in a jitdump JIT_CODE_LOAD record. */
 typedef struct {
-    uint64_t code_addr;  /* load address (the base to trace)                     */
-    uint64_t code_size;  /* code length in bytes                                 */
-    uint64_t timestamp;  /* record timestamp (load order)                        */
-    uint64_t code_index; /* the JIT's unique index for this code                 */
+    uint64_t
+        code_addr; /* load address (the base to trace)                     */
+    uint64_t
+        code_size; /* code length in bytes                                 */
+    uint64_t
+        timestamp; /* record timestamp (load order)                        */
+    uint64_t
+        code_index; /* the JIT's unique index for this code                 */
 } asmtest_jitdump_entry_t;
 
 /* Read the Linux perf **jitdump** image (`jit-<pid>.dump`) a JIT writes and resolve a

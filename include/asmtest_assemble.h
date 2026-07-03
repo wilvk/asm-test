@@ -60,11 +60,11 @@ typedef enum {
  * (owned by the caller; release with asmtest_asm_free). On failure, `ok` is
  * false, `bytes` is NULL, and `err` carries the Keystone diagnostic. */
 typedef struct {
-    uint8_t *bytes;      /* malloc'd machine code, or NULL on failure     */
-    size_t   len;        /* byte length of `bytes`                        */
-    size_t   stat_count; /* assembly statements successfully processed    */
-    bool     ok;         /* true iff the source assembled cleanly         */
-    char     err[160];   /* human-readable error on failure ("" on ok)    */
+    uint8_t *bytes;    /* malloc'd machine code, or NULL on failure     */
+    size_t len;        /* byte length of `bytes`                        */
+    size_t stat_count; /* assembly statements successfully processed    */
+    bool ok;           /* true iff the source assembled cleanly         */
+    char err[160];     /* human-readable error on failure ("" on ok)    */
 } asm_result_t;
 
 /*
@@ -96,8 +96,8 @@ bool emu_arm64_call_asm(emu_arm64_t *e, const char *src, const long *args,
 bool emu_riscv_call_asm(emu_riscv_t *e, const char *src, const long *args,
                         int nargs, uint64_t max_insns, emu_riscv_result_t *out);
 
-bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs,
-                      uint64_t max_insns, emu_arm_result_t *out);
+bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args,
+                      int nargs, uint64_t max_insns, emu_arm_result_t *out);
 
 /* Opaque-handle FFI shim for dynamic-language bindings (mirrors
  * asmtest_emu_call2 in asmtest_emu.h): assemble x86-64 `src` and run it with
@@ -117,8 +117,8 @@ int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
  * Mirrors asmtest_capture6's six-scalar shape so dynamic FFIs marshal no
  * array. */
 int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
-                          long a1, long a2, long a3, long a4, long a5, int nargs,
-                          uint64_t max_insns, emu_result_t *out);
+                          long a1, long a2, long a3, long a4, long a5,
+                          int nargs, uint64_t max_insns, emu_result_t *out);
 
 /* The Keystone diagnostic from the most recent assemble on the calling thread
  * ("" when the last one succeeded, or none has run). Lets a binding report

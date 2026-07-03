@@ -89,9 +89,7 @@ static void set_last_err(const char *msg) {
     snprintf(g_asm_err, sizeof g_asm_err, "%s", msg ? msg : "");
 }
 
-const char *asmtest_asm_last_error(void) {
-    return g_asm_err;
-}
+const char *asmtest_asm_last_error(void) { return g_asm_err; }
 
 /* Record a failure into *out (bytes already NULL/zero) and return false. */
 static bool fail(asm_result_t *out, const char *msg) {
@@ -225,8 +223,8 @@ bool emu_riscv_call_asm(emu_riscv_t *e, const char *src, const long *args,
     return ok;
 }
 
-bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs,
-                      uint64_t max_insns, emu_arm_result_t *out) {
+bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args,
+                      int nargs, uint64_t max_insns, emu_arm_result_t *out) {
     memset(out, 0, sizeof *out);
     asm_result_t r;
     if (!assemble_at_base(ASM_ARM32, ASM_SYNTAX_INTEL, src, &r)) {
@@ -244,8 +242,8 @@ bool emu_arm_call_asm(emu_arm_t *e, const char *src, const long *args, int nargs
  * `max_insns`. Six scalars (like asmtest_capture6) so dynamic FFIs marshal no
  * array. Quiet on failure — the binding reports asmtest_asm_last_error(). */
 int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
-                          long a1, long a2, long a3, long a4, long a5, int nargs,
-                          uint64_t max_insns, emu_result_t *out) {
+                          long a1, long a2, long a3, long a4, long a5,
+                          int nargs, uint64_t max_insns, emu_result_t *out) {
     long args[6] = {a0, a1, a2, a3, a4, a5};
     asm_syntax_t syn = syntax_from_int(syntax);
     if (nargs < 0)
@@ -267,8 +265,8 @@ int asmtest_emu_call_asm6(emu_t *e, const char *src, int syntax, long a0,
 /* Intel-only, two-arg compatibility wrapper over the widened shim. */
 int asmtest_emu_call_asm(emu_t *e, const char *src, long a0, long a1,
                          emu_result_t *out) {
-    return asmtest_emu_call_asm6(e, src, ASM_SYNTAX_INTEL, a0, a1, 0, 0, 0, 0, 2,
-                                 0, out);
+    return asmtest_emu_call_asm6(e, src, ASM_SYNTAX_INTEL, a0, a1, 0, 0, 0, 0,
+                                 2, 0, out);
 }
 
 /* Assemble-only FFI shim (see asmtest_assemble.h): multi-arch text -> bytes for

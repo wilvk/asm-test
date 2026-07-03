@@ -49,7 +49,8 @@ bool emu_fuzz_cover1(emu_t *e, const void *code, size_t code_len, long lo,
         } else {
             long base = corpus[asmtest_rng_u64(&rng) % ncorpus];
             if (asmtest_rng_u64(&rng) & 1)
-                in = base ^ (1L << (asmtest_rng_u64(&rng) % 62)); /* flip a bit */
+                in = base ^
+                     (1L << (asmtest_rng_u64(&rng) % 62)); /* flip a bit */
             else
                 in = base + asmtest_rng_range(&rng, -4, 4); /* nudge */
             if (in < lo)
@@ -120,8 +121,9 @@ size_t emu_mutation_test1(emu_t *e, const void *code, size_t code_len,
         base[i] = run_sig(e, code, code_len, inputs[i]);
 
     uint64_t total_bits = (uint64_t)code_len * 8;
-    uint64_t want = (max_mutants == 0 || max_mutants > total_bits) ? total_bits
-                                                                   : max_mutants;
+    uint64_t want = (max_mutants == 0 || max_mutants > total_bits)
+                        ? total_bits
+                        : max_mutants;
     asmtest_rng_t rng = {seed};
     size_t killed = 0, survived = 0;
     for (uint64_t m = 0; m < want; m++) {

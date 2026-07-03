@@ -20,7 +20,8 @@
  * pattern the language bindings use. No DynamoRIO headers are needed (dr_app.h
  * pulls in dr_defines.h, whose `bool` clashes with <stdbool.h>).
  */
-#define _GNU_SOURCE 1 /* dladdr / Dl_info — locate a package-bundled libdynamorio */
+#define _GNU_SOURCE                                                            \
+    1 /* dladdr / Dl_info — locate a package-bundled libdynamorio */
 #include "asmtest_drtrace.h"
 
 #include <dlfcn.h>
@@ -43,7 +44,8 @@ static int (*p_dr_app_setup)(void);
 static void (*p_dr_app_start)(void);
 static void (*p_dr_app_stop)(void);
 static void (*p_dr_app_stop_and_cleanup)(void);
-static char (*p_dr_app_running)(void); /* dr_app_running_under_dynamorio (bool) */
+static char (*p_dr_app_running)(
+    void); /* dr_app_running_under_dynamorio (bool) */
 
 /* When drapp is shipped inside a package payload (wheel/gem/jar/...), libdynamorio
  * is vendored right next to it. dlopen() does NOT consult drapp's own RUNPATH for
@@ -95,13 +97,7 @@ static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
 /* ------------------------------------------------------------------ */
 /* Lifecycle state machine                                             */
 /* ------------------------------------------------------------------ */
-enum dr_state {
-    ST_UNINIT = 0,
-    ST_INIT,
-    ST_STARTED,
-    ST_STOPPED,
-    ST_SHUTDOWN
-};
+enum dr_state { ST_UNINIT = 0, ST_INIT, ST_STARTED, ST_STOPPED, ST_SHUTDOWN };
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static enum dr_state g_state = ST_UNINIT;
@@ -141,7 +137,9 @@ static void dr_atfork_child(void) {
     g_disabled_in_child = 1;
     g_active_depth = 0;
 }
-static void install_atfork(void) { pthread_atfork(NULL, NULL, dr_atfork_child); }
+static void install_atfork(void) {
+    pthread_atfork(NULL, NULL, dr_atfork_child);
+}
 
 int asmtest_dr_available(void) {
     /* A cheap, side-effect-free probe: is a libdynamorio path resolvable? We do
@@ -151,7 +149,8 @@ int asmtest_dr_available(void) {
     const char *env = getenv("ASMTEST_DR_LIB");
     if (env != NULL && env[0] != '\0')
         return access(env, R_OK) == 0;
-    if (dr_bundled_lib(buf, sizeof buf) != NULL)  /* a package-bundled libdynamorio */
+    if (dr_bundled_lib(buf, sizeof buf) !=
+        NULL) /* a package-bundled libdynamorio */
         return 1;
     const char *home = getenv("DYNAMORIO_HOME");
     if (home != NULL && home[0] != '\0') {
@@ -219,7 +218,8 @@ int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
         p_dr_app_stop_and_cleanup =
             (void (*)(void))dlsym(g_dr_handle, "dr_app_stop_and_cleanup");
         p_dr_app_running = /* optional: only the managed-host probe uses it */
-            (char (*)(void))dlsym(g_dr_handle, "dr_app_running_under_dynamorio");
+            (char (*)(void))dlsym(g_dr_handle,
+                                  "dr_app_running_under_dynamorio");
         if (p_dr_app_setup == NULL || p_dr_app_start == NULL ||
             p_dr_app_stop == NULL || p_dr_app_stop_and_cleanup == NULL) {
             dlclose(g_dr_handle);
@@ -281,7 +281,8 @@ void asmtest_dr_shutdown(void) {
     if (g_active_depth > 0)
         g_marker_errors++;
     pthread_mutex_lock(&g_lock);
-    if ((g_state == ST_STARTED || g_state == ST_STOPPED || g_state == ST_INIT) &&
+    if ((g_state == ST_STARTED || g_state == ST_STOPPED ||
+         g_state == ST_INIT) &&
         p_dr_app_stop_and_cleanup != NULL) {
         p_dr_app_stop_and_cleanup();
     }
@@ -321,8 +322,8 @@ asmtest_dr_unregister_region_marker(const char *name) {
  * the client can resolve via dr_get_proc_address across all loaded modules. Lives
  * in libasmtest_drapp so every language binding (which dlopens drapp) shares one
  * resolvable symbol. (3, 4) -> 10. */
-__attribute__((noinline, visibility("default"))) long asmtest_symbol_demo(long a,
-                                                                          long b) {
+__attribute__((noinline, visibility("default"))) long
+asmtest_symbol_demo(long a, long b) {
     long r = a * 2 + b;
     if (r > 1000)
         r -= 7;
@@ -416,7 +417,8 @@ int asmtest_dr_unregister_region(const char *name) {
 /* ------------------------------------------------------------------ */
 
 void asmtest_trace_begin(const char *name) {
-    g_marker_sink += 0x33; /* distinct body (also read by the client at entry) */
+    g_marker_sink +=
+        0x33; /* distinct body (also read by the client at entry) */
     if (g_disabled_in_child)
         return;
     if (g_active_depth < ASMTEST_DR_MAX_DEPTH)

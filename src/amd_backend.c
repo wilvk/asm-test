@@ -29,8 +29,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ASMTEST_HW_OK 0
-#define ASMTEST_HW_ENOSYS (-5)
+#define ASMTEST_HW_OK      0
+#define ASMTEST_HW_ENOSYS  (-5)
 #define ASMTEST_HW_EDECODE (-8)
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -75,8 +75,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
             uint64_t o = ip - base_ip;
             const uint64_t from_off = from - base_ip;
             for (;;) {
-                size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
-                                         len, base_ip, o, NULL, 0);
+                size_t l =
+                    asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                  len, base_ip, o, NULL, 0);
                 if (l == 0) { /* undecodable: cannot trust the rest */
                     trace->truncated = true;
                     return;
@@ -150,7 +151,8 @@ static int amd_edge_eq(const struct perf_branch_entry *a,
  * the correct prefix. *gap is also set if `out` fills before the merge completes. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
-                          struct perf_branch_entry *out, size_t out_cap, int *gap) {
+                          struct perf_branch_entry *out, size_t out_cap,
+                          int *gap) {
     if (gap != NULL)
         *gap = 0;
     if (samples == NULL || nrs == NULL || n_samples == 0 || out == NULL ||
@@ -255,7 +257,8 @@ int asmtest_amd_decode(const void *br, size_t nbr, const void *base, size_t len,
 }
 
 size_t asmtest_amd_stitch(const void *const *samples, const size_t *nrs,
-                          size_t n_samples, void *out, size_t out_cap, int *gap) {
+                          size_t n_samples, void *out, size_t out_cap,
+                          int *gap) {
     (void)samples;
     (void)nrs;
     (void)n_samples;

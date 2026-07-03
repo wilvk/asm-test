@@ -21,9 +21,9 @@ TEST(assemble, x86_intel_known_encoding) {
     ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL,
                                  "mov rax, rdi; add rax, rsi; ret",
                                  EMU_CODE_BASE, &r));
-    static const uint8_t expect[] = {0x48, 0x89, 0xf8,  /* mov rax, rdi */
-                                     0x48, 0x01, 0xf0,  /* add rax, rsi */
-                                     0xc3};             /* ret          */
+    static const uint8_t expect[] = {0x48, 0x89, 0xf8, /* mov rax, rdi */
+                                     0x48, 0x01, 0xf0, /* add rax, rsi */
+                                     0xc3};            /* ret          */
     ASSERT_EQ(r.len, sizeof expect);
     ASSERT_EQ(r.stat_count, 3);
     ASSERT_MEM_EQ(r.bytes, expect, sizeof expect);
@@ -76,8 +76,8 @@ TEST(assemble, x86_nasm_masm_gas_match_intel) {
 
 TEST(assemble, bad_mnemonic_reported_as_data) {
     asm_result_t r;
-    ASSERT_FALSE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL, "frobnicate rax",
-                                  EMU_CODE_BASE, &r));
+    ASSERT_FALSE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL,
+                                  "frobnicate rax", EMU_CODE_BASE, &r));
     ASSERT_TRUE(r.bytes == NULL);
     ASSERT_TRUE(r.err[0] != '\0'); /* carries the Keystone diagnostic */
     asmtest_asm_free(&r);          /* safe on a failed result */
@@ -90,8 +90,8 @@ TEST(asm_run, x86_add_returns_42) {
     ASSERT_TRUE(e != NULL);
     emu_result_t out;
     long args[] = {40, 2};
-    ASSERT_TRUE(emu_call_asm(e, "mov rax, rdi; add rax, rsi; ret", args, 2, 0,
-                             &out));
+    ASSERT_TRUE(
+        emu_call_asm(e, "mov rax, rdi; add rax, rsi; ret", args, 2, 0, &out));
     ASSERT_FALSE(out.faulted);
     ASSERT_EQ(out.regs.rax, 42);
     emu_close(e);
@@ -158,8 +158,8 @@ TEST(ffi_shim, call_asm6_syntax_and_args) {
 
     /* AT&T syntax + a third arg: rdi + rsi + rdx. */
     ASSERT_TRUE(asmtest_emu_call_asm6(
-        e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret", ASM_SYNTAX_ATT,
-        10, 20, 12, 0, 0, 0, 3, 0, &out));
+        e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
+        ASM_SYNTAX_ATT, 10, 20, 12, 0, 0, 0, 3, 0, &out));
     ASSERT_EQ(out.regs.rax, 42);
 
     /* max_insns caps execution mid-routine: stop after the first mov (rax=rdi)
@@ -202,15 +202,15 @@ TEST(ffi_shim, asm_bytes_multi_arch) {
     /* AArch64 `ret` is C0 03 5F D6 — a guest the x86 emulator can't run, but the
      * assemble-only shim still produces its bytes. */
     static const uint8_t a64[] = {0xc0, 0x03, 0x5f, 0xd6};
-    n = asmtest_asm_bytes(ASM_ARM64, ASM_SYNTAX_INTEL, "ret", EMU_CODE_BASE, buf,
-                          (int)sizeof buf);
+    n = asmtest_asm_bytes(ASM_ARM64, ASM_SYNTAX_INTEL, "ret", EMU_CODE_BASE,
+                          buf, (int)sizeof buf);
     ASSERT_EQ((size_t)n, sizeof a64);
     ASSERT_MEM_EQ(buf, a64, sizeof a64);
 
     /* An out-of-range arch is a reported failure (0), not a crash. */
-    ASSERT_EQ(asmtest_asm_bytes(99, ASM_SYNTAX_INTEL, "ret", 0, buf,
-                                (int)sizeof buf),
-              0);
+    ASSERT_EQ(
+        asmtest_asm_bytes(99, ASM_SYNTAX_INTEL, "ret", 0, buf, (int)sizeof buf),
+        0);
     ASSERT_TRUE(asmtest_asm_last_error()[0] != '\0');
 }
 

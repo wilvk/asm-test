@@ -51,15 +51,16 @@ typedef struct {
 /* buffer (the app rejects longer names so both sides match).           */
 /* ------------------------------------------------------------------ */
 #define MAX_REGIONS 32
-#define MAX_NAME 64
+#define MAX_NAME    64
 typedef struct {
     char name[MAX_NAME]; /* fixed buffer: DR's public API has no string-dup */
     bool used;
     app_pc base;
     size_t len;
     at_trace_t *trace;
-    bool insns;  /* instruction mode for this region (trace->insns_cap > 0) */
-    bool symbol; /* symbol mode (Phase 7): record always-on, no begin/end gate */
+    bool insns; /* instruction mode for this region (trace->insns_cap > 0) */
+    bool
+        symbol; /* symbol mode (Phase 7): record always-on, no begin/end gate */
 } region_t;
 static region_t g_regions[MAX_REGIONS];
 static int g_nregions = 0;
@@ -268,11 +269,10 @@ static dr_emit_flags_t event_bb(void *drcontext, void *tag, instrlist_t *bb,
     instr_t *first = instrlist_first(bb);
 
     if (pc == pc_register) {
-        dr_insert_clean_call(drcontext, bb, first, (void *)on_register, false, 4,
-                             opnd_create_reg(DR_REG_RDI),
-                             opnd_create_reg(DR_REG_RSI),
-                             opnd_create_reg(DR_REG_RDX),
-                             opnd_create_reg(DR_REG_RCX));
+        dr_insert_clean_call(
+            drcontext, bb, first, (void *)on_register, false, 4,
+            opnd_create_reg(DR_REG_RDI), opnd_create_reg(DR_REG_RSI),
+            opnd_create_reg(DR_REG_RDX), opnd_create_reg(DR_REG_RCX));
         return DR_EMIT_DEFAULT;
     }
     if (pc == pc_unregister) {
@@ -359,8 +359,8 @@ static void event_module_load(void *drcontext, const module_data_t *info,
 }
 
 static void event_thread_init(void *drcontext) {
-    thread_state_t *ts = (thread_state_t *)dr_thread_alloc(drcontext,
-                                                           sizeof(thread_state_t));
+    thread_state_t *ts =
+        (thread_state_t *)dr_thread_alloc(drcontext, sizeof(thread_state_t));
     memset(ts, 0, sizeof *ts);
     dr_set_tls_field(drcontext, ts);
 }

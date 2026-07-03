@@ -12,19 +12,13 @@ extern long add_signed(long a, long b);
 extern long sum_to_n(long n);
 
 /* A single-instruction routine: cost is dominated by the call itself. */
-BENCH(arith, add_signed) {
-    add_signed(2, 3);
-}
+BENCH(arith, add_signed) { add_signed(2, 3); }
 
 /* A short counted loop: visibly costlier per call than add_signed. */
-BENCH(arith, sum_to_100) {
-    sum_to_n(100);
-}
+BENCH(arith, sum_to_100) { sum_to_n(100); }
 
 /* A longer loop scales the per-call cost up further. */
-BENCH(arith, sum_to_1000) {
-    sum_to_n(1000);
-}
+BENCH(arith, sum_to_1000) { sum_to_n(1000); }
 
 /* Routine reached through the capture trampoline (the real ABI path), with the
  * result funneled through the sink so nothing is elided. */

@@ -22,8 +22,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ASMTEST_HW_OK 0
-#define ASMTEST_HW_ENOSYS (-5)
+#define ASMTEST_HW_OK      0
+#define ASMTEST_HW_ENOSYS  (-5)
 #define ASMTEST_HW_EDECODE (-8)
 
 #ifdef ASMTEST_HAVE_LIBIPT
@@ -98,7 +98,7 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
     for (;;) {
         int status = pt_insn_sync_forward(dec);
         if (status < 0)
-            break; /* -pte_eos: no more sync points */
+            break;               /* -pte_eos: no more sync points */
         int prev_was_branch = 1; /* first insn after a sync starts a block */
         for (;;) {
             struct pt_insn insn;
@@ -108,7 +108,8 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
             if (!insn.speculative && insn.ip >= ctx.base_ip &&
                 insn.ip < ctx.base_ip + ctx.len) {
                 uint64_t off = insn.ip - ctx.base_ip;
-                trace_append_insn(trace, off); /* no-op if insns recording off */
+                trace_append_insn(trace,
+                                  off); /* no-op if insns recording off */
                 if (prev_was_branch)
                     trace_append_block(trace, off);
                 prev_was_branch = is_branch(insn.iclass);

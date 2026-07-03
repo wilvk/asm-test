@@ -79,7 +79,7 @@ TEST(bittricks, popcount_matches_model) {
 /* --- next_pow2: the exact-power edge is where this routine breaks ---------- */
 TEST(bittricks, next_pow2_known_values) {
     ASSERT_EQ(next_pow2(1), 1);
-    ASSERT_EQ(next_pow2(2), 2);   /* exact power: must NOT double to 4 */
+    ASSERT_EQ(next_pow2(2), 2); /* exact power: must NOT double to 4 */
     ASSERT_EQ(next_pow2(3), 4);
     ASSERT_EQ(next_pow2(5), 8);
     ASSERT_EQ(next_pow2(1UL << 20), 1UL << 20);

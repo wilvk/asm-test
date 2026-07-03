@@ -32,8 +32,9 @@
 /* The public event mirror must stay byte-compatible with the kernel-side struct in
  * bpf/codeimage_event.h (8+8+8+4+4+4+4); the eBPF ring-buffer payload is reinterpreted as
  * this type directly. */
-_Static_assert(sizeof(asmtest_codeimage_event_t) == 40,
-               "asmtest_codeimage_event_t must match bpf/codeimage_event.h layout");
+_Static_assert(
+    sizeof(asmtest_codeimage_event_t) == 40,
+    "asmtest_codeimage_event_t must match bpf/codeimage_event.h layout");
 
 #if defined(__linux__)
 
@@ -69,7 +70,7 @@ typedef struct {
 } ci_region_t;
 
 struct asmtest_codeimage {
-    pid_t pid;     /* resolved target (0 -> self) */
+    pid_t pid; /* resolved target (0 -> self) */
     long page_size;
     int pagemap_scan_ok; /* 1 if PAGEMAP_SCAN usable (efficient read), 0 -> manual */
     uint64_t seq;        /* last sequence assigned (0 = nothing recorded yet) */
@@ -82,7 +83,8 @@ struct asmtest_codeimage {
 };
 
 #if defined(ASMTEST_HAVE_LIBBPF)
-static void ci_bpf_detach(asmtest_codeimage_t *img); /* defined with the eBPF glue below */
+static void
+ci_bpf_detach(asmtest_codeimage_t *img); /* defined with the eBPF glue below */
 #endif
 
 /* ---- soft-dirty helpers --------------------------------------------------- */
@@ -99,7 +101,8 @@ static int ci_arm(asmtest_codeimage_t *img) {
     int fd = ci_open_proc(img->pid, "clear_refs", O_WRONLY);
     if (fd < 0)
         return ASMTEST_CI_EUNAVAIL;
-    ssize_t w = write(fd, CI_CLEAR_REFS_SOFT_DIRTY, sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1);
+    ssize_t w = write(fd, CI_CLEAR_REFS_SOFT_DIRTY,
+                      sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1);
     close(fd);
     return w > 0 ? ASMTEST_CI_OK : ASMTEST_CI_EUNAVAIL;
 }
@@ -136,16 +139,19 @@ static int ci_region_dirty(asmtest_codeimage_t *img, const ci_region_t *r,
                 arg.size = sizeof arg;
                 arg.flags = 0; /* read only — no write-protect */
                 arg.start = r->first_page;
-                arg.end = r->first_page + (uint64_t)r->npages * (uint64_t)img->page_size;
+                arg.end = r->first_page +
+                          (uint64_t)r->npages * (uint64_t)img->page_size;
                 arg.vec = (uintptr_t)vec;
                 arg.vec_len = r->npages;
-                arg.category_anyof_mask = PAGE_IS_SOFT_DIRTY; /* report only dirty pages */
+                arg.category_anyof_mask =
+                    PAGE_IS_SOFT_DIRTY; /* report only dirty pages */
                 arg.return_mask = PAGE_IS_SOFT_DIRTY;
                 int n = (int)ioctl(fd, PAGEMAP_SCAN, &arg);
                 if (n >= 0) {
                     for (int i = 0; i < n; i++) {
                         uint64_t s = vec[i].start, e = vec[i].end;
-                        for (uint64_t p = s; p < e; p += (uint64_t)img->page_size) {
+                        for (uint64_t p = s; p < e;
+                             p += (uint64_t)img->page_size) {
                             size_t idx = (size_t)((p - r->first_page) /
                                                   (uint64_t)img->page_size);
                             if (idx < r->npages) {
@@ -178,7 +184,8 @@ static int ci_region_dirty(asmtest_codeimage_t *img, const ci_region_t *r,
 /* ---- byte capture --------------------------------------------------------- */
 
 /* Read `len` bytes at `base` from the target into a fresh buffer (NULL on failure). */
-static uint8_t *ci_read_region(asmtest_codeimage_t *img, uint64_t base, size_t len) {
+static uint8_t *ci_read_region(asmtest_codeimage_t *img, uint64_t base,
+                               size_t len) {
     uint8_t *buf = (uint8_t *)malloc(len);
     if (buf == NULL)
         return NULL;
@@ -223,7 +230,8 @@ static int ci_probe_softdirty(int *pagemap_scan_ok) {
     int cr = open("/proc/self/clear_refs", O_WRONLY);
     if (cr < 0)
         return 0;
-    if (write(cr, CI_CLEAR_REFS_SOFT_DIRTY, sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1) <= 0) {
+    if (write(cr, CI_CLEAR_REFS_SOFT_DIRTY,
+              sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1) <= 0) {
         close(cr);
         return 0;
     }
@@ -236,7 +244,8 @@ static int ci_probe_softdirty(int *pagemap_scan_ok) {
     /* Re-clear now that the page exists, then dirty it. */
     cr = open("/proc/self/clear_refs", O_WRONLY);
     if (cr >= 0) {
-        (void)!write(cr, CI_CLEAR_REFS_SOFT_DIRTY, sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1);
+        (void)!write(cr, CI_CLEAR_REFS_SOFT_DIRTY,
+                     sizeof CI_CLEAR_REFS_SOFT_DIRTY - 1);
         close(cr);
     }
     *(volatile unsigned char *)p = 0xa5;
@@ -290,7 +299,8 @@ void asmtest_codeimage_skip_reason(char *buf, size_t buflen) {
         asmtest_codeimage_available()
             ? "available"
             : "soft-dirty page tracking unavailable (kernel built without "
-              "CONFIG_MEM_SOFT_DIRTY, or no permission for /proc/<pid>/clear_refs)";
+              "CONFIG_MEM_SOFT_DIRTY, or no permission for "
+              "/proc/<pid>/clear_refs)";
     strncpy(buf, msg, buflen - 1);
     buf[buflen - 1] = '\0';
 }
@@ -336,8 +346,9 @@ static int ci_scan_range(asmtest_codeimage_t *img, size_t lo, size_t hi) {
     for (size_t i = lo; i < hi; i++) {
         ci_region_t *r = &img->regions[i];
         unsigned char stackbuf[64];
-        unsigned char *dirty =
-            r->npages <= sizeof stackbuf ? stackbuf : (unsigned char *)malloc(r->npages);
+        unsigned char *dirty = r->npages <= sizeof stackbuf
+                                   ? stackbuf
+                                   : (unsigned char *)malloc(r->npages);
         if (dirty == NULL)
             return ASMTEST_CI_EUNAVAIL;
 
@@ -359,7 +370,8 @@ static int ci_scan_range(asmtest_codeimage_t *img, size_t lo, size_t hi) {
     return new_versions;
 }
 
-int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t len) {
+int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
+                            size_t len) {
     if (img == NULL || base == NULL || len == 0)
         return ASMTEST_CI_EINVAL;
     if (!asmtest_codeimage_available())
@@ -432,7 +444,8 @@ uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img) {
 }
 
 int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
-                               uint64_t when, const uint8_t **out, size_t *out_len) {
+                               uint64_t when, const uint8_t **out,
+                               size_t *out_len) {
     if (img == NULL || addr == NULL)
         return ASMTEST_CI_EINVAL;
     uint64_t a = (uint64_t)(uintptr_t)addr;
@@ -468,14 +481,16 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
 int asmtest_codeimage_available(void) { return 0; }
 void asmtest_codeimage_skip_reason(char *buf, size_t buflen) {
     if (buf && buflen)
-        strncpy(buf, "code-image recorder is Linux-only", buflen - 1), buf[buflen - 1] = '\0';
+        strncpy(buf, "code-image recorder is Linux-only", buflen - 1),
+            buf[buflen - 1] = '\0';
 }
 asmtest_codeimage_t *asmtest_codeimage_new(pid_t pid) {
     (void)pid;
     return NULL;
 }
 void asmtest_codeimage_free(asmtest_codeimage_t *img) { (void)img; }
-int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t len) {
+int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
+                            size_t len) {
     (void)img, (void)base, (void)len;
     return ASMTEST_CI_ENOSYS;
 }
@@ -488,7 +503,8 @@ uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img) {
     return 0;
 }
 int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
-                               uint64_t when, const uint8_t **out, size_t *out_len) {
+                               uint64_t when, const uint8_t **out,
+                               size_t *out_len) {
     (void)img, (void)addr, (void)when, (void)out, (void)out_len;
     return ASMTEST_CI_ENOSYS;
 }
@@ -513,7 +529,8 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
 
 #include "codeimage.skel.h" /* bpftool-generated: struct codeimage_bpf + codeimage_bpf__* */
 
-#define CI_BPF_QCAP 256 /* drained events buffered for asmtest_codeimage_next() */
+#define CI_BPF_QCAP                                                            \
+    256 /* drained events buffered for asmtest_codeimage_next() */
 
 struct ci_bpf {
     struct codeimage_bpf *skel;
@@ -535,18 +552,21 @@ static void ci_bpf_detach(asmtest_codeimage_t *img) {
 
 /* Silence libbpf's stderr chatter (the availability probe must not spew). Set
  * ASMTEST_CODEIMAGE_DEBUG=1 to let libbpf's diagnostics through (load/attach failures). */
-static int ci_bpf_silent(enum libbpf_print_level lvl, const char *fmt, va_list ap) {
+static int ci_bpf_silent(enum libbpf_print_level lvl, const char *fmt,
+                         va_list ap) {
     (void)lvl;
     (void)fmt;
     (void)ap;
     return 0;
 }
-static int ci_bpf_verbose(enum libbpf_print_level lvl, const char *fmt, va_list ap) {
+static int ci_bpf_verbose(enum libbpf_print_level lvl, const char *fmt,
+                          va_list ap) {
     (void)lvl;
     return vfprintf(stderr, fmt, ap);
 }
 static libbpf_print_fn_t ci_bpf_print_fn(void) {
-    return getenv("ASMTEST_CODEIMAGE_DEBUG") != NULL ? ci_bpf_verbose : ci_bpf_silent;
+    return getenv("ASMTEST_CODEIMAGE_DEBUG") != NULL ? ci_bpf_verbose
+                                                     : ci_bpf_silent;
 }
 
 static int ci_bpf_cached = -1;
@@ -555,28 +575,33 @@ static char ci_bpf_reason[160] = "available";
 /* Load-then-destroy probe (no attach): cheap, hang-proof, leaves nothing attached. */
 static int ci_bpf_probe(void) {
 #if !(defined(__x86_64__) || defined(__aarch64__))
-    snprintf(ci_bpf_reason, sizeof ci_bpf_reason, "eBPF detector is x86-64/aarch64 only");
+    snprintf(ci_bpf_reason, sizeof ci_bpf_reason,
+             "eBPF detector is x86-64/aarch64 only");
     return 0;
 #else
     if (access("/sys/kernel/btf/vmlinux", R_OK) != 0) {
         snprintf(ci_bpf_reason, sizeof ci_bpf_reason,
-                 "kernel BTF unavailable (CONFIG_DEBUG_INFO_BTF off); CO-RE needs it");
+                 "kernel BTF unavailable (CONFIG_DEBUG_INFO_BTF off); CO-RE "
+                 "needs it");
         return 0;
     }
     libbpf_print_fn_t prev = libbpf_set_print(ci_bpf_print_fn());
     struct codeimage_bpf *skel = codeimage_bpf__open();
     int ok = 0;
     if (skel == NULL) {
-        snprintf(ci_bpf_reason, sizeof ci_bpf_reason, "BPF skeleton open failed");
+        snprintf(ci_bpf_reason, sizeof ci_bpf_reason,
+                 "BPF skeleton open failed");
     } else if (codeimage_bpf__load(skel) != 0) {
         int e = errno;
         if (e == EPERM || e == EACCES)
             snprintf(ci_bpf_reason, sizeof ci_bpf_reason,
-                     "insufficient privilege to load BPF (need CAP_BPF; container must "
+                     "insufficient privilege to load BPF (need CAP_BPF; "
+                     "container must "
                      "--cap-add=BPF --security-opt seccomp=unconfined)");
         else if (e == EINVAL)
             snprintf(ci_bpf_reason, sizeof ci_bpf_reason,
-                     "BPF program rejected (kernel too old? need >= 5.8 for bpf_ringbuf)");
+                     "BPF program rejected (kernel too old? need >= 5.8 for "
+                     "bpf_ringbuf)");
         else
             snprintf(ci_bpf_reason, sizeof ci_bpf_reason, "BPF load failed: %s",
                      strerror(e));
@@ -599,7 +624,8 @@ int asmtest_codeimage_bpf_available(void) {
 void asmtest_codeimage_bpf_skip_reason(char *buf, size_t buflen) {
     if (buf == NULL || buflen == 0)
         return;
-    const char *msg = asmtest_codeimage_bpf_available() ? "available" : ci_bpf_reason;
+    const char *msg =
+        asmtest_codeimage_bpf_available() ? "available" : ci_bpf_reason;
     strncpy(buf, msg, buflen - 1);
     buf[buflen - 1] = '\0';
 }
@@ -608,13 +634,17 @@ void asmtest_codeimage_bpf_skip_reason(char *buf, size_t buflen) {
  * (asserted above), so reinterpret and enqueue. Never blocks/allocates. */
 static int ci_bpf_on_event(void *ctx, void *data, size_t sz) {
     asmtest_codeimage_t *img = (asmtest_codeimage_t *)ctx;
-    if (img == NULL || img->bpf == NULL || sz < sizeof(asmtest_codeimage_event_t))
+    if (img == NULL || img->bpf == NULL ||
+        sz < sizeof(asmtest_codeimage_event_t))
         return 0;
     struct ci_bpf *b = img->bpf;
     if (getenv("ASMTEST_CODEIMAGE_DEBUG") != NULL) {
-        const asmtest_codeimage_event_t *e = (const asmtest_codeimage_event_t *)data;
-        fprintf(stderr, "ci_bpf_on_event: kind=%u addr=0x%llx len=%llu pid=%u\n",
-                e->kind, (unsigned long long)e->addr, (unsigned long long)e->len, e->pid);
+        const asmtest_codeimage_event_t *e =
+            (const asmtest_codeimage_event_t *)data;
+        fprintf(stderr,
+                "ci_bpf_on_event: kind=%u addr=0x%llx len=%llu pid=%u\n",
+                e->kind, (unsigned long long)e->addr,
+                (unsigned long long)e->len, e->pid);
     }
     if (b->count >= CI_BPF_QCAP)
         return 0; /* queue full — drop */
@@ -656,10 +686,11 @@ int asmtest_codeimage_watch_bpf(asmtest_codeimage_t *img) {
             cfgv.ino = (uint64_t)st.st_ino;
         }
         uint32_t key = 0;
-        bpf_map_update_elem(bpf_map__fd(b->skel->maps.cfg), &key, &cfgv, BPF_ANY);
+        bpf_map_update_elem(bpf_map__fd(b->skel->maps.cfg), &key, &cfgv,
+                            BPF_ANY);
         if (codeimage_bpf__attach(b->skel) == 0) {
-            b->rb = ring_buffer__new(bpf_map__fd(b->skel->maps.events), ci_bpf_on_event,
-                                     img, NULL);
+            b->rb = ring_buffer__new(bpf_map__fd(b->skel->maps.events),
+                                     ci_bpf_on_event, img, NULL);
             if (b->rb != NULL)
                 rc = ASMTEST_CI_OK;
         }
@@ -688,7 +719,8 @@ int asmtest_codeimage_poll_bpf(asmtest_codeimage_t *img, int timeout_ms) {
     return (int)(img->bpf->count - before);
 }
 
-int asmtest_codeimage_next(asmtest_codeimage_t *img, asmtest_codeimage_event_t *out) {
+int asmtest_codeimage_next(asmtest_codeimage_t *img,
+                           asmtest_codeimage_event_t *out) {
     if (img == NULL || img->bpf == NULL)
         return ASMTEST_CI_EINVAL;
     struct ci_bpf *b = img->bpf;
@@ -708,8 +740,9 @@ int asmtest_codeimage_bpf_available(void) { return 0; }
 void asmtest_codeimage_bpf_skip_reason(char *buf, size_t buflen) {
     if (buf == NULL || buflen == 0)
         return;
-    const char *msg = "built without libbpf (eBPF emission detector); the userspace "
-                      "soft-dirty recorder is the fallback";
+    const char *msg =
+        "built without libbpf (eBPF emission detector); the userspace "
+        "soft-dirty recorder is the fallback";
     strncpy(buf, msg, buflen - 1);
     buf[buflen - 1] = '\0';
 }
@@ -722,7 +755,8 @@ int asmtest_codeimage_poll_bpf(asmtest_codeimage_t *img, int timeout_ms) {
     (void)img, (void)timeout_ms;
     return ASMTEST_CI_ENOSYS;
 }
-int asmtest_codeimage_next(asmtest_codeimage_t *img, asmtest_codeimage_event_t *out) {
+int asmtest_codeimage_next(asmtest_codeimage_t *img,
+                           asmtest_codeimage_event_t *out) {
     (void)img, (void)out;
     return ASMTEST_CI_ENOSYS;
 }

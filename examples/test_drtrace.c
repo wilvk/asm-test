@@ -23,14 +23,14 @@
 static int failures = 0;
 static int checks = 0;
 
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        checks++;                                                               \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        checks++;                                                              \
         if (cond) {                                                            \
-            printf("ok %d - %s\n", checks, msg);                                \
+            printf("ok %d - %s\n", checks, msg);                               \
         } else {                                                               \
-            printf("not ok %d - %s\n", checks, msg);                            \
-            failures++;                                                         \
+            printf("not ok %d - %s\n", checks, msg);                           \
+            failures++;                                                        \
         }                                                                      \
     } while (0)
 
@@ -60,7 +60,8 @@ typedef long (*add2_fn)(long, long);
  * -rdynamic), so it resolves and calls the same definition. */
 
 int main(int argc, char **argv) {
-    setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: progress survives a hard kill */
+    setvbuf(stdout, NULL, _IONBF,
+            0); /* unbuffered: progress survives a hard kill */
     if (!asmtest_dr_available()) {
         printf("# SKIP drtrace: built without DynamoRIO\n");
         printf("1..0 # skipped\n");
@@ -75,12 +76,14 @@ int main(int argc, char **argv) {
 
     int rc = asmtest_dr_init(&opts);
     if (rc != ASMTEST_DR_OK) {
-        printf("# SKIP drtrace: dr_init failed (%d) — is the client path set?\n",
-               rc);
+        printf(
+            "# SKIP drtrace: dr_init failed (%d) — is the client path set?\n",
+            rc);
         printf("1..0 # skipped\n");
         return 0;
     }
-    CHECK(asmtest_dr_start() == ASMTEST_DR_OK, "dr_start takes over in-process");
+    CHECK(asmtest_dr_start() == ASMTEST_DR_OK,
+          "dr_start takes over in-process");
 
     /* Materialize the routine into real executable memory. */
     asmtest_exec_code_t code;
@@ -160,7 +163,8 @@ int main(int argc, char **argv) {
     /* Symbol mode (Phase 7): trace a named function with NO begin/end markers. */
     asmtest_trace_t *str = asmtest_trace_new(0, 64);
     int src = asmtest_dr_register_symbol("asmtest_symbol_demo", 256, str);
-    CHECK(src == ASMTEST_DR_OK, "register_symbol resolves an exported function");
+    CHECK(src == ASMTEST_DR_OK,
+          "register_symbol resolves an exported function");
     volatile long sr = asmtest_symbol_demo(3, 4); /* no begin/end */
     CHECK(sr == 10, "symbol-mode function computes correctly (3*2+4)");
     CHECK(asmtest_trace_covered(str, 0),

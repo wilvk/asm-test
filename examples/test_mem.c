@@ -43,9 +43,7 @@ TEST(cmp, ordering_relations) {
     ASSERT_GE(7, 7);
 }
 
-TEST(cmp, string_equality) {
-    ASSERT_STREQ("asm", "asm");
-}
+TEST(cmp, string_equality) { ASSERT_STREQ("asm", "asm"); }
 
 TEST(mem, partial_fill_not_yet_specified) {
     SKIP("partial-fill semantics not finalized");

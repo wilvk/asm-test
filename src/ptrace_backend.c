@@ -126,9 +126,9 @@ static uint64_t jd_rd64(const unsigned char *p, int swap) {
     return swap ? __builtin_bswap64(v) : v;
 }
 
-#define JITDUMP_MAGIC 0x4A695444u    /* 'JiTD'           */
+#define JITDUMP_MAGIC    0x4A695444u /* 'JiTD'           */
 #define JITDUMP_MAGIC_SW 0x4454694Au /* byte-swapped     */
-#define JIT_CODE_LOAD 0
+#define JIT_CODE_LOAD    0
 
 int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
                          asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
@@ -225,7 +225,8 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
                 out->code_index = code_index;
             }
             if (bytes_out != NULL && bytes_cap > 0) {
-                size_t cpy = code_size < bytes_cap ? (size_t)code_size : bytes_cap;
+                size_t cpy =
+                    code_size < bytes_cap ? (size_t)code_size : bytes_cap;
                 if (fread(bytes_out, 1, cpy, f) != cpy) {
                     /* Record's code bytes are truncated (a live JIT still flushing
                      * the newest record) — do not return OK with an unset length
@@ -324,11 +325,11 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
  * stop-PC lands AT the instruction. Both are spliced into the low bytes of a peeked
  * word and removed before handing the stop to the stepper. */
 #if defined(__x86_64__)
-#define PTRACE_BP_INSN 0xccULL       /* int3                 */
-#define PTRACE_BP_LEN 1
-#else /* __aarch64__ */
+#define PTRACE_BP_INSN 0xccULL /* int3                 */
+#define PTRACE_BP_LEN  1
+#else                                /* __aarch64__ */
 #define PTRACE_BP_INSN 0xd4200000ULL /* brk #0 (little-endian) */
-#define PTRACE_BP_LEN 4
+#define PTRACE_BP_LEN  4
 #endif
 
 /* Read the tracee's program counter (the about-to-execute instruction), the integer
@@ -352,9 +353,10 @@ static int read_pc_ret(pid_t pid, uint64_t *pc, uint64_t *ret, uint64_t *sp,
         *sp = (uint64_t)regs.rsp;
     if (lr != NULL)
         *lr = 0; /* x86-64 has no link register */
-#else /* __aarch64__ */
+#else            /* __aarch64__ */
     struct iovec iov = {&regs, sizeof regs};
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_PRSTATUS, &iov) != 0)
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_PRSTATUS, &iov) !=
+        0)
         return -1;
     if (pc != NULL)
         *pc = (uint64_t)regs.pc;
@@ -383,7 +385,8 @@ static int set_pc(pid_t pid, uint64_t pc) {
 /* The x86 debug registers are reached through `struct user`'s u_debugreg[] via
  * PTRACE_POKEUSER. DR0..3 hold breakpoint addresses; DR7 enables them and selects the
  * condition/length. */
-#define DR_OFFSET(n) (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
+#define DR_OFFSET(n)                                                           \
+    (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
 
 /* Arm a HARDWARE execution breakpoint at `addr` in DR0 (per-thread). Unlike a software
  * int3 it writes no code, so it works on a W^X JIT code heap whose executable page is not
@@ -394,7 +397,8 @@ static int set_hw_bp(pid_t pid, uint64_t addr) {
     if (ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(0),
                (void *)(uintptr_t)addr) != 0)
         return -1;
-    if (ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(7), (void *)(uintptr_t)0x1UL) != 0)
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)DR_OFFSET(7),
+               (void *)(uintptr_t)0x1UL) != 0)
         return -1;
     return 0;
 }
@@ -429,14 +433,16 @@ static int set_hw_bp(pid_t pid, uint64_t addr) {
     struct user_hwdebug_state dbg;
     memset(&dbg, 0, sizeof dbg);
     struct iovec iov = {&dbg, sizeof dbg};
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK, &iov) != 0)
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0)
         return -1;
     if ((dbg.dbg_info & 0xffu) == 0)
         return -1; /* no breakpoint register slots on this host */
     dbg.dbg_regs[0].addr = addr;
     dbg.dbg_regs[0].ctrl = ARM64_HWBP_CTRL;
     iov.iov_len = sizeof dbg;
-    return ptrace(PTRACE_SETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK, &iov);
+    return ptrace(PTRACE_SETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+                  &iov);
 }
 
 /* Disarm the slot-0 hardware breakpoint. Best-effort. */
@@ -444,7 +450,8 @@ static void clear_hw_bp(pid_t pid) {
     struct user_hwdebug_state dbg;
     memset(&dbg, 0, sizeof dbg);
     struct iovec iov = {&dbg, sizeof dbg};
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK, &iov) != 0)
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0)
         return;
     dbg.dbg_regs[0].addr = 0;
     dbg.dbg_regs[0].ctrl = 0;
@@ -515,11 +522,12 @@ int asmtest_ptrace_available(void) {
 void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
     if (buf == NULL || buflen == 0)
         return;
-    const char *msg =
-        asmtest_ptrace_available()
-            ? "available"
-            : "AArch64 PTRACE_SINGLESTEP is non-functional here (e.g. qemu-user "
-              "emulation); the out-of-process stepper needs a real AArch64 host";
+    const char *msg = asmtest_ptrace_available()
+                          ? "available"
+                          : "AArch64 PTRACE_SINGLESTEP is non-functional here "
+                            "(e.g. qemu-user "
+                            "emulation); the out-of-process stepper needs a "
+                            "real AArch64 host";
     strncpy(buf, msg, buflen - 1);
     buf[buflen - 1] = '\0';
 }
@@ -538,7 +546,8 @@ static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
         if (!have_prev || off != expected_next)
             trace_append_block(t, off);
         trace_append_insn(t, off);
-        size_t l = asmtest_disas(PTRACE_TRACE_ARCH, base, len, base_ip, off, NULL, 0);
+        size_t l =
+            asmtest_disas(PTRACE_TRACE_ARCH, base, len, base_ip, off, NULL, 0);
         if (l == 0) {
             t->truncated = true;
             return;
@@ -582,10 +591,12 @@ static int run_until(pid_t pid, uint64_t target) {
         const unsigned long mask = PTRACE_BP_LEN >= (int)sizeof(long)
                                        ? ~0UL
                                        : ((1UL << (PTRACE_BP_LEN * 8)) - 1);
-        long planted = (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
+        long planted =
+            (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
         if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
                    (void *)planted) != 0) {
-            if (set_hw_bp(pid, target) != 0) /* W^X / unwritable text: try hardware */
+            if (set_hw_bp(pid, target) !=
+                0) /* W^X / unwritable text: try hardware */
                 return ASMTEST_PTRACE_ETRACE;
             hw = 1;
         }
@@ -607,13 +618,15 @@ static int run_until(pid_t pid, uint64_t target) {
             break;
         }
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
-            rc = ASMTEST_PTRACE_ENOENT; /* target ended before reaching `target` */
+            rc =
+                ASMTEST_PTRACE_ENOENT; /* target ended before reaching `target` */
             break;
         }
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
-            sig = WSTOPSIG(status); /* forward an unrelated signal and keep running */
+            sig = WSTOPSIG(
+                status); /* forward an unrelated signal and keep running */
             continue;
         }
         uint64_t pc;
@@ -655,7 +668,8 @@ static int run_until(pid_t pid, uint64_t target) {
         if (hw) {
             clear_hw_bp(pid);
         } else {
-            ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target, (void *)orig);
+            ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
+                   (void *)orig);
         }
     }
     return rc;
@@ -663,9 +677,9 @@ static int run_until(pid_t pid, uint64_t target) {
 
 /* How a single-step that LEFT the registered region (after entering it) is classified. */
 typedef enum {
-    EXIT_RETURNED,         /* the routine's own return (or a tail-jump out) */
-    EXIT_CALLOUT_RESUMED,  /* a call-out to a helper, stepped over; recording resumes */
-    EXIT_CALLOUT_LOST      /* a call-out whose step-over failed / target exited */
+    EXIT_RETURNED,        /* the routine's own return (or a tail-jump out) */
+    EXIT_CALLOUT_RESUMED, /* a call-out to a helper, stepped over; recording resumes */
+    EXIT_CALLOUT_LOST /* a call-out whose step-over failed / target exited */
 } exit_kind_t;
 
 /* Decide whether a region exit is the routine RETURNING or merely CALLING OUT to a
@@ -676,13 +690,15 @@ typedef enum {
  * (no per-instruction step through the callee) and report the in-region resume offset.
  * Needs the Capstone is-call query; without it, every exit reads as a return (leaf-only,
  * the previous behaviour). */
-static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code, size_t len,
-                                        uint64_t base_ip, uint64_t last_off,
+static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code,
+                                        size_t len, uint64_t base_ip,
+                                        uint64_t last_off,
                                         uint64_t *resume_off) {
     if (!asmtest_disas_available() ||
         !asmtest_disas_is_call(PTRACE_TRACE_ARCH, code, len, last_off))
         return EXIT_RETURNED;
-    size_t cl = asmtest_disas(PTRACE_TRACE_ARCH, code, len, base_ip, last_off, NULL, 0);
+    size_t cl =
+        asmtest_disas(PTRACE_TRACE_ARCH, code, len, base_ip, last_off, NULL, 0);
     uint64_t ret_off = last_off + cl;
     if (cl == 0 || ret_off >= len)
         return EXIT_RETURNED; /* the call's fall-through is outside the region */
@@ -711,16 +727,16 @@ static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code, size_t l
  * && the just-stepped insn was a return, and a non-local exit that raises SP above sp_ret
  * is swept even without a matching return. */
 typedef struct {
-    int32_t idx;         /* index into descent->frames                       */
-    uint64_t base, len;  /* frame region extent (absolute)                   */
-    uint64_t ret_addr;   /* absolute return address to pop at (0 for root)   */
-    uint64_t sp_ret;     /* SP the caller regains once this frame returns     */
+    int32_t idx;        /* index into descent->frames                       */
+    uint64_t base, len; /* frame region extent (absolute)                   */
+    uint64_t ret_addr;  /* absolute return address to pop at (0 for root)   */
+    uint64_t sp_ret;    /* SP the caller regains once this frame returns     */
     uint32_t depth;
-    int last_was_call;   /* the last recorded insn in this frame was a call  */
-    int last_was_ret;    /* ... or a return (pop-predicate confirmation)     */
-    uint64_t call_site;  /* that call's offset within this frame             */
-    uint64_t call_len;   /* that call's byte length                          */
-    uint64_t call_sp;    /* SP at that call (the caller pre-call SP)          */
+    int last_was_call;  /* the last recorded insn in this frame was a call  */
+    int last_was_ret;   /* ... or a return (pop-predicate confirmation)     */
+    uint64_t call_site; /* that call's offset within this frame             */
+    uint64_t call_len;  /* that call's byte length                          */
+    uint64_t call_sp;   /* SP at that call (the caller pre-call SP)          */
 } dframe_t;
 
 typedef struct {
@@ -730,15 +746,16 @@ typedef struct {
     long *result;
     uint64_t root_base, root_len;
     const uint8_t *root_code; /* bytes for the root region (frame 0) */
-    int forward_faults;       /* live/attached: forward SIGSEGV etc.; fork: terminal */
+    int forward_faults; /* live/attached: forward SIGSEGV etc.; fork: terminal */
     int have_deadline;
     struct timespec deadline;
-    int reaped;               /* set once descend_core's own waitpid reaped the tracee */
+    int reaped; /* set once descend_core's own waitpid reaped the tracee */
 } dctx_t;
 
-#define DESCEND_MAX_STACK 256u
+#define DESCEND_MAX_STACK     256u
 #define DESCEND_RECURSION_CAP 64
-#define DESCEND_HARD_STEP_CAP (1u << 22) /* anti-infinite-loop backstop (~4M steps) */
+#define DESCEND_HARD_STEP_CAP                                                  \
+    (1u << 22) /* anti-infinite-loop backstop (~4M steps) */
 
 /* Disassemble the instruction at absolute `at`: return its byte length (0 = undecodable /
  * unreadable) and, via the out-params, whether it is a call / a return. Bytes come from
@@ -774,7 +791,8 @@ static size_t descend_probe(const dctx_t *c, uint64_t at, uint64_t frame_end,
     }
     /* One Capstone decode returns length + is_call + is_ret (block-boundary length is
      * base-address-independent, so no base_addr is needed here). */
-    return asmtest_disas_probe(PTRACE_TRACE_ARCH, code, clen, off, is_call, is_ret);
+    return asmtest_disas_probe(PTRACE_TRACE_ARCH, code, clen, off, is_call,
+                               is_ret);
 }
 
 /* Record the instruction about to execute at absolute `at` in shadow frame `sf`
@@ -807,8 +825,8 @@ static void descend_record(dctx_t *c, dframe_t *sf, uint64_t at, uint64_t sp) {
  * (setting cbase/clen to the callee extent), 0 to step over. L1 never descends; L2
  * descends resolvable callees (allow-set, then optional resolver); L3 descends everything
  * not denied, resolving the extent from the target's executable mapping. */
-static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee, uint64_t *cbase,
-                          uint64_t *clen) {
+static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee,
+                          uint64_t *cbase, uint64_t *clen) {
     asmtest_descent_t *d = c->d;
     if (d->level < ASMTEST_DESCENT_DESCEND_KNOWN)
         return 0;
@@ -817,7 +835,8 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee, uint64_t *
         return 0;
     }
     if (d->level == ASMTEST_DESCENT_DESCEND_KNOWN) {
-        if (asmtest_descent_region_contains(d->allow, d->allow_len, callee, cbase, clen))
+        if (asmtest_descent_region_contains(d->allow, d->allow_len, callee,
+                                            cbase, clen))
             return 1;
         if (d->resolver != NULL) {
             uint64_t b = 0, l = 0;
@@ -825,8 +844,8 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee, uint64_t *
              * as (pc - base), so a resolver returning a region that does not cover `callee`
              * would underflow to a ~2^64 offset. The allow-set / proc-maps paths guarantee
              * containment; enforce it for the caller-supplied resolver too. */
-            if (d->resolver(callee, d->resolver_user, &b, &l) && l > 0 && callee >= b &&
-                callee < b + l) {
+            if (d->resolver(callee, d->resolver_user, &b, &l) && l > 0 &&
+                callee >= b && callee < b + l) {
                 *cbase = b;
                 *clen = l;
                 return 1;
@@ -835,14 +854,15 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee, uint64_t *
         return 0;
     }
     /* ASMTEST_DESCENT_DESCEND_ALL */
-    if (asmtest_descent_region_contains(d->deny, d->deny_len, callee, NULL, NULL))
+    if (asmtest_descent_region_contains(d->deny, d->deny_len, callee, NULL,
+                                        NULL))
         return 0;
     if (d->denylist != NULL && d->denylist(callee, d->denylist_user))
         return 0;
     void *mb = NULL;
     size_t ml = 0;
-    if (asmtest_proc_region_by_addr(c->pid, (void *)(uintptr_t)callee, &mb, &ml) !=
-        ASMTEST_PTRACE_OK)
+    if (asmtest_proc_region_by_addr(c->pid, (void *)(uintptr_t)callee, &mb,
+                                    &ml) != ASMTEST_PTRACE_OK)
         return 0; /* unknown extent -> step over */
     *cbase = (uint64_t)(uintptr_t)mb;
     *clen = (uint64_t)ml;
@@ -869,7 +889,8 @@ static void descend_watchdog_arm(uint32_t ms, struct sigaction *saved_sa,
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = descend_alarm_handler;
-    sa.sa_flags = 0; /* NO SA_RESTART: SIGALRM must interrupt a blocked waitpid */
+    sa.sa_flags =
+        0; /* NO SA_RESTART: SIGALRM must interrupt a blocked waitpid */
     sigaction(SIGALRM, &sa, saved_sa);
     struct itimerval it;
     it.it_value.tv_sec = ms / 1000u;
@@ -896,7 +917,8 @@ static int descend_deadline_exceeded(const dctx_t *c) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return now.tv_sec > c->deadline.tv_sec ||
-           (now.tv_sec == c->deadline.tv_sec && now.tv_nsec >= c->deadline.tv_nsec);
+           (now.tv_sec == c->deadline.tv_sec &&
+            now.tv_nsec >= c->deadline.tv_nsec);
 }
 
 /* The descending single-step loop. The tracee (`c->pid`) is already at a ptrace stop.
@@ -906,7 +928,8 @@ static int descend_deadline_exceeded(const dctx_t *c) {
  * DESCEND_HARD_STEP_CAP and the optional real-time deadline. */
 static int descend_core(dctx_t *c) {
     asmtest_descent_t *d = c->d;
-    int32_t f0 = asmtest_descent_push_frame(d, c->root_base, c->root_len, 0, -1);
+    int32_t f0 =
+        asmtest_descent_push_frame(d, c->root_base, c->root_len, 0, -1);
     if (f0 < 0)
         return ASMTEST_PTRACE_ETRACE;
     dframe_t stack[DESCEND_MAX_STACK];
@@ -947,7 +970,8 @@ static int descend_core(dctx_t *c) {
             asmtest_descent_mark_truncated(d);
             if (c->flat)
                 c->flat->truncated = true;
-            rc = ASMTEST_PTRACE_ETRACE; /* abandoned the routine mid-flight; *result unset */
+            rc =
+                ASMTEST_PTRACE_ETRACE; /* abandoned the routine mid-flight; *result unset */
             break;
         }
         if (descend_deadline_exceeded(c)) {
@@ -958,7 +982,8 @@ static int descend_core(dctx_t *c) {
             rc = ASMTEST_PTRACE_ETRACE; /* terminal: caller kills/detaches */
             break;
         }
-        if (ptrace(PTRACE_SINGLESTEP, c->pid, NULL, (void *)(uintptr_t)pending_sig) != 0) {
+        if (ptrace(PTRACE_SINGLESTEP, c->pid, NULL,
+                   (void *)(uintptr_t)pending_sig) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -974,12 +999,15 @@ static int descend_core(dctx_t *c) {
             w = waitpid(c->pid, &status, 0);
             if (w >= 0 || errno != EINTR)
                 break;
-            if ((watchdog && descend_alarm_fired) || descend_deadline_exceeded(c))
+            if ((watchdog && descend_alarm_fired) ||
+                descend_deadline_exceeded(c))
                 break;
         }
         if (w < 0) {
-            if ((watchdog && descend_alarm_fired) || descend_deadline_exceeded(c)) {
-                asmtest_descent_mark_truncated(d); /* watchdog / deadline broke the wait */
+            if ((watchdog && descend_alarm_fired) ||
+                descend_deadline_exceeded(c)) {
+                asmtest_descent_mark_truncated(
+                    d); /* watchdog / deadline broke the wait */
                 asmtest_descent_mark_depth_capped(d);
                 if (c->flat)
                     c->flat->truncated = true;
@@ -988,22 +1016,25 @@ static int descend_core(dctx_t *c) {
             break;
         }
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
-            c->reaped = 1; /* this waitpid consumed the exit status; the PID is gone */
-            break;         /* tracee finished */
+            c->reaped =
+                1; /* this waitpid consumed the exit status; the PID is gone */
+            break; /* tracee finished */
         }
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
             int sig = WSTOPSIG(status);
-            if (!c->forward_faults &&
-                (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE)) {
+            if (!c->forward_faults && (sig == SIGSEGV || sig == SIGBUS ||
+                                       sig == SIGILL || sig == SIGFPE)) {
                 asmtest_descent_mark_truncated(d);
                 if (c->flat)
                     c->flat->truncated = true;
-                rc = ASMTEST_PTRACE_ETRACE; /* fork fixture faulted before returning */
+                rc =
+                    ASMTEST_PTRACE_ETRACE; /* fork fixture faulted before returning */
                 break;
             }
-            pending_sig = sig; /* forward benign / managed-runtime control signals */
+            pending_sig =
+                sig; /* forward benign / managed-runtime control signals */
             continue;
         }
 
@@ -1032,7 +1063,8 @@ static int descend_core(dctx_t *c) {
          * popped (the root return is handled in (D)). */
         while (top_i > 0) {
             dframe_t *f = &stack[top_i];
-            if (sp > f->sp_ret) { /* unwound past this frame (longjmp / exception) */
+            if (sp >
+                f->sp_ret) { /* unwound past this frame (longjmp / exception) */
                 top_i--;
                 continue;
             }
@@ -1049,13 +1081,15 @@ static int descend_core(dctx_t *c) {
         if (pc >= top->base && pc < top->base + top->len) {
             if (top->last_was_call) {
                 uint64_t fallthru = top->base + top->call_site + top->call_len;
-                if (pc != fallthru) { /* a call whose target lands in this same frame */
+                if (pc !=
+                    fallthru) { /* a call whose target lands in this same frame */
                     int same = 0;
                     for (int i = 0; i <= top_i; i++)
                         if (stack[i].base == top->base)
                             same++;
                     if ((unsigned)(top_i + 1) < DESCEND_MAX_STACK &&
-                        same < DESCEND_RECURSION_CAP && top->depth + 1 <= d->max_depth) {
+                        same < DESCEND_RECURSION_CAP &&
+                        top->depth + 1 <= d->max_depth) {
                         int32_t ni = asmtest_descent_push_frame(
                             d, top->base, top->len, top->depth + 1, top->idx);
                         if (ni < 0) {
@@ -1078,7 +1112,8 @@ static int descend_core(dctx_t *c) {
                             top = &stack[top_i];
                         }
                     } else {
-                        asmtest_descent_mark_depth_capped(d); /* recursion cap: fold */
+                        asmtest_descent_mark_depth_capped(
+                            d); /* recursion cap: fold */
                     }
                 }
             }
@@ -1098,18 +1133,21 @@ static int descend_core(dctx_t *c) {
                  * budget actually suppressed a descent that would otherwise have happened —
                  * not for every call-out past the budget, most of which (unknown callees)
                  * would have been stepped over regardless. */
-                int would = descend_decide(c, top->depth, callee, &cbase, &clen);
+                int would =
+                    descend_decide(c, top->depth, callee, &cbase, &clen);
                 int budget_ok = (steps < d->insn_budget);
                 int desc = budget_ok && would;
                 if (!budget_ok && would)
                     asmtest_descent_mark_depth_capped(d);
-                if (desc && clen > 0 && (unsigned)(top_i + 1) < DESCEND_MAX_STACK) {
-                    int32_t ni = asmtest_descent_push_frame(d, cbase, clen,
-                                                            top->depth + 1, top->idx);
+                if (desc && clen > 0 &&
+                    (unsigned)(top_i + 1) < DESCEND_MAX_STACK) {
+                    int32_t ni = asmtest_descent_push_frame(
+                        d, cbase, clen, top->depth + 1, top->idx);
                     if (ni >= 0) {
                         uint64_t sret = top->call_sp;
                         uint32_t ndepth = top->depth + 1;
-                        top->last_was_call = 0; /* consumed by the push (see branch B) */
+                        top->last_was_call =
+                            0; /* consumed by the push (see branch B) */
                         top_i++;
                         memset(&stack[top_i], 0, sizeof stack[top_i]);
                         stack[top_i].idx = ni;
@@ -1118,14 +1156,17 @@ static int descend_core(dctx_t *c) {
                         stack[top_i].ret_addr = ret_addr;
                         stack[top_i].sp_ret = sret;
                         stack[top_i].depth = ndepth;
-                        descend_record(c, &stack[top_i], pc, sp); /* callee entry */
+                        descend_record(c, &stack[top_i], pc,
+                                       sp); /* callee entry */
                         continue;
                     }
-                    asmtest_descent_mark_truncated(d); /* push failed: step over instead */
+                    asmtest_descent_mark_truncated(
+                        d); /* push failed: step over instead */
                 }
                 /* Step over: record an edge (L1+), run the callee at native speed. */
                 if (d->level >= ASMTEST_DESCENT_RECORD_EDGES)
-                    asmtest_descent_add_edge(d, call_site, callee, top->depth, top->idx);
+                    asmtest_descent_add_edge(d, call_site, callee, top->depth,
+                                             top->idx);
                 if (run_until(c->pid, ret_addr) != ASMTEST_PTRACE_OK) {
                     asmtest_descent_mark_truncated(d);
                     if (c->flat)
@@ -1138,7 +1179,8 @@ static int descend_core(dctx_t *c) {
                     rc = ASMTEST_PTRACE_ETRACE;
                     break;
                 }
-                descend_record(c, top, ret_addr, rsp); /* resume at the return address */
+                descend_record(c, top, ret_addr,
+                               rsp); /* resume at the return address */
                 continue;
             }
             /* ret_off outside the region: the call's fall-through leaves the frame — fall
@@ -1204,7 +1246,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     uint32_t n = 0;
     int overflow = 0, entered = 0, returned = 0, rc = ASMTEST_PTRACE_OK;
     int status = 0;
-    int pending_sig = 0; /* signal to inject on the next step (forwarded, unrelated) */
+    int pending_sig =
+        0; /* signal to inject on the next step (forwarded, unrelated) */
 
     if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
         /* Could not reach the initial SIGSTOP. */
@@ -1216,8 +1259,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(uintptr_t)PTRACE_O_EXITKILL);
 
     for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, (void *)(uintptr_t)pending_sig) !=
-            0) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
+                   (void *)(uintptr_t)pending_sig) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -1270,8 +1313,9 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
              * after) — so a routine that calls runtime helpers traces correctly, not
              * just a pure-compute leaf. */
             uint64_t resume_off = 0;
-            exit_kind_t k = classify_region_exit(
-                pid, (const uint8_t *)code, len, base_ip, stream[n - 1], &resume_off);
+            exit_kind_t k =
+                classify_region_exit(pid, (const uint8_t *)code, len, base_ip,
+                                     stream[n - 1], &resume_off);
             if (k == EXIT_CALLOUT_RESUMED) {
                 if (n < PTRACE_STREAM_CAP)
                     stream[n++] = resume_off;
@@ -1306,7 +1350,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     }
 
     if (rc == ASMTEST_PTRACE_OK)
-        normalize(trace, (const uint8_t *)code, base_ip, len, stream, n, overflow);
+        normalize(trace, (const uint8_t *)code, base_ip, len, stream, n,
+                  overflow);
     else {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
@@ -1333,7 +1378,8 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
     if (img != NULL) {
         const uint8_t *vb = NULL;
         size_t avail = 0;
-        if (asmtest_codeimage_bytes_at(img, base, when, &vb, &avail) != ASMTEST_CI_OK ||
+        if (asmtest_codeimage_bytes_at(img, base, when, &vb, &avail) !=
+                ASMTEST_CI_OK ||
             avail < len)
             return ASMTEST_PTRACE_ENOENT; /* region not tracked at/by `when` */
         code = vb;
@@ -1432,7 +1478,8 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
                 continue; /* resume single-stepping from the call's return */
             }
             if (k == EXIT_CALLOUT_LOST) {
-                overflow = 1; /* the callee never returned to the region — truncate */
+                overflow =
+                    1; /* the callee never returned to the region — truncate */
                 break;
             }
             if (result != NULL)
@@ -1454,9 +1501,11 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     return trace_attached_impl(pid, base, len, NULL, 0, result, trace);
 }
 
-int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
-                                            struct asmtest_codeimage *img, uint64_t when,
-                                            long *result, asmtest_trace_t *trace) {
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base,
+                                            size_t len,
+                                            struct asmtest_codeimage *img,
+                                            uint64_t when, long *result,
+                                            asmtest_trace_t *trace) {
     return trace_attached_impl(pid, base, len, img, when, result, trace);
 }
 
@@ -1488,8 +1537,8 @@ static void descend_set_deadline(dctx_t *c, const asmtest_descent_t *d) {
 }
 
 /* Fork path: fork a tracee that calls `code`, single-step-descend it, reap it. */
-static int trace_call_descend(const void *code, size_t len, const long *args, int nargs,
-                              long *result, asmtest_trace_t *trace,
+static int trace_call_descend(const void *code, size_t len, const long *args,
+                              int nargs, long *result, asmtest_trace_t *trace,
                               asmtest_descent_t *descent) {
     long a[6] = {0, 0, 0, 0, 0, 0};
     for (int i = 0; i < nargs; i++)
@@ -1524,7 +1573,8 @@ static int trace_call_descend(const void *code, size_t len, const long *args, in
     c.root_base = (uint64_t)(uintptr_t)code;
     c.root_len = len;
     c.root_code = (const uint8_t *)code;
-    c.forward_faults = 0; /* controlled single-threaded callee: a fault is terminal */
+    c.forward_faults =
+        0; /* controlled single-threaded callee: a fault is terminal */
     descend_set_deadline(&c, descent);
 
     int rc = descend_core(&c);
@@ -1550,7 +1600,8 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
     if (img != NULL) {
         const uint8_t *vb = NULL;
         size_t avail = 0;
-        if (asmtest_codeimage_bytes_at(img, base, when, &vb, &avail) != ASMTEST_CI_OK ||
+        if (asmtest_codeimage_bytes_at(img, base, when, &vb, &avail) !=
+                ASMTEST_CI_OK ||
             avail < len)
             return ASMTEST_PTRACE_ENOENT;
         code = vb;
@@ -1576,7 +1627,8 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
     c.root_base = (uint64_t)(uintptr_t)base;
     c.root_len = len;
     c.root_code = code;
-    c.forward_faults = 1; /* live managed runtime: forward its safepoint/GC signals */
+    c.forward_faults =
+        1; /* live managed runtime: forward its safepoint/GC signals */
     descend_set_deadline(&c, descent);
 
     int rc = descend_core(&c);
@@ -1584,8 +1636,9 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
     return rc;
 }
 
-int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args, int nargs,
-                                 long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args,
+                                 int nargs, long *result,
+                                 asmtest_trace_t *trace,
                                  asmtest_descent_t *descent) {
     if (code == NULL || len == 0 || nargs < 0 || nargs > 6 ||
         (nargs > 0 && args == NULL))
@@ -1598,26 +1651,31 @@ int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args,
     return trace_call_descend(code, len, args, nargs, result, trace, descent);
 }
 
-int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len, long *result,
-                                     asmtest_trace_t *trace, asmtest_descent_t *descent) {
+int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len,
+                                     long *result, asmtest_trace_t *trace,
+                                     asmtest_descent_t *descent) {
     if (base == NULL || len == 0)
         return ASMTEST_PTRACE_EINVAL;
     if (descent == NULL || descent->level == ASMTEST_DESCENT_OFF ||
         !asmtest_disas_available())
         return trace_attached_impl(pid, base, len, NULL, 0, result, trace);
-    return trace_attached_descend(pid, base, len, NULL, 0, result, trace, descent);
+    return trace_attached_descend(pid, base, len, NULL, 0, result, trace,
+                                  descent);
 }
 
-int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base, size_t len,
-                                               struct asmtest_codeimage *img, uint64_t when,
-                                               long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base,
+                                               size_t len,
+                                               struct asmtest_codeimage *img,
+                                               uint64_t when, long *result,
+                                               asmtest_trace_t *trace,
                                                asmtest_descent_t *descent) {
     if (base == NULL || len == 0)
         return ASMTEST_PTRACE_EINVAL;
     if (descent == NULL || descent->level == ASMTEST_DESCENT_OFF ||
         !asmtest_disas_available())
         return trace_attached_impl(pid, base, len, img, when, result, trace);
-    return trace_attached_descend(pid, base, len, img, when, result, trace, descent);
+    return trace_attached_descend(pid, base, len, img, when, result, trace,
+                                  descent);
 }
 
 #else /* stepper unsupported: not Linux, or not x86-64 / AArch64 */
@@ -1627,7 +1685,8 @@ int asmtest_ptrace_available(void) { return 0; }
 void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
     if (buf == NULL || buflen == 0)
         return;
-    const char *msg = "out-of-process ptrace stepper needs Linux x86-64 or AArch64";
+    const char *msg =
+        "out-of-process ptrace stepper needs Linux x86-64 or AArch64";
     strncpy(buf, msg, buflen - 1);
     buf[buflen - 1] = '\0';
 }
@@ -1653,9 +1712,11 @@ int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
     return ASMTEST_PTRACE_ENOSYS;
 }
 
-int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t len,
-                                            struct asmtest_codeimage *img, uint64_t when,
-                                            long *result, asmtest_trace_t *trace) {
+int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base,
+                                            size_t len,
+                                            struct asmtest_codeimage *img,
+                                            uint64_t when, long *result,
+                                            asmtest_trace_t *trace) {
     (void)pid;
     (void)base;
     (void)len;
@@ -1672,8 +1733,9 @@ int asmtest_ptrace_run_to(pid_t pid, const void *addr) {
     return ASMTEST_PTRACE_ENOSYS;
 }
 
-int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args, int nargs,
-                                 long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args,
+                                 int nargs, long *result,
+                                 asmtest_trace_t *trace,
                                  asmtest_descent_t *descent) {
     (void)code;
     (void)len;
@@ -1685,8 +1747,9 @@ int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args,
     return ASMTEST_PTRACE_ENOSYS;
 }
 
-int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len, long *result,
-                                     asmtest_trace_t *trace, asmtest_descent_t *descent) {
+int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len,
+                                     long *result, asmtest_trace_t *trace,
+                                     asmtest_descent_t *descent) {
     (void)pid;
     (void)base;
     (void)len;
@@ -1696,9 +1759,11 @@ int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len, lo
     return ASMTEST_PTRACE_ENOSYS;
 }
 
-int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base, size_t len,
-                                               struct asmtest_codeimage *img, uint64_t when,
-                                               long *result, asmtest_trace_t *trace,
+int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base,
+                                               size_t len,
+                                               struct asmtest_codeimage *img,
+                                               uint64_t when, long *result,
+                                               asmtest_trace_t *trace,
                                                asmtest_descent_t *descent) {
     (void)pid;
     (void)base;

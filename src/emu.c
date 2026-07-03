@@ -14,7 +14,8 @@
 #define EMU_CODE_SIZE  0x00010000UL /* 64 KiB of code space  */
 #define EMU_STACK_BASE 0x00200000UL
 #define EMU_STACK_SIZE 0x00010000UL /* 64 KiB stack          */
-#define EMU_RET_MAGIC  0x00f00000UL /* return target; unmapped, only a stop addr */
+#define EMU_RET_MAGIC                                                          \
+    0x00f00000UL /* return target; unmapped, only a stop addr */
 
 /* A memory-write watchpoint armed on the handle (emu_watch_writes): subsequent
  * runs flag the first valid write that violates the [lo,hi) region per `mode`. */
@@ -36,7 +37,7 @@ typedef struct {
 
 struct emu {
     uc_engine *uc;
-    watch_ctx_t watch; /* mid-execution memory-write guard (emu_watch_*)  */
+    watch_ctx_t watch;   /* mid-execution memory-write guard (emu_watch_*)  */
     reg_guard_ctx_t reg; /* mid-execution register invariant (emu_guard_*) */
 };
 
@@ -129,8 +130,8 @@ static void on_mem_write(uc_engine *uc, uc_mem_type type, uint64_t addr,
     if (w->out == NULL || w->out->violated)
         return;
     uint64_t end = addr + (uint64_t)size;
-    bool touches = addr < w->hi && end > w->lo;       /* overlaps [lo,hi)  */
-    bool contained = addr >= w->lo && end <= w->hi;   /* fully inside      */
+    bool touches = addr < w->hi && end > w->lo;     /* overlaps [lo,hi)  */
+    bool contained = addr >= w->lo && end <= w->hi; /* fully inside      */
     bool bad = (w->mode == EMU_WATCH_NEVER) ? touches : !contained;
     if (!bad)
         return;
@@ -166,7 +167,7 @@ static void on_block_guard(uc_engine *uc, uint64_t address, uint32_t size,
 static bool load_code(uc_engine *uc, const void *code, size_t code_len) {
     if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK)
         return false;
-    /* Drop any cached translation for the code region so a reused handle
+        /* Drop any cached translation for the code region so a reused handle
      * re-decodes the freshly written bytes. uc_ctl_flush_tb is newer
      * (Unicorn >= 2.1); fall back to uc_ctl_remove_cache (since 2.0.0) so we
      * build against the older libunicorn shipped by some distros. */
@@ -250,11 +251,11 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
  * preserved — emu_map/emu_write preload data for the call — and the internal
  * stack is re-based per call by the setup. */
 static void emu_x86_zero_regs(uc_engine *uc) {
-    static const int gp[] = {
-        UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
-        UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_RBP, UC_X86_REG_R8,
-        UC_X86_REG_R9,  UC_X86_REG_R10, UC_X86_REG_R11, UC_X86_REG_R12,
-        UC_X86_REG_R13, UC_X86_REG_R14, UC_X86_REG_R15};
+    static const int gp[] = {UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX,
+                             UC_X86_REG_RDX, UC_X86_REG_RSI, UC_X86_REG_RDI,
+                             UC_X86_REG_RBP, UC_X86_REG_R8,  UC_X86_REG_R9,
+                             UC_X86_REG_R10, UC_X86_REG_R11, UC_X86_REG_R12,
+                             UC_X86_REG_R13, UC_X86_REG_R14, UC_X86_REG_R15};
     uint64_t z = 0;
     for (size_t i = 0; i < sizeof gp / sizeof gp[0]; i++)
         uc_reg_write(uc, gp[i], &z);
@@ -414,8 +415,8 @@ int asmtest_emu_call_vec_f32(emu_t *e, const void *fn, const float *lanes,
 /* Run `fn` under the Microsoft x64 (Win64) convention with up to four integer
  * args in rcx, rdx, r8, r9 (nargs clamped [0,4]); the return is rax. Lets a
  * binding test a Win64 routine on a System V host. */
-int asmtest_emu_call_win64_6(emu_t *e, const void *fn, long a0, long a1, long a2,
-                             long a3, int nargs, uint64_t max_insns,
+int asmtest_emu_call_win64_6(emu_t *e, const void *fn, long a0, long a1,
+                             long a2, long a3, int nargs, uint64_t max_insns,
                              emu_result_t *out) {
     long args[4] = {a0, a1, a2, a3};
     if (nargs < 0)
@@ -428,8 +429,8 @@ int asmtest_emu_call_win64_6(emu_t *e, const void *fn, long a0, long a1, long a2
 /* Like asmtest_emu_call6, but records an execution trace / basic-block coverage
  * into `trace` (an opaque handle from asmtest_emu_trace_new; may be NULL to
  * behave exactly like asmtest_emu_call6). */
-int asmtest_emu_call6_traced(emu_t *e, const void *fn, long a0, long a1, long a2,
-                             long a3, long a4, long a5, int nargs,
+int asmtest_emu_call6_traced(emu_t *e, const void *fn, long a0, long a1,
+                             long a2, long a3, long a4, long a5, int nargs,
                              uint64_t max_insns, emu_result_t *out,
                              emu_trace_t *trace) {
     long args[6] = {a0, a1, a2, a3, a4, a5};
@@ -437,7 +438,8 @@ int asmtest_emu_call6_traced(emu_t *e, const void *fn, long a0, long a1, long a2
         nargs = 0;
     if (nargs > 6)
         nargs = 6;
-    return emu_call_traced(e, fn, 64, args, nargs, max_insns, out, trace) ? 1 : 0;
+    return emu_call_traced(e, fn, 64, args, nargs, max_insns, out, trace) ? 1
+                                                                          : 0;
 }
 
 bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
@@ -450,7 +452,8 @@ bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
         return false;
     }
     for (int i = 0; i < nfargs && i < 8; i++) {
-        unsigned char x[16] = {0}; /* a double occupies the low 8 bytes of xmmN */
+        unsigned char x[16] = {
+            0}; /* a double occupies the low 8 bytes of xmmN */
         memcpy(x, &fargs[i], sizeof(double));
         uc_reg_write(uc, UC_X86_REG_XMM0 + i, x);
     }
@@ -683,10 +686,9 @@ static void emu_arm64_zero_regs(uc_engine *uc) {
 
 static bool emu_arm64_setup(uc_engine *uc, const void *code, size_t code_len,
                             const long *iargs, int niargs) {
-    static const int arg_regs[8] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
-                                    UC_ARM64_REG_X2, UC_ARM64_REG_X3,
-                                    UC_ARM64_REG_X4, UC_ARM64_REG_X5,
-                                    UC_ARM64_REG_X6, UC_ARM64_REG_X7};
+    static const int arg_regs[8] = {
+        UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3,
+        UC_ARM64_REG_X4, UC_ARM64_REG_X5, UC_ARM64_REG_X6, UC_ARM64_REG_X7};
     if (!load_code(uc, code, code_len))
         return false;
     emu_arm64_zero_regs(uc); /* deterministic start: clear stale reg state */
@@ -759,7 +761,8 @@ bool emu_arm64_call_fp(emu_arm64_t *e, const void *code, size_t code_len,
         return false;
     }
     for (int i = 0; i < nfargs && i < 8; i++) {
-        unsigned char x[16] = {0}; /* a double occupies the low 8 bytes of d_i */
+        unsigned char x[16] = {
+            0}; /* a double occupies the low 8 bytes of d_i */
         memcpy(x, &fargs[i], sizeof(double));
         uc_reg_write(uc, UC_ARM64_REG_V0 + i, x);
     }
@@ -805,8 +808,8 @@ emu_riscv_t *emu_riscv_open(void) {
             UC_ERR_OK ||
         uc_mem_map(e->uc, EMU_STACK_BASE, EMU_STACK_SIZE,
                    UC_PROT_READ | UC_PROT_WRITE) != UC_ERR_OK ||
-        uc_mem_map(e->uc, EMU_RET_MAGIC, 0x1000,
-                   UC_PROT_READ | UC_PROT_EXEC) != UC_ERR_OK) {
+        uc_mem_map(e->uc, EMU_RET_MAGIC, 0x1000, UC_PROT_READ | UC_PROT_EXEC) !=
+            UC_ERR_OK) {
         uc_close(e->uc);
         free(e);
         return NULL;
@@ -1003,8 +1006,8 @@ static void read_all_regs_arm(uc_engine *uc, emu_arm_regs_t *r) {
  * r0..r3 (32-bit). Returns false only on a code-write failure. */
 static bool emu_arm_setup(uc_engine *uc, const void *code, size_t code_len,
                           const long *iargs, int niargs) {
-    static const int arg_regs[4] = {UC_ARM_REG_R0, UC_ARM_REG_R1,
-                                    UC_ARM_REG_R2, UC_ARM_REG_R3};
+    static const int arg_regs[4] = {UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,
+                                    UC_ARM_REG_R3};
     if (!load_code(uc, code, code_len))
         return false;
     uint32_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 8-aligned (AAPCS) */
@@ -1081,9 +1084,8 @@ bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
 }
 
 bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
-                      const long *iargs, int niargs,
-                      const emu_vec128_t *vargs, int nvargs,
-                      uint64_t max_insns, emu_arm_result_t *out) {
+                      const long *iargs, int niargs, const emu_vec128_t *vargs,
+                      int nvargs, uint64_t max_insns, emu_arm_result_t *out) {
     /* AAPCS-VFP: 128-bit vector args go in q0..q3 (q0..q15 are consecutive
      * Unicorn register ids). The whole q file is captured by read_all_regs_arm,
      * which reads d0..d31 back into q[0..15]. */

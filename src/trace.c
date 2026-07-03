@@ -117,11 +117,13 @@ unsigned long long asmtest_emu_trace_block_at(const asmtest_trace_t *t,
 /* The i-th instruction offset in the ordered execution-order stream — the insns[]
  * counterpart to block_at, so a binding can read the instruction stream through a
  * scalar accessor instead of laying out the struct. */
-unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t, size_t i) {
+unsigned long long asmtest_emu_trace_insn_at(const asmtest_trace_t *t,
+                                             size_t i) {
     return (i < t->insns_len) ? (unsigned long long)t->insns[i] : 0;
 }
 /* True if basic-block offset `off` is in the distinct block set (FFI shim). */
-int asmtest_emu_trace_covered(const asmtest_trace_t *t, unsigned long long off) {
+int asmtest_emu_trace_covered(const asmtest_trace_t *t,
+                              unsigned long long off) {
     for (size_t i = 0; i < t->blocks_len; i++)
         if (t->blocks[i] == (uint64_t)off)
             return 1;
@@ -261,7 +263,8 @@ typedef struct {
 } line_cov_t;
 
 static int cmp_line_cov(const void *a, const void *b) {
-    uint32_t x = ((const line_cov_t *)a)->line, y = ((const line_cov_t *)b)->line;
+    uint32_t x = ((const line_cov_t *)a)->line,
+             y = ((const line_cov_t *)b)->line;
     return (x > y) - (x < y);
 }
 
@@ -291,7 +294,8 @@ static line_cov_t *source_coverage(const asmtest_trace_t *covered,
     }
     if (covered != NULL && covered->blocks != NULL) { /* mark hits */
         for (size_t b = 0; b < covered->blocks_len; b++) {
-            const emu_line_entry_t *en = emu_line_lookup(map, covered->blocks[b]);
+            const emu_line_entry_t *en =
+                emu_line_lookup(map, covered->blocks[b]);
             if (en == NULL)
                 continue;
             for (size_t j = 0; j < m; j++)

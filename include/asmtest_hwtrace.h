@@ -43,29 +43,32 @@ extern "C" {
 #endif
 
 /* Status codes (shared spirit with asmtest_drtrace.h). */
-#define ASMTEST_HW_OK 0
-#define ASMTEST_HW_EINVAL (-1)
-#define ASMTEST_HW_ESTATE (-2)
+#define ASMTEST_HW_OK       0
+#define ASMTEST_HW_EINVAL   (-1)
+#define ASMTEST_HW_ESTATE   (-2)
 #define ASMTEST_HW_EUNAVAIL (-3) /* backend/PMU/privilege unavailable */
-#define ASMTEST_HW_ENOSYS (-5)   /* decoder library not compiled in    */
-#define ASMTEST_HW_EFULL (-6)
-#define ASMTEST_HW_EDECODE (-8)  /* capture/decode failure             */
+#define ASMTEST_HW_ENOSYS   (-5) /* decoder library not compiled in    */
+#define ASMTEST_HW_EFULL    (-6)
+#define ASMTEST_HW_EDECODE  (-8) /* capture/decode failure             */
 
 typedef enum {
     ASMTEST_HWTRACE_INTEL_PT = 0,
     ASMTEST_HWTRACE_CORESIGHT = 1,
-    ASMTEST_HWTRACE_AMD_LBR = 2,    /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
-    ASMTEST_HWTRACE_SINGLESTEP = 3, /* EFLAGS.TF #DB single-step: any x86-64 Linux,
+    ASMTEST_HWTRACE_AMD_LBR = 2, /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
+    ASMTEST_HWTRACE_SINGLESTEP =
+        3, /* EFLAGS.TF #DB single-step: any x86-64 Linux,
                                        no PMU/perf/privilege/decoder; exact + complete */
 } asmtest_trace_backend_t;
 
 typedef struct {
     asmtest_trace_backend_t backend;
-    size_t aux_size;  /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
+    size_t
+        aux_size; /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
     size_t data_size; /* base perf ring bytes; 2^n pages (0=8KB; the AMD backend
                          floors it at 64KB and it bounds the Tier-B stitched run) */
-    int snapshot;     /* nonzero: circular snapshot ring; 0: linear (drain)       */
-    const char *object_hint; /* optional object-file path for hw address filters  */
+    int snapshot; /* nonzero: circular snapshot ring; 0: linear (drain)       */
+    const char
+        *object_hint; /* optional object-file path for hw address filters  */
 } asmtest_hwtrace_options_t;
 
 /* The full gating chain, as a single detect-and-skip predicate: returns 1 only

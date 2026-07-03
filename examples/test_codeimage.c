@@ -30,8 +30,10 @@ static int checks, failures;
  * one byte (0x01 vs 0x29), so a recorder that conflates them by address is caught.
  *   A: mov rax,rdi ; add rax,rsi ; ret
  *   B: mov rax,rdi ; sub rax,rsi ; ret */
-static const unsigned char BLOB_A[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0xc3};
-static const unsigned char BLOB_B[] = {0x48, 0x89, 0xf8, 0x48, 0x29, 0xf0, 0xc3};
+static const unsigned char BLOB_A[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x01, 0xf0, 0xc3};
+static const unsigned char BLOB_B[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x29, 0xf0, 0xc3};
 
 /* Phase A: the temporal correctness proof. Track a region, rewrite it IN PLACE with
  * different bytes (a re-JIT at a reused address), and assert the timeline still answers
@@ -46,8 +48,9 @@ static void test_codeimage_temporal(void) {
         return;
     }
     long ps = sysconf(_SC_PAGESIZE);
-    unsigned char *p = (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
-                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP codeimage temporal: mmap failed\n");
         return;
@@ -59,14 +62,17 @@ static void test_codeimage_temporal(void) {
     CHECK(img != NULL, "codeimage: new()");
 
     int rc = asmtest_codeimage_track(img, p, sizeof BLOB_A);
-    CHECK(rc == ASMTEST_CI_OK, "codeimage: track() snapshots v0 and arms soft-dirty");
+    CHECK(rc == ASMTEST_CI_OK,
+          "codeimage: track() snapshots v0 and arms soft-dirty");
     uint64_t t0 = asmtest_codeimage_now(img);
     CHECK(t0 >= 1, "codeimage: now() advanced past 0 after track");
 
-    memcpy(p, BLOB_B, sizeof BLOB_B); /* re-JIT in place: same address, new bytes */
+    memcpy(p, BLOB_B,
+           sizeof BLOB_B); /* re-JIT in place: same address, new bytes */
 
     int nv = asmtest_codeimage_refresh(img);
-    CHECK(nv >= 1, "codeimage: refresh() detected the in-place rewrite (new version)");
+    CHECK(nv >= 1,
+          "codeimage: refresh() detected the in-place rewrite (new version)");
     uint64_t t1 = asmtest_codeimage_now(img);
     CHECK(t1 > t0, "codeimage: now() advanced after the change");
 
@@ -140,10 +146,12 @@ static void test_codeimage_bpf(void) {
     }
     CHECK(got, "codeimage bpf: observed an emission event");
     if (got) {
-        CHECK(ev.kind == ASMTEST_CI_KIND_MPROTECT, "codeimage bpf: kind is MPROTECT");
+        CHECK(ev.kind == ASMTEST_CI_KIND_MPROTECT,
+              "codeimage bpf: kind is MPROTECT");
         CHECK((void *)(uintptr_t)ev.addr == p,
               "codeimage bpf: addr matches the freshly-published page");
-        CHECK(ev.pid == (uint32_t)getpid(), "codeimage bpf: filtered to the target pid");
+        CHECK(ev.pid == (uint32_t)getpid(),
+              "codeimage bpf: filtered to the target pid");
     }
     munmap(p, (size_t)ps);
     asmtest_codeimage_free(img);

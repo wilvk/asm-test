@@ -19,7 +19,8 @@ int main(void) {
         printf("win64 smoke: FAIL win64_add3(39) = %lld, want 42\n", got);
         return 1;
     }
-    printf("win64 smoke: ok — win64_add3(39) = %lld (Microsoft x64 ABI via Wine)\n",
+    printf("win64 smoke: ok — win64_add3(39) = %lld (Microsoft x64 ABI via "
+           "Wine)\n",
            got);
     return 0;
 }

@@ -22,7 +22,7 @@ static int gen_q15(asmtest_rng_t *rng, long *v, int cap) {
 }
 
 TEST(dsp, qmul_q15_known_values) {
-    ASSERT_EQ(qmul_q15(16384, 16384), 8192);  /* 0.5 * 0.5 = 0.25 */
+    ASSERT_EQ(qmul_q15(16384, 16384), 8192); /* 0.5 * 0.5 = 0.25 */
     ASSERT_EQ(qmul_q15(0, 12345), 0);
     ASSERT_EQ(qmul_q15(-16384, 16384), -8192); /* -0.5 * 0.5 = -0.25 */
 }

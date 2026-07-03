@@ -70,7 +70,8 @@ static bool cs_target(asmtest_arch_t arch, cs_arch *a, cs_mode *m) {
 static int insn_is_call(csh h, cs_insn *insn, cs_arch a) {
     if (cs_insn_group(h, insn, CS_GRP_CALL))
         return 1;
-    if (a == CS_ARCH_ARM64 && (insn->id == ARM64_INS_BL || insn->id == ARM64_INS_BLR))
+    if (a == CS_ARCH_ARM64 &&
+        (insn->id == ARM64_INS_BL || insn->id == ARM64_INS_BLR))
         return 1;
     return 0;
 }
@@ -138,8 +139,8 @@ size_t emu_disas(emu_arch_t arch, const uint8_t *code, size_t code_len,
  * call-out to a runtime helper (step over it, resume after) from the routine's own
  * return (stop). 0 otherwise, or always when built without Capstone (callers then fall
  * back to leaf-only tracing — the first region exit is treated as the return). */
-int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                          uint64_t off) {
+int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code,
+                          size_t code_len, uint64_t off) {
 #ifdef ASMTEST_HAVE_CAPSTONE
     if (code == NULL || off >= code_len)
         return 0;
@@ -152,7 +153,8 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
         return 0;
     cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
     cs_insn *insn = NULL;
-    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
     int is_call = 0;
     if (count > 0) {
         is_call = insn_is_call(h, &insn[0], a);
@@ -175,8 +177,9 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
  * one cs_open + cs_disasm avoids the 3x engine open/decode of calling is_call + is_ret +
  * asmtest_disas separately on a hot path. `is_call`/`is_ret` may be NULL. Not part of the
  * bindings-parity tier surface. */
-size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                           uint64_t off, int *is_call, int *is_ret) {
+size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code,
+                           size_t code_len, uint64_t off, int *is_call,
+                           int *is_ret) {
     if (is_call != NULL)
         *is_call = 0;
     if (is_ret != NULL)
@@ -193,7 +196,8 @@ size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code
         return 0;
     cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
     cs_insn *insn = NULL;
-    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
     size_t len = 0;
     if (count > 0) {
         if (is_call != NULL)
@@ -232,7 +236,8 @@ int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
         return 0;
     cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
     cs_insn *insn = NULL;
-    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
     int is_branch = 0;
     if (count > 0) {
         is_branch = (cs_insn_group(h, &insn[0], CS_GRP_JUMP) ||
@@ -257,8 +262,8 @@ int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
 /* 1 if the instruction at `code+off` is a RETURN (x86 `ret`/`retf`; AArch64 `ret`) — the
  * Capstone CS_GRP_RET group, the third term of the call-descent pop predicate. 0
  * otherwise, or always when built without Capstone. Mirrors asmtest_disas_is_call. */
-int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                         uint64_t off) {
+int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code,
+                         size_t code_len, uint64_t off) {
 #ifdef ASMTEST_HAVE_CAPSTONE
     if (code == NULL || off >= code_len)
         return 0;
@@ -271,7 +276,8 @@ int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_l
         return 0;
     cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
     cs_insn *insn = NULL;
-    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
     int is_ret = 0;
     if (count > 0) {
         is_ret = cs_insn_group(h, &insn[0], CS_GRP_RET) ? 1 : 0;
@@ -293,8 +299,9 @@ int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_l
  * resolved absolute target as an immediate operand (CS_OP_IMM). Returns 1 (direct call,
  * *target set) or 0 (indirect call / non-call / undecodable / no Capstone), in which case
  * the descent loop reads the live post-step PC as the target instead. */
-int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
-                              uint64_t base_addr, uint64_t off, uint64_t *target) {
+int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code,
+                              size_t code_len, uint64_t base_addr, uint64_t off,
+                              uint64_t *target) {
 #ifdef ASMTEST_HAVE_CAPSTONE
     if (code == NULL || off >= code_len)
         return 0;
@@ -305,12 +312,13 @@ int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t c
     csh h;
     if (cs_open(a, m, &h) != CS_ERR_OK)
         return 0;
-    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* operands + groups need detail mode */
+    cs_option(h, CS_OPT_DETAIL,
+              CS_OPT_ON); /* operands + groups need detail mode */
     cs_insn *insn = NULL;
     /* Decode at base_addr+off so Capstone resolves the rel32/imm26 to its ABSOLUTE
      * target immediate directly (no manual displacement arithmetic). */
-    size_t count =
-        cs_disasm(h, code + off, code_len - (size_t)off, base_addr + off, 1, &insn);
+    size_t count = cs_disasm(h, code + off, code_len - (size_t)off,
+                             base_addr + off, 1, &insn);
     int ok = 0;
     if (count > 0) {
         if (insn_is_call(h, &insn[0], a)) {
@@ -378,8 +386,9 @@ static uint64_t *dup_sorted(const uint64_t *src, size_t n, size_t *out_n) {
 
 /* "    0x2f  cmp rax, 0\n" — one annotated block line; the instruction text is
  * elided when the bytes do not decode (e.g. the offset is past the routine). */
-static void print_block_line(FILE *out, asmtest_arch_t arch, const uint8_t *code,
-                             size_t code_len, uint64_t base_addr, uint64_t off) {
+static void print_block_line(FILE *out, asmtest_arch_t arch,
+                             const uint8_t *code, size_t code_len,
+                             uint64_t base_addr, uint64_t off) {
     char text[128];
     asmtest_disas(arch, code, code_len, base_addr, off, text, sizeof text);
     if (text[0] != '\0')
@@ -406,8 +415,8 @@ void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
             fprintf(out, "    0x%llx\n", (unsigned long long)t->insns[i]);
 }
 
-void emu_trace_disasm(const emu_trace_t *t, emu_arch_t arch, const uint8_t *code,
-                      size_t code_len, FILE *out) {
+void emu_trace_disasm(const emu_trace_t *t, emu_arch_t arch,
+                      const uint8_t *code, size_t code_len, FILE *out) {
     asmtest_trace_disasm(t, arch, code, code_len, EMU_CODE_BASE, out);
 }
 
@@ -496,10 +505,10 @@ void emu_fault_describe(const emu_result_t *r, emu_arch_t arch,
         return;
     }
     static const char *const kinds[] = {"no", "read", "write", "fetch"};
-    const char *kind = (r->fault_kind >= EMU_FAULT_NONE &&
-                        r->fault_kind <= EMU_FAULT_FETCH)
-                           ? kinds[r->fault_kind]
-                           : "?";
+    const char *kind =
+        (r->fault_kind >= EMU_FAULT_NONE && r->fault_kind <= EMU_FAULT_FETCH)
+            ? kinds[r->fault_kind]
+            : "?";
     /* On a fault Unicorn leaves rip at the offending instruction; its offset
      * from the load base is what we disassemble (the routine's own bytes). */
     uint64_t rip = r->regs.rip;

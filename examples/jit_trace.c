@@ -172,7 +172,8 @@ static pid_t pick_busy_thread(pid_t pid) {
 static const char *find_java_jitdump(pid_t pid) {
     static char path[256];
     char pattern[128];
-    snprintf(pattern, sizeof pattern, "/tmp/.debug/jit/*/jit-%d.dump", (int)pid);
+    snprintf(pattern, sizeof pattern, "/tmp/.debug/jit/*/jit-%d.dump",
+             (int)pid);
     glob_t g;
     const char *out = NULL;
     if (glob(pattern, 0, NULL, &g) == 0 && g.gl_pathc > 0) {
@@ -192,8 +193,8 @@ typedef void (*perfmap_refresh_fn)(pid_t pid, int iter);
 
 static int trace_runtime(const char *engine, const char *method_substr,
                          char *const cmd[], int target_tier,
-                         perfmap_refresh_fn refresh, trace_thread_fn pick_thread,
-                         int descend_level) {
+                         perfmap_refresh_fn refresh,
+                         trace_thread_fn pick_thread, int descend_level) {
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
@@ -221,7 +222,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
     char sym[256] = {0};
     unsigned long addr = 0, size = 0;
     int found = 0, best_tier = -1;
-    for (int i = 0; i < 200; i++) { /* up to ~20s warmup (CoreCLR startup is slower) */
+    for (int i = 0; i < 200;
+         i++) { /* up to ~20s warmup (CoreCLR startup is slower) */
         struct timespec ts = {0, 100 * 1000 * 1000};
         nanosleep(&ts, NULL);
         int st;
@@ -238,7 +240,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
         while (fgets(line, sizeof line, f)) {
             unsigned long a, s;
             int soff = 0;
-            if (sscanf(line, "%lx %lx %n", &a, &s, &soff) < 2 || soff == 0 || s < 2)
+            if (sscanf(line, "%lx %lx %n", &a, &s, &soff) < 2 || soff == 0 ||
+                s < 2)
                 continue;
             char *t = line + soff;
             t[strcspn(t, "\r\n")] = '\0';
@@ -266,23 +269,24 @@ static int trace_runtime(const char *engine, const char *method_substr,
         return 0;
     }
     if (!found) {
-        printf("# SKIP jit-trace (%s): no optimized perf-map entry for '%s'\n", engine,
-               method_substr);
+        printf("# SKIP jit-trace (%s): no optimized perf-map entry for '%s'\n",
+               engine, method_substr);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
         printf("1..0 # skipped\n");
         return 0;
     }
-    printf("# resolved real %s JIT method: '%s' @ 0x%lx (%lu bytes, tier %d)\n", engine,
-           sym, addr, size, best_tier);
+    printf("# resolved real %s JIT method: '%s' @ 0x%lx (%lu bytes, tier %d)\n",
+           engine, sym, addr, size, best_tier);
 
     /* (1) The library's perf-map parser, against the runtime's REAL map line. */
     void *base = NULL;
     size_t len = 0;
     int rc = asmtest_proc_perfmap_symbol(pid, sym, &base, &len);
-    CHECK(rc == ASMTEST_PTRACE_OK &&
-              (unsigned long)(uintptr_t)base == addr && len == size,
-          "perfmap: library resolves the real JIT method by name (== runtime's map line)");
+    CHECK(rc == ASMTEST_PTRACE_OK && (unsigned long)(uintptr_t)base == addr &&
+              len == size,
+          "perfmap: library resolves the real JIT method by name (== runtime's "
+          "map line)");
 
     /* (2) Region discovery against the real process's /proc/<pid>/maps. */
     void *rbase = NULL;
@@ -290,7 +294,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
     int fr = asmtest_proc_region_by_addr(pid, base, &rbase, &rlen);
     CHECK(fr == ASMTEST_PTRACE_OK && (char *)base >= (char *)rbase &&
               (char *)base < (char *)rbase + rlen,
-          "proc maps: the JIT address falls in an executable mapping of the live runtime");
+          "proc maps: the JIT address falls in an executable mapping of the "
+          "live runtime");
 
     /* (3) Attach to the real, multi-threaded, GC'd runtime from the outside. We trace the
      * specific thread that runs the method (see trace_thread_fn): for V8/CoreCLR that is
@@ -299,8 +304,10 @@ static int trace_runtime(const char *engine, const char *method_substr,
      * the process pid while attach/run_to/trace operate on this tid. */
     pid_t ttid = pick_thread != NULL ? pick_thread(pid) : pid;
     int st = 0;
-    if (ptrace(PTRACE_ATTACH, ttid, NULL, NULL) != 0 || waitpid(ttid, &st, 0) < 0) {
-        printf("# SKIP jit-trace (%s): PTRACE_ATTACH denied (yama ptrace_scope?)\n",
+    if (ptrace(PTRACE_ATTACH, ttid, NULL, NULL) != 0 ||
+        waitpid(ttid, &st, 0) < 0) {
+        printf("# SKIP jit-trace (%s): PTRACE_ATTACH denied (yama "
+               "ptrace_scope?)\n",
                engine);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
@@ -312,7 +319,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
      * invocation, watchdog-bounded so a moved/re-tiered address self-skips not hangs. */
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_alarm; /* sa_flags = 0 -> no SA_RESTART, so waitpid sees EINTR */
+    sa.sa_handler =
+        on_alarm; /* sa_flags = 0 -> no SA_RESTART, so waitpid sees EINTR */
     sigaction(SIGALRM, &sa, NULL);
     alarm(10);
 
@@ -328,7 +336,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
     if (descend_level > 0) {
         dh = asmtest_descent_new((asmtest_descent_level_t)descend_level);
         if (descend_level == ASMTEST_DESCENT_DESCEND_KNOWN)
-            asmtest_descent_allow_region(dh, rbase, rlen); /* the runtime's JIT heap */
+            asmtest_descent_allow_region(dh, rbase,
+                                         rlen); /* the runtime's JIT heap */
         else if (descend_level == ASMTEST_DESCENT_DESCEND_ALL) {
             asmtest_descent_set_insn_budget(dh, 4096); /* conservative */
             asmtest_descent_set_watchdog_ms(dh, 2000);
@@ -337,41 +346,46 @@ static int trace_runtime(const char *engine, const char *method_substr,
     rc = asmtest_ptrace_run_to(ttid, base);
     if (rc == ASMTEST_PTRACE_OK)
         rc = dh != NULL
-                 ? asmtest_ptrace_trace_attached_ex(ttid, base, len, &result, tr, dh)
+                 ? asmtest_ptrace_trace_attached_ex(ttid, base, len, &result,
+                                                    tr, dh)
                  : asmtest_ptrace_trace_attached(ttid, base, len, &result, tr);
     alarm(0);
 
     uint64_t insns = asmtest_emu_trace_insns_total(tr);
     if (rc == ASMTEST_PTRACE_OK && insns >= 1) {
         CHECK(asmtest_trace_covered(tr, 0),
-              "trace: real JIT method single-stepped out of band — entry covered");
+              "trace: real JIT method single-stepped out of band — entry "
+              "covered");
         printf("# traced %llu instructions of real %s JIT code%s\n",
                (unsigned long long)insns, engine,
                asmtest_emu_trace_truncated(tr) ? " (truncated)" : "");
         if (dh != NULL) {
             size_t nf = asmtest_descent_frames_len(dh);
             size_t ne = asmtest_descent_edges_len(dh);
-            printf("# descent L%d: %zu frame(s), %zu edge(s)%s%s\n", descend_level, nf, ne,
+            printf("# descent L%d: %zu frame(s), %zu edge(s)%s%s\n",
+                   descend_level, nf, ne,
                    asmtest_descent_truncated(dh) ? " (truncated)" : "",
                    asmtest_descent_depth_capped(dh) ? " (guard tripped)" : "");
             /* The guarded L3 lane asserts the GUARDS fire (self-skip), not transparency. */
             CHECK(descend_level < ASMTEST_DESCENT_DESCEND_ALL ||
                       asmtest_descent_truncated(dh) ||
                       asmtest_descent_depth_capped(dh) || nf >= 1,
-                  "descent: guarded L3 lane made progress or self-skipped honestly");
+                  "descent: guarded L3 lane made progress or self-skipped "
+                  "honestly");
         }
         if (asmtest_disas_available()) {
             uint8_t *bytes = (uint8_t *)malloc(len);
             if (bytes != NULL) {
                 struct iovec l = {bytes, len}, r = {base, len};
                 if (process_vm_readv(pid, &l, 1, &r, 1, 0) == (ssize_t)len)
-                    asmtest_trace_disasm(tr, ASMTEST_ARCH_X86_64, bytes, len, addr,
-                                         stdout);
+                    asmtest_trace_disasm(tr, ASMTEST_ARCH_X86_64, bytes, len,
+                                         addr, stdout);
                 free(bytes);
             }
         }
     } else {
-        printf("# SKIP jit-trace step (%s): could not single-step the live JIT method "
+        printf("# SKIP jit-trace step (%s): could not single-step the live JIT "
+               "method "
                "(runtime moved/re-tiered the code, or the watchdog fired)\n",
                engine);
     }
@@ -381,7 +395,8 @@ static int trace_runtime(const char *engine, const char *method_substr,
     ptrace(PTRACE_DETACH, ttid, NULL, NULL);
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
-    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,
+           failures);
     return failures ? 1 : 0;
 }
 
@@ -449,7 +464,8 @@ static int trace_jitdump(const char *engine, const char *method_substr,
         while (fgets(line, sizeof line, f)) {
             unsigned long a, s;
             int soff = 0;
-            if (sscanf(line, "%lx %lx %n", &a, &s, &soff) < 2 || soff == 0 || s < 2)
+            if (sscanf(line, "%lx %lx %n", &a, &s, &soff) < 2 || soff == 0 ||
+                s < 2)
                 continue;
             char *t = line + soff;
             t[strcspn(t, "\r\n")] = '\0';
@@ -458,8 +474,8 @@ static int trace_jitdump(const char *engine, const char *method_substr,
             /* The runtime writes the jitdump to /tmp/jit-<pid>.dump (path=NULL resolves it). */
             asmtest_jitdump_entry_t te;
             size_t tl = 0;
-            if (asmtest_jitdump_find(NULL, pid, t, &te, jbytes, sizeof jbytes, &tl) ==
-                    ASMTEST_PTRACE_OK &&
+            if (asmtest_jitdump_find(NULL, pid, t, &te, jbytes, sizeof jbytes,
+                                     &tl) == ASMTEST_PTRACE_OK &&
                 tl > 0) {
                 strncpy(name, t, sizeof name - 1);
                 name[sizeof name - 1] = '\0';
@@ -481,30 +497,37 @@ static int trace_jitdump(const char *engine, const char *method_substr,
         return 0;
     }
     if (!found) {
-        printf("# SKIP jitdump (%s): no method resolvable in the jitdump\n", engine);
+        printf("# SKIP jitdump (%s): no method resolvable in the jitdump\n",
+               engine);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
         printf("1..0 # skipped\n");
         return 0;
     }
-    printf("# recovered real %s method from jit-%d.dump: '%s' @ 0x%llx (%llu bytes, "
+    printf("# recovered real %s method from jit-%d.dump: '%s' @ 0x%llx (%llu "
+           "bytes, "
            "code_index %llu)\n",
            engine, (int)pid, name, (unsigned long long)e.code_addr,
            (unsigned long long)e.code_size, (unsigned long long)e.code_index);
 
     /* (1) The binary jitdump parser recovered a real method's recorded code bytes. */
     CHECK(jblen > 0 && e.code_size > 0,
-          "jitdump: asmtest_jitdump_find recovered a real JIT method's recorded bytes");
+          "jitdump: asmtest_jitdump_find recovered a real JIT method's "
+          "recorded bytes");
 
     /* (2) Cross-check: the jitdump address matches the runtime's own perf-map for the same
      * name — two independent runtime outputs agreeing on the same compilation. */
-    CHECK((unsigned long)e.code_addr == paddr && (unsigned long)e.code_size == psize,
-          "jitdump: code_addr/size agree with the runtime's perf-map (two independent "
+    CHECK((unsigned long)e.code_addr == paddr &&
+              (unsigned long)e.code_size == psize,
+          "jitdump: code_addr/size agree with the runtime's perf-map (two "
+          "independent "
           "outputs)");
 
     /* (3) The recorded bytes are real machine code (decode the first instruction). */
-    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL, 0) > 0,
-          "jitdump: the recorded bytes disassemble to real x86-64 instructions");
+    CHECK(
+        asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL,
+                      0) > 0,
+        "jitdump: the recorded bytes disassemble to real x86-64 instructions");
 
     /* (4) The recorded bytes == the LIVE code at code_addr — the jitdump captured the
      * actual running bytes (best-effort: skips if the runtime moved/re-tiered the code). */
@@ -513,17 +536,19 @@ static int trace_jitdump(const char *engine, const char *method_substr,
     struct iovec lv = {live, n}, rv = {(void *)(uintptr_t)e.code_addr, n};
     if (process_vm_readv(pid, &lv, 1, &rv, 1, 0) == (ssize_t)n &&
         memcmp(live, jbytes, n) == 0)
-        CHECK(1, "jitdump: recorded bytes == the live JIT code (jitdump captured the "
+        CHECK(1, "jitdump: recorded bytes == the live JIT code (jitdump "
+                 "captured the "
                  "running bytes)");
     else
-        printf("# SKIP jitdump byte-match: live code differs (runtime moved/re-tiered it)\n");
+        printf("# SKIP jitdump byte-match: live code differs (runtime "
+               "moved/re-tiered it)\n");
 
-    printf("# real %s JIT code recovered from the jitdump's recorded bytes:\n", engine);
+    printf("# real %s JIT code recovered from the jitdump's recorded bytes:\n",
+           engine);
     for (uint64_t off = 0; off < jblen;) {
         char text[128];
-        size_t l =
-            asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, off, text,
-                          sizeof text);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen,
+                                 e.code_addr, off, text, sizeof text);
         if (l == 0)
             break;
         printf("    0x%llx  %s\n", (unsigned long long)off, text);
@@ -532,7 +557,8 @@ static int trace_jitdump(const char *engine, const char *method_substr,
 
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
-    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,
+           failures);
     return failures ? 1 : 0;
 }
 
@@ -559,7 +585,8 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
         return 0;
     }
     if (agent == NULL || agent[0] == '\0' || access(agent, R_OK) != 0) {
-        printf("# SKIP java-jitdump: needs the perf JVMTI agent (libperf-jvmti.so from "
+        printf("# SKIP java-jitdump: needs the perf JVMTI agent "
+               "(libperf-jvmti.so from "
                "linux-tools)\n1..0 # skipped\n");
         return 0;
     }
@@ -570,18 +597,14 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
         setenv("JITDUMPDIR", "/tmp", 1);
         char ap[256];
         snprintf(ap, sizeof ap, "-agentpath:%s", agent);
-        char *cmd[] = {(char *)"java",
-                       ap,
-                       (char *)"-XX:-TieredCompilation",
-                       /* The agent's per-method I/O slows startup, so compile asmtjit
+        char *cmd[] = {
+            (char *)"java", ap, (char *)"-XX:-TieredCompilation",
+            /* The agent's per-method I/O slows startup, so compile asmtjit
                         * promptly (default C2 threshold is 10000) — else it lands only
                         * after the JDK warmup and the lane may time out. */
-                       (char *)"-XX:CompileThreshold=1000",
-                       (char *)"-XX:CompileCommand=dontinline,Hot.asmtjit",
-                       (char *)"-cp",
-                       (char *)cp,
-                       (char *)"Hot",
-                       NULL};
+            (char *)"-XX:CompileThreshold=1000",
+            (char *)"-XX:CompileCommand=dontinline,Hot.asmtjit", (char *)"-cp",
+            (char *)cp, (char *)"Hot", NULL};
         execvp(cmd[0], cmd);
         _exit(127);
     }
@@ -633,7 +656,8 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
         return 0;
     }
     if (paddr == 0) {
-        printf("# SKIP java-jitdump: asmtjit not resolvable in HotSpot's perf-map in time\n");
+        printf("# SKIP java-jitdump: asmtjit not resolvable in HotSpot's "
+               "perf-map in time\n");
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
         printf("1..0 # skipped\n");
@@ -652,7 +676,8 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
      * SIGKILL would lose the unflushed records. A watchdog bounds the wait. */
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_alarm; /* no SA_RESTART -> waitpid sees EINTR if the JVM hangs */
+    sa.sa_handler =
+        on_alarm; /* no SA_RESTART -> waitpid sees EINTR if the JVM hangs */
     sigaction(SIGALRM, &sa, NULL);
     alarm(15);
     kill(pid, SIGTERM);
@@ -660,7 +685,8 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
     pid_t w = waitpid(pid, &st, 0);
     alarm(0);
     if (w != pid) { /* JVM did not exit (and flush) in time */
-        printf("# SKIP java-jitdump: JVM did not shut down to flush the jitdump\n");
+        printf("# SKIP java-jitdump: JVM did not shut down to flush the "
+               "jitdump\n");
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
         printf("1..0 # skipped\n");
@@ -674,52 +700,64 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
     size_t jblen = 0;
     const char *dump = find_java_jitdump(pid);
     if (dump == NULL ||
-        asmtest_jitdump_find(dump, pid, JAVA_JITDUMP_METHOD, &e, jbytes, sizeof jbytes,
-                             &jblen) != ASMTEST_PTRACE_OK ||
+        asmtest_jitdump_find(dump, pid, JAVA_JITDUMP_METHOD, &e, jbytes,
+                             sizeof jbytes, &jblen) != ASMTEST_PTRACE_OK ||
         jblen == 0) {
-        printf("# SKIP java-jitdump: asmtjit not present in the flushed jitdump\n"
-               "1..0 # skipped\n");
+        printf(
+            "# SKIP java-jitdump: asmtjit not present in the flushed jitdump\n"
+            "1..0 # skipped\n");
         return 0;
     }
-    printf("# recovered real HotSpot method from the agent's jitdump: '%s' @ 0x%llx "
+    printf("# recovered real HotSpot method from the agent's jitdump: '%s' @ "
+           "0x%llx "
            "(%llu bytes, code_index %llu)\n",
            JAVA_JITDUMP_METHOD, (unsigned long long)e.code_addr,
            (unsigned long long)e.code_size, (unsigned long long)e.code_index);
 
     /* (1) The binary jitdump parser recovered a real method's recorded code bytes. */
     CHECK(jblen > 0 && e.code_size > 0,
-          "java-jitdump: asmtest_jitdump_find recovered a real HotSpot method's bytes");
+          "java-jitdump: asmtest_jitdump_find recovered a real HotSpot "
+          "method's bytes");
 
     /* (2) Cross-check: the jitdump's address/size match HotSpot's own jcmd perf-map for the
      * same method — two independent HotSpot outputs (the JVMTI agent and Compiler.perfmap). */
-    CHECK((unsigned long)e.code_addr == paddr && (unsigned long)e.code_size == psize,
-          "java-jitdump: code_addr/size agree with HotSpot's jcmd perf-map (two independent "
+    CHECK((unsigned long)e.code_addr == paddr &&
+              (unsigned long)e.code_size == psize,
+          "java-jitdump: code_addr/size agree with HotSpot's jcmd perf-map "
+          "(two independent "
           "outputs)");
 
     /* (3) The recorded bytes are real machine code (decode the first instruction). */
-    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0, NULL, 0) > 0,
-          "java-jitdump: the recorded bytes disassemble to real x86-64 instructions");
+    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0,
+                        NULL, 0) > 0,
+          "java-jitdump: the recorded bytes disassemble to real x86-64 "
+          "instructions");
 
     /* (4) The recorded bytes == the bytes that were LIVE at code_addr (snapshotted in step
      * B) — the jitdump captured the actual running code (best-effort). */
-    if (livegot == (ssize_t)ln && memcmp(live, jbytes, ln < jblen ? ln : jblen) == 0)
-        CHECK(1, "java-jitdump: recorded bytes == the live JIT code (jitdump captured the "
+    if (livegot == (ssize_t)ln &&
+        memcmp(live, jbytes, ln < jblen ? ln : jblen) == 0)
+        CHECK(1, "java-jitdump: recorded bytes == the live JIT code (jitdump "
+                 "captured the "
                  "running bytes)");
     else
-        printf("# SKIP java-jitdump byte-match: live snapshot unavailable or differs\n");
+        printf("# SKIP java-jitdump byte-match: live snapshot unavailable or "
+               "differs\n");
 
-    printf("# real HotSpot JIT code recovered from the jitdump's recorded bytes:\n");
+    printf("# real HotSpot JIT code recovered from the jitdump's recorded "
+           "bytes:\n");
     for (uint64_t off = 0; off < jblen;) {
         char text[128];
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, off, text,
-                                 sizeof text);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen,
+                                 e.code_addr, off, text, sizeof text);
         if (l == 0)
             break;
         printf("    0x%llx  %s\n", (unsigned long long)off, text);
         off += l;
     }
 
-    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures, failures);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,
+           failures);
     return failures ? 1 : 0;
 }
 
@@ -772,7 +810,8 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
-        return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL, descend_level);
+        return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL,
+                             descend_level);
     }
     if (strcmp(mode, "dotnet-bcl") == 0) {
         if (argc < 3) {
@@ -795,7 +834,8 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], (char *)"bcl", NULL};
-        return trace_runtime("CoreCLR-BCL", "Console::WriteLine", cmd, 0, NULL, NULL, descend_level);
+        return trace_runtime("CoreCLR-BCL", "Console::WriteLine", cmd, 0, NULL,
+                             NULL, descend_level);
     }
     if (strcmp(mode, "java") == 0) {
         if (argc < 3) {
@@ -836,20 +876,22 @@ int main(int argc, char **argv) {
          * single C2 body at a stable address; dontinline keeps floorDiv a standalone nmethod
          * (else C2 inlines the tiny method into the caller). Runs Hot with the "bcl" arg; the
          * thread picker + jcmd perf-map refresh are shared with the plain java lane. */
-        char *cmd[] = {(char *)"java",
-                       (char *)"-XX:-TieredCompilation",
-                       (char *)"-XX:CompileCommand=dontinline,java/lang/Math.floorDiv",
-                       (char *)"-cp",
-                       argv[2],
-                       (char *)"Hot",
-                       (char *)"bcl",
-                       NULL};
-        return trace_runtime("HotSpot-BCL", "floorDiv", cmd, 0, java_perfmap_refresh,
-                             pick_busy_thread, 0);
+        char *cmd[] = {
+            (char *)"java",
+            (char *)"-XX:-TieredCompilation",
+            (char *)"-XX:CompileCommand=dontinline,java/lang/Math.floorDiv",
+            (char *)"-cp",
+            argv[2],
+            (char *)"Hot",
+            (char *)"bcl",
+            NULL};
+        return trace_runtime("HotSpot-BCL", "floorDiv", cmd, 0,
+                             java_perfmap_refresh, pick_busy_thread, 0);
     }
     if (strcmp(mode, "java-jitdump") == 0) {
         if (argc < 4) {
-            fprintf(stderr, "usage: %s java-jitdump <classpath> <libperf-jvmti.so>\n",
+            fprintf(stderr,
+                    "usage: %s java-jitdump <classpath> <libperf-jvmti.so>\n",
                     argv[0]);
             return 2;
         }
@@ -869,7 +911,8 @@ int main(int argc, char **argv) {
     }
     if (strcmp(mode, "dotnet-jitdump") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "usage: %s dotnet-jitdump <app.dll-abspath>\n", argv[0]);
+            fprintf(stderr, "usage: %s dotnet-jitdump <app.dll-abspath>\n",
+                    argv[0]);
             return 2;
         }
         /* CoreCLR writes a native perf jitdump (/tmp/jit-<pid>.dump) AND the text perf-map
@@ -885,7 +928,8 @@ int main(int argc, char **argv) {
     }
 
     fprintf(stderr,
-            "usage: %s {node|dotnet <app.dll>|dotnet-bcl <app.dll>|java <classpath>|"
+            "usage: %s {node|dotnet <app.dll>|dotnet-bcl <app.dll>|java "
+            "<classpath>|"
             "java-bcl <classpath>|java-jitdump <classpath> <agent.so>|jitdump|"
             "dotnet-jitdump <app.dll>}\n",
             argv[0]);

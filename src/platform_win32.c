@@ -41,9 +41,8 @@ void *asmtest_guarded_alloc(size_t n) {
     size_t pg = win32_page_size();
     size_t usable = round_up_page(n, pg);
     size_t total = usable + pg;
-    unsigned char *base =
-        (unsigned char *)VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT,
-                                      PAGE_READWRITE);
+    unsigned char *base = (unsigned char *)VirtualAlloc(
+        NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (base == NULL)
         return NULL;
     DWORD old;
@@ -70,9 +69,8 @@ void *asmtest_guarded_alloc_under(size_t n) {
     size_t pg = win32_page_size();
     size_t usable = round_up_page(n, pg);
     size_t total = pg + usable;
-    unsigned char *base =
-        (unsigned char *)VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT,
-                                      PAGE_READWRITE);
+    unsigned char *base = (unsigned char *)VirtualAlloc(
+        NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (base == NULL)
         return NULL;
     DWORD old;
@@ -100,9 +98,7 @@ void asmtest_guarded_free_under(void *p, size_t n) {
 /* A process that dies from an unhandled hardware exception exits with the
  * NTSTATUS exception code (e.g. 0xC0000005 for an access violation), which lives
  * in the error-severity range. Distinguish those from ordinary exit codes. */
-static int is_crash_code(DWORD code) {
-    return code >= 0xC0000000u;
-}
+static int is_crash_code(DWORD code) { return code >= 0xC0000000u; }
 
 asmtest_win32_run_t asmtest_win32_run(const char *cmdline, unsigned timeout_ms,
                                       unsigned long *exit_code) {
@@ -146,8 +142,8 @@ asmtest_win32_run_t asmtest_win32_run(const char *cmdline, unsigned timeout_ms,
 /* One in-flight child in the pool. */
 typedef struct {
     HANDLE handle;
-    int idx;             /* index into the caller's arrays */
-    ULONGLONG deadline;  /* GetTickCount64 deadline; 0 = no timeout */
+    int idx;            /* index into the caller's arrays */
+    ULONGLONG deadline; /* GetTickCount64 deadline; 0 = no timeout */
 } pool_slot;
 
 /* Spawn cmdline into *s (idx, deadline filled in). Returns 1 on success. */
@@ -216,9 +212,10 @@ int asmtest_win32_run_pool(const char *const *cmdlines, int n, int jobs,
         for (int i = 0; i < nslots; i++)
             handles[i] = slots[i].handle;
 
-        DWORD w = WaitForMultipleObjects((DWORD)nslots, handles, FALSE, wait_ms);
+        DWORD w =
+            WaitForMultipleObjects((DWORD)nslots, handles, FALSE, wait_ms);
 
-        int retire;                  /* slot index to retire */
+        int retire; /* slot index to retire */
         asmtest_win32_run_t outcome;
         DWORD code = 0;
 
@@ -373,8 +370,9 @@ volatile int asmtest_win32_test_reason;
 asmtest_win32_fault_t asmtest_win32_test_fault;
 
 static volatile LONG rt_armed;
-static volatile LONG rt_finishing;       /* main thread has entered test_end (#35) */
-static volatile LONG rt_landing_reached; /* landing pad executed (watchdog, #36) */
+static volatile LONG rt_finishing; /* main thread has entered test_end (#35) */
+static volatile LONG
+    rt_landing_reached; /* landing pad executed (watchdog, #36) */
 static PVOID rt_veh;
 static HANDLE rt_timer_queue;
 static HANDLE rt_timer;
@@ -389,7 +387,8 @@ static HANDLE rt_test_thread;
 enum { RT_LANDING_POLL_MS = 5, RT_LANDING_POLL_ITERS = 200 }; /* ~1s ceiling */
 
 static void rt_landing(void) {
-    InterlockedExchange(&rt_landing_reached, 1); /* watched by rt_timer_cb (#36) */
+    InterlockedExchange(&rt_landing_reached,
+                        1); /* watched by rt_timer_cb (#36) */
     __builtin_longjmp(asmtest_win32_test_recover, 1);
 }
 
@@ -508,8 +507,8 @@ void asmtest_win32_test_end(void) {
      * If a watchdog hijack abandons this DeleteTimerQueueTimer mid-call and
      * run_one re-enters test_end after the longjmp, the second call sees NULL and
      * skips — no double-delete / use-after-free of the timer object. */
-    HANDLE t = (HANDLE)InterlockedExchangePointer((PVOID volatile *)&rt_timer,
-                                                  NULL);
+    HANDLE t =
+        (HANDLE)InterlockedExchangePointer((PVOID volatile *)&rt_timer, NULL);
     if (t != NULL)
         /* INVALID_HANDLE_VALUE: wait for any in-flight callback to finish. */
         DeleteTimerQueueTimer(rt_timer_queue, t, INVALID_HANDLE_VALUE);

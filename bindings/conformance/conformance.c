@@ -57,7 +57,7 @@ extern long clobbers_rbx(long, long); /* ABI violation: trashes rbx        */
 extern double fp_add(double, double);
 /* vec_add4f: lane-wise add of four float32s; vec128 in, vec128 out (xmm0/v0). */
 extern long read_fault(const long *); /* loads *p; faults if p is unmapped */
-extern double int_to_double(long);    /* (double)n into xmm0 from an integer arg */
+extern double int_to_double(long); /* (double)n into xmm0 from an integer arg */
 
 /* Unmapped guest address the fault case dereferences (clear of the emulator's
  * code/stack maps), so the fault lands at a recognizable fault_addr. */
@@ -101,27 +101,28 @@ static void skip(const char *name, const char *reason) {
  * in-blob sibling keeps the call target reachable from an mmap'd page (libc is not). */
 #if defined(__x86_64__)
 /* R@0: mov rax,rdi; call S(+4); add rax,rsi; ret.  S@0xc: inc rax; ret. */
-static const unsigned char CL_CODE[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
-                                        0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3};
-#define CL_HAVE 1
-#define CL_REGION 0xc
+static const unsigned char CL_CODE[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00,
+                                        0x00, 0x00, 0x48, 0x01, 0xf0, 0xc3,
+                                        0x48, 0xff, 0xc0, 0xc3};
+#define CL_HAVE      1
+#define CL_REGION    0xc
 #define CL_CALL_SITE 0x3
-#define CL_LEAF_OFF 0xc
-#define CL_LEAF_LEN 4
-#define CL_RESULT 43
+#define CL_LEAF_OFF  0xc
+#define CL_LEAF_LEN  4
+#define CL_RESULT    43
 static const uint64_t CL_FRAME0[] = {0x0, 0x3, 0x8, 0xb};
 static const uint64_t CL_LEAF[] = {0x0, 0x3};
 #elif defined(__aarch64__)
 /* R@0: bl S; add x0,x0,x1; ret.  S@0xc: add x0,x0,#1; ret. */
-static const unsigned char CL_CODE[] = {0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b,
-                                        0xc0, 0x03, 0x5f, 0xd6, 0x00, 0x04, 0x00, 0x91,
-                                        0xc0, 0x03, 0x5f, 0xd6};
-#define CL_HAVE 1
-#define CL_REGION 0xc
+static const unsigned char CL_CODE[] = {
+    0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b, 0xc0, 0x03,
+    0x5f, 0xd6, 0x00, 0x04, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6};
+#define CL_HAVE      1
+#define CL_REGION    0xc
 #define CL_CALL_SITE 0x0
-#define CL_LEAF_OFF 0xc
-#define CL_LEAF_LEN 8
-#define CL_RESULT 43
+#define CL_LEAF_OFF  0xc
+#define CL_LEAF_LEN  8
+#define CL_RESULT    43
 static const uint64_t CL_FRAME0[] = {0x0, 0x4, 0x8};
 static const uint64_t CL_LEAF[] = {0x0, 0x4};
 #else
@@ -129,7 +130,8 @@ static const uint64_t CL_LEAF[] = {0x0, 0x4};
 #endif
 
 #if CL_HAVE
-static int frame_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp, size_t n) {
+static int frame_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp,
+                    size_t n) {
     if (asmtest_descent_frame_insn_count(d, f) != n)
         return 0;
     for (size_t i = 0; i < n; i++)
@@ -171,12 +173,15 @@ static void run_ptrace_descent(void) {
 
     /* L1 RECORD_EDGES: R's own body + a single (call -> S) edge. */
     {
-        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_RECORD_EDGES);
+        asmtest_descent_t *d =
+            asmtest_descent_new(ASMTEST_DESCENT_RECORD_EDGES);
         asmtest_trace_t *t = asmtest_trace_new(64, 64);
         long res = 0;
-        int rc = asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
+        int rc =
+            asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
         int ok = rc == ASMTEST_PTRACE_OK && res == CL_RESULT &&
-                 asmtest_descent_frames_len(d) == 1 && frame_eq(d, 0, CL_FRAME0, NF0) &&
+                 asmtest_descent_frames_len(d) == 1 &&
+                 frame_eq(d, 0, CL_FRAME0, NF0) &&
                  asmtest_descent_edges_len(d) == 1 &&
                  asmtest_descent_edge_site(d, 0) == CL_CALL_SITE &&
                  asmtest_descent_edge_target(d, 0) == base + CL_LEAF_OFF;
@@ -186,16 +191,20 @@ static void run_ptrace_descent(void) {
     }
     /* L2 DESCEND_KNOWN: descend the allow-set leaf S as a nested frame. */
     {
-        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_t *d =
+            asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
         asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + CL_LEAF_OFF),
                                      CL_LEAF_LEN);
         asmtest_trace_t *t = asmtest_trace_new(64, 64);
         long res = 0;
-        int rc = asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
+        int rc =
+            asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
         int ok = rc == ASMTEST_PTRACE_OK && res == CL_RESULT &&
-                 asmtest_descent_frames_len(d) == 2 && frame_eq(d, 0, CL_FRAME0, NF0) &&
+                 asmtest_descent_frames_len(d) == 2 &&
+                 frame_eq(d, 0, CL_FRAME0, NF0) &&
                  asmtest_descent_frame_base(d, 1) == base + CL_LEAF_OFF &&
-                 asmtest_descent_frame_depth(d, 1) == 1 && frame_eq(d, 1, CL_LEAF, NLF) &&
+                 asmtest_descent_frame_depth(d, 1) == 1 &&
+                 frame_eq(d, 1, CL_LEAF, NLF) &&
                  asmtest_descent_edges_len(d) == 0;
         check(n2, ok, "L2 descend/frame mismatch");
         asmtest_trace_free(t);
@@ -244,14 +253,16 @@ static int run_corpus(void) {
         regs_t r;
         memset(&r, 0, sizeof r);
         asm_call_capture(&r, (void *)set_carry, (long[6]){0});
-        int ok = asmtest_check_flag(&r, ASMTEST_CF, 1, "CF", why, sizeof why) == 0;
+        int ok =
+            asmtest_check_flag(&r, ASMTEST_CF, 1, "CF", why, sizeof why) == 0;
         check("set_carry.cf_set", ok, ok ? NULL : why);
     }
     {
         regs_t r;
         memset(&r, 0, sizeof r);
         asm_call_capture(&r, (void *)clear_carry, (long[6]){0});
-        int ok = asmtest_check_flag(&r, ASMTEST_CF, 0, "CF", why, sizeof why) == 0;
+        int ok =
+            asmtest_check_flag(&r, ASMTEST_CF, 0, "CF", why, sizeof why) == 0;
         check("clear_carry.cf_clear", ok, ok ? NULL : why);
     }
 
@@ -312,7 +323,8 @@ static int run_corpus(void) {
             emu_call(e, (void *)read_fault, 64, fargs, 1, 0, &fres);
             int fok = fres.faulted && fres.fault_addr == CORPUS_FAULT_ADDR &&
                       fres.fault_kind == EMU_FAULT_READ;
-            check("emu.read_fault", fok, fok ? NULL : "fault not reported as data");
+            check("emu.read_fault", fok,
+                  fok ? NULL : "fault not reported as data");
 
             /* int_to_double(42) lands (double)42 in xmm0 — the guest XMM file,
              * beyond the GP registers — and a clean run keeps rip/rflags live
@@ -324,7 +336,8 @@ static int run_corpus(void) {
             emu_call(e, (void *)int_to_double, 64, xargs, 1, 0, &xres);
             int xok = !xres.faulted && xres.regs.xmm[0].f64[0] == 42.0 &&
                       xres.regs.rip != 0 && (xres.regs.rflags & 0x2u) != 0;
-            check("emu.int_to_double", xok, xok ? NULL : "xmm/rip/rflags read mismatch");
+            check("emu.int_to_double", xok,
+                  xok ? NULL : "xmm/rip/rflags read mismatch");
             emu_close(e);
         }
     }
@@ -343,7 +356,7 @@ static int run_corpus(void) {
     /* AArch64 `add x0, x0, x1; ret`, args (40, 2) -> x0 == 42. */
     {
         static const unsigned char code[] = {0x00, 0x00, 0x01, 0x8B,
-                                              0xC0, 0x03, 0x5F, 0xD6};
+                                             0xC0, 0x03, 0x5F, 0xD6};
         emu_arm64_t *e = emu_arm64_open();
         emu_arm64_result_t *r = asmtest_emu_arm64_result_new();
         long args[2] = {40, 2};
@@ -360,7 +373,7 @@ static int run_corpus(void) {
     /* RISC-V (RV64) `add a0, a0, a1; ret`, args (40, 2) -> a0 (x10) == 42. */
     {
         static const unsigned char code[] = {0x33, 0x05, 0xB5, 0x00,
-                                              0x67, 0x80, 0x00, 0x00};
+                                             0x67, 0x80, 0x00, 0x00};
         emu_riscv_t *e = emu_riscv_open();
         emu_riscv_result_t *r = asmtest_emu_riscv_result_new();
         long args[2] = {40, 2};
@@ -377,7 +390,7 @@ static int run_corpus(void) {
     /* ARM32 (A32) `add r0, r0, r1; bx lr`, args (40, 2) -> r0 == 42. */
     {
         static const unsigned char code[] = {0x01, 0x00, 0x80, 0xE0,
-                                              0x1E, 0xFF, 0x2F, 0xE1};
+                                             0x1E, 0xFF, 0x2F, 0xE1};
         emu_arm_t *e = emu_arm_open();
         emu_arm_result_t *r = asmtest_emu_arm_result_new();
         long args[2] = {40, 2};
@@ -451,8 +464,9 @@ static int run_corpus(void) {
         emu_arm64_result_t *r = asmtest_emu_arm64_result_new();
         emu_trace_t *tr = asmtest_emu_trace_new(64, 64);
         long args[1] = {0};
-        int ran = e && r && tr &&
-                  emu_arm64_call_traced(e, code, sizeof code, args, 1, 0, r, tr);
+        int ran =
+            e && r && tr &&
+            emu_arm64_call_traced(e, code, sizeof code, args, 1, 0, r, tr);
         int ok = ran && !asmtest_emu_result_faulted((emu_result_t *)r) &&
                  asmtest_emu_arm64_reg(r, "x0") == 42 &&
                  asmtest_emu_trace_covered(tr, 0) &&
@@ -489,7 +503,8 @@ static int run_corpus(void) {
             ok = asmtest_emu_call_asm6(
                 e, "mov %rdi, %rax; add %rsi, %rax; add %rdx, %rax; ret",
                 ASM_SYNTAX_ATT, 10, 20, 12, 0, 0, 0, 3, 0, &res);
-            check("asm.att_3arg", ok && res.regs.rax == 42, "asm att_3arg mismatch");
+            check("asm.att_3arg", ok && res.regs.rax == 42,
+                  "asm att_3arg mismatch");
 
             /* Failure path: a bad string fails (0) and leaves a diagnostic. */
             memset(&res, 0, sizeof res);
@@ -617,11 +632,12 @@ static void emit_corpus(void) {
            "\"guest\": \"x86_64\", \"call\": \"fp\", "
            "\"code\": [242, 15, 88, 193, 195], \"fargs\": [1.5, 2.25], "
            "\"expect\": {\"xmm_f64\": {\"0\": 3.75}, \"faulted\": false}},\n");
-    printf("      {\"name\": \"emu.vec_add4f\", \"tier\": \"emu_bytes\", "
-           "\"guest\": \"x86_64\", \"call\": \"vec\", "
-           "\"code\": [15, 88, 193, 195], "
-           "\"vargs\": [[1, 2, 3, 4], [10, 20, 30, 40]], "
-           "\"expect\": {\"vret_f32\": [11, 22, 33, 44], \"faulted\": false}},\n");
+    printf(
+        "      {\"name\": \"emu.vec_add4f\", \"tier\": \"emu_bytes\", "
+        "\"guest\": \"x86_64\", \"call\": \"vec\", "
+        "\"code\": [15, 88, 193, 195], "
+        "\"vargs\": [[1, 2, 3, 4], [10, 20, 30, 40]], "
+        "\"expect\": {\"vret_f32\": [11, 22, 33, 44], \"faulted\": false}},\n");
     printf("      {\"name\": \"emu.win64_add\", \"tier\": \"emu_bytes\", "
            "\"guest\": \"x86_64_win64\", \"call\": \"int\", "
            "\"code\": [72, 137, 200, 72, 1, 208, 195], \"args\": [40, 2], "
@@ -658,24 +674,28 @@ static void emit_corpus(void) {
      * ptrace stepper; the `arch` field lets a binding on a different host skip it). */
 #if CL_HAVE
     printf(",\n      {\"name\": \"ptrace_descent.calls_leaf.edges\", "
-           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 1, \"code\": ",
+           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 1, "
+           "\"code\": ",
            CORPUS_ARCH);
     emit_bytes(CL_CODE, sizeof CL_CODE);
     printf(", \"region\": %d, \"args\": [20, 22], \"expect\": {\"result\": %d, "
            "\"frame0\": ",
            (int)CL_REGION, CL_RESULT);
     emit_u64s(CL_FRAME0, sizeof CL_FRAME0 / sizeof CL_FRAME0[0]);
-    printf(", \"edges\": [{\"site\": %d, \"target_off\": %d}]}},\n", (int)CL_CALL_SITE,
-           (int)CL_LEAF_OFF);
+    printf(", \"edges\": [{\"site\": %d, \"target_off\": %d}]}},\n",
+           (int)CL_CALL_SITE, (int)CL_LEAF_OFF);
     printf("      {\"name\": \"ptrace_descent.calls_leaf.descend\", "
-           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 2, \"code\": ",
+           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 2, "
+           "\"code\": ",
            CORPUS_ARCH);
     emit_bytes(CL_CODE, sizeof CL_CODE);
-    printf(", \"region\": %d, \"allow_off\": %d, \"allow_len\": %d, \"args\": [20, 22], "
+    printf(", \"region\": %d, \"allow_off\": %d, \"allow_len\": %d, \"args\": "
+           "[20, 22], "
            "\"expect\": {\"result\": %d, \"frame0\": ",
            (int)CL_REGION, (int)CL_LEAF_OFF, (int)CL_LEAF_LEN, CL_RESULT);
     emit_u64s(CL_FRAME0, sizeof CL_FRAME0 / sizeof CL_FRAME0[0]);
-    printf(", \"frames\": [{\"base_off\": %d, \"depth\": 1, \"insns\": ", (int)CL_LEAF_OFF);
+    printf(", \"frames\": [{\"base_off\": %d, \"depth\": 1, \"insns\": ",
+           (int)CL_LEAF_OFF);
     emit_u64s(CL_LEAF, sizeof CL_LEAF / sizeof CL_LEAF[0]);
     printf("}], \"edges\": []}}");
 #endif

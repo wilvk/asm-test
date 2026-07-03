@@ -20,21 +20,11 @@
 #include <string.h>
 
 /* ---- regs_t opaque handle + accessors ---- */
-regs_t *asmtest_regs_new(void) {
-    return (regs_t *)calloc(1, sizeof(regs_t));
-}
-void asmtest_regs_free(regs_t *r) {
-    free(r);
-}
-unsigned long asmtest_regs_ret(const regs_t *r) {
-    return r->ret;
-}
-unsigned long asmtest_regs_flags(const regs_t *r) {
-    return r->flags;
-}
-double asmtest_regs_fret(const regs_t *r) {
-    return r->fret;
-}
+regs_t *asmtest_regs_new(void) { return (regs_t *)calloc(1, sizeof(regs_t)); }
+void asmtest_regs_free(regs_t *r) { free(r); }
+unsigned long asmtest_regs_ret(const regs_t *r) { return r->ret; }
+unsigned long asmtest_regs_flags(const regs_t *r) { return r->flags; }
+double asmtest_regs_fret(const regs_t *r) { return r->fret; }
 
 /* Read a single vector lane (float32) from a captured vector register. */
 float asmtest_regs_vec_f32(const regs_t *r, int index, int lane) {
@@ -113,12 +103,8 @@ void asmtest_capture_vec_f32(regs_t *out, void *fn, const float *lanes,
 emu_result_t *asmtest_emu_result_new(void) {
     return (emu_result_t *)calloc(1, sizeof(emu_result_t));
 }
-void asmtest_emu_result_free(emu_result_t *r) {
-    free(r);
-}
-int asmtest_emu_result_ok(const emu_result_t *r) {
-    return r->ok ? 1 : 0;
-}
+void asmtest_emu_result_free(emu_result_t *r) { free(r); }
+int asmtest_emu_result_ok(const emu_result_t *r) { return r->ok ? 1 : 0; }
 int asmtest_emu_result_faulted(const emu_result_t *r) {
     return r->faulted ? 1 : 0;
 }
@@ -137,10 +123,11 @@ int asmtest_emu_result_fault_kind(const emu_result_t *r) {
 /* x86-64 guest register by name. The 16 GP fields plus rip/rflags are laid out
  * contiguously in emu_x86_regs_t, so the whole 64-bit file reads as one array —
  * a binding can pull the instruction pointer and flags, not only rax..r15. */
-unsigned long long asmtest_emu_x86_reg(const emu_result_t *r, const char *name) {
-    static const char *const n[18] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi",
-                                      "rbp", "rsp", "r8",  "r9",  "r10", "r11",
-                                      "r12", "r13", "r14", "r15", "rip", "rflags"};
+unsigned long long asmtest_emu_x86_reg(const emu_result_t *r,
+                                       const char *name) {
+    static const char *const n[18] = {
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8",
+        "r9",  "r10", "r11", "r12", "r13", "r14", "r15", "rip", "rflags"};
     const uint64_t *p = &r->regs.rax;
     if (!name)
         return 0;
@@ -250,9 +237,7 @@ unsigned long long asmtest_emu_mutation_survived(const emu_mutation_stat_t *s) {
 emu_arm64_result_t *asmtest_emu_arm64_result_new(void) {
     return (emu_arm64_result_t *)calloc(1, sizeof(emu_arm64_result_t));
 }
-void asmtest_emu_arm64_result_free(emu_arm64_result_t *r) {
-    free(r);
-}
+void asmtest_emu_arm64_result_free(emu_arm64_result_t *r) { free(r); }
 unsigned long long asmtest_emu_arm64_reg(const emu_arm64_result_t *r,
                                          const char *name) {
     if (!name)
@@ -288,9 +273,7 @@ float asmtest_emu_arm64_vec_f32(const emu_arm64_result_t *r, int index,
 emu_riscv_result_t *asmtest_emu_riscv_result_new(void) {
     return (emu_riscv_result_t *)calloc(1, sizeof(emu_riscv_result_t));
 }
-void asmtest_emu_riscv_result_free(emu_riscv_result_t *r) {
-    free(r);
-}
+void asmtest_emu_riscv_result_free(emu_riscv_result_t *r) { free(r); }
 unsigned long long asmtest_emu_riscv_reg(const emu_riscv_result_t *r,
                                          const char *name) {
     if (!name)
@@ -325,9 +308,7 @@ double asmtest_emu_riscv_f_f64(const emu_riscv_result_t *r, int index,
 emu_arm_result_t *asmtest_emu_arm_result_new(void) {
     return (emu_arm_result_t *)calloc(1, sizeof(emu_arm_result_t));
 }
-void asmtest_emu_arm_result_free(emu_arm_result_t *r) {
-    free(r);
-}
+void asmtest_emu_arm_result_free(emu_arm_result_t *r) { free(r); }
 unsigned long long asmtest_emu_arm_reg(const emu_arm_result_t *r,
                                        const char *name) {
     if (!name)

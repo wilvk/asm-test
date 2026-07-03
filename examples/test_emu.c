@@ -14,7 +14,7 @@ extern long add_signed(long a, long b);
 extern long sum_via_rbx(long a, long b);
 extern long clobbers_rbx(long a, long b);
 extern long load_long(void *p);
-extern long classify(long x);             /* -1/0/+1; three branch paths */
+extern long classify(long x); /* -1/0/+1; three branch paths */
 extern void fill_bytes(void *buf, long val, long n); /* a counted loop  */
 
 /* 64 bytes comfortably covers each of these tiny routines; emulation stops at
@@ -39,9 +39,7 @@ extern void fill_bytes(void *buf, long val, long n); /* a counted loop  */
 
 static emu_t *E;
 
-SETUP(emu) {
-    E = emu_open();
-}
+SETUP(emu) { E = emu_open(); }
 
 TEARDOWN(emu) {
     emu_close(E);
@@ -129,13 +127,13 @@ TEST(emu, trace_records_instruction_stream) {
     t.blocks_cap = 16;
 
     long args[] = {7};
-    ASSERT_TRUE(emu_call_traced(E, (void *)classify, CODE_WINDOW, args, 1, 0,
-                                &r, &t));
+    ASSERT_TRUE(
+        emu_call_traced(E, (void *)classify, CODE_WINDOW, args, 1, 0, &r, &t));
     ASSERT_EQ(r.regs.rax, 1);
     ASSERT_TRUE(t.insns_total > 0);
     ASSERT_EQ(t.insns_len, t.insns_total); /* big buffer: nothing dropped */
     ASSERT_FALSE(t.truncated);
-    ASSERT_UEQ(t.insns[0], 0);  /* execution starts at the routine's entry */
+    ASSERT_UEQ(t.insns[0], 0); /* execution starts at the routine's entry */
     ASSERT_TRUE(t.blocks_len >= 1);
     ASSERT_UEQ(t.blocks[0], 0); /* first basic block is the entry block     */
 }
@@ -206,7 +204,8 @@ TEST(emu, double_arg_returns_in_xmm0) {
     double fargs[] = {1.5, 2.25}; /* xmm0, xmm1 */
     ASSERT_TRUE(emu_call_fp(E, ADDSD, sizeof ADDSD, iargs, 0, fargs, 2, 0, &r));
     ASSERT_NO_FAULT(&r);
-    ASSERT_EMU_FP_EQ(&r, 3.75); /* result in xmm0.f64[0], no manual struct read */
+    ASSERT_EMU_FP_EQ(&r,
+                     3.75); /* result in xmm0.f64[0], no manual struct read */
 }
 
 TEST(emu, vector_arg_captures_xmm_file) {
@@ -214,12 +213,13 @@ TEST(emu, vector_arg_captures_xmm_file) {
     emu_result_t r;
     emu_vec128_t a = {0}, b = {0};
     for (int i = 0; i < 4; i++) {
-        a.u32[i] = (uint32_t)(i + 1);   /* 1 2 3 4   */
+        a.u32[i] = (uint32_t)(i + 1);        /* 1 2 3 4   */
         b.u32[i] = (uint32_t)(10 * (i + 1)); /* 10 20 30 40 */
     }
     emu_vec128_t vargs[2] = {a, b};
     long iargs[1] = {0};
-    ASSERT_TRUE(emu_call_vec(E, PADDD, sizeof PADDD, iargs, 0, vargs, 2, 0, &r));
+    ASSERT_TRUE(
+        emu_call_vec(E, PADDD, sizeof PADDD, iargs, 0, vargs, 2, 0, &r));
     ASSERT_NO_FAULT(&r);
     emu_vec128_t expect = {0};
     for (int i = 0; i < 4; i++)
@@ -374,7 +374,8 @@ TEST(emu, source_line_mapping) {
  * emu_disas_available(). */
 
 TEST(emu, disas_decodes_known_instructions) {
-    static const uint8_t code[] = {0x48, 0x31, 0xc0, 0xc3}; /* xor rax,rax;ret */
+    static const uint8_t code[] = {0x48, 0x31, 0xc0,
+                                   0xc3}; /* xor rax,rax;ret */
     char buf[64];
     size_t n = emu_disas(EMU_ARCH_X86_64, code, sizeof code, EMU_CODE_BASE, 0,
                          buf, sizeof buf);
@@ -392,7 +393,8 @@ TEST(emu, disas_decodes_known_instructions) {
 }
 
 TEST(emu, fault_describe_names_offending_instruction) {
-    static const uint8_t code[] = {0x48, 0x8b, 0x07, 0xc3}; /* mov rax,[rdi];ret */
+    static const uint8_t code[] = {0x48, 0x8b, 0x07,
+                                   0xc3}; /* mov rax,[rdi];ret */
     emu_result_t r;
     long args[] = {(long)0xdead0000UL}; /* unmapped pointer */
     emu_call_traced(E, code, sizeof code, args, 1, 0, &r, NULL);
@@ -460,7 +462,8 @@ TEST(emu, watchpoint_only_flags_escaping_write) {
     long args[] = {(long)WATCH_BASE};
 
     emu_watch_t w;
-    emu_watch_writes(E, WATCH_BASE, 8, EMU_WATCH_ONLY, &w); /* confine to [base,+8) */
+    emu_watch_writes(E, WATCH_BASE, 8, EMU_WATCH_ONLY,
+                     &w); /* confine to [base,+8) */
     emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
     emu_watch_clear(E);
 
@@ -586,9 +589,9 @@ TEST(emu, mutation_strong_suite_kills_more) {
     size_t strong_surv = emu_mutation_test1(E, CLASSIFY3, sizeof CLASSIFY3,
                                             strong, 3, 0, 0xABCDULL, &ss);
 
-    ASSERT_UEQ(ws.mutants, ss.mutants);      /* identical mutant set */
-    ASSERT_TRUE(weak_surv > 0);              /* the weak suite misses some */
-    ASSERT_TRUE(strong_surv < weak_surv);    /* the strong suite kills more */
+    ASSERT_UEQ(ws.mutants, ss.mutants);   /* identical mutant set */
+    ASSERT_TRUE(weak_surv > 0);           /* the weak suite misses some */
+    ASSERT_TRUE(strong_surv < weak_surv); /* the strong suite kills more */
     ASSERT_TRUE(ss.killed > ws.killed);
 }
 
@@ -791,8 +794,8 @@ TEST(emu_riscv, trace_records_instruction_stream) {
     t.blocks_cap = 8;
 
     long args[] = {1, 2, 100};
-    ASSERT_TRUE(emu_riscv_call_traced(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0,
-                                      &r, &t));
+    ASSERT_TRUE(
+        emu_riscv_call_traced(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0, &r, &t));
     ASSERT_EQ(r.regs.x[10], 103); /* (1 + 2) + 100 */
     /* add, add, ret — straight line: 3 instructions at offsets 0/4/8, one
      * basic block (base RV64 instructions are 4 bytes, so offsets are exact). */
@@ -896,8 +899,8 @@ TEST(emu_arm, trace_records_instruction_stream) {
     t.blocks_cap = 8;
 
     long args[] = {1, 2, 100};
-    ASSERT_TRUE(emu_arm_call_traced(e, ARM_ADD3, sizeof ARM_ADD3, args, 3, 0,
-                                    &r, &t));
+    ASSERT_TRUE(
+        emu_arm_call_traced(e, ARM_ADD3, sizeof ARM_ADD3, args, 3, 0, &r, &t));
     ASSERT_EQ(r.regs.r[0], 103); /* (1 + 2) + 100 */
     /* add, add, bx lr — straight line: 3 instructions at offsets 0/4/8, one
      * basic block (A32 instructions are 4 bytes, so offsets are exact). */
@@ -946,8 +949,8 @@ TEST(emu_arm, vector_arg_captures_q_file) {
     }
     emu_vec128_t vargs[2] = {a, b};
     long iargs[1] = {0};
-    ASSERT_TRUE(emu_arm_call_vec(e, VADD4S, sizeof VADD4S, iargs, 0, vargs, 2, 0,
-                                 &r));
+    ASSERT_TRUE(
+        emu_arm_call_vec(e, VADD4S, sizeof VADD4S, iargs, 0, vargs, 2, 0, &r));
     ASSERT_NO_FAULT(&r);
     emu_vec128_t expect = {0};
     for (int i = 0; i < 4; i++)
@@ -970,9 +973,9 @@ TEST(emu_arm, vector_arg_captures_q_file) {
  * ------------------------------------------------------------------------- */
 TEST(emu_win64, runs_routine_in_isolation) {
     /* arg0 + arg1, taken from rcx and rdx under Win64. */
-    static const unsigned char ADD[] = {0x48, 0x89, 0xc8,  /* mov rax, rcx */
-                                        0x48, 0x01, 0xd0,  /* add rax, rdx */
-                                        0xc3};             /* ret          */
+    static const unsigned char ADD[] = {0x48, 0x89, 0xc8, /* mov rax, rcx */
+                                        0x48, 0x01, 0xd0, /* add rax, rdx */
+                                        0xc3};            /* ret          */
     emu_t *e = emu_open();
     ASSERT_TRUE(e != NULL);
     emu_result_t r;

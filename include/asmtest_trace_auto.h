@@ -46,9 +46,11 @@ extern "C" {
 
 /* The trace tiers, most-faithful to least. */
 typedef enum {
-    ASMTEST_TIER_HWTRACE = 0,   /* HW branch trace / single-step (real CPU)     */
-    ASMTEST_TIER_DYNAMORIO = 1, /* in-process software DBI (real CPU)           */
-    ASMTEST_TIER_EMULATOR = 2,  /* Unicorn virtual CPU (isolated guest)         */
+    ASMTEST_TIER_HWTRACE = 0, /* HW branch trace / single-step (real CPU)     */
+    ASMTEST_TIER_DYNAMORIO =
+        1, /* in-process software DBI (real CPU)           */
+    ASMTEST_TIER_EMULATOR =
+        2, /* Unicorn virtual CPU (isolated guest)         */
 } asmtest_trace_tier_t;
 
 /* Execution fidelity of a tier. NATIVE runs the real bytes on the real CPU in this
@@ -65,18 +67,19 @@ typedef enum {
  * native->emulator line. */
 typedef struct {
     asmtest_trace_tier_t tier;
-    asmtest_trace_backend_t backend; /* valid iff tier == ASMTEST_TIER_HWTRACE */
+    asmtest_trace_backend_t
+        backend; /* valid iff tier == ASMTEST_TIER_HWTRACE */
     asmtest_trace_fidelity_t fidelity;
 } asmtest_trace_choice_t;
 
 /* Portable compile-time assert (same idiom as asmtest.h), so the binding layout
  * guard below compiles from C and C++. */
 #ifndef ASMTEST_STATIC_ASSERT
-#  ifdef __cplusplus
-#    define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-#  else
-#    define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
-#  endif
+#ifdef __cplusplus
+#define ASMTEST_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
 #endif
 /* Pinned for the language bindings: three int-sized enum fields, no padding, so a
  * binding can marshal a choice as three consecutive C ints. */
@@ -84,7 +87,8 @@ ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 3 * sizeof(int),
                       "asmtest_trace_choice_t must be three int-sized fields");
 
 /* Policy is a bitmask (composable), passed across the FFI as an int. */
-#define ASMTEST_TRACE_BEST 0x0 /* most-faithful available; emulator floor allowed */
+#define ASMTEST_TRACE_BEST                                                     \
+    0x0 /* most-faithful available; emulator floor allowed */
 /* Drop the one ceiling-bounded backend (AMD LBR: Tier-B stitching decodes past its
  * 16-deep stack, but capture is still bounded by the data ring / PMI throttling):
  * the policy to re-resolve under after a trace comes back trace.truncated. Mirrors

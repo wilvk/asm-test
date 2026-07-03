@@ -168,19 +168,21 @@ int main(void) {
     /* --- Callee-saved sentinels (host arch) --- */
     printf("    \"sentinels\": {");
 #if defined(__x86_64__)
-    printf("\n      \"RBX\": \"0x%lx\", \"RBP\": \"0x%lx\", \"R12\": \"0x%lx\",\n"
-           "      \"R13\": \"0x%lx\", \"R14\": \"0x%lx\", \"R15\": \"0x%lx\"\n",
-           ASMTEST_SENTINEL_RBX, ASMTEST_SENTINEL_RBP, ASMTEST_SENTINEL_R12,
-           ASMTEST_SENTINEL_R13, ASMTEST_SENTINEL_R14, ASMTEST_SENTINEL_R15);
+    printf(
+        "\n      \"RBX\": \"0x%lx\", \"RBP\": \"0x%lx\", \"R12\": \"0x%lx\",\n"
+        "      \"R13\": \"0x%lx\", \"R14\": \"0x%lx\", \"R15\": \"0x%lx\"\n",
+        ASMTEST_SENTINEL_RBX, ASMTEST_SENTINEL_RBP, ASMTEST_SENTINEL_R12,
+        ASMTEST_SENTINEL_R13, ASMTEST_SENTINEL_R14, ASMTEST_SENTINEL_R15);
 #elif defined(__aarch64__)
-    printf("\n      \"X19\": \"0x%lx\", \"X20\": \"0x%lx\", \"X21\": \"0x%lx\",\n"
-           "      \"X22\": \"0x%lx\", \"X23\": \"0x%lx\", \"X24\": \"0x%lx\",\n"
-           "      \"X25\": \"0x%lx\", \"X26\": \"0x%lx\", \"X27\": \"0x%lx\",\n"
-           "      \"X28\": \"0x%lx\", \"X29\": \"0x%lx\"\n",
-           ASMTEST_SENTINEL_X19, ASMTEST_SENTINEL_X20, ASMTEST_SENTINEL_X21,
-           ASMTEST_SENTINEL_X22, ASMTEST_SENTINEL_X23, ASMTEST_SENTINEL_X24,
-           ASMTEST_SENTINEL_X25, ASMTEST_SENTINEL_X26, ASMTEST_SENTINEL_X27,
-           ASMTEST_SENTINEL_X28, ASMTEST_SENTINEL_X29);
+    printf(
+        "\n      \"X19\": \"0x%lx\", \"X20\": \"0x%lx\", \"X21\": \"0x%lx\",\n"
+        "      \"X22\": \"0x%lx\", \"X23\": \"0x%lx\", \"X24\": \"0x%lx\",\n"
+        "      \"X25\": \"0x%lx\", \"X26\": \"0x%lx\", \"X27\": \"0x%lx\",\n"
+        "      \"X28\": \"0x%lx\", \"X29\": \"0x%lx\"\n",
+        ASMTEST_SENTINEL_X19, ASMTEST_SENTINEL_X20, ASMTEST_SENTINEL_X21,
+        ASMTEST_SENTINEL_X22, ASMTEST_SENTINEL_X23, ASMTEST_SENTINEL_X24,
+        ASMTEST_SENTINEL_X25, ASMTEST_SENTINEL_X26, ASMTEST_SENTINEL_X27,
+        ASMTEST_SENTINEL_X28, ASMTEST_SENTINEL_X29);
 #endif
     printf("    },\n");
 
