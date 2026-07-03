@@ -521,7 +521,9 @@ picture:
 
 ## Where "only import + using" leaks — and what to do about it
 
-Three honest edges, in decreasing order of how often they bite:
+Three honest edges, in decreasing order of how often they bite. (They are written
+against the lowest common denominator; the next section shows how much dissolves when
+**.NET 8+** can be assumed.)
 
 1. **Tracing one *specific* method, completely, needs help the empty ctor can't give.**
    The empty scope captures the dynamic path through the window. If you instead want
@@ -546,9 +548,11 @@ Three honest edges, in decreasing order of how often they bite:
    ([IPC protocol][dotnet-ipc]; `DiagnosticsClient.EnablePerfMap(PerfMapType.JitDump)`,
    [diagnostics client][dotnet-diag-client]) — and that port is a filesystem socket a
    process can connect to **on itself**, so the initializer *could* switch jitdump on at
-   arm time with no launch flag. The design still does **not** depend on it for the pure
-   in-process case: it is .NET-8+-only, pulls in the diagnostics-client plumbing, emits
-   going *forward* only (no guaranteed rundown of methods JITted before the toggle), and
+   arm time with no launch flag — and the enable path passes `sendExisting = true`, so
+   methods compiled *before* the toggle are enumerated and dumped too
+   ([ds-rt-coreclr.h][dotnet-ds-rt], [perfmap.cpp][dotnet-perfmap-cpp]). The design
+   still does **not** depend on it for the pure in-process case: it is .NET-8+-only,
+   pulls in the diagnostics-client plumbing, and
    the temporal-bytes rule still applies across recompilation — the self code-image
    recorder needs none of that. (Jitdump remains the *lowest-overhead* byte source when
    you can enable it — at launch, or at arm time on .NET 8+ — per
@@ -558,6 +562,89 @@ Tiered/OSR recompilation can also move a method to a new address mid-run; the co
 recorder's versioning is exactly the mechanism for tracking that, but a *stable* trace of
 a *specific* hot method still benefits from pinning tiering off — again, extra beyond the
 bare `using`.
+
+## Closing the leaks on .NET 8+
+
+Pinning the target at **.NET 8+** changes the leak ledger materially: leak 2 and leak 3
+dissolve into supported, in-process, no-launch-flag mechanisms, and leak 1 shrinks to
+its irreducible core — inlining.
+
+### The runtime-events route — addresses without files, flags, or `PrepareMethod`
+
+CoreCLR's JIT already announces every method it emits. The runtime provider
+(`Microsoft-Windows-DotNETRuntime`) raises `MethodLoadVerbose_V2` under `JITKeyword`
+(0x10) carrying **`MethodStartAddress`, `MethodSize`, namespace/name/signature, and
+`ReJITID`** — and it is consumable **in-process** by a plain
+`System.Diagnostics.Tracing.EventListener` (the `NativeRuntimeEventSource` surface): a
+supported public API, no file, no IPC, no privilege, no launch flag
+([method runtime events][dotnet-method-events], [in-process CLR event listeners][criteo-listeners]).
+Each new code version (tier-up, OSR) raises a fresh event with the new address. So the
+`[ModuleInitializer]` can hang a listener at arm time and maintain the
+name→(address, size, version) map itself, feeding each (address, size) straight into
+the self code-image recorder (`asmtest_codeimage_track`) — the byte-source composition
+this document already wants, with the runtime *volunteering* the "what changed, where"
+signal the recorder otherwise detects by page-scan. This retires the leak-2 workaround
+wholesale: neither the broken `PrepareMethod`+`GetFunctionPointer` contract nor
+perf-map file parsing is needed for anything JITted after arm.
+
+Two companion keywords sharpen leak 1's diagnostics: `JITTracingKeyword` (0x1000)
+raises `MethodJitInliningSucceeded/Failed` naming inliner and inlinee — the scope can
+*know* `HotPath` was folded into its caller and report that instead of an empty
+region — and `JittedMethodILToNativeMapKeyword` (0x20000) supplies IL↔native maps for
+labelling which window instructions belong to which source method.
+
+### Methods JITted *before* arm — the runtime rundown is real
+
+The pre-arm gap is covered twice on .NET 8+:
+
+- The diagnostic-IPC `EnablePerfMap` handler calls
+  `PerfMap::Enable(type, /* sendExisting */ true)` ([ds-rt-coreclr.h][dotnet-ds-rt]):
+  enabling at arm time **enumerates already-compiled code** — R2R methods of loaded
+  assemblies and the JIT code heaps via `CodeHeapIterator`
+  ([perfmap.cpp][dotnet-perfmap-cpp]). A self-connected `EnablePerfMap(JitDump)` thus
+  yields a jitdump containing pre-arm methods, which the shipped
+  `asmtest_jitdump_*` / `asmtest_proc_perfmap_symbol` parsers already read.
+- Alternatively, a self EventPipe session opened with rundown requested replays
+  `MethodDCEnd` events for existing methods. (An `EventListener` alone cannot get
+  these — the rundown provider is not an `EventSource` — which is why the perfmap
+  route above is the lighter default.)
+
+### What leak 1 reduces to
+
+With addresses event-supplied and bytes recorder-supplied, the two annotations lose
+their *correctness* role:
+
+- **`DOTNET_TieredCompilation=0` is no longer needed to be right — only to be quiet.**
+  Movement is the versioned recorder's job by design: each recompilation announces
+  itself (a fresh `MethodLoadVerbose` at a new address), the recorder snapshots the new
+  bytes as a new version, and each trace slice decodes against the version live in its
+  window — the temporal-bytes rule, event-driven instead of page-scan-driven. Pinning
+  tiering off remains a *noise* preference (one stable body instead of several), not a
+  correctness precondition.
+- **`[MethodImpl(NoInlining)]` is the irreducible residue — but it is detectable,
+  avoidable, and (at the heavy end) reversible.** *Detectable*: the inlining events
+  above. *Avoidable*: whole-window capture does not care — the inlined copy's
+  instructions are captured where they ran, and the IL↔native map attributes them; and
+  a scope API handed the method reference can invoke it through a delegate from an
+  internal helper pinned `NoInlining | NoOptimization`, so the standalone body executes
+  with no annotation on *user* code (minopts code performs no guarded-devirtualization
+  inlining, which is what could otherwise fold a hot monomorphic delegate target into
+  the helper under .NET 8 dynamic PGO). *Reversible, at real cost*: since .NET Core 3 a
+  profiler can attach at runtime — over the same self-connectable IPC
+  (`AttachProfiler`) — and call `ICorProfilerInfo10::RequestReJITWithInliners`, which
+  re-JITs the method **and every method it was already inlined into** and blocks future
+  inlining of the re-JITted body (`COR_PRF_REJIT_BLOCK_INLINING`)
+  ([RequestReJITWithInliners][dotnet-rejit-inliners], [ReJIT on attach][dotnet-rejit-attach]).
+  That means shipping a native profiler component inside the package — buildable, but a
+  heavier posture than the thin-shim model, so it is the documented escape hatch, not
+  the default.
+
+Net, on .NET 8+: **leak 2 disappears** (the runtime's own events supply addresses;
+nothing version-fragile remains), **leak 3 disappears** (bytes come from the recorder
+fed by events, or from a runtime-enabled jitdump that includes pre-arm methods), and
+**leak 1 contracts** to "you must *name* the method" — which is not a workaround but
+the ask itself — plus an inlining caveat the scope can detect, route around, or (with a
+profiler shim) undo.
 
 ## What already ships vs. what is new
 
@@ -616,12 +703,13 @@ normalization step documented for the other backends. This is the same boundary
   self-skips when it is missing.
 - **AMD LBR truncates** past 16 taken branches; treat its trace as best-effort and
   re-resolve under `CEILING_FREE`.
-- **.NET specifics:** jitdump's env var is launch-only, and the .NET 8+ runtime toggle
-  (diagnostic-IPC `EnablePerfMap`, self-connectable) emits forward-only — the self
-  code-image recorder stays the default byte source;
-  `PrepareMethod`+`GetFunctionPointer` is not a stable address contract post-.NET 7 (use
-  whole-window capture / `/proc/self/maps` resolution); tiering can move code (pin it off
-  for a stable single-method trace).
+- **.NET specifics:** jitdump's env var is launch-only, but the .NET 8+ runtime toggle
+  (diagnostic-IPC `EnablePerfMap`, self-connectable) covers already-compiled methods
+  too (`sendExisting`) — the self code-image recorder stays the default byte source;
+  `PrepareMethod`+`GetFunctionPointer` is not a stable address contract post-.NET 7 (on
+  .NET 8+ resolve addresses from the runtime's own `MethodLoadVerbose` events via an
+  in-process `EventListener` instead); tiering can move code (track it via those same
+  events + recorder versioning; pin it off only for a *quieter* single-method trace).
 - **The temporal-bytes correctness rule holds:** decode against the version live during
   the window, not a late snapshot — the self recorder is what makes that correct.
 - **In-process single-step is for controlled native regions only.** Pointed at live
@@ -665,6 +753,13 @@ in-process `using` framing:
   inheritance ([perf-intel-pt][perf-intel-pt]); .NET `ExecutionContext` flows across
   `await`, and `AsyncLocal<T>`'s value-changed handler fires on the thread-context switch
   ([ExecutionContext][ec-doc], [AsyncLocal][asynclocal]).
+- Closing the leaks on .NET 8+: in-process method addresses from the runtime's own
+  events ([method runtime events][dotnet-method-events] — `MethodLoadVerbose_V2` carries
+  `MethodStartAddress`/`MethodSize`/`ReJITID`; [in-process CLR event listeners][criteo-listeners]);
+  arm-time rundown of already-compiled code
+  ([ds-rt-coreclr.h — `EnablePerfMap` passes `sendExisting = true`][dotnet-ds-rt],
+  [perfmap.cpp][dotnet-perfmap-cpp]); runtime un-inlining via attach-time profiler ReJIT
+  ([RequestReJITWithInliners][dotnet-rejit-inliners], [ReJIT on attach][dotnet-rejit-attach]).
 
 [perf-intel-pt]: https://man7.org/linux/man-pages/man1/perf-intel-pt.1.html
 [perf-eo]: https://www.man7.org/linux/man-pages/man2/perf_event_open.2.html
@@ -673,6 +768,12 @@ in-process `using` framing:
 [dotnet-82142]: https://github.com/dotnet/runtime/pull/82142
 [dotnet-ipc]: https://github.com/dotnet/diagnostics/blob/main/documentation/design-docs/ipc-protocol.md
 [dotnet-diag-client]: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/microsoft-diagnostics-netcore-client
+[dotnet-method-events]: https://learn.microsoft.com/en-us/dotnet/fundamentals/diagnostics/runtime-method-events
+[criteo-listeners]: https://medium.com/criteo-engineering/c-in-process-clr-event-listeners-with-net-core-2-2-ef4075c14e87
+[dotnet-ds-rt]: https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/eventing/eventpipe/ds-rt-coreclr.h
+[dotnet-perfmap-cpp]: https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/perfmap.cpp
+[dotnet-rejit-inliners]: https://learn.microsoft.com/en-us/dotnet/core/unmanaged-api/profiling/icorprofilerinfo10-requestrejitwithinliners-method
+[dotnet-rejit-attach]: https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/profiling/ReJIT%20on%20Attach.md
 [dotnet-preparemethod]: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.runtimehelpers.preparemethod
 [dotnet-83042]: https://github.com/dotnet/runtime/issues/83042
 [prctl]: https://man7.org/linux/man-pages/man2/prctl.2.html
