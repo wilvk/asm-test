@@ -219,6 +219,37 @@ flowchart TB
     SRC --> OUT["source-line coverage + lcov"]
 ```
 
+## Trace and coverage backends
+
+Every trace backend — emulator, native DBI, and hardware — fills the **same**
+`asmtest_trace_t` sink, so a test switches backends without changing how it reads
+coverage — from [Native runtime tracing](../guides/tracing/native-tracing.md),
+[Execution traces](../guides/tracing/traces.md), and
+[Hardware tracing](../guides/tracing/hardware-tracing.md).
+
+```mermaid
+flowchart TB
+    RT["Routine under test<br/>(offsets from entry, 0 = first byte)"]
+    subgraph Emu["Emulator tier — any host"]
+        UC["Unicorn virtual CPU<br/>CODE/BLOCK hooks"]
+    end
+    subgraph DBI["Native software DBI"]
+        DR["DynamoRIO client<br/>bb event, in-process<br/>Linux x86-64"]
+    end
+    subgraph HW["Native hardware / single-step — asmtest_hwtrace.h"]
+        PT["Intel PT → libipt<br/>bare-metal Intel x86-64"]
+        AMD["AMD LBR/BRS → built-in<br/>bare-metal Zen 3+"]
+        CS["ARM CoreSight → OpenCSD<br/>AArch64 boards (scaffold)"]
+        SS["Single-step EFLAGS.TF → #DB<br/>any x86-64 Linux (exact)"]
+    end
+    RT --> UC & DR & PT & AMD & CS & SS
+    UC & DR & PT & AMD & CS & SS -->|"trace_append_insn /<br/>trace_append_block (dedup)"| SINK
+    SINK["asmtest_trace_t (shared sink)<br/>insns[] ordered · blocks[] distinct<br/>insns_total · blocks_total · truncated"]
+    SINK --> COV["Coverage helpers<br/>ASSERT_BLOCK_COVERED · _report · _lcov"]
+    SINK --> ANN["Capstone annotation layer<br/>offsets → instruction text"]
+    SINK -.->|"ptrace call descent:<br/>flat trace stays frame 0"| DESC["asmtest_descent_t<br/>edges + nested callee frames<br/>(separate opaque handle)"]
+```
+
 ## Portability across targets
 
 How one source set reaches every target natively and via the emulator guests — from

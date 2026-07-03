@@ -15,6 +15,8 @@ instruction offsets, distinct basic-block offsets, totals, a truncation bit — 
 it reads coverage, and the optional [Capstone annotation layer](../disassembly.md)
 renders any backend's offsets back to instruction text.
 
+> **Diagram:** [Trace and coverage backends](../../reference/diagrams.md#trace-and-coverage-backends)
+
 This tier is **optional, advanced, and self-skipping**: it is kept out of the core
 `libasmtest` and the `libasmtest_emu` superset, builds only when its toolchain is
 present (the PT/CoreSight decoders are only linked when libipt/OpenCSD are found;

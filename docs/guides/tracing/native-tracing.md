@@ -18,6 +18,8 @@ distinct basic-block offsets, totals, a truncation bit) — see
 reads coverage, and the optional [Capstone annotation layer](../disassembly.md)
 renders any backend's recorded offsets back to instruction text.
 
+> **Diagram:** [Trace and coverage backends](../../reference/diagrams.md#trace-and-coverage-backends)
+
 Both native tiers are **optional, advanced, and self-skipping**: they are kept out
 of the core `libasmtest` and the `libasmtest_emu` superset, build only when their
 toolchain is present, and degrade to a clear "skipped" message otherwise.

@@ -5,6 +5,8 @@
 > DynamoRIO and hardware trace (Intel PT / ARM CoreSight) — described in
 > [Native runtime tracing](native-tracing.md). The trace substrate, coverage
 > helpers, and the Capstone annotation layer are backend-neutral and shared.
+>
+> **Diagram:** [Trace and coverage backends](../../reference/diagrams.md#trace-and-coverage-backends)
 
 The emulator tier can record what a routine executed while it ran. A traced call
 captures two related views:
