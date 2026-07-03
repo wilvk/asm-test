@@ -108,9 +108,7 @@ guides/property-testing
 guides/runner
 guides/benchmarks
 guides/emulator
-guides/tracing/traces
-guides/tracing/native-tracing
-guides/tracing/hardware-tracing
+guides/tracing/index
 guides/disassembly
 guides/win64
 ```
