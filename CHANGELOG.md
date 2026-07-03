@@ -9,10 +9,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Review-driven defect sweep (2026-07-02).** Resolved the full backlog from the
-  [code-level review](docs/analysis/2026-07-02-code-review.md) (54 findings) and the
-  still-open [2026-07-01](docs/reviews/2026-07-01-repo-review.md) /
-  [2026-07-02](docs/reviews/2026-07-02-repo-review.md) repo-review items, with a
-  per-batch implementation note under [`docs/summaries/`](docs/summaries/). Highlights:
+  [code-level review](https://github.com/wilvk/asm-test/blob/main/docs/analysis/2026-07-02-code-review.md) (54 findings) and the
+  still-open [2026-07-01](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-01-repo-review.md) /
+  [2026-07-02](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-02-repo-review.md) repo-review items, with a
+  per-batch implementation note under [`docs/summaries/`](https://github.com/wilvk/asm-test/tree/main/docs/summaries/). Highlights:
   AArch64 callee-saved `d8`–`d15` ABI checking + a corrected `vm.s`/`structparam.s`;
   `SKIP()` in SETUP/TEARDOWN reported as skip; JUnit XML made well-formed and no longer
   preceded by test stdout; hardware-trace truncation contract honored across the
@@ -50,14 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     rather than hanging. AArch64 gained a `NT_ARM_HW_BREAK` hardware-breakpoint step-over path
     (the W^X JIT-heap fallback x86-64 already had). L3 is documented as **best-effort /
     expected-to-perturb** on a live managed runtime (the cross-thread lock-inversion deadlock
-    vector is not fully mitigable) — see [analysis/jit-runtime-tracing.md](docs/analysis/jit-runtime-tracing.md).
+    vector is not fully mitigable) — see [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md).
   - Surfaced in **all ten language bindings** (a `Descent` wrapper + descending `trace_call_ex`,
     with idempotent free and the per-FFI address/upcall hazards handled), pinned by a new
     `ptrace_descent` conformance-corpus tier and the header-grep parity gate; the resolver
     callback ships to the six upcall-safe FFIs (Python/Go/Node/Java/.NET/Lua) and Rust/Ruby/
     C++/Zig expose the allow-set only. New `jit_trace *-descend` / `*-descend-all` demo lanes
-    (`make docker-hwtrace-jit-dotnet-bcl-descend`, …). See [docs/native-tracing.md](docs/native-tracing.md)
-    ("Call descent levels") and [docs/plans/call-descent-plan.md](docs/plans/call-descent-plan.md).
+    (`make docker-hwtrace-jit-dotnet-bcl-descend`, …). See [docs/native-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/native-tracing.md)
+    ("Call descent levels") and [docs/plans/call-descent-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/call-descent-plan.md).
 
 - **Clean-room install test — every bundled binding, on Linux and macOS, in CI.**
   `make clean-room-test` (any host) / `make macos-clean-test` (darwin alias) packages

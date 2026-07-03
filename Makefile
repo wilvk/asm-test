@@ -138,6 +138,7 @@ help:
 	@echo ''
 	@echo 'Docs (Sphinx):'
 	@echo '  docs docs-serve docs-linkcheck docs-clean'
+	@echo '  docker-docs docker-docs-linkcheck  build/link-check docs in a container (no host Sphinx)'
 
 # "Unusual use case" demo suites (Track F): self-contained examples that show
 # off a framework feature on a less-obvious target — property-tested bit hacks,

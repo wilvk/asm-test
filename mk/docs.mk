@@ -33,3 +33,31 @@ docs-linkcheck:
 docs-clean:
 	rm -rf $(DOCS_OUT)
 
+# --- Documentation in Docker (no host Sphinx toolchain needed) -------------
+# `make docker-docs`           build the HTML docs in a throwaway Python image
+# `make docker-docs-linkcheck` link-check the docs the same way
+# Mirrors `make docs` / `make docs-linkcheck` (same SPHINXOPTS, same docs/conf.py
+# and docs/requirements.txt) but installs the Sphinx toolchain inside a container,
+# so a contributor without a local Python/Sphinx install can still build and
+# warning-check the docs. Runs as the invoking user (venv in /tmp), so the built
+# $(DOCS_OUT) on the host stays owned by you. Override the image with DOCS_IMAGE.
+DOCKER     ?= docker
+DOCS_IMAGE ?= python:3.12-slim
+
+# Bring the toolchain up in a container and hand off to the given sphinx-build
+# invocation (reusing the same knobs as the host targets — one source of truth).
+# $(1) = sphinx-build argument tail.
+_docker_docs_run = $(DOCKER) run --rm -v "$(CURDIR)":/work -w /work -e HOME=/tmp \
+	--user $$(id -u):$$(id -g) $(DOCS_IMAGE) sh -euc \
+	'python -m venv /tmp/venv && . /tmp/venv/bin/activate && \
+	 pip install --quiet -r docs/requirements.txt && \
+	 $(SPHINXBUILD) $(1)'
+
+.PHONY: docker-docs docker-docs-linkcheck
+docker-docs:
+	$(call _docker_docs_run,-b html $(SPHINXOPTS) $(DOCS_SRC) $(DOCS_OUT)/html)
+	@echo "docker-docs: built $(DOCS_OUT)/html/index.html"
+
+docker-docs-linkcheck:
+	$(call _docker_docs_run,-b linkcheck $(SPHINXOPTS) $(DOCS_SRC) $(DOCS_OUT)/linkcheck)
+

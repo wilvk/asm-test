@@ -672,7 +672,7 @@ as the allow-set, so the tracer descends `get_Out` as a nested frame instead of 
 call would still be stepped over. `make docker-hwtrace-jit-dotnet-bcl-descend-all` runs **level
 3** with the conservative budget + watchdog and is expected to *self-skip* (truncate) when it
 trips a guard — it proves the guards fire, not that L3 is transparent (see the L3 hazards in
-[hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](analysis/jit-runtime-tracing.md)).
+[hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)).
 
 Two honesty limits are load-bearing, not caveats-in-passing. **L2 still single-steps the full
 body of each descended method**, so the allow-set / resolver must be *method-exact*, never a
