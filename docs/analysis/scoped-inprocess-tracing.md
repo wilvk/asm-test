@@ -373,6 +373,123 @@ default), or the GDB JIT interface where the runtime implements it. The scoped m
 composes: hardware-or-stepper control flow × recorder-supplied bytes × Capstone
 rendering.
 
+## Can the four qualifications be fixed in code?
+
+The qualifications above are not all equally fundamental. Three are engineering gaps
+with buildable fixes — some already half-built or named as TODOs in the tree — and one
+(the thread/async boundary) is a genuine model change. The answer differs between the
+hardware and single-step backends, so both are covered.
+
+| Qualification | Hardware trace (Intel PT) | In-process single-step |
+|---|---|---|
+| **1. Thread scope / async hop** | **Hard but possible** — model change: follow the logical operation, not the thread | **Possible, ill-advised** — same hook, but arming TF on runtime threads deepens the collision |
+| **2. Runtime noise (JIT/GC)** | **Already half-done** — decode region-filters today; attribution via code-image events | **Output already clean** — handler region-filters; residual is *cost*, not noise |
+| **3. Bandwidth / overflow** | **Yes** — the capture-side address filter is the named TODO; sizing/snapshot exist | **Partly** — buffer overflow handled; the real ceiling is per-instruction *time* |
+| **4. Nesting / concurrency** | **Yes, nearly free** — per-thread fds + multi-range decode filter | **Yes** — per-thread TLS state + a range stack in the handler |
+
+### Qualification 1 — the thread/async boundary (the deep one)
+
+Both backends key on the calling thread, so both miss thread hops — but the *fix shape*
+is shared and specific to the runtime, not the backend. .NET's `ExecutionContext` flows
+across `await`/continuations, and `AsyncLocal<T>` constructed with a value-changed handler
+invokes that handler **whenever the context switches onto or off a thread**
+(`AsyncLocalValueChangedArgs.ThreadContextChanged`) — precisely the "a continuation just
+resumed here, possibly on a new thread" hook the raw perf/TF machinery lacks
+([ExecutionContext][ec-doc], [AsyncLocal][asynclocal]). So the buildable design is:
+an `AsyncLocal<ScopeId>` marker whose handler **disables** capture when the logical flow
+leaves a thread and **re-arms** it on whichever thread the continuation resumes on, then
+**stitches** the per-thread slices by `ScopeId` at the end. The developer still writes
+only the `using`; internally the scope becomes a set of thread-window slices for one
+logical operation.
+
+- **Under PT** this is clean: Intel PT per-thread mode traces an *exact list of threads
+  with no inheritance* ([perf-intel-pt][perf-intel-pt]) — so following a hop means opening
+  a fresh per-thread PT event (own AUX ring) on the resuming thread, which the
+  value-changed hook triggers, then merging AUX streams by `ScopeId`. It stays
+  per-thread, so it needs **no privilege bump**. The alternative — **per-CPU** mode
+  (`pid=-1, cpu=N`) with TID demux from `PERF_RECORD_ITRACE_START`/sched records — also
+  captures hops but needs `CAP_SYS_ADMIN`/`paranoid=-1` and heavier decode; the
+  per-thread-plus-hook route is preferable.
+- **Under single-step** the same hook can `ss_arm_tf()` on the resuming thread and make
+  `g_base`/`g_stream`/`g_armed` thread-local — but arming TF on a thread the runtime
+  scheduled means asm-test is now single-stepping runtime-owned threads, compounding the
+  SIGTRAP-ownership collision this doc already flags. Buildable, not advisable on a live
+  runtime; fine for a body you know is synchronous.
+
+Verdict: possible, and the `AsyncLocal` value-changed hook is the elegant enabler — but
+it converts "thread window" into "stitched logical-operation trace," which is where the
+real engineering (and the multi-slice output contract) lives.
+
+### Qualification 2 — runtime noise
+
+Largely a non-issue once the scope is *region-scoped* rather than *whole-window*, and both
+backends already filter to the region:
+
+- **PT** already drops out-of-region instructions at decode
+  ([src/pt_backend.c:108-116](../../src/pt_backend.c#L108-L116)) — the JIT/GC/runtime code
+  that runs *outside* the registered range never reaches the trace. The remaining noise is
+  only in the empty-ctor *whole-window* mode; three buildable refinements bound it:
+  (a) program the capture-side IP **address filter** so the CPU emits packets only for the
+  region (the named TODO at [src/pt_backend.c:129-134](../../src/pt_backend.c#L129-L134));
+  (b) use the **code-image emission events** (mprotect/mmap `PROT_EXEC`, the eBPF detector
+  in [asmtest_codeimage.h](../../include/asmtest_codeimage.h)) to timestamp *when* a
+  method's bytes appeared, so the "JIT compiling HotPath" slice can be split from the
+  "HotPath running" slice; (c) **symbolize and bucket** every IP against `/proc/self/maps`
+  + the perf-map (`asmtest_proc_region_by_addr`, `asmtest_proc_perfmap_symbol`) so noise is
+  *labelled* ("31k insns in RyuJIT, 2k in GC, 7k in HotPath") rather than silently mixed.
+- **Single-step** already excludes noise from the *output* — the handler records only
+  in-region RIPs ([src/ss_backend.c:95-103](../../src/ss_backend.c#L95-L103)) — so an
+  unwarmed body's JIT/GC steps run **unrecorded**. The residual problem is *cost*, not
+  output: it still traps on every one of those instructions at ~1000×. The fix is to reach
+  the region warm — pre-warm before arming, or gate arming on region entry the way the
+  out-of-process variant's `run_to` does — not more filtering.
+
+### Qualification 3 — bandwidth / overflow
+
+- **PT**: the structural fix is the same **address filter** as Q2 — a region filter cuts
+  emitted bandwidth by orders of magnitude for a small hot region inside a large window.
+  Buffer sizing (`aux_size`/`data_size`) and circular **snapshot** mode with a
+  flight-recorder drain are already first-class in the options
+  ([asmtest_hwtrace.h:62-68](../../include/asmtest_hwtrace.h#L62-L68)); PSB-period / cycle
+  toggles trade detail for bytes. Overflow already maps onto `truncated`. All standard PT
+  knobs — the only gate is PT hardware to validate the filter.
+- **Single-step** has no I/O bandwidth; its budget is the fixed 512 KiB offset buffer
+  (`SS_STREAM_CAP`), and overflow is already handled honestly (`g_overflow → truncated`,
+  [src/ss_backend.c:99-102](../../src/ss_backend.c#L99-L102), [:201-202](../../src/ss_backend.c#L201-L202)).
+  You can enlarge it, or make it a growable buffer sized between windows (never `malloc`
+  in the handler — it must stay async-signal-safe). But the true ceiling is **time**: a
+  long region at a trap per instruction, which no buffer change fixes. The honest answer
+  there is "trace a smaller region," or fold loops (record body-once + count) at the cost
+  of the ordered-stream contract.
+
+### Qualification 4 — nesting / concurrency
+
+The single process-global slot is an explicit MVP limitation
+([asmtest_hwtrace.h:144-146](../../include/asmtest_hwtrace.h#L144-L146)), and the fix is the
+one the header itself points at — **per-thread state**:
+
+- **PT**: give each scoping thread its own per-thread event + AUX ring (per-thread mode
+  supports exactly this). Nesting on one thread is nearly free because the decoder already
+  range-filters — attribute the one AUX stream to *several* nested ranges at decode instead
+  of one, or refcount enable/disable across the nest.
+- **Single-step**: move `g_base`/`g_stream`/`g_armed`/`g_old_sa` into thread-local storage
+  and replace the single `[base,len)` test with a small fixed-size **range stack** the
+  handler walks (innermost match wins) — keeping it async-signal-safe (a TLS array, no
+  allocation). The SIGTRAP disposition is process-wide, so concurrent scopes on different
+  threads still share one handler, but per-thread `g_armed` + TLS state makes that safe.
+
+### Net
+
+Q2, Q3, and Q4 are ordinary engineering — and PT already ships the decode-side half of
+Q2 and names the capture-side filter (which also solves Q3) as its own next step, while
+single-step already handles the Q2 output and Q3 overflow cases. Q1 is the one that is not
+a knob but a redesign: **the model has to stop being a thread window and become a stitched
+trace of a logical operation**, enabled by the `AsyncLocal` context-flow hook. That fix
+lives naturally under PT (per-thread, no privilege bump); under single-step it is
+technically possible but pushes further into the intrusiveness this document already warns
+against. In every case the developer-visible surface stays the import plus the `using` —
+the work is entirely behind the constructor.
+
 ## How this lands on concrete hosts
 
 The two hosts this analysis was asked about, plus the neighbours needed to complete the
@@ -515,6 +632,10 @@ in-process `using` framing:
   [PrepareMethod docs][dotnet-preparemethod], [dotnet/runtime#83042][dotnet-83042].
 - The concealed-tracer attach path: [prctl(2)][prctl] (`PR_SET_PTRACER`),
   [Yama LSM ptrace_scope][yama], [Docker seccomp profiles][docker-seccomp].
+- Following a logical operation across threads: Intel PT per-thread mode has no
+  inheritance ([perf-intel-pt][perf-intel-pt]); .NET `ExecutionContext` flows across
+  `await`, and `AsyncLocal<T>`'s value-changed handler fires on the thread-context switch
+  ([ExecutionContext][ec-doc], [AsyncLocal][asynclocal]).
 
 [perf-intel-pt]: https://man7.org/linux/man-pages/man1/perf-intel-pt.1.html
 [perf-eo]: https://www.man7.org/linux/man-pages/man2/perf_event_open.2.html
@@ -526,3 +647,5 @@ in-process `using` framing:
 [prctl]: https://man7.org/linux/man-pages/man2/prctl.2.html
 [yama]: https://docs.kernel.org/admin-guide/LSM/Yama.html
 [docker-seccomp]: https://docs.docker.com/engine/security/seccomp/
+[ec-doc]: https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/executioncontext-synchronizationcontext
+[asynclocal]: https://learn.microsoft.com/en-us/dotnet/api/system.threading.asynclocal-1
