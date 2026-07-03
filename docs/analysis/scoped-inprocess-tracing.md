@@ -175,8 +175,13 @@ is a thin shim:
 - **Emit with no read-back call.** Because the empty form captures no variable, the
   default "assume no knowledge" behaviour is to render the decoded path on `Dispose()`
   to a default sink (stdout, or `asmtrace-<member>.txt`) via the already-wrapped Capstone
-  layer (`emu_disas`, `src/disasm.c`). A developer who *does* want the data reads it off
-  the handle instead: `using var t = new AsmTrace(); … ; t.Path`.
+  layer (`emu_disas`, `src/disasm.c`) — and it must be *unconditional*, since a
+  constructor cannot detect whether its result was assigned; an explicit argument
+  (`emit: false`, or `sink:`) is the opt-out. A developer who *does* want the data
+  keeps the handle and reads it **after** the block — statement form, not `using var`:
+  `AsmTrace t; using (t = new AsmTrace(emit: false)) { … } … t.Path` — because the
+  decode happens *in* `Dispose()`; the rendered result stays on the managed handle
+  after the native capture resources are released.
 
 So the "handle everything" promise is real for the **dynamic-path** interpretation
 ("show me the asm of whatever executed in this scope"). It only leaks when the developer
@@ -208,7 +213,15 @@ Four qualifications shape what comes back — the first is a real semantic trap:
 2. **You get everything that ran — including the runtime itself.** If the code inside
    is not warm, the first call traces the *JIT compiling it* (thousands of RyuJIT
    instructions), then the tier-0 body, then perhaps an OSR transition; a GC triggered
-   mid-scope is captured too. That is honest — it *is* the assembly path that executed —
+   mid-scope is captured too. Two boundaries sharpen this: the **containing** method —
+   the one holding the `using` — was compiled before the window opened, so its own JIT
+   never appears, only cold *callees'*; and the kernel side is silent (the events set
+   `exclude_kernel`, [src/hwtrace.c:668](../../src/hwtrace.c#L668)), so a thread in a
+   syscall goes dark and resumes emitting on return. For ordinary library-leaning code
+   the window is dominated by BCL plumbing — a single
+   `Console.WriteLine("x is:" + x)` drags in `Int32.ToString`, `string.Concat`,
+   console locking/encoding, and the write path: tens of thousands of instructions for
+   a few visible statements. That is honest — it *is* the assembly path that executed —
    but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
    [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs) exists
    precisely to get a *clean* single-method trace instead of the runtime's plumbing.
@@ -246,7 +259,7 @@ and it must self-flag when an async hop or window overflow breaks those assumpti
 | Backend | In-process? | Intrusive? | Completeness | Precondition |
 |---|---|---|---|---|
 | **Intel PT** (self) | yes | **no** — out-of-band, ~2–20 % overhead, 0 detached | full instruction stream | Intel bare metal + `perf_event_paranoid`/`CAP_PERFMON` |
-| **AMD LBR** (self) | yes | **no** | **16-taken-branch window only** — truncates on all but tiny regions (modelled as `trace.truncated` + `CEILING_FREE`) | AMD Zen 3+ bare metal |
+| **AMD LBR** (self) | yes | **no** to state; `sample_period=1` costs a kernel PMI per taken branch (timing only) | 16-deep stack per **sample**, but shipped Tier-B stitching decodes past the ceiling up to the data-ring capacity (`truncated` + `CEILING_FREE` on gap/loss) | AMD Zen 3+ bare metal |
 | **ARM CoreSight** (self) | yes | **no** | full stream (PT-analog) | specific bare-metal AArch64 boards |
 | **EFLAGS.TF single-step** (in-process) | yes | **yes** — `SIGTRAP`/insn, shares the thread, collides with GC/JIT | exact + complete | none (any x86-64 Linux) |
 | **Out-of-process ptrace stepper** | **no** (separate tracer process) | doesn't touch tracee state, but ~1000× slower on the stepped thread | exact + complete | ptrace of the target |
@@ -270,15 +283,32 @@ capture-everything-then-filter-at-decode: no per-instruction decisions, no metho
 address, no knowledge. The whole rest of this document is this case; its only ceilings
 are the host preconditions (Intel/CoreSight bare metal + perf privilege).
 
-### AMD LBR self-trace — scope works, window doesn't
+### AMD LBR self-trace — scope works; stitching lifts the window
 
 The scope shape is identical (same `begin`/`end`, same self perf event), and it is
-genuinely non-intrusive — but the 16-taken-branch window means anything beyond a tiny
-leaf region comes back `truncated` (modelled honestly:
-[src/hwtrace.c:483](../../src/hwtrace.c#L483) keeps the richest in-region sample, and the
-`CEILING_FREE` policy exists to re-resolve past it). Treat it as a smoke-level scope —
-"did we enter these blocks" — not a path recorder. Zen 3 BRS / Zen 4 LbrExtV2 only; the
-probe explicitly classifies **Zen 2** as the no-hardware case
+state-safe — the capture is `sample_period=1` branch-stack sampling, so its cost is a
+kernel PMI per taken branch: timing, not state. The hardware stack itself is fixed at
+**16 entries** (Zen 3 BRS / Zen 4 LbrExtV2; `AMD_LBR_DEPTH`,
+[src/hwtrace.c:58](../../src/hwtrace.c#L58)) and no AMD knob deepens it — but because
+*every* taken branch emits a sample carrying the 16 most-recent branches, consecutive
+windows overlap by up to 15 entries, and the shipped decode escalates automatically:
+**Tier A** decodes the richest single in-region window when the routine fit one stack
+([src/hwtrace.c:483](../../src/hwtrace.c#L483)); when that window overflowed, **Tier B**
+(`asmtest_amd_stitch`) merges the time-ordered overlapping windows into one gapless
+sequence and decodes past the 16-entry ceiling
+([src/hwtrace.c:584-614](../../src/hwtrace.c#L584-L614),
+[src/amd_backend.c:47](../../src/amd_backend.c#L47)). The ceiling that remains is the
+base **data ring**: ~400 bytes per sample ≈ ~160 taken branches at the default 64 KiB,
+linearly extendable via the existing `data_size` option
+([asmtest_hwtrace.h:65](../../include/asmtest_hwtrace.h#L65)); a stitch gap, a
+`PERF_RECORD_LOST`/`THROTTLE`, or a near-full ring flags `truncated`
+([src/hwtrace.c:569-582](../../src/hwtrace.c#L569-L582)), and `CEILING_FREE` remains the
+re-resolve escape. A mid-capture drain (advance `data_tail` from a consumer thread while
+the region runs) is the buildable step that converts the ceiling from ring capacity to
+sustained consumption — though the PMI-per-branch cost still grows with the region, so
+a long window trends toward stepper-like slowdown: stitching extends the *window*, not
+the bandwidth economics. Zen 3 BRS / Zen 4 LbrExtV2 only; the probe explicitly
+classifies **Zen 2** as the no-hardware case
 ([src/hwtrace.c:182](../../src/hwtrace.c#L182)); Zen 2's IBS is statistical sampling and
 cannot reconstruct a complete path.
 
@@ -518,7 +548,7 @@ picture:
 | Host | Non-intrusive hardware path | Exact path under the scope | Notes |
 |---|---|---|---|
 | Intel bare-metal Linux | **Intel PT** | PT | the full model, as designed |
-| AMD Zen 3/4/5 Linux | LBR (16-branch ceiling) | hidden ptrace stepper | no PT on AMD, ever |
+| AMD Zen 3/4/5 Linux | LBR (Tier-B stitched; data-ring ceiling) | hidden ptrace stepper | no PT on AMD, ever |
 | **AMD Zen 2 Linux** | **none** — no PT, no BRS/LbrExtV2 ([src/hwtrace.c:182](../../src/hwtrace.c#L182)); IBS is sampling-only | hidden ptrace stepper | the host class the W2 stepper was built for (zen2-singlestep-trace-plan) |
 | **Apple Intel, macOS** | **none** — the CPU has PT silicon, but macOS exposes no `perf_event_open`/PT API and the whole tier is Linux-gated (perf probe returns 0 off Linux, [src/hwtrace.c:226-229](../../src/hwtrace.c#L226-L229); single-step likewise, [:154-164](../../src/hwtrace.c#L154-L164)) | none (emulator only — virtual, different question) | the OS, not the CPU, is the blocker |
 | Apple Intel, bare-metal Linux | **Intel PT** | PT | pre-T2 Intel Macs boot standard Linux; full model |
@@ -648,6 +678,24 @@ their *correctness* role:
   heavier posture than the thin-shim model, so it is the documented escape hatch, not
   the default.
 
+Concretely, the named-method form costs exactly one thing beyond the empty scope — the
+method reference:
+
+```csharp
+using var t = AsmTrace.Method(HotPath);  // the naming — leak 1's entire residue
+int r = t.Invoke(data);                  // Invoke brackets the capture window and calls
+                                         // through the pinned helper: the standalone
+                                         // JIT'd body executes, then End() decodes
+Console.WriteLine(t.Path);               // rendered against the version live in the window
+```
+
+No `[MethodImpl]` on `HotPath`, no launch flag, no `PrepareMethod`: `target.Method`
+gives the `MethodInfo`, the arm-time listener map resolves it to (address, size) and
+keeps resolving as tiering moves it, and `Invoke` — the *library's* call site, pinned
+`NoInlining | NoOptimization` — is what guarantees the standalone body is what runs.
+(Here `using var` is fine: the window closes in `Invoke`, not in `Dispose`, so `t.Path`
+is readable immediately; `Dispose` only releases the handle.)
+
 Net, on .NET 8+: **leak 2 disappears** (the runtime's own events supply addresses;
 nothing version-fragile remains), **leak 3 disappears** (bytes come from the recorder
 fed by events, or from a runtime-enabled jitdump that includes pre-arm methods), and
@@ -712,8 +760,10 @@ normalization step documented for the other backends. This is the same boundary
 - **Privilege is a host prerequisite, not code** — provision it once
   (`perf_event_paranoid`/`CAP_PERFMON`/container capability). The import detects and
   self-skips when it is missing.
-- **AMD LBR truncates** past 16 taken branches; treat its trace as best-effort and
-  re-resolve under `CEILING_FREE`.
+- **AMD LBR's 16-deep stack is lifted by the shipped Tier-B window stitching**; the
+  remaining ceiling is the data ring (~160 branches at the default 64 KiB — extend via
+  `data_size`) plus PMI throttling. On a stitch gap or sample loss the trace comes back
+  `truncated`; re-resolve under `CEILING_FREE`.
 - **.NET specifics:** jitdump's env var is launch-only, but the .NET 8+ runtime toggle
   (diagnostic-IPC `EnablePerfMap`, self-connectable) covers already-compiled methods
   too (`sendExisting`) — the self code-image recorder stays the default byte source;
