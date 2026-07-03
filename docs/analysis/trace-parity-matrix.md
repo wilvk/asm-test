@@ -23,9 +23,9 @@ changing how it reads coverage.
 - **DynamoRIO** is the only vendor- and microarchitecture-independent *native*
   backend shipping today (Linux x86-64, every Intel + every Zen).
 - **Hardware trace splits strictly by vendor/uarch:** Intel → Intel PT; AMD
-  Zen 3 / Zen 4 / Zen 5 → AMD LBR (16-taken-branch cap; live-verified on a Zen 5
-  Ryzen 9 9950X); AMD Zen 2 → nothing yet (its branch-stack `perf_event_open`
-  returns `EOPNOTSUPP`).
+  Zen 3 / Zen 4 / Zen 5 → AMD LBR (Tier-A 16-branch window + Tier-B stitching;
+  live-verified on a Zen 5 Ryzen 9 9950X); AMD Zen 2 → nothing yet (its branch-stack
+  `perf_event_open` returns `EOPNOTSUPP`).
 - The **emulator (Unicorn)** tier is the universal floor for every OS, architecture,
   and language the native tiers do not reach (Windows-x64, macOS, AArch64, and the
   managed runtimes in-process DynamoRIO cannot take over).
@@ -122,9 +122,10 @@ Zen 2's branch-stack `perf_event_open` returns `EOPNOTSUPP` → `AMD_NOHW`
 not wired to perf branch-stack. So on Zen 2 the only exact native options are
 **DynamoRIO** and **single-step** (both shipping today). Zen 3 uses **BRS** (Family 19h,
 opt-in `branch-brs` event); Zen 4 and **Zen 5** use **LbrExtV2** (mainline Linux 6.1+);
-both are a fixed 16-entry stack, so the AMD backend is exact only within a
-16-taken-branch window (Tier A) and sets `truncated` to route longer routines to
-DynamoRIO.
+both are a fixed 16-entry stack: Tier A is exact within one window, and Tier-B
+stitching of the `sample_period=1` windows reconstructs past it (bounded by the data
+ring + PMI throttling); a run the stitched capture cannot hold sets `truncated` to
+route the routine to DynamoRIO.
 
 **Live-verified on Zen 5.** The AMD LBR capture+decode path was run on a **Ryzen 9
 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)** — the project's actual dev host
@@ -134,7 +135,8 @@ findings from that first real-hardware run:
 - It **works**: for a branch-heavy routine a PMU sample fires *inside* the region, so
   LbrExtV2 delivers a full 16-deep in-region branch stack and the decoder
   reconstructs it exactly (loop-body block + ordered offsets, `truncated` once the
-  routine exceeds 16 taken branches — Tier A as specified).
+  routine exceeds 16 taken branches — Tier A as specified; Tier-B stitching has since
+  lifted that >16 truncation, leaving the data ring as the ceiling).
 - perf gives the 16-deep stack **only at a sample**, so a **tiny single-shot routine
   is too fast to be sampled in-region** and the capture honestly sets `truncated`
   (the dynamic-fallback signal) rather than emitting an empty trace. This corrected a
@@ -230,8 +232,9 @@ Every tier reduces to two primitives that make a cascade tractable:
   these probes tried in priority order, terminating at the emulator — which is always
   available.
 - **A dynamic completeness signal.** `asmtest_trace_t.truncated` is set when a
-  backend could not record the whole path: AMD LBR window overflow (>16 taken
-  branches), Intel PT AUX-ring overflow, or single-step desync. It is the *runtime*
+  backend could not record the whole path: AMD LBR stitched-capture overflow (data
+  ring full, stitch gap, or sample loss), Intel PT AUX-ring overflow, or single-step
+  desync. It is the *runtime*
   fallback trigger, distinct from the *init-time* availability probe.
 
 Both are safe to act on because **every backend normalizes to the same offset basis**
@@ -260,7 +263,7 @@ transparent, while a native→emulator fallback crosses a semantic line and shou
 | Trigger | Signal | Fires at | Canonical example |
 |---|---|---|---|
 | Static (capability) | `available()` == 0 + skip reason | init | PT on AMD; DynamoRIO on macOS; LBR on Zen 2 |
-| Dynamic (completeness) | `trace.truncated` == true | after `end()` | AMD LBR routine exceeding 16 taken branches |
+| Dynamic (completeness) | `trace.truncated` == true | after `end()` | AMD LBR run overflowing the stitched capture (data ring / stitch gap) |
 
 ### Matrix 8 — Hardware / microarchitecture fallback chain (Linux x86-64, native runtime)
 
@@ -357,7 +360,8 @@ CoreSight}` in descending-fidelity order and returns those that `available()`, a
 ([hwtrace.c](../../src/hwtrace.c), [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)).
 The `policy` encodes the static *and* the dynamic fallback: `ASMTEST_HWTRACE_BEST`
 picks the most faithful backend; `ASMTEST_HWTRACE_CEILING_FREE` drops the one
-fixed-window backend (AMD LBR, 16 taken branches) and is what a caller re-resolves
+ceiling-bounded backend (AMD LBR — Tier-B stitching decodes past the 16-deep stack,
+but capture stays ring-bounded) and is what a caller re-resolves
 under after a trace comes back `truncated`. On any x86-64 Linux host the cascade is
 non-empty (single-step is the floor), so it never fails to resolve. This is exactly
 the within-hardware-tier portion of Matrix 8.

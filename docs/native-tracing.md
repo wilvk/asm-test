@@ -399,7 +399,7 @@ make docker-hwtrace-bindings  # every language wrapper, in plain containers
 `make hwtrace-test` executes the single-step backend live on this host (where Intel PT
 and AMD LBR self-skip), asserting the same `[0x0, 0x3, 0x6, 0xc, 0x11]` /
 `{0, 0x11}` partition the other backends produce, plus a 20-trip loop (62 instructions,
-past LBR's 16-branch window) to prove completeness. This is the hardware tier's first
+past a single 16-deep LBR window) to prove completeness. This is the hardware tier's first
 regression that **runs** on standard CI instead of self-skipping.
 
 ### Out-of-process variant (W2 — ptrace)
@@ -834,9 +834,9 @@ if (b >= 0) {
     asmtest_hwtrace_begin("fn");  fn(20, 22);  asmtest_hwtrace_end("fn");
     asmtest_hwtrace_shutdown();
 
-    /* Dynamic fallback: if the backend could not record the whole path (AMD LBR
-     * overflowed its 16-branch window, a PT ring overflowed), re-resolve to a
-     * ceiling-free backend and re-run the routine. */
+    /* Dynamic fallback: if the backend could not record the whole path (AMD LBR's
+     * data ring could not hold the stitched run, a PT ring overflowed),
+     * re-resolve to a ceiling-free backend and re-run the routine. */
     if (tr->truncated) {
         int b2 = asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE);
         if (b2 >= 0 && b2 != b) { /* re-init under b2, begin/call/end again */ }
@@ -851,9 +851,10 @@ the head (or `ASMTEST_HW_EUNAVAIL`). The `policy`:
 
 - **`ASMTEST_HWTRACE_BEST`** — the most faithful backend the host can run.
 - **`ASMTEST_HWTRACE_CEILING_FREE`** — the same, but skipping the one backend with a
-  fixed completeness window (AMD LBR, 16 taken branches). This is what you re-resolve
-  under after a trace comes back `truncated`, so the second attempt has no depth
-  ceiling.
+  bounded completeness ceiling (AMD LBR: Tier-B stitching decodes past the 16-deep
+  stack, but capture is still bounded by the data ring and PMI throttling). This is
+  what you re-resolve under after a trace comes back `truncated`, so the second
+  attempt has no such ceiling.
 
 On **any x86-64 Linux host the cascade is non-empty** — the single-step backend is
 the floor — so `auto()` never fails there; it only returns a negative status off

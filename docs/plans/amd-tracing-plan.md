@@ -848,10 +848,10 @@ kernel already programs `period − lbr_nr` via `amd_brs_adjust_period`), cuttin
 capture from O(branches) interrupts to one and removing the throttle/ring exposure.
 
 **Work / caveat.** `sample_period=1` is **load-bearing** for the current design: the Tier-B
-stitch and the richest-in-region heuristic ([hwtrace.c:465-474, 561-585](../../src/hwtrace.c);
-[amd_backend.c:129-131](../../src/amd_backend.c)) assume a sample at *every* taken branch so
+stitch and the richest-in-region heuristic ([hwtrace.c:477-486, 584-614](../../src/hwtrace.c);
+[amd_backend.c:130-135](../../src/amd_backend.c)) assume a sample at *every* taken branch so
 consecutive 16-deep windows overlap by 15 edges. A fixed BRS period breaks that overlap. So
-this is **not** a blanket change to `hwtrace_begin_amd` ([hwtrace.c:414](../../src/hwtrace.c))
+this is **not** a blanket change to `hwtrace_begin_amd` ([hwtrace.c:426](../../src/hwtrace.c))
 — it must be a **distinct Tier-A capture mode**, selected only when the region is known-small
 and the Tier-B path is not needed, and kept off Zen 4/5 (where the Phase-3 software-event
 snapshot is the better lever). The `period=1` appears in two places (probe

@@ -33,7 +33,7 @@ caller can pick whichever the host can run without changing the rest of its code
 | Backend (`asmtest_trace_backend_t`) | Mechanism | Decoder | Runs where | Completeness ceiling |
 |---|---|---|---|---|
 | `ASMTEST_HWTRACE_INTEL_PT` | Intel PT TNT/TIP/PSB packets → kernel AUX ring (`perf_event_open`) | libipt | bare-metal **Intel** x86-64 + perf privilege | ring size |
-| `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 3 BRS / Zen 4–5 LbrExtV2 branch stack | built-in | bare-metal **AMD** (Zen 3+) + perf branch-stack | **16 taken branches** |
+| `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 3 BRS / Zen 4–5 LbrExtV2 branch stack | built-in | bare-metal **AMD** (Zen 3+) + perf branch-stack | 16-deep stack per sample; **Tier-B stitching** decodes past it — ceiling is the data ring (`data_size`) |
 | `ASMTEST_HWTRACE_CORESIGHT` | ARM ETM/ETE waypoints → AUX ring | OpenCSD | specific **AArch64** boards (scaffold) | ring size |
 | `ASMTEST_HWTRACE_SINGLESTEP` | `EFLAGS.TF` → `#DB` → `SIGTRAP` after every instruction | Capstone length-decoder | **any x86-64 Linux** (no PMU/perf/privilege/decoder) | none — exact + complete |
 
@@ -109,8 +109,11 @@ The tier reuses the native-trace begin/end region model. The five calls are:
 
 `asmtest_hwtrace_options_t` controls the rings: `aux_size` (trace ring bytes,
 rounded up to a power-of-two pages, `0` → 64 KB), `data_size` (base perf ring, `0` →
-8 KB), `snapshot` (nonzero for a circular snapshot ring, `0` for a linear drain),
-and an optional `object_hint` path for hardware address filters.
+8 KB for PT/CoreSight; the AMD backend floors it at 64 KB, and it bounds the Tier-B
+stitched capture), `snapshot` (nonzero maps a circular snapshot ring instead of a linear drain —
+capture-side only so far: `end()` decodes the linear ring, and the circular-ring walk
+from `aux_tail` is a named follow-up), and an optional `object_hint` path for hardware
+address filters.
 
 Only the `backend` field is required; the rest default sensibly when zero-initialized.
 
@@ -216,8 +219,10 @@ The `policy` is one of:
 
 - **`ASMTEST_HWTRACE_BEST`** — the most faithful backend the host can run.
 - **`ASMTEST_HWTRACE_CEILING_FREE`** — the same, but skipping the one backend with a
-  fixed completeness window (AMD LBR, 16 taken branches). Re-resolve under this after
-  a trace comes back `truncated`, so the second attempt has no depth ceiling.
+  bounded completeness ceiling (AMD LBR: Tier-B stitching decodes past the 16-deep
+  stack, but capture is still bounded by the data ring and PMI throttling). Re-resolve
+  under this after a trace comes back `truncated`, so the second attempt has no such
+  ceiling.
 
 ```c
 #include "asmtest_hwtrace.h"
@@ -231,8 +236,8 @@ if (b >= 0) {
     asmtest_hwtrace_shutdown();
 
     /* Dynamic fallback: if the chosen backend could not record the whole path
-     * (AMD LBR overflowed its 16-branch window, a PT ring overflowed), re-resolve
-     * to a ceiling-free backend and re-run. */
+     * (AMD LBR's data ring could not hold the stitched run, a PT ring
+     * overflowed), re-resolve to a ceiling-free backend and re-run. */
     if (tr->truncated) {
         int b2 = asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE);
         if (b2 >= 0 && b2 != b) { /* re-init under b2, begin/call/end again */ }
@@ -290,7 +295,7 @@ make docker-hwtrace-amd       # AMD LBR, live (PERFMON cap + seccomp=unconfined)
 `make hwtrace-test` executes the single-step backend live on the dev host (where
 Intel PT and AMD LBR self-skip), asserting the same `[0x0, 0x3, 0x6, 0xc, 0x11]` /
 `{0, 0x11}` partition the other backends produce, plus a 20-trip loop (62
-instructions, past LBR's 16-branch window) to prove completeness. This is the
+instructions, past a single 16-deep LBR window) to prove completeness. This is the
 hardware tier's first regression that **runs** on standard CI instead of
 self-skipping. The Intel-PT/CoreSight hardware capture cannot run on standard CI — it
 needs a self-hosted bare-metal runner — but the single-step backend removes that
@@ -355,8 +360,10 @@ The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its
   branch stack at the PMU, so it `truncated`s a too-fast single-shot routine —
   single-step is the deterministic in-process backend for that case.
-- **AMD LBR has a 16-taken-branch window.** Re-resolve under `CEILING_FREE` after a
-  `truncated` trace.
+- **AMD LBR's 16-deep stack is lifted by Tier-B window stitching**; the remaining
+  ceiling is the data ring (extend via `data_size`) plus PMI throttling. On a stitch
+  gap or sample loss the trace comes back `truncated` — re-resolve under
+  `CEILING_FREE`.
 - **CoreSight is a scaffold** pending AArch64 board access — it always self-skips.
 - **Single-step is Linux x86-64 only** for now (macOS/Windows planned); the
   out-of-process ptrace form adds AArch64. It targets well-behaved compute routines
