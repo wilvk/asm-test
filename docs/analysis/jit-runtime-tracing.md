@@ -7,7 +7,10 @@ and the Phase 2 foreign-JIT forward-look it adds), a sibling of the
 [DynamoRIO native-trace plan](../plans/dynamorio-native-trace-plan.md). It is the
 sequel to the DynamoRIO plan's [Language runtime support](../plans/dynamorio-native-trace-plan.md#language-runtime-support)
 section: that section explains why in-process DBI fights managed runtimes; this
-one asks how to trace a **foreign** JIT's generated code anyway.*
+one asks how to trace a **foreign** JIT's generated code anyway. For the in-process,
+**cooperative** face of the same machinery — wrapping a region of your own managed code
+in a `using` block, non-intrusively — see the sibling
+[scoped-inprocess-tracing.md](scoped-inprocess-tracing.md).*
 
 > **Update — approach #2's core has shipped.** The "time-aware code-image recorder"
 > (below, [§2](#2-general-case--ebpf--userfaultfd-time-aware-recorder-no-runtime-cooperation))
