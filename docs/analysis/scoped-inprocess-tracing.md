@@ -118,7 +118,7 @@ traced short of probing MSRs. One honest caveat: the `using` block itself is cod
 the target, so the cooperative model is by definition not zero-footprint — but its
 intrusion is confined to the scope boundaries (today's `begin` opens the perf event and
 maps its rings each time, [src/hwtrace.c:671-704](../../src/hwtrace.c#L671-L704); with
-the fd held open by an import-time initializer that steady state shrinks to the
+the fd held open by the arm-time initializer that steady state shrinks to the
 enable/disable `ioctl` pair); the region *body* runs untouched at native speed. That is
 the precise sense in which this document claims the model is non-intrusive.
 
@@ -347,7 +347,10 @@ what to step into.** So under a stepper the empty-constructor promise degrades:
 - **"Trace this one JIT'd method"** is a region + step-over (descent OFF or
   `RECORD_EDGES`/`DESCEND_KNOWN`) — reliable, and shipping today via shape 2 above. It
   costs the extra knowledge the empty form was trying to avoid: keeping the method
-  un-inlined, hot, and tiering-stable, then resolving its address.
+  un-inlined, hot, and tiering-stable, then resolving its address. (On .NET 8+ the
+  address and the movement tracking automate via the runtime's own method-load
+  events — see [Closing the leaks](#closing-the-leaks-on-net-8); the un-inlining
+  discipline remains.)
 
 So: with hardware trace the zero-knowledge scope is the *strong* form; with a stepper the
 zero-knowledge scope is the *weak* (L3, best-effort) form and the method-scoped trace is
@@ -448,7 +451,9 @@ backends already filter to the region:
   method's bytes appeared, so the "JIT compiling HotPath" slice can be split from the
   "HotPath running" slice; (c) **symbolize and bucket** every IP against `/proc/self/maps`
   + the perf-map (`asmtest_proc_region_by_addr`, `asmtest_proc_perfmap_symbol`) so noise is
-  *labelled* ("31k insns in RyuJIT, 2k in GC, 7k in HotPath") rather than silently mixed.
+  *labelled* ("31k insns in RyuJIT, 2k in GC, 7k in HotPath") rather than silently mixed
+  (on .NET 8+ the runtime's `MethodLoadVerbose` events label JIT'd methods directly —
+  see [Closing the leaks](#closing-the-leaks-on-net-8)).
 - **Single-step** already excludes noise from the *output* — the handler records only
   in-region RIPs ([src/ss_backend.c:95-103](../../src/ss_backend.c#L95-L103)) — so an
   unwarmed body's JIT/GC steps run **unrecorded**. The residual problem is *cost*, not
@@ -543,6 +548,8 @@ against the lowest common denominator; the next section shows how much dissolves
    address) is the robust "assume no knowledge" default; when an address *is* needed,
    fall back to resolving the region from `/proc/self/maps`
    (`asmtest_proc_region_by_addr`) around a captured sample IP, or from the perf-map.
+   (On .NET 8+ neither fallback is needed — the runtime's own method-load events
+   supply the address; see the next section.)
 3. **`.NET`'s own jitdump is launch-flag-shaped — but no longer strictly launch-only.**
    `DOTNET_PerfMapEnabled` is read at process start ([.NET runtime-config][dotnet-perfmap]),
    and a `[ModuleInitializer]` runs too late to set it. But since **.NET 8** the
@@ -667,8 +674,10 @@ profiler shim) undo.
 
 1. An `IDisposable AsmTrace` scope (a thin shim over `begin`/`end`, with
    `[CallerMemberName]` auto-naming and default-sink emission on `Dispose`).
-2. A `[ModuleInitializer]` that arms the tier on import and wires the **self** code-image
-   recorder as the **PT decoder's** image source. Today the recorder feeds the
+2. A `[ModuleInitializer]` that arms the tier before first use and wires the **self**
+   code-image recorder as the **PT decoder's** image source (on .NET 8+, also hanging
+   the `MethodLoadVerbose` listener that feeds the recorder — see
+   [Closing the leaks](#closing-the-leaks-on-net-8)). Today the recorder feeds the
    *out-of-process* stepper (`_versioned`); feeding libipt's image callback for the
    in-process self case is the same forward-look
    [jit-runtime-tracing.md](jit-runtime-tracing.md) flags as PT Phase 2.
