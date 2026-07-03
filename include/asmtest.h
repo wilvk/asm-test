@@ -34,10 +34,15 @@ extern "C" {
 /* Framework version (semantic). ASMTEST_VERSION is the dotted string; the
  * numeric form ASMTEST_VERSION_NUM = MAJOR*10000 + MINOR*100 + PATCH allows
  * compile-time comparisons, e.g. #if ASMTEST_VERSION_NUM >= 10100. */
+/* sync-version.sh matches these #defines with single-space, anchored patterns;
+ * AlignConsecutiveMacros would pad ASMTEST_VERSION and break the CI check-version
+ * gate, so the block is fenced off from clang-format. */
+/* clang-format off */
 #define ASMTEST_VERSION_MAJOR 1
 #define ASMTEST_VERSION_MINOR 1
 #define ASMTEST_VERSION_PATCH 0
-#define ASMTEST_VERSION       "1.1.0"
+#define ASMTEST_VERSION "1.1.0"
+/* clang-format on */
 #define ASMTEST_VERSION_NUM                                                    \
     (ASMTEST_VERSION_MAJOR * 10000 + ASMTEST_VERSION_MINOR * 100 +             \
      ASMTEST_VERSION_PATCH)
