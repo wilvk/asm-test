@@ -354,7 +354,7 @@ class HwTrace {
   /** This host's hardware-trace fallback cascade: the available backends, most-
    *  faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`.
    *  Empty only off x86-64 Linux (single-step is the floor there). CEILING_FREE
-   *  drops the depth-bounded backend (AMD LBR). Returns an array of backend ints. */
+   *  drops the ceiling-bounded backend (AMD LBR). Returns an array of backend ints. */
   static resolve(policy = BEST) {
     const out = Buffer.alloc(4 * 4); // up to 4 int32 backend enums
     const n = Number(_fn.resolve(policy, out, 4));

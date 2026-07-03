@@ -289,7 +289,7 @@ end
 -- This host's hardware-trace fallback cascade: the available backends, most-
 -- faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`
 -- (default BEST), as a 1-based Lua array of backend ints. Empty only off x86-64
--- Linux (single-step is the floor there). CEILING_FREE drops the depth-bounded
+-- Linux (single-step is the floor there). CEILING_FREE drops the ceiling-bounded
 -- backend (AMD LBR).
 function HwTrace.resolve(policy)
   assert(L, "libasmtest_hwtrace not loaded")
@@ -315,7 +315,7 @@ end
 -- emulator, each included only if its tier is available. Honors `policy` (default
 -- TRACE_BEST), returned as a 1-based Lua array of { tier=, backend=, fidelity= }
 -- tables. TRACE_NATIVE_ONLY drops the emulator floor (no native->emulator fidelity
--- crossing); TRACE_CEILING_FREE drops the depth-bounded backend (AMD LBR).
+-- crossing); TRACE_CEILING_FREE drops the ceiling-bounded backend (AMD LBR).
 function HwTrace.resolve_tiers(policy)
   assert(L, "libasmtest_hwtrace not loaded")
   local cap = 8

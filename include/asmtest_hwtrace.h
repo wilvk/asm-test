@@ -62,7 +62,8 @@ typedef enum {
 typedef struct {
     asmtest_trace_backend_t backend;
     size_t aux_size;  /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
-    size_t data_size; /* base perf ring bytes; rounded up to 2^n pages (0=8KB)    */
+    size_t data_size; /* base perf ring bytes; 2^n pages (0=8KB; the AMD backend
+                         floors it at 64KB and it bounds the Tier-B stitched run) */
     int snapshot;     /* nonzero: circular snapshot ring; 0: linear (drain)       */
     const char *object_hint; /* optional object-file path for hw address filters  */
 } asmtest_hwtrace_options_t;
@@ -90,9 +91,10 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
 /* ------------------------------------------------------------------ */
 
 /* Selection policy. BEST returns the most faithful available backend.
- * CEILING_FREE additionally skips the depth-bounded backend (AMD LBR, whose
- * 16-taken-branch window a routine can overflow and set trace.truncated) — so the
- * backend it returns has no fixed completeness ceiling. CEILING_FREE is the policy
+ * CEILING_FREE additionally skips the ceiling-bounded backend (AMD LBR: Tier-B
+ * stitching decodes past its 16-deep stack, but capture is still bounded by the
+ * data ring and PMI throttling, either of which sets trace.truncated) — so the
+ * backend it returns has no such completeness ceiling. CEILING_FREE is the policy
  * to re-resolve under after a trace comes back truncated. */
 typedef enum {
     ASMTEST_HWTRACE_BEST = 0,

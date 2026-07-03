@@ -85,7 +85,8 @@ ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 3 * sizeof(int),
 
 /* Policy is a bitmask (composable), passed across the FFI as an int. */
 #define ASMTEST_TRACE_BEST 0x0 /* most-faithful available; emulator floor allowed */
-/* Drop the one fixed-window backend (AMD LBR, exact only within 16 taken branches):
+/* Drop the one ceiling-bounded backend (AMD LBR: Tier-B stitching decodes past its
+ * 16-deep stack, but capture is still bounded by the data ring / PMI throttling):
  * the policy to re-resolve under after a trace comes back trace.truncated. Mirrors
  * the hardware tier's ASMTEST_HWTRACE_CEILING_FREE. */
 #define ASMTEST_TRACE_CEILING_FREE 0x1

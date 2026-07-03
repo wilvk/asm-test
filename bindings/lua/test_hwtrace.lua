@@ -133,7 +133,7 @@ do
     end
     if not in_best then subset = false end
   end
-  ok(no_amd, "auto CEILING_FREE never selects AMD LBR (16-branch window)")
+  ok(no_amd, "auto CEILING_FREE never selects AMD LBR (ceiling-bounded)")
   ok(subset, "auto CEILING_FREE is a subset of BEST")
 
   -- auto(policy) is the head of resolve(policy), or EUNAVAIL when empty.
@@ -245,7 +245,7 @@ do
 end
 
 -- test_singlestep_loop_no_depth_ceiling — LOOP, call(1, 20): 19 back-edges, all
--- captured (no LBR-style 16-deep ceiling). Use instructions=256 for the loop.
+-- captured (no LBR-style capture ceiling). Use instructions=256 for the loop.
 do
   local code = NativeCode.from_bytes(LOOP)
   local tr = HwTrace.create(64, 256)

@@ -496,7 +496,7 @@ namespace Asmtest
         /// most-faithful first (INTEL_PT &gt; AMD_LBR &gt; SINGLESTEP &gt; CORESIGHT),
         /// honoring <paramref name="policy"/>. Empty only off x86-64 Linux (single-step
         /// is the floor there) or when the lib is missing. CeilingFree drops the
-        /// depth-bounded backend (AMD LBR).
+        /// ceiling-bounded backend (AMD LBR).
         /// </summary>
         public static int[] Resolve(HwPolicy policy = HwPolicy.Best)
         {

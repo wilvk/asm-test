@@ -567,7 +567,7 @@ class HwTrace {
     /// This host's hardware-trace fallback cascade: the available backends,
     /// most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
     /// `policy`. Empty only off x86-64 Linux (single-step is the floor there) or
-    /// when the library is missing. CEILING_FREE drops the depth-bounded backend
+    /// when the library is missing. CEILING_FREE drops the ceiling-bounded backend
     /// (AMD LBR).
     static std::vector<int> resolve(int policy = BEST) {
         detail::HwApi &a = detail::api();

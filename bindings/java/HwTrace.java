@@ -592,7 +592,7 @@ public final class HwTrace {
     /** This host's hardware-trace fallback cascade: the available backend enums,
      *  most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
      *  {@code policy}. Empty only off x86-64 Linux (single-step is the floor there).
-     *  {@code CEILING_FREE} drops the depth-bounded backend (AMD LBR). */
+     *  {@code CEILING_FREE} drops the ceiling-bounded backend (AMD LBR). */
     public static int[] resolve(int policy) {
         if (HW_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
         try (Arena a = Arena.ofConfined()) {

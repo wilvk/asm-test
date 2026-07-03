@@ -461,7 +461,7 @@ class HwTrace:
         """This host's hardware-trace fallback cascade: the available backends,
         most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
         ``policy``. Empty only off x86-64 Linux (single-step is the floor there).
-        ``CEILING_FREE`` drops the depth-bounded backend (AMD LBR)."""
+        ``CEILING_FREE`` drops the ceiling-bounded backend (AMD LBR)."""
         out = (C.c_int * 4)()
         n = _get().asmtest_hwtrace_resolve(policy, out, len(out))
         return [out[i] for i in range(n)]

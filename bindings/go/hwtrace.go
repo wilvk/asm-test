@@ -639,7 +639,7 @@ func HwTraceSkipReason(backend int) string {
 // HwTraceResolve is this host's hardware-trace fallback cascade: the available
 // backends, most-faithful first (IntelPT > AmdLBR > SingleStep > CoreSight),
 // honoring policy. Empty only off x86-64 Linux (single-step is the floor there)
-// or when libasmtest_hwtrace is not loaded. CeilingFree drops the depth-bounded
+// or when libasmtest_hwtrace is not loaded. CeilingFree drops the ceiling-bounded
 // backend (AMD LBR).
 func HwTraceResolve(policy int) []int {
 	var out [4]C.int

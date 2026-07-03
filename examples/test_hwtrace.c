@@ -630,7 +630,7 @@ static void test_cross_tier_resolve(void) {
           "cross-tier NATIVE_ONLY drops the emulator (no fidelity crossing)");
     CHECK(nn == nb - 1, "cross-tier NATIVE_ONLY is BEST minus the emulator floor");
 
-    /* CEILING_FREE drops the one fixed-window backend (AMD LBR, 16 taken branches). */
+    /* CEILING_FREE drops the one ceiling-bounded backend (AMD LBR, ring-bounded). */
     int cf_no_amd = 1;
     for (size_t i = 0; i < ncf; i++)
         if (cf[i].tier == ASMTEST_TIER_HWTRACE &&

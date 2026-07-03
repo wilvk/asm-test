@@ -382,7 +382,7 @@ module Asmtest
       # This host's hardware-trace fallback cascade: the available backends, most-
       # faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
       # +policy+. Empty only off x86-64 Linux (single-step is the floor there).
-      # CEILING_FREE drops the depth-bounded backend (AMD LBR). Returns an Array of
+      # CEILING_FREE drops the ceiling-bounded backend (AMD LBR). Returns an Array of
       # backend ints. resolve writes up to 4 enums into the out buffer and returns
       # the count; we read back the first n int values.
       def self.resolve(policy = BEST)

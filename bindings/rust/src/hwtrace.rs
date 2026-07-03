@@ -801,7 +801,7 @@ impl HwTrace {
     /// `asmtest_trace_backend_t` enum values), most-faithful first
     /// (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring `policy`. Empty only
     /// off x86-64 Linux (single-step is the floor there) or when the lib is absent.
-    /// `CeilingFree` drops the depth-bounded backend (AMD LBR).
+    /// `CeilingFree` drops the ceiling-bounded backend (AMD LBR).
     pub fn resolve(policy: Policy) -> Vec<i32> {
         match hw_fns().resolve {
             Some(f) => {

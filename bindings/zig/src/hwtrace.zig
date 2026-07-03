@@ -573,7 +573,7 @@ pub fn skipReason(backend: Backend, buf: []u8) []const u8 {
 /// CORESIGHT). Self-owns a fixed 4-element buffer (there are only four backends)
 /// and returns the live `[0..n]` slice into it; empty only off x86-64 Linux
 /// (single-step is the floor there) or when the lib can't load. `CEILING_FREE`
-/// drops the depth-bounded backend (AMD LBR). Mirrors `HwTrace.resolve()`.
+/// drops the ceiling-bounded backend (AMD LBR). Mirrors `HwTrace.resolve()`.
 pub const Resolved = struct {
     buf: [4]c_int = undefined,
     len: usize = 0,

@@ -294,11 +294,11 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
 /* asmtest_hwtrace_available(), so the cascade is just those probes in   */
 /* priority order. Order is descending fidelity == ascending enum:      */
 /* Intel PT (near-zero overhead, exact, unbounded ring) > AMD LBR        */
-/* (HW-attributed, exact within a 16-taken-branch window) > single-step  */
-/* (exact + unbounded, per-instruction cost) > CoreSight (AArch64).      */
-/* CEILING_FREE drops AMD LBR — the one backend with a fixed completeness */
-/* window a small routine can overflow — so its pick has no depth ceiling */
-/* and is the right target to re-resolve to after trace.truncated.       */
+/* (HW-attributed; Tier-B stitches past the 16-deep stack, ring-bounded) */
+/* > single-step (exact + unbounded, per-instruction cost) > CoreSight   */
+/* (AArch64). CEILING_FREE drops AMD LBR — the one backend whose capture */
+/* is ceiling-bounded (data ring / PMI throttling) — so its pick has no  */
+/* completeness ceiling: the re-resolve target after trace.truncated.    */
 /* ------------------------------------------------------------------ */
 size_t asmtest_hwtrace_resolve(asmtest_hwtrace_policy_t policy,
                                asmtest_trace_backend_t *out, size_t cap) {
