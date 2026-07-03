@@ -1,6 +1,6 @@
 [package]
 name = "asm-test"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Rust binding for the asm-test assembly unit-testing framework"
 repository = "https://github.com/wilvk/asm-test"

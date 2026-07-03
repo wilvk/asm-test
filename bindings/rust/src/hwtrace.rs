@@ -268,6 +268,60 @@ type PtraceTraceAttachedVersionedFn = unsafe extern "C" fn(
     *mut c_void,
 ) -> c_int;
 
+// --- Call descent (asmtest_descent_t) — asmtest_ptrace.h ------------------ //
+//
+// Descend into the call-outs the ptrace stepper would otherwise step over, at
+// four opt-in levels ([`DescentLevel`]). Descent records into a SEPARATE opaque
+// handle read through the scalar accessors below; the flat `asmtest_trace_t`
+// stays the single-region frame-0 view. Same `libasmtest_hwtrace`, same
+// resolve-at-run-time idiom; each entry is `None` when the symbol is absent so
+// callers self-skip.
+//
+// This binding is ALLOW-SET-ONLY: it wraps `allow_region`/`deny_region` but NOT
+// the two capturing-upcall setters (`set_resolver`/`set_denylist`) — a Rust
+// `extern "C"` fn pointer cannot host a GC-safe capturing closure, so those two
+// symbols are exempted in `scripts/bindings-parity-allow.txt` rather than wrapped.
+
+type DescentNewFn = unsafe extern "C" fn(c_int) -> *mut c_void;
+type DescentFreeFn = unsafe extern "C" fn(*mut c_void);
+type DescentSetU32Fn = unsafe extern "C" fn(*mut c_void, u32);
+type DescentSetU64Fn = unsafe extern "C" fn(*mut c_void, u64);
+type DescentRegionFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> c_int;
+type DescentLenFn = unsafe extern "C" fn(*mut c_void) -> usize;
+type DescentAtU64Fn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
+type DescentAtU32Fn = unsafe extern "C" fn(*mut c_void, usize) -> u32;
+type DescentAtI32Fn = unsafe extern "C" fn(*mut c_void, usize) -> i32;
+type DescentCountFn = unsafe extern "C" fn(*mut c_void, usize) -> usize;
+type DescentAt2Fn = unsafe extern "C" fn(*mut c_void, usize, usize) -> u64;
+type DescentFlagFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+type PtraceTraceCallExFn = unsafe extern "C" fn(
+    *const c_void,
+    usize,
+    *const c_long,
+    c_int,
+    *mut c_long,
+    *mut c_void,
+    *mut c_void,
+) -> c_int;
+type PtraceTraceAttachedExFn = unsafe extern "C" fn(
+    c_int,
+    *const c_void,
+    usize,
+    *mut c_long,
+    *mut c_void,
+    *mut c_void,
+) -> c_int;
+type PtraceTraceAttachedVersionedExFn = unsafe extern "C" fn(
+    c_int,
+    *const c_void,
+    usize,
+    *mut c_void,
+    u64,
+    *mut c_long,
+    *mut c_void,
+    *mut c_void,
+) -> c_int;
+
 // --- Time-aware code-image recorder (asmtest_codeimage.h) ----------------- //
 //
 // The userspace PERF_RECORD_TEXT_POKE: a timestamped code-image timeline that
@@ -342,6 +396,33 @@ struct HwFns {
     proc_region_by_addr: Option<ProcRegionByAddrFn>,
     proc_perfmap_symbol: Option<ProcPerfmapSymbolFn>,
     jitdump_find: Option<JitdumpFindFn>,
+    // asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames.
+    // Allow-set-only: no set_resolver/set_denylist (see the alias block above).
+    descent_new: Option<DescentNewFn>,
+    descent_free: Option<DescentFreeFn>,
+    descent_set_max_depth: Option<DescentSetU32Fn>,
+    descent_set_insn_budget: Option<DescentSetU64Fn>,
+    descent_set_watchdog_ms: Option<DescentSetU32Fn>,
+    descent_allow_region: Option<DescentRegionFn>,
+    descent_deny_region: Option<DescentRegionFn>,
+    descent_edges_len: Option<DescentLenFn>,
+    descent_edge_site: Option<DescentAtU64Fn>,
+    descent_edge_target: Option<DescentAtU64Fn>,
+    descent_edge_depth: Option<DescentAtU32Fn>,
+    descent_frames_len: Option<DescentLenFn>,
+    descent_frame_base: Option<DescentAtU64Fn>,
+    descent_frame_len: Option<DescentAtU64Fn>,
+    descent_frame_depth: Option<DescentAtU32Fn>,
+    descent_frame_parent: Option<DescentAtI32Fn>,
+    descent_frame_insn_count: Option<DescentCountFn>,
+    descent_frame_insn_at: Option<DescentAt2Fn>,
+    descent_frame_block_count: Option<DescentCountFn>,
+    descent_frame_block_at: Option<DescentAt2Fn>,
+    descent_truncated: Option<DescentFlagFn>,
+    descent_depth_capped: Option<DescentFlagFn>,
+    ptrace_trace_call_ex: Option<PtraceTraceCallExFn>,
+    ptrace_trace_attached_ex: Option<PtraceTraceAttachedExFn>,
+    ptrace_trace_attached_versioned_ex: Option<PtraceTraceAttachedVersionedExFn>,
     // asmtest_codeimage.h — time-aware code-image recorder.
     ci_available: Option<CodeImageAvailableFn>,
     ci_skip_reason: Option<CodeImageSkipReasonFn>,
@@ -425,6 +506,19 @@ fn hw_fns() -> &'static HwFns {
                 ptrace_run_to: None, ptrace_trace_attached_versioned: None,
                 proc_region_by_addr: None, proc_perfmap_symbol: None,
                 jitdump_find: None,
+                descent_new: None, descent_free: None,
+                descent_set_max_depth: None, descent_set_insn_budget: None,
+                descent_set_watchdog_ms: None, descent_allow_region: None,
+                descent_deny_region: None, descent_edges_len: None,
+                descent_edge_site: None, descent_edge_target: None,
+                descent_edge_depth: None, descent_frames_len: None,
+                descent_frame_base: None, descent_frame_len: None,
+                descent_frame_depth: None, descent_frame_parent: None,
+                descent_frame_insn_count: None, descent_frame_insn_at: None,
+                descent_frame_block_count: None, descent_frame_block_at: None,
+                descent_truncated: None, descent_depth_capped: None,
+                ptrace_trace_call_ex: None, ptrace_trace_attached_ex: None,
+                ptrace_trace_attached_versioned_ex: None,
                 ci_available: None, ci_skip_reason: None,
                 ci_new: None, ci_free: None, ci_track: None,
                 ci_refresh: None, ci_now: None, ci_bytes_at: None,
@@ -484,6 +578,39 @@ fn hw_fns() -> &'static HwFns {
             proc_region_by_addr: load!("asmtest_proc_region_by_addr", ProcRegionByAddrFn),
             proc_perfmap_symbol: load!("asmtest_proc_perfmap_symbol", ProcPerfmapSymbolFn),
             jitdump_find: load!("asmtest_jitdump_find", JitdumpFindFn),
+            // Call descent (asmtest_descent_t) — allow-set-only: set_resolver /
+            // set_denylist are intentionally NOT loaded (see the alias block).
+            descent_new: load!("asmtest_descent_new", DescentNewFn),
+            descent_free: load!("asmtest_descent_free", DescentFreeFn),
+            descent_set_max_depth: load!("asmtest_descent_set_max_depth", DescentSetU32Fn),
+            descent_set_insn_budget: load!("asmtest_descent_set_insn_budget", DescentSetU64Fn),
+            descent_set_watchdog_ms: load!("asmtest_descent_set_watchdog_ms", DescentSetU32Fn),
+            descent_allow_region: load!("asmtest_descent_allow_region", DescentRegionFn),
+            descent_deny_region: load!("asmtest_descent_deny_region", DescentRegionFn),
+            descent_edges_len: load!("asmtest_descent_edges_len", DescentLenFn),
+            descent_edge_site: load!("asmtest_descent_edge_site", DescentAtU64Fn),
+            descent_edge_target: load!("asmtest_descent_edge_target", DescentAtU64Fn),
+            descent_edge_depth: load!("asmtest_descent_edge_depth", DescentAtU32Fn),
+            descent_frames_len: load!("asmtest_descent_frames_len", DescentLenFn),
+            descent_frame_base: load!("asmtest_descent_frame_base", DescentAtU64Fn),
+            descent_frame_len: load!("asmtest_descent_frame_len", DescentAtU64Fn),
+            descent_frame_depth: load!("asmtest_descent_frame_depth", DescentAtU32Fn),
+            descent_frame_parent: load!("asmtest_descent_frame_parent", DescentAtI32Fn),
+            descent_frame_insn_count: load!("asmtest_descent_frame_insn_count", DescentCountFn),
+            descent_frame_insn_at: load!("asmtest_descent_frame_insn_at", DescentAt2Fn),
+            descent_frame_block_count: load!("asmtest_descent_frame_block_count", DescentCountFn),
+            descent_frame_block_at: load!("asmtest_descent_frame_block_at", DescentAt2Fn),
+            descent_truncated: load!("asmtest_descent_truncated", DescentFlagFn),
+            descent_depth_capped: load!("asmtest_descent_depth_capped", DescentFlagFn),
+            ptrace_trace_call_ex: load!("asmtest_ptrace_trace_call_ex", PtraceTraceCallExFn),
+            ptrace_trace_attached_ex: load!(
+                "asmtest_ptrace_trace_attached_ex",
+                PtraceTraceAttachedExFn
+            ),
+            ptrace_trace_attached_versioned_ex: load!(
+                "asmtest_ptrace_trace_attached_versioned_ex",
+                PtraceTraceAttachedVersionedExFn
+            ),
             ci_available: load!("asmtest_codeimage_available", CodeImageAvailableFn),
             ci_skip_reason: load!("asmtest_codeimage_skip_reason", CodeImageSkipReasonFn),
             ci_new: load!("asmtest_codeimage_new", CodeImageNewFn),
@@ -1042,6 +1169,111 @@ impl Ptrace {
         result as i64
     }
 
+    /// Descending variant of [`trace_call`](Ptrace::trace_call): thread a
+    /// [`Descent`] handle through the single-step loop so the call-outs the tracer
+    /// would step over are recorded as edges (level >= 1) and descended as nested
+    /// frames (level >= 2). `trace` (the flat frame-0 view) may be `None` to record
+    /// only into `descent`.
+    ///
+    /// CRITICAL: `region` is the traced region's byte length, NOT the whole
+    /// allocation — pass it (`Some(len)`) when the call target is an in-blob sibling
+    /// that must stay OUTSIDE the traced region, or a call into that sibling
+    /// mis-records as recursion. `None` defaults to the whole [`NativeCode`] length.
+    /// Panics on a fork/ptrace failure or when the lib is absent — gate on
+    /// [`available`](Ptrace::available) first.
+    pub fn trace_call_ex(
+        code: &NativeCode,
+        args: &[i64],
+        trace: Option<&Trace>,
+        descent: &Descent,
+        region: Option<usize>,
+    ) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_call_ex
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let cargs: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
+        let mut result: c_long = 0;
+        let th = trace.map_or(std::ptr::null_mut(), |t| t.handle);
+        let len = region.unwrap_or(code.len);
+        let rc = unsafe {
+            f(
+                code.base,
+                len,
+                cargs.as_ptr(),
+                cargs.len() as c_int,
+                &mut result,
+                th,
+                descent.handle,
+            )
+        };
+        assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_call_ex failed: {rc}");
+        result as i64
+    }
+
+    /// Descending variant of [`trace_attached`](Ptrace::trace_attached) for an
+    /// externally-attached, ptrace-stopped process `pid` (the caller owns
+    /// PTRACE_ATTACH/DETACH). Threads a [`Descent`] handle through the loop; `trace`
+    /// (frame 0) may be `None` to record only into `descent`. Panics on a ptrace
+    /// failure or when the lib is absent — gate on [`available`](Ptrace::available).
+    pub fn trace_attached_ex(
+        pid: i32,
+        base: usize,
+        len: usize,
+        trace: Option<&Trace>,
+        descent: &Descent,
+    ) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_attached_ex
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let mut result: c_long = 0;
+        let th = trace.map_or(std::ptr::null_mut(), |t| t.handle);
+        let rc = unsafe {
+            f(pid as c_int, base as *const c_void, len, &mut result, th, descent.handle)
+        };
+        assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_attached_ex failed: {rc}");
+        result as i64
+    }
+
+    /// Descending variant of
+    /// [`trace_attached_versioned`](Ptrace::trace_attached_versioned): decode the
+    /// region against TIME-CORRECT bytes from a [`CodeImage`] at logical timestamp
+    /// `when` (`0` = latest) while threading a [`Descent`] handle through the loop.
+    /// `trace` (frame 0) may be `None` to record only into `descent`. Panics on a
+    /// ptrace failure or when the lib is absent — gate on
+    /// [`available`](Ptrace::available) first.
+    pub fn trace_attached_versioned_ex(
+        pid: i32,
+        base: usize,
+        len: usize,
+        img: &CodeImage,
+        when: u64,
+        trace: Option<&Trace>,
+        descent: &Descent,
+    ) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_attached_versioned_ex
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let mut result: c_long = 0;
+        let th = trace.map_or(std::ptr::null_mut(), |t| t.handle);
+        let rc = unsafe {
+            f(
+                pid as c_int,
+                base as *const c_void,
+                len,
+                img.handle,
+                when,
+                &mut result,
+                th,
+                descent.handle,
+            )
+        };
+        assert!(
+            rc == ASMTEST_PTRACE_OK,
+            "asmtest_ptrace_trace_attached_versioned_ex failed: {rc}"
+        );
+        result as i64
+    }
+
     /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
     /// `addr` (a software breakpoint that fires when the program itself next calls
     /// in), leaving it stopped there ready for [`trace_attached`](Ptrace::trace_attached)
@@ -1138,6 +1370,223 @@ impl Ptrace {
         })
     }
 }
+
+/// `asmtest_descent_level_t` — call-descent policy deciding what happens at each
+/// call-out (all default off). Passed to [`Descent::new`].
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DescentLevel {
+    /// Step over, record nothing — today's behaviour (the default).
+    Off = 0,
+    /// Record each (call-site -> callee) edge, still step over.
+    RecordEdges = 1,
+    /// Step INTO calls whose target resolves (allow-set), else edge + step over.
+    DescendKnown = 2,
+    /// Step INTO every call (denylist + budget + watchdog gated); best-effort.
+    DescendAll = 3,
+}
+
+/// Call descent (`asmtest_descent_t`): configure how the ptrace stepper handles the
+/// call-outs it would otherwise step over, and read back the recorded edges + nested
+/// frames. Four levels ([`DescentLevel`]): `Off`, `RecordEdges`, `DescendKnown`,
+/// `DescendAll`. Pass to [`Ptrace::trace_call_ex`] and its siblings. Frame 0 is the
+/// root region (a superset of the flat trace); descended callees are frames `1..N`.
+///
+/// This is the **allow-set-only** surface: descent targets are selected with
+/// [`allow_region`](Descent::allow_region) / [`deny_region`](Descent::deny_region),
+/// not a capturing-closure resolver — a Rust `extern "C"` fn pointer cannot host a
+/// GC-safe capturing upcall, so `set_resolver` / `set_denylist` are not offered (they
+/// are exempted in `scripts/bindings-parity-allow.txt`).
+///
+/// Wraps the same `libasmtest_hwtrace` the [`HwTrace`] tier loads, so the same
+/// self-skip applies: gate on [`Ptrace::available`] before tracing.
+pub struct Descent {
+    handle: *mut c_void,
+}
+
+impl Descent {
+    /// Allocate a descent handle at `level` (conservative defaults for
+    /// depth/budget/watchdog; empty allow-set/deny-set). Panics if the lib is
+    /// unavailable or the allocation fails — gate on [`Ptrace::available`] first.
+    pub fn new(level: DescentLevel) -> Descent {
+        let f = hw_fns()
+            .descent_new
+            .expect("libasmtest_hwtrace not loaded (Ptrace::available() is false)");
+        let h = unsafe { f(level as c_int) };
+        assert!(!h.is_null(), "asmtest_descent_new failed");
+        Descent { handle: h }
+    }
+
+    /// Idempotently free the descent handle. NULLs the pointer so a second call (or
+    /// [`Drop`]) is a no-op — mirroring the [`Trace`] / [`CodeImage`] handle
+    /// discipline (the native `asmtest_descent_free` is itself NULL-safe too).
+    pub fn free(&mut self) {
+        if !self.handle.is_null() {
+            if let Some(f) = hw_fns().descent_free {
+                unsafe { f(self.handle) };
+            }
+            self.handle = std::ptr::null_mut();
+        }
+    }
+
+    // ---- configuration (in) ---- //
+
+    /// Ceiling on nested descent depth (frame 0 is depth 0). `0` restores the default.
+    pub fn set_max_depth(&self, max_depth: u32) {
+        if let Some(f) = hw_fns().descent_set_max_depth {
+            unsafe { f(self.handle, max_depth) };
+        }
+    }
+
+    /// Total single-step instruction budget across all descended frames; `0` =
+    /// default.
+    pub fn set_insn_budget(&self, budget: u64) {
+        if let Some(f) = hw_fns().descent_set_insn_budget {
+            unsafe { f(self.handle, budget) };
+        }
+    }
+
+    /// Real-time watchdog in milliseconds for a descended run (the L3 blocked-syscall
+    /// escape); `0` = default.
+    pub fn set_watchdog_ms(&self, ms: u32) {
+        if let Some(f) = hw_fns().descent_set_watchdog_ms {
+            unsafe { f(self.handle, ms) };
+        }
+    }
+
+    /// Add `[base, base+len)` to the level-2 allow-set (descend into calls landing
+    /// inside it). Returns `0` on success, negative on OOM (or when the lib is absent).
+    pub fn allow_region(&self, base: usize, len: usize) -> i32 {
+        match hw_fns().descent_allow_region {
+            Some(f) => unsafe { f(self.handle, base as *const c_void, len) },
+            None => ASMTEST_PTRACE_ENOENT,
+        }
+    }
+
+    /// Add `[base, base+len)` to the level-3 deny-set (never descend into it).
+    /// Returns `0` on success, negative on OOM (or when the lib is absent).
+    pub fn deny_region(&self, base: usize, len: usize) -> i32 {
+        match hw_fns().descent_deny_region {
+            Some(f) => unsafe { f(self.handle, base as *const c_void, len) },
+            None => ASMTEST_PTRACE_ENOENT,
+        }
+    }
+
+    // ---- results (out) ---- //
+
+    /// Every stepped-over call (level >= 1) as `(site, target, depth)`: the call-site
+    /// byte-offset, the ABSOLUTE callee address, and the caller's frame depth. Empty
+    /// when the lib is absent.
+    pub fn edges(&self) -> Vec<(u64, u64, u32)> {
+        let fns = hw_fns();
+        match (fns.descent_edges_len, fns.descent_edge_site, fns.descent_edge_target, fns.descent_edge_depth) {
+            (Some(len), Some(site), Some(target), Some(depth)) => {
+                let n = unsafe { len(self.handle) };
+                (0..n)
+                    .map(|i| unsafe {
+                        (site(self.handle, i), target(self.handle, i), depth(self.handle, i))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Number of recorded frames (frame 0 is the root region; descended callees are
+    /// `1..N`). `0` when the lib is absent.
+    pub fn frames_len(&self) -> usize {
+        match hw_fns().descent_frames_len {
+            Some(f) => unsafe { f(self.handle) },
+            None => 0,
+        }
+    }
+
+    /// The ABSOLUTE base address of frame `f`.
+    pub fn frame_base(&self, f: usize) -> u64 {
+        match hw_fns().descent_frame_base {
+            Some(func) => unsafe { func(self.handle, f) },
+            None => 0,
+        }
+    }
+
+    /// The byte length of frame `f`.
+    pub fn frame_len(&self, f: usize) -> u64 {
+        match hw_fns().descent_frame_len {
+            Some(func) => unsafe { func(self.handle, f) },
+            None => 0,
+        }
+    }
+
+    /// The descent depth of frame `f` (`0` = frame 0 / root).
+    pub fn frame_depth(&self, f: usize) -> u32 {
+        match hw_fns().descent_frame_depth {
+            Some(func) => unsafe { func(self.handle, f) },
+            None => 0,
+        }
+    }
+
+    /// The parent frame index of frame `f` (`-1` for the root).
+    pub fn frame_parent(&self, f: usize) -> i32 {
+        match hw_fns().descent_frame_parent {
+            Some(func) => unsafe { func(self.handle, f) },
+            None => -1,
+        }
+    }
+
+    /// The ordered instruction-offset stream recorded in frame `f` (each offset
+    /// relative to that frame's base). Empty when the lib is absent.
+    pub fn frame_insns(&self, f: usize) -> Vec<u64> {
+        let fns = hw_fns();
+        match (fns.descent_frame_insn_count, fns.descent_frame_insn_at) {
+            (Some(count), Some(at)) => {
+                let n = unsafe { count(self.handle, f) };
+                (0..n).map(|i| unsafe { at(self.handle, f, i) }).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The distinct basic-block start offsets recorded in frame `f`. Empty when the
+    /// lib is absent.
+    pub fn frame_blocks(&self, f: usize) -> Vec<u64> {
+        let fns = hw_fns();
+        match (fns.descent_frame_block_count, fns.descent_frame_block_at) {
+            (Some(count), Some(at)) => {
+                let n = unsafe { count(self.handle, f) };
+                (0..n).map(|i| unsafe { at(self.handle, f, i) }).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// True if a pool overflowed / a byte failed to decode (the record is incomplete).
+    pub fn truncated(&self) -> bool {
+        match hw_fns().descent_truncated {
+            Some(f) => unsafe { f(self.handle) != 0 },
+            None => false,
+        }
+    }
+
+    /// True if descent stopped at a policy limit (max_depth / budget / recursion cap)
+    /// — distinct from a pool overflow ([`truncated`](Descent::truncated)).
+    pub fn depth_capped(&self) -> bool {
+        match hw_fns().descent_depth_capped {
+            Some(f) => unsafe { f(self.handle) != 0 },
+            None => false,
+        }
+    }
+}
+
+impl Drop for Descent {
+    fn drop(&mut self) {
+        self.free();
+    }
+}
+
+// The handle is an owned C allocation used only behind &self / &mut self / Drop; it
+// shares no mutable state across threads, so the wrapper is Send (matching the
+// crate's other owned-handle wrappers).
+unsafe impl Send for Descent {}
 
 /// `ASMTEST_CI_OK` from `asmtest_codeimage.h`; nonzero is an error/status.
 const ASMTEST_CI_OK: c_int = 0;

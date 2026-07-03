@@ -192,7 +192,8 @@ typedef void (*perfmap_refresh_fn)(pid_t pid, int iter);
 
 static int trace_runtime(const char *engine, const char *method_substr,
                          char *const cmd[], int target_tier,
-                         perfmap_refresh_fn refresh, trace_thread_fn pick_thread) {
+                         perfmap_refresh_fn refresh, trace_thread_fn pick_thread,
+                         int descend_level) {
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
@@ -317,9 +318,27 @@ static int trace_runtime(const char *engine, const char *method_substr,
 
     asmtest_trace_t *tr = asmtest_trace_new(128, 512);
     long result = 0;
+    /* Optional call descent: at L2 the allow-set is the method's own executable mapping, so
+     * the tracer descends INTO the runtime's sibling JIT methods it calls (e.g. .NET
+     * Console::WriteLine -> get_Out) while still stepping OVER libc/PLT; at L3 it descends
+     * everything, bounded by a conservative budget + the backend watchdog and expected to
+     * self-skip (truncate) when it trips a guard — never to hang or corrupt. Ships behind
+     * the explicit *-descend / *-descend-all modes only. */
+    asmtest_descent_t *dh = NULL;
+    if (descend_level > 0) {
+        dh = asmtest_descent_new((asmtest_descent_level_t)descend_level);
+        if (descend_level == ASMTEST_DESCENT_DESCEND_KNOWN)
+            asmtest_descent_allow_region(dh, rbase, rlen); /* the runtime's JIT heap */
+        else if (descend_level == ASMTEST_DESCENT_DESCEND_ALL) {
+            asmtest_descent_set_insn_budget(dh, 4096); /* conservative */
+            asmtest_descent_set_watchdog_ms(dh, 2000);
+        }
+    }
     rc = asmtest_ptrace_run_to(ttid, base);
     if (rc == ASMTEST_PTRACE_OK)
-        rc = asmtest_ptrace_trace_attached(ttid, base, len, &result, tr);
+        rc = dh != NULL
+                 ? asmtest_ptrace_trace_attached_ex(ttid, base, len, &result, tr, dh)
+                 : asmtest_ptrace_trace_attached(ttid, base, len, &result, tr);
     alarm(0);
 
     uint64_t insns = asmtest_emu_trace_insns_total(tr);
@@ -329,6 +348,18 @@ static int trace_runtime(const char *engine, const char *method_substr,
         printf("# traced %llu instructions of real %s JIT code%s\n",
                (unsigned long long)insns, engine,
                asmtest_emu_trace_truncated(tr) ? " (truncated)" : "");
+        if (dh != NULL) {
+            size_t nf = asmtest_descent_frames_len(dh);
+            size_t ne = asmtest_descent_edges_len(dh);
+            printf("# descent L%d: %zu frame(s), %zu edge(s)%s%s\n", descend_level, nf, ne,
+                   asmtest_descent_truncated(dh) ? " (truncated)" : "",
+                   asmtest_descent_depth_capped(dh) ? " (guard tripped)" : "");
+            /* The guarded L3 lane asserts the GUARDS fire (self-skip), not transparency. */
+            CHECK(descend_level < ASMTEST_DESCENT_DESCEND_ALL ||
+                      asmtest_descent_truncated(dh) ||
+                      asmtest_descent_depth_capped(dh) || nf >= 1,
+                  "descent: guarded L3 lane made progress or self-skipped honestly");
+        }
         if (asmtest_disas_available()) {
             uint8_t *bytes = (uint8_t *)malloc(len);
             if (bytes != NULL) {
@@ -345,6 +376,7 @@ static int trace_runtime(const char *engine, const char *method_substr,
                engine);
     }
 
+    asmtest_descent_free(dh);
     asmtest_trace_free(tr);
     ptrace(PTRACE_DETACH, ttid, NULL, NULL);
     kill(pid, SIGKILL);
@@ -694,6 +726,26 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "node";
 
+    /* Optional call-descent suffix on the managed-runtime lanes: `<mode>-descend` (L2,
+     * descend the runtime's own sibling JIT methods) or `<mode>-descend-all` (L3, descend
+     * everything, guarded + expected to self-skip). Strip it to a base mode + a level. */
+    int descend_level = 0;
+    char basemode[64];
+    snprintf(basemode, sizeof basemode, "%s", mode);
+    {
+        size_t ml = strlen(basemode);
+        const char *sa = "-descend-all", *sd = "-descend";
+        size_t la = strlen(sa), ld = strlen(sd);
+        if (ml > la && strcmp(basemode + ml - la, sa) == 0) {
+            descend_level = ASMTEST_DESCENT_DESCEND_ALL;
+            basemode[ml - la] = '\0';
+        } else if (ml > ld && strcmp(basemode + ml - ld, sd) == 0) {
+            descend_level = ASMTEST_DESCENT_DESCEND_KNOWN;
+            basemode[ml - ld] = '\0';
+        }
+        mode = basemode;
+    }
+
     if (strcmp(mode, "node") == 0) {
         /* --no-turbo-inlining keeps asmtjit a REAL standalone callable body (else
          * TurboFan inlines the tiny function and its perf-map entry is never called). */
@@ -703,7 +755,7 @@ int main(int argc, char **argv) {
                        (char *)"-e",
                        (char *)HOT_JS,
                        NULL};
-        return trace_runtime("V8", "asmtjit", cmd, 2, NULL, NULL);
+        return trace_runtime("V8", "asmtjit", cmd, 2, NULL, NULL, 0);
     }
     if (strcmp(mode, "dotnet") == 0) {
         if (argc < 3) {
@@ -720,7 +772,7 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
-        return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL);
+        return trace_runtime("CoreCLR", "Program::Add", cmd, 2, NULL, NULL, descend_level);
     }
     if (strcmp(mode, "dotnet-bcl") == 0) {
         if (argc < 3) {
@@ -743,7 +795,7 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], (char *)"bcl", NULL};
-        return trace_runtime("CoreCLR-BCL", "Console::WriteLine", cmd, 0, NULL, NULL);
+        return trace_runtime("CoreCLR-BCL", "Console::WriteLine", cmd, 0, NULL, NULL, descend_level);
     }
     if (strcmp(mode, "java") == 0) {
         if (argc < 3) {
@@ -770,7 +822,7 @@ int main(int argc, char **argv) {
                        (char *)"Hot",
                        NULL};
         return trace_runtime("HotSpot", "asmtjit", cmd, 0, java_perfmap_refresh,
-                             pick_busy_thread);
+                             pick_busy_thread, descend_level);
     }
     if (strcmp(mode, "java-bcl") == 0) {
         if (argc < 3) {
@@ -793,7 +845,7 @@ int main(int argc, char **argv) {
                        (char *)"bcl",
                        NULL};
         return trace_runtime("HotSpot-BCL", "floorDiv", cmd, 0, java_perfmap_refresh,
-                             pick_busy_thread);
+                             pick_busy_thread, 0);
     }
     if (strcmp(mode, "java-jitdump") == 0) {
         if (argc < 4) {

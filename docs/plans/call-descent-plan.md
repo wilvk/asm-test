@@ -99,6 +99,7 @@ void asmtest_descent_set_watchdog_ms(asmtest_descent_t *d, uint32_t ms);        
 int  asmtest_descent_allow_region(asmtest_descent_t *d, const void *base, size_t len);  /* L2 allow-set */
 int  asmtest_descent_deny_region(asmtest_descent_t *d, const void *base, size_t len);   /* L3 denylist  */
 void asmtest_descent_set_resolver(asmtest_descent_t *d, asmtest_descent_resolver_fn fn, void *user);
+void asmtest_descent_set_denylist(asmtest_descent_t *d, asmtest_descent_denylist_fn fn, void *user); /* L3 */
 
 /* Read accessors (opaque-handle idiom, one scalar per call — safe for every FFI): */
 size_t   asmtest_descent_edges_len(const asmtest_descent_t *d);
@@ -211,13 +212,32 @@ mitigations are requirements, not nice-to-haves.
   tail-callee's return, keeping the frame open until its real return, so a subsequent
   genuine return cannot match the wrong frame.
 
+> **Deferred in the first cut (2026-07-03) — known limitations, both on the branch-D
+> catch-all pop.** The [2026-07-03 call-descent review](../analysis/2026-07-03-call-descent-review.md)
+> surfaced that two of the mitigations above are only *partially* realized:
+> - **Signal-frame SP-pop suspension is NOT implemented.** On the live/attached path
+>   (`forward_faults=1`) an async managed-runtime signal (a `SIGSEGV` null-check safepoint,
+>   `SIGPROF`, `SIGURG`) delivered while inside a descended frame lands the PC on the handler
+>   entry — out of the frame's region, SP in the low kernel signal frame (so the SP-sweep
+>   does not fire) — and branch D pops the frame, and one step later mis-reads a root return
+>   with a garbage value. The fork path forwards benign signals but its controlled fixtures
+>   install no handlers, so this bites only live-runtime descent — which is already documented
+>   best-effort/expected-to-perturb. Not yet mitigated; do not rely on descended traces across
+>   a live safepoint.
+> - **Tail-call keep-open is NOT implemented.** A descended method ending in a tail `jmp`
+>   pops early instead of following to the tail-callee's return. The first cut adds a
+>   *defensive* mitigation only — clearing the parent's pending-call state on every frame
+>   push — so a tail-jump degrades to **honest truncation** rather than a mis-parented /
+>   corrupted frame tree. Full keep-open (record an edge + `run_until` the real return) is
+>   future work.
+
 ---
 
 ## Phases
 
 Ordering is dependency-driven; **Phase 0 blocks everything.**
 
-### Phase 0 — Freeze the shape *(decision, no code)*
+### Phase 0 — Freeze the shape *(decision, no code)* — ✅ **DONE (2026-07-03)**
 
 **Goal.** Reconcile the conflicting sketches to the one surface in
 [§Frozen API surface](#frozen-api-surface-phase-0-output). **Deliverables:** the frozen
@@ -227,7 +247,16 @@ resolver is optional and the **allow-set is the universal path**; L3 is **defaul
 **Acceptance:** this section of the plan is ratified and the [open decisions](#open-decisions-for-the-user)
 are answered. **Effort:** 0.5 day.
 
-### Phase 1 — Arch/read prerequisites
+### Phase 1 — Arch/read prerequisites — ✅ **DONE (2026-07-03)**
+
+Landed: `read_pc_ret` now also returns SP + AArch64 x30 ([src/ptrace_backend.c](../../src/ptrace_backend.c));
+`asmtest_disas_is_ret` + `asmtest_disas_call_target` in [src/disasm.c](../../src/disasm.c),
+declared in the non-parity-gated [asmtest_trace.h](../../include/asmtest_trace.h); the AArch64
+`NT_ARM_HW_BREAK` `set_hw_bp`/`clear_hw_bp` wired into `run_until` as the W^X fallback
+(x86-64 debug-register path unchanged). Unit tests `test_disas_queries` cover both arches
+cross-arch (11 checks, green on x86-64 live and aarch64-under-qemu). AArch64 object
+cross-compiles clean; the live hardware-breakpoint trap awaits a real arm64 host (qemu-user
+exposes no debug-register slots, so `set_hw_bp` fails and the caller self-skips to edges-only).
 
 **Goal.** Land the primitives descent's loop needs. **Deliverables:**
 - Extend `read_pc_ret` ([src/ptrace_backend.c:322](../../src/ptrace_backend.c#L322)) to
@@ -255,7 +284,18 @@ but **not** in the parity gate's `TIER_HEADERS`), `asmtest_ptrace.h` (parity-enf
 forces 10-way wrapping), or C-internal. Default: keep them C-internal until a binding
 consumes them. **Effort:** 3 days (was 1; +2 for the AArch64 `NT_ARM_HW_BREAK` path).
 
-### Phase 2 — Handle + accessors, no loop changes yet
+### Phase 2 — Handle + accessors, no loop changes yet — ✅ **DONE (2026-07-03)**
+
+Landed: [src/descent.c](../../src/descent.c) (growable edge/frame pools + the ~20 scalar
+accessors + the internal mutators the loop drives), [include/asmtest_descent_internal.h](../../include/asmtest_descent_internal.h)
+(private handle layout, not a tier header), the frozen public surface in
+[asmtest_ptrace.h](../../include/asmtest_ptrace.h), and the three `_ex` entry points as
+level-0-only wrappers (descent handle reads back empty). Wired into `HWTRACE_OBJS` + the
+`pic`/shared-lib lists in [mk/native-trace.mk](../../mk/native-trace.mk). (`scripts/amalgamate.sh`
+covers only the core `asmtest.c` surface, not the hwtrace tier — ptrace_backend.c is already
+excluded — so descent.c is correctly *not* added there.) `test_descent_handle` green (8
+checks); compiles clean on x86-64 and aarch64. The 10-way binding decls + parity land with
+Phase 7 (header intentionally ahead of bindings until then, in one change).
 
 **Goal.** The `asmtest_descent_t` handle exists and reads back empty; `_ex` entry points
 exist as `descent==NULL` wrappers so parity/manifest/tests stay green while the loop is
@@ -270,7 +310,28 @@ bindings** — so the header, all 10 binding decls, and any
 header ahead of the bindings. **Acceptance:** `make hwtrace-test` + `make check-bindings-parity`
 green with the NULL-descent wrappers. **Effort:** 2 days C + folded into Phase 7's 10-way work.
 
-### Phase 3 — Level 1 `RECORD_EDGES`
+### Phase 3 — Level 1 `RECORD_EDGES` — ✅ **DONE (2026-07-03)**
+### Phase 4 — Level 2 `DESCEND_KNOWN` — ✅ **DONE (2026-07-03)**
+### Phase 5 — Level 3 `DESCEND_ALL` + guards — ✅ **DONE (2026-07-03)**
+
+Implemented as one shadow-stack descending loop (`descend_core` in
+[src/ptrace_backend.c](../../src/ptrace_backend.c)) shared by the fork and attached `_ex`
+entry points, covering all levels at once. Load-bearing correctness pieces landed: the
+pop-phase-first ordering (so a same-region recursion's return — whose address lies inside
+the frame — is popped before the in-frame check), the exact `PC==ret_addr && SP==sp_ret &&
+last-insn-was-ret` pop predicate with the `SP > sp_ret` non-local sweep, the `sp_ret =
+caller-pre-call-SP` derivation (arch-uniform: x86 `ret` and AArch64 epilogue both restore
+to it), the `entered` gate, same-region recursion as a distinct frame + recursion/`max_depth`
+caps, per-instruction byte windows via `process_vm_readv` (so L3's whole-mapping extent
+never needs a huge read), benign-signal forwarding on the live path, the conservative insn
+budget, and the **backend-owned ITIMER_REAL/SIGALRM watchdog** (SA_RESTART cleared → a
+blocked `waitpid` returns EINTR). Tests: `test_descent_fork` (L1 edges, L2 descend-known +
+step-over-unknown, L3 descend-all + denylist + budget, recursion, max_depth, watchdog
+self-termination) and `test_descent_attach` (foreign-process L2) — 14 checks, green on
+x86-64; ptrace_backend.o cross-compiles clean on aarch64. AArch64 fixtures + the hardware-bp
+step-over path land with Phase 8; the conformance corpus fixture with Phase 6.
+
+### Phase 3 — Level 1 `RECORD_EDGES` (detail)
 
 **Goal.** Stop discarding the out-of-region PC at
 [src/ptrace_backend.c:856](../../src/ptrace_backend.c#L856); append edges in the exit
@@ -311,7 +372,18 @@ edges-only (self-skip remains only where the host reports no debug-register slot
 **Effort:** 4–5 days (was 3–4; +1 for the guarded live-runtime L3 lane + its self-skip
 discipline).
 
-### Phase 6 — Conformance + manifest + parity
+### Phase 6 — Conformance + manifest + parity — ✅ **DONE (2026-07-03)**
+
+Added a `ptrace_descent` tier to `run_corpus()` + `emit_corpus()` in
+[conformance.c](../../bindings/conformance/conformance.c) (a `calls_leaf` in-blob
+R→sibling-S fixture, x86-64 + AArch64 bytes; self-skips off a single-step host / arch
+mismatch), linking the ptrace backend + descent + Capstone into `$(BUILD)/conformance`. The
+generated `corpus.json` carries two cases (L1 edges, L2 descend) with a per-case `arch` gate.
+Manifest stays structs-only (no `descent_symbols` emitter, per plan). The parity gate rides
+the existing header-grep — **`check-bindings-parity.sh` is green: 78 tier symbols × 10
+bindings in sync**. L3 kept out of the corpus. All 10 bindings replay L1/L2 or SKIP.
+
+### Phase 6 — Conformance + manifest + parity (detail)
 
 **Goal.** Pin descent behaviour cross-language. **Deliverables:** a new `ptrace_descent`
 tier added to `run_corpus()` **and** `emit_corpus()` in
@@ -329,7 +401,24 @@ existing header-grep parity gate, and the manifest stays structs-only (adding a
 `descent_symbols` emitter is explicitly **out of scope**). **Acceptance:** `make conformance`
 regenerates `corpus.json`; all 10 bindings replay the L1/L2 cases or SKIP. **Effort:** 2 days.
 
-### Phase 7 — Per-binding wrappers + smoke tests (all 10)
+### Phase 7 — Per-binding wrappers + smoke tests (all 10) — ✅ **DONE (2026-07-03)**
+
+A `Descent` wrapper + descending `trace_call_ex` (with an explicit **region** arg — the
+fixture's caller region is a sub-range of the allocation) + L1/L2 smoke tests + a
+`ptrace_descent` conformance handler landed in **all ten** bindings, with idempotent free and
+the per-FFI hazards handled (Node BigInt getters, Lua boxed-`uint64` cdata, Ruby unsigned
+mask, .NET `GCHandle`/Java `upcallStub`-Arena/Node `koffi.register`/Lua `ffi.cast`/Go
+`runtime.Pinner`/Python `CFUNCTYPE` upcall pinning). The resolver ships to the six upcall-safe
+FFIs (Python/Go/Node/Java/.NET/Lua) with a resolver smoke test each; Rust/Ruby/C++/Zig are
+allow-set-only and exempt `set_resolver`/`set_denylist` in
+[bindings-parity-allow.txt](../../scripts/bindings-parity-allow.txt). Parity green. Validated
+live per binding (descent smoke + conformance replay). **Also corrected a pre-existing
+cross-binding drift** surfaced here: commit `10bd4ed` switched the single-step block model to
+ends-at-branch (the loop is 3 blocks `{0,0x7,0xf}`, matching the C reference) but the binding
+loop smoke tests still asserted 2 — fixed to 3 across all ten (aborting on that stale
+assertion had been blocking the descent smoke checks from running in some bindings).
+
+### Phase 7 — Per-binding wrappers + smoke tests (detail)
 
 **Goal.** A `Descent` surface in every binding. Per binding: declare the new native
 entry points + accessors via that binding's FFI, add a `Descent` object (level enum,
@@ -365,7 +454,21 @@ resolver-capable bindings prove a resolver upcall fires and is not collected und
 pressure. **Effort:** 6–7 days (was 5–6; +1 for first-cut resolver pinning across six
 bindings and its lifetime tests).
 
-### Phase 8 — Fixtures, real-runtime harness, cascade invariants
+### Phase 8 — Fixtures, real-runtime harness, cascade invariants — ✅ **DONE (2026-07-03)**
+
+`examples/test_hwtrace.c` gained the fork-path descent fixtures (L0-L3, `max_depth`, budget,
+recursion, watchdog self-termination), the attached-path descent test, and the **cascade
+invariants** (`test_descent_cascade`: frame-0 body byte-identical across L1/L2/L3; higher
+levels add only directly-reachable frames) plus the **honest limitation** test (a known region
+behind a stepped-over intermediary is NOT recorded). `jit_trace` gained `<mode>-descend` (L2)
+/ `<mode>-descend-all` (L3, guarded, asserts the guards fire) for the dotnet / dotnet-bcl /
+java lanes, wired to `mk/native-trace.mk` `hwtrace-jit-*-descend[-all]` + `mk/docker.mk`
+`docker-hwtrace-jit-*-descend[-all]` targets. C suite green (132/132) on x86-64; the AArch64
+descent stream + hardware-breakpoint step-over path and the live `docker-hwtrace-jit-*-descend`
+runs await their respective hardware/runtime (the lanes self-skip like the existing jit lanes;
+the aarch64 `calls_leaf` fixture is carried in the conformance corpus + compiles clean).
+
+### Phase 8 — Fixtures, real-runtime harness, cascade invariants (detail)
 
 **Goal.** Deterministic C coverage + live proof. **Deliverables:**
 - New `examples/test_hwtrace.c` fork-path tests beside `test_ptrace_callout`
@@ -391,7 +494,20 @@ bindings and its lifetime tests).
 `make docker-hwtrace-jit-dotnet-bcl-descend` prints the descended `get_Out` body or
 self-skips. **Effort:** 3 days.
 
-### Phase 9 — Docs
+### Phase 9 — Docs — ✅ **DONE (2026-07-03)**
+
+Landed: [native-tracing.md](../native-tracing.md) "Call descent levels" subsection (4-level
+table + edge/frame model + the honesty limits + the `dotnet-bcl-descend` worked-output
+pointer); the L3-hazard treatment in [hardware-tracing.md](../hardware-tracing.md) and
+[analysis/jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md); the ~27 new symbols in
+[api-reference.md](../api-reference.md); five [glossary.md](../glossary.md) terms (call
+descent, call edge, descent level, frame 0, nested frame, shadow stack, step-over vs
+step-into); the single-region-invariant reconciliation in [traces.md](../traces.md);
+per-binding paragraphs ([python.md](../bindings/python.md), [dotnet.md](../bindings/dotnet.md));
+the [CHANGELOG.md](../../CHANGELOG.md) entry; and the version bump via
+[scripts/sync-version.sh](../../scripts/sync-version.sh).
+
+### Phase 9 — Docs (detail)
 
 **Goal.** Every doc reflects descent, honestly. **Deliverables** (one section each):
 - [docs/native-tracing.md](../native-tracing.md) §558-604 — extend the step-over passage
@@ -474,14 +590,24 @@ the AArch64 CI lane doesn't read as a regression.
    closing the W^X descent-parity gap; edges-only self-skip survives only where no
    debug-register slot exists / under qemu-user.
 
-**Still open:**
+**Decided (2026-07-03, Phase 0 ratified):**
 
-4. **Where do `is_ret` / `call_target` live** — C-internal (recommended: no binding/parity
-   cost), `asmtest_trace.h` (unenforced), or `asmtest_ptrace.h` (forces 10-way wrapping)?
-5. **Does frame 0 also fill the flat `asmtest_trace_t`** when both handles are passed, or is
-   the descent handle the sole sink? (Affects every binding's view semantics.)
-6. **Edge list at level ≥ 2** — edges for *only* stepped-over calls (current design), or
-   *all* calls (a complete call graph incl. descended ones)?
+4. ✅ **`is_ret` / `call_target` live in `asmtest_trace.h`**, next to the existing
+   `asmtest_disas_is_call` / `asmtest_disas_is_branch`. That header is *not* in the parity
+   gate's `TIER_HEADERS`, so the two new queries carry **no binding/parity cost** (the
+   "C-internal" intent) yet stay non-`static` so the Phase-1 unit tests can link them.
+5. ✅ **Frame 0 also fills the flat `asmtest_trace_t`** whenever a `trace` is passed —
+   byte-identical to today's single-handle behaviour — *and* is mirrored as descent frame 0.
+   The descent handle is thus a strict superset of the flat view; existing single-handle
+   callers and every current test are unaffected.
+6. ✅ **The edge list records only stepped-over (un-followed) calls.** A descended call is
+   represented by its nested **frame**, not also duplicated as an edge; the edge list stays
+   the complete record of calls the tracer did *not* follow (per §Design overview).
+
+**Phase-0 refinement:** the frozen surface declared the `asmtest_descent_denylist_fn`
+typedef but no setter to install it, so Phase 0 adds `asmtest_descent_set_denylist(d, fn,
+user)` for symmetry with `asmtest_descent_set_resolver` (L3-only; Rust/Ruby exempt it in
+`bindings-parity-allow.txt` like the resolver).
 
 ---
 

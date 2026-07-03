@@ -119,6 +119,31 @@ pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
 pub const ASMTEST_PTRACE_OK: c_int = 0;
 pub const ASMTEST_PTRACE_ENOENT: c_int = -7;
 
+/// asmtest_descent_level_t — call-descent policy: what the ptrace stepper does at
+/// each call-out it would otherwise step over (all default off). `OFF` records
+/// nothing; `RECORD_EDGES` records each (call-site -> callee) edge and steps over;
+/// `DESCEND_KNOWN` single-steps INTO calls whose target resolves (allow-set /
+/// resolver); `DESCEND_ALL` steps into everything (denylist + budget + watchdog
+/// gated). Pass to `Descent.init`.
+pub const DescentLevel = enum(c_int) {
+    off = 0,
+    record_edges = 1,
+    descend_known = 2,
+    descend_all = 3,
+};
+
+/// Step over, record nothing — today's behaviour (the default).
+pub const DESCENT_OFF: DescentLevel = .off;
+
+/// Record each (call-site -> callee) edge, still step over.
+pub const DESCENT_RECORD_EDGES: DescentLevel = .record_edges;
+
+/// Single-step INTO calls whose target resolves (allow-set / resolver).
+pub const DESCENT_DESCEND_KNOWN: DescentLevel = .descend_known;
+
+/// Single-step INTO every call (denylist + budget + watchdog gated).
+pub const DESCENT_DESCEND_ALL: DescentLevel = .descend_all;
+
 /// asmtest_codeimage.h — time-aware code-image recorder status codes (its own
 /// namespace, mirroring the ptrace ones). `OK` is success; `ENOENT` means the
 /// address was never tracked, or no version exists at-or-before `when` (the
@@ -219,6 +244,40 @@ const FnPtraceRunTo = *const fn (c_int, ?*const anyopaque) callconv(.C) c_int;
 const FnProcRegionByAddr = *const fn (c_int, ?*const anyopaque, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnProcPerfmapSymbol = *const fn (c_int, [*:0]const u8, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnJitdumpFind = *const fn ([*c]const u8, c_int, [*:0]const u8, *JitEntry, [*c]u8, usize, ?*usize) callconv(.C) c_int;
+// asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames. The
+// opaque `asmtest_descent_t*` marshals as `?*anyopaque`; `size_t` indices/lengths
+// as `usize`; addresses as `u64`; the frame-parent as `i32`. Zig is allow-set-only
+// (std.DynLib hosts no GC-safe capturing upcall), so the two callback installers
+// (set_resolver / set_denylist) are intentionally NOT wrapped — see the exemption
+// lines in scripts/bindings-parity-allow.txt.
+const FnDescentNew = *const fn (c_int) callconv(.C) ?*anyopaque;
+const FnDescentFree = *const fn (?*anyopaque) callconv(.C) void;
+const FnDescentSetMaxDepth = *const fn (?*anyopaque, u32) callconv(.C) void;
+const FnDescentSetInsnBudget = *const fn (?*anyopaque, u64) callconv(.C) void;
+const FnDescentSetWatchdogMs = *const fn (?*anyopaque, u32) callconv(.C) void;
+const FnDescentAllowRegion = *const fn (?*anyopaque, ?*const anyopaque, usize) callconv(.C) c_int;
+const FnDescentDenyRegion = *const fn (?*anyopaque, ?*const anyopaque, usize) callconv(.C) c_int;
+const FnDescentEdgesLen = *const fn (?*anyopaque) callconv(.C) usize;
+const FnDescentEdgeSite = *const fn (?*anyopaque, usize) callconv(.C) u64;
+const FnDescentEdgeTarget = *const fn (?*anyopaque, usize) callconv(.C) u64;
+const FnDescentEdgeDepth = *const fn (?*anyopaque, usize) callconv(.C) u32;
+const FnDescentFramesLen = *const fn (?*anyopaque) callconv(.C) usize;
+const FnDescentFrameBase = *const fn (?*anyopaque, usize) callconv(.C) u64;
+const FnDescentFrameLen = *const fn (?*anyopaque, usize) callconv(.C) u64;
+const FnDescentFrameDepth = *const fn (?*anyopaque, usize) callconv(.C) u32;
+const FnDescentFrameParent = *const fn (?*anyopaque, usize) callconv(.C) i32;
+const FnDescentFrameInsnCount = *const fn (?*anyopaque, usize) callconv(.C) usize;
+const FnDescentFrameInsnAt = *const fn (?*anyopaque, usize, usize) callconv(.C) u64;
+const FnDescentFrameBlockCount = *const fn (?*anyopaque, usize) callconv(.C) usize;
+const FnDescentFrameBlockAt = *const fn (?*anyopaque, usize, usize) callconv(.C) u64;
+const FnDescentTruncated = *const fn (?*anyopaque) callconv(.C) c_int;
+const FnDescentDepthCapped = *const fn (?*anyopaque) callconv(.C) c_int;
+// Descending variants of the three trace entry points; each threads the descent
+// handle through the loop. `trace`/`descent` may be null; `trace_call_ex` takes an
+// explicit region length (the traced region), distinct from the whole allocation.
+const FnPtraceTraceCallEx = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, ?*c_long, ?*anyopaque, ?*anyopaque) callconv(.C) c_int;
+const FnPtraceTraceAttachedEx = *const fn (c_int, ?*const anyopaque, usize, ?*c_long, ?*anyopaque, ?*anyopaque) callconv(.C) c_int;
+const FnPtraceTraceAttachedVersionedEx = *const fn (c_int, ?*const anyopaque, usize, ?*anyopaque, u64, ?*c_long, ?*anyopaque, ?*anyopaque) callconv(.C) c_int;
 // asmtest_codeimage.h — time-aware code-image recorder. Same lib, same
 // resolve-at-runtime idiom; the opaque `asmtest_codeimage_t*` marshals as
 // `?*anyopaque`, `pid_t` as `c_int`, `size_t` as `usize`, the logical timestamp
@@ -274,6 +333,32 @@ const Api = struct {
     proc_region_by_addr: FnProcRegionByAddr,
     proc_perfmap_symbol: FnProcPerfmapSymbol,
     jitdump_find: FnJitdumpFind,
+    // asmtest_ptrace.h — call descent (asmtest_descent_t).
+    descent_new: FnDescentNew,
+    descent_free: FnDescentFree,
+    descent_set_max_depth: FnDescentSetMaxDepth,
+    descent_set_insn_budget: FnDescentSetInsnBudget,
+    descent_set_watchdog_ms: FnDescentSetWatchdogMs,
+    descent_allow_region: FnDescentAllowRegion,
+    descent_deny_region: FnDescentDenyRegion,
+    descent_edges_len: FnDescentEdgesLen,
+    descent_edge_site: FnDescentEdgeSite,
+    descent_edge_target: FnDescentEdgeTarget,
+    descent_edge_depth: FnDescentEdgeDepth,
+    descent_frames_len: FnDescentFramesLen,
+    descent_frame_base: FnDescentFrameBase,
+    descent_frame_len: FnDescentFrameLen,
+    descent_frame_depth: FnDescentFrameDepth,
+    descent_frame_parent: FnDescentFrameParent,
+    descent_frame_insn_count: FnDescentFrameInsnCount,
+    descent_frame_insn_at: FnDescentFrameInsnAt,
+    descent_frame_block_count: FnDescentFrameBlockCount,
+    descent_frame_block_at: FnDescentFrameBlockAt,
+    descent_truncated: FnDescentTruncated,
+    descent_depth_capped: FnDescentDepthCapped,
+    ptrace_trace_call_ex: FnPtraceTraceCallEx,
+    ptrace_trace_attached_ex: FnPtraceTraceAttachedEx,
+    ptrace_trace_attached_versioned_ex: FnPtraceTraceAttachedVersionedEx,
     // asmtest_codeimage.h — time-aware code-image recorder.
     ci_available: FnCiAvailable,
     ci_skip_reason: FnCiSkipReason,
@@ -377,6 +462,32 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .proc_region_by_addr = lib.lookup(FnProcRegionByAddr, "asmtest_proc_region_by_addr") orelse return null,
         .proc_perfmap_symbol = lib.lookup(FnProcPerfmapSymbol, "asmtest_proc_perfmap_symbol") orelse return null,
         .jitdump_find = lib.lookup(FnJitdumpFind, "asmtest_jitdump_find") orelse return null,
+        // asmtest_ptrace.h — call descent (asmtest_descent_t).
+        .descent_new = lib.lookup(FnDescentNew, "asmtest_descent_new") orelse return null,
+        .descent_free = lib.lookup(FnDescentFree, "asmtest_descent_free") orelse return null,
+        .descent_set_max_depth = lib.lookup(FnDescentSetMaxDepth, "asmtest_descent_set_max_depth") orelse return null,
+        .descent_set_insn_budget = lib.lookup(FnDescentSetInsnBudget, "asmtest_descent_set_insn_budget") orelse return null,
+        .descent_set_watchdog_ms = lib.lookup(FnDescentSetWatchdogMs, "asmtest_descent_set_watchdog_ms") orelse return null,
+        .descent_allow_region = lib.lookup(FnDescentAllowRegion, "asmtest_descent_allow_region") orelse return null,
+        .descent_deny_region = lib.lookup(FnDescentDenyRegion, "asmtest_descent_deny_region") orelse return null,
+        .descent_edges_len = lib.lookup(FnDescentEdgesLen, "asmtest_descent_edges_len") orelse return null,
+        .descent_edge_site = lib.lookup(FnDescentEdgeSite, "asmtest_descent_edge_site") orelse return null,
+        .descent_edge_target = lib.lookup(FnDescentEdgeTarget, "asmtest_descent_edge_target") orelse return null,
+        .descent_edge_depth = lib.lookup(FnDescentEdgeDepth, "asmtest_descent_edge_depth") orelse return null,
+        .descent_frames_len = lib.lookup(FnDescentFramesLen, "asmtest_descent_frames_len") orelse return null,
+        .descent_frame_base = lib.lookup(FnDescentFrameBase, "asmtest_descent_frame_base") orelse return null,
+        .descent_frame_len = lib.lookup(FnDescentFrameLen, "asmtest_descent_frame_len") orelse return null,
+        .descent_frame_depth = lib.lookup(FnDescentFrameDepth, "asmtest_descent_frame_depth") orelse return null,
+        .descent_frame_parent = lib.lookup(FnDescentFrameParent, "asmtest_descent_frame_parent") orelse return null,
+        .descent_frame_insn_count = lib.lookup(FnDescentFrameInsnCount, "asmtest_descent_frame_insn_count") orelse return null,
+        .descent_frame_insn_at = lib.lookup(FnDescentFrameInsnAt, "asmtest_descent_frame_insn_at") orelse return null,
+        .descent_frame_block_count = lib.lookup(FnDescentFrameBlockCount, "asmtest_descent_frame_block_count") orelse return null,
+        .descent_frame_block_at = lib.lookup(FnDescentFrameBlockAt, "asmtest_descent_frame_block_at") orelse return null,
+        .descent_truncated = lib.lookup(FnDescentTruncated, "asmtest_descent_truncated") orelse return null,
+        .descent_depth_capped = lib.lookup(FnDescentDepthCapped, "asmtest_descent_depth_capped") orelse return null,
+        .ptrace_trace_call_ex = lib.lookup(FnPtraceTraceCallEx, "asmtest_ptrace_trace_call_ex") orelse return null,
+        .ptrace_trace_attached_ex = lib.lookup(FnPtraceTraceAttachedEx, "asmtest_ptrace_trace_attached_ex") orelse return null,
+        .ptrace_trace_attached_versioned_ex = lib.lookup(FnPtraceTraceAttachedVersionedEx, "asmtest_ptrace_trace_attached_versioned_ex") orelse return null,
         // asmtest_codeimage.h — time-aware code-image recorder.
         .ci_available = lib.lookup(FnCiAvailable, "asmtest_codeimage_available") orelse return null,
         .ci_skip_reason = lib.lookup(FnCiSkipReason, "asmtest_codeimage_skip_reason") orelse return null,
@@ -822,6 +933,84 @@ pub const Ptrace = struct {
         return @intCast(result);
     }
 
+    /// Descending variant of `traceCall`: thread a `Descent` handle through the
+    /// single-step loop so the call-outs are recorded as edges and (at level >= 2)
+    /// descended as nested frames. `trace` (the flat frame-0 view) may be `null` to
+    /// record only into `descent`, and `descent` may be `null` to reproduce
+    /// `traceCall` exactly. CRITICAL: `region` is the traced region's byte length —
+    /// pass it (not the whole allocation) when the call target is an in-blob sibling
+    /// that must stay OUTSIDE the traced region, else the sibling falls inside the
+    /// region and mis-records as recursion. `region == null` defaults to `code_len`
+    /// (the whole allocation). Mirrors `Ptrace.trace_call_ex()`.
+    pub fn traceCallEx(
+        code_ptr: ?*anyopaque,
+        code_len: usize,
+        args: []const i64,
+        trace: ?*const HwTrace,
+        descent: ?*const Descent,
+        region: ?usize,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        const cargs: [*c]const c_long = @ptrCast(args.ptr);
+        var result: c_long = 0;
+        const th: ?*anyopaque = if (trace) |t| t.handle else null;
+        const dh: ?*anyopaque = if (descent) |d| d.handle else null;
+        const rc = api.ptrace_trace_call_ex(
+            code_ptr,
+            region orelse code_len,
+            cargs,
+            @intCast(args.len),
+            &result,
+            th,
+            dh,
+        );
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// Descending variant of `traceAttached` for an externally-attached process:
+    /// thread a `Descent` handle (`null` reproduces `traceAttached`) through the
+    /// loop over `[base, base+len)`. `trace` may be `null` to record only into
+    /// `descent`. Mirrors `Ptrace.trace_attached_ex()`.
+    pub fn traceAttachedEx(
+        pid: c_int,
+        base: ?*const anyopaque,
+        len: usize,
+        trace: ?*const HwTrace,
+        descent: ?*const Descent,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        var result: c_long = 0;
+        const th: ?*anyopaque = if (trace) |t| t.handle else null;
+        const dh: ?*anyopaque = if (descent) |d| d.handle else null;
+        const rc = api.ptrace_trace_attached_ex(pid, base, len, &result, th, dh);
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// Descending, version-aware variant of `traceAttached`: consult the code-image
+    /// timeline `img` for the bytes live at logical timestamp `when` (`when == 0` =>
+    /// latest) and thread a `Descent` handle (`null` reproduces
+    /// `traceAttachedVersioned`) through the loop. `trace` may be `null` to record
+    /// only into `descent`. Mirrors `Ptrace.trace_attached_versioned_ex()`.
+    pub fn traceAttachedVersionedEx(
+        pid: c_int,
+        base: ?*const anyopaque,
+        len: usize,
+        img: *const CodeImage,
+        when: u64,
+        trace: ?*const HwTrace,
+        descent: ?*const Descent,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        var result: c_long = 0;
+        const th: ?*anyopaque = if (trace) |t| t.handle else null;
+        const dh: ?*anyopaque = if (descent) |d| d.handle else null;
+        const rc = api.ptrace_trace_attached_versioned_ex(pid, base, len, img.handle, when, &result, th, dh);
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
     /// Run an already-attached, ptrace-stopped target `pid` forward until it reaches
     /// `addr` (a software breakpoint that fires when the program itself next calls in),
     /// leaving it stopped there ready for `traceAttached` — the step that makes a
@@ -890,6 +1079,224 @@ pub const Ptrace = struct {
             .code_index = entry.code_index,
             .code = if (want != 0) out_bytes[0..bytes_len] else &.{},
         };
+    }
+};
+
+/// A recorded (call-site -> callee) edge for a stepped-over call (level >= 1): the
+/// call-site byte `site` within its frame, the ABSOLUTE `target` address of the
+/// callee, and the caller `depth` (0 = frame 0). Mirrors the Python `edges()`
+/// tuples.
+pub const Edge = struct {
+    site: u64,
+    target: u64,
+    depth: u32,
+};
+
+/// Call descent (`asmtest_descent_t`): configure how the ptrace stepper handles the
+/// call-outs it would otherwise step over, and read back the recorded edges + nested
+/// frames. Four levels (see the `DESCENT_*` constants / `DescentLevel`): OFF,
+/// RECORD_EDGES, DESCEND_KNOWN, DESCEND_ALL. Pass to `Ptrace.traceCallEx` and
+/// friends. Frame 0 is the root region (a superset of the flat trace); descended
+/// callees are frames 1..N.
+///
+/// Wraps the opaque `asmtest_descent_t*` and resolves the same `libasmtest_hwtrace`
+/// the rest of this module loads. `deinit` NULLs the handle so a double free is a
+/// no-op (the native side is also idempotent), mirroring the trace-handle
+/// discipline in this binding. The Zig analogue of Python's `Descent`.
+///
+/// NOTE: Zig is allow-set-only. `std.DynLib` gives raw C function pointers with no
+/// place to anchor a GC-safe capturing trampoline, so the level-2/3 upcall
+/// installers (`set_resolver` / `set_denylist`) are intentionally not offered —
+/// configure descent through `allowRegion` / `denyRegion` instead (the allow-set
+/// path the C engine also drives). The two FFI symbols carry exemption lines in
+/// scripts/bindings-parity-allow.txt.
+pub const Descent = struct {
+    handle: ?*anyopaque,
+
+    /// Allocate a descent handle at `level` (conservative defaults for
+    /// depth/budget/watchdog; empty allow-set/deny-set). Returns
+    /// `Error.LibUnavailable` if the tier isn't loadable, `Error.AllocFailed` on a
+    /// NULL C return. Mirrors `asmtest_descent_new()`.
+    pub fn init(level: DescentLevel) Error!Descent {
+        const api = load() orelse return Error.LibUnavailable;
+        const h = api.descent_new(@intFromEnum(level)) orelse return Error.AllocFailed;
+        return Descent{ .handle = h };
+    }
+
+    /// Free the descent handle. Idempotent: NULLs the handle so a double free (or a
+    /// free after the lib unloaded) is a no-op. Mirrors `asmtest_descent_free()`.
+    pub fn deinit(self: *Descent) void {
+        if (self.handle) |h| {
+            const api = load() orelse {
+                self.handle = null;
+                return;
+            };
+            api.descent_free(h);
+            self.handle = null;
+        }
+    }
+
+    // ---- configuration (in) ---- //
+
+    /// Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default.
+    pub fn setMaxDepth(self: *Descent, max_depth: u32) void {
+        const api = load() orelse return;
+        api.descent_set_max_depth(self.handle, max_depth);
+    }
+
+    /// Total single-step instruction budget across all descended frames; 0 = default.
+    pub fn setInsnBudget(self: *Descent, budget: u64) void {
+        const api = load() orelse return;
+        api.descent_set_insn_budget(self.handle, budget);
+    }
+
+    /// Real-time watchdog in milliseconds for a descended run; 0 = default.
+    pub fn setWatchdogMs(self: *Descent, ms: u32) void {
+        const api = load() orelse return;
+        api.descent_set_watchdog_ms(self.handle, ms);
+    }
+
+    /// Add `[base, base+len)` to the level-2 allow-set (descend into calls landing
+    /// inside). Returns 0 on success, negative on OOM (or if the lib is absent).
+    pub fn allowRegion(self: *Descent, base: ?*const anyopaque, len: usize) c_int {
+        const api = load() orelse return -1;
+        return api.descent_allow_region(self.handle, base, len);
+    }
+
+    /// Add `[base, base+len)` to the level-3 deny-set (never descend into it).
+    /// Returns 0 on success, negative on OOM (or if the lib is absent).
+    pub fn denyRegion(self: *Descent, base: ?*const anyopaque, len: usize) c_int {
+        const api = load() orelse return -1;
+        return api.descent_deny_region(self.handle, base, len);
+    }
+
+    // ---- results (out) ---- //
+
+    /// Number of recorded (call-site -> callee) edges (level >= 1).
+    pub fn edgesLen(self: *const Descent) usize {
+        const api = load() orelse return 0;
+        return api.descent_edges_len(self.handle);
+    }
+
+    /// The call-site byte offset of edge `i`.
+    pub fn edgeSite(self: *const Descent, i: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_edge_site(self.handle, i);
+    }
+
+    /// The ABSOLUTE target address of edge `i`.
+    pub fn edgeTarget(self: *const Descent, i: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_edge_target(self.handle, i);
+    }
+
+    /// The caller depth of edge `i` (0 = frame 0).
+    pub fn edgeDepth(self: *const Descent, i: usize) u32 {
+        const api = load() orelse return 0;
+        return api.descent_edge_depth(self.handle, i);
+    }
+
+    /// Every recorded edge as an allocator-owned `[]Edge` the caller must `free`;
+    /// an empty slice if the tier is unavailable. Mirrors Python's `edges()`.
+    pub fn edges(self: *const Descent, allocator: std.mem.Allocator) ![]Edge {
+        const api = load() orelse return allocator.alloc(Edge, 0);
+        const n = api.descent_edges_len(self.handle);
+        const out = try allocator.alloc(Edge, n);
+        for (out, 0..) |*slot, i| slot.* = .{
+            .site = api.descent_edge_site(self.handle, i),
+            .target = api.descent_edge_target(self.handle, i),
+            .depth = api.descent_edge_depth(self.handle, i),
+        };
+        return out;
+    }
+
+    /// Number of recorded frames (frame 0 plus every descended callee).
+    pub fn framesLen(self: *const Descent) usize {
+        const api = load() orelse return 0;
+        return api.descent_frames_len(self.handle);
+    }
+
+    /// The ABSOLUTE base address of frame `f`.
+    pub fn frameBase(self: *const Descent, f: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_frame_base(self.handle, f);
+    }
+
+    /// The byte length of frame `f`.
+    pub fn frameLen(self: *const Descent, f: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_frame_len(self.handle, f);
+    }
+
+    /// The nesting depth of frame `f` (0 = frame 0).
+    pub fn frameDepth(self: *const Descent, f: usize) u32 {
+        const api = load() orelse return 0;
+        return api.descent_frame_depth(self.handle, f);
+    }
+
+    /// The parent frame index of frame `f`, or -1 for the root (frame 0).
+    pub fn frameParent(self: *const Descent, f: usize) i32 {
+        const api = load() orelse return -1;
+        return api.descent_frame_parent(self.handle, f);
+    }
+
+    /// Number of instruction offsets recorded in frame `f`.
+    pub fn frameInsnCount(self: *const Descent, f: usize) usize {
+        const api = load() orelse return 0;
+        return api.descent_frame_insn_count(self.handle, f);
+    }
+
+    /// The `i`th instruction byte offset recorded in frame `f`.
+    pub fn frameInsnAt(self: *const Descent, f: usize, i: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_frame_insn_at(self.handle, f, i);
+    }
+
+    /// Number of basic-block offsets recorded in frame `f`.
+    pub fn frameBlockCount(self: *const Descent, f: usize) usize {
+        const api = load() orelse return 0;
+        return api.descent_frame_block_count(self.handle, f);
+    }
+
+    /// The `i`th basic-block byte offset recorded in frame `f`.
+    pub fn frameBlockAt(self: *const Descent, f: usize, i: usize) u64 {
+        const api = load() orelse return 0;
+        return api.descent_frame_block_at(self.handle, f, i);
+    }
+
+    /// Frame `f`'s instruction-offset stream as an allocator-owned `[]u64` the
+    /// caller must `free`; an empty slice if the tier is unavailable. Mirrors
+    /// Python's `frame_insns(f)`.
+    pub fn frameInsns(self: *const Descent, allocator: std.mem.Allocator, f: usize) ![]u64 {
+        const api = load() orelse return allocator.alloc(u64, 0);
+        const n = api.descent_frame_insn_count(self.handle, f);
+        const out = try allocator.alloc(u64, n);
+        for (out, 0..) |*slot, i| slot.* = api.descent_frame_insn_at(self.handle, f, i);
+        return out;
+    }
+
+    /// Frame `f`'s basic-block-offset stream as an allocator-owned `[]u64` the caller
+    /// must `free`; an empty slice if the tier is unavailable. Mirrors Python's
+    /// `frame_blocks(f)`.
+    pub fn frameBlocks(self: *const Descent, allocator: std.mem.Allocator, f: usize) ![]u64 {
+        const api = load() orelse return allocator.alloc(u64, 0);
+        const n = api.descent_frame_block_count(self.handle, f);
+        const out = try allocator.alloc(u64, n);
+        for (out, 0..) |*slot, i| slot.* = api.descent_frame_block_at(self.handle, f, i);
+        return out;
+    }
+
+    /// True if a pool overflowed / a byte failed to decode (the record is incomplete).
+    pub fn truncated(self: *const Descent) bool {
+        const api = load() orelse return false;
+        return api.descent_truncated(self.handle) != 0;
+    }
+
+    /// True if descent stopped at a policy limit (max_depth / budget / recursion
+    /// cap) — distinct from a pool overflow (`truncated`).
+    pub fn depthCapped(self: *const Descent) bool {
+        const api = load() orelse return false;
+        return api.descent_depth_capped(self.handle) != 0;
     }
 };
 

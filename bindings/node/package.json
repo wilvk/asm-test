@@ -1,6 +1,6 @@
 {
   "name": "asmtest",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Node.js binding for the asm-test assembly unit-testing framework",
   "//license": "asm-test is MIT, but the bundled native payload conveys Unicorn + Keystone (GPL-2.0) and Capstone (BSD-3-Clause), so the package as distributed is effectively GPL-2.0. See native/<plat>/THIRD-PARTY-LICENSES.",
   "license": "MIT AND GPL-2.0-only AND BSD-3-Clause",

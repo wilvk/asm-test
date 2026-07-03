@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const hwtrace = @import("hwtrace.zig");
 
 const c = @cImport({
     @cInclude("asmtest.h");
@@ -411,5 +412,77 @@ test "vec512.add8d (AVX-512)" {
         }
     } else {
         return error.SkipZigTest;
+    }
+}
+
+// ptrace_descent tier: the out-of-process single-step stepper's call-descent — a
+// region R that calls an in-blob leaf sibling S, replayed at L1 (RECORD_EDGES: R's
+// body + one (call -> S) edge) and L2 (DESCEND_KNOWN: S descends as frame 1, no
+// edges). Host-native (fork + PTRACE_SINGLESTEP), so it SELF-SKIPS unless the
+// corpus arch matches the host AND the stepper is available (qemu-user / yama /
+// no-decoder report SKIP, never FAIL), mirroring the C reference's ptrace_descent
+// tier and Python's `_run_ptrace_descent`. The corpus arch for these bytes is
+// x86_64 (the x86-64 code below); a non-x86_64 host skips. The libasmtest_hwtrace
+// tier is resolved at runtime via std.DynLib (this test does not link it), so an
+// absent lib self-skips through Ptrace.available().
+test "ptrace_descent.calls_leaf (L1 edges, L2 descend)" {
+    // Corpus arch for this fixture is x86_64; skip on any other host arch.
+    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    if (!hwtrace.Ptrace.available()) return error.SkipZigTest;
+
+    // R@0: mov rax,rdi; call S(+4); add rax,rsi; ret   S@0xc: inc rax; ret
+    const blob = [_]u8{
+        0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
+        0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3,
+    };
+    const region: usize = 0xc; // the traced region R; S is beyond it (allow_off 12)
+    const args = [_]i64{ 20, 22 };
+    const alloc = std.testing.allocator;
+
+    var code = try hwtrace.NativeCode.fromBytes(&blob);
+    defer code.free();
+    const base: usize = @intFromPtr(code.base);
+    const leaf_addr: u64 = @intCast(base + 0xc);
+
+    // Level 1 (RECORD_EDGES): result 43, frame0 == [0,3,8,0xb], one edge to S.
+    {
+        var d = try hwtrace.Descent.init(hwtrace.DESCENT_RECORD_EDGES);
+        defer d.deinit();
+        var tr = try hwtrace.HwTrace.create(64, 64);
+        defer tr.free();
+
+        const r = try hwtrace.Ptrace.traceCallEx(code.base, code.len, &args, &tr, &d, region);
+        try std.testing.expectEqual(@as(i64, 43), r);
+
+        const f0 = try d.frameInsns(alloc, 0);
+        defer alloc.free(f0);
+        try std.testing.expectEqualSlices(u64, &[_]u64{ 0x0, 0x3, 0x8, 0xb }, f0);
+
+        const es = try d.edges(alloc);
+        defer alloc.free(es);
+        try std.testing.expectEqual(@as(usize, 1), es.len);
+        try std.testing.expectEqual(@as(u64, 0x3), es[0].site);
+        try std.testing.expectEqual(leaf_addr, es[0].target);
+    }
+
+    // Level 2 (DESCEND_KNOWN): allow S -> it descends as frame 1 (depth 1,
+    // insns [0,3]); no edges.
+    {
+        var d = try hwtrace.Descent.init(hwtrace.DESCENT_DESCEND_KNOWN);
+        defer d.deinit();
+        _ = d.allowRegion(@ptrFromInt(base + 0xc), 4); // allow_off 12, allow_len 4
+        var tr = try hwtrace.HwTrace.create(64, 64);
+        defer tr.free();
+
+        const r = try hwtrace.Ptrace.traceCallEx(code.base, code.len, &args, &tr, &d, region);
+        try std.testing.expectEqual(@as(i64, 43), r);
+        try std.testing.expectEqual(@as(usize, 2), d.framesLen());
+        try std.testing.expectEqual(leaf_addr, d.frameBase(1));
+        try std.testing.expectEqual(@as(u32, 1), d.frameDepth(1));
+
+        const f1 = try d.frameInsns(alloc, 1);
+        defer alloc.free(f1);
+        try std.testing.expectEqualSlices(u64, &[_]u64{ 0x0, 0x3 }, f1);
+        try std.testing.expectEqual(@as(usize, 0), d.edgesLen());
     }
 }

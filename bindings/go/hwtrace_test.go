@@ -100,12 +100,15 @@ func TestHwtrace(t *testing.T) {
 	if tr2.InsnsTotal() != 62 { // 1 + 20*3 + 1, all captured
 		t.Fatalf("InsnsTotal: got %d, want 62", tr2.InsnsTotal())
 	}
-	if !tr2.Covered(0) || !tr2.Covered(0x7) {
-		t.Fatalf("expected offsets 0 and 0x7 covered (covered(0)=%v, covered(0x7)=%v)",
-			tr2.Covered(0), tr2.Covered(0x7))
+	if !tr2.Covered(0) || !tr2.Covered(0x7) || !tr2.Covered(0xf) {
+		t.Fatalf("expected offsets 0, 0x7 and 0xf covered (covered(0)=%v, covered(0x7)=%v, covered(0xf)=%v)",
+			tr2.Covered(0), tr2.Covered(0x7), tr2.Covered(0xf))
 	}
-	if tr2.BlocksLen() != 2 {
-		t.Fatalf("BlocksLen: got %d, want 2", tr2.BlocksLen())
+	// Block partition {0, 0x7, 0xf} (entry / loop head / ret) — matches Unicorn/PT/DR
+	// and the C reference (test_hwtrace's "single-step loop block partition
+	// {0, 0x7, 0xf}" check).
+	if tr2.BlocksLen() != 3 {
+		t.Fatalf("BlocksLen: got %d, want 3", tr2.BlocksLen())
 	}
 	if tr2.Truncated() {
 		t.Fatalf("Truncated: got true, want false")
@@ -482,6 +485,163 @@ func TestJitdumpFind(t *testing.T) {
 	}
 	if _, ok := JitdumpFind(path, "missing", 0, 0); ok {
 		t.Fatalf("JitdumpFind(missing): got ok, want !ok")
+	}
+}
+
+// ---- Call descent (asmtest_descent_t) ----
+//
+// Mirrors the Python suite's test_descent_edges_and_frames plus a resolver-upcall
+// test. Named with the TestHwtrace prefix so the `make hwtrace-go-test` lane (which
+// runs `go test -run TestHwtrace`) exercises them. They self-skip when the ptrace
+// single-stepper is unavailable (off x86-64 Linux, or when libasmtest_hwtrace is
+// absent).
+
+// descentBlob is the call-descent fixture (x86-64): R@0 = mov rax,rdi; call S(+4);
+// add rax,rsi; ret — with the in-blob leaf S@0xc = inc rax; ret. The traced region is
+// R only (0xc bytes); S lives beyond it in the SAME allocation, so trace_call_ex must
+// be told region=0xc or S mis-records as recursion. Args (20,22) -> 43.
+var descentBlob = []byte{
+	0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+	0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3,
+}
+
+func descentEqualU64(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestHwtraceDescent mirrors the Python suite's test_descent_edges_and_frames: at
+// level 1 R's call to the in-blob leaf S is recorded as one edge (S stepped over); at
+// level 2, with S in the allow-set, S descends as nested frame 1.
+func TestHwtraceDescent(t *testing.T) {
+	skipIfNoPtrace(t)
+	code, err := HwNativeCodeFromBytes(descentBlob)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+	sBase := uint64(code.Base()) + 0xc
+
+	// Level 1: R's own body + one (call -> S) edge; S is stepped over.
+	d1 := NewDescent(DescentRecordEdges)
+	if d1 == nil {
+		t.Fatal("NewDescent(DescentRecordEdges): got nil")
+	}
+	defer d1.Free()
+	r, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d1, 0xc)
+	if err != nil {
+		t.Fatalf("PtraceTraceCallEx L1: %v", err)
+	}
+	if r != 43 {
+		t.Fatalf("L1 result: got %d, want 43", r)
+	}
+	if d1.FramesLen() != 1 {
+		t.Fatalf("L1 FramesLen: got %d, want 1", d1.FramesLen())
+	}
+	if got := d1.FrameInsns(0); !descentEqualU64(got, []uint64{0x0, 0x3, 0x8, 0xb}) {
+		t.Fatalf("L1 FrameInsns(0): got %v, want [0 3 8 11]", got)
+	}
+	edges := d1.Edges()
+	if len(edges) != 1 {
+		t.Fatalf("L1 Edges: got %d, want 1", len(edges))
+	}
+	if edges[0].Site != 0x3 || edges[0].Target != sBase {
+		t.Fatalf("L1 edge: got site=%#x target=%#x, want site=0x3 target=%#x",
+			edges[0].Site, edges[0].Target, sBase)
+	}
+	if d1.Truncated() {
+		t.Fatal("L1 Truncated: got true, want false")
+	}
+
+	// Level 2: S (in the allow-set) descends as frame 1.
+	d2 := NewDescent(DescentDescendKnown)
+	if d2 == nil {
+		t.Fatal("NewDescent(DescentDescendKnown): got nil")
+	}
+	defer d2.Free()
+	if rc := d2.AllowRegion(code.Base()+0xc, 4); rc != 0 {
+		t.Fatalf("AllowRegion: got %d, want 0", rc)
+	}
+	r2, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d2, 0xc)
+	if err != nil {
+		t.Fatalf("PtraceTraceCallEx L2: %v", err)
+	}
+	if r2 != 43 {
+		t.Fatalf("L2 result: got %d, want 43", r2)
+	}
+	if d2.FramesLen() != 2 {
+		t.Fatalf("L2 FramesLen: got %d, want 2", d2.FramesLen())
+	}
+	if d2.FrameBase(1) != sBase {
+		t.Fatalf("L2 FrameBase(1): got %#x, want %#x", d2.FrameBase(1), sBase)
+	}
+	if d2.FrameDepth(1) != 1 {
+		t.Fatalf("L2 FrameDepth(1): got %d, want 1", d2.FrameDepth(1))
+	}
+	if got := d2.FrameInsns(1); !descentEqualU64(got, []uint64{0x0, 0x3}) {
+		t.Fatalf("L2 FrameInsns(1): got %v, want [0 3]", got)
+	}
+	if len(d2.Edges()) != 0 {
+		t.Fatalf("L2 Edges: got %d, want 0", len(d2.Edges()))
+	}
+}
+
+// TestHwtraceDescentResolver proves the resolver UPCALL fires. Instead of a static
+// allow-region, a Go closure (installed via SetResolver, kept alive GC-safe through
+// the package registry + //export trampoline) decides to descend into the in-blob leaf
+// S. The closure must be invoked during the out-of-process single-step (calls > 0 and
+// the callee address it saw is S), and S must then appear as descended frame 1 — proof
+// the C engine round-tripped through Go and back.
+func TestHwtraceDescentResolver(t *testing.T) {
+	skipIfNoPtrace(t)
+	code, err := HwNativeCodeFromBytes(descentBlob)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+
+	target := uint64(code.Base()) + 0xc
+	var calls int
+	var sawCallee uint64
+	d := NewDescent(DescentDescendKnown)
+	if d == nil {
+		t.Fatal("NewDescent(DescentDescendKnown): got nil")
+	}
+	defer d.Free()
+	d.SetResolver(func(callee uint64) (bool, uint64, uint64) {
+		calls++
+		sawCallee = callee
+		if callee == target {
+			return true, target, 4
+		}
+		return false, 0, 0
+	})
+
+	r, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d, 0xc)
+	if err != nil {
+		t.Fatalf("PtraceTraceCallEx: %v", err)
+	}
+	if r != 43 {
+		t.Fatalf("result: got %d, want 43", r)
+	}
+	if calls == 0 {
+		t.Fatal("resolver upcall never fired")
+	}
+	if sawCallee != target {
+		t.Fatalf("resolver callee: got %#x, want %#x", sawCallee, target)
+	}
+	if d.FramesLen() != 2 {
+		t.Fatalf("FramesLen: got %d, want 2 (resolver-driven descent)", d.FramesLen())
+	}
+	if d.FrameBase(1) != target {
+		t.Fatalf("FrameBase(1): got %#x, want %#x", d.FrameBase(1), target)
 	}
 }
 

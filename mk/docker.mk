@@ -245,6 +245,17 @@ docker-hwtrace-jit-dotnet: docker-dotnet
 docker-hwtrace-jit-dotnet-bcl: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-bcl
 
+# Call-descent demo lanes (Phase 8): descend into the runtime's sibling JIT methods at L2
+# (`-descend`) or everything at L3 (`-descend-all`, guarded + expected to self-skip).
+.PHONY: docker-hwtrace-jit-dotnet-descend docker-hwtrace-jit-dotnet-descend-all \
+        docker-hwtrace-jit-dotnet-bcl-descend docker-hwtrace-jit-dotnet-bcl-descend-all \
+        docker-hwtrace-jit-java-descend docker-hwtrace-jit-java-descend-all
+docker-hwtrace-jit-dotnet-descend docker-hwtrace-jit-dotnet-descend-all \
+docker-hwtrace-jit-dotnet-bcl-descend docker-hwtrace-jit-dotnet-bcl-descend-all: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make $(patsubst docker-%,%,$@)
+docker-hwtrace-jit-java-descend docker-hwtrace-jit-java-descend-all: docker-java
+	$(DOCKER) run --rm $(_docker_plat) asmtest-java make $(patsubst docker-%,%,$@)
+
 docker-hwtrace-jit-dotnet-jitdump: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-jitdump
 

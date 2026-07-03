@@ -7,12 +7,22 @@
 //   ASMTEST_LIB         libasmtest_emu.{so,dylib}
 //   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib}
 'use strict';
+const fs = require('fs');
+const path = require('path');
+const koffi = require('koffi');
 const asmtest = require('./asmtest');
 const {
   corpusRoutine: routine, Regs, Emu, Trace, Guest, AsmtestError, FaultKind,
   assemble, disas, disasAvailable, Arch, Syntax,
   assertRet, assertAbiPreserved, assertFp, assertVecF32, assertFault,
 } = asmtest;
+// Call-descent tier (asmtest_ptrace.h) lives in the hwtrace wrapper. Requiring it
+// never throws even when libasmtest_hwtrace is absent — Ptrace.available() then
+// reports false and the ptrace_descent cases self-skip.
+const {
+  HwTrace, NativeCode, Ptrace, Descent,
+  DESCENT_DESCEND_KNOWN,
+} = require('./hwtrace');
 
 let fails = 0;
 let total = 0;
@@ -249,6 +259,86 @@ if (asmtest.cpuHasAvx512f()) {
     out[4] === 55 && out[5] === 66 && out[6] === 77 && out[7] === 88);
 } else {
   console.log('ok - vec512.add8d # SKIP no AVX-512F');
+}
+
+// --- Tier: call descent (asmtest_ptrace.h ptrace_descent) ------------------
+// Replay the corpus's ptrace_descent cases through the out-of-process stepper:
+// fork host-native code, single-step it, and check the frame-0 body, the call
+// EDGES (level 1), and the DESCENDED frames (level 2). Host-native, so it replays
+// only when the corpus arch matches the host AND the ptrace single-step tier is
+// available (Linux x86-64 + Capstone); otherwise every case SKIPs (never fails) —
+// mirroring the Python _run_ptrace_descent handler and the C reference tier. The
+// descent tier carries raw code bytes (not a named corpus routine), so this reads
+// the cases straight from the JSON corpus the C reference emits. Descent address
+// getters return BigInt, so absolute-address comparisons are done in BigInt.
+{
+  const hostArch = { x64: 'x86_64', arm64: 'aarch64' }[process.arch];
+  let descentCases = [];
+  try {
+    let corpusJson = process.env.ASMTEST_CORPUS_JSON;
+    if (!corpusJson) corpusJson = path.join(__dirname, '..', 'conformance', 'corpus.json');
+    if (fs.existsSync(corpusJson)) {
+      const cases = JSON.parse(fs.readFileSync(corpusJson, 'utf8')).corpus.cases || [];
+      descentCases = cases.filter((c) => c.tier === 'ptrace_descent');
+    }
+  } catch (_e) {
+    descentCases = [];
+  }
+
+  if (descentCases.length === 0) {
+    console.log('ok - ptrace_descent # SKIP no ptrace_descent cases in corpus');
+  } else if (!Ptrace.available()) {
+    for (const c of descentCases) {
+      console.log(`ok - ${c.name} # SKIP ptrace stepper unavailable: ${Ptrace.skipReason()}`);
+    }
+  } else {
+    for (const c of descentCases) {
+      if (c.arch !== hostArch) {
+        console.log(`ok - ${c.name} # SKIP corpus arch ${c.arch} != host ${hostArch}`);
+        continue;
+      }
+      const exp = c.expect;
+      const code = NativeCode.fromBytes(Buffer.from(c.code));
+      const baseAddr = koffi.address(code.base); // BigInt absolute base
+      const d = new Descent(c.level);
+      const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+      try {
+        if (c.level >= DESCENT_DESCEND_KNOWN && c.allow_off !== undefined) {
+          d.allowRegion(baseAddr + BigInt(c.allow_off), c.allow_len);
+        }
+        const result = Ptrace.traceCallEx(code, c.args || [], tr, d, c.region);
+        let good = result === exp.result;
+        // Frame-0 body (instruction offsets) — BigInt getters vs JSON numbers.
+        const frame0 = d.frameInsns(0);
+        good = good && frame0.length === exp.frame0.length
+          && frame0.every((v, i) => v === BigInt(exp.frame0[i]));
+        // Call edges (level 1): site offset (Number) + absolute target (BigInt).
+        const gotEdges = d.edges();
+        const wantEdges = exp.edges || [];
+        good = good && gotEdges.length === wantEdges.length;
+        for (let i = 0; good && i < wantEdges.length; i++) {
+          good = gotEdges[i].site === wantEdges[i].site
+            && gotEdges[i].target === baseAddr + BigInt(wantEdges[i].target_off);
+        }
+        // Descended frames beyond frame 0 (level 2), matched by absolute base.
+        for (const wf of exp.frames || []) {
+          let idx = -1;
+          for (let i = 1; i < d.framesLen(); i++) {
+            if (d.frameBase(i) === baseAddr + BigInt(wf.base_off)) { idx = i; break; }
+          }
+          const insns = idx >= 0 ? d.frameInsns(idx) : [];
+          good = good && idx >= 0 && d.frameDepth(idx) === wf.depth
+            && insns.length === wf.insns.length
+            && insns.every((v, i) => v === BigInt(wf.insns[i]));
+        }
+        check(c.name, good);
+      } finally {
+        tr.free();
+        d.free();
+        code.free();
+      }
+    }
+  }
 }
 
 console.log(`# ${total - fails} passed, ${fails} failed, ${total} total`);

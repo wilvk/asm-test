@@ -267,6 +267,13 @@ process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map 
 jitdump resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../native-tracing.md).
 
+The `Descent` class (`IDisposable`) makes the tracer follow call-outs instead of stepping
+over them: `new Descent(DescentLevel.DescendKnown)`, optionally `AllowRegion(base, len)` or a
+`SetResolver(...)` delegate (a P/Invoke upcall, `GCHandle`-pinned for the handle's lifetime),
+then `Ptrace.TraceCallEx(code, args, trace, descent, region)`. Read `descent.Edges()` and
+`descent.FrameInsns(f)` for each nested frame. Level 3 (`DescendAll`) is default-off and
+best-effort on a live runtime — see [Call descent levels](../native-tracing.md#call-descent-levels).
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```csharp

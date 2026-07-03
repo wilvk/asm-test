@@ -18,10 +18,11 @@ const os = require('os');
 const path = require('path');
 const koffi = require('koffi');
 const {
-  HwTrace, NativeCode, Ptrace, CodeImage, SINGLESTEP, AMD_LBR,
+  HwTrace, NativeCode, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
   BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
+  DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN,
 } = require('./hwtrace');
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
@@ -160,7 +161,12 @@ function main() {
       ok(Number(r) === 20, 'loop returns 20 (sum of 1, 20 times)');
       ok(tr.insnsTotal() === 62, 'insnsTotal() == 62 (1 + 20*3 + 1, all captured)');
       ok(tr.covered(0) && tr.covered(0x7), 'covered(0) && covered(7)');
-      ok(tr.blocksLen() === 2, 'blocksLen() == 2');
+      // Three blocks {0, 0x7, 0xf}: entry, the jnz target (loop body), and the
+      // loop-exit ret at 0xf — the fall-through immediately after the NOT-taken
+      // jnz is its own block leader in the single-step partition (matching PT/DR/
+      // Unicorn; see src/ss_backend.c ss_normalize).
+      assert.deepStrictEqual(tr.blockOffsets(), [0x0, 0x7, 0xF]);
+      ok(tr.blocksLen() === 3, 'blocksLen() == 3 (entry, loop body, exit ret)');
       ok(!tr.truncated(), '!truncated()');
 
       code.free();
@@ -305,6 +311,96 @@ function main() {
           'jitdumpFind(missing) is null');
       } finally {
         fs.unlinkSync(dumpPath);
+      }
+    }
+
+    // --- Call descent (Descent + Ptrace.traceCallEx): edges (L1) and descended
+    //     nested frames (L2), plus a GC-safe resolver upcall. Mirrors
+    //     test_hwtrace.py::test_descent_edges_and_frames. Fixture: R@0 mov rax,rdi;
+    //     call S(+4); add rax,rsi; ret.  S@0xc inc rax; ret. region=0xc keeps the
+    //     in-blob sibling S OUTSIDE the traced region (passing the whole allocation
+    //     would fold S into R and mis-record the call as recursion). ---
+    {
+      const FIX = Buffer.from([0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+        0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3]);
+
+      // L1 RECORD_EDGES, region=0xc: frame 0 only, one edge (site 3 -> base+0xc).
+      {
+        const code = NativeCode.fromBytes(FIX);
+        const baseAddr = koffi.address(code.base); // BigInt absolute base
+        const d = new Descent(DESCENT_RECORD_EDGES);
+        const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+        const r = Ptrace.traceCallEx(code, [20, 22], tr, d, 0xc);
+        ok(Number(r) === 43, 'descent L1 traceCallEx(region=0xc) returns 43');
+        ok(d.framesLen() === 1, 'descent L1 framesLen() == 1 (edge only, no descent)');
+        assert.deepStrictEqual(d.frameInsns(0), [0n, 3n, 8n, 0xBn]);
+        ok(true, 'descent L1 frameInsns(0) == [0, 3, 8, 0xb] (BigInt)');
+        const edges = d.edges();
+        ok(edges.length === 1 && edges[0].site === 3 && edges[0].depth === 0,
+          'descent L1 one edge: site 3, depth 0');
+        ok(typeof edges[0].target === 'bigint' && edges[0].target === baseAddr + 0xCn,
+          'descent L1 edge target == code_base+0xc (BigInt absolute address)');
+        ok(!d.truncated(), 'descent L1 !truncated()');
+        d.free(); tr.free(); code.free();
+      }
+
+      // L2 DESCEND_KNOWN + allow_region(base+0xc, 4): the leaf S is descended as
+      // frame 1 (depth 1) and the edge is consumed (edges() empty).
+      {
+        const code = NativeCode.fromBytes(FIX);
+        const baseAddr = koffi.address(code.base);
+        const d = new Descent(DESCENT_DESCEND_KNOWN);
+        d.allowRegion(baseAddr + 0xCn, 4);
+        const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+        const r = Ptrace.traceCallEx(code, [20, 22], tr, d, 0xc);
+        ok(Number(r) === 43, 'descent L2 traceCallEx(region=0xc) returns 43');
+        ok(d.framesLen() === 2, 'descent L2 framesLen() == 2 (leaf S descended)');
+        assert.deepStrictEqual(d.frameInsns(0), [0n, 3n, 8n, 0xBn]);
+        ok(true, 'descent L2 frameInsns(0) == [0, 3, 8, 0xb]');
+        ok(typeof d.frameBase(1) === 'bigint' && d.frameBase(1) === baseAddr + 0xCn,
+          'descent L2 frameBase(1) == code_base+0xc (BigInt)');
+        ok(d.frameDepth(1) === 1, 'descent L2 frameDepth(1) == 1');
+        assert.deepStrictEqual(d.frameInsns(1), [0n, 3n]);
+        ok(true, 'descent L2 frameInsns(1) == [0, 3]');
+        ok(d.edges().length === 0, 'descent L2 edges() == [] (edge consumed by descent)');
+        d.free(); tr.free(); code.free();
+      }
+
+      // Resolver upcall (resolver-capable binding): at L2 with an EMPTY allow-set a
+      // koffi.register'd resolver decides. It MUST fire (proving the retained
+      // trampoline survives the single-step / is not GC'd) and, by writing the
+      // callee region back through the out-params, drive the same leaf descent.
+      {
+        const code = NativeCode.fromBytes(FIX);
+        const baseAddr = koffi.address(code.base);
+        const d = new Descent(DESCENT_DESCEND_KNOWN);
+        let firedWith = null;
+        d.setResolver((callee) => {
+          firedWith = callee;
+          return callee === baseAddr + 0xCn ? { base: baseAddr + 0xCn, len: 4 } : null;
+        });
+        const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+        const r = Ptrace.traceCallEx(code, [20, 22], tr, d, 0xc);
+        ok(Number(r) === 43, 'descent resolver traceCallEx returns 43');
+        ok(firedWith === baseAddr + 0xCn,
+          'descent resolver upcall FIRED with callee == code_base+0xc (BigInt)');
+        ok(d.framesLen() === 2 && d.frameBase(1) === baseAddr + 0xCn,
+          'descent resolver drove the leaf descent (frame 1 == code_base+0xc)');
+        d.free(); tr.free(); code.free();
+      }
+
+      // >2^53 round-trip: a uint64 accessor must survive a value past the JS safe-
+      // integer boundary as a lossless BigInt — a real >2^53 ASLR address would
+      // round if read as Number. The descent address getters read through this same
+      // koffi uint64 path; prove it with a routine that returns 2^53+1 in RAX.
+      {
+        const BIG = 0x0020000000000001n; // 2^53 + 1
+        const ret = NativeCode.fromBytes(Buffer.from(
+          [0x48, 0xB8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0xC3])); // mov rax,BIG; ret
+        const got = koffi.decode(ret.base, koffi.proto('uint64_t u64probe()'))();
+        ok(typeof got === 'bigint' && got === BIG,
+          'uint64 address path round-trips a >2^53 value losslessly as BigInt');
+        ret.free();
       }
     }
   }

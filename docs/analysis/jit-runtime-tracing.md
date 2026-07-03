@@ -332,6 +332,36 @@ components are new:
 The hardware-trace plan tracks this as its forward-looking **Phase 2**; this
 document is its detailed treatment.
 
+## When to use L3 call descent — and why it is hazardous on a live runtime
+
+The out-of-process single-step tracer can optionally **descend** into the call-outs it
+would otherwise step over (see [native-tracing.md](../native-tracing.md#call-descent-levels)).
+Levels 0–2 are safe defaults: level 2 (`DESCEND_KNOWN`) only single-steps callees whose
+region you named in an allow-set, so it never wanders into runtime internals. **Level 3
+(`DESCEND_ALL`) is different, and default-off for a reason.** On a live managed runtime it is
+**best-effort and expected to perturb — and it can deadlock the target**:
+
+- **Cross-thread lock inversion is real and not fully mitigable.** The attach is single-tid,
+  so sibling CoreCLR/JVM/V8 threads run free while the tracer single-steps one thread ~1000×
+  slower than native. If the descended code holds a lock a sibling needs — a GC alloc
+  slow-path, a JIT-compile helper, `_dl_runtime_resolve` under the loader lock, a malloc arena
+  — the sibling stalls, and a per-thread watchdog cannot break a lock the sibling now spins on.
+- **GC / re-JIT can move code out from under the stepper**, desyncing cached frame bytes and
+  invalidating shadow-stack return addresses. Descent self-truncates (never crashes) on a
+  PC/executable-mapping mismatch, but the trace past that point is lost.
+- **Blocking syscalls park `waitpid` indefinitely** — the backend-owned `ITIMER_REAL`
+  watchdog (SA_RESTART cleared → `EINTR`) is the only escape, and it terminates the descent,
+  it doesn't resume it.
+
+So L3's bounding — the default denylist (GC / JIT-compile / PLT `ld.so` resolver / blocking
+libc), the conservative instruction budget, the watchdog — is **damage limitation, not a
+guarantee**. Use L3 on a **safe-by-construction** target: the fork path (a controlled
+single-threaded callee), a paused / single-threaded / post-mortem process, or a live runtime
+whose sibling threads you have frozen (itself not free of deadlock risk if a frozen thread
+holds a runtime lock). The guarded `jit_trace *-descend-all` demo lane exists to exercise this
+path and is **expected to self-skip** (truncate — never hang, never corrupt) when it trips a
+guard; it asserts the guards fire, not that L3 is transparent.
+
 ## Sources
 
 Hardware trace & decode: [perf-intel-pt], [perf-inject], [jitdump spec],

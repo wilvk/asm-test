@@ -35,6 +35,8 @@ import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -82,6 +84,17 @@ public final class HwTrace {
     public static final int ASMTEST_PTRACE_OK = 0;
     /** ASMTEST_PTRACE_ENOENT — region / symbol / method not found. */
     public static final int ASMTEST_PTRACE_ENOENT = -7;
+
+    // asmtest_descent_level_t — call-descent policy (see the Descent class). Decides
+    // what the ptrace stepper does at each call-out it would otherwise step over.
+    /** DESCENT_OFF — step over, record nothing (today's default). */
+    public static final int DESCENT_OFF = 0;
+    /** DESCENT_RECORD_EDGES — record (call-site -> callee) edges, still step over. */
+    public static final int DESCENT_RECORD_EDGES = 1;
+    /** DESCENT_DESCEND_KNOWN — step INTO resolvable calls (allow-set / resolver). */
+    public static final int DESCENT_DESCEND_KNOWN = 2;
+    /** DESCENT_DESCEND_ALL — step INTO everything (denylist + budget + watchdog gated). */
+    public static final int DESCENT_DESCEND_ALL = 3;
 
     // asmtest_codeimage.h — time-aware code-image recorder status codes / event kinds.
     /** ASMTEST_CI_OK — the success status returned by the code-image calls. */
@@ -145,6 +158,19 @@ public final class HwTrace {
         CI_AVAILABLE, CI_SKIP_REASON, CI_NEW, CI_FREE, CI_TRACK, CI_REFRESH, CI_NOW,
         CI_BYTES_AT, CI_BPF_AVAILABLE, CI_BPF_SKIP_REASON, CI_WATCH_BPF, CI_POLL_BPF,
         CI_NEXT;
+
+    // asmtest_ptrace.h — call descent (asmtest_descent_t): the (call-site -> callee)
+    // edge recorder + nested-frame stepper threaded through the ptrace loop, plus the
+    // three descending trace entry points (_ex). Read via the opaque-handle accessors.
+    private static final MethodHandle DESCENT_NEW, DESCENT_FREE, DESCENT_SET_MAX_DEPTH,
+        DESCENT_SET_INSN_BUDGET, DESCENT_SET_WATCHDOG_MS, DESCENT_ALLOW_REGION,
+        DESCENT_DENY_REGION, DESCENT_SET_RESOLVER, DESCENT_SET_DENYLIST,
+        DESCENT_EDGES_LEN, DESCENT_EDGE_SITE, DESCENT_EDGE_TARGET, DESCENT_EDGE_DEPTH,
+        DESCENT_FRAMES_LEN, DESCENT_FRAME_BASE, DESCENT_FRAME_LEN, DESCENT_FRAME_DEPTH,
+        DESCENT_FRAME_PARENT, DESCENT_FRAME_INSN_COUNT, DESCENT_FRAME_INSN_AT,
+        DESCENT_FRAME_BLOCK_COUNT, DESCENT_FRAME_BLOCK_AT, DESCENT_TRUNCATED,
+        DESCENT_DEPTH_CAPPED, PTRACE_TRACE_CALL_EX, PTRACE_TRACE_ATTACHED_EX,
+        PTRACE_TRACE_ATTACHED_VERSIONED_EX;
 
     // The load error, kept for diagnostics; null on success.
     private static final Throwable LOAD_ERROR;
@@ -265,7 +291,17 @@ public final class HwTrace {
             ciAvailable = null, ciSkipReason = null, ciNew = null, ciFree = null,
             ciTrack = null, ciRefresh = null, ciNow = null, ciBytesAt = null,
             ciBpfAvailable = null, ciBpfSkipReason = null, ciWatchBpf = null,
-            ciPollBpf = null, ciNext = null;
+            ciPollBpf = null, ciNext = null,
+            descentNew = null, descentFree = null, descentSetMaxDepth = null,
+            descentSetInsnBudget = null, descentSetWatchdogMs = null, descentAllowRegion = null,
+            descentDenyRegion = null, descentSetResolver = null, descentSetDenylist = null,
+            descentEdgesLen = null, descentEdgeSite = null, descentEdgeTarget = null,
+            descentEdgeDepth = null, descentFramesLen = null, descentFrameBase = null,
+            descentFrameLen = null, descentFrameDepth = null, descentFrameParent = null,
+            descentFrameInsnCount = null, descentFrameInsnAt = null, descentFrameBlockCount = null,
+            descentFrameBlockAt = null, descentTruncated = null, descentDepthCapped = null,
+            ptraceTraceCallEx = null, ptraceTraceAttachedEx = null,
+            ptraceTraceAttachedVersionedEx = null;
         Throwable loadError = null;
         String resolvedPath = null;
         try {
@@ -397,6 +433,76 @@ public final class HwTrace {
             // asmtest_codeimage_next(img, out) — out is the 40-byte event struct (ADDRESS).
             ciNext = h(lib, "asmtest_codeimage_next",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+            // asmtest_ptrace.h — call descent (asmtest_descent_t). The handle is an opaque
+            // void* (ADDRESS); uint32/int32 marshal as JAVA_INT, uint64/size_t as JAVA_LONG.
+            // asmtest_descent_new(level) -> descent*; _free(d).
+            descentNew = h(lib, "asmtest_descent_new",
+                FunctionDescriptor.of(ADDRESS, JAVA_INT));
+            descentFree = h(lib, "asmtest_descent_free", FunctionDescriptor.ofVoid(ADDRESS));
+            // Configuration setters (void). max_depth/watchdog_ms are uint32; insn_budget u64.
+            descentSetMaxDepth = h(lib, "asmtest_descent_set_max_depth",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT));
+            descentSetInsnBudget = h(lib, "asmtest_descent_set_insn_budget",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
+            descentSetWatchdogMs = h(lib, "asmtest_descent_set_watchdog_ms",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT));
+            // allow/deny_region(d, base, len) -> int. base is a const void* (ADDRESS).
+            descentAllowRegion = h(lib, "asmtest_descent_allow_region",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+            descentDenyRegion = h(lib, "asmtest_descent_deny_region",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+            // set_resolver/set_denylist(d, fn, user): fn is a native function pointer we
+            // materialize as an upcall stub (see Descent.setResolver/setDenylist); user is
+            // an opaque void*. Both are ADDRESS.
+            descentSetResolver = h(lib, "asmtest_descent_set_resolver",
+                FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS));
+            descentSetDenylist = h(lib, "asmtest_descent_set_denylist",
+                FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS));
+            // Read accessors — one scalar per call. edge_target / frame_base are ABSOLUTE
+            // addresses (uint64 -> JAVA_LONG); frame_parent is int32 (-1 = root).
+            descentEdgesLen = h(lib, "asmtest_descent_edges_len",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            descentEdgeSite = h(lib, "asmtest_descent_edge_site",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentEdgeTarget = h(lib, "asmtest_descent_edge_target",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentEdgeDepth = h(lib, "asmtest_descent_edge_depth",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+            descentFramesLen = h(lib, "asmtest_descent_frames_len",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            descentFrameBase = h(lib, "asmtest_descent_frame_base",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentFrameLen = h(lib, "asmtest_descent_frame_len",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentFrameDepth = h(lib, "asmtest_descent_frame_depth",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+            descentFrameParent = h(lib, "asmtest_descent_frame_parent",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+            descentFrameInsnCount = h(lib, "asmtest_descent_frame_insn_count",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentFrameInsnAt = h(lib, "asmtest_descent_frame_insn_at",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG));
+            descentFrameBlockCount = h(lib, "asmtest_descent_frame_block_count",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            descentFrameBlockAt = h(lib, "asmtest_descent_frame_block_at",
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG));
+            descentTruncated = h(lib, "asmtest_descent_truncated",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            descentDepthCapped = h(lib, "asmtest_descent_depth_capped",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            // Descending trace entry points (_ex): each threads a descent* through the
+            // existing loop. trace_call_ex(code, len, args, nargs, result, trace, descent);
+            // len is the TRACED REGION length (frame 0), not necessarily the whole
+            // allocation. trace / descent may be NULL.
+            ptraceTraceCallEx = h(lib, "asmtest_ptrace_trace_call_ex",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
+                    ADDRESS, ADDRESS, ADDRESS));
+            ptraceTraceAttachedEx = h(lib, "asmtest_ptrace_trace_attached_ex",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
+                    ADDRESS, ADDRESS));
+            ptraceTraceAttachedVersionedEx = h(lib, "asmtest_ptrace_trace_attached_versioned_ex",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
+                    JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
         } catch (Throwable t) {
             // The library may be absent (not built) — degrade to available() == false
             // rather than failing class init.
@@ -419,6 +525,20 @@ public final class HwTrace {
         CI_BYTES_AT = ciBytesAt; CI_BPF_AVAILABLE = ciBpfAvailable;
         CI_BPF_SKIP_REASON = ciBpfSkipReason; CI_WATCH_BPF = ciWatchBpf;
         CI_POLL_BPF = ciPollBpf; CI_NEXT = ciNext;
+        DESCENT_NEW = descentNew; DESCENT_FREE = descentFree;
+        DESCENT_SET_MAX_DEPTH = descentSetMaxDepth; DESCENT_SET_INSN_BUDGET = descentSetInsnBudget;
+        DESCENT_SET_WATCHDOG_MS = descentSetWatchdogMs; DESCENT_ALLOW_REGION = descentAllowRegion;
+        DESCENT_DENY_REGION = descentDenyRegion; DESCENT_SET_RESOLVER = descentSetResolver;
+        DESCENT_SET_DENYLIST = descentSetDenylist; DESCENT_EDGES_LEN = descentEdgesLen;
+        DESCENT_EDGE_SITE = descentEdgeSite; DESCENT_EDGE_TARGET = descentEdgeTarget;
+        DESCENT_EDGE_DEPTH = descentEdgeDepth; DESCENT_FRAMES_LEN = descentFramesLen;
+        DESCENT_FRAME_BASE = descentFrameBase; DESCENT_FRAME_LEN = descentFrameLen;
+        DESCENT_FRAME_DEPTH = descentFrameDepth; DESCENT_FRAME_PARENT = descentFrameParent;
+        DESCENT_FRAME_INSN_COUNT = descentFrameInsnCount; DESCENT_FRAME_INSN_AT = descentFrameInsnAt;
+        DESCENT_FRAME_BLOCK_COUNT = descentFrameBlockCount; DESCENT_FRAME_BLOCK_AT = descentFrameBlockAt;
+        DESCENT_TRUNCATED = descentTruncated; DESCENT_DEPTH_CAPPED = descentDepthCapped;
+        PTRACE_TRACE_CALL_EX = ptraceTraceCallEx; PTRACE_TRACE_ATTACHED_EX = ptraceTraceAttachedEx;
+        PTRACE_TRACE_ATTACHED_VERSIONED_EX = ptraceTraceAttachedVersionedEx;
         LOAD_ERROR = loadError;
         RESOLVED_PATH = loadError == null ? resolvedPath : null;
     }
@@ -827,6 +947,76 @@ public final class HwTrace {
         catch (Throwable t) { throw rethrow(t); }
     }
 
+    /** Descending variant of {@link #ptraceTraceCall}: fork a tracee that calls
+     *  {@code code}, single-step it OUT OF PROCESS, and thread a {@link Descent}
+     *  handle through the loop so the call-outs are recorded as edges and (at level
+     *  &gt;= 2) descended as nested frames. Returns the routine's return value.
+     *  <p>CRITICAL: {@code len} is the TRACED REGION length (frame 0), NOT necessarily
+     *  the whole allocation — pass the region so an in-blob sibling the code calls stays
+     *  OUTSIDE it (else the sibling falls inside the region and mis-records as recursion).
+     *  {@code trace} (the flat frame-0 view) may be {@link MemorySegment#NULL} to record
+     *  only into {@code descent}, and vice versa. Throws on a nonzero status. */
+    public static long ptraceTraceCallEx(MemorySegment code, long len, long[] args,
+                                         MemorySegment trace, MemorySegment descent) {
+        if (PTRACE_TRACE_CALL_EX == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            int n = args.length;
+            MemorySegment argSeg = a.allocate(
+                MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+            for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+            MemorySegment result = a.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_CALL_EX.invoke(code, len, argSeg, n, result,
+                trace == null ? MemorySegment.NULL : trace,
+                descent == null ? MemorySegment.NULL : descent);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_call_ex failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Descending variant of {@link #ptraceTraceAttached} for an externally-attached,
+     *  already-ptrace-stopped process: threads a {@link Descent} handle through the loop.
+     *  {@code trace} / {@code descent} may be {@link MemorySegment#NULL}. Returns the
+     *  target's RAX at the ret. Throws on a nonzero status. */
+    public static long ptraceTraceAttachedEx(int pid, MemorySegment base, long len,
+                                             MemorySegment trace, MemorySegment descent) {
+        if (PTRACE_TRACE_ATTACHED_EX == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment result = a.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_ATTACHED_EX.invoke(pid, base, len, result,
+                trace == null ? MemorySegment.NULL : trace,
+                descent == null ? MemorySegment.NULL : descent);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_attached_ex failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Descending variant of {@link #ptraceTraceAttachedVersioned} (code-image-versioned
+     *  bytes) that threads a {@link Descent} handle through the loop. {@code img} may be
+     *  {@link MemorySegment#NULL} (then exactly {@link #ptraceTraceAttachedEx}); {@code trace}
+     *  / {@code descent} may be {@link MemorySegment#NULL}. Returns the target's RAX at the
+     *  ret. Throws on a nonzero status. */
+    public static long ptraceTraceAttachedVersionedEx(int pid, MemorySegment base, long len,
+                                                      MemorySegment img, long when,
+                                                      MemorySegment trace, MemorySegment descent) {
+        if (PTRACE_TRACE_ATTACHED_VERSIONED_EX == null)
+            throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment result = a.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_ATTACHED_VERSIONED_EX.invoke(pid, base, len,
+                img == null ? MemorySegment.NULL : img, when, result,
+                trace == null ? MemorySegment.NULL : trace,
+                descent == null ? MemorySegment.NULL : descent);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_attached_versioned_ex failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
     /** Run an already-attached, ptrace-stopped target {@code pid} forward until it
      *  reaches {@code addr} (a software breakpoint that fires when the program itself
      *  next calls in), leaving it stopped there ready for
@@ -909,6 +1099,260 @@ public final class HwTrace {
                 new JitMethod(codeAddr, codeSize, timestamp, codeIndex, code));
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
+    }
+
+    // ---- Call descent (asmtest_descent_t) ----
+    //
+    // Configure how the ptrace stepper handles the call-outs it would otherwise step
+    // over, and read back the recorded edges + nested frames. Four levels (DESCENT_*):
+    // OFF, RECORD_EDGES, DESCEND_KNOWN, DESCEND_ALL. Pass a Descent's handle() to
+    // ptraceTraceCallEx and friends. Frame 0 is the root region (a superset of the flat
+    // trace); descended callees are frames 1..N. Mirrors the Python wrapper's Descent.
+
+    /** A recorded (call-site -&gt; callee) edge: the {@code site} call-site byte offset in
+     *  frame 0, the ABSOLUTE {@code target} address, and the caller {@code depth}
+     *  (0 = frame 0). Mirrors the Python wrapper's {@code (site, target, depth)} tuple. */
+    public record Edge(long site, long target, int depth) {}
+
+    /** Call descent (asmtest_descent_t): configure descent policy and read back the
+     *  recorded edges + nested frames from a {@link #ptraceTraceCallEx} run.
+     *  {@link AutoCloseable} with an idempotent {@link #close()} (the handle is NULLed
+     *  after {@code asmtest_descent_free}, so a double free is a no-op). */
+    public static final class Descent implements AutoCloseable {
+        /** A level-2/3 resolver: return {@code {base, len}} to descend into
+         *  {@code calleeAddr} (the callee's region), or {@code null} to step over it. */
+        @FunctionalInterface public interface Resolver { long[] resolve(long calleeAddr); }
+        /** A level-3 denylist: return {@code true} to REFUSE descent into
+         *  {@code calleeAddr} (step over it), {@code false} to allow it. */
+        @FunctionalInterface public interface Denylist { boolean deny(long calleeAddr); }
+
+        // asmtest_descent_resolver_fn: int(uint64 callee, void* user, uint64* base_out,
+        // uint64* len_out); asmtest_descent_denylist_fn: int(uint64 callee, void* user).
+        private static final FunctionDescriptor RESOLVER_DESC =
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS);
+        private static final FunctionDescriptor DENYLIST_DESC =
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS);
+        private static final MethodHandle ON_RESOLVE_MH, ON_DENY_MH;
+        static {
+            try {
+                MethodHandles.Lookup lk = MethodHandles.lookup();
+                ON_RESOLVE_MH = lk.findVirtual(Descent.class, "onResolve",
+                    MethodType.methodType(int.class, long.class, MemorySegment.class,
+                        MemorySegment.class, MemorySegment.class));
+                ON_DENY_MH = lk.findVirtual(Descent.class, "onDeny",
+                    MethodType.methodType(int.class, long.class, MemorySegment.class));
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        private MemorySegment handle; // an asmtest_descent_t*
+        // The upcall trampolines are native code the callback FFI jumps to; their backing
+        // Arena MUST outlive every trace_call_ex that could fire them, so it is held for
+        // the handle's lifetime and closed only in free() (after descent_free). Keeping the
+        // stubs + the user callbacks referenced also pins them against GC mid-single-step.
+        private Arena upcallArena;
+        private MemorySegment resolverStub, denylistStub;
+        private Resolver resolver;
+        private Denylist denylist;
+
+        /** Allocate a descent handle at {@code level} (a {@code DESCENT_*} constant), with
+         *  conservative depth/budget/watchdog defaults and an empty allow-set/denylist. */
+        public Descent(int level) {
+            if (DESCENT_NEW == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            try {
+                MemorySegment h = (MemorySegment) DESCENT_NEW.invoke(level);
+                if (MemorySegment.NULL.equals(h)) throw new RuntimeException("asmtest_descent_new failed");
+                this.handle = h;
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The underlying {@code asmtest_descent_t*} handle — pass to
+         *  {@link HwTrace#ptraceTraceCallEx} and friends as their {@code descent} argument. */
+        public MemorySegment handle() { return handle; }
+
+        // ---- configuration (in) ----
+
+        /** Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default. */
+        public void setMaxDepth(int maxDepth) {
+            try { DESCENT_SET_MAX_DEPTH.invoke(handle, maxDepth); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Total single-step instruction budget across all descended frames; 0 = default. */
+        public void setInsnBudget(long budget) {
+            try { DESCENT_SET_INSN_BUDGET.invoke(handle, budget); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Real-time watchdog in milliseconds for a descended run; 0 = default. */
+        public void setWatchdogMs(int ms) {
+            try { DESCENT_SET_WATCHDOG_MS.invoke(handle, ms); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Add {@code [base, base+len)} to the level-2 allow-set (descend into calls landing
+         *  inside). Returns 0 on success, negative on OOM. */
+        public int allowRegion(long base, long len) {
+            try { return (int) DESCENT_ALLOW_REGION.invoke(handle, MemorySegment.ofAddress(base), len); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Add {@code [base, base+len)} to the level-3 deny-set (never descend into it). */
+        public int denyRegion(long base, long len) {
+            try { return (int) DESCENT_DENY_REGION.invoke(handle, MemorySegment.ofAddress(base), len); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Install a level-2/3 {@link Resolver}. The callback fires in-process on the tracer
+         *  thread mid-single-step; its upcall stub is materialized into {@link #upcallArena}
+         *  (open for this handle's lifetime) and both are pinned against GC. */
+        public void setResolver(Resolver r) {
+            if (DESCENT_SET_RESOLVER == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            this.resolver = r;
+            if (upcallArena == null) upcallArena = Arena.ofShared();
+            try {
+                resolverStub = LINKER.upcallStub(ON_RESOLVE_MH.bindTo(this), RESOLVER_DESC, upcallArena);
+                DESCENT_SET_RESOLVER.invoke(handle, resolverStub, MemorySegment.NULL);
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Install a level-3 {@link Denylist} (consulted in addition to the deny-region set).
+         *  Same GC-pinning / arena-lifetime discipline as {@link #setResolver}. */
+        public void setDenylist(Denylist d) {
+            if (DESCENT_SET_DENYLIST == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            this.denylist = d;
+            if (upcallArena == null) upcallArena = Arena.ofShared();
+            try {
+                denylistStub = LINKER.upcallStub(ON_DENY_MH.bindTo(this), DENYLIST_DESC, upcallArena);
+                DESCENT_SET_DENYLIST.invoke(handle, denylistStub, MemorySegment.NULL);
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        // Upcall targets (package-private so the same-class Lookup.findVirtual resolves
+        // them). The base_out/len_out cells arrive as zero-length segments, so reinterpret
+        // to a u64 before writing.
+        int onResolve(long callee, MemorySegment user, MemorySegment baseOut, MemorySegment lenOut) {
+            Resolver r = this.resolver;
+            if (r == null) return 0;
+            long[] res = r.resolve(callee);
+            if (res != null && res.length == 2 && res[1] != 0) {
+                baseOut.reinterpret(JAVA_LONG.byteSize()).set(JAVA_LONG, 0, res[0]);
+                lenOut.reinterpret(JAVA_LONG.byteSize()).set(JAVA_LONG, 0, res[1]);
+                return 1;
+            }
+            return 0;
+        }
+
+        int onDeny(long callee, MemorySegment user) {
+            Denylist d = this.denylist;
+            return (d != null && d.deny(callee)) ? 1 : 0;
+        }
+
+        // ---- results (out) ----
+
+        /** Number of recorded (call-site -&gt; callee) edges (level &gt;= 1). */
+        public long edgesLen() {
+            try { return (long) DESCENT_EDGES_LEN.invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Every stepped-over call as an {@link Edge} (site, ABSOLUTE target, depth). */
+        public Edge[] edges() {
+            try {
+                int n = (int) (long) DESCENT_EDGES_LEN.invoke(handle);
+                Edge[] out = new Edge[n];
+                for (int i = 0; i < n; i++)
+                    out[i] = new Edge((long) DESCENT_EDGE_SITE.invoke(handle, (long) i),
+                        (long) DESCENT_EDGE_TARGET.invoke(handle, (long) i),
+                        (int) DESCENT_EDGE_DEPTH.invoke(handle, (long) i));
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Number of recorded frames (1 = frame 0 only; 2+ once callees were descended). */
+        public long framesLen() {
+            try { return (long) DESCENT_FRAMES_LEN.invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The ABSOLUTE base address of frame {@code f}. */
+        public long frameBase(long f) {
+            try { return (long) DESCENT_FRAME_BASE.invoke(handle, f); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The byte length of frame {@code f}. */
+        public long frameLen(long f) {
+            try { return (long) DESCENT_FRAME_LEN.invoke(handle, f); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The nesting depth of frame {@code f} (0 = frame 0). */
+        public int frameDepth(long f) {
+            try { return (int) DESCENT_FRAME_DEPTH.invoke(handle, f); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The parent frame index of {@code f}, or -1 for the root (frame 0). */
+        public int frameParent(long f) {
+            try { return (int) DESCENT_FRAME_PARENT.invoke(handle, f); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The ordered instruction-offset stream of frame {@code f} (offsets are relative
+         *  to that frame's base). */
+        public long[] frameInsns(long f) {
+            try {
+                int n = (int) (long) DESCENT_FRAME_INSN_COUNT.invoke(handle, f);
+                long[] out = new long[n];
+                for (int i = 0; i < n; i++) out[i] = (long) DESCENT_FRAME_INSN_AT.invoke(handle, f, (long) i);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** The distinct basic-block start offsets of frame {@code f}. */
+        public long[] frameBlocks(long f) {
+            try {
+                int n = (int) (long) DESCENT_FRAME_BLOCK_COUNT.invoke(handle, f);
+                long[] out = new long[n];
+                for (int i = 0; i < n; i++) out[i] = (long) DESCENT_FRAME_BLOCK_AT.invoke(handle, f, (long) i);
+                return out;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** True if a pool overflowed / a byte failed to decode (the record is incomplete). */
+        public boolean truncated() {
+            try { return (int) DESCENT_TRUNCATED.invoke(handle) != 0; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** True if descent stopped at a policy limit (max_depth / budget / recursion cap),
+         *  as distinct from a pool overflow. */
+        public boolean depthCapped() {
+            try { return (int) DESCENT_DEPTH_CAPPED.invoke(handle) != 0; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Free the descent handle (idempotent: the handle is NULLed after
+         *  {@code asmtest_descent_free}, so a double free is a no-op) and close the upcall
+         *  Arena that backed any resolver/denylist trampolines. */
+        public void free() {
+            if (handle != null && DESCENT_FREE != null) {
+                try { DESCENT_FREE.invoke(handle); }
+                catch (Throwable t) { throw rethrow(t); }
+                finally { handle = null; }
+            }
+            if (upcallArena != null) {
+                try { upcallArena.close(); }
+                finally { upcallArena = null; resolverStub = null; denylistStub = null; }
+            }
+        }
+
+        @Override public void close() { free(); }
     }
 
     // ---- Time-aware code-image recorder (asmtest_codeimage.h) ----

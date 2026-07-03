@@ -195,6 +195,32 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
 int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
                             size_t code_len, uint64_t off);
 
+/* 1 if the instruction at code[off] is a RETURN (x86 `ret`/`retf`; AArch64 `ret`) — the
+ * Capstone CS_GRP_RET group. The call-descent shadow stack uses it as the third term of
+ * the exact pop predicate (PC == ret_addr AND SP == sp_at_call AND the just-stepped insn
+ * is a return), so a mid-frame `jmp` back to a return address cannot be mistaken for the
+ * callee's own return. 0 otherwise, and always 0 without Capstone. Not part of the
+ * bindings-parity tier surface (this header is not a TIER_HEADER). */
+int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                         uint64_t off);
+
+/* Decode the instruction at code[off] ONCE, returning its byte length (0 if undecodable /
+ * no Capstone) and, via the out-params (either may be NULL), whether it is a call and/or a
+ * return. The call-descent step loop uses this to get length + is_call + is_ret in a single
+ * Capstone decode per single-stepped instruction instead of three. Not a parity tier symbol. */
+size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                           uint64_t off, int *is_call, int *is_ret);
+
+/* Resolve the DIRECT-call target of the instruction at code[off] for `arch` into
+ * *target (an absolute address = base_addr + call displacement): x86 `E8` rel32 and
+ * AArch64 `bl` imm26. Returns 1 and sets *target for a direct call; returns 0 for an
+ * INDIRECT call (`call r/m64`, `blr`/`br`), a non-call, an undecodable instruction, or
+ * without Capstone — in which case the descent loop uses the live post-step PC as the
+ * target instead. `base_addr` is the address the bytes run at, so the returned target is
+ * absolute. Not part of the bindings-parity tier surface. */
+int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                              uint64_t base_addr, uint64_t off, uint64_t *target);
+
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
                           const uint8_t *code, size_t code_len,

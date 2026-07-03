@@ -84,6 +84,18 @@ module Asmtest
     PTRACE_OK     = 0
     PTRACE_ENOENT = -7
 
+    # asmtest_descent_level_t — call-descent policy (see the Descent class). How the
+    # ptrace stepper handles the call-outs it would otherwise step over.
+    DESCENT_OFF           = 0 # step over, record nothing (default)
+    DESCENT_RECORD_EDGES  = 1 # record (call-site -> callee) edges, still step over
+    DESCENT_DESCEND_KNOWN = 2 # step INTO resolvable calls (allow-set / resolver)
+    DESCENT_DESCEND_ALL   = 3 # step INTO everything (denylist + budget + watchdog gated)
+
+    # Mask for the signed TYPE_LONG_LONG returns of the address/length getters: a
+    # uint64 with the top bit set comes back from Fiddle as a NEGATIVE Ruby Integer,
+    # so `& U64` re-reads it as the unsigned 64-bit value (ASLR addresses, lengths).
+    U64 = (1 << 64) - 1
+
     # asmtest_codeimage.h — time-aware code-image recorder status codes (own
     # namespace, like the ptrace ones). CI_OK is success; CI_ENOENT is "address
     # never tracked / no version at-or-before when" (bytes_at maps it to nil).
@@ -205,6 +217,42 @@ module Asmtest
         ptrace_trace_attached_versioned:
           func(LIB, "asmtest_ptrace_trace_attached_versioned",
                [INT, VOIDP, SZ, VOIDP, LL, VOIDP, VOIDP], INT),
+        # ---- call descent (asmtest_descent_t): edges + nested frames (asmtest_ptrace.h) ----
+        # The stepper records the call-outs it would otherwise step over as edges, and
+        # (at level >= 2) single-steps INTO resolvable callees as nested frames. NOTE:
+        # this Fiddle binding is allow-set-only — it does NOT wrap the capturing upcall
+        # setters (a GC-safe Fiddle::Closure over the handle's whole lifetime is not
+        # available), so the allow_region/deny_region region-set is the level-2/3 gate.
+        descent_new:             func(LIB, "asmtest_descent_new", [INT], VOIDP),
+        descent_free:            func(LIB, "asmtest_descent_free", [VOIDP], VOID),
+        descent_set_max_depth:   func(LIB, "asmtest_descent_set_max_depth", [VOIDP, INT], VOID),
+        descent_set_insn_budget: func(LIB, "asmtest_descent_set_insn_budget", [VOIDP, LL], VOID),
+        descent_set_watchdog_ms: func(LIB, "asmtest_descent_set_watchdog_ms", [VOIDP, INT], VOID),
+        descent_allow_region:    func(LIB, "asmtest_descent_allow_region", [VOIDP, VOIDP, SZ], INT),
+        descent_deny_region:     func(LIB, "asmtest_descent_deny_region", [VOIDP, VOIDP, SZ], INT),
+        descent_edges_len:       func(LIB, "asmtest_descent_edges_len", [VOIDP], SZ),
+        descent_edge_site:       func(LIB, "asmtest_descent_edge_site", [VOIDP, SZ], LL),
+        descent_edge_target:     func(LIB, "asmtest_descent_edge_target", [VOIDP, SZ], LL),
+        descent_edge_depth:      func(LIB, "asmtest_descent_edge_depth", [VOIDP, SZ], INT),
+        descent_frames_len:      func(LIB, "asmtest_descent_frames_len", [VOIDP], SZ),
+        descent_frame_base:      func(LIB, "asmtest_descent_frame_base", [VOIDP, SZ], LL),
+        descent_frame_len:       func(LIB, "asmtest_descent_frame_len", [VOIDP, SZ], LL),
+        descent_frame_depth:     func(LIB, "asmtest_descent_frame_depth", [VOIDP, SZ], INT),
+        descent_frame_parent:    func(LIB, "asmtest_descent_frame_parent", [VOIDP, SZ], INT),
+        descent_frame_insn_count: func(LIB, "asmtest_descent_frame_insn_count", [VOIDP, SZ], SZ),
+        descent_frame_insn_at:   func(LIB, "asmtest_descent_frame_insn_at", [VOIDP, SZ, SZ], LL),
+        descent_frame_block_count: func(LIB, "asmtest_descent_frame_block_count", [VOIDP, SZ], SZ),
+        descent_frame_block_at:  func(LIB, "asmtest_descent_frame_block_at", [VOIDP, SZ, SZ], LL),
+        descent_truncated:       func(LIB, "asmtest_descent_truncated", [VOIDP], INT),
+        descent_depth_capped:    func(LIB, "asmtest_descent_depth_capped", [VOIDP], INT),
+        # ---- descending trace variants that thread a Descent handle (asmtest_ptrace.h) ----
+        ptrace_trace_call_ex:
+          func(LIB, "asmtest_ptrace_trace_call_ex", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP, VOIDP], INT),
+        ptrace_trace_attached_ex:
+          func(LIB, "asmtest_ptrace_trace_attached_ex", [INT, VOIDP, SZ, VOIDP, VOIDP, VOIDP], INT),
+        ptrace_trace_attached_versioned_ex:
+          func(LIB, "asmtest_ptrace_trace_attached_versioned_ex",
+               [INT, VOIDP, SZ, VOIDP, LL, VOIDP, VOIDP, VOIDP], INT),
         # ---- time-aware code-image recorder (asmtest_codeimage.h) ----
         ci_available:      func(LIB, "asmtest_codeimage_available", [], INT),
         ci_skip_reason:    func(LIB, "asmtest_codeimage_skip_reason", [VOIDP, SZ], VOID),
@@ -487,6 +535,72 @@ module Asmtest
         result
       end
 
+      # Descending variant of ptrace_trace_call: thread a Descent handle through the
+      # single-step loop so the call-outs are recorded as EDGES and (at level >= 2)
+      # descended as nested FRAMES. +trace+ (the flat frame-0 view) may be nil to
+      # record only into +descent+; +descent+ may be nil to behave like trace_call.
+      #
+      # CRITICAL: +region+ is the traced region's byte length and defaults to the whole
+      # +code_len+ only when the caller omits it. Pass it when the call target is an
+      # in-blob sibling that must stay OUTSIDE the traced region — the fixture's caller
+      # region R is 0xc bytes but the allocation also holds sibling S beyond it, so
+      # tracing the whole allocation would make S fall inside R and mis-record as
+      # recursion. Returns the routine's return value (the child's RAX at the ret).
+      def self.ptrace_trace_call_ex(code_base, code_len, args, trace, descent, region: nil)
+        region ||= code_len
+        n = args.length
+        argbuf = Fiddle::Pointer.new(Fiddle.malloc(8 * [n, 1].max), 8 * [n, 1].max)
+        argbuf[0, 8 * [n, 1].max] = "\x00".b * (8 * [n, 1].max)
+        argbuf[0, 8 * n] = args.pack("q*") if n > 0
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        th = trace ? trace.handle : Fiddle::NULL
+        dh = descent ? descent.handle : Fiddle::NULL
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_call_ex].call(
+          code_base, region, argbuf, n, res, th, dh)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(argbuf.to_i)
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_call_ex failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # Descending variant of ptrace_trace_attached for an externally-attached process:
+      # trace [+base+, +base+ + +len+) in +pid+, threading a Descent handle so the
+      # call-outs become edges/frames. +trace+ and/or +descent+ may be nil. +pid+ is a
+      # C int; the caller owns PTRACE_ATTACH/DETACH.
+      def self.ptrace_trace_attached_ex(pid, base, len, trace, descent)
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        base_p = Fiddle::Pointer.new(base)
+        th = trace ? trace.handle : Fiddle::NULL
+        dh = descent ? descent.handle : Fiddle::NULL
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_attached_ex].call(pid, base_p, len, res, th, dh)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_attached_ex failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # Descending variant of ptrace_trace_attached_versioned: like
+      # ptrace_trace_attached_ex, but decode the region against TIME-CORRECT bytes from
+      # a CodeImage recorder (+img+) at logical timestamp +when_seq+ (0 = latest). With
+      # +img+ nil this is exactly ptrace_trace_attached_ex. +trace+/+descent+ may be nil.
+      def self.ptrace_trace_attached_versioned_ex(pid, base, len, img, when_seq, trace, descent)
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        base_p = Fiddle::Pointer.new(base)
+        img_p  = img ? img.handle : Fiddle::NULL
+        th = trace ? trace.handle : Fiddle::NULL
+        dh = descent ? descent.handle : Fiddle::NULL
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_attached_versioned_ex].call(
+          pid, base_p, len, img_p, when_seq, res, th, dh)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_attached_versioned_ex failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
       # Run an already-attached, ptrace-stopped target forward until it reaches +addr+
       # (a software breakpoint that fires when the program itself next calls in),
       # leaving it stopped there ready for ptrace_trace_attached -- the step that makes a
@@ -640,6 +754,133 @@ module Asmtest
         return unless @handle
         Asmtest::HwTrace::FN[:trace_free].call(@handle)
         @handle = nil
+      end
+    end
+
+    # Call descent (asmtest_descent_t): configure how the ptrace stepper handles the
+    # call-outs it would otherwise step over, then read back the recorded edges +
+    # nested frames. Four levels (the DESCENT_* constants): OFF, RECORD_EDGES,
+    # DESCEND_KNOWN, DESCEND_ALL. Pass to HwTrace.ptrace_trace_call_ex and friends.
+    # Frame 0 is the root region (a superset of the flat trace); descended callees are
+    # frames 1..N. The Descent OWNS its native handle: free is idempotent (NULLs the
+    # handle so a double free is a no-op — mirroring the trace-handle discipline).
+    #
+    # This binding is ALLOW-SET-ONLY: unlike the upcall-safe bindings it deliberately
+    # offers no capturing resolver/denylist callback (Fiddle has no GC-safe way to
+    # host one over the handle's whole lifetime). Use allow_region / deny_region — the
+    # native region-set gate — to steer level-2/3 descent instead.
+    class Descent
+      attr_reader :handle
+
+      # Allocate a descent handle at +level+ (a DESCENT_* constant). Raises if the C
+      # side returns NULL (OOM).
+      def initialize(level = DESCENT_OFF)
+        @handle = Asmtest::HwTrace::FN[:descent_new].call(level)
+        raise "asmtest_descent_new failed" if @handle.null?
+      end
+
+      # Idempotent free: the native side NULLs its internal state, and we drop our
+      # handle, so a double free (or a free after an ensure) is a safe no-op.
+      def free
+        return unless @handle
+        Asmtest::HwTrace::FN[:descent_free].call(@handle)
+        @handle = nil
+      end
+
+      # ---- configuration (in) ----
+
+      # Cap descent at +d+ nested frames (DESCEND_KNOWN/ALL); deeper calls are stepped
+      # over and flagged via depth_capped?.
+      def set_max_depth(d)
+        Asmtest::HwTrace::FN[:descent_set_max_depth].call(@handle, d)
+      end
+
+      # Bound total single-stepped instructions for the trace to +b+ (0 = conservative
+      # default); once reached, descent decisions are declined and overrun trips truncated?.
+      def set_insn_budget(b)
+        Asmtest::HwTrace::FN[:descent_set_insn_budget].call(@handle, b)
+      end
+
+      # Wall-clock guard (milliseconds) for a descended call that spins/deadlocks
+      # (level 3 best-effort); 0 = conservative default (set a large value to relax it).
+      def set_watchdog_ms(ms)
+        Asmtest::HwTrace::FN[:descent_set_watchdog_ms].call(@handle, ms)
+      end
+
+      # Add [+base+, +base+ + +len+) to the allow-set: a DESCEND_KNOWN call whose target
+      # lands inside is descended. +base+ is an integer address. Returns the C status.
+      def allow_region(base, len)
+        Asmtest::HwTrace::FN[:descent_allow_region].call(@handle, Fiddle::Pointer.new(base), len)
+      end
+
+      # Add [+base+, +base+ + +len+) to the denylist: a call whose target lands inside is
+      # refused (stepped over) even under DESCEND_ALL. Returns the C status.
+      def deny_region(base, len)
+        Asmtest::HwTrace::FN[:descent_deny_region].call(@handle, Fiddle::Pointer.new(base), len)
+      end
+
+      # ---- results (out) ----
+
+      # Every stepped-over call (level >= 1) as [site, target, depth]: +site+ is the
+      # call instruction's byte-offset, +target+ the callee's ABSOLUTE address, +depth+
+      # the caller's frame depth. target is masked to unsigned 64-bit (signed LL return).
+      def edges
+        n = Asmtest::HwTrace::FN[:descent_edges_len].call(@handle)
+        (0...n).map do |i|
+          site   = Asmtest::HwTrace::FN[:descent_edge_site].call(@handle, i)
+          target = Asmtest::HwTrace::FN[:descent_edge_target].call(@handle, i) & U64
+          depth  = Asmtest::HwTrace::FN[:descent_edge_depth].call(@handle, i)
+          [site, target, depth]
+        end
+      end
+
+      # Number of recorded frames (>= 1: frame 0 is always the root region).
+      def frames_len
+        Asmtest::HwTrace::FN[:descent_frames_len].call(@handle)
+      end
+
+      # Absolute base address of frame +f+ (masked to unsigned 64-bit).
+      def frame_base(f)
+        Asmtest::HwTrace::FN[:descent_frame_base].call(@handle, f) & U64
+      end
+
+      # Byte length of frame +f+'s region (masked to unsigned 64-bit).
+      def frame_len(f)
+        Asmtest::HwTrace::FN[:descent_frame_len].call(@handle, f) & U64
+      end
+
+      # Call depth of frame +f+ (0 = the root frame).
+      def frame_depth(f)
+        Asmtest::HwTrace::FN[:descent_frame_depth].call(@handle, f)
+      end
+
+      # Index of frame +f+'s parent frame, or -1 for the root.
+      def frame_parent(f)
+        Asmtest::HwTrace::FN[:descent_frame_parent].call(@handle, f)
+      end
+
+      # The instruction-offset stream recorded in frame +f+, in execution order (each
+      # offset masked to unsigned 64-bit).
+      def frame_insns(f)
+        n = Asmtest::HwTrace::FN[:descent_frame_insn_count].call(@handle, f)
+        (0...n).map { |i| Asmtest::HwTrace::FN[:descent_frame_insn_at].call(@handle, f, i) & U64 }
+      end
+
+      # The distinct basic-block start offsets recorded in frame +f+ (each masked to
+      # unsigned 64-bit).
+      def frame_blocks(f)
+        n = Asmtest::HwTrace::FN[:descent_frame_block_count].call(@handle, f)
+        (0...n).map { |i| Asmtest::HwTrace::FN[:descent_frame_block_at].call(@handle, f, i) & U64 }
+      end
+
+      # True if recording hit a capacity/budget limit and dropped data.
+      def truncated?
+        Asmtest::HwTrace::FN[:descent_truncated].call(@handle) != 0
+      end
+
+      # True if descent stopped at the max-depth cap (deeper calls stepped over).
+      def depth_capped?
+        Asmtest::HwTrace::FN[:descent_depth_capped].call(@handle) != 0
       end
     end
 

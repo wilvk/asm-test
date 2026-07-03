@@ -156,6 +156,51 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code, size_t code_
 #endif
 }
 
+/* Decode the instruction at `code+off` ONCE and report its byte length (return value; 0 if
+ * undecodable / no Capstone) plus, via the out-params, whether it is a call and/or a return.
+ * The call-descent step loop needs all three per single-stepped instruction; doing them in
+ * one cs_open + cs_disasm avoids the 3x engine open/decode of calling is_call + is_ret +
+ * asmtest_disas separately on a hot path. `is_call`/`is_ret` may be NULL. Not part of the
+ * bindings-parity tier surface. */
+size_t asmtest_disas_probe(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                           uint64_t off, int *is_call, int *is_ret) {
+    if (is_call != NULL)
+        *is_call = 0;
+    if (is_ret != NULL)
+        *is_ret = 0;
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    size_t len = 0;
+    if (count > 0) {
+        if (is_call != NULL)
+            *is_call = cs_insn_group(h, &insn[0], CS_GRP_CALL) ? 1 : 0;
+        if (is_ret != NULL)
+            *is_ret = cs_insn_group(h, &insn[0], CS_GRP_RET) ? 1 : 0;
+        len = insn[0].size;
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return len;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return 0;
+#endif
+}
+
 /* 1 if the instruction at `code+off` is any control-transfer instruction — a
  * (conditional or unconditional) jump, a call, or a return — matching the block
  * partition the PT/DR/Unicorn backends produce (a block ends after every CTI).
@@ -192,6 +237,106 @@ int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
     (void)code;
     (void)code_len;
     (void)off;
+    return 0;
+#endif
+}
+
+/* 1 if the instruction at `code+off` is a RETURN (x86 `ret`/`retf`; AArch64 `ret`) — the
+ * Capstone CS_GRP_RET group, the third term of the call-descent pop predicate. 0
+ * otherwise, or always when built without Capstone. Mirrors asmtest_disas_is_call. */
+int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                         uint64_t off) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t count = cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    int is_ret = 0;
+    if (count > 0) {
+        is_ret = cs_insn_group(h, &insn[0], CS_GRP_RET) ? 1 : 0;
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return is_ret;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return 0;
+#endif
+}
+
+/* Resolve the DIRECT-call target at `code+off` into *target (absolute = base_addr +
+ * displacement). x86 `E8` rel32 and AArch64 `bl` imm26 are direct; Capstone exposes the
+ * resolved absolute target as an immediate operand (CS_OP_IMM). Returns 1 (direct call,
+ * *target set) or 0 (indirect call / non-call / undecodable / no Capstone), in which case
+ * the descent loop reads the live post-step PC as the target instead. */
+int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code, size_t code_len,
+                              uint64_t base_addr, uint64_t off, uint64_t *target) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* operands + groups need detail mode */
+    cs_insn *insn = NULL;
+    /* Decode at base_addr+off so Capstone resolves the rel32/imm26 to its ABSOLUTE
+     * target immediate directly (no manual displacement arithmetic). */
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, base_addr + off, 1, &insn);
+    int ok = 0;
+    if (count > 0) {
+        if (cs_insn_group(h, &insn[0], CS_GRP_CALL)) {
+            const cs_detail *d = insn[0].detail;
+            if (d != NULL) {
+                /* Both operand-enum sets are always available (capstone.h pulls in
+                 * x86.h and arm64.h), and the disasm layer is cross-arch — x86 bytes
+                 * may be decoded on an AArch64 host and vice versa — so neither branch
+                 * is host-arch gated; `a` (the decode target) selects the union arm. */
+                if (a == CS_ARCH_X86) {
+                    for (int i = 0; i < d->x86.op_count; i++)
+                        if (d->x86.operands[i].type == X86_OP_IMM) {
+                            if (target != NULL)
+                                *target = (uint64_t)d->x86.operands[i].imm;
+                            ok = 1;
+                            break;
+                        }
+                } else if (a == CS_ARCH_ARM64) {
+                    for (int i = 0; i < d->arm64.op_count; i++)
+                        if (d->arm64.operands[i].type == ARM64_OP_IMM) {
+                            if (target != NULL)
+                                *target = (uint64_t)d->arm64.operands[i].imm;
+                            ok = 1;
+                            break;
+                        }
+                }
+            }
+        }
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return ok;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)base_addr;
+    (void)off;
+    (void)target;
     return 0;
 #endif
 }

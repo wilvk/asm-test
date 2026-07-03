@@ -206,7 +206,13 @@ $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 # Out-of-process ptrace single-step backend (W2): no external library, just the
 # same Capstone length-decoder (disasm.o) for block normalization.
 $(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
-                          include/asmtest_trace.h include/asmtest_codeimage.h | $(BUILD)
+                          include/asmtest_trace.h include/asmtest_codeimage.h \
+                          include/asmtest_descent_internal.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+# Call-descent handle (asmtest_descent_t): edges + nested frames read through scalar
+# accessors. No external library (plain malloc pools); sibling of src/trace.c.
+$(BUILD)/descent.o: src/descent.c include/asmtest_ptrace.h \
+                    include/asmtest_descent_internal.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Time-aware code-image recorder (asmtest_codeimage.h): a userspace soft-dirty timeline
 # (the foreign-JIT byte source) + an OPTIONAL eBPF emission detector. The userspace path
@@ -220,6 +226,7 @@ $(BUILD)/codeimage.o: src/codeimage.c include/asmtest_codeimage.h $(CODEIMAGE_SK
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
+                $(BUILD)/descent.o \
                 $(BUILD)/codeimage.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
@@ -316,6 +323,33 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	./$(BUILD)/jit_trace java $(BUILD)/jit_java
+
+# --- Call-descent demo lanes (Phase 8 of docs/plans/call-descent-plan.md) ---------------
+# `<lane>-descend` runs the same live trace at descent level 2 (DESCEND_KNOWN): the tracer
+# descends INTO the runtime's own sibling JIT methods the traced method calls (the .NET
+# `dotnet-bcl-descend` lane descends Console.WriteLine's `get_Out`) while still stepping OVER
+# libc/PLT. `<lane>-descend-all` runs at level 3 (DESCEND_ALL) with a conservative instruction
+# budget + the backend watchdog and is EXPECTED to self-skip (truncate) when it trips a guard
+# — it asserts the guards fire, never that L3 is transparent. All watchdog-bounded and
+# self-skipping like the plain lanes. Needs the runtime SDK + Capstone.
+.PHONY: hwtrace-jit-dotnet-descend hwtrace-jit-dotnet-descend-all \
+        hwtrace-jit-dotnet-bcl-descend hwtrace-jit-dotnet-bcl-descend-all \
+        hwtrace-jit-java-descend hwtrace-jit-java-descend-all
+hwtrace-jit-dotnet-descend hwtrace-jit-dotnet-descend-all: hwtrace-jit-dotnet-%: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet-$* (descend into CoreCLR sibling JIT methods) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	./$(BUILD)/jit_trace dotnet-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
+hwtrace-jit-dotnet-bcl-descend hwtrace-jit-dotnet-bcl-descend-all: hwtrace-jit-dotnet-bcl-%: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet-bcl-$* (descend Console.WriteLine -> get_Out) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	./$(BUILD)/jit_trace dotnet-bcl-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
+hwtrace-jit-java-descend hwtrace-jit-java-descend-all: hwtrace-jit-java-%: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-java-$* (descend into HotSpot sibling JIT methods) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	./$(BUILD)/jit_trace java-$* $(BUILD)/jit_java
 
 # OpenJDK (HotSpot) LIBRARY method: trace java.lang.Math::floorDiv. Unlike .NET, HotSpot JITs
 # JDK methods on demand BY DEFAULT — no precompilation-disable flag — so this needs only the
@@ -590,7 +624,11 @@ $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
-                               include/asmtest_trace.h include/asmtest_codeimage.h | $(BUILD)/pic
+                               include/asmtest_trace.h include/asmtest_codeimage.h \
+                               include/asmtest_descent_internal.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/descent.o: src/descent.c include/asmtest_ptrace.h \
+                        include/asmtest_descent_internal.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
                           $(CODEIMAGE_SKEL) | $(BUILD)/pic
@@ -604,6 +642,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/ss_backend.o \
                                        $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/ptrace_backend.o \
+                                       $(BUILD)/pic/descent.o \
                                        $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o

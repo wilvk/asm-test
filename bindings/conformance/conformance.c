@@ -25,7 +25,16 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 #include "asmtest.h"
+/* The ptrace_descent tier drives the out-of-process single-step stepper + call-descent
+ * handle (asmtest_ptrace.h). Self-skips off a ptrace-single-step host (qemu-user / yama)
+ * or without Capstone; only runs where the corpus arch matches the host. */
+#include "asmtest_ptrace.h"
 /* Always available: the cross-arch and raw-bytes emulator cases below run on any
  * host (Unicorn emulates every guest regardless of host arch). Only the
  * host-native x86 emu cases stay gated to an x86-64 host. */
@@ -78,6 +87,123 @@ static void check(const char *name, int passed, const char *detail) {
                detail ? detail : "");
     }
 }
+
+/* TAP skip (counts as run, never as failed) — the ptrace tier self-skips off a
+ * single-step-capable host, like test_ptrace_callout. */
+static void skip(const char *name, const char *reason) {
+    g_n++;
+    printf("ok %d - %s # SKIP %s\n", g_n, name, reason);
+}
+
+/* ---- ptrace_descent tier fixture: R calls an in-blob leaf sibling S. --------------
+ * Host-native machine code (executed via fork + PTRACE_SINGLESTEP), so the bytes are
+ * emitted per host arch and only replay where the corpus arch matches. A rel32/bl to an
+ * in-blob sibling keeps the call target reachable from an mmap'd page (libc is not). */
+#if defined(__x86_64__)
+/* R@0: mov rax,rdi; call S(+4); add rax,rsi; ret.  S@0xc: inc rax; ret. */
+static const unsigned char CL_CODE[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
+                                        0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3};
+#define CL_HAVE 1
+#define CL_REGION 0xc
+#define CL_CALL_SITE 0x3
+#define CL_LEAF_OFF 0xc
+#define CL_LEAF_LEN 4
+#define CL_RESULT 43
+static const uint64_t CL_FRAME0[] = {0x0, 0x3, 0x8, 0xb};
+static const uint64_t CL_LEAF[] = {0x0, 0x3};
+#elif defined(__aarch64__)
+/* R@0: bl S; add x0,x0,x1; ret.  S@0xc: add x0,x0,#1; ret. */
+static const unsigned char CL_CODE[] = {0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b,
+                                        0xc0, 0x03, 0x5f, 0xd6, 0x00, 0x04, 0x00, 0x91,
+                                        0xc0, 0x03, 0x5f, 0xd6};
+#define CL_HAVE 1
+#define CL_REGION 0xc
+#define CL_CALL_SITE 0x0
+#define CL_LEAF_OFF 0xc
+#define CL_LEAF_LEN 8
+#define CL_RESULT 43
+static const uint64_t CL_FRAME0[] = {0x0, 0x4, 0x8};
+static const uint64_t CL_LEAF[] = {0x0, 0x4};
+#else
+#define CL_HAVE 0
+#endif
+
+#if CL_HAVE
+static int frame_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp, size_t n) {
+    if (asmtest_descent_frame_insn_count(d, f) != n)
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (asmtest_descent_frame_insn_at(d, f, i) != exp[i])
+            return 0;
+    return 1;
+}
+
+/* Run the two ptrace_descent cases (L1 edges, L2 descend-known). Self-skips cleanly. */
+static void run_ptrace_descent(void) {
+    const char *n1 = "ptrace_descent.calls_leaf.edges";
+    const char *n2 = "ptrace_descent.calls_leaf.descend";
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        skip(n1, why);
+        skip(n2, why);
+        return;
+    }
+    if (!asmtest_disas_available()) {
+        skip(n1, "no Capstone (call/ret detection)");
+        skip(n2, "no Capstone (call/ret detection)");
+        return;
+    }
+    void *p = mmap(NULL, sizeof CL_CODE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        skip(n1, "mmap failed");
+        skip(n2, "mmap failed");
+        return;
+    }
+    memcpy(p, CL_CODE, sizeof CL_CODE);
+    mprotect(p, sizeof CL_CODE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof CL_CODE);
+    uint64_t base = (uint64_t)(uintptr_t)p;
+    long args[2] = {20, 22};
+    const size_t NF0 = sizeof CL_FRAME0 / sizeof CL_FRAME0[0];
+    const size_t NLF = sizeof CL_LEAF / sizeof CL_LEAF[0];
+
+    /* L1 RECORD_EDGES: R's own body + a single (call -> S) edge. */
+    {
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_RECORD_EDGES);
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        long res = 0;
+        int rc = asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
+        int ok = rc == ASMTEST_PTRACE_OK && res == CL_RESULT &&
+                 asmtest_descent_frames_len(d) == 1 && frame_eq(d, 0, CL_FRAME0, NF0) &&
+                 asmtest_descent_edges_len(d) == 1 &&
+                 asmtest_descent_edge_site(d, 0) == CL_CALL_SITE &&
+                 asmtest_descent_edge_target(d, 0) == base + CL_LEAF_OFF;
+        check(n1, ok, "L1 edge/body mismatch");
+        asmtest_trace_free(t);
+        asmtest_descent_free(d);
+    }
+    /* L2 DESCEND_KNOWN: descend the allow-set leaf S as a nested frame. */
+    {
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + CL_LEAF_OFF),
+                                     CL_LEAF_LEN);
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        long res = 0;
+        int rc = asmtest_ptrace_trace_call_ex(p, CL_REGION, args, 2, &res, t, d);
+        int ok = rc == ASMTEST_PTRACE_OK && res == CL_RESULT &&
+                 asmtest_descent_frames_len(d) == 2 && frame_eq(d, 0, CL_FRAME0, NF0) &&
+                 asmtest_descent_frame_base(d, 1) == base + CL_LEAF_OFF &&
+                 asmtest_descent_frame_depth(d, 1) == 1 && frame_eq(d, 1, CL_LEAF, NLF) &&
+                 asmtest_descent_edges_len(d) == 0;
+        check(n2, ok, "L2 descend/frame mismatch");
+        asmtest_trace_free(t);
+        asmtest_descent_free(d);
+    }
+    munmap(p, sizeof CL_CODE);
+}
+#endif /* CL_HAVE */
 
 static int run_corpus(void) {
     char why[128];
@@ -385,8 +511,34 @@ static int run_corpus(void) {
     }
 #endif /* ASMTEST_ENABLE_ASM */
 
+    /* ptrace_descent tier: the out-of-process stepper's call-descent (L1 edges, L2
+     * descend-known). Host-native, so it runs only where the corpus arch matches; it
+     * self-skips off a single-step-capable host. */
+#if CL_HAVE
+    run_ptrace_descent();
+#else
+    skip("ptrace_descent.calls_leaf.edges", "no ptrace stepper on this arch");
+    skip("ptrace_descent.calls_leaf.descend", "no ptrace stepper on this arch");
+#endif
+
     return g_fail;
 }
+
+#if CL_HAVE
+/* Emit a byte array / u64 array as a JSON int list (ptrace_descent tier only). */
+static void emit_bytes(const unsigned char *b, size_t n) {
+    printf("[");
+    for (size_t i = 0; i < n; i++)
+        printf("%s%d", i ? ", " : "", (int)b[i]);
+    printf("]");
+}
+static void emit_u64s(const uint64_t *a, size_t n) {
+    printf("[");
+    for (size_t i = 0; i < n; i++)
+        printf("%s%llu", i ? ", " : "", (unsigned long long)a[i]);
+    printf("]");
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* JSON emission — the portable expected-results table                 */
@@ -501,6 +653,32 @@ static void emit_corpus(void) {
     printf("      {\"name\": \"asm.arm64_bytes\", \"tier\": \"asm\", "
            "\"call\": \"assemble\", \"arch\": \"arm64\", \"src\": \"ret\", "
            "\"expect\": {\"bytes\": [192, 3, 95, 214]}}");
+
+    /* ptrace_descent tier — host-native call-descent (emitted only on an arch with a
+     * ptrace stepper; the `arch` field lets a binding on a different host skip it). */
+#if CL_HAVE
+    printf(",\n      {\"name\": \"ptrace_descent.calls_leaf.edges\", "
+           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 1, \"code\": ",
+           CORPUS_ARCH);
+    emit_bytes(CL_CODE, sizeof CL_CODE);
+    printf(", \"region\": %d, \"args\": [20, 22], \"expect\": {\"result\": %d, "
+           "\"frame0\": ",
+           (int)CL_REGION, CL_RESULT);
+    emit_u64s(CL_FRAME0, sizeof CL_FRAME0 / sizeof CL_FRAME0[0]);
+    printf(", \"edges\": [{\"site\": %d, \"target_off\": %d}]}},\n", (int)CL_CALL_SITE,
+           (int)CL_LEAF_OFF);
+    printf("      {\"name\": \"ptrace_descent.calls_leaf.descend\", "
+           "\"tier\": \"ptrace_descent\", \"arch\": \"%s\", \"level\": 2, \"code\": ",
+           CORPUS_ARCH);
+    emit_bytes(CL_CODE, sizeof CL_CODE);
+    printf(", \"region\": %d, \"allow_off\": %d, \"allow_len\": %d, \"args\": [20, 22], "
+           "\"expect\": {\"result\": %d, \"frame0\": ",
+           (int)CL_REGION, (int)CL_LEAF_OFF, (int)CL_LEAF_LEN, CL_RESULT);
+    emit_u64s(CL_FRAME0, sizeof CL_FRAME0 / sizeof CL_FRAME0[0]);
+    printf(", \"frames\": [{\"base_off\": %d, \"depth\": 1, \"insns\": ", (int)CL_LEAF_OFF);
+    emit_u64s(CL_LEAF, sizeof CL_LEAF / sizeof CL_LEAF[0]);
+    printf("}], \"edges\": []}}");
+#endif
 
     printf("\n    ]\n");
     printf("  }\n}\n");

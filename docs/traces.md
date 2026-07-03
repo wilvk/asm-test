@@ -15,6 +15,15 @@ captures two related views:
 Both views use byte offsets from the routine entry. Offset `0` is the first byte
 of the code passed to `emu_call_traced` or a guest-specific traced call.
 
+An `asmtest_trace_t` records **one region** — offsets from a single base. That
+invariant is unchanged even under [call descent](native-tracing.md#call-descent-levels),
+the ptrace tracer's mode for following call-outs: the flat trace remains the single-region
+view (**frame 0**, the root region), byte-identical whatever the descent level. When descent
+steps *into* a callee, that callee's own instructions are recorded in a **separate nested
+frame** on the descent handle (offsets relative to *that* frame's base), never mixed into the
+flat trace. So "one `asmtest_trace_t` = one region's offsets" still holds; descent adds
+frames beside it, not into it.
+
 Tracing is useful when a return value is not enough. You can check that tests
 reach every path you care about, compare a narrow input against a broader
 "universe" of blocks, inspect a loop's dynamic behavior, or feed coverage into

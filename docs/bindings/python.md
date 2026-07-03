@@ -316,6 +316,25 @@ result = Ptrace.trace_call(code, [20, 22], trace)
   `perfmap_symbol`, `jitdump_find`) and the `CodeImage` recorder trace a method in a
   **separate** process — the managed-runtime path. Full reference in
   [Native runtime tracing](../native-tracing.md).
+* **Call descent** (`Descent`) makes the tracer follow the call-outs it would otherwise
+  step over. Create a `Descent(level)` (`DESCENT_RECORD_EDGES` / `DESCENT_DESCEND_KNOWN` /
+  `DESCENT_DESCEND_ALL`), optionally `allow_region(base, len)` the callee regions to descend,
+  and pass it to `Ptrace.trace_call_ex(code, args, trace, descent, region=...)`; then read
+  `descent.edges()` and `descent.frame_insns(f)` for each nested frame. The optional
+  `set_resolver(fn)` callback is a ctypes upcall (kept alive against GC for the handle's
+  lifetime). `region` is the traced region's length — pass it when the call target is an
+  in-blob sibling that must stay outside the region. See
+  [Call descent levels](../native-tracing.md#call-descent-levels).
+
+```python
+from asmtest.hwtrace import Descent, DESCENT_DESCEND_KNOWN
+with Descent(DESCENT_DESCEND_KNOWN) as d:
+    d.allow_region(code.base + 0xc, 4)         # descend the sibling at 0xc
+    Ptrace.trace_call_ex(code, [20, 22], None, d, region=0xc)
+    d.frames_len()          # 2: frame 0 (root) + the descended callee
+    d.frame_insns(1)        # the callee's own instruction offsets
+    d.edges()               # [(site, callee_addr, depth), ...] for stepped-over calls
+```
 
 ### Mid-execution guards (Track F)
 

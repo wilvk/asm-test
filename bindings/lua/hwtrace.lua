@@ -59,6 +59,36 @@ typedef struct { uint64_t code_addr; uint64_t code_size; uint64_t timestamp; uin
 int  asmtest_jitdump_find(const char* path, int pid, const char* name, asmtest_jitdump_entry_t* out, uint8_t* bytes_out, size_t bytes_cap, size_t* bytes_len);
 /* Trace an attached target reading versioned code-image bytes (asmtest_ptrace.h). */
 int  asmtest_ptrace_trace_attached_versioned(int pid, const void* base, size_t len, void* img, uint64_t when, long* result, void* trace);
+/* asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames. */
+typedef int (*asmtest_descent_resolver_fn)(uint64_t callee_addr, void* user, uint64_t* base_out, uint64_t* len_out);
+typedef int (*asmtest_descent_denylist_fn)(uint64_t callee_addr, void* user);
+void* asmtest_descent_new(int level);
+void  asmtest_descent_free(void* d);
+void  asmtest_descent_set_max_depth(void* d, uint32_t max_depth);
+void  asmtest_descent_set_insn_budget(void* d, uint64_t budget);
+void  asmtest_descent_set_watchdog_ms(void* d, uint32_t ms);
+int   asmtest_descent_allow_region(void* d, const void* base, size_t len);
+int   asmtest_descent_deny_region(void* d, const void* base, size_t len);
+void  asmtest_descent_set_resolver(void* d, asmtest_descent_resolver_fn fn, void* user);
+void  asmtest_descent_set_denylist(void* d, asmtest_descent_denylist_fn fn, void* user);
+size_t   asmtest_descent_edges_len(const void* d);
+uint64_t asmtest_descent_edge_site(const void* d, size_t i);
+uint64_t asmtest_descent_edge_target(const void* d, size_t i);
+uint32_t asmtest_descent_edge_depth(const void* d, size_t i);
+size_t   asmtest_descent_frames_len(const void* d);
+uint64_t asmtest_descent_frame_base(const void* d, size_t f);
+uint64_t asmtest_descent_frame_len(const void* d, size_t f);
+uint32_t asmtest_descent_frame_depth(const void* d, size_t f);
+int32_t  asmtest_descent_frame_parent(const void* d, size_t f);
+size_t   asmtest_descent_frame_insn_count(const void* d, size_t f);
+uint64_t asmtest_descent_frame_insn_at(const void* d, size_t f, size_t i);
+size_t   asmtest_descent_frame_block_count(const void* d, size_t f);
+uint64_t asmtest_descent_frame_block_at(const void* d, size_t f, size_t i);
+int   asmtest_descent_truncated(const void* d);
+int   asmtest_descent_depth_capped(const void* d);
+int   asmtest_ptrace_trace_call_ex(const void* code, size_t len, const long* args, int nargs, long* result, void* trace, void* descent);
+int   asmtest_ptrace_trace_attached_ex(int pid, const void* base, size_t len, long* result, void* trace, void* descent);
+int   asmtest_ptrace_trace_attached_versioned_ex(int pid, const void* base, size_t len, void* img, uint64_t when, long* result, void* trace, void* descent);
 /* asmtest_codeimage.h — time-aware code-image recorder (a userspace PERF_RECORD_TEXT_POKE). */
 struct asmtest_codeimage_event { uint64_t addr; uint64_t len; uint64_t timestamp; uint32_t pid; uint32_t tid; uint32_t kind; int32_t fd; };
 int   asmtest_codeimage_available(void);
@@ -82,6 +112,12 @@ local ASMTEST_HW_EUNAVAIL = -3  -- no hardware-trace backend available on this h
 -- asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
 local ASMTEST_PTRACE_OK = 0
 local ASMTEST_PTRACE_ENOENT = -7  -- region / symbol / method not found
+
+-- asmtest_descent_level_t — call-descent policy (see the Descent wrapper below).
+local DESCENT_OFF = 0            -- step over, record nothing (default)
+local DESCENT_RECORD_EDGES = 1   -- record (call-site -> callee) edges, still step over
+local DESCENT_DESCEND_KNOWN = 2  -- step INTO resolvable calls (allow-set / resolver)
+local DESCENT_DESCEND_ALL = 3    -- step INTO everything (denylist + budget + watchdog gated)
 
 -- asmtest_codeimage.h — time-aware code-image recorder status codes / event kinds.
 local ASMTEST_CI_OK = 0
@@ -178,6 +214,10 @@ M.TRACE_BEST = TRACE_BEST
 M.TRACE_CEILING_FREE = TRACE_CEILING_FREE
 M.TRACE_NATIVE_ONLY = TRACE_NATIVE_ONLY
 M.ASMTEST_HW_EUNAVAIL = ASMTEST_HW_EUNAVAIL
+M.DESCENT_OFF = DESCENT_OFF
+M.DESCENT_RECORD_EDGES = DESCENT_RECORD_EDGES
+M.DESCENT_DESCEND_KNOWN = DESCENT_DESCEND_KNOWN
+M.DESCENT_DESCEND_ALL = DESCENT_DESCEND_ALL
 M.ASMTEST_CI_KIND_MPROTECT = ASMTEST_CI_KIND_MPROTECT
 M.ASMTEST_CI_KIND_MMAP = ASMTEST_CI_KIND_MMAP
 M.ASMTEST_CI_KIND_MEMFD = ASMTEST_CI_KIND_MEMFD
@@ -543,6 +583,210 @@ function HwTrace.jitdump_find(path, name, pid, want_bytes)
     code_index = u64(e.code_index),
     code       = code,
   }
+end
+
+-- ---- Call descent (asmtest_descent_t): edges + nested frames ----
+--
+-- Configure how the ptrace stepper handles the call-outs it would otherwise step
+-- over, and read back the recorded edges + nested frames. Four levels (the DESCENT_*
+-- constants): OFF, RECORD_EDGES, DESCEND_KNOWN, DESCEND_ALL. Pass a Descent to
+-- HwTrace.ptrace_trace_call_ex and friends. Frame 0 is the root region (a superset
+-- of the flat trace); descended callees are frames 1..N.
+--
+-- HAZARD (LuaJIT precision): the ABSOLUTE-address getters — frame_base, frame_len,
+-- edge_target, and each element of frame_insns / frame_blocks — return the raw boxed
+-- uint64_t cdata, NOT a Lua number. A double keeps only 53 bits, so tonumber() would
+-- silently round a >2^53 JIT address (code lives at ~0x7f..). Compare them via cdata
+-- equality, e.g. frame_base(1) == ffi.cast("uint64_t", code.base) + 0xc — never by
+-- converting to a number first.
+local Descent = {}
+Descent.__index = Descent
+M.Descent = Descent
+
+-- Allocate a descent handle at `level` (default OFF). The wrapper OWNS the handle
+-- with an idempotent :free(). It also anchors any resolver/denylist upcall
+-- trampoline (an ffi.cast callback) on the object for the handle's lifetime, so the
+-- GC cannot collect it mid-single-step; :free() releases them.
+function Descent.new(level)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local h = L.asmtest_descent_new(level or DESCENT_OFF)
+  if h == nil then error("asmtest_descent_new failed") end
+  return setmetatable({ h = h, cbs = {} }, Descent)
+end
+
+-- Idempotent free. Frees the handle (the native side NULLs internally, so a double
+-- free is a no-op) and NULLs it here so a second :free() — or any call after close —
+-- is a safe no-op. The anchored upcall callbacks are freed AFTER the handle so the
+-- native side can never call into a freed trampoline.
+function Descent:free()
+  if self.h ~= nil then
+    L.asmtest_descent_free(self.h)
+    self.h = nil
+  end
+  for i = 1, #self.cbs do self.cbs[i]:free() end
+  self.cbs = {}
+end
+
+-- ---- configuration (in) ----
+function Descent:set_max_depth(d)
+  L.asmtest_descent_set_max_depth(self.h, d); return self
+end
+function Descent:set_insn_budget(b)
+  L.asmtest_descent_set_insn_budget(self.h, ffi.cast("uint64_t", b)); return self
+end
+function Descent:set_watchdog_ms(ms)
+  L.asmtest_descent_set_watchdog_ms(self.h, ms); return self
+end
+
+-- Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).
+-- Returns the status code (0 ok, negative on OOM) as a Lua number. `base` may be a
+-- Lua number, a boxed uint64_t, or a void* cdata.
+function Descent:allow_region(base, len)
+  return tonumber(L.asmtest_descent_allow_region(self.h,
+                  ffi.cast("const void*", base), len))
+end
+-- Add [base, base+len) to the level-3 deny-set (never descend into it). 0 / negative.
+function Descent:deny_region(base, len)
+  return tonumber(L.asmtest_descent_deny_region(self.h,
+                  ffi.cast("const void*", base), len))
+end
+
+-- Install a level-2/3 resolver `fn(callee_addr) -> descend, base, len`: return
+-- (true, base, len) to descend into [base, base+len), or a falsy first value to step
+-- over. `callee_addr` is delivered as a boxed uint64_t cdata (an ABSOLUTE address —
+-- compare it via cdata equality, do NOT tonumber it). The callback is anchored on
+-- this Descent so the GC cannot collect it mid-single-step. `user` is an optional
+-- opaque pointer/int forwarded to the native side.
+function Descent:set_resolver(fn, user)
+  local cb = ffi.cast("asmtest_descent_resolver_fn",
+    function(callee, _user, base_out, len_out)
+      local descend, base, len = fn(callee)
+      if descend and len and len ~= 0 then
+        base_out[0] = ffi.cast("uint64_t", base)
+        len_out[0] = ffi.cast("uint64_t", len)
+        return 1
+      end
+      return 0
+    end)
+  self.cbs[#self.cbs + 1] = cb  -- anchor against GC for the handle's lifetime
+  L.asmtest_descent_set_resolver(self.h, cb, ffi.cast("void*", user or 0))
+  return self
+end
+
+-- Install a level-3 denylist `fn(callee_addr) -> bool` (true = REFUSE descent, step
+-- over). `callee_addr` is a boxed uint64_t cdata (see set_resolver). Anchored on this
+-- Descent against GC like the resolver.
+function Descent:set_denylist(fn, user)
+  local cb = ffi.cast("asmtest_descent_denylist_fn",
+    function(callee, _user) return fn(callee) and 1 or 0 end)
+  self.cbs[#self.cbs + 1] = cb
+  L.asmtest_descent_set_denylist(self.h, cb, ffi.cast("void*", user or 0))
+  return self
+end
+
+-- ---- results (out) ----
+
+-- Every stepped-over call (level >= 1) as a 1-based Lua array of
+-- { site=, target=, depth= }: `site` the call-site offset (Lua number), `target` the
+-- ABSOLUTE callee address (boxed uint64_t cdata — see the HAZARD note), `depth` the
+-- caller's frame depth (Lua number).
+function Descent:edges()
+  local n = tonumber(L.asmtest_descent_edges_len(self.h))
+  local t = {}
+  for i = 0, n - 1 do
+    t[i + 1] = {
+      site   = tonumber(L.asmtest_descent_edge_site(self.h, i)),
+      target = L.asmtest_descent_edge_target(self.h, i),  -- absolute: keep cdata
+      depth  = tonumber(L.asmtest_descent_edge_depth(self.h, i)),
+    }
+  end
+  return t
+end
+
+function Descent:frames_len() return tonumber(L.asmtest_descent_frames_len(self.h)) end
+-- ABSOLUTE frame base — boxed uint64_t cdata (do NOT tonumber; see HAZARD).
+function Descent:frame_base(f) return L.asmtest_descent_frame_base(self.h, f) end
+-- Frame byte length — boxed uint64_t cdata.
+function Descent:frame_len(f) return L.asmtest_descent_frame_len(self.h, f) end
+function Descent:frame_depth(f) return tonumber(L.asmtest_descent_frame_depth(self.h, f)) end
+function Descent:frame_parent(f) return tonumber(L.asmtest_descent_frame_parent(self.h, f)) end
+-- The frame's executed instruction offsets, as a 1-based array of boxed uint64_t
+-- cdata (compare via cdata equality: `insns[1] == 0`, etc.).
+function Descent:frame_insns(f)
+  local n = tonumber(L.asmtest_descent_frame_insn_count(self.h, f))
+  local t = {}
+  for i = 0, n - 1 do t[i + 1] = L.asmtest_descent_frame_insn_at(self.h, f, i) end
+  return t
+end
+-- The frame's basic-block start offsets, as a 1-based array of boxed uint64_t cdata.
+function Descent:frame_blocks(f)
+  local n = tonumber(L.asmtest_descent_frame_block_count(self.h, f))
+  local t = {}
+  for i = 0, n - 1 do t[i + 1] = L.asmtest_descent_frame_block_at(self.h, f, i) end
+  return t
+end
+-- True if a pool overflowed / a byte failed to decode (the record is incomplete).
+function Descent:truncated() return L.asmtest_descent_truncated(self.h) ~= 0 end
+-- True if descent stopped at a policy limit (max_depth / budget / recursion cap).
+function Descent:depth_capped() return L.asmtest_descent_depth_capped(self.h) ~= 0 end
+
+-- Descending variant of ptrace_trace_call: thread a Descent through the single-step
+-- loop so call-outs are recorded as edges and (at level >= 2) descended into nested
+-- frames. `trace` (the flat frame-0 HwTrace) or `descent` may be nil to record into
+-- only the other. CRITICAL: `region` is the traced region's byte LENGTH (default: the
+-- whole `code_len`) — pass the caller region's true extent when the blob also holds a
+-- sibling past it, so the sibling stays OUTSIDE the region and is not mis-recorded as
+-- recursion. Returns the routine's return value (u64: a Lua number, or boxed cdata
+-- past the double mantissa). error()s on a nonzero return.
+function HwTrace.ptrace_trace_call_ex(code_base, code_len, args_table, trace, descent, region)
+  assert(L, "libasmtest_hwtrace not loaded")
+  args_table = args_table or {}
+  local n = #args_table
+  local arr = ffi.new("long[?]", n > 0 and n or 1)
+  for i = 1, n do arr[i - 1] = args_table[i] end
+  local result = ffi.new("long[1]")
+  local th = trace and trace.h or nil
+  local dh = descent and descent.h or nil
+  local rc = L.asmtest_ptrace_trace_call_ex(ffi.cast("const void*", code_base),
+                                            region or code_len, arr, n, result, th, dh)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_call_ex failed: " .. tonumber(rc))
+  end
+  return u64(result[0])
+end
+
+-- Descending variant of ptrace_trace_attached (externally-attached target). `trace`
+-- or `descent` may be nil. Returns the target's RAX at the ret (u64). error()s on a
+-- nonzero return.
+function HwTrace.ptrace_trace_attached_ex(pid, base, len, trace, descent)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local result = ffi.new("long[1]")
+  local th = trace and trace.h or nil
+  local dh = descent and descent.h or nil
+  local rc = L.asmtest_ptrace_trace_attached_ex(pid, ffi.cast("const void*", base),
+                                                len, result, th, dh)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_attached_ex failed: " .. tonumber(rc))
+  end
+  return u64(result[0])
+end
+
+-- Descending variant of ptrace_trace_attached_versioned (code-image-versioned bytes
+-- as of capture sequence `when`; `img` a CodeImage or nil for the live snapshot).
+-- `trace` or `descent` may be nil. Returns the target's RAX at the ret (u64).
+-- error()s on a nonzero return.
+function HwTrace.ptrace_trace_attached_versioned_ex(pid, base, len, img, when, trace, descent)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local result = ffi.new("long[1]")
+  local th = trace and trace.h or nil
+  local dh = descent and descent.h or nil
+  local rc = L.asmtest_ptrace_trace_attached_versioned_ex(
+    pid, ffi.cast("const void*", base), len, img and img.img or nil,
+    ffi.cast("uint64_t", when or 0), result, th, dh)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_attached_versioned_ex failed: " .. tonumber(rc))
+  end
+  return u64(result[0])
 end
 
 -- ---- Time-aware code-image recorder (asmtest_codeimage.h) ----

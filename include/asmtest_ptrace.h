@@ -147,6 +147,113 @@ int asmtest_ptrace_trace_attached_versioned(pid_t pid, const void *base, size_t 
  * breakpoint is best-effort removed). */
 int asmtest_ptrace_run_to(pid_t pid, const void *addr);
 
+/* ================================================================== */
+/* Call descent (optional) — descend into the call-outs the tracer    */
+/* steps over, at four opt-in levels. See docs/plans/call-descent-plan */
+/* .md. The flat asmtest_trace_t stays the single-region view (frame   */
+/* 0); descent records into a SEPARATE opaque handle read through the  */
+/* scalar accessors below, so asmtest_trace_t is unchanged and every   */
+/* binding adds accessor calls, not a struct layout.                   */
+/* ================================================================== */
+
+/* Descent policy, deciding what happens at each call-out (all default off):
+ *   OFF            step over, record nothing — today's behaviour.
+ *   RECORD_EDGES   record each (call-site -> callee) edge, still step over.
+ *   DESCEND_KNOWN  single-step INTO calls whose target resolves (allow-set / resolver),
+ *                  else record an edge + step over.
+ *   DESCEND_ALL    single-step INTO every call (denylist + budget + watchdog gated) —
+ *                  DEFAULT OFF and best-effort: it can perturb or deadlock a live
+ *                  managed runtime; see the plan's "Level 3 safety" section. */
+typedef enum {
+    ASMTEST_DESCENT_OFF = 0,
+    ASMTEST_DESCENT_RECORD_EDGES = 1,
+    ASMTEST_DESCENT_DESCEND_KNOWN = 2,
+    ASMTEST_DESCENT_DESCEND_ALL = 3,
+} asmtest_descent_level_t;
+
+/* Opaque descent handle; full type in src/descent.c (read via the accessors below). */
+typedef struct asmtest_descent asmtest_descent_t;
+
+/* Optional level-2/3 resolver: return 1 to descend into `callee_addr` (and, if the
+ * extent is known, set *base_out and *len_out to the callee region), 0 to step over. `user`
+ * is the pointer passed to asmtest_descent_set_resolver. */
+typedef int (*asmtest_descent_resolver_fn)(uint64_t callee_addr, void *user,
+                                           uint64_t *base_out, uint64_t *len_out);
+/* Optional level-3 denylist: return 1 to REFUSE descent into `callee_addr` (step over
+ * it), 0 to allow it. Consulted in addition to the deny-region set. */
+typedef int (*asmtest_descent_denylist_fn)(uint64_t callee_addr, void *user);
+
+/* Allocate a descent handle at `level` (conservative defaults for depth/budget/watchdog;
+ * empty allow-set/denylist). NULL on OOM. Free with asmtest_descent_free. */
+asmtest_descent_t *asmtest_descent_new(asmtest_descent_level_t level);
+/* Free a descent handle. NULL-safe. Like any C free it is NOT double-free-safe: after
+ * freeing, the caller must not pass the same pointer again (drop/NULL your own reference).
+ * The bindings' Descent wrappers NULL their handle on free so a finalizer + an explicit
+ * free cannot double-free. */
+void asmtest_descent_free(asmtest_descent_t *d);
+/* Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default. */
+void asmtest_descent_set_max_depth(asmtest_descent_t *d, uint32_t max_depth);
+/* Total single-step budget for the trace (all steps: root + descended frames). Descent
+ * decisions are declined once it is reached; frame-0 recording continues. 0 = default. */
+void asmtest_descent_set_insn_budget(asmtest_descent_t *d, uint64_t budget);
+/* Real-time watchdog in milliseconds for a descended run (L3 blocked-syscall escape);
+ * 0 = default. */
+void asmtest_descent_set_watchdog_ms(asmtest_descent_t *d, uint32_t ms);
+/* Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).
+ * Returns 0 on success, negative on OOM. */
+int asmtest_descent_allow_region(asmtest_descent_t *d, const void *base, size_t len);
+/* Add [base, base+len) to the level-3 deny-set (never descend into it). 0 / negative. */
+int asmtest_descent_deny_region(asmtest_descent_t *d, const void *base, size_t len);
+/* Install the optional level-2/3 resolver (see asmtest_descent_resolver_fn). */
+void asmtest_descent_set_resolver(asmtest_descent_t *d, asmtest_descent_resolver_fn fn,
+                                  void *user);
+/* Install the optional level-3 denylist callback (see asmtest_descent_denylist_fn). */
+void asmtest_descent_set_denylist(asmtest_descent_t *d, asmtest_descent_denylist_fn fn,
+                                  void *user);
+
+/* Read accessors — one scalar per call, the opaque-handle idiom every binding speaks.
+ * All are NULL-safe (return 0) and bounds-checked (out-of-range index returns 0). */
+size_t asmtest_descent_edges_len(const asmtest_descent_t *d);
+uint64_t asmtest_descent_edge_site(const asmtest_descent_t *d, size_t i);   /* call-site off */
+uint64_t asmtest_descent_edge_target(const asmtest_descent_t *d, size_t i); /* absolute addr */
+uint32_t asmtest_descent_edge_depth(const asmtest_descent_t *d, size_t i);  /* caller depth  */
+size_t asmtest_descent_frames_len(const asmtest_descent_t *d);
+uint64_t asmtest_descent_frame_base(const asmtest_descent_t *d, size_t f);  /* absolute base */
+uint64_t asmtest_descent_frame_len(const asmtest_descent_t *d, size_t f);
+uint32_t asmtest_descent_frame_depth(const asmtest_descent_t *d, size_t f); /* 0 = frame 0   */
+int32_t asmtest_descent_frame_parent(const asmtest_descent_t *d, size_t f); /* -1 = root     */
+size_t asmtest_descent_frame_insn_count(const asmtest_descent_t *d, size_t f);
+uint64_t asmtest_descent_frame_insn_at(const asmtest_descent_t *d, size_t f, size_t i);
+size_t asmtest_descent_frame_block_count(const asmtest_descent_t *d, size_t f);
+uint64_t asmtest_descent_frame_block_at(const asmtest_descent_t *d, size_t f, size_t i);
+/* 1 if a pool overflowed / a byte failed to decode (the record is incomplete). */
+int asmtest_descent_truncated(const asmtest_descent_t *d);
+/* 1 if descent stopped at a policy limit (max_depth / budget / recursion cap) — distinct
+ * from a pool overflow, so a caller can tell "bounded by design" from "ran out of room". */
+int asmtest_descent_depth_capped(const asmtest_descent_t *d);
+
+/* Descending variants of the three trace entry points. Each threads a descent handle
+ * through the existing loop; with descent == NULL they reproduce today's trace exactly
+ * (the non-_ex spellings are these with descent == NULL). `trace` (frame 0, the flat
+ * single-region view) may be NULL to record only into the descent handle, and vice
+ * versa. Same return codes as the non-_ex forms.
+ *
+ * Note: at ANY level >= 1 a region that calls back into its OWN range (self-recursion) is
+ * split into nested frames rather than folded into frame 0 (this fixes a latent level-0
+ * accounting bug). So for a self-recursive region the flat `trace` holds only the TOP-level
+ * pass — it deliberately differs from the recursion-folded trace the non-_ex (descent==NULL)
+ * form produces; the recursive invocations are the depth>0 frames. Frame 0 is byte-identical
+ * across descent levels 1..3. */
+int asmtest_ptrace_trace_call_ex(const void *code, size_t len, const long *args, int nargs,
+                                 long *result, asmtest_trace_t *trace,
+                                 asmtest_descent_t *descent);
+int asmtest_ptrace_trace_attached_ex(pid_t pid, const void *base, size_t len, long *result,
+                                     asmtest_trace_t *trace, asmtest_descent_t *descent);
+int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base, size_t len,
+                                               struct asmtest_codeimage *img, uint64_t when,
+                                               long *result, asmtest_trace_t *trace,
+                                               asmtest_descent_t *descent);
+
 /* ------------------------------------------------------------------ */
 /* Code-region resolution — turn the foreign-attach primitive above   */
 /* into "point it at a running process" by discovering the (base,len)  */

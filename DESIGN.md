@@ -70,7 +70,7 @@ asm-test/
 │   ├── asmtest.c            #   runner, registry, reporting, failure model
 │   ├── capture.s / .asm     #   register/flags capture trampolines (GAS + NASM)
 │   ├── emu.c                #   Unicorn emulator tier
-│   └── …                    #   ffi, fuzz, hwtrace, ptrace, drtrace, disasm, …
+│   └── …                    #   ffi, fuzz, hwtrace, ptrace, descent, drtrace, disasm, …
 ├── examples/                # sample routines (.s/.asm) + their tests (.c)
 ├── tests/                   # the framework's own self-tests
 ├── bindings/                # language bindings (Python, Rust, Go, …)

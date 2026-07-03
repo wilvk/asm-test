@@ -157,6 +157,18 @@ fn checkCrossTierNativeOnly() Failure!void {
 
 const Ptrace = hwtrace.Ptrace;
 const CodeImage = hwtrace.CodeImage;
+const Descent = hwtrace.Descent;
+
+// Call-descent fixture (x86-64): R@0 calls an in-blob leaf sibling S@0xc.
+//   R@0:   mov rax,rdi; call S(+4); add rax,rsi; ret   (region = 0xc bytes)
+//   S@0xc: inc rax; ret
+// Args (20,22) -> 43. The traced region is R ONLY (0xc); S lives beyond it in the
+// same allocation, so trace_call_ex MUST be passed region=0xc — passing the whole
+// allocation would fold S into the region and mis-record it as recursion.
+const DESCENT_BLOB = [_]u8{
+    0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
+    0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3,
+};
 
 // Seven native-code bytes: mov rax,rdi; add rax,rsi; ret. A minimal tracked
 // region for the code-image recorder round-trip (the bytes are immaterial — the
@@ -296,6 +308,64 @@ fn checkJitdumpFind(alloc: std.mem.Allocator) !void {
     try check(Ptrace.jitdumpFind(path, "missing", 0, &bytes_buf) == null, "jitdump_find misses an absent name");
 }
 
+// Call descent (hwtrace.Descent): a region that calls an in-blob leaf S records the
+// call as an edge at level 1 and descends S as a nested frame at level 2. Mirrors
+// Python's `test_descent_edges_and_frames`. Gated on Ptrace.available() (which also
+// implies the decoder is present, as the stepper decodes each instruction).
+fn checkPtraceDescent(alloc: std.mem.Allocator) !void {
+    var code = try hwtrace.NativeCode.fromBytes(&DESCENT_BLOB);
+    defer code.free();
+    const base: usize = @intFromPtr(code.base);
+    const leaf_addr: u64 = @intCast(base + 0xc);
+    const args = [_]i64{ 20, 22 };
+
+    // Level 1 (RECORD_EDGES): R's own body + one (call -> S) edge; S is stepped
+    // over. The traced region is R only (0xc); S lives beyond it in the allocation.
+    {
+        var d = try Descent.init(hwtrace.DESCENT_RECORD_EDGES);
+        defer d.deinit();
+        var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
+        defer tr.free();
+
+        const r = try Ptrace.traceCallEx(code.base, code.len, &args, &tr, &d, 0xc);
+        try check(r == 43, "descent L1 trace_call_ex(region=0xc) returns 43");
+        try check(d.framesLen() == 1, "descent L1 frames_len == 1 (S stepped over)");
+
+        const f0 = try d.frameInsns(alloc, 0);
+        defer alloc.free(f0);
+        try check(std.mem.eql(u64, f0, &[_]u64{ 0x0, 0x3, 0x8, 0xb }),
+            "descent L1 frame_insns(0) == [0,3,8,0xb]");
+
+        const es = try d.edges(alloc);
+        defer alloc.free(es);
+        try check(es.len == 1, "descent L1 records exactly one edge");
+        try check(es[0].site == 0x3 and es[0].target == leaf_addr and es[0].depth == 0,
+            "descent L1 edge is (site 0x3 -> code_base+0xc, depth 0)");
+        try check(!d.truncated(), "descent L1 not truncated");
+    }
+
+    // Level 2 (DESCEND_KNOWN): S is in the allow-set, so it descends as frame 1 and
+    // no edge is recorded.
+    {
+        var d = try Descent.init(hwtrace.DESCENT_DESCEND_KNOWN);
+        defer d.deinit();
+        _ = d.allowRegion(@ptrFromInt(base + 0xc), 4);
+        var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
+        defer tr.free();
+
+        const r = try Ptrace.traceCallEx(code.base, code.len, &args, &tr, &d, 0xc);
+        try check(r == 43, "descent L2 trace_call_ex(region=0xc) returns 43");
+        try check(d.framesLen() == 2, "descent L2 frames_len == 2 (S descended)");
+        try check(d.frameBase(1) == leaf_addr, "descent L2 frame_base(1) == code_base+0xc");
+        try check(d.frameDepth(1) == 1, "descent L2 frame_depth(1) == 1");
+
+        const f1 = try d.frameInsns(alloc, 1);
+        defer alloc.free(f1);
+        try check(std.mem.eql(u64, f1, &[_]u64{ 0x0, 0x3 }), "descent L2 frame_insns(1) == [0,3]");
+        try check(d.edgesLen() == 0, "descent L2 records no edges (S descended, not an edge)");
+    }
+}
+
 // ---- Time-aware code-image recorder (hwtrace.CodeImage) ---- //
 // The Zig analogue of test_hwtrace.py's code-image tests. Each self-skips
 // (returns without failing) when the recorder / BPF detector is unavailable.
@@ -426,8 +496,10 @@ pub fn main() !void {
         tr.region("loop", .{ &code, @as(c_long, 1), @as(c_long, 20) }, callBody);
         try check(g_result == 20, "loop(1,20) == 20");
         try check(tr.insnsTotal() == 62, "insns_total == 62 (1 + 20*3 + 1, all captured)");
-        try check(tr.covered(0) and tr.covered(0x7), "covered(0) and covered(0x7)");
-        try check(tr.blocksLen() == 2, "blocks_len == 2");
+        try check(tr.covered(0) and tr.covered(0x7) and tr.covered(0xf),
+            "covered(0), covered(0x7), covered(0xf)");
+        // 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+        try check(tr.blocksLen() == 3, "blocks_len == 3");
         try check(!tr.truncated(), "not truncated");
     }
 
@@ -444,6 +516,7 @@ pub fn main() !void {
         try checkProcRegionByAddr();
         try checkProcPerfmapSymbol();
         try checkJitdumpFind(alloc);
+        try checkPtraceDescent(alloc);
     }
 
     // ---- Time-aware code-image recorder (hwtrace.CodeImage) ---- //

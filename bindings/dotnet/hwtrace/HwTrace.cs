@@ -261,6 +261,61 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_versioned(
             int pid, IntPtr @base, UIntPtr len, IntPtr img, ulong when, out long result, IntPtr trace);
 
+        // ---- call descent (asmtest_descent_t) — edges + nested frames ----
+        // A SEPARATE opaque handle threaded through the three _ex trace entry points
+        // (below); the flat asmtest_trace_t stays the single-region frame-0 view. Every
+        // getter is one scalar per call (the opaque-handle idiom), NULL-safe and
+        // bounds-checked in C. size_t indices/counts marshal as UIntPtr; absolute
+        // addresses (edge_target / frame_base / insn_at / block_at) as ulong. The two
+        // callback installers take a managed delegate the Descent wrapper pins against
+        // GC for the handle's lifetime (see Descent.SetResolver / SetDenylist).
+
+        // Level-2/3 resolver: return 1 to descend into calleeAddr (setting *baseOut /
+        // *lenOut to its extent), 0 to step over. `user` is the pointer passed to
+        // set_resolver. Cdecl, matching asmtest_descent_resolver_fn.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int DescentResolverFn(ulong calleeAddr, IntPtr user, out ulong baseOut, out ulong lenOut);
+
+        // Level-3 denylist: return 1 to REFUSE descent into calleeAddr, 0 to allow.
+        // Cdecl, matching asmtest_descent_denylist_fn.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int DescentDenylistFn(ulong calleeAddr, IntPtr user);
+
+        [DllImport(HWTRACE)] public static extern IntPtr asmtest_descent_new(int level);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_free(IntPtr d);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_set_max_depth(IntPtr d, uint maxDepth);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_set_insn_budget(IntPtr d, ulong budget);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_set_watchdog_ms(IntPtr d, uint ms);
+        [DllImport(HWTRACE)] public static extern int asmtest_descent_allow_region(IntPtr d, IntPtr @base, UIntPtr len);
+        [DllImport(HWTRACE)] public static extern int asmtest_descent_deny_region(IntPtr d, IntPtr @base, UIntPtr len);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_set_resolver(IntPtr d, DescentResolverFn fn, IntPtr user);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_set_denylist(IntPtr d, DescentDenylistFn fn, IntPtr user);
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_descent_edges_len(IntPtr d);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_edge_site(IntPtr d, UIntPtr i);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_edge_target(IntPtr d, UIntPtr i);
+        [DllImport(HWTRACE)] public static extern uint asmtest_descent_edge_depth(IntPtr d, UIntPtr i);
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_descent_frames_len(IntPtr d);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_frame_base(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_frame_len(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern uint asmtest_descent_frame_depth(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern int asmtest_descent_frame_parent(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_descent_frame_insn_count(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_frame_insn_at(IntPtr d, UIntPtr f, UIntPtr i);
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_descent_frame_block_count(IntPtr d, UIntPtr f);
+        [DllImport(HWTRACE)] public static extern ulong asmtest_descent_frame_block_at(IntPtr d, UIntPtr f, UIntPtr i);
+        [DllImport(HWTRACE)] public static extern int asmtest_descent_truncated(IntPtr d);
+        [DllImport(HWTRACE)] public static extern int asmtest_descent_depth_capped(IntPtr d);
+
+        // Descending variants of the three trace entry points: each threads a descent
+        // handle through the loop. trace (frame 0) may be IntPtr.Zero to record only into
+        // the descent handle, and descent may be IntPtr.Zero to reproduce the non-_ex form.
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_call_ex(
+            IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace, IntPtr descent);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_ex(
+            int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace, IntPtr descent);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_versioned_ex(
+            int pid, IntPtr @base, UIntPtr len, IntPtr img, ulong when, out long result, IntPtr trace, IntPtr descent);
+
         // ---- time-aware code-image recorder (asmtest_codeimage.h) ----
         // A userspace PERF_RECORD_TEXT_POKE: track() snapshots a region and arms
         // write-protect; refresh() re-snapshots only changed pages as new versions;
@@ -728,6 +783,71 @@ namespace Asmtest
         }
 
         /// <summary>
+        /// Descending variant of <see cref="TraceCall"/>: thread a <see cref="Descent"/>
+        /// handle through the single-step loop so the call-outs the tracer would step over
+        /// are recorded as edges and (at level &gt;= 2) descended as nested frames.
+        /// <paramref name="trace"/> (the flat frame-0 view) may be <see cref="IntPtr.Zero"/>
+        /// to record only into the descent handle.
+        /// CRITICAL: <paramref name="region"/> is the traced region's byte length — pass it
+        /// when the call target is an in-blob sibling that must stay OUTSIDE the region (a
+        /// sibling inside the region mis-records as recursion). Defaults to the whole
+        /// <see cref="NativeCode"/> allocation only when omitted.
+        /// </summary>
+        public static long TraceCallEx(NativeCode code, long[] args, IntPtr trace,
+                                       Descent descent, nuint? region = null)
+        {
+            // A null/empty array can't be P/Invoked as a sized pointer; pass a 1-elem
+            // placeholder with nargs = 0 (the native side ignores it).
+            var arr = (args == null || args.Length == 0) ? new long[1] : args;
+            int n = args == null ? 0 : args.Length;
+            UIntPtr len = region.HasValue ? (UIntPtr)region.Value : (UIntPtr)(nuint)code.Length;
+            IntPtr dh = descent != null ? descent.Handle : IntPtr.Zero;
+            int rc = HwNative.asmtest_ptrace_trace_call_ex(
+                code.Base, len, arr, n, out long result, trace, dh);
+            // Keep the descent handle (and its pinned upcall trampolines) alive across the
+            // out-of-process single-step, which may call back into a resolver/denylist.
+            GC.KeepAlive(descent);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_call_ex failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
+        /// Descending variant of <see cref="TraceAttached"/> for an externally-attached,
+        /// ptrace-stopped process. <paramref name="trace"/> and <paramref name="descent"/>
+        /// follow the same NULL rules as <see cref="TraceCallEx"/>.
+        /// </summary>
+        public static long TraceAttachedEx(int pid, IntPtr @base, nuint len, IntPtr trace, Descent descent)
+        {
+            IntPtr dh = descent != null ? descent.Handle : IntPtr.Zero;
+            int rc = HwNative.asmtest_ptrace_trace_attached_ex(
+                pid, @base, (UIntPtr)len, out long result, trace, dh);
+            GC.KeepAlive(descent);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_attached_ex failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
+        /// Descending variant of <see cref="TraceAttachedVersioned"/>: reconstruct the
+        /// region's bytes from a <see cref="CodeImage"/> timeline as of sequence
+        /// <paramref name="when"/> (0 =&gt; latest) while threading a <see cref="Descent"/>
+        /// handle through the loop. Pass <paramref name="img"/> == null for a fresh read.
+        /// </summary>
+        public static long TraceAttachedVersionedEx(
+            int pid, IntPtr @base, nuint len, CodeImage img, ulong when, IntPtr trace, Descent descent)
+        {
+            IntPtr imgHandle = img != null ? img.Handle : IntPtr.Zero;
+            IntPtr dh = descent != null ? descent.Handle : IntPtr.Zero;
+            int rc = HwNative.asmtest_ptrace_trace_attached_versioned_ex(
+                pid, @base, (UIntPtr)len, imgHandle, when, out long result, trace, dh);
+            GC.KeepAlive(descent);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_attached_versioned_ex failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
         /// Run an already-attached, ptrace-stopped target forward until it reaches
         /// <paramref name="addr"/> (a software breakpoint that fires when the program
         /// itself next calls in), leaving it stopped there ready for
@@ -791,6 +911,226 @@ namespace Asmtest
             }
             return new JitMethod(e.CodeAddr, e.CodeSize, e.Timestamp, e.CodeIndex, code);
         }
+    }
+
+    /// <summary>
+    /// Call-descent policy (mirrors asmtest_descent_level_t): what the ptrace stepper does
+    /// at each call-out it would otherwise step over. All default OFF.
+    /// </summary>
+    public enum DescentLevel
+    {
+        /// <summary>Step over, record nothing — today's behaviour.</summary>
+        Off = 0,
+        /// <summary>Record each (call-site -&gt; callee) edge, still step over.</summary>
+        RecordEdges = 1,
+        /// <summary>Single-step INTO calls whose target resolves (allow-set / resolver), else edge + step over.</summary>
+        DescendKnown = 2,
+        /// <summary>Single-step INTO every call (denylist + budget + watchdog gated). Best-effort; default OFF.</summary>
+        DescendAll = 3,
+    }
+
+    /// <summary>
+    /// A recorded (call-site -&gt; callee) edge from a stepped-over call (mirrors the
+    /// asmtest_descent_edge_* accessors): the <see cref="Site"/> call-site byte offset,
+    /// the ABSOLUTE <see cref="Target"/> address, and the caller <see cref="Depth"/>.
+    /// </summary>
+    public readonly struct DescentEdge
+    {
+        /// <summary>Call-site byte offset within the recording frame.</summary>
+        public ulong Site { get; }
+
+        /// <summary>Absolute address of the callee (NOT an offset).</summary>
+        public ulong Target { get; }
+
+        /// <summary>Depth of the caller frame (0 = frame 0).</summary>
+        public uint Depth { get; }
+
+        public DescentEdge(ulong site, ulong target, uint depth)
+        {
+            Site = site;
+            Target = target;
+            Depth = depth;
+        }
+
+        public override string ToString() => $"DescentEdge(site=0x{Site:x}, target=0x{Target:x}, depth={Depth})";
+    }
+
+    /// <summary>
+    /// Call descent (asmtest_descent_t): configure how <see cref="Ptrace.TraceCallEx"/> and
+    /// its siblings handle the call-outs the tracer would otherwise step over, and read back
+    /// the recorded edges (level &gt;= 1) and nested frames (level &gt;= 2). Frame 0 is the
+    /// root region (a superset of the flat trace); descended callees are frames 1..N.
+    ///
+    /// A resolver/denylist upcall is a MANAGED delegate the native single-step loop calls
+    /// back into. The delegate (and a <see cref="GCHandle"/> pinning it) is kept alive as a
+    /// field for the handle's lifetime so the GC cannot collect or move the trampoline
+    /// mid-single-step; the _ex trace wrappers additionally <c>GC.KeepAlive</c> the Descent
+    /// across the native call. <see cref="Dispose"/> is idempotent (NULLs the handle after
+    /// asmtest_descent_free, so a double free is a no-op) and releases the pins.
+    /// </summary>
+    public sealed class Descent : IDisposable
+    {
+        IntPtr _handle;
+
+        // Registered upcall trampolines + their GC pins, kept for the handle's lifetime.
+        HwNative.DescentResolverFn _resolver;
+        HwNative.DescentDenylistFn _denylist;
+        GCHandle _resolverPin;
+        GCHandle _denylistPin;
+
+        /// <summary>
+        /// Allocate a descent handle at <paramref name="level"/> (conservative defaults for
+        /// depth/budget/watchdog; empty allow-set/denylist). Throws on allocation failure.
+        /// </summary>
+        public Descent(DescentLevel level = DescentLevel.Off)
+        {
+            _handle = HwNative.asmtest_descent_new((int)level);
+            if (_handle == IntPtr.Zero)
+                throw new HwTraceException("asmtest_descent_new failed");
+        }
+
+        // The opaque handle, for the descending ptrace entry points.
+        internal IntPtr Handle => _handle;
+
+        // ---- configuration (in) ----
+
+        /// <summary>Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default.</summary>
+        public void SetMaxDepth(uint maxDepth) => HwNative.asmtest_descent_set_max_depth(_handle, maxDepth);
+
+        /// <summary>Total single-step instruction budget across all descended frames; 0 = default.</summary>
+        public void SetInsnBudget(ulong budget) => HwNative.asmtest_descent_set_insn_budget(_handle, budget);
+
+        /// <summary>Real-time watchdog in milliseconds for a descended run; 0 = default.</summary>
+        public void SetWatchdogMs(uint ms) => HwNative.asmtest_descent_set_watchdog_ms(_handle, ms);
+
+        /// <summary>Add <c>[base, base+len)</c> to the level-2 allow-set. Returns 0 on success, negative on OOM.</summary>
+        public int AllowRegion(IntPtr @base, nuint len) =>
+            HwNative.asmtest_descent_allow_region(_handle, @base, (UIntPtr)len);
+
+        /// <summary>Add <c>[base, base+len)</c> to the level-3 deny-set. Returns 0 on success, negative on OOM.</summary>
+        public int DenyRegion(IntPtr @base, nuint len) =>
+            HwNative.asmtest_descent_deny_region(_handle, @base, (UIntPtr)len);
+
+        /// <summary>
+        /// Install the level-2/3 resolver: <paramref name="fn"/> maps a callee address to
+        /// <c>(descend, base, length)</c> — return <c>(true, base, length)</c> to descend into
+        /// the callee region, <c>(false, 0, 0)</c> to step over. The delegate is pinned against
+        /// GC for the handle's lifetime.
+        /// </summary>
+        public void SetResolver(Func<ulong, (bool descend, ulong @base, ulong length)> fn, IntPtr user = default)
+        {
+            // Wrap the user function in a native-callable trampoline. Keep both the delegate
+            // and a GC pin as fields so the runtime-generated thunk survives single-stepping.
+            HwNative.DescentResolverFn thunk = (ulong callee, IntPtr u, out ulong baseOut, out ulong lenOut) =>
+            {
+                var (descend, b, ln) = fn(callee);
+                if (descend && ln != 0)
+                {
+                    baseOut = b;
+                    lenOut = ln;
+                    return 1;
+                }
+                baseOut = 0;
+                lenOut = 0;
+                return 0;
+            };
+            if (_resolverPin.IsAllocated) _resolverPin.Free();
+            _resolver = thunk;
+            _resolverPin = GCHandle.Alloc(thunk);
+            HwNative.asmtest_descent_set_resolver(_handle, thunk, user);
+        }
+
+        /// <summary>
+        /// Install the level-3 denylist: <paramref name="fn"/> returns <c>true</c> to REFUSE
+        /// descent into a callee, <c>false</c> to allow it. The delegate is pinned against GC
+        /// for the handle's lifetime.
+        /// </summary>
+        public void SetDenylist(Func<ulong, bool> fn, IntPtr user = default)
+        {
+            HwNative.DescentDenylistFn thunk = (ulong callee, IntPtr u) => fn(callee) ? 1 : 0;
+            if (_denylistPin.IsAllocated) _denylistPin.Free();
+            _denylist = thunk;
+            _denylistPin = GCHandle.Alloc(thunk);
+            HwNative.asmtest_descent_set_denylist(_handle, thunk, user);
+        }
+
+        // ---- results (out) ----
+
+        /// <summary>Every stepped-over call as a <see cref="DescentEdge"/> (level &gt;= 1).</summary>
+        public DescentEdge[] Edges()
+        {
+            int n = (int)HwNative.asmtest_descent_edges_len(_handle);
+            var edges = new DescentEdge[n];
+            for (int i = 0; i < n; i++)
+                edges[i] = new DescentEdge(
+                    HwNative.asmtest_descent_edge_site(_handle, (UIntPtr)(nuint)i),
+                    HwNative.asmtest_descent_edge_target(_handle, (UIntPtr)(nuint)i),
+                    HwNative.asmtest_descent_edge_depth(_handle, (UIntPtr)(nuint)i));
+            return edges;
+        }
+
+        /// <summary>The number of recorded frames (1 = frame 0 only; 2+ = descended callees).</summary>
+        public int FramesLen() => (int)HwNative.asmtest_descent_frames_len(_handle);
+
+        /// <summary>Absolute base address of frame <paramref name="f"/>.</summary>
+        public ulong FrameBase(int f) => HwNative.asmtest_descent_frame_base(_handle, (UIntPtr)(nuint)f);
+
+        /// <summary>Byte length of frame <paramref name="f"/>.</summary>
+        public ulong FrameLen(int f) => HwNative.asmtest_descent_frame_len(_handle, (UIntPtr)(nuint)f);
+
+        /// <summary>Nesting depth of frame <paramref name="f"/> (0 = frame 0).</summary>
+        public uint FrameDepth(int f) => HwNative.asmtest_descent_frame_depth(_handle, (UIntPtr)(nuint)f);
+
+        /// <summary>Parent frame index of frame <paramref name="f"/> (-1 = root).</summary>
+        public int FrameParent(int f) => HwNative.asmtest_descent_frame_parent(_handle, (UIntPtr)(nuint)f);
+
+        /// <summary>The ordered instruction-offset stream recorded in frame <paramref name="f"/>.</summary>
+        public ulong[] FrameInsns(int f)
+        {
+            int n = (int)HwNative.asmtest_descent_frame_insn_count(_handle, (UIntPtr)(nuint)f);
+            var offs = new ulong[n];
+            for (int i = 0; i < n; i++)
+                offs[i] = HwNative.asmtest_descent_frame_insn_at(_handle, (UIntPtr)(nuint)f, (UIntPtr)(nuint)i);
+            return offs;
+        }
+
+        /// <summary>The distinct basic-block start offsets recorded in frame <paramref name="f"/>.</summary>
+        public ulong[] FrameBlocks(int f)
+        {
+            int n = (int)HwNative.asmtest_descent_frame_block_count(_handle, (UIntPtr)(nuint)f);
+            var offs = new ulong[n];
+            for (int i = 0; i < n; i++)
+                offs[i] = HwNative.asmtest_descent_frame_block_at(_handle, (UIntPtr)(nuint)f, (UIntPtr)(nuint)i);
+            return offs;
+        }
+
+        /// <summary>True if a pool overflowed / a byte failed to decode (the record is incomplete).</summary>
+        public bool Truncated() => HwNative.asmtest_descent_truncated(_handle) != 0;
+
+        /// <summary>True if descent stopped at a policy limit (max_depth / budget / recursion cap).</summary>
+        public bool DepthCapped() => HwNative.asmtest_descent_depth_capped(_handle) != 0;
+
+        /// <summary>
+        /// Free the descent handle (idempotent: NULLs it so a double free is a no-op) and
+        /// release the pinned upcall trampolines. The native asmtest_descent_free NULLs
+        /// internally too, mirroring the trace-handle discipline.
+        /// </summary>
+        public void Free()
+        {
+            if (_handle != IntPtr.Zero)
+            {
+                HwNative.asmtest_descent_free(_handle);
+                _handle = IntPtr.Zero;
+            }
+            // Safe to drop the trampolines once the native side no longer holds them.
+            if (_resolverPin.IsAllocated) _resolverPin.Free();
+            if (_denylistPin.IsAllocated) _denylistPin.Free();
+            _resolver = null;
+            _denylist = null;
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/>.</summary>
+        public void Dispose() => Free();
     }
 
     /// <summary>

@@ -68,6 +68,13 @@ const TRACE_NATIVE_ONLY = 0x2;  // forbid the native->emulator fidelity crossing
 const ASMTEST_PTRACE_OK = 0;
 const ASMTEST_PTRACE_ENOENT = -7; // region / symbol / method not found
 
+// asmtest_descent_level_t — call-descent policy (see the Descent class). Decides
+// what the ptrace stepper does at each call-out it would otherwise step over.
+const DESCENT_OFF = 0;           // step over, record nothing (today's behaviour)
+const DESCENT_RECORD_EDGES = 1;  // record (call-site -> callee) edges, still step over
+const DESCENT_DESCEND_KNOWN = 2; // step INTO resolvable calls (allow-set / resolver)
+const DESCENT_DESCEND_ALL = 3;   // step INTO everything (denylist + budget + watchdog gated)
+
 // asmtest_codeimage.h — time-aware code-image recorder status codes + event kinds
 const ASMTEST_CI_OK = 0;
 const ASMTEST_CI_ENOENT = -7; // address never tracked / no version at-or-before when
@@ -143,6 +150,18 @@ const CodeImageEvent = koffi.struct('asmtest_codeimage_event_t', {
 // ABI), matching the Python wrapper's default call().
 const Fn2 = koffi.proto('long asmtest_native_fn(long, long)');
 
+// Call-descent upcall prototypes (asmtest_ptrace.h). The tracer invokes these
+// mid-single-step to decide whether to descend into a call-out. A JS closure is
+// bound to one via koffi.register (a PERSISTENT trampoline, unlike a transient
+// callback) and retained on the Descent object (Descent._cb) so the GC cannot
+// collect it while a descended trace is running. The callee address arrives as a
+// uint64_t; the resolver writes the callee region back through two uint64_t*
+// out-params (koffi.encode) and returns 1 to descend / 0 to step over.
+const ResolverFn = koffi.proto(
+  'int asmtest_descent_resolver_fn(uint64_t callee, void *user, uint64_t *base_out, uint64_t *len_out)');
+const DenylistFn = koffi.proto(
+  'int asmtest_descent_denylist_fn(uint64_t callee, void *user)');
+
 // Load the lib and declare every native entry point, all kept private here. On
 // failure (no hwtrace build present) we keep `_lib` null so available() returns
 // false instead of throwing — the tier self-skips.
@@ -206,6 +225,41 @@ let _loadError = null;
     procRegionByAddr: lib.func('int asmtest_proc_region_by_addr(int, const void*, _Out_ void**, _Out_ size_t*)'),
     procPerfmapSymbol: lib.func('int asmtest_proc_perfmap_symbol(int, const char*, _Out_ void**, _Out_ size_t*)'),
     jitdumpFind: lib.func('int asmtest_jitdump_find(const char*, int, const char*, _Out_ uint8_t*, _Out_ uint8_t*, size_t, _Out_ size_t*)'),
+    // asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames.
+    // The address-returning accessors (edge_target, frame_base, frame_len,
+    // frame_insn_at, frame_block_at) are declared uint64_t and surfaced as JS
+    // BigInt by the Descent wrapper — a >2^53 ASLR address rounds as a Number.
+    // set_resolver/set_denylist take a koffi-registered upcall pointer (see the
+    // ResolverFn/DenylistFn protos and Descent.setResolver/setDenylist).
+    descentNew: lib.func('void* asmtest_descent_new(int)'),
+    descentFree: lib.func('void asmtest_descent_free(void*)'),
+    descentSetMaxDepth: lib.func('void asmtest_descent_set_max_depth(void*, uint32_t)'),
+    descentSetInsnBudget: lib.func('void asmtest_descent_set_insn_budget(void*, uint64_t)'),
+    descentSetWatchdogMs: lib.func('void asmtest_descent_set_watchdog_ms(void*, uint32_t)'),
+    descentAllowRegion: lib.func('int asmtest_descent_allow_region(void*, const void*, size_t)'),
+    descentDenyRegion: lib.func('int asmtest_descent_deny_region(void*, const void*, size_t)'),
+    descentSetResolver: lib.func('void asmtest_descent_set_resolver(void*, asmtest_descent_resolver_fn*, void*)'),
+    descentSetDenylist: lib.func('void asmtest_descent_set_denylist(void*, asmtest_descent_denylist_fn*, void*)'),
+    descentEdgesLen: lib.func('size_t asmtest_descent_edges_len(void*)'),
+    descentEdgeSite: lib.func('uint64_t asmtest_descent_edge_site(void*, size_t)'),
+    descentEdgeTarget: lib.func('uint64_t asmtest_descent_edge_target(void*, size_t)'),
+    descentEdgeDepth: lib.func('uint32_t asmtest_descent_edge_depth(void*, size_t)'),
+    descentFramesLen: lib.func('size_t asmtest_descent_frames_len(void*)'),
+    descentFrameBase: lib.func('uint64_t asmtest_descent_frame_base(void*, size_t)'),
+    descentFrameLen: lib.func('uint64_t asmtest_descent_frame_len(void*, size_t)'),
+    descentFrameDepth: lib.func('uint32_t asmtest_descent_frame_depth(void*, size_t)'),
+    descentFrameParent: lib.func('int32_t asmtest_descent_frame_parent(void*, size_t)'),
+    descentFrameInsnCount: lib.func('size_t asmtest_descent_frame_insn_count(void*, size_t)'),
+    descentFrameInsnAt: lib.func('uint64_t asmtest_descent_frame_insn_at(void*, size_t, size_t)'),
+    descentFrameBlockCount: lib.func('size_t asmtest_descent_frame_block_count(void*, size_t)'),
+    descentFrameBlockAt: lib.func('uint64_t asmtest_descent_frame_block_at(void*, size_t, size_t)'),
+    descentTruncated: lib.func('int asmtest_descent_truncated(void*)'),
+    descentDepthCapped: lib.func('int asmtest_descent_depth_capped(void*)'),
+    // Descending variants of the three trace entry points — each threads a descent
+    // handle through the stepper (descent == NULL reproduces the non-_ex forms).
+    ptraceTraceCallEx: lib.func('int asmtest_ptrace_trace_call_ex(const void*, size_t, const long*, int, _Out_ long*, void*, void*)'),
+    ptraceTraceAttachedEx: lib.func('int asmtest_ptrace_trace_attached_ex(int, const void*, size_t, _Out_ long*, void*, void*)'),
+    ptraceTraceAttachedVersionedEx: lib.func('int asmtest_ptrace_trace_attached_versioned_ex(int, const void*, size_t, void*, uint64_t, _Out_ long*, void*, void*)'),
     // asmtest_codeimage.h — time-aware code-image recorder (a userspace
     // PERF_RECORD_TEXT_POKE). The img handle is an opaque void*. bytes_at borrows
     // bytes owned by the timeline: it writes a const uint8_t* through `out` (read
@@ -468,6 +522,53 @@ class Ptrace {
     return Number(resultBuf.readBigInt64LE(0));
   }
 
+  /** Like traceCall, but thread a Descent handle through the loop so call-outs are
+   *  recorded as edges and (at level >= 2) descended as nested frames. `trace`
+   *  (the flat frame-0 view) may be null to record only into `descent`, and vice
+   *  versa. CRITICAL: `region` is the traced region's byte length — pass the caller
+   *  region's extent, NOT the whole allocation, when the call target is an in-blob
+   *  sibling that must stay OUTSIDE the region (else it mis-records as recursion).
+   *  Defaults to code.length only when omitted. Returns the child's RAX at the ret. */
+  static traceCallEx(code, args, trace, descent, region) {
+    const n = args.length;
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const len = region === undefined || region === null ? code.length : region;
+    const th = trace ? trace._handle : null;
+    const dh = descent ? descent._handle : null;
+    const rc = _fn.ptraceTraceCallEx(code.base, len, argBuf, n, resultBuf, th, dh);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call_ex failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Descending variant of traceAttached for an externally-attached process: threads
+   *  a Descent handle through the attach-trace loop. `trace`/`descent` may each be
+   *  null. Returns the target's RAX at the ret. */
+  static traceAttachedEx(pid, base, len, trace, descent) {
+    const resultBuf = Buffer.alloc(8);
+    const th = trace ? trace._handle : null;
+    const dh = descent ? descent._handle : null;
+    const rc = _fn.ptraceTraceAttachedEx(pid, _addr(base), len, resultBuf, th, dh);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached_ex failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Descending variant of traceAttachedVersioned: decodes the region against the
+   *  time-correct bytes from a CodeImage timeline (`img`) as of sequence `when`,
+   *  while threading a Descent handle. `trace`/`descent` may each be null. */
+  static traceAttachedVersionedEx(pid, base, len, img, when, trace, descent) {
+    const resultBuf = Buffer.alloc(8);
+    const th = trace ? trace._handle : null;
+    const dh = descent ? descent._handle : null;
+    const rc = _fn.ptraceTraceAttachedVersionedEx(
+      pid, _addr(base), len, img ? img._handle : null, BigInt(when), resultBuf, th, dh);
+    if (rc !== ASMTEST_PTRACE_OK) {
+      throw new Error(`asmtest_ptrace_trace_attached_versioned_ex failed: ${rc}`);
+    }
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
   /** Trace a region in a SEPARATE, already-ptrace-stopped process (the caller owns
    *  PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv. Returns
    *  the target's RAX at the ret as a JS number. */
@@ -544,6 +645,142 @@ class Ptrace {
       code: wantBytes ? Buffer.from(codeBuf.subarray(0, n)) : Buffer.alloc(0),
     };
   }
+}
+
+/** Call descent (asmtest_descent_t): configure how the ptrace stepper handles the
+ *  call-outs it would otherwise step over, and read back the recorded edges +
+ *  nested frames. Four levels (see the DESCENT_* constants): OFF, RECORD_EDGES,
+ *  DESCEND_KNOWN, DESCEND_ALL. Pass to Ptrace.traceCallEx and friends. Frame 0 is
+ *  the root region (a superset of the flat trace); descended callees are frames
+ *  1..N. HAZARD: the address getters (edgeTarget, frameBase, frameLen, frameInsns,
+ *  frameBlocks) return JS BigInt — a >2^53 ASLR address rounds if read as Number. */
+class Descent {
+  constructor(level = DESCENT_OFF) {
+    this._handle = _fn.descentNew(level);
+    if (!this._handle) throw new Error('asmtest_descent_new failed');
+    // Registered upcall trampolines (koffi.register handles). Held for the handle's
+    // lifetime so the GC cannot collect/move a resolver/denylist closure mid-single-
+    // step; released in free() via koffi.unregister.
+    this._cb = [];
+  }
+
+  /** Idempotent free: NULL the handle (the C side is NULL-safe, so a double free is
+   *  a no-op) and unregister any retained upcall trampolines. */
+  free() {
+    if (this._handle) {
+      _fn.descentFree(this._handle);
+      this._handle = null;
+    }
+    for (const cb of this._cb) {
+      try { koffi.unregister(cb); } catch (_e) { /* already gone */ }
+    }
+    this._cb = [];
+  }
+
+  // ---- configuration (in) ----
+
+  /** Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default. */
+  setMaxDepth(d) { _fn.descentSetMaxDepth(this._handle, d); return this; }
+
+  /** Total single-step instruction budget across all descended frames; 0 = default. */
+  setInsnBudget(b) { _fn.descentSetInsnBudget(this._handle, BigInt(b)); return this; }
+
+  /** Real-time watchdog (ms) for a descended run (L3 blocked-syscall escape); 0 = default. */
+  setWatchdogMs(ms) { _fn.descentSetWatchdogMs(this._handle, ms); return this; }
+
+  /** Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).
+   *  `base` may be a NativeCode external pointer or a numeric/BigInt address. Returns
+   *  0 on success, negative on OOM. */
+  allowRegion(base, len) { return _fn.descentAllowRegion(this._handle, _addr(base), len); }
+
+  /** Add [base, base+len) to the level-3 deny-set (never descend into it). 0 / negative. */
+  denyRegion(base, len) { return _fn.descentDenyRegion(this._handle, _addr(base), len); }
+
+  /** Install a level-2/3 resolver. `fn(calleeAddr)` receives the callee as a BigInt and
+   *  returns `{ base, len }` (truthy len) to descend into that region, or a falsy value
+   *  to step over. The trampoline is koffi-registered and retained on this Descent so a
+   *  GC cannot collect it mid-single-step. */
+  setResolver(fn, user = 0) {
+    const thunk = (callee, _user, baseOut, lenOut) => {
+      const r = fn(BigInt(callee));
+      if (r && r.len) {
+        koffi.encode(baseOut, 'uint64_t', BigInt(r.base));
+        koffi.encode(lenOut, 'uint64_t', BigInt(r.len));
+        return 1;
+      }
+      return 0;
+    };
+    const cb = koffi.register(thunk, koffi.pointer(ResolverFn));
+    this._cb.push(cb);
+    _fn.descentSetResolver(this._handle, cb, _addr(user));
+    return this;
+  }
+
+  /** Install a level-3 denylist. `fn(calleeAddr)` receives the callee as a BigInt and
+   *  returns truthy to REFUSE descent (step over it). Retained like setResolver. */
+  setDenylist(fn, user = 0) {
+    const thunk = (callee, _user) => (fn(BigInt(callee)) ? 1 : 0);
+    const cb = koffi.register(thunk, koffi.pointer(DenylistFn));
+    this._cb.push(cb);
+    _fn.descentSetDenylist(this._handle, cb, _addr(user));
+    return this;
+  }
+
+  // ---- results (out) ----
+
+  /** Every stepped-over call (level >= 1) as { site, target, depth }: `site` is a
+   *  call-site byte offset (Number), `target` the ABSOLUTE callee address (BigInt),
+   *  `depth` the caller's frame depth (Number). */
+  edges() {
+    const n = Number(_fn.descentEdgesLen(this._handle));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = {
+        site: Number(_fn.descentEdgeSite(this._handle, i)),
+        target: BigInt(_fn.descentEdgeTarget(this._handle, i)),
+        depth: Number(_fn.descentEdgeDepth(this._handle, i)),
+      };
+    }
+    return out;
+  }
+
+  /** Number of recorded frames (>= 1 once a trace ran: frame 0 is the root region). */
+  framesLen() { return Number(_fn.descentFramesLen(this._handle)); }
+
+  /** ABSOLUTE base address of frame `f` (BigInt). */
+  frameBase(f) { return BigInt(_fn.descentFrameBase(this._handle, f)); }
+
+  /** Byte length of frame `f` (BigInt). */
+  frameLen(f) { return BigInt(_fn.descentFrameLen(this._handle, f)); }
+
+  /** Descent depth of frame `f` (0 = frame 0). */
+  frameDepth(f) { return Number(_fn.descentFrameDepth(this._handle, f)); }
+
+  /** Parent frame index of `f`, or -1 for the root. */
+  frameParent(f) { return Number(_fn.descentFrameParent(this._handle, f)); }
+
+  /** The instruction byte-offsets recorded in frame `f`, in execution order, as
+   *  BigInts (uint64 accessor — never rounded to Number). */
+  frameInsns(f) {
+    const n = Number(_fn.descentFrameInsnCount(this._handle, f));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = BigInt(_fn.descentFrameInsnAt(this._handle, f, i));
+    return out;
+  }
+
+  /** The distinct basic-block byte-offsets recorded in frame `f`, as BigInts. */
+  frameBlocks(f) {
+    const n = Number(_fn.descentFrameBlockCount(this._handle, f));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = BigInt(_fn.descentFrameBlockAt(this._handle, f, i));
+    return out;
+  }
+
+  /** True if a pool overflowed / a byte failed to decode (the record is incomplete). */
+  truncated() { return _fn.descentTruncated(this._handle) !== 0; }
+
+  /** True if descent stopped at a policy limit (max_depth / budget / recursion cap). */
+  depthCapped() { return _fn.descentDepthCapped(this._handle) !== 0; }
 }
 
 /** A time-aware code-image recorder (asmtest_codeimage.h): a userspace
@@ -669,13 +906,14 @@ class CodeImage {
 }
 
 module.exports = {
-  HwTrace, NativeCode, Ptrace, CodeImage,
+  HwTrace, NativeCode, Ptrace, Descent, CodeImage,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
   TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,
   FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
   ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT,
+  DESCENT_OFF, DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN, DESCENT_DESCEND_ALL,
   ASMTEST_CI_OK, ASMTEST_CI_ENOENT,
   ASMTEST_CI_KIND_MPROTECT, ASMTEST_CI_KIND_MMAP, ASMTEST_CI_KIND_MEMFD,
 };

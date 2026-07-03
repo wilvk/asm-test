@@ -5,7 +5,7 @@
 -- installs the native library the LuaJIT `ffi` binding loads at run time, one
 -- slot per platform present in the collected payload (see docs/packaging.md).
 package = "asmtest"
-version = "1.0.0-1"
+version = "1.1.0-1"
 
 source = {
    url = "git+https://github.com/wilvk/asm-test.git",

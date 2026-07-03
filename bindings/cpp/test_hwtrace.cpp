@@ -105,9 +105,10 @@ int main() {
         ok(result == 20, "LOOP: code.call(1, 20) == 20");
         ok(tr.insns_total() == 62,
            "LOOP: insns_total() == 62 (1 + 20*3 + 1)");
-        ok(tr.covered(0) && tr.covered(0x7),
-           "LOOP: covered(0) && covered(0x7)");
-        ok(tr.blocks_len() == 2, "LOOP: blocks_len() == 2");
+        ok(tr.covered(0) && tr.covered(0x7) && tr.covered(0xf),
+           "LOOP: covered(0) && covered(0x7) && covered(0xf)");
+        // 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+        ok(tr.blocks_len() == 3, "LOOP: blocks_len() == 3");
         ok(!tr.truncated(), "LOOP: !truncated()");
 
         tr.free();
@@ -372,6 +373,75 @@ int main() {
             ok(!Ptrace::jitdumpFind(path, "missing").has_value(),
                "ptrace: jitdump_find(missing) is empty");
             std::remove(path.c_str());
+        }
+
+        // ---- call descent: edges (L1) + descended frames (L2) ----
+        // Mirrors test_hwtrace.py::test_descent_edges_and_frames. Fixture:
+        //   R@0:   mov rax,rdi; call S(+4); add rax,rsi; ret
+        //   S@0xc: inc rax; ret
+        // The traced region is R only (0xc bytes): S is a sibling BEYOND it in the
+        // same allocation, so it is recorded as a call-out, not mis-attributed as
+        // recursion. Passing the whole allocation would fold S into the region.
+        {
+            const std::vector<std::uint8_t> BLOB = {
+                0x48, 0x89, 0xF8,              // R@0:   mov rax, rdi
+                0xE8, 0x04, 0x00, 0x00, 0x00,  //        call +4 -> S@0xc
+                0x48, 0x01, 0xF0,              //        add rax, rsi
+                0xC3,                          //        ret
+                0x48, 0xFF, 0xC0,              // S@0xc: inc rax
+                0xC3};                         //        ret
+            const std::size_t REGION = 0xC;    // trace R only; S stays outside
+            const std::vector<std::uint64_t> F0{0x0, 0x3, 0x8, 0xB};
+
+            // Level 1: RECORD_EDGES — R's body + one (call -> S) edge; S stepped over.
+            {
+                NativeCode code = NativeCode::from_bytes(BLOB);
+                HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+                Descent d(DESCENT_RECORD_EDGES);
+                long result = Ptrace::traceCallEx(code, {20, 22}, &tr, &d, REGION);
+                ok(result == 43, "descent L1: trace_call_ex(20, 22) == 43");
+                ok(d.frames_len() == 1, "descent L1: frames_len() == 1 (root only)");
+                ok(d.frame_insns(0) == F0,
+                   "descent L1: frame_insns(0) == {0, 3, 8, 0xB}");
+                std::uint64_t s_addr =
+                    reinterpret_cast<std::uint64_t>(code.base()) + 0xC;
+                std::vector<Descent::Edge> edges = d.edges();
+                ok(edges.size() == 1 && edges[0].site == 0x3 &&
+                       edges[0].target == s_addr && edges[0].depth == 0,
+                   "descent L1: one edge (site 0x3, target base+0xC, depth 0)");
+                ok(!d.truncated(), "descent L1: !truncated()");
+                d.free();
+                tr.free();
+                code.free();
+            }
+
+            // Level 2: DESCEND_KNOWN — S is in the allow-set, so it descends as a
+            // nested frame; the edge becomes a real frame instead. The callee is
+            // exposed through a NON-OWNING FrameView (never frees the handle).
+            {
+                NativeCode code = NativeCode::from_bytes(BLOB);
+                HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+                Descent d(DESCENT_DESCEND_KNOWN);
+                std::uint64_t s_addr =
+                    reinterpret_cast<std::uint64_t>(code.base()) + 0xC;
+                d.allow_region(reinterpret_cast<const void *>(s_addr), 4);
+                long result = Ptrace::traceCallEx(code, {20, 22}, &tr, &d, REGION);
+                ok(result == 43, "descent L2: trace_call_ex(20, 22) == 43");
+                ok(d.frames_len() == 2,
+                   "descent L2: frames_len() == 2 (root + descended callee)");
+                ok(d.frame_insns(0) == F0,
+                   "descent L2: frame_insns(0) == {0, 3, 8, 0xB}");
+                FrameView s = d.frame(1);  // non-owning view of the callee frame
+                ok(s.base() == s_addr, "descent L2: frame(1).base() == base+0xC");
+                ok(s.depth() == 1, "descent L2: frame(1).depth() == 1");
+                const std::vector<std::uint64_t> F1{0x0, 0x3};
+                ok(s.insns() == F1, "descent L2: frame(1).insns() == {0, 3}");
+                ok(d.edges().empty(),
+                   "descent L2: edges() == [] (the call was descended)");
+                d.free();
+                tr.free();
+                code.free();
+            }
         }
     }
 

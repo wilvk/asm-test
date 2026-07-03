@@ -85,6 +85,18 @@ calling convention
   another: where arguments go, where the return value comes back, and who is
   responsible for which registers.
 
+call descent
+  An opt-in mode of the out-of-process {term}`single-step` tracer that follows the
+  calls a traced region makes instead of only stepping **over** them. Four levels
+  (see {term}`descent level`): record nothing, record {term}`call edge`s, descend
+  into known callees, or descend into everything. Each descended callee becomes a
+  {term}`nested frame`.
+
+call edge
+  A recorded `(call-site → callee)` pair for a call the tracer did **not** follow
+  (stepped over). At descent level 1+ the edge list is the complete record of
+  un-descended calls, even when depth/budget/allow-set gating declines a descent.
+
 capture trampoline
   A small piece of asm-test's own machinery that calls your routine on the real
   {term}`CPU`, then records the {term}`CPU register`s, {term}`flags`, and return
@@ -113,6 +125,13 @@ CPU register
 cycles per call
   A speed measurement: the number of {term}`CPU` clock cycles consumed by a
   single call to a routine. Reported by {term}`benchmark mode`.
+
+descent level
+  How far {term}`call descent` follows a traced region's calls: `OFF` (step over,
+  record nothing), `RECORD_EDGES` (record {term}`call edge`s), `DESCEND_KNOWN`
+  (step **into** resolvable callees), `DESCEND_ALL` (step into everything —
+  default off, guarded). Higher levels add {term}`nested frame`s without changing
+  {term}`frame 0`.
 
 differential testing
   Testing a routine by running it on many inputs and checking that its output
@@ -161,6 +180,11 @@ floating-point
   A way of representing numbers with fractional parts (like `3.14`) inside a
   computer. Often abbreviated **FP**. Comparing floating-point results needs care
   — see {term}`ULP`.
+
+frame 0
+  The root registered region in a {term}`call descent` trace — a superset mirror
+  of the flat single-region trace, byte-identical across all {term}`descent
+  level`s. Descended callees are frames 1..N ({term}`nested frame`s).
 
 fork
   A POSIX system call that creates a child copy of the running process. asm-test
@@ -222,6 +246,11 @@ NEON
   the ARM equivalent of the {term}`XMM`-based vector instructions on
   {term}`x86-64`.
 
+nested frame
+  A self-contained trace of a callee the tracer **descended into** during {term}`call
+  descent`: its own instruction and block offsets, relative to *that callee's* base,
+  with a depth and a parent-frame index. Distinct from {term}`frame 0`, the root.
+
 NZCV
   The four main condition {term}`flag`s on {term}`AArch64`: **N**egative,
   **Z**ero, **C**arry, and o**V**erflow. The ARM counterpart to the x86
@@ -272,6 +301,14 @@ seed
   A starting value that makes a {term}`RNG` produce the same sequence every time.
   Reporting the seed lets a failing random test be replayed exactly.
 
+shadow stack
+  The tracer-side stack of return addresses {term}`call descent` maintains to know
+  when a descended callee has returned to its caller. Each entry records the callee's
+  return address and the caller's pre-call stack pointer; a frame is popped when the
+  program counter reaches that return address with the stack pointer restored (or on a
+  non-local exit that raises the stack pointer past it). Internal to the tracer — not
+  the CPU's hardware shadow stack (CET).
+
 SF
   *Sign Flag.* A {term}`CPU` status {term}`flag` set when the result of an
   operation is negative (its top bit is `1`).
@@ -306,6 +343,12 @@ struct-by-value
 struct return
   Returning a whole structure from a function. Like {term}`struct-by-value`, the
   {term}`ABI` specifies exactly how, and asm-test handles it.
+
+step-over vs step-into
+  Two ways the {term}`single-step` tracer handles a call. **Step-over** runs the callee
+  at native speed to its return and records nothing of it (the default, keeping a trace
+  to the region's own body). **Step-into** single-steps through the callee, recording it
+  as a {term}`nested frame` — what {term}`call descent` does at `DESCEND_KNOWN`/`DESCEND_ALL`.
 
 suite
   A collection of related tests built into a single test program (one binary per

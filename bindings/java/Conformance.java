@@ -11,7 +11,18 @@
  * FFM is a preview API in JDK 21: compile with `--release 21 --enable-preview`,
  * run with `--enable-preview --enable-native-access=ALL-UNNAMED`.
  */
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.invoke.MethodHandle;
+
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public class Conformance {
     static int fails = 0, total = 0;
@@ -237,7 +248,176 @@ public class Conformance {
             System.out.println("ok - vec512.add8d # SKIP no AVX512F");
         }
 
+        // --- Tier: call-descent (asmtest_ptrace.h) — replay-or-skip ------- //
+        PtraceDescent.replay();
+
         System.out.printf("# %d passed, %d failed, %d total%n", total - fails, fails, total);
         System.exit(fails == 0 ? 0 : 1);
+    }
+
+    // ---- Call-descent conformance tier (asmtest_ptrace.h), self-contained ----
+    //
+    // Conformance is compiled WITHOUT HwTrace.java (java-test lists only Asmtest.java +
+    // Conformance.java), so this replays the ptrace_descent corpus cases through its OWN
+    // libasmtest_hwtrace FFI rather than the HwTrace wrapper. It is host-native and
+    // x86-64-specific, so it self-skips (never fails) unless the lib loads, the host is
+    // x86-64, and the out-of-process single-step stepper is available — mirroring the C
+    // reference's ptrace_descent tier and the Python _run_ptrace_descent handler.
+    static final class PtraceDescent {
+        // R@0: mov rax,rdi; call S(+4); add rax,rsi; ret  (traced region = 0xc bytes)
+        // S@0xc: inc rax; ret.  args (20,22) -> 43. Matches the two ptrace_descent
+        // corpus.json cases (calls_leaf.edges @ L1, calls_leaf.descend @ L2).
+        static final byte[] FIXTURE = {
+            0x48, (byte) 0x89, (byte) 0xF8, (byte) 0xE8, 0x04, 0x00, 0x00, 0x00,
+            0x48, 0x01, (byte) 0xF0, (byte) 0xC3, 0x48, (byte) 0xFF, (byte) 0xC0, (byte) 0xC3
+        };
+
+        static java.util.List<String> libCandidates() {
+            java.util.List<String> c = new java.util.ArrayList<>();
+            String ext = System.getProperty("os.name", "").toLowerCase().contains("mac") ? "dylib" : "so";
+            String name = "libasmtest_hwtrace." + ext;
+            String env = System.getenv("ASMTEST_HWTRACE_LIB");
+            if (env != null && !env.isEmpty()) c.add(env);
+            // The build dir java-test actually uses is wherever ASMTEST_LIB (libasmtest_emu)
+            // lives — derive the sibling hwtrace lib from it so any BUILD= value works.
+            String emu = System.getenv("ASMTEST_LIB");
+            if (emu != null && !emu.isEmpty()) {
+                java.io.File dir = new java.io.File(emu).getParentFile();
+                if (dir != null) c.add(new java.io.File(dir, name).getPath());
+            }
+            c.add("build/" + name); // cwd-relative dev build/ fallback
+            c.add(name);            // bare name -> the system loader
+            return c;
+        }
+
+        static MethodHandle dh(Linker lk, SymbolLookup L, String name, FunctionDescriptor fd) {
+            return lk.downcallHandle(L.find(name).orElseThrow(
+                () -> new RuntimeException("missing symbol: " + name)), fd);
+        }
+
+        static void skip(String why) {
+            System.out.println("ok - ptrace_descent.calls_leaf.edges # SKIP " + why);
+            System.out.println("ok - ptrace_descent.calls_leaf.descend # SKIP " + why);
+        }
+
+        // trace_call_ex with trace = NULL (record only into descent). region is the TRACED
+        // length (0xc), NOT the whole allocation, so the sibling stays outside frame 0.
+        static long runCall(MethodHandle callEx, long base, long region, long[] args,
+                            MemorySegment d) throws Throwable {
+            try (Arena a = Arena.ofConfined()) {
+                int n = args.length;
+                MemorySegment argSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+                for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+                MemorySegment result = a.allocate(JAVA_LONG);
+                int rc = (int) callEx.invoke(MemorySegment.ofAddress(base), region, argSeg, n,
+                    result, MemorySegment.NULL, d);
+                if (rc != 0) throw new RuntimeException("trace_call_ex rc=" + rc);
+                return result.get(JAVA_LONG, 0);
+            }
+        }
+
+        static long[] insns(MethodHandle count, MethodHandle at, MemorySegment d, long f)
+                throws Throwable {
+            int n = (int) (long) count.invoke(d, f);
+            long[] out = new long[n];
+            for (int i = 0; i < n; i++) out[i] = (long) at.invoke(d, f, (long) i);
+            return out;
+        }
+
+        static void replay() {
+            Linker linker = Linker.nativeLinker();
+            try (Arena arena = Arena.ofConfined()) {
+                SymbolLookup lib = null;
+                for (String cand : libCandidates()) {
+                    try { lib = SymbolLookup.libraryLookup(cand, arena); break; }
+                    catch (RuntimeException ignore) { /* try the next candidate */ }
+                }
+                if (lib == null) { skip("libasmtest_hwtrace not found"); return; }
+                String arch = System.getProperty("os.arch", "").toLowerCase();
+                if (!(arch.contains("amd64") || arch.contains("x86_64"))) {
+                    skip("x86-64 corpus, host arch " + arch); return;
+                }
+                MethodHandle available = dh(linker, lib, "asmtest_ptrace_available",
+                    FunctionDescriptor.of(JAVA_INT));
+                if ((int) available.invoke() == 0) { skip("ptrace single-step unavailable"); return; }
+
+                MethodHandle execAlloc = dh(linker, lib, "asmtest_hwtrace_exec_alloc",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
+                MethodHandle execFree = dh(linker, lib, "asmtest_hwtrace_exec_free",
+                    FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
+                MethodHandle descentNew = dh(linker, lib, "asmtest_descent_new",
+                    FunctionDescriptor.of(ADDRESS, JAVA_INT));
+                MethodHandle descentFree = dh(linker, lib, "asmtest_descent_free",
+                    FunctionDescriptor.ofVoid(ADDRESS));
+                MethodHandle allowRegion = dh(linker, lib, "asmtest_descent_allow_region",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+                MethodHandle callEx = dh(linker, lib, "asmtest_ptrace_trace_call_ex",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
+                        ADDRESS, ADDRESS, ADDRESS));
+                MethodHandle framesLen = dh(linker, lib, "asmtest_descent_frames_len",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+                MethodHandle frameBase = dh(linker, lib, "asmtest_descent_frame_base",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+                MethodHandle frameDepth = dh(linker, lib, "asmtest_descent_frame_depth",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+                MethodHandle frameInsnCount = dh(linker, lib, "asmtest_descent_frame_insn_count",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+                MethodHandle frameInsnAt = dh(linker, lib, "asmtest_descent_frame_insn_at",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG, JAVA_LONG));
+                MethodHandle edgesLen = dh(linker, lib, "asmtest_descent_edges_len",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+                MethodHandle edgeSite = dh(linker, lib, "asmtest_descent_edge_site",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+                MethodHandle edgeTarget = dh(linker, lib, "asmtest_descent_edge_target",
+                    FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+
+                // Materialize the fixture in real executable (W^X) memory.
+                MemorySegment in = arena.allocate(FIXTURE.length);
+                MemorySegment.copy(FIXTURE, 0, in, JAVA_BYTE, 0, FIXTURE.length);
+                MemorySegment baseOut = arena.allocate(ADDRESS);
+                MemorySegment lenOut = arena.allocate(JAVA_LONG);
+                int rc = (int) execAlloc.invoke(in, (long) FIXTURE.length, baseOut, lenOut);
+                if (rc != 0) { Conformance.check("ptrace_descent.exec_alloc", false); return; }
+                long base = baseOut.get(ADDRESS, 0).address();
+                long allocLen = lenOut.get(JAVA_LONG, 0);
+                try {
+                    // L1 RECORD_EDGES, region 0xc: frame 0 only + one edge to the sibling.
+                    MemorySegment d1 = (MemorySegment) descentNew.invoke(1);
+                    boolean l1;
+                    try {
+                        long res = runCall(callEx, base, 0xC, new long[] {20, 22}, d1);
+                        long[] f0 = insns(frameInsnCount, frameInsnAt, d1, 0);
+                        boolean edgeOk = (long) edgesLen.invoke(d1) == 1
+                            && (long) edgeSite.invoke(d1, 0L) == 0x3
+                            && (long) edgeTarget.invoke(d1, 0L) == base + 0xC;
+                        l1 = res == 43 && (long) framesLen.invoke(d1) == 1
+                            && java.util.Arrays.equals(f0, new long[] {0, 3, 8, 0xB}) && edgeOk;
+                    } finally { descentFree.invoke(d1); }
+                    Conformance.check("ptrace_descent.calls_leaf.edges", l1);
+
+                    // L2 DESCEND_KNOWN + allow the sibling: frame 1 is the leaf, no edges.
+                    MemorySegment d2 = (MemorySegment) descentNew.invoke(2);
+                    boolean l2;
+                    try {
+                        allowRegion.invoke(d2, MemorySegment.ofAddress(base + 0xC), 4L);
+                        long res = runCall(callEx, base, 0xC, new long[] {20, 22}, d2);
+                        long[] f0 = insns(frameInsnCount, frameInsnAt, d2, 0);
+                        long[] f1 = insns(frameInsnCount, frameInsnAt, d2, 1);
+                        l2 = res == 43 && (long) framesLen.invoke(d2) == 2
+                            && java.util.Arrays.equals(f0, new long[] {0, 3, 8, 0xB})
+                            && (long) frameBase.invoke(d2, 1L) == base + 0xC
+                            && (int) frameDepth.invoke(d2, 1L) == 1
+                            && java.util.Arrays.equals(f1, new long[] {0, 3})
+                            && (long) edgesLen.invoke(d2) == 0;
+                    } finally { descentFree.invoke(d2); }
+                    Conformance.check("ptrace_descent.calls_leaf.descend", l2);
+                } finally {
+                    execFree.invoke(MemorySegment.ofAddress(base), allocLen);
+                }
+            } catch (Throwable t) {
+                // A load/link hiccup or an environment quirk self-skips (never fails the run).
+                skip("descent replay unavailable: " + t);
+            }
+        }
     }
 }

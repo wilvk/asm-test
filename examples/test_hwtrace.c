@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/ptrace.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -1434,11 +1435,634 @@ static void test_jitdump_reader(void) {
 #endif
 }
 
+/* Phase 1 (call-descent): the two new Capstone queries the descent loop needs —
+ * asmtest_disas_is_ret (the pop-predicate's third term) and asmtest_disas_call_target
+ * (the direct-call-target query — a public helper; the descent loop itself reads the callee
+ * from the live post-step PC, but the query is exercised here for both arches). The
+ * disassembly layer is cross-arch, so both the x86-64 and the AArch64 encodings are
+ * decoded here on ANY Capstone host (no single-step needed), exactly like the emulator
+ * tier decodes foreign bytes. Also spot-checks is_call for symmetry. */
+static void test_disas_queries(void) {
+    if (!asmtest_disas_available()) {
+        printf("# SKIP disas queries (is_ret/call_target): needs Capstone\n");
+        return;
+    }
+    const uint64_t BASE = 0x1000;
+
+    /* x86-64: [0] call rel32(+4)  [5] add rax,rsi  [8] ret  [9] call rax (indirect). */
+    static const unsigned char X[] = {0xe8, 0x04, 0x00, 0x00, 0x00, 0x48, 0x01,
+                                      0xf0, 0xc3, 0xff, 0xd0};
+    const size_t XL = sizeof X;
+    uint64_t t = 0;
+    CHECK(asmtest_disas_is_call(ASMTEST_ARCH_X86_64, X, XL, 0) == 1,
+          "disas x86: call rel32 is a call");
+    CHECK(asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, X, XL, 0) == 0,
+          "disas x86: call is not a ret");
+    CHECK(asmtest_disas_call_target(ASMTEST_ARCH_X86_64, X, XL, BASE, 0, &t) == 1 &&
+              t == BASE + 5 + 4,
+          "disas x86: direct call target = base+insnlen+rel32 (0x1009)");
+    CHECK(asmtest_disas_is_call(ASMTEST_ARCH_X86_64, X, XL, 5) == 0,
+          "disas x86: add is not a call");
+    CHECK(asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, X, XL, 8) == 1,
+          "disas x86: ret is a ret");
+    t = 0xdead;
+    CHECK(asmtest_disas_is_call(ASMTEST_ARCH_X86_64, X, XL, 9) == 1 &&
+              asmtest_disas_call_target(ASMTEST_ARCH_X86_64, X, XL, BASE, 9, &t) == 0,
+          "disas x86: indirect call (call rax) has no direct target");
+
+    /* AArch64: [0] bl #0x10  [4] add x0,x0,x1  [8] ret  [12] blr x0 (indirect). */
+    static const unsigned char A[] = {0x04, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b,
+                                      0xc0, 0x03, 0x5f, 0xd6, 0x00, 0x00, 0x3f, 0xd6};
+    const size_t AL = sizeof A;
+    t = 0;
+    CHECK(asmtest_disas_is_call(ASMTEST_ARCH_ARM64, A, AL, 0) == 1,
+          "disas arm64: bl is a call");
+    CHECK(asmtest_disas_call_target(ASMTEST_ARCH_ARM64, A, AL, BASE, 0, &t) == 1 &&
+              t == BASE + 0x10,
+          "disas arm64: bl target = base + imm26<<2 (0x1010)");
+    CHECK(asmtest_disas_is_ret(ASMTEST_ARCH_ARM64, A, AL, 4) == 0,
+          "disas arm64: add is not a ret");
+    CHECK(asmtest_disas_is_ret(ASMTEST_ARCH_ARM64, A, AL, 8) == 1,
+          "disas arm64: ret is a ret");
+    t = 0xdead;
+    CHECK(asmtest_disas_is_call(ASMTEST_ARCH_ARM64, A, AL, 12) == 1 &&
+              asmtest_disas_call_target(ASMTEST_ARCH_ARM64, A, AL, BASE, 12, &t) == 0,
+          "disas arm64: indirect call (blr x0) has no direct target");
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+static void noop_sigalrm(int s) { (void)s; }
+#endif
+
+/* Map `blob` (`n` bytes) as private R+X executable memory, or NULL on failure. */
+static void *map_exec(const void *blob, size_t n) {
+    void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return NULL;
+    memcpy(p, blob, n);
+    mprotect(p, n, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + n);
+    return p;
+}
+
+/* Phase 2 (call-descent): the descent handle exists, allocates, reads back empty, and
+ * frees idempotently; the _ex entry points reproduce the flat trace exactly whether the
+ * descent handle is NULL or OFF (the loop is still level-0-only until Phase 3). */
+static void test_descent_handle(void) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    /* Accessors are NULL-safe. */
+    CHECK(asmtest_descent_frames_len(NULL) == 0 && asmtest_descent_edges_len(NULL) == 0 &&
+              asmtest_descent_truncated(NULL) == 0 &&
+              asmtest_descent_depth_capped(NULL) == 0,
+          "descent: NULL handle accessors return 0");
+
+    asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_OFF);
+    CHECK(d != NULL, "descent: asmtest_descent_new allocates a handle");
+    CHECK(asmtest_descent_frames_len(d) == 0 && asmtest_descent_edges_len(d) == 0,
+          "descent: fresh handle reads back empty");
+    CHECK(asmtest_descent_frame_base(d, 0) == 0 && asmtest_descent_edge_target(d, 5) == 0,
+          "descent: out-of-range accessors return 0");
+    CHECK(asmtest_descent_allow_region(d, (void *)0x1000, 0x40) == ASMTEST_PTRACE_OK,
+          "descent: allow_region succeeds");
+
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP descent handle _ex trace: %s\n", why);
+        asmtest_descent_free(d);
+        asmtest_descent_free(NULL); /* idempotent / NULL-safe */
+        return;
+    }
+
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTN = sizeof ROUTINE_A64;
+    static const uint64_t EXP[] = {0x0, 0x4, 0x8, 0x10};
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTN = sizeof ROUTINE;
+    static const uint64_t EXP[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+#endif
+    const size_t NEXP = sizeof EXP / sizeof EXP[0];
+    void *p = map_exec(RT, RTN);
+    if (p == NULL) {
+        printf("# SKIP descent handle _ex trace: mmap failed\n");
+        asmtest_descent_free(d);
+        return;
+    }
+    const long args[2] = {20, 22};
+
+    /* _ex with descent == NULL is identical to the plain call. */
+    asmtest_trace_t *t0 = asmtest_trace_new(64, 64);
+    long r0 = 0;
+    int rc0 = asmtest_ptrace_trace_call_ex(p, RTN, args, 2, &r0, t0, NULL);
+    int ok0 = (rc0 == ASMTEST_PTRACE_OK && r0 == 42 &&
+               asmtest_emu_trace_insns_total(t0) == NEXP);
+    for (size_t i = 0; ok0 && i < NEXP; i++)
+        ok0 = (t0->insns[i] == EXP[i]);
+    CHECK(ok0, "descent: _ex(descent=NULL) reproduces the flat trace");
+
+    /* _ex with an OFF handle fills the flat trace and leaves the handle empty. */
+    asmtest_trace_t *t1 = asmtest_trace_new(64, 64);
+    long r1 = 0;
+    int rc1 = asmtest_ptrace_trace_call_ex(p, RTN, args, 2, &r1, t1, d);
+    int ok1 = (rc1 == ASMTEST_PTRACE_OK && r1 == 42 &&
+               asmtest_emu_trace_insns_total(t1) == NEXP);
+    for (size_t i = 0; ok1 && i < NEXP; i++)
+        ok1 = (t1->insns[i] == EXP[i]);
+    CHECK(ok1, "descent: _ex(level=OFF) still fills the flat trace");
+    CHECK(asmtest_descent_frames_len(d) == 0 && asmtest_descent_edges_len(d) == 0,
+          "descent: OFF level records nothing into the handle");
+
+    asmtest_trace_free(t0);
+    asmtest_trace_free(t1);
+    munmap(p, RTN);
+    asmtest_descent_free(d);
+    asmtest_descent_free(NULL); /* idempotent / NULL-safe */
+#else
+    printf("# SKIP descent handle: not Linux x86-64/AArch64\n");
+#endif
+}
+
+/* Match a descent frame's ordered instruction stream against `exp`. */
+static int frame_insns_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp,
+                          size_t nexp) {
+    if (asmtest_descent_frame_insn_count(d, f) != nexp)
+        return 0;
+    for (size_t i = 0; i < nexp; i++)
+        if (asmtest_descent_frame_insn_at(d, f, i) != exp[i])
+            return 0;
+    return 1;
+}
+
+/* Phases 3-5 (call-descent): the fork-path descending step loop across all four levels.
+ * One in-page fixture (R calls sibling S and sibling K) drives L1 (edges) and L2 (descend
+ * the known S, step over the unknown K); a separate-mapping fixture drives L3 (descend
+ * everything, extent from /proc/maps) plus the denylist and budget guards; a self-calling
+ * fixture drives the same-region recursion frame + the max_depth cap. x86-64 machine code;
+ * the loop itself is arch-neutral (AArch64 rides the same path on real hardware). */
+static void test_descent_fork(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available() || !asmtest_disas_available()) {
+        printf("# SKIP descent fork: needs ptrace single-step + Capstone\n");
+        return;
+    }
+    const long args[2] = {20, 22};
+    long r = 0;
+
+    /* R@0: mov rax,rdi; call S; call K; add rax,rsi; ret   S@0x11: inc rax; ret
+     * K@0x15: dec rax; ret.  R region = [0,0x11); S,K are out-of-region call-outs. */
+    static const unsigned char BLOB1[] = {
+        0x48, 0x89, 0xf8,                   /* 0x00 mov rax,rdi   */
+        0xe8, 0x09, 0x00, 0x00, 0x00,       /* 0x03 call S(0x11)  */
+        0xe8, 0x08, 0x00, 0x00, 0x00,       /* 0x08 call K(0x15)  */
+        0x48, 0x01, 0xf0,                   /* 0x0d add rax,rsi   */
+        0xc3,                               /* 0x10 ret           */
+        0x48, 0xff, 0xc0, 0xc3,             /* 0x11 S: inc rax;ret*/
+        0x48, 0xff, 0xc8, 0xc3};            /* 0x15 K: dec rax;ret*/
+    const size_t REGION_R = 0x11, S_OFF = 0x11, K_OFF = 0x15, LEAF_LEN = 4;
+    static const uint64_t R_STREAM[] = {0x0, 0x3, 0x8, 0xd, 0x10};
+    static const uint64_t S_STREAM[] = {0x0, 0x3};
+
+    /* --- Phase 3: Level 1 RECORD_EDGES (both calls stepped over, edges recorded). --- */
+    void *b1 = map_exec(BLOB1, sizeof BLOB1);
+    if (b1 == NULL) {
+        printf("# SKIP descent fork: mmap failed\n");
+        return;
+    }
+    uint64_t base1 = (uint64_t)(uintptr_t)b1;
+    {
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_RECORD_EDGES);
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        r = 0;
+        int rc = asmtest_ptrace_trace_call_ex(b1, REGION_R, args, 2, &r, t, d);
+        int flat_ok = (rc == ASMTEST_PTRACE_OK && r == 42 &&
+                       asmtest_emu_trace_insns_total(t) == 5);
+        for (size_t i = 0; flat_ok && i < 5; i++)
+            flat_ok = (t->insns[i] == R_STREAM[i]);
+        CHECK(flat_ok, "descent L1: flat trace is R's own body (both calls stepped over)");
+        CHECK(asmtest_descent_frames_len(d) == 1 && frame_insns_eq(d, 0, R_STREAM, 5),
+              "descent L1: frame 0 mirrors the flat trace, no descended frames");
+        int e_ok = (asmtest_descent_edges_len(d) == 2 &&
+                    asmtest_descent_edge_site(d, 0) == 0x3 &&
+                    asmtest_descent_edge_target(d, 0) == base1 + S_OFF &&
+                    asmtest_descent_edge_site(d, 1) == 0x8 &&
+                    asmtest_descent_edge_target(d, 1) == base1 + K_OFF &&
+                    asmtest_descent_edge_depth(d, 0) == 0);
+        CHECK(e_ok, "descent L1: two edges (call->S, call->K) with correct sites/targets");
+        CHECK(!asmtest_descent_truncated(d), "descent L1: complete (not truncated)");
+        asmtest_trace_free(t);
+        asmtest_descent_free(d);
+    }
+
+    /* --- Phase 4: Level 2 DESCEND_KNOWN (descend S via allow-set, step over K). --- */
+    {
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_allow_region(d, (void *)(uintptr_t)(base1 + S_OFF), LEAF_LEN);
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        r = 0;
+        int rc = asmtest_ptrace_trace_call_ex(b1, REGION_R, args, 2, &r, t, d);
+        int flat_ok = (rc == ASMTEST_PTRACE_OK && r == 42 &&
+                       asmtest_emu_trace_insns_total(t) == 5);
+        for (size_t i = 0; flat_ok && i < 5; i++)
+            flat_ok = (t->insns[i] == R_STREAM[i]);
+        CHECK(flat_ok, "descent L2: frame-0 flat body byte-identical to L1 (S not folded)");
+        CHECK(asmtest_descent_frames_len(d) == 2 && frame_insns_eq(d, 0, R_STREAM, 5),
+              "descent L2: two frames (R + descended S)");
+        int f1_ok = (asmtest_descent_frame_base(d, 1) == base1 + S_OFF &&
+                     asmtest_descent_frame_depth(d, 1) == 1 &&
+                     asmtest_descent_frame_parent(d, 1) == 0 &&
+                     frame_insns_eq(d, 1, S_STREAM, 2));
+        CHECK(f1_ok, "descent L2: frame 1 is S's own body (inc; ret) at depth 1");
+        CHECK(asmtest_descent_edges_len(d) == 1 &&
+                  asmtest_descent_edge_target(d, 0) == base1 + K_OFF,
+              "descent L2: unknown K still stepped over as an edge (not descended)");
+        asmtest_trace_free(t);
+        asmtest_descent_free(d);
+    }
+    munmap(b1, sizeof BLOB1);
+
+    /* --- Phase 4: same-region recursion is a distinct frame; max_depth caps it. --- */
+    /* rec(n)@0: test rdi,rdi; je ret; dec rdi; call rec; ret   (region = [0,0xe)). */
+    static const unsigned char REC[] = {
+        0x48, 0x85, 0xff,             /* 0x00 test rdi,rdi        */
+        0x74, 0x08,                   /* 0x03 je 0xd              */
+        0x48, 0xff, 0xcf,             /* 0x05 dec rdi             */
+        0xe8, 0xf3, 0xff, 0xff, 0xff, /* 0x08 call rec (->0)      */
+        0xc3};                        /* 0x0d ret                 */
+    const size_t REGION_REC = sizeof REC;
+    void *br = map_exec(REC, sizeof REC);
+    if (br != NULL) {
+        {
+            asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+            long a2[1] = {2};
+            r = 0;
+            int rc = asmtest_ptrace_trace_call_ex(br, REGION_REC, a2, 1, &r, NULL, d);
+            /* rec(2) recurses to depth 2 -> frames at depth 0,1,2. */
+            int ok = (rc == ASMTEST_PTRACE_OK && asmtest_descent_frames_len(d) == 3 &&
+                      asmtest_descent_frame_depth(d, 0) == 0 &&
+                      asmtest_descent_frame_depth(d, 1) == 1 &&
+                      asmtest_descent_frame_depth(d, 2) == 2 &&
+                      asmtest_descent_frame_base(d, 1) == (uint64_t)(uintptr_t)br &&
+                      asmtest_descent_frame_parent(d, 2) == 1);
+            CHECK(ok, "descent recursion: same-region self-call is a distinct nested frame");
+            asmtest_descent_free(d);
+        }
+        {
+            asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+            asmtest_descent_set_max_depth(d, 2);
+            long a5[1] = {5};
+            r = 0;
+            int rc = asmtest_ptrace_trace_call_ex(br, REGION_REC, a5, 1, &r, NULL, d);
+            /* Depth ceiling 2: frames at depth 0,1,2 only; deeper folds + flags capped. */
+            int ok = (rc == ASMTEST_PTRACE_OK && asmtest_descent_frames_len(d) == 3 &&
+                      asmtest_descent_depth_capped(d) == 1);
+            CHECK(ok, "descent max_depth: recursion capped at the depth ceiling (flagged)");
+            asmtest_descent_free(d);
+        }
+        munmap(br, sizeof REC);
+    }
+
+    /* --- Phase 5: Level 3 DESCEND_ALL into a separate-mapping helper + guards. --- */
+    /* M (own page): inc rax; ret.  R2 (own page): mov rax,rdi; movabs r11,M; call r11;
+     * add rax,rsi; ret.  The indirect call keeps M in a DISTINCT mapping (so L3's
+     * /proc/maps extent for M does not overlap R2 — the in-page-sibling hazard). */
+    static const unsigned char M_BLOB[] = {0x48, 0xff, 0xc0, 0xc3}; /* inc rax; ret */
+    void *m = map_exec(M_BLOB, sizeof M_BLOB);
+    unsigned char R2[] = {
+        0x48, 0x89, 0xf8,                                     /* mov rax,rdi          */
+        0x49, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0,                   /* movabs r11, <M>      */
+        0x41, 0xff, 0xd3,                                     /* call r11             */
+        0x48, 0x01, 0xf0,                                     /* add rax,rsi          */
+        0xc3};                                                /* ret                  */
+    if (m != NULL) {
+        uint64_t maddr = (uint64_t)(uintptr_t)m;
+        memcpy(&R2[5], &maddr, sizeof maddr); /* patch the movabs immediate */
+        const size_t REGION_R2 = sizeof R2, CALL_SITE2 = 0xd;
+        void *b2 = map_exec(R2, sizeof R2);
+        if (b2 != NULL) {
+            /* L3: descend into M (resolved from /proc/maps). */
+            asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+            r = 0;
+            int rc = asmtest_ptrace_trace_call_ex(b2, REGION_R2, args, 2, &r, NULL, d);
+            int ok = (rc == ASMTEST_PTRACE_OK && r == 43 &&
+                      asmtest_descent_frames_len(d) == 2 &&
+                      asmtest_descent_frame_base(d, 1) <= maddr &&
+                      asmtest_descent_frame_depth(d, 1) == 1);
+            CHECK(ok, "descent L3: descends an arbitrary callee (extent from /proc/maps)");
+            asmtest_descent_free(d);
+
+            /* L3 denylist: deny M's page -> stepped over, recorded as an edge. */
+            d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+            asmtest_descent_deny_region(d, m, sizeof M_BLOB);
+            r = 0;
+            rc = asmtest_ptrace_trace_call_ex(b2, REGION_R2, args, 2, &r, NULL, d);
+            int deny_ok = (rc == ASMTEST_PTRACE_OK && r == 43 &&
+                           asmtest_descent_frames_len(d) == 1 &&
+                           asmtest_descent_edges_len(d) == 1 &&
+                           asmtest_descent_edge_site(d, 0) == CALL_SITE2);
+            CHECK(deny_ok, "descent L3 denylist: a denied callee is stepped over, not descended");
+            asmtest_descent_free(d);
+
+            /* Budget guard: a tiny instruction budget declines descent (depth_capped). */
+            d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+            asmtest_descent_set_insn_budget(d, 1);
+            r = 0;
+            rc = asmtest_ptrace_trace_call_ex(b2, REGION_R2, args, 2, &r, NULL, d);
+            int bud_ok = (rc == ASMTEST_PTRACE_OK && asmtest_descent_frames_len(d) == 1 &&
+                          asmtest_descent_depth_capped(d) == 1);
+            CHECK(bud_ok, "descent L3 budget: an exhausted budget declines descent (flagged)");
+            asmtest_descent_free(d);
+            munmap(b2, sizeof R2);
+        }
+        munmap(m, sizeof M_BLOB);
+    }
+
+    /* --- Phase 5: the watchdog terminates a descent that never returns (no hang). --- */
+    /* SPIN (own page): jmp $ (an infinite 1-insn loop).  RS (own page): mov rax,rdi;
+     * movabs r11,SPIN; call r11; ret.  Descending SPIN at L3 with a short watchdog must
+     * self-truncate on the deadline rather than single-step forever. */
+    static const unsigned char SPIN_BLOB[] = {0xeb, 0xfe}; /* jmp $ */
+    void *sp = map_exec(SPIN_BLOB, sizeof SPIN_BLOB);
+    unsigned char RS[] = {
+        0x48, 0x89, 0xf8,                   /* mov rax,rdi     */
+        0x49, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0, /* movabs r11,SPIN */
+        0x41, 0xff, 0xd3,                   /* call r11        */
+        0xc3};                              /* ret             */
+    if (sp != NULL) {
+        uint64_t saddr = (uint64_t)(uintptr_t)sp;
+        memcpy(&RS[5], &saddr, sizeof saddr);
+        void *bs = map_exec(RS, sizeof RS);
+        if (bs != NULL) {
+            asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+            asmtest_descent_set_insn_budget(d, 1u << 20); /* don't decline on budget */
+            asmtest_descent_set_watchdog_ms(d, 60);
+            r = 0;
+            int rc = asmtest_ptrace_trace_call_ex(bs, sizeof RS, args, 2, &r, NULL, d);
+            /* Reaching this CHECK at all proves it did not hang. */
+            int wd_ok = (rc != ASMTEST_PTRACE_OK && asmtest_descent_truncated(d) &&
+                         asmtest_descent_depth_capped(d) &&
+                         asmtest_descent_frames_len(d) >= 2);
+            CHECK(wd_ok, "descent watchdog: a non-returning descent self-terminates (no hang)");
+            asmtest_descent_free(d);
+            munmap(bs, sizeof RS);
+        }
+        munmap(sp, sizeof SPIN_BLOB);
+    }
+#else
+    printf("# SKIP descent fork: x86-64 Linux only (fork fixtures)\n");
+#endif
+}
+
+/* Regression (call-descent): after an L3 descent trips the watchdog (leaving the internal
+ * alarm flag set), a later L2 descent must NOT be aborted by that stale flag when its own
+ * waitpid is interrupted by an UNRELATED signal (a host process's own repeating timer). The
+ * L3-only watchdog gate means L1/L2 must ignore the flag; before that fix a stale flag +
+ * EINTR spuriously truncated a healthy trace. */
+static void test_descent_stale_alarm_flag(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available() || !asmtest_disas_available()) {
+        printf("# SKIP descent stale-alarm: needs ptrace single-step + Capstone\n");
+        return;
+    }
+    /* (1) Trip the L3 watchdog on a non-returning callee, setting the internal flag. */
+    static const unsigned char SPIN[] = {0xeb, 0xfe}; /* jmp $ */
+    void *sp = map_exec(SPIN, sizeof SPIN);
+    unsigned char RS[] = {0x48, 0x89, 0xf8, 0x49, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0x41, 0xff, 0xd3, 0xc3};
+    if (sp != NULL) {
+        uint64_t saddr = (uint64_t)(uintptr_t)sp;
+        memcpy(&RS[5], &saddr, sizeof saddr);
+        void *bs = map_exec(RS, sizeof RS);
+        if (bs != NULL) {
+            asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+            asmtest_descent_set_insn_budget(d, 1u << 20);
+            asmtest_descent_set_watchdog_ms(d, 50);
+            long r = 0;
+            const long a[2] = {1, 2};
+            asmtest_ptrace_trace_call_ex(bs, sizeof RS, a, 2, &r, NULL, d);
+            asmtest_descent_free(d);
+            munmap(bs, sizeof RS);
+        }
+        munmap(sp, sizeof SPIN);
+    }
+
+    /* (2) Install an unrelated repeating SIGALRM so the next descent's waitpid gets EINTR. */
+    struct sigaction old_sa;
+    struct itimerval old_it, it;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = noop_sigalrm; /* no SA_RESTART -> interrupts waitpid */
+    sigaction(SIGALRM, &sa, &old_sa);
+    it.it_value.tv_sec = 0;
+    it.it_value.tv_usec = 200; /* fire quickly + repeatedly during the L2 descent */
+    it.it_interval.tv_sec = 0;
+    it.it_interval.tv_usec = 200;
+    setitimer(ITIMER_REAL, &it, &old_it);
+
+    /* (3) A healthy L2 descent must complete despite the stale flag + the EINTRs. */
+    static const unsigned char BLOB1[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
+                                          0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3};
+    void *b = map_exec(BLOB1, sizeof BLOB1);
+    int ok = 0;
+    if (b != NULL) {
+        uint64_t base = (uint64_t)(uintptr_t)b;
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + 0xc), 4);
+        long r = 0;
+        const long a[2] = {20, 22};
+        int rc = asmtest_ptrace_trace_call_ex(b, 0xc, a, 2, &r, NULL, d);
+        ok = (rc == ASMTEST_PTRACE_OK && r == 43 && asmtest_descent_frames_len(d) == 2 &&
+              !asmtest_descent_truncated(d));
+        asmtest_descent_free(d);
+        munmap(b, sizeof BLOB1);
+    }
+
+    /* (4) Restore the caller's signal/timer state. */
+    setitimer(ITIMER_REAL, &old_it, NULL);
+    sigaction(SIGALRM, &old_sa, NULL);
+
+    CHECK(ok, "descent stale-alarm: L2 completes despite a stale L3 watchdog flag + EINTRs");
+#else
+    printf("# SKIP descent stale-alarm: x86-64 Linux only\n");
+#endif
+}
+
+/* Phase 8 (call-descent): cascade invariants + the honest limitation. Frame-0's body is
+ * byte-identical across all levels (higher levels only ADD directly-reachable frames), and
+ * a known region reachable only THROUGH a stepped-over intermediary is invisible to
+ * descent — the documented `recorded(L2) is not a superset of recorded(L3)` caveat. */
+static void test_descent_cascade(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available() || !asmtest_disas_available()) {
+        printf("# SKIP descent cascade: needs ptrace single-step + Capstone\n");
+        return;
+    }
+    const long args[2] = {20, 22};
+    /* R@0 calls sibling S and sibling K; both out of R's region [0,0x11). */
+    static const unsigned char BLOB1[] = {
+        0x48, 0x89, 0xf8, 0xe8, 0x09, 0x00, 0x00, 0x00, 0xe8, 0x08, 0x00, 0x00, 0x00,
+        0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3, 0x48, 0xff, 0xc8, 0xc3};
+    const size_t REGION_R = 0x11, S_OFF = 0x11, LEAF_LEN = 4;
+    static const uint64_t R_STREAM[] = {0x0, 0x3, 0x8, 0xd, 0x10};
+    void *b = map_exec(BLOB1, sizeof BLOB1);
+    if (b == NULL) {
+        printf("# SKIP descent cascade: mmap failed\n");
+        return;
+    }
+    uint64_t base = (uint64_t)(uintptr_t)b;
+
+    /* Frame-0 body is identical at L1, L2, L3; frame count grows with reachability. */
+    int frame0_same = 1, counts_ok = 1;
+    size_t want_frames[3] = {1, 2, 3}; /* L1: R; L2: R+S; L3: R+S+K */
+    asmtest_descent_level_t lv[3] = {ASMTEST_DESCENT_RECORD_EDGES,
+                                     ASMTEST_DESCENT_DESCEND_KNOWN,
+                                     ASMTEST_DESCENT_DESCEND_ALL};
+    for (int i = 0; i < 3; i++) {
+        asmtest_descent_t *d = asmtest_descent_new(lv[i]);
+        if (lv[i] == ASMTEST_DESCENT_DESCEND_KNOWN) /* only S known -> L2 adds one frame */
+            asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + S_OFF), LEAF_LEN);
+        long r = 0;
+        int rc = asmtest_ptrace_trace_call_ex(b, REGION_R, args, 2, &r, NULL, d);
+        if (rc != ASMTEST_PTRACE_OK || !frame_insns_eq(d, 0, R_STREAM, 5))
+            frame0_same = 0;
+        if (asmtest_descent_frames_len(d) != want_frames[i])
+            counts_ok = 0;
+        asmtest_descent_free(d);
+    }
+    CHECK(frame0_same, "descent cascade: frame-0 body byte-identical across L1/L2/L3");
+    CHECK(counts_ok, "descent cascade: higher levels add only directly-reachable frames");
+    munmap(b, sizeof BLOB1);
+
+    /* Limitation: R -> (unknown) I -> (known, allow-set) G. I is stepped over at L2, so its
+     * call to G is invisible: G is NOT descended even though it is in the allow-set. */
+    static const unsigned char CHAIN[] = {
+        0x48, 0x89, 0xf8,             /* R@0  mov rax,rdi       */
+        0xe8, 0x01, 0x00, 0x00, 0x00, /* R@3  call I (->9)      */
+        0xc3,                         /* R@8  ret  (region=9)   */
+        0xe8, 0x01, 0x00, 0x00, 0x00, /* I@9  call G (->0xf)    */
+        0xc3,                         /* I@e  ret               */
+        0x48, 0xff, 0xc0,             /* G@f  inc rax           */
+        0xc3};                        /* G@12 ret               */
+    const size_t REGION_RC = 9, I_OFF = 9, G_OFF = 0xf, G_LEN = 4;
+    void *c = map_exec(CHAIN, sizeof CHAIN);
+    if (c != NULL) {
+        uint64_t cb = (uint64_t)(uintptr_t)c;
+        asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_allow_region(d, (void *)(uintptr_t)(cb + G_OFF), G_LEN); /* known G */
+        long r = 0;
+        int rc = asmtest_ptrace_trace_call_ex(c, REGION_RC, args, 2, &r, NULL, d);
+        /* G is behind the stepped-over I: only R is a frame, and the recorded edge is
+         * R->I (never R->G / a G frame). */
+        int ok = rc == ASMTEST_PTRACE_OK && asmtest_descent_frames_len(d) == 1 &&
+                 asmtest_descent_edges_len(d) == 1 &&
+                 asmtest_descent_edge_target(d, 0) == cb + I_OFF;
+        CHECK(ok, "descent limitation: a known region behind a stepped-over intermediary "
+                  "is NOT recorded");
+        asmtest_descent_free(d);
+        munmap(c, sizeof CHAIN);
+    }
+#else
+    printf("# SKIP descent cascade: x86-64 Linux only\n");
+#endif
+}
+
+/* Phase 3-4 (call-descent): the ATTACHED path threads the same descending loop through a
+ * foreign, externally-attached process (bytes read via process_vm_readv). Mirrors
+ * test_ptrace_attach but descends the known sibling S at L2. */
+static void test_descent_attach(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available() || !asmtest_disas_available()) {
+        printf("# SKIP descent attach: needs ptrace single-step + Capstone\n");
+        return;
+    }
+    static const unsigned char BLOB1[] = {
+        0x48, 0x89, 0xf8, 0xe8, 0x09, 0x00, 0x00, 0x00, 0xe8, 0x08, 0x00, 0x00, 0x00,
+        0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3, 0x48, 0xff, 0xc8, 0xc3};
+    const size_t REGION_R = 0x11, S_OFF = 0x11, LEAF_LEN = 4;
+    static const uint64_t R_STREAM[] = {0x0, 0x3, 0x8, 0xd, 0x10};
+    static const uint64_t S_STREAM[] = {0x0, 0x3};
+
+    volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *p = mmap(NULL, sizeof BLOB1, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (go == MAP_FAILED || p == MAP_FAILED) {
+        printf("# SKIP descent attach: mmap failed\n");
+        return;
+    }
+    *go = 0;
+    memcpy(p, BLOB1, sizeof BLOB1);
+    mprotect(p, sizeof BLOB1, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof BLOB1);
+    uint64_t base = (uint64_t)(uintptr_t)p;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        while (!*go) {
+        }
+        volatile long r = ((add2_fn)p)(20, 22);
+        (void)r;
+        _exit(0);
+    }
+    struct timespec ts = {0, 3 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP descent attach: PTRACE_ATTACH not permitted (yama)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return;
+    }
+    *go = 1;
+
+    asmtest_descent_t *d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+    asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + S_OFF), LEAF_LEN);
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_ptrace_trace_attached_ex(pid, p, REGION_R, &result, tr, d);
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+
+    int ok = (rc == ASMTEST_PTRACE_OK && result == 42 &&
+              asmtest_emu_trace_insns_total(tr) == 5 &&
+              asmtest_descent_frames_len(d) == 2 && frame_insns_eq(d, 0, R_STREAM, 5) &&
+              asmtest_descent_frame_base(d, 1) == base + S_OFF &&
+              frame_insns_eq(d, 1, S_STREAM, 2));
+    CHECK(ok, "descent attach: L2 descends the known sibling in a foreign attached process");
+    asmtest_trace_free(tr);
+    asmtest_descent_free(d);
+    munmap(p, sizeof BLOB1);
+    munmap((void *)go, sizeof(int));
+#else
+    printf("# SKIP descent attach: x86-64 Linux only\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_reconstruction();
+
+    /* Phase 1 call-descent prerequisites: the is_ret / call_target disasm queries. */
+    test_disas_queries();
+
+    /* Phase 2 call-descent: the descent handle lifecycle + OFF-level no-op. */
+    test_descent_handle();
+
+    /* Phases 3-5 call-descent: the fork-path descending loop (L1 edges, L2 descend-known,
+     * L3 descend-all + guards, same-region recursion, max_depth). */
+    test_descent_fork();
+
+    /* Phase 3-4 call-descent: the attached-path descending loop (foreign process). */
+    test_descent_attach();
+
+    /* Phase 8 call-descent: cascade invariants + the honest step-over-intermediary limit. */
+    test_descent_cascade();
+
+    /* Regression: a stale L3 watchdog flag must not abort a later L1/L2 descent on EINTR. */
+    test_descent_stale_alarm_flag();
 
     /* Backend-independent: validate the CoreSight reconstruction core (synthetic
      * ranges; the live OpenCSD decode tree awaits a board). */

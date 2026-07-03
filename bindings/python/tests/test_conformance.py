@@ -53,6 +53,9 @@ def test_corpus_case(case, routine):
     if tier == "asm":
         _run_asm(case, expect)
         return
+    if tier == "ptrace_descent":
+        _run_ptrace_descent(case, expect)
+        return
 
     fn = routine(case["routine"])
 
@@ -196,6 +199,54 @@ def _run_asm(case, expect):
         assert list(got) == list(expect["bytes"])
     else:
         pytest.fail(f"unknown asm call: {call}")
+
+
+def _run_ptrace_descent(case, expect):
+    """The call-descent tier (asmtest_ptrace.h): fork + single-step host-native code and
+    replay the recorded frame-0 body, edges (L1), and descended frames (L2). Host-native,
+    so it self-skips unless the corpus arch matches the host and the out-of-process stepper
+    (PTRACE_SINGLESTEP + Capstone) is available — qemu-user / yama / no-Capstone report
+    SKIP, not FAIL, mirroring the C reference's ptrace_descent tier."""
+    from asmtest.hwtrace import (
+        Descent, HwTrace, NativeCode, Ptrace,
+        DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN,
+    )
+    import platform
+    host = {"x86_64": "x86_64", "aarch64": "aarch64"}.get(platform.machine())
+    if case.get("arch") != host:
+        pytest.skip(f"ptrace_descent corpus arch {case.get('arch')} != host {host}")
+    if not Ptrace.available():
+        pytest.skip(f"no ptrace single-step: {Ptrace.skip_reason()}")
+
+    code = NativeCode.from_bytes(bytes(case["code"]))
+    try:
+        region = case["region"]
+        args = case.get("args", [])
+        level = case["level"]
+        d = Descent(level)
+        if level >= DESCENT_DESCEND_KNOWN and "allow_off" in case:
+            d.allow_region(code.base + case["allow_off"], case["allow_len"])
+        tr = HwTrace.new(blocks=64, instructions=64)
+        try:
+            result = Ptrace.trace_call_ex(code, args, tr, d, region=region)
+            assert result == expect["result"], f"result {result} != {expect['result']}"
+            assert d.frame_insns(0) == list(expect["frame0"])
+            edges = expect.get("edges", [])
+            got_edges = d.edges()
+            assert len(got_edges) == len(edges)
+            for (site, target, _depth), e in zip(got_edges, edges):
+                assert site == e["site"]
+                assert target == code.base + e["target_off"]
+            for f in expect.get("frames", []):
+                idx = next(i for i in range(1, d.frames_len())
+                           if d.frame_base(i) == code.base + f["base_off"])
+                assert d.frame_depth(idx) == f["depth"]
+                assert d.frame_insns(idx) == list(f["insns"])
+        finally:
+            tr.free()
+            d.free()
+    finally:
+        code.free()
 
 
 def test_disas():

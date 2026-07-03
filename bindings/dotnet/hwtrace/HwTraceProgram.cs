@@ -8,6 +8,7 @@
 // "ok N - ..." lines, and returns nonzero on any assertion failure.
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using Asmtest;
 
 static class HwTraceProgram
@@ -24,6 +25,18 @@ static class HwTraceProgram
     {
         0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
         0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3,
+    };
+
+    // Call-descent fixture (x86-64): a caller region R that calls an in-blob leaf S.
+    //   R@0:   mov rax,rdi; call S(+4); add rax,rsi; ret   (region = 0xc bytes)
+    //   S@0xc: inc rax; ret
+    // The traced region is R only (0xc); S lives BEYOND it in the same allocation, so
+    // trace_call_ex must be passed region=0xc — passing the whole 0x10-byte allocation
+    // would fold S into the region and mis-record the call as recursion.
+    static readonly byte[] DESCENT_BLOB =
+    {
+        0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+        0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3,
     };
 
     static int _n;
@@ -104,8 +117,10 @@ static class HwTraceProgram
             tr2.Region("loop", () => { r2 = code2.Call(1, 20); });
             Check(r2 == 20, $"loop(1,20) == 20 (got {r2})");
             Check(tr2.InsnsTotal() == 62, $"insns_total == 62 (got {tr2.InsnsTotal()})"); // 1 + 20*3 + 1
-            Check(tr2.Covered(0) && tr2.Covered(0x7), "loop preamble + body blocks covered");
-            Check(tr2.BlocksLen() == 2, $"blocks_len == 2 (got {tr2.BlocksLen()})");
+            Check(tr2.Covered(0) && tr2.Covered(0x7) && tr2.Covered(0xf),
+                  "loop preamble + body + exit blocks covered");
+            // 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+            Check(tr2.BlocksLen() == 3, $"blocks_len == 3 (got {tr2.BlocksLen()})");
             Check(!tr2.Truncated(), "not truncated");
 
             tr2.Free();
@@ -245,9 +260,18 @@ static class HwTraceProgram
         // (the lib is loaded here, but the host may not be Linux x86-64). trace_attached
         // needs no live test — it is referenced (wrapped) by Ptrace.TraceAttached.
         if (Ptrace.Available())
+        {
             PtraceChecks();
+            DescentChecks();
+        }
         else
             Console.WriteLine($"# SKIP ptrace toolkit unavailable: {Ptrace.SkipReason()}");
+
+        // --- conformance replay: the ptrace_descent corpus tier (replay-or-skip) --- //
+        // Mirrors bindings/python/tests/test_conformance._run_ptrace_descent: replay the
+        // corpus's L1 (edges) and L2 (frames) cases live when ptrace is available AND the
+        // corpus arch matches the host, else SKIP (never fail).
+        DescentConformanceReplay();
 
         // --- time-aware code-image recorder (Asmtest.CodeImage) --- //
         // The userspace PERF_RECORD_TEXT_POKE: snapshot a region, then read back the bytes
@@ -452,5 +476,137 @@ static class HwTraceProgram
         for (int i = 0; i < a.Length; i++)
             if (a[i] != b[i]) return false;
         return true;
+    }
+
+    // --- call descent (Asmtest.Descent) --------------------------------------- //
+    // Mirrors bindings/python/tests/test_hwtrace.py::test_descent_edges_and_frames plus a
+    // resolver-upcall smoke that proves the managed delegate fires from the single-step
+    // loop. The traced region is R only (0xc); S is the in-blob leaf beyond it.
+    static void DescentChecks()
+    {
+        var code = NativeCode.FromBytes(DESCENT_BLOB);
+        ulong codeBase = (ulong)code.Base.ToInt64();
+        try
+        {
+            // L1 RECORD_EDGES: R's own body + one (call -> S) edge; S stepped over.
+            using (var d = new Descent(DescentLevel.RecordEdges))
+            {
+                long r = Ptrace.TraceCallEx(code, new long[] { 20, 22 }, IntPtr.Zero, d, region: (nuint)0xc);
+                Check(r == 43, $"descent L1: trace_call_ex(20,22) == 43 (got {r})");
+                Check(d.FramesLen() == 1, $"descent L1: frames_len == 1 (got {d.FramesLen()})");
+                var f0 = d.FrameInsns(0);
+                var wantF0 = new ulong[] { 0x0, 0x3, 0x8, 0xb };
+                Check(Eq(f0, wantF0), $"descent L1: frame0 insns {Hex(f0)} == {Hex(wantF0)}");
+                var edges = d.Edges();
+                Check(edges.Length == 1
+                      && edges[0].Site == 0x3
+                      && edges[0].Target == codeBase + 0xc
+                      && edges[0].Depth == 0,
+                      $"descent L1: one edge (site 0x3 -> S at base+0xc, depth 0) (got {edges.Length})");
+                Check(!d.Truncated(), "descent L1: not truncated");
+            }
+
+            // L2 DESCEND_KNOWN + allow_region(S): S descends as frame 1, no edges.
+            using (var d = new Descent(DescentLevel.DescendKnown))
+            {
+                Check(d.AllowRegion(code.Base + 0xc, (nuint)4) == 0, "descent L2: allow_region(S) ok");
+                long r = Ptrace.TraceCallEx(code, new long[] { 20, 22 }, IntPtr.Zero, d, region: (nuint)0xc);
+                Check(r == 43, $"descent L2: trace_call_ex(20,22) == 43 (got {r})");
+                Check(d.FramesLen() == 2, $"descent L2: frames_len == 2 (got {d.FramesLen()})");
+                Check(d.FrameBase(1) == codeBase + 0xc, "descent L2: frame1 base == S (base+0xc)");
+                Check(d.FrameDepth(1) == 1, $"descent L2: frame1 depth == 1 (got {d.FrameDepth(1)})");
+                Check(d.FrameParent(1) == 0, $"descent L2: frame1 parent == 0 (got {d.FrameParent(1)})");
+                var f1 = d.FrameInsns(1);
+                var wantF1 = new ulong[] { 0x0, 0x3 };
+                Check(Eq(f1, wantF1), $"descent L2: frame1 insns {Hex(f1)} == {Hex(wantF1)}");
+                Check(d.Edges().Length == 0, "descent L2: no edges (descended, not stepped over)");
+            }
+
+            // Resolver upcall: L2 with NO allow-region — a managed resolver delegate drives
+            // the descent into S, proving the trampoline is invoked (and survives GC) from
+            // the out-of-process single-step loop.
+            using (var d = new Descent(DescentLevel.DescendKnown))
+            {
+                int calls = 0;
+                ulong seen = 0;
+                ulong target = codeBase + 0xc;
+                d.SetResolver(callee =>
+                {
+                    calls++;
+                    seen = callee;
+                    // Resolve S to its 4-byte region; refuse everything else.
+                    return callee == target ? (true, target, 4UL) : (false, 0UL, 0UL);
+                });
+                long r = Ptrace.TraceCallEx(code, new long[] { 20, 22 }, IntPtr.Zero, d, region: (nuint)0xc);
+                Check(r == 43, $"descent resolver: trace_call_ex(20,22) == 43 (got {r})");
+                Check(calls >= 1, $"descent resolver: upcall fired (calls={calls})");
+                Check(seen == target, $"descent resolver: saw S callee 0x{seen:x} == 0x{target:x}");
+                Check(d.FramesLen() == 2, $"descent resolver: resolver drove descent into S (frames_len={d.FramesLen()})");
+                Check(d.FrameBase(1) == target, "descent resolver: frame1 base == S (base+0xc)");
+            }
+        }
+        finally
+        {
+            code.Free();
+        }
+    }
+
+    // Replay the cross-language corpus's ptrace_descent tier (L1 edges + L2 frames).
+    // Host-native, so it SKIPs (never fails) unless the corpus arch (x86_64) matches the
+    // host AND the out-of-process single-step stepper is available — mirroring Python's
+    // test_conformance._run_ptrace_descent and the C reference's ptrace_descent tier.
+    static void DescentConformanceReplay()
+    {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        {
+            Console.WriteLine("# SKIP ptrace_descent conformance: corpus arch x86_64 != host");
+            return;
+        }
+        if (!Ptrace.Available())
+        {
+            Console.WriteLine($"# SKIP ptrace_descent conformance: {Ptrace.SkipReason()}");
+            return;
+        }
+
+        var code = NativeCode.FromBytes(DESCENT_BLOB);
+        ulong codeBase = (ulong)code.Base.ToInt64();
+        try
+        {
+            // Case 1 (level 1): result 43, frame0 [0,3,8,11], one edge site 3 -> base+12.
+            using (var d = new Descent(DescentLevel.RecordEdges))
+            {
+                long r = Ptrace.TraceCallEx(code, new long[] { 20, 22 }, IntPtr.Zero, d, region: (nuint)12);
+                Check(r == 43, $"conformance ptrace_descent L1: result == 43 (got {r})");
+                Check(Eq(d.FrameInsns(0), new ulong[] { 0, 3, 8, 11 }),
+                      "conformance ptrace_descent L1: frame0 == [0,3,8,11]");
+                var edges = d.Edges();
+                Check(edges.Length == 1 && edges[0].Site == 3 && edges[0].Target == codeBase + 12,
+                      "conformance ptrace_descent L1: edge site 3 -> base+12");
+            }
+
+            // Case 2 (level 2): allow S (base+12,4); frame at base+12 depth 1 insns [0,3].
+            using (var d = new Descent(DescentLevel.DescendKnown))
+            {
+                d.AllowRegion(code.Base + 12, (nuint)4);
+                long r = Ptrace.TraceCallEx(code, new long[] { 20, 22 }, IntPtr.Zero, d, region: (nuint)12);
+                Check(r == 43, $"conformance ptrace_descent L2: result == 43 (got {r})");
+                Check(Eq(d.FrameInsns(0), new ulong[] { 0, 3, 8, 11 }),
+                      "conformance ptrace_descent L2: frame0 == [0,3,8,11]");
+                int idx = -1;
+                for (int i = 1; i < d.FramesLen(); i++)
+                    if (d.FrameBase(i) == codeBase + 12) { idx = i; break; }
+                Check(idx >= 1, "conformance ptrace_descent L2: descended frame at base+12 present");
+                if (idx >= 1)
+                {
+                    Check(d.FrameDepth(idx) == 1, $"conformance ptrace_descent L2: frame depth == 1 (got {d.FrameDepth(idx)})");
+                    Check(Eq(d.FrameInsns(idx), new ulong[] { 0, 3 }),
+                          "conformance ptrace_descent L2: frame insns == [0,3]");
+                }
+            }
+        }
+        finally
+        {
+            code.Free();
+        }
     }
 }

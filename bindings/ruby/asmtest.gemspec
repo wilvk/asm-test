@@ -6,7 +6,7 @@
 # per platform present in the collected payload (see docs/packaging.md).
 Gem::Specification.new do |s|
   s.name        = "asmtest"
-  s.version     = "1.0.0"
+  s.version     = "1.1.0"
   s.summary     = "Ruby binding for the asm-test assembly unit-testing framework"
   s.description = "Run, capture, and emulate assembly routines through asm-test " \
                   "from Ruby via the stdlib Fiddle FFI over the opaque-handle ABI."

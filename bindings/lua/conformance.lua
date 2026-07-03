@@ -244,5 +244,104 @@ else
   print("ok - vec512.add8d # SKIP no AVX512F")
 end
 
+-- --- Tier: call descent (asmtest_ptrace.h) — fork + single-step host-native code,
+-- replaying the recorded frame-0 body, edges (L1), and descended frames (L2). This is
+-- the ptrace/native tier (libasmtest_hwtrace, a separate lib from the emulator above),
+-- so it replays only when the corpus `arch` matches the host AND the out-of-process
+-- stepper (PTRACE_SINGLESTEP + Capstone) is available; otherwise it SKIPs (never
+-- fails), mirroring the C reference / Python `_run_ptrace_descent`.
+do
+  local hwtrace = require("hwtrace")
+  local HwTrace = hwtrace.HwTrace
+  local Descent = hwtrace.Descent
+  local NativeCode = hwtrace.NativeCode
+  local ffi = require("ffi")
+
+  -- The two ptrace_descent cases from bindings/conformance/corpus.json, inline (the
+  -- Lua runner replays through the binding API rather than parsing the JSON corpus).
+  -- R@0: mov rax,rdi; call S(+4); add rax,rsi; ret.  S@0xc: inc rax; ret.
+  local DESCENT_CODE = { 0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+                         0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3 }
+  local cases = {
+    { name = "ptrace_descent.calls_leaf.edges", arch = "x86_64", level = 1,
+      code = DESCENT_CODE, region = 12, args = { 20, 22 },
+      expect = { result = 43, frame0 = { 0, 3, 8, 11 },
+                 edges = { { site = 3, target_off = 12 } }, frames = {} } },
+    { name = "ptrace_descent.calls_leaf.descend", arch = "x86_64", level = 2,
+      code = DESCENT_CODE, region = 12, allow_off = 12, allow_len = 4, args = { 20, 22 },
+      expect = { result = 43, frame0 = { 0, 3, 8, 11 }, edges = {},
+                 frames = { { base_off = 12, depth = 1, insns = { 0, 3 } } } } },
+  }
+
+  -- LuaJIT reports the host arch as 'x64' on x86-64 / 'arm64' on aarch64.
+  local host = (ffi.arch == "x64") and "x86_64"
+            or (ffi.arch == "arm64") and "aarch64" or ffi.arch
+
+  -- cdata-uint64 list compare: frame_insns are boxed uint64_t (never tonumber()'d);
+  -- LuaJIT compares a uint64_t cdata to a Lua number numerically.
+  local function u64_list_eq(got, want)
+    if #got ~= #want then return false end
+    for i = 1, #want do if got[i] ~= want[i] then return false end end
+    return true
+  end
+
+  local function replay(case)
+    local code = NativeCode.from_bytes(case.code)
+    local d = Descent.new(case.level)
+    if case.level >= 2 and case.allow_off then
+      d:allow_region(ffi.cast("uint64_t", code.base) + case.allow_off, case.allow_len)
+    end
+    local tr = HwTrace.create(64, 64)
+    local ran, result = pcall(HwTrace.ptrace_trace_call_ex, code.base, code.len,
+                              case.args, tr, d, case.region)
+    local pass = ran
+    if ran then
+      local exp = case.expect
+      if result ~= exp.result then pass = false end
+      if not u64_list_eq(d:frame_insns(0), exp.frame0) then pass = false end
+      local edges = d:edges()
+      if #edges ~= #exp.edges then
+        pass = false
+      else
+        for i = 1, #exp.edges do
+          local w = exp.edges[i]
+          if tonumber(edges[i].site) ~= w.site then pass = false end
+          if edges[i].target ~= ffi.cast("uint64_t", code.base) + w.target_off then
+            pass = false
+          end
+        end
+      end
+      -- Descended frames are 1..N; frame 0 is the root region.
+      for _, fs in ipairs(exp.frames) do
+        local want_base = ffi.cast("uint64_t", code.base) + fs.base_off
+        local idx
+        for i = 1, d:frames_len() - 1 do
+          if d:frame_base(i) == want_base then idx = i; break end
+        end
+        if not idx then
+          pass = false
+        else
+          if d:frame_depth(idx) ~= fs.depth then pass = false end
+          if not u64_list_eq(d:frame_insns(idx), fs.insns) then pass = false end
+        end
+      end
+    end
+    d:free(); tr:free(); code:free()
+    return pass
+  end
+
+  for _, case in ipairs(cases) do
+    if not HwTrace.ptrace_available() then
+      print("ok - " .. case.name .. " # SKIP no ptrace single-step: "
+            .. HwTrace.ptrace_skip_reason())
+    elseif case.arch ~= host then
+      print("ok - " .. case.name .. " # SKIP ptrace_descent corpus arch "
+            .. case.arch .. " != host " .. tostring(host))
+    else
+      check(case.name, replay(case))
+    end
+  end
+end
+
 print(string.format("# %d passed, %d failed, %d total", total - fails, fails, total))
 os.exit(fails == 0 and 0 or 1)

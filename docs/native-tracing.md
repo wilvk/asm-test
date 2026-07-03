@@ -640,6 +640,47 @@ trace: 24 instructions
     0x56  ret
 ```
 
+### Call descent levels
+
+Stepping **over** every call-out keeps a trace to one method's own body — the right default,
+but it discards what the method *calls*. Call descent (`asmtest_descent_t`, in
+`asmtest_ptrace.h`) makes that a four-level opt-in, threaded through the `_ex` trace entry
+points (`asmtest_ptrace_trace_call_ex` / `_trace_attached_ex` / `_trace_attached_versioned_ex`):
+
+| Level | Name | Behaviour |
+|---|---|---|
+| 0 | `OFF` | step over, record nothing — the default described above |
+| 1 | `RECORD_EDGES` | record each `(call-site → callee)` **edge**, still step over |
+| 2 | `DESCEND_KNOWN` | single-step **into** calls whose target resolves (an allow-set of method regions, or an optional resolver callback); step over the rest |
+| 3 | `DESCEND_ALL` | single-step into **every** call incl. runtime internals — **default off**, denylist + instruction-budget + real-time-watchdog gated |
+
+The flat `asmtest_trace_t` is unchanged: it is always **frame 0**, the root region's own body,
+byte-identical across all four levels. Descent records into the *separate* opaque handle, read
+through scalar accessors (no struct layout to mirror per binding):
+
+- an **edge** is `(call_site_off, callee_addr, depth)` for each call the tracer did **not**
+  follow — the complete record of un-descended calls;
+- a **nested frame** is a self-contained trace of a descended callee (its own instruction and
+  block offsets, *relative to that callee's* base), with a `depth` and a `parent` frame index.
+  Frame 0 is the root; frames 1..N are descended callees.
+
+The motivating case is the `Console::WriteLine` body above: at level 0 the two call-outs at
+`0xb` (`get_Out`) and `0x1e` (the virtual `TextWriter.WriteLine`) are opaque. `make
+docker-hwtrace-jit-dotnet-bcl-descend` runs the same lane at **level 2** with the JIT code heap
+as the allow-set, so the tracer descends `get_Out` as a nested frame instead of stepping over it
+— recovering the assembly of the property accessor the framework method calls, while a libc
+call would still be stepped over. `make docker-hwtrace-jit-dotnet-bcl-descend-all` runs **level
+3** with the conservative budget + watchdog and is expected to *self-skip* (truncate) when it
+trips a guard — it proves the guards fire, not that L3 is transparent (see the L3 hazards in
+[hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](analysis/jit-runtime-tracing.md)).
+
+Two honesty limits are load-bearing, not caveats-in-passing. **L2 still single-steps the full
+body of each descended method**, so the allow-set / resolver must be *method-exact*, never a
+broad module range that re-admits runtime glue. And a known method reachable only **through** a
+stepped-over intermediary is **invisible** to descent (the tracer never single-steps the
+intermediary, so it never sees the nested call) — descent records what is *directly* reachable
+from a frame it is stepping, nothing behind a step-over.
+
 Three further lanes validate the **binary jitdump** byte source (`asmtest_jitdump_find`)
 against real output from **three independent producers** (V8, HotSpot, CoreCLR):
 

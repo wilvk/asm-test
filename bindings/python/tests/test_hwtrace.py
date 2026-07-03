@@ -67,8 +67,10 @@ def test_singlestep_loop_no_depth_ceiling(hwtrace):
 
     assert result == 20
     assert trace.insns_total() == 62  # 1 + 20*3 + 1, all captured
-    assert trace.covered(0) and trace.covered(0x7)
-    assert trace.blocks_len() == 2
+    assert trace.covered(0) and trace.covered(0x7) and trace.covered(0xf)
+    # 3 blocks {0, 0x7, 0xf}: ends-at-branch normalization makes the ret after the
+    # not-taken jnz its own block (matches the C reference test_singlestep_loop).
+    assert trace.blocks_len() == 3
     assert not trace.truncated()
 
     trace.free()
@@ -182,6 +184,40 @@ def test_ptrace_trace_call():
     assert not trace.truncated()
     trace.free()
     code.free()
+
+
+def test_descent_edges_and_frames():
+    """Call descent (asmtest.hwtrace.Descent): a region that calls an in-blob leaf S
+    records the call as an edge at level 1 and descends S as a nested frame at level 2."""
+    _skip_if_no_ptrace()
+    from asmtest.hwtrace import Descent, DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN
+    # R@0: mov rax,rdi; call S(+4); add rax,rsi; ret   S@0xc: inc rax; ret
+    blob = bytes([0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,
+                  0x48, 0x01, 0xf0, 0xc3, 0x48, 0xff, 0xc0, 0xc3])
+    code = NativeCode.from_bytes(blob)
+    try:
+        # Level 1: R's own body + one (call -> S) edge; S is stepped over. The traced
+        # region is R only (0xc); S lives beyond it in the same allocation.
+        with Descent(DESCENT_RECORD_EDGES) as d:
+            r = Ptrace.trace_call_ex(code, [20, 22], None, d, region=0xc)
+            assert r == 43
+            assert d.frames_len() == 1
+            assert d.frame_insns(0) == [0x0, 0x3, 0x8, 0xb]
+            edges = d.edges()
+            assert len(edges) == 1
+            assert edges[0][0] == 0x3 and edges[0][1] == code.base + 0xc
+        # Level 2: S (in the allow-set) descends as frame 1.
+        with Descent(DESCENT_DESCEND_KNOWN) as d:
+            d.allow_region(code.base + 0xc, 4)
+            r = Ptrace.trace_call_ex(code, [20, 22], None, d, region=0xc)
+            assert r == 43
+            assert d.frames_len() == 2
+            assert d.frame_base(1) == code.base + 0xc
+            assert d.frame_depth(1) == 1
+            assert d.frame_insns(1) == [0x0, 0x3]
+            assert d.edges() == []
+    finally:
+        code.free()
 
 
 def test_ptrace_run_to_rejects_null():

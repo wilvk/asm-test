@@ -21,11 +21,18 @@ $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \
                         include/asmtest_emu.h | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -c $< -o $@
 
+# The ptrace_descent tier drives the out-of-process stepper + descent handle, so the
+# reference runner links the ptrace backend, the descent pools, and the Capstone
+# length/call/ret decoder (disasm.o) — self-skipping at runtime when Capstone or
+# PTRACE_SINGLESTEP is absent. codeimage.o resolves ptrace_backend.o's versioned-attach
+# reference (unused by the fork-path tier but required at link).
 $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
                       $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
                       $(BUILD)/trace.o $(BUILD)/add.o $(BUILD)/flags.o \
-                      $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o
-	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
+                      $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o \
+                      $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
+                      $(BUILD)/disasm.o $(BUILD)/codeimage.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 conformance: $(BUILD)/conformance
 	./$(BUILD)/conformance

@@ -6,7 +6,11 @@
 #
 #   ASMTEST_LIB         libasmtest_emu.{so,dylib}
 #   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib}
+#   ASMTEST_HWTRACE_LIB libasmtest_hwtrace.{so,dylib} (only for the ptrace_descent
+#                       tier below; absent/off-host => that tier self-skips)
 require_relative "asmtest"
+require_relative "hwtrace"
+require "json"
 
 def routine(name)
   Asmtest.corpus_routine(name)
@@ -260,6 +264,81 @@ if Asmtest.cpu_has_avx512f?
         out[0].unpack("d8") == [11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0])
 else
   puts "ok - vec512.add8d # SKIP no AVX-512"
+end
+
+# --- Tier: call descent (asmtest_ptrace.h ptrace_descent) ------------------
+# Replay the corpus's ptrace_descent cases through the out-of-process stepper:
+# fork host-native code, single-step it, and check the frame-0 body, the call
+# EDGES (level 1), and the DESCENDED frames (level 2). Host-native, so it replays
+# only when the corpus arch matches the host AND the ptrace single-step tier is
+# available (Linux x86-64 + Capstone); otherwise every case SKIPs (never fails) —
+# mirroring the Python _run_ptrace_descent handler and the C reference tier. The
+# descent tier carries raw code bytes (not a named corpus routine), so this reads
+# the cases straight from the JSON corpus the C reference emits.
+hw = Asmtest::HwTrace::HwTrace
+host_arch =
+  case RbConfig::CONFIG["host_cpu"]
+  when /x86_64|amd64/ then "x86_64"
+  when /aarch64|arm64/ then "aarch64"
+  end
+
+descent_cases =
+  begin
+    corpus_json = ENV["ASMTEST_CORPUS_JSON"].to_s
+    corpus_json = File.expand_path("../conformance/corpus.json", __dir__) if corpus_json.empty?
+    if File.exist?(corpus_json)
+      (JSON.parse(File.read(corpus_json)).dig("corpus", "cases") || [])
+        .select { |c| c["tier"] == "ptrace_descent" }
+    else
+      []
+    end
+  rescue StandardError
+    []
+  end
+
+if descent_cases.empty?
+  puts "ok - ptrace_descent # SKIP no ptrace_descent cases in corpus"
+elsif !hw.ptrace_available?
+  descent_cases.each do |c|
+    puts "ok - #{c['name']} # SKIP ptrace stepper unavailable: #{hw.ptrace_skip_reason}"
+  end
+else
+  descent_cases.each do |c|
+    if c["arch"] != host_arch
+      puts "ok - #{c['name']} # SKIP corpus arch #{c['arch']} != host #{host_arch.inspect}"
+      next
+    end
+    exp = c["expect"]
+    nc = Asmtest::HwTrace::NativeCode.from_bytes(c["code"].pack("C*"))
+    d  = Asmtest::HwTrace::Descent.new(c["level"])
+    tr = hw.create(blocks: 64, instructions: 64)
+    begin
+      if c["level"] >= Asmtest::HwTrace::DESCENT_DESCEND_KNOWN && c["allow_off"]
+        d.allow_region(nc.base + c["allow_off"], c["allow_len"])
+      end
+      result = hw.ptrace_trace_call_ex(nc.base, nc.length, c["args"] || [], tr, d,
+                                       region: c["region"])
+      good = result == exp["result"] && d.frame_insns(0) == exp["frame0"]
+      # Call edges (level 1): site offset + absolute target (base + target_off).
+      got_edges = d.edges
+      want_edges = exp["edges"] || []
+      good &&= got_edges.length == want_edges.length
+      want_edges.each_with_index do |we, i|
+        ge = got_edges[i]
+        good &&= ge && ge[0] == we["site"] && ge[1] == nc.base + we["target_off"]
+      end
+      # Descended frames beyond frame 0 (level 2), matched by absolute base.
+      (exp["frames"] || []).each do |wf|
+        idx = (1...d.frames_len).find { |i| d.frame_base(i) == nc.base + wf["base_off"] }
+        good &&= idx && d.frame_depth(idx) == wf["depth"] && d.frame_insns(idx) == wf["insns"]
+      end
+      check(c["name"], good)
+    ensure
+      tr.free
+      d.free
+      nc.free
+    end
+  end
 end
 
 puts "# #{$total - $fail} passed, #{$fail} failed, #{$total} total"

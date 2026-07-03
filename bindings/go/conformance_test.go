@@ -9,7 +9,9 @@ package asmtest
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
+	"unsafe"
 )
 
 // --- Tier 1: corpus replay (capture trampoline) ----------------------------
@@ -280,6 +282,125 @@ func TestDisas(t *testing.T) {
 	}
 	if got := Disas([]byte{0x90}, 0, ArchX8664, 0x00100000); got != "nop" {
 		t.Fatalf("disas nop: got %q", got)
+	}
+}
+
+// --- Tier: call descent (asmtest_ptrace.h) — replay or skip ----------------
+
+// TestPtraceDescent replays the conformance corpus's ptrace_descent tier: fork +
+// single-step the host-native fixture and check the recorded frame-0 body, the edges
+// (L1) and the descended frames (L2). Host-native, so it self-skips (never fails)
+// unless the corpus arch matches the host AND the out-of-process stepper is available
+// — qemu-user / yama / no-Capstone report SKIP, mirroring the Python conformance
+// handler _run_ptrace_descent and the C reference's ptrace_descent tier. The two cases
+// are the corpus entries ptrace_descent.calls_leaf.{edges,descend}.
+func TestPtraceDescent(t *testing.T) {
+	host := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
+
+	type edge struct{ site, targetOff uint64 }
+	type frame struct {
+		baseOff uint64
+		depth   uint32
+		insns   []uint64
+	}
+	// The bytes are shared by both cases (R@0 + leaf S@0xc); region=12 traces R only.
+	code := []byte{72, 137, 248, 232, 4, 0, 0, 0, 72, 1, 240, 195, 72, 255, 192, 195}
+	cases := []struct {
+		name     string
+		arch     string
+		level    int
+		region   int
+		allowOff int
+		allowLen int
+		hasAllow bool
+		args     []int64
+		result   int64
+		frame0   []uint64
+		edges    []edge
+		frames   []frame
+	}{
+		{
+			name: "calls_leaf.edges", arch: "x86_64", level: DescentRecordEdges,
+			region: 12, args: []int64{20, 22}, result: 43,
+			frame0: []uint64{0, 3, 8, 11},
+			edges:  []edge{{site: 3, targetOff: 12}},
+		},
+		{
+			name: "calls_leaf.descend", arch: "x86_64", level: DescentDescendKnown,
+			region: 12, allowOff: 12, allowLen: 4, hasAllow: true,
+			args: []int64{20, 22}, result: 43,
+			frame0: []uint64{0, 3, 8, 11},
+			frames: []frame{{baseOff: 12, depth: 1, insns: []uint64{0, 3}}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.arch != host {
+				t.Skipf("ptrace_descent corpus arch %s != host %s", c.arch, host)
+			}
+			if !PtraceAvailable() {
+				t.Skipf("no ptrace single-step: %s", PtraceSkipReason())
+			}
+			nc, err := HwNativeCodeFromBytes(code)
+			if err != nil {
+				t.Fatalf("HwNativeCodeFromBytes: %v", err)
+			}
+			defer nc.Free()
+			base := uint64(nc.Base())
+
+			d := NewDescent(c.level)
+			if d == nil {
+				t.Fatal("NewDescent: got nil")
+			}
+			defer d.Free()
+			if c.hasAllow {
+				if rc := d.AllowRegion(nc.Base()+uintptr(c.allowOff), c.allowLen); rc != 0 {
+					t.Fatalf("AllowRegion: got %d, want 0", rc)
+				}
+			}
+			tr := NewHwTrace(64, 64)
+			defer tr.Free()
+
+			result, err := PtraceTraceCallEx(unsafe.Pointer(nc.Base()), nc.Len(), c.args, tr, d, c.region)
+			if err != nil {
+				t.Fatalf("PtraceTraceCallEx: %v", err)
+			}
+			if result != c.result {
+				t.Fatalf("result: got %d, want %d", result, c.result)
+			}
+			if got := d.FrameInsns(0); !descentEqualU64(got, c.frame0) {
+				t.Fatalf("frame0 insns: got %v, want %v", got, c.frame0)
+			}
+			gotEdges := d.Edges()
+			if len(gotEdges) != len(c.edges) {
+				t.Fatalf("edges: got %d, want %d", len(gotEdges), len(c.edges))
+			}
+			for i, e := range c.edges {
+				if gotEdges[i].Site != e.site || gotEdges[i].Target != base+e.targetOff {
+					t.Fatalf("edge %d: got site=%#x target=%#x, want site=%#x target=%#x",
+						i, gotEdges[i].Site, gotEdges[i].Target, e.site, base+e.targetOff)
+				}
+			}
+			for _, f := range c.frames {
+				idx := -1
+				for i := 1; i < d.FramesLen(); i++ {
+					if d.FrameBase(i) == base+f.baseOff {
+						idx = i
+						break
+					}
+				}
+				if idx < 0 {
+					t.Fatalf("no descended frame with base_off %#x", f.baseOff)
+				}
+				if d.FrameDepth(idx) != f.depth {
+					t.Fatalf("frame %d depth: got %d, want %d", idx, d.FrameDepth(idx), f.depth)
+				}
+				if got := d.FrameInsns(idx); !descentEqualU64(got, f.insns) {
+					t.Fatalf("frame %d insns: got %v, want %v", idx, got, f.insns)
+				}
+			}
+		})
 	}
 }
 

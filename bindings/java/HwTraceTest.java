@@ -38,6 +38,20 @@ public final class HwTraceTest {
         0x48, 0x01, (byte) 0xF8, 0x48, (byte) 0xFF, (byte) 0xCE, 0x75, (byte) 0xF8, (byte) 0xC3
     };
 
+    // Call-descent fixture (x86-64): a caller region R@0 that calls a sibling leaf S@0xc.
+    //   R@0:  mov rax,rdi; call S(+4); add rax,rsi; ret     (region = 0xc bytes)
+    //   S@0xc: inc rax; ret
+    // args (20,22) -> rax=20, S makes it 21, +22 => 43. The traced region is 0xc so S
+    // stays OUTSIDE it (else it mis-records as recursion); trace_call_ex takes region=0xc.
+    private static final byte[] DESCENT_FIXTURE = {
+        0x48, (byte) 0x89, (byte) 0xF8,               // mov rax, rdi
+        (byte) 0xE8, 0x04, 0x00, 0x00, 0x00,          // call +4 -> S@0xc
+        0x48, 0x01, (byte) 0xF0,                      // add rax, rsi
+        (byte) 0xC3,                                  // ret  (end of region R @0xc)
+        0x48, (byte) 0xFF, (byte) 0xC0,               // inc rax  (sibling leaf S)
+        (byte) 0xC3                                   // ret
+    };
+
     private static int testNo = 0;
 
     private static void ok(boolean cond, String name) {
@@ -73,6 +87,8 @@ public final class HwTraceTest {
             procRegionByAddr();
             procPerfmapSymbol();
             jitdumpFind();
+            ptraceDescentEdgesAndFrames();
+            ptraceDescentResolverUpcall();
             codeImageRoundTrip();
             codeImageBpfProbe();
         } catch (Throwable t) {
@@ -134,8 +150,10 @@ public final class HwTraceTest {
         trace.region("loop", () -> r[0] = code.call(1, 20));
         ok(r[0] == 20, "call(1,20): result == 20 (got " + r[0] + ")");
         ok(trace.insnsTotal() == 62, "insnsTotal == 62 (got " + trace.insnsTotal() + ")");
-        ok(trace.covered(0) && trace.covered(0x7), "covered(0) && covered(7)");
-        ok(trace.blocksLen() == 2, "blocksLen == 2 (got " + trace.blocksLen() + ")");
+        ok(trace.covered(0) && trace.covered(0x7) && trace.covered(0xf),
+           "covered(0) && covered(7) && covered(0xf)");
+        // 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+        ok(trace.blocksLen() == 3, "blocksLen == 3 (got " + trace.blocksLen() + ")");
         ok(!trace.truncated(), "!truncated");
 
         trace.free();
@@ -401,6 +419,97 @@ public final class HwTraceTest {
             throw new RuntimeException(e);
         } finally {
             if (path != null) try { Files.deleteIfExists(path); } catch (IOException ignored) {}
+        }
+    }
+
+    // The descent fixture is x86-64 machine code, so its live replay is x86-64-only
+    // (the ptrace stepper is available on aarch64 too, but these bytes would fault there).
+    private static boolean hostIsX86_64() {
+        String a = System.getProperty("os.arch", "").toLowerCase();
+        return a.contains("amd64") || a.contains("x86_64") || a.contains("x8664");
+    }
+
+    // Mirrors test_descent_edges_and_frames: fork + single-step the caller region R with a
+    // Descent handle threaded through, at L1 (record edges) and L2 (descend into the leaf).
+    private static void ptraceDescentEdgesAndFrames() {
+        if (ptraceUnavailable()) return;
+        if (!hostIsX86_64()) {
+            System.out.println("# SKIP ptrace descent: x86-64 fixture, host arch "
+                + System.getProperty("os.arch"));
+            return;
+        }
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(DESCENT_FIXTURE);
+        long base = code.base();
+        try {
+            // L1 RECORD_EDGES, region = 0xc: the call-out to the sibling is recorded as one
+            // edge and stepped over; only frame 0 exists.
+            try (HwTrace.Descent d = new HwTrace.Descent(HwTrace.DESCENT_RECORD_EDGES);
+                 HwTrace.NativeTrace tr = HwTrace.create(64, 64)) {
+                long result = HwTrace.ptraceTraceCallEx(MemorySegment.ofAddress(base), 0xC,
+                    new long[] {20, 22}, tr.handle(), d.handle());
+                ok(result == 43, "descent L1 call(20,22): result == 43 (got " + result + ")");
+                ok(d.framesLen() == 1, "descent L1 framesLen == 1 (got " + d.framesLen() + ")");
+                long[] f0 = d.frameInsns(0);
+                ok(Arrays.equals(f0, new long[] {0x0, 0x3, 0x8, 0xB}),
+                    "descent L1 frameInsns(0) == [0,3,8,11] (got " + Arrays.toString(f0) + ")");
+                HwTrace.Edge[] edges = d.edges();
+                ok(edges.length == 1 && edges[0].site() == 0x3
+                        && edges[0].target() == base + 0xC && edges[0].depth() == 0,
+                    "descent L1 one edge (site 3 -> base+0xc, depth 0) (got "
+                        + Arrays.toString(edges) + ")");
+                ok(!d.truncated(), "descent L1 !truncated");
+            }
+            // L2 DESCEND_KNOWN, region = 0xc, allow the sibling: it is single-stepped INTO
+            // as frame 1 (depth 1) and no edge is recorded.
+            try (HwTrace.Descent d = new HwTrace.Descent(HwTrace.DESCENT_DESCEND_KNOWN);
+                 HwTrace.NativeTrace tr = HwTrace.create(64, 64)) {
+                ok(d.allowRegion(base + 0xC, 4) == 0, "descent L2 allowRegion(base+0xc, 4) == 0");
+                long result = HwTrace.ptraceTraceCallEx(MemorySegment.ofAddress(base), 0xC,
+                    new long[] {20, 22}, tr.handle(), d.handle());
+                ok(result == 43, "descent L2 call(20,22): result == 43 (got " + result + ")");
+                ok(d.framesLen() == 2, "descent L2 framesLen == 2 (got " + d.framesLen() + ")");
+                long[] f0 = d.frameInsns(0);
+                ok(Arrays.equals(f0, new long[] {0x0, 0x3, 0x8, 0xB}),
+                    "descent L2 frameInsns(0) == [0,3,8,11] (got " + Arrays.toString(f0) + ")");
+                ok(d.frameBase(1) == base + 0xC, "descent L2 frameBase(1) == base+0xc (got 0x"
+                    + Long.toHexString(d.frameBase(1)) + ", want 0x" + Long.toHexString(base + 0xC) + ")");
+                ok(d.frameDepth(1) == 1, "descent L2 frameDepth(1) == 1 (got " + d.frameDepth(1) + ")");
+                long[] f1 = d.frameInsns(1);
+                ok(Arrays.equals(f1, new long[] {0x0, 0x3}),
+                    "descent L2 frameInsns(1) == [0,3] (got " + Arrays.toString(f1) + ")");
+                ok(d.edges().length == 0, "descent L2 edges() == [] (got " + d.edges().length + ")");
+            }
+        } finally {
+            code.free();
+        }
+    }
+
+    // The resolver upcall path: at L2 with no allow-region, a Descent.Resolver callback
+    // decides the leaf is descendable. Proves the FFM upcallStub actually fires in-process
+    // (the callback records the callee it saw) and drives the same descent as the allow-set.
+    private static void ptraceDescentResolverUpcall() {
+        if (ptraceUnavailable()) return;
+        if (!hostIsX86_64()) return; // the edges/frames test already printed the SKIP line
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(DESCENT_FIXTURE);
+        long base = code.base();
+        long sib = base + 0xC;
+        try (HwTrace.Descent d = new HwTrace.Descent(HwTrace.DESCENT_DESCEND_KNOWN);
+             HwTrace.NativeTrace tr = HwTrace.create(64, 64)) {
+            long[] seen = { -1 }; // the callee address the upcall was invoked with
+            d.setResolver(callee -> {
+                seen[0] = callee;
+                return callee == sib ? new long[] {sib, 4} : null;
+            });
+            long result = HwTrace.ptraceTraceCallEx(MemorySegment.ofAddress(base), 0xC,
+                new long[] {20, 22}, tr.handle(), d.handle());
+            ok(result == 43, "descent resolver call(20,22): result == 43 (got " + result + ")");
+            ok(seen[0] == sib, "descent resolver upcall fired with callee == base+0xc (got 0x"
+                + Long.toHexString(seen[0]) + ")");
+            ok(d.framesLen() == 2, "descent resolver descended (framesLen == 2, got "
+                + d.framesLen() + ")");
+            ok(d.frameBase(1) == sib, "descent resolver frameBase(1) == base+0xc");
+        } finally {
+            code.free();
         }
     }
 

@@ -132,6 +132,32 @@ typedef int      (*ci_watch_bpf_fn)(void *);
 typedef int      (*ci_poll_bpf_fn)(void *, int);
 typedef int      (*ci_next_fn)(void *, asmtest_codeimage_event_t *);
 
+// asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames, plus
+// the three descending _ex trace entry points. From the SAME libasmtest_hwtrace. The
+// resolver/denylist upcalls are C-callable Go functions (//export goDescent*Tramp in
+// descent_cgo.go); declared extern here so the set-callback bridges below can install
+// them, and so the linker binds them across the two cgo-generated C files.
+extern int goDescentResolverTramp(uint64_t callee, void *user, uint64_t *base_out, uint64_t *len_out);
+extern int goDescentDenylistTramp(uint64_t callee, void *user);
+
+typedef void *   (*desc_new_fn)(int);
+typedef void     (*desc_free_fn)(void *);
+typedef void     (*desc_set_u32_fn)(void *, uint32_t);
+typedef void     (*desc_set_u64_fn)(void *, uint64_t);
+typedef int      (*desc_region_fn)(void *, const void *, size_t);
+typedef void     (*desc_set_resolver_fn)(void *, int (*)(uint64_t, void *, uint64_t *, uint64_t *), void *);
+typedef void     (*desc_set_denylist_fn)(void *, int (*)(uint64_t, void *), void *);
+typedef size_t   (*desc_len_fn)(void *);
+typedef uint64_t (*desc_u64_idx_fn)(void *, size_t);
+typedef uint32_t (*desc_u32_idx_fn)(void *, size_t);
+typedef int32_t  (*desc_i32_idx_fn)(void *, size_t);
+typedef size_t   (*desc_count2_fn)(void *, size_t);
+typedef uint64_t (*desc_u64_idx2_fn)(void *, size_t, size_t);
+typedef int      (*desc_flag_fn)(void *);
+typedef int (*pt_trace_call_ex_fn)(const void *, size_t, const long *, int, long *, void *, void *);
+typedef int (*pt_trace_attached_ex_fn)(int, const void *, size_t, long *, void *, void *);
+typedef int (*pt_trace_attached_versioned_ex_fn)(int, const void *, size_t, void *, uint64_t, long *, void *, void *);
+
 static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
 static hw_resolve_fn          p_hw_resolve;
@@ -178,6 +204,34 @@ static ci_bpf_skip_reason_fn  p_ci_bpf_skip_reason;
 static ci_watch_bpf_fn        p_ci_watch_bpf;
 static ci_poll_bpf_fn         p_ci_poll_bpf;
 static ci_next_fn             p_ci_next;
+// asmtest_ptrace.h — call descent (asmtest_descent_t) + descending _ex entry points.
+static desc_new_fn            p_desc_new;
+static desc_free_fn           p_desc_free;
+static desc_set_u32_fn        p_desc_set_max_depth;
+static desc_set_u64_fn        p_desc_set_insn_budget;
+static desc_set_u32_fn        p_desc_set_watchdog_ms;
+static desc_region_fn         p_desc_allow_region;
+static desc_region_fn         p_desc_deny_region;
+static desc_set_resolver_fn   p_desc_set_resolver;
+static desc_set_denylist_fn   p_desc_set_denylist;
+static desc_len_fn            p_desc_edges_len;
+static desc_u64_idx_fn        p_desc_edge_site;
+static desc_u64_idx_fn        p_desc_edge_target;
+static desc_u32_idx_fn        p_desc_edge_depth;
+static desc_len_fn            p_desc_frames_len;
+static desc_u64_idx_fn        p_desc_frame_base;
+static desc_u64_idx_fn        p_desc_frame_len;
+static desc_u32_idx_fn        p_desc_frame_depth;
+static desc_i32_idx_fn        p_desc_frame_parent;
+static desc_count2_fn         p_desc_frame_insn_count;
+static desc_u64_idx2_fn       p_desc_frame_insn_at;
+static desc_count2_fn         p_desc_frame_block_count;
+static desc_u64_idx2_fn       p_desc_frame_block_at;
+static desc_flag_fn           p_desc_truncated;
+static desc_flag_fn           p_desc_depth_capped;
+static pt_trace_call_ex_fn    p_pt_trace_call_ex;
+static pt_trace_attached_ex_fn p_pt_trace_attached_ex;
+static pt_trace_attached_versioned_ex_fn p_pt_trace_attached_versioned_ex;
 
 static int g_hw_loaded;   // 1 once dlopen + every dlsym succeeded.
 static char g_hw_path[4096]; // the lib string this process dlopen()ed (for LibraryPath).
@@ -244,6 +298,34 @@ static void asmtest_hw_resolve(void) {
     p_ci_watch_bpf         = (ci_watch_bpf_fn)dlsym(h, "asmtest_codeimage_watch_bpf");
     p_ci_poll_bpf          = (ci_poll_bpf_fn)dlsym(h, "asmtest_codeimage_poll_bpf");
     p_ci_next              = (ci_next_fn)dlsym(h, "asmtest_codeimage_next");
+    // asmtest_ptrace.h — call descent + descending _ex entry points, same handle.
+    p_desc_new             = (desc_new_fn)dlsym(h, "asmtest_descent_new");
+    p_desc_free            = (desc_free_fn)dlsym(h, "asmtest_descent_free");
+    p_desc_set_max_depth   = (desc_set_u32_fn)dlsym(h, "asmtest_descent_set_max_depth");
+    p_desc_set_insn_budget = (desc_set_u64_fn)dlsym(h, "asmtest_descent_set_insn_budget");
+    p_desc_set_watchdog_ms = (desc_set_u32_fn)dlsym(h, "asmtest_descent_set_watchdog_ms");
+    p_desc_allow_region    = (desc_region_fn)dlsym(h, "asmtest_descent_allow_region");
+    p_desc_deny_region     = (desc_region_fn)dlsym(h, "asmtest_descent_deny_region");
+    p_desc_set_resolver    = (desc_set_resolver_fn)dlsym(h, "asmtest_descent_set_resolver");
+    p_desc_set_denylist    = (desc_set_denylist_fn)dlsym(h, "asmtest_descent_set_denylist");
+    p_desc_edges_len       = (desc_len_fn)dlsym(h, "asmtest_descent_edges_len");
+    p_desc_edge_site       = (desc_u64_idx_fn)dlsym(h, "asmtest_descent_edge_site");
+    p_desc_edge_target     = (desc_u64_idx_fn)dlsym(h, "asmtest_descent_edge_target");
+    p_desc_edge_depth      = (desc_u32_idx_fn)dlsym(h, "asmtest_descent_edge_depth");
+    p_desc_frames_len      = (desc_len_fn)dlsym(h, "asmtest_descent_frames_len");
+    p_desc_frame_base      = (desc_u64_idx_fn)dlsym(h, "asmtest_descent_frame_base");
+    p_desc_frame_len       = (desc_u64_idx_fn)dlsym(h, "asmtest_descent_frame_len");
+    p_desc_frame_depth     = (desc_u32_idx_fn)dlsym(h, "asmtest_descent_frame_depth");
+    p_desc_frame_parent    = (desc_i32_idx_fn)dlsym(h, "asmtest_descent_frame_parent");
+    p_desc_frame_insn_count  = (desc_count2_fn)dlsym(h, "asmtest_descent_frame_insn_count");
+    p_desc_frame_insn_at     = (desc_u64_idx2_fn)dlsym(h, "asmtest_descent_frame_insn_at");
+    p_desc_frame_block_count = (desc_count2_fn)dlsym(h, "asmtest_descent_frame_block_count");
+    p_desc_frame_block_at    = (desc_u64_idx2_fn)dlsym(h, "asmtest_descent_frame_block_at");
+    p_desc_truncated       = (desc_flag_fn)dlsym(h, "asmtest_descent_truncated");
+    p_desc_depth_capped    = (desc_flag_fn)dlsym(h, "asmtest_descent_depth_capped");
+    p_pt_trace_call_ex     = (pt_trace_call_ex_fn)dlsym(h, "asmtest_ptrace_trace_call_ex");
+    p_pt_trace_attached_ex = (pt_trace_attached_ex_fn)dlsym(h, "asmtest_ptrace_trace_attached_ex");
+    p_pt_trace_attached_versioned_ex = (pt_trace_attached_versioned_ex_fn)dlsym(h, "asmtest_ptrace_trace_attached_versioned_ex");
     g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
                   p_hw_auto && p_trace_resolve && p_trace_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
@@ -258,7 +340,19 @@ static void asmtest_hw_resolve(void) {
                   p_ci_available && p_ci_skip_reason && p_ci_new && p_ci_free &&
                   p_ci_track && p_ci_refresh && p_ci_now && p_ci_bytes_at &&
                   p_ci_bpf_available && p_ci_bpf_skip_reason && p_ci_watch_bpf &&
-                  p_ci_poll_bpf && p_ci_next;
+                  p_ci_poll_bpf && p_ci_next &&
+                  p_desc_new && p_desc_free && p_desc_set_max_depth &&
+                  p_desc_set_insn_budget && p_desc_set_watchdog_ms &&
+                  p_desc_allow_region && p_desc_deny_region &&
+                  p_desc_set_resolver && p_desc_set_denylist &&
+                  p_desc_edges_len && p_desc_edge_site && p_desc_edge_target &&
+                  p_desc_edge_depth && p_desc_frames_len && p_desc_frame_base &&
+                  p_desc_frame_len && p_desc_frame_depth && p_desc_frame_parent &&
+                  p_desc_frame_insn_count && p_desc_frame_insn_at &&
+                  p_desc_frame_block_count && p_desc_frame_block_at &&
+                  p_desc_truncated && p_desc_depth_capped &&
+                  p_pt_trace_call_ex && p_pt_trace_attached_ex &&
+                  p_pt_trace_attached_versioned_ex;
 }
 
 static int asmtest_hw_is_loaded(void) { return g_hw_loaded; }
@@ -405,6 +499,48 @@ static int asmtest_go_ci_poll_bpf(void *img, int timeout_ms) {
 }
 static int asmtest_go_ci_next(void *img, asmtest_codeimage_event_t *out) {
     return p_ci_next ? p_ci_next(img, out) : -1;
+}
+
+// asmtest_ptrace.h — call descent (asmtest_descent_t) bridges. Each NULL-guards its
+// (already-resolved) pointer so a partial load can never dereference NULL. The two
+// set-callback bridges install the //export'd Go trampolines (descent_cgo.go); `user`
+// is the descent handle, the key the trampoline uses to find the Go closure.
+static void *asmtest_go_desc_new(int level) { return p_desc_new ? p_desc_new(level) : NULL; }
+static void asmtest_go_desc_free(void *d) { if (p_desc_free) p_desc_free(d); }
+static void asmtest_go_desc_set_max_depth(void *d, uint32_t v) { if (p_desc_set_max_depth) p_desc_set_max_depth(d, v); }
+static void asmtest_go_desc_set_insn_budget(void *d, uint64_t v) { if (p_desc_set_insn_budget) p_desc_set_insn_budget(d, v); }
+static void asmtest_go_desc_set_watchdog_ms(void *d, uint32_t v) { if (p_desc_set_watchdog_ms) p_desc_set_watchdog_ms(d, v); }
+static int asmtest_go_desc_allow_region(void *d, const void *b, size_t n) { return p_desc_allow_region ? p_desc_allow_region(d, b, n) : -1; }
+static int asmtest_go_desc_deny_region(void *d, const void *b, size_t n) { return p_desc_deny_region ? p_desc_deny_region(d, b, n) : -1; }
+static void asmtest_go_desc_set_resolver(void *d, void *user) { if (p_desc_set_resolver) p_desc_set_resolver(d, goDescentResolverTramp, user); }
+static void asmtest_go_desc_set_denylist(void *d, void *user) { if (p_desc_set_denylist) p_desc_set_denylist(d, goDescentDenylistTramp, user); }
+static size_t asmtest_go_desc_edges_len(void *d) { return p_desc_edges_len ? p_desc_edges_len(d) : 0; }
+static uint64_t asmtest_go_desc_edge_site(void *d, size_t i) { return p_desc_edge_site ? p_desc_edge_site(d, i) : 0; }
+static uint64_t asmtest_go_desc_edge_target(void *d, size_t i) { return p_desc_edge_target ? p_desc_edge_target(d, i) : 0; }
+static uint32_t asmtest_go_desc_edge_depth(void *d, size_t i) { return p_desc_edge_depth ? p_desc_edge_depth(d, i) : 0; }
+static size_t asmtest_go_desc_frames_len(void *d) { return p_desc_frames_len ? p_desc_frames_len(d) : 0; }
+static uint64_t asmtest_go_desc_frame_base(void *d, size_t f) { return p_desc_frame_base ? p_desc_frame_base(d, f) : 0; }
+static uint64_t asmtest_go_desc_frame_len(void *d, size_t f) { return p_desc_frame_len ? p_desc_frame_len(d, f) : 0; }
+static uint32_t asmtest_go_desc_frame_depth(void *d, size_t f) { return p_desc_frame_depth ? p_desc_frame_depth(d, f) : 0; }
+static int32_t asmtest_go_desc_frame_parent(void *d, size_t f) { return p_desc_frame_parent ? p_desc_frame_parent(d, f) : -1; }
+static size_t asmtest_go_desc_frame_insn_count(void *d, size_t f) { return p_desc_frame_insn_count ? p_desc_frame_insn_count(d, f) : 0; }
+static uint64_t asmtest_go_desc_frame_insn_at(void *d, size_t f, size_t i) { return p_desc_frame_insn_at ? p_desc_frame_insn_at(d, f, i) : 0; }
+static size_t asmtest_go_desc_frame_block_count(void *d, size_t f) { return p_desc_frame_block_count ? p_desc_frame_block_count(d, f) : 0; }
+static uint64_t asmtest_go_desc_frame_block_at(void *d, size_t f, size_t i) { return p_desc_frame_block_at ? p_desc_frame_block_at(d, f, i) : 0; }
+static int asmtest_go_desc_truncated(void *d) { return p_desc_truncated ? p_desc_truncated(d) : 0; }
+static int asmtest_go_desc_depth_capped(void *d) { return p_desc_depth_capped ? p_desc_depth_capped(d) : 0; }
+static int asmtest_go_pt_trace_call_ex(const void *code, size_t len, const long *args, int nargs,
+                                       long *result, void *trace, void *descent) {
+    return p_pt_trace_call_ex ? p_pt_trace_call_ex(code, len, args, nargs, result, trace, descent) : -1;
+}
+static int asmtest_go_pt_trace_attached_ex(int pid, const void *base, size_t len, long *result,
+                                           void *trace, void *descent) {
+    return p_pt_trace_attached_ex ? p_pt_trace_attached_ex(pid, base, len, result, trace, descent) : -1;
+}
+static int asmtest_go_pt_trace_attached_versioned_ex(int pid, const void *base, size_t len, void *img,
+                                                     uint64_t when, long *result, void *trace, void *descent) {
+    return p_pt_trace_attached_versioned_ex
+        ? p_pt_trace_attached_versioned_ex(pid, base, len, img, when, result, trace, descent) : -1;
 }
 */
 import "C"
@@ -1099,3 +1235,275 @@ func (c *CodeImage) Close() {
 // Free is an alias for Close, matching the Free naming of the other handle types in
 // this package (HwNativeCode, HwTrace).
 func (c *CodeImage) Free() { c.Close() }
+
+// ---- Call descent (asmtest_descent_t) ----
+//
+// Configure how the ptrace stepper handles the call-outs it would otherwise step
+// over, and read back the recorded edges + nested frames. Four levels (the Descent*
+// constants). Pass a *Descent to the *Ex trace entry points; frame 0 is the root
+// region (a superset of the flat trace) and descended callees are frames 1..N. Mirrors
+// the Python wrapper's Descent class.
+//
+// The resolver / denylist upcalls are GC-safe: their trampolines are //export'd
+// C-callable Go functions (descent_cgo.go), and the Go closures they dispatch to are
+// held in a package-level registry keyed by the handle for the handle's lifetime — so
+// Go's moving GC can neither collect nor relocate them while the out-of-process
+// single-stepper is calling back into them mid-step (the go(cgo) analogue of the
+// Python wrapper keeping the CFUNCTYPE trampolines referenced).
+
+// asmtest_descent_level_t — call-descent policy. OFF steps over and records nothing
+// (today's behaviour); RECORD_EDGES records (call-site -> callee) edges and steps
+// over; DESCEND_KNOWN single-steps INTO calls that resolve (allow-set / resolver),
+// else records an edge; DESCEND_ALL steps INTO everything (denylist + budget +
+// watchdog gated).
+const (
+	DescentOff          = 0
+	DescentRecordEdges  = 1
+	DescentDescendKnown = 2
+	DescentDescendAll   = 3
+)
+
+// DescentEdge is one recorded (call-site -> callee) edge: Site is the call
+// instruction's offset from the region entry, Target is the callee's ABSOLUTE
+// address, Depth is the caller frame's depth (0 = frame 0).
+type DescentEdge struct {
+	Site   uint64
+	Target uint64
+	Depth  uint32
+}
+
+// DescentResolver decides, per call-out, whether to descend into callee and — when
+// known — its extent. Return (true, base, length) to descend into the callee region
+// [base, base+length); (false, 0, 0) to step over. A true with length 0 steps over
+// (mirrors the Python wrapper, and the C engine ignores a zero-length resolution).
+type DescentResolver func(callee uint64) (descend bool, base uint64, length uint64)
+
+// DescentDenylist returns true to REFUSE descent into callee (step over it), false to
+// allow it. Consulted in addition to the deny-region set.
+type DescentDenylist func(callee uint64) bool
+
+// Descent owns an asmtest_descent_t handle. Release it with Free (or the alias Close);
+// both are idempotent — this wrapper NULLs the handle and the native free is itself
+// NULL-safe, so a double free is a no-op (mirroring the trace-handle discipline).
+type Descent struct{ h unsafe.Pointer }
+
+// NewDescent allocates a descent handle at level (one of the Descent* constants).
+// Returns nil when libasmtest_hwtrace is not loaded or the allocation fails.
+func NewDescent(level int) *Descent {
+	if C.asmtest_hw_is_loaded() == 0 {
+		return nil
+	}
+	h := C.asmtest_go_desc_new(C.int(level))
+	if h == nil {
+		return nil
+	}
+	return &Descent{h: h}
+}
+
+// Free releases the handle and drops any registered resolver / denylist closures from
+// the package registry. Safe to call more than once.
+func (d *Descent) Free() {
+	if d.h != nil {
+		descentUnregister(d.h)
+		C.asmtest_go_desc_free(d.h)
+		d.h = nil
+	}
+}
+
+// Close is an alias for Free, matching the CodeImage naming.
+func (d *Descent) Close() { d.Free() }
+
+// ---- configuration (in) ----
+
+// SetMaxDepth caps nested descent depth (frame 0 is depth 0). 0 restores the default.
+func (d *Descent) SetMaxDepth(maxDepth uint32) {
+	C.asmtest_go_desc_set_max_depth(d.h, C.uint32_t(maxDepth))
+}
+
+// SetInsnBudget sets the total single-step instruction budget across all descended
+// frames. 0 restores the default.
+func (d *Descent) SetInsnBudget(budget uint64) {
+	C.asmtest_go_desc_set_insn_budget(d.h, C.uint64_t(budget))
+}
+
+// SetWatchdogMs sets the real-time watchdog (milliseconds) for a descended run. 0
+// restores the default.
+func (d *Descent) SetWatchdogMs(ms uint32) {
+	C.asmtest_go_desc_set_watchdog_ms(d.h, C.uint32_t(ms))
+}
+
+// AllowRegion adds [base, base+length) to the level-2 allow-set (descend into calls
+// landing inside). Returns 0 on success, negative on OOM.
+func (d *Descent) AllowRegion(base uintptr, length int) int {
+	return int(C.asmtest_go_desc_allow_region(d.h, unsafe.Pointer(base), C.size_t(length)))
+}
+
+// DenyRegion adds [base, base+length) to the level-3 deny-set (never descend into it).
+// Returns 0 on success, negative on OOM.
+func (d *Descent) DenyRegion(base uintptr, length int) int {
+	return int(C.asmtest_go_desc_deny_region(d.h, unsafe.Pointer(base), C.size_t(length)))
+}
+
+// SetResolver installs a level-2/3 resolver upcall. The closure is kept alive in a
+// package-level registry keyed by this handle until Free, so a moving GC cannot
+// collect or relocate it while the stepper calls back into it.
+func (d *Descent) SetResolver(fn DescentResolver) {
+	descentSetResolver(d.h, fn)
+	C.asmtest_go_desc_set_resolver(d.h, d.h)
+}
+
+// SetDenylist installs a level-3 denylist upcall (kept alive like SetResolver).
+func (d *Descent) SetDenylist(fn DescentDenylist) {
+	descentSetDenylist(d.h, fn)
+	C.asmtest_go_desc_set_denylist(d.h, d.h)
+}
+
+// ---- results (out) ----
+
+// Edges is every stepped-over call (level >= 1) as (Site, Target, Depth).
+func (d *Descent) Edges() []DescentEdge {
+	n := uint64(C.asmtest_go_desc_edges_len(d.h))
+	out := make([]DescentEdge, n)
+	for i := uint64(0); i < n; i++ {
+		out[i] = DescentEdge{
+			Site:   uint64(C.asmtest_go_desc_edge_site(d.h, C.size_t(i))),
+			Target: uint64(C.asmtest_go_desc_edge_target(d.h, C.size_t(i))),
+			Depth:  uint32(C.asmtest_go_desc_edge_depth(d.h, C.size_t(i))),
+		}
+	}
+	return out
+}
+
+// FramesLen is the number of recorded frames (frame 0 is the root region).
+func (d *Descent) FramesLen() int { return int(C.asmtest_go_desc_frames_len(d.h)) }
+
+// FrameBase is frame f's ABSOLUTE base address.
+func (d *Descent) FrameBase(f int) uint64 {
+	return uint64(C.asmtest_go_desc_frame_base(d.h, C.size_t(f)))
+}
+
+// FrameLen is frame f's byte length.
+func (d *Descent) FrameLen(f int) uint64 {
+	return uint64(C.asmtest_go_desc_frame_len(d.h, C.size_t(f)))
+}
+
+// FrameDepth is frame f's nesting depth (0 = frame 0).
+func (d *Descent) FrameDepth(f int) uint32 {
+	return uint32(C.asmtest_go_desc_frame_depth(d.h, C.size_t(f)))
+}
+
+// FrameParent is frame f's parent frame index, or -1 for the root.
+func (d *Descent) FrameParent(f int) int32 {
+	return int32(C.asmtest_go_desc_frame_parent(d.h, C.size_t(f)))
+}
+
+// FrameInsns is frame f's ordered instruction-offset stream.
+func (d *Descent) FrameInsns(f int) []uint64 {
+	n := uint64(C.asmtest_go_desc_frame_insn_count(d.h, C.size_t(f)))
+	out := make([]uint64, n)
+	for i := uint64(0); i < n; i++ {
+		out[i] = uint64(C.asmtest_go_desc_frame_insn_at(d.h, C.size_t(f), C.size_t(i)))
+	}
+	return out
+}
+
+// FrameBlocks is frame f's distinct basic-block start offsets.
+func (d *Descent) FrameBlocks(f int) []uint64 {
+	n := uint64(C.asmtest_go_desc_frame_block_count(d.h, C.size_t(f)))
+	out := make([]uint64, n)
+	for i := uint64(0); i < n; i++ {
+		out[i] = uint64(C.asmtest_go_desc_frame_block_at(d.h, C.size_t(f), C.size_t(i)))
+	}
+	return out
+}
+
+// Truncated reports whether a pool overflowed / a byte failed to decode (the record is
+// incomplete).
+func (d *Descent) Truncated() bool { return C.asmtest_go_desc_truncated(d.h) != 0 }
+
+// DepthCapped reports whether descent stopped at a policy limit (max_depth / budget /
+// recursion cap), as distinct from a pool overflow.
+func (d *Descent) DepthCapped() bool { return C.asmtest_go_desc_depth_capped(d.h) != 0 }
+
+// ---- Descending trace entry points (asmtest_ptrace_*_ex) ----
+
+// PtraceTraceCallEx is the descending variant of PtraceTraceCall: it threads a
+// *Descent through the single-step loop so call-outs are recorded as edges and (at
+// level >= 2) descended as nested frames. trace (the flat frame-0 view) may be nil to
+// record only into descent, and descent may be nil (then it is exactly
+// PtraceTraceCall). CRITICAL: region is the TRACED region's byte length, NOT the whole
+// allocation — pass it when the call target is an in-blob sibling that must stay
+// OUTSIDE the region (otherwise the sibling falls inside and mis-records as recursion).
+// region <= 0 defaults to codeLen (the whole allocation).
+func PtraceTraceCallEx(codeBase unsafe.Pointer, codeLen int, args []int64, trace *HwTrace,
+	descent *Descent, region int) (int64, error) {
+	n := len(args)
+	arr := make([]C.long, n)
+	if n == 0 {
+		arr = make([]C.long, 1)
+	}
+	for i, a := range args {
+		arr[i] = C.long(a)
+	}
+	if region <= 0 {
+		region = codeLen
+	}
+	var th, dh unsafe.Pointer
+	if trace != nil {
+		th = trace.h
+	}
+	if descent != nil {
+		dh = descent.h
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_call_ex(codeBase, C.size_t(region), &arr[0], C.int(n),
+		&result, th, dh)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_call_ex failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// PtraceTraceAttachedEx is the descending variant of PtraceTraceAttached for an
+// externally-attached, already-ptrace-stopped process. trace and/or descent may be nil.
+func PtraceTraceAttachedEx(pid int, base uintptr, length int, trace *HwTrace,
+	descent *Descent) (int64, error) {
+	var th, dh unsafe.Pointer
+	if trace != nil {
+		th = trace.h
+	}
+	if descent != nil {
+		dh = descent.h
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_attached_ex(C.int(pid), unsafe.Pointer(base),
+		C.size_t(length), &result, th, dh)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_ex failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// PtraceTraceAttachedVersionedEx is the descending variant of
+// PtraceTraceAttachedVersioned (decoded against code-image-versioned bytes). A nil img
+// is exactly PtraceTraceAttachedEx; trace and/or descent may be nil.
+func PtraceTraceAttachedVersionedEx(pid int, base uintptr, length int, img *CodeImage,
+	when uint64, trace *HwTrace, descent *Descent) (int64, error) {
+	var imgPtr, th, dh unsafe.Pointer
+	if img != nil {
+		imgPtr = img.h
+	}
+	if trace != nil {
+		th = trace.h
+	}
+	if descent != nil {
+		dh = descent.h
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_attached_versioned_ex(C.int(pid), unsafe.Pointer(base),
+		C.size_t(length), imgPtr, C.uint64_t(when), &result, th, dh)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_versioned_ex failed: %d", int(rc))
+	}
+	return int64(result), nil
+}

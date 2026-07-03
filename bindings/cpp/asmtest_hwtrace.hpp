@@ -106,6 +106,21 @@ enum PtraceStatus {
     ASMTEST_PTRACE_ENOENT = -7,  // region / symbol / method not found
 };
 
+/* asmtest_descent_level_t — call-descent policy (see the Descent class). Redeclared
+ * here (not via asmtest_ptrace.h) so this wrapper keeps depending only on the hwtrace
+ * headers, exactly as PtraceStatus above and the Python wrapper's DESCENT_* do.
+ *
+ * NOTE: this binding is allow-set-only. dlopen/dlsym cannot host a GC-safe capturing
+ * upcall, so it deliberately does NOT wrap the descent resolver/denylist setters (see
+ * scripts/bindings-parity-allow.txt). DESCEND_KNOWN still descends via allow_region();
+ * DESCEND_ALL / resolver-gated descent is unavailable here. */
+enum DescentLevel {
+    DESCENT_OFF = 0,            // step over, record nothing (default)
+    DESCENT_RECORD_EDGES = 1,   // record (call-site -> callee) edges, still step over
+    DESCENT_DESCEND_KNOWN = 2,  // step INTO calls resolvable via the allow-set
+    DESCENT_DESCEND_ALL = 3,    // step INTO everything (needs a resolver/denylist: N/A here)
+};
+
 /* asmtest_codeimage.h — time-aware code-image recorder status codes. Redeclared
  * here (not via the C header) so this wrapper keeps depending only on the hwtrace
  * headers, exactly as PtraceStatus above and the Python wrapper do. */
@@ -205,6 +220,42 @@ struct HwApi {
     int (*ptrace_trace_attached_versioned)(int, const void *, size_t, void *,
                                            uint64_t, long *, void *) = nullptr;
 
+    /* asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames.
+     * The descent handle is the same opaque void* idiom as the trace handle. This
+     * table wraps the 25 allow-set-visible descent symbols; the two callback
+     * installers (set_resolver / set_denylist) are intentionally NOT resolved here
+     * because a dlopen FFI cannot host a GC-safe capturing upcall (see the enum note
+     * above and scripts/bindings-parity-allow.txt). */
+    void *(*descent_new)(int) = nullptr;
+    void (*descent_free)(void *) = nullptr;
+    void (*descent_set_max_depth)(void *, uint32_t) = nullptr;
+    void (*descent_set_insn_budget)(void *, uint64_t) = nullptr;
+    void (*descent_set_watchdog_ms)(void *, uint32_t) = nullptr;
+    int (*descent_allow_region)(void *, const void *, size_t) = nullptr;
+    int (*descent_deny_region)(void *, const void *, size_t) = nullptr;
+    size_t (*descent_edges_len)(void *) = nullptr;
+    uint64_t (*descent_edge_site)(void *, size_t) = nullptr;
+    uint64_t (*descent_edge_target)(void *, size_t) = nullptr;
+    uint32_t (*descent_edge_depth)(void *, size_t) = nullptr;
+    size_t (*descent_frames_len)(void *) = nullptr;
+    uint64_t (*descent_frame_base)(void *, size_t) = nullptr;
+    uint64_t (*descent_frame_len)(void *, size_t) = nullptr;
+    uint32_t (*descent_frame_depth)(void *, size_t) = nullptr;
+    int32_t (*descent_frame_parent)(void *, size_t) = nullptr;
+    size_t (*descent_frame_insn_count)(void *, size_t) = nullptr;
+    uint64_t (*descent_frame_insn_at)(void *, size_t, size_t) = nullptr;
+    size_t (*descent_frame_block_count)(void *, size_t) = nullptr;
+    uint64_t (*descent_frame_block_at)(void *, size_t, size_t) = nullptr;
+    int (*descent_truncated)(void *) = nullptr;
+    int (*descent_depth_capped)(void *) = nullptr;
+    int (*ptrace_trace_call_ex)(const void *, size_t, const long *, int, long *,
+                                void *, void *) = nullptr;
+    int (*ptrace_trace_attached_ex)(int, const void *, size_t, long *, void *,
+                                    void *) = nullptr;
+    int (*ptrace_trace_attached_versioned_ex)(int, const void *, size_t, void *,
+                                              uint64_t, long *, void *,
+                                              void *) = nullptr;
+
     /* True if the library loaded and every symbol resolved. */
     bool loaded() const { return handle != nullptr; }
 };
@@ -297,6 +348,49 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_codeimage_next", t.ci_next);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_attached_versioned",
                          t.ptrace_trace_attached_versioned);
+        // Call descent (25 allow-set-visible symbols). set_resolver / set_denylist
+        // are intentionally not resolved (allow-set-only binding; see the enum note).
+        ok &= dlsym_into(h, "asmtest_descent_new", t.descent_new);
+        ok &= dlsym_into(h, "asmtest_descent_free", t.descent_free);
+        ok &= dlsym_into(h, "asmtest_descent_set_max_depth",
+                         t.descent_set_max_depth);
+        ok &= dlsym_into(h, "asmtest_descent_set_insn_budget",
+                         t.descent_set_insn_budget);
+        ok &= dlsym_into(h, "asmtest_descent_set_watchdog_ms",
+                         t.descent_set_watchdog_ms);
+        ok &= dlsym_into(h, "asmtest_descent_allow_region",
+                         t.descent_allow_region);
+        ok &= dlsym_into(h, "asmtest_descent_deny_region",
+                         t.descent_deny_region);
+        ok &= dlsym_into(h, "asmtest_descent_edges_len", t.descent_edges_len);
+        ok &= dlsym_into(h, "asmtest_descent_edge_site", t.descent_edge_site);
+        ok &= dlsym_into(h, "asmtest_descent_edge_target",
+                         t.descent_edge_target);
+        ok &= dlsym_into(h, "asmtest_descent_edge_depth", t.descent_edge_depth);
+        ok &= dlsym_into(h, "asmtest_descent_frames_len", t.descent_frames_len);
+        ok &= dlsym_into(h, "asmtest_descent_frame_base", t.descent_frame_base);
+        ok &= dlsym_into(h, "asmtest_descent_frame_len", t.descent_frame_len);
+        ok &= dlsym_into(h, "asmtest_descent_frame_depth",
+                         t.descent_frame_depth);
+        ok &= dlsym_into(h, "asmtest_descent_frame_parent",
+                         t.descent_frame_parent);
+        ok &= dlsym_into(h, "asmtest_descent_frame_insn_count",
+                         t.descent_frame_insn_count);
+        ok &= dlsym_into(h, "asmtest_descent_frame_insn_at",
+                         t.descent_frame_insn_at);
+        ok &= dlsym_into(h, "asmtest_descent_frame_block_count",
+                         t.descent_frame_block_count);
+        ok &= dlsym_into(h, "asmtest_descent_frame_block_at",
+                         t.descent_frame_block_at);
+        ok &= dlsym_into(h, "asmtest_descent_truncated", t.descent_truncated);
+        ok &= dlsym_into(h, "asmtest_descent_depth_capped",
+                         t.descent_depth_capped);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_call_ex",
+                         t.ptrace_trace_call_ex);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_attached_ex",
+                         t.ptrace_trace_attached_ex);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_attached_versioned_ex",
+                         t.ptrace_trace_attached_versioned_ex);
         if (!ok) {
             ::dlclose(h);
             return HwApi{};  // a fresh, empty table -> available() == false
@@ -666,6 +760,191 @@ struct JitMethod {
     std::vector<std::uint8_t> code;  // the recorded bytes (empty unless requested)
 };
 
+/// Forward declaration: Descent::frame() hands out a FrameView, defined just after
+/// Descent so its accessors can call Descent's public readers.
+class FrameView;
+
+/// Call descent (asmtest_descent_t): configure how the ptrace stepper handles the
+/// call-outs it would otherwise step over, and read back the recorded edges + nested
+/// frames. Four levels (see DescentLevel): OFF, RECORD_EDGES, DESCEND_KNOWN,
+/// DESCEND_ALL. Pass to Ptrace::traceCallEx and friends. Frame 0 is the root region
+/// (a superset of the flat trace); descended callees are frames 1..N.
+///
+/// Move-only; owns the handle with an idempotent, NULL-safe free() (the native side
+/// also NULLs internally, so a double free is a no-op — the trace-handle discipline
+/// this header uses everywhere). This binding is ALLOW-SET-ONLY: it offers
+/// allow_region()/deny_region() but no set_resolver/set_denylist callback API, because
+/// a dlopen FFI cannot host a GC-safe capturing upcall.
+class Descent {
+  public:
+    /// A single stepped-over call-out (level >= 1): the call-site offset within its
+    /// frame, the ABSOLUTE callee target address, and the caller's descent depth.
+    struct Edge {
+        std::uint64_t site;
+        std::uint64_t target;
+        std::uint32_t depth;
+    };
+
+    /// Allocate a descent handle at `level` (conservative depth/budget/watchdog
+    /// defaults; empty allow-set). Throws std::runtime_error if the library is
+    /// missing or allocation fails.
+    explicit Descent(int level = DESCENT_OFF) {
+        handle_ = detail::require().descent_new(level);
+        if (!handle_)
+            throw std::runtime_error("asmtest_descent_new failed");
+    }
+
+    Descent(const Descent &) = delete;
+    Descent &operator=(const Descent &) = delete;
+    Descent(Descent &&o) noexcept : handle_(o.handle_) { o.handle_ = nullptr; }
+    Descent &operator=(Descent &&o) noexcept {
+        if (this != &o) {
+            free();
+            handle_ = o.handle_;
+            o.handle_ = nullptr;
+        }
+        return *this;
+    }
+    ~Descent() { free(); }
+
+    // ---- configuration (in) ----
+
+    /// Ceiling on nested descent depth (frame 0 is depth 0). 0 restores the default.
+    void set_max_depth(std::uint32_t d) {
+        detail::api().descent_set_max_depth(handle_, d);
+    }
+    /// Total single-step instruction budget across all descended frames; 0 = default.
+    void set_insn_budget(std::uint64_t b) {
+        detail::api().descent_set_insn_budget(handle_, b);
+    }
+    /// Real-time watchdog (ms) for a descended run; 0 = default.
+    void set_watchdog_ms(std::uint32_t ms) {
+        detail::api().descent_set_watchdog_ms(handle_, ms);
+    }
+    /// Add [base, base+len) to the level-2 allow-set (descend into calls landing
+    /// inside). Returns 0 on success, negative on OOM.
+    int allow_region(const void *base, std::size_t len) {
+        return detail::api().descent_allow_region(handle_, base, len);
+    }
+    /// Add [base, base+len) to the level-3 deny-set (never descend into it).
+    int deny_region(const void *base, std::size_t len) {
+        return detail::api().descent_deny_region(handle_, base, len);
+    }
+
+    // ---- results (out) ----
+
+    /// Every stepped-over call-out (level >= 1), in record order.
+    std::vector<Edge> edges() const {
+        const auto &a = detail::api();
+        std::size_t n = a.descent_edges_len(handle_);
+        std::vector<Edge> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = Edge{a.descent_edge_site(handle_, i),
+                        a.descent_edge_target(handle_, i),
+                        a.descent_edge_depth(handle_, i)};
+        return v;
+    }
+
+    /// Number of recorded frames (>= 1 once a call is traced: frame 0 is the root).
+    std::size_t frames_len() const {
+        return detail::api().descent_frames_len(handle_);
+    }
+    /// ABSOLUTE base address of frame `f`.
+    std::uint64_t frame_base(std::size_t f) const {
+        return detail::api().descent_frame_base(handle_, f);
+    }
+    /// Byte length of frame `f`'s region.
+    std::uint64_t frame_len(std::size_t f) const {
+        return detail::api().descent_frame_len(handle_, f);
+    }
+    /// Descent depth of frame `f` (0 = frame 0 / root).
+    std::uint32_t frame_depth(std::size_t f) const {
+        return detail::api().descent_frame_depth(handle_, f);
+    }
+    /// Parent frame index of frame `f` (-1 = root).
+    std::int32_t frame_parent(std::size_t f) const {
+        return detail::api().descent_frame_parent(handle_, f);
+    }
+    /// Frame `f`'s instruction offsets (relative to the frame base), execution order.
+    std::vector<std::uint64_t> frame_insns(std::size_t f) const {
+        const auto &a = detail::api();
+        std::size_t n = a.descent_frame_insn_count(handle_, f);
+        std::vector<std::uint64_t> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = a.descent_frame_insn_at(handle_, f, i);
+        return v;
+    }
+    /// Frame `f`'s distinct basic-block start offsets (relative to the frame base).
+    std::vector<std::uint64_t> frame_blocks(std::size_t f) const {
+        const auto &a = detail::api();
+        std::size_t n = a.descent_frame_block_count(handle_, f);
+        std::vector<std::uint64_t> v(n);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = a.descent_frame_block_at(handle_, f, i);
+        return v;
+    }
+    /// True if a pool overflowed / a byte failed to decode (record incomplete).
+    bool truncated() const {
+        return detail::api().descent_truncated(handle_) != 0;
+    }
+    /// True if descent stopped at a policy limit (max_depth / budget / recursion
+    /// cap) — distinct from a pool overflow.
+    bool depth_capped() const {
+        return detail::api().descent_depth_capped(handle_) != 0;
+    }
+
+    /// A NON-OWNING view of descended frame `f` (see FrameView). The view borrows
+    /// this Descent and never frees the handle; keep the Descent alive while it is used.
+    FrameView frame(std::size_t f) const;
+
+    void free() {
+        if (handle_) {
+            detail::api().descent_free(handle_);
+            handle_ = nullptr;
+        }
+    }
+
+  private:
+    friend class Ptrace;
+    /// The opaque asmtest_descent_t* handle, as the ptrace tracer needs it.
+    void *raw() const { return handle_; }
+
+    void *handle_ = nullptr;
+};
+
+/// A non-owning window onto one descended frame of a Descent. It holds a reference
+/// to the owning Descent and reads through its accessors; it NEVER calls
+/// descent_free (the Descent owns the handle). Cheap to copy; must not outlive the
+/// Descent it views.
+class FrameView {
+  public:
+    /// This frame's index within the Descent (0 = root).
+    std::size_t index() const { return f_; }
+    /// ABSOLUTE base address of the frame.
+    std::uint64_t base() const { return d_.frame_base(f_); }
+    /// Byte length of the frame's region.
+    std::uint64_t length() const { return d_.frame_len(f_); }
+    /// Descent depth (0 = root).
+    std::uint32_t depth() const { return d_.frame_depth(f_); }
+    /// Parent frame index (-1 = root).
+    std::int32_t parent() const { return d_.frame_parent(f_); }
+    /// Instruction offsets (relative to base), in execution order.
+    std::vector<std::uint64_t> insns() const { return d_.frame_insns(f_); }
+    /// Distinct basic-block start offsets (relative to base).
+    std::vector<std::uint64_t> blocks() const { return d_.frame_blocks(f_); }
+
+  private:
+    friend class Descent;
+    FrameView(const Descent &d, std::size_t f) : d_(d), f_(f) {}
+
+    const Descent &d_;  // borrowed — never freed here
+    std::size_t f_;
+};
+
+inline FrameView Descent::frame(std::size_t f) const {
+    return FrameView(*this, f);
+}
+
 /// Forward declaration: traceAttachedVersioned() decodes against a CodeImage,
 /// which is defined below (it in turn does not depend on Ptrace).
 class CodeImage;
@@ -721,6 +1000,37 @@ class Ptrace {
         return traceCall(code.base(), code.length(), args, trace);
     }
 
+    /// Descending trace_call: thread a Descent handle through the single-step loop so
+    /// call-outs are recorded as edges and (at level >= DESCEND_KNOWN) descended as
+    /// nested frames. `trace` (the flat frame-0 view) and `descent` are each optional
+    /// (pass nullptr to skip one). `len` is the traced region's byte length — pass the
+    /// callee-excluding region, NOT the whole allocation, when a call target is an
+    /// in-blob sibling that must stay OUTSIDE the traced region (else it mis-records as
+    /// recursion). Throws std::runtime_error on a nonzero status.
+    static long traceCallEx(const void *code, std::size_t len,
+                            const std::vector<long> &args, HwTrace *trace,
+                            Descent *descent) {
+        long result = 0;
+        int rc = detail::require().ptrace_trace_call_ex(
+            code, len, args.data(), static_cast<int>(args.size()), &result,
+            trace ? trace->raw() : nullptr,
+            descent ? descent->raw() : nullptr);
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error("asmtest_ptrace_trace_call_ex failed: " +
+                                     std::to_string(rc));
+        return result;
+    }
+
+    /// Same, taking a NativeCode. `region` is the traced region's byte length;
+    /// when 0 (the default) it falls back to the whole allocation (code.length()).
+    /// Pass an explicit region (e.g. 0xc) to keep an in-blob sibling out of it.
+    static long traceCallEx(const NativeCode &code,
+                            const std::vector<long> &args, HwTrace *trace,
+                            Descent *descent, std::size_t region = 0) {
+        return traceCallEx(code.base(), region ? region : code.length(), args,
+                           trace, descent);
+    }
+
     /// Trace a region in a SEPARATE, already-ptrace-stopped process (the caller
     /// owns PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv.
     /// Returns the target's RAX at the region exit. Throws on a nonzero status.
@@ -734,6 +1044,29 @@ class Ptrace {
                                      std::to_string(rc));
         return result;
     }
+
+    /// Descending variant of traceAttached for an externally-attached process:
+    /// threads a Descent handle through the loop. `trace` and `descent` are each
+    /// optional (nullptr to skip one). Throws on a nonzero status.
+    static long traceAttachedEx(int pid, const void *base, std::size_t len,
+                                HwTrace *trace, Descent *descent) {
+        long result = 0;
+        int rc = detail::require().ptrace_trace_attached_ex(
+            pid, base, len, &result, trace ? trace->raw() : nullptr,
+            descent ? descent->raw() : nullptr);
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error(
+                "asmtest_ptrace_trace_attached_ex failed: " +
+                std::to_string(rc));
+        return result;
+    }
+
+    /// Descending variant of traceAttachedVersioned (code-image-versioned bytes +
+    /// a Descent handle). Defined out-of-line below, after CodeImage.
+    static long traceAttachedVersionedEx(int pid, const void *base,
+                                         std::size_t len, const CodeImage &img,
+                                         std::uint64_t when, HwTrace *trace,
+                                         Descent *descent);
 
     /// Like traceAttached, but decode the target's instructions against the bytes
     /// the CodeImage recorder captured at capture sequence `when` (when == 0 =>
@@ -993,6 +1326,25 @@ inline long Ptrace::traceAttachedVersioned(int pid, const void *base,
     if (rc != ASMTEST_PTRACE_OK)
         throw std::runtime_error(
             "asmtest_ptrace_trace_attached_versioned failed: " +
+            std::to_string(rc));
+    return result;
+}
+
+/// Out-of-line because it references CodeImage (defined above only after Ptrace)
+/// and threads a Descent handle. Mirrors traceAttachedVersioned but records edges +
+/// nested frames into `descent` (either handle may be nullptr).
+inline long Ptrace::traceAttachedVersionedEx(int pid, const void *base,
+                                             std::size_t len,
+                                             const CodeImage &img,
+                                             std::uint64_t when, HwTrace *trace,
+                                             Descent *descent) {
+    long result = 0;
+    int rc = detail::require().ptrace_trace_attached_versioned_ex(
+        pid, base, len, img.raw(), when, &result,
+        trace ? trace->raw() : nullptr, descent ? descent->raw() : nullptr);
+    if (rc != ASMTEST_PTRACE_OK)
+        throw std::runtime_error(
+            "asmtest_ptrace_trace_attached_versioned_ex failed: " +
             std::to_string(rc));
     return result;
 }

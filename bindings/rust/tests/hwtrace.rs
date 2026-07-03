@@ -12,8 +12,8 @@
 //!       cargo test --test hwtrace -- --nocapture`
 
 use asmtest::hwtrace::{
-    Backend, CodeImage, Fidelity, HwTrace, NativeCode, Policy, Ptrace, Tier, TracePolicy,
-    ASMTEST_HW_EUNAVAIL,
+    Backend, CodeImage, Descent, DescentLevel, Fidelity, HwTrace, NativeCode, Policy, Ptrace,
+    Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
 };
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
@@ -76,8 +76,13 @@ fn singlestep_live_trace() {
 
         assert_eq!(result, 20, "loop accumulates 1 twenty times");
         assert_eq!(tr.insns_total(), 62, "1 + 20*3 + 1, all captured");
-        assert!(tr.covered(0) && tr.covered(0x7), "entry + loop-body blocks covered");
-        assert_eq!(tr.blocks_len(), 2, "two basic blocks");
+        assert!(
+            tr.covered(0) && tr.covered(0x7) && tr.covered(0xf),
+            "entry + loop-body + exit blocks covered"
+        );
+        // 3 blocks {0, 0x7, 0xf}: the ret after the not-taken jnz is its own block
+        // (ends-at-branch normalization, matching the C reference).
+        assert_eq!(tr.blocks_len(), 3, "three basic blocks");
         assert!(!tr.truncated(), "stream not truncated");
     }
 
@@ -306,6 +311,61 @@ fn ptrace_trace_call() {
     );
     assert!(!tr.truncated(), "stream not truncated");
     eprintln!("# PASS: Ptrace::trace_call (out-of-process single-step)");
+}
+
+// Call descent (asmtest::hwtrace::Descent): a region R that calls an in-blob leaf S
+// records the call as an EDGE at level 1 and DESCENDS S as a nested frame at level 2.
+// R's traced region is 0xc bytes (R only); S lives beyond it in the SAME allocation,
+// so the region length passed to trace_call_ex must stay 0xc — passing the whole
+// allocation would fold S into the region and mis-record the call as recursion.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn ptrace_descent_edges_and_frames() {
+    if skip_if_no_ptrace() {
+        return;
+    }
+    // R@0: mov rax,rdi; call S(+4); add rax,rsi; ret.   S@0xc: inc rax; ret.
+    let blob: [u8; 16] = [
+        0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00, 0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF,
+        0xC0, 0xC3,
+    ];
+    let code = NativeCode::from_bytes(&blob);
+    let s_addr = (code.base() + 0xc) as u64;
+
+    // ---- Level 1 RECORD_EDGES: R's own body + one (call -> S) edge; S stepped over.
+    {
+        let d = Descent::new(DescentLevel::RecordEdges);
+        let r = Ptrace::trace_call_ex(&code, &[20, 22], None, &d, Some(0xc));
+        assert_eq!(r, 43, "descent L1 traced call returns 20 + 22 + 1 (via S)");
+        assert_eq!(d.frames_len(), 1, "L1 records only frame 0 (S is stepped over)");
+        assert_eq!(
+            d.frame_insns(0),
+            vec![0x0, 0x3, 0x8, 0xb],
+            "frame-0 body is R's four instructions"
+        );
+        let edges = d.edges();
+        assert_eq!(edges.len(), 1, "exactly one call-out edge");
+        assert_eq!(edges[0].0, 0x3, "edge call-site is R's `call` at offset 0x3");
+        assert_eq!(edges[0].1, s_addr, "edge target is S's ABSOLUTE address");
+        assert_eq!(edges[0].2, 0, "edge caller depth is 0 (from frame 0)");
+        assert!(!d.truncated(), "L1 record is complete (not truncated)");
+    }
+
+    // ---- Level 2 DESCEND_KNOWN: S (in the allow-set) descends as frame 1.
+    {
+        let d = Descent::new(DescentLevel::DescendKnown);
+        assert_eq!(d.allow_region(code.base() + 0xc, 4), 0, "allow S's region");
+        let r = Ptrace::trace_call_ex(&code, &[20, 22], None, &d, Some(0xc));
+        assert_eq!(r, 43, "descent L2 traced call returns 20 + 22 + 1 (via S)");
+        assert_eq!(d.frames_len(), 2, "L2 descends S as a nested frame");
+        assert_eq!(d.frame_base(1), s_addr, "frame 1 base is S's ABSOLUTE address");
+        assert_eq!(d.frame_depth(1), 1, "frame 1 is depth 1");
+        assert_eq!(d.frame_parent(1), 0, "frame 1's parent is frame 0");
+        assert_eq!(d.frame_insns(1), vec![0x0, 0x3], "S body: inc rax; ret");
+        assert!(d.edges().is_empty(), "L2 descends instead of recording an edge");
+    }
+
+    eprintln!("# PASS: Ptrace call-descent (L1 edges + L2 descended frame)");
 }
 
 #[test]

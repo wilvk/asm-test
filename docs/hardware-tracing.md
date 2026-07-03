@@ -173,6 +173,17 @@ foreign-JIT resolution toolkit (`/proc/maps`, perf-maps, binary jitdump, the
 time-aware code-image recorder). It is documented in full under
 [Native runtime tracing](native-tracing.md#out-of-process-variant-w2--ptrace).
 
+By default that tracer steps **over** the call-outs a method makes (runtime helpers, GC
+barriers, PLT stubs) — keeping the trace to the method's own body. **Call descent** is an
+opt-in that follows those calls instead, recording each as an edge (level 1) or descending
+into it as a nested frame (levels 2–3). See
+[Call descent levels](native-tracing.md#call-descent-levels). Descending into *known* method
+regions (level 2) is a sound default; **level 3 — descend into everything — is default-off and
+best-effort on a live managed runtime**: single-stepping a helper that holds a GC / JIT /
+loader lock can perturb or **deadlock** sibling runtime threads, which no watchdog fully
+prevents. Reserve L3 for the fork path or a frozen/post-mortem target — see the L3 hazards in
+[analysis/jit-runtime-tracing.md](analysis/jit-runtime-tracing.md).
+
 ---
 
 ## Block normalization

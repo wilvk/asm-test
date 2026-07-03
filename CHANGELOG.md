@@ -28,6 +28,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Call descent for the out-of-process ptrace tracer.** The single-step tracer
+  (`asmtest_ptrace.h`) can now optionally FOLLOW the calls a traced region makes instead of
+  only stepping over them, at four opt-in levels (`asmtest_descent_t`): `OFF` (today's
+  behaviour), `RECORD_EDGES` (record each `call-site → callee` edge, still step over),
+  `DESCEND_KNOWN` (single-step **into** resolvable callees — an allow-set of method regions
+  or an optional resolver callback — stepping over the rest), and `DESCEND_ALL` (into
+  everything, **default off**, denylist + instruction-budget + real-time-watchdog gated).
+  The flat `asmtest_trace_t` is unchanged — it is always frame 0, byte-identical across all
+  levels; descent records into a **separate opaque handle** read through scalar accessors
+  (edges + nested per-callee frames), so `asmtest_trace_t` stays ABI-frozen and every binding
+  adds accessor calls, not a struct layout. New entry points `asmtest_ptrace_trace_call_ex` /
+  `_trace_attached_ex` / `_trace_attached_versioned_ex` thread the handle through the existing
+  loops; the non-`_ex` symbols are unchanged (`descent == NULL`).
+  - The descender is a return-address **shadow stack** with an exact pop predicate
+    (`PC == ret_addr && SP == caller-pre-call-SP && the just-stepped insn is a return`) plus
+    an SP-sweep for non-local exits (`longjmp`/unwind/`sigreturn`), same-region recursion as a
+    distinct frame (with a recursion + `max_depth` cap), per-instruction byte windows via
+    `process_vm_readv`, benign-signal forwarding on the live path, and a backend-owned
+    `ITIMER_REAL`/`SIGALRM` watchdog so a blocked syscall in a descended callee self-truncates
+    rather than hanging. AArch64 gained a `NT_ARM_HW_BREAK` hardware-breakpoint step-over path
+    (the W^X JIT-heap fallback x86-64 already had). L3 is documented as **best-effort /
+    expected-to-perturb** on a live managed runtime (the cross-thread lock-inversion deadlock
+    vector is not fully mitigable) — see [analysis/jit-runtime-tracing.md](docs/analysis/jit-runtime-tracing.md).
+  - Surfaced in **all ten language bindings** (a `Descent` wrapper + descending `trace_call_ex`,
+    with idempotent free and the per-FFI address/upcall hazards handled), pinned by a new
+    `ptrace_descent` conformance-corpus tier and the header-grep parity gate; the resolver
+    callback ships to the six upcall-safe FFIs (Python/Go/Node/Java/.NET/Lua) and Rust/Ruby/
+    C++/Zig expose the allow-set only. New `jit_trace *-descend` / `*-descend-all` demo lanes
+    (`make docker-hwtrace-jit-dotnet-bcl-descend`, …). See [docs/native-tracing.md](docs/native-tracing.md)
+    ("Call descent levels") and [docs/plans/call-descent-plan.md](docs/plans/call-descent-plan.md).
+
 - **Clean-room install test — every bundled binding, on Linux and macOS, in CI.**
   `make clean-room-test` (any host) / `make macos-clean-test` (darwin alias) packages
   each binding that ships a native payload, installs it **fresh** into a throwaway

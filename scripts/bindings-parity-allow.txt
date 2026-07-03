@@ -33,3 +33,16 @@ dotnet asmtest_dr_under_dynamorio
 ruby asmtest_dr_under_dynamorio
 lua asmtest_dr_under_dynamorio
 go asmtest_dr_under_dynamorio
+
+# Call descent (asmtest_descent_t) upcall setters. The Rust binding is allow-set
+# only: descent targets are selected via allow_region/deny_region, never a
+# capturing-closure resolver, because a Rust extern "C" fn pointer cannot host a
+# GC-safe capturing upcall. It still wraps every other asmtest_descent_* symbol.
+rust asmtest_descent_set_resolver   # allow-set only: no capturing-closure upcall
+rust asmtest_descent_set_denylist   # allow-set only: no capturing-closure upcall
+cpp asmtest_descent_set_resolver   # allow-set only: dlopen FFI hosts no capturing upcall
+cpp asmtest_descent_set_denylist   # allow-set only: dlopen FFI hosts no capturing upcall
+zig asmtest_descent_set_resolver   # allow-set only: std.DynLib hosts no capturing upcall
+zig asmtest_descent_set_denylist   # allow-set only: std.DynLib hosts no capturing upcall
+ruby asmtest_descent_set_resolver   # allow-set only: Fiddle hosts no GC-safe capturing upcall
+ruby asmtest_descent_set_denylist   # allow-set only: Fiddle hosts no GC-safe capturing upcall

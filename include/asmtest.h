@@ -35,9 +35,9 @@ extern "C" {
  * numeric form ASMTEST_VERSION_NUM = MAJOR*10000 + MINOR*100 + PATCH allows
  * compile-time comparisons, e.g. #if ASMTEST_VERSION_NUM >= 10100. */
 #define ASMTEST_VERSION_MAJOR 1
-#define ASMTEST_VERSION_MINOR 0
+#define ASMTEST_VERSION_MINOR 1
 #define ASMTEST_VERSION_PATCH 0
-#define ASMTEST_VERSION "1.0.0"
+#define ASMTEST_VERSION "1.1.0"
 #define ASMTEST_VERSION_NUM                                                   \
     (ASMTEST_VERSION_MAJOR * 10000 + ASMTEST_VERSION_MINOR * 100 +            \
      ASMTEST_VERSION_PATCH)

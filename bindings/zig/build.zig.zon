@@ -6,7 +6,7 @@
 // tarballs the binding source (build.zig{,.zon} + src/) for distribution.
 .{
     .name = "asmtest",
-    .version = "1.0.0",
+    .version = "1.1.0",
     .minimum_zig_version = "0.13.0",
     .paths = .{
         "build.zig",

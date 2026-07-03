@@ -15,6 +15,9 @@ local hwtrace = require("hwtrace")
 local HwTrace = hwtrace.HwTrace
 local CodeImage = hwtrace.CodeImage
 local NativeCode = hwtrace.NativeCode
+local Descent = hwtrace.Descent
+local DESCENT_RECORD_EDGES = hwtrace.DESCENT_RECORD_EDGES
+local DESCENT_DESCEND_KNOWN = hwtrace.DESCENT_DESCEND_KNOWN
 local SINGLESTEP = hwtrace.SINGLESTEP
 local AMD_LBR = hwtrace.AMD_LBR
 local BEST = hwtrace.BEST
@@ -36,6 +39,14 @@ local ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
 -- mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16 deep)
 local LOOP = { 0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
                0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3 }
+
+-- Call-descent fixture (mirrors bindings/python .../test_descent_edges_and_frames):
+--   R@0:   mov rax,rdi; call S(+4); add rax,rsi; ret   (the caller region, 0xc bytes)
+--   S@0xc: inc rax; ret                                (an in-blob sibling leaf)
+-- Region = 0xc, args (20,22) -> 43. S sits BEYOND the traced region, so trace_call_ex
+-- must be given region=0xc (not the whole allocation) or S mis-records as recursion.
+local DESCENT_FIXTURE = { 0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+                          0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3 }
 
 -- ---- TAP-ish harness: "ok N - ..." / "not ok N - ..."; nonzero exit on failure ----
 local count = 0
@@ -62,6 +73,24 @@ local function list_eq(got, want, desc)
     if got[i] ~= want[i] then
       ok(false, string.format("%s ([%d]: got 0x%x, want 0x%x)",
                               desc, i, got[i], want[i]))
+      return
+    end
+  end
+  ok(true, desc)
+end
+-- Like list_eq but for a list of boxed uint64_t cdata (the descent frame_insns /
+-- frame_blocks getters, which must NOT be tonumber()'d) compared against plain Lua
+-- numbers. LuaJIT compares a uint64_t cdata to a number numerically; kept separate
+-- from list_eq because %x-formatting a cdata errors, so mismatches print tostring().
+local function u64_list_eq(got, want, desc)
+  if #got ~= #want then
+    ok(false, string.format("%s (len %d != %d)", desc, #got, #want))
+    return
+  end
+  for i = 1, #want do
+    if got[i] ~= want[i] then
+      ok(false, string.format("%s ([%d]: got %s, want %d)",
+                              desc, i, tostring(got[i]), want[i]))
       return
     end
   end
@@ -227,8 +256,10 @@ do
 
   eq(result, 20, "LOOP: call(1,20) == 20")
   eq(tr:insns_total(), 62, "LOOP: insns_total == 62")  -- 1 + 20*3 + 1
-  ok(tr:covered(0) and tr:covered(0x7), "LOOP: covered(0) and covered(7)")
-  eq(tr:blocks_len(), 2, "LOOP: blocks_len == 2")
+  ok(tr:covered(0) and tr:covered(0x7) and tr:covered(0xf),
+     "LOOP: covered(0), covered(7), covered(0xf)")
+  -- 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+  eq(tr:blocks_len(), 3, "LOOP: blocks_len == 3")
   ok(not tr:truncated(), "LOOP: not truncated")
 
   tr:free()
@@ -387,6 +418,91 @@ else
     eq(HwTrace.jitdump_find(path, "missing", 0, 0), nil,
        "jitdump_find: missing -> nil")
     os.remove(path)
+  end
+
+  -- ---- Call descent (Descent / trace_call_ex) — mirrors the Python
+  -- test_descent_edges_and_frames. Runs live here (ptrace single-step is available
+  -- past the guard above). Region = 0xc keeps the in-blob sibling S OUTSIDE the
+  -- traced region. Address getters return boxed uint64_t cdata — compared via cdata
+  -- equality (ffi.cast("uint64_t", code.base) + off), never tonumber().
+
+  -- L1 RECORD_EDGES: one edge (site 0x3 -> code_base+0xc, depth 0), frame 0 only.
+  do
+    local code = NativeCode.from_bytes(DESCENT_FIXTURE)
+    local d = Descent.new(DESCENT_RECORD_EDGES)
+    local tr = HwTrace.create(64, 64)
+    local result = HwTrace.ptrace_trace_call_ex(code.base, code.len, { 20, 22 },
+                                                tr, d, 0xc)
+    eq(result, 43, "descent L1: call(20,22) == 43")
+    eq(d:frames_len(), 1, "descent L1: frames_len == 1 (frame 0 only)")
+    u64_list_eq(d:frame_insns(0), { 0, 3, 8, 0xb },
+                "descent L1: frame_insns(0) == {0,3,8,0xb}")
+    local edges = d:edges()
+    eq(#edges, 1, "descent L1: one recorded edge")
+    if #edges == 1 then
+      eq(edges[1].site, 0x3, "descent L1: edge site == 0x3")
+      eq(edges[1].depth, 0, "descent L1: edge depth == 0")
+      ok(edges[1].target == ffi.cast("uint64_t", code.base) + 0xc,
+         "descent L1: edge target == code_base+0xc (cdata equality)")
+    end
+    ok(not d:truncated(), "descent L1: not truncated")
+    d:free()
+    tr:free()
+    code:free()
+  end
+
+  -- L2 DESCEND_KNOWN + allow_region(S): frame 1 is S (base code_base+0xc, depth 1,
+  -- insns {0,3}); no residual edges.
+  do
+    local code = NativeCode.from_bytes(DESCENT_FIXTURE)
+    local d = Descent.new(DESCENT_DESCEND_KNOWN)
+    d:allow_region(ffi.cast("uint64_t", code.base) + 0xc, 4)
+    local tr = HwTrace.create(64, 64)
+    local result = HwTrace.ptrace_trace_call_ex(code.base, code.len, { 20, 22 },
+                                                tr, d, 0xc)
+    eq(result, 43, "descent L2: call(20,22) == 43")
+    eq(d:frames_len(), 2, "descent L2: frames_len == 2 (root + descended S)")
+    u64_list_eq(d:frame_insns(0), { 0, 3, 8, 0xb },
+                "descent L2: frame_insns(0) == {0,3,8,0xb}")
+    ok(d:frame_base(1) == ffi.cast("uint64_t", code.base) + 0xc,
+       "descent L2: frame_base(1) == code_base+0xc (cdata equality)")
+    eq(d:frame_depth(1), 1, "descent L2: frame_depth(1) == 1")
+    u64_list_eq(d:frame_insns(1), { 0, 3 }, "descent L2: frame_insns(1) == {0,3}")
+    eq(#d:edges(), 0, "descent L2: no residual edges")
+    d:free()
+    tr:free()
+    code:free()
+  end
+
+  -- Resolver upcall (LuaJIT ffi.cast callback) — drive DESCEND_KNOWN from a resolver
+  -- rather than a static allow-region. Proves the upcall FIRES (its callee_addr
+  -- reaches Lua as S's absolute address) and that returning descend=true descends into
+  -- S (frames_len == 2). The trampoline is anchored on the Descent so a GC mid-single-
+  -- step cannot collect it; :free() releases it.
+  do
+    local code = NativeCode.from_bytes(DESCENT_FIXTURE)
+    local d = Descent.new(DESCENT_DESCEND_KNOWN)
+    local leaf = ffi.cast("uint64_t", code.base) + 0xc
+    local seen = { fired = false, matched = false }
+    d:set_resolver(function(callee)
+      seen.fired = true
+      if callee == leaf then
+        seen.matched = true
+        return true, callee, 4
+      end
+      return false
+    end)
+    local tr = HwTrace.create(64, 64)
+    local result = HwTrace.ptrace_trace_call_ex(code.base, code.len, { 20, 22 },
+                                                tr, d, 0xc)
+    eq(result, 43, "resolver: call(20,22) == 43")
+    ok(seen.fired, "resolver: upcall fired")
+    ok(seen.matched, "resolver: callee_addr == code_base+0xc (cdata equality)")
+    eq(d:frames_len(), 2, "resolver: descended into S (frames_len == 2)")
+    ok(d:frame_base(1) == leaf, "resolver: frame_base(1) == code_base+0xc")
+    d:free()
+    tr:free()
+    code:free()
   end
 end
 

@@ -318,3 +318,67 @@ fn vec512_avx512() {
         [11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0]
     );
 }
+
+// Track 7 (call descent): the ptrace_descent corpus tier. Fork + single-step
+// host-native code OUT OF PROCESS and replay the recorded frame-0 body, the edges
+// (L1), and the descended frames (L2) — the Rust analog of conformance.c's
+// run_ptrace_descent and the Python _run_ptrace_descent replay handler. The two
+// cases mirror corpus.json's `ptrace_descent.calls_leaf.{edges,descend}`.
+//
+// Host-native and x86-64-only (the corpus arch is x86_64): compiled in only on an
+// x86-64 host, and even there it self-skips (never FAILs) when the out-of-process
+// stepper is unavailable — qemu-user single-step, yama, or a no-Capstone lib.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn ptrace_descent_calls_leaf() {
+    use asmtest::hwtrace::{Descent, DescentLevel, HwTrace, NativeCode, Ptrace};
+
+    if !Ptrace::available() {
+        eprintln!(
+            "# SKIP: ptrace_descent (no out-of-process single-step): {}",
+            Ptrace::skip_reason()
+        );
+        return;
+    }
+
+    // corpus.json ptrace_descent.calls_leaf.*: R calls the in-blob leaf sibling S.
+    // R@0: mov rax,rdi; call S(+4); add rax,rsi; ret.   S@0xc: inc rax; ret.
+    let code_bytes: [u8; 16] = [
+        72, 137, 248, 232, 4, 0, 0, 0, 72, 1, 240, 195, 72, 255, 192, 195,
+    ];
+    let region = 12usize; // R only; S lives beyond it in the same allocation.
+    let args = [20i64, 22];
+    let code = NativeCode::from_bytes(&code_bytes);
+    let leaf = (code.base() + 12) as u64;
+
+    // ---- L1 RECORD_EDGES: frame-0 body [0,3,8,11] + one edge (site 3 -> S@+12).
+    {
+        let d = Descent::new(DescentLevel::RecordEdges);
+        let tr = HwTrace::new_trace(64, 64);
+        let result = Ptrace::trace_call_ex(&code, &args, Some(&tr), &d, Some(region));
+        assert_eq!(result, 43, "L1 result");
+        assert_eq!(d.frame_insns(0), vec![0, 3, 8, 11], "L1 frame-0 body");
+        let edges = d.edges();
+        assert_eq!(edges.len(), 1, "L1 records one edge");
+        assert_eq!(edges[0].0, 3, "L1 edge call-site offset");
+        assert_eq!(edges[0].1, leaf, "L1 edge target (absolute S)");
+    }
+
+    // ---- L2 DESCEND_KNOWN: allow S; it descends as a depth-1 frame [0,3]; no edges.
+    {
+        let d = Descent::new(DescentLevel::DescendKnown);
+        assert_eq!(d.allow_region(code.base() + 12, 4), 0, "L2 allow S");
+        let tr = HwTrace::new_trace(64, 64);
+        let result = Ptrace::trace_call_ex(&code, &args, Some(&tr), &d, Some(region));
+        assert_eq!(result, 43, "L2 result");
+        assert_eq!(d.frame_insns(0), vec![0, 3, 8, 11], "L2 frame-0 body");
+        let idx = (1..d.frames_len())
+            .find(|&i| d.frame_base(i) == leaf)
+            .expect("L2 descends S as a nested frame");
+        assert_eq!(d.frame_depth(idx), 1, "L2 descended frame depth");
+        assert_eq!(d.frame_insns(idx), vec![0, 3], "L2 descended frame body");
+        assert!(d.edges().is_empty(), "L2 descends instead of recording an edge");
+    }
+
+    eprintln!("# PASS: conformance ptrace_descent (L1 edges + L2 descend-known)");
+}

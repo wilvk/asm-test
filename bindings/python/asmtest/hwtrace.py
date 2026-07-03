@@ -76,6 +76,18 @@ TRACE_NATIVE_ONLY = 0x2   # forbid the native->emulator fidelity crossing
 ASMTEST_PTRACE_OK = 0
 ASMTEST_PTRACE_ENOENT = -7  # region / symbol / method not found
 
+# asmtest_descent_level_t — call-descent policy (see Descent)
+DESCENT_OFF = 0            # step over, record nothing (default)
+DESCENT_RECORD_EDGES = 1   # record (call-site -> callee) edges, step over
+DESCENT_DESCEND_KNOWN = 2  # step INTO resolvable calls (allow-set / resolver)
+DESCENT_DESCEND_ALL = 3    # step INTO everything (denylist + budget + watchdog gated)
+
+# Descent callback prototypes (kept referenced so the CFUNCTYPE trampolines are not
+# garbage-collected mid-single-step; see Descent.set_resolver / set_denylist).
+_RESOLVER_FN = C.CFUNCTYPE(C.c_int, C.c_uint64, C.c_void_p,
+                          C.POINTER(C.c_uint64), C.POINTER(C.c_uint64))
+_DENYLIST_FN = C.CFUNCTYPE(C.c_int, C.c_uint64, C.c_void_p)
+
 # asmtest_codeimage.h — time-aware code-image recorder status codes
 ASMTEST_CI_OK = 0
 ASMTEST_CI_ENOENT = -7  # address never tracked / no version at/before `when`
@@ -272,6 +284,40 @@ def _declare(lib):
     lib.asmtest_jitdump_find.restype = ci
     lib.asmtest_ptrace_trace_attached_versioned.argtypes = [ci, v, sz, v, u64, pl, v]
     lib.asmtest_ptrace_trace_attached_versioned.restype = ci
+
+    # asmtest_ptrace.h — call descent (asmtest_descent_t): edges + nested frames.
+    u32, i32 = C.c_uint32, C.c_int32
+    lib.asmtest_descent_new.argtypes = [ci]
+    lib.asmtest_descent_new.restype = v
+    lib.asmtest_descent_free.argtypes = [v]
+    lib.asmtest_descent_set_max_depth.argtypes = [v, u32]
+    lib.asmtest_descent_set_insn_budget.argtypes = [v, u64]
+    lib.asmtest_descent_set_watchdog_ms.argtypes = [v, u32]
+    lib.asmtest_descent_allow_region.argtypes = [v, v, sz]
+    lib.asmtest_descent_allow_region.restype = ci
+    lib.asmtest_descent_deny_region.argtypes = [v, v, sz]
+    lib.asmtest_descent_deny_region.restype = ci
+    lib.asmtest_descent_set_resolver.argtypes = [v, _RESOLVER_FN, v]
+    lib.asmtest_descent_set_denylist.argtypes = [v, _DENYLIST_FN, v]
+    for _fn, _rt in (("edges_len", sz), ("edge_site", u64), ("edge_target", u64),
+                     ("edge_depth", u32), ("frames_len", sz), ("frame_base", u64),
+                     ("frame_len", u64), ("frame_depth", u32), ("frame_parent", i32),
+                     ("frame_insn_count", sz), ("frame_block_count", sz),
+                     ("truncated", ci), ("depth_capped", ci)):
+        f = getattr(lib, "asmtest_descent_" + _fn)
+        f.argtypes = [v] if _fn in ("edges_len", "frames_len", "truncated",
+                                    "depth_capped") else [v, sz]
+        f.restype = _rt
+    lib.asmtest_descent_frame_insn_at.argtypes = [v, sz, sz]
+    lib.asmtest_descent_frame_insn_at.restype = u64
+    lib.asmtest_descent_frame_block_at.argtypes = [v, sz, sz]
+    lib.asmtest_descent_frame_block_at.restype = u64
+    lib.asmtest_ptrace_trace_call_ex.argtypes = [v, sz, pl, ci, pl, v, v]
+    lib.asmtest_ptrace_trace_call_ex.restype = ci
+    lib.asmtest_ptrace_trace_attached_ex.argtypes = [ci, v, sz, pl, v, v]
+    lib.asmtest_ptrace_trace_attached_ex.restype = ci
+    lib.asmtest_ptrace_trace_attached_versioned_ex.argtypes = [ci, v, sz, v, u64, pl, v, v]
+    lib.asmtest_ptrace_trace_attached_versioned_ex.restype = ci
 
     # asmtest_codeimage.h — time-aware code-image recorder + optional eBPF detector.
     lib.asmtest_codeimage_available.restype = ci
@@ -554,6 +600,51 @@ class Ptrace:
         return result.value
 
     @staticmethod
+    def trace_call_ex(code: NativeCode, args, trace, descent: "Descent",
+                      region=None) -> int:
+        """Like trace_call, but thread a :class:`Descent` handle through the loop so the
+        call-outs are recorded as edges and (at level >= 2) descended as nested frames.
+        `trace` (the flat frame-0 view) may be None to record only into `descent`. `region`
+        is the traced region's byte length (default: the whole allocation) — pass it when
+        the call target is an in-blob sibling that must stay OUTSIDE the traced region."""
+        n = len(args)
+        arr = (C.c_long * max(n, 1))(*args)
+        result = C.c_long()
+        th = trace._handle if trace is not None else None
+        dh = descent._handle if descent is not None else None
+        rc = _get().asmtest_ptrace_trace_call_ex(
+            code.base, code.length if region is None else region, arr, n,
+            C.byref(result), th, dh)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_call_ex failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def trace_attached_ex(pid: int, base: int, length: int, trace, descent: "Descent") -> int:
+        """Descending variant of trace_attached for an externally-attached process."""
+        result = C.c_long()
+        th = trace._handle if trace is not None else None
+        dh = descent._handle if descent is not None else None
+        rc = _get().asmtest_ptrace_trace_attached_ex(
+            pid, C.c_void_p(base), length, C.byref(result), th, dh)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_attached_ex failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def trace_attached_versioned_ex(pid: int, base: int, length: int, image, when: int,
+                                    trace, descent: "Descent") -> int:
+        """Descending variant of trace_attached_versioned (code-image-versioned bytes)."""
+        result = C.c_long()
+        th = trace._handle if trace is not None else None
+        dh = descent._handle if descent is not None else None
+        rc = _get().asmtest_ptrace_trace_attached_versioned_ex(
+            pid, C.c_void_p(base), length, image._handle, when, C.byref(result), th, dh)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_attached_versioned_ex failed: {rc}")
+        return result.value
+
+    @staticmethod
     def trace_attached(pid: int, base: int, length: int, trace: "HwTrace") -> int:
         """Trace a region in a SEPARATE, already-ptrace-stopped process (the caller
         owns PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv."""
@@ -623,6 +714,118 @@ class Ptrace:
             return None
         code = bytes(buf[:blen.value]) if want_bytes else b""
         return JitMethod(e.code_addr, e.code_size, e.timestamp, e.code_index, code)
+
+
+class Descent:
+    """Call descent (asmtest_descent_t): configure how the ptrace stepper handles the
+    call-outs it would otherwise step over, and read back the recorded edges + nested
+    frames. Four levels (see the DESCENT_* constants): OFF, RECORD_EDGES, DESCEND_KNOWN,
+    DESCEND_ALL. Pass to :meth:`Ptrace.trace_call_ex` and friends. Frame 0 is the root
+    region (a superset of the flat trace); descended callees are frames 1..N."""
+
+    def __init__(self, level=DESCENT_OFF):
+        self._lib = _get()
+        self._handle = self._lib.asmtest_descent_new(level)
+        if not self._handle:
+            raise RuntimeError("asmtest_descent_new failed")
+        # Keep registered upcall trampolines alive for the handle's lifetime so a GC
+        # cannot collect/move them mid-single-step.
+        self._cb = []
+
+    def free(self):
+        """Idempotent free (the native side NULLs internally, so a double free is safe)."""
+        if self._handle:
+            self._lib.asmtest_descent_free(self._handle)
+            self._handle = None
+
+    def __del__(self):
+        self.free()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.free()
+        return False
+
+    # ---- configuration (in) ----
+    def set_max_depth(self, d: int):
+        self._lib.asmtest_descent_set_max_depth(self._handle, d)
+
+    def set_insn_budget(self, b: int):
+        self._lib.asmtest_descent_set_insn_budget(self._handle, b)
+
+    def set_watchdog_ms(self, ms: int):
+        self._lib.asmtest_descent_set_watchdog_ms(self._handle, ms)
+
+    def allow_region(self, base: int, length: int) -> int:
+        return int(self._lib.asmtest_descent_allow_region(
+            self._handle, C.c_void_p(base), length))
+
+    def deny_region(self, base: int, length: int) -> int:
+        return int(self._lib.asmtest_descent_deny_region(
+            self._handle, C.c_void_p(base), length))
+
+    def set_resolver(self, fn, user: int = 0):
+        """Install a level-2/3 resolver ``fn(callee_addr) -> (descend, base, length)``:
+        return (True, base, length) to descend, (False, 0, 0) to step over."""
+        def _thunk(callee, _u, base_out, len_out):
+            descend, b, ln = fn(callee)
+            if descend and ln:
+                base_out[0] = b
+                len_out[0] = ln
+                return 1
+            return 0
+        cb = _RESOLVER_FN(_thunk)
+        self._cb.append(cb)
+        self._lib.asmtest_descent_set_resolver(self._handle, cb, C.c_void_p(user))
+
+    def set_denylist(self, fn, user: int = 0):
+        """Install a level-3 denylist ``fn(callee_addr) -> bool`` (True = refuse)."""
+        def _thunk(callee, _u):
+            return 1 if fn(callee) else 0
+        cb = _DENYLIST_FN(_thunk)
+        self._cb.append(cb)
+        self._lib.asmtest_descent_set_denylist(self._handle, cb, C.c_void_p(user))
+
+    # ---- results (out) ----
+    def edges(self):
+        """List of (site, target, depth) for every stepped-over call (level >= 1)."""
+        n = self._lib.asmtest_descent_edges_len(self._handle)
+        return [(self._lib.asmtest_descent_edge_site(self._handle, i),
+                 self._lib.asmtest_descent_edge_target(self._handle, i),
+                 self._lib.asmtest_descent_edge_depth(self._handle, i)) for i in range(n)]
+
+    def frames_len(self) -> int:
+        return int(self._lib.asmtest_descent_frames_len(self._handle))
+
+    def frame_base(self, f: int) -> int:
+        return int(self._lib.asmtest_descent_frame_base(self._handle, f))
+
+    def frame_len(self, f: int) -> int:
+        return int(self._lib.asmtest_descent_frame_len(self._handle, f))
+
+    def frame_depth(self, f: int) -> int:
+        return int(self._lib.asmtest_descent_frame_depth(self._handle, f))
+
+    def frame_parent(self, f: int) -> int:
+        return int(self._lib.asmtest_descent_frame_parent(self._handle, f))
+
+    def frame_insns(self, f: int):
+        n = self._lib.asmtest_descent_frame_insn_count(self._handle, f)
+        return [int(self._lib.asmtest_descent_frame_insn_at(self._handle, f, i))
+                for i in range(n)]
+
+    def frame_blocks(self, f: int):
+        n = self._lib.asmtest_descent_frame_block_count(self._handle, f)
+        return [int(self._lib.asmtest_descent_frame_block_at(self._handle, f, i))
+                for i in range(n)]
+
+    def truncated(self) -> bool:
+        return bool(self._lib.asmtest_descent_truncated(self._handle))
+
+    def depth_capped(self) -> bool:
+        return bool(self._lib.asmtest_descent_depth_capped(self._handle))
 
 
 class CodeImage:

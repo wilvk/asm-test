@@ -15,6 +15,9 @@ require_relative "hwtrace"
 HwTrace      = Asmtest::HwTrace::HwTrace
 NativeCode   = Asmtest::HwTrace::NativeCode
 CodeImage    = Asmtest::HwTrace::CodeImage
+Descent      = Asmtest::HwTrace::Descent
+DESCENT_RECORD_EDGES  = Asmtest::HwTrace::DESCENT_RECORD_EDGES
+DESCENT_DESCEND_KNOWN = Asmtest::HwTrace::DESCENT_DESCEND_KNOWN
 SINGLESTEP   = Asmtest::HwTrace::SINGLESTEP
 AMD_LBR      = Asmtest::HwTrace::AMD_LBR
 BEST         = Asmtest::HwTrace::BEST
@@ -163,9 +166,10 @@ begin
   ok(loop_result == 20, "loop call(1,20) == 20 (got #{loop_result})")
   ok(loop_trace.insns_total == 62,
      "loop insns_total == 62 (got #{loop_trace.insns_total})")
-  ok(loop_trace.covered?(0) && loop_trace.covered?(0x7),
-     "loop covers entry(0) and body(7)")
-  ok(loop_trace.blocks_len == 2, "loop blocks_len == 2 (got #{loop_trace.blocks_len})")
+  ok(loop_trace.covered?(0) && loop_trace.covered?(0x7) && loop_trace.covered?(0xf),
+     "loop covers entry(0), body(7), exit(0xf)")
+  # 3 blocks {0,0x7,0xf}: the ret after the not-taken jnz is its own block.
+  ok(loop_trace.blocks_len == 3, "loop blocks_len == 3 (got #{loop_trace.blocks_len})")
   ok(!loop_trace.truncated?, "loop not truncated")
 
   loop_trace.free
@@ -290,6 +294,61 @@ if HwTrace.ptrace_available?
   end
 else
   puts "# SKIP out-of-process ptrace toolkit (unavailable): #{HwTrace.ptrace_skip_reason}"
+end
+
+# ---- Call descent (asmtest_descent_t): edges (L1) + descended frames (L2) ----
+# A region R that calls an in-blob leaf S records the call as an EDGE at level 1 and
+# DESCENDS S as a nested frame at level 2. The traced region is R only (0xc bytes);
+# S lives beyond it in the SAME allocation, so ptrace_trace_call_ex takes region=0xc
+# to keep S OUTSIDE R — tracing the whole allocation would fold S into R and
+# mis-record the call as recursion. Shares the ptrace_available? guard.
+if HwTrace.ptrace_available?
+  # R@0: mov rax,rdi; call S(+4); add rax,rsi; ret    S@0xc: inc rax; ret
+  descent_blob = [0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
+                  0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3].pack("C*")
+  d_code = NativeCode.from_bytes(descent_blob)
+  begin
+    # Level 1 RECORD_EDGES: R's own body + one (call -> S) edge; S is stepped over.
+    d1 = Descent.new(DESCENT_RECORD_EDGES)
+    begin
+      r1 = HwTrace.ptrace_trace_call_ex(d_code.base, d_code.length, [20, 22], nil, d1, region: 0xc)
+      ok(r1 == 43, "descent L1 trace_call_ex(20,22) == 43 (got #{r1})")
+      ok(d1.frames_len == 1, "descent L1 frames_len == 1 (got #{d1.frames_len})")
+      ok(d1.frame_insns(0) == [0x0, 0x3, 0x8, 0xB],
+         "descent L1 frame0 insns == [0,3,8,11] (got #{d1.frame_insns(0).inspect})")
+      e = d1.edges
+      ok(e.length == 1, "descent L1 one edge (got #{e.length})")
+      ok(!e.empty? && e[0][0] == 0x3 && e[0][1] == d_code.base + 0xc && e[0][2] == 0,
+         "descent L1 edge site 3 -> base+0xc at depth 0 (got #{e.inspect})")
+      ok(!d1.truncated?, "descent L1 not truncated")
+    ensure
+      d1.free
+    end
+    # Level 2 DESCEND_KNOWN: S is in the allow-set, so it descends as frame 1; no edges.
+    d2 = Descent.new(DESCENT_DESCEND_KNOWN)
+    begin
+      d2.allow_region(d_code.base + 0xc, 4)
+      r2 = HwTrace.ptrace_trace_call_ex(d_code.base, d_code.length, [20, 22], nil, d2, region: 0xc)
+      ok(r2 == 43, "descent L2 trace_call_ex(20,22) == 43 (got #{r2})")
+      ok(d2.frames_len == 2, "descent L2 frames_len == 2 (got #{d2.frames_len})")
+      ok(d2.frame_base(1) == d_code.base + 0xc,
+         "descent L2 frame1 base == code base + 0xc (got #{d2.frame_base(1)})")
+      ok(d2.frame_depth(1) == 1, "descent L2 frame1 depth == 1 (got #{d2.frame_depth(1)})")
+      ok(d2.frame_insns(1) == [0x0, 0x3],
+         "descent L2 frame1 insns == [0,3] (got #{d2.frame_insns(1).inspect})")
+      ok(d2.edges == [], "descent L2 no edges (got #{d2.edges.inspect})")
+      # free is idempotent: NULLs the handle so a second call is a safe no-op.
+      d2.free
+      d2.free
+      ok(true, "descent free is idempotent (double free is a no-op)")
+    ensure
+      d2.free
+    end
+  ensure
+    d_code.free
+  end
+else
+  puts "# SKIP call descent (ptrace unavailable): #{HwTrace.ptrace_skip_reason}"
 end
 
 # ---- Time-aware code-image recorder (asmtest_codeimage.h) ----
