@@ -377,7 +377,9 @@ the run.
 
 Whichever mechanism supplies **control flow** (PT packets or stepper RIPs), something
 must supply the **bytes** to render assembly: the text perf-map (symbols only — enough
-to *find* a method, never to decode one), jitdump (bytes, but launch-only on .NET), the
+to *find* a method, never to decode one), jitdump (bytes; a launch flag before .NET 8,
+runtime-toggleable since — self-connectable IPC `EnablePerfMap`, already-compiled
+methods included), the
 self code-image recorder (bytes, no cooperation, no launch flag — this document's
 default), or the GDB JIT interface where the runtime implements it. The scoped model
 composes: hardware-or-stepper control flow × recorder-supplied bytes × Capstone
