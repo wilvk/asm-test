@@ -9,15 +9,15 @@ If a word in the documentation looks unfamiliar, it is probably explained here.
 AArch64
   The 64-bit version of the {term}`ARM` processor architecture, used by Apple
   Silicon Macs, modern phones, and many servers. Also written `arm64`. asm-test
-  runs on AArch64 as well as {term}`x86-64`.
+  runs on [AArch64](https://en.wikipedia.org/wiki/AArch64) as well as {term}`x86-64`.
 
 AAPCS64
-  *Procedure Call Standard for the ARM 64-bit Architecture.* The {term}`ABI`
+  *[Procedure Call Standard for the ARM 64-bit Architecture](https://github.com/ARM-software/abi-aa).* The {term}`ABI`
   (the rulebook for how functions call each other) on {term}`AArch64`. It is the
   ARM equivalent of the {term}`System V AMD64 ABI`.
 
 ABI
-  *Application Binary Interface.* The set of low-level rules that lets compiled
+  *[Application Binary Interface](https://en.wikipedia.org/wiki/Application_binary_interface).* The set of low-level rules that lets compiled
   code from different sources work together: which {term}`CPU register`s carry
   function arguments and return values, which registers a function must leave
   untouched, how the stack is laid out, and so on. asm-test calls your assembly
@@ -38,7 +38,7 @@ arity
   call routines with any number of arguments.
 
 ARM
-  A family of processor architectures common in phones, tablets, and newer Macs
+  A [family of processor architectures](https://en.wikipedia.org/wiki/ARM_architecture_family) common in phones, tablets, and newer Macs
   and servers. See {term}`AArch64` (64-bit) and {term}`ARM32` (32-bit).
 
 ARM32
@@ -46,7 +46,7 @@ ARM32
   the {term}`emulator` tier.
 
 ASLR
-  *Address Space Layout Randomization.* An operating-system defence that loads
+  *[Address Space Layout Randomization](https://en.wikipedia.org/wiki/Address_space_layout_randomization).* An operating-system defence that loads
   code at a different address every run. asm-test reports trace offsets relative
   to a routine's base precisely so they stay stable despite ASLR.
 
@@ -56,12 +56,12 @@ assembler
   {term}`GAS` and {term}`NASM`.
 
 assembly language
-  The lowest-level human-readable programming language, where each instruction
+  The [lowest-level human-readable programming language](https://en.wikipedia.org/wiki/Assembly_language), where each instruction
   maps almost directly to a single operation the {term}`CPU` performs. This is
   the code asm-test is built to test.
 
 AVX2
-  *Advanced Vector Extensions 2.* The 256-bit {term}`SIMD` instruction set on
+  *[Advanced Vector Extensions 2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions).* The 256-bit {term}`SIMD` instruction set on
   {term}`x86-64`, widening the 128-bit {term}`XMM` registers to 256-bit
   `ymm0`–`ymm15`. asm-test captures 256-bit vector returns via `ASM_VCALL256n`
   and self-skips on hosts without AVX2.
@@ -76,7 +76,7 @@ binding
   for example the Python, .NET, Go, Rust, or Java bindings. See also {term}`FFI`.
 
 basic block
-  A straight-line run of instructions with one entry and one exit: control enters
+  A [straight-line run of instructions](https://en.wikipedia.org/wiki/Basic_block) with one entry and one exit: control enters
   at the top and runs to the end without branching in or out. A new block begins
   at a routine's entry and after every branch. asm-test's traces report which
   basic blocks a run reached; every trace backend normalizes to this same
@@ -99,7 +99,7 @@ caller-saved register
   Contrast {term}`callee-saved register`.
 
 calling convention
-  The specific rules — part of an {term}`ABI` — for how one function calls
+  The [specific rules](https://en.wikipedia.org/wiki/Calling_convention) — part of an {term}`ABI` — for how one function calls
   another: where arguments go, where the return value comes back, and who is
   responsible for which registers.
 
@@ -116,7 +116,7 @@ call edge
   un-descended calls, even when depth/budget/allow-set gating declines a descent.
 
 Capstone
-  A disassembler *library* asm-test optionally uses to turn machine-code bytes
+  A [disassembler](https://www.capstone-engine.org/) *library* asm-test optionally uses to turn machine-code bytes
   back into readable instruction text — annotating {term}`fault`s, traces, and
   coverage reports. The {term}`single-step` and {term}`hardware trace` backends
   also use it as an instruction length-decoder. See [Disassembly](../guides/disassembly.md).
@@ -129,12 +129,12 @@ capture trampoline
   tier."
 
 CF
-  *Carry Flag.* A {term}`CPU` status {term}`flag` set when an arithmetic
+  *[Carry Flag](https://en.wikipedia.org/wiki/Carry_flag).* A {term}`CPU` status {term}`flag` set when an arithmetic
   operation produces a carry or borrow out of the most significant bit — for
   example, when an unsigned addition overflows.
 
 CI
-  *Continuous Integration.* Automated systems (such as GitHub Actions) that build
+  *[Continuous Integration](https://en.wikipedia.org/wiki/Continuous_integration).* Automated systems (such as GitHub Actions) that build
   the project and run its tests on every change. See the [CI guide](../reference/ci.md).
 
 conformance corpus
@@ -143,7 +143,7 @@ conformance corpus
   lock-step.
 
 CoreCLR
-  The runtime engine of .NET — a {term}`managed runtime` with a {term}`JIT`
+  The [runtime engine of .NET](https://github.com/dotnet/runtime) — a {term}`managed runtime` with a {term}`JIT`
   compiler. One of the three runtimes asm-test's foreign-JIT tracer is validated
   against (with {term}`V8` and {term}`HotSpot`).
 
@@ -159,7 +159,7 @@ CPSR
   {term}`PSTATE`; the {term}`x86-64` one is {term}`RFLAGS`.
 
 CPU
-  *Central Processing Unit.* The processor that executes machine-code
+  *[Central Processing Unit](https://en.wikipedia.org/wiki/Central_processing_unit).* The processor that executes machine-code
   instructions. asm-test can run routines on the real CPU (native tier) or a
   simulated one (the {term}`emulator`).
 
@@ -190,24 +190,24 @@ differential testing
   reveal bugs. Often combined with {term}`property testing` and {term}`fuzzing`.
 
 DWARF
-  A standard debugging-information format embedded in compiled programs,
+  A [standard debugging-information format](https://dwarfstd.org/) embedded in compiled programs,
   describing how source code maps to machine code. Relevant to stack unwinding
   and {term}`ABI` details.
 
 DynamoRIO
-  An open-source {term}`DBI` engine. asm-test's DynamoRIO tier attaches it
+  An open-source {term}`DBI` engine. asm-test's [DynamoRIO](https://dynamorio.org/) tier attaches it
   **in-process** to trace native code as it runs on the real {term}`CPU` at
   native speed. It is a {term}`native tier`-trace back-end, distinct from the
   {term}`emulator`. See [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 eBPF
-  *extended Berkeley Packet Filter.* A mechanism for running small,
+  *[extended Berkeley Packet Filter](https://ebpf.io/).* A mechanism for running small,
   kernel-verified programs inside the Linux kernel. asm-test uses an optional eBPF
   probe to detect the instant a {term}`JIT` marks freshly generated code
   executable. Also written **BPF**.
 
 EFLAGS
-  The 32-bit {term}`x86-64` status register — the low half of {term}`RFLAGS`. Its
+  The 32-bit {term}`x86-64` [status register](https://en.wikipedia.org/wiki/FLAGS_register) — the low half of {term}`RFLAGS`. Its
   **TF** (*trap flag*) bit, when set, makes the {term}`CPU` trap after every
   instruction; that trap (delivered as {term}`SIGTRAP`) is the mechanism behind
   the in-process {term}`single-step` tracer.
@@ -218,7 +218,7 @@ eightbyte
   classified and placed in a register or spilled to the stack.
 
 ELF
-  *Executable and Linkable Format.* The standard file format for programs,
+  *[Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format).* The standard file format for programs,
   object files, and libraries on Linux. Compare {term}`PE`, used on Windows.
 
 emulator
@@ -234,12 +234,12 @@ fault
   {term}`emulator` reports them precisely.
 
 FFI
-  *Foreign Function Interface.* The mechanism by which one programming language
+  *[Foreign Function Interface](https://en.wikipedia.org/wiki/Foreign_function_interface).* The mechanism by which one programming language
   calls functions written in (or compiled to) another. asm-test's
   {term}`binding`s use FFI to reach the C library from Python, Go, and so on.
 
 FFM
-  *Foreign Function & Memory API.* Java's modern, built-in {term}`FFI`
+  *[Foreign Function & Memory API](https://openjdk.org/jeps/454).* Java's modern, built-in {term}`FFI`
   mechanism, used by the Java binding.
 
 flag
@@ -251,7 +251,7 @@ flags
   {term}`PF`.
 
 floating-point
-  A way of representing numbers with fractional parts (like `3.14`) inside a
+  A [way of representing numbers with fractional parts](https://en.wikipedia.org/wiki/Floating-point_arithmetic) (like `3.14`) inside a
   computer. Often abbreviated **FP**. Comparing floating-point results needs care
   — see {term}`ULP`.
 
@@ -261,22 +261,22 @@ frame 0
   level`s. Descended callees are frames 1..N ({term}`nested frame`s).
 
 fork
-  A POSIX system call that creates a child copy of the running process. asm-test
+  A POSIX [system call that creates a child copy](https://en.wikipedia.org/wiki/Fork_(system_call)) of the running process. asm-test
   runs each test in its own forked child so a crash or hang in one test can't
   take down the rest of the suite.
 
 fuzzing
-  Feeding a routine many randomly generated inputs to flush out bugs.
+  [Feeding a routine many randomly generated inputs](https://en.wikipedia.org/wiki/Fuzzing) to flush out bugs.
   asm-test's fuzzing uses a reproducible {term}`seed` so a failing run can be
   replayed exactly.
 
 GAS
-  *GNU Assembler.* One of the two {term}`assembler`s asm-test supports. It uses
+  *[GNU Assembler](https://en.wikipedia.org/wiki/GNU_Assembler).* One of the two {term}`assembler`s asm-test supports. It uses
   AT&T syntax and is the assembler the standard C toolchain (`cc`) invokes.
   Compare {term}`NASM`.
 
 GC
-  *Garbage collection.* Automatic reclamation of unused memory inside a
+  *[Garbage collection](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)).* Automatic reclamation of unused memory inside a
   {term}`managed runtime`. Its concurrent background threads are one reason
   tracing a live JVM/.NET/Node process in-process is hazardous — see
   {term}`managed runtime`.
@@ -304,7 +304,7 @@ hexdump
   memory comparison fails, highlighting exactly which bytes differ.
 
 HotSpot
-  The {term}`JIT` compiler in OpenJDK (the standard Java runtime). Its optimizing
+  The {term}`JIT` compiler in [OpenJDK](https://openjdk.org/) (the standard Java runtime). Its optimizing
   compiler is called **C2**, and a compiled method as it lives in the code cache
   is an {term}`nmethod`. One of the {term}`managed runtime`s asm-test's
   foreign-JIT tracer is validated against.
@@ -321,13 +321,13 @@ Intel PT
   bare-metal Intel only.
 
 ISA
-  *Instruction Set Architecture.* The instructions and registers a processor
+  *[Instruction Set Architecture](https://en.wikipedia.org/wiki/Instruction_set_architecture).* The instructions and registers a processor
   family understands — {term}`x86-64`, {term}`AArch64`, {term}`RISC-V`,
   {term}`ARM32`. "Cross-ISA" means running one ISA's code on a host of another,
   which the {term}`emulator` can do.
 
 JIT
-  *Just-In-Time compilation.* Compiling code to machine instructions while the
+  *[Just-In-Time compilation](https://en.wikipedia.org/wiki/Just-in-time_compilation).* Compiling code to machine instructions while the
   program runs — as the JVM, .NET, and JavaScript engines do — rather than ahead
   of time. asm-test can trace JIT-generated code; see {term}`jitdump`,
   {term}`perf-map`, and {term}`managed runtime`.
@@ -340,12 +340,12 @@ jitdump
   {term}`perf-map`, which carries no bytes.
 
 JUnit XML
-  A widely understood XML file format for test results, originally from the JUnit
+  A widely understood XML file format for test results, originally from the [JUnit](https://junit.org/)
   framework. asm-test can emit it so {term}`CI` dashboards can display the
   results.
 
 Keystone
-  An assembler *library* (the counterpart to the Unicorn {term}`emulator`) that
+  An [assembler](https://www.keystone-engine.org/) *library* (the counterpart to the Unicorn {term}`emulator`) that
   asm-test uses to turn {term}`in-line assembly` strings into machine code.
 
 lane
@@ -361,12 +361,12 @@ LBR
   hardware limit.
 
 lcov
-  A common line-coverage report format (from the LCOV tool). asm-test can export a
+  A common line-coverage report format (from the [LCOV tool](https://github.com/linux-test-project/lcov)). asm-test can export a
   trace as an lcov record — with {term}`basic block` offsets standing in for line
   numbers — so standard coverage viewers can display it.
 
 libipt
-  Intel's BSD-licensed decoder library for {term}`Intel PT` packet streams. It is
+  Intel's BSD-licensed [decoder library](https://github.com/intel/libipt) for {term}`Intel PT` packet streams. It is
   linked only when present; without it the PT backend self-skips.
 
 LR
@@ -381,12 +381,12 @@ managed runtime
   observes out of band.
 
 mutation testing
-  Deliberately introducing small faults ("mutants") into a routine and checking
+  [Deliberately introducing small faults](https://en.wikipedia.org/wiki/Mutation_testing) ("mutants") into a routine and checking
   that the tests catch them — a way to measure how thorough the tests really are.
   asm-test runs it contained inside the {term}`emulator`.
 
 NASM
-  *Netwide Assembler.* One of the two {term}`assembler`s asm-test supports. It
+  *[Netwide Assembler](https://www.nasm.us/).* One of the two {term}`assembler`s asm-test supports. It
   uses Intel syntax (`.asm` files). Compare {term}`GAS`.
 
 native tier
@@ -418,24 +418,24 @@ NZCV
   {term}`flags` in {term}`RFLAGS`.
 
 OF
-  *Overflow Flag.* A {term}`CPU` status {term}`flag` set when a *signed*
+  *[Overflow Flag](https://en.wikipedia.org/wiki/Overflow_flag).* A {term}`CPU` status {term}`flag` set when a *signed*
   arithmetic operation produces a result too large to fit. Compare {term}`CF`,
   which covers unsigned overflow.
 
 OpenCSD
-  The BSD-licensed decoder library for ARM {term}`CoreSight` trace streams — the
+  The BSD-licensed [decoder library](https://github.com/Linaro/OpenCSD) for ARM {term}`CoreSight` trace streams — the
   CoreSight counterpart to {term}`libipt`.
 
 PE
-  *Portable Executable.* The program and library file format used on Windows.
+  *[Portable Executable](https://en.wikipedia.org/wiki/Portable_Executable).* The program and library file format used on Windows.
   Compare {term}`ELF` on Linux. Relevant to the {term}`Win64 ABI` tier.
 
 PF
-  *Parity Flag.* A {term}`CPU` status {term}`flag` set according to whether the
+  *[Parity Flag](https://en.wikipedia.org/wiki/Parity_flag).* A {term}`CPU` status {term}`flag` set according to whether the
   low byte of a result has an even number of `1` bits.
 
 P/Invoke
-  *Platform Invoke.* .NET's built-in {term}`FFI` mechanism, used by the .NET
+  *[Platform Invoke](https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke).* .NET's built-in {term}`FFI` mechanism, used by the .NET
   {term}`binding` to reach asm-test's C library.
 
 perf-map
@@ -445,7 +445,7 @@ perf-map
   {term}`jitdump` (it carries no code bytes) but widely emitted.
 
 perf_event
-  The Linux kernel interface (`perf_event_open`) for programming the {term}`PMU`
+  The Linux kernel interface ([`perf_event_open`](https://man7.org/linux/man-pages/man2/perf_event_open.2.html)) for programming the {term}`PMU`
   and collecting trace data. The {term}`Intel PT`, {term}`LBR`, and
   {term}`CoreSight` backends use it — which is why they need a lowered
   `perf_event_paranoid` or `CAP_PERFMON` the process cannot grant itself.
@@ -461,7 +461,7 @@ PMU
   {term}`perf_event`.
 
 POSIX
-  *Portable Operating System Interface.* A family of standards defining a common
+  *[Portable Operating System Interface](https://en.wikipedia.org/wiki/POSIX).* A family of standards defining a common
   Unix-like programming interface, shared by Linux and macOS. asm-test relies on
   POSIX features such as {term}`fork` and {term}`signal`s.
 
@@ -474,7 +474,7 @@ property testing
 program counter
   The {term}`CPU register` holding the address of the instruction being executed —
   `rip` on {term}`x86-64`, `pc` on {term}`AArch64`. Also called the **PC** or
-  instruction pointer. asm-test's {term}`single-step` tracers read it at each step
+  [instruction pointer](https://en.wikipedia.org/wiki/Program_counter). asm-test's {term}`single-step` tracers read it at each step
   to record the offset that executed.
 
 PSTATE
@@ -483,14 +483,14 @@ PSTATE
   {term}`x86-64` and {term}`CPSR` on {term}`ARM32`.
 
 ptrace
-  The POSIX/Linux system call by which one process (the *tracer*) controls and
+  The POSIX/Linux [system call](https://man7.org/linux/man-pages/man2/ptrace.2.html) by which one process (the *tracer*) controls and
   inspects another (the *tracee*) — the basis of debuggers. asm-test's
   out-of-process {term}`single-step` tracer uses it to step a target without
   touching that target's signal disposition or code cache, the safe path for a
   {term}`managed runtime`.
 
 ReadyToRun
-  *R2R.* Precompiled native code shipped inside .NET assemblies so the
+  *[R2R](https://learn.microsoft.com/en-us/dotnet/core/deploying/ready-to-run).* Precompiled native code shipped inside .NET assemblies so the
   {term}`JIT` need not compile them at run time. Tracing a precompiled framework
   method can require forcing the {term}`CoreCLR` JIT back on
   (`DOTNET_ReadyToRun=0`) so it appears in the {term}`jitdump`/{term}`perf-map`.
@@ -505,7 +505,7 @@ RFLAGS
   (such as {term}`CF`, {term}`ZF`, {term}`OF`, {term}`SF`, {term}`PF`).
 
 RISC-V
-  An open, free processor architecture. Its 64-bit variant (**RV64**) is one of
+  An [open, free processor architecture](https://riscv.org/). Its 64-bit variant (**RV64**) is one of
   the targets the {term}`emulator` tier can run.
 
 RNG
@@ -535,11 +535,11 @@ shadow stack
   the CPU's hardware shadow stack (CET).
 
 SF
-  *Sign Flag.* A {term}`CPU` status {term}`flag` set when the result of an
+  *[Sign Flag](https://en.wikipedia.org/wiki/Sign_flag).* A {term}`CPU` status {term}`flag` set when the result of an
   operation is negative (its top bit is `1`).
 
 signal
-  An asynchronous notification the operating system sends to a process, often to
+  An [asynchronous notification](https://en.wikipedia.org/wiki/Signal_(IPC)) the operating system sends to a process, often to
   report an error. asm-test catches signals to contain crashes — see
   {term}`SIGSEGV`, {term}`SIGBUS`, {term}`SIGABRT`.
 
@@ -552,7 +552,7 @@ SIGBUS
   misaligned access the hardware rejects.
 
 SIGSEGV
-  *Segmentation fault.* The {term}`signal` raised when a program touches memory
+  *[Segmentation fault](https://en.wikipedia.org/wiki/Segmentation_fault).* The {term}`signal` raised when a program touches memory
   it isn't allowed to — the classic symptom of a pointer bug.
 
 SIGTRAP
@@ -561,7 +561,7 @@ SIGTRAP
   in-process {term}`single-step` tracer records one offset per SIGTRAP.
 
 SIMD
-  *Single Instruction, Multiple Data.* A CPU feature that performs the same
+  *[Single Instruction, Multiple Data](https://en.wikipedia.org/wiki/Single_instruction,_multiple_data).* A CPU feature that performs the same
   operation on several values at once, packed into one wide register. Used for
   high-performance math. See {term}`lane`, {term}`XMM`, {term}`NEON`.
 
@@ -575,7 +575,7 @@ single-step
   small routines. Contrast {term}`step-over vs step-into`.
 
 soft-dirty
-  A Linux page-table bit recording whether a memory page has been written since it
+  A [Linux page-table bit](https://docs.kernel.org/admin-guide/mm/soft-dirty.html) recording whether a memory page has been written since it
   was last cleared. asm-test uses it to notice when a {term}`JIT` has re-emitted
   code, even in another process — the foreign-JIT case.
 
@@ -600,12 +600,12 @@ suite
 
 System V AMD64 ABI
   The {term}`calling convention` used on Linux and macOS for {term}`x86-64`
-  programs. It dictates that the first integer arguments go in specific registers,
+  programs (the [x86-64 psABI](https://gitlab.com/x86-psABIs/x86-64-ABI)). It dictates that the first integer arguments go in specific registers,
   the return value comes back in `rax`, and so on. asm-test implements this call
   model fully. The {term}`AAPCS64` is the {term}`AArch64` equivalent.
 
 TAP
-  *Test Anything Protocol.* A simple, line-oriented text format for reporting
+  *[Test Anything Protocol](https://testanything.org/).* A simple, line-oriented text format for reporting
   test results (`ok 1`, `not ok 2`, …). asm-test prints colored TAP output by
   default.
 
@@ -638,17 +638,17 @@ trampoline
   See {term}`capture trampoline`.
 
 ULP
-  *Unit in the Last Place.* The size of the smallest possible step between two
+  *[Unit in the Last Place](https://en.wikipedia.org/wiki/Unit_in_the_last_place).* The size of the smallest possible step between two
   representable {term}`floating-point` numbers. Because floating-point math is
   inexact, asm-test compares results "to within N ULP" instead of demanding exact
   equality.
 
 Unicorn
-  The open-source {term}`CPU` {term}`emulator` library asm-test uses for its
+  The open-source {term}`CPU` {term}`emulator` [library](https://www.unicorn-engine.org/) asm-test uses for its
   emulator tier. (Its assembler sibling is {term}`Keystone`.)
 
 V8
-  Google's JavaScript engine (used by Node.js and Chrome). Its optimizing
+  Google's [JavaScript engine](https://v8.dev/) (used by Node.js and Chrome). Its optimizing
   {term}`JIT` is **TurboFan**. One of the {term}`managed runtime`s asm-test's
   foreign-JIT tracer is validated against.
 
@@ -663,19 +663,19 @@ watchpoint
   corruption even if the value is restored before the routine returns.
 
 Win64 ABI
-  The {term}`calling convention` Microsoft Windows uses on {term}`x86-64`. It
+  The {term}`calling convention` Microsoft Windows uses on {term}`x86-64` (its [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)). It
   differs from the {term}`System V AMD64 ABI` (different argument registers, a
   shadow-stack area, etc.). asm-test has a dedicated tier for it — see the
   [Win64 guide](../guides/win64.md).
 
 W^X
-  *Write-xor-execute.* A memory-protection rule that a page may be writable *or*
+  *[Write-xor-execute](https://en.wikipedia.org/wiki/W%5EX).* A memory-protection rule that a page may be writable *or*
   executable, but never both at once. asm-test maps generated code W^X-correctly
   (write the bytes, then flip the page to execute-only) before running or tracing
   it.
 
 x86-64
-  The 64-bit Intel/AMD processor architecture that powers most PCs and servers.
+  The [64-bit Intel/AMD processor architecture](https://en.wikipedia.org/wiki/X86-64) that powers most PCs and servers.
   Also called {term}`AMD64`. One of asm-test's two primary native targets,
   alongside {term}`AArch64`.
 
@@ -684,6 +684,6 @@ XMM
   (`xmm0`, `xmm1`, …), used to pass vector and floating-point values.
 
 ZF
-  *Zero Flag.* A {term}`CPU` status {term}`flag` set when the result of an
+  *[Zero Flag](https://en.wikipedia.org/wiki/Zero_flag).* A {term}`CPU` status {term}`flag` set when the result of an
   operation is exactly zero.
 :::
