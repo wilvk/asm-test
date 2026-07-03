@@ -128,7 +128,7 @@ t:free()
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
 Where `Trace` records isolated guest bytes under the emulator, the optional
-[native-trace tier](../native-tracing.md) traces **host-native code as it runs
+[native-trace tier](../tracing/native-tracing.md) traces **host-native code as it runs
 inside this LuaJIT process**: DynamoRIO is brought up once, machine code is
 materialized into executable (W^X) memory, a region is marked, you call into it,
 and basic-block coverage / the ordered instruction stream is read back. It lives
@@ -171,7 +171,7 @@ NativeTrace.shutdown()
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -213,7 +213,7 @@ available backend (Intel PT → AMD LBR → single-step). A cross-tier resolver
 — which traces a method in a **separate** process (fork-and-step, foreign-process
 attach + run-to-method, and `/proc`-map / jitdump resolution), the managed-runtime
 path — round out the tier. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

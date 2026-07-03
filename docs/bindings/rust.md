@@ -125,7 +125,7 @@ t.covered(0x0);                                 // bool: basic block at byte-off
 
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
-The optional in-process [native-trace tier](../native-tracing.md) traces
+The optional in-process [native-trace tier](../tracing/native-tracing.md) traces
 **host-native** code as it runs inside this Rust process, rather than guest bytes
 in the emulator. Bring DynamoRIO up once, materialize machine code with
 `NativeCode`, mark a region, call into it, and read back basic-block coverage and
@@ -171,7 +171,7 @@ if NativeTrace::available() {
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -216,7 +216,7 @@ resolver (`TracePolicy`) extends the cascade across the DynamoRIO and emulator
 tiers. An out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

@@ -174,7 +174,7 @@ Asm.Assert.Covered(t, 0x0);            // the assertion form
 
 ### Native tracing — `NativeTrace` (optional, DynamoRIO)
 
-A separate, optional tier (see [Native runtime tracing](../native-tracing.md))
+A separate, optional tier (see [Native runtime tracing](../tracing/native-tracing.md))
 traces **host-native code as it runs inside this process** via an in-process
 DynamoRIO client, rather than emulated guest bytes. Bring DynamoRIO up once with
 `DrTrace.Initialize`, materialize machine code as a `NativeCode`, register it
@@ -221,7 +221,7 @@ try {
 Under .NET — a managed runtime — this in-process tier **self-skips at run time**:
 in-process DynamoRIO can't take over the CLR's background threads, so prefer the
 out-of-band Intel PT path (see the central doc). Linux x86-64 only; full reference
-in [Native runtime tracing](../native-tracing.md).
+in [Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -265,14 +265,14 @@ most-faithful available backend (Intel PT → AMD LBR → single-step), and
 emulator tiers. An out-of-process `Ptrace` surface traces a method in a **separate**
 process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map /
 jitdump resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 The `Descent` class (`IDisposable`) makes the tracer follow call-outs instead of stepping
 over them: `new Descent(DescentLevel.DescendKnown)`, optionally `AllowRegion(base, len)` or a
 `SetResolver(...)` delegate (a P/Invoke upcall, `GCHandle`-pinned for the handle's lifetime),
 then `Ptrace.TraceCallEx(code, args, trace, descent, region)`. Read `descent.Edges()` and
 `descent.FrameInsns(f)` for each nested frame. Level 3 (`DescendAll`) is default-off and
-best-effort on a live runtime — see [Call descent levels](../native-tracing.md#call-descent-levels).
+best-effort on a live runtime — see [Call descent levels](../tracing/native-tracing.md#call-descent-levels).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

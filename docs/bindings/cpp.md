@@ -172,7 +172,7 @@ NativeTrace::shutdown();                   // dr_app_stop_and_cleanup (back to n
 ```
 
 Linux x86-64 only, self-skips when DynamoRIO is absent; full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -217,7 +217,7 @@ resolver (spanning the DynamoRIO and emulator tiers) and an out-of-process
 `Ptrace` surface — which traces a method in a **separate** process (fork-and-step,
 foreign-process attach + run-to-method, and `/proc`-map / jitdump resolution), the
 managed-runtime path — round out the tier. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Cross-arch guests (raw bytes, any host)
 

@@ -198,7 +198,7 @@ DynamoRIO
   An open-source {term}`DBI` engine. asm-test's DynamoRIO tier attaches it
   **in-process** to trace native code as it runs on the real {term}`CPU` at
   native speed. It is a {term}`native tier`-trace back-end, distinct from the
-  {term}`emulator`. See [Native runtime tracing](native-tracing.md).
+  {term}`emulator`. See [Native runtime tracing](tracing/native-tracing.md).
 
 eBPF
   *extended Berkeley Packet Filter.* A mechanism for running small,
@@ -297,7 +297,7 @@ hardware trace
   hardware — {term}`Intel PT`, AMD {term}`LBR`, or ARM {term}`CoreSight` — read
   through the {term}`PMU` with near-zero capture overhead. It needs bare metal and
   perf privilege; the portable {term}`single-step` backend is the universal
-  fallback. See [Hardware tracing](hardware-tracing.md).
+  fallback. See [Hardware tracing](tracing/hardware-tracing.md).
 
 hexdump
   A side-by-side display of raw bytes in hexadecimal. asm-test prints one when a

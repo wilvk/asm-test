@@ -7,22 +7,7 @@ ABI argument registers, performs the real `call`, and snapshots **every
 general-purpose register plus the flags** into a `regs_t`. You then assert on
 that snapshot.
 
-```mermaid
-flowchart LR
-    M["ASM_CALL2(r, fn, 2, 3)"] --> T
-    subgraph T["capture trampoline — capture.s"]
-        direction TB
-        S1["Seed callee-saved regs<br/>with sentinels (0x1111…, 0x2222…)"]
-        S2["Marshal args into ABI arg registers<br/>rdi,rsi,… / x0,x1,…"]
-        S3["Real CALL into the routine"]
-        S4["Snapshot all GP regs + RFLAGS<br/>(+ FP / vector file for _fp / _vec)"]
-        S1 --> S2 --> S3 --> S4
-    end
-    T --> R["regs_t r<br/>ret · flags · callee-saved · fret · vec[]"]
-    R --> A1["ASSERT_EQ(r.ret, 5)"]
-    R --> A2["ASSERT_ABI_PRESERVED(r)"]
-    R --> A3["ASSERT_FLAG_CLEAR(r, CF)"]
-```
+> **Diagram:** [Capture trampoline](diagrams.md#capture-trampoline)
 
 ## Capturing a call
 
@@ -82,18 +67,7 @@ present everywhere so tests stay portable, while the named callee-saved fields
 (and a few others) differ by calling convention. The field offsets are fixed and
 `_Static_assert`-guarded so the bindings can mirror them.
 
-```mermaid
-flowchart LR
-    subgraph SV["regs_t — x86-64 System V"]
-        SVf["ret = rax (return value)<br/>rdx = second return register<br/>rbx, rbp, r12–r15 = callee-saved<br/>flags = RFLAGS (CF/PF/ZF/SF/OF)<br/>fret = xmm0 (FP return)<br/>vec[16] = xmm0–xmm15"]
-    end
-    subgraph W64["regs_t — x86-64 Win64"]
-        W64f["ret, rdx = return registers<br/>rbx, rbp, r12–r15 = callee-saved<br/>rdi, rsi = callee-saved (Win64 only)<br/>flags = RFLAGS<br/>fret = xmm0<br/>vec[16] = xmm6–15 also callee-saved"]
-    end
-    subgraph A64["regs_t — AArch64 AAPCS64"]
-        A64f["ret = x0 (return value)<br/>x19–x28, x29 = callee-saved<br/>flags = NZCV<br/>fret = d0 (FP return)<br/>vec[32] = v0–v31"]
-    end
-```
+> **Diagram:** [Register snapshot layouts across ABIs](diagrams.md#register-snapshot-layouts-across-abis)
 
 :::{note}
 Capture is defined as the **post-return** register state plus sentinel-based

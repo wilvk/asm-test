@@ -9,29 +9,7 @@ and SIMD assertions have their own pages.
 The full assertion surface spans six families — this page is the first two; the
 rest are linked under [Related assertion families](#related-assertion-families):
 
-```mermaid
-flowchart LR
-    A["ASSERT_* families"] --> V["Value"]
-    A --> MEM["Memory / string"]
-    A --> REG["Register / flags / ABI"]
-    A --> FPV["Floating-point / SIMD"]
-    A --> PROP["Differential / property"]
-    A --> EMU["Emulator"]
-    V --> V1["ASSERT_TRUE / FALSE"]
-    V --> V2["ASSERT_EQ/NE/LT/LE/GT/GE (signed)"]
-    V --> V3["ASSERT_UEQ/UNE/ULT/ULE/UGT/UGE (unsigned hex)"]
-    MEM --> M1["ASSERT_STREQ"]
-    MEM --> M2["ASSERT_MEM_EQ (hexdump diff)"]
-    REG --> R1["ASSERT_ABI_PRESERVED"]
-    REG --> R2["ASSERT_FLAG_SET / CLEAR"]
-    REG --> R3["ASSERT_REG_EQ"]
-    FPV --> F1["ASSERT_FP_EQ / NEAR (ULP-aware)"]
-    FPV --> F2["ASSERT_VEC_EQ + lane asserts<br/>ASSERT_DEQ/DNEAR/FEQ/FNEAR"]
-    PROP --> P1["ASSERT_MATCHES_REF1 / 2 / 3"]
-    EMU --> E1["ASSERT_NO_FAULT / FAULT / FAULT_AT"]
-    EMU --> E2["ASSERT_EMU_REG_EQ / FP_EQ / VEC_EQ"]
-    EMU --> E3["ASSERT_BLOCK_COVERED /<br/>ASSERT_BLOCKS_AT_LEAST"]
-```
+> **Diagram:** [Assertion families](diagrams.md#assertion-families)
 
 ## Boolean
 

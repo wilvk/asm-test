@@ -6,8 +6,8 @@ system, CPU microarchitecture, and language binding. It is derived from the sour
 of record — [src/hwtrace.c](../../src/hwtrace.c)'s gating chain,
 [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h), and
 [mk/native-trace.mk](../../mk/native-trace.mk) — and the shipped/planned status of
-each tier. Narrative docs: [native runtime tracing](../native-tracing.md),
-[emulator traces](../traces.md), [portability](../portability.md). Roadmaps:
+each tier. Narrative docs: [native runtime tracing](../tracing/native-tracing.md),
+[emulator traces](../tracing/traces.md), [portability](../portability.md). Roadmaps:
 [hardware-trace](../plans/hardware-trace-plan.md),
 [AMD LBR](../plans/amd-tracing-plan.md),
 [Zen 2 single-step](../plans/zen2-singlestep-trace-plan.md),

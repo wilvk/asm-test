@@ -174,7 +174,7 @@ NativeTrace.shutdown();
   time**: in-process DynamoRIO can't take over V8's background threads, so
   `available()` may return true yet tracing yields no coverage. Intel PT is the
   recommended backend on such hosts (see the central doc).
-* Linux x86-64 only; full reference in [Native runtime tracing](../native-tracing.md).
+* Linux x86-64 only; full reference in [Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -215,7 +215,7 @@ available backend (Intel PT → AMD LBR → single-step), and `HwTrace.resolveTi
 out-of-process `Ptrace` surface traces a method in a **separate** process
 (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map / jitdump
 resolution) — the managed-runtime path. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

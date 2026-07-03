@@ -18,7 +18,7 @@ four levels, each a strict opt-in over the last:
 
 The motivating case is the `.NET` BCL lane: `System.Console::WriteLine`'s body is two
 stepped-over call-outs (`get_Out` @ `0xb`, virtual `TextWriter.WriteLine` @ `0x1e` —
-[docs/native-tracing.md:578-604](../native-tracing.md)). Levels 1–3 let a caller record
+[docs/native-tracing.md:578-604](../tracing/native-tracing.md)). Levels 1–3 let a caller record
 those edges, descend into `get_Out`, or descend the whole tree.
 
 > Status legend: **planned** unless noted. This plan was pressure-tested by an
@@ -496,13 +496,13 @@ self-skips. **Effort:** 3 days.
 
 ### Phase 9 — Docs — ✅ **DONE (2026-07-03)**
 
-Landed: [native-tracing.md](../native-tracing.md) "Call descent levels" subsection (4-level
+Landed: [native-tracing.md](../tracing/native-tracing.md) "Call descent levels" subsection (4-level
 table + edge/frame model + the honesty limits + the `dotnet-bcl-descend` worked-output
-pointer); the L3-hazard treatment in [hardware-tracing.md](../hardware-tracing.md) and
+pointer); the L3-hazard treatment in [hardware-tracing.md](../tracing/hardware-tracing.md) and
 [analysis/jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md); the ~27 new symbols in
 [api-reference.md](../api-reference.md); five [glossary.md](../glossary.md) terms (call
 descent, call edge, descent level, frame 0, nested frame, shadow stack, step-over vs
-step-into); the single-region-invariant reconciliation in [traces.md](../traces.md);
+step-into); the single-region-invariant reconciliation in [traces.md](../tracing/traces.md);
 per-binding paragraphs ([python.md](../bindings/python.md), [dotnet.md](../bindings/dotnet.md));
 the [CHANGELOG.md](../../CHANGELOG.md) entry; and the version bump via
 [scripts/sync-version.sh](../../scripts/sync-version.sh).
@@ -510,15 +510,15 @@ the [CHANGELOG.md](../../CHANGELOG.md) entry; and the version bump via
 ### Phase 9 — Docs (detail)
 
 **Goal.** Every doc reflects descent, honestly. **Deliverables** (one section each):
-- [docs/native-tracing.md](../native-tracing.md) §558-604 — extend the step-over passage
+- [docs/native-tracing.md](../tracing/native-tracing.md) §558-604 — extend the step-over passage
   into a **"Call descent levels"** subsection with the 4-level table, the edge/frame model,
   and a **worked `dotnet-bcl-descend` output** captured from the Phase 8 make target (so it
   lands *last*).
-- [docs/hardware-tracing.md](../hardware-tracing.md) — managed-runtime descent note + the L3 caveat.
+- [docs/hardware-tracing.md](../tracing/hardware-tracing.md) — managed-runtime descent note + the L3 caveat.
 - [docs/api-reference.md](../api-reference.md) — the ~20 new symbols.
 - [docs/glossary.md](../glossary.md) — *descent level*, *call edge*, *nested frame*,
   *shadow stack*, *step-over vs step-into*.
-- [docs/traces.md](../traces.md) — reconcile the "single-region `asmtest_trace_t` invariant"
+- [docs/traces.md](../tracing/traces.md) — reconcile the "single-region `asmtest_trace_t` invariant"
   text with nested frames (frame 0 remains the single-region view; descent frames live in
   the separate handle).
 - [docs/bindings/*.md](../bindings/) — one paragraph each (esp. `dotnet.md`, `python.md`).

@@ -48,27 +48,7 @@ buggy code without falling over:
 The child ships its outcome (PASS/FAIL/SKIP plus message and location) back to
 the parent over a pipe:
 
-```mermaid
-sequenceDiagram
-    participant R as Runner (parent)
-    participant C as Forked child
-    participant T as Routine under test
-    R->>C: fork() — one child per test
-    Note over C: arm alarm(timeout) +<br/>SIGSEGV / SIGBUS handler
-    C->>T: run test body (real ABI call)
-    alt passes / fails / skips
-        T-->>C: verdict via siglongjmp
-        C->>R: write PASS/FAIL/SKIP + msg + location over pipe
-    else infinite loop
-        Note over C: alarm fires, SIGALRM
-        C->>R: write "timed out"
-    else hard crash (SIGABRT-class)
-        Note over C: child dies before writing
-        R->>R: synthesize result from wait() status
-    end
-    R->>R: reap_child(), record in registration order
-    Note over R: -jN keeps N children in flight,<br/>report order stays deterministic
-```
+> **Diagram:** [Runner fork-per-test lifecycle](diagrams.md#runner-fork-per-test-lifecycle)
 
 Run the demo to watch a hang and a crash get contained:
 

@@ -268,7 +268,7 @@ NativeTrace.shutdown()
 
 This tier is Linux x86-64 only and self-skips when DynamoRIO is absent; the full
 reference (lifecycle, env vars, the managed-runtime caveat) lives in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -315,7 +315,7 @@ result = Ptrace.trace_call(code, [20, 22], trace)
 * The `Ptrace` surface (`trace_call`, `trace_attached`, `run_to`, `region_by_addr`,
   `perfmap_symbol`, `jitdump_find`) and the `CodeImage` recorder trace a method in a
   **separate** process — the managed-runtime path. Full reference in
-  [Native runtime tracing](../native-tracing.md).
+  [Native runtime tracing](../tracing/native-tracing.md).
 * **Call descent** (`Descent`) makes the tracer follow the call-outs it would otherwise
   step over. Create a `Descent(level)` (`DESCENT_RECORD_EDGES` / `DESCENT_DESCEND_KNOWN` /
   `DESCENT_DESCEND_ALL`), optionally `allow_region(base, len)` the callee regions to descend,
@@ -324,7 +324,7 @@ result = Ptrace.trace_call(code, [20, 22], trace)
   `set_resolver(fn)` callback is a ctypes upcall (kept alive against GC for the handle's
   lifetime). `region` is the traced region's length — pass it when the call target is an
   in-blob sibling that must stay outside the region. See
-  [Call descent levels](../native-tracing.md#call-descent-levels).
+  [Call descent levels](../tracing/native-tracing.md#call-descent-levels).
 
 ```python
 from asmtest.hwtrace import Descent, DESCENT_DESCEND_KNOWN

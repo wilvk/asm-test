@@ -12,22 +12,7 @@ guests emulate even on an x86-64 host.
 All five guests share one shape — `*_open` → `*_map`/`*_write` → `*_call` → a
 result struct — over a single Unicorn engine:
 
-```mermaid
-flowchart TB
-    G1["x86-64 System V"]
-    G2["x86-64 Win64 ABI"]
-    G3["AArch64 + NEON"]
-    G4["RISC-V RV64"]
-    G5["ARM32 A32 + NEON"]
-    G1 & G2 & G3 & G4 & G5 --> OPEN["*_open(): map internal code + stack regions"]
-    OPEN --> MAP["*_map / *_write:<br/>preload arbitrary guest memory"]
-    MAP --> LOAD["Load routine bytes<br/>x86-64: copy from the built fn<br/>others: raw machine code"]
-    LOAD --> ARGS["Marshal args into guest ABI registers<br/>scalar / _fp / _vec variants"]
-    ARGS --> RUN["Run to the routine's ret<br/>OR stop after max_insns (mid-routine)"]
-    RUN --> RES["emu_result_t:<br/>full register file + rip/flags + xmm/vec,<br/>faulted · fault_addr · fault_kind"]
-    RUN -.->|"while running"| HOOKS["Hooks:<br/>invalid memory access becomes a fault,<br/>CODE/BLOCK becomes trace + coverage"]
-    HOOKS -.-> RES
-```
+> **Diagram:** [Emulator guests](diagrams.md#emulator-guests)
 
 ## Building and running
 
@@ -175,7 +160,7 @@ caller-owned buffers, an **instruction trace** (each executed instruction's byte
 offset from the routine entry, in order) and **basic-block coverage** (the
 *distinct* block-start offsets). Either buffer may be `NULL` to skip that
 dimension. For the focused guide to trace buffers, coverage comparison,
-source-line maps, and lcov export, see [Execution traces and coverage](traces.md).
+source-line maps, and lcov export, see [Execution traces and coverage](tracing/traces.md).
 
 ```c
 uint64_t blocks[64];
@@ -195,19 +180,7 @@ ASSERT_BLOCKS_AT_LEAST(&tr, 3);      // the union covered all three paths
 Tracing **appends**, so re-running with the same struct unions coverage across
 inputs — that's how you answer *"did the tests exercise every branch?"*:
 
-```mermaid
-flowchart TB
-    IN["inputs: -5, 0, +7"] --> CALL["emu_call_traced(…, tr)"]
-    CALL --> TR["emu_trace_t tr (APPENDS)<br/>insns[] ordered trace<br/>blocks[] distinct block offsets"]
-    TR -->|"re-run unions coverage"| CALL
-    TR --> Q{"every branch hit?"}
-    Q --> A1["ASSERT_BLOCK_COVERED /<br/>ASSERT_BLOCKS_AT_LEAST"]
-    Q --> A2["emu_trace_report /<br/>emu_coverage_uncovered"]
-    Q --> A3["emu_trace_lcov<br/>(offset-level .info)"]
-    MAP["line map: (offset, line) rows<br/>from objdump / DWARF, out-of-band"] --> SRC
-    TR --> SRC["emu_trace_source_report /<br/>emu_trace_lcov_source"]
-    SRC --> OUT["source-line coverage + lcov"]
-```
+> **Diagram:** [Emulator trace and coverage flow](diagrams.md#emulator-trace-and-coverage-flow)
 
 Key fields:
 

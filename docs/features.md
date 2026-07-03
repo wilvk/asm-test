@@ -81,7 +81,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](emulato
 - **FP & vector** marshalling/capture (`emu_call_fp` / `emu_call_vec`).
 - **Execution trace & basic-block coverage** (`emu_call_traced`), with union
   across inputs, lcov export, and **source-line coverage** via a caller-supplied
-  line map. ([Traces](traces.md))
+  line map. ([Traces](tracing/traces.md))
 - **Mid-execution guards**: memory-write watchpoints and block-entry register
   invariants (catch corruption even when restored before return).
 - **Coverage-guided fuzzing** (`emu_fuzz_cover1`) and **mutation testing**
@@ -98,7 +98,7 @@ alongside native capture and the emulator. Every backend fills the same
 `asmtest_trace_t` shape as the emulator trace and self-skips when its toolchain or
 hardware is absent. All are exposed through **all ten language wrappers**
 (`drtrace` / `hwtrace`) and held in sync by the binding function-parity gate.
-([Native runtime tracing](native-tracing.md))
+([Native runtime tracing](tracing/native-tracing.md))
 
 - **DynamoRIO native trace**: in-process attach (`dr_app_*`), begin/end region
   markers, basic-block + instruction coverage for native or Keystone-generated
@@ -258,7 +258,7 @@ builds the superset `libasmtest_emu` with all three tiers.
 
 - [Examples](examples.md) — these features in action, by use case and audience.
 - [Emulator tier](emulator.md) — the full guest API and diagnostics.
-- [Execution traces and coverage](traces.md) — trace buffers, coverage unions,
+- [Execution traces and coverage](tracing/traces.md) — trace buffers, coverage unions,
   source-line maps, and lcov export.
 - [Bindings](bindings.md) — the per-language capability map and setup.
 - [Portability](portability.md) — the architecture/OS/assembler details.

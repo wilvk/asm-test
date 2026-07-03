@@ -165,7 +165,7 @@ emu_coverage_uncovered_disasm(&covered, &universe,
 ```
 
 Without Capstone, these helpers fall back to the same offset-only reports. See
-[Disassembly](disassembly.md) for build flags and examples.
+[Disassembly](../disassembly.md) for build flags and examples.
 
 ## Limits
 

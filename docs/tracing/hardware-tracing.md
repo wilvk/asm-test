@@ -1,6 +1,6 @@
 # Hardware tracing
 
-The **hardware-trace tier** ([asmtest_hwtrace.h](../include/asmtest_hwtrace.h),
+The **hardware-trace tier** ([asmtest_hwtrace.h](../../include/asmtest_hwtrace.h),
 `src/hwtrace.c`) records which instructions and basic blocks a routine actually
 executes on the **real CPU** with near-zero *capture* overhead: the processor
 emits a compressed branch-trace packet stream into a kernel ring, and a software
@@ -12,7 +12,7 @@ out-of-process / foreign-JIT toolkit built on the same single-step machinery.
 Like every other backend, it fills the **same** `asmtest_trace_t` shape (ordered
 instruction offsets, distinct basic-block offsets, totals, a truncation bit — see
 [Execution traces](traces.md)), so a test can switch backends without changing how
-it reads coverage, and the optional [Capstone annotation layer](disassembly.md)
+it reads coverage, and the optional [Capstone annotation layer](../disassembly.md)
 renders any backend's offsets back to instruction text.
 
 This tier is **optional, advanced, and self-skipping**: it is kept out of the core
@@ -332,7 +332,7 @@ is held in sync by the binding function-parity gate.
 | Lua | `bindings/lua/hwtrace.lua` | `hwtrace-lua-test` |
 | Zig | `bindings/zig/src/hwtrace.zig` | `hwtrace-zig-test` |
 
-See [Language bindings](bindings.md) for the shared binding overview.
+See [Language bindings](../bindings.md) for the shared binding overview.
 
 ---
 
@@ -379,6 +379,6 @@ The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
   toolkit, the time-aware code-image recorder, and cross-tier auto-selection.
 - [Execution traces](traces.md) — the shared `asmtest_trace_t` shape and the
   emulator trace model.
-- [Disassembly](disassembly.md) — rendering recorded offsets back to instruction text.
-- [Language bindings](bindings.md) — driving the tier from another language.
-- [asmtest_hwtrace.h](../include/asmtest_hwtrace.h) — the API header.
+- [Disassembly](../disassembly.md) — rendering recorded offsets back to instruction text.
+- [Language bindings](../bindings.md) — driving the tier from another language.
+- [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h) — the API header.

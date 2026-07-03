@@ -247,7 +247,7 @@ if !tr.Covered(0) {
 ```
 
 Linux x86-64 only; self-skips without DynamoRIO. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -293,7 +293,7 @@ available backend (Intel PT → AMD LBR → single-step), and `ResolveTiers` / `
 extend the cascade across the DynamoRIO and emulator tiers. An out-of-process
 `Ptrace` surface (`PtraceTraceCall`, `PtraceRunTo`, …) traces a method in a
 **separate** process — the managed-runtime path. Full reference in
-[Native runtime tracing](../native-tracing.md).
+[Native runtime tracing](../tracing/native-tracing.md).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

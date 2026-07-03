@@ -15,7 +15,7 @@ the **real CPU, in-process**:
 All three fill the **same** `asmtest_trace_t` shape (ordered instruction offsets,
 distinct basic-block offsets, totals, a truncation bit) — see
 [asmtest_trace.h](traces.md). A test can switch backends without changing how it
-reads coverage, and the optional [Capstone annotation layer](disassembly.md)
+reads coverage, and the optional [Capstone annotation layer](../disassembly.md)
 renders any backend's recorded offsets back to instruction text.
 
 Both native tiers are **optional, advanced, and self-skipping**: they are kept out
@@ -47,7 +47,7 @@ guest memory, no faults-as-data).
 Two cooperating libraries (built by `make shared-drtrace` and
 `make drtrace-client`):
 
-- **`libasmtest_drapp`** — the app-facing API ([asmtest_drtrace.h](api-reference.md)).
+- **`libasmtest_drapp`** — the app-facing API ([asmtest_drtrace.h](../api-reference.md)).
   It owns the lifecycle state machine, exposes the begin/end region markers, and
   brings DynamoRIO up in-process.
 - **`libasmtest_drclient.so`** — a DynamoRIO client loaded in-process that observes
@@ -229,7 +229,7 @@ Python is the canonical reference. From a **published package** (`pip install`, 
 npm, nupkg, jar, rock) on `linux-x86_64` this tier is bundled, so no build or
 `DYNAMORIO_HOME` is needed — `NativeTrace.initialize()` with no arguments picks up the
 bundled DR client and `libdynamorio` automatically (see
-[packaging](packaging.md)). From a **source checkout**, build the libraries
+[packaging](../packaging.md)). From a **source checkout**, build the libraries
 (`make shared-drtrace drtrace-client DYNAMORIO_HOME=...`) and point the env at
 them (`ASMTEST_DRCLIENT`, and `ASMTEST_DR_LIB` or `dynamorio_home=`):
 
@@ -726,7 +726,7 @@ For a live JIT that is wrong the moment the code is patched, freed, or has its a
 reused mid-trace: a late snapshot returns whatever bytes are there *now*, not the bytes
 that were live when the trace ran. The kernel solves this for its own self-modifying code
 with `PERF_RECORD_TEXT_POKE` (old+new bytes, timestamped); `asmtest_codeimage`
-([asmtest_codeimage.h](../include/asmtest_codeimage.h)) is the userspace equivalent — a
+([asmtest_codeimage.h](../../include/asmtest_codeimage.h)) is the userspace equivalent — a
 **timestamped code-image timeline**.
 
 ```c

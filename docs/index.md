@@ -37,36 +37,7 @@ convention** — either natively (a capture trampoline on the real CPU) or, opti
 in, inside a virtual CPU (the [emulator tier](emulator.md)) — then asserts on the
 result and reports.
 
-```mermaid
-flowchart TB
-    subgraph Author["You write"]
-        ASM["Assembly routines<br/>examples/foo.s · foo.asm"]
-        CT["C test cases<br/>TEST(...) + ASSERT_*"]
-    end
-    subgraph Build["Build (Makefile)"]
-        AS["Assemble .s via cc (GAS)<br/>or nasm (Intel syntax)"]
-        CC["Compile C tests +<br/>libasmtest runtime"]
-        LD["Link one binary per suite<br/>build/test_foo"]
-    end
-    subgraph Run["Run the suite binary"]
-        MAIN["Framework main()<br/>discover + filter + order tests"]
-        ENG{"Execution engine"}
-        NAT["Native tier — capture trampoline<br/>real CPU, real ABI"]
-        EMU["Emulator tier (optional)<br/>Unicorn virtual CPU"]
-        REP["Assert on return / registers /<br/>flags / memory / faults"]
-        OUT["Colored TAP or JUnit XML<br/>+ nonzero exit on any failure"]
-    end
-    ASM --> AS
-    CT --> CC
-    AS --> LD
-    CC --> LD
-    LD --> MAIN --> ENG
-    ENG -->|"ASM_CALLn"| NAT
-    ENG -->|"emu_call"| EMU
-    NAT --> REP
-    EMU --> REP
-    REP --> OUT
-```
+> **Diagram:** [Framework build and run pipeline](diagrams.md#framework-build-and-run-pipeline)
 
 ## Why asm-test
 
@@ -94,7 +65,7 @@ comparison and roadmap.
 - An optional **emulator tier** (Unicorn) that runs a routine inside a virtual
   CPU — x86-64, AArch64, RISC-V, ARM32, and the Windows x64 ABI — to read the
   *full* register file, catch precise faults, and record
-  [execution traces and coverage](traces.md).
+  [execution traces and coverage](tracing/traces.md).
 - **Portability** across x86-64 and AArch64, Linux and macOS, with GAS and NASM
   assembler backends.
 
@@ -137,9 +108,9 @@ property-testing
 runner
 benchmarks
 emulator
-traces
-native-tracing
-hardware-tracing
+tracing/traces
+tracing/native-tracing
+tracing/hardware-tracing
 disassembly
 win64
 ```
@@ -156,6 +127,7 @@ packaging
 releasing
 ci
 api-reference
+diagrams
 ```
 
 ```{toctree}

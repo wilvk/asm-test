@@ -65,7 +65,7 @@ live PT **capture** cannot run on AMD CPUs, VMs, or standard CI (no `intel_pt`
 PMU), exactly as this plan predicts. On those hosts `make hwtrace-test` self-skips
 with the specific reason. Capture is validated only on bare-metal Intel PT with
 `perf_event_paranoid` lowered. User-facing docs:
-[native-tracing.md](../native-tracing.md#hardware-trace-tier-intel-pt--arm-coresight).
+[native-tracing.md](../tracing/native-tracing.md#hardware-trace-tier-intel-pt--arm-coresight).
 
 Phase 2 (attach-to-foreign-JIT) remains **planned, forward-look** (it is research-
 grade: PT-attach-to-PID + a time-aware jitdump/eBPF code-image recorder, then the

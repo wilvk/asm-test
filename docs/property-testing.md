@@ -5,19 +5,7 @@ the ones you didn't: you supply a **C reference model** of what the routine
 *should* compute, plus a generator of random inputs, and the framework fuzzes
 many inputs through the real ABI and asserts the assembly agrees with the model.
 
-```mermaid
-flowchart TB
-    SEED["seed — fixed by default,<br/>or ASMTEST_SEED"] --> RNG["splitmix64 RNG"]
-    RNG --> GEN["gen(rng, args, cap)<br/>build one input tuple"]
-    GEN --> CALL["call routine via real ABI<br/>(asm_call_capture_args)"]
-    GEN --> REF["C reference model: ref(…)"]
-    CALL --> CMP{"results equal?"}
-    REF --> CMP
-    CMP -->|"equal (silent)"| NEXT{"tried n inputs?"}
-    NEXT -->|"no"| GEN
-    NEXT -->|"yes"| PASS["test passes"]
-    CMP -->|"mismatch"| FAIL["report input + both results + seed,<br/>then fail the test"]
-```
+> **Diagram:** [Property and differential testing loop](diagrams.md#property-and-differential-testing-loop)
 
 ## The assertion
 

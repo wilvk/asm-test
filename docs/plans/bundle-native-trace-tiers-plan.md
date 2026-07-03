@@ -196,7 +196,7 @@ The heavy tier: ship `libasmtest_drapp.so` + `libasmtest_drclient.so` + the pinn
 ## Track 5 — Docs + CHANGELOG + source-binding note — **done**
 
 - Update [`docs/packaging.md`](../packaging.md) and
-  [`docs/native-tracing.md`](../native-tracing.md): the tiers now ship in the six
+  [`docs/native-tracing.md`](../tracing/native-tracing.md): the tiers now ship in the six
   payload packages (per the matrix); the four source bindings need the consumer to
   build `shared-drtrace`/`shared-hwtrace` and link/point the env var (document the
   one-liner).
