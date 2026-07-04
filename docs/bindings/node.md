@@ -217,6 +217,23 @@ out-of-process `Ptrace` surface traces a method in a **separate** process
 resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the callback *import + scope* form (`scope`). It auto-names the
+region from the call site, renders the executed assembly on close, and returns
+`{ name, path, armed, truncated }`. Genuine cross-thread work (`worker_threads` / the
+libuv pool) is a disclosed gap — untraced, flagged via `truncated`, not stitched; the
+`using` + `Symbol.dispose` sugar needs Node 24+, so the callback form is the
+version-independent fallback.
+
+```js
+const { HwTrace, NativeCode, SINGLESTEP } = require('./hwtrace');
+HwTrace.init(SINGLESTEP);
+const code = NativeCode.fromBytes(Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3])); // add2; ret
+const tr = HwTrace.create({ blocks: 64, instructions: 256 });
+let r;
+const res = tr.scope(code, () => { r = code.call(20, 22); }, { emit: false }); // auto-named "file.js:<line>"
+// res.path holds the disassembly that executed; res.truncated is the thread-scope bit
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```js

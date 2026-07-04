@@ -219,6 +219,24 @@ process (fork-and-step, foreign-process attach + run-to-method, and `/proc`-map 
 jitdump resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the try-with-resources scope (`HwTrace.AsmTrace`). It auto-names
+the region from the call site (`StackWalker`), and `close()` renders the executed
+assembly into `path()` (and to stdout unless `emit=false`); `truncated()` is the
+thread-scope honesty bit.
+
+```java
+HwTrace.init(HwTrace.SINGLESTEP);
+byte[] routine = { 0x48, (byte)0x89, (byte)0xF8, 0x48, 0x01, (byte)0xF0, (byte)0xC3 }; // add2; ret
+HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(routine);
+HwTrace.AsmTrace scope;
+try (HwTrace.AsmTrace t = HwTrace.AsmTrace.scope(code, false)) { // auto-named "File.java:<line>"
+    scope = t;
+    code.call(20, 22);                                           // 42
+}   // close(): end + render the executed assembly
+String listing = scope.path();   // the disassembly that executed; scope.truncated() the thread bit
+code.free();
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```java

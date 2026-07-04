@@ -309,6 +309,23 @@ backend = HwTrace.auto(BEST)               # >= 0 backend, or ASMTEST_HW_EUNAVAI
 result = Ptrace.trace_call(code, [20, 22], trace)
 ```
 
+**Scoped tracing** — the ergonomic *import + scope* form (`HwTrace.scope`). It
+auto-names the region from the call site, arms lazily on first use, registers +
+begins under that name, and on close **renders the executed assembly** to `t.path`
+(and to stdout unless `emit=False`). `t.truncated` is set if the block closed on a
+different OS thread than it opened (`await`/thread-pool hop) — never a partial trace
+presented as complete.
+
+```python
+from asmtest.hwtrace import HwTrace, NativeCode
+
+code = NativeCode.from_bytes(bytes([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3]))  # add2; ret
+with HwTrace.scope(code, emit=False) as t:      # auto-named "myfile.py:<line>"
+    r = code.call(20, 22)                        # 42
+assert r == 42 and t.armed and not t.truncated
+print(t.path)                                    # the disassembly that executed
+```
+
 * `HwTrace.resolve(policy)` / `HwTrace.auto(policy)` return the available cascade /
   its head (`BEST` or `CEILING_FREE`); `HwTrace.resolve_tiers` / `auto_tier` extend
   it across the DynamoRIO and emulator tiers (`TRACE_BEST` / `TRACE_NATIVE_ONLY` / …).

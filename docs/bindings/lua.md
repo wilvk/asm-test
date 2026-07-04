@@ -215,6 +215,22 @@ attach + run-to-method, and `/proc`-map / jitdump resolution), the managed-runti
 path — round out the tier. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the callback *import + scope* form (`:scope`). It auto-names the
+region from the call site (`debug.getinfo`), renders the executed assembly on close,
+and returns a table `{name, path, armed, truncated}`; the `pcall` closes the region
+even if the callback errors (LuaJIT 5.1 has no `<close>`).
+
+```lua
+local hwtrace = require("hwtrace")
+local HwTrace, NativeCode = hwtrace.HwTrace, hwtrace.NativeCode
+
+HwTrace.init(hwtrace.SINGLESTEP)
+local code = NativeCode.from_bytes({ 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3 })  -- add2; ret
+local tr = HwTrace.create(64, 256)
+local res = tr:scope(code, function() code:call(20, 22) end, { emit = false }) -- auto-named "file.lua:<line>"
+print(res.path)   -- the disassembly that executed; res.truncated is the thread-scope bit
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```lua

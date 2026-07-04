@@ -219,6 +219,26 @@ foreign-process attach + run-to-method, and `/proc`-map / jitdump resolution), t
 managed-runtime path — round out the tier. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the RAII *import + scope* form (`asmtest::ScopedTrace`). It
+auto-names the region from the call site (`__builtin_FILE`/`__builtin_LINE`, the C++17
+floor), and its **`noexcept` destructor** renders the executed assembly on close (into
+an optional `out` string, and to stdout unless `emit=false`) and flags `truncated()`
+on a cross-thread close — never a partial trace presented as complete.
+
+```cpp
+#include "asmtest_hwtrace.hpp"
+using namespace asmtest;
+
+HwTrace::init(SINGLESTEP);
+NativeCode code = NativeCode::from_bytes({0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3}); // add2; ret
+std::string listing;
+{
+    asmtest::ScopedTrace t(code, &listing, /*emit=*/false);  // auto-named "file.cpp:<line>"
+    code.call(20, 22);                                       // 42
+}   // destructor: end + render the executed assembly into `listing`
+HwTrace::shutdown();
+```
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```cpp

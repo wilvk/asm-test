@@ -295,6 +295,21 @@ extend the cascade across the DynamoRIO and emulator tiers. An out-of-process
 **separate** process — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the closure *import + scope* form (`Scope`). It auto-names the
+region from the call site (`runtime.Caller`), pins the goroutine with
+`runtime.LockOSThread` for the region, renders the executed assembly on close, and
+returns a `ScopedResult`. Work fanned out via `go func()` runs on another OS thread and
+is silently untraced (a disclosed gap); `res.Truncated` flags a cross-thread close.
+
+```go
+_ = asmtest.HwTraceInit(asmtest.SingleStep)
+code, _ := asmtest.HwNativeCodeFromBytes([]byte{0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3}) // add2; ret
+tr := asmtest.NewHwTrace(64, 256)
+var r int64
+res := tr.Scope(code, false, func() { r = code.Call(20, 22) }) // auto-named "file.go:<line>"
+// res.Path holds the disassembly that executed; res.Truncated is the thread-scope bit
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 These run **raw machine-code bytes** on any host.

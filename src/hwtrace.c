@@ -18,6 +18,7 @@
  */
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
+#include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,11 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#if defined(__x86_64__) || defined(__aarch64__)
+#include <sys/prctl.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#endif
 #endif
 
 /* Decoder entry points (defined in pt_backend.c / cs_backend.c, or the no-decoder
@@ -1396,3 +1402,143 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
     }
     return nb;
 }
+
+/* ------------------------------------------------------------------ */
+/* §D3 — concealed out-of-process ptrace-stealth stepper               */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+/* Shared scratch the helper child fills and the caller reads back. The shadow trace
+ * points at the insns[]/blocks[] buffers that follow it in the same mapping. */
+typedef struct {
+    volatile int ready; /* helper -> caller: seized + about to plant the run_to bp */
+    volatile int rc;    /* helper's outcome (ASMTEST_HW_*)                          */
+    long result;        /* the region's return value                               */
+    asmtest_trace_t shadow;
+    /* uint64_t insns[icap]; uint64_t blocks[bcap]; follow here */
+} stealth_scratch_t;
+
+int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
+                                  asmtest_trace_t *trace, long *result_out,
+                                  void (*run_region)(void *), void *arg) {
+    if (base == NULL || len == 0 || trace == NULL || run_region == NULL)
+        return ASMTEST_HW_EINVAL;
+    size_t icap = trace->insns_cap ? trace->insns_cap : 256;
+    size_t bcap = trace->blocks_cap ? trace->blocks_cap : 64;
+    if (icap > 65536)
+        icap = 65536;
+    if (bcap > 4096)
+        bcap = 4096;
+    size_t total = sizeof(stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
+    stealth_scratch_t *sc = (stealth_scratch_t *)mmap(
+        NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (sc == MAP_FAILED)
+        return ASMTEST_HW_EUNAVAIL;
+    memset(sc, 0, total);
+    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(stealth_scratch_t));
+    uint64_t *bbuf = ibuf + icap;
+    sc->shadow.insns = ibuf;
+    sc->shadow.insns_cap = icap;
+    sc->shadow.blocks = bbuf;
+    sc->shadow.blocks_cap = bcap;
+    sc->rc = ASMTEST_HW_EDECODE; /* until the helper reports otherwise */
+
+    /* Nominate any process to ptrace us so a Yama ptrace_scope=1 host permits the
+     * helper's reverse attach; harmless when Yama is off. */
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+
+    pid_t parent = getpid();
+    pid_t helper = fork();
+    if (helper < 0) {
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    if (helper == 0) {
+        /* HELPER (child): reverse-attach to the caller and step it through the
+         * region. alarm() is the watchdog so a stuck attach never hangs the caller. */
+        alarm(15);
+        if (ptrace(PTRACE_SEIZE, parent, (void *)0, (void *)0) != 0 ||
+            ptrace(PTRACE_INTERRUPT, parent, (void *)0, (void *)0) != 0) {
+            sc->rc = ASMTEST_HW_EUNAVAIL;
+            sc->ready = 1;
+            _exit(0);
+        }
+        int st = 0;
+        if (waitpid(parent, &st, 0) < 0 || !WIFSTOPPED(st)) {
+            sc->rc = ASMTEST_HW_EUNAVAIL;
+            sc->ready = 1;
+            _exit(0);
+        }
+        /* The caller is now INTERRUPT-stopped; releasing it (run_to CONTs it) is what
+         * lets it observe `ready` and proceed into run_region. */
+        sc->ready = 1;
+        if (asmtest_ptrace_run_to(parent, base) != ASMTEST_PTRACE_OK) {
+            ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
+            sc->rc = ASMTEST_HW_EUNAVAIL;
+            _exit(0);
+        }
+        long res = 0;
+        int tr =
+            asmtest_ptrace_trace_attached(parent, base, len, &res, &sc->shadow);
+        ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
+        sc->result = res;
+        sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
+        _exit(0);
+    }
+
+    /* CALLER (tracee): wait (busy, no syscall) until the helper has seized us and is
+     * ready; we are INTERRUPT-stopped during this spin and only resume — seeing
+     * `ready` — once the helper's run_to CONTs us with the entry breakpoint planted,
+     * so the region cannot run untraced. */
+    while (!sc->ready) {
+        /* spin */
+    }
+    if (sc->rc == ASMTEST_HW_EUNAVAIL) { /* attach refused before run_to */
+        int st = 0;
+        waitpid(helper, &st, 0);
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+
+    run_region(arg); /* invoke the region; the helper single-steps it out of band */
+
+    int st = 0;
+    waitpid(helper, &st, 0);
+
+    int rc = sc->rc;
+    if (rc == ASMTEST_HW_OK) {
+        size_t ni = sc->shadow.insns_len;
+        if (ni > trace->insns_cap)
+            ni = trace->insns_cap;
+        if (trace->insns != NULL)
+            for (size_t i = 0; i < ni; i++)
+                trace->insns[i] = ibuf[i];
+        trace->insns_len = ni;
+        trace->insns_total = sc->shadow.insns_total;
+        size_t nb = sc->shadow.blocks_len;
+        if (nb > trace->blocks_cap)
+            nb = trace->blocks_cap;
+        if (trace->blocks != NULL)
+            for (size_t i = 0; i < nb; i++)
+                trace->blocks[i] = bbuf[i];
+        trace->blocks_len = nb;
+        trace->blocks_total = sc->shadow.blocks_total;
+        trace->truncated = sc->shadow.truncated;
+        if (result_out != NULL)
+            *result_out = sc->result;
+    }
+    munmap(sc, total);
+    return rc;
+}
+#else
+int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
+                                  asmtest_trace_t *trace, long *result_out,
+                                  void (*run_region)(void *), void *arg) {
+    (void)base;
+    (void)len;
+    (void)trace;
+    (void)result_out;
+    (void)run_region;
+    (void)arg;
+    return ASMTEST_HW_ENOSYS;
+}
+#endif

@@ -270,6 +270,31 @@ int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
                            asmtest_hwtrace_slice_bound_t *bounds, size_t *nbounds);
 
 /* ------------------------------------------------------------------ */
+/* §D3 — concealed out-of-process ptrace-stealth stepper               */
+/*                                                                     */
+/* The hardware-free path, hidden behind the scope façade, for hosts    */
+/* with no PT/LBR (Zen 2, Docker-on-Mac). It spawns a small helper       */
+/* CHILD that reverse-attaches to THIS process (prctl(PR_SET_PTRACER)    */
+/* so a Yama ptrace_scope=1 host permits it, then PTRACE_SEIZE), drives  */
+/* the caller to the region entry (run_to), and single-steps the region  */
+/* while the caller runs it — exact, state-safe, timing-intrusive (~100- */
+/* 1000x on the stepped thread while siblings run native). CI-runnable   */
+/* on any ptrace-capable Linux (not hardware-gated).                    */
+/* ------------------------------------------------------------------ */
+
+/* Trace [base, base+len) — host-native code the caller has ALREADY mapped executable
+ * — via a reverse-attached helper child, running the region through `run_region(arg)`
+ * (the callback the caller uses to invoke it). On return `*trace` holds the recorded
+ * offsets and `*result_out` (may be NULL) the region's return value. Returns
+ * ASMTEST_HW_OK, ASMTEST_HW_EINVAL on a bad argument, or ASMTEST_HW_EUNAVAIL when the
+ * reverse-attach is not permitted (Yama / no ptrace) — a clean self-skip. The trace
+ * buffers may be ordinary heap (the helper fills a shared shadow copied back here).
+ * Linux x86-64 / AArch64 only. */
+int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
+                                  asmtest_trace_t *trace, long *result_out,
+                                  void (*run_region)(void *), void *arg);
+
+/* ------------------------------------------------------------------ */
 /* §3.1(c) — whole-window noise attribution: address→name reverse       */
 /* resolver + IP bucketer.                                              */
 /*                                                                     */

@@ -252,10 +252,17 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install Capstone (AMD reconstruction) + libipt (PT decode) + OpenCSD
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config python3 python3-pytest
 
       - name: Build + run the hardware-trace suite (decode validated; capture self-skips)
         run: make hwtrace-test
+
+      # The Python single-step wrapper (incl. the scoped-tracing `HwTrace.scope`
+      # case) is excluded from the docker matrix (HWTRACE_DOCKER_LANGS), so run it
+      # here against the shared lib the recipe builds — otherwise it runs only
+      # locally. Self-skips off x86-64 Linux.
+      - name: Python wrapper (single-step + scoped tracing)
+        run: make hwtrace-python-test
 
   # K2: the cross-language hardware-trace wrappers — each binding's in-process
   # single-step tracer, in the same isolated per-language images the `bindings`

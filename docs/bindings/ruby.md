@@ -215,6 +215,21 @@ out-of-process `Ptrace` surface traces a method in a **separate** process
 resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the block *import + scope* form (`#scope`). It auto-names the
+region from the call site (`caller_locations`), renders the executed assembly on
+close, and returns a `ScopeResult`; the `ensure` closes the region even if the block
+raises. `.truncated` flags a close on a different OS thread (Ractors / the 3.3+ M:N
+scheduler — fibers never migrate).
+
+```ruby
+# (HwTrace / NativeCode / SINGLESTEP aliased as above)
+HwTrace.init(SINGLESTEP)
+code = NativeCode.from_bytes([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3])  # add2; ret
+tr = HwTrace.create(blocks: 64, instructions: 256)
+res = tr.scope(code, emit: false) { code.call(20, 22) }   # auto-named "file.rb:<line>"
+puts res.path        # the disassembly that executed; res.truncated is the thread-scope bit
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```ruby

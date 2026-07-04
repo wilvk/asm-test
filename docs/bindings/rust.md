@@ -218,6 +218,23 @@ tiers. An out-of-process `Ptrace` surface traces a method in a **separate** proc
 resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the *import + scope* form (`HwTrace::scope`). It auto-names the
+region from the call site (`#[track_caller]` + `Location::caller`); `close()` ends the
+scope, renders the executed assembly, and returns the listing (`Drop` closes it,
+emitting to stdout, otherwise). `was_truncated()` is the thread-scope honesty bit.
+
+```rust
+use asmtest::hwtrace::{Backend, HwTrace, NativeCode};
+
+HwTrace::init(Backend::Singlestep).unwrap();
+let code = NativeCode::from_bytes(&[0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3]); // add2; ret
+let scope = HwTrace::scope(&code, /*emit=*/false); // auto-named "file.rs:<line>"
+let r = code.call(20, 22);                          // 42
+let listing = scope.close();                        // the disassembly that executed
+assert_eq!(r, 42);
+HwTrace::shutdown();
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```rust

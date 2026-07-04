@@ -247,6 +247,24 @@ out-of-process `Ptrace` surface traces a method in a **separate** process
 resolution) — the managed-runtime path. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
+**Scoped tracing** — the *import + scope* form (`hwtrace.HwTrace.scope`). Zig has no
+destructors, so the returned `Scope` is **not RAII** — close it with `defer
+scope.deinit()`. Pass `@src()` at the call site (Zig has no caller-location
+propagation) to auto-name the region `basename:line`; `deinit` renders the executed
+assembly into `scope.path()` and flags `scope.truncated()` on a cross-thread close.
+
+```zig
+const hwtrace = @import("hwtrace.zig");
+
+try hwtrace.init(hwtrace.SINGLESTEP);
+var code = try hwtrace.NativeCode.fromBytes(&[_]u8{ 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3 }); // add2; ret
+var tr = try hwtrace.HwTrace.create(64, 256);
+var scope = tr.scope(&code, @src(), false); // auto-named "file.zig:<line>"
+defer scope.deinit();                        // NOT RAII: explicit deinit renders on close
+_ = code.call(20, 22);                       // 42
+// after deinit: scope.path() holds the disassembly; scope.truncated() the thread bit
+```
+
 ### Cross-arch guests (raw bytes, any host)
 
 ```zig

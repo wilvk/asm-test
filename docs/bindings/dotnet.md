@@ -274,6 +274,22 @@ then `Ptrace.TraceCallEx(code, args, trace, descent, region)`. Read `descent.Edg
 `descent.FrameInsns(f)` for each nested frame. Level 3 (`DescendAll`) is default-off and
 best-effort on a live runtime — see [Call descent levels](../guides/tracing/native-tracing.md#call-descent-levels).
 
+**Scoped tracing** — the reference `using` scope (`AsmTrace : IDisposable`), the
+canonical *import + scope* shape. It auto-names the region from the call site
+(`[CallerMemberName]` / `[CallerLineNumber]`), and `Dispose` renders the executed
+assembly into `Path` (and to stdout unless `emit: false`); `Truncated` is the
+thread-scope honesty bit.
+
+```csharp
+HwTrace.Init(HwBackend.SingleStep);
+var code = NativeCode.FromBytes(new byte[] { 0x48,0x89,0xF8, 0x48,0x01,0xF0, 0xC3 }); // add2; ret
+AsmTrace scope;
+using (scope = new AsmTrace(code, emit: false))   // auto-named "Method:<line>"
+    code.Call(20, 22);                             // 42
+// scope.Path holds the disassembly that executed; scope.Truncated is the thread-scope bit
+HwTrace.Shutdown();
+```
+
 ### Cross-arch guests — `Guest` / `GuestResult`
 
 ```csharp

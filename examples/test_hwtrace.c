@@ -2105,6 +2105,60 @@ static void test_ptrace_callout(const char *label, int force_hw) {
 #endif
 }
 
+/* §D3: the concealed out-of-process ptrace-stealth stepper. A helper CHILD
+ * reverse-attaches to THIS process (PR_SET_PTRACER + PTRACE_SEIZE) and single-steps
+ * the region while we run it — the hardware-free scope path for Zen 2 / Docker-on-Mac.
+ * CI-runnable on any ptrace-capable Linux (self-skips where the reverse attach is
+ * refused); asserts exact offsets vs the in-process/ground-truth stream. */
+#if defined(__linux__) && defined(__x86_64__)
+static void stealth_run_region(void *arg) {
+    volatile long r = ((add2_fn)arg)(20, 22);
+    (void)r;
+}
+#endif
+static void test_ptrace_scoped_stealth(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace stealth: %s\n", why);
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP ptrace stealth: mmap failed\n");
+        return;
+    }
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_hwtrace_stealth_trace(p, sizeof ROUTINE, tr, &result,
+                                           stealth_run_region, p);
+    if (rc == ASMTEST_HW_EUNAVAIL) {
+        printf("# SKIP ptrace stealth: reverse-attach not permitted (yama "
+               "ptrace_scope)\n");
+        asmtest_trace_free(tr);
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
+    CHECK(rc == ASMTEST_HW_OK,
+          "ptrace stealth: reverse-attach helper traced the region");
+    CHECK(result == 42,
+          "ptrace stealth: result 42 read from the caller's return reg");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "ptrace stealth: exact offsets [0,3,6,c,11] vs ground truth");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 &&
+              !asmtest_emu_trace_truncated(tr),
+          "ptrace stealth: two blocks, complete (stepped out of band)");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP ptrace stealth: needs Linux x86-64\n");
+#endif
+}
+
 /* JIT method resolution: a JIT writes /tmp/perf-<pid>.map so perf can symbolize its
  * generated code; we parse it to recover a method's (base,len) for trace_attached.
  * Emulate one entry (with a spaces-bearing symbol) and resolve it by name. */
@@ -2999,6 +3053,9 @@ int main(void) {
      * (the path that traces W^X JIT code as-shipped), asserting identical results. */
     test_ptrace_callout("software int3", 0);
     test_ptrace_callout("hardware bp", 1);
+
+    /* §D3: the concealed reverse-attach ptrace-stealth stepper scope (CI-runnable). */
+    test_ptrace_scoped_stealth();
 
     test_perfmap_resolve();
     test_jitdump_reader();

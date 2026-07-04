@@ -134,11 +134,21 @@ untraced). The .NET `AsmTrace` is the canonical reference shape the plan calls f
   implemented + host-tested (`test_stitch_slices`, `test_render_versioned`).
 - **§D1 Node** and **§D2 Java** scope constructs over a native leaf — implemented +
   tested (the managed-code capability's testable surface today).
+- **§D3 the concealed out-of-process ptrace-stealth stepper** — implemented +
+  CI-runnable. `asmtest_hwtrace_stealth_trace` spawns a helper **child** that
+  reverse-attaches to the caller (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` +
+  `PTRACE_SEIZE`), drives it to the region entry (`run_to`), and single-steps the
+  region out of band while the caller runs it (reusing the shipped
+  `asmtest_ptrace_trace_attached` W2 tracer against a shared shadow trace). Host test
+  `test_ptrace_scoped_stealth` (checks 158–161) asserts exact offsets vs ground truth
+  on any ptrace-capable Linux; it self-skips (`EUNAVAIL`) where Yama refuses the
+  reverse attach, and an `alarm()` watchdog in the helper means it never hangs CI.
+  This is the hardware-free scope path for Zen 2 / Docker-on-Mac.
 - **Forward-look:** §D0 (.NET `MethodLoadVerbose` address resolution, `AsyncLocal`
-  async-hop), the §D1/§D2 per-runtime async-hop hooks, and §D3 (the concealed
-  out-of-process ptrace-stealth stepper — reverse-attach `PR_SET_PTRACER` +
-  `PTRACE_SEIZE` protocol, cross-process address channel, per-ecosystem bundling).
-  These need managed runtimes, PT hardware, or a second process to validate, and are
+  async-hop), the §D1/§D2 per-runtime async-hop hooks, and the §D3 **per-ecosystem
+  bundling** (a standalone helper binary + NuGet/npm/Maven packaging) + the
+  cross-process address channel for a live JIT's `MethodLoadVerbose` addresses. These
+  need managed runtimes, PT hardware, or the packaging surface to validate, and are
   sequenced last exactly as the plan states.
 
 ## Build fix (incidental, unblocks the binding test lanes)

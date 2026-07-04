@@ -269,7 +269,19 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 
 ---
 
-## §D3 — The concealed out-of-process ptrace stepper scope *(planned; Zen 2 / Docker-on-Mac)*
+## §D3 — The concealed out-of-process ptrace stepper scope *(CI-runnable core DONE; bundling forward-look)*
+
+> **Status: reverse-attach stealth stepper landed + CI-runnable.**
+> `asmtest_hwtrace_stealth_trace` ([src/hwtrace.c](../../src/hwtrace.c)) spawns a
+> helper **child** that reverse-attaches to the caller (`prctl(PR_SET_PTRACER,
+> PR_SET_PTRACER_ANY)` + `PTRACE_SEIZE`), `run_to`s it to the region entry, and
+> single-steps the region out of band (reusing `asmtest_ptrace_trace_attached`), with
+> a shared shadow trace copied back to the caller. `test_ptrace_scoped_stealth`
+> (checks 158–161) passes on any ptrace-capable Linux, self-skips where Yama refuses
+> the attach, and an `alarm()` watchdog means it never hangs CI. **Forward-look:** the
+> per-ecosystem **bundling** (a standalone helper binary + NuGet/npm/Maven packaging +
+> dladdr discovery) and the cross-process channel that feeds the helper a live JIT's
+> `MethodLoadVerbose` addresses.
 
 The hardware-free path, hidden behind the same scope constructs, for hosts with no
 PT/LBR (Zen 2 — [src/hwtrace.c:183](../../src/hwtrace.c#L183) classifies it
