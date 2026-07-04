@@ -14,6 +14,12 @@ trampoline is the easy part; the runner is POSIX and that is the cost** — and 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
+>
+> **Status: complete (2026-07-04).** All phases landed, including Phase 4 (Win32
+> runner port, past the gate by request) and Phase 5 (CI + docs): the `win64`
+> Wine job and the optional `windows-latest` real-OS sign-off job both exist in
+> `ci.yml`, and `docs/guides/win64.md` is written. The stale "defer Phase 4" /
+> "optional follow-ons remain" notes below are superseded by the shipped code.
 
 ---
 
@@ -408,7 +414,12 @@ containment, and the `-jN` pool all working.
 
 ---
 
-## Phase 5 — CI, authoritative sign-off, docs
+## Phase 5 — CI, authoritative sign-off, docs *(done)*
+
+**Status: done.** The `win64` job runs `make docker-win64` on every push (no
+Windows host), the optional `windows-latest` real-OS sign-off job runs the full
+runner suite natively (no Wine), and `docs/guides/win64.md` documents the tier,
+the three lanes, and the Wine-fidelity caveat.
 
 **Goal.** Make it permanent and documented.
 
@@ -437,8 +448,8 @@ updated to "landed."
 3. **Phase 3** — the validation slice + **decision gate**. *(done — gate says stop)*
 4. **Phase 4** — the Win32 runner port, *only if* the gate says the full tier is
    wanted; this is the bulk of the effort. *(deferred by the Phase 3 gate.)*
-5. **Phase 5** — CI + optional `windows-latest` + docs. *(CI landed in Phase 3;
-   the `windows-latest` sign-off and a `docs/win64.md` remain optional follow-ons.)*
+5. **Phase 5** — CI + optional `windows-latest` + docs. *(done — the `win64` Wine
+   job, the `windows-latest` sign-off job, and `docs/guides/win64.md` all landed.)*
 
 **Milestone reached: Phases 0–3 ship a usable, CI'd `--no-fork` Win64 trampoline
 tier on the existing Linux CI — no Windows host.** Phase 4 is the optional deep

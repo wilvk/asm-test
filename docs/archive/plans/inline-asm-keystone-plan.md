@@ -15,6 +15,11 @@ execution engine, and no native/capture-tier work (that would need an executable
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
+>
+> **Status: complete (2026-07-04).** All seven phases landed — assembler core,
+> emu bridge, build wiring, dependency provisioning, tests, bindings, and docs.
+> The one open risk (Keystone RISC-V maturity) shipped best-effort with a
+> documented self-skip, as the plan permitted.
 
 ---
 

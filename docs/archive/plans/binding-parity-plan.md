@@ -6,6 +6,10 @@ opaque-handle wrapper for it — and anchors every tier in the shared conformanc
 corpus so the bindings stay honest.
 
 > Status legend: **done** / **planned**. Update as tracks land.
+>
+> **Status: complete (2026-07-04).** All four tracks (A — C-core FFI surface,
+> B — shared corpus, C — all ten bindings, D — docs) landed and verified against
+> the code.
 
 ---
 
