@@ -378,12 +378,11 @@ hwtrace-jit-java-jitdump: $(BUILD)/jit_trace
 # Self-skips when DynamoRIO is absent. Runs on a dev box (DYNAMORIO_HOME=...) and
 # is the body of the `make docker-drtrace` container lane.
 .PHONY: drtrace-python-test
-drtrace-python-test:
+drtrace-python-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	@echo "== drtrace-python-test =="
 	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-python-test =="
 	@# One DR lifecycle per process (in-process re-attach is unreliable), so run
 	@# each native-trace test file as its OWN pytest invocation.
@@ -437,21 +436,34 @@ endef
 drtrace-bindings-test: drtrace-python-test \
 	$(addprefix drtrace-,$(addsuffix -test,$(DRTRACE_BINDING_LANGS)))
 
-drtrace-cpp-test:
+# Shared native-trace artifacts, built ONCE before the per-language fan-out (B7).
+# Every drtrace-*-test lane used to run its own `$(MAKE) shared-drtrace
+# drtrace-client DRAPP_KEYSTONE=0` (a recursive sub-make — needed because the
+# DRAPP_KEYSTONE=0 override is per-lane, not global). Under `make -j` two lanes
+# then built the same build/pic/*.o + libasmtest_drapp + drclient into one shared
+# tree concurrently → torn writes / cmake collisions. Making it a single shared
+# prerequisite of every lane makes GNU make build it exactly once and every lane
+# wait on it. Guarded by DR_AVAILABLE so it stays a no-op (and the lanes SKIP) off
+# a DynamoRIO host. shared-emu + $(CORPUS_LIB) are folded in for the rust/go lanes.
+.PHONY: drtrace-shared-prep
+drtrace-shared-prep:
+ifdef DR_AVAILABLE
+	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+endif
+
+drtrace-cpp-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,cpp)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-cpp-test =="
 	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_drtrace.cpp -ldl -o $(BUILD)/test_drtrace_cpp
 	$(drtrace_env) ./$(BUILD)/test_drtrace_cpp
 endif
 
-drtrace-rust-test:
+drtrace-rust-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,rust)
 else
-	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-rust-test =="
 	@# Run as an EXAMPLE binary (main thread), NOT `cargo test` (which runs the
 	@# test on a worker thread, making the process multi-threaded when dr_app_start
@@ -460,11 +472,10 @@ else
 	  $(CARGO) run --quiet --example drtrace
 endif
 
-drtrace-go-test:
+drtrace-go-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,go)
 else
-	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-go-test =="
 	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" CGO_CFLAGS="-I$(abspath include)" \
 	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
@@ -472,20 +483,18 @@ else
 	  $(GO) test -run TestDrtrace ./...
 endif
 
-drtrace-node-test:
+drtrace-node-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,node)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-node-test =="
 	$(call drtrace_run,cd bindings/node && $(drtrace_env) $(NODE) test_drtrace.js)
 endif
 
-drtrace-java-test:
+drtrace-java-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,java)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-java-test =="
 	mkdir -p $(BUILD)/java-drtrace
 	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-drtrace \
@@ -493,38 +502,34 @@ else
 	$(call drtrace_run,$(drtrace_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-drtrace DrTraceTest)
 endif
 
-drtrace-dotnet-test:
+drtrace-dotnet-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,dotnet)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-dotnet-test =="
 	$(call drtrace_run,$(drtrace_env) $(DOTNET) run --project bindings/dotnet/drtrace/drtrace.csproj)
 endif
 
-drtrace-ruby-test:
+drtrace-ruby-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,ruby)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-ruby-test =="
 	cd bindings/ruby && $(drtrace_env) $(RUBY) test_drtrace.rb
 endif
 
-drtrace-lua-test:
+drtrace-lua-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,lua)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-lua-test =="
 	cd bindings/lua && $(drtrace_env) $(LUAJIT) test_drtrace.lua
 endif
 
-drtrace-zig-test:
+drtrace-zig-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,zig)
 else
-	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
 	@echo "== drtrace-zig-test =="
 	cd bindings/zig && $(drtrace_env) \
 	  $(ZIG) build drtrace-test -Dincdir=$(abspath include) -Dlibdir=$(abspath $(BUILD))
@@ -562,8 +567,7 @@ hwtrace-cpp-test: shared-hwtrace
 
 # rust/go link libasmtest_emu (their wrapper shares the crate/package), so build
 # the emu superset + corpus lib too — mirroring the drtrace-rust/go lanes.
-hwtrace-rust-test: shared-hwtrace
-	@$(MAKE) shared-emu $(CORPUS_LIB)
+hwtrace-rust-test: shared-hwtrace shared-emu $(CORPUS_LIB)
 	@echo "== hwtrace-rust-test =="
 	@# --test-threads=1: the single-step backend is process-global (single active
 	@# region, a global SIGTRAP handler, per-thread EFLAGS.TF), so the two live
@@ -571,8 +575,7 @@ hwtrace-rust-test: shared-hwtrace
 	cd bindings/rust && ASMTEST_LIB_DIR=$(abspath $(BUILD)) $(hwtrace_env) \
 	  $(CARGO) test --test hwtrace -- --nocapture --test-threads=1
 
-hwtrace-go-test: shared-hwtrace
-	@$(MAKE) shared-emu $(CORPUS_LIB)
+hwtrace-go-test: shared-hwtrace shared-emu $(CORPUS_LIB)
 	@echo "== hwtrace-go-test =="
 	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" CGO_CFLAGS="-I$(abspath include)" \
 	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \

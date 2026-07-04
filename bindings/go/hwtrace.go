@@ -547,6 +547,7 @@ import "C"
 
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -795,13 +796,25 @@ func (t *HwTrace) Register(name string, code *HwNativeCode) error {
 // with End — prefer Region, which balances them for you. (MVP: only one region
 // may be active at a time.)
 func (t *HwTrace) Begin(name string) {
+	// Pin the goroutine to its OS thread for the region's lifetime (End releases
+	// it). The single-step backend arms per-thread EFLAGS.TF, single-steps the
+	// traced code, and handles the SIGTRAPs — all of which must happen on ONE OS
+	// thread. Begin, the traced call, and End are three separate cgo calls with Go
+	// code in between, so without this the Go scheduler can migrate the goroutine
+	// mid-region: TF gets armed on one thread while the code runs on another (an
+	// empty/partial trace — "offset 0 not covered"), or a stray SIGTRAP lands on a
+	// thread later running Go and crashes with a wandering site. Harmless for the
+	// PT/AMD backends (they capture per-thread hardware AUX and decode after End).
+	runtime.LockOSThread()
 	cs := C.CString(name)
 	defer C.free(unsafe.Pointer(cs))
 	C.asmtest_hw_go_begin(cs)
 }
 
-// End closes capture for the named region and decodes the captured trace.
+// End closes capture for the named region and decodes the captured trace, then
+// releases the OS-thread pin taken in Begin.
 func (t *HwTrace) End(name string) {
+	defer runtime.UnlockOSThread()
 	cs := C.CString(name)
 	defer C.free(unsafe.Pointer(cs))
 	C.asmtest_hw_go_end(cs)

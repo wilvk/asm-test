@@ -25,7 +25,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        # macos-latest is arm64; macos-13 is the Intel (x86_64) runner. Both are
+        # required so the published packages/wheels carry a darwin-x86_64 payload
+        # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     steps:
       - uses: actions/checkout@v5
       - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
@@ -68,7 +71,11 @@ jobs:
         run: |
           mkdir -p build/dist/native
           cp -R payloads/*/* build/dist/native/
-          make package-libs-verify
+          # Assert the COMPLETE platform set is present, not just that each present
+          # slot is well-formed (repo-review B2 — darwin-x86_64 used to be missing
+          # while every job stayed green). A dropped matrix leg now fails here.
+          make package-libs-verify \
+            EXPECT_PLATFORMS="linux-x86_64 linux-aarch64 darwin-x86_64 darwin-arm64"
       - uses: actions/upload-artifact@v5
         with:
           name: native-all
@@ -140,7 +147,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        # macos-latest is arm64; macos-13 is the Intel (x86_64) runner. Both are
+        # required so the published packages/wheels carry a darwin-x86_64 payload
+        # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -233,7 +243,9 @@ jobs:
       fail-fast: false
       matrix:
         lang: [node, ruby, lua, java, dotnet]
-        os: [ubuntu-latest, macos-latest]
+        # macos-13 (Intel) alongside macos-latest (arm64) so the Intel-mac install
+        # is smoke-tested too; the packages already bundle every native-all slot.
+        os: [ubuntu-latest, macos-latest, macos-13]
         include:
           - lang: node
             smoke: |

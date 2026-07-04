@@ -26,20 +26,39 @@ that blocked set, which is intentionally out of scope here.
 
 ## Priority ordering
 
-| # | Item | Source | Severity | Blocked? |
-|---|------|--------|----------|----------|
-| P0 | Go full-suite flaky segfault (codeimage/ptrace corruption) | M | High (memory corruption) | **No — actionable here** |
-| P1 | B7 — `make -j *-bindings-test` recursive-make race | R | Low | Partially (can't reliably repro the race here) |
-| P2 | B5 — no integrity pin on fetched/built third-party binaries | R | Medium (supply chain) | No — code, but a trust decision |
-| P3 | B2 — no `darwin-x86_64` payload in published packages | R | Medium–High | Decision (add leg vs. document arm64-only) |
-| P4 | S1 — release pipeline has never fired (cut a real tag) | R | High (leverage) | Manual / credentialed |
-| P5 | Deliberate documented limitations (Capstone decode, DRTRACE_EVENTS, per-thread hwtrace, Keystone ext-mnemonics) | M | — | Enhancements, not defects |
+| # | Item | Source | Severity | Status (2026-07-04) |
+|---|------|--------|----------|---------------------|
+| P0 | Go full-suite flaky segfault (codeimage/ptrace corruption) | M | High (memory corruption) | ✅ **Fixed & verified** (`runtime.LockOSThread`; 40/40 vs 30/40) |
+| P1 | B7 — `make -j *-bindings-test` recursive-make race | R | Low | ✅ **Done** (single shared prereq; sub-make now built once) |
+| P2 | B5 — no integrity pin on fetched/built third-party binaries | R | Medium (supply chain) | ✅ **Done** (real digest/commit manifest + verify + CI gate) |
+| P3 | B2 — no `darwin-x86_64` payload in published packages | R | Medium–High | ✅ **Done** (macos-13 leg + complete-set verify) |
+| P4 | S1 — release pipeline has never fired (cut a real tag) | R | High (leverage) | ◻ **Partial** — version green; tag/publish is the maintainer's |
+| P5 | Deliberate documented limitations (Capstone decode, DRTRACE_EVENTS, per-thread hwtrace, Keystone ext-mnemonics) | M | — | ✅ **Confirmed** no-action-by-design |
 
 ---
 
-## P0 — Go full-suite flaky segfault *(open — the one unblocked real defect)*
+## P0 — Go full-suite flaky segfault *(✅ DONE 2026-07-04 — root-caused & fixed)*
 
-**Issue.** The Go binding's **full** suite `go test ./...` segfaults on ~5% of
+> **Outcome.** Root cause: the Go `HwTrace` wrapper ran `Begin` → traced call →
+> `End` as three separate cgo calls **without pinning the goroutine to its OS
+> thread**. The single-step backend arms per-thread `EFLAGS.TF` and handles the
+> SIGTRAPs, so when Go's scheduler migrated the goroutine mid-region, TF was armed
+> on one thread while the code ran on another → empty trace (or a stray SIGTRAP on
+> a thread later running Go = the wandering-site crash). The full suite triggered
+> it (all conformance/drtrace tests run first → max GC/thread churn) while the
+> gated `-run TestHwtrace` subset stayed clean — matching the memory exactly.
+> **Fix:** `runtime.LockOSThread()` in `Begin`, `runtime.UnlockOSThread()` in `End`
+> ([bindings/go/hwtrace.go](../../bindings/go/hwtrace.go)), pinning the region's
+> whole lifetime. **Verified** in the `asmtest-go` container on the SingleStep
+> path: full `go test ./...` went from **30 ok / 10 fail (25%)** pre-fix to
+> **40/40 (0%)** post-fix; the gated subsets were 20/20 both ways. *(Separate
+> newly-surfaced observation, not this defect: on a host where AMD LBR is available
+> (`CAP_PERFMON`), `HwTraceAuto(Best)` picks LBR and `Covered(0)` is statistically
+> flaky — tracked as a follow-up, out of scope for the memory's ptrace/single-step
+> bug.)*
+
+**Issue (as originally filed).** The Go binding's **full** suite `go test ./...`
+segfaults on ~5% of
 runs with a **wandering crash site** in the codeimage soft-dirty scan / ptrace
 single-step — the signature of heap-layout-dependent memory corruption. It is
 **not** the call-descent code: `src/descent.c` + the descend loop are
@@ -75,7 +94,20 @@ under an ASan-instrumented native lib with zero faults.
 
 ---
 
-## P1 — B7: `make -j *-bindings-test` recursive-make race *(open)*
+## P1 — B7: `make -j *-bindings-test` recursive-make race *(✅ DONE 2026-07-04)*
+
+> **Outcome.** Added a single `drtrace-shared-prep` target (the `DRAPP_KEYSTONE=0`
+> recursive sub-make, guarded by `DR_AVAILABLE`) and made it a **shared
+> prerequisite of every** `drtrace-*-test` lane, deleting the per-lane inner
+> `$(MAKE)`; the hwtrace `rust`/`go` lanes now take `shared-emu`/`$(CORPUS_LIB)` as
+> normal prerequisites instead of a recipe sub-make
+> ([mk/native-trace.mk](../../mk/native-trace.mk)). GNU make now builds the shared
+> artifacts **exactly once** and every lane waits on them — no concurrent writers.
+> **Verified:** `make -n drtrace-bindings-test DR_AVAILABLE=1` shows the shared
+> sub-make scheduled **once** (was once-per-lane); DR-absent `make -n` still prints
+> the SKIP for every lane (behavior preserved); the makefile parses clean.
+
+**Issue.** [mk/native-trace.mk:386](../../mk/native-trace.mk#L386) (`drtrace-bindings-test`)
 
 **Issue.** [mk/native-trace.mk:386](../../mk/native-trace.mk#L386) (`drtrace-bindings-test`)
 and the `hwtrace-bindings-test` fan-out invoke per-language sub-makes
@@ -97,7 +129,27 @@ with `make -j$(nproc) drtrace-bindings-test` in a loop.
 
 ---
 
-## P2 — B5: no integrity pin on fetched/built third-party binaries *(open)*
+## P2 — B5: no integrity pin on fetched/built third-party binaries *(✅ DONE 2026-07-04)*
+
+> **Outcome.** Added a trust-anchor manifest
+> [scripts/third-party-digests.txt](../../scripts/third-party-digests.txt) with
+> **real** pinned values (DynamoRIO tarball `sha256:1499acb…`, keystone 0.9.2 →
+> commit `dc7932ef…`, capstone 5.0.1 → commit `097c04d9…`) and a POSIX helper
+> [scripts/lib-thirdparty.sh](../../scripts/lib-thirdparty.sh). `fetch-dynamorio.sh`
+> now SHA-256-verifies the download before extracting; `build-keystone.sh` /
+> `build-capstone.sh` clone the tag then **assert `HEAD` equals the pinned commit**
+> (catching a moved/force-pushed tag); all three **fail closed** if the manifest
+> lacks an entry. A regenerator [scripts/refresh-thirdparty-digests.sh](../../scripts/refresh-thirdparty-digests.sh)
+> makes bumps a one-command step, and `check-thirdparty-versions.sh` gained a gate
+> asserting every declared version has a manifest anchor. **Verified:** all six
+> scripts `sh -n`-clean; the drift gate passes and lists all three anchors; the
+> helper returns the right values (and errors on an absent version); `tp_sha256`
+> matches (`sha256("hello")=2cf24dba…`); and a live shallow clone of keystone 0.9.2
+> resolves `HEAD` to exactly the pinned `dc7932ef…` (assertion passes legitimately,
+> would trip on a moved tag). *(The 455 MB DR download itself was pinned to
+> GitHub's own recorded asset digest rather than re-downloaded here.)*
+
+**Issue.** [scripts/fetch-dynamorio.sh](../../scripts/fetch-dynamorio.sh) curls a
 
 **Issue.** [scripts/fetch-dynamorio.sh](../../scripts/fetch-dynamorio.sh) curls a
 release tarball and untars it straight into what gets bundled into wheels;
@@ -117,7 +169,22 @@ one-line manifest change. Complements the existing `check-version` gate.
 
 ---
 
-## P3 — B2: no `darwin-x86_64` payload in published packages *(open — decision)*
+## P3 — B2: no `darwin-x86_64` payload in published packages *(✅ DONE 2026-07-04 — option (a))*
+
+> **Outcome.** Took option (a), "ship it." Added the `macos-13` (Intel) runner to
+> all three release matrices — `native`, `python` (wheels are per-OS), and
+> `dlopen-package` — in [.github/workflows/release.yml](../../.github/workflows/release.yml),
+> so `native-all` now carries a `darwin-x86_64` slot bundled into every package +
+> the wheel set. Strengthened `package-libs-verify`
+> ([mk/bindings.mk](../../mk/bindings.mk)) with an `EXPECT_PLATFORMS` complete-set
+> assertion (default off for local single-slot verifies; the collect job passes the
+> full `linux-x86_64 linux-aarch64 darwin-x86_64 darwin-arm64` set), so a dropped
+> matrix leg fails loudly instead of silently shipping an incomplete set.
+> **Verified:** `release.yml` parses as YAML; all three matrices carry `macos-13`;
+> the gate flags a missing `darwin-x86_64` (negative test) and passes with all four
+> slots present (positive test).
+
+**Issue.** [.github/workflows/release.yml](../../.github/workflows/release.yml)'s
 
 **Issue.** [.github/workflows/release.yml](../../.github/workflows/release.yml)'s
 `native` matrix is `[ubuntu-latest, ubuntu-24.04-arm, macos-latest]`, and
@@ -142,7 +209,21 @@ nightly; the only missing piece is wiring that leg into `release.yml`.
 
 ---
 
-## P4 — S1: the release pipeline has never fired *(open — manual/credentialed)*
+## P4 — S1: the release pipeline has never fired *(◻ Partially done 2026-07-04 — maintainer action remains)*
+
+> **Outcome.** Code-side reconciliation **verified green**: `make check-version`
+> reports *all manifests at 1.1.0* (matching the `VERSION` file), so there is no
+> version drift blocking a tag. Per maintainer decision (2026-07-04), the CHANGELOG
+> `[Unreleased]` → `[1.1.0]` flush is **deferred to tag time** rather than dated now
+> (no tag exists yet; dating an untagged release would misrepresent it). **The
+> remaining work is intentionally the maintainer's** and out of scope for an agent:
+> push the `v1.1.0` tag, register the per-ecosystem package names, and add the
+> publish token secrets. This is the correct stopping point — everything an agent
+> can safely do here (version consistency) is done and confirmed; nothing was
+> fabricated. Land P2/P3 (done) first so the first real tag doesn't discover a
+> missing Intel payload or an unpinned dependency.
+
+**Issue.** `git tag` returns **zero tags**, yet `CHANGELOG.md` documents
 
 **Issue.** `git tag` returns **zero tags**, yet `CHANGELOG.md` documents
 `[1.0.0] — 2026-06-24` and a large `[Unreleased]` section has since accumulated.
@@ -167,7 +248,21 @@ here; the tag push + credential setup is the maintainer's.)*
 
 ---
 
-## P5 — Deliberate documented limitations *(open — enhancements, not defects)*
+## P5 — Deliberate documented limitations *(✅ Confirmed 2026-07-04 — no action by design)*
+
+> **Outcome.** Re-verified each against its source: all four are **intentional,
+> documented boundaries, not defects** — Capstone's decoder is gated so
+> `asmtest_cs_decoder_present()` returns 0 and the tier self-skips
+> ([src/cs_backend.c:27](../../src/cs_backend.c#L27)); `ASMTEST_DRTRACE_EVENTS` is
+> marked *reserved* ([include/asmtest_drtrace.h:49](../../include/asmtest_drtrace.h#L49));
+> hwtrace region registration is documented "NOT yet per-thread — bracket one
+> registered routine per begin/end" ([include/asmtest_hwtrace.h:151](../../include/asmtest_hwtrace.h#L151));
+> and Keystone extended-mnemonic assembly is upstream-gated
+> ([include/asmtest_assemble.h:30](../../include/asmtest_assemble.h#L30)). Left
+> as-is per the plan's recommendation; the future-implementation shapes below stand
+> for when a concrete user need arises.
+
+These grep as "not implemented / not yet" but are **intentional, documented**
 
 These grep as "not implemented / not yet" but are **intentional, documented**
 boundaries. Listed for completeness with the shape a future implementation takes;

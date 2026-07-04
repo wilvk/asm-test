@@ -14,6 +14,7 @@ set -eu
 VERSION="${1:-5.0.1}"
 PREFIX="${CAPSTONE_PREFIX:-/usr/local}"
 prog=$(basename "$0")
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib-thirdparty.sh"
 
 # Already present? (the in-tree builds find it via pkg-config.)
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists capstone 2>/dev/null; then
@@ -29,7 +30,19 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 echo "$prog: building capstone $VERSION -> $PREFIX"
+# Integrity pin (B5): pin the mutable tag to its immutable commit and assert HEAD.
+want=$(tp_digest git-commit capstone "$VERSION") || {
+    echo "$prog: ERROR: no pinned commit for capstone $VERSION in the digest manifest" >&2
+    echo "$prog:        regenerate it with scripts/refresh-thirdparty-digests.sh" >&2
+    exit 1
+}
+commit="${want#commit:}"
 git clone --depth 1 --branch "$VERSION" https://github.com/capstone-engine/capstone.git "$work/capstone"
+got=$(cd "$work/capstone" && git rev-parse HEAD)
+if [ "$got" != "$commit" ]; then
+    echo "$prog: ERROR: capstone $VERSION resolved to $got, expected pinned $commit (moved tag?)" >&2
+    exit 1
+fi
 
 mkdir -p "$work/capstone/build"
 cd "$work/capstone/build"

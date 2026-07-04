@@ -59,8 +59,25 @@ check_group "Capstone" \
     'scripts/build-capstone.sh|VERSION="\$\{1:-([0-9][0-9.]*)\}"' \
     'scripts/fetch-corresponding-source.sh|CAPSTONE_VERSION="\$\{CAPSTONE_VERSION:-([0-9][0-9.]*)\}"'
 
+# The integrity manifest (B5) must carry a pinned digest/commit for each version
+# above, or a bump would ship unpinned. Assert an entry exists for each declared
+# version — a name+version present in scripts/third-party-digests.txt.
+manifest="$(dirname "$0")/third-party-digests.txt"
+check_manifest() { # <name> <version>
+    [ -n "$2" ] || return 0
+    if awk -v n="$1" -v v="$2" '!/^[[:space:]]*#/ && $2==n && $3==v {found=1} END{exit !found}' "$manifest"; then
+        echo "  manifest: $1 $2 pinned"
+    else
+        echo "  ! manifest: no pinned digest/commit for $1 $2 in $manifest (run scripts/refresh-thirdparty-digests.sh)"
+        fail=1
+    fi
+}
+check_manifest dynamorio "$(extract mk/bindings.mk 'DR_VERSION \?= ([0-9][0-9.]*)')"
+check_manifest keystone  "$(extract scripts/build-keystone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
+check_manifest capstone  "$(extract scripts/build-capstone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
+
 if [ "$fail" -ne 0 ]; then
     echo "third-party version drift detected — reconcile the versions above." >&2
     exit 1
 fi
-echo "OK: all pinned third-party versions are consistent."
+echo "OK: all pinned third-party versions and integrity anchors are consistent."

@@ -1,0 +1,17 @@
+# third-party-digests.txt — trusted integrity anchors for the third-party engines
+# this project downloads or builds and then bundles into user-facing packages
+# (repo-review B5). Without these, integrity rested only on a version string in a
+# URL or a *mutable* git tag: a moved tag or a swapped release asset would ship an
+# altered engine under this project's name with every release job still green.
+#
+# The fetch/build scripts (fetch-dynamorio.sh, build-keystone.sh, build-capstone.sh)
+# verify what they pull against the matching line here and FAIL on any mismatch or
+# on a missing entry — so a version bump that forgets this file cannot ship unpinned.
+# Regenerate after a bump with:  scripts/refresh-thirdparty-digests.sh
+#
+# Format (whitespace-separated):  <kind>  <name>  <version>  <algo>:<value>
+#   tarball-sha256 — SHA-256 of the downloaded release archive (as GitHub records it)
+#   git-commit     — the immutable commit a version tag must still resolve to
+tarball-sha256  dynamorio  11.91.20630  sha256:1499acbee02788ff235a8b4a8016514538ec3bf479463bdc6037c6e33f0bff02
+git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab485005139d6
+git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa

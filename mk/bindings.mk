@@ -498,6 +498,12 @@ package-libs-verify:
 	  fi; \
 	done; \
 	echo "package-libs-verify: $$n platform(s) in $$dir"; \
+	if [ -n "$(EXPECT_PLATFORMS)" ]; then \
+	  for want in $(EXPECT_PLATFORMS); do \
+	    if [ -d "$$dir/$$want" ]; then echo "  have required $$want"; \
+	    else echo "  MISS required platform $$want — a release must ship a COMPLETE set (repo-review B2: no darwin-x86_64)"; rc=1; fi; \
+	  done; \
+	fi; \
 	$(MAKE) --no-print-directory package-libs-verify-macho || rc=1; \
 	exit $$rc
 

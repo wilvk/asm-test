@@ -14,6 +14,7 @@ set -eu
 
 DR_VERSION="${DR_VERSION:-11.91.20630}"
 DR_URL="${DR_URL:-https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz}"
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib-thirdparty.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DR_CACHE="${DR_CACHE:-$root/build/dynamorio}"
 home="$DR_CACHE/DynamoRIO-Linux-$DR_VERSION"
@@ -29,6 +30,22 @@ if [ ! -e "$home/lib64/release/libdynamorio.so" ]; then
     else
         wget -qO "$tmp" "$DR_URL"
     fi
+    # Integrity pin (B5): the download is bundled into user-facing wheels/packages,
+    # so refuse to use it unless it matches the digest recorded in the manifest —
+    # a moved/swapped release asset must fail loudly, not ship silently.
+    want=$(tp_digest tarball-sha256 dynamorio "$DR_VERSION") || {
+        log "ERROR: no pinned digest for dynamorio $DR_VERSION in $TP_MANIFEST"
+        log "       (add one via scripts/refresh-thirdparty-digests.sh — refusing to use an unpinned download)"
+        rm -f "$tmp"; exit 1
+    }
+    got="sha256:$(tp_sha256 "$tmp")"
+    if [ "$got" != "$want" ]; then
+        log "ERROR: DynamoRIO $DR_VERSION integrity check FAILED"
+        log "       expected $want"
+        log "       got      $got"
+        rm -f "$tmp"; exit 1
+    fi
+    log "verified DynamoRIO $DR_VERSION ($got)"
     rm -rf "$home"
     ( cd "$DR_CACHE" && tar -xzf "$tmp" )
     # The tarball's top dir is DynamoRIO-Linux-<ver>; normalize if it differs.
