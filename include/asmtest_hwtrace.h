@@ -42,6 +42,10 @@
 extern "C" {
 #endif
 
+/* Forward declaration (defined in asmtest_codeimage.h); the §1 version-aware render
+ * takes a code-image timeline. Identical typedef, so both headers may be included. */
+typedef struct asmtest_codeimage asmtest_codeimage_t;
+
 /* Status codes (shared spirit with asmtest_drtrace.h). */
 #define ASMTEST_HW_OK       0
 #define ASMTEST_HW_EINVAL   (-1)
@@ -146,11 +150,157 @@ void asmtest_hwtrace_exec_free(void *base, size_t len);
  * the captured packets into the registered trace. Backend-neutral by name (no
  * drwrap needed for this tier).
  *
- * MVP limitation: capture state is a single process-global slot — only ONE region
- * may be active at a time (a begin while another is active is ignored), so these
- * are NOT yet per-thread. Bracket one registered routine per begin/end pair. */
+ * Threading (scoped-tracing-core-plan §1): the SINGLE-STEP backend is now
+ * per-thread and nesting-safe — nested begin/end pairs on one thread compose
+ * (innermost included in the outer) and concurrent scopes on different threads are
+ * independent, via a per-thread TLS range stack. The PT / AMD LBR / CoreSight
+ * backends still use a single process-global capture slot (only ONE region active at
+ * a time; a begin while another is active is ignored) — the per-thread AUX-ring
+ * migration is forward-look, gated on PT hardware to validate. */
 void asmtest_hwtrace_begin(const char *name);
 void asmtest_hwtrace_end(const char *name);
+
+/* ------------------------------------------------------------------ */
+/* Scoped-tracing shared-core primitives (scoped-tracing-core-plan §0) */
+/* ------------------------------------------------------------------ */
+
+/* §0.1 — error-returning begin. Same effect as asmtest_hwtrace_begin(name) but
+ * returns 0 (ASMTEST_HW_OK) on success and a negative ASMTEST_HW_* otherwise, so a
+ * scope shim gets a signal instead of a silent no-op: ASMTEST_HW_ESTATE when the
+ * single process-global capture slot is already busy (the MVP no-nesting guard),
+ * ASMTEST_HW_EINVAL when `name` is not a registered region, and the backend's own
+ * negative status when the perf/single-step arm itself fails. asmtest_hwtrace_begin
+ * is a thin wrapper that discards this result — no ABI change for the shipped shims. */
+int asmtest_hwtrace_try_begin(const char *name);
+
+/* §0.2 — the OS thread id (SYS_gettid) that armed the currently-active capture, or
+ * -1 when none is active. asmtest_hwtrace_end already flags trace.truncated when it
+ * runs on a different thread than begin; this accessor lets a shim assert the same
+ * "single region, single thread" contract in its own idiom before it closes. */
+int asmtest_hwtrace_arm_tid(void);
+
+/* §0.3 — render a closed region's recorded instruction offsets to disassembly text.
+ * Walks the named region's asmtest_trace_t insn offsets and disassembles the live
+ * bytes at [base, base+len) with Capstone. snprintf semantics: writes up to
+ * buflen-1 bytes plus a NUL into buf and returns the non-negative total length that
+ * WOULD be written — so a caller sizes with buf=NULL, buflen=0, allocates, then
+ * calls again. Returns a negative ASMTEST_HW_* code (distinct from the non-negative
+ * length): ASMTEST_HW_EINVAL on a name miss or a region with no trace buffer,
+ * ASMTEST_HW_ENOSYS when Capstone is not compiled in. Region-scoped and
+ * version-blind: it renders whatever bytes are live at [base, len) now. A truncated
+ * or over-capacity trace is rendered as a labelled PREFIX, never as complete. */
+int asmtest_hwtrace_render(const char *name, char *buf, size_t buflen);
+
+/* ------------------------------------------------------------------ */
+/* §1 — per-thread handle-keyed scope API                              */
+/*                                                                     */
+/* try_begin/end/render (above) are name-keyed for the single-owner    */
+/* path the bindings slice ships against. The handle-keyed trio here is */
+/* purely ADDITIVE: it keys close/render on a per-scope handle so two   */
+/* threads entering the same auto-named site concurrently each get      */
+/* their own slice with no "which thread's slice" ambiguity. Backed by  */
+/* the single-step per-thread range stack (host-testable); the PT/AMD   */
+/* per-thread AUX path is forward-look (needs PT hardware).            */
+/* ------------------------------------------------------------------ */
+
+/* Opaque per-scope capture handle: an index into the calling thread's TLS range
+ * stack, tagged with a generation counter so a stale/closed handle is rejected. */
+typedef struct {
+    uint32_t idx;
+    uint32_t gen;
+} asmtest_hwtrace_scope_t;
+
+/* Handle-producing begin: register-then-begin under `name` (§0.4 idempotent), push a
+ * range-stack frame on the calling thread, and return its handle in *out. Same
+ * negative ASMTEST_HW_* returns as try_begin, plus ASMTEST_HW_EFULL when this
+ * thread's range stack is full. On a non-single-step backend it falls back to the
+ * name-keyed try_begin and leaves *out a sentinel. */
+int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out);
+
+/* Handle-keyed render — the calling thread's slice for `handle`, version-blind (live
+ * bytes at [base, len)). snprintf-style size-then-allocate; negative ASMTEST_HW_* on
+ * a stale/unknown handle or unavailable decoder. */
+int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char *buf,
+                                 size_t buflen);
+
+/* Version-aware render — disassemble `trace`'s recorded ABSOLUTE addresses against
+ * code-image `img` as of `when` (asmtest_codeimage_now), for the §D3/§D4 tiered/moved
+ * managed bytes where §0.3's version-blind render would show stale text. Same
+ * snprintf / negative-code convention. */
+int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
+                                     const asmtest_trace_t *trace, char *buf,
+                                     size_t buflen);
+
+/* ------------------------------------------------------------------ */
+/* §D4 — async-hop stitching: the shared logical-operation merge core   */
+/*                                                                     */
+/* When a scope follows a logical operation across await/continuation   */
+/* thread hops (the opt-in stitched mode), each per-thread window is     */
+/* captured as a slice, ALREADY decoded against the code-image version   */
+/* live in its own window at disable time. asmtest_hwtrace_stitch is a   */
+/* pure ordered CONCATENATION by `seq` — it does not decode — so it is   */
+/* host-testable from synthetic pre-decoded slices with no PT hardware   */
+/* and no real threads. The per-slice (tid, version) annotations ride    */
+/* the companion `bounds` array (asmtest_trace_t has no field for them). */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    uint64_t scope_id;     /* logical-operation id                          */
+    uint32_t seq;          /* hop order within the scope                    */
+    int tid;               /* thread the slice ran on                       */
+    uint64_t version;      /* code-image version live in this window        */
+    asmtest_trace_t trace; /* offsets ALREADY decoded against `version`     */
+} asmtest_hwtrace_slice_t;
+
+typedef struct {
+    size_t insn_off; /* offset into out->insns where this slice begins */
+    uint64_t scope_id;
+    uint32_t seq;
+    int tid;
+    uint64_t version;
+} asmtest_hwtrace_slice_bound_t;
+
+/* Order `slices[0..n)` by `seq` and concatenate their instruction (and block)
+ * offsets into `out` in that order, appending. Writes one `bounds` entry per slice
+ * (when bounds != NULL) recording where in `out->insns` that slice begins and its
+ * (scope_id, seq, tid, version); *nbounds gets the count. Returns ASMTEST_HW_OK, or
+ * ASMTEST_HW_EINVAL on a NULL slices/out or n over the merge cap. A pure merge — no
+ * decode — so the synchronous single-slice case is byte-identical to a plain trace. */
+int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
+                           asmtest_trace_t *out,
+                           asmtest_hwtrace_slice_bound_t *bounds, size_t *nbounds);
+
+/* ------------------------------------------------------------------ */
+/* §3.1(c) — whole-window noise attribution: address→name reverse       */
+/* resolver + IP bucketer.                                              */
+/*                                                                     */
+/* The whole-window (empty-scope) PT mode captures the runtime too — the */
+/* JIT compiling the method, GC, BCL plumbing. This labels every decoded */
+/* IP against /proc/<pid>/maps and the perf-map so that noise is         */
+/* ATTRIBUTED ("31k insns in RyuJIT, 7k in HotPath") rather than         */
+/* silently mixed. The two shipped helpers return extents, not names     */
+/* (asmtest_proc_region_by_addr discards the maps pathname; the perf-map  */
+/* helper is a forward name→region lookup), so this is the new address→   */
+/* name REVERSE resolver. Host-testable: the bucketer takes an IP list,   */
+/* not a live PT capture. */
+typedef struct {
+    char label[128]; /* region pathname / JIT symbol (or "[anon]"/"[unknown]") */
+    uint64_t count;  /* IPs bucketed to this label                             */
+} asmtest_hwtrace_bucket_t;
+
+/* Resolve the mapped-file pathname (or a "[...]" pseudo-name) + extent containing
+ * `addr` in process `pid` (0 = self), keeping the maps pathname field. Returns 1 on
+ * a hit (fills name/start/end; name always NUL-terminated), 0 on a miss. */
+int asmtest_hwtrace_region_name(int pid, uint64_t addr, char *name, size_t namelen,
+                                uint64_t *start, uint64_t *end);
+
+/* Bucket ips[0..n) by containing perf-map JIT symbol (preferred) or mapped-file
+ * region into buckets[0..cap), returning the number of distinct buckets written
+ * (<= cap). Unresolved IPs bucket under "[unknown]"; if more than `cap` distinct
+ * labels appear the surplus IPs are dropped (a caller wanting exact totals sizes
+ * `cap` to the expected label count). */
+size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
+                                        asmtest_hwtrace_bucket_t *buckets,
+                                        size_t cap);
 
 #ifdef __cplusplus
 }

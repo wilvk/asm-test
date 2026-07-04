@@ -4,6 +4,19 @@
 # variables/knobs (CSTD, WERROR, ASM_SYNTAX, BUILD, ...) come from the parent
 # Makefile, which reads this file in place; edit targets here, knobs there.
 
+# CORPUS_LIB is the conformance fixture lib the per-binding hwtrace test lanes below
+# link (via each crate's build.rs / cgo). It is fully defined in mk/bindings.mk, but
+# that file is included AFTER this one, so a bare `$(CORPUS_LIB)` in a prerequisite
+# here would expand to EMPTY (Make expands prerequisites when the rule is read) — the
+# lane would then never build the fixture and cargo/cgo would fail to link
+# -lasmtest_corpus. Define it here too (identical `:=`; bindings.mk redefines it
+# harmlessly) so the `hwtrace-rust-test` / `hwtrace-go-test` corpus prereq resolves.
+ifeq ($(UNAME_S),Darwin)
+CORPUS_LIB := $(BUILD)/libasmtest_corpus.dylib
+else
+CORPUS_LIB := $(BUILD)/libasmtest_corpus.so
+endif
+
 # --- Optional DynamoRIO in-process native-trace tier -----------------------
 # `make drtrace-test` traces code running NATIVELY in-process via DynamoRIO's
 # Application Interface (the emulator tier traces isolated guest bytes instead).
@@ -231,7 +244,7 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
-	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 
 .PHONY: hwtrace-test
 hwtrace-test: $(BUILD)/test_hwtrace

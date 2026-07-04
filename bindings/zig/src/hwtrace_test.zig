@@ -485,6 +485,32 @@ pub fn main() !void {
         try check(!tr.truncated(), "not truncated");
     }
 
+    // ---- scope: @src()-named scope with render-on-close (defer deinit) ---- //
+    {
+        var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer code.free();
+        var tr = try hwtrace.HwTrace.create(64, 256);
+        defer tr.free();
+
+        var scope = tr.scope(&code, @src(), false); // NOT RAII: explicit deinit
+        g_result = code.call(20, 22);
+        scope.deinit();
+
+        try check(g_result == 42, "scope: add2(20,22) == 42");
+        try check(scope.armed, "scope: armed on an available backend");
+        try check(!scope.truncated(), "scope: not truncated");
+        try check(scope.path().len > 0, "scope: render-on-close produced text");
+        var nl: usize = 0;
+        for (scope.path()) |ch| {
+            if (ch == '\n') nl += 1;
+        }
+        try check(nl == 5, "scope: 5 rendered instruction lines");
+        try check(std.mem.indexOf(u8, scope.path(), "ret") != null,
+            "scope: rendered listing includes the ret");
+        try check(std.mem.startsWith(u8, scope.name(), "hwtrace_test.zig:"),
+            "scope: auto-name is basename:line from @src()");
+    }
+
     // ---- loop: 19 back-edges (no depth ceiling) ---- //
     {
         var code = try hwtrace.NativeCode.fromBytes(&LOOP);

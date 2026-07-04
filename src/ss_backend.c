@@ -17,11 +17,25 @@
  * offsets matching Unicorn / DynamoRIO / Intel PT, and block offsets that match
  * after the same single-entry/ends-at-branch normalization.
  *
+ * PER-THREAD STATE (scoped-tracing-core-plan §1). The capture state is a per-thread
+ * TLS range stack, so nested begin/end pairs on one thread COMPOSE (innermost frame
+ * included in the outer) and concurrent scopes on different threads are independent
+ * — lifting the single-region/single-thread MVP. The handler dereferences the range
+ * stack in signal context, so the TLS objects it touches (tls_frames, tls_depth) are
+ * forced to the INITIAL-EXEC model: the general-dynamic first-touch of a __thread var
+ * in a dlopen'd .so can route through __tls_get_addr and lazily malloc, which is not
+ * async-signal-safe. The 512 KiB ordered-RIP buffer stays heap-malloc'd (never TLS);
+ * only pointers/offsets live in the (small, fixed-depth) TLS stack. g_armed stays a
+ * process-global non-TLS atomic — a coarse belt that spares the UNARMED early-return
+ * path from touching TLS at all; the real per-thread "am I stepping" gate is the TLS
+ * range-stack depth. The process-wide SIGTRAP disposition is installed once under an
+ * explicit arm-refcount (a second concurrent begin must not overwrite g_old_sa with
+ * asm-test's own handler).
+ *
  * Signal-safety: the SIGTRAP handler does ONLY async-signal-safe work — a
  * bounds-checked store of each in-region RIP offset into a preallocated buffer,
- * and re-asserting TF in the saved context. All Capstone-based block
- * normalization (which allocates) runs in a post-pass in asmtest_ss_end(), in
- * normal context — never from the handler.
+ * and re-asserting TF in the saved context. All Capstone-based block normalization
+ * (which allocates) runs in a post-pass in asmtest_ss_end(), in normal context.
  */
 /* Must precede every include so glibc exposes REG_RIP/REG_EFL in <ucontext.h>. */
 #define _GNU_SOURCE
@@ -33,10 +47,12 @@
 
 #define ASMTEST_HW_OK     0
 #define ASMTEST_HW_EINVAL (-1)
+#define ASMTEST_HW_EFULL  (-6)
 #define ASMTEST_HW_ENOSYS (-5)
 
 #if defined(__linux__) && defined(__x86_64__)
 
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,28 +60,53 @@
 
 #define SS_TF 0x100ULL /* EFLAGS.TF, bit 8 */
 
-/* Capacity of the internal ordered-RIP buffer. The handler stores every executed
- * in-region instruction offset here (async-signal-safe array write); the post-pass
- * replays it to fill the trace and derive blocks. Sized for the small-routine
- * envelope; a routine that executes more in-region instructions than this overflows
- * and is honestly flagged truncated (never emit partial as complete). */
+/* Capacity of each frame's internal ordered-RIP buffer. The handler stores every
+ * executed in-region instruction offset here (async-signal-safe array write); the
+ * post-pass replays it to fill the trace and derive blocks. Sized for the
+ * small-routine envelope; a routine that executes more in-region instructions than
+ * this overflows and is honestly flagged truncated (never emit partial as complete). */
 #ifndef SS_STREAM_CAP
 #define SS_STREAM_CAP (1u << 16) /* 65536 offsets = 512 KiB */
 #endif
 
-/* Active-stepper state (single region, single thread — the hwtrace MVP contract).
- * `volatile`/sig_atomic_t members are touched from the SIGTRAP handler. */
+/* Per-thread nesting depth bound. Kept SMALL and fixed because the range stack is
+ * initial-exec TLS and draws on the shared static-TLS surplus (~1–2 KiB; exhaustion
+ * fails a later dlopen with "cannot allocate memory in static TLS block"). */
+#ifndef SS_MAX_FRAMES
+#define SS_MAX_FRAMES 8
+#endif
+
+/* One active capture frame. base/base_ip/len/trace describe the region; stream is
+ * the heap ordered-RIP buffer; gen tags the frame for stale-handle rejection. */
+typedef struct {
+    const uint8_t *base;
+    uint64_t base_ip;
+    size_t len;
+    asmtest_trace_t *trace;
+    uint64_t *stream; /* heap-malloc'd ordered in-region RIP offsets */
+    volatile uint32_t stream_len;
+    volatile sig_atomic_t overflow;
+    uint32_t gen;
+} ss_frame_t;
+
+/* Per-thread range stack + depth + generation counter. INITIAL-EXEC: the handler
+ * dereferences these in signal context (see file header). */
+static __thread ss_frame_t tls_frames[SS_MAX_FRAMES]
+    __attribute__((tls_model("initial-exec")));
+static __thread int tls_depth __attribute__((tls_model("initial-exec")));
+static __thread uint32_t tls_gen_ctr __attribute__((tls_model("initial-exec")));
+
+/* Process-global coarse belt: nonzero iff ANY thread is stepping. Spares an unarmed
+ * thread's handler from touching TLS; the real per-thread gate is tls_depth > 0. */
 static volatile sig_atomic_t g_armed;
-static const uint8_t *g_base;
-static uint64_t g_base_ip;
-static size_t g_len;
-static asmtest_trace_t *g_trace;
-static uint64_t *g_stream; /* ordered in-region RIP offsets             */
-static volatile uint32_t g_stream_len;
-static volatile sig_atomic_t
-    g_overflow; /* stream filled, entries dropped       */
+
+/* Process-wide SIGTRAP disposition, gated by an explicit arm-refcount: install on
+ * the 0->1 transition, restore on 1->0. A plain mutex (off the signal path) makes
+ * the count + install/restore atomic across concurrent begins. */
 static struct sigaction g_old_sa;
 static int g_installed;
+static int g_arm_refcount;
+static pthread_mutex_t g_ss_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Set / clear EFLAGS.TF for the current thread. `or`/`and` on the flags image
  * pushed by pushfq; the instruction *after* popfq is the first to trap when
@@ -83,100 +124,130 @@ static inline void ss_disarm_tf(void) {
                          : "cc", "memory");
 }
 
-/* The trap handler: record the in-region offset, re-assert TF, return. No Capstone,
- * no malloc, no block logic — all of that is deferred to the post-pass. */
+/* The trap handler: record the in-region offset into EVERY active frame on this
+ * thread whose range contains RIP (so a nested inner region is a subset of its
+ * outer), re-assert TF, return. No Capstone, no malloc, no locks — all deferred. */
 static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
     (void)sig;
     (void)si;
-    ucontext_t *uc = (ucontext_t *)uctx;
     if (!g_armed)
-        return; /* not our stepping window */
+        return; /* process-global belt: no thread stepping */
+    int d = tls_depth; /* initial-exec TLS read: async-signal-safe */
+    if (d <= 0)
+        return; /* this thread isn't stepping (e.g. mid-disarm after depth->0) */
+    ucontext_t *uc = (ucontext_t *)uctx;
     uint64_t rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
 
-    /* Record conditionally: only instructions inside the registered region. Steps
-     * through callees and the begin/end glue execute but are not recorded, so the
-     * trace stays clean (mirrors the DynamoRIO/AMD in-region gating). */
-    if (rip >= g_base_ip && rip < g_base_ip + g_len) {
-        if (g_stream_len < SS_STREAM_CAP)
-            g_stream[g_stream_len++] = rip - g_base_ip;
-        else
-            g_overflow = 1;
+    for (int i = 0; i < d; i++) {
+        ss_frame_t *f = &tls_frames[i];
+        if (rip >= f->base_ip && rip < f->base_ip + f->len) {
+            if (f->stream_len < SS_STREAM_CAP)
+                f->stream[f->stream_len++] = rip - f->base_ip;
+            else
+                f->overflow = 1;
+        }
     }
 
     /* Re-assert TF so sigreturn resumes stepping (in-region OR in a callee). */
     uc->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_TF;
 }
 
-int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
+/* Push a capture frame on this thread. On the OUTERMOST push, install the
+ * process-wide SIGTRAP disposition (0->1 arm-refcount) and arm this thread's TF.
+ * Returns the frame handle (idx/gen) via out params (either may be NULL), or a
+ * negative status: EFULL when this thread's range stack is full, EINVAL on bad args
+ * / allocation / sigaction failure. */
+int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
+                        uint32_t *out_idx, uint32_t *out_gen) {
     if (base == NULL || len == 0)
         return ASMTEST_HW_EINVAL;
-
-    g_base = (const uint8_t *)base;
-    g_base_ip = (uint64_t)(uintptr_t)base;
-    g_len = len;
-    g_trace = trace;
-    g_stream_len = 0;
-    g_overflow = 0;
-    g_stream = (uint64_t *)malloc((size_t)SS_STREAM_CAP * sizeof(uint64_t));
-    if (g_stream == NULL)
+    if (tls_depth >= SS_MAX_FRAMES)
+        return ASMTEST_HW_EFULL; /* this thread's range stack is full */
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)SS_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
         return ASMTEST_HW_EINVAL;
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_sigaction = ss_on_sigtrap;
-    sa.sa_flags = SA_SIGINFO;
-    sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGTRAP, &sa, &g_old_sa) != 0) {
-        free(g_stream);
-        g_stream = NULL;
-        return ASMTEST_HW_EINVAL;
+    int idx = tls_depth;
+    ss_frame_t *f = &tls_frames[idx];
+    f->base = (const uint8_t *)base;
+    f->base_ip = (uint64_t)(uintptr_t)base;
+    f->len = len;
+    f->trace = trace;
+    f->stream = stream;
+    f->stream_len = 0;
+    f->overflow = 0;
+    f->gen = ++tls_gen_ctr;
+    if (out_idx != NULL)
+        *out_idx = (uint32_t)idx;
+    if (out_gen != NULL)
+        *out_gen = f->gen;
+
+    /* Process-wide SIGTRAP install on the 0->1 arm-refcount transition. Save the
+     * caller's original disposition into g_old_sa ONLY then, so a second concurrent
+     * begin cannot overwrite it with asm-test's own just-installed handler. */
+    pthread_mutex_lock(&g_ss_lock);
+    if (g_arm_refcount == 0) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = ss_on_sigtrap;
+        sa.sa_flags = SA_SIGINFO;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGTRAP, &sa, &g_old_sa) != 0) {
+            pthread_mutex_unlock(&g_ss_lock);
+            free(stream);
+            f->stream = NULL;
+            return ASMTEST_HW_EINVAL;
+        }
+        g_installed = 1;
     }
-    g_installed = 1;
+    g_arm_refcount++;
+    pthread_mutex_unlock(&g_ss_lock);
 
-    /* Arm LAST: every instruction executed after this — the rest of this function's
-     * epilogue, the begin/end glue, and the registered routine — single-steps. The
-     * in-region filter keeps the trace to the routine itself. */
-    g_armed = 1;
-    ss_arm_tf();
+    /* Publish the frame (bump depth) BEFORE arming TF: the handler reads tls_depth. */
+    tls_depth = idx + 1;
+    g_armed = 1; /* belt */
+    ss_arm_tf(); /* arm THIS thread; from here it single-steps */
     return ASMTEST_HW_OK;
 }
 
-/* Post-pass: replay the captured ordered offsets into the trace, deriving the block
- * partition from fall-through discontinuities (the same single-entry/ends-at-branch
- * model the other backends use). Runs in normal context, so Capstone is safe. */
-static void ss_normalize(void) {
-    asmtest_trace_t *t = g_trace;
+/* Compat wrapper for the name-keyed single-region path. */
+int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
+    return asmtest_ss_begin_ex(base, len, trace, NULL, NULL);
+}
+
+/* Post-pass: replay a frame's captured ordered offsets into its trace, deriving the
+ * block partition from fall-through discontinuities (the same single-entry/ends-at-
+ * branch model the other backends use). Runs in normal context, so Capstone is safe. */
+static void ss_normalize(ss_frame_t *fr) {
+    asmtest_trace_t *t = fr->trace;
     if (t == NULL)
         return;
-    uint32_t n = g_stream_len;
+    const uint8_t *g_base = fr->base;
+    uint64_t g_base_ip = fr->base_ip;
+    size_t g_len = fr->len;
+    uint32_t n = fr->stream_len;
     int have_prev = 0;
-    int prev_was_branch =
-        0; /* previous recorded insn was a CTI (jump/call/ret) */
+    int prev_was_branch = 0;    /* previous recorded insn was a CTI */
     uint64_t expected_next = 0; /* fall-through offset of the previous insn */
     uint64_t prev_off = 0;
 
     for (uint32_t i = 0; i < n; i++) {
-        uint64_t off = g_stream[i];
+        uint64_t off = fr->stream[i];
 
         /* Collapse consecutive identical offsets: a REP-prefixed string insn traps
-         * after every iteration under TF, recording the same offset repeatedly,
-         * whereas PT/DR record it once. Skip the duplicate (no insn, no block). */
+         * after every iteration under TF, recording the same offset repeatedly. */
         if (have_prev && off == prev_off)
             continue;
 
-        /* Block boundary, matching the PT/DR/Unicorn partition (a block ends after
-         * every branch-class instruction): region entry, a non-fall-through target
-         * (taken branch / callee re-entry), OR the fall-through immediately after a
-         * branch-class instruction — i.e. a NOT-taken conditional branch, which
-         * fall-through-discontinuity alone would miss. */
+        /* Block boundary (matches the PT/DR/Unicorn partition): region entry, a
+         * non-fall-through target, OR the fall-through right after a branch-class
+         * instruction (a NOT-taken conditional branch). */
         if (!have_prev || off != expected_next || prev_was_branch)
             trace_append_block(t, off);
 
         trace_append_insn(t, off);
 
-        /* Fall-through of THIS instruction = off + its length (Capstone). A zero
-         * length means undecodable (self-modifying / relocated bytes): flag the
-         * loss and stop — never trust the rest of the partition. */
         size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, g_base, g_len, g_base_ip,
                                  off, NULL, 0);
         if (l == 0) {
@@ -190,41 +261,84 @@ static void ss_normalize(void) {
         have_prev = 1;
     }
 
-    /* A well-formed routine leaves the region via a control transfer (its `ret`,
-     * or a jump out), so the last recorded in-region instruction is a branch (or
-     * its fall-through reaches the region end). If instead the last instruction is
-     * a non-branch whose fall-through is still strictly inside the region, stepping
-     * stopped early — e.g. the routine cleared EFLAGS.TF (popfq/iret of a flags
-     * image with TF=0), suppressing further #DB traps — so the tail ran unrecorded.
-     * Flag the partial trace rather than present a prefix as complete. */
+    /* If the last recorded instruction is a non-branch whose fall-through is still
+     * strictly inside the region, stepping stopped early (e.g. the routine cleared
+     * TF) — flag the partial trace rather than present a prefix as complete. */
     if (have_prev && !prev_was_branch && expected_next < g_len)
         t->truncated = true;
 
-    if (g_overflow)
+    if (fr->overflow)
         t->truncated = true; /* in-region run exceeded the capture buffer */
 }
 
+/* Pop the calling thread's TOP frame (LIFO), normalize it, and (on the OUTERMOST pop)
+ * disarm this thread's TF + drop the process-wide arm-refcount, restoring the caller's
+ * original SIGTRAP disposition on the 1->0 transition. A no-op when this thread has no
+ * frame (e.g. a cross-thread close): TLS makes the arming thread's stack invisible
+ * here, so the frame stays and the caller's tid-assert backstop flags the misuse. */
 void asmtest_ss_end(void) {
-    /* Disarm FIRST: clear TF so stepping stops, then this function and the caller
-     * run at full speed. (popfq that clears TF suppresses its own trailing trap.) */
-    g_armed = 0;
-    ss_disarm_tf();
-
-    if (g_installed) {
-        sigaction(SIGTRAP, &g_old_sa, NULL);
-        g_installed = 0;
+    int d = tls_depth;
+    if (d <= 0)
+        return; /* nothing on this thread's stack */
+    ss_frame_t *fr = &tls_frames[d - 1];
+    if (d == 1) {
+        /* Outermost: drop depth to 0 FIRST so the handler early-returns (never
+         * re-asserts TF) during the disarm's own trailing trap, then clear TF. */
+        tls_depth = 0;
+        ss_disarm_tf();
+    } else {
+        tls_depth = d - 1; /* nested pop: outer frames keep stepping */
     }
-    ss_normalize();
+    ss_normalize(fr);
+    free(fr->stream);
+    fr->stream = NULL; /* keep base/len/trace/gen for a post-close render_scope */
 
-    free(g_stream);
-    g_stream = NULL;
-    g_trace = NULL;
-    g_base = NULL;
-    g_len = 0;
+    pthread_mutex_lock(&g_ss_lock);
+    if (g_arm_refcount > 0)
+        g_arm_refcount--;
+    if (g_arm_refcount == 0) {
+        if (g_installed) {
+            sigaction(SIGTRAP, &g_old_sa, NULL);
+            g_installed = 0;
+        }
+        g_armed = 0;
+    }
+    pthread_mutex_unlock(&g_ss_lock);
+}
+
+/* Resolve a frame handle (idx+gen) on the CALLING thread to its region + trace. The
+ * frame data survives a pop (only stream is freed), so a render-on-close can read the
+ * normalized trace. Returns 1 + fills the out params on a live match, 0 on a
+ * stale/unknown handle. */
+int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
+                            size_t *len, asmtest_trace_t **trace) {
+    /* Unsigned compare: a signed cast would let the 0xffffffff sentinel handle
+     * (begin_scope's failure marker) pass the bound and index out of range. */
+    if (idx >= (uint32_t)SS_MAX_FRAMES)
+        return 0;
+    ss_frame_t *f = &tls_frames[idx];
+    if (f->gen != gen || f->gen == 0)
+        return 0;
+    if (base != NULL)
+        *base = f->base;
+    if (len != NULL)
+        *len = f->len;
+    if (trace != NULL)
+        *trace = f->trace;
+    return 1;
 }
 
 #else /* not Linux x86-64 — link-compatible stubs */
 
+int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
+                        uint32_t *out_idx, uint32_t *out_gen) {
+    (void)base;
+    (void)len;
+    (void)trace;
+    (void)out_idx;
+    (void)out_gen;
+    return ASMTEST_HW_ENOSYS;
+}
 int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
     (void)base;
     (void)len;
@@ -232,5 +346,14 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
     return ASMTEST_HW_ENOSYS;
 }
 void asmtest_ss_end(void) {}
+int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
+                            size_t *len, asmtest_trace_t **trace) {
+    (void)idx;
+    (void)gen;
+    (void)base;
+    (void)len;
+    (void)trace;
+    return 0;
+}
 
 #endif

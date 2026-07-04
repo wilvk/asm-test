@@ -43,7 +43,18 @@ instructions at decode — [src/pt_backend.c:108](../../src/pt_backend.c#L108),
 
 ---
 
-## §0 — The two cheap C-layer fixes + shared render-on-close *(planned; lands first)*
+## §0 — The two cheap C-layer fixes + shared render-on-close *(DONE)*
+
+> **Status: landed.** `asmtest_hwtrace_try_begin` (§0.1), the arming-thread record +
+> `asmtest_hwtrace_arm_tid` accessor + cross-thread `truncated` flag (§0.2),
+> `asmtest_hwtrace_render` (§0.3), and idempotent-by-name `register_region` (§0.4)
+> are implemented in [src/hwtrace.c](../../src/hwtrace.c) and declared in
+> [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h). Tests
+> `test_try_begin_busy`, `test_arm_tid_mismatch`, `test_render_singlestep`,
+> `test_register_idempotent` pass in [examples/test_hwtrace.c](../../examples/test_hwtrace.c)
+> (checks 69–88, all single-step, any x86-64 Linux). Docs updated in
+> [hardware-tracing.md](../guides/tracing/hardware-tracing.md) +
+> [native-tracing.md](../guides/tracing/native-tracing.md).
 
 **Goal.** A small set of self-contained changes that de-risk *every* binding and
 unblock the bindings slice's emit-on-close. Cheap enough to land before any shim
@@ -51,7 +62,7 @@ work. §0.1–§0.3 are the two C-layer fixes plus render-on-close; §0.4 makes 
 registration idempotent by name — the prerequisite that lets a scope object safely
 register on **every** construction.
 
-### §0.1 `begin` returns an error when a slot is active
+### §0.1 `begin` returns an error when a slot is active — **DONE**
 
 **Today.** `asmtest_hwtrace_begin` silently no-ops on a busy slot —
 [src/hwtrace.c:656-658](../../src/hwtrace.c#L656): `if (!g_inited || g_fd >= 0 ||
@@ -87,7 +98,7 @@ ABI:
   each surface their own failure through the new return path (e.g. `perf_open`
   failing at [:684](../../src/hwtrace.c#L684)).
 
-### §0.2 Record the arming thread id in `begin`, assert it in `end`
+### §0.2 Record the arming thread id in `begin`, assert it in `end` — **DONE**
 
 **Today.** Neither `asmtest_hwtrace_begin` nor `asmtest_ss_begin` captures a thread
 id; the "single region, single thread" contract
@@ -123,7 +134,7 @@ enforced** — confirmed absent. The analysis makes a same-thread mismatch flag 
 - Expose the arming tid via a read accessor (`int asmtest_hwtrace_arm_tid(void)`)
   so a shim can *also* assert in its own idiom before close.
 
-### §0.3 Shared render-on-close path
+### §0.3 Shared render-on-close path — **DONE**
 
 **Today — this is a *shared* gap across all ten bindings, not a .NET exception.**
 The shared C `end` reconstructs the packet stream into `asmtest_trace_t` *offsets*
@@ -181,7 +192,7 @@ so it cannot stay an "or"):
   the decoders already filtered to; whole-window rendering (Core §3 / Managed slice)
   is a separate mode.
 
-### §0.4 Region registration is idempotent by name
+### §0.4 Region registration is idempotent by name — **DONE**
 
 **Today.** `asmtest_hwtrace_register_region` **appends unconditionally** —
 `hw_region_t *r = &g_regions[g_nregions++]` ([src/hwtrace.c:404](../../src/hwtrace.c#L404)) —
@@ -254,7 +265,21 @@ validated on any x86-64 Linux via the single-step backend.
 
 ---
 
-## §1 — Per-thread hwtrace state *(planned; analysis phase C, before the managed bindings)*
+## §1 — Per-thread hwtrace state *(single-step DONE; PT/AMD per-thread forward-look)*
+
+> **Status: single-step per-thread landed.** [src/ss_backend.c](../../src/ss_backend.c)
+> is rewritten to a per-thread TLS range stack (initial-exec model for the
+> handler-touched objects; heap-malloc'd streams; process-global non-TLS `g_armed`
+> belt; process-wide arm-refcount gating the SIGTRAP disposition). The region
+> registry is mutex-guarded ([src/hwtrace.c](../../src/hwtrace.c)), and the
+> handle-keyed trio `asmtest_hwtrace_begin_scope` / `_render_scope` / `_render_versioned`
+> plus `asmtest_ss_begin_ex` / `asmtest_ss_frame_lookup` are implemented. Tests
+> `test_nested_singlestep`, `test_concurrent_singlestep`, `test_concurrent_samename`,
+> `test_render_versioned` (checks 107–118) pass, and the §0 `test_try_begin_busy`
+> (now EFULL on a full range stack) + `test_arm_tid_mismatch` were rewritten to §1
+> semantics; `test_singlestep_live`/`_loop` re-run byte-identical (regression).
+> **Forward-look:** the PT/CoreSight per-thread AUX-ring migration validates only on
+> bare-metal Intel PT (this dev host is AMD), so PT/AMD keep the process-global slot.
 
 **Goal.** Replace the process-global single capture slot with per-thread state,
 lifting the no-nesting / no-concurrency / no-multi-binding MVP limit
@@ -429,7 +454,18 @@ any x86-64 Linux; PT per-thread AUX rings validate only on bare-metal Intel PT
 
 ---
 
-## §2 — libipt decode-against-self-code-image glue *(planned, forward-look; analysis phase C)*
+## §2 — libipt decode-against-self-code-image glue *(host-testable half DONE; live PT forward-look)*
+
+> **Status: host-testable adapter landed.** The recorder-backed image read adapter
+> `asmtest_pt_read_codeimage` (libipt-independent) is implemented in
+> [src/pt_backend.c](../../src/pt_backend.c) and serves the version-correct bytes at
+> `(ip, when)` from the code-image recorder; the libipt `read_recorder` callback +
+> whole-window `asmtest_pt_decode_window` (distinct callback / no in-region filter,
+> selected by mode) build under libipt. Host tests `test_pt_image_from_codeimage`
+> (checks 11–15) + the `test_codeimage` decoder round-trip pass with **no PT hardware
+> and no libipt**. The **live whole-window libipt decode + capture-side address
+> filter remain forward-look on bare-metal Intel PT** (no synthetic PT-packet fixture
+> in the tree, this dev host is AMD).
 
 **Goal.** The remaining new decoder piece: feed the self (`pid == 0`) code-image
 recorder's bytes into libipt's image callback so an in-process PT capture of the
@@ -550,7 +586,18 @@ until a bare-metal Intel PT host is available (same gate as the hardware-trace p
 
 ---
 
-## §3 — Whole-window completeness: noise attribution (Q2) + snapshot drain (Q3) *(planned)*
+## §3 — Whole-window completeness: noise attribution (Q2) + snapshot drain (Q3) *(host-testable halves DONE; live drains forward-look)*
+
+> **Status: host-testable halves landed.** §3.1(c) symbolize-and-bucket ships the new
+> address→name **reverse resolver** `asmtest_hwtrace_region_name` (keeps the maps
+> pathname) + perf-map reverse search + `asmtest_hwtrace_symbolize_bucket`
+> ([src/hwtrace.c](../../src/hwtrace.c)); `test_symbolize_bucket` (checks 16–20)
+> passes with no hardware. §3.2's AMD `data_tail` drain **reconstruction** is covered
+> by `test_amd_drain_reconstruction` (a stream far past one window stitches gapless +
+> decodes complete). **Forward-look:** §3.1(b) emission-event slicing (needs the eBPF
+> detector / soft-dirty timeline correlation at live capture), the **live** AMD
+> `data_tail` mid-capture drain (Zen 3+), and the PT `aux_tail` circular walk (Intel
+> PT hardware).
 
 **Goal.** Make the empty-scope *whole-window* mode usable, not just honest. §2 backs
 the decoder with the recorder (so whole-window decodes at all); this sub-phase adds

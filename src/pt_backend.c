@@ -17,18 +17,50 @@
  * still compiles, reporting the decoder absent so asmtest_hwtrace_available()
  * self-skips.
  */
+#include "asmtest_codeimage.h"
 #include "asmtest_trace.h"
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define ASMTEST_HW_OK      0
+#define ASMTEST_HW_EINVAL  (-1)
 #define ASMTEST_HW_ENOSYS  (-5)
 #define ASMTEST_HW_EDECODE (-8)
 
+/* ------------------------------------------------------------------ */
+/* §2 — recorder-backed image read (libipt-independent, host-testable) */
+/*                                                                     */
+/* Serve the bytes live at `ip` as of trace position `when` from a      */
+/* self/foreign code-image recorder, so an in-process PT capture of the  */
+/* WHOLE window decodes against the JIT's own live bytes (the temporal-  */
+/* bytes rule) rather than a single pre-registered range. Returns the    */
+/* number of bytes copied (> 0), or a negative ASMTEST_HW_* on a miss    */
+/* (no version at/before `when`, or `ip` outside every tracked region).  */
+/* The libipt pt_image callback (read_recorder, below) adapts this to    */
+/* pt_image's signature when libipt is present; this plain form is       */
+/* exercised directly by test_pt_image_from_codeimage — no PT hardware,  */
+/* no libipt packet stream (unlike AMD/CS, Intel PT has no synthetic     */
+/* packet fixture in the tree, so end-to-end libipt decode is forward-   */
+/* look on real hardware). */
+int asmtest_pt_read_codeimage(const asmtest_codeimage_t *img, uint64_t when,
+                              uint64_t ip, uint8_t *buffer, size_t size) {
+    if (img == NULL || buffer == NULL || size == 0)
+        return ASMTEST_HW_EINVAL;
+    const uint8_t *bytes = NULL;
+    size_t avail = 0;
+    int rc = asmtest_codeimage_bytes_at(img, (const void *)(uintptr_t)ip, when,
+                                        &bytes, &avail);
+    if (rc != ASMTEST_CI_OK || bytes == NULL || avail == 0)
+        return ASMTEST_HW_EDECODE; /* not mapped at this (ip, when) */
+    size_t n = (size < avail) ? size : avail;
+    memcpy(buffer, bytes, n);
+    return (int)n;
+}
+
 #ifdef ASMTEST_HAVE_LIBIPT
 #include <intel-pt.h>
-#include <string.h>
 
 int asmtest_pt_decoder_present(void) { return 1; }
 
@@ -49,6 +81,24 @@ static int read_region(uint8_t *buffer, size_t size, const struct pt_asid *asid,
     size_t n = (size < avail) ? size : (size_t)avail;
     memcpy(buffer, c->base + (ip - c->base_ip), n);
     return (int)n;
+}
+
+/* Context for the recorder-backed pt_image callback (§2 whole-window mode). */
+typedef struct {
+    const asmtest_codeimage_t *img;
+    uint64_t when;
+} pt_recorder_ctx_t;
+
+/* pt_image read callback backed by the code-image recorder: serves bytes for ANY
+ * executed address (temporal-correct as of `when`), so the decoder no longer stops
+ * at the first out-of-region IP the way read_region does. Distinct from read_region
+ * — selected by mode — so the shipped region-scoped decode stays byte-identical. */
+static int read_recorder(uint8_t *buffer, size_t size, const struct pt_asid *asid,
+                         uint64_t ip, void *context) {
+    (void)asid;
+    pt_recorder_ctx_t *c = (pt_recorder_ctx_t *)context;
+    int n = asmtest_pt_read_codeimage(c->img, c->when, ip, buffer, size);
+    return (n > 0) ? n : -pte_nomap;
 }
 
 static int is_branch(enum pt_insn_class c) {
@@ -138,6 +188,67 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
     return ASMTEST_HW_OK;
 }
 
+/* §2 whole-window decode: like asmtest_pt_decode, but the pt_image is backed by the
+ * code-image recorder (bytes for ANY address, temporal-correct as of `when`) and NO
+ * in-region IP filter is applied — every executed instruction is recorded, at an
+ * offset from the first decoded IP. A distinct callback + record policy from the
+ * region-scoped decode, selected by mode. Needs Intel PT hardware to validate live
+ * (self-skips as the rest of the PT capture path does); the recorder-backed image
+ * adapter it rides (asmtest_pt_read_codeimage) is host-tested directly. */
+int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
+                             const asmtest_codeimage_t *img, uint64_t when,
+                             asmtest_trace_t *trace) {
+    if (aux == NULL || aux_len == 0 || img == NULL || trace == NULL)
+        return ASMTEST_HW_EDECODE;
+    struct pt_config config;
+    pt_config_init(&config);
+    config.begin = (uint8_t *)aux;
+    config.end = (uint8_t *)aux + aux_len;
+    struct pt_insn_decoder *dec = pt_insn_alloc_decoder(&config);
+    if (dec == NULL)
+        return ASMTEST_HW_EDECODE;
+    pt_recorder_ctx_t ctx = {img, when};
+    struct pt_image *image = pt_image_alloc("asmtest-window");
+    if (image == NULL) {
+        pt_insn_free_decoder(dec);
+        return ASMTEST_HW_EDECODE;
+    }
+    pt_image_set_callback(image, read_recorder, &ctx);
+    pt_insn_set_image(dec, image);
+
+    size_t decoded = 0;
+    uint64_t base_ip = 0; /* first decoded IP: the window's offset origin */
+    for (;;) {
+        int status = pt_insn_sync_forward(dec);
+        if (status < 0)
+            break;
+        int prev_was_branch = 1;
+        for (;;) {
+            struct pt_insn insn;
+            status = pt_insn_next(dec, &insn, sizeof insn);
+            if (status < 0)
+                break;
+            if (!insn.speculative) {
+                if (decoded == 0)
+                    base_ip = insn.ip;
+                uint64_t off = insn.ip - base_ip;
+                trace_append_insn(trace, off);
+                if (prev_was_branch)
+                    trace_append_block(trace, off);
+                prev_was_branch = is_branch(insn.iclass);
+                decoded++;
+            }
+            if (status & pts_eos)
+                break;
+        }
+    }
+    pt_insn_free_decoder(dec);
+    pt_image_free(image);
+    if (decoded == 0)
+        return ASMTEST_HW_EDECODE;
+    return ASMTEST_HW_OK;
+}
+
 #else /* !ASMTEST_HAVE_LIBIPT */
 
 int asmtest_pt_decoder_present(void) { return 0; }
@@ -148,6 +259,17 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
     (void)aux_len;
     (void)base;
     (void)len;
+    (void)trace;
+    return ASMTEST_HW_ENOSYS;
+}
+
+int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
+                             const asmtest_codeimage_t *img, uint64_t when,
+                             asmtest_trace_t *trace) {
+    (void)aux;
+    (void)aux_len;
+    (void)img;
+    (void)when;
     (void)trace;
     return ASMTEST_HW_ENOSYS;
 }

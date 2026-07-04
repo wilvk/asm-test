@@ -218,6 +218,9 @@ const FnAutoTier = *const fn (c_uint, *Choice) callconv(.C) c_int;
 const FnInit = *const fn (*const c.asmtest_hwtrace_options_t) callconv(.C) c_int;
 const FnRegister = *const fn ([*:0]const u8, ?*anyopaque, usize, ?*anyopaque) callconv(.C) c_int;
 const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
+// Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
+const FnTryBegin = *const fn ([*:0]const u8) callconv(.C) c_int;
+const FnRender = *const fn ([*:0]const u8, ?[*]u8, usize) callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
 const FnExecAlloc = *const fn (?*const anyopaque, usize, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnExecFree = *const fn (?*anyopaque, usize) callconv(.C) void;
@@ -311,6 +314,9 @@ const Api = struct {
     register: FnRegister,
     begin: FnMarker,
     end: FnMarker,
+    // Optional (an older lib without them still loads; the scope falls back to begin).
+    try_begin: ?FnTryBegin,
+    render: ?FnRender,
     shutdown: FnShutdown,
     exec_alloc: FnExecAlloc,
     exec_free: FnExecFree,
@@ -440,6 +446,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .register = lib.lookup(FnRegister, "asmtest_hwtrace_register_region") orelse return null,
         .begin = lib.lookup(FnMarker, "asmtest_hwtrace_begin") orelse return null,
         .end = lib.lookup(FnMarker, "asmtest_hwtrace_end") orelse return null,
+        .try_begin = lib.lookup(FnTryBegin, "asmtest_hwtrace_try_begin"),
+        .render = lib.lookup(FnRender, "asmtest_hwtrace_render"),
         .shutdown = lib.lookup(FnShutdown, "asmtest_hwtrace_shutdown") orelse return null,
         .exec_alloc = lib.lookup(FnExecAlloc, "asmtest_hwtrace_exec_alloc") orelse return null,
         .exec_free = lib.lookup(FnExecFree, "asmtest_hwtrace_exec_free") orelse return null,
@@ -698,6 +706,73 @@ pub const NativeCode = struct {
     }
 };
 
+/// The `basename` of a path (the tail after the last '/'), so an auto-name dodges
+/// the 64-char C name ceiling and full-path aliasing under Core §0.4's by-name
+/// registry.
+fn basename(path: []const u8) []const u8 {
+    var i: usize = path.len;
+    while (i > 0) : (i -= 1) {
+        if (path[i - 1] == '/') return path[i..];
+    }
+    return path;
+}
+
+/// A `deinit`-able scope value (NOT RAII — Zig has no destructors). Obtained from
+/// `HwTrace.scope`; close it with `defer scope.deinit()`. It owns its own trace
+/// handle and renders the executed assembly into `path()` on close.
+pub const Scope = struct {
+    name_buf: [64]u8 = undefined,
+    name_len: usize = 0,
+    handle: ?*anyopaque = null,
+    emit: bool = true,
+    armed: bool = false,
+    truncated_flag: bool = false,
+    path_buf: [4096]u8 = undefined,
+    path_len: usize = 0,
+    closed: bool = false,
+
+    /// The auto-generated (or explicit) region name.
+    pub fn name(self: *const Scope) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    /// The rendered assembly listing (populated by `deinit`).
+    pub fn path(self: *const Scope) []const u8 {
+        return self.path_buf[0..self.path_len];
+    }
+
+    /// True if the close hopped OS threads / the capture overflowed (Core §0.2/§1).
+    /// Meaningful after `deinit`.
+    pub fn truncated(self: *const Scope) bool {
+        return self.truncated_flag;
+    }
+
+    /// End the region, render the executed assembly into `path()`, and emit it (when
+    /// `emit`). Reads — but does NOT free — the caller's HwTrace handle (the HwTrace
+    /// owns it). Idempotent.
+    pub fn deinit(self: *Scope) void {
+        if (self.closed) return;
+        self.closed = true;
+        const api = load() orelse return;
+        const nptr: [*:0]const u8 = @ptrCast(&self.name_buf);
+        api.end(nptr);
+        if (api.render) |r| {
+            const need = r(nptr, null, 0);
+            if (need > 0) {
+                const want: usize = @intCast(need);
+                const cap = self.path_buf.len;
+                const buflen = if (want + 1 <= cap) want + 1 else cap;
+                _ = r(nptr, @ptrCast(&self.path_buf), buflen);
+                self.path_len = if (want < cap) want else cap - 1;
+            }
+        }
+        if (self.handle) |h|
+            self.truncated_flag = api.truncated(h) != 0;
+        if (self.emit and self.path_len > 0)
+            std.io.getStdOut().writeAll(self.path_buf[0..self.path_len]) catch {};
+    }
+};
+
 /// A coverage recorder for a registered native region, via the hardware tier.
 /// Wraps the opaque `asmtest_trace_t*` handle and the per-region begin/end
 /// markers.
@@ -749,6 +824,36 @@ pub const HwTrace = struct {
         self.begin(name);
         defer self.end(name);
         return @call(.auto, body, args);
+    }
+
+    /// A scope over the register-then-begin/end pair with the shared-core
+    /// render-on-close. Zig has no destructors, so the returned `Scope` is NOT RAII —
+    /// close it with `defer scope.deinit()`. Pass `@src()` at the call site (Zig has
+    /// no default-arg / caller-location propagation) to auto-name the region
+    /// `basename:line`. The C core flags the trace truncated on a cross-thread close
+    /// (§0.2/§1). NOTE: `defer` is skipped on `panic`, so on the abnormal path the
+    /// trace is simply not emitted, never emitted-partial-as-complete.
+    pub fn scope(self: *HwTrace, code: *const NativeCode, src: std.builtin.SourceLocation, emit: bool) Scope {
+        var s = Scope{ .handle = self.handle, .emit = emit };
+        const base = basename(src.file);
+        const written = std.fmt.bufPrintZ(&s.name_buf, "{s}:{d}", .{ base, src.line }) catch blk: {
+            const fallback = "asmscope";
+            @memcpy(s.name_buf[0..fallback.len], fallback);
+            s.name_buf[fallback.len] = 0;
+            break :blk s.name_buf[0..fallback.len :0];
+        };
+        s.name_len = written.len;
+        const api = load() orelse return s;
+        const nptr: [*:0]const u8 = @ptrCast(&s.name_buf);
+        // Register-then-begin under the same generated name (Core §0.4 idempotent).
+        _ = api.register(nptr, code.base, code.len, self.handle);
+        if (api.try_begin) |tb| {
+            s.armed = tb(nptr) == OK; // nonzero -> clean self-skip
+        } else {
+            api.begin(nptr);
+            s.armed = true;
+        }
+        return s;
     }
 
     /// True if the basic block at byte offset `off` was entered.

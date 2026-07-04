@@ -244,6 +244,26 @@ do
   code:free()
 end
 
+-- scope — block form with auto-name + render-on-close.
+do
+  local code = NativeCode.from_bytes(ROUTINE)
+  local tr = HwTrace.create(64, 256)
+  local sresult
+  local res = tr:scope(code, function() sresult = code:call(20, 22) end,
+                       { emit = false })
+  eq(sresult, 42, "scope: call(20,22) == 42")
+  ok(res.armed, "scope: armed on an available backend")
+  ok(not res.truncated, "scope: not truncated")
+  ok(#res.path > 0, "scope: render-on-close produced text")
+  local lines = select(2, res.path:gsub("\n", "\n"))
+  eq(lines, 5, "scope: 5 rendered instruction lines")
+  ok(res.path:find("ret", 1, true) ~= nil, "scope: rendered listing includes the ret")
+  ok(res.name:match("^test_hwtrace%.lua:") ~= nil,
+     "scope: auto-name is basename:line (" .. res.name .. ")")
+  tr:free()
+  code:free()
+end
+
 -- test_singlestep_loop_no_depth_ceiling — LOOP, call(1, 20): 19 back-edges, all
 -- captured (no LBR-style capture ceiling). Use instructions=256 for the loop.
 do

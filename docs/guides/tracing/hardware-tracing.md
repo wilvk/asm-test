@@ -124,6 +124,32 @@ Only the `backend` field is required; the rest default sensibly when zero-initia
 > the markers are not yet per-thread. Bracket one registered routine per begin/end
 > pair.
 
+### Scoped-tracing primitives (the shared-core `§0` surface)
+
+The scope constructs in the language bindings (`using`/RAII/`with`/`defer`) are thin
+shims over three additional entry points that live in the C core so every binding
+inherits them once:
+
+| Call | Role |
+|---|---|
+| `int asmtest_hwtrace_try_begin(name)` | like `begin`, but returns `0` on success and a negative `ASMTEST_HW_*` on a busy slot (`ESTATE`) or an unregistered name (`EINVAL`) — the signal a scope shim needs instead of a silent no-op. `begin` is now a thin wrapper that discards this status, so the shipped `void` ABI is unchanged. |
+| `int asmtest_hwtrace_arm_tid(void)` | the OS thread id (`SYS_gettid`) that armed the active capture, or `-1` when idle — a shim can assert its close runs on the arming thread. |
+| `int asmtest_hwtrace_render(name, buf, buflen)` | render the region's recorded instruction offsets to Capstone disassembly text. `snprintf` semantics: pass `buf=NULL, buflen=0` to size, then allocate and call again; returns the non-negative would-be length, or a negative `ASMTEST_HW_*` on a name miss / absent Capstone. A truncated or over-capacity trace renders as a labelled prefix, never as complete. |
+
+Two correctness rules the scope shims rely on:
+
+- **Register-then-begin under the same name.** `begin`/`try_begin` key on the region
+  name, so a self-naming scope must `register_region` under its generated name first.
+- **`register_region` is idempotent by name.** A repeat registration of a name that
+  already has a slot refreshes that slot in place (its `[base, len)` + trace) instead
+  of appending, so a scope object that registers on *every* construction reuses one
+  slot — a looped or sprinkled scope never exhausts the 32-entry table, which now
+  counts **distinct** scope sites.
+
+**Thread-scope backstop.** `end` compares the closing thread against `arm_tid` and
+flags the trace `truncated` on a mismatch, so a scope whose work hopped OS threads
+(`await` / `go func()` / a thread-pool continuation) is never emitted as complete.
+
 ---
 
 ## Single-step: the portable backend

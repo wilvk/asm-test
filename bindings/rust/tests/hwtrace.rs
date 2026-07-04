@@ -91,6 +91,46 @@ fn singlestep_live_trace() {
 }
 
 #[test]
+fn scoped_trace_render_and_autoname() {
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+    HwTrace::init(Backend::Singlestep).expect("hwtrace init (single-step)");
+
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let scope = HwTrace::scope(&code, /*emit=*/ false); // auto-name at THIS line
+    let name = scope.name().to_string();
+    let result = code.call(20, 22);
+    let armed = scope.armed();
+    let truncated = {
+        let listing = scope.close(); // end + render, returns the listing
+        assert_eq!(result, 42, "scoped traced call returns 20+22");
+        assert!(armed, "scope armed on an available backend");
+        assert!(!listing.is_empty(), "render-on-close produced text");
+        assert_eq!(
+            listing.matches('\n').count(),
+            5,
+            "5 rendered instruction lines (matches the 5 executed insns)"
+        );
+        assert!(listing.contains("ret"), "rendered listing includes the ret");
+        // Auto-name is basename:line from the call site (this test file).
+        assert!(
+            name.starts_with("hwtrace.rs:"),
+            "auto-name is basename:line, got {name:?}"
+        );
+        listing
+    };
+    let _ = truncated;
+
+    HwTrace::shutdown();
+    eprintln!("# PASS: scoped-trace wrapper (render-on-close + auto-name)");
+}
+
+#[test]
 fn auto_resolve_selection_invariants() {
     // The orchestrator's selection invariants hold on every host (even where all
     // backends self-skip and the cascade is empty).

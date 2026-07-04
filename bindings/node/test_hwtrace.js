@@ -149,6 +149,23 @@ function main() {
       tr.free();
     }
 
+    // --- scope: callback form with auto-name + render-on-close ---
+    {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const tr = HwTrace.create({ blocks: 64, instructions: 256 });
+      let r;
+      const res = tr.scope(code, () => { r = code.call(20, 22); }, { emit: false });
+      ok(Number(r) === 42, 'scope: add2(20,22) == 42');
+      ok(res.armed, 'scope: armed on an available backend');
+      ok(!res.truncated, 'scope: not truncated');
+      ok(res.path && res.path.length > 0, 'scope: render-on-close produced text');
+      ok((res.path.match(/\n/g) || []).length === 5, 'scope: 5 rendered instruction lines');
+      ok(res.path.includes('ret'), 'scope: rendered listing includes the ret');
+      ok(res.name.startsWith('test_hwtrace.js:'), `scope: auto-name is basename:line (${res.name})`);
+      code.free();
+      tr.free();
+    }
+
     // --- loop fixture: 20 iterations, no depth ceiling ---
     {
       const code = NativeCode.fromBytes(LOOP);

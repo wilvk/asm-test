@@ -13,6 +13,18 @@ The analysis is blunt that this is "the real project," medium-plus effort, and t
 one place the four qualifications stop being knobs and become a redesign (the
 thread → logical-operation model change). It is deliberately sequenced **last**.
 
+> **Status: partially landed.** The **§D4 shared merge core** (`asmtest_hwtrace_stitch`
+> + the slice/bound ABI) and the **version-aware render** (`asmtest_hwtrace_render_versioned`)
+> are implemented and host-tested (`test_stitch_slices`, `test_render_versioned`). The
+> **Node (§D1)** `scope`/`using`-fallback and **Java (§D2)** try-with-resources
+> `AsmTrace` scope constructs over a native leaf are implemented + tested in their
+> `hwtrace-<lang>-test` lanes. **Forward-look (not yet landed):** the live managed-JIT
+> capability — §D0 .NET `MethodLoadVerbose`/`AsyncLocal`, the §D1/§D2 per-runtime
+> async-hop hooks, and the §D3 concealed out-of-process ptrace-stealth stepper
+> (reverse-attach protocol + cross-process address channel + per-ecosystem bundling) —
+> which need managed runtimes / PT hardware / a second process to validate. See
+> [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
+>
 > Status legend: **planned**, forward-look. The clean managed path needs the
 > shared-core libipt glue (PT hardware to validate); the ptrace fallback runs on
 > ordinary CI-adjacent hosts (Zen 2 / Docker) but exercises a second process.
@@ -325,6 +337,16 @@ it is CI-runnable in the `hwtrace` job / a Docker lane with `--cap-add=SYS_PTRAC
 ---
 
 ## §D4 — Async-hop stitching (piece D): the shared logical-operation model
+
+> **Status: shared merge core landed (host-testable half).** The slice/bound ABI
+> (`asmtest_hwtrace_slice_t`, `asmtest_hwtrace_slice_bound_t`) and the pure ordered
+> merge `asmtest_hwtrace_stitch` are implemented in
+> [src/hwtrace.c](../../src/hwtrace.c) / declared in
+> [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h); `test_stitch_slices`
+> (checks 6–10) passes with no PT hardware and no real threads — the CI-runnable
+> deliverable that closes the async-hop merge test hole. **Forward-look:** the
+> per-runtime value-changed hooks (.NET `AsyncLocal` / Node `AsyncLocalStorage` / JVM
+> JVMTI) that drive live capture→tag→merge remain a disclosed gap (a PT/ptrace host).
 
 *(planned; explicit opt-in — the deepest piece in the set.)* This is the analysis's
 Q1 redesign: the one qualification that is **not a knob but a model change** — the

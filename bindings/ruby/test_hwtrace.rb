@@ -155,6 +155,22 @@ begin
   trace.free
   code.free
 
+  # ---- scope: block form with auto-name + render-on-close ----
+  scode = NativeCode.from_bytes(ROUTINE)
+  strace = HwTrace.create(blocks: 64, instructions: 256)
+  sresult = nil
+  res = strace.scope(scode, emit: false) { sresult = scode.call(20, 22) }
+  ok(sresult == 42, "scope call(20,22) == 42 (got #{sresult})")
+  ok(res.armed, "scope armed on an available backend")
+  ok(!res.truncated, "scope not truncated")
+  ok(!res.path.empty?, "scope render-on-close produced text")
+  ok(res.path.count("\n") == 5, "scope 5 rendered lines (got #{res.path.count("\n")})")
+  ok(res.path.include?("ret"), "scope rendered listing includes the ret")
+  ok(res.name.start_with?("test_hwtrace.rb:"),
+     "scope auto-name is basename:line (got #{res.name})")
+  strace.free
+  scode.free
+
   # ---- loop: 19 back-edges, exact + complete under single-step ----
   loop_code = NativeCode.from_bytes(LOOP)
   loop_trace = HwTrace.create(blocks: 64, instructions: 256)

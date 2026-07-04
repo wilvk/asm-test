@@ -35,6 +35,8 @@ int  asmtest_hwtrace_init(const asmtest_hwtrace_options_t* opts);
 int  asmtest_hwtrace_register_region(const char* name, void* base, size_t len, void* trace);
 void asmtest_hwtrace_begin(const char* name);
 void asmtest_hwtrace_end(const char* name);
+int  asmtest_hwtrace_try_begin(const char* name);
+int  asmtest_hwtrace_render(const char* name, char* buf, size_t buflen);
 void asmtest_hwtrace_shutdown(void);
 int  asmtest_hwtrace_exec_alloc(const void* bytes, size_t len, void** base_out, size_t* len_out);
 void asmtest_hwtrace_exec_free(void* base, size_t len);
@@ -391,6 +393,49 @@ function HwTrace:region(name, fn)
   local ran_ok, err = pcall(fn)
   L.asmtest_hwtrace_end(name)
   if not ran_ok then error(err) end
+end
+
+-- basename:line call-site name (basename dodges the 64-char C name ceiling and
+-- full-path aliasing under Core §0.4's by-name registry).
+local function scope_name(info)
+  if not info then return "asmscope" end
+  local src = (info.short_src or info.source or "?"):gsub("^@", "")
+  local base = src:match("([^/]+)$") or src
+  local n = base .. ":" .. tostring(info.currentline)
+  if #n > 63 then n = n:sub(#n - 62) end
+  return n
+end
+
+-- Render the named region's recorded instructions to assembly text (size-then-
+-- allocate); "" if the decoder is unavailable.
+local function render_region(name)
+  local need = tonumber(L.asmtest_hwtrace_render(name, nil, 0))
+  if need <= 0 then return "" end
+  local buf = ffi.new("char[?]", need + 1)
+  L.asmtest_hwtrace_render(name, buf, need + 1)
+  return ffi.string(buf, need)
+end
+
+-- A block scope over the register-then-begin/end pair with the shared-core
+-- render-on-close — the callback form of the *import + scope* surface (LuaJIT 5.1
+-- has no `<close>`). `code` is the traced region; the name auto-generates as
+-- `basename:line` from `debug.getinfo` (override with `opts.name`). Renders the
+-- executed assembly on close and (when `opts.emit ~= false`) writes it. The C core
+-- flags the trace truncated if `fn` yields across a `pcall` and resumes on another OS
+-- thread (LuaJIT permits yield-across-pcall) — the tid-assert backstop. Returns a
+-- table {name, path, armed, truncated}; the end marker always fires (pcall).
+function HwTrace:scope(code, fn, opts)
+  opts = opts or {}
+  local emit = opts.emit ~= false
+  local name = opts.name or scope_name(debug.getinfo(2, "Sl"))
+  self:register(name, code) -- register-then-begin (Core §0.4 idempotent-by-name)
+  local armed = tonumber(L.asmtest_hwtrace_try_begin(name)) == 0
+  local ran_ok, err = pcall(fn)
+  L.asmtest_hwtrace_end(name)
+  local path = render_region(name)
+  if emit and #path > 0 then io.write(path) end
+  if not ran_ok then error(err) end
+  return { name = name, path = path, armed = armed, truncated = self:truncated() }
 end
 
 -- True if the basic block at byte-offset `off` (from the region entry) was entered.

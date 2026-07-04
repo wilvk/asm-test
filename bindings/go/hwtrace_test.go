@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -116,6 +117,85 @@ func TestHwtrace(t *testing.T) {
 
 	tr2.Free()
 	loop.Free()
+}
+
+// TestHwtraceScope exercises the closure-form scope construct: auto-name from the
+// call site, render-on-close, and the thread-scope honesty bit.
+func TestHwtraceScope(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+	if err := HwTraceInit(SingleStep); err != nil {
+		t.Skipf("hwtrace init failed: %v", err)
+	}
+	defer HwTraceShutdown()
+
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+	tr := NewHwTrace(64, 256)
+	defer tr.Free()
+
+	var r int64
+	res := tr.Scope(code, false, func() { r = code.Call(20, 22) }) // auto-name at THIS line
+	if r != 42 {
+		t.Fatalf("Call(20,22): got %d, want 42", r)
+	}
+	if !res.Armed {
+		t.Fatalf("scope did not arm on an available backend")
+	}
+	if res.Truncated {
+		t.Fatalf("scope unexpectedly flagged truncated")
+	}
+	if res.Path == "" {
+		t.Fatalf("render-on-close produced no text")
+	}
+	if lines := strings.Count(res.Path, "\n"); lines != 5 {
+		t.Fatalf("rendered instruction lines: got %d, want 5", lines)
+	}
+	if !strings.HasPrefix(res.Name, "hwtrace_test.go:") {
+		t.Fatalf("auto-name: got %q, want hwtrace_test.go:<line>", res.Name)
+	}
+}
+
+// TestHwtraceScopeFanoutUntraced documents the Go-specific gap: work fanned out via
+// `go func()` inside a scope runs on ANOTHER OS thread and is silently untraced —
+// LockOSThread confines the trace to the arming thread, so the trace holds only the
+// arming-thread instructions, not the fanned-out call's.
+func TestHwtraceScopeFanoutUntraced(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+	if err := HwTraceInit(SingleStep); err != nil {
+		t.Skipf("hwtrace init failed: %v", err)
+	}
+	defer HwTraceShutdown()
+
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+	tr := NewHwTrace(64, 256)
+	defer tr.Free()
+
+	done := make(chan int64, 1)
+	var mainRet int64
+	tr.Scope(code, false, func() {
+		go func() { done <- code.Call(200, 50) }() // fan-out: another OS thread, untraced
+		mainRet = code.Call(20, 22)                // arming-thread work: 5 insns, traced
+		<-done                                     // join the fan-out
+	})
+	if mainRet != 42 {
+		t.Fatalf("arming-thread call: got %d, want 42", mainRet)
+	}
+	// Only the arming-thread call (add2(20,22) = 5 insns) is traced; the fan-out
+	// (add2(200,50) = 6 insns) ran elsewhere and is silently untraced.
+	if got := tr.InsnsTotal(); got != 5 {
+		t.Fatalf("fan-out leaked into the trace: InsnsTotal=%d, want 5 (arming-thread only)", got)
+	}
 }
 
 // TestHwtraceAutoSelection mirrors the Python suite's selection invariants

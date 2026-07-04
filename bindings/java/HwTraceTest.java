@@ -138,6 +138,25 @@ public final class HwTraceTest {
 
         trace.free();
         code.free();
+
+        // Reference scope: try-with-resources AsmTrace with auto-name + render.
+        HwTrace.NativeCode scode = HwTrace.NativeCode.fromBytes(ROUTINE);
+        long[] sr = {0};
+        HwTrace.AsmTrace scope;
+        try (HwTrace.AsmTrace t = HwTrace.AsmTrace.scope(scode, false)) { // auto-name here
+            scope = t;
+            sr[0] = scode.call(20, 22);
+        }
+        ok(sr[0] == 42, "AsmTrace: add2(20,22) == 42 (got " + sr[0] + ")");
+        ok(scope.armed(), "AsmTrace: armed on an available backend");
+        ok(!scope.truncated(), "AsmTrace: not truncated");
+        ok(scope.path() != null && !scope.path().isEmpty(), "AsmTrace: render-on-close produced text");
+        long nl = scope.path().chars().filter(c -> c == '\n').count();
+        ok(nl == 5, "AsmTrace: 5 rendered instruction lines (got " + nl + ")");
+        ok(scope.path().contains("ret"), "AsmTrace: rendered listing includes the ret");
+        ok(scope.name().startsWith("HwTraceTest.java:"),
+            "AsmTrace: auto-name is basename:line (got " + scope.name() + ")");
+        scode.free();
     }
 
     // Mirrors test_singlestep_loop_no_depth_ceiling.

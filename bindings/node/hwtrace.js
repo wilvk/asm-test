@@ -196,6 +196,9 @@ let _loadError = null;
     registerRegion: lib.func('int asmtest_hwtrace_register_region(const char*, void*, size_t, void*)'),
     begin: lib.func('void asmtest_hwtrace_begin(const char*)'),
     end: lib.func('void asmtest_hwtrace_end(const char*)'),
+    // Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
+    tryBegin: lib.func('int asmtest_hwtrace_try_begin(const char*)'),
+    render: lib.func('int asmtest_hwtrace_render(const char*, _Out_ char*, size_t)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -443,6 +446,30 @@ class HwTrace {
     } finally {
       _fn.end(name);
     }
+  }
+
+  /** A block scope over the register-then-begin/end pair with the shared-core
+   *  render-on-close — the callback form of the *import + scope* surface (the
+   *  version-independent fallback; the `using` + Symbol.dispose sugar needs Node 24+).
+   *  `code` is the traced region; the name auto-generates as `basename:line` from the
+   *  call site (override with `opts.name`). Renders the executed assembly on close and
+   *  (when `opts.emit !== false`) writes it. The C core flags the trace `truncated` on
+   *  a cross-thread close (§0.2/§1). Genuine cross-thread work (Worker / libuv pool) is
+   *  a disclosed gap — untraced, flagged via the tid assert, not stitched. Returns
+   *  `{ name, path, armed, truncated }`. `fn` runs even if it throws (end is finally'd). */
+  scope(code, fn, opts = {}) {
+    const emit = opts.emit !== false;
+    const name = opts.name || _scopeName(new Error().stack);
+    this.register(name, code); // register-then-begin (Core §0.4 idempotent-by-name)
+    const armed = _fn.tryBegin(name) === ASMTEST_HW_OK; // nonzero -> clean self-skip
+    try {
+      fn();
+    } finally {
+      _fn.end(name);
+    }
+    const path = _renderRegion(name);
+    if (emit && path) process.stdout.write(path);
+    return { name, path, armed, truncated: this.truncated() };
   }
 
   /** True if the basic block at byte-offset `off` was entered. */
@@ -903,6 +930,26 @@ class CodeImage {
       this._handle = null;
     }
   }
+}
+
+// basename:line call-site name from a captured stack (frame [2] is the caller of
+// scope()); basename dodges the 64-char C name ceiling and full-path aliasing under
+// Core §0.4's by-name registry.
+function _scopeName(stack) {
+  const lines = (stack || '').split('\n');
+  const frame = lines[2] || '';
+  const m = frame.match(/([^\s/\\(]+):(\d+):\d+\)?\s*$/);
+  if (m) { const n = `${m[1]}:${m[2]}`; return n.length > 63 ? n.slice(-63) : n; }
+  return 'asmscope';
+}
+
+// Render the named region's recorded instructions to assembly text; '' if the
+// decoder is unavailable. (snprintf semantics: returns the would-be length.)
+function _renderRegion(name) {
+  const buf = Buffer.alloc(16384);
+  const n = _fn.render(name, buf, buf.length);
+  if (n <= 0) return '';
+  return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
 }
 
 module.exports = {

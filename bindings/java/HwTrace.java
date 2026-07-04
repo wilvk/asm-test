@@ -147,7 +147,7 @@ public final class HwTrace {
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
-        REGISTER_REGION, HW_BEGIN, HW_END, EXEC_ALLOC, EXEC_FREE,
+        REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER, EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
@@ -280,7 +280,8 @@ public final class HwTrace {
         MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
             traceResolve = null, traceAuto = null,
             hwInit = null, hwShutdown = null,
-            registerRegion = null, hwBegin = null, hwEnd = null, execAlloc = null, execFree = null,
+            registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
+            execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
             traceBlockAt = null, traceInsnAt = null,
@@ -344,6 +345,10 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS));
             hwBegin = h(lib, "asmtest_hwtrace_begin", FunctionDescriptor.ofVoid(ADDRESS));
             hwEnd = h(lib, "asmtest_hwtrace_end", FunctionDescriptor.ofVoid(ADDRESS));
+            // Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
+            hwTryBegin = h(lib, "asmtest_hwtrace_try_begin", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            hwRender = h(lib, "asmtest_hwtrace_render",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             execFree = h(lib, "asmtest_hwtrace_exec_free",
@@ -511,7 +516,8 @@ public final class HwTrace {
         HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
         HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto; HW_INIT = hwInit;
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
-        HW_END = hwEnd; EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
+        HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
+        EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
         TRACE_TRUNCATED = traceTruncated; TRACE_BLOCK_AT = traceBlockAt; TRACE_INSN_AT = traceInsnAt;
@@ -850,6 +856,87 @@ public final class HwTrace {
         }
 
         @Override public void close() { free(); }
+    }
+
+    /**
+     * The try-with-resources scope construct (§D2): an {@link AutoCloseable} over the
+     * register-then-begin/close-end pair with the shared-core render-on-close. Use it as
+     * {@code try (var t = HwTrace.scope(code)) { HotPath(); }}: the factory auto-names
+     * the region {@code basename:line} from the call site (StackWalker), registers the
+     * traced range, and brackets {@code try_begin} (a nonzero return is a clean
+     * self-skip); {@link #close} ends the region, renders the executed assembly into
+     * {@link #path}, and — when {@code emit} — writes it to stdout. The C core flags the
+     * trace {@code truncated} on a cross-thread close (§0.2/§1). Live managed-JIT tracing
+     * (the runtime's own methods) needs PT/LBR or the out-of-process ptrace stepper — a
+     * forward-look managed-tier capability; this scope traces a known native leaf today.
+     */
+    public static final class AsmTrace implements AutoCloseable {
+        private final Arena arena;
+        private final MemorySegment nameSeg;
+        private final MemorySegment handle;
+        private final String name;
+        private final boolean emit;
+        private boolean armed;
+        private boolean truncated;
+        private String path = "";
+
+        private AsmTrace(NativeCode code, boolean emit, String name) {
+            this.arena = Arena.ofConfined();
+            this.name = name;
+            this.emit = emit;
+            try {
+                this.nameSeg = str(arena, name);
+                this.handle = (MemorySegment) TRACE_NEW.invoke(256L, 64L);
+                // Register-then-begin under the same generated name (Core §0.4 idempotent).
+                REGISTER_REGION.invoke(nameSeg, MemorySegment.ofAddress(code.base()),
+                    code.length(), handle);
+                this.armed = ((int) HW_TRY_BEGIN.invoke(nameSeg)) == ASMTEST_HW_OK;
+            } catch (Throwable t) { arena.close(); throw rethrow(t); }
+        }
+
+        /** Open a scope tracing {@code code}, emitting the rendered listing on close. */
+        public static AsmTrace scope(NativeCode code) {
+            return new AsmTrace(code, true, autoName());
+        }
+
+        /** Open a scope tracing {@code code}; {@code emit} gates the stdout write. */
+        public static AsmTrace scope(NativeCode code, boolean emit) {
+            return new AsmTrace(code, emit, autoName());
+        }
+
+        private static String autoName() {
+            // stack: [0]=autoName, [1]=scope(...), [2]=the caller.
+            var f = StackWalker.getInstance().walk(s -> s.skip(2).findFirst().orElse(null));
+            if (f == null) return "asmscope";
+            String file = f.getFileName();
+            String n = (file == null ? "asmscope" : file) + ":" + f.getLineNumber();
+            return n.length() > 63 ? n.substring(n.length() - 63) : n;
+        }
+
+        /** The rendered assembly listing (populated on close). */
+        public String path() { return path; }
+        /** True if the scope armed (a backend was available and try_begin succeeded). */
+        public boolean armed() { return armed; }
+        /** True if the close hopped OS threads / the capture overflowed (§0.2/§1). */
+        public boolean truncated() { return truncated; }
+        /** The auto-generated (or explicit) region name. */
+        public String name() { return name; }
+
+        @Override public void close() {
+            try {
+                HW_END.invoke(nameSeg);
+                int need = (int) HW_RENDER.invoke(nameSeg, MemorySegment.NULL, 0L);
+                if (need > 0) {
+                    MemorySegment buf = arena.allocate(need + 1L);
+                    HW_RENDER.invoke(nameSeg, buf, (long) (need + 1));
+                    this.path = buf.getString(0);
+                }
+                this.truncated = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                if (handle != null && TRACE_FREE != null) TRACE_FREE.invoke(handle);
+            } catch (Throwable t) { throw rethrow(t); }
+            finally { arena.close(); }
+            if (emit && path != null && !path.isEmpty()) System.out.print(path);
+        }
     }
 
     // ---- Out-of-process / foreign-process tracing toolkit (asmtest_ptrace.h) ----

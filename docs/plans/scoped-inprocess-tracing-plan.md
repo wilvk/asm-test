@@ -31,6 +31,14 @@ The **only genuinely new** engineering is a small shared C/decode core plus thin
 per-language shims — the split this plan's [three slice plans](#the-slice-plans)
 own.
 
+> **Status: core + bindings landed; managed tier partial.** The shared-core slice
+> (Core §0/§1/§2/§3) and its host-testable deliverables, the full **bindings slice**
+> (scope construct across all eight tiers + the .NET reference), and the managed
+> slice's **§D4 merge core / §D1 Node / §D2 Java** halves are implemented and green;
+> the live managed-JIT capability (§D0/§D3 + the per-runtime async-hop hooks) and the
+> PT-hardware-gated live capture remain forward-look. Full accounting:
+> [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
+>
 > Status legend: **planned** unless noted. Update this file (and the slice files)
 > as slices land, the way
 > [hardware-trace-plan.md](hardware-trace-plan.md) and

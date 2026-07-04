@@ -243,6 +243,13 @@ def _declare(lib):
     lib.asmtest_hwtrace_register_region.restype = ci
     lib.asmtest_hwtrace_begin.argtypes = [cc]
     lib.asmtest_hwtrace_end.argtypes = [cc]
+    # Scoped-tracing shared core (§0/§1): error-returning begin, render-on-close,
+    # arming-thread accessor.
+    lib.asmtest_hwtrace_try_begin.argtypes = [cc]
+    lib.asmtest_hwtrace_try_begin.restype = ci
+    lib.asmtest_hwtrace_render.argtypes = [cc, cc, sz]
+    lib.asmtest_hwtrace_render.restype = ci
+    lib.asmtest_hwtrace_arm_tid.restype = ci
     lib.asmtest_hwtrace_shutdown.restype = None
     lib.asmtest_hwtrace_exec_alloc.argtypes = [v, sz, C.POINTER(v), C.POINTER(sz)]
     lib.asmtest_hwtrace_exec_alloc.restype = ci
@@ -430,6 +437,83 @@ class _Region:
         return False
 
 
+_scope_counter = 0
+
+
+def _auto_name(depth):
+    """A call-site region name for a self-naming scope: ``basename:line`` from the
+    caller's frame (basename to dodge the 64-char C name ceiling / path aliasing).
+    ``sys._getframe`` is CPython-only, so degrade to a collision-resistant synthetic
+    label on other implementations rather than aliasing distinct sites to one slot."""
+    global _scope_counter
+    _scope_counter += 1
+    try:
+        import os as _os
+        import sys as _sys
+        f = _sys._getframe(depth)
+        return f"{_os.path.basename(f.f_code.co_filename)}:{f.f_lineno}"
+    except (ValueError, AttributeError):
+        return f"asmscope#{_scope_counter}"
+
+
+class _ScopedTrace:
+    """A ``with`` scope over the register-then-begin/end pair with the shared-core
+    render-on-close: it auto-names from the call site, brackets ``try_begin``/``end``
+    (a nonzero ``try_begin`` is a clean self-skip, never an error), always renders to
+    populate :attr:`path`, and — when ``emit`` — writes that text to stdout (or a
+    tid-suffixed file on an explicit ``sink``, so concurrent same-named scopes neither
+    clobber nor interleave). The C core flags the trace ``truncated`` if the close
+    hops OS threads (§0.2/§1), so :attr:`truncated` is the honest thread-scope check."""
+
+    def __init__(self, lib, handle, name, emit, sink):
+        self._lib = lib
+        self._handle = handle
+        self._name = name.encode()
+        self._name_str = name
+        self.name = name
+        self._emit = emit
+        self._sink = sink
+        self.armed = False
+        self.path = None
+        self.truncated = False
+
+    def __enter__(self):
+        rc = int(self._lib.asmtest_hwtrace_try_begin(self._name))
+        self.armed = (rc == ASMTEST_HW_OK)  # nonzero -> clean self-skip
+        return self
+
+    def __exit__(self, *exc):
+        self._lib.asmtest_hwtrace_end(self._name)
+        # Always render (size-then-allocate) to populate .path — emit only gates the
+        # sink write, not producing .path.
+        need = int(self._lib.asmtest_hwtrace_render(self._name, None, 0))
+        if need > 0:
+            buf = C.create_string_buffer(need + 1)
+            self._lib.asmtest_hwtrace_render(self._name, buf, need + 1)
+            self.path = buf.value.decode(errors="replace")
+        else:
+            self.path = ""
+        # Capture the thread-scope honesty bit BEFORE freeing the handle.
+        self.truncated = bool(
+            self._lib.asmtest_emu_trace_truncated(self._handle))
+        if self._emit and self.path:
+            if self._sink:
+                import os as _os
+                import threading as _th
+                fn = self._sink if isinstance(self._sink, str) \
+                    else f"asmtrace-{self._name_str}.txt"
+                base, ext = _os.path.splitext(fn)
+                with open(f"{base}-{_th.get_native_id()}{ext or '.txt'}", "w") as f:
+                    f.write(self.path)
+            else:
+                print(self.path, end="")
+        # The region keeps a stale pointer to this handle; a re-entry of the same
+        # auto-named site refreshes it (Core §0.4) before the next begin, so freeing
+        # here is safe for the one-shot scope.
+        self._lib.asmtest_trace_free(self._handle)
+        return False
+
+
 class HwTrace:
     """A coverage recorder for a registered native region, via the hardware tier."""
 
@@ -506,10 +590,49 @@ class HwTrace:
         rc = lib.asmtest_hwtrace_init(C.byref(opts))
         if rc != ASMTEST_HW_OK:
             raise RuntimeError(f"asmtest_hwtrace_init failed: {rc}")
+        cls._scope_armed = True
+
+    _scope_armed = False
+
+    @classmethod
+    def _lazy_arm(cls):
+        """Lazy first-scope arm: mere import claims no capture slot / installs no
+        SIGTRAP handler; the tier comes up on first scope entry (auto-selecting the
+        most-faithful available backend, single-step on any x86-64 Linux)."""
+        if not cls._scope_armed:
+            b = cls.auto()
+            if b >= 0:
+                try:
+                    cls.init(b)
+                except RuntimeError:
+                    pass
+            cls._scope_armed = True
+
+    @classmethod
+    def scope(cls, code: "NativeCode", name=None, emit=True, sink=None,
+              blocks=64, instructions=256) -> "_ScopedTrace":
+        """A ``with`` scope around a traced native region — the *import + scope*
+        surface. ``code`` is the region being traced (registered under the auto-name);
+        ``name`` defaults to a ``basename:line`` call-site label. On close the executed
+        assembly is rendered to :attr:`_ScopedTrace.path` and (when ``emit``) printed to
+        stdout, or written to a tid-suffixed file on an explicit ``sink``. Arms lazily
+        on first use; self-skips cleanly where no backend is available."""
+        lib = _get()
+        cls._lazy_arm()
+        if name is None:
+            name = _auto_name(2)  # the caller's frame
+        handle = lib.asmtest_trace_new(instructions, blocks)
+        if not handle:
+            raise RuntimeError("asmtest_trace_new returned NULL")
+        # Register-then-begin under the same generated name (Core §0.4 idempotent).
+        lib.asmtest_hwtrace_register_region(
+            name.encode(), code.base, code.length, handle)
+        return _ScopedTrace(lib, handle, name, emit, sink)
 
     @staticmethod
     def shutdown():
         _get().asmtest_hwtrace_shutdown()
+        HwTrace._scope_armed = False
 
     # ---- per-trace ----
     @classmethod

@@ -115,6 +115,29 @@ int main() {
         code.free();
     }
 
+    // ---- ScopedTrace: RAII scope with auto-name + render-on-close ----
+    {
+        NativeCode code = NativeCode::from_bytes(ROUTINE);
+        std::string rendered;
+        std::string nm;
+        {
+            asmtest::ScopedTrace t(code, &rendered, /*emit=*/false);
+            code.call(20, 22);
+            nm = t.name();
+        } // dtor: end + render into `rendered`
+        std::size_t lines = 0;
+        for (char c : rendered)
+            if (c == '\n')
+                ++lines;
+        ok(!rendered.empty(), "ScopedTrace: render-on-close produced text");
+        ok(lines == 5, "ScopedTrace: 5 rendered instruction lines (matches insns)");
+        ok(rendered.find("ret") != std::string::npos,
+           "ScopedTrace: rendered listing includes the ret");
+        ok(nm.rfind("test_hwtrace.cpp:", 0) == 0,
+           "ScopedTrace: auto-name is basename:line from the call site");
+        code.free();
+    }
+
     HwTrace::shutdown();
 
     // ---- auto-select front-end: pick the most-faithful available backend ----

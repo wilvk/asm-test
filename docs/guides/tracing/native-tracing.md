@@ -326,6 +326,14 @@ if (asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
 }
 ```
 
+`asmtest_hwtrace_begin` is a thin, status-discarding wrapper over
+`asmtest_hwtrace_try_begin(name)` — the scoped-tracing shared core (see
+[Hardware tracing → scoped-tracing primitives](hardware-tracing.md#scoped-tracing-primitives-the-shared-core-0-surface))
+— which returns a negative `ASMTEST_HW_*` on a busy slot or an unregistered name so a
+`using`/RAII scope object gets a signal instead of a silent no-op. Pair it with
+`asmtest_hwtrace_render` to turn a closed region's offsets into disassembly text on
+scope close.
+
 The Intel PT capture and libipt decode are implemented; the CoreSight backend is a
 documented scaffold pending AArch64 board access (it always self-skips until
 completed). The Intel-PT/CoreSight hardware capture **cannot run on standard CI** —

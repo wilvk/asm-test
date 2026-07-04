@@ -6,6 +6,7 @@
  * with libbpf and run with CAP_BPF (the `make docker-hwtrace-codeimage` lane).
  */
 #include "asmtest_codeimage.h"
+#include "asmtest_trace.h" /* asmtest_disas: the bytes_at-through-decoder round-trip */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -105,6 +106,22 @@ static void test_codeimage_temporal(void) {
 
     rc = asmtest_codeimage_bytes_at(img, p + ps, 0, &b, &bl);
     CHECK(rc == ASMTEST_CI_ENOENT, "codeimage: untracked address -> ENOENT");
+
+    /* §2 round-trip: disassemble the bytes_at-served bytes and confirm the temporal
+     * version drives a version-correct decode. A's insn at offset 3 is `add`, B's is
+     * `sub`, so the two versions must disassemble differently at the SAME address. */
+    if (asmtest_disas_available()) {
+        const uint8_t *ba = NULL, *bb = NULL;
+        size_t la = 0, lb = 0;
+        asmtest_codeimage_bytes_at(img, p, t0, &ba, &la);
+        asmtest_codeimage_bytes_at(img, p, t1, &bb, &lb);
+        char da[64], db[64];
+        uint64_t ip = (uint64_t)(uintptr_t)p;
+        asmtest_disas(ASMTEST_ARCH_X86_64, ba, la, ip, 3, da, sizeof da);
+        asmtest_disas(ASMTEST_ARCH_X86_64, bb, lb, ip, 3, db, sizeof db);
+        CHECK(da[0] != '\0' && db[0] != '\0' && strcmp(da, db) != 0,
+              "codeimage: t0 (add) and t1 (sub) decode differently at one address");
+    }
 
     asmtest_codeimage_free(img);
     munmap(p, (size_t)ps);

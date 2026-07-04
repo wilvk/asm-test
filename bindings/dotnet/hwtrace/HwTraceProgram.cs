@@ -126,6 +126,25 @@ static class HwTraceProgram
             tr2.Free();
             code2.Free();
 
+            // --- reference shim: AsmTrace (using scope + auto-name + render) --- //
+            // Statement form so Dispose-populated Path/Truncated are readable after.
+            var code3 = NativeCode.FromBytes(ROUTINE);
+            long r3 = 0;
+            AsmTrace scope;
+            using (scope = new AsmTrace(code3, emit: false)) // auto-name at THIS line
+            {
+                r3 = code3.Call(20, 22);
+            }
+            Check(r3 == 42, $"AsmTrace: add2(20,22) == 42 (got {r3})");
+            Check(scope.Armed, "AsmTrace: armed on an available backend");
+            Check(scope.Path != null && scope.Path.Length > 0, "AsmTrace: render-on-close produced text");
+            int r3Lines = scope.Path.Split('\n').Length - 1;
+            Check(r3Lines == 5, $"AsmTrace: 5 rendered instruction lines (got {r3Lines})");
+            Check(scope.Path.Contains("ret"), "AsmTrace: rendered listing includes the ret");
+            Check(!scope.Truncated, "AsmTrace: not truncated");
+            Check(scope.Name.Contains(":"), $"AsmTrace: auto-name is member:line (got {scope.Name})");
+            code3.Free();
+
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
             // only available backends in ascending-enum order with no dups;

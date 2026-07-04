@@ -16,6 +16,16 @@ this slice targets the use every binding already supports — a scope around an
 asm-test-generated / P/Invoked **native region**, captured by single-step (any
 x86-64 Linux) or available hardware trace.
 
+> **Status: DONE across all eight tiers + the .NET reference.** The scope construct +
+> auto-name + `try_begin` arm signal + render-on-close + thread-scope truncated bit are
+> implemented and tested in every binding: Python (`HwTrace.scope`), C++
+> (`ScopedTrace`), Zig (`Scope`/`deinit`), Ruby (`scope`), Lua (`scope`), Rust
+> (`HwTrace::scope` → `ScopedTrace`), Go (`Scope` + `LockOSThread` + fan-out gap), and
+> the .NET reference `AsmTrace : IDisposable` (`[CallerMemberName]`/`[CallerLineNumber]`).
+> Each per-binding `hwtrace-<lang>-test` lane's scope case passes green (see the
+> implementation summary at
+> [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md)).
+>
 > Status legend: **planned** unless noted. .NET's `Region(Action)` and the other
 > nine `region(name, fn)` helpers already ship (see anchors below); this slice adds
 > the *scope object*, *auto-name*, *arm hook*, *thread-id assert*, and *emit-on-close*

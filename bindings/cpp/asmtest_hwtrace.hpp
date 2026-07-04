@@ -43,6 +43,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -171,6 +173,11 @@ struct HwApi {
     int (*register_region)(const char *, void *, size_t, void *) = nullptr;
     void (*begin)(const char *) = nullptr;
     void (*end)(const char *) = nullptr;
+    /* Scoped-tracing shared core (§0/§1): error-returning begin, render-on-close,
+     * arming-thread accessor. Non-gated (an older lib without them still loads). */
+    int (*try_begin)(const char *) = nullptr;
+    int (*render)(const char *, char *, size_t) = nullptr;
+    int (*arm_tid)() = nullptr;
     void (*shutdown)(void) = nullptr;
     int (*exec_alloc)(const void *, size_t, void **, size_t *) = nullptr;
     void (*exec_free)(void *, size_t) = nullptr;
@@ -306,6 +313,10 @@ inline HwApi &api() {
                          t.register_region);
         ok &= dlsym_into(h, "asmtest_hwtrace_begin", t.begin);
         ok &= dlsym_into(h, "asmtest_hwtrace_end", t.end);
+        /* Non-gated: the scope construct falls back to begin/end when absent. */
+        dlsym_into(h, "asmtest_hwtrace_try_begin", t.try_begin);
+        dlsym_into(h, "asmtest_hwtrace_render", t.render);
+        dlsym_into(h, "asmtest_hwtrace_arm_tid", t.arm_tid);
         ok &= dlsym_into(h, "asmtest_hwtrace_shutdown", t.shutdown);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_alloc", t.exec_alloc);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_free", t.exec_free);
@@ -521,6 +532,98 @@ class RegionScope {
 
     std::string name_;
     bool active_;
+};
+
+namespace detail {
+/// Build a call-site region name `basename:line` (basename dodges the 64-char C
+/// name ceiling and full-path aliasing under Core §0.4's by-name registry).
+inline std::string scope_name(const char *file, int line) {
+    const char *base = file ? file : "?";
+    if (const char *slash = std::strrchr(base, '/'))
+        base = slash + 1;
+    std::string n(base);
+    n += ':';
+    n += std::to_string(line);
+    if (n.size() > 63)
+        n = n.substr(n.size() - 63); /* keep the distinguishing tail */
+    return n;
+}
+} // namespace detail
+
+/// RAII scope over the register-then-begin/end pair with the shared-core
+/// render-on-close. It auto-names from the CALL SITE via the
+/// __builtin_FUNCTION/FILE/LINE default arguments (evaluated where the object is
+/// constructed — the C++17 floor; `std::source_location` needs C++20), brackets
+/// `try_begin`/`end` (a nonzero try_begin is a clean self-skip), and — in a
+/// **noexcept** destructor (never throw / abort from a dtor) — renders the executed
+/// assembly into `path()` and, when `emit`, writes it to stdout. The C core flags the
+/// trace `truncated` on a cross-thread close (§0.2/§1), surfaced via `truncated()`.
+class ScopedTrace {
+  public:
+    /// `out` (optional) receives the rendered listing on close, so it is readable
+    /// after the RAII scope ends (the render happens in the destructor); `emit`
+    /// additionally writes it to stdout.
+    explicit ScopedTrace(const NativeCode &code, std::string *out = nullptr,
+                         bool emit = true, const char *file = __builtin_FILE(),
+                         int line = __builtin_LINE())
+        : name_(detail::scope_name(file, line)), out_(out), emit_(emit) {
+        detail::HwApi &a = detail::require();
+        handle_ = a.trace_new(256, 64);
+        if (handle_ != nullptr)
+            a.register_region(name_.c_str(), code.base(), code.length(), handle_);
+        if (a.try_begin != nullptr)
+            active_ = (a.try_begin(name_.c_str()) == 0);
+        else {
+            a.begin(name_.c_str());
+            active_ = true;
+        }
+    }
+    ScopedTrace(const ScopedTrace &) = delete;
+    ScopedTrace &operator=(const ScopedTrace &) = delete;
+
+    ~ScopedTrace() noexcept {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded()) {
+            if (handle_ != nullptr && a.trace_free)
+                a.trace_free(handle_);
+            return;
+        }
+        a.end(name_.c_str());
+        if (a.render != nullptr) {
+            int need = a.render(name_.c_str(), nullptr, 0);
+            if (need > 0) {
+                path_.resize(static_cast<std::size_t>(need));
+                a.render(name_.c_str(), &path_[0],
+                         static_cast<std::size_t>(need) + 1);
+            }
+        }
+        if (a.trace_truncated != nullptr && handle_ != nullptr)
+            truncated_ = a.trace_truncated(handle_) != 0;
+        if (out_ != nullptr)
+            *out_ = path_;
+        if (emit_ && !path_.empty())
+            std::fputs(path_.c_str(), stdout);
+        if (handle_ != nullptr && a.trace_free != nullptr)
+            a.trace_free(handle_);
+    }
+
+    /// The rendered assembly listing (populated on close; empty if unavailable).
+    const std::string &path() const { return path_; }
+    /// True if the scope was armed (a backend was available and try_begin succeeded).
+    bool armed() const { return active_; }
+    /// True if the close hopped OS threads / the capture overflowed (Core §0.2/§1).
+    bool truncated() const { return truncated_; }
+    /// The auto-generated (or explicit) region name.
+    const std::string &name() const { return name_; }
+
+  private:
+    std::string name_;
+    std::string path_;
+    void *handle_ = nullptr;
+    std::string *out_;
+    bool emit_;
+    bool active_ = false;
+    bool truncated_ = false;
 };
 
 /// A coverage recorder for a registered native region, via the hardware tier.

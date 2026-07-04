@@ -54,6 +54,43 @@ def test_singlestep_live_trace(hwtrace):
     code.free()
 
 
+def test_scoped_trace_matches_callback(hwtrace):
+    # The scope object is a faithful wrapper of the callback region() form: it
+    # produces the same offsets, renders the assembly on close, and auto-names from
+    # the call site.
+    code = NativeCode.from_bytes(ROUTINE)
+
+    # Callback form: 5 in-region instructions for add2(20,22).
+    cb = HwTrace.new(blocks=64, instructions=64)
+    cb.register("cb_add2", code)
+    with cb.region("cb_add2"):
+        r_cb = code.call(20, 22)
+    assert r_cb == 42
+    assert cb.insns_total() == 5
+    cb.free()
+
+    # Scope form over the same routine: rendered non-empty, one line per insn.
+    with HwTrace.scope(code, name="sc_add2", emit=False) as t:
+        r_sc = code.call(20, 22)
+    assert r_sc == 42
+    assert t.armed
+    assert not t.truncated
+    assert t.path and t.path.count("\n") == 5  # 5 rendered instruction lines
+    assert "ret" in t.path.lower()
+
+    code.free()
+
+
+def test_scoped_trace_auto_name(hwtrace):
+    # The generated region name reflects the enclosing file + line (CPython frame
+    # walk); degrades to a synthetic label off CPython.
+    code = NativeCode.from_bytes(ROUTINE)
+    with HwTrace.scope(code, emit=False) as t:
+        code.call(20, 22)
+    assert t.name.startswith("test_hwtrace.py:") or t.name.startswith("asmscope#")
+    code.free()
+
+
 def test_singlestep_loop_no_depth_ceiling(hwtrace):
     # mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
     loop = bytes([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,

@@ -19,6 +19,7 @@
 // ASMTEST_HWTRACE_LIB -> <repo>/build/libasmtest_hwtrace.so -> NativeLibrary.Load.
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Asmtest
@@ -202,6 +203,12 @@ namespace Asmtest
         public static extern void asmtest_hwtrace_begin([MarshalAs(UnmanagedType.LPStr)] string name);
         [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
         public static extern void asmtest_hwtrace_end([MarshalAs(UnmanagedType.LPStr)] string name);
+        // Scoped-tracing shared core (§0/§1): error-returning begin, render-on-close.
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_hwtrace_try_begin([MarshalAs(UnmanagedType.LPStr)] string name);
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_hwtrace_render([MarshalAs(UnmanagedType.LPStr)] string name, byte[] buf, UIntPtr buflen);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_arm_tid();
 
         // ---- host-native executable code (out-param form, NOT a struct) ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_exec_alloc(
@@ -953,6 +960,81 @@ namespace Asmtest
         }
 
         public override string ToString() => $"DescentEdge(site=0x{Site:x}, target=0x{Target:x}, depth={Depth})";
+    }
+
+    /// <summary>
+    /// The reference scoped-trace construct — an <see cref="IDisposable"/> over the
+    /// register-then-begin/end pair with the shared-core render-on-close. Use it as
+    /// <c>using (new AsmTrace(code)) { HotPath(data); }</c>: the constructor auto-names
+    /// from the call site (<c>[CallerMemberName]</c> + <c>[CallerLineNumber]</c>),
+    /// registers the traced range, and brackets <c>try_begin</c> (a nonzero return is a
+    /// clean self-skip); <see cref="Dispose"/> ends the region, always renders to
+    /// populate <see cref="Path"/>, and — when <c>emit</c> — writes that text to stdout.
+    /// Requires the tier to be up (<see cref="HwTrace.Init"/>); the C core flags the
+    /// trace <c>truncated</c> on a cross-thread close (§0.2/§1), surfaced via
+    /// <see cref="Truncated"/>. On <c>net8.0</c> with <c>&lt;Nullable&gt;disable&lt;/Nullable&gt;</c>
+    /// the caller-info parameters are unannotated <c>string</c> (a <c>?</c> would emit
+    /// CS8632). A <c>[ModuleInitializer]</c> arm-on-import is the documented ergonomic
+    /// optimisation on top (the real slot/SIGTRAP arming stays lazy at first scope,
+    /// which is also why CA2255 is safe to suppress for a library ship).
+    /// </summary>
+    public sealed class AsmTrace : IDisposable
+    {
+        readonly string _name;
+        readonly IntPtr _handle;
+        readonly bool _emit;
+        bool _disposed;
+
+        /// <summary>The rendered assembly listing (populated on close).</summary>
+        public string Path { get; private set; }
+        /// <summary>True if the scope armed (a backend was available and try_begin succeeded).</summary>
+        public bool Armed { get; private set; }
+        /// <summary>True if the close hopped OS threads / the capture overflowed (§0.2/§1).</summary>
+        public bool Truncated { get; private set; }
+        /// <summary>The auto-generated (or explicit) region name.</summary>
+        public string Name => _name;
+
+        public AsmTrace(NativeCode code, bool emit = true,
+                        [CallerMemberName] string member = null,
+                        [CallerLineNumber] int line = 0)
+        {
+            _name = ScopeName(member, line);
+            _emit = emit;
+            _handle = HwNative.asmtest_trace_new((UIntPtr)256, (UIntPtr)64);
+            if (_handle != IntPtr.Zero)
+                HwNative.asmtest_hwtrace_register_region(_name, code.Base, (UIntPtr)code.Length, _handle);
+            // Register-then-begin under the same generated name (Core §0.4 idempotent).
+            Armed = HwNative.asmtest_hwtrace_try_begin(_name) == HwNative.ASMTEST_HW_OK;
+        }
+
+        static string ScopeName(string member, int line)
+        {
+            string n = $"{member}:{line}";
+            return n.Length > 63 ? n.Substring(n.Length - 63) : n;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            HwNative.asmtest_hwtrace_end(_name);
+            // Always render (size-then-allocate) to populate Path — emit gates only the
+            // sink write, not producing Path.
+            int need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+            if (need > 0)
+            {
+                byte[] buf = new byte[need + 1];
+                HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
+                Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+            }
+            else Path = "";
+            if (_handle != IntPtr.Zero)
+            {
+                Truncated = HwNative.asmtest_emu_trace_truncated(_handle) != 0;
+                HwNative.asmtest_trace_free(_handle);
+            }
+            if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
+        }
     }
 
     /// <summary>

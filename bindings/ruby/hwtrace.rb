@@ -191,6 +191,9 @@ module Asmtest
         register:     func(LIB, "asmtest_hwtrace_register_region", [VOIDP, VOIDP, SZ, VOIDP], INT),
         trace_begin:  func(LIB, "asmtest_hwtrace_begin", [VOIDP], VOID),
         trace_end:    func(LIB, "asmtest_hwtrace_end", [VOIDP], VOID),
+        # scoped-tracing shared core (§0/§1): error-returning begin + render-on-close
+        try_begin:    func(LIB, "asmtest_hwtrace_try_begin", [VOIDP], INT),
+        render:       func(LIB, "asmtest_hwtrace_render", [VOIDP, VOIDP, SZ], INT),
         # ---- host-native executable code ----
         exec_alloc:   func(LIB, "asmtest_hwtrace_exec_alloc", [VOIDP, SZ, VOIDP, VOIDP], INT),
         exec_free:    func(LIB, "asmtest_hwtrace_exec_free", [VOIDP, SZ], VOID),
@@ -709,6 +712,56 @@ module Asmtest
         ensure
           Asmtest::HwTrace::FN[:trace_end].call(name)
         end
+      end
+
+      # Result of a #scope: the auto-generated name, the rendered assembly listing,
+      # whether the scope armed, and the thread-scope honesty bit (truncated on a
+      # cross-thread close / overflow, Core §0.2/§1).
+      ScopeResult = Struct.new(:name, :path, :armed, :truncated)
+
+      # A block scope over the register-then-begin/end pair with the shared-core
+      # render-on-close — the block form of the *import + scope* surface. +code+ is the
+      # traced region; the region name auto-generates as +basename:line+ from
+      # +caller_locations+ (override with +name:+). Renders the executed assembly on
+      # close and (when +emit+) prints it. The C core flags the trace truncated if the
+      # +ensure+ ran on a different OS thread than begin (Ractors / the 3.3+ M:N
+      # scheduler; fibers never migrate) — the tid-assert backstop. Returns a
+      # ScopeResult. The block runs even if it raises (the ensure closes the region).
+      def scope(code, emit: true, name: nil)
+        name ||= self.class.__scope_name(caller_locations(1, 1)&.first)
+        register(name, code)
+        # Register-then-begin under the same generated name (Core §0.4 idempotent);
+        # a nonzero try_begin is a clean self-skip.
+        armed = Asmtest::HwTrace::FN[:try_begin].call(name) == OK
+        begin
+          yield
+        ensure
+          Asmtest::HwTrace::FN[:trace_end].call(name)
+        end
+        path = self.class.__render_region(name)
+        Kernel.print(path) if emit && !path.empty?
+        ScopeResult.new(name, path, armed, truncated?)
+      end
+
+      # basename:line call-site name (basename dodges the 64-char C name ceiling and
+      # full-path aliasing under Core §0.4's by-name registry).
+      def self.__scope_name(loc)
+        return "asmscope" unless loc
+        n = "#{File.basename(loc.path)}:#{loc.lineno}"
+        n.length > 63 ? n[-63..] : n
+      end
+
+      # Render the named region's recorded instructions to assembly text (size-then-
+      # allocate); "" if the decoder is unavailable.
+      def self.__render_region(name)
+        need = Asmtest::HwTrace::FN[:render].call(name, Fiddle::NULL, 0)
+        return "" if need <= 0
+        buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
+        buf[0, need + 1] = "\x00".b * (need + 1)
+        Asmtest::HwTrace::FN[:render].call(name, buf, need + 1)
+        s = buf.to_s(need)
+        Fiddle.free(buf.to_i)
+        s
       end
 
       # True if the basic block at byte-offset +off+ (from the region entry) was entered.

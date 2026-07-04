@@ -67,6 +67,8 @@ typedef int    (*hw_trace_auto_fn)(unsigned, asmtest_trace_choice_t *);
 typedef int  (*hw_init_fn)(const asmtest_hwtrace_options_t *);
 typedef int  (*hw_register_fn)(const char *, void *, size_t, void *);
 typedef void (*hw_marker_fn)(const char *);
+typedef int  (*hw_try_begin_fn)(const char *);
+typedef int  (*hw_render_fn)(const char *, char *, size_t);
 typedef void (*hw_shutdown_fn)(void);
 typedef int  (*hw_exec_alloc_fn)(const void *, size_t, void **, size_t *);
 typedef void (*hw_exec_free_fn)(void *, size_t);
@@ -168,6 +170,8 @@ static hw_init_fn             p_hw_init;
 static hw_register_fn         p_hw_register;
 static hw_marker_fn           p_hw_begin;
 static hw_marker_fn           p_hw_end;
+static hw_try_begin_fn        p_hw_try_begin;
+static hw_render_fn           p_hw_render;
 static hw_shutdown_fn         p_hw_shutdown;
 static hw_exec_alloc_fn       p_hw_exec_alloc;
 static hw_exec_free_fn        p_hw_exec_free;
@@ -262,6 +266,8 @@ static void asmtest_hw_resolve(void) {
     p_hw_register        = (hw_register_fn)dlsym(h, "asmtest_hwtrace_register_region");
     p_hw_begin           = (hw_marker_fn)dlsym(h, "asmtest_hwtrace_begin");
     p_hw_end             = (hw_marker_fn)dlsym(h, "asmtest_hwtrace_end");
+    p_hw_try_begin       = (hw_try_begin_fn)dlsym(h, "asmtest_hwtrace_try_begin");
+    p_hw_render          = (hw_render_fn)dlsym(h, "asmtest_hwtrace_render");
     p_hw_shutdown        = (hw_shutdown_fn)dlsym(h, "asmtest_hwtrace_shutdown");
     p_hw_exec_alloc      = (hw_exec_alloc_fn)dlsym(h, "asmtest_hwtrace_exec_alloc");
     p_hw_exec_free       = (hw_exec_free_fn)dlsym(h, "asmtest_hwtrace_exec_free");
@@ -394,6 +400,16 @@ static int  asmtest_hw_go_register(const char *name, void *base, size_t len, voi
 }
 static void asmtest_hw_go_begin(const char *name) { if (p_hw_begin) p_hw_begin(name); }
 static void asmtest_hw_go_end(const char *name)   { if (p_hw_end) p_hw_end(name); }
+// Scoped-tracing shared core (§0/§1): error-returning begin (falls back to void
+// begin -> 0 when absent) + render-on-close.
+static int  asmtest_hw_go_try_begin(const char *name) {
+    if (p_hw_try_begin) return p_hw_try_begin(name);
+    if (p_hw_begin) { p_hw_begin(name); return 0; }
+    return -1;
+}
+static int  asmtest_hw_go_render(const char *name, char *buf, size_t buflen) {
+    return p_hw_render ? p_hw_render(name, buf, buflen) : -5;
+}
 static void asmtest_hw_go_shutdown(void) { if (p_hw_shutdown) p_hw_shutdown(); }
 static int  asmtest_hw_go_exec_alloc(const void *bytes, size_t len, void **base_out, size_t *len_out) {
     return p_hw_exec_alloc ? p_hw_exec_alloc(bytes, len, base_out, len_out) : -1;
@@ -827,6 +843,83 @@ func (t *HwTrace) Region(name string, fn func()) {
 	t.Begin(name)
 	defer t.End(name)
 	fn()
+}
+
+// scopeName builds a call-site region name "basename:line" (basename dodges the
+// 64-char C name ceiling and full-path aliasing under Core §0.4's by-name registry).
+func scopeName(file string, line int) string {
+	base := file
+	for i := len(file) - 1; i >= 0; i-- {
+		if file[i] == '/' {
+			base = file[i+1:]
+			break
+		}
+	}
+	n := fmt.Sprintf("%s:%d", base, line)
+	if len(n) > 63 {
+		n = n[len(n)-63:]
+	}
+	return n
+}
+
+// renderRegion renders the named region's recorded instructions to assembly text
+// (size-then-allocate); "" if the decoder is unavailable.
+func renderRegion(name string) string {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	need := int(C.asmtest_hw_go_render(cs, (*C.char)(nil), 0))
+	if need <= 0 {
+		return ""
+	}
+	buf := make([]byte, need+1)
+	C.asmtest_hw_go_render(cs, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	return string(buf[:need])
+}
+
+// ScopedResult carries a Scope's outcome: the auto-generated region name, the
+// rendered assembly listing, whether the scope armed, and the thread-scope honesty
+// bit (truncated on a cross-thread close / capture overflow, Core §0.2/§1).
+type ScopedResult struct {
+	Name      string
+	Path      string
+	Armed     bool
+	Truncated bool
+}
+
+// Scope traces fn over the native code, auto-naming from the call site
+// (runtime.Caller) and returning the rendered assembly on close — the closure form of
+// the *import + scope* surface (Go has no RAII). LockOSThread pins the goroutine so
+// the per-thread single-step capture stays on ONE OS thread (released after End).
+//
+// WORK FANNED OUT via `go func()` inside fn runs on OTHER OS threads and is SILENTLY
+// UNTRACED — the scope confines the trace to the arming thread. The §0.2 tid assert
+// is a backstop only for an End that ran on the wrong thread, NOT a fan-out detector.
+// End runs even if fn panics.
+func (t *HwTrace) Scope(code *HwNativeCode, emit bool, fn func()) ScopedResult {
+	_, file, line, _ := runtime.Caller(1)
+	name := scopeName(file, line)
+	res := ScopedResult{Name: name}
+	// Register-then-begin under the auto-name (Core §0.4 idempotent-by-name).
+	csr := C.CString(name)
+	C.asmtest_hw_go_register(csr, code.base, code.len, t.h)
+	C.free(unsafe.Pointer(csr))
+	runtime.LockOSThread()
+	cs := C.CString(name)
+	res.Armed = C.asmtest_hw_go_try_begin(cs) == 0
+	func() {
+		defer func() {
+			C.asmtest_hw_go_end(cs)
+			C.free(unsafe.Pointer(cs))
+			runtime.UnlockOSThread()
+		}()
+		fn()
+	}()
+	res.Path = renderRegion(name)
+	res.Truncated = t.Truncated()
+	if emit && res.Path != "" {
+		fmt.Print(res.Path)
+	}
+	return res
 }
 
 // Covered reports whether the basic block at byte-offset off (from the region

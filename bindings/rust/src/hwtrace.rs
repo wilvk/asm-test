@@ -214,6 +214,9 @@ type ShutdownFn = unsafe extern "C" fn();
 type RegisterRegionFn =
     unsafe extern "C" fn(*const c_char, *mut c_void, usize, *mut c_void) -> c_int;
 type MarkerFn = unsafe extern "C" fn(*const c_char);
+// Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
+type TryBeginFn = unsafe extern "C" fn(*const c_char) -> c_int;
+type RenderFn = unsafe extern "C" fn(*const c_char, *mut c_char, usize) -> c_int;
 type ExecAllocFn =
     unsafe extern "C" fn(*const c_void, usize, *mut *mut c_void, *mut usize) -> c_int;
 type ExecFreeFn = unsafe extern "C" fn(*mut c_void, usize);
@@ -375,6 +378,8 @@ struct HwFns {
     register_region: Option<RegisterRegionFn>,
     begin: Option<MarkerFn>,
     end: Option<MarkerFn>,
+    try_begin: Option<TryBeginFn>,
+    render: Option<RenderFn>,
     exec_alloc: Option<ExecAllocFn>,
     exec_free: Option<ExecFreeFn>,
     trace_new: Option<TraceNewFn>,
@@ -497,6 +502,7 @@ fn hw_fns() -> &'static HwFns {
                 trace_resolve: None, trace_auto: None,
                 init: None, shutdown: None,
                 register_region: None, begin: None, end: None,
+                try_begin: None, render: None,
                 exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
                 blocks_len: None, insns_total: None, insns_len: None,
@@ -555,6 +561,8 @@ fn hw_fns() -> &'static HwFns {
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
             begin: load!("asmtest_hwtrace_begin", MarkerFn),
             end: load!("asmtest_hwtrace_end", MarkerFn),
+            try_begin: load!("asmtest_hwtrace_try_begin", TryBeginFn),
+            render: load!("asmtest_hwtrace_render", RenderFn),
             exec_alloc: load!("asmtest_hwtrace_exec_alloc", ExecAllocFn),
             exec_free: load!("asmtest_hwtrace_exec_free", ExecFreeFn),
             trace_new: load!("asmtest_trace_new", TraceNewFn),
@@ -731,6 +739,125 @@ impl Drop for Region {
     }
 }
 
+/// Build a call-site region name `basename:line` (basename dodges the 64-char C
+/// name ceiling and full-path aliasing under Core §0.4's by-name registry).
+fn scope_name(file: &str, line: u32) -> String {
+    let base = file.rsplit('/').next().unwrap_or(file);
+    let n = format!("{base}:{line}");
+    if n.len() > 63 {
+        // ASCII path:line, so a byte slice of the tail is on a char boundary.
+        n[n.len() - 63..].to_string()
+    } else {
+        n
+    }
+}
+
+/// A scoped trace over the register-then-begin/end pair with the shared-core
+/// render-on-close. Constructed by [`HwTrace::scope`]: it auto-names from the call
+/// site via `#[track_caller]` + [`Location::caller`](std::panic::Location::caller),
+/// brackets `try_begin`/`end` (a nonzero `try_begin` is a clean self-skip), and on
+/// close renders the executed assembly. Call [`close`](ScopedTrace::close) to end the
+/// scope and take the rendered listing; otherwise `Drop` ends it (emitting to stdout
+/// when `emit`). The C core flags the trace `truncated` on a cross-thread close
+/// (§0.2/§1), surfaced via [`truncated`](ScopedTrace::truncated).
+pub struct ScopedTrace {
+    name: CString,
+    handle: *mut c_void,
+    emit: bool,
+    active: bool,
+    closed: bool,
+    truncated: bool,
+    path: String,
+}
+
+impl ScopedTrace {
+    fn with_name(name: &str, code: &NativeCode, emit: bool) -> ScopedTrace {
+        let cname = CString::new(name).expect("scope name has interior NUL");
+        let f = hw_fns();
+        let handle = f
+            .trace_new
+            .map(|g| unsafe { g(256, 64) })
+            .unwrap_or(std::ptr::null_mut());
+        if let Some(reg) = f.register_region {
+            unsafe {
+                reg(cname.as_ptr(), code.base() as *mut c_void, code.len(), handle);
+            }
+        }
+        let active = if let Some(tb) = f.try_begin {
+            unsafe { tb(cname.as_ptr()) == 0 } // nonzero -> clean self-skip
+        } else if let Some(b) = f.begin {
+            unsafe { b(cname.as_ptr()) };
+            true
+        } else {
+            false
+        };
+        ScopedTrace { name: cname, handle, emit, active, closed: false, truncated: false, path: String::new() }
+    }
+
+    /// True if the scope armed (a backend was available and `try_begin` succeeded).
+    pub fn armed(&self) -> bool {
+        self.active
+    }
+
+    /// The auto-generated (or explicit) region name.
+    pub fn name(&self) -> &str {
+        self.name.to_str().unwrap_or("")
+    }
+
+    /// True if the close hopped OS threads / the capture overflowed (Core §0.2/§1).
+    /// Meaningful after [`close`](ScopedTrace::close) (or once dropped).
+    pub fn was_truncated(&self) -> bool {
+        self.truncated
+    }
+
+    /// End the scope, render the executed assembly, and return the listing.
+    pub fn close(mut self) -> String {
+        self.finish();
+        std::mem::take(&mut self.path)
+    }
+
+    fn finish(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        let f = hw_fns();
+        if let Some(end) = f.end {
+            unsafe { end(self.name.as_ptr()) };
+        }
+        if let Some(render) = f.render {
+            let need = unsafe { render(self.name.as_ptr(), std::ptr::null_mut(), 0) };
+            if need > 0 {
+                let mut buf = vec![0u8; need as usize + 1];
+                unsafe {
+                    render(self.name.as_ptr(), buf.as_mut_ptr() as *mut c_char, buf.len());
+                }
+                self.path = String::from_utf8_lossy(&buf[..need as usize]).into_owned();
+            }
+        }
+        if let Some(tr) = f.truncated {
+            if !self.handle.is_null() {
+                self.truncated = unsafe { tr(self.handle) != 0 };
+            }
+        }
+        if self.emit && !self.path.is_empty() {
+            print!("{}", self.path);
+        }
+        if let Some(free) = f.trace_free {
+            if !self.handle.is_null() {
+                unsafe { free(self.handle) };
+                self.handle = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
+impl Drop for ScopedTrace {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 /// The process-wide hardware-trace tier: detect, initialize, tear down.
 ///
 /// Bring the tier up once with [`init`](HwTrace::init) /
@@ -887,6 +1014,18 @@ impl HwTrace {
         if let Some(f) = hw_fns().shutdown {
             unsafe { f() };
         }
+    }
+
+    /// A scoped trace around a traced native region — the *import + scope* surface.
+    /// `code` is the region being traced (registered under a `basename:line`
+    /// call-site name captured via `#[track_caller]`); the returned [`ScopedTrace`]
+    /// renders the executed assembly on close. Requires the tier to be up
+    /// ([`init`](HwTrace::init)); self-skips cleanly where no backend is available.
+    #[track_caller]
+    pub fn scope(code: &NativeCode, emit: bool) -> ScopedTrace {
+        let loc = std::panic::Location::caller();
+        let name = scope_name(loc.file(), loc.line());
+        ScopedTrace::with_name(&name, code, emit)
     }
 
     // ---- per-trace ---- //
