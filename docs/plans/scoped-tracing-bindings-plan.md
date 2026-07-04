@@ -48,7 +48,11 @@ cross-language pass):
    region name via `find_region` ([src/hwtrace.c:413](../../src/hwtrace.c#L413),
    [:659](../../src/hwtrace.c#L659)) and silently no-ops on a miss, so an auto-named
    scope must `asmtest_hwtrace_register_region` under its generated name *before*
-   `begin`.
+   `begin`. Because the scope object registers on **every** construction, this is only
+   safe once **Core §0.4** makes `register_region` idempotent-by-name (repeated names
+   reuse one slot, so a looped/sprinkled scope doesn't exhaust the 32-entry table).
+   Shims must treat a nonzero `register_region`/`try_begin` return as a **clean
+   self-skip**, never a hard failure.
 2. **Lazy first-scope arm.** Mere import must not claim the (per-thread, after core
    §1) capture slot or install the single-step SIGTRAP sigaction
    ([src/ss_backend.c:129](../../src/ss_backend.c#L129)). "Arm on import" is
@@ -92,7 +96,9 @@ in the binding today (verified). New work:
   resolution; `[ModuleInitializer]` only front-loads the availability probe.)
 - **Emit contract.** Empty ctor → unconditional render on `Dispose` (a ctor can't
   detect assignment); `emit:false` / `sink:` is the opt-out. This is the analysis's
-  "assume no knowledge" default.
+  "assume no knowledge" default. The default sink is **stdout** (Core §0.3); a file
+  (`asmtrace-<member>.txt`) is used only on an explicit `sink:`, and then tid-suffixed
+  so concurrent same-named scopes don't clobber.
 
 The `AsmTrace.Method(HotPath)` named-method form and its `MethodLoadVerbose`
 address resolution are the [managed slice](scoped-tracing-managed-plan.md)'s
@@ -228,7 +234,11 @@ managed clean path respectively, and the shims inherit them for free once landed
 - **Auto-name via stack walk has per-language edge cases** (inlining, tail calls,
   release-mode frame elision). Compile-time source-location (C++/Zig/Rust) is
   robust; the interpreted stack walks are best-effort — document when the name
-  falls back to a synthetic label.
+  falls back to a synthetic label. **Name *collisions*** (a scope in a loop, or the
+  same site running concurrently) are handled by Core §0.4's idempotent `register`
+  (repeated names reuse one slot) plus a tid/counter qualifier where the same site can
+  run on multiple threads at once (Core §1 render selection) — not by inventing a
+  unique name per entry.
 - **Zig `defer` is skipped on `panic`; Lua has no `<close>` under LuaJIT 5.1.** The
   scope still closes on the normal path; document the abnormal-exit gap (the trace
   is simply not emitted, never emitted-partial-as-complete).

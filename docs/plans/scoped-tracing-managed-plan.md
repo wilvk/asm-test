@@ -29,6 +29,13 @@ thread → logical-operation model change). It is deliberately sequenced **last*
   construct; this slice adds `.NET`'s managed-code capability on top and builds the
   **Node** and **Java** scope constructs (rated "medium," same tier as .NET).
 
+**Dependency granularity.** The §1/§2 dependency is blanket for the slice but not
+uniform per sub-phase: **§D3** (a single-thread ptrace stepper) and **§D4's
+host-testable merge test** need only **§1** (per-thread state) — **not** §2's
+PT-hardware-gated libipt glue — so the two *CI-protective* deliverables can land right
+after §1. Only the clean in-process PT path (§D0–§D2 live capture) is a first consumer
+of §2.
+
 ---
 
 ## Why this tier is different
@@ -140,9 +147,12 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 **Construct.** Node's `region(name, fn)` ships at
 [bindings/node/hwtrace.js:439](../../bindings/node/hwtrace.js#L439) (on `class HwTrace`,
 [:328](../../bindings/node/hwtrace.js#L328)). Add a `using`-compatible scope via
-`Symbol.dispose` (Node 22+) — `using t = new AsmTrace()` — over the same
+`Symbol.dispose` — `using t = new AsmTrace()` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
-assert. Arm hook is the existing top-level `require` IIFE
+assert. The `using` **declaration** ships unflagged only in **Node 24+** (V8 13.8);
+on Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node
+24 and keep the existing `region(name, fn)` callback form as the version-independent
+fallback (it needs no `using`). Arm hook is the existing top-level `require` IIFE
 ([hwtrace.js:172-282](../../bindings/node/hwtrace.js#L172)); keep it lazy-first-scope.
 
 **Async-hop stitching (piece D).** Node's hook for the shared
@@ -174,11 +184,14 @@ lazy-first-scope. Address resolution for JIT'd methods is via the jitdump agent 
 `perf inject --jit` path the `jit_trace` harness already drives, feeding the recorder.
 
 **Async-hop.** The JVM's hook for the shared
-[§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is a
-JVMTI or `ScopedValue` story (heavier than .NET's `AsyncLocal`); §D4 owns the merge.
-Scoped to the opt-in async form, same posture as Node/.NET. Live managed JIT needs
-PT/LBR or ptrace; DynamoRIO self-skips (guarded) and is never used against the
-runtime.
+[§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
+**JVMTI** (or bytecode-agent instrumentation of the executor) — `ScopedValue` only
+*propagates* a binding across `StructuredTaskScope` forks and has **no** value-changed
+callback that fires as the flow moves on/off a thread, so it is **not** the JVM analog
+of .NET's `AsyncLocal` value-changed handler; §D4 owns the merge. This is the
+**least-proven** of the three per-runtime hooks. Scoped to the opt-in async form, same
+posture as Node/.NET. Live managed JIT needs PT/LBR or ptrace; DynamoRIO self-skips
+(guarded) and is never used against the runtime.
 
 **§D2 tests.** Extend the `hwtrace-java-test` lane and the
 [examples/jit_java/](../../examples/jit_java/) fixture under `docker-hwtrace-jit-java`
@@ -198,12 +211,24 @@ memory protections — state-safe on every axis except timing (~1000× on the st
 thread while siblings run native).
 
 **Concealment.** The empty constructor spawns a small **bundled tracer helper**,
-`prctl(PR_SET_PTRACER, helper)` so a Yama `ptrace_scope=1` host permits the attach,
-the helper `PTRACE_SEIZE`s the calling thread and steps it from a sentinel at the
-scope open to a sentinel at the scope close; `Dispose()`/`close()` joins the helper
-and renders (shared-core §0.3). Developer footprint stays **import + scope**. Works on
-Zen 2 and inside Docker on an Intel Mac (modern default container profiles permit
-ptrace; older need `CAP_SYS_PTRACE`).
+`prctl(PR_SET_PTRACER, helper)` so a Yama `ptrace_scope=1` host permits the attach (the
+helper is the caller's *child*, so the nomination is what makes the reverse attach
+legal), the helper `PTRACE_SEIZE`s the calling thread and steps it from a sentinel at
+the scope open to a sentinel at the scope close; `Dispose()`/`close()` joins the helper
+and renders via the **version-aware** render variant (§0.3 is region-scoped and
+version-blind, but the stepped managed bytes tier/move, so the plain primitive would
+render stale text). Developer footprint stays **import + scope**. Works on Zen 2 and
+inside Docker on an Intel Mac — the default seccomp profile permits `ptrace(2)` when the
+**host kernel is ≥ 4.8**; older kernels (or a stripped profile) need `CAP_SYS_PTRACE`.
+
+**Byte source (foreign, not self).** Because the helper is a *separate process*
+attached to the parent, its recorder reads the **parent's** JIT bytes — the
+**foreign-pid** code-image recorder (`asmtest_codeimage_new(parent_pid)` +
+`process_vm_readv`/soft-dirty), **not** the `pid == 0` self recorder. The parent's
+`MethodLoadVerbose` listener (§D0.1) is the only party that knows the JIT method
+addresses, so the helper needs a **cross-process channel** (or a shared/serialized
+recorder) to learn them. This is the load-bearing new work the "the tracer exists"
+framing understates.
 
 **Contract.** Whole-scope capture rides descent-L3 (best-effort, self-truncating);
 method-scoped capture is reliable. Non-intrusive to *state*, intrusive to *timing* —
@@ -213,9 +238,18 @@ perturbation, not deadlock, form of the L3 hazard). Document this prominently.
 **§D3 deliverables.**
 
 - A bundled helper binary + spawn/`PR_SET_PTRACER`/`PTRACE_SEIZE`/sentinel-step glue,
-  reusing `asmtest_ptrace_trace_attached_versioned` and the self recorder. This is
-  the [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) W2 machinery in
-  a scope wrapper — no new tracer, just concealment + sentinels.
+  reusing `asmtest_ptrace_trace_attached_versioned` against the **foreign-pid**
+  recorder (above). This is the
+  [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) W2 machinery in a
+  scope wrapper — no new *tracer*, but the reverse-attach protocol (`PR_SET_PTRACER` +
+  `PTRACE_SEIZE` of the parent), the sentinels, and the cross-process address channel
+  **are** new.
+- The helper's **build target + install path** in
+  [mk/native-trace.mk](../../mk/native-trace.mk) (reusing `ptrace_backend.o`), its
+  **runtime discovery** (dladdr-on-own-symbol sibling lookup, matching the DynamoRIO
+  payload's [src/drtrace_app.c](../../src/drtrace_app.c) pattern), and its **bundling**
+  into each managed package (NuGet / npm / Maven) — the packaging + supply-chain surface
+  the risks list flags.
 - Scope-façade wiring in each managed binding so `new AsmTrace()` on a no-hardware
   host silently routes to the helper instead of self-skipping.
 
@@ -247,7 +281,7 @@ signals a thread hop.
 |---|---|
 | .NET | `AsyncLocal<ScopeId>` value-changed (`AsyncLocalValueChangedArgs.ThreadContextChanged`) |
 | Node | `AsyncLocalStorage` / `async_hooks` `init`/`before`/`after` |
-| JVM | JVMTI callback / `ScopedValue` (heavier) |
+| JVM | JVMTI callback / executor bytecode-agent instrumentation (`ScopedValue` only *propagates* context — not a value-changed hop signal); least-proven |
 
 **The merge core (shared) — the concrete algorithm:**
 
@@ -264,17 +298,52 @@ signals a thread hop.
    per-CPU alternative `pid=-1, cpu=N` also captures hops but needs
    `CAP_SYS_ADMIN`/`paranoid=-1` and TID demux from `ITRACE_START`/sched records —
    rejected as heavier.)
-4. **Close.** Collect all slices for `ScopeId`, order by `seq`, decode each against
-   the code-image version live *in its own window* (the temporal-bytes rule, Core
-   §2's recorder-backed callback), and concatenate into one ordered instruction
-   stream with slice boundaries annotated (which thread, which version).
+4. **Close.** Collect all slices for `ScopeId` and order by `seq`. Each slice was
+   **already decoded** against the code-image version live *in its own window* at the
+   moment it was disabled (the temporal-bytes rule, Core §2's recorder-backed
+   callback), so step 4 is a pure ordered **concatenation** — no re-decode — into one
+   instruction stream, with slice boundaries (which thread, which version) returned in
+   the companion `bounds` array. Decoding at disable time, not at close, is what keeps
+   the merge host-testable from synthetic pre-decoded slices.
 
-**Native substrate (new, shared).** A language-agnostic C helper
-`int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
-asmtest_trace_t *out)` in `src/hwtrace.c` performs step 4's ordered merge over
-slices the per-thread state (Core §1) accumulates; the per-language hook only does
-arm/disarm + `ScopeId` tagging. The Core §1 per-thread state struct gains a
-`ScopeId` + `seq` field so slices are attributable at merge.
+**Native substrate (new, shared).** A language-agnostic C helper in `src/hwtrace.c`
+performs step 4's ordered merge over slices the per-thread state (Core §1) accumulates;
+the per-language hook only does arm/disarm + `ScopeId` tagging. The Core §1 per-thread
+state struct gains a `ScopeId` + `seq` field so slices are attributable at merge. The
+slice ABI and merge signature are **pinned here** (the flagship CI-runnable deliverable
+depends on both being concrete):
+
+```c
+typedef struct {
+    uint64_t         scope_id;   /* logical-operation id */
+    uint32_t         seq;        /* hop order within the scope */
+    int              tid;        /* thread the slice ran on */
+    uint64_t         version;    /* code-image version live in this window (asmtest_codeimage_now) */
+    asmtest_trace_t  trace;      /* offsets ALREADY decoded against `version` at disable time */
+} asmtest_hwtrace_slice_t;
+
+typedef struct {
+    size_t   insn_off;           /* offset into `out` where this slice begins */
+    uint64_t scope_id;
+    uint32_t seq;
+    int      tid;
+    uint64_t version;
+} asmtest_hwtrace_slice_bound_t;
+
+int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
+                           asmtest_trace_t *out,
+                           asmtest_hwtrace_slice_bound_t *bounds, size_t *nbounds);
+```
+
+**`stitch` concatenates; it does not decode.** Each slice is decoded against its own
+`version` *at the moment it is disabled* (Core §2's recorder-backed callback), so by the
+time it reaches `stitch` it already carries offsets. `stitch` is then a pure ordered
+merge by `seq` — which is exactly what makes `test_stitch_slices` host-testable from
+synthetic pre-decoded slices with no PT hardware and no real threads. Because
+`asmtest_trace_t` ([include/asmtest_trace.h:44](../../include/asmtest_trace.h#L44)) has
+**no** field for per-slice boundaries, the "(which thread, which version)" annotations
+the contract promises are returned in the companion `bounds` array (one entry per
+slice), **not** smuggled into `out`.
 
 **Multi-slice output contract.** The scope's result becomes a *list of thread-window
 slices for one logical operation*; the rendered `Path` concatenates them in `seq`
@@ -292,12 +361,12 @@ host-testable unit test, not the ptrace lane.
 **§D4 tests.**
 
 - `test_stitch_slices` (**host-testable, CI-runnable — closes the async-hop test
-  hole**) — construct synthetic per-thread slices (offset lists with monotonic `seq`
-  + distinct versions), call `asmtest_hwtrace_stitch`, assert the concatenated
-  ordered stream equals the expected logical-operation sequence and that each slice
-  decodes against its own version (temporal-bytes). No PT hardware, no real threads —
-  it validates the merge algorithm itself, mirroring the §2 "reconstruction half is
-  host-testable" posture. Lives in [examples/test_hwtrace.c](../../examples/test_hwtrace.c).
+  hole**) — construct synthetic `asmtest_hwtrace_slice_t` values (offset lists with
+  monotonic `seq` + distinct `version`s), call `asmtest_hwtrace_stitch`, assert the
+  concatenated ordered stream equals the expected logical-operation sequence and that
+  the `bounds` array attributes each run to its `(tid, version)`. No PT hardware, no
+  real threads — it validates the merge algorithm itself, mirroring the §2
+  reconstruction-half posture. Lives in [examples/test_hwtrace.c](../../examples/test_hwtrace.c).
 - Per-runtime opt-in async case (.NET/Node/JVM) that drives a real `await`/continuation
   hop and asserts slices stitch by `ScopeId` — **self-skips** off a PT/ptrace host
   (the honest known validation gap: the live hook has no CI coverage; the merge core
@@ -310,7 +379,12 @@ forward-look on PT hardware.
 **§D4 risk.** This is the real engineering of the whole plan set — a model change,
 gated behind an explicit opt-in, and it must **never** emit a partial (un-stitched)
 trace as complete; the Core §0.2 arming-thread assert is the backstop that flags any
-unhandled hop as `truncated`.
+unhandled hop as `truncated`. **Coverage honesty:** the hook-side `ScopeId`/`seq`/
+`version` *tagging* is exercised by **neither** CI-protective test — `test_stitch_slices`
+builds correct tags itself, and §D3 is single-thread — so the live capture→tag→merge
+chain ships with no CI coverage. Add a **fake-hook harness** that drives the merge from
+a scripted hop sequence (not pre-tagged slices) to cover the hook→merge seam; the live
+per-runtime hook remains a disclosed forward-look gap.
 
 ---
 

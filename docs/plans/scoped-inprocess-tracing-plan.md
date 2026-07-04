@@ -110,10 +110,12 @@ the facility, not a footnote.
    disassembly *text* on close is unwired in all ten bindings (the .NET scope is
    `begin`/`try`/`finally`-`end` with no render,
    [bindings/dotnet/hwtrace/HwTrace.cs:602](../../bindings/dotnet/hwtrace/HwTrace.cs#L602)).
-4. Two cheap **C-layer fixes**: make `begin` **return an error** when a slot is
+4. Cheap **C-layer fixes**: make `begin` **return an error** when a slot is
    active (today it silently no-ops, [src/hwtrace.c:656](../../src/hwtrace.c#L656)),
-   and **record the arming thread id** in `begin` so `end` can flag `truncated` on
-   a same-thread mismatch (today neither is done).
+   **record the arming thread id** in `begin` so `end` can flag `truncated` on a
+   same-thread mismatch (today neither is done), and make `register_region`
+   **idempotent by name** so a scope object that registers on **every** construction
+   reuses one slot instead of exhausting the process-global 32-entry table (Core §0.4).
 5. **Per-thread hwtrace state** to replace the process-global single slot (the
    MVP contract, [include/asmtest_hwtrace.h:149](../../include/asmtest_hwtrace.h#L149)),
    lifting no-nesting / no-concurrency / no-multi-binding for all ten bindings at once.
@@ -210,7 +212,11 @@ local specifics.
   ([src/hwtrace.c:413](../../src/hwtrace.c#L413), used at
   [:659](../../src/hwtrace.c#L659)) and silently no-ops on a miss. A self-naming,
   auto-named scope **must register-then-begin under the same generated name** — a
-  correctness constraint every shim (including .NET) must honour.
+  correctness constraint every shim (including .NET) must honour. Because the scope
+  object registers on **every** construction under a call-site-constant name,
+  `register_region` **must be idempotent by name** (Core §0.4) — otherwise a looped or
+  sprinkled scope exhausts the 32-entry table or aliases the first registration's
+  trace.
 - **Single-step is for controlled native code only.** Pointed at live managed code
   it swaps the process-wide SIGTRAP disposition the runtime's PAL also owns
   ([src/ss_backend.c:129](../../src/ss_backend.c#L129)) and can put sibling threads

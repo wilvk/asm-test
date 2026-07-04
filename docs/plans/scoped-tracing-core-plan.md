@@ -45,9 +45,11 @@ instructions at decode — [src/pt_backend.c:108](../../src/pt_backend.c#L108),
 
 ## §0 — The two cheap C-layer fixes + shared render-on-close *(planned; lands first)*
 
-**Goal.** Three small, self-contained changes that de-risk *every* binding and
+**Goal.** A small set of self-contained changes that de-risk *every* binding and
 unblock the bindings slice's emit-on-close. Cheap enough to land before any shim
-work.
+work. §0.1–§0.3 are the two C-layer fixes plus render-on-close; §0.4 makes region
+registration idempotent by name — the prerequisite that lets a scope object safely
+register on **every** construction.
 
 ### §0.1 `begin` returns an error when a slot is active
 
@@ -65,9 +67,17 @@ ABI:
 - Introduce `int asmtest_hwtrace_try_begin(const char *name)` in
   [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h#L152) (next to
   `asmtest_hwtrace_begin`/`end`), returning `0` on success and a negative
-  `ASMTEST_HW_*` code on a busy slot (`EBUSY`-analog) or unregistered name
-  (`ENOENT`-analog). Reuse the existing `ASMTEST_HW_*` negative-code convention
-  (`asmtest_hwtrace_auto` already returns them, [src/hwtrace.c:327](../../src/hwtrace.c#L327)).
+  `ASMTEST_HW_*` code otherwise. **There is no literal `EBUSY`/`ENOENT` constant** in
+  the header — reuse the existing set
+  ([include/asmtest_hwtrace.h:46-52](../../include/asmtest_hwtrace.h#L46)): a **busy
+  slot** returns `ASMTEST_HW_ESTATE` (the exact code `asmtest_hwtrace_init` already
+  returns for the same wrong-state condition, [src/hwtrace.c:385](../../src/hwtrace.c#L385)),
+  and an **unregistered name** returns `ASMTEST_HW_EINVAL` (the bad-argument code,
+  [:378](../../src/hwtrace.c#L378) / [:401](../../src/hwtrace.c#L401)).
+  `asmtest_hwtrace_auto` already returns these negative codes
+  ([src/hwtrace.c:327](../../src/hwtrace.c#L327)). Under §1 the busy-slot case becomes
+  legal nesting; the "cannot start" return is then reserved for a **full range stack**
+  (`ASMTEST_HW_EFULL`) — see §1 Compatibility.
 - Keep `void asmtest_hwtrace_begin(const char *name)` as a thin wrapper that calls
   `try_begin` and discards the result — **no ABI break** for the ten shipped
   shims. The implementation split happens in `asmtest_hwtrace_begin`
@@ -89,14 +99,27 @@ enforced** — confirmed absent. The analysis makes a same-thread mismatch flag 
 
 - Add a `g_arm_tid` to the active-capture state block
   ([src/hwtrace.c:351-358](../../src/hwtrace.c#L351), alongside `g_fd`/`g_active`),
-  set from `gettid()` in `begin` (all three backends), cleared in `end`.
-- In `asmtest_hwtrace_end` ([src/hwtrace.c:762](../../src/hwtrace.c#L762)) — and the
-  single-step `asmtest_ss_end` ([src/ss_backend.c:207](../../src/ss_backend.c#L207)) —
-  compare `gettid()` against `g_arm_tid`; on mismatch set `trace->truncated = true`
+  set from `syscall(SYS_gettid)` in `begin` (all three backends), cleared in `end`.
+  Use the **raw syscall, not the bare `gettid()` wrapper**: that wrapper needs
+  `_GNU_SOURCE` (glibc ≥ 2.30), `src/hwtrace.c` does not define it, and under
+  `-Werror` a bare `gettid()` is an implicit-declaration build failure on the
+  **default** lane. `syscall(SYS_gettid)` matches the file's existing idiom
+  (`syscall(SYS_perf_event_open)`, [src/hwtrace.c:173](../../src/hwtrace.c#L173)) and
+  needs no new include in `hwtrace.c`.
+- Do the capture/compare **once in `asmtest_hwtrace_begin`/`_end`**, which already
+  wrap `asmtest_ss_begin`/`_end` — `src/ss_backend.c` is a separate TU with no
+  visibility into `hwtrace.c` statics and its `asmtest_ss_end(void)`
+  ([src/ss_backend.c:207](../../src/ss_backend.c#L207)) takes no args, so putting the
+  check there would force a duplicate tid or a forbidden signature change (add
+  `<unistd.h>` + `<sys/syscall.h>` there only if a direct `asmtest_ss_*` caller must
+  also be guarded). On a closing-thread mismatch set `trace->truncated = true`
   ([include/asmtest_trace.h:59](../../include/asmtest_trace.h#L59)) rather than
   emitting a partial trace as complete. This is the C half of the Go
   `LockOSThread` / .NET `AsyncLocal` story: the shim can't always prevent the hop,
-  but the core will never mislabel it.
+  but the core will never mislabel it. The flag deliberately errs toward
+  **false-truncated over false-complete**; once §1 moves `g_arm_tid` into TLS the
+  compare reads the closing thread's own slot (an unset arming tid on a cross-thread
+  close still flags `truncated`).
 - Expose the arming tid via a read accessor (`int asmtest_hwtrace_arm_tid(void)`)
   so a shim can *also* assert in its own idiom before close.
 
@@ -120,33 +143,79 @@ so it cannot stay an "or"):
 - `int asmtest_hwtrace_render(const char *name, char *buf, size_t buflen)` in
   [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h), implemented in
   `src/hwtrace.c`, walking the named region's `asmtest_trace_t` insn offsets and
-  calling `asmtest_disas` ([src/disasm.c:89](../../src/disasm.c#L89)) against
-  `[base, base+len)`. **`snprintf` semantics:** it writes up to `buflen-1` bytes +
-  NUL and **returns the total length that would be written** (so a caller passes
-  `buf=NULL, buflen=0` to size, then allocates) — the one shape every binding can
-  marshal (`char[]`/`byte[]`/`[*]u8`) without a callback FFI. A convenience
+  calling `asmtest_disas` ([src/disasm.c:89](../../src/disasm.c#L89) — the canonical
+  spelling; `emu_disas` in the analysis is a one-line forward to it) against
+  `[base, base+len)`. **`snprintf` semantics:** on success it writes up to `buflen-1`
+  bytes + NUL and **returns the non-negative total length that would be written** (so
+  a caller passes `buf=NULL, buflen=0` to size, then allocates). **Error convention:**
+  a name miss (`find_region` NULL) or unavailable decoder (Capstone not compiled in)
+  returns a **negative** `ASMTEST_HW_*` code — distinct from the non-negative length,
+  so the size-then-allocate idiom is unambiguous. It is the one shape every binding
+  can marshal (`char[]`/`byte[]`/`[*]u8`) without a callback FFI. A convenience
   `FILE*` wrapper may be layered *above* it later, but the buffer form is the
   installed primitive.
-- Default sink policy for the empty-scope case lives in the shims (stdout or
-  `asmtrace-<member>.txt`), but the **decode + Capstone render** is this one C path.
+- **This primitive is region-scoped and version-blind:** it renders the live bytes at
+  `[base, len)` for a single-owner named region. Concurrent same-name scopes (§1) and
+  temporally-recompiled managed code (§D3/§D4, where the executed bytes have since
+  tiered/moved) need a **version-/handle-aware** render — the §1 per-scope selection
+  and a `(img, when)`-parameterised variant — **not** this primitive. Pinning this
+  ABI here must not foreclose that variant.
+- Default sink policy for the empty-scope case lives in the shims but is **pinned here
+  so ten shims don't diverge:** the empty ctor renders to **stdout**; a file
+  (`asmtrace-<member>.txt`) is used only on an explicit `sink:`, and then
+  **tid-suffixed** (or `O_APPEND` with a per-scope header line) so concurrent
+  same-named scopes (§1) neither clobber nor interleave. The **decode + Capstone
+  render** itself is this one C path.
 - Must respect the region-scoped model: it renders exactly the in-region offsets
   the decoders already filtered to; whole-window rendering (Core §3 / Managed slice)
   is a separate mode.
 
+### §0.4 Region registration is idempotent by name
+
+**Today.** `asmtest_hwtrace_register_region` **appends unconditionally** —
+`hw_region_t *r = &g_regions[g_nregions++]` ([src/hwtrace.c:404](../../src/hwtrace.c#L404)) —
+with no dedup, and `find_region` returns the **first** name match
+([:413](../../src/hwtrace.c#L413)); the table is fixed at `MAX_REGIONS == 32`
+([:337](../../src/hwtrace.c#L337)) and `g_nregions` resets only at init/shutdown. The
+shipped model registers a region **once** at setup and `begin`s it many times.
+
+**Why the scope object breaks that.** A self-naming scope registers on **every**
+construction under a call-site-constant auto-name (`[CallerMemberName]`+line,
+`std::source_location`, …). So a `using (new AsmTrace())` in a loop, or more than 32
+scope sites over process lifetime, would either exhaust the 32-slot table
+(`register_region` returns `ASMTEST_HW_EFULL`) or, if the shim swallows that, resolve
+a **stale** earlier duplicate — `find_region`/`render` alias the first registration's
+`asmtest_trace_t`. This is a *shared* correctness gap: fixing it once in the C core is
+what makes the bindings slice's register-then-begin pattern safe for all ten shims.
+
+**Change.** Make `asmtest_hwtrace_register_region` **idempotent by name**: on a name
+that already has a slot, return that slot (refreshing its `[base, len)`) instead of
+appending. Repeated entry of the same auto-named scope then reuses one slot and never
+grows `g_nregions`, so looped/sprinkled scopes are safe and the 32-entry ceiling
+counts **distinct** scope sites, not entries. A shim has no C-API way to dedup itself —
+`find_region` is `static` ([:413](../../src/hwtrace.c#L413)) — so the dedup **must**
+live in the core. Behaviour for distinct names is unchanged.
+
 **§0 tests.** Extend [examples/test_hwtrace.c](../../examples/test_hwtrace.c)
 (dispatched from `main` at [:2174](../../examples/test_hwtrace.c#L2174)):
 
-- `test_try_begin_busy` — register two regions, `try_begin` the second while the
-  first is active, assert the negative `EBUSY`-analog; assert `try_begin` on an
-  unregistered name returns the `ENOENT`-analog; assert the legacy `void` `begin`
-  still no-ops (ABI unchanged). Runs on **any host** (single-step backend, no
-  hardware needed).
+- `test_try_begin_busy` — with one region active, assert `try_begin` on a busy slot
+  returns `ASMTEST_HW_ESTATE`, and `try_begin` on an unregistered name returns
+  `ASMTEST_HW_EINVAL`; assert the legacy `void` `begin` still no-ops (ABI unchanged).
+  **Provoke the busy code by filling the fixed range stack to its depth bound**
+  (backend-independent), **not** by a second same-thread `begin` — because §1 makes a
+  second same-thread `begin` *compose* (return `0`), so this framing survives the
+  §0→§1 transition unchanged. Runs on **any host** (single-step backend, no hardware
+  needed).
 - `test_arm_tid_mismatch` — arm on the main thread, close from a spawned thread,
   assert `truncated` is set. Any host.
 - `test_render_singlestep` — single-step-trace a known native leaf, call
   `asmtest_hwtrace_render`, assert the text matches a ground-truth `asmtest_disas`
   of the same bytes (reuse the `test_singlestep_live` fixture at
   [:408](../../examples/test_hwtrace.c#L408)). Any x86-64 Linux.
+- `test_register_idempotent` — register the same name twice; assert the second call
+  returns the same slot and does **not** advance the region count (§0.4), and that
+  registering past `MAX_REGIONS` *distinct* names returns `ASMTEST_HW_EFULL`. Any host.
 
 **§0 docs.** Update
 [docs/guides/tracing/hardware-tracing.md](../guides/tracing/hardware-tracing.md)
@@ -155,8 +224,8 @@ and the API surface in
 symbols; note the `void begin` → `try_begin` relationship in
 [docs/guides/tracing/native-tracing.md](../guides/tracing/native-tracing.md).
 
-**§0 effort.** ~2–3 days. No hardware needed — validated on any x86-64 Linux via
-the single-step backend.
+**§0 effort.** ~3–4 days (§0.4 adds the register-dedup fix). No hardware needed —
+validated on any x86-64 Linux via the single-step backend.
 
 ---
 
@@ -198,10 +267,25 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   slot; moving that slot to TLS covers it. Tier-A/Tier-B stitching
   ([src/amd_backend.c:152](../../src/amd_backend.c#L152),
   [src/hwtrace.c:603](../../src/hwtrace.c#L603)) is per-region and unaffected.
+- **Per-scope trace ownership + render/close selection.** Moving the *capture* slot
+  to TLS is not enough: the region table and its `asmtest_trace_t` stay
+  process-global and name-keyed, so two threads entering the **same** auto-named
+  scope resolve the same `r->trace` — a silent cross-thread ownership swap, and
+  `render(name)` has no defined "which thread's slice." Give each active scope a
+  **per-thread (or per-scope-handle) trace slot** and key `end`/`render` on that
+  handle, not the bare name: `render` returns the **calling thread's
+  most-recently-closed** slice. Auto-names that can run concurrently on one site must
+  be tid/counter-disambiguated by the shim. This is the concurrency half of the
+  render contract §0.3 deferred.
 
 **Compatibility.** The shipped single-region API must behave identically when only
-one thread/one region is used. `try_begin`'s `EBUSY` (§0.1) is redefined to mean
-"this thread's range stack is full," not "the process is busy."
+one thread/one region is used. After §1 a second same-thread `try_begin` **composes**
+(nested range) and returns `0`; the "cannot start" return (`ASMTEST_HW_ESTATE` from
+§0.1) is **redefined** to fire only when this thread's fixed range stack is **full**,
+for which the natural code is `ASMTEST_HW_EFULL`. Because that flips §0's
+`test_try_begin_busy` (a second same-thread `begin` no longer refuses), that test is
+authored from the start to provoke the error by **filling the range stack to its depth
+bound** (see §0 tests) — so it survives the §0→§1 transition unchanged.
 
 **§1 tests.** In [examples/test_hwtrace.c](../../examples/test_hwtrace.c):
 
@@ -212,6 +296,9 @@ one thread/one region is used. `try_begin`'s `EBUSY` (§0.1) is redefined to mea
   concurrently; assert each gets its own complete trace and neither trips the other
   (the previous single-slot behaviour would have dropped one). Any x86-64 Linux.
   This is the regression test for the flaky-crash class the Go binding hit.
+- `test_concurrent_samename` — two threads scope the **same** auto-named site
+  concurrently; assert each thread's `render` returns its own slice (no cross-thread
+  aliasing), proving the per-scope trace ownership above. Any x86-64 Linux.
 - Keep a `test_singlestep_live`/`test_singlestep_loop` re-run
   ([:408](../../examples/test_hwtrace.c#L408), [:463](../../examples/test_hwtrace.c#L463))
   to prove the single-region path is byte-identical after the TLS migration.
@@ -264,7 +351,9 @@ from `/proc/self/maps`.
   [the analysis's correctness rule](../analysis/scoped-inprocess-tracing.md#byte-sources-are-orthogonal-to-all-of-the-above).
   For file-backed regions with no recorder entry, fall back to reading the mapped
   file (resolve via `asmtest_proc_region_by_addr`,
-  [include/asmtest_ptrace.h:291](../../include/asmtest_ptrace.h#L291)).
+  [include/asmtest_ptrace.h:291](../../include/asmtest_ptrace.h#L291)). Note the
+  `asmtest_proc_*` helpers format `/proc/<pid>/…` literally, so the self case must
+  pass `getpid()`, **not** `0` (unlike `asmtest_codeimage_new(0)`, which maps `0`→self).
 - **Self-recorder wiring (`src/hwtrace.c`).** In the arm path, create a self
   code-image timeline (`asmtest_codeimage_new(0)`,
   [include/asmtest_codeimage.h:81](../../include/asmtest_codeimage.h#L81)) and
@@ -279,21 +368,27 @@ from `/proc/self/maps`.
   qualifications. It needs PT hardware to validate, so it ships gated behind the
   same self-skip as the rest of the PT capture path.
 
-**Validation posture (mirrors the hardware-trace plan).** The **reconstruction
-half** — feeding a synthetic code image to the decoder and asserting byte-for-byte
-parity with the other backends — is host-testable the way
-`test_amd_reconstruction`/`test_cs_reconstruction` already are (no hardware). The
-**live PT capture** half self-skips off bare-metal Intel PT. Per the project's "no
-untested hardware code" rule, the live path is written but gated, and the gate is
-exercised on every host.
+**Validation posture (mirrors the hardware-trace plan).** The host-testable half
+exercises the **recorder-backed image callback (`bytes_at`) adapter directly** —
+feed known bytes at two `when` values and assert the adapter returns the
+version-correct bytes and that `asmtest_disas` of them matches ground truth. It does
+**not** drive libipt end-to-end: unlike AMD/CS, Intel PT has **no** decoder-independent
+reconstruction sibling (`asmtest_pt_decode` consumes a raw PT packet stream, and there
+is **no** synthetic-PT-packet fixture or PT encoder in the tree), so a genuine
+host-side libipt decode would first need a synthetic PT packet stream / libipt's
+encoder — a separately-budgeted sub-task (below). The **live PT capture** half
+self-skips off bare-metal Intel PT. Per the project's "no untested hardware code" rule,
+the live path is written but gated, and the gate is exercised on every host.
 
 **§2 tests.** In [examples/test_hwtrace.c](../../examples/test_hwtrace.c):
 
 - `test_pt_image_from_codeimage` (host-testable) — build an `asmtest_codeimage`
-  over an in-process buffer with two versions of the bytes at one address, run the
-  new image adapter through the decode path at two `when` values, assert each
-  decodes against the version live then (the temporal-bytes rule) and that the
-  instruction offsets match `asmtest_disas` ground truth. No PT hardware.
+  over an in-process buffer with two versions of the bytes at one address, drive the
+  new recorder-backed image adapter (the `bytes_at` callback libipt would call)
+  **directly** at two `when` values, assert each returns the version live then (the
+  temporal-bytes rule) and that `asmtest_disas` of the returned bytes matches ground
+  truth. No PT hardware, no libipt packet stream. (End-to-end libipt decode needs a
+  synthetic PT fixture or real Intel PT — see Validation posture.)
 - Extend `test_codeimage` ([examples/test_codeimage.c](../../examples/test_codeimage.c),
   target `codeimage-test`, [mk/native-trace.mk:247](../../mk/native-trace.mk#L247))
   with a `bytes_at`-through-decoder round-trip.
@@ -307,10 +402,11 @@ cross-link [hardware-trace-plan Phase 2](hardware-trace-plan.md) as the shared
 build; update [docs/analysis/trace-parity-matrix.md](../analysis/trace-parity-matrix.md)
 with the new decode mode's parity status.
 
-**§2 effort.** Reconstruction adapter + tests ~3–4 days (host-testable); the
-capture-side address filter + live whole-window decode a further ~3–5 days **on PT
-hardware**, forward-look until a bare-metal Intel PT host is available (same gate as
-the hardware-trace plan).
+**§2 effort.** Recorder-backed `bytes_at` adapter + direct tests ~3–4 days
+(host-testable; add ~1–2 days if an end-to-end host decode needs a synthetic PT packet
+fixture / libipt-enc rather than the direct adapter test); the capture-side address
+filter + live whole-window decode a further ~3–5 days **on PT hardware**, forward-look
+until a bare-metal Intel PT host is available (same gate as the hardware-trace plan).
 
 ---
 
@@ -338,15 +434,25 @@ This sub-phase builds (b) and (c):
   bytes appeared, so the "JIT compiling `HotPath`" slice can be split from the
   "`HotPath` running" slice in the decoded stream (correlate each decoded IP's trace
   position against the recorder version timeline via
-  `asmtest_codeimage_now`, [:102](../../include/asmtest_codeimage.h#L102)).
-- **(c) Symbolize-and-bucket.** Bucket every decoded IP against `/proc/self/maps`
-  (`asmtest_proc_region_by_addr`,
-  [include/asmtest_ptrace.h:291](../../include/asmtest_ptrace.h#L291)) and the
-  perf-map (`asmtest_proc_perfmap_symbol`,
-  [:303](../../include/asmtest_ptrace.h#L303)), so noise is labelled ("31k insns in
-  RyuJIT, 2k in GC, 7k in `HotPath`") rather than silently mixed. **This is
-  host-testable** — the bucketer takes an IP list, not a live PT capture — so it is
-  the one whole-window piece with real CI coverage.
+  `asmtest_codeimage_now`, [:102](../../include/asmtest_codeimage.h#L102)). The eBPF
+  detector is **build- and privilege-gated** (needs libbpf + clang + bpftool at build,
+  `CAP_BPF` + kernel BTF at runtime); where it is unavailable, emission-slicing falls
+  back to the coarser **soft-dirty version timeline** (`asmtest_codeimage_now`
+  correlation), and `test_emission_slice`'s eBPF assertions self-skip when
+  `bpf_available() == 0`.
+- **(c) Symbolize-and-bucket.** Bucket every decoded IP against `/proc/self/maps` and
+  the perf-map so noise is labelled ("31k insns in RyuJIT, 2k in GC, 7k in `HotPath`")
+  rather than silently mixed. **The two cited helpers return *extents*, not names** —
+  `asmtest_proc_region_by_addr`
+  ([include/asmtest_ptrace.h:291](../../include/asmtest_ptrace.h#L291)) discards the
+  maps pathname (its `sscanf` reads only `start-end perms`), and
+  `asmtest_proc_perfmap_symbol` ([:303](../../include/asmtest_ptrace.h#L303)) is a
+  *forward* name→region lookup — so the **label** half needs a **new address→name
+  reverse resolver** built here: a `/proc/self/maps` reader that keeps the pathname
+  field, and a perf-map range search that returns the containing JIT symbol. **The
+  bucket-by-IP mechanics stay host-testable** (the bucketer takes an IP list, not a
+  live PT capture); the label half rides the new resolver — together the one
+  whole-window piece with real CI coverage.
 
 ### §3.2 Q3 snapshot drain — lift the bandwidth ceiling
 
@@ -373,7 +479,8 @@ follow-up ([:797-798](../../src/hwtrace.c#L797)). Two buildable drains:
 
 - `test_symbolize_bucket` (host-testable, **CI-runnable**) — feed a synthetic IP list
   spanning two `/proc/self/maps` regions + a perf-map entry, assert the bucket counts
-  and labels. No hardware.
+  and the labels resolved via the new address→name reverse resolver (§3.1(c)). No
+  hardware.
 - `test_emission_slice` — over the `test_codeimage` fixture
   ([examples/test_codeimage.c](../../examples/test_codeimage.c)), assert an IP inside
   a range whose bytes appeared *after* trace position T is attributed to the
