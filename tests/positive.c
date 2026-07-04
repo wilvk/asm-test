@@ -186,3 +186,22 @@ SETUP(fix) { g_fixture = 7; }
 TEARDOWN(fix) { g_fixture = 0; }
 
 TEST(fix, sees_setup) { ASSERT_EQ(g_fixture, 7); }
+
+/* TEARDOWN actually runs — observed across tests. SETUP/TEARDOWN increment
+ * counters; under fork each test is isolated (a later test can't see an earlier
+ * teardown's effect on a global), but under --no-fork the tests share state, so a
+ * second test can prove the first test's TEARDOWN executed. `g_setups > 1`
+ * detects the --no-fork case (state persisted). tests/expect.sh runs the suite
+ * --no-fork so this fires. */
+static int g_setups, g_teardowns;
+
+SETUP(lifecycle) { g_setups++; }
+TEARDOWN(lifecycle) { g_teardowns++; }
+
+/* At entry, my SETUP ran but not my TEARDOWN, and every prior lifecycle test's
+ * SETUP+TEARDOWN both ran — so setups is exactly one ahead of teardowns. */
+TEST(lifecycle, first) { ASSERT_EQ(g_setups - g_teardowns, 1); }
+TEST(lifecycle, observes_prior_teardown) {
+    if (g_setups > 1)                         /* --no-fork: `first` already ran */
+        ASSERT_EQ(g_teardowns, g_setups - 1); /* ...and its TEARDOWN executed */
+}

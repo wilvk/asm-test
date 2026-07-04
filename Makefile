@@ -586,7 +586,7 @@ include mk/win64.mk         # native Win64 (cross-compile + Wine)
 # framework catches SIGSEGV/SIGBUS itself (crash containment), so tell ASan not
 # to grab those signals; UBSan halts on the first violation. detect_leaks is
 # left at its platform default (LSan on Linux; unsupported on macOS).
-ASAN_RUN_OPTIONS ?= handle_segv=0:handle_sigbus=0:handle_sigfpe=0:abort_on_error=0
+ASAN_RUN_OPTIONS ?= handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0:abort_on_error=0
 UBSAN_RUN_OPTIONS ?= halt_on_error=1:print_stacktrace=1
 # Run a sub-make target under the sanitizers with the shared run options.
 san_run = ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) $(MAKE) SAN=1

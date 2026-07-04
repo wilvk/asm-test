@@ -71,6 +71,20 @@ annotated per item.
   (Win64 + AVX2/512), added a Troubleshooting & FAQ page, and gave the README a
   Documentation funnel into the docs site. Verified: `make test`/`check` green,
   the JUnit/bench/color paths exercised by hand, and the emulator container (50/50).
+- **Step 6 — re-verify the finder-only leads (N3–N6, X1–X4)** — the review's own
+  bindings/self-test verifiers were interrupted, so each was re-checked against
+  the code first. **X1–X4 confirmed and fixed**: the self-test suites now assert
+  TEARDOWN runs (a --no-fork lifecycle counter), fault a guard-page overrun/
+  underrun and a differential-model mismatch, contain SIGILL/SIGFPE/SIGBUS (not
+  just SIGSEGV/SIGABRT), and validate the JUnit escaper on a `< & > "` message
+  (xmllint installed on the test lane). The re-check **downgraded three finder
+  leads**: **N5** is not real (the zig README explicitly *defers* the module
+  export), **N6** is impractical as proposed (corpus mirroring is heterogeneous
+  by design, so a flat parity gate is all-noise — the same reason
+  check-bindings-parity.sh skips the corpus surface), and **N3** is
+  working-as-documented scaffolding. **N4** is confirmed but a genuine
+  multi-binding expansion, deferred. Verified: `make check` green (self-tests
+  36 → 43), the new cases exercised by hand + validated well-formed.
 
 Everything else remains open (`verified` = confirmed real, not yet actioned).
 
@@ -135,14 +149,14 @@ can't assemble — none of which any current gate catches.
 | P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | verified |
 | P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | verified |
 | R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | ✅ fixed (step 4) |
-| N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | finder-only |
-| N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | finder-only |
-| N5 | Zig package exports no importable module | Medium | improvement | finder-only |
-| N6 | No tripwire stops a new corpus case silently skipping 9/10 bindings | Medium | improvement | finder-only |
-| X1 | Nothing anywhere asserts `TEARDOWN` actually runs | Medium | improvement | finder-only |
-| X2 | Guard-page & `ASSERT_MATCHES_REF` paths only run with exit ignored | High | improvement | finder-only |
-| X3 | Crash containment self-tested for SIGSEGV/SIGABRT only | Medium | improvement | finder-only |
-| X4 | JUnit XML escaping never validated (`xmllint` installed on no lane) | Medium | improvement | finder-only |
+| N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | ⚪ not a defect — packaging is scaffolding by design (packaging.md); only nit is an unused `LUAROCKS` var |
+| N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | ⏸ confirmed; deferred (genuine multi-binding expansion — C entry points exist + are FFI-friendly, just unwrapped) |
+| N5 | Zig package exports no importable module | Medium | improvement | ⚪ not real — the zig README's "## Deferred" lists the module export as future work; finder missed it |
+| N6 | No tripwire stops a new corpus case silently skipping 9/10 bindings | Medium | improvement | ⚪ impractical as proposed — corpus mirroring is heterogeneous by design (Python data-replays, Go names differently, tiers per-binding); a flat parity rule is all-noise |
+| X1 | Nothing anywhere asserts `TEARDOWN` actually runs | Medium | improvement | ✅ fixed (step 6) |
+| X2 | Guard-page & `ASSERT_MATCHES_REF` paths only run with exit ignored | High | improvement | ✅ fixed (step 6) |
+| X3 | Crash containment self-tested for SIGSEGV/SIGABRT only | Medium | improvement | ✅ fixed (step 6) |
+| X4 | JUnit XML escaping never validated (`xmllint` installed on no lane) | Medium | improvement | ✅ fixed (step 6) |
 
 ---
 

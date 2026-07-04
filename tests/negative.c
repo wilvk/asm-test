@@ -14,6 +14,8 @@
  */
 #include "asmtest.h"
 
+#include <signal.h> /* raise(SIGILL/SIGFPE/SIGBUS) for the containment cases */
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -126,3 +128,54 @@ TEST(neg, timeout) {
  * fork (the default) the child dies and the parent synthesizes the result from
  * the wait status — the path that makes fork the default. */
 TEST(neg, aborts) { abort(); }
+
+/* SIGILL / SIGFPE / SIGBUS — the runner installs handlers for these too (a bad
+ * opcode, a divide fault, and a bus error are common real asm-routine crashes),
+ * but only SIGSEGV/SIGABRT were self-tested. Delivered via raise() so they fire
+ * identically on x86-64 and AArch64 (where integer div-by-zero does not trap and
+ * unaligned access does not bus-fault). Each must surface as a contained failure
+ * naming the signal. */
+TEST(neg, illegal_instruction) { raise(SIGILL); }
+TEST(neg, fp_exception) { raise(SIGFPE); }
+TEST(neg, bus_error) { raise(SIGBUS); }
+
+/* ---- headline safety features that only the demo exercised ----
+ *
+ * The guard-page fault and the differential-model mismatch were run only in
+ * test_failure_demo (whose recipe prefixes `-` and asserts nothing), so a
+ * regression — e.g. guarded_alloc degrading to malloc — stayed green. Pin them
+ * as real, asserted failures here. */
+
+/* One past the end of a guard-page buffer faults (SIGSEGV). */
+TEST(neg, guard_page_overrun) {
+    unsigned char *p = asmtest_guarded_alloc(8);
+    p[8] = 0x41; /* the trailing guard page */
+    asmtest_guarded_free(p, 8);
+}
+/* One before the start of an underrun-guarded buffer faults (SIGSEGV). */
+TEST(neg, guard_page_underrun) {
+    unsigned char *p = asmtest_guarded_alloc_under(8);
+    p[-1] = 0x41; /* the leading guard page */
+    asmtest_guarded_free_under(p, 8);
+}
+
+/* A routine that disagrees with its C model — differential testing reports the
+ * first failing input. buggy_sum returns a-b where the model returns a+b, and
+ * the generator always draws a nonzero b, so the very first draw disagrees. */
+static long ref_sum(long a, long b) { return a + b; }
+static long buggy_sum(long a, long b) { return a - b; }
+static int gen_two(asmtest_rng_t *rng, long *out, int cap) {
+    if (cap < 2)
+        return 0;
+    out[0] = (long)(asmtest_rng_u64(rng) % 100);
+    out[1] = 1 + (long)(asmtest_rng_u64(rng) % 100); /* nonzero: a-b != a+b */
+    return 2;
+}
+TEST(neg, ref_model_mismatch) {
+    ASSERT_MATCHES_REF2(buggy_sum, ref_sum, gen_two, 1000);
+}
+
+/* An assertion message full of XML metacharacters, so the JUnit output must
+ * escape `< & > "` — the escaping was never validated (xmllint ran only on the
+ * all-passing suite). tests/expect.sh xmllint-checks this suite's JUnit. */
+TEST(neg, xml_special_chars) { ASSERT_STREQ("a<b&c>d", "w\"x'y"); }

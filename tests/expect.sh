@@ -136,6 +136,17 @@ expect_fail_re "SIGSEGV contained (no-fork)" "$CRASH_RE" "$NEG" --filter=neg.cra
 expect_fail_msg "infinite loop times out"     "timed out" "$NEG" --filter=neg.timeout --timeout=1
 # abort() (SIGABRT, uncaught) is contained by fork: parent synthesizes from wait status.
 expect_fail_msg "SIGABRT contained by fork"   "SIGABRT" "$NEG" --filter=neg.aborts
+# SIGILL / SIGFPE / SIGBUS are contained and named (raise() delivers them the same
+# on every arch; the sanitize build sets handle_sig*=0 so the framework still catches).
+expect_fail_re  "SIGILL contained"  'SIGILL' "$NEG" --filter=neg.illegal_instruction
+expect_fail_re  "SIGFPE contained"  'SIGFPE' "$NEG" --filter=neg.fp_exception
+expect_fail_re  "SIGBUS contained"  'SIGBUS' "$NEG" --filter=neg.bus_error
+# Guard-page overrun/underrun faults — the headline buffer-safety feature, no
+# longer exercised only in the exit-code-ignored demo.
+expect_fail_re  "guard-page overrun faults"  "$CRASH_RE" "$NEG" --filter=neg.guard_page_overrun
+expect_fail_re  "guard-page underrun faults" "$CRASH_RE" "$NEG" --filter=neg.guard_page_underrun
+# Differential testing reports the first disagreeing input.
+expect_fail_msg "ref-model mismatch reported" "trial 0 input" "$NEG" --filter=neg.ref_model_mismatch
 
 # ---- SKIP ----
 expect_contains "SKIP reported"    "# SKIP" "$POS" --filter=posit.skip_reports
@@ -143,6 +154,11 @@ expect_exit     "SKIP exits 0"     0        "$POS" --filter=posit.skip_reports
 
 # ---- SETUP / TEARDOWN ----
 expect_exit "SETUP runs before test" 0 "$POS" --filter=fix.sees_setup
+# TEARDOWN actually runs (X1): the whole positive suite passes --no-fork, where
+# the lifecycle counters share state and the second test asserts the first test's
+# TEARDOWN executed. A skipped teardown makes lifecycle.observes_prior_teardown
+# fail -> nonzero exit.
+expect_exit "TEARDOWN runs (observed --no-fork)" 0 "$POS" --no-fork
 
 # ---- runner CLI behavior ----
 
@@ -188,12 +204,29 @@ expect_exit "--jobs=0 exits 2" 2 "$POS" --jobs=0
 # --format=junit emits a testsuites root, and a <failure> for a failing case.
 expect_contains "junit root element"  "<testsuites" "$POS" --format=junit
 expect_contains "junit failure element" "<failure"   "$NEG" --filter=neg.eq --format=junit
+# The JUnit escaper (X4): validate the XML is well-formed for BOTH the all-passing
+# suite AND a failing suite whose assertion message is full of `< & > "`, and that
+# those metacharacters are actually escaped. CI installs libxml2-utils so this
+# runs there; it self-skips only where xmllint is absent locally.
 if command -v xmllint >/dev/null 2>&1; then
     if "$POS" --format=junit 2>/dev/null | xmllint --noout - 2>/dev/null; then
-        ok "junit is well-formed XML"
+        ok "junit is well-formed XML (passing suite)"
     else
-        bad "junit is well-formed XML"
+        bad "junit is well-formed XML (passing suite)"
     fi
+    if "$NEG" --format=junit 2>/dev/null | xmllint --noout - 2>/dev/null; then
+        ok "junit is well-formed XML (failures + XML metacharacters)"
+    else
+        bad "junit is well-formed XML (failures + XML metacharacters)"
+    fi
+    if "$NEG" --filter=neg.xml_special_chars --format=junit 2>/dev/null \
+         | grep -q 'a&lt;b&amp;c&gt;d'; then
+        ok "junit escapes < & > in messages"
+    else
+        bad "junit escapes < & > in messages"
+    fi
+else
+    echo "  - SKIP junit XML validation (xmllint not installed)"
 fi
 
 # Unknown option exits 2; --help exits 0.

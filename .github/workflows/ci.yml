@@ -43,6 +43,12 @@ jobs:
       - name: Build and run test suites
         run: make WERROR=1 test
 
+      # xmllint validates the JUnit XML (incl. escaping of < & > " in failure
+      # messages) in `make check`. Preinstalled on the runners, but make it
+      # deterministic; macOS ships it natively.
+      - name: Install xmllint (JUnit XML validation)
+        run: if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y --no-install-recommends libxml2-utils; fi
+
       - name: Framework self-tests (meta-tests; assertions/runner/containment)
         run: make WERROR=1 check
 
@@ -76,6 +82,12 @@ jobs:
 
       - name: Build and run test suites
         run: make WERROR=1 test
+
+      # xmllint validates the JUnit XML (incl. escaping of < & > " in failure
+      # messages) in `make check`. Preinstalled on the runners, but make it
+      # deterministic; macOS ships it natively.
+      - name: Install xmllint (JUnit XML validation)
+        run: if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y --no-install-recommends libxml2-utils; fi
 
       - name: Framework self-tests (meta-tests; assertions/runner/containment)
         run: make WERROR=1 check
