@@ -264,6 +264,16 @@ size_t emu_fuzz_corpus_len(const emu_t *e) {
     return e != NULL ? e->fuzz_corpus_len : 0;
 }
 
+/* The i-th kept input from the handle's last fuzz run (the coverage-growing corpus),
+ * so a dynamic-FFI binding can replay or persist it; 0 if out of range. Keyed on the
+ * handle, since the handle owns the corpus (not the stat). Sits here beside the
+ * emu_fuzz_corpus accessors it wraps — its siblings are in ffi.o, but ffi.o goes into
+ * the emu-free core libasmtest, and this shim's emu.o dependency must not leak there
+ * (see the note in ffi.c). It ships in the emu superset, where emu.o is present. */
+long asmtest_emu_fuzz_corpus_at(const emu_t *e, unsigned long long i) {
+    return (i < emu_fuzz_corpus_len(e)) ? emu_fuzz_corpus(e)[i] : 0;
+}
+
 bool emu_map(emu_t *e, uint64_t addr, size_t size) {
     return uc_mem_map(e->uc, addr, size, UC_PROT_READ | UC_PROT_WRITE) ==
            UC_ERR_OK;

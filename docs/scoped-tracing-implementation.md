@@ -1,10 +1,18 @@
+---
+# Reachable via inline links from the published scoped-tracing guide, not the
+# toctree — `orphan` tells Sphinx that is intentional (no toc.not_included warning
+# under -W). The plan set it summarizes lives under docs/plans/ (excluded from the
+# site), so those links point at GitHub blobs, matching the repo-wide convention.
+orphan: true
+---
+
 # Scoped in-process tracing — implementation summary
 
 This document records what was **built and tested** for the scoped-tracing plan set
-([scoped-inprocess-tracing-plan.md](plans/scoped-inprocess-tracing-plan.md) and its
-three slices — [core](plans/scoped-tracing-core-plan.md),
-[bindings](plans/scoped-tracing-bindings-plan.md),
-[managed](plans/scoped-tracing-managed-plan.md)), and what remains **forward-look**
+([scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-inprocess-tracing-plan.md) and its
+three slices — [core](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-core-plan.md),
+[bindings](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-bindings-plan.md),
+[managed](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-managed-plan.md)), and what remains **forward-look**
 (gated on hardware / managed runtimes the CI host lacks — this dev box is AMD, with no
 Intel PT and no bare-metal perf privilege in containers).
 

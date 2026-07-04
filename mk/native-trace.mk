@@ -457,11 +457,25 @@ drtrace-bindings-test: drtrace-python-test \
 # tree concurrently → torn writes / cmake collisions. Making it a single shared
 # prerequisite of every lane makes GNU make build it exactly once and every lane
 # wait on it. Guarded by DR_AVAILABLE so it stays a no-op (and the lanes SKIP) off
-# a DynamoRIO host. shared-emu + $(CORPUS_LIB) are folded in for the rust/go lanes.
+# a DynamoRIO host.
+#
+# The base prep builds ONLY the DR essentials (libasmtest_drapp + the DR client):
+# eight lanes and the CI `drtrace` job dlopen just libasmtest_drapp, and that job
+# installs no emulator dep, so pulling shared-emu in here would fail on the missing
+# libunicorn/unicorn.h. rust/go additionally load libasmtest_emu and link the
+# conformance corpus fixture, so they depend on drtrace-shared-prep-emu, which layers
+# shared-emu + $(CORPUS_LIB) on top. Ordered AFTER the base prep, so the shared
+# pic/*.o are already built once before the emu sub-make runs — no -j torn writes.
 .PHONY: drtrace-shared-prep
 drtrace-shared-prep:
 ifdef DR_AVAILABLE
-	@$(MAKE) shared-emu $(CORPUS_LIB) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+	@$(MAKE) shared-drtrace drtrace-client DRAPP_KEYSTONE=0
+endif
+
+.PHONY: drtrace-shared-prep-emu
+drtrace-shared-prep-emu: drtrace-shared-prep
+ifdef DR_AVAILABLE
+	@$(MAKE) shared-emu $(CORPUS_LIB) DRAPP_KEYSTONE=0
 endif
 
 drtrace-cpp-test: drtrace-shared-prep
@@ -473,7 +487,7 @@ else
 	$(drtrace_env) ./$(BUILD)/test_drtrace_cpp
 endif
 
-drtrace-rust-test: drtrace-shared-prep
+drtrace-rust-test: drtrace-shared-prep-emu
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,rust)
 else
@@ -485,7 +499,7 @@ else
 	  $(CARGO) run --quiet --example drtrace
 endif
 
-drtrace-go-test: drtrace-shared-prep
+drtrace-go-test: drtrace-shared-prep-emu
 ifndef DR_AVAILABLE
 	$(call drtrace_skip,go)
 else
