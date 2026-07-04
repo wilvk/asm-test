@@ -2,6 +2,9 @@
 name = "asm-test"
 version = "1.1.0"
 edition = "2021"
+# MSRV: the binding uses std::sync::OnceLock (stabilized in Rust 1.70.0), so the
+# real floor is 1.70 — not the 2021 edition's own 1.56 minimum.
+rust-version = "1.70"
 description = "Rust binding for the asm-test assembly unit-testing framework"
 repository = "https://github.com/wilvk/asm-test"
 homepage = "https://github.com/wilvk/asm-test"

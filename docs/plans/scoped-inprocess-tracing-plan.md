@@ -183,6 +183,12 @@ Core §0 ──► Bindings (Python, C++, Zig, Go; Ruby, Lua, Rust; .NET ref)
    └──► Core §1 (per-thread state) ──► Core §2 (libipt glue) ──► Managed (Node → JVM → .NET)
 ```
 
+The Managed edge is not uniform per sub-phase: the slice's two **CI-protective**
+deliverables — the §D3 ptrace-stealth stepper and the §D4 `test_stitch_slices` merge
+unit — depend only on **Core §1** (per-thread state), **not** §2's PT-hardware-gated
+libipt glue, so they can land right after §1. Only the clean in-process PT path
+(§D0–§D2 live capture) is a first consumer of §2.
+
 ---
 
 ## Cross-cutting decisions (shared by all three slices)

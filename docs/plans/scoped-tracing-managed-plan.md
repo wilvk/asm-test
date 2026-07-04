@@ -162,7 +162,11 @@ assert. The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA 
 with the feature enabled; it shipped unflagged upstream in V8 13.8 / Chromium 134); on
 Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node 24
 and keep the existing `region(name, fn)` callback form as the version-independent
-fallback (it needs no `using`). Arm hook is the existing top-level `require` IIFE
+fallback (it needs no `using`). **The `Symbol.dispose` well-known symbol is itself only
+native from Node 18.18 / 20.4** (not the whole 18.0 floor), so key the manual-dispose
+method off a guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');`
+(Node uses `Symbol.for('nodejs.dispose')` internally) rather than assuming
+`Symbol.dispose` exists across the 18 floor. Arm hook is the existing top-level `require` IIFE
 ([hwtrace.js:172-282](../../bindings/node/hwtrace.js#L172)); keep it lazy-first-scope.
 
 **Async-hop stitching (piece D) — weaker for Node than for .NET, by construction.**

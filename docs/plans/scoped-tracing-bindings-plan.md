@@ -138,13 +138,13 @@ the auto-name mechanism.
 
 | # | Binding | Shipped region helper | Construct to add | Arm hook | Auto-name |
 |---|---|---|---|---|---|
-| A1 | **Python** | [hwtrace.py:528](../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe` one-frame walk |
-| A2 | **C++** | [asmtest_hwtrace.hpp:677](../../bindings/cpp/asmtest_hwtrace.hpp#L677) `region()` → RAII `RegionScope` ([:501](../../bindings/cpp/asmtest_hwtrace.hpp#L501)) | **extend** `RegionScope` (dtor emit + tid assert) | no module-init → Meyers static `api()` ([:289](../../bindings/cpp/asmtest_hwtrace.hpp#L289)) | `std::source_location` (C++20) or `__builtin_FUNCTION` |
-| A3 | **Zig** | [hwtrace.zig:743](../../bindings/zig/src/hwtrace.zig#L743) `region(name, args, body)` (begin/`defer` end) | add `Scope` returning a `deinit`-able value (or keep callback + emit) | lazy `load()` latch ([:511](../../bindings/zig/src/hwtrace.zig#L511)) | `@src()` compile-time |
+| A1 | **Python** | [hwtrace.py:528](../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe(N)` walk at a **pinned depth** (CPython; `inspect.currentframe()` fallback → `file:line`) |
+| A2 | **C++** | [asmtest_hwtrace.hpp:677](../../bindings/cpp/asmtest_hwtrace.hpp#L677) `region()` → RAII `RegionScope` ([:501](../../bindings/cpp/asmtest_hwtrace.hpp#L501)) | **extend** `RegionScope` (**`noexcept`** dtor emit + tid assert) | no module-init → Meyers static `api()` ([:289](../../bindings/cpp/asmtest_hwtrace.hpp#L289)) | `__builtin_FUNCTION`+`__builtin_LINE`+`__builtin_FILE` → `file:line` name (**C++17 floor**); `std::source_location` only `#if __cplusplus >= 202002L` |
+| A3 | **Zig** | [hwtrace.zig:743](../../bindings/zig/src/hwtrace.zig#L743) `region(name, args, body)` (begin/`defer` end) | add `Scope` returning a `deinit`-able value (**not RAII** — needs explicit `defer scope.deinit()`) or keep callback + emit | lazy `load()` latch ([:511](../../bindings/zig/src/hwtrace.zig#L511)) | `@src()` **passed at the call site** (Zig has no default-arg / caller-location propagation) |
 | A4 | **Ruby** | [hwtrace.rb:705](../../bindings/ruby/hwtrace.rb#L705) `region(name)` block + `ensure` | block form + emit; auto-name from `caller_locations` | real `require`; recommend lazy | `caller_locations(1,1)` |
 | A5 | **Lua** | [hwtrace.lua:389](../../bindings/lua/hwtrace.lua#L389) `region(name, fn)` + `pcall` | callback + emit (no `<close>` under LuaJIT 5.1) | real `require`; defensive `pcall(ffi.load)` ([:186](../../bindings/lua/hwtrace.lua#L186)) | `debug.getinfo(2)` |
 | A6 | **Rust** | [hwtrace.rs:937](../../bindings/rust/src/hwtrace.rs#L937) `region()` → `Drop` guard `Region` ([:712](../../bindings/rust/src/hwtrace.rs#L712)) | **extend** `Region::drop` (emit + tid assert) | lazy `OnceLock` `hw_fns()` ([:490](../../bindings/rust/src/hwtrace.rs#L490)) | `#[track_caller]` + `Location::caller()` |
-| B1 | **Go** | [hwtrace.go:826](../../bindings/go/hwtrace.go#L826) `Region(name, fn)`; `Begin`/`End` ([:798](../../bindings/go/hwtrace.go#L798)/[:816](../../bindings/go/hwtrace.go#L816)) | closure + `defer`; emit; **keep** `LockOSThread` ([:808](../../bindings/go/hwtrace.go#L808)) | `func init()` ([:608](../../bindings/go/hwtrace.go#L608)) | `runtime.Caller(1)` |
+| B1 | **Go** | [hwtrace.go:826](../../bindings/go/hwtrace.go#L826) `Region(name, fn)`; `Begin`/`End` ([:798](../../bindings/go/hwtrace.go#L798)/[:816](../../bindings/go/hwtrace.go#L816)) | closure + `defer`; emit; **keep** `LockOSThread` ([:808](../../bindings/go/hwtrace.go#L808)) | `func init()` ([:608](../../bindings/go/hwtrace.go#L608)) | `runtime.Caller(1)` → `file:line` (function name needs `runtime.FuncForPC(pc).Name()`) |
 
 *(Node and Java `region()` helpers exist —
 [hwtrace.js:439](../../bindings/node/hwtrace.js#L439),
@@ -157,19 +157,35 @@ JIT-managed tier as .NET.)*
 
 - **Native / no-GC (C++, Rust, Zig).** Trivial and safe — `begin == end`
   same-thread holds by construction. Rust and C++ already have true RAII (`Drop` /
-  dtor); the only real gap is emit-on-close (shared-core §0.3) and auto-name. Zig's
-  `defer` is skipped on `panic` — document it.
+  dtor); the only real gap is emit-on-close (shared-core §0.3) and auto-name. **The
+  C++ dtor path must be `noexcept`** — flag `truncated` (as the .NET reference does),
+  never throw or use an aborting `assert()` from a destructor. **Zig has no
+  destructors, so its `Scope` value is *not* RAII** — it needs an explicit `defer
+  scope.deinit()` at the call site and shares the callback form's abnormal-exit gap
+  (Zig's `defer` is skipped on `panic` — document it). The trace is then simply not
+  emitted on the abnormal path, never emitted-partial-as-complete.
 - **Refcount / interpreter (Python, Ruby, Lua).** Easy, with real import-time arm
-  hooks. Ruby's Fiber-scheduler / Ractor can resume `ensure` on a **different** OS
-  thread → the tid assert (shared-core §0.2) is load-bearing here. Lua coroutines
-  stay on one OS thread → *safer than Ruby*.
+  hooks. On **Ruby ≥ 3.0** the Fiber-scheduler / Ractor can resume `ensure` on a
+  **different** OS thread → the tid assert (shared-core §0.2) is load-bearing there.
+  Both features arrived in **3.0**, so on the **2.6–2.7 floor** fibers never change OS
+  thread and the tid assert is *defensive-only* — keep it (it is correct and required
+  for supported 3.0+ runtimes), but the hazard is a 3.0+ property, not a floor one.
+  Lua's same-thread safety comes from the **single `lua_State`**, not coroutine
+  pinning; note that LuaJIT permits **yield-across-`pcall`**, so a `region()` whose
+  `fn` yields leaves the marker pair open across the suspension — rely on the tid
+  assert if it resumes on another OS thread, and treat a never-resumed coroutine as
+  the "not emitted" abnormal-exit case. Still *safer than Ruby*.
 - **Moving-GC + M:N scheduler (Go) — the instructive middle.** Already solved by
   *pinning* the OS thread (`runtime.LockOSThread`,
   [hwtrace.go:808](../../bindings/go/hwtrace.go#L808)) — the fix for the project's
   own resolved **go-full-test flaky-crash** finding (single-step TF is per-thread).
   Go converts .NET's "follow the migration" into "forbid the migration for the
-  region." `go func()` fan-out inside the scope still escapes with no stitch hook —
-  document it, flag it via the tid assert.
+  region." **`go func()` fan-out inside the scope is *silently untraced*** —
+  `LockOSThread` confines the trace to the arming OS thread, so work fanned out to
+  other goroutines runs elsewhere with no stitch and no signal. The tid assert is a
+  backstop **only** for the "`End` ran on the wrong thread" misuse, **not** a
+  fan-out detector; the Go thread-hop test must therefore force `End` from a spawned
+  goroutine to actually exercise it.
 
 ---
 
@@ -255,8 +271,14 @@ managed clean path respectively, and the shims inherit them for free once landed
 - **Emit-on-close needs shared-core §0.3.** Until `asmtest_hwtrace_render` lands,
   the shims can only record coverage, not render text — sequence §0.3 first.
 - **Auto-name via stack walk has per-language edge cases** (inlining, tail calls,
-  release-mode frame elision). Compile-time source-location (C++/Zig/Rust) is
-  robust; the interpreted stack walks are best-effort — document when the name
+  release-mode frame elision). Compile-time source-location is robust — Zig `@src()`
+  and Rust `#[track_caller]`+`Location::caller()`; **C++ uses the
+  `__builtin_FUNCTION`/`__builtin_LINE`/`__builtin_FILE` builtins at the C++17 floor**
+  (`std::source_location` needs C++20, above the floor). `__builtin_FUNCTION` alone
+  yields only the function name — two scopes in one function alias — so compose it with
+  `__builtin_LINE`/`__builtin_FILE` into a `file:line` name. The interpreted stack
+  walks (`sys._getframe`, `caller_locations`, `debug.getinfo`, `runtime.Caller`) are
+  best-effort — document when the name
   falls back to a synthetic label, and make that fallback **collision-resistant**
   (e.g. `file:line`, or a monotonic counter suffix) so two distinct *unresolved* sites
   do not alias to one slot under Core §0.4's idempotent-by-name registry. **Name
