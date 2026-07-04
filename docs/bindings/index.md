@@ -42,7 +42,7 @@ an end-to-end, idiomatic example:
 | C++ | [C++ binding](cpp.md) | direct `#include` | C++17 (`-std=c++17` / `cxx_std_17`) |
 | Zig | [Zig binding](zig.md) | `@cImport` | Zig 0.13.0 (`minimum_zig_version`) |
 | Node.js | [Node.js binding](node.md) | `koffi` | Node.js 18 (`engines.node = ">=18"`) |
-| Java | [Java binding](java.md) | FFM (Panama) | JDK 21 (`--release 21`; FFM preview, stable in 22+) |
+| Java | [Java binding](java.md) | FFM (Panama) | JDK 22 (`--release 22`; FFM final since 22, no preview flags) |
 | Ruby | [Ruby binding](ruby.md) | `Fiddle` | Ruby 2.6 (`required_ruby_version = ">= 2.6"`) |
 | Lua | [Lua binding](lua.md) | LuaJIT `ffi` | LuaJIT (Lua 5.1 ABI) |
 
