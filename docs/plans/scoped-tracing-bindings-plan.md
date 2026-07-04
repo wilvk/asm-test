@@ -120,6 +120,9 @@ in the binding today (verified). New work:
   **does** fire for downstream consumers — it runs on first use of any type in the module,
   in the consumer's process, not only when this assembly is built directly — which is
   exactly what **CA2255** ("`[ModuleInitializer]` should not be used in libraries") flags.
+  (CA2255 is **default-enabled only in .NET 10**; on the net8.0 target it fires only under
+  a newer SDK / raised `AnalysisLevel` — but a NuGet-published library should treat it as
+  live regardless, since a downstream consumer may build at a higher analysis level.)
   That is *why* the initializer here is confined to a cheap, side-effect-free availability
   probe with the real slot/SIGTRAP arming lazy-first-scope: suppress CA2255 with that
   justification and keep the probe trim-/startup-safe. The lazy-first-scope arm makes the
@@ -147,7 +150,7 @@ the auto-name mechanism.
 
 | # | Binding | Shipped region helper | Construct to add | Arm hook | Auto-name |
 |---|---|---|---|---|---|
-| A1 | **Python** | [hwtrace.py:528](../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe(N)` walk at a **pinned depth** (CPython; `inspect.currentframe()` fallback → `file:line`) |
+| A1 | **Python** | [hwtrace.py:528](../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe(N)` walk at a **pinned depth** (CPython-only; on other impls `inspect.currentframe()` returns `None` — degrade to a synthetic collision-resistant `file:line`/counter label, not a portability path) |
 | A2 | **C++** | [asmtest_hwtrace.hpp:677](../../bindings/cpp/asmtest_hwtrace.hpp#L677) `region()` → RAII `RegionScope` ([:501](../../bindings/cpp/asmtest_hwtrace.hpp#L501)) | **extend** `RegionScope` (**`noexcept`** dtor emit + tid assert) | no module-init → Meyers static `api()` ([:289](../../bindings/cpp/asmtest_hwtrace.hpp#L289)) | `__builtin_FUNCTION`+`__builtin_LINE`+`__builtin_FILE` → `file:line` name (**C++17 floor**); `std::source_location` only `#if __cplusplus >= 202002L` |
 | A3 | **Zig** | [hwtrace.zig:743](../../bindings/zig/src/hwtrace.zig#L743) `region(name, args, body)` (begin/`defer` end) | add `Scope` returning a `deinit`-able value (**not RAII** — needs explicit `defer scope.deinit()`) or keep callback + emit | lazy `load()` latch ([:511](../../bindings/zig/src/hwtrace.zig#L511)) | `@src()` **passed at the call site** (Zig has no default-arg / caller-location propagation) |
 | A4 | **Ruby** | [hwtrace.rb:705](../../bindings/ruby/hwtrace.rb#L705) `region(name)` block + `ensure` | block form + emit; auto-name from `caller_locations` | real `require`; recommend lazy | `caller_locations(1,1)` |
@@ -178,8 +181,10 @@ JIT-managed tier as .NET.)*
   fibers.** A Ruby **Fiber never migrates OS threads** in any released Ruby: fibers are
   pinned to their creating thread (resuming one elsewhere raises `FiberError`), and the
   Fiber *scheduler* is itself thread-local — so a `region()` whose `begin`/`ensure` sit
-  in one fiber close on the arming OS thread (fiber migration, Feature #13821, was
-  proposed but never merged). The genuine hazards, for both of which the §0.2 tid assert
+  in one fiber close on the arming OS thread **when M:N is off** (fiber pinning is to the
+  Ruby *thread*, not the OS thread — under M:N hazard (b) the Ruby thread's own native
+  thread can still change mid-scope; fiber migration, Feature #13821, was proposed but
+  never merged). The genuine hazards, for both of which the §0.2 tid assert
   is the load-bearing backstop, are: **(a) Ractors** (Ruby **3.0+**) — each runs on its
   own native thread(s), so a scope entered in a different Ractor arms on a different OS
   thread; and **(b) the M:N thread scheduler** (Ruby **3.3+**) — Ruby *threads* are
@@ -193,7 +198,7 @@ JIT-managed tier as .NET.)*
   `fn` yields leaves the marker pair open across the suspension — rely on the tid
   assert if it resumes on another OS thread, and treat a never-resumed coroutine as
   the "not emitted" abnormal-exit case. Still *safer than Ruby*.
-- **Moving-GC + M:N scheduler (Go) — the instructive middle.** Already solved by
+- **Non-moving GC + M:N scheduler (Go) — the instructive middle.** Already solved by
   *pinning* the OS thread (`runtime.LockOSThread`,
   [hwtrace.go:808](../../bindings/go/hwtrace.go#L808)) — the fix for the project's
   own resolved **go-full-test flaky-crash** finding (single-step TF is per-thread).
@@ -263,9 +268,15 @@ scoped-trace case:
   `libasmtest_hwtrace` ([shared-hwtrace](../../mk/native-trace.mk#L653)).
 - The per-language scope tests run in the existing `hwtrace-<lang>-test` recipes
   ([mk/native-trace.mk:559-612](../../mk/native-trace.mk#L559)) and the
-  `hwtrace-bindings` / `bindings` CI jobs — no new CI job. Docker fan-out lanes
-  (`docker-hwtrace-<lang>`, [mk/docker.mk:306-313](../../mk/docker.mk#L306)) pick
-  them up unchanged.
+  `hwtrace-bindings` / `bindings` CI jobs — no new CI job **for the docker-matrix
+  languages**. Docker fan-out lanes (`docker-hwtrace-<lang>`,
+  [mk/docker.mk:306-313](../../mk/docker.mk#L306)) pick them up unchanged. **Exception —
+  Python:** Python is deliberately excluded from `HWTRACE_DOCKER_LANGS`
+  ([mk/docker.mk:220](../../mk/docker.mk#L220)), so its scope test is **not** exercised by
+  the `hwtrace-bindings` job (in the `bindings` job the hwtrace tests self-skip, since no
+  `shared-hwtrace` lib is on the path). The A1 Python scope test therefore needs explicit
+  CI wiring — add `python` to the hwtrace docker matrix, or run `make hwtrace-python-test`
+  in a dedicated step — otherwise it runs only locally.
 
 ---
 
@@ -296,8 +307,11 @@ managed clean path respectively, and the shims inherit them for free once landed
   yields only the function name — two scopes in one function alias — so compose it with
   `__builtin_LINE`/`__builtin_FILE` into a `file:line` name. The interpreted stack
   walks (`sys._getframe`, `caller_locations`, `debug.getinfo`, `runtime.Caller`) are
-  best-effort — document when the name
-  falls back to a synthetic label, and make that fallback **collision-resistant**
+  best-effort — and note Python's `sys._getframe` **and** `inspect.currentframe()` are
+  *both* CPython-only (on other implementations `currentframe()` returns `None` rather
+  than being a portability path), so the shim must null-check the frame result, document
+  when the name falls back to a synthetic label, and make that fallback
+  **collision-resistant**
   (e.g. `file:line`, or a monotonic counter suffix) so two distinct *unresolved* sites
   do not alias to one slot under Core §0.4's idempotent-by-name registry. **Name
   *collisions*** (a scope in a loop, or the

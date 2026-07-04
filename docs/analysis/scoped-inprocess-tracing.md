@@ -136,7 +136,7 @@ model asm-test already ships:
 
 The perf event is opened **on the calling process itself** — `perf_open(&a, 0, -1, -1, 0)`,
 i.e. `pid == 0` (this thread) / `cpu == -1` (follow it across CPUs)
-([src/hwtrace.c:438](../../src/hwtrace.c#L438)) — so this is in-process self-tracing, not
+([src/hwtrace.c:441](../../src/hwtrace.c#L441)) — so this is in-process self-tracing, not
 a foreign attach. The `try/finally` that keeps `begin`/`end` balanced even on an
 exception is already how the .NET binding's `HwTrace.Region(name, Action)` works
 ([bindings/dotnet/hwtrace/HwTrace.cs:602](../../bindings/dotnet/hwtrace/HwTrace.cs#L602));
@@ -216,7 +216,7 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    mid-scope is captured too. Two boundaries sharpen this: the **containing** method —
    the one holding the `using` — was compiled before the window opened, so its own JIT
    never appears, only cold *callees'*; and the kernel side is silent (the events set
-   `exclude_kernel`, [src/hwtrace.c:668](../../src/hwtrace.c#L668)), so a thread in a
+   `exclude_kernel`, [src/hwtrace.c:681](../../src/hwtrace.c#L681)), so a thread in a
    syscall goes dark and resumes emitting on return. For ordinary library-leaning code
    the window is dominated by BCL plumbing — a single
    `Console.WriteLine("x is:" + x)` drags in `Int32.ToString`, `string.Concat`,
@@ -288,8 +288,9 @@ are the host preconditions (Intel/CoreSight bare metal + perf privilege).
 The scope shape is identical (same `begin`/`end`, same self perf event), and it is
 state-safe — the capture is `sample_period=1` branch-stack sampling, so its cost is a
 kernel PMI per taken branch: timing, not state. The hardware stack itself is fixed at
-**16 entries** (Zen 3 BRS / Zen 4 LbrExtV2; `AMD_LBR_DEPTH`,
-[src/hwtrace.c:58](../../src/hwtrace.c#L58)) and no AMD knob deepens it — but because
+**16 entries** (Zen 3 BRS is architecturally 16-deep; Zen 4/5 LbrExtV2 enumerates its
+depth via CPUID leaf `0x80000022` EBX, =16 on shipping parts; `AMD_LBR_DEPTH`,
+[src/hwtrace.c:59](../../src/hwtrace.c#L59)) and no AMD knob deepens it — but because
 *every* taken branch emits a sample carrying the 16 most-recent branches, consecutive
 windows overlap by up to 15 entries, and the shipped decode escalates automatically:
 **Tier A** decodes the richest single in-region window when the routine fit one stack
@@ -453,8 +454,9 @@ logical operation.
   value-changed hook triggers, then merging AUX streams by `ScopeId`. It stays
   per-thread, so it needs **no privilege bump**. The alternative — **per-CPU** mode
   (`pid=-1, cpu=N`) with TID demux from `PERF_RECORD_ITRACE_START`/sched records — also
-  captures hops but needs `CAP_SYS_ADMIN`/`paranoid=-1` and heavier decode; the
-  per-thread-plus-hook route is preferable.
+  captures hops but needs `CAP_PERFMON` (Linux 5.8+) or `CAP_SYS_ADMIN`, or
+  `perf_event_paranoid < 1`, plus heavier decode; the per-thread-plus-hook route is
+  preferable.
 - **Under single-step** the same hook can `ss_arm_tf()` on the resuming thread and make
   `g_base`/`g_stream`/`g_armed` thread-local — but arming TF on a thread the runtime
   scheduled means asm-test is now single-stepping runtime-owned threads, compounding the
@@ -475,7 +477,12 @@ backends already filter to the region:
   that runs *outside* the registered range never reaches the trace. The remaining noise is
   only in the empty-ctor *whole-window* mode; three buildable refinements bound it:
   (a) program the capture-side IP **address filter** so the CPU emits packets only for the
-  region (the named TODO at [src/pt_backend.c:129-134](../../src/pt_backend.c#L129-L134));
+  region (the pending fix at [src/pt_backend.c:129-134](../../src/pt_backend.c#L129-L134)) —
+  **but** perf userspace address filters resolve only against **file-backed** VMAs
+  (inode+offset), so they cannot target the anonymous `exec_alloc`/JIT regions this
+  facility traces; for those the effective mechanism is the decode-time range filter
+  already shipped, which trims the *decoded* stream but not capture bandwidth (see the
+  [core plan §2](../plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c) for the full constraint);
   (b) use the **code-image emission events** (mprotect/mmap `PROT_EXEC`, the eBPF detector
   in [asmtest_codeimage.h](../../include/asmtest_codeimage.h)) to timestamp *when* a
   method's bytes appeared, so the "JIT compiling HotPath" slice can be split from the
@@ -493,8 +500,10 @@ backends already filter to the region:
 
 ### Qualification 3 — bandwidth / overflow
 
-- **PT**: the structural fix is the same **address filter** as Q2 — a region filter cuts
-  emitted bandwidth by orders of magnitude for a small hot region inside a large window.
+- **PT**: the same **address filter** as Q2 would cut *emitted* bandwidth by orders of
+  magnitude for a small hot region inside a large window — **but only for file-backed
+  code**; the anonymous `exec_alloc`/JIT regions this facility traces cannot be
+  hardware-filtered (Q2(a)), so their bandwidth ceiling is not lifted by the filter.
   Buffer sizing (`aux_size`/`data_size`) and the circular **snapshot** option are already
   first-class in the options
   ([asmtest_hwtrace.h:62-68](../../include/asmtest_hwtrace.h#L62-L68)) — though snapshot

@@ -82,7 +82,7 @@ ABI:
   `try_begin` and discards the result — **no ABI break** for the ten shipped
   shims. The implementation split happens in `asmtest_hwtrace_begin`
   ([src/hwtrace.c:654](../../src/hwtrace.c#L654)).
-- The same two dispatch cases (single-step [:663](../../src/hwtrace.c#L663), AMD
+- The same three dispatch cases (single-step [:663](../../src/hwtrace.c#L663), AMD
   [:669](../../src/hwtrace.c#L669), PT/CS [:674](../../src/hwtrace.c#L674)) must
   each surface their own failure through the new return path (e.g. `perf_open`
   failing at [:684](../../src/hwtrace.c#L684)).
@@ -279,8 +279,9 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   (innermost range wins at decode). The perf event is already per-thread
   (`pid == 0`, [:684](../../src/hwtrace.c#L684)) so no privilege change.
 - **Single-step (`src/ss_backend.c`).** Move the **per-capture** state
-  `g_armed`/`g_base`/`g_base_ip`/`g_len`/`g_trace`/`g_stream`/`g_stream_len`/`g_overflow`
-  ([:58-68](../../src/ss_backend.c#L58)) into TLS, and replace the single
+  `g_base`/`g_base_ip`/`g_len`/`g_trace`/`g_stream`/`g_stream_len`/`g_overflow`
+  ([:59-66](../../src/ss_backend.c#L59)) into TLS (the `g_armed` guard is handled
+  separately — see below), and replace the single
   `[g_base_ip, g_base_ip+g_len)` test in the handler
   ([:99-104](../../src/ss_backend.c#L99)) with an async-signal-safe **range stack**
   (a fixed-size TLS array, no allocation in the handler — the analysis is explicit:
@@ -296,22 +297,39 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   lazy allocation and no `__tls_get_addr` call at all, accepting the resulting
   static-TLS-surplus constraint on the FFI `dlopen`). **initial-exec is mandatory for
   *every* TLS object the handler dereferences — the range stack and the per-capture
-  state, not only `g_armed`:** an *armed* thread's handler reads the range stack on its
+  state:** an *armed* thread's handler reads the range stack on its
   hot path, and general-dynamic `__tls_get_addr` is not async-signal-safe **even for an
   already-faulted-in block** (glibc's lock-free fast path is an optimisation, not a spec
   guarantee, and a SIGTRAP landing mid-`__tls_get_addr` in normal code re-enters it).
-  Keeping the `g_armed` guard a **non-TLS atomic** is a useful *additional* belt — it
-  lets an **unarmed** thread's handler early-return without touching TLS at all — but it
-  is **not a substitute** for initial-exec on the range stack, which an armed thread must
-  still read. (The unqualified "same discipline as the existing `g_stream` write" is
-  insufficient — `g_stream` is safe today only because it is a plain `static`.) **The SIGTRAP disposition stays process-wide:** `g_old_sa`/`g_installed`
-  remain process-global `static`s (**not** moved to TLS), installed once
-  ([:129](../../src/ss_backend.c#L129)). Today `asmtest_ss_end` restores it
-  unconditionally under `g_installed` ([:213-216](../../src/ss_backend.c#L214)) with no
-  cross-thread refcount, so §1 must add an explicit **process-wide arm-refcount**
-  (incremented in `ss_begin`, decremented in `ss_end`) that gates the `sigaction` restore
-  so it fires only at count 0; per-thread `g_armed` then makes concurrent scopes on
-  different threads safe.
+  **The `g_armed` "am I stepping" guard is deliberately *not* one of those TLS objects
+  (resolving the storage-class question one way):** keep it a **process-global non-TLS
+  atomic** (`volatile sig_atomic_t`, as today, [:58](../../src/ss_backend.c#L58)) so an
+  **unarmed** thread's handler early-returns without touching TLS at all; a thread's own
+  "I am stepping" is then implied by its range-stack depth (`> 0`), itself initial-exec
+  TLS. That is a *belt* on the unarmed path, **not** a substitute for initial-exec on the
+  range stack an armed thread must still read. (The unqualified "same discipline as the
+  existing `g_stream` write" is insufficient — `g_stream` is safe today only because it
+  is a plain `static`.) **Bound the initial-exec footprint:** it draws on the small,
+  shared static-TLS surplus (~1–2 KiB; exhaustion fails a later `dlopen` with "cannot
+  allocate memory in static TLS block"), so the range stack stays **small and fixed** —
+  cap it at a shallow depth (e.g. 8 frames) of offsets/pointers only; the 512 KiB
+  ordered-RIP buffer stays **heap-`malloc`'d as today** ([:120](../../src/ss_backend.c#L120)),
+  never TLS. Where a host still exhausts the surplus, the escape levers are the
+  `glibc.rtld.optional_static_tls` tunable or linking the `.so` at startup as a
+  `DT_NEEDED` dependency rather than late `dlopen`. **The SIGTRAP disposition stays
+  process-wide:** `g_old_sa`/`g_installed` remain process-global `static`s (**not** moved
+  to TLS), installed once ([:129](../../src/ss_backend.c#L129)). Today `asmtest_ss_begin`
+  **saves-and-installs unconditionally** ([:124-134](../../src/ss_backend.c#L124)) and
+  `asmtest_ss_end` restores unconditionally under `g_installed`
+  ([:213-216](../../src/ss_backend.c#L214)), with no cross-thread refcount, so §1 must add
+  an explicit **process-wide arm-refcount** (incremented in `ss_begin`, decremented in
+  `ss_end`) that gates **both sides**: save the caller's original disposition into
+  `g_old_sa` and install `ss_on_sigtrap` only on the **0→1** transition, and restore only
+  on the **1→0** transition. Gating the restore alone is a bug — a second concurrent
+  `ss_begin` would otherwise overwrite `g_old_sa` with asm-test's *own* just-installed
+  handler, so the count-0 restore would reinstate that instead of the caller's original.
+  The process-global non-TLS `g_armed` guard plus per-thread range-stack state then make
+  concurrent scopes on different threads safe.
 - **AMD (`src/amd_backend.c` / `hwtrace.c`).** The AMD path shares the `hwtrace.c`
   slot; moving that slot to TLS covers it. Tier-A/Tier-B stitching
   ([src/amd_backend.c:152](../../src/amd_backend.c#L152),
@@ -335,15 +353,40 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   handle, not the bare name: `render` returns the **calling thread's
   most-recently-closed** slice. Auto-names that can run concurrently on one site must
   be tid/counter-disambiguated by the shim. This is the concurrency half of the
-  render contract §0.3 deferred — **and §1 owns it.** Pin, additively (no ABI change to
-  §0.3's `render`): `int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle,
-  char *buf, size_t buflen)`, handle-keyed rather than name-keyed, plus an
-  `(img, when)`-parameterised variant for the **version-aware** render §D3/§D4 need
-  against tiered/moved managed bytes — same `snprintf`-style size-then-allocate and
-  negative-`ASMTEST_HW_*` error convention as §0.3. The bindings slice's emit-on-close
-  keeps consuming the name-keyed §0.3 `render` (single-owner scopes are unaffected); the
-  handle-keyed form is purely additive, so §1 does **not** break the ABI the bindings
-  slice ships against.
+  render contract §0.3 deferred — **and §1 owns it.** Pin the handle type and three
+  additive entry points (no ABI change to §0.3's name-keyed `render`, which the bindings
+  slice keeps consuming; single-owner scopes are unaffected):
+
+  ```c
+  /* Opaque per-scope capture handle: an index into this thread's TLS range stack,
+   * tagged with a generation counter so a stale/closed handle is rejected. */
+  typedef struct { uint32_t idx; uint32_t gen; } asmtest_hwtrace_scope_t;
+
+  /* Handle-producing begin: register-then-begin under `name` (§0.4 idempotent),
+   * push a range-stack frame, return its handle in `*out`. Same negative ASMTEST_HW_*
+   * returns as try_begin (§0.1); ASMTEST_HW_EFULL when this thread's stack is full. */
+  int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out);
+
+  /* Handle-keyed render — the calling thread's slice for `handle`, version-blind
+   * (live bytes at [base,len)). snprintf-style size-then-allocate; negative
+   * ASMTEST_HW_* on a stale/unknown handle or unavailable decoder. */
+  int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle,
+                                   char *buf, size_t buflen);
+
+  /* Version-aware render — decode `trace`'s offsets against code-image `img` as of
+   * `when` (asmtest_codeimage_now), for §D3/§D4's tiered/moved managed bytes. Same
+   * snprintf/negative-code convention. */
+  int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
+                                       const asmtest_trace_t *trace,
+                                       char *buf, size_t buflen);
+  ```
+
+  `end`/`render_scope` key on the **handle**, not the bare name, so `render_scope`
+  returns the handle's own slice with no "which thread's slice" ambiguity; auto-names
+  that can run concurrently on one site are disambiguated by the handle, not by inventing
+  a unique name per entry. `try_begin`/`end` (§0.1) stay unchanged for the name-keyed
+  single-owner path the bindings slice ships against; the handle-keyed trio is purely
+  additive, so §1 does **not** break that ABI.
 
 **Compatibility.** The shipped single-region API must behave identically when only
 one thread/one region is used. After §1 a second same-thread `try_begin` **composes**
@@ -441,15 +484,29 @@ from `/proc/self/maps`.
   ([:97](../../include/asmtest_codeimage.h#L97)) at region boundaries so a new
   version is snapshotted on change. (The recorder already feeds the *out-of-process*
   stepper's `_versioned` path; this points the same recorder at self.)
-- **Capture-side address filter (`src/pt_backend.c:129-135`).** The named TODO —
-  program `PERF_EVENT_IOC_SET_FILTER` so the CPU emits packets only for the region
-  — is the structural fix for both the runtime-noise (Q2) and bandwidth (Q3)
-  qualifications. **Intel PT exposes only a small, CPU-dependent number of address-range
-  filters** (`/sys/bus/event_source/devices/intel_pt/caps/num_address_ranges`, aka the
-  perf `nr_addr_filters` limit), so wide or many-region windows can exceed the hardware
-  filter budget and must fall back to decode-time range filtering. It needs PT hardware
-  to validate, so it ships gated behind the same self-skip as the rest of the PT capture
-  path.
+- **Capture-side address filter (`src/pt_backend.c:129-135`).** The documented pending
+  capture-side fix (a prose comment at [:133-134](../../src/pt_backend.c#L133), **not** a
+  literal `TODO` token) would program `PERF_EVENT_IOC_SET_FILTER` so the CPU emits packets
+  only for the region. **Critical constraint (correcting the earlier "structural Q2/Q3
+  fix" framing):** perf userspace address filters are resolved by scanning the task's VMAs
+  for a **file-backed** match (inode + offset — the `start[/size]@<file>` grammar); a
+  fileless filter is a *kernel*-address filter, and these PT events set `exclude_kernel =
+  1` ([src/hwtrace.c:681](../../src/hwtrace.c#L681)). The regions this facility traces are
+  **anonymous** — the native-leaf `exec_alloc` buffer is `MAP_ANONYMOUS`
+  ([src/hwtrace.c:848](../../src/hwtrace.c#L848)) and JIT code pages are anonymous too — so
+  the hardware filter **cannot target them**; it helps only for **file-backed DSOs**. So
+  for the anonymous native-leaf and whole-window JIT cases the real Q2/Q3 mechanism is the
+  **decode-time range filtering that already ships**
+  ([src/pt_backend.c:108-116](../../src/pt_backend.c#L108)) — which cuts the *decoded*
+  stream but **not** capture bandwidth, so the "orders-of-magnitude bandwidth win" applies
+  only where the traced code is file-backed (or is first re-mapped from a `memfd`, which
+  this plan does not currently propose). Even for file-backed regions, **Intel PT exposes
+  only a small, CPU-dependent number of address-range filters**
+  (`/sys/bus/event_source/devices/intel_pt/caps/num_address_ranges`, aka the perf
+  `nr_addr_filters` limit), so wide or many-region windows exceed the hardware budget and
+  fall back to decode-time filtering anyway. The whole capture-side-filter path needs PT
+  hardware to validate, so it ships gated behind the same self-skip as the rest of the PT
+  capture path.
 
 **Validation posture (mirrors the hardware-trace plan).** The host-testable half
 exercises the **recorder-backed image callback (`bytes_at`) adapter directly** —
@@ -632,8 +689,9 @@ reconstruction host-testable; PT live forward-look on Intel PT).
   CI-validated, exactly as [hardware-trace-plan](hardware-trace-plan.md) accepts
   for its own PT capture.
 - **ABI stability.** `begin`/`end` stay `void` and behaviourally identical for the
-  ten shipped shims; all new capability is additive (`try_begin`, `render`,
-  `arm_tid`). No existing symbol changes signature.
+  ten shipped shims; all new capability is additive (`try_begin`, `render`, `arm_tid`,
+  and the §1 handle-keyed trio `begin_scope`/`render_scope`/`render_versioned` plus the
+  §D4 `stitch` merge helper). No existing symbol changes signature.
 
 ## Sources
 

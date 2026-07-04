@@ -119,9 +119,11 @@ the JIT code heap (`CodeHeapIterator` → `LogJITCompiledMethod`,
 [coreclr/vm/perfmap.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/perfmap.cpp))
 before logging new methods forward — so pre-arm methods **are** captured, with the self
 recorder as the version-independent fallback. Self-connecting `DiagnosticsClient` to its
-own pid works for a lightweight command like this, but the runtime documents a
-self-diagnostics **deadlock** risk for heavier self-operations (EventPipe rundown,
-self-dump); `EnablePerfMap` is light, but this is a reason to keep the self recorder as
+own pid works for a lightweight command like this, but there are **known self-tracing
+deadlock reports** for heavier self-operations (EventPipe rundown, self-dump — e.g.
+dotnet/runtime #45518, where reading rundown events can itself trigger a JIT); the caveat
+lives in the issue tracker, not formal docs. `EnablePerfMap` is light, but this is a
+reason to keep the self recorder as
 the no-IPC path), whose jitdump the shipped `asmtest_jitdump_find`
 ([include/asmtest_ptrace.h:331](../../include/asmtest_ptrace.h#L331)) /
 `asmtest_proc_perfmap_symbol` ([:303](../../include/asmtest_ptrace.h#L303)) already
@@ -173,7 +175,9 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 `Symbol.dispose` — `using t = new AsmTrace()` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
 assert. The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
-with the feature enabled; it shipped unflagged upstream in V8 13.8 / Chromium 134); on
+and enables Explicit Resource Management itself; upstream it was default-on in the V8
+engine at v13.8 / Chrome 138 — Chrome had turned it on earlier at Chromium 134 on V8 13.4,
+which is why Node 24 on V8 13.6 still had to flip it manually); on
 Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node 24
 and keep the existing `region(name, fn)` callback form as the version-independent
 fallback (it needs no `using`). **The `Symbol.dispose` well-known symbol is itself only
@@ -218,10 +222,18 @@ try-with-resources `AsmTrace implements AutoCloseable` over register-then-`try_b
 / `close`-end, with render-on-close + tid assert. Arm hook is the existing class
 `static{}` ([HwTrace.java:279](../../bindings/java/HwTrace.java#L279)); keep it
 lazy-first-scope. Address resolution for JIT'd methods reuses the **jitdump agent**
-(`-agentpath libperf-jvmti.so` for HotSpot) to emit `jit-<pid>.dump`, read **in-process**
-via the shipped `asmtest_jitdump_find`
-([src/ptrace_backend.c](../../src/ptrace_backend.c)) — the same in-process reader the
-V8/CoreCLR jitdumps already exercise, feeding the recorder. (`perf inject --jit` is the
+(`-agentpath libperf-jvmti.so` for HotSpot) to emit a `jit-<pid>.dump`, read
+**in-process** via the shipped `asmtest_jitdump_find`
+([src/ptrace_backend.c](../../src/ptrace_backend.c)) — the same in-process *reader* the
+V8/CoreCLR jitdumps already exercise, feeding the recorder. **Two caveats the "same
+reader" framing hides:** (i) `libperf-jvmti.so` is a **Linux perf-tools** artifact
+(`tools/perf/jvmti`), not a HotSpot/OpenJDK-shipped agent, and is often absent from distro
+packages — an external build dependency §D2 must provision; and (ii) it writes to
+`$JITDUMPDIR|$HOME|cwd + /.debug/jit/<mkdtemp-random>/jit-<pid>.dump`, **not** the
+`/tmp/jit-<pid>.dump` default `asmtest_jitdump_find` assumes when `path == NULL` — so §D2
+must **discover** that randomized directory (glob `$HOME/.debug/jit/*/jit-<pid>.dump`, or
+set `JITDUMPDIR` and glob the subdir) and pass the resolved path explicitly. Prefer the
+self code-image recorder where possible. (`perf inject --jit` is the
 jitdump format's canonical **offline** consumer — it merges a jitdump into a recorded
 `perf.data` using the external `perf` binary — and is **not** used here; it would
 duplicate the in-process reader and contradict the clean in-process PT thesis.)
@@ -260,9 +272,10 @@ thread while siblings run native).
 helper is the caller's *child*, so the nomination is what makes the reverse attach
 legal), the helper `PTRACE_SEIZE`s the calling thread and steps it from a sentinel at
 the scope open to a sentinel at the scope close; `Dispose()`/`close()` joins the helper
-and renders via the **version-aware** render variant (§0.3 is region-scoped and
-version-blind, but the stepped managed bytes tier/move, so the plain primitive would
-render stale text). Developer footprint stays **import + scope**. Works on Zen 2 and
+and renders via the **version-aware** render variant `asmtest_hwtrace_render_versioned`
+(pinned in [Core §1](scoped-tracing-core-plan.md#1--per-thread-hwtrace-state-planned-analysis-phase-c-before-the-managed-bindings);
+§0.3's `render` is region-scoped and version-blind, but the stepped managed bytes
+tier/move, so the plain primitive would render stale text). Developer footprint stays **import + scope**. Works on Zen 2 and
 inside Docker on an Intel Mac — the default seccomp profile permits `ptrace(2)` when the
 **host kernel is ≥ 4.8**; older kernels (or a stripped profile) need `CAP_SYS_PTRACE`.
 
