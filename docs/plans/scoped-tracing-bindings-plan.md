@@ -74,19 +74,36 @@ in the binding today (verified). New work:
 
 - **`sealed class AsmTrace : IDisposable`** (new type in
   [bindings/dotnet/hwtrace/HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)).
-  Ctor: `public AsmTrace(bool emit = true, [CallerMemberName] string? name = null,
-  [CallerLineNumber] int line = 0)`. It (a) lazily arms (below), (b) generates the
-  region name from `name`/`line`, (c) `asmtest_hwtrace_register_region`
-  ([HwTrace.cs:198](../../bindings/dotnet/hwtrace/HwTrace.cs#L198)) then
-  `asmtest_hwtrace_try_begin` (new shared-core §0.1 P/Invoke — add next to
+  Ctor: `public AsmTrace(<region>, bool emit = true, [CallerMemberName] string name =
+  null, [CallerLineNumber] int line = 0)` (unannotated `string`, not `string?` — the
+  .NET projects set `<Nullable>disable</Nullable>`, so a `?` annotation emits CS8632).
+  It (a) lazily arms (below), (b) generates the region name from `name`/`line`,
+  (c) registers the traced code range under that name — see the **Region source** note
+  below — then `asmtest_hwtrace_try_begin` (new shared-core §0.1 P/Invoke — add next to
   `asmtest_hwtrace_begin` at [:201](../../bindings/dotnet/hwtrace/HwTrace.cs#L201)),
   capturing `Environment.CurrentManagedThreadId`.
   `Dispose()`: `asmtest_hwtrace_end` ([:203](../../bindings/dotnet/hwtrace/HwTrace.cs#L203)),
-  assert the closing thread id equals the ctor's (flag `truncated` on mismatch —
-  the shared-core §0.2 assert), and if `emit` render via `asmtest_hwtrace_render`
-  to the default sink; expose `Path` (rendered text) as a property readable after
-  the block (statement form: `AsmTrace t; using (t = new AsmTrace(emit:false)) {…}
-  … t.Path`).
+  assert the closing thread matches the ctor's (flag `truncated` on mismatch — the
+  **authoritative** check is the native OS-tid §0.2 assert; the ctor's
+  `Environment.CurrentManagedThreadId` is a **complementary** managed-level guard, a
+  different id space from the OS tid the single-step TF and §0.2 assert key on).
+  **Always render** via `asmtest_hwtrace_render` to populate the `Path` property
+  (readable after the block — statement form: `AsmTrace t; using (t = new AsmTrace(…,
+  emit:false)) {…} … t.Path`); **`emit` gates only whether the rendered text is also
+  written to the default sink**, not whether `Path` is produced.
+- **Region source (required — the ctor must have a range to register).**
+  `asmtest_hwtrace_register_region`
+  ([HwTrace.cs:198](../../bindings/dotnet/hwtrace/HwTrace.cs#L198)) binds the auto-name to
+  a concrete `[base, len)` code range recorded into an `asmtest_trace_t` handle and
+  returns `ASMTEST_HW_EINVAL` on a null argument — so an **empty** ctor has nothing to
+  register, and a `begin` under an unregistered name silently no-ops (constraint #1). The
+  reference shim therefore takes the traced native region explicitly — either
+  **(a)** a code parameter (`AsmTrace(NativeCode code, …)` / `base+len` + an owned trace
+  handle the ctor allocates and `Dispose` frees), registering it under the auto-name; or
+  **(b)** a pre-registered region the scope only *drives* — `AsmTrace(string regionName,
+  …)` that skips `register_region` and calls `try_begin`/`end`/`render` by name. Pick one
+  and state it per binding; the "import + scope" surface still holds because the region is
+  the *thing being traced*, supplied once, not per-entry config.
 - **`[ModuleInitializer] static void Arm()`** — the *ergonomic* arm-on-import: it
   probes availability (`HwTrace.Available`/`Auto`,
   [:470](../../bindings/dotnet/hwtrace/HwTrace.cs#L470)/[:517](../../bindings/dotnet/hwtrace/HwTrace.cs#L517))
@@ -94,9 +111,15 @@ in the binding today (verified). New work:
   `AsmTrace` per the lazy-first-scope rule. (The existing eager `LibHandle` load at
   [:100](../../bindings/dotnet/hwtrace/HwTrace.cs#L100) already handles library
   resolution; `[ModuleInitializer]` only front-loads the availability probe.)
-- **Emit contract.** Empty ctor → unconditional render on `Dispose` (a ctor can't
-  detect assignment); `emit:false` / `sink:` is the opt-out. This is the analysis's
-  "assume no knowledge" default. The default sink is **stdout** (Core §0.3); a file
+  **Packaging:** a `[ModuleInitializer]` fires for consumers only if its compiland ships
+  in the packable library. Today `HwTrace.cs` compiles into the hwtrace **smoke-test exe**
+  (`hwtrace.csproj`, `OutputType Exe`), not the packable NuGet lib (`asmtest-lib.csproj`,
+  which includes only `Asmtest.cs`) — so add `HwTrace.cs` (or a new `AsmTrace.cs`) to the
+  packable compile items, or ship `AsmTrace` in a separate hwtrace package.
+- **Emit contract.** `Dispose` **always renders** to populate `Path` (a ctor can't
+  detect assignment); `emit` gates only the **sink write**, and `emit:false` / `sink:` is
+  the opt-out for writing (never for producing `Path`). This is the analysis's "assume no
+  knowledge" default. The default sink is **stdout** (Core §0.3); a file
   (`asmtrace-<member>.txt`) is used only on an explicit `sink:`, and then tid-suffixed
   so concurrent same-named scopes don't clobber.
 
@@ -153,8 +176,8 @@ JIT-managed tier as .NET.)*
 ## Tests
 
 Every binding already has a `hwtrace-<lang>-test` lane
-([mk/native-trace.mk:547-612](../../mk/native-trace.mk#L547), aggregated by
-`hwtrace-bindings-test` at [:552](../../mk/native-trace.mk#L552)) run under
+([mk/native-trace.mk:547-612](../../mk/native-trace.mk#L547), aggregated by the
+`hwtrace-bindings-test` rule at [:556](../../mk/native-trace.mk#L556)) run under
 `hwtrace_env` and wired into CI (`hwtrace-bindings` job,
 [.github/workflows/ci.yml:268](../../.github/workflows/ci.yml)). Extend each with a
 scoped-trace case:
@@ -234,7 +257,10 @@ managed clean path respectively, and the shims inherit them for free once landed
 - **Auto-name via stack walk has per-language edge cases** (inlining, tail calls,
   release-mode frame elision). Compile-time source-location (C++/Zig/Rust) is
   robust; the interpreted stack walks are best-effort — document when the name
-  falls back to a synthetic label. **Name *collisions*** (a scope in a loop, or the
+  falls back to a synthetic label, and make that fallback **collision-resistant**
+  (e.g. `file:line`, or a monotonic counter suffix) so two distinct *unresolved* sites
+  do not alias to one slot under Core §0.4's idempotent-by-name registry. **Name
+  *collisions*** (a scope in a loop, or the
   same site running concurrently) are handled by Core §0.4's idempotent `register`
   (repeated names reuse one slot) plus a tid/counter qualifier where the same site can
   run on multiple threads at once (Core §1 render selection) — not by inventing a

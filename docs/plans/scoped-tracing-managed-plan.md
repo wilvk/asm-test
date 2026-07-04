@@ -89,8 +89,11 @@ analysis shows leak 2 and leak 3 dissolve and leak 1 shrinks to "you must name t
 method."
 
 **§D0.1 — `MethodLoadVerbose` address resolution (retires the fragile path).**
-`PrepareMethod` + `GetFunctionPointer` stopped being a stable address contract after
-.NET 7. Instead, hang an in-process `EventListener` (the `NativeRuntimeEventSource`
+`PrepareMethod` + `GetFunctionPointer` stopped being a stable address contract **as of
+.NET 7** (the break landed in .NET 7 itself — [dotnet/runtime#83042](https://github.com/dotnet/runtime/issues/83042) —
+so it affects .NET 7+): `GetFunctionPointer` returns a precode/indirection stub, not the
+JIT'd body start, independent of tiering (which further relocates the body via OSR).
+Instead, hang an in-process `EventListener` (the `NativeRuntimeEventSource`
 surface) at arm time that consumes `MethodLoadVerbose_V2` under `JITKeyword` (0x10),
 carrying `MethodStartAddress` / `MethodSize` / `ReJITID`, and maintain a
 name→(address, size, version) map. Feed each (address, size) into the self
@@ -101,8 +104,10 @@ source the shared-core §2 decoder reads. New code lives in the .NET binding
 [HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs).
 
 **§D0.2 — Pre-arm rundown.** Methods JITted *before* arm are covered by a
-self-connected `DiagnosticsClient.EnablePerfMap(PerfMapType.JitDump)` (the handler
-passes `sendExisting = true`, enumerating already-compiled R2R + JIT-heap methods),
+self-connected `DiagnosticsClient.EnablePerfMap(PerfMapType.JitDump)` (the only
+signature is `EnablePerfMap(PerfMapType)` — there is **no** `sendExisting` parameter;
+whether it emits records for methods compiled *before* the call must be confirmed
+against the target runtime, and the self recorder is the fallback if it does not),
 whose jitdump the shipped `asmtest_jitdump_find`
 ([include/asmtest_ptrace.h:331](../../include/asmtest_ptrace.h#L331)) /
 `asmtest_proc_perfmap_symbol` ([:303](../../include/asmtest_ptrace.h#L303)) already
@@ -123,10 +128,14 @@ This is the analysis's *canonical* enabler for following a logical operation acr
 `await`/continuation thread hops, and it is the .NET realisation of the shared
 [§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model). In
 the .NET binding, the hook is an `AsyncLocal<ScopeId>` constructed with a
-value-changed handler: `AsyncLocalValueChangedArgs.ThreadContextChanged` fires
-**whenever the execution context moves onto or off a thread**, which is precisely
-the "a continuation just resumed here, possibly on a new thread" signal the raw perf
-machinery lacks. The handler disables capture when the flow leaves a thread and
+value-changed handler: the handler fires **when the `AsyncLocal` value changes on a
+thread** (including the execution-context restore on a resuming thread), and
+`AsyncLocalValueChangedArgs.ThreadContextChanged` is the **bool that distinguishes an
+EC-driven change from an explicit `.Value` set** — it is *not* itself the fire trigger.
+That EC-restore-on-resume is precisely the "a continuation just resumed here, possibly
+on a new thread" signal the raw perf machinery lacks (note the handler does **not** fire
+when the value is unchanged across the hop, so the `ScopeId` must actually differ or be
+(re)set at the boundary). The handler disables capture when the flow leaves a thread and
 re-arms a fresh per-thread PT event on the resuming one; §D4 owns the merge. Default
 stays the honest thread-scope-with-mismatch-flag; the stitched mode is an explicit
 opt-in.
@@ -149,21 +158,31 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 [:328](../../bindings/node/hwtrace.js#L328)). Add a `using`-compatible scope via
 `Symbol.dispose` — `using t = new AsmTrace()` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
-assert. The `using` **declaration** ships unflagged only in **Node 24+** (V8 13.8);
-on Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node
-24 and keep the existing `region(name, fn)` callback form as the version-independent
+assert. The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
+with the feature enabled; it shipped unflagged upstream in V8 13.8 / Chromium 134); on
+Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node 24
+and keep the existing `region(name, fn)` callback form as the version-independent
 fallback (it needs no `using`). Arm hook is the existing top-level `require` IIFE
 ([hwtrace.js:172-282](../../bindings/node/hwtrace.js#L172)); keep it lazy-first-scope.
 
-**Async-hop stitching (piece D).** Node's hook for the shared
+**Async-hop stitching (piece D) — weaker for Node than for .NET, by construction.**
+Node's per-`ScopeId` hook for the shared
 [§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
 `AsyncLocalStorage` / `async_hooks` — **neither appears in the binding today**
-(verified). Its `init`/`before`/`after` callbacks disable capture when the logical
-flow leaves a thread (libuv worker) and re-arm on the resuming one; §D4 owns the
-per-`ScopeId` merge. Live JS needs PT/LBR or the ptrace stepper (single-step is
-unsafe against the V8 runtime); libuv-pool / Worker off-thread work escapes without
-the stitch hook. Explicit opt-in; default stays the honest thread-scope with a
-mismatch flag.
+(verified). But Node's threading model changes what the hook can do: **normal
+`await`/Promise/timer continuations resume on the same single JS thread**, so there is
+*no OS-thread hop to follow* — the per-thread PT event never moves, and `async_hooks`
+`before`/`after` only reconstruct **logical-async ordering on one thread**, not a
+cross-thread stitch. The one real OS-thread boundary, `worker_threads`, is exactly where
+`AsyncLocalStorage` **does not help**: each Worker has its **own** `async_hooks`/ALS
+subsystem and the parent store is **not** propagated across the boundary — so ALS is
+**not** the Node analog of .NET's cross-thread-flowing `AsyncLocal` (where thread-pool
+continuations genuinely hop OS threads *and* the value flows with them). Net: on Node the
+async machinery mostly *orders same-thread async*; genuine cross-thread (Worker /
+libuv-pool) work **escapes** and is a **disclosed gap**, flagged via the §0.2 tid assert,
+not stitched. Live JS needs PT/LBR or the ptrace stepper (single-step is unsafe against
+the V8 runtime). Explicit opt-in; default stays the honest thread-scope with a mismatch
+flag.
 
 **§D1 tests.** Extend the `hwtrace-node-test` lane
 ([mk/native-trace.mk:559-612](../../mk/native-trace.mk#L559)) with a `using`-scope
@@ -180,16 +199,24 @@ stitch by `ScopeId` (PT/ptrace host; self-skips otherwise).
 try-with-resources `AsmTrace implements AutoCloseable` over register-then-`try_begin`
 / `close`-end, with render-on-close + tid assert. Arm hook is the existing class
 `static{}` ([HwTrace.java:279](../../bindings/java/HwTrace.java#L279)); keep it
-lazy-first-scope. Address resolution for JIT'd methods is via the jitdump agent +
-`perf inject --jit` path the `jit_trace` harness already drives, feeding the recorder.
+lazy-first-scope. Address resolution for JIT'd methods reuses the **jitdump agent**
+(`-agentpath libperf-jvmti.so` for HotSpot) to emit `jit-<pid>.dump`, read **in-process**
+via the shipped `asmtest_jitdump_find`
+([src/ptrace_backend.c](../../src/ptrace_backend.c)) — the same in-process reader the
+V8/CoreCLR jitdumps already exercise, feeding the recorder. (`perf inject --jit` is the
+jitdump format's canonical **offline** consumer — it merges a jitdump into a recorded
+`perf.data` using the external `perf` binary — and is **not** used here; it would
+duplicate the in-process reader and contradict the clean in-process PT thesis.)
 
 **Async-hop.** The JVM's hook for the shared
 [§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
 **JVMTI** (or bytecode-agent instrumentation of the executor) — `ScopedValue` only
 *propagates* a binding across `StructuredTaskScope` forks and has **no** value-changed
 callback that fires as the flow moves on/off a thread, so it is **not** the JVM analog
-of .NET's `AsyncLocal` value-changed handler; §D4 owns the merge. This is the
-**least-proven** of the three per-runtime hooks. Scoped to the opt-in async form, same
+of .NET's `AsyncLocal` value-changed handler; §D4 owns the merge. (`ScopedValue` /
+`StructuredTaskScope` are also **preview** APIs at the JDK 22 the binding targets —
+`--enable-preview` — a further reason the load-bearing hook is JVMTI/agent, not them.)
+This is the **least-proven** of the three per-runtime hooks. Scoped to the opt-in async form, same
 posture as Node/.NET. Live managed JIT needs PT/LBR or ptrace; DynamoRIO self-skips
 (guarded) and is never used against the runtime.
 
@@ -280,7 +307,7 @@ signals a thread hop.
 | Runtime | Hook |
 |---|---|
 | .NET | `AsyncLocal<ScopeId>` value-changed (`AsyncLocalValueChangedArgs.ThreadContextChanged`) |
-| Node | `AsyncLocalStorage` / `async_hooks` `init`/`before`/`after` |
+| Node | `AsyncLocalStorage` / `async_hooks` `init`/`before`/`after` (orders **same-thread** async only; does **not** propagate across `worker_threads`, so genuine OS-thread hops escape — see §D1) |
 | JVM | JVMTI callback / executor bytecode-agent instrumentation (`ScopedValue` only *propagates* context — not a value-changed hop signal); least-proven |
 
 **The merge core (shared) — the concrete algorithm:**
@@ -296,7 +323,8 @@ signals a thread hop.
    inheritance**, so following a hop is exactly "open a new per-thread event on the
    resuming thread" — and it stays per-thread, needing **no privilege bump**. (The
    per-CPU alternative `pid=-1, cpu=N` also captures hops but needs
-   `CAP_SYS_ADMIN`/`paranoid=-1` and TID demux from `ITRACE_START`/sched records —
+   `CAP_PERFMON` (Linux 5.8+; or the broader `CAP_SYS_ADMIN`) **or**
+   `perf_event_paranoid < 1`, plus TID demux from `ITRACE_START`/sched records —
    rejected as heavier.)
 4. **Close.** Collect all slices for `ScopeId` and order by `seq`. Each slice was
    **already decoded** against the code-image version live *in its own window* at the
@@ -435,7 +463,11 @@ per-runtime hook remains a disclosed forward-look gap.
 
 **Effort.** §D0 (.NET events + named form + `AsyncLocal` hook) ~5–7 days; §D1 (Node
 `using` + `AsyncLocalStorage` hook) ~4–6 days; §D2 (JVM) ~4–6 days; §D3
-(ptrace-stealth scope) ~4–6 days (mostly concealment + sentinels; the tracer exists);
+(ptrace-stealth scope) ~4–6 days for the tracer-plumbing (the reverse-attach protocol —
+`PR_SET_PTRACER` + `PTRACE_SEIZE` of the parent — the sentinels, and the cross-process
+address channel; the single-step *stepper* exists, but this protocol is new),
+**plus a separately-budgeted ~3–5 days for the per-ecosystem bundling/packaging +
+install/discovery** (NuGet / npm / Maven — the supply-chain surface the risks list flags);
 §D4 (shared `asmtest_hwtrace_stitch` merge core + host-testable unit test) ~2–3 days,
 the per-runtime hooks folded into §D0/§D1/§D2. The clean PT path's live validation and
 the live per-runtime async-hop cases are forward-look, gated on PT hardware.

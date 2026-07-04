@@ -202,11 +202,14 @@ live in the core. Behaviour for distinct names is unchanged.
 - `test_try_begin_busy` — with one region active, assert `try_begin` on a busy slot
   returns `ASMTEST_HW_ESTATE`, and `try_begin` on an unregistered name returns
   `ASMTEST_HW_EINVAL`; assert the legacy `void` `begin` still no-ops (ABI unchanged).
-  **Provoke the busy code by filling the fixed range stack to its depth bound**
-  (backend-independent), **not** by a second same-thread `begin` — because §1 makes a
-  second same-thread `begin` *compose* (return `0`), so this framing survives the
-  §0→§1 transition unchanged. Runs on **any host** (single-step backend, no hardware
-  needed).
+  **At §0 there is no range stack yet** (that is a §1 construct — the single
+  process-global busy guard `g_active != NULL` is all that exists,
+  [src/hwtrace.c:656](../../src/hwtrace.c#L656)), so **provoke the busy path with a
+  second `begin` while a slot is active** — the only §0 mechanism. **§1 then rewrites
+  this test:** once a second same-thread `begin` *composes* (returns `0`), the refusal
+  moves to a **full per-thread range stack** returning `ASMTEST_HW_EFULL`, so the §1
+  version fills the stack to its depth bound and asserts `EFULL` instead (see §1
+  Compatibility). Runs on **any host** (single-step backend, no hardware needed).
 - `test_arm_tid_mismatch` — arm on the main thread, close from a spawned thread,
   assert `truncated` is set. Any host.
 - `test_render_singlestep` — single-step-trace a known native leaf, call
@@ -253,16 +256,33 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   refcount + a small fixed range stack so nested `begin`s on one thread compose
   (innermost range wins at decode). The perf event is already per-thread
   (`pid == 0`, [:684](../../src/hwtrace.c#L684)) so no privilege change.
-- **Single-step (`src/ss_backend.c`).** Move `g_armed`/`g_base`/`g_base_ip`/`g_len`/
-  `g_trace`/`g_stream`/`g_stream_len`/`g_overflow`/`g_old_sa`/`g_installed`
+- **Single-step (`src/ss_backend.c`).** Move the **per-capture** state
+  `g_armed`/`g_base`/`g_base_ip`/`g_len`/`g_trace`/`g_stream`/`g_stream_len`/`g_overflow`
   ([:58-68](../../src/ss_backend.c#L58)) into TLS, and replace the single
   `[g_base_ip, g_base_ip+g_len)` test in the handler
   ([:99-104](../../src/ss_backend.c#L99)) with an async-signal-safe **range stack**
   (a fixed-size TLS array, no allocation in the handler — the analysis is explicit:
-  "never `malloc` in the handler"). The SIGTRAP disposition stays process-wide
-  (installed once, [:129](../../src/ss_backend.c#L129); restored when the last
-  armed thread leaves, [:214](../../src/ss_backend.c#L214)); per-thread `g_armed`
-  makes concurrent scopes on different threads safe.
+  "never `malloc` in the handler"). **Async-signal-safety of the TLS *access* is a
+  separate requirement from the range-stack *contents*:** this code builds into a
+  `dlopen`'d shared library (`shared-hwtrace`,
+  [mk/native-trace.mk:653](../../mk/native-trace.mk#L653)), where the default
+  general-dynamic TLS model routes the **first** per-thread access through
+  `__tls_get_addr`, which can lazily `malloc` the block — *not* async-signal-safe, and
+  the handler's first act is to read `g_armed` ([:88-93](../../src/ss_backend.c#L88)).
+  So the handler-touched TLS must be forced to the **initial-exec** model
+  (`__attribute__((tls_model("initial-exec")))` — a fixed thread-pointer offset with no
+  lazy allocation, accepting the resulting static-TLS-surplus constraint on the FFI
+  `dlopen`), **or** the `g_armed` guard must stay a **non-TLS atomic** so the handler's
+  early-return path never touches TLS. (The unqualified "same discipline as the existing
+  `g_stream` write" is insufficient — `g_stream` is safe today only because it is a plain
+  `static`.) **The SIGTRAP disposition stays process-wide:** `g_old_sa`/`g_installed`
+  remain process-global `static`s (**not** moved to TLS), installed once
+  ([:129](../../src/ss_backend.c#L129)). Today `asmtest_ss_end` restores it
+  unconditionally under `g_installed` ([:213-216](../../src/ss_backend.c#L214)) with no
+  cross-thread refcount, so §1 must add an explicit **process-wide arm-refcount**
+  (incremented in `ss_begin`, decremented in `ss_end`) that gates the `sigaction` restore
+  so it fires only at count 0; per-thread `g_armed` then makes concurrent scopes on
+  different threads safe.
 - **AMD (`src/amd_backend.c` / `hwtrace.c`).** The AMD path shares the `hwtrace.c`
   slot; moving that slot to TLS covers it. Tier-A/Tier-B stitching
   ([src/amd_backend.c:152](../../src/amd_backend.c#L152),
@@ -276,16 +296,26 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   handle, not the bare name: `render` returns the **calling thread's
   most-recently-closed** slice. Auto-names that can run concurrently on one site must
   be tid/counter-disambiguated by the shim. This is the concurrency half of the
-  render contract §0.3 deferred.
+  render contract §0.3 deferred — **and §1 owns it.** Pin, additively (no ABI change to
+  §0.3's `render`): `int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle,
+  char *buf, size_t buflen)`, handle-keyed rather than name-keyed, plus an
+  `(img, when)`-parameterised variant for the **version-aware** render §D3/§D4 need
+  against tiered/moved managed bytes — same `snprintf`-style size-then-allocate and
+  negative-`ASMTEST_HW_*` error convention as §0.3. The bindings slice's emit-on-close
+  keeps consuming the name-keyed §0.3 `render` (single-owner scopes are unaffected); the
+  handle-keyed form is purely additive, so §1 does **not** break the ABI the bindings
+  slice ships against.
 
 **Compatibility.** The shipped single-region API must behave identically when only
 one thread/one region is used. After §1 a second same-thread `try_begin` **composes**
 (nested range) and returns `0`; the "cannot start" return (`ASMTEST_HW_ESTATE` from
 §0.1) is **redefined** to fire only when this thread's fixed range stack is **full**,
 for which the natural code is `ASMTEST_HW_EFULL`. Because that flips §0's
-`test_try_begin_busy` (a second same-thread `begin` no longer refuses), that test is
-authored from the start to provoke the error by **filling the range stack to its depth
-bound** (see §0 tests) — so it survives the §0→§1 transition unchanged.
+`test_try_begin_busy` (a second same-thread `begin` no longer refuses), **§1 rewrites
+that test**: it provokes the error by **filling the range stack to its depth bound**
+(see §0 tests) and asserts `EFULL`, replacing the §0 version's `ESTATE`-via-second-`begin`.
+The `try_begin` wrapper itself (§0.1) is unchanged across the transition; only the test's
+provocation mechanism and asserted code move (`ESTATE` → `EFULL`).
 
 **§1 tests.** In [examples/test_hwtrace.c](../../examples/test_hwtrace.c):
 
@@ -352,8 +382,9 @@ from `/proc/self/maps`.
   For file-backed regions with no recorder entry, fall back to reading the mapped
   file (resolve via `asmtest_proc_region_by_addr`,
   [include/asmtest_ptrace.h:291](../../include/asmtest_ptrace.h#L291)). Note the
-  `asmtest_proc_*` helpers format `/proc/<pid>/…` literally, so the self case must
-  pass `getpid()`, **not** `0` (unlike `asmtest_codeimage_new(0)`, which maps `0`→self).
+  `asmtest_proc_*` helpers substitute the pid literally into their path
+  (`/proc/<pid>/maps`, `/tmp/perf-<pid>.map`), so the self case must pass `getpid()`,
+  **not** `0` (unlike `asmtest_codeimage_new(0)`, which maps `0`→self).
 - **Self-recorder wiring (`src/hwtrace.c`).** In the arm path, create a self
   code-image timeline (`asmtest_codeimage_new(0)`,
   [include/asmtest_codeimage.h:81](../../include/asmtest_codeimage.h#L81)) and
@@ -365,8 +396,12 @@ from `/proc/self/maps`.
 - **Capture-side address filter (`src/pt_backend.c:129-135`).** The named TODO —
   program `PERF_EVENT_IOC_SET_FILTER` so the CPU emits packets only for the region
   — is the structural fix for both the runtime-noise (Q2) and bandwidth (Q3)
-  qualifications. It needs PT hardware to validate, so it ships gated behind the
-  same self-skip as the rest of the PT capture path.
+  qualifications. **Intel PT exposes only a small, CPU-dependent number of address-range
+  filters** (`/sys/bus/event_source/devices/intel_pt/caps/num_address_ranges`, aka the
+  perf `nr_addr_filters` limit), so wide or many-region windows can exceed the hardware
+  filter budget and must fall back to decode-time range filtering. It needs PT hardware
+  to validate, so it ships gated behind the same self-skip as the rest of the PT capture
+  path.
 
 **Validation posture (mirrors the hardware-trace plan).** The host-testable half
 exercises the **recorder-backed image callback (`bytes_at`) adapter directly** —
@@ -513,13 +548,15 @@ reconstruction host-testable; PT live forward-look on Intel PT).
   no new pkg-config knob.
 - If `asmtest_hwtrace_try_begin`/`_render`/`_arm_tid` are installed public symbols,
   add them to `install-shared-hwtrace`
-  ([mk/native-trace.mk:677-694](../../mk/native-trace.mk#L677)) and the header
-  install (review item **K6**).
+  ([mk/native-trace.mk:677-688](../../mk/native-trace.mk#L677)) — which already copies
+  `include/asmtest_hwtrace.h`, so header-declared symbols need no extra header-install
+  step (review item **K6**).
 - CI: the new `test_*` cases run inside the existing `hwtrace` job
   ([.github/workflows/ci.yml:247](../../.github/workflows/ci.yml)) via
-  `make hwtrace-test` and the `codeimage` job (`:281`) via `make codeimage-test` —
-  no new job. The per-binding lanes that exercise the new symbols are the bindings
-  slice's concern (`hwtrace-bindings`, `:268`).
+  `make hwtrace-test` and the `codeimage` job (`:281`) via `make docker-hwtrace-codeimage`,
+  which runs `codeimage-test` inside the eBPF-capable container — no new job. The
+  per-binding lanes that exercise the new symbols are the bindings slice's concern
+  (`hwtrace-bindings`, `:268`).
 
 ---
 
@@ -528,11 +565,15 @@ reconstruction host-testable; PT live forward-look on Intel PT).
 - **Per-thread migration is invasive and must be a no-op for existing callers.**
   The single-region API is shipped and CI-gated across ten bindings; §1's
   regression tests (`test_singlestep_live` re-run, byte-identical) are the guard.
-- **Async-signal-safety of the single-step range stack.** The handler
-  ([src/ss_backend.c:88](../../src/ss_backend.c#L88)) runs in signal context; the
-  range stack must be a fixed TLS array with no allocation, no locks — the same
-  discipline the existing `g_stream` write obeys
-  ([:99-104](../../src/ss_backend.c#L99)).
+- **Async-signal-safety of the single-step range stack — and of the TLS access
+  itself.** The handler ([src/ss_backend.c:88](../../src/ss_backend.c#L88)) runs in
+  signal context; the range stack must be a fixed TLS array with no allocation, no
+  locks. Beyond the array *contents*, the TLS *access model* matters: in the `dlopen`'d
+  shared library the general-dynamic first-touch of a `__thread` var can route through
+  `__tls_get_addr` and lazily allocate, so the handler-touched state must be
+  `tls_model("initial-exec")` (or the `g_armed` guard kept a non-TLS atomic). The
+  process-wide SIGTRAP disposition needs an explicit arm-refcount so the restore fires
+  only when the last armed thread leaves (§1).
 - **§2's live half needs PT hardware** (this dev host is AMD — no PT, ever). It
   ships self-skipping and hardware-gated; only the reconstruction half is
   CI-validated, exactly as [hardware-trace-plan](hardware-trace-plan.md) accepts
