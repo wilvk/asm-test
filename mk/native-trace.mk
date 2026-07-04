@@ -668,3 +668,32 @@ $(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_hwtrace)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_hwtrace)) $@
 
+# K6: install the native-trace shared libs + their headers, so an installed-prefix
+# consumer can compile against the hardware-trace / DynamoRIO tiers (the guide's
+# `#include "asmtest_drtrace.h"` and packaging.md's "installs the libs"). `make
+# install` installs the headers; these add the shared lib + soname/dev symlinks
+# (mirroring install-shared-emu). No pkg-config template ships for these tiers —
+# a consumer links by name (-lasmtest_hwtrace / -lasmtest_drapp).
+.PHONY: install-shared-hwtrace install-shared-drtrace
+install-shared-hwtrace: shared-hwtrace
+	mkdir -p $(libdir) $(incdir)
+	cp $(call shlib_real,libasmtest_hwtrace) $(libdir)/
+	ln -sf $(notdir $(call shlib_real,libasmtest_hwtrace)) \
+	       $(libdir)/$(call shlib_soname,libasmtest_hwtrace)
+	ln -sf $(call shlib_soname,libasmtest_hwtrace) \
+	       $(libdir)/$(notdir $(call shlib_dev,libasmtest_hwtrace))
+	cp include/asmtest_hwtrace.h include/asmtest_ptrace.h \
+	   include/asmtest_codeimage.h include/asmtest_trace_auto.h \
+	   include/asmtest_trace.h $(incdir)/
+	@echo "installed shared libasmtest_hwtrace $(ASMTEST_VERSION) to $(libdir)"
+
+install-shared-drtrace: shared-drtrace
+	mkdir -p $(libdir) $(incdir)
+	cp $(call shlib_real,libasmtest_drapp) $(libdir)/
+	ln -sf $(notdir $(call shlib_real,libasmtest_drapp)) \
+	       $(libdir)/$(call shlib_soname,libasmtest_drapp)
+	ln -sf $(call shlib_soname,libasmtest_drapp) \
+	       $(libdir)/$(notdir $(call shlib_dev,libasmtest_drapp))
+	cp include/asmtest_drtrace.h include/asmtest_trace.h $(incdir)/
+	@echo "installed shared libasmtest_drapp $(ASMTEST_VERSION) to $(libdir)"
+

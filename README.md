@@ -89,6 +89,34 @@ permissions, or (for CoreSight) a live trace decoder are unavailable. See
   `ASSERT_EMU_VEC_EQ`) and coverage reporting (`emu_trace_report`,
   `emu_coverage_uncovered`, an lcov export, and `ASSERT_BLOCK_COVERED`).
 
+## Documentation
+
+Full documentation lives in [docs/](docs/index.md) (also built on Read the Docs).
+Where to start:
+
+- **Getting started** — [Quick start](docs/getting-started/quickstart.md) ·
+  [Installation](docs/getting-started/installation.md) ·
+  [Writing tests](docs/getting-started/writing-tests.md) ·
+  [Examples](docs/getting-started/examples.md)
+- **Guides** — [ABI capture](docs/guides/abi-capture.md) ·
+  [Assertions](docs/guides/assertions.md) ·
+  [Floating-point & SIMD](docs/guides/floating-point-simd.md) ·
+  [The runner](docs/guides/runner.md) · [Benchmarks](docs/guides/benchmarks.md) ·
+  [Property testing](docs/guides/property-testing.md) ·
+  [Emulator](docs/guides/emulator.md) ·
+  [Disassembly](docs/guides/disassembly.md) ·
+  [Windows x64 tier](docs/guides/win64.md)
+- **Language bindings** — [overview](docs/bindings/index.md) for C++, Rust, Zig,
+  Go, Node, Python, Ruby, Lua, Java, and .NET.
+- **Tracing tiers** — [Unicorn emulator](docs/guides/emulator.md), in-process
+  [DynamoRIO](docs/bindings/index.md), and the hardware backends (Intel PT, AMD
+  LBR, ARM CoreSight, single-step) — see [docs/](docs/index.md).
+- **Reference** — [API reference](docs/reference/api-reference.md) ·
+  [Integration](docs/reference/integration.md) ·
+  [Packaging](docs/reference/packaging.md) ·
+  [CI & Docker](docs/reference/ci.md) ·
+  [Troubleshooting & FAQ](docs/reference/troubleshooting.md)
+
 ## Quick start
 
 ```sh
@@ -298,12 +326,14 @@ make docker-shell       # interactive shell in the CI image
 
 To emulate the `ubuntu-24.04-arm` runner, pass `DOCKER_PLATFORM=linux/arm64`
 (Docker Desktop ships the emulation; on Linux run
-`docker run --privileged tonistiigi/binfmt` once first). On arm64, CI only runs
-the `test` and `emu` jobs:
+`docker run --privileged tonistiigi/binfmt` once first). On arm64, CI runs the
+`test`, `emu`, `asm`, and `package-libs` jobs (NASM is x86-64 only, so no `nasm`
+job there):
 
 ```sh
 make docker-test DOCKER_PLATFORM=linux/arm64
 make docker-emu  DOCKER_PLATFORM=linux/arm64
+make docker-asm  DOCKER_PLATFORM=linux/arm64
 ```
 
 Override `DOCKER_BASE` to test another distro/release (e.g.

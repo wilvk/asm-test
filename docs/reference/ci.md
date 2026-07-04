@@ -6,12 +6,25 @@ machine.
 
 ## What CI covers
 
-The pipeline runs the suites across all four OS/architecture combinations
-(`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `macos-13`) and adds
-dedicated jobs for the NASM backend, the emulator tier, Valgrind, the
-sanitizers, clang-tidy, and gcov coverage. The framework's own
-[self-tests](../getting-started/writing-tests.md) (`tests/positive.c`, `tests/negative.c`, the
-`tests/expect.sh` black-box harness) run via `make check`.
+The pipeline is ~20 jobs. The core `test` job runs the suites across all four
+OS/architecture combinations (`ubuntu-latest`, `ubuntu-24.04-arm`,
+`macos-latest`, and the nightly `macos-13`/`rosetta` x86-64 legs), and dedicated
+jobs cover the rest of the surface:
+
+- **Backends & tiers** — `nasm` (Intel-syntax backend), `emu` (Unicorn emulator),
+  `asm` (in-line Keystone assembler), `drtrace` (DynamoRIO), `hwtrace`
+  (hardware-trace decode + self-skip gating), `hwtrace-bindings` (every language
+  wrapper's single-step tracer), and `codeimage` (the eBPF emission detector).
+- **Language bindings** — the 10-language `bindings` matrix, plus `clean-room`
+  (fresh-install resolution) and `bindings-parity`.
+- **Windows** — `win64` (mingw cross-compile + Wine) and `windows` (native).
+- **Quality** — `valgrind`, `sanitize` (ASan + UBSan), `analyze` (clang-tidy),
+  `format` (clang-format drift), and `coverage` (gcov).
+- **Packaging** — `package-libs` (+ its macOS and collect legs).
+
+The framework's own [self-tests](../getting-started/writing-tests.md)
+(`tests/positive.c`, `tests/negative.c`, the `tests/expect.sh` black-box harness)
+run via `make check`.
 
 `--format=junit` ([runner](../guides/runner.md#output-formats)) emits JUnit XML for CI
 systems that ingest structured test results.

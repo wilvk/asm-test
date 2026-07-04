@@ -511,10 +511,9 @@ TEST(emu, reg_invariant_catches_clobber_and_holds) {
     emu_result_t r;
     long args[] = {0};
 
-    /* Fresh handle: rbx starts at 0. A routine that never touches rbx keeps the
-     * invariant across both of its blocks. (Run this first: the engine RETAINS
-     * register state across calls on a handle, so the clobber below would leave
-     * rbx = 0x99 behind.) */
+    /* rbx starts at 0 (the engine zeros the register file at the start of every
+     * call), so a routine that never touches rbx keeps the invariant across both
+     * of its blocks — order-independent of the clobber test below. */
     static const uint8_t XOR_JMP_RET[] = {0x31, 0xc0, 0xeb, 0x00, 0xc3};
     emu_reg_guard_t g2;
     ASSERT_TRUE(emu_guard_reg(E, "rbx", 0, &g2));
@@ -535,6 +534,48 @@ TEST(emu, reg_invariant_catches_clobber_and_holds) {
     /* An unknown register name is rejected. */
     emu_reg_guard_t g3;
     ASSERT_FALSE(emu_guard_reg(E, "nope", 0, &g3));
+}
+
+/* mov rax, rbx ; ret — returns whatever rbx held at entry. rbx is callee-saved,
+ * so the ABI never sets it from arguments: a routine reading it needs a preload. */
+static const uint8_t MOV_RAX_RBX[] = {0x48, 0x89, 0xd8, 0xc3};
+
+TEST(emu, preloaded_register_is_visible_to_the_routine) {
+    REQUIRE_X86_HOST();
+    emu_result_t r;
+    long noargs[1] = {0};
+    ASSERT_TRUE(emu_set_reg(E, "rbx", 0x1234));
+    ASSERT_TRUE(emu_call(E, MOV_RAX_RBX, sizeof MOV_RAX_RBX, noargs, 0, 0, &r));
+    ASSERT_UEQ(r.regs.rax, 0x1234); /* the preload reached the routine */
+    /* Re-arming updates it; clearing returns to the deterministic zero. */
+    emu_set_reg(E, "rbx", 0x99);
+    emu_call(E, MOV_RAX_RBX, sizeof MOV_RAX_RBX, noargs, 0, 0, &r);
+    ASSERT_UEQ(r.regs.rax, 0x99);
+    emu_clear_regs(E);
+    emu_call(E, MOV_RAX_RBX, sizeof MOV_RAX_RBX, noargs, 0, 0, &r);
+    ASSERT_UEQ(r.regs.rax, 0);
+    ASSERT_FALSE(emu_set_reg(E, "nope", 1)); /* unknown name rejected */
+}
+
+TEST(emu, read_watchpoint_flags_a_forbidden_read) {
+    REQUIRE_X86_HOST();
+    ASSERT_TRUE(emu_map(E, WATCH_BASE, 0x1000));
+    emu_result_t r;
+    long args[] = {(long)WATCH_BASE};
+    /* NEVER-read the low 8 bytes; load_long reads exactly [rdi]. */
+    emu_watch_t w;
+    emu_watch_reads(E, WATCH_BASE, 8, EMU_WATCH_NEVER, &w);
+    emu_call(E, (void *)load_long, CODE_WINDOW, args, 1, 0, &r);
+    emu_watch_clear(E);
+    ASSERT_NO_FAULT(&r);        /* mapped: the read itself succeeds... */
+    ASSERT_WRITE_VIOLATION(&w); /* ...but the read watch flagged it */
+    ASSERT_UEQ(w.addr, WATCH_BASE);
+    /* A write watch would miss it — load_long only reads. */
+    emu_watch_t w2;
+    emu_watch_writes(E, WATCH_BASE, 8, EMU_WATCH_NEVER, &w2);
+    emu_call(E, (void *)load_long, CODE_WINDOW, args, 1, 0, &r);
+    emu_watch_clear(E);
+    ASSERT_NO_WRITE_VIOLATION(&w2);
 }
 
 /* ---- Coverage-guided fuzzing & mutation testing (Track E) ---------------
@@ -575,6 +616,29 @@ TEST(emu, fuzz_coverage_beats_fixed_vector) {
     ASSERT_UEQ(st.blocks_reached, uni.blocks_len);
     ASSERT_TRUE(uni.blocks_len > fixed.blocks_len); /* guided > fixed */
     ASSERT_TRUE(st.corpus_len >= 2); /* several coverage-expanding inputs */
+}
+
+TEST(emu, fuzz_corpus_is_retrievable_and_feeds_mutation) {
+    REQUIRE_X86_HOST();
+    uint64_t blocks[16];
+    emu_trace_t uni = {0};
+    uni.blocks = blocks;
+    uni.blocks_cap = 16;
+    emu_fuzz_stat_t st;
+    ASSERT_TRUE(emu_fuzz_cover1(E, CLASSIFY3, sizeof CLASSIFY3, -50, 50, 2000,
+                                0xC0FFEEULL, &uni, &st));
+    /* The kept inputs are now readable off the handle (were discarded before). */
+    const long *corpus = emu_fuzz_corpus(E);
+    size_t n = emu_fuzz_corpus_len(E);
+    ASSERT_TRUE(n >= 2);
+    ASSERT_TRUE(corpus != NULL);
+    ASSERT_UEQ((uint64_t)n, (uint64_t)st.corpus_len); /* handle vs stat agree */
+    /* Feed the corpus straight into mutation testing — its inputs are exactly
+     * this set — and confirm it distinguishes at least some mutants. */
+    emu_mutation_stat_t ms;
+    emu_mutation_test1(E, CLASSIFY3, sizeof CLASSIFY3, corpus, n, 0, 0xABCDULL,
+                       &ms);
+    ASSERT_TRUE(ms.killed + ms.survived > 0);
 }
 
 TEST(emu, mutation_strong_suite_kills_more) {

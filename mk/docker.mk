@@ -17,9 +17,9 @@
 #   make docker-coverage   gcov of the runner
 #   make docker-ci         the whole x86-64 Linux matrix end to end
 #   make docker-shell      interactive shell in the CI image
-# Emulate the aarch64 runner with DOCKER_PLATFORM=linux/arm64; on arm64 CI only
-# runs the test + emu jobs (NASM is x86-64 only), so use docker-test/docker-emu
-# there rather than docker-ci.
+# Emulate the aarch64 runner with DOCKER_PLATFORM=linux/arm64; on arm64 CI runs
+# the test, emu, asm, and package-libs jobs (NASM is x86-64 only), so use
+# docker-test/docker-emu/docker-asm there rather than docker-ci.
 DOCKER          ?= docker
 DOCKER_IMAGE    ?= asmtest-ci
 DOCKER_BASE     ?= ubuntu:24.04

@@ -60,6 +60,17 @@ annotated per item.
   buildx `type=gha` cache; host `actions/cache` of a compiled toolchain) are
   GitHub-Actions-runtime-specific, can't be validated locally, and touch the
   release pipeline — it wants its own PR with a CI run to confirm the cache config.
+- **Step 4 — DX & docs (R4, R6, R7, K6, K7, D2, D4, D5, E3, E4, E6)** — fixed.
+  Runner: complete JUnit (`<error>`/`errors=`/`time=`/`<system-out>`), bench
+  dispersion + `--bench-format=json`, and `--color`/`NO_COLOR`. Emulator: a
+  register-preload API (`emu_set_reg`), a retrievable fuzz corpus (handle-owned,
+  feeds `emu_mutation_test1`), and read watchpoints (`emu_watch_reads`) — each
+  with a new self-test (emu tier 47 → 50, all green). Build: `make install` now
+  ships the native-trace headers plus `install-shared-hwtrace`/`-drtrace`. Docs:
+  fixed the releasing/arm64-CI/ci.md drift, back-filled the API reference
+  (Win64 + AVX2/512), added a Troubleshooting & FAQ page, and gave the README a
+  Documentation funnel into the docs site. Verified: `make test`/`check` green,
+  the JUnit/bench/color paths exercised by hand, and the emulator container (50/50).
 
 Everything else remains open (`verified` = confirmed real, not yet actioned).
 
@@ -101,29 +112,29 @@ can't assemble — none of which any current gate catches.
 | K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | ⏸ deferred (CI-only; needs a CI run to validate cache config — see step-3 note) |
 | K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | ✅ fixed (step 3) |
 | K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | ✅ fixed (step 3) |
-| E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | verified |
-| D2 | README doesn't funnel to the docs site; bindings/tracing invisible | High | docs | verified |
+| E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | ✅ fixed (step 4) |
+| D2 | README doesn't funnel to the docs site; bindings/tracing invisible | High | docs | ✅ fixed (step 4) |
 | P1 | C core has no system-package presence (brew/deb/AUR/vcpkg/conan) | High | expansion | verified |
-| R4 | JUnit report incomplete (`<error>`, `time=`, `<system-out>`) | Medium | improvement | verified |
-| R6 | Bench mode has no dispersion stat and no machine-readable output | Medium | improvement | verified |
+| R4 | JUnit report incomplete (`<error>`, `time=`, `<system-out>`) | Medium | improvement | ✅ fixed (step 4) |
+| R6 | Bench mode has no dispersion stat and no machine-readable output | Medium | improvement | ✅ fixed (step 4) |
 | K4 | `make sanitize` never instruments the emu/asm/trace tiers | Medium | improvement | ✅ fixed (step 3, emu tier) |
-| K6 | Native-trace headers/libs not installed → installed-prefix can't build | Medium | improvement | verified |
-| K7 | Docs drift: `releasing.md` steps, arm64-CI claims, `ci.md` job list | Medium | docs | verified |
-| E4 | Fuzz corpus is built then discarded — no replay/persistence | Medium | improvement | verified |
-| E6 | Watchpoints cover writes only, not reads | Medium | expansion | verified |
+| K6 | Native-trace headers/libs not installed → installed-prefix can't build | Medium | improvement | ✅ fixed (step 4) |
+| K7 | Docs drift: `releasing.md` steps, arm64-CI claims, `ci.md` job list | Medium | docs | ✅ fixed (step 4) |
+| E4 | Fuzz corpus is built then discarded — no replay/persistence | Medium | improvement | ✅ fixed (step 4) |
+| E6 | Watchpoints cover writes only, not reads | Medium | expansion | ✅ fixed (step 4) |
 | E7 | `ASSERT_MATCHES_REF` reports the raw first-failing input (no shrink) | Medium | expansion | verified |
 | A6 | No mixed integer+FP capture macro (`ASM_MIXCALL`) | Medium | expansion | verified |
 | A7 | Differential testing is integer-only (no FP reference models) | Medium | expansion | verified |
 | R5 | No `--fail-fast`, `--repeat=N`, or shard selection | Medium | expansion | verified |
 | E5 | No emulator snapshot/restore → order-dependent fuzz/mutation sweeps | Medium | expansion | verified |
 | E2 | `emulator.md` still claims register state is retained across calls | Medium | docs | ✅ fixed (step 2) |
-| D4 | API-reference index omits the post-1.0 surface (Win64, AVX2/512) | Medium | docs | verified |
-| D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | verified |
+| D4 | API-reference index omits the post-1.0 surface (Win64, AVX2/512) | Medium | docs | ✅ fixed (step 4) |
+| D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | ✅ fixed (step 4) |
 | P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | verified |
 | P3 | RISC-V is emulator-guest only; no native RISC-V host tier | Medium | expansion | verified |
 | P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | verified |
 | P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | verified |
-| R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | verified |
+| R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | ✅ fixed (step 4) |
 | N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | finder-only |
 | N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | finder-only |
 | N5 | Zig package exports no importable module | Medium | improvement | finder-only |

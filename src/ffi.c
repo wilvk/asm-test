@@ -207,6 +207,12 @@ unsigned long long asmtest_emu_fuzz_blocks_reached(const emu_fuzz_stat_t *s) {
 unsigned long long asmtest_emu_fuzz_corpus_len(const emu_fuzz_stat_t *s) {
     return s ? (unsigned long long)s->corpus_len : 0;
 }
+/* The i-th kept input from the handle's last fuzz run (the coverage-growing
+ * corpus), so a dynamic-FFI binding can replay or persist it; 0 if out of range.
+ * Keyed on the handle, since the handle owns the corpus (not the stat). */
+long asmtest_emu_fuzz_corpus_at(const emu_t *e, unsigned long long i) {
+    return (i < emu_fuzz_corpus_len(e)) ? emu_fuzz_corpus(e)[i] : 0;
+}
 unsigned long long asmtest_emu_fuzz_iterations(const emu_fuzz_stat_t *s) {
     return s ? (unsigned long long)s->iterations : 0;
 }

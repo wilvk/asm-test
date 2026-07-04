@@ -47,8 +47,10 @@ others still publish.
 
 ## Cutting a release
 
-1. Bump `ASMTEST_VERSION` in the [Makefile](https://github.com/wilvk/asm-test/blob/main/Makefile) and the version field in
-   every package manifest (they must match; the ABI manifest is checked at load).
+1. Bump the version in [VERSION](https://github.com/wilvk/asm-test/blob/main/VERSION), then run `make sync-version` to
+   propagate it to `include/asmtest.h` and every package manifest (they must
+   match — CI's `check-version` gate fails on any drift; the ABI manifest is also
+   checked at load). Do not hand-edit the manifests.
 2. Update [CHANGELOG.md](https://github.com/wilvk/asm-test/blob/main/CHANGELOG.md).
 3. Tag and push:
    ```sh

@@ -125,6 +125,7 @@ reference/packaging
 reference/releasing
 reference/ci
 reference/api-reference
+reference/troubleshooting
 reference/diagrams
 ```
 

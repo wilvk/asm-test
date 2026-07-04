@@ -18,6 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Internal (defined in emu.c, which owns `struct emu`): hand the coverage-growing
+ * corpus to the handle so it outlives this call without the stat owning it. */
+void emu_fuzz_set_corpus(emu_t *e, long *corpus, size_t n);
+
 /* Cap a mutant/candidate run so a runaway routine can't spin forever; real
  * routines under test return in far fewer instructions than this. */
 #define FUZZ_INSN_CAP 100000ULL
@@ -72,7 +76,10 @@ bool emu_fuzz_cover1(emu_t *e, const void *code, size_t code_len, long lo,
         stat->corpus_len = ncorpus;
         stat->iterations = tried;
     }
-    free(corpus);
+    /* Hand the kept inputs to the handle, which owns them until the next fuzz run
+     * or emu_close — so the caller can read them back with emu_fuzz_corpus and the
+     * stat stays a plain value type (no owned pointer to copy/free). */
+    emu_fuzz_set_corpus(e, corpus, ncorpus);
     return true;
 }
 

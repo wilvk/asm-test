@@ -17,12 +17,15 @@
 #define EMU_RET_MAGIC                                                          \
     0x00f00000UL /* return target; unmapped, only a stop addr */
 
-/* A memory-write watchpoint armed on the handle (emu_watch_writes): subsequent
- * runs flag the first valid write that violates the [lo,hi) region per `mode`. */
+/* A memory watchpoint armed on the handle (emu_watch_writes / emu_watch_reads):
+ * subsequent runs flag the first valid access that violates the [lo,hi) region
+ * per `mode`. `dir` selects which access directions are watched. */
+enum { WATCH_WRITE = 1, WATCH_READ = 2 };
 typedef struct {
     bool armed;
     uint64_t lo, hi; /* the guarded region [lo, hi)                     */
     emu_watch_mode_t mode;
+    int dir;          /* bitmask of WATCH_WRITE / WATCH_READ            */
     emu_watch_t *out; /* caller's result (NULL == disarmed)             */
 } watch_ctx_t;
 
@@ -35,10 +38,24 @@ typedef struct {
     emu_reg_guard_t *out;
 } reg_guard_ctx_t;
 
+/* Registers preloaded on the handle (emu_set_reg): applied at the start of every
+ * call, after the deterministic zero and before the call convention writes rsp
+ * and the argument registers (so an arg or the frame pointer is never clobbered
+ * — preload the callee-saved / scratch registers a routine reads). */
+#define EMU_MAX_PRELOAD 24
+typedef struct {
+    int uc_reg; /* UC_X86_REG_* */
+    uint64_t val;
+} emu_preload_t;
+
 struct emu {
     uc_engine *uc;
     watch_ctx_t watch;   /* mid-execution memory-write guard (emu_watch_*)  */
     reg_guard_ctx_t reg; /* mid-execution register invariant (emu_guard_*) */
+    emu_preload_t preload[EMU_MAX_PRELOAD];
+    int npreload;
+    long *fuzz_corpus;      /* last emu_fuzz_cover1's kept inputs, handle-owned */
+    size_t fuzz_corpus_len; /* entries in fuzz_corpus                          */
 };
 
 typedef struct {
@@ -118,12 +135,14 @@ static void add_trace_hooks(uc_engine *uc, trace_ctx_t *tc, uc_hook *hcode,
     uc_hook_add(uc, hblock, UC_HOOK_BLOCK, (void *)on_block, tc, 1, 0);
 }
 
-/* UC_HOOK_MEM_WRITE: every VALID write. Flags the first one that violates the
- * armed watchpoint — a write touching a NEVER region, or escaping an ONLY
- * region — recording its data address, width, and the offending store's offset.
- * (A write to UNMAPPED memory faults instead, via on_invalid_mem.) */
-static void on_mem_write(uc_engine *uc, uc_mem_type type, uint64_t addr,
-                         int size, int64_t value, void *user) {
+/* UC_HOOK_MEM_WRITE / UC_HOOK_MEM_READ: every VALID access. Flags the first one
+ * that violates the armed watchpoint — an access touching a NEVER region, or
+ * escaping an ONLY region — recording its data address, width, and the offending
+ * instruction's offset. Direction-agnostic (armed via emu_watch_writes /
+ * emu_watch_reads). (An access to UNMAPPED memory faults instead, via
+ * on_invalid_mem.) */
+static void on_mem_access(uc_engine *uc, uc_mem_type type, uint64_t addr,
+                          int size, int64_t value, void *user) {
     (void)type;
     (void)value;
     watch_ctx_t *w = (watch_ctx_t *)user;
@@ -220,7 +239,29 @@ void emu_close(emu_t *e) {
     if (e == NULL)
         return;
     uc_close(e->uc);
+    free(e->fuzz_corpus);
     free(e);
+}
+
+/* Hand the coverage-growing corpus (malloc'd by emu_fuzz_cover1) to the handle,
+ * which owns it until the next fuzz run or emu_close — so the stat can be a
+ * plain value type with no owned pointer. Internal to the emulator lib. */
+void emu_fuzz_set_corpus(emu_t *e, long *corpus, size_t n) {
+    if (e == NULL) {
+        free(corpus);
+        return;
+    }
+    free(e->fuzz_corpus);
+    e->fuzz_corpus = corpus;
+    e->fuzz_corpus_len = n;
+}
+
+const long *emu_fuzz_corpus(const emu_t *e) {
+    return e != NULL ? e->fuzz_corpus : NULL;
+}
+
+size_t emu_fuzz_corpus_len(const emu_t *e) {
+    return e != NULL ? e->fuzz_corpus_len : 0;
 }
 
 bool emu_map(emu_t *e, uint64_t addr, size_t size) {
@@ -284,14 +325,17 @@ static void emu_x86_zero_regs(uc_engine *uc) {
     uc_reg_write(uc, UC_X86_REG_EFLAGS, &flags);
 }
 
-static bool emu_x86_setup_sysv(uc_engine *uc, const void *fn, size_t code_len,
+static bool emu_x86_setup_sysv(emu_t *e, const void *fn, size_t code_len,
                                const long *iargs, int niargs) {
+    uc_engine *uc = e->uc;
     static const int arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
                                     UC_X86_REG_RDX, UC_X86_REG_RCX,
                                     UC_X86_REG_R8,  UC_X86_REG_R9};
     if (!load_code(uc, fn, code_len))
         return false;
     emu_x86_zero_regs(uc); /* deterministic start: clear stale reg state */
+    for (int i = 0; i < e->npreload; i++) /* handle preloads (emu_set_reg) */
+        uc_reg_write(uc, e->preload[i].uc_reg, &e->preload[i].val);
     /* SysV places INTEGER args beyond the sixth on the stack starting at
      * [rsp+8] at entry (psABI §3.2.3). Reserve room above the return address for
      * them, rounding the reservation to 16 bytes so rsp stays ≡ 8 (mod 16) at
@@ -329,11 +373,15 @@ static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
 
     /* Mid-execution guards armed on the handle (emu_watch_writes/emu_guard_reg);
      * each resets its result for this run, then records the first violation. */
-    uc_hook hwrite = 0, hguard = 0;
+    uc_hook hwrite = 0, hread = 0, hguard = 0;
     if (e->watch.armed && e->watch.out != NULL) {
         e->watch.out->violated = false;
-        uc_hook_add(uc, &hwrite, UC_HOOK_MEM_WRITE, (void *)on_mem_write,
-                    &e->watch, 1, 0);
+        if (e->watch.dir & WATCH_WRITE)
+            uc_hook_add(uc, &hwrite, UC_HOOK_MEM_WRITE, (void *)on_mem_access,
+                        &e->watch, 1, 0);
+        if (e->watch.dir & WATCH_READ)
+            uc_hook_add(uc, &hread, UC_HOOK_MEM_READ, (void *)on_mem_access,
+                        &e->watch, 1, 0);
     }
     if (e->reg.armed && e->reg.out != NULL) {
         e->reg.out->violated = false;
@@ -350,6 +398,8 @@ static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
     }
     if (hwrite)
         uc_hook_del(uc, hwrite);
+    if (hread)
+        uc_hook_del(uc, hread);
     if (hguard)
         uc_hook_del(uc, hguard);
 
@@ -365,9 +415,8 @@ static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
 bool emu_call_traced(emu_t *e, const void *fn, size_t code_len,
                      const long *args, int nargs, uint64_t max_insns,
                      emu_result_t *out, emu_trace_t *trace) {
-    uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-    if (!emu_x86_setup_sysv(uc, fn, code_len, args, nargs)) {
+    if (!emu_x86_setup_sysv(e, fn, code_len, args, nargs)) {
         out->uc_err = -1;
         return false;
     }
@@ -465,7 +514,7 @@ bool emu_call_fp(emu_t *e, const void *fn, size_t code_len, const long *iargs,
                  uint64_t max_insns, emu_result_t *out) {
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-    if (!emu_x86_setup_sysv(uc, fn, code_len, iargs, niargs)) {
+    if (!emu_x86_setup_sysv(e, fn, code_len, iargs, niargs)) {
         out->uc_err = -1;
         return false;
     }
@@ -483,7 +532,7 @@ bool emu_call_vec(emu_t *e, const void *fn, size_t code_len, const long *iargs,
                   uint64_t max_insns, emu_result_t *out) {
     uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-    if (!emu_x86_setup_sysv(uc, fn, code_len, iargs, niargs)) {
+    if (!emu_x86_setup_sysv(e, fn, code_len, iargs, niargs)) {
         out->uc_err = -1;
         return false;
     }
@@ -576,14 +625,15 @@ static int x86_uc_reg(const char *name) {
     return -1;
 }
 
-void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
-                      emu_watch_mode_t mode, emu_watch_t *out) {
+static void emu_watch_arm(emu_t *e, uint64_t addr, size_t size,
+                          emu_watch_mode_t mode, int dir, emu_watch_t *out) {
     if (e == NULL)
         return;
     e->watch.armed = true;
     e->watch.lo = addr;
     e->watch.hi = addr + size;
     e->watch.mode = mode;
+    e->watch.dir = dir;
     e->watch.out = out;
     if (out != NULL) {
         out->violated = false;
@@ -591,6 +641,20 @@ void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
         out->size = 0;
         out->rip_off = 0;
     }
+}
+
+void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
+                      emu_watch_mode_t mode, emu_watch_t *out) {
+    emu_watch_arm(e, addr, size, mode, WATCH_WRITE, out);
+}
+
+/* Like emu_watch_writes but flags READS of the region — so a routine reading a
+ * secret/uninitialized area (NEVER) or reading past a declared length (ONLY) is
+ * caught, which a write-only watchpoint misses. One watchpoint per handle: this
+ * replaces any armed write watch (use the same [lo,hi) with either direction). */
+void emu_watch_reads(emu_t *e, uint64_t addr, size_t size,
+                     emu_watch_mode_t mode, emu_watch_t *out) {
+    emu_watch_arm(e, addr, size, mode, WATCH_READ, out);
 }
 
 void emu_watch_clear(emu_t *e) {
@@ -624,6 +688,38 @@ void emu_guard_reg_clear(emu_t *e) {
         return;
     e->reg.armed = false;
     e->reg.out = NULL;
+}
+
+/* Preload a GP register (or rip) by name to `value` on this handle; the value is
+ * written at the start of every subsequent call, after the deterministic zero
+ * and before the call convention sets rsp and the argument registers. Returns
+ * false for an unknown name or when the preload table is full. Re-arming the same
+ * register updates it. Use for registers a routine reads but the ABI doesn't set
+ * (callee-saved rbx/rbp/r12-r15, or a scratch reg) — pass call arguments as
+ * emu_call arguments, not as preloads. */
+bool emu_set_reg(emu_t *e, const char *name, uint64_t value) {
+    if (e == NULL || name == NULL)
+        return false;
+    int r = x86_uc_reg(name);
+    if (r < 0)
+        return false;
+    for (int i = 0; i < e->npreload; i++)
+        if (e->preload[i].uc_reg == r) {
+            e->preload[i].val = value;
+            return true;
+        }
+    if (e->npreload >= EMU_MAX_PRELOAD)
+        return false;
+    e->preload[e->npreload].uc_reg = r;
+    e->preload[e->npreload].val = value;
+    e->npreload++;
+    return true;
+}
+
+/* Drop all register preloads armed on the handle. */
+void emu_clear_regs(emu_t *e) {
+    if (e != NULL)
+        e->npreload = 0;
 }
 
 /* ------------------------------------------------------------------ */

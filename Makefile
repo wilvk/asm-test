@@ -508,6 +508,9 @@ install: lib
 	mkdir -p $(incdir) $(libdir) $(pcdir)
 	cp include/asmtest.h include/asmtest_emu.h include/asmtest_trace.h \
 	   include/asmtest_assemble.h \
+	   include/asmtest_hwtrace.h include/asmtest_drtrace.h \
+	   include/asmtest_codeimage.h include/asmtest_ptrace.h \
+	   include/asmtest_trace_auto.h \
 	   include/asm.h include/asm_nasm.inc $(incdir)/
 	cp $(BUILD)/libasmtest.a $(libdir)/
 	$(pc_subst) asmtest.pc.in > $(pcdir)/asmtest.pc
@@ -516,7 +519,16 @@ install: lib
 uninstall:
 	rm -f $(incdir)/asmtest.h $(incdir)/asmtest_emu.h \
 	      $(incdir)/asmtest_trace.h $(incdir)/asmtest_assemble.h \
+	      $(incdir)/asmtest_hwtrace.h $(incdir)/asmtest_drtrace.h \
+	      $(incdir)/asmtest_codeimage.h $(incdir)/asmtest_ptrace.h \
+	      $(incdir)/asmtest_trace_auto.h \
 	      $(incdir)/asm.h $(incdir)/asm_nasm.inc
+	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest_hwtrace)) \
+	      $(libdir)/$(call shlib_soname,libasmtest_hwtrace) \
+	      $(libdir)/$(notdir $(call shlib_dev,libasmtest_hwtrace)) \
+	      $(libdir)/$(notdir $(call shlib_real,libasmtest_drapp)) \
+	      $(libdir)/$(call shlib_soname,libasmtest_drapp) \
+	      $(libdir)/$(notdir $(call shlib_dev,libasmtest_drapp))
 	-rmdir $(incdir) 2>/dev/null || true
 	rm -f $(libdir)/libasmtest.a $(pcdir)/asmtest.pc
 	rm -f $(libdir)/$(notdir $(call shlib_real,libasmtest)) \

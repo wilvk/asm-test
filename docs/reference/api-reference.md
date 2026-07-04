@@ -27,6 +27,9 @@ See [Writing tests](../getting-started/writing-tests.md).
 | `ASM_FCALLN(&r, fn, …)` | Any number of `double` args |
 | `ASM_VCALL1`…`ASM_VCALL3(&r, fn, …)` | 1–3 `vec128_t` args |
 | `ASM_VCALLN(&r, fn, …)` | Any number of `vec128_t` args |
+| `ASM_VCALL256_1`/`_2(out, fn, …)` | 1–2 `vec256_t` (AVX2 ymm) args; **self-skips** without AVX2. `out` is a `vec256_t[16]` |
+| `ASM_VCALL512_1`/`_2(out, fn, …)` | 1–2 `vec512_t` (AVX-512 zmm) args; **self-skips** without AVX-512F. `out` is a `vec512_t[32]` |
+| `ASM_CALL_WIN64_0`…`_6` / `_N(&r, fn, …)` | Microsoft x64 convention (args in `rcx/rdx/r8/r9`); needs `ASMTEST_ABI_WIN64` |
 
 See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guides/floating-point-simd.md).
 
@@ -57,6 +60,8 @@ See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guide
 | `ASSERT_FP_EQ(&r, expected)` | `r.fret` bit-equals `expected` |
 | `ASSERT_FP_NEAR(&r, expected, ulps)` | `r.fret` within `ulps` |
 | `ASSERT_VEC_EQ(&r, idx, expect_ptr)` | whole 128-bit lane `r.vec[idx]` |
+| `ASSERT_VEC256_EQ(vec, idx, expect_ptr)` | whole 256-bit ymm lane (AVX2 capture) |
+| `ASSERT_VEC512_EQ(vec, idx, expect_ptr)` | whole 512-bit zmm lane (AVX-512 capture) |
 | `ASSERT_DEQ/DNEAR(actual, expected[, ulps])` | one `double` lane |
 | `ASSERT_FEQ/FNEAR(actual, expected[, ulps])` | one `float` lane |
 
@@ -86,6 +91,19 @@ void asm_call_capture_sret(regs_t *out, void *fn, void *result,
                            const long *args, int nargs);
 void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize);
+
+// AVX2 / AVX-512 vector capture (x86-64; gate on the CPU probes below).
+void asm_call_capture_vec256(vec256_t *vec, void *fn, const long *iargs,
+                             const vec256_t *vargs);                        // ymm
+void asm_call_capture_vec512(vec512_t *vec, void *fn, const long *iargs,
+                             const vec512_t *vargs);                        // zmm
+int  asmtest_cpu_has_avx2(void);      // gate for the _vec256 / ASM_VCALL256 path
+int  asmtest_cpu_has_avx512f(void);   // gate for the _vec512 / ASM_VCALL512 path
+
+// Microsoft x64 ("Win64") capture (needs ASMTEST_ABI_WIN64; args are 64-bit).
+void asm_call_capture_win64(regs_t *out, void *fn, const long long *args);  // 6
+void asm_call_capture_args_win64(regs_t *out, void *fn, const long long *args,
+                                 int nargs);
 ```
 
 :::{note}

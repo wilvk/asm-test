@@ -554,6 +554,12 @@ typedef struct {
  * out=NULL, or emu_watch_clear, to disarm). x86-64 guest. */
 void emu_watch_writes(emu_t *e, uint64_t addr, size_t size,
                       emu_watch_mode_t mode, emu_watch_t *out);
+/* Like emu_watch_writes but watches READS of the region — catches a routine that
+ * reads a secret/uninitialized area (NEVER) or reads past a declared length
+ * (ONLY), which a write watch misses. One watchpoint per handle (this replaces an
+ * armed write watch). x86-64 guest. */
+void emu_watch_reads(emu_t *e, uint64_t addr, size_t size,
+                     emu_watch_mode_t mode, emu_watch_t *out);
 void emu_watch_clear(emu_t *e);
 
 /* Arm a register invariant: assert x86 GP register `regname` ("rbx", "rsp", …)
@@ -564,6 +570,16 @@ void emu_watch_clear(emu_t *e);
 bool emu_guard_reg(emu_t *e, const char *regname, uint64_t want,
                    emu_reg_guard_t *out);
 void emu_guard_reg_clear(emu_t *e);
+
+/* Preload x86 GP register `name` ("rbx", "r12", "rip", …) to `value` on the
+ * handle: written at the start of every subsequent call, after the deterministic
+ * zero and before the call convention sets rsp and the argument registers — so
+ * this sets the registers a routine reads but the ABI does not (callee-saved or
+ * scratch), while call arguments and the stack frame stay under the runner's
+ * control. Returns false for an unknown name or a full preload table; re-arming a
+ * register updates it. emu_clear_regs drops all preloads. */
+bool emu_set_reg(emu_t *e, const char *name, uint64_t value);
+void emu_clear_regs(emu_t *e);
 
 /* Format a one-line description of a watchpoint violation into buf, including
  * the offending store's disassembly when Capstone is present (pairs with the
@@ -618,6 +634,14 @@ bool emu_fuzz_cover1(emu_t *e, const void *code, size_t code_len, long lo,
                      long hi, uint64_t iters, uint64_t seed, emu_trace_t *uni,
                      emu_fuzz_stat_t *stat);
 
+/* The coverage-growing corpus the LAST emu_fuzz_cover1 on this handle kept
+ * (emu_fuzz_corpus_len entries) — replay it, persist it, or pass it straight to
+ * emu_mutation_test1 as its `inputs`. Owned by the handle: valid until the next
+ * emu_fuzz_cover1 on it or emu_close, so copy it out to keep it. NULL / 0 before
+ * any fuzz run. */
+const long *emu_fuzz_corpus(const emu_t *e);
+size_t emu_fuzz_corpus_len(const emu_t *e);
+
 typedef struct {
     size_t mutants;  /* mutants generated and run                            */
     size_t killed;   /* an input distinguished the mutant from the original  */
@@ -645,6 +669,9 @@ emu_fuzz_stat_t *asmtest_emu_fuzz_stat_new(void);
 void asmtest_emu_fuzz_stat_free(emu_fuzz_stat_t *s);
 unsigned long long asmtest_emu_fuzz_blocks_reached(const emu_fuzz_stat_t *s);
 unsigned long long asmtest_emu_fuzz_corpus_len(const emu_fuzz_stat_t *s);
+/* The i-th kept input from the handle's last fuzz run, so a dynamic-FFI binding
+ * can read the corpus without the struct layout; 0 if out of range. */
+long asmtest_emu_fuzz_corpus_at(const emu_t *e, unsigned long long i);
 unsigned long long asmtest_emu_fuzz_iterations(const emu_fuzz_stat_t *s);
 
 emu_mutation_stat_t *asmtest_emu_mutation_stat_new(void);

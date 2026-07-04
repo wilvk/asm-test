@@ -1437,8 +1437,27 @@ typedef struct {
     int timeout;     /* seconds; <0 = leave the default in place */
     int bench;       /* run benchmarks instead of tests */
     long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
+    int bench_json;  /* --bench-format=json: machine-readable bench output */
     int fail_if_no_tests; /* exit nonzero when the selection is empty */
+    int color;            /* 0 auto, 1 always, 2 never (--color=) */
 } options_t;
+
+enum { COLOR_AUTO = 0, COLOR_ALWAYS = 1, COLOR_NEVER = 2 };
+
+/* Whether to emit ANSI color. --color=always/never force it; the default (auto)
+ * colors only an interactive stdout with NO_COLOR unset — honoring the
+ * https://no-color.org convention (any non-empty NO_COLOR disables color), which
+ * `isatty`-only detection ignored. */
+static int want_color(const options_t *opt) {
+    if (opt->color == COLOR_ALWAYS)
+        return 1;
+    if (opt->color == COLOR_NEVER)
+        return 0;
+    const char *nc = getenv("NO_COLOR");
+    if (nc != NULL && nc[0] != '\0')
+        return 0;
+    return ASMTEST_ISATTY();
+}
 
 static void usage(const char *prog) {
     printf(
@@ -1455,12 +1474,15 @@ static void usage(const char *prog) {
         "  -jN, --jobs=N        run up to N tests concurrently (implies fork;\n"
         "                       default 1 = serial). Output stays in order.\n"
         "  --format=tap|junit   output format (default tap)\n"
+        "  --color=auto|always|never  colorize (default auto; honors NO_COLOR)\n"
         "  --fail-if-no-tests   exit nonzero if the selection is empty (e.g. a "
         "typo'd --filter)\n"
         "  --bench              run registered benchmarks (BENCH) instead of "
         "tests\n"
         "  --bench-reps=N       fixed inner reps per round (default: "
         "auto-calibrate)\n"
+        "  --bench-format=text|json  benchmark output (default text; json for "
+        "CI ingestion)\n"
         "  -h, --help           show this help\n",
         prog);
 }
@@ -1526,39 +1548,70 @@ static void xml_print_escaped(const char *s) {
     }
 }
 
-/* Render results as JUnit XML, grouped into <testsuite> by suite name. */
-static void render_junit(const test_result_t *results, int n) {
-    int failures = 0, skipped = 0;
+/* JUnit distinguishes an <error> (a crash, timeout, or abnormal exit — something
+ * unexpected went wrong) from a <failure> (a failed assertion). asmtest records
+ * both as ST_FAIL, but the crash/timeout paths — the signal/alarm handler and
+ * the fork reaper — set one of these message prefixes, which an assertion never
+ * does, so the outcome classifies with no extra per-test plumbing. */
+static int result_is_error(const test_result_t *r) {
+    if (r->outcome != ST_FAIL)
+        return 0;
+    static const char *const pfx[] = {"caught fatal signal", "timed out",
+                                      "crashed:", "child exited abnormally",
+                                      "no result reported"};
+    for (size_t i = 0; i < sizeof pfx / sizeof pfx[0]; i++)
+        if (strncmp(r->msg, pfx[i], strlen(pfx[i])) == 0)
+            return 1;
+    return 0;
+}
+
+/* Render results as JUnit XML, grouped into <testsuite> by suite name. sysout is
+ * the test bodies' captured stdout (NULL if none / unavailable), surfaced as a
+ * <system-out> so a CI viewer keeps it instead of the old /dev/null discard. */
+static void render_junit(const test_result_t *results, int n,
+                         const char *sysout) {
+    int failures = 0, errors = 0, skipped = 0;
+    double total_secs = 0.0;
     for (int i = 0; i < n; i++) {
-        if (results[i].outcome == ST_FAIL)
+        total_secs += results[i].secs;
+        if (result_is_error(&results[i]))
+            errors++;
+        else if (results[i].outcome == ST_FAIL)
             failures++;
         else if (results[i].outcome == ST_SKIP)
             skipped++;
     }
     printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    printf("<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", n,
-           failures, skipped);
+    printf("<testsuites tests=\"%d\" failures=\"%d\" errors=\"%d\" "
+           "skipped=\"%d\" time=\"%.6f\">\n",
+           n, failures, errors, skipped, total_secs);
 
     int *done = (int *)asmtest_xalloc(
         calloc((size_t)(n > 0 ? n : 1), sizeof(int)), "junit suite map");
+    int first_suite = 1;
     for (int i = 0; i < n; i++) {
         if (done[i])
             continue;
         const char *suite = results[i].suite;
-        int s_tests = 0, s_fail = 0, s_skip = 0;
+        int s_tests = 0, s_fail = 0, s_err = 0, s_skip = 0;
+        double s_secs = 0.0;
         for (int j = i; j < n; j++) {
             if (strcmp(results[j].suite, suite) != 0)
                 continue;
             s_tests++;
-            if (results[j].outcome == ST_FAIL)
+            s_secs += results[j].secs;
+            if (result_is_error(&results[j]))
+                s_err++;
+            else if (results[j].outcome == ST_FAIL)
                 s_fail++;
             else if (results[j].outcome == ST_SKIP)
                 s_skip++;
         }
         printf("  <testsuite name=\"");
         xml_print_escaped(suite);
-        printf("\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", s_tests,
-               s_fail, s_skip);
+        printf("\" tests=\"%d\" failures=\"%d\" errors=\"%d\" skipped=\"%d\" "
+               "time=\"%.6f\">\n",
+               s_tests, s_fail, s_err, s_skip, s_secs);
         for (int j = i; j < n; j++) {
             if (strcmp(results[j].suite, suite) != 0)
                 continue;
@@ -1570,14 +1623,16 @@ static void render_junit(const test_result_t *results, int n) {
             xml_print_escaped(r->name);
             printf("\" time=\"%.6f\">", r->secs);
             if (r->outcome == ST_FAIL) {
-                printf("\n      <failure message=\"");
+                /* crash/timeout -> <error>, assertion -> <failure> */
+                const char *tag = result_is_error(r) ? "error" : "failure";
+                printf("\n      <%s message=\"", tag);
                 xml_print_escaped(r->msg);
                 printf("\">at ");
                 xml_print_escaped(
                     r->file); /* a path with &/< must be escaped */
                 printf(":%d&#10;", r->line);
                 xml_print_escaped(r->msg);
-                printf("</failure>\n    ");
+                printf("</%s>\n    ", tag);
             } else if (r->outcome == ST_SKIP) {
                 printf("\n      <skipped message=\"");
                 xml_print_escaped(r->msg);
@@ -1585,6 +1640,15 @@ static void render_junit(const test_result_t *results, int n) {
             }
             printf("</testcase>\n");
         }
+        /* The runner captures stdout at the run level (tests are interleaved, not
+         * grouped by suite), so attach the whole-run capture to the first
+         * <testsuite> — schema-valid there, and no CI output is discarded. */
+        if (first_suite && sysout != NULL && sysout[0] != '\0') {
+            printf("    <system-out>");
+            xml_print_escaped(sysout);
+            printf("</system-out>\n");
+        }
+        first_suite = 0;
         printf("  </testsuite>\n");
     }
     printf("</testsuites>\n");
@@ -1626,7 +1690,7 @@ enum {
 };
 
 typedef struct {
-    double min, median, mean;
+    double min, median, mean, stddev; /* stddev: round-to-round dispersion */
     long reps;
 } bench_stats_t;
 
@@ -1675,15 +1739,60 @@ static void bench_measure(void (*body)(void), long reps, bench_stats_t *st) {
     st->min = per[0];
     st->median = per[BENCH_ROUNDS / 2];
     st->mean = sum / BENCH_ROUNDS;
+    double var = 0;
+    for (int r = 0; r < BENCH_ROUNDS; r++) {
+        double d = per[r] - st->mean;
+        var += d * d;
+    }
+    var /= BENCH_ROUNDS; /* population variance over the rounds */
+    /* Newton's method for the sd, so the runner needs no libm (-lm) link — the
+     * test binaries don't link it, and mingw Win64 keeps it self-contained. */
+    double g = var;
+    if (g > 0.0)
+        for (int i = 0; i < 40; i++)
+            g = 0.5 * (g + var / g);
+    st->stddev = var > 0.0 ? g : 0.0;
     st->reps = reps;
 }
 
-/* Run the selected benchmarks, printing an aligned table of cycles per call.
- * Each runs in-process under the same signal/timeout guard as a test, so a
- * crashing or hung routine is reported as an error rather than taking the
- * process down. forced_reps > 0 overrides auto-calibration. */
+/* Print s as a JSON string literal (quotes + minimal escapes). */
+static void json_print_string(const char *s) {
+    putchar('"');
+    for (; s != NULL && *s != '\0'; s++) {
+        unsigned char c = (unsigned char)*s;
+        switch (c) {
+        case '"':
+            fputs("\\\"", stdout);
+            break;
+        case '\\':
+            fputs("\\\\", stdout);
+            break;
+        case '\n':
+            fputs("\\n", stdout);
+            break;
+        case '\r':
+            fputs("\\r", stdout);
+            break;
+        case '\t':
+            fputs("\\t", stdout);
+            break;
+        default:
+            if (c < 0x20)
+                printf("\\u%04x", c);
+            else
+                putchar((int)c);
+        }
+    }
+    putchar('"');
+}
+
+/* Run the selected benchmarks. Each runs in-process under the same signal/timeout
+ * guard as a test, so a crashing or hung routine is reported as an error rather
+ * than taking the process down. forced_reps > 0 overrides auto-calibration.
+ * format 0 = the aligned human table (min/median/mean + sd + cv%); format 1 =
+ * a machine-readable JSON object for CI ingestion / baseline diffing. */
 static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
-                          int use_color) {
+                          int use_color, int json) {
     const char *dim = use_color ? "\033[2m" : "";
     const char *red = use_color ? "\033[31m" : "";
     const char *rst = use_color ? "\033[0m" : "";
@@ -1696,9 +1805,15 @@ static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
             width = w;
     }
 
-    printf("%s# benchmarks — %s per call, min/median over %d rounds%s\n", dim,
-           ASMTEST_BENCH_UNIT, BENCH_ROUNDS, rst);
+    if (json)
+        printf("{\"unit\": \"%s\", \"rounds\": %d, \"benchmarks\": [",
+               ASMTEST_BENCH_UNIT, BENCH_ROUNDS);
+    else
+        printf("%s# benchmarks — %s per call, min/median/mean +/- sd over %d "
+               "rounds%s\n",
+               dim, ASMTEST_BENCH_UNIT, BENCH_ROUNDS, rst);
 
+    int emitted = 0; /* JSON array comma tracking */
     for (int i = 0; i < n; i++) {
         asmtest_bench_t *b = sel[i];
         char id[256];
@@ -1714,7 +1829,16 @@ static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
             alarm(0);
             asmtest_in_test = 0;
             errors++;
-            printf("  %-*s  %sERROR: %s%s\n", width, id, red, asmtest_msg, rst);
+            if (json) {
+                printf("%s\n    {\"name\": ", emitted++ ? "," : "");
+                json_print_string(id);
+                printf(", \"error\": ");
+                json_print_string(asmtest_msg);
+                printf("}");
+            } else {
+                printf("  %-*s  %sERROR: %s%s\n", width, id, red, asmtest_msg,
+                       rst);
+            }
             continue;
         }
 #endif
@@ -1726,9 +1850,22 @@ static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
 #endif
         asmtest_in_test = 0;
 
-        printf("  %-*s  min=%9.2f  median=%9.2f  mean=%9.2f  %s(reps=%ld)%s\n",
-               width, id, st.min, st.median, st.mean, dim, st.reps, rst);
+        double cv = st.mean != 0.0 ? st.stddev / st.mean : 0.0; /* rel. spread */
+        if (json) {
+            printf("%s\n    {\"name\": ", emitted++ ? "," : "");
+            json_print_string(id);
+            printf(", \"min\": %.4f, \"median\": %.4f, \"mean\": %.4f, "
+                   "\"stddev\": %.4f, \"cv\": %.5f, \"reps\": %ld}",
+                   st.min, st.median, st.mean, st.stddev, cv, st.reps);
+        } else {
+            printf("  %-*s  min=%9.2f  median=%9.2f  mean=%9.2f  sd=%8.2f  "
+                   "cv=%5.1f%%  %s(reps=%ld)%s\n",
+                   width, id, st.min, st.median, st.mean, st.stddev, 100.0 * cv,
+                   dim, st.reps, rst);
+        }
     }
+    if (json)
+        printf("\n  ]\n}\n");
     return errors;
 }
 
@@ -1784,6 +1921,27 @@ int main(int argc, char **argv) {
         } else if (opt_prefix(a, "--bench-reps=", &v)) {
             opt.bench = 1;
             opt.bench_reps = strtol(v, NULL, 0);
+        } else if (opt_prefix(a, "--bench-format=", &v)) {
+            opt.bench = 1;
+            if (strcmp(v, "json") == 0)
+                opt.bench_json = 1;
+            else if (strcmp(v, "text") == 0)
+                opt.bench_json = 0;
+            else {
+                fprintf(stderr, "unknown --bench-format: %s\n", v);
+                return 2;
+            }
+        } else if (opt_prefix(a, "--color=", &v)) {
+            if (strcmp(v, "auto") == 0)
+                opt.color = COLOR_AUTO;
+            else if (strcmp(v, "always") == 0)
+                opt.color = COLOR_ALWAYS;
+            else if (strcmp(v, "never") == 0)
+                opt.color = COLOR_NEVER;
+            else {
+                fprintf(stderr, "unknown --color: %s\n", v);
+                return 2;
+            }
         } else if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
             usage(argv[0]);
             return 0;
@@ -1875,7 +2033,9 @@ int main(int argc, char **argv) {
             for (int i = 0; i < bn; i++)
                 printf("%s.%s\n", bsel[i]->suite, bsel[i]->name);
         } else {
-            berr = run_benchmarks(bsel, bn, opt.bench_reps, ASMTEST_ISATTY());
+            berr = run_benchmarks(bsel, bn, opt.bench_reps,
+                                  want_color(&opt) && !opt.bench_json,
+                                  opt.bench_json);
         }
         free(bsel);
         /* A benchmark that crashed or timed out must fail the run — `make bench`
@@ -1940,7 +2100,7 @@ int main(int argc, char **argv) {
         did_shuffle = 1;
     }
 
-    int use_color = !opt.format_junit && ASMTEST_ISATTY();
+    int use_color = !opt.format_junit && want_color(&opt);
     tap_palette_t pal = {
         .grn = use_color ? "\033[32m" : "",
         .red = use_color ? "\033[31m" : "",
@@ -1979,15 +2139,21 @@ int main(int argc, char **argv) {
      * the real stdout fd at /dev/null for the run phase (children inherit it),
      * then restore it before rendering the XML. */
     int junit_saved_out = -1;
+    FILE *junit_out = NULL; /* captures test bodies' stdout for <system-out> */
 #if !defined(_WIN32)
     if (opt.format_junit) {
         fflush(stdout);
         junit_saved_out = dup(STDOUT_FILENO);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (junit_saved_out >= 0 && devnull >= 0)
-            dup2(devnull, STDOUT_FILENO);
-        if (devnull >= 0)
-            close(devnull);
+        junit_out = tmpfile(); /* auto-deleted on close */
+        if (junit_saved_out >= 0 && junit_out != NULL) {
+            dup2(fileno(junit_out), STDOUT_FILENO);
+        } else if (junit_saved_out >= 0) {
+            int devnull = open("/dev/null", O_WRONLY); /* fallback: discard */
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                close(devnull);
+            }
+        }
     }
 #endif
 
@@ -2042,17 +2208,30 @@ int main(int argc, char **argv) {
         print_tap_result(i + 1, r, &pal);
     }
 
+    char *junit_sysout = NULL;
 #if !defined(_WIN32)
     if (opt.format_junit && junit_saved_out >= 0) {
-        fflush(
-            stdout); /* nothing should be buffered for /dev/null, but be safe */
+        fflush(stdout); /* flush any parent buffering before restoring stdout */
         dup2(junit_saved_out, STDOUT_FILENO);
         close(junit_saved_out);
+    }
+    if (junit_out != NULL) { /* slurp the captured test-body output */
+        int fd = fileno(junit_out);
+        off_t sz = lseek(fd, 0, SEEK_END);
+        if (sz > 0) {
+            junit_sysout = (char *)malloc((size_t)sz + 1);
+            if (junit_sysout != NULL) {
+                lseek(fd, 0, SEEK_SET);
+                ssize_t got = read(fd, junit_sysout, (size_t)sz);
+                junit_sysout[got > 0 ? (size_t)got : 0] = '\0';
+            }
+        }
+        fclose(junit_out);
     }
 #endif
 
     if (opt.format_junit) {
-        render_junit(results, n);
+        render_junit(results, n, junit_sysout);
     } else {
         const char *summary_color = failed ? pal.red : pal.grn;
         printf("%s# %d passed, %d failed, %d skipped, %d total%s\n",
@@ -2062,6 +2241,7 @@ int main(int argc, char **argv) {
     free(results);
     free(sel);
     free(gidx);
+    free(junit_sysout);
     return (failed || (n == 0 && opt.fail_if_no_tests)) ? 1 : 0;
 }
 #endif /* ASMTEST_NO_MAIN */
