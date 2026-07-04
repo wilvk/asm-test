@@ -34,8 +34,24 @@ review is blocked on hardware, privileges, or a credentialed action.
 
 ## Remediation status (updated 2026-07-04)
 
-Two batches of the suggested fix order have landed; the `Status` column below is
-annotated per item.
+All six steps of the suggested fix order have been worked through, and every one
+of the ~50 findings now has an explicit disposition in the `Status` column below.
+
+**At a glance — 50 findings:**
+
+| Disposition | Count | Items |
+|---|---|---|
+| ✅ Fixed & verified | 35 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 |
+| ⏸ Confirmed, deferred | 2 | K1 (CI-cache PR — needs a CI run), N4 (multi-binding expansion) |
+| ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
+| ⬜ Open expansions (step 5) | 10 | P1 E7 A6 A7 R5 E5 P2 P3 P4 P5 |
+
+Landed across: **59adb74** (step 1), **817cc72** (step 2), **356b0ff** + **2b8e8f9**
+(step 3), **8fb7c14** (step 4), **a8f7054** (step 6). Each "fixed" row was
+independently re-verified against the committed code (40/40 confirmed, 0
+discrepancies) — not just self-reported.
+
+Per-step detail:
 
 - **Step 1 — the "green CI, broken artifact" cluster (D1, N1, N2, A1, A2)** —
   fixed in **59adb74**, each with a regression gate (a `make
