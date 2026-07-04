@@ -245,6 +245,36 @@ jobs:
       - name: Build + run the hardware-trace suite (decode validated; capture self-skips)
         run: make hwtrace-test
 
+  # K2: the cross-language hardware-trace wrappers — each binding's in-process
+  # single-step tracer, in the same isolated per-language images the `bindings`
+  # job builds. Run as ONE job so the shared bindings base (and its Keystone /
+  # Capstone source build) is built once via the in-job docker layer cache, not
+  # once per language. python is excluded (HWTRACE_DOCKER_LANGS), matching the
+  # single-step tier's Docker matrix. Needs no privilege (in-process TF/SIGTRAP);
+  # each wrapper self-skips off x86-64 Linux. This is the tier's first CI lane
+  # that actually executes a trace across the bindings, not just the C harness.
+  hwtrace-bindings:
+    name: hwtrace-bindings (all wrappers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Trace every language wrapper (single-step; self-skips off x86-64 Linux)
+        run: make docker-hwtrace-bindings
+
+  # K2: the eBPF code-image (JIT emission) detector — build the CO-RE program +
+  # host harness and run it in a container with the BPF / PERFMON / SYS_PTRACE
+  # caps the lane grants, exercising the mmap -> mprotect(PROT_EXEC) emission
+  # edge. Self-skips cleanly where the kernel denies CAP_BPF.
+  codeimage:
+    name: codeimage (eBPF emission detector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build + run the eBPF code-image detector
+        run: make docker-hwtrace-codeimage
+
   # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
   # container (the generic bindings/Dockerfile.lang on a shared base) so the
   # toolchains stay isolated — one matrix job per language, `make docker-<lang>`,

@@ -47,6 +47,19 @@ annotated per item.
   TAP/YAML spec-conformance and the crashing-BENCH exit and empty-selection paths
   exercised by hand, and the cpp (20/20), emu (47/47), and go conformance
   containers all pass.
+- **Step 3 — CI leverage (K3, K4, K5, K2)** — fixed. K5 makes the PIC and
+  native-trace object trees rebuild on a build-knob flip; K4 sanitizes the
+  emulator tier (emu-test 47/47 clean under ASan+UBSan; the single-step / ptrace /
+  codeimage tiers are excluded because sanitizer instrumentation perturbs the
+  exact instruction stream / emission addresses they measure); K3 widens
+  clang-tidy and gcov across the C tree; K2 wires the cross-language hardware-trace
+  wrappers and the eBPF codeimage detector into CI. Verified in the CI container
+  (docker-analyze, docker-coverage, docker-sanitize, docker-hwtrace-codeimage
+  19/19, docker-hwtrace-go all green). **K1** (cache the Keystone/Capstone builds)
+  is **deferred**: it is a CI-throughput optimization whose mechanisms (docker
+  buildx `type=gha` cache; host `actions/cache` of a compiled toolchain) are
+  GitHub-Actions-runtime-specific, can't be validated locally, and touch the
+  release pipeline — it wants its own PR with a CI run to confirm the cache config.
 
 Everything else remains open (`verified` = confirmed real, not yet actioned).
 
@@ -85,8 +98,8 @@ can't assemble — none of which any current gate catches.
 | D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | ✅ fixed (step 2) |
 | A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | ✅ fixed (step 2) |
 | N7 | `vec_add8d` missing from the corpus name table | Low | defect | ✅ fixed (step 2) |
-| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | verified |
-| K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | verified |
+| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | ⏸ deferred (CI-only; needs a CI run to validate cache config — see step-3 note) |
+| K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | ✅ fixed (step 3) |
 | K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | ✅ fixed (step 3) |
 | E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | verified |
 | D2 | README doesn't funnel to the docs site; bindings/tracing invisible | High | docs | verified |
