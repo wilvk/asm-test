@@ -26,7 +26,7 @@ those edges, descend into `get_Out`, or descend the whole tree.
 > [§Correctness core](#correctness-core-the-shadow-stack) and the honesty constraints in
 > [§Level 3 safety](#level-3-safety-and-honesty) are **load-bearing**, not optional
 > polish. Update this file as phases land, the way
-> [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) tracks its own.
+> [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) tracks its own.
 
 This plan is a **sibling** of the
 [zen2-singlestep-trace-plan](zen2-singlestep-trace-plan.md) (which shipped the W2

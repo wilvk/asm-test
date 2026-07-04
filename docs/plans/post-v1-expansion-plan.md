@@ -3,8 +3,8 @@
 A roadmap for what comes *after* the v1.0.0 feature set. The five prior plans —
 [DESIGN.md](../../DESIGN.md) (phases 0–11), [expansion-plan.md](expansion-plan.md)
 (tracks A–E), [multi-language-bindings-plan.md](multi-language-bindings-plan.md)
-(Track 0 + ten languages), [binding-parity-plan.md](binding-parity-plan.md), and the
-[Native Win64 tier plan](win64-native-tier-plan.md) — are all **landed**. They
+(Track 0 + ten languages), [binding-parity-plan.md](../archive/plans/binding-parity-plan.md), and the
+[Native Win64 tier plan](../archive/plans/win64-native-tier-plan.md) — are all **landed**. They
 widened *what can be tested*, *how the runner behaves*, and *who can call it*. This
 plan covers the two directions left: **reach** (turning a built framework into a
 published, installable one) and **depth** (new introspection capability that plays to
@@ -103,7 +103,7 @@ the per-language `Dockerfile`s, the registry manifests, [docs/packaging.md](../r
 **Goal.** Bring the Win64 tier up to the POSIX runner's guarantees and add
 authoritative real-OS confirmation.
 
-**Why.** The [Win64 plan](win64-native-tier-plan.md) shipped the trampoline, layout,
+**Why.** The [Win64 plan](../archive/plans/win64-native-tier-plan.md) shipped the trampoline, layout,
 and an in-process runner under Wine, but deferred forked/`-jN` execution and
 benchmarks behind its Phase 3 decision gate. The primitives (`asmtest_win32_run`,
 `asmtest_win32_run_pool`) already exist and are tested; what remains is wiring a
@@ -250,7 +250,7 @@ is native-only until Unicorn ships AVX execution.
    the wider lane counts) plus manifest/`_Static_assert` pins for the new layout.
 3. **Emulator parity** where Unicorn exposes the registers; documented self-skip
    where it doesn't (mirroring the RISC-V "V" decision in
-   [binding-parity-plan.md](binding-parity-plan.md)).
+   [binding-parity-plan.md](../archive/plans/binding-parity-plan.md)).
 
 ### Acceptance criteria
 

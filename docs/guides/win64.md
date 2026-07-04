@@ -15,7 +15,7 @@ Wine, or drives the trampoline directly via a compiler ABI attribute.
 > now underway — all five primitives are ported and verified under
 > Wine, with the runner's execution model being wired through a platform seam
 > (see [The runner port](#the-runner-port) below). See the
-> [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md)
+> [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/archive/plans/win64-native-tier-plan.md)
 > for the full breakdown.
 
 ## What it captures

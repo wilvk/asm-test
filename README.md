@@ -190,14 +190,14 @@ in `out.err`), never a crash. Build and run with `make asm-test` (needs
 (macOS gets it from Homebrew). Capstone (the disassembler) is built the same way
 from a pinned release via [scripts/build-capstone.sh](scripts/build-capstone.sh),
 so neither optional tier depends on a distro/brew package. See
-[docs/plans/inline-asm-keystone-plan.md](docs/plans/inline-asm-keystone-plan.md).
+[docs/plans/inline-asm-keystone-plan.md](docs/archive/plans/inline-asm-keystone-plan.md).
 
 The **published language packages bundle both optional tiers** (the superset
 `libasmtest_emu` plus vendored Unicorn/Keystone/Capstone), so a fresh install
 runs in-line assembly and disassembly with no system libraries. Because they
 convey the GPL-2.0 engines as binaries, those packages are **effectively GPL-2.0**
 (asm-test's own source stays MIT — see [LICENSE](LICENSE) and
-[docs/plans/fully-featured-packages-plan.md](docs/plans/fully-featured-packages-plan.md)).
+[docs/plans/fully-featured-packages-plan.md](docs/archive/plans/fully-featured-packages-plan.md)).
 
 ## Debugging a routine under test
 

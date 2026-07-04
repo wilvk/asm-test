@@ -407,7 +407,7 @@ installed package actually ships.** For a long time the answer collapsed the fal
 cascade to a single rung — only the emulator tier was bundled, so a `pip install` /
 `npm install` / `gem install` consumer had exactly **one** trace tier out of the box on
 every platform. **That changed with the [bundle-native-trace-tiers
-work](../plans/bundle-native-trace-tiers-plan.md):** the two native tiers now ship
+work](../archive/plans/bundle-native-trace-tiers-plan.md):** the two native tiers now ship
 *inside* the packages on the **Linux** slots, so a fresh install runs
 `NativeTrace` / `HwTrace` on a capable Linux host with no manual `make shared-*` and no
 `DYNAMORIO_HOME`. The macOS slots still carry the emulator only — both native tiers are

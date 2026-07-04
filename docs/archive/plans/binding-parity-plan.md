@@ -1,7 +1,7 @@
 # asm-test — Binding Coverage Parity Plan
 
 Closes the gaps where the C core exposes an emulator/assembler capability that **no
-language binding can reach**, because [`src/ffi.c`](../../src/ffi.c) never grew an
+language binding can reach**, because [`src/ffi.c`](../../../src/ffi.c) never grew an
 opaque-handle wrapper for it — and anchors every tier in the shared conformance
 corpus so the bindings stay honest.
 
@@ -22,7 +22,7 @@ unreachable from any binding, and the corpus was behind the bindings it governs:
 
 1. **Multi-arch emulator guests** (arm64 / riscv / arm). The `emu_arm64_*` /
    `emu_riscv_*` / `emu_arm_*` engines and their register structs existed in
-   [`asmtest_emu.h`](../../include/asmtest_emu.h) / [`asmtest_abi.json`](../../asmtest_abi.json),
+   [`asmtest_emu.h`](../../../include/asmtest_emu.h) / [`asmtest_abi.json`](../../../asmtest_abi.json),
    but the FFI exposed only **x86** accessors, so every binding's emulator tier was
    x86-only.
 2. **Emulator FP/vector args + >2 int args** — `emu_call_fp` / `emu_call_vec` / 6-arg

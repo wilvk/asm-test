@@ -29,52 +29,52 @@ Paths are repo-relative; `file:line` points at the exact site.
 decode-side fixed (its Intel-PT address-filter half needs Intel hardware), #19
 resolved by correcting the header claim, #36 mitigated (Win64 kernel-wait; a full
 fix needs a Windows host). Fixes landed in batches; each has an implementation note
-under [`docs/summaries/`](../summaries/), and the working tree was validated on
+under `docs/summaries/`, and the working tree was validated on
 x86-64 (core + sanitizer + emu + hwtrace) and linux/arm64 (via qemu). Items whose
 full validation needs hardware this AMD Zen 5 dev box lacks (Intel PT, AArch64
 CoreSight, Zen 3 BRS), a non-AMD OS (macOS/Windows runtime), or a privileged/manual
 action (`perf_event_paranoid`, package-publish credentials) are called out inline
-and mapped in [roadmap-assessment](../summaries/2026-07-02-roadmap-assessment.md).
+and mapped in roadmap-assessment.
 
 | Finding | Status | Note |
 |---|---|---|
-| #1 AArch64 d8–d15 ABI check | ✅ Fixed | [batch-a](../summaries/2026-07-02-batch-a-abi-examples.md) |
+| #1 AArch64 d8–d15 ABI check | ✅ Fixed | batch-a |
 | #2 AArch64 x1 return (doc) | ✅ Fixed | batch-a |
 | #3 struct{long;double} arg (doc) | ✅ Fixed | batch-a |
 | #4 pst_mixed AArch64 body | ✅ Fixed | batch-a |
 | #5 vm.s x23 + frame | ✅ Fixed | batch-a |
 | #6 ASSERT_ABI_PRESERVED sp claim (doc) | ✅ Fixed | batch-a |
-| #11 Intel PT empty trace as complete | ⚠️ Partial | [batch-c](../summaries/2026-07-02-batch-c-hwtrace.md) — decode-side truncated fix done; PT address-filter needs Intel HW |
+| #11 Intel PT empty trace as complete | ⚠️ Partial | batch-c — decode-side truncated fix done; PT address-filter needs Intel HW |
 | #12 AMD LBR ring-full undetectable | ✅ Fixed | batch-c |
 | #13 single-step block partition | ✅ Fixed | batch-c (live-validated vs Unicorn) |
 | #14 available(SINGLESTEP) non-Linux stub | ✅ Fixed | batch-c |
 | #15 TF-clear stops capture silently | ✅ Fixed | batch-c |
 | #16 AMD replay not-taken block | ✅ Fixed | batch-c |
 | #17 init during active capture | ✅ Fixed | batch-c |
-| #18 trace_call non-SIGTRAP kill | ✅ Fixed | [batch-d](../summaries/2026-07-02-batch-d-ptrace.md) |
+| #18 trace_call non-SIGTRAP kill | ✅ Fixed | batch-d |
 | #19 call-out not call-depth aware | ✅ Fixed (doc) | batch-d — header corrected; SP-aware step-over a documented follow-up |
 | #20 jitdump truncation OK+garbage | ✅ Fixed | batch-d |
 | #21 unreaped tracee on return path | ✅ Fixed | batch-d |
-| #26 Rust call_traced heap overflow | ✅ Fixed | [batch-f](../summaries/2026-07-02-batch-f-bindings.md) |
+| #26 Rust call_traced heap overflow | ✅ Fixed | batch-f |
 | #27 Python reg() KeyError | ✅ Fixed | batch-f |
 | #28 Node 32-bit address truncation | ✅ Fixed | batch-f |
 | #29 Lua 64-bit read-back corruption | ✅ Fixed | batch-f |
 | #30 C++ null fn-pointer crash | ✅ Fixed | batch-f |
 | #31 Java unbounded arena | ✅ Fixed | batch-f |
 | #32 Python hwtrace OSError | ✅ Fixed | batch-f |
-| #7 SKIP in SETUP/TEARDOWN → FAIL | ✅ Fixed | [batch-b](../summaries/2026-07-02-batch-b-core-runner.md) |
+| #7 SKIP in SETUP/TEARDOWN → FAIL | ✅ Fixed | batch-b |
 | #8 vec_f32 unbounded index (OOB) | ✅ Fixed | batch-b |
 | #9 JUnit not XML-safe | ✅ Fixed | batch-b |
 | #10 test stdout precedes JUnit XML | ✅ Fixed | batch-b |
-| #22 codeimage track re-arm wipe | ✅ Fixed | [batch-e](../summaries/2026-07-02-batch-e-emu-codeimage.md) |
+| #22 codeimage track re-arm wipe | ✅ Fixed | batch-e |
 | #23 emu SysV stack args dropped | ✅ Fixed | batch-e |
 | #24 emu AArch64 x0..x7 | ✅ Fixed | batch-e |
 | #25 emulator.md preload address (doc) | ✅ Fixed | batch-e |
-| #33 Win64 teardown skipped | ✅ Fixed | [batch-g](../summaries/2026-07-02-batch-g-windows.md) |
+| #33 Win64 teardown skipped | ✅ Fixed | batch-g |
 | #34 Win64 DF not cleared on recovery | ✅ Fixed | batch-g |
 | #35 Win64 watchdog double-delete | ✅ Fixed | batch-g |
 | #36 Win64 --no-fork kernel-wait hang | ⚠️ Mitigated | batch-g (bounded hard-exit + doc; full fix needs a Windows host) |
-| #40 release.yml corresponding-source | ✅ Fixed | [batch-i](../summaries/2026-07-02-batch-i-build-ci.md) |
+| #40 release.yml corresponding-source | ✅ Fixed | batch-i |
 | #41 lua rockspec hardcoded version | ✅ Fixed | batch-i |
 | #42 asmtest.o/test header prereqs | ✅ Fixed | batch-i |
 | #43 PIC/ptrace header prereqs | ✅ Fixed | batch-i |
@@ -83,10 +83,10 @@ and mapped in [roadmap-assessment](../summaries/2026-07-02-roadmap-assessment.md
 | #46 install omits asmtest_assemble.h | ✅ Fixed | batch-i |
 | #47 release verify without llvm | ✅ Fixed | batch-i |
 | #48 vmlinux_min.h can't compile bpf | ✅ Fixed | batch-i |
-| #37 expect.sh negative timeout | ✅ Fixed | [batch-h](../summaries/2026-07-02-batch-h-test-suite.md) |
+| #37 expect.sh negative timeout | ✅ Fixed | batch-h |
 | #38 expect.sh shuffle tautology | ✅ Fixed | batch-h |
 | #39 drtrace coverage assertion | ✅ Fixed | batch-h |
-| #49 quickstart auto-discovery (doc) | ✅ Fixed | [batch-j](../summaries/2026-07-02-batch-j-docs.md) |
+| #49 quickstart auto-discovery (doc) | ✅ Fixed | batch-j |
 | #50 emulator.md AArch64 args (doc) | ✅ Fixed | via #24 (batch-e) |
 | #51 ASMTEST_SEED / --shuffle | ✅ Fixed | batch-j |
 | #52 CHANGELOG stale emu_full (doc) | ✅ Fixed | batch-j |

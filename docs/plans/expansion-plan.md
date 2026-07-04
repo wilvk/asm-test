@@ -290,7 +290,7 @@ the only deferred remainder).
   and as a real PE under **Docker + Wine** — with a first-class `regs_t` layout,
   manifest, and a CI `win64` job. The POSIX runner is *not* ported to Win32 (the
   suite runs `--no-fork`); that remains scoped for on-demand pickup. See the
-  [Native Win64 tier implementation plan](win64-native-tier-plan.md) for the full
+  [Native Win64 tier implementation plan](../archive/plans/win64-native-tier-plan.md) for the full
   build, [docs/win64.md](../guides/win64.md) for usage, and [Track E.1 — Native Win64
   trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for what
   the remaining runner port takes.
@@ -324,7 +324,7 @@ the only deferred remainder).
 ## Track E.1 — Native Win64 trampoline (scoping)
 
 > For the concrete phased *how* (substrate, trampoline, layout, runner port, CI),
-> see the [Native Win64 tier implementation plan](win64-native-tier-plan.md). This
+> see the [Native Win64 tier implementation plan](../archive/plans/win64-native-tier-plan.md). This
 > section is the *scoping* it builds on.
 
 The one Track E item left undone. This section records *what it takes* so the

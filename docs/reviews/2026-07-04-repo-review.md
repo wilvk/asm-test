@@ -16,7 +16,7 @@ already implemented? already tracked in a plan/review/summary/DESIGN? real
 value? — with the tracked P0–P5 set from
 [open-defects-and-review-items-plan.md](../plans/open-defects-and-review-items-plan.md)
 and the hardware/privilege-blocked set from
-[2026-07-02-roadmap-assessment.md](../summaries/2026-07-02-roadmap-assessment.md)
+2026-07-02-roadmap-assessment.md
 supplied as exclusions. ~30 recommendations survived.
 
 **Caveat — partial verification:** the verifier agents for the **bindings** and

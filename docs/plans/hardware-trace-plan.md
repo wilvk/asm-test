@@ -23,8 +23,8 @@ Throughout this plan, **native-trace Phase N** means a phase of the
 **Phase 1 / Phase 2** is one of *this* plan's own two phases.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the
-> way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) and
-> [win64-native-tier-plan.md](win64-native-tier-plan.md) track theirs.
+> way [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) and
+> [win64-native-tier-plan.md](../archive/plans/win64-native-tier-plan.md) track theirs.
 
 ---
 

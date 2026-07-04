@@ -13,8 +13,8 @@ execution engine, and no native/capture-tier work (that would need an executable
 `mmap`; in-line source belongs in the emulator tier where code is already bytes).
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
-> [expansion-plan.md](expansion-plan.md) and
-> [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
+> [expansion-plan.md](../../plans/expansion-plan.md) and
+> [multi-language-bindings-plan.md](../../plans/multi-language-bindings-plan.md) track theirs.
 >
 > **Status: complete (2026-07-04).** All seven phases landed — assembler core,
 > emu bridge, build wiring, dependency provisioning, tests, bindings, and docs.
@@ -69,7 +69,7 @@ Two layers:
   not pull Unicorn itself); the final binary links both libs.
 
 The emulator loads code at `EMU_CODE_BASE` (`0x00100000`, currently private to
-[src/emu.c](../../src/emu.c)). Keystone must assemble at that same base so branch
+[src/emu.c](../../../src/emu.c)). Keystone must assemble at that same base so branch
 and PC-relative targets match where the bytes actually land — so the base is
 exposed in the public emu header and shared by both sides.
 
@@ -109,7 +109,7 @@ Keystone/kstool convention; AT&T stays one enum away.)
 
 ## Phase 2 — Emu bridge wrappers — **done**
 
-Move `EMU_CODE_BASE` into [include/asmtest_emu.h](../../include/asmtest_emu.h) as a
+Move `EMU_CODE_BASE` into [include/asmtest_emu.h](../../../include/asmtest_emu.h) as a
 public `#define` (out of emu.c). Add to `src/assemble.c`:
 
 ```c
@@ -130,7 +130,7 @@ side already reports setup failure).
 
 ## Phase 3 — Build wiring (mirror Unicorn exactly) — **done**
 
-In [Makefile](../../Makefile), beside the `UNICORN_*` block:
+In [Makefile](../../../Makefile), beside the `UNICORN_*` block:
 
 - `KEYSTONE_CFLAGS ?= $(shell pkg-config --cflags keystone 2>/dev/null)` and
   `KEYSTONE_LIBS ?= $(shell pkg-config --libs keystone 2>/dev/null || echo -lkeystone)`.
@@ -146,7 +146,7 @@ In [Makefile](../../Makefile), beside the `UNICORN_*` block:
 
 ## Phase 4 — Dependency provisioning — **done**
 
-In [scripts/install-deps.sh](../../scripts/install-deps.sh): add `want_keystone`, a
+In [scripts/install-deps.sh](../../../scripts/install-deps.sh): add `want_keystone`, a
 `--asm` flag (and include it in `--all`), a `have_keystone()` pkg-config probe, and
 per-manager package names. Update the `--asm` line in the usage banner and the
 `make deps` comments in the Makefile.
@@ -154,14 +154,14 @@ per-manager package names. Update the `--asm` line in the usage banner and the
 > **Revised:** CI confirmed **Keystone has no Ubuntu/Debian apt package**
 > (`E: Unable to locate package libkeystone-dev`) — only Homebrew packages it. So
 > `keystone_pkg` is empty for every Linux manager, and `--asm` points at a new
-> [scripts/build-keystone.sh](../../scripts/build-keystone.sh) — a pinned
+> [scripts/build-keystone.sh](../../../scripts/build-keystone.sh) — a pinned
 > (`0.9.2`) source build the CI `asm` job and the Docker image run. `cmake`/`git`
 > were added to the Dockerfile for it.
 
 ## Phase 5 — Tests — **done**
 
 New `examples/test_asm.c` (TAP, modeled on
-[examples/test_emu.c](../../examples/test_emu.c)):
+[examples/test_emu.c](../../../examples/test_emu.c)):
 
 - **x86-64**: assemble `"mov rax, rdi; add rax, rsi; ret"`, run via
   `emu_call_asm(40, 2)`, assert `rax == 42` (matches the `add_signed` corpus
@@ -174,13 +174,13 @@ New `examples/test_asm.c` (TAP, modeled on
   identically to the linked symbol.
 
 Wire `test_asm` into `make asm-test`, the Docker matrix, and CI
-([.github/workflows](../../.github/workflows)) gated like the emu jobs (skip where
+([.github/workflows](../../../.github/workflows)) gated like the emu jobs (skip where
 Keystone is absent, exactly as emu skips without Unicorn).
 
 ## Phase 6 — Bindings — **done**
 
 A C ABI shim `asmtest_emu_call_asm(emu, src, a0, a1, out)`
-([src/assemble.c](../../src/assemble.c), like `asmtest_emu_call2`) — a binding
+([src/assemble.c](../../../src/assemble.c), like `asmtest_emu_call2`) — a binding
 passes a string and reads back the same `emu_result_t`. Each of the five
 dlopen bindings (.NET, Ruby, Lua, Node, Java) gains a `CallAsm` method and a
 conformance case, **bound optionally**: the entry point is present only in the
@@ -203,11 +203,11 @@ the case (never a missing-symbol crash). Each conformance replays the x86-64
 
 ## Phase 7 — Docs — **done**
 
-- [README.md](../../README.md): a "Pass assembly as a string (in-line)" subsection
+- [README.md](../../../README.md): a "Pass assembly as a string (in-line)" subsection
   under the emulator tier, with an x86-64 example.
-- [DESIGN.md](../../DESIGN.md) / [docs/design.md](../project/design.md): a phase entry for
+- [DESIGN.md](../../../DESIGN.md) / [docs/design.md](../../project/design.md): a phase entry for
   the in-line assembler tier.
-- [CHANGELOG.md](../../CHANGELOG.md): the new API, `make asm-test`, and the `--asm`
+- [CHANGELOG.md](../../../CHANGELOG.md): the new API, `make asm-test`, and the `--asm`
   deps flag (source-built Keystone).
 - This plan: flip phase statuses to **done** as they land.
 
@@ -220,7 +220,7 @@ the case (never a missing-symbol crash). Each conformance replays the x86-64
   documented caveat.
 - **Packaging gaps** — _confirmed:_ Keystone has **no Ubuntu/Debian apt package**
   (only Homebrew packages it). Resolved with a pinned source build
-  ([scripts/build-keystone.sh](../../scripts/build-keystone.sh)), used by the CI
+  ([scripts/build-keystone.sh](../../../scripts/build-keystone.sh)), used by the CI
   `asm` job and the Docker image. This is also why binding `CallAsm` is deferred
   (Phase 6).
 - **Two LLVM-derived libs in one binary** — _resolved:_ `make asm-test` links both

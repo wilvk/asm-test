@@ -24,7 +24,7 @@ the same branch-edge normalization step. It is a **sibling** of the
 > Status legend: **planned** unless noted; forward-look phases are tagged
 > *(forward-look)*. Update this file as phases land, the way
 > [hardware-trace-plan.md](hardware-trace-plan.md) and
-> [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) track theirs. The house
+> [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) track theirs. The house
 > rule holds: **no untested hardware code** — a lane that cannot self-validate on its
 > target silicon self-skips (`available()` → 0) rather than shipping unproven.
 

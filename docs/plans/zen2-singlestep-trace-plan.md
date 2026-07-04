@@ -249,7 +249,7 @@ Linux/x86-64 backend.
 
 - **Windows (x86-64).** Same `TF`, delivered as `EXCEPTION_SINGLE_STEP` to a Vectored
   Exception Handler (the classic technique); ~6× the Linux per-step cost. Slots into
-  the [win64 native tier](win64-native-tier-plan.md).
+  the [win64 native tier](../archive/plans/win64-native-tier-plan.md).
 - **macOS (Intel).** The BSD signal layer delivers `SIGTRAP` in-process like Linux;
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
   entitlement. Slots into the [macOS clean-test plan](macos-clean-test-plan.md).

@@ -22,13 +22,13 @@ as the emulator/Keystone/Capstone tiers already do.
 ## Context: what ships today, and what doesn't
 
 The packaging pipeline bundles only the **core + superset** libraries. From
-[`package-libs`](../../mk/bindings.mk) (`shared shared-emu`):
+[`package-libs`](../../../mk/bindings.mk) (`shared shared-emu`):
 
 - `libasmtest` (capture) and `libasmtest_emu` (emulator + Keystone + Capstone) are
   copied into `build/dist/native/<plat>/`, then
-  [`scripts/package-native.sh`](../../scripts/package-native.sh) vendors
+  [`scripts/package-native.sh`](../../../scripts/package-native.sh) vendors
   Unicorn/Keystone/Capstone next to the emu lib with an `$ORIGIN` / `@loader_path`
-  rpath and [`collect-licenses.sh`](../../scripts/collect-licenses.sh) writes
+  rpath and [`collect-licenses.sh`](../../../scripts/collect-licenses.sh) writes
   `THIRD-PARTY-LICENSES/`.
 - The multi-platform packers copy the whole slot: `emu_lib_slots` (Ruby/Node/Java/
   Lua) and the `.NET` RID loop both `cp lib*.so* lib*.dylib`; Python stages named
@@ -37,8 +37,8 @@ The packaging pipeline bundles only the **core + superset** libraries. From
 The two native-trace libs are **built but never staged into a slot**, so they are
 absent from every package. Each binding's `drtrace`/`hwtrace` wrapper dlopens its lib
 from `$ASMTEST_DRAPP_LIB` / `$ASMTEST_HWTRACE_LIB` → **`_REPO_ROOT/build/`** → bare
-system search ([`drtrace.py`](../../bindings/python/asmtest/drtrace.py#L63),
-[`hwtrace.py`](../../bindings/python/asmtest/hwtrace.py#L186)) and self-skips
+system search ([`drtrace.py`](../../../bindings/python/asmtest/drtrace.py#L63),
+[`hwtrace.py`](../../../bindings/python/asmtest/hwtrace.py#L186)) and self-skips
 (`available()` → `false`) when nothing resolves. So on an installed package the tiers
 are simply *off*.
 
@@ -66,7 +66,7 @@ Only **six** bindings ship a prebuilt native payload and are in scope:
 **Python** (wheel), **Ruby** (gem), **Node** (npm), **Java** (jar), **.NET**
 (nupkg), **Lua** (rock). The other four — **Rust, Zig, C++, Go** — are *source
 distributions*: the consumer builds/links `libasmtest` themselves
-([`mk/bindings.mk`](../../mk/bindings.mk) `rust-package`/`zig-package`/`cpp-package`/
+([`mk/bindings.mk`](../../../mk/bindings.mk) `rust-package`/`zig-package`/`cpp-package`/
 `go-package`), so there is no payload to bundle into — for those, "bundling" means
 **documenting** the extra `make shared-drtrace` / `shared-hwtrace` link/dlopen step
 (Track 5), not shipping a binary.
@@ -102,10 +102,10 @@ that list**.
 
 - Insert a **bundled candidate** into each wrapper's search, at the right precedence:
   `$ASMTEST_*_LIB → bundled (package dir) → repo build/ → system`. Mirror the core
-  loader's `_LIBS` logic ([`_native.py`](../../bindings/python/asmtest/_native.py#L36))
+  loader's `_LIBS` logic ([`_native.py`](../../../bindings/python/asmtest/_native.py#L36))
   in `drtrace`/`hwtrace` for all six payload bindings (and the four source bindings'
   dlopen paths, which resolve from the linked/installed prefix).
-- **Self-report parity (ties into the [macOS clean-room plan](macos-clean-test-plan.md)
+- **Self-report parity (ties into the [macOS clean-room plan](../../plans/macos-clean-test-plan.md)
   Track A).** Give the tier loaders the same "print the resolved path" accessor the
   core `--where` work adds, so a clean-room test can assert a bundled tier resolved
   from the package — not a leaked `build/` tree. The `_REPO_ROOT/build/` fall-through
@@ -158,7 +158,7 @@ variant, not the default.
 The heavy tier: ship `libasmtest_drapp.so` + `libasmtest_drclient.so` + the pinned
 **`libdynamorio.so`**, `linux-x86_64` slot only.
 
-- **Fetch + stage DynamoRIO.** Reuse the [`Dockerfile.drtrace`](../../Dockerfile.drtrace)
+- **Fetch + stage DynamoRIO.** Reuse the [`Dockerfile.drtrace`](../../../Dockerfile.drtrace)
   pin (`DR_VERSION=11.91.20630`); `package-libs` (Linux-x86-64 slot) builds
   `shared-drtrace` + `drtrace-client` with `DYNAMORIO_HOME` set, then copies all three
   libs into the slot.
@@ -185,7 +185,7 @@ The heavy tier: ship `libasmtest_drapp.so` + `libasmtest_drclient.so` + the pinn
   install DynamoRIO (curl the pinned tarball) and — for the full hwtrace lane — libipt/
   OpenCSD, then have `package-libs` build+stage the tiers. macOS runners are unchanged
   (tiers are Linux-only). Keep `fail-fast: false`.
-- **`package-libs-verify`** ([`mk/bindings.mk`](../../mk/bindings.mk)): extend the merged-
+- **`package-libs-verify`** ([`mk/bindings.mk`](../../../mk/bindings.mk)): extend the merged-
   tree check so each present tier lib carries an `$ORIGIN`/`@loader_path` rpath, no
   absolute/leaked path, and its license note; the darwin slots must **not** carry them.
 - **Clean-room smoke:** after install (with `$ASMTEST_*_LIB` unset), assert on a capable
@@ -195,8 +195,8 @@ The heavy tier: ship `libasmtest_drapp.so` + `libasmtest_drclient.so` + the pinn
 
 ## Track 5 — Docs + CHANGELOG + source-binding note — **done**
 
-- Update [`docs/packaging.md`](../reference/packaging.md) and
-  [`docs/native-tracing.md`](../guides/tracing/native-tracing.md): the tiers now ship in the six
+- Update [`docs/packaging.md`](../../reference/packaging.md) and
+  [`docs/native-tracing.md`](../../guides/tracing/native-tracing.md): the tiers now ship in the six
   payload packages (per the matrix); the four source bindings need the consumer to
   build `shared-drtrace`/`shared-hwtrace` and link/point the env var (document the
   one-liner).

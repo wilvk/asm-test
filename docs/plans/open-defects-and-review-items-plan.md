@@ -11,15 +11,15 @@ defect sweep landed. It covers two sources:
    list as not-yet-closed (S1, B2, B5, B7).
 
 Everything else from the plans and reviews is either landed (see
-[docs/summaries/](../summaries/)) or blocked on hardware / hosts / privileges that
+docs/summaries/) or blocked on hardware / hosts / privileges that
 this dev box (AMD Zen 5, Linux, `perf_event_paranoid=4`, no passwordless sudo)
 cannot supply — see the
-[2026-07-02 roadmap assessment](../summaries/2026-07-02-roadmap-assessment.md) for
+2026-07-02 roadmap assessment for
 that blocked set, which is intentionally out of scope here.
 
 > Status legend: **open** unless noted. Each item states the **issue** (with a
 > `file:line` anchor) and a **proposed solution**. Update this file as items land,
-> the way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) tracks its own.
+> the way [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) tracks its own.
 > Sources: `M` = memory/testing, `R` = repo review finding.
 
 ---
