@@ -253,7 +253,7 @@ Include `asmtest_single.h` for the API; in **exactly one** translation unit
 > link that trampoline (or just link `libasmtest.a`). The amalgamation covers
 > the C surface only; the optional emulator tier is not included.
 
-The installed header exposes `ASMTEST_VERSION` (`"1.0.0"`) and
+The installed header exposes `ASMTEST_VERSION` (`"1.1.0"`) and
 `ASMTEST_VERSION_NUM` for compile-time checks. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements

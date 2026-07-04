@@ -285,10 +285,12 @@ ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on 
 | `emu_watch_describe(&w, arch, code, len, base, buf, n)` | a violation line with the offending store disassembled |
 | `ASSERT_NO_WRITE_VIOLATION` / `ASSERT_WRITE_VIOLATION` / `ASSERT_REG_INVARIANT` | the matching assertions |
 
-> The engine **retains register state across calls** on a handle (only the
-> argument registers and `rsp` are reset each call), so a register invariant sees
-> whatever a previous call left behind — arm it on a fresh `emu_open` handle, or
-> account for the carried-over value.
+> The engine **zeros the register file at the start of every call** on a handle
+> (all GP registers, the XMM file, and `EFLAGS`), so a register invariant sees a
+> deterministic clean start, not whatever a previous call left behind — no
+> fresh-handle workaround is needed for register carry-over. Mapped memory and
+> the stack, by contrast, **do** persist across calls on a handle (see above), so
+> a sweep of inputs still runs each call against memory an earlier one dirtied.
 
 **Step-bounded assertions** need no new API: run with `max_insns=N` (the
 single-step path) to stop after N instructions, then inspect `out->regs` with

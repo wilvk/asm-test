@@ -22,8 +22,8 @@
 /* ---- regs_t opaque handle + accessors ---- */
 regs_t *asmtest_regs_new(void) { return (regs_t *)calloc(1, sizeof(regs_t)); }
 void asmtest_regs_free(regs_t *r) { free(r); }
-unsigned long asmtest_regs_ret(const regs_t *r) { return r->ret; }
-unsigned long asmtest_regs_flags(const regs_t *r) { return r->flags; }
+uint64_t asmtest_regs_ret(const regs_t *r) { return r->ret; }
+uint64_t asmtest_regs_flags(const regs_t *r) { return r->flags; }
 double asmtest_regs_fret(const regs_t *r) { return r->fret; }
 
 /* Read a single vector lane (float32) from a captured vector register. */

@@ -12,9 +12,15 @@ project = "asm-test"
 author = "asm-test contributors"
 copyright = f"{datetime.date.today().year}, {author}"
 
-# Keep in sync with ASMTEST_VERSION in include/asmtest.h.
-release = "1.0.0"
-version = "1.0"
+# Read the version from the repo VERSION file (the same source check-version and
+# sync-version use) so the published docs banner never drifts from the shipped
+# ASMTEST_VERSION.
+with open(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION"),
+    encoding="utf-8",
+) as _vf:
+    release = _vf.read().strip()  # full semver, e.g. "1.1.0"
+version = ".".join(release.split(".")[:2])  # "major.minor", e.g. "1.1"
 
 # -- General configuration ---------------------------------------------------
 

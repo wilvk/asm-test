@@ -5,7 +5,7 @@
 # find_package()-able INTERFACE target. `make cpp-package` tarballs the header +
 # this file for distribution.
 cmake_minimum_required(VERSION 3.14)
-project(asmtest-cpp VERSION 1.0.0 LANGUAGES CXX)
+project(asmtest-cpp VERSION 1.1.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 

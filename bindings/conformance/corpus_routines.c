@@ -42,6 +42,8 @@ void *asmtest_corpus_routine(const char *name) {
 #if defined(__x86_64__)
     if (!strcmp(name, "vec_add4d"))
         return (void *)vec_add4d;
+    if (!strcmp(name, "vec_add8d"))
+        return (void *)vec_add8d;
 #endif
     if (!strcmp(name, "read_fault"))
         return (void *)read_fault;

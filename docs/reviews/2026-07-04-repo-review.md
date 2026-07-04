@@ -32,6 +32,26 @@ review is blocked on hardware, privileges, or a credentialed action.
 
 ---
 
+## Remediation status (updated 2026-07-04)
+
+Two batches of the suggested fix order have landed; the `Status` column below is
+annotated per item.
+
+- **Step 1 — the "green CI, broken artifact" cluster (D1, N1, N2, A1, A2)** —
+  fixed in **59adb74**, each with a regression gate (a `make
+  check-header-portability` target compiling a strict-c11 and a C++ consumer plus
+  a docs lint; a go consumer-link step and a JDK-25/no-preview java smoke in
+  `release.yml`). Verified in the cpp/go/java containers.
+- **Step 2 — the cheap correctness wins (A3, A4, A5, R1, R2, R3, T1, E1, N7, D3,
+  E2)** — fixed in the follow-up commit. Verified: `make test`/`check` green,
+  TAP/YAML spec-conformance and the crashing-BENCH exit and empty-selection paths
+  exercised by hand, and the cpp (20/20), emu (47/47), and go conformance
+  containers all pass.
+
+Everything else remains open (`verified` = confirmed real, not yet actioned).
+
+---
+
 ## Overall
 
 The core is complete and CI-exercised, and the existing open-defects plan
@@ -49,22 +69,22 @@ can't assemble — none of which any current gate catches.
 
 | # | Finding | Severity | Kind | Status |
 |---|---------|----------|------|--------|
-| A1 | `sigjmp_buf` in public header breaks `-std=c11` consumers | High | defect | verified |
-| A2 | Capture macros (`ASM_CALL*`) don't compile from C++ | High | defect | verified |
-| D1 | README "Writing a test" example doesn't assemble | High | defect | verified |
-| N1 | Published Go module links a test-only fixture lib → unconsumable | High | defect | verified |
-| N2 | Java binding compiled `--enable-preview` → jar dead on JDK 22+ | High | defect | verified |
-| A3 | `ASSERT_UEQ`/`ASSERT_REG_EQ` truncate to 32-bit on Win64 (LLP64) | Medium | defect | verified |
-| A4 | `ASM_CALLN`/`ASM_SRET`/`ASM_CALL_WIN64_N` don't cast varargs | Medium | defect | verified |
-| R1 | TAP stream not spec-conformant (version-line order, invalid YAML) | Medium | defect | verified |
-| R2 | A crashing/hanging `BENCH` still exits 0 | Medium | defect | verified |
-| R3 | Empty test selection exits 0 silently | Medium | improvement | verified |
-| T1 | `asmtest_dr_available()` disagrees with `dr_lib_path()`; no DR skip-reason | Medium | defect | verified |
-| E1 | Emulator run-off nondeterministic across reused handles | Medium | defect | verified |
+| A1 | `sigjmp_buf` in public header breaks `-std=c11` consumers | High | defect | ✅ fixed (59adb74) |
+| A2 | Capture macros (`ASM_CALL*`) don't compile from C++ | High | defect | ✅ fixed (59adb74) |
+| D1 | README "Writing a test" example doesn't assemble | High | defect | ✅ fixed (59adb74) |
+| N1 | Published Go module links a test-only fixture lib → unconsumable | High | defect | ✅ fixed (59adb74) |
+| N2 | Java binding compiled `--enable-preview` → jar dead on JDK 22+ | High | defect | ✅ fixed (59adb74) |
+| A3 | `ASSERT_UEQ`/`ASSERT_REG_EQ` truncate to 32-bit on Win64 (LLP64) | Medium | defect | ✅ fixed (step 2) |
+| A4 | `ASM_CALLN`/`ASM_SRET`/`ASM_CALL_WIN64_N` don't cast varargs | Medium | defect | ✅ fixed (step 2) |
+| R1 | TAP stream not spec-conformant (version-line order, invalid YAML) | Medium | defect | ✅ fixed (step 2) |
+| R2 | A crashing/hanging `BENCH` still exits 0 | Medium | defect | ✅ fixed (step 2) |
+| R3 | Empty test selection exits 0 silently | Medium | improvement | ✅ fixed (step 2) |
+| T1 | `asmtest_dr_available()` disagrees with `dr_lib_path()`; no DR skip-reason | Medium | defect | ✅ fixed (step 2) |
+| E1 | Emulator run-off nondeterministic across reused handles | Medium | defect | ✅ fixed (step 2) |
 | K5 | `.build-flags` sentinel absent from PIC/native-trace object trees | Medium | defect | verified |
-| D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | verified |
-| A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | verified |
-| N7 | `vec_add8d` missing from the corpus name table | Low | defect | verified |
+| D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | ✅ fixed (step 2) |
+| A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | ✅ fixed (step 2) |
+| N7 | `vec_add8d` missing from the corpus name table | Low | defect | ✅ fixed (step 2) |
 | K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | verified |
 | K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | verified |
 | K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | verified |
@@ -83,7 +103,7 @@ can't assemble — none of which any current gate catches.
 | A7 | Differential testing is integer-only (no FP reference models) | Medium | expansion | verified |
 | R5 | No `--fail-fast`, `--repeat=N`, or shard selection | Medium | expansion | verified |
 | E5 | No emulator snapshot/restore → order-dependent fuzz/mutation sweeps | Medium | expansion | verified |
-| E2 | `emulator.md` still claims register state is retained across calls | Medium | docs | verified |
+| E2 | `emulator.md` still claims register state is retained across calls | Medium | docs | ✅ fixed (step 2) |
 | D4 | API-reference index omits the post-1.0 surface (Win64, AVX2/512) | Medium | docs | verified |
 | D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | verified |
 | P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | verified |

@@ -59,7 +59,7 @@ The installed header exposes compile-time version information:
 
 | Macro | Example | Use |
 |---|---|---|
-| `ASMTEST_VERSION` | `"1.0.0"` | human-readable version string |
+| `ASMTEST_VERSION` | `"1.1.0"` | human-readable version string |
 | `ASMTEST_VERSION_NUM` | integer | numeric compares in `#if` guards |
 
 See the [Changelog](../project/changelog.md) for what changed between releases.

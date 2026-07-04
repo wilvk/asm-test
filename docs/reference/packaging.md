@@ -92,7 +92,7 @@ package ships:
 
 ## Versioning
 
-Every package pins its version to `ASMTEST_VERSION` (`1.0.0`); the layout
+Every package pins its version to `ASMTEST_VERSION` (`1.1.0`); the layout
 manifest (`asmtest_abi.json`, bundled into the Python wheel) carries the same
 version, so a mismatched native lib is detectable at load. Bump all package
 manifests together with the C `ASMTEST_VERSION` on release.

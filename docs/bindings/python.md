@@ -124,7 +124,7 @@ raw-bytes paths take a `bytes` object of machine code instead.
 
 ```python
 ctx = asmtest.load()        # process-wide Context (created lazily on first use)
-ctx.version                 # native lib version string, e.g. "1.0.0"
+ctx.version                 # native lib version string, e.g. "1.1.0"
 ctx.arch                    # host arch the shared lib was built for, e.g. "x86_64"
 ctx.has_emu                 # bool: emulator tier present (libasmtest_emu)
 ctx.has_asm                 # bool: in-line assembler present (carried by libasmtest_emu)

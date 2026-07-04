@@ -1401,7 +1401,22 @@ static void print_tap_result(int num, const test_result_t *r,
                r->name);
         printf("  %s---%s\n", p->dim, p->rst);
         printf("  at:  %s:%d\n", r->file, r->line);
-        printf("  msg: %s\n", r->msg);
+        /* Block scalar (`|`): assertion messages routinely contain `): ` and
+         * other glyphs that are illegal in a YAML plain scalar (PyYAML rejects
+         * even the single-line case). Emit each line indented under the key. */
+        if (!r->msg[0]) {
+            printf("  msg: \"\"\n");
+        } else {
+            printf("  msg: |\n");
+            for (const char *s = r->msg; *s;) {
+                const char *nl = strchr(s, '\n');
+                int len = nl ? (int)(nl - s) : (int)strlen(s);
+                printf("    %.*s\n", len, s);
+                if (!nl)
+                    break;
+                s = nl + 1;
+            }
+        }
         printf("  %s...%s\n", p->dim, p->rst);
     }
 }
@@ -1422,6 +1437,7 @@ typedef struct {
     int timeout;     /* seconds; <0 = leave the default in place */
     int bench;       /* run benchmarks instead of tests */
     long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
+    int fail_if_no_tests; /* exit nonzero when the selection is empty */
 } options_t;
 
 static void usage(const char *prog) {
@@ -1439,6 +1455,8 @@ static void usage(const char *prog) {
         "  -jN, --jobs=N        run up to N tests concurrently (implies fork;\n"
         "                       default 1 = serial). Output stays in order.\n"
         "  --format=tap|junit   output format (default tap)\n"
+        "  --fail-if-no-tests   exit nonzero if the selection is empty (e.g. a "
+        "typo'd --filter)\n"
         "  --bench              run registered benchmarks (BENCH) instead of "
         "tests\n"
         "  --bench-reps=N       fixed inner reps per round (default: "
@@ -1664,11 +1682,12 @@ static void bench_measure(void (*body)(void), long reps, bench_stats_t *st) {
  * Each runs in-process under the same signal/timeout guard as a test, so a
  * crashing or hung routine is reported as an error rather than taking the
  * process down. forced_reps > 0 overrides auto-calibration. */
-static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
-                           int use_color) {
+static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
+                          int use_color) {
     const char *dim = use_color ? "\033[2m" : "";
     const char *red = use_color ? "\033[31m" : "";
     const char *rst = use_color ? "\033[0m" : "";
+    int errors = 0; /* benches that crashed/timed out — the run must fail */
 
     int width = 1;
     for (int i = 0; i < n; i++) {
@@ -1694,6 +1713,7 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
         if (sigsetjmp(asmtest_jmp, 1) != 0) {
             alarm(0);
             asmtest_in_test = 0;
+            errors++;
             printf("  %-*s  %sERROR: %s%s\n", width, id, red, asmtest_msg, rst);
             continue;
         }
@@ -1709,6 +1729,7 @@ static void run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
         printf("  %-*s  min=%9.2f  median=%9.2f  mean=%9.2f  %s(reps=%ld)%s\n",
                width, id, st.min, st.median, st.mean, dim, st.reps, rst);
     }
+    return errors;
 }
 
 /* The framework provides main(). Define ASMTEST_NO_MAIN to omit it and supply
@@ -1789,6 +1810,8 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "unknown --format: %s\n", v);
                 return 2;
             }
+        } else if (strcmp(a, "--fail-if-no-tests") == 0) {
+            opt.fail_if_no_tests = 1;
         } else {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
@@ -1847,14 +1870,17 @@ int main(int argc, char **argv) {
             if (opt.filter == NULL || id_matches(b->suite, b->name, opt.filter))
                 bsel[bn++] = b;
         }
+        int berr = 0;
         if (opt.do_list) {
             for (int i = 0; i < bn; i++)
                 printf("%s.%s\n", bsel[i]->suite, bsel[i]->name);
         } else {
-            run_benchmarks(bsel, bn, opt.bench_reps, ASMTEST_ISATTY());
+            berr = run_benchmarks(bsel, bn, opt.bench_reps, ASMTEST_ISATTY());
         }
         free(bsel);
-        return 0;
+        /* A benchmark that crashed or timed out must fail the run — `make bench`
+         * gates CI, so a silent exit 0 would let a broken BENCH pass. */
+        return berr > 0 ? 1 : 0;
     }
 
     /* Collect the registered tests that pass the filter into an array. */
@@ -1886,6 +1912,8 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    uint64_t shuffle_seed = 0;
+    int did_shuffle = 0;
     if (opt.shuffle) {
         /* --seed=N wins; else fall back to ASMTEST_SEED (decimal or 0x-hex) so a
          * shuffled order is reproducible via the env var; else time^pid. */
@@ -1908,8 +1936,8 @@ int main(int argc, char **argv) {
             gidx[i] = gidx[j];
             gidx[j] = g;
         }
-        if (!opt.format_junit)
-            printf("# shuffle seed=0x%llx\n", (unsigned long long)seed);
+        shuffle_seed = seed;
+        did_shuffle = 1;
     }
 
     int use_color = !opt.format_junit && ASMTEST_ISATTY();
@@ -1922,8 +1950,24 @@ int main(int argc, char **argv) {
     };
 
     if (!opt.format_junit) {
+        /* TAP 13: the version line must be the first line of output, so the
+         * shuffle-seed diagnostic goes *after* the plan, not before the version. */
         printf("TAP version 13\n");
         printf("1..%d\n", n);
+        if (did_shuffle)
+            printf("# shuffle seed=0x%llx\n", (unsigned long long)shuffle_seed);
+    }
+
+    /* An empty selection (typically a typo'd --filter) otherwise runs nothing
+     * and exits 0, so a CI job that filters can green-light having tested
+     * nothing. Warn to stderr always; `1..0` stays valid TAP. --fail-if-no-tests
+     * opts into a nonzero exit (pytest exits 5 here; gtest warns). */
+    if (n == 0) {
+        if (opt.filter)
+            fprintf(stderr, "asmtest: no tests matched --filter='%s'\n",
+                    opt.filter);
+        else
+            fprintf(stderr, "asmtest: no tests to run\n");
     }
 
     test_result_t *results = (test_result_t *)asmtest_xalloc(
@@ -2018,6 +2062,6 @@ int main(int argc, char **argv) {
     free(results);
     free(sel);
     free(gidx);
-    return failed ? 1 : 0;
+    return (failed || (n == 0 && opt.fail_if_no_tests)) ? 1 : 0;
 }
 #endif /* ASMTEST_NO_MAIN */

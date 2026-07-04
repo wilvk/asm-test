@@ -128,7 +128,7 @@ See [guard-page buffers](../guides/runner.md#guard-page-buffers).
 
 | Symbol | Meaning |
 |---|---|
-| `ASMTEST_VERSION` | version string, e.g. `"1.0.0"` |
+| `ASMTEST_VERSION` | version string, e.g. `"1.1.0"` |
 | `ASMTEST_VERSION_NUM` | numeric version for `#if` compares |
 | `asmtest_cycle_counter()` | inline cycle/tick counter used by `BENCH` |
 

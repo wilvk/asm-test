@@ -62,10 +62,18 @@ typedef struct {
         mode; /* process-init default recording mode        */
 } asmtest_drtrace_options_t;
 
-/* 1 if this build includes the DynamoRIO tier AND libdynamorio is loadable at
- * runtime, else 0. Callers (and the smoke test) use this to self-skip cleanly,
- * mirroring asm_available()/emu disas_available(). */
+/* 1 if this build includes the DynamoRIO tier AND a libdynamorio path resolves
+ * (via ASMTEST_DR_LIB, a bundled copy, or DYNAMORIO_HOME), else 0. Callers (and
+ * the smoke test) use this to self-skip cleanly, mirroring asm_available()/emu
+ * disas_available(). This is a side-effect-free probe: it does not dlopen, so a
+ * libdynamorio reachable only via the loader path (ldconfig / LD_LIBRARY_PATH)
+ * reports 0 yet may still load at init — call asmtest_dr_skip_reason for why. */
 int asmtest_dr_available(void);
+
+/* A human-readable reason asmtest_dr_available() returned 0 (or "available"),
+ * into buf (always NUL-terminated) — the DR-tier counterpart of
+ * asmtest_hwtrace_skip_reason, so a self-skip can explain itself. */
+void asmtest_dr_skip_reason(char *buf, size_t buflen);
 
 /* Lifecycle (state machine UNINIT -> INIT -> STARTED -> STOPPED -> SHUTDOWN):
  *   init     performs dr_app_setup + client configuration (no takeover yet);

@@ -165,8 +165,26 @@ static void on_block_guard(uc_engine *uc, uint64_t address, uint32_t size,
  * different routine at the same address: without it, Unicorn would re-run the
  * previously translated (now stale) code instead of the bytes just written. */
 static bool load_code(uc_engine *uc, const void *code, size_t code_len) {
+    if (code_len > EMU_CODE_SIZE)
+        code_len = EMU_CODE_SIZE;
     if (uc_mem_write(uc, EMU_CODE_BASE, code, code_len) != UC_ERR_OK)
         return false;
+    /* Trap-fill (INT3 / 0xCC) the rest of the code window. On a REUSED handle
+     * the region still holds the previous routine's bytes, so a routine that
+     * runs past its end (bad branch, truncated code_len, the fixed FFI windows)
+     * would execute that leftover code — making first-call and reused-handle
+     * behavior differ. INT3 makes any run-off stop deterministically instead. */
+    if (code_len < EMU_CODE_SIZE) {
+        unsigned char trap[4096];
+        memset(trap, 0xCC, sizeof trap);
+        for (uint64_t off = code_len; off < EMU_CODE_SIZE; off += sizeof trap) {
+            size_t n = (size_t)(EMU_CODE_SIZE - off);
+            if (n > sizeof trap)
+                n = sizeof trap;
+            if (uc_mem_write(uc, EMU_CODE_BASE + off, trap, n) != UC_ERR_OK)
+                break;
+        }
+    }
         /* Drop any cached translation for the code region so a reused handle
      * re-decodes the freshly written bytes. uc_ctl_flush_tb is newer
      * (Unicorn >= 2.1); fall back to uc_ctl_remove_cache (since 2.0.0) so we

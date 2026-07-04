@@ -531,8 +531,8 @@ void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r);
  * accessor — the universal FFI subset. See src/ffi.c and the API reference. */
 regs_t *asmtest_regs_new(void);
 void asmtest_regs_free(regs_t *r);
-unsigned long asmtest_regs_ret(const regs_t *r);
-unsigned long asmtest_regs_flags(const regs_t *r);
+uint64_t asmtest_regs_ret(const regs_t *r);
+uint64_t asmtest_regs_flags(const regs_t *r);
 double asmtest_regs_fret(const regs_t *r);
 float asmtest_regs_vec_f32(const regs_t *r, int index, int lane);
 int asmtest_regs_flag_set(const regs_t *r,
@@ -540,6 +540,11 @@ int asmtest_regs_flag_set(const regs_t *r,
 void asmtest_capture6(regs_t *out, void *fn, long a0, long a1, long a2, long a3,
                       long a4, long a5);
 void asmtest_capture_fp2(regs_t *out, void *fn, double f0, double f1);
+/* `lanes` is a flat 4*nvec float32 array (nvec vector args, four lanes each);
+ * captures the whole vector file into out->vec[], read back with
+ * asmtest_regs_vec_f32. nvec is clamped to [0, 8]. */
+void asmtest_capture_vec_f32(regs_t *out, void *fn, const float *lanes,
+                             int nvec);
 void asmtest_assert_double_eq(const char *file, int line, double actual,
                               double expected);
 void asmtest_assert_double_near(const char *file, int line, double actual,
@@ -636,6 +641,40 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * g++ rejects taking the address of a compound-literal temporary array, which
  * is what a C++ consumer of asmtest.h would otherwise hit. */
 
+/* ASMTEST_MAP_CAST(type, ...) — cast each of up to ASMTEST_ARG_CAP args to type.
+ * The fixed-arity ASM_CALLn cast every arg to (long), so a pointer just works;
+ * the variable-arity ASM_CALLN / ASM_SRET / ASM_CALL_WIN64_N take an open list,
+ * so without a per-arg cast a pointer — the common case at exactly the >6-arg
+ * boundary these macros exist for — is a -Wint-conversion warning on gcc 13 and
+ * a hard error on gcc 14+/clang. Args beyond the cap won't compile (raise it). */
+#define ASMTEST_ARG_CAP 16
+#define ASMTEST_MC_1(t, a) (t)(a)
+#define ASMTEST_MC_2(t, a, ...) (t)(a), ASMTEST_MC_1(t, __VA_ARGS__)
+#define ASMTEST_MC_3(t, a, ...) (t)(a), ASMTEST_MC_2(t, __VA_ARGS__)
+#define ASMTEST_MC_4(t, a, ...) (t)(a), ASMTEST_MC_3(t, __VA_ARGS__)
+#define ASMTEST_MC_5(t, a, ...) (t)(a), ASMTEST_MC_4(t, __VA_ARGS__)
+#define ASMTEST_MC_6(t, a, ...) (t)(a), ASMTEST_MC_5(t, __VA_ARGS__)
+#define ASMTEST_MC_7(t, a, ...) (t)(a), ASMTEST_MC_6(t, __VA_ARGS__)
+#define ASMTEST_MC_8(t, a, ...) (t)(a), ASMTEST_MC_7(t, __VA_ARGS__)
+#define ASMTEST_MC_9(t, a, ...) (t)(a), ASMTEST_MC_8(t, __VA_ARGS__)
+#define ASMTEST_MC_10(t, a, ...) (t)(a), ASMTEST_MC_9(t, __VA_ARGS__)
+#define ASMTEST_MC_11(t, a, ...) (t)(a), ASMTEST_MC_10(t, __VA_ARGS__)
+#define ASMTEST_MC_12(t, a, ...) (t)(a), ASMTEST_MC_11(t, __VA_ARGS__)
+#define ASMTEST_MC_13(t, a, ...) (t)(a), ASMTEST_MC_12(t, __VA_ARGS__)
+#define ASMTEST_MC_14(t, a, ...) (t)(a), ASMTEST_MC_13(t, __VA_ARGS__)
+#define ASMTEST_MC_15(t, a, ...) (t)(a), ASMTEST_MC_14(t, __VA_ARGS__)
+#define ASMTEST_MC_16(t, a, ...) (t)(a), ASMTEST_MC_15(t, __VA_ARGS__)
+#define ASMTEST_MC_PICK(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, \
+                        _14, _15, _16, NAME, ...)                              \
+    NAME
+#define ASMTEST_MAP_CAST(t, ...)                                               \
+    ASMTEST_MC_PICK(__VA_ARGS__, ASMTEST_MC_16, ASMTEST_MC_15, ASMTEST_MC_14,  \
+                    ASMTEST_MC_13, ASMTEST_MC_12, ASMTEST_MC_11, ASMTEST_MC_10,\
+                    ASMTEST_MC_9, ASMTEST_MC_8, ASMTEST_MC_7, ASMTEST_MC_6,    \
+                    ASMTEST_MC_5, ASMTEST_MC_4, ASMTEST_MC_3, ASMTEST_MC_2,    \
+                    ASMTEST_MC_1)                                              \
+    (t, __VA_ARGS__)
+
 #define ASM_CALL0(out, fn)                                                     \
     do {                                                                       \
         long asmtest_ia_[6] = {0, 0, 0, 0, 0, 0};                              \
@@ -679,7 +718,7 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * the stack as the ABI requires. nargs is derived from the argument list. */
 #define ASM_CALLN(out, fn, ...)                                                \
     do {                                                                       \
-        long asmtest_ia_[] = {__VA_ARGS__};                                    \
+        long asmtest_ia_[] = {ASMTEST_MAP_CAST(long, __VA_ARGS__)};            \
         asm_call_capture_args((out), (void *)(fn), asmtest_ia_,                \
                               (int)(sizeof(asmtest_ia_) / sizeof(long)));      \
     } while (0)
@@ -732,7 +771,7 @@ void asmtest_guarded_free_under(void *p, size_t n);
 /* Any number (>=1) of integer args; nargs derived from the list. */
 #define ASM_CALL_WIN64_N(out, fn, ...)                                         \
     do {                                                                       \
-        long long asmtest_wa_[] = {__VA_ARGS__};                              \
+        long long asmtest_wa_[] = {ASMTEST_MAP_CAST(long long, __VA_ARGS__)};  \
         asm_call_capture_args_win64(                                           \
             (out), (void *)(fn), asmtest_wa_,                                  \
             (int)(sizeof(asmtest_wa_) / sizeof(long long)));                   \
@@ -743,7 +782,7 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * integer args. */
 #define ASM_SRET(out, fn, result, ...)                                         \
     do {                                                                       \
-        long asmtest_ia_[] = {__VA_ARGS__};                                    \
+        long asmtest_ia_[] = {ASMTEST_MAP_CAST(long, __VA_ARGS__)};            \
         asm_call_capture_sret((out), (void *)(fn), (result), asmtest_ia_,      \
                               (int)(sizeof(asmtest_ia_) / sizeof(long)));      \
     } while (0)
@@ -872,13 +911,16 @@ void asmtest_guarded_free_under(void *p, size_t n);
             asmtest_fail(__FILE__, __LINE__, "ASSERT_FALSE(%s)", #x);          \
     } while (0)
 
+/* long long (not long) so a 64-bit register value survives on LLP64 (Win64),
+ * where long is 32-bit: casting to long there would compare/print only the low
+ * half. No change on LP64, where long and long long are both 64-bit. */
 #define ASMTEST_CMP_(a, op, b, opname)                                         \
     do {                                                                       \
-        long asmtest_a_ = (long)(a);                                           \
-        long asmtest_b_ = (long)(b);                                           \
+        long long asmtest_a_ = (long long)(a);                                 \
+        long long asmtest_b_ = (long long)(b);                                 \
         if (!(asmtest_a_ op asmtest_b_))                                       \
             asmtest_fail(__FILE__, __LINE__,                                   \
-                         "ASSERT_" opname "(%s, %s): %ld vs %ld", #a, #b,      \
+                         "ASSERT_" opname "(%s, %s): %lld vs %lld", #a, #b,    \
                          asmtest_a_, asmtest_b_);                              \
     } while (0)
 
@@ -894,12 +936,12 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * misprint those). Compared and reported as unsigned hex. */
 #define ASMTEST_UCMP_(a, op, b, opname)                                        \
     do {                                                                       \
-        unsigned long asmtest_ua_ = (unsigned long)(a);                        \
-        unsigned long asmtest_ub_ = (unsigned long)(b);                        \
+        unsigned long long asmtest_ua_ = (unsigned long long)(a);              \
+        unsigned long long asmtest_ub_ = (unsigned long long)(b);              \
         if (!(asmtest_ua_ op asmtest_ub_))                                     \
             asmtest_fail(__FILE__, __LINE__,                                   \
-                         "ASSERT_" opname "(%s, %s): 0x%lx vs 0x%lx", #a, #b,  \
-                         asmtest_ua_, asmtest_ub_);                            \
+                         "ASSERT_" opname "(%s, %s): 0x%llx vs 0x%llx", #a,    \
+                         #b, asmtest_ua_, asmtest_ub_);                        \
     } while (0)
 
 #define ASSERT_UEQ(a, b) ASMTEST_UCMP_(a, ==, b, "UEQ")

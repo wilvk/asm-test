@@ -52,7 +52,7 @@ others still publish.
 2. Update [CHANGELOG.md](https://github.com/wilvk/asm-test/blob/main/CHANGELOG.md).
 3. Tag and push:
    ```sh
-   git tag v1.0.0 && git push origin v1.0.0
+   git tag v1.1.0 && git push origin v1.1.0
    ```
 4. The workflow builds the cross-platform payload, runs the fresh-install smokes,
    attaches the corresponding-source archive to the release, and publishes to each
@@ -65,7 +65,7 @@ Re-publishing the same version fails on most registries (NuGet uses
 ## Manual registries
 
 - **LuaRocks** — `make lua-package` stages the rock payload; publish with
-  `luarocks upload bindings/lua/asmtest-1.0.0-1.rockspec --api-key=...` (a binary
+  `luarocks upload bindings/lua/asmtest-1.1.0-1.rockspec --api-key=...` (a binary
   rock with a prebuilt native payload isn't automated here).
 - **Maven Central** — the jar is built by `make java-package`; Central requires
   GPG signing + a Sonatype account, done out of band.

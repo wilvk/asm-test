@@ -68,8 +68,11 @@ static const char *dr_bundled_lib(char *buf, size_t buflen) {
 
 /* Resolve the libdynamorio path: explicit option, the ASMTEST_DR_LIB env var, a
  * copy bundled next to drapp (a published package), the DYNAMORIO_HOME env var,
- * then a bare soname (found via rpath / LD_LIBRARY_PATH). Kept in lock-step with
- * asmtest_dr_available(), which advertises the same cascade. Writes into buf. */
+ * then a bare soname (found via rpath / ldconfig / LD_LIBRARY_PATH). Writes into
+ * buf. asmtest_dr_available() probes the SAME cascade minus this final
+ * bare-soname fallback — it can't verify a bare soname without dlopen (which
+ * runs DR's constructor), so init may still succeed via that fallback after
+ * available() reports 0 (see dr_probe). */
 static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
                                size_t buflen) {
     const char *env = getenv("ASMTEST_DR_LIB");
@@ -141,23 +144,62 @@ static void install_atfork(void) {
     pthread_atfork(NULL, NULL, dr_atfork_child);
 }
 
-int asmtest_dr_available(void) {
-    /* A cheap, side-effect-free probe: is a libdynamorio path resolvable? We do
-     * NOT dlopen here (that runs DR's constructor); we just check the file. A
-     * bare soname (no path) is reported available and left to dlopen to settle. */
+static void dr_reason(char *buf, size_t buflen, const char *msg) {
+    if (buf != NULL && buflen > 0) {
+        strncpy(buf, msg, buflen - 1);
+        buf[buflen - 1] = '\0';
+    }
+}
+
+/* Shared availability probe behind asmtest_dr_available() and _skip_reason().
+ * Cheap and side-effect-free: it does NOT dlopen (that runs DR's constructor),
+ * so it resolves the SAME cascade as dr_lib_path() EXCEPT the final bare-soname
+ * fallback, which only dlopen can settle. Returns 1 when an explicit path
+ * (ASMTEST_DR_LIB / a bundled copy / DYNAMORIO_HOME) is readable; else 0, with a
+ * human-readable reason in *why (when non-NULL). A libdynamorio reachable ONLY
+ * via the loader search path (ldconfig / LD_LIBRARY_PATH) reports 0 here yet
+ * still loads at init — uncommon, so DR-gated tests self-skip conservatively
+ * rather than error mid-init. */
+static int dr_probe(char *why, size_t wn) {
     char buf[1024];
     const char *env = getenv("ASMTEST_DR_LIB");
-    if (env != NULL && env[0] != '\0')
-        return access(env, R_OK) == 0;
-    if (dr_bundled_lib(buf, sizeof buf) !=
-        NULL) /* a package-bundled libdynamorio */
+    if (env != NULL && env[0] != '\0') {
+        if (access(env, R_OK) == 0) {
+            dr_reason(why, wn, "available");
+            return 1;
+        }
+        dr_reason(why, wn, "ASMTEST_DR_LIB is set but not readable");
+        return 0;
+    }
+    if (dr_bundled_lib(buf, sizeof buf) != NULL) { /* package-bundled copy */
+        dr_reason(why, wn, "available");
         return 1;
+    }
     const char *home = getenv("DYNAMORIO_HOME");
     if (home != NULL && home[0] != '\0') {
         snprintf(buf, sizeof buf, "%s/lib64/release/libdynamorio.so", home);
-        return access(buf, R_OK) == 0;
+        if (access(buf, R_OK) == 0) {
+            dr_reason(why, wn, "available");
+            return 1;
+        }
+        dr_reason(why, wn,
+                  "DYNAMORIO_HOME set but lib64/release/libdynamorio.so not "
+                  "found under it");
+        return 0;
     }
+    dr_reason(why, wn,
+              "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, "
+              "or bundle it (a bare libdynamorio.so on the loader path is still "
+              "tried at init)");
     return 0;
+}
+
+int asmtest_dr_available(void) { return dr_probe(NULL, 0); }
+
+void asmtest_dr_skip_reason(char *buf, size_t buflen) {
+    if (buf == NULL || buflen == 0)
+        return;
+    (void)dr_probe(buf, buflen);
 }
 
 int asmtest_dr_marker_error(void) { return g_marker_errors; }
