@@ -33,18 +33,23 @@ This page is the **shared overview** — architecture, one-time setup, and the
 capability map common to every binding. Each language then has its own page with
 an end-to-end, idiomatic example:
 
-| Language | Page | FFI mechanism |
-|---|---|---|
-| Python | [Python binding](python.md) | `ctypes` |
-| .NET | [.NET binding](dotnet.md) | P/Invoke |
-| Go | [Go binding](go.md) | `cgo` |
-| Rust | [Rust binding](rust.md) | `extern` + build script |
-| C++ | [C++ binding](cpp.md) | direct `#include` |
-| Zig | [Zig binding](zig.md) | `@cImport` |
-| Node.js | [Node.js binding](node.md) | `koffi` |
-| Java | [Java binding](java.md) | FFM (Panama) |
-| Ruby | [Ruby binding](ruby.md) | `Fiddle` |
-| Lua | [Lua binding](lua.md) | LuaJIT `ffi` |
+| Language | Page | FFI mechanism | Minimum version targeted |
+|---|---|---|---|
+| Python | [Python binding](python.md) | `ctypes` | Python 3.8 (`requires-python = ">=3.8"`) |
+| .NET | [.NET binding](dotnet.md) | P/Invoke | .NET 8.0 (`<TargetFramework>net8.0`) |
+| Go | [Go binding](go.md) | `cgo` | Go 1.21 (`go.mod`) |
+| Rust | [Rust binding](rust.md) | `extern` + build script | Rust 1.56+ (2021 edition) |
+| C++ | [C++ binding](cpp.md) | direct `#include` | C++17 (`-std=c++17` / `cxx_std_17`) |
+| Zig | [Zig binding](zig.md) | `@cImport` | Zig 0.13.0 (`minimum_zig_version`) |
+| Node.js | [Node.js binding](node.md) | `koffi` | Node.js 18 (`engines.node = ">=18"`) |
+| Java | [Java binding](java.md) | FFM (Panama) | JDK 21 (`--release 21`; FFM preview, stable in 22+) |
+| Ruby | [Ruby binding](ruby.md) | `Fiddle` | Ruby 2.6 (`required_ruby_version = ">= 2.6"`) |
+| Lua | [Lua binding](lua.md) | LuaJIT `ffi` | LuaJIT (Lua 5.1 ABI) |
+
+The **minimum version** column is the floor each binding actually builds and tests
+against — taken from its packaging descriptor (`pyproject.toml`, `go.mod`, the
+`.csproj`/`Cargo.toml`/`pom.xml`/`.gemspec`/`.rockspec`, etc.), not an aspiration.
+Newer toolchains work; older ones are unsupported.
 
 **Python** is the reference binding (start there if you're new); **.NET** and
 **Go** are the other two with worked, all-three-capability examples. For how each
