@@ -264,8 +264,8 @@ jobs:
           - lang: java
             smoke: |
               printf 'public class Smoke { public static void main(String[] a){ if(!Asmtest.disasAvailable()) throw new RuntimeException("disassembler tier not available from the self-contained jar"); System.out.println("java ok: disas available"); }}' > /tmp/Smoke.java
-              javac --release 21 --enable-preview -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
-              java --enable-preview --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
+              javac --release 22 -cp build/dist/java/asmtest-*.jar -d /tmp /tmp/Smoke.java
+              java --enable-native-access=ALL-UNNAMED -cp "$(ls build/dist/java/asmtest-*.jar):/tmp" Smoke
           - lang: dotnet
             smoke: |
               ver="$(make -s -C "$GITHUB_WORKSPACE" print-version)"
@@ -282,9 +282,12 @@ jobs:
       - if: ${{ matrix.lang == 'ruby' }}
         uses: ruby/setup-ruby@v1
         with: { ruby-version: "3.2" }
+      # Compile/run the packaged jar on a JDK != 21 with no --enable-preview: a
+      # preview-classfile jar (--enable-preview) refuses to load here, so this
+      # smoke is the gate that the jar is consumable on modern JDKs (FFM final).
       - if: ${{ matrix.lang == 'java' }}
         uses: actions/setup-java@v5
-        with: { distribution: temurin, java-version: "21" }
+        with: { distribution: temurin, java-version: "25" }
       - if: ${{ matrix.lang == 'dotnet' }}
         uses: actions/setup-dotnet@v5
         with: { dotnet-version: "10.0.x" }
@@ -365,6 +368,20 @@ jobs:
       # demand); the release check is that the cgo module vets + builds.
       - name: go vet + build
         run: cd bindings/go && CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go vet ./... && CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go build ./...
+      # A downstream consumer `go get`s the module and links a *binary* — the
+      # step `go build ./...` on a library skips (no final link), so it never
+      # catches a stray -l on a lib that make install-shared doesn't stage. The
+      # default (untagged) build must link against libasmtest_emu alone; the
+      # corpus fixture is test-only (behind the asmtest_corpus tag).
+      - name: A consumer links the module against libasmtest_emu alone (N1 gate)
+        run: |
+          mkdir -p /tmp/goconsumer && cd /tmp/goconsumer
+          go mod init consumer
+          go mod edit -require=github.com/wilvk/asm-test/bindings/go@v0.0.0
+          go mod edit -replace=github.com/wilvk/asm-test/bindings/go=$GITHUB_WORKSPACE/bindings/go
+          printf 'package main\nimport asmtest "github.com/wilvk/asm-test/bindings/go"\nfunc main() { r := asmtest.NewRegs(); r.Free() }\n' > main.go
+          CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go build -o consumer .
+          LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build ./consumer && echo "go ok: module links libasmtest_emu without the corpus fixture"
 
   cpp:
     name: cpp (header + cmake)

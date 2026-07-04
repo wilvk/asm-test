@@ -25,8 +25,8 @@
  * a load failure and {@link #available(int)} self-skips cleanly — callers never
  * see a throw out of {@code available()}.
  *
- * FFM is a preview API in JDK 21: compile with `--release 21 --enable-preview`,
- * run with `--enable-preview --enable-native-access=ALL-UNNAMED`.
+ * FFM is final since JDK 22: compile with `--release 22`, run with
+ * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -556,7 +556,7 @@ public final class HwTrace {
     // freed when the call returns; the shared ARENA is reserved for the process-
     // lifetime library lookup. Otherwise every call would leak its buffer forever.
     private static MemorySegment str(Arena a, String s) {
-        return s == null ? MemorySegment.NULL : a.allocateUtf8String(s);
+        return s == null ? MemorySegment.NULL : a.allocateFrom(s);
     }
 
     // ---- process-wide lifecycle ----
@@ -582,7 +582,7 @@ public final class HwTrace {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment buf = a.allocate(160);
             HW_SKIP_REASON.invoke(backend, buf, 160L);
-            return buf.getUtf8String(0);
+            return buf.getString(0);
         } catch (Throwable t) { throw rethrow(t); }
     }
 
@@ -877,7 +877,7 @@ public final class HwTrace {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment buf = a.allocate(160);
             PTRACE_SKIP_REASON.invoke(buf, 160L);
-            return buf.getUtf8String(0);
+            return buf.getString(0);
         } catch (Throwable t) { throw rethrow(t); }
     }
 
@@ -1420,7 +1420,7 @@ public final class HwTrace {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment buf = a.allocate(160);
                 CI_SKIP_REASON.invoke(buf, 160L);
-                return buf.getUtf8String(0);
+                return buf.getString(0);
             } catch (Throwable t) { throw rethrow(t); }
         }
 
@@ -1485,7 +1485,7 @@ public final class HwTrace {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment buf = a.allocate(160);
                 CI_BPF_SKIP_REASON.invoke(buf, 160L);
-                return buf.getUtf8String(0);
+                return buf.getString(0);
             } catch (Throwable t) { throw rethrow(t); }
         }
 

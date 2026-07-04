@@ -1,3 +1,5 @@
+//go:build asmtest_corpus
+
 // conformance_test.go — asm-test Go binding (Track G).
 //
 // Replays the cross-language conformance corpus through `go test`, the idiomatic
@@ -5,6 +7,9 @@
 // (bindings/conformance/conformance.c) and the other language bindings: integer
 // capture + ABI preservation, an ABI violation that must be detected, flag
 // capture, FP capture, and an x86-64 emulator case (faults as data).
+//
+// Needs the corpus fixtures (CorpusRoutine, libasmtest_corpus), so it builds
+// only under the `asmtest_corpus` tag — see corpus.go. `make go-test` sets it.
 package asmtest
 
 import (

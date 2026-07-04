@@ -139,18 +139,18 @@ lua_clean_test() {
 java_clean_test() {
     JAVA="$(command -v java 2>/dev/null)"; JAVAC="$(command -v javac 2>/dev/null)"
     { [ -n "$JAVA" ] && [ -n "$JAVAC" ]; } || { skip_b java "no java/javac toolchain"; return; }
-    "$JAVA" -version >/dev/null 2>&1 || { skip_b java "no JRE (macOS java stub only — install a JDK 21)"; return; }
+    "$JAVA" -version >/dev/null 2>&1 || { skip_b java "no JRE (macOS java stub only — install a JDK 22+)"; return; }
     ( cd "$REPO" && make -s java-package ) >/dev/null 2>&1 \
         || { fail_b java "make java-package failed"; return; }
     jar="$(ls "$REPO"/build/dist/java/asmtest-*.jar 2>/dev/null | head -1)"
     [ -n "$jar" ] || { fail_b java "no jar built"; return; }
     smoke="$WORK/java"; mkdir -p "$smoke"
     printf 'public class Where{public static void main(String[] a){System.out.print(Asmtest.libraryPath());}}' > "$smoke/Where.java"
-    "$JAVAC" --release 21 --enable-preview -cp "$jar" -d "$smoke" "$smoke/Where.java" 2>/dev/null \
-        || { fail_b java "javac failed (needs JDK 21)"; return; }
+    "$JAVAC" --release 22 -cp "$jar" -d "$smoke" "$smoke/Where.java" 2>/dev/null \
+        || { fail_b java "javac failed (needs JDK 22+)"; return; }
     path="$(
         . "$CLEAN_ENV" 1>&2
-        "$JAVA" --enable-preview --enable-native-access=ALL-UNNAMED -cp "$jar:$smoke" Where 2>/dev/null
+        "$JAVA" --enable-native-access=ALL-UNNAMED -cp "$jar:$smoke" Where 2>/dev/null
     )"
     assert_path java "$path" "$smoke"
 }

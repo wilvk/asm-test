@@ -107,7 +107,7 @@ DOCKER_APT_node   := nodejs npm
 # linux-tools-generic ships libperf-jvmti.so (HotSpot's jitdump encoder for the
 # java-jitdump lane). It is a userspace JVMTI agent, so a kernel-version-mismatched
 # package still works in the container; the other java lanes simply ignore it.
-DOCKER_APT_java   := openjdk-21-jdk-headless linux-tools-generic
+DOCKER_APT_java   := openjdk-25-jdk-headless linux-tools-generic
 DOCKER_APT_dotnet := dotnet-sdk-8.0
 DOCKER_APT_ruby   := ruby
 DOCKER_APT_lua    := luajit

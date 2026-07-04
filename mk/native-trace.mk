@@ -497,9 +497,9 @@ ifndef DR_AVAILABLE
 else
 	@echo "== drtrace-java-test =="
 	mkdir -p $(BUILD)/java-drtrace
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-drtrace \
+	$(JAVAC) --release 22 -d $(BUILD)/java-drtrace \
 	  bindings/java/DrTrace.java bindings/java/DrTraceTest.java
-	$(call drtrace_run,$(drtrace_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-drtrace DrTraceTest)
+	$(call drtrace_run,$(drtrace_env) $(JAVA) --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-drtrace DrTraceTest)
 endif
 
 drtrace-dotnet-test: drtrace-shared-prep
@@ -589,9 +589,9 @@ hwtrace-node-test: shared-hwtrace
 hwtrace-java-test: shared-hwtrace
 	@echo "== hwtrace-java-test =="
 	mkdir -p $(BUILD)/java-hwtrace
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-hwtrace \
+	$(JAVAC) --release 22 -d $(BUILD)/java-hwtrace \
 	  bindings/java/HwTrace.java bindings/java/HwTraceTest.java
-	$(hwtrace_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
+	$(hwtrace_env) $(JAVA) --enable-native-access=ALL-UNNAMED \
 	  -cp $(BUILD)/java-hwtrace HwTraceTest
 
 hwtrace-dotnet-test: shared-hwtrace

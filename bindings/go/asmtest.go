@@ -14,15 +14,22 @@
 //   emu_open/_close, asmtest_emu_*  run a routine in the emulator (faults as data)
 //
 // The build links libasmtest_emu (the full superset: capture + emulator +
-// accessors + Keystone assembler + Capstone disassembler) and libasmtest_corpus
-// (the routine fixtures), so asm_available()/disas_available() are true with no
-// flag. At run time the dynamic loader finds them via LD_LIBRARY_PATH /
-// DYLD_LIBRARY_PATH (set by `make go-test`); the CGO_LDFLAGS -L below makes a
-// default `build/` tree work without the Makefile.
+// accessors + Keystone assembler + Capstone disassembler), so
+// asm_available()/disas_available() are true with no flag. At run time the
+// dynamic loader finds it via LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (set by
+// `make go-test`); the CGO_LDFLAGS -L below makes a default `build/` tree work
+// without the Makefile.
+//
+// The conformance routine fixtures (libasmtest_corpus) are a test-only
+// dependency: CorpusRoutine and the `-lasmtest_corpus` link directive live in
+// corpus.go behind the `asmtest_corpus` build tag, so `go get`ing this module
+// and linking a consumer binary pulls only libasmtest_emu — the fixture lib is
+// never staged by `make install-shared`. `make go-test` builds with
+// `-tags asmtest_corpus` to pull it in for the conformance suite.
 package asmtest
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../build -lasmtest_emu -lasmtest_corpus
+#cgo LDFLAGS: -L${SRCDIR}/../../build -lasmtest_emu
 #cgo linux LDFLAGS: -ldl
 #include <stdlib.h>
 #include <stddef.h>
@@ -30,7 +37,6 @@ package asmtest
 
 // Opaque-handle FFI surface, declared here (not via the C headers) so no struct
 // layout is mirrored on the Go side.
-extern void *asmtest_corpus_routine(const char *name);
 extern void *asmtest_regs_new(void);
 extern void  asmtest_regs_free(void *r);
 extern void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
@@ -125,10 +131,6 @@ extern int asmtest_cpu_has_avx2(void);
 // AVX-512 512-bit capture (Track D).
 extern void asm_call_capture_vec512(void *vec, void *fn, long *iargs, void *vargs);
 extern int asmtest_cpu_has_avx512f(void);
-// vec_add8d (AVX-512 corpus routine) is linked in via -lasmtest_corpus, but the
-// shared asmtest_corpus_routine() name table does not register it; take its
-// address directly so the go binding can drive it without touching corpus glue.
-extern void vec_add8d(void);
 
 // In-line assembler entry points live in libasmtest_emu (now the full superset:
 // emulator + Keystone assembler + Capstone disassembler), which the binding loads.
@@ -188,14 +190,6 @@ func init() { C.asmtest_resolve_asm() }
 // passes back to C is C-allocated, so it is exempt from cgo's pointer-passing
 // rules.
 type Routine = unsafe.Pointer
-
-// CorpusRoutine resolves a canonical corpus routine (e.g. "add_signed") to its
-// address, or nil if the name is unknown.
-func CorpusRoutine(name string) Routine {
-	cs := C.CString(name)
-	defer C.free(unsafe.Pointer(cs))
-	return Routine(C.asmtest_corpus_routine(cs))
-}
 
 // Regs is a captured register/flags snapshot. Read its fields via the methods;
 // release it with Free.
@@ -420,11 +414,6 @@ func CaptureVec512(fn Routine, vargs [][8]float64) [8]float64 {
 		unsafe.Pointer(&va[0]))
 	return *(*[8]float64)(unsafe.Pointer(&out[0]))
 }
-
-// vecAdd8dRoutine returns the address of the AVX-512 corpus routine vec_add8d.
-// It is taken directly rather than via CorpusRoutine because the shared
-// asmtest_corpus_routine() name table does not register vec_add8d.
-func vecAdd8dRoutine() Routine { return Routine(C.vec_add8d) }
 
 // --- helpers for passing Go slices to C (no Go pointers inside the slices) --- //
 

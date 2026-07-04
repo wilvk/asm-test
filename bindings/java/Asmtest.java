@@ -13,8 +13,8 @@
  *   ASMTEST_LIB         libasmtest_emu.{so,dylib}    (capture + emulator + accessors)
  *   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib} (the canonical fixtures)
  *
- * FFM is a preview API in JDK 21: compile with `--release 21 --enable-preview`,
- * run with `--enable-preview --enable-native-access=ALL-UNNAMED`.
+ * FFM is final since JDK 22: compile with `--release 22`, run with
+ * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -334,7 +334,7 @@ public final class Asmtest {
         return t instanceof RuntimeException re ? re : new RuntimeException(t);
     }
 
-    private static MemorySegment str(Arena a, String s) { return a.allocateUtf8String(s); }
+    private static MemorySegment str(Arena a, String s) { return a.allocateFrom(s); }
 
     /** Resolve a canonical corpus routine (e.g. "add_signed") to its address.
      *  Goes through the name dispatcher first; if that does not know the routine
@@ -357,7 +357,7 @@ public final class Asmtest {
         if (ASM_LAST_ERROR == null) return "";
         try {
             MemorySegment p = (MemorySegment) ASM_LAST_ERROR.invoke();
-            return p.equals(MemorySegment.NULL) ? "" : p.reinterpret(256).getUtf8String(0);
+            return p.equals(MemorySegment.NULL) ? "" : p.reinterpret(256).getString(0);
         } catch (Throwable t) { throw rethrow(t); }
     }
 
@@ -407,7 +407,7 @@ public final class Asmtest {
             MemorySegment.copy(code, 0, in, JAVA_BYTE, 0, code.length);
             MemorySegment buf = a.allocate(160);
             long n = (long) EMU_DISAS.invoke(arch.v, in, (long) code.length, base, off, buf, 160L);
-            return n == 0 ? "" : buf.getUtf8String(0);
+            return n == 0 ? "" : buf.getString(0);
         } catch (Throwable t) { throw rethrow(t); }
     }
     /** Convenience: x86-64 at the emulator load base. */

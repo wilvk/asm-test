@@ -28,12 +28,13 @@
   </licenses>
 
   <properties>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>22</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
-  <!-- FFM is preview in JDK 21, stable in 22+. The native libs are bundled as
-       resources under src/main/resources/native/<os-arch>/ (staged by
+  <!-- FFM is final since JDK 22 (preview in 21), so we target release 22 with no
+       preview flags — the jar then loads on any JDK >= 22. The native libs are
+       bundled as resources under src/main/resources/native/<os-arch>/ (staged by
        `make java-package`); a real release adds the maven-source/javadoc/gpg
        plugins for Central. -->
 </project>

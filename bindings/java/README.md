@@ -14,7 +14,7 @@ a `FaultKind` enum — for where and why one hit).
 ## Run
 
 ```sh
-make java-test        # from the repo root (needs the shared libs + JDK 21)
+make java-test        # from the repo root (needs the shared libs + JDK 22)
 make docker-java      # or in an isolated container
 ```
 
@@ -23,9 +23,9 @@ handles inside and exposes the `Regs` / `Emu` / `EmuResult` classes plus the
 `assert*` helpers. [`Conformance.java`](Conformance.java) is a thin consumer that
 replays the corpus through it. `make java-test` builds `libasmtest_emu` + the
 routine fixture lib, compiles both sources, and runs the conformance class. FFM
-is a **preview** API in JDK 21, so it compiles with `--release 21
---enable-preview` and runs with `--enable-preview --enable-native-access=ALL-UNNAMED`
-(stable in JDK 22+; drop the preview flags there).
+is **final since JDK 22**, so it compiles with `--release 22` and runs with
+`--enable-native-access=ALL-UNNAMED` (no preview flags) — the resulting
+classfiles load on any JDK 22 or newer.
 
 ## In-line assembler (optional)
 
@@ -70,10 +70,10 @@ exits 0) when it can't run. Build the tier and client with
 and export `ASMTEST_DRCLIENT`. Compile + run standalone:
 
 ```sh
-javac --release 21 --enable-preview -d /tmp/jdt \
+javac --release 22 -d /tmp/jdt \
     bindings/java/DrTrace.java bindings/java/DrTraceTest.java
 ASMTEST_DRAPP_LIB=$PWD/build/libasmtest_drapp.so \
-    java --enable-preview --enable-native-access=ALL-UNNAMED -cp /tmp/jdt DrTraceTest
+    java --enable-native-access=ALL-UNNAMED -cp /tmp/jdt DrTraceTest
 ```
 
 ## Deferred

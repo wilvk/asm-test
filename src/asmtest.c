@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <setjmp.h> /* sig{setjmp,longjmp}; no longer pulled in via asmtest.h */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -32,7 +33,10 @@ static asmtest_case_t *asmtest_tail = NULL;
 static asmtest_hook_t *asmtest_hooks = NULL;
 
 #if !defined(_WIN32)
-sigjmp_buf asmtest_jmp;
+/* Per-test recovery buffer. Internal to the runner (no consumer references it),
+ * so it stays out of the public header — where sigjmp_buf, a POSIX type, would
+ * break strict -std=c11 consumers that #include "asmtest.h". */
+static sigjmp_buf asmtest_jmp;
 static volatile sig_atomic_t asmtest_in_test = 0;
 #else
 static volatile int asmtest_in_test = 0;

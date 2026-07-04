@@ -16,10 +16,13 @@
 
 CC         ?= cc
 # Pin the C standard for reproducible builds across gcc/clang versions and the
-# four native targets. gnu11 (not c11) keeps the GNU extensions the runtime and
-# the assembler-with-cpp shim rely on. Override with `make CSTD=c11 ...`.
+# four native targets. gnu11 is the default; `make CSTD=c11 ...` builds strict.
+# The runtime is inherently POSIX (fork isolation, sigaltstack, CLOCK_MONOTONIC),
+# so -D_DEFAULT_SOURCE keeps those symbols visible under strict -std=c11 too — a
+# no-op under gnu11, where glibc exposes them anyway. (The public header itself
+# is pure ISO C, so consumers can #include it under -std=c11 with no macro.)
 CSTD       ?= gnu11
-CFLAGS     := -std=$(CSTD) -Wall -Wextra -O0 -g -Iinclude
+CFLAGS     := -std=$(CSTD) -D_DEFAULT_SOURCE -Wall -Wextra -O0 -g -Iinclude
 ASFLAGS    := -x assembler-with-cpp -Iinclude
 BUILD      := build
 ASM_SYNTAX ?= gas
@@ -56,7 +59,7 @@ SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
                   $(BUILD)/test_callback $(BUILD)/test_qmul \
                   $(BUILD)/test_checked $(BUILD)/test_qadd
 
-.PHONY: all help test check demo-fail clean
+.PHONY: all help test check check-header-portability demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
 .PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
@@ -76,6 +79,7 @@ help:
 	@echo 'Core:'
 	@echo '  test            build + run the example suites (default)'
 	@echo '  check           run the framework self-tests (tests/expect.sh)'
+	@echo '  check-header-portability  strict-c11 include + C++ macro-use + docs gate'
 	@echo '  usecases        "unusual use case" suites (bit tricks, RPN VM)'
 	@echo '  demo-fail       intentional-failure demo (exits nonzero by design)'
 	@echo '  demo-robust     crash/hang containment demo'
@@ -331,8 +335,34 @@ $(BUILD)/tests_positive: $(FRAMEWORK_OBJS) $(BUILD)/positive.o
 $(BUILD)/tests_negative: $(FRAMEWORK_OBJS) $(BUILD)/negative.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-check: $(SELFTESTS)
+check: $(SELFTESTS) check-header-portability
 	@BUILD=$(BUILD) sh tests/expect.sh
+
+# Public first-contact surface gate — three paths no other target covers, all
+# cheap (compile-only, needs only cc/c++; no link, no libunicorn):
+#   (A1) a strict `-std=c11` consumer must be able to #include "asmtest.h"
+#        (regresses if a POSIX-only type such as sigjmp_buf re-enters the header);
+#   (A2) the ASM_CALL* capture macros must expand from a C++ TU (g++ rejects the
+#        address of a compound-literal temporary array);
+#   (D1) the docs must invoke the GAS ASM_FUNC/ASM_ENDFUNC macros paren-free
+#        (`ASM_FUNC name`); a parenthesized `ASM_FUNC(name)` snippet won't
+#        assemble. The historical review/plan docs quote the bug, so skip them.
+# CXX is defined in mk/bindings.mk (default c++).
+check-header-portability:
+	$(CC) -std=c11 -Wall -Wextra -Iinclude -fsyntax-only \
+	    tests/portability/consumer_c11.c
+	$(CXX) -std=c++17 -Wall -Wextra -Iinclude -fsyntax-only \
+	    tests/portability/consumer_cpp.cpp
+	@if grep -rn 'ASM_FUNC(\|ASM_ENDFUNC(' README.md docs examples \
+	      --include='*.md' --include='*.rst' --include='*.s' 2>/dev/null \
+	      | grep -v 'docs/reviews/\|docs/plans/\|docs/summaries/' | grep -q .; then \
+	    echo "ERROR: parenthesized ASM_FUNC(...) in docs — GAS macros are invoked paren-free (ASM_FUNC name)"; \
+	    grep -rn 'ASM_FUNC(\|ASM_ENDFUNC(' README.md docs examples \
+	      --include='*.md' --include='*.rst' --include='*.s' 2>/dev/null \
+	      | grep -v 'docs/reviews/\|docs/plans/\|docs/summaries/'; \
+	    exit 1; \
+	fi
+	@echo "check-header-portability: OK (c11 include + c++ macro expansion + docs)"
 
 # Static library: the framework runtime + the asm capture trampoline. The
 # optional emulator tier (emu.o, -lunicorn) is intentionally left out.

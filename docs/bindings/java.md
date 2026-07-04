@@ -22,9 +22,10 @@ From the repository root, build the native library:
 make shared-emu     # libasmtest_emu.{so,dylib} — capture trampoline + emulator + FFI accessors
 ```
 
-FFM is a **preview** API in JDK 21, so sources compile with `--release 21
---enable-preview` and run with `--enable-preview --enable-native-access=ALL-UNNAMED`
-(stable in JDK 22+; drop the preview flags there).
+FFM is **final since JDK 22**, so sources compile with `--release 22` and run
+with `--enable-native-access=ALL-UNNAMED` (no preview flags). The classfiles then
+load on any JDK 22 or newer; a JDK 21 (where FFM is still preview) is no longer
+supported.
 
 ## Usage
 

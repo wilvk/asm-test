@@ -10,8 +10,8 @@
  * Asserts are NOT used (the `assert` keyword is off by default); failures throw
  * or System.exit nonzero explicitly. On success it prints "PASS".
  *
- * Compile with `--release 21 --enable-preview`, run with `--enable-preview
- * --enable-native-access=ALL-UNNAMED`.
+ * Compile with `--release 22`, run with
+ * `--enable-native-access=ALL-UNNAMED`.
  */
 public final class DrTraceTest {
 

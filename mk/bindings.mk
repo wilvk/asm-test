@@ -189,9 +189,9 @@ node-test: shared-emu $(CORPUS_LIB)
 
 java-test: shared-emu $(CORPUS_LIB)
 	mkdir -p $(BUILD)/java
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java \
+	$(JAVAC) --release 22 -d $(BUILD)/java \
 	  bindings/java/Asmtest.java bindings/java/Conformance.java
-	$(bindings_env) $(JAVA) --enable-preview --enable-native-access=ALL-UNNAMED \
+	$(bindings_env) $(JAVA) --enable-native-access=ALL-UNNAMED \
 	  -cp $(BUILD)/java Conformance
 
 dotnet-test: shared-emu $(CORPUS_LIB)
@@ -201,10 +201,13 @@ dotnet-test: shared-emu $(CORPUS_LIB)
 # a custom BUILD works), and bindings_env's LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
 # resolves them at run time. GOTOOLCHAIN=local + GOPROXY=off keep it offline (no
 # module deps). The emulator case uses the x86-64 guest, so run on an x86-64 host.
+# The conformance suite links the test-only corpus fixture lib, which lives
+# behind the `asmtest_corpus` build tag (corpus.go) so consumers who `go get`
+# this module link only libasmtest_emu; build the tests with the tag to pull it.
 go-test: shared-emu $(CORPUS_LIB)
 	cd bindings/go && CGO_LDFLAGS="-L$(abspath $(BUILD))" \
 	  GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPROXY=off \
-	  $(bindings_env) $(GO) test ./...
+	  $(bindings_env) $(GO) test -tags asmtest_corpus ./...
 
 # --- Packaging scaffolding (publishable artifacts) -------------------------
 # See docs/packaging.md. `make package-libs` stages the host's shared libs into
@@ -362,7 +365,7 @@ java-package: native-payload-check
 	rm -rf bindings/java/src/main/resources/native
 	mkdir -p $(BUILD)/java-pkg $(PKG_DIST)/java
 	$(call emu_lib_slots,bindings/java/src/main/resources/native)
-	$(JAVAC) --release 21 --enable-preview -d $(BUILD)/java-pkg bindings/java/Asmtest.java
+	$(JAVAC) --release 22 -d $(BUILD)/java-pkg bindings/java/Asmtest.java
 	cp -r bindings/java/src/main/resources/native $(BUILD)/java-pkg/
 	cd $(BUILD)/java-pkg && $(JAR) cf $(abspath $(PKG_DIST))/java/asmtest-$(ASMTEST_VERSION).jar .
 

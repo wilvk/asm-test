@@ -122,11 +122,11 @@ handles the ELF/Mach-O symbol differences so it builds on Linux and macOS:
 ```asm
 #include "asm.h"
 
-ASM_FUNC(add_signed)
+ASM_FUNC add_signed
     movq %rdi, %rax
     addq %rsi, %rax
     ret
-ASM_ENDFUNC(add_signed)
+ASM_ENDFUNC add_signed
 ```
 
 C test (`examples/test_arith.c`):

@@ -8,8 +8,8 @@
  *   ASMTEST_LIB         libasmtest_emu.{so,dylib}
  *   ASMTEST_CORPUS_LIB  libasmtest_corpus.{so,dylib}
  *
- * FFM is a preview API in JDK 21: compile with `--release 21 --enable-preview`,
- * run with `--enable-preview --enable-native-access=ALL-UNNAMED`.
+ * FFM is final since JDK 22: compile with `--release 22`, run with
+ * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;

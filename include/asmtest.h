@@ -12,7 +12,6 @@
 #ifndef ASMTEST_H
 #define ASMTEST_H
 
-#include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -574,10 +573,6 @@ void asmtest_guarded_free(void *p, size_t n);
 void *asmtest_guarded_alloc_under(size_t n);
 void asmtest_guarded_free_under(void *p, size_t n);
 
-#if !defined(_WIN32)
-extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Test / fixture definition                                           */
 /* ------------------------------------------------------------------ */
@@ -635,120 +630,187 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
 /* Capture-call convenience: ASM_CALLn(out, fn, args...)               */
 /* ------------------------------------------------------------------ */
 
+/* Each macro marshals its args into a named local array inside a do/while
+ * block, then calls the capture entry point. The array is a block-scoped local
+ * (not a C99 compound literal) so the macros compile identically in C and C++:
+ * g++ rejects taking the address of a compound-literal temporary array, which
+ * is what a C++ consumer of asmtest.h would otherwise hit. */
+
 #define ASM_CALL0(out, fn)                                                     \
-    asm_call_capture((out), (void *)(fn), (long[6]){0, 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0, 0, 0, 0, 0, 0};                              \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL1(out, fn, a)                                                  \
-    asm_call_capture((out), (void *)(fn), (long[6]){(long)(a), 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), 0, 0, 0, 0, 0};                      \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL2(out, fn, a, b)                                               \
-    asm_call_capture((out), (void *)(fn),                                      \
-                     (long[6]){(long)(a), (long)(b), 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), 0, 0, 0, 0};              \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL3(out, fn, a, b, c)                                            \
-    asm_call_capture((out), (void *)(fn),                                      \
-                     (long[6]){(long)(a), (long)(b), (long)(c), 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), 0, 0, 0};      \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL4(out, fn, a, b, c, d)                                         \
-    asm_call_capture(                                                          \
-        (out), (void *)(fn),                                                   \
-        (long[6]){(long)(a), (long)(b), (long)(c), (long)(d), 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d), 0,  \
+                               0};                                             \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL5(out, fn, a, b, c, d, e)                                      \
-    asm_call_capture(                                                          \
-        (out), (void *)(fn),                                                   \
-        (long[6]){(long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d),     \
+                               (long)(e), 0};                                  \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 #define ASM_CALL6(out, fn, a, b, c, d, e, f)                                   \
-    asm_call_capture((out), (void *)(fn),                                      \
-                     (long[6]){(long)(a), (long)(b), (long)(c), (long)(d),     \
-                               (long)(e), (long)(f)})
+    do {                                                                       \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d),     \
+                               (long)(e), (long)(f)};                          \
+        asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
+    } while (0)
 
 /* ASM_CALLN: call fn with any number (>=1) of integer args, overflowing onto
  * the stack as the ABI requires. nargs is derived from the argument list. */
 #define ASM_CALLN(out, fn, ...)                                                \
-    asm_call_capture_args((out), (void *)(fn), (long[]){__VA_ARGS__},          \
-                          (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+    do {                                                                       \
+        long asmtest_ia_[] = {__VA_ARGS__};                                    \
+        asm_call_capture_args((out), (void *)(fn), asmtest_ia_,                \
+                              (int)(sizeof(asmtest_ia_) / sizeof(long)));      \
+    } while (0)
 
 #if defined(ASMTEST_ABI_WIN64)
 /* The Win64 counterparts of ASM_CALL0..6 / ASM_CALLN. Args are 64-bit (Win64 is
  * LLP64), so the marshalling arrays are `long long`. */
 #define ASM_CALL_WIN64_0(out, fn)                                              \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){0, 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {0, 0, 0, 0, 0, 0};                         \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_1(out, fn, a)                                           \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){(long long)(a), 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), 0, 0, 0, 0, 0};            \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_2(out, fn, a, b)                                        \
-    asm_call_capture_win64(                                                    \
-        (out), (void *)(fn),                                                   \
-        (long long[6]){(long long)(a), (long long)(b), 0, 0, 0, 0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), (long long)(b), 0, 0, 0,   \
+                                    0};                                        \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_3(out, fn, a, b, c)                                     \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){(long long)(a), (long long)(b),      \
-                                          (long long)(c), 0, 0, 0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
+                                    (long long)(c), 0, 0, 0};                  \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_4(out, fn, a, b, c, d)                                  \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){(long long)(a), (long long)(b),      \
-                                          (long long)(c), (long long)(d), 0,   \
-                                          0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
+                                    (long long)(c), (long long)(d), 0, 0};     \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_5(out, fn, a, b, c, d, e)                               \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){(long long)(a), (long long)(b),      \
-                                          (long long)(c), (long long)(d),      \
-                                          (long long)(e), 0})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
+                                    (long long)(c), (long long)(d),            \
+                                    (long long)(e), 0};                        \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 #define ASM_CALL_WIN64_6(out, fn, a, b, c, d, e, f)                            \
-    asm_call_capture_win64((out), (void *)(fn),                                \
-                           (long long[6]){(long long)(a), (long long)(b),      \
-                                          (long long)(c), (long long)(d),      \
-                                          (long long)(e), (long long)(f)})
+    do {                                                                       \
+        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
+                                    (long long)(c), (long long)(d),            \
+                                    (long long)(e), (long long)(f)};           \
+        asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
+    } while (0)
 /* Any number (>=1) of integer args; nargs derived from the list. */
 #define ASM_CALL_WIN64_N(out, fn, ...)                                         \
-    asm_call_capture_args_win64(                                               \
-        (out), (void *)(fn), (long long[]){__VA_ARGS__},                       \
-        (int)(sizeof((long long[]){__VA_ARGS__}) / sizeof(long long)))
+    do {                                                                       \
+        long long asmtest_wa_[] = {__VA_ARGS__};                              \
+        asm_call_capture_args_win64(                                           \
+            (out), (void *)(fn), asmtest_wa_,                                  \
+            (int)(sizeof(asmtest_wa_) / sizeof(long long)));                   \
+    } while (0)
 #endif /* ASMTEST_ABI_WIN64 */
 
 /* ASM_SRET: call fn that returns a large struct into *result, with >=1 visible
  * integer args. */
 #define ASM_SRET(out, fn, result, ...)                                         \
-    asm_call_capture_sret((out), (void *)(fn), (result),                       \
-                          (long[]){__VA_ARGS__},                               \
-                          (int)(sizeof((long[]){__VA_ARGS__}) / sizeof(long)))
+    do {                                                                       \
+        long asmtest_ia_[] = {__VA_ARGS__};                                    \
+        asm_call_capture_sret((out), (void *)(fn), (result), asmtest_ia_,      \
+                              (int)(sizeof(asmtest_ia_) / sizeof(long)));      \
+    } while (0)
 
 /* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the
  * double return lands in out->fret. For routines mixing integer and float
  * args, call asm_call_capture_fp directly. */
 #define ASM_FCALL1(out, fn, x)                                                 \
-    asm_call_capture_fp((out), (void *)(fn), (long[6]){0},                     \
-                        (double[8]){(double)(x), 0, 0, 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        double asmtest_fa_[8] = {(double)(x), 0, 0, 0, 0, 0, 0, 0};            \
+        asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
+    } while (0)
 #define ASM_FCALL2(out, fn, x, y)                                              \
-    asm_call_capture_fp(                                                       \
-        (out), (void *)(fn), (long[6]){0},                                     \
-        (double[8]){(double)(x), (double)(y), 0, 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        double asmtest_fa_[8] = {(double)(x), (double)(y), 0, 0, 0, 0, 0, 0};  \
+        asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
+    } while (0)
 #define ASM_FCALL3(out, fn, x, y, z)                                           \
-    asm_call_capture_fp(                                                       \
-        (out), (void *)(fn), (long[6]){0},                                     \
-        (double[8]){(double)(x), (double)(y), (double)(z), 0, 0, 0, 0, 0})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        double asmtest_fa_[8] = {(double)(x), (double)(y), (double)(z),        \
+                                 0, 0, 0, 0, 0};                               \
+        asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
+    } while (0)
 
 /* ASM_VCALLn: call fn with n 128-bit vector args (vec128_t) and capture the
  * whole vector file; the vector return is out->vec[0]. */
 #define ASM_VCALL1(out, fn, v0)                                                \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0}, (vec128_t[8]){(v0)})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        vec128_t asmtest_va_[8] = {(v0)};                                      \
+        asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
+    } while (0)
 #define ASM_VCALL2(out, fn, v0, v1)                                            \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                    \
-                         (vec128_t[8]){(v0), (v1)})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        vec128_t asmtest_va_[8] = {(v0), (v1)};                                \
+        asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
+    } while (0)
 #define ASM_VCALL3(out, fn, v0, v1, v2)                                        \
-    asm_call_capture_vec((out), (void *)(fn), (long[6]){0},                    \
-                         (vec128_t[8]){(v0), (v1), (v2)})
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        vec128_t asmtest_va_[8] = {(v0), (v1), (v2)};                          \
+        asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
+    } while (0)
 
 /* ASM_FCALLN: call fn with any number (>=1) of double args, the 9th+ spilling
  * onto the stack as the ABI requires. The double return lands in out->fret. */
 #define ASM_FCALLN(out, fn, ...)                                               \
-    asm_call_capture_fp_n(                                                     \
-        (out), (void *)(fn), (long[6]){0}, (double[]){__VA_ARGS__},            \
-        (int)(sizeof((double[]){__VA_ARGS__}) / sizeof(double)))
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        double asmtest_fa_[] = {__VA_ARGS__};                                  \
+        asm_call_capture_fp_n((out), (void *)(fn), asmtest_ia_, asmtest_fa_,   \
+                              (int)(sizeof(asmtest_fa_) / sizeof(double)));    \
+    } while (0)
 
 /* ASM_VCALLN: call fn with any number (>=1) of 128-bit vector args, the 9th+
  * spilling onto the stack. Captures the whole vector file (return = vec[0]). */
 #define ASM_VCALLN(out, fn, ...)                                               \
-    asm_call_capture_vec_n(                                                    \
-        (out), (void *)(fn), (long[6]){0}, (vec128_t[]){__VA_ARGS__},          \
-        (int)(sizeof((vec128_t[]){__VA_ARGS__}) / sizeof(vec128_t)))
+    do {                                                                       \
+        long asmtest_ia_[6] = {0};                                             \
+        vec128_t asmtest_va_[] = {__VA_ARGS__};                                \
+        asm_call_capture_vec_n((out), (void *)(fn), asmtest_ia_, asmtest_va_,  \
+                               (int)(sizeof(asmtest_va_) / sizeof(vec128_t))); \
+    } while (0)
 
 /* ASM_VCALL256n: like ASM_VCALLn but with 256-bit (AVX2 ymm) args; `out` is a
  * vec256_t[16] receiving the ymm file (out[0] = return). SELF-SKIPS the test
@@ -757,15 +819,19 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
     do {                                                                       \
         if (!asmtest_cpu_has_avx2())                                           \
             SKIP("AVX2 not available on this host");                           \
-        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},             \
-                                (vec256_t[8]){(v0)});                          \
+        long asmtest_ia_[6] = {0};                                             \
+        vec256_t asmtest_va_[8] = {(v0)};                                      \
+        asm_call_capture_vec256((out), (void *)(fn), asmtest_ia_,              \
+                                asmtest_va_);                                  \
     } while (0)
 #define ASM_VCALL256_2(out, fn, v0, v1)                                        \
     do {                                                                       \
         if (!asmtest_cpu_has_avx2())                                           \
             SKIP("AVX2 not available on this host");                           \
-        asm_call_capture_vec256((out), (void *)(fn), (long[6]){0},             \
-                                (vec256_t[8]){(v0), (v1)});                    \
+        long asmtest_ia_[6] = {0};                                             \
+        vec256_t asmtest_va_[8] = {(v0), (v1)};                                \
+        asm_call_capture_vec256((out), (void *)(fn), asmtest_ia_,              \
+                                asmtest_va_);                                  \
     } while (0)
 
 /* ASM_VCALL512n: like ASM_VCALL256n but with 512-bit (AVX-512 zmm) args; `out` is a
@@ -775,15 +841,19 @@ extern sigjmp_buf asmtest_jmp; /* assertions/crashes jump here (POSIX runner) */
     do {                                                                       \
         if (!asmtest_cpu_has_avx512f())                                        \
             SKIP("AVX-512 not available on this host");                        \
-        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},             \
-                                (vec512_t[8]){(v0)});                          \
+        long asmtest_ia_[6] = {0};                                             \
+        vec512_t asmtest_va_[8] = {(v0)};                                      \
+        asm_call_capture_vec512((out), (void *)(fn), asmtest_ia_,              \
+                                asmtest_va_);                                  \
     } while (0)
 #define ASM_VCALL512_2(out, fn, v0, v1)                                        \
     do {                                                                       \
         if (!asmtest_cpu_has_avx512f())                                        \
             SKIP("AVX-512 not available on this host");                        \
-        asm_call_capture_vec512((out), (void *)(fn), (long[6]){0},             \
-                                (vec512_t[8]){(v0), (v1)});                    \
+        long asmtest_ia_[6] = {0};                                             \
+        vec512_t asmtest_va_[8] = {(v0), (v1)};                                \
+        asm_call_capture_vec512((out), (void *)(fn), asmtest_ia_,              \
+                                asmtest_va_);                                  \
     } while (0)
 
 /* ------------------------------------------------------------------ */
