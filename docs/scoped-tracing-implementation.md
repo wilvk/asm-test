@@ -64,9 +64,18 @@ Handle-keyed additive trio: `asmtest_hwtrace_begin_scope` / `_render_scope` /
 `_render_versioned` (per-thread scope handle `{idx, gen}`; a stale/closed handle is
 rejected). Tests: `test_nested_singlestep`, `test_concurrent_singlestep`,
 `test_concurrent_samename`, `test_render_versioned`; `test_singlestep_live`/`_loop`
-re-run byte-identical (regression). The **PT/CoreSight/AMD per-thread AUX-ring
-migration is forward-look** (validates only on bare-metal Intel PT), so those backends
-keep the process-global slot.
+re-run byte-identical (regression).
+
+The **PT / AMD LBR / CoreSight** active-capture block is now `__thread` too, so those
+backends are per-thread as well (each scoping thread owns its perf fd + rings; a
+cross-thread close is impossible). Validated live for **AMD LBR** on this Zen 5:
+`test_concurrent_amd` (two threads each open their own AMD perf fd concurrently —
+deterministic, since the process-global slot would have refused the second) passes in
+the capped `make docker-hwtrace-amd` lane. The **PT / CoreSight** per-thread *code* is
+in place but the live per-thread-AUX validation needs the silicon (Intel PT board /
+AArch64 CoreSight board). Separately, the AMD end path now enforces the
+**never-empty-yet-complete honesty invariant** (a branch window that reconstructs to
+zero in-region instructions is flagged `truncated`).
 
 ### §2 — recorder-backed image callback (host-testable adapter DONE; live PT forward-look)
 
@@ -160,12 +169,36 @@ lib was never built — cargo/cgo then failed to link `-lasmtest_corpus`. Fixed 
 hoisting the `CORPUS_LIB` definition into `mk/native-trace.mk` (identical `:=`, so
 `bindings.mk` redefines it harmlessly). See [mk/native-trace.mk](../mk/native-trace.mk).
 
-## Where validation stops
+## What Docker can and cannot validate here
 
-Per the project's no-untested-hardware-code rule, every hardware-gated path ships
-**self-skipping and gated**, and the gate is exercised on every host. The forward-look
-items above are written where their design is pinned (the §D4 ABI, `render_versioned`,
-the whole-window `decode_window`) but their live paths need Intel PT, AMD Zen 3+,
-`CAP_BPF`/`CAP_PERFMON`, or a live managed runtime — none available on this AMD dev host
-or in the default container sandbox, exactly as the hardware-trace and AMD plans already
-accept for their own capture halves.
+Containers share the host kernel + CPU, so the dividing line is the **host's silicon**,
+not Docker. This dev host is an **AMD Ryzen 9 9950X (Zen 5)**: `intel_pt` PMU absent,
+kernel BTF present. Everything reachable on that hardware is now implemented and
+validated in a capped Docker lane; the rest is marked with the architecture / OS it
+needs.
+
+### Validated in Docker on this AMD host
+
+| Item | Lane | Needs |
+|---|---|---|
+| Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD honesty invariant | `make docker-hwtrace-amd` | AMD Zen 3+ + `--cap-add=PERFMON` (this box) |
+| §D3 reverse-attach ptrace-stealth stepper (`test_ptrace_scoped_stealth`) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
+| Core §0/§1-single-step/§2-adapter/§3-symbolize/§D4-merge + all 10 binding scopes | `make docker-hwtrace` + per-binding lanes | any x86-64 Linux |
+| eBPF code-emission detector | `make docker-hwtrace-codeimage` | `CAP_BPF` + kernel BTF (present) |
+| Managed-JIT tracing via the ptrace/W2 path (.NET/Node/Java) | `make docker-hwtrace-jit-{dotnet,node,java}` | a live runtime (in the image) |
+
+### Remaining — blocked on architecture / OS (Docker cannot substitute)
+
+| Item | Requires |
+|---|---|
+| Core §2 live whole-window libipt decode + capture-side address filter | **bare-metal Intel PT** (no `intel_pt` on AMD; a synthetic PT-packet fixture is the only non-hardware route) |
+| Core §1 per-thread PT/CoreSight **AUX** live validation | **bare-metal Intel PT** / an **AArch64 CoreSight board** (the per-thread *code* is done) |
+| Core §3.1(b) emission **slicing** (trace-position ↔ emission-timestamp correlation) | **Intel PT** whole-window decode for per-IP positions (the eBPF detector itself is done) |
+| Core §3.2 **live** AMD `data_tail` mid-capture drain | **AMD Zen 3+** — deferred: live capture is PMU-variable (no deterministic assertion); reconstruction is tested |
+| Core §3.2 PT `aux_tail` circular drain | **bare-metal Intel PT** |
+| Single-step Windows/macOS front-ends | **Windows (VEH)** / **macOS-Intel** hosts |
+| §D0 live managed-JIT capability (`MethodLoadVerbose`, `AsyncLocal` hook) + §D1/§D2 async-hop hooks | a **live .NET/Node/JVM** runtime (Docker-reachable, but large; the ptrace tracing path already works) + **Intel PT** for cross-thread async-hop stitching |
+| §D3 helper **bundling** (standalone binary + NuGet/npm/Maven) | packaging/supply-chain work (Docker clean-room-verifiable) |
+
+Per the project's no-untested-hardware-code rule, every remaining live path ships
+**self-skipping and gated**, and the gate is exercised on every host.

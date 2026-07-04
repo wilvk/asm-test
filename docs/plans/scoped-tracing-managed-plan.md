@@ -94,7 +94,18 @@ per-language analogues).
 
 ---
 
-## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(planned)*
+## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(forward-look; needs a live .NET runtime + Intel PT for the clean path)*
+
+> **Remaining, by requirement.** The `AsmTrace` native-leaf reference shim ships (see
+> the bindings slice). The *live managed-JIT* pieces need substrate: **§D0.1
+> `MethodLoadVerbose` address resolution** + **§D0.2 pre-arm rundown** + **§D0.3
+> named-method form** are **Docker-reachable** on a **live .NET runtime** (the
+> `docker-hwtrace-jit-dotnet` lane already traces a live CoreCLR method out of band via
+> the §D3 ptrace path) — implementable there, just not yet built. **§D0.4 `AsyncLocal`
+> async-hop stitching** additionally needs **bare-metal Intel PT** for the per-thread
+> events the cross-thread merge consumes (the §D4 merge *core* is done + host-tested;
+> the single-thread ptrace stepper cannot exercise a cross-thread hop). Same shape for
+> the Node (§D1) / JVM (§D2) async-hop hooks.
 
 Builds directly on the bindings slice's `AsmTrace` construct. On **.NET 8+** the
 analysis shows leak 2 and leak 3 dissolve and leak 1 shrinks to "you must name the

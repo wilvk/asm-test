@@ -265,21 +265,32 @@ validated on any x86-64 Linux via the single-step backend.
 
 ---
 
-## §1 — Per-thread hwtrace state *(single-step DONE; PT/AMD per-thread forward-look)*
+## §1 — Per-thread hwtrace state *(single-step + AMD DONE; PT/CoreSight need their silicon)*
 
-> **Status: single-step per-thread landed.** [src/ss_backend.c](../../src/ss_backend.c)
-> is rewritten to a per-thread TLS range stack (initial-exec model for the
-> handler-touched objects; heap-malloc'd streams; process-global non-TLS `g_armed`
-> belt; process-wide arm-refcount gating the SIGTRAP disposition). The region
-> registry is mutex-guarded ([src/hwtrace.c](../../src/hwtrace.c)), and the
-> handle-keyed trio `asmtest_hwtrace_begin_scope` / `_render_scope` / `_render_versioned`
-> plus `asmtest_ss_begin_ex` / `asmtest_ss_frame_lookup` are implemented. Tests
+> **Status: per-thread landed for every backend; AMD validated live.**
+> [src/ss_backend.c](../../src/ss_backend.c) is a per-thread TLS range stack
+> (initial-exec model for the handler-touched objects; heap-malloc'd streams;
+> process-global non-TLS `g_armed` belt; process-wide arm-refcount gating the SIGTRAP
+> disposition). The **PT / AMD LBR / CoreSight** active-capture block in
+> [src/hwtrace.c](../../src/hwtrace.c) (`g_fd` / `g_base_map` / `g_aux_map` /
+> `g_active` / `g_arm_tid`) is now `__thread` too, so those backends are per-thread as
+> well — each scoping thread owns its own perf fd + rings (the perf event is already
+> `pid == 0`), and a cross-thread close is impossible (the closing thread's slot is
+> empty). The registry is mutex-guarded; the handle-keyed trio
+> `asmtest_hwtrace_begin_scope` / `_render_scope` / `_render_versioned` plus
+> `asmtest_ss_begin_ex` / `asmtest_ss_frame_lookup` are implemented.
+>
+> **Validated (`make docker-hwtrace` / `make docker-hwtrace-amd`, this AMD Zen 5 box):**
 > `test_nested_singlestep`, `test_concurrent_singlestep`, `test_concurrent_samename`,
-> `test_render_versioned` (checks 107–118) pass, and the §0 `test_try_begin_busy`
-> (now EFULL on a full range stack) + `test_arm_tid_mismatch` were rewritten to §1
-> semantics; `test_singlestep_live`/`_loop` re-run byte-identical (regression).
-> **Forward-look:** the PT/CoreSight per-thread AUX-ring migration validates only on
-> bare-metal Intel PT (this dev host is AMD), so PT/AMD keep the process-global slot.
+> `test_render_versioned` (single-step, any x86-64 Linux); **`test_concurrent_amd`** —
+> two threads each open their own AMD-LBR perf fd concurrently (deterministic: the
+> process-global slot would have refused the second) in the capped
+> `docker-hwtrace-amd` lane. `test_singlestep_live`/`_loop` re-run byte-identical.
+>
+> **Remaining, by required silicon:** the per-thread migration *code* covers PT and
+> CoreSight, but the **live per-thread AUX validation needs the hardware** —
+> **bare-metal Intel PT** (no `intel_pt` PMU on an AMD host; Docker can't emulate a
+> PMU) and an **AArch64 CoreSight board** — so those two remain forward-look.
 
 **Goal.** Replace the process-global single capture slot with per-thread state,
 lifting the no-nesting / no-concurrency / no-multi-binding MVP limit
@@ -463,9 +474,14 @@ any x86-64 Linux; PT per-thread AUX rings validate only on bare-metal Intel PT
 > whole-window `asmtest_pt_decode_window` (distinct callback / no in-region filter,
 > selected by mode) build under libipt. Host tests `test_pt_image_from_codeimage`
 > (checks 11–15) + the `test_codeimage` decoder round-trip pass with **no PT hardware
-> and no libipt**. The **live whole-window libipt decode + capture-side address
-> filter remain forward-look on bare-metal Intel PT** (no synthetic PT-packet fixture
-> in the tree, this dev host is AMD).
+> and no libipt**.
+>
+> **Remaining — Requires: bare-metal Intel PT.** The live whole-window libipt decode +
+> the capture-side `PERF_EVENT_IOC_SET_FILTER` address filter need an `intel_pt` PMU,
+> which an AMD host lacks and Docker cannot emulate. (The one non-hardware alternative
+> is a **synthetic PT-packet fixture / libipt encoder** — code, not silicon — which
+> would make the end-to-end decode host-testable anywhere; a separately-budgeted
+> sub-task.)
 
 **Goal.** The remaining new decoder piece: feed the self (`pid == 0`) code-image
 recorder's bytes into libipt's image callback so an in-process PT capture of the
@@ -588,16 +604,30 @@ until a bare-metal Intel PT host is available (same gate as the hardware-trace p
 
 ## §3 — Whole-window completeness: noise attribution (Q2) + snapshot drain (Q3) *(host-testable halves DONE; live drains forward-look)*
 
-> **Status: host-testable halves landed.** §3.1(c) symbolize-and-bucket ships the new
-> address→name **reverse resolver** `asmtest_hwtrace_region_name` (keeps the maps
-> pathname) + perf-map reverse search + `asmtest_hwtrace_symbolize_bucket`
-> ([src/hwtrace.c](../../src/hwtrace.c)); `test_symbolize_bucket` (checks 16–20)
-> passes with no hardware. §3.2's AMD `data_tail` drain **reconstruction** is covered
-> by `test_amd_drain_reconstruction` (a stream far past one window stitches gapless +
-> decodes complete). **Forward-look:** §3.1(b) emission-event slicing (needs the eBPF
-> detector / soft-dirty timeline correlation at live capture), the **live** AMD
-> `data_tail` mid-capture drain (Zen 3+), and the PT `aux_tail` circular walk (Intel
-> PT hardware).
+> **Status: host-testable halves landed + an AMD honesty fix.** §3.1(c)
+> symbolize-and-bucket ships the new address→name **reverse resolver**
+> `asmtest_hwtrace_region_name` (keeps the maps pathname) + perf-map reverse search +
+> `asmtest_hwtrace_symbolize_bucket` ([src/hwtrace.c](../../src/hwtrace.c));
+> `test_symbolize_bucket` passes with no hardware. §3.2's AMD `data_tail` drain
+> **reconstruction** is covered by `test_amd_drain_reconstruction`. Separately, the AMD
+> end path now enforces the **never-empty-yet-complete honesty invariant** (a branch
+> window that reconstructs to zero in-region instructions is flagged `truncated`),
+> which also de-flakes the live single-shot check.
+>
+> **Remaining, by required silicon / privilege:**
+> - **§3.1(b) emission-event slicing** — the eBPF emission detector itself is shipped
+>   and CI-exercised (`make docker-hwtrace-codeimage`, `CAP_BPF` + kernel BTF), but the
+>   *slicing* correlates each decoded IP's trace position against the emission
+>   timestamp, which needs per-IP trace positions from the **whole-window PT decode
+>   (bare-metal Intel PT)**; the soft-dirty version-timeline fallback is the coarser
+>   path. **Requires: Intel PT** (correlation consumer) — the detector needs
+>   `CAP_BPF` + BTF (Docker-reachable).
+> - **live AMD `data_tail` mid-capture drain** — a background consumer advancing
+>   `data_tail` while the region runs. **Requires: AMD Zen 3+** (this box; Docker
+>   `--cap-add=PERFMON` lane). Deferred: the live capture is inherently PMU-variable
+>   (concurrent `sample_period=1` events multiplex), so it lacks a deterministic
+>   assertion; the reconstruction half is already tested.
+> - **PT `aux_tail` circular walk** — **Requires: bare-metal Intel PT**.
 
 **Goal.** Make the empty-scope *whole-window* mode usable, not just honest. §2 backs
 the decoder with the recorder (so whole-window decodes at all); this sub-phase adds

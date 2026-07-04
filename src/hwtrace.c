@@ -374,18 +374,23 @@ static pthread_mutex_t g_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 static hw_region_t *find_region(const char *name);          /* locked; below */
 static hw_region_t *find_region_unlocked(const char *name); /* caller holds lock */
 
-/* Active capture state (single region at a time in the MVP). */
+/* §1: per-thread active-capture state for the PT / AMD LBR / CoreSight backends.
+ * These are `__thread` so concurrent scopes on different threads each own their perf
+ * fd + rings (the perf event is already per-thread, `pid == 0`), lifting the
+ * process-global single-region limit for the hardware backends too — the single-step
+ * backend carries its own per-thread range stack in ss_backend.c. General-dynamic TLS
+ * is fine here: unlike the single-step handler, none of this is touched in signal
+ * context. Per-thread `g_active` also makes a cross-thread close impossible (the
+ * closing thread's slot is empty), the same isolation the single-step frames give. */
 #if defined(__linux__)
-static int g_fd = -1;
-static void *g_base_map; /* perf base ring (metadata page + data)  */
-static size_t g_base_sz;
-static void *g_aux_map; /* AUX trace ring                          */
-static size_t g_aux_sz;
-static hw_region_t *g_active;
-/* §0.2: OS thread id (SYS_gettid) that armed the active capture, -1 when idle.
- * Set in try_begin, compared in end (cross-thread close flags truncated), cleared
- * in end. Under §1 this migrates into the per-thread capture struct. */
-static int g_arm_tid = -1;
+static __thread int g_fd = -1;
+static __thread void *g_base_map; /* perf base ring (metadata page + data)  */
+static __thread size_t g_base_sz;
+static __thread void *g_aux_map; /* AUX trace ring                          */
+static __thread size_t g_aux_sz;
+static __thread hw_region_t *g_active;
+/* §0.2: OS thread id (SYS_gettid) that armed this thread's active capture, -1 idle. */
+static __thread int g_arm_tid = -1;
 #endif
 
 static size_t round_pages(size_t want, size_t dflt) {
@@ -704,6 +709,14 @@ static void hwtrace_end_amd(void) {
      * which tier decoded, so the single-window Tier-A path can't report a
      * ring-truncated capture as complete. */
     if (lost && r->trace != NULL)
+        r->trace->truncated = true;
+
+    /* Honesty invariant (matches the other backends): an in-region branch window that
+     * reconstructs to ZERO instructions — a boundary branch, or endpoints that do not
+     * bound a decodable run — is not a complete empty trace. Flag it truncated so the
+     * AMD path never reports empty-yet-complete (the intermittent case on a tiny
+     * single-shot routine whose branches barely enter the region). */
+    if (r->trace != NULL && r->trace->insns_total == 0)
         r->trace->truncated = true;
 
     free(samples);

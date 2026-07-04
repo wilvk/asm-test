@@ -31,12 +31,16 @@ The **only genuinely new** engineering is a small shared C/decode core plus thin
 per-language shims — the split this plan's [three slice plans](#the-slice-plans)
 own.
 
-> **Status: core + bindings landed; managed tier partial.** The shared-core slice
-> (Core §0/§1/§2/§3) and its host-testable deliverables, the full **bindings slice**
-> (scope construct across all eight tiers + the .NET reference), and the managed
-> slice's **§D4 merge core / §D1 Node / §D2 Java** halves are implemented and green;
-> the live managed-JIT capability (§D0/§D3 + the per-runtime async-hop hooks) and the
-> PT-hardware-gated live capture remain forward-look. Full accounting:
+> **Status: core + bindings landed; managed tier + AMD/ptrace validated; Intel-PT
+> gated pieces remain.** The shared-core slice (Core §0/§1/§2/§3), the full **bindings
+> slice** (scope construct across all eight tiers + the .NET reference), the managed
+> slice's **§D4 merge core / §D1 Node / §D2 Java** halves, and the **§D3 reverse-attach
+> ptrace-stealth stepper** are implemented and green. Everything reachable on this
+> **AMD Zen 5** host is validated in Docker — including **per-thread AMD LBR capture**
+> (Core §1, the `docker-hwtrace-amd` capped lane) and the ptrace-stealth scope. What
+> remains is marked by the **architecture / OS it needs** (bare-metal Intel PT, an
+> AArch64 CoreSight board, Windows/macOS single-step, or a live managed runtime for the
+> §D0 hooks). Full accounting + the Docker-can/can't matrix:
 > [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
 >
 > Status legend: **planned** unless noted. Update this file (and the slice files)

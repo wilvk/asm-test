@@ -84,6 +84,10 @@ static const unsigned char LOOP_A64[] = {
     0xc1, 0xff, 0xff, 0x54, 0xe0, 0x03, 0x09, 0xaa, 0xc0, 0x03, 0x5f, 0xd6};
 #endif
 
+/* Map bytes W^X-correctly into executable memory (defined with the §0 tests below;
+ * forward-declared here for the earlier AMD/concurrency fixtures). */
+static void *ss_map_exec(const unsigned char *bytes, size_t len);
+
 static int checks, failures;
 #define CHECK(c, m)                                                            \
     do {                                                                       \
@@ -451,6 +455,79 @@ static void test_amd_drain_reconstruction(void) {
     asmtest_trace_free(tb);
 #else
     printf("# SKIP AMD drain reconstruction: not Linux x86-64\n");
+#endif
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+struct amd_cc_arg {
+    const char *name;
+    long trips;
+    long expect_ret;
+    int ok;
+};
+/* One AMD-LBR-captured loop on its own thread (its own perf fd + capture slot). */
+static void *amd_cc_worker(void *v) {
+    struct amd_cc_arg *A = (struct amd_cc_arg *)v;
+    void *p = ss_map_exec(AMD_LOOP, sizeof AMD_LOOP);
+    if (p == NULL) {
+        A->ok = 0;
+        return NULL;
+    }
+    asmtest_trace_t *tr = asmtest_trace_new(256, 64);
+    asmtest_hwtrace_register_region(A->name, p, sizeof AMD_LOOP, tr);
+    long (*fn)(long, long) = (long (*)(long, long))p;
+    /* The DETERMINISTIC per-thread proof: each thread's try_begin opens its OWN perf
+     * fd and returns OK. Before the per-thread migration the process-global slot
+     * refused the second thread's begin with ESTATE. (The captured branch stream
+     * itself is best-effort — two concurrent sample_period=1 branch-stack events
+     * multiplex on the PMU, so one can come back empty; that is a hardware property,
+     * not a collision, so it is not asserted here.) */
+    int armed = asmtest_hwtrace_try_begin(A->name) == ASMTEST_HW_OK;
+    long r = fn(1, A->trips);
+    asmtest_hwtrace_end(A->name);
+    A->ok = (r == A->expect_ret) && armed;
+    asmtest_trace_free(tr);
+    munmap(p, sizeof AMD_LOOP);
+    return NULL;
+}
+#endif
+
+/* §1 (AMD): two threads each AMD-LBR-capture a DIFFERENT loop CONCURRENTLY, proving
+ * the per-thread perf fd / capture slot (each thread's own hardware branch stream, no
+ * collision). Validated live on a Zen 3+/4/5 host with perf branch-stack permitted —
+ * the `make docker-hwtrace-amd` capped lane on this AMD box; self-skips where AMD LBR
+ * is unavailable (the plain container / any Intel host). */
+static void test_concurrent_amd(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+        char why[160];
+        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, why, sizeof why);
+        printf("# SKIP concurrent AMD: %s\n", why);
+        return;
+    }
+#if defined(__linux__) && defined(__x86_64__)
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+        printf("# SKIP concurrent AMD: init failed\n");
+        return;
+    }
+    struct amd_cc_arg a = {"amd_A", 40, 40, 0};
+    struct amd_cc_arg b = {"amd_B", 55, 55, 0};
+    pthread_t ta, tb;
+    pthread_create(&ta, NULL, amd_cc_worker, &a);
+    pthread_create(&tb, NULL, amd_cc_worker, &b);
+    pthread_join(ta, NULL);
+    pthread_join(tb, NULL);
+    CHECK(a.ok,
+          "concurrent AMD: thread A opened its own perf fd (per-thread slot, "
+          "not refused)");
+    CHECK(b.ok,
+          "concurrent AMD: thread B opened its own perf fd (per-thread slot, "
+          "not refused)");
+    asmtest_hwtrace_shutdown();
+#else
+    printf("# SKIP concurrent AMD: needs Linux x86-64\n");
 #endif
 }
 
@@ -3001,6 +3078,9 @@ int main(void) {
     /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
     test_amd_live();
+
+    /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */
+    test_concurrent_amd();
 
     /* AMD Tier-B stitching past the 16-deep window (host-validated, synthetic). */
     test_amd_stitch();
