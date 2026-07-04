@@ -742,6 +742,149 @@ profiler shim) undo.
    timing-intrusive; whole-scope capture rides descent L3 (best-effort), method-scoped
    capture is reliable.
 
+## Beyond .NET — extending the scoped model to the other nine bindings
+
+Everything above is framed in C# (`using`, `[ModuleInitializer]`, `[CallerMemberName]`,
+`AsyncLocal`). But the .NET shim is a thin marshalling layer over **language-agnostic C**
+(`asmtest_hwtrace_{init,register_region,begin,end}`, `available`/`skip_reason`/`auto`/
+`resolve`, the [`pid == 0` self code-image recorder](../../src/codeimage.c), Capstone
+rendering), so the natural question is whether the model generalises to the other nine
+bindings. **It does — and the fault line is not *which language* but *what is under the
+scope*.** Every binding today traces *separately-materialised native regions* (asm-test-
+assembled bytes in a W^X `asmtest_exec_alloc` mmap), not the host's own execution. For that
+use — a scope around a known native leaf — the model ports to **every binding at low
+effort**; three of the four ergonomic pieces (guaranteed-cleanup scope, auto-name,
+arm-on-load) map either idiomatically or better. It only gets hard when the ask escalates
+to *"trace the runtime's own live JIT output,"* which happens only in the managed tier.
+
+The four ergonomic pieces the .NET section leans on are each a *generic* capability with a
+per-language analogue:
+
+| .NET mechanism | Generic capability | Analogue in the other bindings |
+|---|---|---|
+| `IDisposable` / `using` | guaranteed-cleanup scope (balanced `begin`/`end`) | C++/Rust destructor (RAII/`Drop`), Go/Zig `defer`, Python `with`, Ruby `begin/ensure`, Lua closure+`pcall`, Java try-with-resources / `AutoCloseable`, Node `using`+`Symbol.dispose` |
+| `[ModuleInitializer]` | arm before first use, no setup call | real import/init hook in Python (`import`), Ruby/Lua (`require`), Go (`func init()`), Node (`require`), Java (`static{}`); **no portable hook** in C++/Rust/Zig → lazy-once instead |
+| `[CallerMemberName]` etc. | auto-name from the call site | compile-time `std::source_location` / `@src()`; else a one-frame stack walk (`sys._getframe`, `caller_locations`, `runtime.Caller`, `Error().stack`, `StackWalker`) |
+| `AsyncLocal` value-changed | follow a logical op across thread hops | only needed in the managed tier — `AsyncLocalStorage`/`async_hooks` (Node), a JVMTI/`ScopedValue` story (JVM) |
+
+### Determination — the scoped model across all ten bindings
+
+| Binding | Feasibility | Scope construct | Arm-on-import | Key residual limit | Effort |
+|---|---|---|---|---|---|
+| **C++** | yes✝ | RAII `RegionScope` (ctor `begin` / dtor `end`) — *house style, ships* | no module-init → lazy Meyers magic-static (strictly better: lazy) | render-on-close unwired; process-global single slot | low |
+| **Rust** | yes✝ | `Drop` RAII; `HwTrace` + [`OnceLock`](../../bindings/rust/src/hwtrace.rs#L490) lazy-init ship; [`region()`](../../bindings/rust/src/hwtrace.rs#L937) | no module-init → `OnceLock` lazy-once (already the pattern) | `#[track_caller]` for auto-name; render-on-close; single slot | low |
+| **Zig** | yes✝ | `defer scope.deinit()` (explicit, not RAII); `region()` ships | no runtime module-init → `std.once` lazy-arm | `defer` skipped on `panic`; single slot | low |
+| **Python** | **yes** | `with AsmTrace(code):` context manager | **real** `import` hook (recommend lazy-first-scope) | scopes a native region, not Python bytecode; threads/`run_in_executor` escape; single slot | low |
+| **Ruby** | yes✝ | block + `begin/ensure`; `region(name){}` ships | **real** `require` hook (recommend lazy-first-scope) | Fiber-scheduler / Ractor can resume `ensure` on a different OS thread → disarms TF on the wrong thread; single slot | low |
+| **Lua** | yes✝ | [`region(name, fn)`](../../bindings/lua/hwtrace.lua#L389) closure + `pcall` — *ships* | **real** `require` hook (defensive `pcall(ffi.load)`) | LuaJIT ffi is 5.1 → **no `<close>`**; but coroutines stay on one OS thread → *safer than Ruby*; single slot | low |
+| **Go** | yes✝ | closure + `defer`; [`Region`/`Begin`](../../bindings/go/hwtrace.go#L798) ship **with [`LockOSThread`](../../bindings/go/hwtrace.go#L808)** | **real** `func init()` hook | **must pin the OS thread** (done); `go func()` fan-out inside the scope escapes with no stitch hook; single slot | low |
+| **Node** | yes✝ | `region(name, fn)` ships / `using new AsmTrace()` via `Symbol.dispose` (Node 22+) | **real** top-level-module (`require`) hook | piece-D `AsyncLocalStorage`/`async_hooks` is real work; libuv-pool / Worker off-thread escapes; live JS needs PT/ptrace, not single-step | medium |
+| **Java** | yes✝ | try-with-resources / `AutoCloseable`; FFM downcalls; [`region(String,Runnable)`](../../bindings/java/HwTrace.java#L779) ships; **[`static{}`](../../bindings/java/HwTrace.java#L279) arm hook** | **real** static-initializer hook | managed JIT → PT / W2-ptrace; DynamoRIO self-skips (guarded); JVMTI / `ScopedValue` for piece-D; single slot | medium |
+| **.NET** *(reference)* | yes | `using (new AsmTrace())` — `IDisposable` / [`HwTrace.Region`](../../bindings/dotnet/hwtrace/HwTrace.cs#L602) | `[ModuleInitializer]` = true arm-on-load | piece-D `AsyncLocal` value-changed = the redesign; managed code needs PT/ptrace | medium |
+
+✝ *yes-with-caveats.* The tiers: **native / no-GC (C++, Rust, Zig)** — trivial and safe,
+`begin == end` same-thread holds by construction, the only gap being the missing module-init
+hook; **refcount / interpreter (Python, Ruby, Lua)** — easy, with real import-time arm hooks;
+**moving-GC + M:N scheduler (Go)** — the instructive middle, already solved by *pinning* the
+OS thread; **JIT-managed (.NET, Node, Java)** — the real project, needing the hardware-decode
+half plus async-hop stitching.
+
+### One shared core, thin per-language shims
+
+Almost all of the load-bearing machinery is already shared C; the per-binding delta is small
+and repetitive.
+
+**Build once, reused by all ten:**
+
+1. **The lifecycle already exists** — `asmtest_hwtrace_*` + auto-select + self-skip + the
+   `exec_alloc` W^X helper + the self code-image recorder. Each binding is a marshalling layer.
+2. **The libipt / branch-trace decode-against-self-code-image glue** — *the same code* the
+   [hardware-trace plan Phase 2](../plans/hardware-trace-plan.md) needs. Building it once
+   unblocks the clean managed-code path (PT/LBR) for **every** binding at once — the single
+   highest-leverage shared investment.
+3. **Per-thread hwtrace state** — replacing the process-global single slot (the
+   [MVP contract](../../include/asmtest_hwtrace.h#L144)) with per-thread state (TLS + per-thread
+   perf fd + a multi-range decode filter for PT; an async-signal-safe range stack for
+   single-step) lifts the no-nesting / no-concurrency / no-multi-binding limit from all ten
+   bindings simultaneously. Second-highest leverage.
+4. **Two cheap C-layer fixes that de-risk every binding:** make `begin` *return an error* when
+   a slot is active instead of silently dropping it (today every binding must reinvent a
+   nesting guard), and record the arming thread id in `begin` so `end` can flag `truncated` on
+   a same-thread mismatch (today every binding independently proposes this check).
+
+**What each binding must add** is small: its scope construct (mostly already shipped as a
+`region(name, fn)`-shaped helper), its arm hook (a real module-init where one exists, else a
+lazy-once magic-static), its auto-name (compile-time injection or a one-frame stack walk),
+GC-callback keepalive (already solved per binding for `Descent`), and the thread-id assert at
+close. **Recommended everywhere: lazy first-scope arm** — mere import must not claim the
+process-global slot or install the SIGTRAP sigaction.
+
+### The hard cases, called honestly
+
+- **Go — thread migration is the defining hazard, already handled by pinning.** The M:N
+  scheduler can move a goroutine across OS threads at any cgo boundary; since `EFLAGS.TF` is
+  per-thread CPU state, an unpinned scope arms on one thread and runs/closes on another → an
+  empty or truncated trace, or a stray in-region `SIGTRAP` landing on a thread now running Go
+  (a crash). This is not hypothetical — it is the project's **own resolved `go-full-test`
+  flaky-crash finding**, whose fix was the missing
+  [`runtime.LockOSThread`](../../bindings/go/hwtrace.go#L808) precisely because single-step TF
+  is per-thread. Go converts .NET's "follow the migration" into "forbid the migration for the
+  region" — which works for the pinned flow but means `go func()` fan-out inside the scope
+  escapes with no stitch hook.
+- **Node / .NET / JVM — JIT-hostility makes hardware trace the only clean in-process path.**
+  Pointing single-step at *live managed code* swaps the process-wide SIGTRAP disposition the
+  runtime's PAL owns, can put a sibling runtime thread into runaway single-step, fights the
+  JIT's self-modifying / relocating bytes, and adds ~100–1000× slowdown on exactly the thread
+  the GC/JIT coordinate with (the same collision `native-tracing`'s single-step §(b) documents).
+  Single-step is safe only against a **known native leaf** — which is what the bindings do
+  today. Tracing the runtime's own execution requires out-of-band **Intel PT / AMD LBR**
+  (privilege- and bare-metal-gated, never in most cloud/CI VMs, never on macOS) or the
+  **out-of-process ptrace stepper** on hosts with no hardware trace — plus piece-D async-hop
+  stitching. This tier is where the medium-plus effort lives.
+- **The arm-on-import gap for C++/Rust/Zig.** None has a portable runtime module-init with
+  C#'s "fires before first type touch" semantics; `__attribute__((constructor))` / `.init_array`
+  is eager, compiler-specific, and exposed to static-init-order fiasco in a header-only lib. The
+  honest answer is a **lazy function-local `static` / `OnceLock` / `std.once` guard on first
+  scope entry** — which is *strictly better* here (arms only if used, self-skips cleanly) and
+  keeps the developer footprint at import + scope. "Arm on import" is delivered as an *effect*,
+  not a hook, for exactly these three.
+
+### Refinements this cross-language pass forces on the .NET-only framing above
+
+- **`begin` *does* key on the region name.** The empty-ctor discussion above emphasises that
+  `end` closes the active slot regardless of name; but `begin` looks the name up via
+  [`find_region`](../../src/hwtrace.c#L413) ([`:659`](../../src/hwtrace.c#L659)) and silently
+  no-ops when it doesn't match a registered region. So a self-registering, auto-named scope
+  **must register-then-begin under the same generated name** — a correctness constraint every
+  shim (including the .NET one) must honour, understated above.
+- **Render-on-close is a *shared* gap, not a per-language one.** Every binding except .NET
+  records coverage/offsets but does not decode-and-render on scope exit. This is one common
+  "decode the recorded offsets → Capstone/`emu_disas` → emit" path that belongs in (or just
+  above) the C core, not re-implemented ten times.
+- **The whole using-model is Linux-only across *every* binding.** Off Linux the `begin`/`end`
+  lifecycle self-skips to `(void)name` no-ops and the emulator is the only tier, so the
+  "empty-constructor `using`" promise silently degrades to "records nothing" for *all*
+  languages — a first-class property of the facility, not a per-language footnote.
+
+### Impact on the plan
+
+This rescopes the corresponding roadmap item from *"a .NET `IDisposable AsmTrace`"* to
+**"a cross-binding scoped-trace facility: one shared C/decode core + thin per-language
+shims,"** with .NET as the reference shim rather than the deliverable. A sensible phasing:
+(A) prove the shim shape on the zero-hazard tier — **Python + C++** first (real import hook /
+RAII already ship), **Zig** near-free; (B) prove the migration mitigation on **Go**
+(`LockOSThread` already wired); (C) build the shared prerequisites that unblock the most —
+**per-thread hwtrace state** and the **libipt decode-against-self-code-image glue** (the
+hardware half shared with [hardware-trace Phase 2](../plans/hardware-trace-plan.md)) plus the
+two C-layer fixes — *before*, not during, the managed bindings; (D) the managed hard cases —
+**Node → JVM → .NET** — each on the PT/ptrace path with its own piece-D stitching. Ruby/Lua
+slot into (A)/(B) (Lua is actually safer than Ruby on thread affinity), and Rust joins the
+native trivial tier.
+
+*Derived from a per-binding code review of the ten hwtrace wrappers against the C substrate;
+Rust/Lua/Java were read directly, the other six via parallel reviewers with an adversarial
+verification pass.*
+
 ## Boundary — what the scope does *not* give
 
 Inherited directly from PT/ETM: you get **which** instructions ran, **in what order**,
