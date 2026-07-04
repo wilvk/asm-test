@@ -154,6 +154,17 @@ so it cannot stay an "or"):
   can marshal (`char[]`/`byte[]`/`[*]u8`) without a callback FFI. A convenience
   `FILE*` wrapper may be layered *above* it later, but the buffer form is the
   installed primitive.
+- **Precondition — the region needs an instruction buffer.** `render` walks the region's
+  `asmtest_trace_t.insns[0..insns_len)`
+  ([include/asmtest_trace.h:47-49](../../include/asmtest_trace.h#L47)), so the shim must
+  register the region with an allocated instruction buffer (`insns != NULL`,
+  `insns_cap > 0`); a blocks-only (coverage) trace renders empty text. For the bounded
+  native-leaf case the shim sizes `insns_cap` to the routine. For the unbounded
+  whole-window / managed case (§2 / Managed slice) the executed count can exceed any fixed
+  `insns_cap`, so render must honour `insns_total > insns_cap`
+  ([:50](../../include/asmtest_trace.h#L50)) / `trace->truncated`
+  ([:59](../../include/asmtest_trace.h#L59)) and label the text a prefix — never present a
+  capped stream as complete.
 - **This primitive is region-scoped and version-blind:** it renders the live bytes at
   `[base, len)` for a single-owner named region. Concurrent same-name scopes (§1) and
   temporally-recompiled managed code (§D3/§D4, where the executed bytes have since
@@ -195,6 +206,17 @@ grows `g_nregions`, so looped/sprinkled scopes are safe and the 32-entry ceiling
 counts **distinct** scope sites, not entries. A shim has no C-API way to dedup itself —
 `find_region` is `static` ([:413](../../src/hwtrace.c#L413)) — so the dedup **must**
 live in the core. Behaviour for distinct names is unchanged.
+
+**Thread-safety note (becomes load-bearing under §1).** This idempotent lookup is a
+find-then-refresh-or-append **read-modify-write** over the process-global
+`g_regions`/`g_nregions`, and `find_region` scans the same array — **neither is
+synchronised today** (the registry is a plain `static` array with no mutex/atomic,
+confirmed in the tree). That is safe under §0's single-thread MVP, but §1 blesses
+concurrent scopes on multiple threads, at which point two first-entries racing on
+`g_nregions++` corrupt the table. §1 therefore adds a **registry mutex** (see §1
+Changes); the RMW introduced here is written to run under it. Per-thread *capture*
+state (§1, TLS) and shared *registry* state (this lock) are distinct concerns — TLS
+does not make the registry safe.
 
 **§0 tests.** Extend [examples/test_hwtrace.c](../../examples/test_hwtrace.c)
 (dispatched from `main` at [:2174](../../examples/test_hwtrace.c#L2174)):
@@ -271,11 +293,18 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   the handler's first act is to read `g_armed` ([:88-93](../../src/ss_backend.c#L88)).
   So the handler-touched TLS must be forced to the **initial-exec** model
   (`__attribute__((tls_model("initial-exec")))` — a fixed thread-pointer offset with no
-  lazy allocation, accepting the resulting static-TLS-surplus constraint on the FFI
-  `dlopen`), **or** the `g_armed` guard must stay a **non-TLS atomic** so the handler's
-  early-return path never touches TLS. (The unqualified "same discipline as the existing
-  `g_stream` write" is insufficient — `g_stream` is safe today only because it is a plain
-  `static`.) **The SIGTRAP disposition stays process-wide:** `g_old_sa`/`g_installed`
+  lazy allocation and no `__tls_get_addr` call at all, accepting the resulting
+  static-TLS-surplus constraint on the FFI `dlopen`). **initial-exec is mandatory for
+  *every* TLS object the handler dereferences — the range stack and the per-capture
+  state, not only `g_armed`:** an *armed* thread's handler reads the range stack on its
+  hot path, and general-dynamic `__tls_get_addr` is not async-signal-safe **even for an
+  already-faulted-in block** (glibc's lock-free fast path is an optimisation, not a spec
+  guarantee, and a SIGTRAP landing mid-`__tls_get_addr` in normal code re-enters it).
+  Keeping the `g_armed` guard a **non-TLS atomic** is a useful *additional* belt — it
+  lets an **unarmed** thread's handler early-return without touching TLS at all — but it
+  is **not a substitute** for initial-exec on the range stack, which an armed thread must
+  still read. (The unqualified "same discipline as the existing `g_stream` write" is
+  insufficient — `g_stream` is safe today only because it is a plain `static`.) **The SIGTRAP disposition stays process-wide:** `g_old_sa`/`g_installed`
   remain process-global `static`s (**not** moved to TLS), installed once
   ([:129](../../src/ss_backend.c#L129)). Today `asmtest_ss_end` restores it
   unconditionally under `g_installed` ([:213-216](../../src/ss_backend.c#L214)) with no
@@ -287,6 +316,16 @@ refcount enable/disable across the nest. Single-step needs a TLS range stack.
   slot; moving that slot to TLS covers it. Tier-A/Tier-B stitching
   ([src/amd_backend.c:152](../../src/amd_backend.c#L152),
   [src/hwtrace.c:603](../../src/hwtrace.c#L603)) is per-region and unaffected.
+- **Registry synchronization (`src/hwtrace.c`).** Moving *capture* state to TLS is
+  necessary but not sufficient: the **region registry** (`g_regions`/`g_nregions`,
+  [:346-347](../../src/hwtrace.c#L346)) stays process-global and shared, and §0.4's
+  idempotent `register_region` is a find-then-append **read-modify-write** over it while
+  `find_region` scans it ([:413](../../src/hwtrace.c#L413)) — both unsynchronised today.
+  Once this section blesses concurrent multi-thread scopes, that is a data race (two
+  first-entries racing `g_nregions++`), so **guard the registry with a process-global
+  mutex** (a plain `pthread_mutex` critical section around register/find — registration
+  is off the hot capture path, so lock cost is irrelevant; the single-step handler never
+  touches the registry, so no async-signal-safety constraint applies to this lock).
 - **Per-scope trace ownership + render/close selection.** Moving the *capture* slot
   to TLS is not enough: the region table and its `asmtest_trace_t` stay
   process-global and name-keyed, so two threads entering the **same** auto-named
@@ -385,6 +424,15 @@ from `/proc/self/maps`.
   `asmtest_proc_*` helpers substitute the pid literally into their path
   (`/proc/<pid>/maps`, `/tmp/perf-<pid>.map`), so the self case must pass `getpid()`,
   **not** `0` (unlike `asmtest_codeimage_new(0)`, which maps `0`→self).
+- **Mode interaction — a second decode mode, not a mutation of the first.** The shipped
+  region-scoped decode *relies on* `read_region` returning `-pte_nomap` at the boundary to
+  stop the walk ([src/pt_backend.c:47](../../src/pt_backend.c#L47),
+  [:128-137](../../src/pt_backend.c#L128)); a recorder-backed callback that serves bytes
+  for *any* address removes that stop, so the whole-window path must also lift the
+  **record-side** IP filter ([:108-109](../../src/pt_backend.c#L108), which today records
+  only in-region IPs). Keep the two as **distinct** callbacks / record policies selected by
+  mode — the region-scoped decode the bindings slice consumes must stay **byte-identical**
+  after §2 (make that a regression assert, like §1's).
 - **Self-recorder wiring (`src/hwtrace.c`).** In the arm path, create a self
   code-image timeline (`asmtest_codeimage_new(0)`,
   [include/asmtest_codeimage.h:81](../../include/asmtest_codeimage.h#L81)) and
@@ -571,9 +619,14 @@ reconstruction host-testable; PT live forward-look on Intel PT).
   locks. Beyond the array *contents*, the TLS *access model* matters: in the `dlopen`'d
   shared library the general-dynamic first-touch of a `__thread` var can route through
   `__tls_get_addr` and lazily allocate, so the handler-touched state must be
-  `tls_model("initial-exec")` (or the `g_armed` guard kept a non-TLS atomic). The
+  `tls_model("initial-exec")` — **mandatory for the range stack and per-capture state**,
+  since `__tls_get_addr` is not async-signal-safe even for an already-allocated block;
+  keeping `g_armed` a non-TLS atomic only spares the *unarmed* early-return path, it does
+  **not** substitute for initial-exec on the range stack the *armed* handler reads. The
   process-wide SIGTRAP disposition needs an explicit arm-refcount so the restore fires
-  only when the last armed thread leaves (§1).
+  only when the last armed thread leaves (§1). Separately, the process-global **region
+  registry** needs a mutex once §1 allows concurrent scopes (§1 Changes) — a distinct
+  lock from the TLS work, and off the signal path.
 - **§2's live half needs PT hardware** (this dev host is AMD — no PT, ever). It
   ships self-skipping and hardware-gated; only the reconstruction half is
   CI-validated, exactly as [hardware-trace-plan](hardware-trace-plan.md) accepts

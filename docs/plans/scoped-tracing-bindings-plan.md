@@ -116,6 +116,15 @@ in the binding today (verified). New work:
   (`hwtrace.csproj`, `OutputType Exe`), not the packable NuGet lib (`asmtest-lib.csproj`,
   which includes only `Asmtest.cs`) — so add `HwTrace.cs` (or a new `AsmTrace.cs`) to the
   packable compile items, or ship `AsmTrace` in a separate hwtrace package.
+  **Analyzer note (CA2255).** A `[ModuleInitializer]` compiled into a *shipped library*
+  **does** fire for downstream consumers — it runs on first use of any type in the module,
+  in the consumer's process, not only when this assembly is built directly — which is
+  exactly what **CA2255** ("`[ModuleInitializer]` should not be used in libraries") flags.
+  That is *why* the initializer here is confined to a cheap, side-effect-free availability
+  probe with the real slot/SIGTRAP arming lazy-first-scope: suppress CA2255 with that
+  justification and keep the probe trim-/startup-safe. The lazy-first-scope arm makes the
+  initializer an *optimisation*, not a correctness dependency — a further reason it is safe
+  to ship.
 - **Emit contract.** `Dispose` **always renders** to populate `Path` (a ctor can't
   detect assignment); `emit` gates only the **sink write**, and `emit:false` / `sink:` is
   the opt-out for writing (never for producing `Path`). This is the analysis's "assume no
@@ -165,11 +174,20 @@ JIT-managed tier as .NET.)*
   (Zig's `defer` is skipped on `panic` — document it). The trace is then simply not
   emitted on the abnormal path, never emitted-partial-as-complete.
 - **Refcount / interpreter (Python, Ruby, Lua).** Easy, with real import-time arm
-  hooks. On **Ruby ≥ 3.0** the Fiber-scheduler / Ractor can resume `ensure` on a
-  **different** OS thread → the tid assert (shared-core §0.2) is load-bearing there.
-  Both features arrived in **3.0**, so on the **2.6–2.7 floor** fibers never change OS
-  thread and the tid assert is *defensive-only* — keep it (it is correct and required
-  for supported 3.0+ runtimes), but the hazard is a 3.0+ property, not a floor one.
+  hooks. **Ruby's OS-thread-migration hazard is Ractors and the M:N scheduler — not
+  fibers.** A Ruby **Fiber never migrates OS threads** in any released Ruby: fibers are
+  pinned to their creating thread (resuming one elsewhere raises `FiberError`), and the
+  Fiber *scheduler* is itself thread-local — so a `region()` whose `begin`/`ensure` sit
+  in one fiber close on the arming OS thread (fiber migration, Feature #13821, was
+  proposed but never merged). The genuine hazards, for both of which the §0.2 tid assert
+  is the load-bearing backstop, are: **(a) Ractors** (Ruby **3.0+**) — each runs on its
+  own native thread(s), so a scope entered in a different Ractor arms on a different OS
+  thread; and **(b) the M:N thread scheduler** (Ruby **3.3+**) — Ruby *threads* are
+  multiplexed onto a native-thread pool, so the OS thread under a Ruby thread can change
+  across a blocking point mid-scope (off by default for the main Ractor; on for non-main
+  Ractors or under `RUBY_MN_THREADS=1`). On the **2.6–2.7 floor** neither exists and the
+  tid assert is *defensive-only* — keep it regardless; it is correct and required once a
+  supported runtime enables Ractors or M:N.
   Lua's same-thread safety comes from the **single `lua_State`**, not coroutine
   pinning; note that LuaJIT permits **yield-across-`pcall`**, so a `region()` whose
   `fn` yields leaves the marker pair open across the suspension — rely on the tid
@@ -286,13 +304,21 @@ managed clean path respectively, and the shims inherit them for free once landed
   same site running concurrently) are handled by Core §0.4's idempotent `register`
   (repeated names reuse one slot) plus a tid/counter qualifier where the same site can
   run on multiple threads at once (Core §1 render selection) — not by inventing a
-  unique name per entry.
+  unique name per entry. **Watch the 64-char name ceiling:** `hw_region_t.name` is
+  `char[64]` ([src/hwtrace.c:339](../../src/hwtrace.c#L339)) and `register_region`
+  `snprintf`s into it ([:405](../../src/hwtrace.c#L405)), so a long absolute-path
+  `file:line` auto-name **truncates** and two sites sharing a 64-char prefix would alias
+  under §0.4's by-name dedup — derive the auto-name from the **basename** (+ line, + a
+  short hash of the full path if needed), not the full path.
 - **Zig `defer` is skipped on `panic`; Lua has no `<close>` under LuaJIT 5.1.** The
   scope still closes on the normal path; document the abnormal-exit gap (the trace
   is simply not emitted, never emitted-partial-as-complete).
-- **Ruby thread affinity is the real hazard in this slice** — Fiber-scheduler /
-  Ractor can resume `ensure` on another OS thread and disarm TF on the wrong one.
-  The tid assert catches it; a full fix is the managed slice's async-hop territory.
+- **Ruby thread affinity is the real hazard in this slice** — but via **Ractors** (own
+  native threads) and the **3.3+ M:N scheduler** (Ruby threads multiplexed across a
+  native-thread pool), **not fibers** (which never migrate OS threads — see the
+  interpreter-tier note). Either can land `ensure` on another OS thread and disarm TF on
+  the wrong one. The tid assert catches it; a full fix is the managed slice's async-hop
+  territory.
 
 ## Sources
 

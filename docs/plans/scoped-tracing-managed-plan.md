@@ -101,14 +101,28 @@ code-image recorder (`asmtest_codeimage_track`,
 [include/asmtest_codeimage.h:90](../../include/asmtest_codeimage.h#L90)) — the byte
 source the shared-core §2 decoder reads. New code lives in the .NET binding
 (`bindings/dotnet/hwtrace/`); a new `AsmTrace.Method(Delegate|MethodInfo)` static in
-[HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs).
+[HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs). **Two in-process caveats
+(confirmed against the runtime): (i)** an in-proc `EventListener` sees only methods
+JIT'd **after** it enables `JITKeyword` — there is **no** in-proc rundown of
+already-jitted methods the way an out-of-proc EventPipe session gets one on stop, so the
+pre-arm set is §D0.2's `EnablePerfMap` rundown or the self recorder, not this listener;
+**(ii)** handling a `MethodLoadVerbose` can itself trigger a JIT (reentrancy), so the
+callback must be allocation-light and re-entrancy-safe (do the `codeimage_track` on a
+copied `(address, size)`, not inline work that re-enters the JIT).
 
 **§D0.2 — Pre-arm rundown.** Methods JITted *before* arm are covered by a
 self-connected `DiagnosticsClient.EnablePerfMap(PerfMapType.JitDump)` (the only
 signature is `EnablePerfMap(PerfMapType)` — there is **no** `sendExisting` parameter;
-whether it emits records for methods compiled *before* the call must be confirmed
-against the target runtime, and the self recorder is the fallback if it does not),
-whose jitdump the shipped `asmtest_jitdump_find`
+the open question is now **resolved against the runtime**: the coreclr `PerfMap::Enable`
+path *does* rundown already-JIT'd methods on enable — it walks loaded R2R assemblies and
+the JIT code heap (`CodeHeapIterator` → `LogJITCompiledMethod`,
+[coreclr/vm/perfmap.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/perfmap.cpp))
+before logging new methods forward — so pre-arm methods **are** captured, with the self
+recorder as the version-independent fallback. Self-connecting `DiagnosticsClient` to its
+own pid works for a lightweight command like this, but the runtime documents a
+self-diagnostics **deadlock** risk for heavier self-operations (EventPipe rundown,
+self-dump); `EnablePerfMap` is light, but this is a reason to keep the self recorder as
+the no-IPC path), whose jitdump the shipped `asmtest_jitdump_find`
 ([include/asmtest_ptrace.h:331](../../include/asmtest_ptrace.h#L331)) /
 `asmtest_proc_perfmap_symbol` ([:303](../../include/asmtest_ptrace.h#L303)) already
 read. The design does **not** depend on this for the pure in-process case (the self
@@ -417,6 +431,18 @@ builds correct tags itself, and §D3 is single-thread — so the live capture→
 chain ships with no CI coverage. Add a **fake-hook harness** that drives the merge from
 a scripted hop sequence (not pre-tagged slices) to cover the hook→merge seam; the live
 per-runtime hook remains a disclosed forward-look gap.
+
+**§D4 cost (feasibility, disclose in docs).** Decoding each slice *at disable time*
+(what keeps `stitch` a pure host-testable merge) puts a PT drain + libipt decode **and** a
+fresh `perf_event_open` + AUX-ring `mmap` on the resuming thread **on every hop** — i.e.
+inside the `AsyncLocal` value-changed handler, which on .NET fires on **every** EC restore
+where the `ScopeId` differs. A workload that awaits in a tight loop would pay that per
+continuation. This is why the stitched mode is **explicit opt-in**, not the default, and
+why the default stays the honest thread-scope-with-mismatch-flag; the docs must set the
+"stitching extends the *window*, not the bandwidth economics" expectation (same posture as
+the Core §3 drain caveat). Mitigations to evaluate: reuse a per-thread event across hops on
+the same thread rather than re-opening, and batch-decode at close where the AUX ring is
+still intact (trading the host-testable-at-disable property for lower per-hop cost).
 
 ---
 
