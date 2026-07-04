@@ -92,7 +92,9 @@ CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/flags.o \
                        $(BUILD)/pic/fault.o $(BUILD)/pic/corpus_routines.o
 
 # name -> routine-address lookup, so bindings need no per-FFI symbol-address API.
-$(BUILD)/pic/corpus_routines.o: bindings/conformance/corpus_routines.c | $(BUILD)/pic
+# Depends on .build-flags (K5) so a knob flip rebuilds the fixture lib too.
+$(BUILD)/pic/corpus_routines.o: bindings/conformance/corpus_routines.c \
+                                $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 $(CORPUS_LIB): $(CORPUS_ROUTINE_OBJS)

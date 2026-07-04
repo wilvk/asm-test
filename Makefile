@@ -434,6 +434,16 @@ $(BUILD)/pic/%.o: examples/%.s include/asm.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(ASFLAGS) -fPIC -c $< -o $@
 endif
 
+# K5: the non-PIC test tree already depends on .build-flags (a knob flip —
+# SAN=1/COV=1/CSTD/ASM_SYNTAX — rebuilds it), but the PIC tree behind the shared
+# libs and bindings did not, so `make shared-emu && make SAN=1 shared-emu` would
+# relink stale, uninstrumented objects and never re-run the .so. Declare the
+# sentinel dependency for every PIC object (pic/drtrace_app.o keeps its own
+# .drapp-flags; the native-trace tree is covered in mk/native-trace.mk).
+$(BUILD)/pic/asmtest.o $(BUILD)/pic/capture.o $(BUILD)/pic/ffi.o \
+$(BUILD)/pic/trace.o $(BUILD)/pic/emu.o $(BUILD)/pic/fuzz.o \
+$(BUILD)/pic/disasm.o $(BUILD)/pic/assemble.o: $(BUILD)/.build-flags
+
 # Core shared lib: real versioned file + soname/dev symlinks beside it.
 shared: $(call shlib_dev,libasmtest)
 $(call shlib_real,libasmtest): $(PIC_OBJS)
@@ -566,17 +576,31 @@ include mk/win64.mk         # native Win64 (cross-compile + Wine)
 # left at its platform default (LSan on Linux; unsupported on macOS).
 ASAN_RUN_OPTIONS ?= handle_segv=0:handle_sigbus=0:handle_sigfpe=0:abort_on_error=0
 UBSAN_RUN_OPTIONS ?= halt_on_error=1:print_stacktrace=1
+# Run a sub-make target under the sanitizers with the shared run options.
+san_run = ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) $(MAKE) SAN=1
 sanitize:
 	$(MAKE) clean
-	ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) \
-	    $(MAKE) SAN=1 test
-	ASAN_OPTIONS=$(ASAN_RUN_OPTIONS) UBSAN_OPTIONS=$(UBSAN_RUN_OPTIONS) \
-	    $(MAKE) SAN=1 check
+	$(san_run) test
+	$(san_run) check
+	# K4: instrument the emulator tier too — emu.c (+ ffi/fuzz/trace/disasm) is the
+	# largest C surface the language bindings dlopen, and it sanitizes cleanly
+	# (verified: 0 ASan/UBSan findings). K5 makes its objects rebuild under SAN.
+	# Gated on libunicorn so a bare `make sanitize` still runs (widening once the
+	# dep is present). The hwtrace/ptrace/codeimage tiers are deliberately NOT
+	# sanitized here: single-step tracing counts the exact executed instruction
+	# stream and the eBPF detector watches code-emission addresses, both of which
+	# the sanitizers perturb (extra instrumented instructions / shifted layout) —
+	# so they report spurious trace-count failures, not memory bugs. They keep
+	# their own CI lanes (`hwtrace-test`, `codeimage-test`).
+	@if pkg-config --exists unicorn 2>/dev/null; then \
+	    echo "== sanitize: emu tier =="; $(san_run) emu-test; \
+	 else echo "== sanitize: SKIP emu tier (no libunicorn; make deps DEPS_ARGS=--emu) =="; fi
 
-# Coverage of the runner (src/asmtest.c). Forked children _exit() without
+# Coverage of the runner (src/asmtest.c) and, when libunicorn is present, the
+# emulator tier (emu/ffi/fuzz/trace/disasm). Forked children _exit() without
 # flushing gcov, so drive the suites with --no-fork (one process, normal exit)
 # across a few non-crashing invocations; .gcda accumulates across runs. Emits
-# asmtest.c.gcov, surfaced as a CI artifact (informational, not a gate).
+# per-TU *.gcov, surfaced as a CI artifact (informational, not a gate).
 coverage:
 	$(MAKE) clean
 	$(MAKE) COV=1 $(BUILD)/tests_positive $(BUILD)/tests_negative \
@@ -592,14 +616,55 @@ coverage:
 	-./$(BUILD)/test_simd --no-fork >/dev/null 2>&1     # vector capture/assert
 	-./$(BUILD)/test_refmatch --no-fork >/dev/null 2>&1 # differential engine
 	-./$(BUILD)/test_bench --bench >/dev/null 2>&1      # benchmark mode
+	# K3: cover the emulator tier too (emu.c + ffi/fuzz/trace/disasm) — the code
+	# the language bindings dlopen — when libunicorn is present. --no-fork so gcov
+	# flushes (forked children _exit without writing .gcda).
+	@if pkg-config --exists unicorn 2>/dev/null; then \
+	    $(MAKE) COV=1 $(BUILD)/test_emu && \
+	    ./$(BUILD)/test_emu --no-fork >/dev/null 2>&1 || true; \
+	 else echo "coverage: skip emu tier (no libunicorn)"; fi
 	gcov -o $(BUILD) src/asmtest.c
+	@pkg-config --exists unicorn 2>/dev/null && \
+	    gcov -o $(BUILD) src/emu.c src/fuzz.c src/trace.c src/disasm.c || true
 
-# Static analysis over the runner with clang-tidy (checks curated in
-# .clang-tidy). Informational by default — findings are warnings, not errors —
-# so the job reports a baseline without gating; promote to gating later.
+# Static analysis with clang-tidy (checks curated in .clang-tidy). Informational
+# by default — findings are warnings, not errors — so the job reports a baseline
+# without gating; promote to gating later.
+#
+# K3: analyze the whole C tree, not just the runner. The base group needs only
+# -Iinclude (the runner, glob matcher, trace substrate, and the single-step /
+# ptrace / hwtrace / call-descent backends — the code a latent memory bug would
+# hide in). Each optional-lib tier is analyzed only when its dev headers are
+# installed (empty pkg-config -> skip), so `make tidy` works with just clang-tidy
+# and widens as deps are added. Excluded: platform_win32.c (windows.h) and
+# drtrace_client.c (dr_api.h) — headers absent off their platforms; codeimage.c
+# needs the generated libbpf skeleton.
 CLANG_TIDY ?= clang-tidy
+TIDY_BASE_SRCS := src/asmtest.c src/glob_match.c src/trace.c src/trace_auto.c \
+                  src/descent.c src/hwtrace.c src/amd_backend.c \
+                  src/ss_backend.c src/ptrace_backend.c src/drtrace_app.c
 tidy:
-	$(CLANG_TIDY) src/asmtest.c -- $(CFLAGS)
+	$(CLANG_TIDY) $(TIDY_BASE_SRCS) -- $(CFLAGS)
+	@if pkg-config --exists unicorn 2>/dev/null; then \
+	    echo "== tidy: emu tier (unicorn) =="; \
+	    $(CLANG_TIDY) src/emu.c src/ffi.c src/fuzz.c -- $(CFLAGS) $(UNICORN_CFLAGS); \
+	 else echo "== tidy: SKIP emu tier (no libunicorn) =="; fi
+	@if pkg-config --exists capstone 2>/dev/null; then \
+	    echo "== tidy: disassembler (capstone) =="; \
+	    $(CLANG_TIDY) src/disasm.c -- $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF); \
+	 else echo "== tidy: SKIP disassembler (no capstone) =="; fi
+	@if pkg-config --exists keystone 2>/dev/null; then \
+	    echo "== tidy: assembler (keystone) =="; \
+	    $(CLANG_TIDY) src/assemble.c -- $(CFLAGS) $(KEYSTONE_CFLAGS); \
+	 else echo "== tidy: SKIP assembler (no keystone) =="; fi
+	@if pkg-config --exists libipt 2>/dev/null; then \
+	    echo "== tidy: intel-pt backend (libipt) =="; \
+	    $(CLANG_TIDY) src/pt_backend.c -- $(CFLAGS) $(LIBIPT_DEF) $(LIBIPT_CFLAGS); \
+	 else echo "== tidy: SKIP intel-pt backend (no libipt) =="; fi
+	@if pkg-config --exists libopencsd 2>/dev/null; then \
+	    echo "== tidy: coresight backend (opencsd) =="; \
+	    $(CLANG_TIDY) src/cs_backend.c -- $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS); \
+	 else echo "== tidy: SKIP coresight backend (no opencsd) =="; fi
 
 # Formatting with clang-format (style in .clang-format). `fmt` rewrites in place;
 # `fmt-check` reports drift and exits nonzero (so it CAN gate) but the CI job runs

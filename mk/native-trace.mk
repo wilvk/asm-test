@@ -637,6 +637,19 @@ $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
                           $(CODEIMAGE_SKEL) | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -fPIC -c $< -o $@
 
+# K5: rebuild the hardware/native-trace object tree on a build-knob flip
+# (SAN=1/COV=1/CSTD), like the core tree. drtrace_app.o already tracks its own
+# .drapp-flags (Keystone + CFLAGS); the rest gain the shared .build-flags
+# sentinel here, so `make shared-hwtrace && make SAN=1 shared-hwtrace` no longer
+# relinks stale, uninstrumented objects. codeimage.o is included (its bytecode
+# skeleton is regenerated separately, but the host object still tracks CFLAGS).
+NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
+    $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
+    $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
+    $(BUILD)/codeimage.o
+$(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
+    $(BUILD)/.build-flags
+
 shared-hwtrace: $(call shlib_dev,libasmtest_hwtrace)
 $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/pt_backend.o \

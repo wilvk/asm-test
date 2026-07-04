@@ -81,19 +81,19 @@ can't assemble — none of which any current gate catches.
 | R3 | Empty test selection exits 0 silently | Medium | improvement | ✅ fixed (step 2) |
 | T1 | `asmtest_dr_available()` disagrees with `dr_lib_path()`; no DR skip-reason | Medium | defect | ✅ fixed (step 2) |
 | E1 | Emulator run-off nondeterministic across reused handles | Medium | defect | ✅ fixed (step 2) |
-| K5 | `.build-flags` sentinel absent from PIC/native-trace object trees | Medium | defect | verified |
+| K5 | `.build-flags` sentinel absent from PIC/native-trace object trees | Medium | defect | ✅ fixed (step 3) |
 | D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | ✅ fixed (step 2) |
 | A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | ✅ fixed (step 2) |
 | N7 | `vec_add8d` missing from the corpus name table | Low | defect | ✅ fixed (step 2) |
 | K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | verified |
 | K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | verified |
-| K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | verified |
+| K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | ✅ fixed (step 3) |
 | E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | verified |
 | D2 | README doesn't funnel to the docs site; bindings/tracing invisible | High | docs | verified |
 | P1 | C core has no system-package presence (brew/deb/AUR/vcpkg/conan) | High | expansion | verified |
 | R4 | JUnit report incomplete (`<error>`, `time=`, `<system-out>`) | Medium | improvement | verified |
 | R6 | Bench mode has no dispersion stat and no machine-readable output | Medium | improvement | verified |
-| K4 | `make sanitize` never instruments the emu/asm/trace tiers | Medium | improvement | verified |
+| K4 | `make sanitize` never instruments the emu/asm/trace tiers | Medium | improvement | ✅ fixed (step 3, emu tier) |
 | K6 | Native-trace headers/libs not installed → installed-prefix can't build | Medium | improvement | verified |
 | K7 | Docs drift: `releasing.md` steps, arm64-CI claims, `ci.md` job list | Medium | docs | verified |
 | E4 | Fuzz corpus is built then discarded — no replay/persistence | Medium | improvement | verified |

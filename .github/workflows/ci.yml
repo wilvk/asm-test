@@ -366,9 +366,14 @@ jobs:
   sanitize:
     name: sanitize (asan+ubsan)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      # libunicorn (+ capstone) so `make sanitize` also instruments the emulator
+      # tier; the hwtrace single-step tier builds/runs with no extra dep, and
+      # codeimage self-skips here (no bpftool). See the sanitize target (K4).
+      - name: Install the emulator tier deps
+        run: make deps DEPS_ARGS=--emu
       - name: Build and run under sanitizers
         run: make sanitize
 
@@ -395,8 +400,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - name: Install clang-tidy
-        run: make deps DEPS_ARGS=--tidy
+      # clang-tidy, plus libunicorn (+ capstone) so tidy also analyzes the
+      # emulator and disassembler tiers, not just the base group (K3). The
+      # keystone / libipt / OpenCSD tiers self-skip (their libs aren't installed).
+      - name: Install clang-tidy + emulator tier deps
+        run: make deps DEPS_ARGS="--tidy --emu"
       - name: Run clang-tidy
         run: make tidy
 
@@ -424,13 +432,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      # libunicorn (+ capstone) so coverage spans the emulator tier too, not just
+      # the runner (K3).
+      - name: Install the emulator tier deps
+        run: make deps DEPS_ARGS=--emu
       - name: Generate coverage
         run: make coverage
       - name: Upload coverage report
         uses: actions/upload-artifact@v5
         with:
           name: asmtest-coverage
-          path: asmtest.c.gcov
+          path: "*.gcov"
           if-no-files-found: error
 
   # Release payloads: build the prebuilt native libraries per OS/arch and upload
