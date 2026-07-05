@@ -41,8 +41,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `register`, `begin`/`end`/`begin_scope`/`render_scope`) drives it; the `src/hwtrace.c`
   gate `HWTRACE_LIFECYCLE` is a superset of `__linux__`, so the Linux path is unchanged
   (verified: `make hwtrace-test` 61 pass on macOS; `make docker-hwtrace` 178 pass on
-  Linux). Off-platform hosts self-skip with "single-step backend is x86-64 Linux/macOS
-  only (Windows/AArch64 planned)".
+  Linux). The binding-facing W^X executable-memory helper
+  (`asmtest_hwtrace_exec_alloc`/`_exec_free`, `src/hwtrace.c`) now runs on x86-64 Darwin
+  too — its `PROT_NONE`→RW→RX `mmap`/`mprotect` path is plain POSIX and identical to the
+  Linux one — so the per-binding single-step lanes are reachable natively on macOS, not
+  just the C suite (verified on this host: `make hwtrace-{python,cpp,ruby}-test` pass,
+  with the Linux-only ptrace/codeimage backends self-skipping). Off-platform hosts
+  self-skip with "single-step backend is x86-64 Linux/macOS only (Windows/AArch64
+  planned)".
 - **Scoped in-process tracing (the `using`/RAII/`with` model).** A cooperative,
   developer-ergonomics face of the tracing machinery: bracket a region of a program's
   own code with a scope construct — `using (new AsmTrace())` in C#, RAII in C++/Rust,

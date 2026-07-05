@@ -42,7 +42,8 @@
 #endif
 
 #if defined(__APPLE__)
-#include <pthread.h> /* g_reg_lock, the g_arm_tid __thread, pthread_threadid_np */
+#include <pthread.h>  /* g_reg_lock, the g_arm_tid __thread, pthread_threadid_np */
+#include <sys/mman.h> /* asmtest_hwtrace_exec_alloc W^X mmap/mprotect (x86-64 Darwin) */
 #endif
 
 /* The EFLAGS.TF single-step tier (ss_backend.c) runs on x86-64 Linux AND macOS; the
@@ -1050,7 +1051,11 @@ void asmtest_hwtrace_shutdown(void) {
 /* ------------------------------------------------------------------ */
 int asmtest_hwtrace_exec_alloc(const void *bytes, size_t len, void **base_out,
                                size_t *len_out) {
-#if defined(__linux__)
+/* The PROT_NONE→RW→RX W^X dance is plain POSIX mmap/mprotect, identical on x86-64
+ * Linux and x86-64 macOS — the two hosts the single-step tier runs on. (Apple Silicon
+ * would additionally need MAP_JIT + pthread_jit_write_protect_np, but the single-step
+ * front-end is x86-64-Darwin only and self-skips on AArch64, so this never runs there.) */
+#if defined(__linux__) || defined(__APPLE__)
     if (bytes == NULL || len == 0 || base_out == NULL)
         return ASMTEST_HW_EINVAL;
     /* PROT_NONE first, then RW to copy, then RX: never simultaneously W and X. */
@@ -1081,7 +1086,7 @@ int asmtest_hwtrace_exec_alloc(const void *bytes, size_t len, void **base_out,
 }
 
 void asmtest_hwtrace_exec_free(void *base, size_t len) {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     if (base != NULL && len != 0)
         munmap(base, len);
 #else
