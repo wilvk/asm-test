@@ -14,9 +14,9 @@ native, real-CPU tiers:
 | Page | Backend(s) | Records | Runs where |
 |---|---|---|---|
 | [Execution traces and coverage](traces.md) | Unicorn emulator | guest blocks + instructions, coverage unions, source-line maps, lcov | any host |
-| [Native runtime tracing](native-tracing.md) | DynamoRIO (software DBI) + single-step (`EFLAGS.TF`) | native blocks + instructions, in-process | Linux x86-64 (single-step: any x86-64 Linux) |
-| [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step everywhere) |
-| [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | any x86-64 Linux (single-step) |
+| [Native runtime tracing](native-tracing.md) | DynamoRIO (software DBI) + single-step (`EFLAGS.TF`) | native blocks + instructions, in-process | DynamoRIO: Linux x86-64; single-step: x86-64 Linux **or macOS** |
+| [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS) |
+| [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
 
 Start with the [emulator trace model](traces.md) for the shared trace API,
 coverage helpers, and reporting — the concepts carry across every backend. The

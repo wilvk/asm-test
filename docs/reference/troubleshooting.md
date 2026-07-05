@@ -68,7 +68,7 @@ decoder library, or without perf permission. The `hwtrace-test` C job validates
 `perf_event_paranoid` low enough (and, in a container, `--cap-add=PERFMON`).
 Lower it with `sudo sysctl kernel.perf_event_paranoid=1` (or `-1`). The
 **single-step** backend needs no PMU/perf/privilege — it runs on any x86-64 Linux
-and is what the language-binding wrappers use.
+**or macOS** host and is what the language-binding wrappers use.
 
 ## DynamoRIO in-process tracing
 

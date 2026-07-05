@@ -28,6 +28,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Single-step native-trace tier: macOS-Intel front-end.** The exact, unprivileged
+  EFLAGS.TF (`#DB` → `SIGTRAP`) single-step backend now runs in-process on x86-64
+  **macOS**, not just Linux — the first Phase-5 front-end a Linux CI host (or
+  Docker-on-Mac, whose containers are Linux) cannot exercise. XNU delivers the
+  single-step trap as a BSD `SIGTRAP`, so re-asserting `TF` in the saved thread state
+  re-arms stepping across `sigreturn` exactly as on Linux; the only platform deltas are
+  the feature-test macro (`_DARWIN_C_SOURCE`) and the mcontext field access
+  (`uc_mcontext->__ss.__rip`/`__rflags` vs. `gregs[REG_RIP]`/`[REG_EFL]`), both isolated
+  behind shims in `src/ss_backend.c`. `asmtest_hwtrace_available(SINGLESTEP)` now returns
+  1 on x86-64 Darwin and the whole `asmtest_hwtrace_*` facade (region table, `init`/
+  `register`, `begin`/`end`/`begin_scope`/`render_scope`) drives it; the `src/hwtrace.c`
+  gate `HWTRACE_LIFECYCLE` is a superset of `__linux__`, so the Linux path is unchanged
+  (verified: `make hwtrace-test` 61 pass on macOS; `make docker-hwtrace` 178 pass on
+  Linux). Off-platform hosts self-skip with "single-step backend is x86-64 Linux/macOS
+  only (Windows/AArch64 planned)".
 - **Scoped in-process tracing (the `using`/RAII/`with` model).** A cooperative,
   developer-ergonomics face of the tracing machinery: bracket a region of a program's
   own code with a scope construct — `using (new AsmTrace())` in C#, RAII in C++/Rust,

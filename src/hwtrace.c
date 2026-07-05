@@ -41,6 +41,41 @@
 #endif
 #endif
 
+#if defined(__APPLE__)
+#include <pthread.h> /* g_reg_lock, the g_arm_tid __thread, pthread_threadid_np */
+#endif
+
+/* The EFLAGS.TF single-step tier (ss_backend.c) runs on x86-64 Linux AND macOS; the
+ * Intel PT / AMD LBR / CoreSight / perf machinery is Linux-only. Two gates keep the
+ * split honest without duplicating the facade:
+ *   HWTRACE_HAVE_SINGLESTEP — x86-64 Linux OR macOS: the stepper + its handle path.
+ *   HWTRACE_LIFECYCLE       — the shared facade (region table + mutex, init/register,
+ *                             begin/end/scope single-step dispatch, arm-tid backstop).
+ * On Linux HWTRACE_LIFECYCLE is ALWAYS set (it is a superset of __linux__), so every
+ * Linux code path below is byte-for-byte unchanged; each perf/PT/AMD block stays behind
+ * a narrower __linux__ guard, so it simply drops out of the macOS build. */
+#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
+#define HWTRACE_HAVE_SINGLESTEP 1
+#endif
+#if defined(__linux__) || defined(HWTRACE_HAVE_SINGLESTEP)
+#define HWTRACE_LIFECYCLE 1
+#endif
+
+/* Portable OS thread id for the arming-thread backstop: SYS_gettid on Linux,
+ * pthread_threadid_np on macOS. Only ever compared for equality (a cross-thread-close
+ * tripwire), never used as an index, so the 64->32 bit narrowing on macOS is benign. */
+#if defined(HWTRACE_LIFECYCLE)
+static int hw_current_tid(void) {
+#if defined(__linux__)
+    return (int)syscall(SYS_gettid);
+#else
+    __uint64_t t = 0;
+    pthread_threadid_np(NULL, &t);
+    return (int)t;
+#endif
+}
+#endif
+
 /* Decoder entry points (defined in pt_backend.c / cs_backend.c, or the no-decoder
  * stubs below). Decode the raw AUX bytes against [base, base+len) into *trace. */
 int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
@@ -72,7 +107,7 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
  * backends there is no post-pass decode: begin() arms TF and the SIGTRAP handler
  * fills the trace live; end() disarms. base/len bound the region, trace is the
  * sink (block normalization needs the Capstone length-decoder). */
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(HWTRACE_HAVE_SINGLESTEP)
 int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace);
 /* §1: handle-producing push (per-thread range stack) + calling-thread frame lookup. */
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
@@ -91,9 +126,11 @@ int asmtest_amd_decoder_present(void);
 /* Gating: detect-and-skip                                             */
 /* ------------------------------------------------------------------ */
 
+#if defined(__linux__)
 static const char *pmu_name(asmtest_trace_backend_t b) {
     return b == ASMTEST_HWTRACE_INTEL_PT ? "intel_pt" : "cs_etm";
 }
+#endif
 
 /* Read the PMU type id from sysfs, or -1 if the node is absent. */
 static int pmu_type(asmtest_trace_backend_t b) {
@@ -167,12 +204,13 @@ static int cpu_matches(asmtest_trace_backend_t b) {
     case ASMTEST_HWTRACE_AMD_LBR:
         return vendor_is("AuthenticAMD");
     case ASMTEST_HWTRACE_SINGLESTEP:
-        /* TF/#DB single-step is baseline x86-64 — any vendor, Intel or AMD — but
-         * the whole capture lifecycle (begin/end, asmtest_ss_*) is implemented only
-         * under Linux; off Linux it is a no-op stub. Gate on __linux__ too so
-         * available() self-skips (with the "Linux x86-64 only" reason) instead of
-         * reporting available and yielding an empty "complete" trace. */
-#if defined(__x86_64__) && defined(__linux__)
+        /* TF/#DB single-step is baseline x86-64 — any vendor, Intel or AMD — and the
+         * capture lifecycle (begin/end, asmtest_ss_*) is implemented for x86-64 Linux
+         * AND macOS (both deliver the #DB as an in-process SIGTRAP). Elsewhere it is a
+         * no-op stub, so gate to HWTRACE_HAVE_SINGLESTEP: available() then self-skips
+         * (with the "x86-64 Linux/macOS only" reason) on Windows/AArch64/etc. instead
+         * of reporting available and yielding an empty "complete" trace. */
+#if defined(HWTRACE_HAVE_SINGLESTEP)
         return 1;
 #else
         return 0;
@@ -277,7 +315,7 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
                 ? "not a GenuineIntel x86-64 host"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
             : (backend == ASMTEST_HWTRACE_SINGLESTEP)
-                ? "single-step backend is Linux x86-64 only (Windows/macOS "
+                ? "single-step backend is x86-64 Linux/macOS only (Windows/AArch64 "
                   "planned)"
                 : "not an AuthenticAMD x86-64 host";
     else if (backend == ASMTEST_HWTRACE_SINGLESTEP)
@@ -368,7 +406,7 @@ static int g_inited = 0;
  * scans it — a data race once concurrent multi-thread scopes are blessed. A plain
  * mutex (registration is off the hot capture path; the single-step handler never
  * touches the registry, so no async-signal-safety constraint) makes it safe. */
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
 static pthread_mutex_t g_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
@@ -390,17 +428,21 @@ static __thread size_t g_base_sz;
 static __thread void *g_aux_map; /* AUX trace ring                          */
 static __thread size_t g_aux_sz;
 static __thread hw_region_t *g_active;
-/* §0.2: OS thread id (SYS_gettid) that armed this thread's active capture, -1 idle. */
+#endif
+/* §0.2: OS thread id that armed this thread's active capture, -1 idle. Shared by the
+ * single-step backstop too (set in the ss begin/end paths), so it lives outside the
+ * Linux-only perf block above — the macOS single-step build reads/writes it. */
+#if defined(HWTRACE_LIFECYCLE)
 static __thread int g_arm_tid = -1;
 #endif
 
-static size_t round_pages(size_t want, size_t dflt) {
-    long pg = 4096;
+/* AUX/data-ring sizing for the perf backends — Linux-only (its callers are the
+ * PT/AMD perf paths). Left out of the macOS single-step build entirely. */
 #if defined(__linux__)
-    pg = sysconf(_SC_PAGESIZE);
+static size_t round_pages(size_t want, size_t dflt) {
+    long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
-#endif
     size_t v = want ? want : dflt;
     size_t pages = (v + (size_t)pg - 1) / (size_t)pg;
     size_t p = 1; /* AUX/data ring needs a power-of-two page count */
@@ -408,6 +450,7 @@ static size_t round_pages(size_t want, size_t dflt) {
         p <<= 1;
     return p * (size_t)pg;
 }
+#endif
 
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts) {
     if (opts == NULL)
@@ -444,7 +487,7 @@ int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
      * never grows, and the MAX_REGIONS ceiling counts DISTINCT scope sites. (This
      * find-then-refresh-or-append is a read-modify-write over g_regions; §1 runs it
      * under the registry mutex once concurrent scopes are blessed.) */
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     pthread_mutex_lock(&g_reg_lock); /* §1: RMW over the shared registry */
 #endif
     hw_region_t *existing = find_region_unlocked(name);
@@ -452,13 +495,13 @@ int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
         existing->base = base;
         existing->len = len;
         existing->trace = trace;
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
         pthread_mutex_unlock(&g_reg_lock);
 #endif
         return ASMTEST_HW_OK;
     }
     if (g_nregions >= MAX_REGIONS) {
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
         pthread_mutex_unlock(&g_reg_lock);
 #endif
         return ASMTEST_HW_EFULL;
@@ -470,7 +513,7 @@ int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
     r->len = len;
     r->trace = trace;
     r->arm_tid = 0; /* idle until begin */
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     pthread_mutex_unlock(&g_reg_lock);
 #endif
     return ASMTEST_HW_OK;
@@ -484,11 +527,11 @@ static hw_region_t *find_region_unlocked(const char *name) {
 }
 
 static hw_region_t *find_region(const char *name) {
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     pthread_mutex_lock(&g_reg_lock);
 #endif
     hw_region_t *r = find_region_unlocked(name);
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     pthread_mutex_unlock(&g_reg_lock);
 #endif
     return r;
@@ -737,7 +780,7 @@ static void hwtrace_end_amd(void) {
 /* ------------------------------------------------------------------ */
 
 int asmtest_hwtrace_try_begin(const char *name) {
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
         return ASMTEST_HW_ESTATE;
 #if defined(__x86_64__)
@@ -749,13 +792,14 @@ int asmtest_hwtrace_try_begin(const char *name) {
         hw_region_t *r = find_region(name);
         if (r == NULL)
             return ASMTEST_HW_EINVAL;
-        int tid = (int)syscall(SYS_gettid);
+        int tid = hw_current_tid();
         r->arm_tid = tid;  /* per-region cross-thread backstop */
         g_arm_tid = tid;   /* best-effort most-recent-arming-tid accessor */
         return asmtest_ss_begin(r->base, r->len,
                                 r->trace); /* OK / EFULL / EINVAL */
     }
 #endif
+#if defined(__linux__)
     /* PT / AMD / CoreSight: still the process-global single slot (per-thread AUX
      * migration is forward-look, needs PT hardware to validate). */
     if (g_fd >= 0 || g_active != NULL)
@@ -827,6 +871,11 @@ int asmtest_hwtrace_try_begin(const char *name) {
     ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
     ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0);
     return ASMTEST_HW_OK;
+#else  /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step is the only backend,
+        * handled above; a non-single-step backend never passes init()'s available() */
+    (void)name;
+    return ASMTEST_HW_EUNAVAIL;
+#endif
 #else
     (void)name;
     return ASMTEST_HW_ENOSYS;
@@ -842,7 +891,7 @@ void asmtest_hwtrace_begin(const char *name) {
 
 /* §0.2: the OS thread id that armed the active capture (-1 when idle). */
 int asmtest_hwtrace_arm_tid(void) {
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     return g_arm_tid;
 #else
     return -1;
@@ -888,7 +937,7 @@ static int aux_data_ring_truncated(void) {
 #endif
 
 void asmtest_hwtrace_end(const char *name) {
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
 #if defined(__x86_64__)
     /* §1: single-step closes the CALLING thread's top frame (per-thread range
      * stack). If the closing thread differs from the region's arming thread, the
@@ -899,13 +948,14 @@ void asmtest_hwtrace_end(const char *name) {
         if (name != NULL) {
             hw_region_t *r = find_region(name);
             if (r != NULL && r->arm_tid != 0 &&
-                r->arm_tid != (int)syscall(SYS_gettid) && r->trace != NULL)
+                r->arm_tid != hw_current_tid() && r->trace != NULL)
                 r->trace->truncated = true;
         }
         asmtest_ss_end(); /* disarms TF + restores SIGTRAP; trace already filled */
         return;
     }
 #endif
+#if defined(__linux__)
     (void)name;
     if (g_active == NULL) {
         /* No active region, but release any orphaned perf fd/mmaps (defensive:
@@ -930,7 +980,7 @@ void asmtest_hwtrace_end(const char *name) {
      * truncated rather than presenting it as complete. This is the C half of the
      * shims' thread-scope backstop; it errs toward false-truncated over
      * false-complete. */
-    if (g_arm_tid != -1 && (int)syscall(SYS_gettid) != g_arm_tid &&
+    if (g_arm_tid != -1 && hw_current_tid() != g_arm_tid &&
         g_active->trace != NULL)
         g_active->trace->truncated = true;
 #if defined(__x86_64__)
@@ -971,6 +1021,9 @@ void asmtest_hwtrace_end(const char *name) {
     g_fd = -1;
     g_active = NULL;
     g_arm_tid = -1;
+#else  /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step returned above */
+    (void)name;
+#endif
 #else
     (void)name;
 #endif
@@ -981,6 +1034,11 @@ void asmtest_hwtrace_shutdown(void) {
     /* g_active covers an unbalanced region for every backend, including the
      * single-step one (g_fd stays -1): end() must still run to disarm TF. */
     if (g_fd >= 0 || g_active != NULL)
+        asmtest_hwtrace_end(NULL);
+#elif defined(HWTRACE_LIFECYCLE)
+    /* macOS single-step: no perf fd / active-slot to test; end(NULL) disarms this
+     * thread's TF if a scope was left open (a no-op when the range stack is empty). */
+    if (g_inited)
         asmtest_hwtrace_end(NULL);
 #endif
     g_inited = 0;
@@ -1123,7 +1181,7 @@ int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out) 
         out->idx = 0xffffffffu;
         out->gen = 0;
     }
-#if defined(__linux__)
+#if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
         return ASMTEST_HW_ESTATE;
 #if defined(__x86_64__)
@@ -1131,7 +1189,7 @@ int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out) 
         hw_region_t *r = find_region(name);
         if (r == NULL)
             return ASMTEST_HW_EINVAL;
-        int tid = (int)syscall(SYS_gettid);
+        int tid = hw_current_tid();
         r->arm_tid = tid;
         g_arm_tid = tid;
         uint32_t idx = 0, gen = 0;
@@ -1156,7 +1214,7 @@ int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out) 
 
 int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char *buf,
                                  size_t buflen) {
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(HWTRACE_HAVE_SINGLESTEP)
     const void *base = NULL;
     size_t len = 0;
     asmtest_trace_t *trace = NULL;

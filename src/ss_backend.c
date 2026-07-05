@@ -36,9 +36,28 @@
  * bounds-checked store of each in-region RIP offset into a preallocated buffer,
  * and re-asserting TF in the saved context. All Capstone-based block normalization
  * (which allocates) runs in a post-pass in asmtest_ss_end(), in normal context.
+ *
+ * MACOS-INTEL FRONT-END (zen2-singlestep-trace-plan.md Phase 5). The mechanism is
+ * identical on Darwin/x86-64: TF is set with the same pushfq/popfq, the #DB the CPU
+ * raises is translated by XNU into a BSD SIGTRAP (EXC_BREAKPOINT falls through to the
+ * signal path when no Mach exception port claims it — i.e. no debugger attached), and
+ * re-asserting TF in the saved thread state re-arms stepping across sigreturn exactly
+ * as on Linux. The ONLY platform differences are (1) the feature-test macro that
+ * exposes the machine context and (2) the mcontext field access: Linux reaches RIP/
+ * EFLAGS through uc_mcontext.gregs[REG_RIP]/[REG_EFL], Darwin through the
+ * uc_mcontext POINTER's __ss.__rip/__ss.__rflags. Both are isolated behind the small
+ * SS_RIP()/SS_SET_TF() shims below; everything else (TLS range stack, arm-refcount,
+ * Capstone post-pass) is shared verbatim.
  */
-/* Must precede every include so glibc exposes REG_RIP/REG_EFL in <ucontext.h>. */
+/* Must precede every include so the machine context is fully exposed: glibc hides
+ * REG_RIP/REG_EFL behind _GNU_SOURCE; Darwin hides ucontext_t/mcontext_t behind the
+ * default (non-strict) visibility, which _DARWIN_C_SOURCE guarantees even under
+ * -std=c11 (which would otherwise define __STRICT_ANSI__ and hide them). */
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#else
 #define _GNU_SOURCE
+#endif
 
 #include "asmtest_trace.h"
 
@@ -50,13 +69,28 @@
 #define ASMTEST_HW_EFULL  (-6)
 #define ASMTEST_HW_ENOSYS (-5)
 
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
 
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
+
+/* Machine-context shims (the only platform-specific reads in the handler). Darwin's
+ * uc_mcontext is a pointer to struct __darwin_mcontext64; Linux's is an inline struct
+ * with a gregs[] array indexed by REG_RIP/REG_EFL. */
+#if defined(__APPLE__)
+#define SS_RIP(uc)    ((uint64_t)(uc)->uc_mcontext->__ss.__rip)
+#define SS_SET_TF(uc) ((uc)->uc_mcontext->__ss.__rflags |= SS_TF)
+#else
+#define SS_RIP(uc)    ((uint64_t)(uc)->uc_mcontext.gregs[REG_RIP])
+#define SS_SET_TF(uc) ((uc)->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_TF)
+#endif
 
 #define SS_TF 0x100ULL /* EFLAGS.TF, bit 8 */
 
@@ -136,7 +170,7 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
     if (d <= 0)
         return; /* this thread isn't stepping (e.g. mid-disarm after depth->0) */
     ucontext_t *uc = (ucontext_t *)uctx;
-    uint64_t rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    uint64_t rip = SS_RIP(uc);
 
     for (int i = 0; i < d; i++) {
         ss_frame_t *f = &tls_frames[i];
@@ -149,7 +183,7 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
     }
 
     /* Re-assert TF so sigreturn resumes stepping (in-region OR in a callee). */
-    uc->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_TF;
+    SS_SET_TF(uc);
 }
 
 /* Push a capture frame on this thread. On the OUTERMOST push, install the
@@ -328,7 +362,7 @@ int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
     return 1;
 }
 
-#else /* not Linux x86-64 — link-compatible stubs */
+#else /* not x86-64 Linux/macOS — link-compatible stubs */
 
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
                         uint32_t *out_idx, uint32_t *out_gen) {

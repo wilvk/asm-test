@@ -37,7 +37,7 @@ caller can pick whichever the host can run without changing the rest of its code
 | `ASMTEST_HWTRACE_INTEL_PT` | Intel PT TNT/TIP/PSB packets → kernel AUX ring (`perf_event_open`) | libipt | bare-metal **Intel** x86-64 + perf privilege | ring size |
 | `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 3 BRS / Zen 4–5 LbrExtV2 branch stack | built-in | bare-metal **AMD** (Zen 3+) + perf branch-stack | 16-deep stack per sample; **Tier-B stitching** decodes past it — ceiling is the data ring (`data_size`) |
 | `ASMTEST_HWTRACE_CORESIGHT` | ARM ETM/ETE waypoints → AUX ring | OpenCSD | specific **AArch64** boards (scaffold) | ring size |
-| `ASMTEST_HWTRACE_SINGLESTEP` | `EFLAGS.TF` → `#DB` → `SIGTRAP` after every instruction | Capstone length-decoder | **any x86-64 Linux** (no PMU/perf/privilege/decoder) | none — exact + complete |
+| `ASMTEST_HWTRACE_SINGLESTEP` | `EFLAGS.TF` → `#DB` → `SIGTRAP` after every instruction | Capstone length-decoder | **any x86-64 Linux or macOS** (no PMU/perf/privilege/decoder) | none — exact + complete |
 
 The PT and CoreSight backends observe *out of band* and are the recommended
 backends for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where in-process
@@ -393,7 +393,7 @@ The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
   gap or sample loss the trace comes back `truncated` — re-resolve under
   `CEILING_FREE`.
 - **CoreSight is a scaffold** pending AArch64 board access — it always self-skips.
-- **Single-step is Linux x86-64 only** for now (macOS/Windows planned); the
+- **Single-step is x86-64 Linux/macOS** (Windows/AArch64 planned); the
   out-of-process ptrace form adds AArch64. It targets well-behaved compute routines
   with stable bytes — self-modifying code, `POPF`/`IRET`, and in-routine signal
   handlers are flagged `truncated`, not emitted as complete.

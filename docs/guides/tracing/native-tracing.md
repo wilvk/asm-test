@@ -10,7 +10,7 @@ the **real CPU, in-process**:
 | Emulator trace ([traces.md](traces.md)) | Unicorn | guest blocks + instructions | any host |
 | **DynamoRIO native trace** | DynamoRIO (software DBI) | native blocks + instructions | Linux x86-64 |
 | **Hardware trace** | Intel PT / ARM CoreSight | native blocks + instructions | bare-metal Intel / AArch64 |
-| **Single-step trace** | EFLAGS.TF → SIGTRAP (debug exception) | native blocks + instructions | **any x86-64 Linux** (no PMU/perf/privilege) |
+| **Single-step trace** | EFLAGS.TF → SIGTRAP (debug exception) | native blocks + instructions | **any x86-64 Linux or macOS** (no PMU/perf/privilege) |
 
 All three fill the **same** `asmtest_trace_t` shape (ordered instruction offsets,
 distinct basic-block offsets, totals, a truncation bit) — see
@@ -349,8 +349,8 @@ The single-step backend (`ASMTEST_HWTRACE_SINGLESTEP`) is the **portable** membe
 the hardware tier: it produces the **same exact, complete** `asmtest_trace_t` offsets
 as Intel PT — byte-for-byte the Unicorn/DynamoRIO instruction and block streams — but
 needs **no PMU, no `perf_event`, no privilege, no decoder library, and no specific
-CPU**. It runs on **any x86-64 Linux host**: Intel, AMD of any generation (including
-Zen 2, which has no branch-trace facility at all), VMs, standard CI, and a **plain
+CPU**. It runs on **any x86-64 Linux or macOS host**: Intel, AMD of any generation
+(including Zen 2, which has no branch-trace facility at all), VMs, standard CI, and a **plain
 unprivileged container** (no `--privileged`, no `CAP_PERFMON`, no seccomp changes).
 
 ### How it works
@@ -388,9 +388,10 @@ if (asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
 }
 ```
 
-`asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)` returns 1 on x86-64 Linux when
-Capstone is linked (for block normalization), and self-skips elsewhere with a specific
-reason (e.g. *"single-step backend is Linux x86-64 only (Windows/macOS planned)"*).
+`asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)` returns 1 on x86-64 Linux **or
+macOS** when Capstone is linked (for block normalization), and self-skips elsewhere with
+a specific reason (e.g. *"single-step backend is x86-64 Linux/macOS only (Windows/AArch64
+planned)"*).
 The supported target is a **well-behaved compute routine** — no in-routine
 `POPF`/`IRET`/signal handlers or self-modifying code, which break naive stepping and
 are flagged `truncated` rather than emitted as complete (the same "registered bytes

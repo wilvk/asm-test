@@ -208,7 +208,8 @@ $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Single-step (EFLAGS.TF / SIGTRAP) backend: no external library at all, just the
 # same Capstone length-decoder (disasm.o) for block normalization. Runs on ANY
-# x86-64 Linux host with no PMU/perf/privilege — the universal hardware-tier path.
+# x86-64 Linux OR macOS host with no PMU/perf/privilege — the universal hardware-tier
+# path (both deliver the #DB single-step trap as an in-process SIGTRAP).
 $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Cross-tier orchestrator (asmtest_trace_auto.h): no external library; calls

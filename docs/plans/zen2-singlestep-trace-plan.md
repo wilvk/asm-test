@@ -103,19 +103,32 @@ unprivileged container by `make hwtrace-test`. The **region resolvers**
 `asmtest_proc_region_by_addr` (`/proc/<pid>/maps`) and `asmtest_proc_perfmap_symbol`
 (`/tmp/perf-<pid>.map`, the JIT text format V8/Node/.NET/OpenJDK emit) discover the
 `(base, len)` to hand `trace_attached`, completing the managed-runtime flow (resolve →
-attach → trace → detach) end to end in the live test. The remaining Phase-5 fronts
-(Windows VEH, macOS-Intel, and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is
-kernel-only, so out-of-process is its *only* single-step form) stay forward-look, as
-does the richer **binary jitdump** code-image reader (the text perf-map is the portable
-lowest common denominator already supported).
+attach → trace → detach) end to end in the live test. The **macOS-Intel front-end has
+since landed**: the identical in-process EFLAGS.TF stepper drives it, because XNU
+delivers the resulting `#DB` as a BSD `SIGTRAP` (an `EXC_BREAKPOINT` that falls through
+to the signal path when no Mach exception port claims it), so re-asserting `TF` in the
+saved thread state re-arms stepping across `sigreturn` exactly as on Linux. The only
+platform deltas are the feature-test macro (`_DARWIN_C_SOURCE`) and the mcontext field
+access (`uc_mcontext->__ss.__rip`/`__rflags` vs. Linux's `gregs[REG_RIP]`/`[REG_EFL]`),
+isolated behind two shims in [src/ss_backend.c](../../src/ss_backend.c); the
+[src/hwtrace.c](../../src/hwtrace.c) facade runs the full single-step lifecycle on
+x86-64 Darwin, validated live by `make hwtrace-test` there (61 pass) with the Linux
+tier unchanged (`make docker-hwtrace`, 178 pass). The remaining Phase-5 fronts
+(Windows VEH and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
+so out-of-process is its *only* single-step form) stay forward-look, as does the richer
+**binary jitdump** code-image reader (the text perf-map is the portable lowest common
+denominator already supported).
 
 ---
 
-## Phase 0 — Backend gating & feature detection *(planned)*
+## Phase 0 — Backend gating & feature detection *(shipped; macOS-Intel added)*
 
 **Goal.** Make `asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)` return 1 on
-any Linux x86-64 host (no privilege, no PMU, no decoder library required) and
-self-skip elsewhere with a specific reason.
+any x86-64 Linux **or macOS** host (no privilege, no PMU, no decoder library required)
+and self-skip elsewhere with a specific reason. *(Shipped: the gate is
+`HWTRACE_HAVE_SINGLESTEP` = `__x86_64__ && (__linux__ || __APPLE__)`; the skip reason
+off-platform reads "single-step backend is x86-64 Linux/macOS only (Windows/AArch64
+planned)".)*
 
 **Work.**
 

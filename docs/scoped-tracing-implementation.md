@@ -223,9 +223,27 @@ needs.
 | Core §3.1(b) emission **slicing** (trace-position ↔ emission-timestamp correlation) | **Intel PT** whole-window decode for per-IP positions (the eBPF detector itself is done) |
 | Core §3.2 **live** AMD `data_tail` mid-capture drain | **AMD Zen 3+** — deferred: live capture is PMU-variable (no deterministic assertion); reconstruction is tested |
 | Core §3.2 PT `aux_tail` circular drain | **bare-metal Intel PT** |
-| Single-step Windows/macOS front-ends | **Windows (VEH)** / **macOS-Intel** hosts |
+| Single-step **Windows** front-end (VEH) | a **Windows** host (the macOS-Intel front-end has since landed — see the note below) |
 | §D0 live managed-JIT capability (`MethodLoadVerbose`, `AsyncLocal` hook) + §D1/§D2 async-hop hooks | a **live .NET/Node/JVM** runtime (Docker-reachable, but large; the ptrace tracing path already works) + **Intel PT** for cross-thread async-hop stitching |
 | §D3 **cross-process address channel** — feeding the helper a live JIT's `MethodLoadVerbose` addresses over the process boundary (the standalone binary, build/install, dladdr discovery, **and per-ecosystem package embedding** are all done above) | a **live .NET/Node/JVM** runtime |
+
+### Validated natively on a macOS-Intel host (not Docker — Docker-on-Mac is Linux)
+
+The single-step tier's **macOS-Intel front-end** is the one Phase-5 front that a Linux
+CI host (or Docker-on-Mac, whose containers are Linux) *cannot* exercise: it needs a
+real x86-64 Darwin userspace. It shares the in-process EFLAGS.TF stepper with Linux —
+XNU delivers the `#DB` as a BSD `SIGTRAP`, so re-asserting `TF` in the saved thread
+state re-arms stepping across `sigreturn` — with only the feature-test macro
+(`_DARWIN_C_SOURCE`) and the mcontext field access (`uc_mcontext->__ss.__rip`/`__rflags`)
+differing, both isolated behind shims in [src/ss_backend.c](../src/ss_backend.c). The
+[src/hwtrace.c](../src/hwtrace.c) facade (region table + mutex, `init`/`register`,
+`begin`/`end`/`begin_scope`/`render_scope`, arm-tid backstop) is gated by
+`HWTRACE_LIFECYCLE` (a superset of `__linux__`, so the Linux path is byte-for-byte
+unchanged) with every perf/PT/AMD block kept behind a narrower `__linux__` guard.
+
+| Item | Lane | Needs |
+|---|---|---|
+| Single-step live capture + 62-insn loop (no depth ceiling) + `try_begin` nesting/compose/EFULL + `begin_scope`/`render_scope` | `make hwtrace-test` (native, no Docker) | an **x86-64 macOS** host — **61 pass** on this box |
 
 Per the project's no-untested-hardware-code rule, every remaining live path ships
 **self-skipping and gated**, and the gate is exercised on every host.
