@@ -48,8 +48,10 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > and `asmtest_ss_end` no-ops when the closing thread holds no frame
 > ([src/ss_backend.c:279](../../src/ss_backend.c#L279)); the merge core
 > `asmtest_hwtrace_stitch` ([:1233](../../src/hwtrace.c#L1233)) has **no upstream
-> producer**. The whole facility is **Linux-only** across every binding; a clean no-op
-> self-skip on this AMD host. Full accounting + the Docker-can/can't matrix:
+> producer**. The whole facility is **Linux-only** across every binding; on this AMD host a
+> clean no-op self-skip absent privilege (§Z1's *AMD fork*: with `CAP_PERFMON` a bounded LBR
+> tail, with ptrace the complete §D3-stepper window). Full accounting + the
+> Docker-can/can't matrix:
 > [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
 >
 > Status legend: **planned** unless noted.
@@ -81,7 +83,9 @@ the attach case is the byte source: the self `pid==0` code-image recorder
 ([src/codeimage.c:314](../../src/codeimage.c#L314)) reads the JIT's own bytes, so no
 cross-process channel is needed synchronously. Everywhere else — this AMD host, VMs, Docker,
 macOS, off Linux — the **same code self-skips and says why**, accepts a second-process ptrace
-stealth stepper (timing-intrusive), or accepts intrusive single-step on native leaves only,
+stealth stepper (timing-intrusive; the **complete** AMD form, block-step-cheapened once
+[amd-tracing-plan.md](amd-tracing-plan.md) Part III Phase 2 lands), renders a bounded LBR tail
+on Zen 3+ (`truncated`), or accepts intrusive single-step on native leaves only,
 and **never hard-fails**. `Net:` the empty ctor is **Linux-only across every binding** and
 **cannot be a default**.
 
@@ -112,6 +116,7 @@ code.
 | Managed | §D0.1/§D0.2 | `MethodLoadVerbose_V2` in-proc listener → name→(addr,size,version) map feeding `asmtest_codeimage_track`; pre-arm `EnablePerfMap(JitDump)` rundown + self-recorder fallback | **planned** — needs a live runtime |
 | Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:1233](../../src/hwtrace.c#L1233), [asmtest_hwtrace.h:246](../../include/asmtest_hwtrace.h#L246)) | hook **planned**; merge core shipped (host-tested) but **no upstream producer** |
 | Managed | §D3 | Concealed out-of-process ptrace-stealth stepper (bundled `asmtest-stealth-helper`, reverse-attach) | stepper shipped; live-JIT address channel **planned** |
+| AMD | Part III P2/P3 | **P2** BTF block-step mode for the W2/§D3 ptrace stepper (`asmtest_ptrace_*_blockstep` — one `#DB` per **taken branch**, ~4–10× fewer stops than per-insn, rootless, every Zen incl. Zen 2); **P3** eBPF `bpf_get_branch_snapshot` boundary capture (deterministic ≤16-entry LBR window at scope entry/exit; Zen 4/5, Linux ≥ 6.10) | **planned** — [amd-tracing-plan.md](amd-tracing-plan.md) Part III; consumed as upgrades when they land, **not** Z0–Z5 prerequisites |
 | Substrate | — | Backend auto-selection + `available()`/`skip_reason()` self-probe + the self `pid==0` code-image recorder — [codeimage.c:310](../../src/codeimage.c#L310), [:373](../../src/codeimage.c#L373) | shipped |
 
 ### Net-new — what this plan owns (surface, integration, presentation)
@@ -272,8 +277,10 @@ exhausts the frame stack nor leaks the stream buffer.
 > host. The **STRONG** PT tier stands up here but is **not believed until
 > [§Z2](#z2--live-whole-window-decode-validation-synthetic-fixture-front-loaded-live-pt-forward-look)'s
 > synthetic fixture is green**; the **CEILING** AMD LBR tier rides
-> [amd-tracing-plan.md](amd-tracing-plan.md)'s shipped backend. Ships self-skipping;
-> **Linux-only**.
+> [amd-tracing-plan.md](amd-tracing-plan.md)'s shipped backend — a bounded *complement*,
+> never a complete whole window: AMD's **complete-flow** whole-window tier is the §D3/W2
+> ptrace stepper (block-step-cheapened when amd Part III Phase 2 lands — see *the AMD
+> fork* below). Ships self-skipping; **Linux-only**.
 
 **Goal.** Turn the range-less handle Z0 hands back into an actual capture, owning the lifted
 **record policy** (netNew #1, POLICY span), its **versioned render** wiring, and the
@@ -293,13 +300,31 @@ Auto-selects one of three honesty tiers.
 |---|---|---|---|---|
 | **WEAK** | single-step L3 `DESCEND_ALL` | a **degradation** (self-truncating by design) | any **x86-64 Linux**, native leaf only; managed → §D3 ptrace | `docker-hwtrace` (unprivileged) — **first end-to-end** |
 | **STRONG** | PT recorder-backed whole-window | **native** (filter-at-decode) | **Intel bare-metal PT** + `paranoid < 0` / `CAP_PERFMON` (128 KiB ring if unprivileged) | self-hosted PT runner (trust-gated on §Z2); self-skips on AMD/ARM/VM/Docker |
-| **CEILING** | AMD LBR | native but **~16-branch-bounded** | **Zen 3+** bare metal + `CAP_PERFMON` | `docker-hwtrace-amd` capped lane; Zen 2 → `EOPNOTSUPP` → ptrace |
+| **CEILING** | AMD LBR | native but **~16-branch-bounded** — a quiet *complement*; a whole window always overruns it (`truncated`) | **Zen 3+** bare metal + `CAP_PERFMON` | `docker-hwtrace-amd` capped lane; Zen 2 → `EOPNOTSUPP` → ptrace |
 
 The ladder prefers **STRONG** when `asmtest_pt_decoder_present`
 ([:65](../../src/pt_backend.c#L65)) is true, an `intel_pt` PMU is present, *and* §Z2's fixture
 is green; then **CEILING** on Zen 3+; else **WEAK**. On every current CI/AMD host the real PT
 bodies are absent (`ASMTEST_HAVE_LIBIPT` guard [:62](../../src/pt_backend.c#L62)), so it lands
 on WEAK or §D3 — which is why the weak tier is the earliest developer-visible value.
+
+**The AMD fork, stated plainly.** AMD ships no PT equivalent on any Zen — a verified dead
+end, not a gap ([amd-tracing-plan.md](amd-tracing-plan.md), *the governing constraint*) — so
+on AMD the ladder can never produce a *quiet complete* whole window. The honest choice is a
+fork: **bounded-but-quiet** (CEILING LBR — an honest ~16-branch tail, always `truncated` for
+a real window) versus **complete-but-intrusive** (the §D3/W2 ptrace stepper running L3 — the
+same tier WEAK's managed routing already uses). A caller needing completeness re-resolves
+under the shipped `ASMTEST_HWTRACE_CEILING_FREE` policy
+([asmtest_hwtrace.h:108](../../include/asmtest_hwtrace.h#L108)), which drops the
+ceiling-bounded backend and lands on the stepper. Two planned
+[amd-tracing-plan.md](amd-tracing-plan.md) Part III phases upgrade the two prongs and are
+**consumed here as they land** (upgrades, not Z0–Z5 prerequisites): **Phase 2 BTF
+block-step** (`PTRACE_SINGLEBLOCK` → one `#DB` per **taken branch** instead of per
+instruction — ~4–10× fewer stops, byte-identical `insns[]`/`blocks[]`, rootless, every Zen
+including Zen 2) makes the complete prong materially cheaper; **Phase 3's eBPF
+`bpf_get_branch_snapshot`** (Zen 4/5, Linux ≥ 6.10, `CAP_PERFMON`+`CAP_BPF`) reads the LBR
+window **deterministically at the scope boundary**, fixing the two documented live Zen-5
+failure modes (a tiny window "too fast to sample"; post-scope-glue contamination).
 
 #### §Z1.1 — WEAK: region-free single-step L3 `DESCEND_ALL` (netNew #4)
 
@@ -340,7 +365,11 @@ handle:
   [**§D3** concealed ptrace-stealth helper running L3](scoped-tracing-managed-plan.md#d3--the-concealed-out-of-process-ptrace-stepper-scope-stepper--standalone-binary-bundling--package-embedding-done-live-jit-address-channel-forward-look)
   (`SYS_PTRACE` / Yama `PR_SET_PTRACER`; default Docker seccomp on host kernel ≥ 4.8, else
   `CAP_SYS_PTRACE`), which also backstops the cross-thread drop `asmtest_ss_end`
-  ([:279](../../src/ss_backend.c#L279)) still exhibits.
+  ([:279](../../src/ss_backend.c#L279)) still exhibits. The stepper steps per-instruction
+  today; when [amd-tracing-plan.md](amd-tracing-plan.md) Part III Phase 2 lands
+  (`asmtest_ptrace_trace_attached_blockstep`), this routing consumes **block-step** — one
+  `#DB` per taken branch, ~4–10× fewer stops, byte-identical output — with no change to
+  the seam.
 
 #### §Z1.2 — STRONG: PT recorder-backed whole-window arm
 
@@ -364,8 +393,18 @@ Auto-selected when LBR is present and PT is not. LBR is a bounded ~16-branch win
 whole scope overruns it and the trace is flagged `truncated`.
 [amd-tracing-plan.md](amd-tracing-plan.md)'s **Tier-B stitching** extends the *window*,
 **not** the PMI-per-branch economics — so a Zen host honestly renders the tail and flags
-the rest. **Gate.** Zen 3+ bare metal + `CAP_PERFMON`, `docker-hwtrace-amd` capped lane;
-Zen 2 → `EOPNOTSUPP` → falls through to §D3. Linux-only.
+the rest. This tier is therefore a fast, quiet **complement**, never AMD's whole-window
+capture: the *complete* region-free trace on AMD is the §D3/W2 ptrace stepper (see *the
+AMD fork* above), reached via `ASMTEST_HWTRACE_CEILING_FREE`
+([asmtest_hwtrace.h:108](../../include/asmtest_hwtrace.h#L108)) or when LBR is
+absent/denied. Two [amd-tracing-plan.md](amd-tracing-plan.md) Part III upgrades are
+consumed here as they land: **Phase 3's eBPF `bpf_get_branch_snapshot`** reads the
+16-entry window **deterministically at the scope boundary** (no `sample_period=1` flood,
+no richest-window heuristic — the two documented live Zen-5 failure modes; Zen 4/5,
+Linux ≥ 6.10, `CAP_PERFMON`+`CAP_BPF`); **Phase 2 block-step** cheapens the
+`CEILING_FREE` fallback this tier truncates into. **Gate.** Zen 3+ bare metal +
+`CAP_PERFMON`, `docker-hwtrace-amd` capped lane; Zen 2 → `EOPNOTSUPP` → falls through to
+§D3. Linux-only.
 
 **§Z1 tests** (in [examples/test_hwtrace.c](../../examples/test_hwtrace.c)):
 
@@ -642,10 +681,12 @@ AMD/ARM/VMs/Docker/macOS.
 > the `AsmTrace.SkipReason` scope-object surface (new field, no line yet), the **composed**
 > developer message (new `asmtest_hwtrace_degradation_note`-style builder, to be added), and
 > the never-emit-partial contract over the §3.1 bucket labels + §3.2 banner. On this AMD
-> host the empty ctor is a **clean no-op** — no `intel_pt` PMU
+> host the empty ctor is a **clean no-op absent privilege** — no `intel_pt` PMU
 > ([:298-299](../../src/hwtrace.c#L298)), single-step forbidden against live managed code —
-> so it records nothing and reports the §Z5.2 message. Host-testable on **every** host; the
-> facility it fronts is **Linux-only**.
+> so unprivileged it records nothing and reports the §Z5.2 message; with `CAP_PERFMON` the
+> CEILING LBR complement arms (bounded, `truncated`), and with ptrace permitted the §D3
+> stepper renders the complete window (§Z1's *AMD fork*). Host-testable on **every** host;
+> the facility it fronts is **Linux-only**.
 
 The presentation capstone. The empty ctor promises capture from privilege/hardware the code
 cannot grant itself, over a trace that is **noisy and partial by nature** — so honesty rests
@@ -671,9 +712,9 @@ note surfaced through the scope's `Path`/sink and `SkipReason`:
 | Host / condition | Raw `skip_reason` (shipped) | Composed empty-ctor message (net-new) |
 |---|---|---|
 | Intel bare metal, unprivileged | `perf_event capture not permitted` ([:302](../../src/hwtrace.c#L302)) | whole-window PT needs `perf_event_paranoid<0` **or** `CAP_PERFMON`; falling back to ptrace stepper (timing-intrusive) — §Z5.4 |
-| AMD / cloud / VM (this host) | `no intel_pt PMU…` ([:298-299](../../src/hwtrace.c#L298)) | PT unavailable here; **Zen 3+ offers LBR** (bounded ~16-branch window, flags `truncated`); else ptrace/self-skip |
+| AMD / cloud / VM (this host) | `no intel_pt PMU…` ([:298-299](../../src/hwtrace.c#L298)) | PT unavailable here; **Zen 3+ offers LBR** (bounded ~16-branch window, flags `truncated`); **complete** capture = the §D3 ptrace stepper (`CEILING_FREE`); else self-skip |
 | AMD Zen 3+, unprivileged | `perf branch-stack not permitted…` ([:290-292](../../src/hwtrace.c#L290)) | LBR present but not permitted; lower `perf_event_paranoid` or grant `CAP_PERFMON` |
-| No PT/LBR, ptrace-capable | ptrace skip code ([asmtest_ptrace.h:82](../../include/asmtest_ptrace.h#L82)) | degraded to the concealed §D3 ptrace stepper — a second process, ~1000× on the stepped thread; L3 self-truncating |
+| No PT/LBR, ptrace-capable | ptrace skip code ([asmtest_ptrace.h:82](../../include/asmtest_ptrace.h#L82)) | degraded to the concealed §D3 ptrace stepper — a second process, ~1000× on the stepped thread (amd Part III P2 block-step cuts stops ~4–10× when it lands); L3 self-truncating |
 | No PT/LBR, ptrace denied | ptrace skip code | records nothing; grant `CAP_SYS_PTRACE` or `PR_SET_PTRACER`, or run on Intel bare metal |
 | Not Linux | `single-step backend is Linux x86-64 only…` ([:280-281](../../src/hwtrace.c#L280)), codeimage `ENOSYS` ([codeimage.c:492](../../src/codeimage.c#L492)) | the whole using-model is **Linux-only**; records nothing and says why |
 | Async-hop detected | `trace.truncated` via arm-tid mismatch (handle-carried; §Z4) | captured the arming thread only; continuation hopped — stitching is opt-in (§Z4) |
@@ -748,8 +789,10 @@ load-bearing dependency edges):
 - **§Z1 precedes Z2 in numbering but delivers value first.** Fills Z0's arm with the
   bounded-ring record policy + its self-codeimage `render_versioned` wiring. WEAK single-step
   L3 is where `using (new AsmTrace())` **first renders end-to-end** unprivileged; STRONG PT
-  is **not trusted until Z2 is green**; CEILING is AMD LBR. Depends on Z0, Z2, Core §1/§2,
-  call-descent §L3, amd §LBR, zen2 §W2 / §D3.
+  is **not trusted until Z2 is green**; CEILING is AMD LBR (bounded complement — the
+  complete AMD form is the §D3 stepper via `CEILING_FREE`). Depends on Z0, Z2, Core §1/§2,
+  call-descent §L3, amd §LBR (+ Part III P2 block-step / P3 boundary snapshot, consumed as
+  they land), zen2 §W2 / §D3.
 - **§Z3 after Z1 *and* (Z2 **or** Z1's §D3).** The arm-time managed composition (soft-dirty-gated
   `track()`) + the managed-tier `Dispose` swap. Needs .NET 8+.
 - **§Z4 — split dependency.** The **DEFAULT** depends **only on Core §0.2 + the Z0 arm-tid
@@ -765,8 +808,10 @@ load-bearing dependency edges):
   Core §0/§1 + Bindings ─► Z0 region-free arm surface ─► Z1 CAPTURE MODE
      (10 shims; arm_tid carry;              ├─ WEAK single-step L3 DESCEND_ALL (any x86-64 Linux · FIRST end-to-end;
       Z5 self-skip scaffold)                │                                   bounded ring → render_versioned/self codeimage)
-     call-descent §L3 / amd §LBR /          ├─ STRONG PT recorder-backed        (Intel BM · decode validated in Z2)
-     zen2 §W2·§D3 ──────────────────────────└─ CEILING AMD LBR                  (Zen 3+ · flags truncated)
+     call-descent §L3 / amd §LBR·P2·P3 /    ├─ STRONG PT recorder-backed        (Intel BM · decode validated in Z2)
+     zen2 §W2·§D3 ──────────────────────────└─ CEILING AMD LBR complement       (Zen 3+ · bounded → truncated;
+                                                                                 complete AMD = §D3 stepper via
+                                                                                 CEILING_FREE [+P2 blockstep])
                                                         │
   Managed §D0.1/§D0.2/§D3 ─► Z3 managed capture ◄───────┘   (MethodLoadVerbose → codeimage_track[soft-dirty-gated]
                                     │                          ⊕ recorder ⊕ /proc/self/maps; managed Dispose→render_versioned)
@@ -866,7 +911,10 @@ region-free arm **surface** (§Z0) and the arm-time **integration** (§Z1–§Z5
 - **[hardware-trace-plan.md](hardware-trace-plan.md)** — its **Phase 2** is the same libipt glue
   as Core §2, run self (`pid==0`); inherits its PT-hardware-gated forward-look posture.
 - **[amd-tracing-plan.md](amd-tracing-plan.md)** — the AMD **LBR ceiling** §Z1 auto-selects on
-  Zen 3+; **[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md)** — its **W2** ptrace
+  Zen 3+ (a bounded complement), plus the two Part III upgrades §Z1 consumes as they land:
+  **Phase 2 BTF block-step** (the cheap complete-flow form of the §D3/W2 stepper — every Zen
+  incl. Zen 2, rootless) and **Phase 3 eBPF boundary snapshot** (deterministic LBR window at
+  scope entry/exit, Zen 4/5); **[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md)** — its **W2** ptrace
   stepper is the CI-runnable fallback §Z1/§Z3 conceal; **[call-descent-plan.md](call-descent-plan.md)**
   — the **L3 `DESCEND_ALL`** guards the stepper rides; **[multi-language-bindings-plan.md](multi-language-bindings-plan.md)**
   — the shared-substrate + thin-shim pattern.
@@ -920,7 +968,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 |---|---|---|---|
 | WEAK single-step L3, **managed** region-free | Z1 | `docker-hwtrace` (+ §D3 ptrace-stealth lane) | Routes to the concealed ptrace stepper (single-step **forbidden** against live managed code). Needs `SYS_PTRACE` / Yama `PR_SET_PTRACER` (default Docker seccomp on host kernel ≥ 4.8, else `CAP_SYS_PTRACE`) |
 | STRONG PT recorder-backed whole-window arm | Z1 / Z2 | self-hosted **bare-metal Intel PT** runner (allowed-to-be-absent) | `intel_pt` PMU + `perf_event_paranoid<0` or `CAP_PERFMON`. **Not trusted until `test_wholewindow_decode` is green.** Self-skips on AMD/ARM/VMs/Docker |
-| CEILING **AMD LBR** whole-window | Z1 | `docker-hwtrace-amd` (`--cap-add=PERFMON`, [mk/docker.mk:280](../../mk/docker.mk#L280)) | Zen 3+ bare metal + `CAP_PERFMON`; ~16-branch ring → flags `truncated`. Zen 2 = `EOPNOTSUPP` → ptrace |
+| CEILING **AMD LBR** bounded complement | Z1 | `docker-hwtrace-amd` (`--cap-add=PERFMON`, [mk/docker.mk:280](../../mk/docker.mk#L280)) | Zen 3+ bare metal + `CAP_PERFMON`; ~16-branch ring → flags `truncated` (complete AMD = §D3 stepper via `CEILING_FREE`). Zen 2 = `EOPNOTSUPP` → ptrace |
 | Live arbitrary-managed-method whole-window | Z3 | [`docker-hwtrace-jit-dotnet`](../../mk/docker.mk#L242) (inner recipe [`hwtrace-jit-dotnet`](../../mk/native-trace.mk#L327); also `-jit-node` / `-jit-java`) | A live .NET 8+ runtime **plus** Intel PT (Z2) or §D3. Self-skips when the runtime re-tiers/moves code, when soft-dirty is unavailable, or when ptrace is denied |
 | Version-timeline noise attribution (eBPF PROT_EXEC slicer) | Z3 / Z5 | `docker-hwtrace-codeimage` (CAP_BPF/CAP_PERFMON/SYS_PTRACE) | **CAP_BPF + kernel BTF** ([codeimage.c:618](../../src/codeimage.c#L618)/[:584](../../src/codeimage.c#L584)); degrades to the coarser soft-dirty version-timeline when absent |
 | L3 DESCEND_ALL guard-fire (managed) | Z1 / Z3 | `docker-hwtrace-jit-dotnet-descend-all` (also `-java-descend-all`) | Asserts the denylist / budget / `ITIMER_REAL`+`SIGALRM` watchdog fire and the stepper self-truncates — **never** that L3 is transparent |
