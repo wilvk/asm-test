@@ -28,6 +28,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Scoped in-process tracing (the `using`/RAII/`with` model).** A cooperative,
+  developer-ergonomics face of the tracing machinery: bracket a region of a program's
+  own code with a scope construct — `using (new AsmTrace())` in C#, RAII in C++/Rust,
+  `with` in Python, `defer` in Go/Zig, a block/try-with-resources elsewhere — and get
+  back the assembly that executed inside it, rendered on scope close. Implemented across
+  **all ten language bindings** over a small shared C/decode core (error-returning
+  `asmtest_hwtrace_try_begin`, arming-thread assert, `asmtest_hwtrace_render`,
+  idempotent-by-name region registration, per-thread single-step state, a recorder-backed
+  image adapter, symbolize-and-bucket, and the `asmtest_hwtrace_stitch` async-hop merge
+  core). Linux-only; self-skips to a recorded no-op where no faithful backend is
+  available. See [docs/scoped-tracing-implementation.md](https://github.com/wilvk/asm-test/blob/main/docs/scoped-tracing-implementation.md)
+  and [docs/plans/scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-inprocess-tracing-plan.md).
+  - **§D3 concealed ptrace-stealth stepper — now a bundled standalone binary.** The
+    hardware-free scope path (Zen 2 / Docker-on-Mac) reverse-attaches a helper to the
+    caller (`PR_SET_PTRACER` + `PTRACE_SEIZE`) and single-steps the region out of band.
+    Its stepping body + discovery moved to `src/stealth_helper.c` so the same code runs
+    either as an in-process forked child (the fallback) or as the standalone
+    **`asmtest-stealth-helper`** binary — a real separate process the managed packages can
+    ship — which the caller discovers via a dladdr-sibling lookup (mirroring the
+    DynamoRIO payload) or the `ASMTEST_STEALTH_HELPER` override, handing the shared trace
+    over a memfd. New `$(BUILD)/asmtest-stealth-helper` build target +
+    `install-stealth-helper`; `test_ptrace_scoped_stealth` asserts **both** paths
+    reconstruct byte-identical offsets on any ptrace-capable Linux. The helper is
+    **bundled into every managed package payload** (NuGet `runtimes/<rid>/native`,
+    npm/Maven/gem/rock, the Python wheel `_libs/`) beside `libasmtest_hwtrace`,
+    `$ORIGIN`-rpath'd so it resolves the co-vendored Capstone in-package, and asserted
+    present + rpath'd (and not leaked into a darwin slot) by a fail-closed
+    `package-libs-verify` gate. Only the live-JIT cross-process address channel (needs a
+    running managed runtime) remains forward-look.
 - **Call descent for the out-of-process ptrace tracer.** The single-step tracer
   (`asmtest_ptrace.h`) can now optionally FOLLOW the calls a traced region makes instead of
   only stepping over them, at four opt-in levels (`asmtest_descent_t`): `OFF` (today's

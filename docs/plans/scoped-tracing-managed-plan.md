@@ -280,19 +280,40 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 
 ---
 
-## §D3 — The concealed out-of-process ptrace stepper scope *(CI-runnable core DONE; bundling forward-look)*
+## §D3 — The concealed out-of-process ptrace stepper scope *(stepper + standalone-binary bundling + package embedding DONE; live-JIT address channel forward-look)*
 
-> **Status: reverse-attach stealth stepper landed + CI-runnable.**
-> `asmtest_hwtrace_stealth_trace` ([src/hwtrace.c](../../src/hwtrace.c)) spawns a
-> helper **child** that reverse-attaches to the caller (`prctl(PR_SET_PTRACER,
-> PR_SET_PTRACER_ANY)` + `PTRACE_SEIZE`), `run_to`s it to the region entry, and
-> single-steps the region out of band (reusing `asmtest_ptrace_trace_attached`), with
-> a shared shadow trace copied back to the caller. `test_ptrace_scoped_stealth`
-> (checks 158–161) passes on any ptrace-capable Linux, self-skips where Yama refuses
-> the attach, and an `alarm()` watchdog means it never hangs CI. **Forward-look:** the
-> per-ecosystem **bundling** (a standalone helper binary + NuGet/npm/Maven packaging +
-> dladdr discovery) and the cross-process channel that feeds the helper a live JIT's
-> `MethodLoadVerbose` addresses.
+> **Status: reverse-attach stealth stepper + standalone-binary bundling landed +
+> CI-runnable.** `asmtest_hwtrace_stealth_trace`
+> ([src/hwtrace.c](../../src/hwtrace.c)) reverse-attaches to the caller
+> (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` + `PTRACE_SEIZE`), `run_to`s it to the
+> region entry, and single-steps the region out of band (reusing
+> `asmtest_ptrace_trace_attached`), with a shared shadow trace copied back to the
+> caller. The stepping body + bundled-binary discovery now live in
+> [src/stealth_helper.c](../../src/stealth_helper.c) so the SAME code runs either as an
+> in-process forked child (the fallback) or as the **standalone `asmtest-stealth-helper`
+> binary** — a real separate process the managed packages can ship — which the caller
+> discovers via a dladdr-sibling lookup (mirroring
+> [drtrace_app.c](../../src/drtrace_app.c)'s `dr_bundled_lib`) or the
+> `ASMTEST_STEALTH_HELPER` override and hands the shared scratch over a memfd
+> (survives `execv`, unlike the anonymous mapping the fork path inherits).
+> `test_ptrace_scoped_stealth` (checks 158–166) asserts **both** paths reconstruct the
+> identical `[0,3,6,c,11]` offsets on any ptrace-capable Linux, self-skips where Yama
+> refuses the attach, and an `alarm()` watchdog means it never hangs CI. Build/install:
+> the `$(BUILD)/asmtest-stealth-helper` target + `install-stealth-helper` (next to
+> `libasmtest_hwtrace`, where the sibling lookup resolves), in
+> [mk/native-trace.mk](../../mk/native-trace.mk). **Package embedding is now also done:**
+> the helper is staged into every native payload slot beside `libasmtest_hwtrace`,
+> `$ORIGIN`-rpath'd so it resolves the co-vendored Capstone in-package
+> ([scripts/package-native.sh](../../scripts/package-native.sh)), copied into every
+> managed payload (NuGet `runtimes/<rid>/native`, npm/Maven/gem/rock via `emu_lib_slots`,
+> the Python wheel `_libs/`), and asserted present + `$ORIGIN`-rpath'd (and not leaked
+> into a darwin slot) by a fail-closed `package-libs-verify` gate
+> ([mk/bindings.mk](../../mk/bindings.mk)). Clean-room-verified on this Linux host: a
+> full `package-libs` slot passes the complete-set gate, `ldd asmtest-stealth-helper`
+> resolves the in-slot `libcapstone.so.5`, and a `dlopen` of the bundled
+> `libasmtest_hwtrace.so` discovers the helper as its dladdr sibling with the environment
+> scrubbed. **Forward-look:** only the cross-process channel that feeds the helper a live
+> JIT's `MethodLoadVerbose` addresses (needs a live managed runtime) remains.
 
 The hardware-free path, hidden behind the same scope constructs, for hosts with no
 PT/LBR (Zen 2 — [src/hwtrace.c:183](../../src/hwtrace.c#L183) classifies it

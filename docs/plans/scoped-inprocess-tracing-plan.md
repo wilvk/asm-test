@@ -35,7 +35,10 @@ own.
 > gated pieces remain.** The shared-core slice (Core §0/§1/§2/§3), the full **bindings
 > slice** (scope construct across all eight tiers + the .NET reference), the managed
 > slice's **§D4 merge core / §D1 Node / §D2 Java** halves, and the **§D3 reverse-attach
-> ptrace-stealth stepper** are implemented and green. Everything reachable on this
+> ptrace-stealth stepper — now also as a bundled standalone `asmtest-stealth-helper`
+> binary** with dladdr-sibling discovery and per-ecosystem package embedding (only the
+> live-JIT cross-process address channel is forward-look) —
+> are implemented and green. Everything reachable on this
 > **AMD Zen 5** host is validated in Docker — including **per-thread AMD LBR capture**
 > (Core §1, the `docker-hwtrace-amd` capped lane) and the ptrace-stealth scope. What
 > remains is marked by the **architecture / OS it needs** (bare-metal Intel PT, an

@@ -2192,6 +2192,51 @@ static void stealth_run_region(void *arg) {
     volatile long r = ((add2_fn)arg)(20, 22);
     (void)r;
 }
+/* Internal §D3 discovery (src/stealth_helper.c) — not a public header symbol, so
+ * forward-declare it here to assert the dladdr-sibling lookup finds the bundled
+ * binary the makefile builds next to this test. */
+const char *asmtest_stealth_helper_path(char *buf, size_t buflen);
+
+/* Drive the stealth scope once and assert the exact stream. `label` distinguishes
+ * the in-process forked-child fallback from the exec'd bundled-binary path; both
+ * must reconstruct the identical [0,3,6,c,11] offsets. Returns 1 when the reverse
+ * attach was refused (a skip, not a failure), else 0. */
+static int stealth_trace_once(const char *label, void *p) {
+    char msg[128];
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_hwtrace_stealth_trace(p, sizeof ROUTINE, tr, &result,
+                                           stealth_run_region, p);
+    if (rc == ASMTEST_HW_EUNAVAIL) {
+        printf("# SKIP ptrace stealth (%s): reverse-attach not permitted (yama "
+               "ptrace_scope)\n",
+               label);
+        asmtest_trace_free(tr);
+        return 1;
+    }
+    snprintf(msg, sizeof msg, "ptrace stealth (%s): helper traced the region",
+             label);
+    CHECK(rc == ASMTEST_HW_OK, msg);
+    snprintf(msg, sizeof msg, "ptrace stealth (%s): result 42 from caller reg",
+             label);
+    CHECK(result == 42, msg);
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    snprintf(msg, sizeof msg,
+             "ptrace stealth (%s): exact offsets [0,3,6,c,11] vs ground truth",
+             label);
+    CHECK(seq, msg);
+    snprintf(msg, sizeof msg,
+             "ptrace stealth (%s): two blocks, complete (stepped out of band)",
+             label);
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 &&
+              !asmtest_emu_trace_truncated(tr),
+          msg);
+    asmtest_trace_free(tr);
+    return 0;
+}
 #endif
 static void test_ptrace_scoped_stealth(void) {
 #if defined(__linux__) && defined(__x86_64__)
@@ -2206,30 +2251,34 @@ static void test_ptrace_scoped_stealth(void) {
         printf("# SKIP ptrace stealth: mmap failed\n");
         return;
     }
-    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
-    long result = 0;
-    int rc = asmtest_hwtrace_stealth_trace(p, sizeof ROUTINE, tr, &result,
-                                           stealth_run_region, p);
-    if (rc == ASMTEST_HW_EUNAVAIL) {
-        printf("# SKIP ptrace stealth: reverse-attach not permitted (yama "
-               "ptrace_scope)\n");
-        asmtest_trace_free(tr);
-        munmap(p, sizeof ROUTINE);
-        return;
+
+    /* §D3 bundling: with no override the standalone helper is discovered as our
+     * dladdr sibling (the makefile builds asmtest-stealth-helper next to
+     * test_hwtrace in build/), mirroring how a managed package finds the payload. */
+    unsetenv("ASMTEST_STEALTH_HELPER");
+    char hp[4096], bundled[4096];
+    bundled[0] = '\0';
+    const char *found = asmtest_stealth_helper_path(hp, sizeof hp);
+    if (found != NULL && strstr(found, "asmtest-stealth-helper") != NULL) {
+        snprintf(bundled, sizeof bundled, "%s", found);
+        CHECK(1, "ptrace stealth: dladdr discovers the bundled helper sibling");
+    } else {
+        printf("# SKIP stealth discovery: no bundled helper next to the test "
+               "binary (build it via `make stealth-helper`)\n");
     }
-    CHECK(rc == ASMTEST_HW_OK,
-          "ptrace stealth: reverse-attach helper traced the region");
-    CHECK(result == 42,
-          "ptrace stealth: result 42 read from the caller's return reg");
-    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
-    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
-    for (size_t i = 0; seq && i < 5; i++)
-        seq = (tr->insns[i] == EXPECT[i]);
-    CHECK(seq, "ptrace stealth: exact offsets [0,3,6,c,11] vs ground truth");
-    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 &&
-              !asmtest_emu_trace_truncated(tr),
-          "ptrace stealth: two blocks, complete (stepped out of band)");
-    asmtest_trace_free(tr);
+
+    /* (a) in-process forked-child fallback: an unrunnable override forces it, so
+     * this re-runs the original proven anonymous-mmap path as a regression check. */
+    setenv("ASMTEST_STEALTH_HELPER", "/nonexistent/asmtest-stealth-helper", 1);
+    int skipped = stealth_trace_once("fork", p);
+
+    /* (b) the bundled exec'd-binary path: point the override at the real helper —
+     * memfd hand-off + fork+execv — and assert byte-identical offsets. */
+    if (!skipped && bundled[0] != '\0') {
+        setenv("ASMTEST_STEALTH_HELPER", bundled, 1);
+        stealth_trace_once("bundled", p);
+    }
+    unsetenv("ASMTEST_STEALTH_HELPER");
     munmap(p, sizeof ROUTINE);
 #else
     printf("# SKIP ptrace stealth: needs Linux x86-64\n");

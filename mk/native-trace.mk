@@ -235,19 +235,46 @@ $(BUILD)/descent.o: src/descent.c include/asmtest_ptrace.h \
 # that probe fires (see Phase C).
 $(BUILD)/codeimage.o: src/codeimage.c include/asmtest_codeimage.h $(CODEIMAGE_SKEL) | $(BUILD)
 	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -c $< -o $@
+# §D3 concealed ptrace-stealth stepper: the shared stepping body + bundled-binary
+# discovery (dladdr-sibling, mirroring drtrace_app.c's dr_bundled_lib). Compiled
+# into BOTH libasmtest_hwtrace (the in-process forked-child fallback path) and the
+# standalone asmtest-stealth-helper binary below (the bundled path).
+$(BUILD)/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
+                           include/asmtest_hwtrace.h include/asmtest_ptrace.h \
+                           include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/stealth_helper_main.o: src/stealth_helper_main.c src/stealth_helper.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
-                $(BUILD)/descent.o \
+                $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 
+# §D3 bundled stepper: a real separate process the managed packages ship (vs. the
+# in-process forked child). Links only the ptrace stepper + Capstone length-decoder
+# (NOT the PT/CoreSight/AMD decoders), so a bundled copy carries no libipt/OpenCSD
+# runtime dependency. Found at run time via the dladdr-sibling lookup in
+# stealth_helper.c (or the ASMTEST_STEALTH_HELPER path override).
+STEALTH_HELPER_OBJS := $(BUILD)/stealth_helper_main.o $(BUILD)/stealth_helper.o \
+    $(BUILD)/ptrace_backend.o $(BUILD)/descent.o $(BUILD)/codeimage.o \
+    $(BUILD)/disasm.o $(BUILD)/trace.o
+$(BUILD)/asmtest-stealth-helper: $(STEALTH_HELPER_OBJS)
+	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
+
+.PHONY: stealth-helper
+stealth-helper: $(BUILD)/asmtest-stealth-helper
+
+# hwtrace-test builds the bundled helper alongside the C harness so the §D3 test's
+# bundled sub-case (which finds asmtest-stealth-helper as test_hwtrace's sibling in
+# $(BUILD)/) exercises the real exec'd-binary path, not only the forked child.
 .PHONY: hwtrace-test
-hwtrace-test: $(BUILD)/test_hwtrace
+hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper
 	@echo "== hwtrace-test =="
 	./$(BUILD)/test_hwtrace
 
@@ -663,6 +690,10 @@ $(BUILD)/pic/descent.o: src/descent.c include/asmtest_ptrace.h \
 $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
                           $(CODEIMAGE_SKEL) | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -fPIC -c $< -o $@
+$(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
+                               include/asmtest_hwtrace.h include/asmtest_ptrace.h \
+                               include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # K5: rebuild the hardware/native-trace object tree on a build-knob flip
 # (SAN=1/COV=1/CSTD), like the core tree. drtrace_app.o already tracks its own
@@ -673,7 +704,7 @@ $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
 NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
     $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
-    $(BUILD)/codeimage.o
+    $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
@@ -686,6 +717,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/ptrace_backend.o \
                                        $(BUILD)/pic/descent.o \
+                                       $(BUILD)/pic/stealth_helper.o \
                                        $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
@@ -701,7 +733,16 @@ $(call shlib_dev,libasmtest_hwtrace): $(call shlib_real,libasmtest_hwtrace)
 # install` installs the headers; these add the shared lib + soname/dev symlinks
 # (mirroring install-shared-emu). No pkg-config template ships for these tiers —
 # a consumer links by name (-lasmtest_hwtrace / -lasmtest_drapp).
-.PHONY: install-shared-hwtrace install-shared-drtrace
+.PHONY: install-shared-hwtrace install-shared-drtrace install-stealth-helper
+# §D3 bundled stepper: install the standalone helper NEXT TO libasmtest_hwtrace so
+# the dladdr-sibling discovery in stealth_helper.c finds it with no env/opts — the
+# same "sibling of the payload" placement the managed packages use. It is an
+# executable in $(libdir) by design (that is where the sibling lookup resolves).
+install-stealth-helper: stealth-helper
+	mkdir -p $(libdir)
+	cp $(BUILD)/asmtest-stealth-helper $(libdir)/
+	@echo "installed asmtest-stealth-helper to $(libdir)"
+
 install-shared-hwtrace: shared-hwtrace
 	mkdir -p $(libdir) $(incdir)
 	cp $(call shlib_real,libasmtest_hwtrace) $(libdir)/

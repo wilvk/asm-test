@@ -19,6 +19,7 @@
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
+#include "stealth_helper.h" /* §D3 shared stepping body + bundled-binary discovery */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1420,16 +1421,10 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
 /* ------------------------------------------------------------------ */
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
-/* Shared scratch the helper child fills and the caller reads back. The shadow trace
- * points at the insns[]/blocks[] buffers that follow it in the same mapping. */
-typedef struct {
-    volatile int ready; /* helper -> caller: seized + about to plant the run_to bp */
-    volatile int rc;    /* helper's outcome (ASMTEST_HW_*)                          */
-    long result;        /* the region's return value                               */
-    asmtest_trace_t shadow;
-    /* uint64_t insns[icap]; uint64_t blocks[bcap]; follow here */
-} stealth_scratch_t;
-
+/* The shared scratch (asmtest_stealth_scratch_t) and the stepping body
+ * (asmtest_stealth_helper_run) live in src/stealth_helper.h/.c so the SAME code
+ * runs whether the stepper is an in-process forked child (the fallback below) or
+ * the exec'd standalone asmtest-stealth-helper binary (the bundled path). */
 int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
                                   asmtest_trace_t *trace, long *result_out,
                                   void (*run_region)(void *), void *arg) {
@@ -1441,19 +1436,44 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
         icap = 65536;
     if (bcap > 4096)
         bcap = 4096;
-    size_t total = sizeof(stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
-    stealth_scratch_t *sc = (stealth_scratch_t *)mmap(
-        NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (sc == MAP_FAILED)
+    size_t total =
+        sizeof(asmtest_stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
+
+    /* Prefer the bundled standalone helper binary if one is discoverable next to us
+     * (or named via ASMTEST_STEALTH_HELPER); fall back to an in-process forked child
+     * otherwise. The bundled path needs a memfd — a file the exec'd image can re-map
+     * by fd — since an anonymous MAP_SHARED mapping survives fork but not exec. */
+    char helperbuf[4096];
+    const char *helper_path = asmtest_stealth_helper_path(helperbuf, sizeof helperbuf);
+    int use_exec = 0;
+    int shm_fd = -1;
+#ifdef __NR_memfd_create
+    if (helper_path != NULL) {
+        shm_fd = (int)syscall(__NR_memfd_create, "asmtest_stealth", 0);
+        if (shm_fd >= 0 && ftruncate(shm_fd, (off_t)total) == 0) {
+            use_exec = 1;
+        } else if (shm_fd >= 0) {
+            close(shm_fd);
+            shm_fd = -1;
+        }
+    }
+#endif
+
+    asmtest_stealth_scratch_t *sc = (asmtest_stealth_scratch_t *)mmap(
+        NULL, total, PROT_READ | PROT_WRITE,
+        use_exec ? MAP_SHARED : (MAP_SHARED | MAP_ANONYMOUS),
+        use_exec ? shm_fd : -1, 0);
+    if (sc == MAP_FAILED) {
+        if (shm_fd >= 0)
+            close(shm_fd);
         return ASMTEST_HW_EUNAVAIL;
+    }
     memset(sc, 0, total);
-    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(stealth_scratch_t));
+    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(asmtest_stealth_scratch_t));
     uint64_t *bbuf = ibuf + icap;
-    sc->shadow.insns = ibuf;
-    sc->shadow.insns_cap = icap;
-    sc->shadow.blocks = bbuf;
-    sc->shadow.blocks_cap = bcap;
-    sc->rc = ASMTEST_HW_EDECODE; /* until the helper reports otherwise */
+    sc->icap = icap; /* the stepping side recomputes its own buffer pointers */
+    sc->bcap = bcap;
+    sc->rc = ASMTEST_HW_EDECODE; /* until the stepper reports otherwise */
 
     /* Nominate any process to ptrace us so a Yama ptrace_scope=1 host permits the
      * helper's reverse attach; harmless when Yama is off. */
@@ -1463,52 +1483,57 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
     pid_t helper = fork();
     if (helper < 0) {
         munmap(sc, total);
+        if (shm_fd >= 0)
+            close(shm_fd);
         return ASMTEST_HW_EUNAVAIL;
     }
     if (helper == 0) {
-        /* HELPER (child): reverse-attach to the caller and step it through the
-         * region. alarm() is the watchdog so a stuck attach never hangs the caller. */
-        alarm(15);
-        if (ptrace(PTRACE_SEIZE, parent, (void *)0, (void *)0) != 0 ||
-            ptrace(PTRACE_INTERRUPT, parent, (void *)0, (void *)0) != 0) {
-            sc->rc = ASMTEST_HW_EUNAVAIL;
-            sc->ready = 1;
-            _exit(0);
+        /* HELPER (child): exec the bundled binary if we have one; on any exec
+         * failure fall through to the identical in-process stepping body. Either
+         * way asmtest_stealth_helper_run drives the reverse-attach + step. */
+        if (use_exec) {
+            char apid[24], afd[24], abase[32], alen[32];
+            snprintf(apid, sizeof apid, "%d", (int)parent);
+            snprintf(afd, sizeof afd, "%d", shm_fd);
+            snprintf(abase, sizeof abase, "%#llx",
+                     (unsigned long long)(uintptr_t)base);
+            snprintf(alen, sizeof alen, "%zu", len);
+            char *hargv[] = {(char *)helper_path, apid, afd, abase, alen, NULL};
+            execv(helper_path, hargv);
+            /* exec failed → fall through to the in-process stepper */
         }
-        int st = 0;
-        if (waitpid(parent, &st, 0) < 0 || !WIFSTOPPED(st)) {
-            sc->rc = ASMTEST_HW_EUNAVAIL;
-            sc->ready = 1;
-            _exit(0);
-        }
-        /* The caller is now INTERRUPT-stopped; releasing it (run_to CONTs it) is what
-         * lets it observe `ready` and proceed into run_region. */
-        sc->ready = 1;
-        if (asmtest_ptrace_run_to(parent, base) != ASMTEST_PTRACE_OK) {
-            ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
-            sc->rc = ASMTEST_HW_EUNAVAIL;
-            _exit(0);
-        }
-        long res = 0;
-        int tr =
-            asmtest_ptrace_trace_attached(parent, base, len, &res, &sc->shadow);
-        ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
-        sc->result = res;
-        sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
+        asmtest_stealth_helper_run(sc, parent, base, len);
         _exit(0);
     }
 
     /* CALLER (tracee): wait (busy, no syscall) until the helper has seized us and is
      * ready; we are INTERRUPT-stopped during this spin and only resume — seeing
      * `ready` — once the helper's run_to CONTs us with the entry breakpoint planted,
-     * so the region cannot run untraced. */
+     * so the region cannot run untraced. In the bundled path also break if the
+     * exec'd helper dies before publishing `ready` (a bad binary), so we never spin
+     * forever waiting on a process that will never signal us. */
+    int helper_gone = 0;
     while (!sc->ready) {
-        /* spin */
+        if (use_exec) {
+            int ws = 0;
+            if (waitpid(helper, &ws, WNOHANG) == helper) {
+                helper_gone = 1;
+                break;
+            }
+        }
+    }
+    if (helper_gone) {
+        munmap(sc, total);
+        if (shm_fd >= 0)
+            close(shm_fd);
+        return ASMTEST_HW_EUNAVAIL;
     }
     if (sc->rc == ASMTEST_HW_EUNAVAIL) { /* attach refused before run_to */
         int st = 0;
         waitpid(helper, &st, 0);
         munmap(sc, total);
+        if (shm_fd >= 0)
+            close(shm_fd);
         return ASMTEST_HW_EUNAVAIL;
     }
 
@@ -1540,6 +1565,8 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
             *result_out = sc->result;
     }
     munmap(sc, total);
+    if (shm_fd >= 0)
+        close(shm_fd);
     return rc;
 }
 #else

@@ -148,6 +148,17 @@ if [ -n "$tier" ]; then
             # Decoder-free builds link no external decoder; a "full" build links
             # libipt / OpenCSD / libbpf — vendor whichever are present.
             vendor_and_rpath "$lib" ipt opencsd bpf
+            # §D3: the bundled ptrace-stealth helper binary sits in this same slot so
+            # libasmtest_hwtrace's dladdr-sibling lookup finds it. It links Capstone
+            # (+ libbpf), already vendored into the slot by the emu pass / above — so
+            # it only needs its own runtime search path set to $ORIGIN to resolve them
+            # in-package (it is not a lib*.so*, so vendor_and_rpath's loop skipped it).
+            helper="$slot/asmtest-stealth-helper"
+            if [ -f "$helper" ] && [ "$uname_s" != "Darwin" ]; then
+                patchelf --set-rpath '$ORIGIN' "$helper" 2>/dev/null \
+                    && echo "  rpath'd asmtest-stealth-helper to \$ORIGIN" \
+                    || echo "$prog: warning — could not rpath asmtest-stealth-helper" >&2
+            fi
             ;;
         drtrace)
             assert_exports "$lib" asmtest_dr_available

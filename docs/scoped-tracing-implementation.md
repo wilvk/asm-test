@@ -114,8 +114,9 @@ concatenation by `seq` (no decode), host-testable from synthetic pre-decoded sli
 Test: `test_stitch_slices`. This closes the async-hop **merge** test hole; the live
 per-runtime tag→merge hooks remain forward-look.
 
-**Core test results:** `make hwtrace-test` → **183 passed, 0 failed** (up from 137);
-`make codeimage-test` → 12 passed; all on any x86-64 Linux, no hardware.
+**Core test results:** `make hwtrace-test` → **192 passed, 0 failed** (up from 137;
++9 for the §D3 bundled-helper discovery + dual-path assertions); `make codeimage-test`
+→ 12 passed; all on any x86-64 Linux, no hardware.
 
 ## Bindings slice — the scope construct across all ten tiers (DONE)
 
@@ -151,22 +152,39 @@ untraced). The .NET `AsmTrace` is the canonical reference shape the plan calls f
   implemented + host-tested (`test_stitch_slices`, `test_render_versioned`).
 - **§D1 Node** and **§D2 Java** scope constructs over a native leaf — implemented +
   tested (the managed-code capability's testable surface today).
-- **§D3 the concealed out-of-process ptrace-stealth stepper** — implemented +
-  CI-runnable. `asmtest_hwtrace_stealth_trace` spawns a helper **child** that
+- **§D3 the concealed out-of-process ptrace-stealth stepper + standalone-binary
+  bundling** — implemented + CI-runnable. `asmtest_hwtrace_stealth_trace`
   reverse-attaches to the caller (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` +
   `PTRACE_SEIZE`), drives it to the region entry (`run_to`), and single-steps the
   region out of band while the caller runs it (reusing the shipped
-  `asmtest_ptrace_trace_attached` W2 tracer against a shared shadow trace). Host test
-  `test_ptrace_scoped_stealth` (checks 158–161) asserts exact offsets vs ground truth
-  on any ptrace-capable Linux; it self-skips (`EUNAVAIL`) where Yama refuses the
-  reverse attach, and an `alarm()` watchdog in the helper means it never hangs CI.
+  `asmtest_ptrace_trace_attached` W2 tracer against a shared shadow trace). The
+  stepping body + bundled-binary discovery moved to
+  [src/stealth_helper.c](../src/stealth_helper.c) so the SAME code runs either as an
+  in-process forked child (the fallback) or as the **standalone
+  `asmtest-stealth-helper` binary** — a real separate process the managed packages can
+  ship — discovered via a dladdr-sibling lookup (mirroring `drtrace_app.c`) or the
+  `ASMTEST_STEALTH_HELPER` override, with the shared scratch handed over a memfd (it
+  survives `execv`, unlike the fork path's anonymous mapping). Build/install:
+  `$(BUILD)/asmtest-stealth-helper` + `install-stealth-helper` in
+  [mk/native-trace.mk](../mk/native-trace.mk). Host test `test_ptrace_scoped_stealth`
+  (checks 158–166) asserts **both** paths reconstruct the identical `[0,3,6,c,11]`
+  offsets on any ptrace-capable Linux; it self-skips (`EUNAVAIL`) where Yama refuses
+  the reverse attach, and an `alarm()` watchdog in the helper means it never hangs CI.
   This is the hardware-free scope path for Zen 2 / Docker-on-Mac.
+- **§D3 package embedding** — the built standalone helper is now bundled into every
+  native payload slot beside `libasmtest_hwtrace` and `$ORIGIN`-rpath'd so it resolves
+  the co-vendored Capstone in-package ([scripts/package-native.sh](../scripts/package-native.sh)),
+  copied into every managed payload (NuGet `runtimes/<rid>/native`, npm/Maven/gem/rock
+  via `emu_lib_slots`, the Python wheel `_libs/`), and asserted present + rpath'd (and
+  not leaked into a darwin slot) by a fail-closed `package-libs-verify` gate
+  ([mk/bindings.mk](../mk/bindings.mk)). Clean-room-verified: a full `package-libs` slot
+  passes the complete-set gate, `ldd asmtest-stealth-helper` resolves the in-slot
+  `libcapstone.so.5`, and a `dlopen` of the bundled `libasmtest_hwtrace.so` discovers the
+  helper as its dladdr sibling with the environment scrubbed.
 - **Forward-look:** §D0 (.NET `MethodLoadVerbose` address resolution, `AsyncLocal`
-  async-hop), the §D1/§D2 per-runtime async-hop hooks, and the §D3 **per-ecosystem
-  bundling** (a standalone helper binary + NuGet/npm/Maven packaging) + the
-  cross-process address channel for a live JIT's `MethodLoadVerbose` addresses. These
-  need managed runtimes, PT hardware, or the packaging surface to validate, and are
-  sequenced last exactly as the plan states.
+  async-hop), the §D1/§D2 per-runtime async-hop hooks, and — for §D3 — the cross-process
+  address channel for a live JIT's `MethodLoadVerbose` addresses. These need managed
+  runtimes or PT hardware to validate, and are sequenced last exactly as the plan states.
 
 ## Build fix (incidental, unblocks the binding test lanes)
 
@@ -190,7 +208,8 @@ needs.
 | Item | Lane | Needs |
 |---|---|---|
 | Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD honesty invariant | `make docker-hwtrace-amd` | AMD Zen 3+ + `--cap-add=PERFMON` (this box) |
-| §D3 reverse-attach ptrace-stealth stepper (`test_ptrace_scoped_stealth`) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
+| §D3 reverse-attach ptrace-stealth stepper **+ standalone `asmtest-stealth-helper` binary** (both paths, `test_ptrace_scoped_stealth` checks 158–166) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
+| §D3 helper **package embedding** — full `package-libs` slot, complete-set `package-libs-verify`, in-slot Capstone resolution, dladdr-sibling discovery from the bundled `.so` | `make package-libs && make package-libs-verify` (bindings-base image) | x86-64 Linux + emu toolchain (Capstone/patchelf) |
 | Core §0/§1-single-step/§2-adapter/§3-symbolize/§D4-merge + all 10 binding scopes | `make docker-hwtrace` + per-binding lanes | any x86-64 Linux |
 | eBPF code-emission detector | `make docker-hwtrace-codeimage` | `CAP_BPF` + kernel BTF (present) |
 | Managed-JIT tracing via the ptrace/W2 path (.NET/Node/Java) | `make docker-hwtrace-jit-{dotnet,node,java}` | a live runtime (in the image) |
@@ -206,7 +225,7 @@ needs.
 | Core §3.2 PT `aux_tail` circular drain | **bare-metal Intel PT** |
 | Single-step Windows/macOS front-ends | **Windows (VEH)** / **macOS-Intel** hosts |
 | §D0 live managed-JIT capability (`MethodLoadVerbose`, `AsyncLocal` hook) + §D1/§D2 async-hop hooks | a **live .NET/Node/JVM** runtime (Docker-reachable, but large; the ptrace tracing path already works) + **Intel PT** for cross-thread async-hop stitching |
-| §D3 helper **bundling** (standalone binary + NuGet/npm/Maven) | packaging/supply-chain work (Docker clean-room-verifiable) |
+| §D3 **cross-process address channel** — feeding the helper a live JIT's `MethodLoadVerbose` addresses over the process boundary (the standalone binary, build/install, dladdr discovery, **and per-ecosystem package embedding** are all done above) | a **live .NET/Node/JVM** runtime |
 
 Per the project's no-untested-hardware-code rule, every remaining live path ships
 **self-skipping and gated**, and the gate is exercised on every host.

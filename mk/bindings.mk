@@ -234,6 +234,11 @@ pkg_core_name    := $(notdir $(call shlib_dev,libasmtest))
 # Optional native-trace tier libs (Linux-only) staged into the same slot.
 pkg_hwtrace_name := $(notdir $(call shlib_dev,libasmtest_hwtrace))
 pkg_drapp_name   := $(notdir $(call shlib_dev,libasmtest_drapp))
+# §D3 concealed ptrace-stealth stepper: the standalone helper binary shipped NEXT TO
+# libasmtest_hwtrace in each payload, so its dladdr-sibling discovery finds it. A plain
+# executable (no lib*/.so name), so it must be copied EXPLICITLY — the lib*.so* globs
+# the payload copiers use never match it.
+pkg_stealth_name := asmtest-stealth-helper
 # Pinned DynamoRIO release for the bundled drtrace tier (see scripts/fetch-dynamorio.sh
 # + Dockerfile.drtrace). Kept in one place so the version shows up in THIRD-PARTY-LICENSES.
 DR_VERSION ?= 11.91.20630
@@ -283,8 +288,9 @@ package-libs-tiers:
 	  *) echo "package-libs: native-trace tiers are Linux-only — none staged for $(PKG_PLAT)" ;; \
 	esac
 
-package-libs-hwtrace: shared-hwtrace
+package-libs-hwtrace: shared-hwtrace $(BUILD)/asmtest-stealth-helper
 	cp -f $(call shlib_real,libasmtest_hwtrace) $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_hwtrace_name)
+	cp -f $(BUILD)/asmtest-stealth-helper $(PKG_DIST)/native/$(PKG_PLAT)/$(pkg_stealth_name)
 	sh scripts/package-native.sh --tier hwtrace $(PKG_DIST)/native/$(PKG_PLAT) $(pkg_hwtrace_name)
 
 # drtrace: linux-x86_64 only, needs DynamoRIO. Uses $DYNAMORIO_HOME if set, else fetches
@@ -327,7 +333,7 @@ python-package: package-libs manifest
 	# need no system-dep vendoring, and repairing the dlopen'd DR libs would
 	# relocate/rename libdynamorio and break drapp's sibling lookup. Absent on
 	# non-Linux slots, so the loop simply copies nothing there.
-	@for f in $(pkg_hwtrace_name) $(pkg_drapp_name) libasmtest_drclient.so libdynamorio.so; do \
+	@for f in $(pkg_hwtrace_name) $(pkg_stealth_name) $(pkg_drapp_name) libasmtest_drclient.so libdynamorio.so; do \
 	  cp -f $(PKG_DIST)/native/$(PKG_PLAT)/$$f bindings/python/asmtest/_libs/ 2>/dev/null \
 	    && echo "  python: bundled tier lib $$f" || true; \
 	done
@@ -347,8 +353,9 @@ define emu_lib_slots
 	  mkdir -p "$(1)/$$p"; \
 	  cp -f "$$pd"lib*.so* "$(1)/$$p/" 2>/dev/null || true; \
 	  cp -f "$$pd"lib*.dylib "$(1)/$$p/" 2>/dev/null || true; \
+	  cp -f "$$pd"$(pkg_stealth_name) "$(1)/$$p/" 2>/dev/null || true; \
 	  cp -Rf "$$pd"THIRD-PARTY-LICENSES "$(1)/$$p/" 2>/dev/null || true; \
-	  echo "  bundled $$p (lib + vendored deps + licenses)"; \
+	  echo "  bundled $$p (lib + vendored deps + $(pkg_stealth_name) + licenses)"; \
 	done
 endef
 
@@ -385,8 +392,9 @@ dotnet-package: native-payload-check
 	  mkdir -p bindings/dotnet/runtimes/$$rid/native; \
 	  cp -f "$$pd"lib*.so* bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
 	  cp -f "$$pd"lib*.dylib bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
+	  cp -f "$$pd"$(pkg_stealth_name) bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
 	  cp -Rf "$$pd"THIRD-PARTY-LICENSES bindings/dotnet/runtimes/$$rid/native/ 2>/dev/null || true; \
-	  echo "  bundled $$p -> runtimes/$$rid/native (lib + vendored deps + licenses)"; \
+	  echo "  bundled $$p -> runtimes/$$rid/native (lib + vendored deps + $(pkg_stealth_name) + licenses)"; \
 	done
 	$(DOTNET) pack bindings/dotnet/asmtest-lib.csproj -c Release \
 	  -p:PackageOutputPath=$(abspath $(PKG_DIST))/dotnet
@@ -480,7 +488,8 @@ package-libs-verify:
 	  done; \
 	  [ -d "$$pd/THIRD-PARTY-LICENSES" ] || miss="$$miss licenses"; \
 	  case "$$p" in \
-	    linux-*) ls "$$pd"/libasmtest_hwtrace.so* >/dev/null 2>&1 || miss="$$miss hwtrace"; ;; \
+	    linux-*) ls "$$pd"/libasmtest_hwtrace.so* >/dev/null 2>&1 || miss="$$miss hwtrace"; \
+	             ls "$$pd"/asmtest-stealth-helper >/dev/null 2>&1 || miss="$$miss stealth-helper"; ;; \
 	  esac; \
 	  case "$$p" in \
 	    linux-x86_64) for t in libasmtest_drapp libasmtest_drclient libdynamorio; do \
@@ -488,13 +497,18 @@ package-libs-verify:
 	  esac; \
 	  case "$$p" in \
 	    darwin-*) for t in libasmtest_hwtrace libasmtest_drapp libdynamorio; do \
-	                ! ls "$$pd"/$$t.* >/dev/null 2>&1 || miss="$$miss LINUX-TIER-LEAKED:$$t"; done; ;; \
+	                ! ls "$$pd"/$$t.* >/dev/null 2>&1 || miss="$$miss LINUX-TIER-LEAKED:$$t"; done; \
+	              ! ls "$$pd"/asmtest-stealth-helper >/dev/null 2>&1 || miss="$$miss LINUX-TIER-LEAKED:stealth-helper"; ;; \
 	  esac; \
 	  if command -v readelf >/dev/null 2>&1; then \
 	    for t in libasmtest_hwtrace libasmtest_drapp libasmtest_drclient; do \
 	      so=$$(ls "$$pd"/$$t.so* 2>/dev/null | head -1); [ -n "$$so" ] || continue; \
 	      readelf -d "$$so" 2>/dev/null | grep -Eq 'R(UN)?PATH.*ORIGIN' || miss="$$miss rpath:$$t"; \
 	    done; \
+	    helper=$$(ls "$$pd"/asmtest-stealth-helper 2>/dev/null | head -1); \
+	    if [ -n "$$helper" ]; then \
+	      readelf -d "$$helper" 2>/dev/null | grep -Eq 'R(UN)?PATH.*ORIGIN' || miss="$$miss rpath:stealth-helper"; \
+	    fi; \
 	  fi; \
 	  if [ -z "$$miss" ]; then \
 	    echo "  ok   $$p   (core, emu, deps, licenses; Linux native-trace tiers where applicable)"; \
