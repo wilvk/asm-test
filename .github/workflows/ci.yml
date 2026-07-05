@@ -101,6 +101,26 @@ jobs:
       - name: Benchmark demo (informational; cycles/call)
         run: make bench
 
+      # The single-step native-trace tier runs live on a stock runner (baseline
+      # EFLAGS.TF #DB -> SIGTRAP; no PMU/perf/privilege), and macOS-Intel is the one
+      # front-end no Linux/Docker lane can exercise (Docker-on-Mac is Linux). This is
+      # the only place the native-Darwin single-step path is regression-protected, so
+      # guard both the C parity suite AND the per-binding reachability — the W^X
+      # exec-memory helper (asmtest_hwtrace_exec_alloc) whose mmap/mprotect path is
+      # x86-64-Darwin-enabled; without it every binding's live trace fails at alloc.
+      - name: Build + install Capstone from source (single-step block normalization)
+        run: ./scripts/build-capstone.sh   # pinned source build; no brew/distro package
+
+      - name: Native-trace single-step tier — C parity suite (live capture on Darwin)
+        run: make hwtrace-test
+
+      # Two independent FFIs over the same asmtest_hwtrace_exec_alloc symbol; both use
+      # only preinstalled toolchains (clang, ruby), so no extra provisioning. The
+      # Python lane is covered on the Linux `hwtrace` job; other bindings inherit the
+      # fix wherever their toolchains exist on a macOS runner.
+      - name: Native-trace single-step tier — language bindings (macOS-native path)
+        run: make hwtrace-cpp-test hwtrace-ruby-test
+
   # x86-64 macOS / Mach-O on every push, without an Intel runner: the
   # Apple-Silicon `macos-latest` runner cross-builds the x86-64 slice with
   # `-arch x86_64` (a real x86-64 Mach-O, linked by the macOS linker) and the
