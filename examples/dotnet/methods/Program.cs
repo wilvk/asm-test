@@ -9,7 +9,7 @@
 // attributes the captured window to managed methods — so an arbitrary cold method is
 // identified BY NAME. Runs via the single-step WEAK tier: honest but intrusive (it also
 // single-steps the JIT compiling the cold method). The clean, non-intrusive path is the
-// STRONG whole-window PT tier (forward-look on this AMD host).
+// STRONG whole-window PT tier (forward-look).
 
 using System;
 using System.Runtime.CompilerServices;
@@ -39,7 +39,8 @@ internal static class Program
             return 0;
         }
         HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier (no Intel PT on this AMD host)\n");
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
+                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
 
         long r;
         AsmTrace ww;

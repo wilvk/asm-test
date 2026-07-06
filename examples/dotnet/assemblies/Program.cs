@@ -35,7 +35,8 @@ internal static class Program
             return 0;
         }
         HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier (no Intel PT on this AMD host)\n");
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
+                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
 
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))

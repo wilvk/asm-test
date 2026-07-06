@@ -31,7 +31,8 @@ internal static class Program
             return 0;
         }
         HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier (no Intel PT on this AMD host)\n");
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
+                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
 
         var code = NativeCode.FromBytes(ADD2);
         code.Call(20, 22); // warm the call path before the window
