@@ -23,6 +23,9 @@ internal static class Program
     {
         long s = 0;
         for (long i = 0; i < n; i++) s += a * (i + 1);
+        
+        Console.WriteLine($"-- ColdPath({a},{n}) = {s} --");
+
         return s;
     }
 
