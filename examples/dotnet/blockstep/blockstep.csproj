@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- BTF block-step (Ptrace.TraceCallBlockstep, PTRACE_SINGLEBLOCK): the same exact
+       out-of-process trace as single-step, at ~1 tracer stop per TAKEN branch instead of
+       one per instruction. A dependency-free console app that compiles the binding source
+       (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run`
+       works offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0) where
+       PTRACE_SINGLEBLOCK is unavailable. EnableDefaultCompileItems=false so it compiles
+       exactly Program.cs + Report.cs + the one binding source. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>blockstep</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

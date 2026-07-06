@@ -299,6 +299,17 @@ codeimage-test: $(BUILD)/test_codeimage
 $(BUILD)/jit_trace: $(HWTRACE_OBJS) $(BUILD)/jit_trace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
+# §D3 whole-window capture over the cross-process JIT-address channel: a self-contained
+# demo (no managed runtime) proving the stepper records methods it learns only through the
+# shared channel after forking. Runs on any ptrace-capable x86-64 Linux; self-skips where
+# ptrace is denied. `make windowed-trace` (and the docker-hwtrace lane below runs it).
+$(BUILD)/windowed_trace: $(HWTRACE_OBJS) $(BUILD)/windowed_trace.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
+
+.PHONY: windowed-trace
+windowed-trace: $(BUILD)/windowed_trace
+	./$(BUILD)/windowed_trace
+
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
         hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump \
         hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl
@@ -700,6 +711,8 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/callgraph/callgraph.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_native) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_native/ptrace_native.csproj
+	@echo "== hwtrace-dotnet-example (blockstep) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/blockstep/blockstep.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_dotnet) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
 

@@ -314,6 +314,11 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern void asmtest_ptrace_skip_reason(byte[] buf, UIntPtr buflen);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_call(
             IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace);
+        // BTF block-step (PTRACE_SINGLEBLOCK): same contract as trace_call but ~4-10x
+        // fewer tracer stops, reconstructing the identical trace. x86-64 Linux only.
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_blockstep_available();
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_call_blockstep(
+            IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached(
             int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_run_to(int pid, IntPtr addr);
@@ -861,6 +866,35 @@ namespace Asmtest
                 code, (UIntPtr)len, arr, n, out long result, trace);
             if (rc != HwNative.ASMTEST_PTRACE_OK)
                 throw new HwTraceException($"asmtest_ptrace_trace_call failed: {rc}");
+            return result;
+        }
+
+        /// <summary>True if BTF block-step (<c>PTRACE_SINGLEBLOCK</c>) can run here —
+        /// x86-64 Linux with a functional single-block step and Capstone. Callers
+        /// self-skip to <see cref="TraceCall"/> where it is false.</summary>
+        public static bool BlockstepAvailable()
+        {
+            if (!HwNative.LibAvailable) return false;
+            try { return HwNative.asmtest_ptrace_blockstep_available() != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// BTF block-step variant of <see cref="TraceCall"/>: drives
+        /// <c>PTRACE_SINGLEBLOCK</c> (one debug exception per TAKEN branch, ~4-10x fewer
+        /// tracer stops than per-instruction single-step) and reconstructs the IDENTICAL
+        /// per-instruction trace by disassembling each block's straight-line run. The only
+        /// exact real-CPU capture on Zen 2, and a rootless completeness fallback everywhere.
+        /// Throws where block-step is unavailable — probe <see cref="BlockstepAvailable"/>.
+        /// </summary>
+        public static long TraceCallBlockstep(IntPtr code, nuint len, long[] args, IntPtr trace)
+        {
+            var arr = (args == null || args.Length == 0) ? new long[1] : args;
+            int n = args == null ? 0 : args.Length;
+            int rc = HwNative.asmtest_ptrace_trace_call_blockstep(
+                code, (UIntPtr)len, arr, n, out long result, trace);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_call_blockstep failed: {rc}");
             return result;
         }
 

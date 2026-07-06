@@ -19,6 +19,7 @@ single-step cannot run.
 | [coverage/](coverage/) | `HwTrace.Create(blocks: N)` + `Region` | **basic-block coverage** of a branchy native routine across inputs — the never-covered block is the missing test case |
 | [callgraph/](callgraph/) | `new AsmTrace(byMethod: true, withRundown: true)` | reconstruct the dynamic **call tree + edges** from the labelled stream (shadow stack over `Disassembly`) |
 | [ptrace_native/](ptrace_native/) | `Ptrace.TraceCall(...)` | single-step native code running **out of process** (a forked `PTRACE_TRACEME` child) — no in-process SIGTRAP |
+| [blockstep/](blockstep/) | `Ptrace.TraceCallBlockstep(...)` | **BTF block-step** (`PTRACE_SINGLEBLOCK`) — the SAME exact trace at ~1 stop per taken branch instead of per instruction; the only exact real-CPU capture on Zen 2 |
 | [ptrace_dotnet/](ptrace_dotnet/) | `Ptrace` attach to `jit_dotnet` | **attach to a live CoreCLR** and single-step a real JIT'd method in *another* process — what in-process single-step cannot do |
 
 See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for more proposed
@@ -32,8 +33,8 @@ workload traced *out of process* by the C `jit_trace` harness — driven by
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all twelve, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all twelve, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all thirteen, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all thirteen, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
@@ -47,6 +48,7 @@ dotnet run --project examples/dotnet/hotspots/hotspots.csproj
 dotnet run --project examples/dotnet/coverage/coverage.csproj
 dotnet run --project examples/dotnet/callgraph/callgraph.csproj
 dotnet run --project examples/dotnet/ptrace_native/ptrace_native.csproj
+dotnet run --project examples/dotnet/blockstep/blockstep.csproj
 dotnet run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
 ```
 

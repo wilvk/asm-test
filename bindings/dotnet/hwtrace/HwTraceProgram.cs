@@ -739,6 +739,25 @@ static class HwTraceProgram
             code.Free();
         }
 
+        // (1a) block-step (PTRACE_SINGLEBLOCK): same trace, ~4-10x fewer tracer stops.
+        if (Ptrace.BlockstepAvailable())
+        {
+            var code = NativeCode.FromBytes(ROUTINE);
+            var tr = HwTrace.Create(blocks: 64, instructions: 64);
+            long result = Ptrace.TraceCallBlockstep(code.Base, (nuint)code.Length,
+                                                    new long[] { 20, 22 }, tr.Handle);
+            Check(result == 42, $"ptrace: block-step trace_call(20,22) == 42 (got {result})");
+            var insns = tr.InsnOffsets();
+            var wantInsns = new ulong[] { 0x0, 0x3, 0x6, 0xC, 0x11 };
+            Check(Eq(insns, wantInsns),
+                  $"ptrace: block-step reconstructs the exact single-step offsets {Hex(insns)}");
+            Check(!tr.Truncated(), "ptrace: block-step trace not truncated");
+            tr.Free();
+            code.Free();
+        }
+        else
+            Console.WriteLine("# SKIP ptrace block-step: PTRACE_SINGLEBLOCK unavailable here");
+
         // (1b) run_to drives an attached target to a resolved method (software
         // breakpoint). A live foreign attach is covered by the C suite; exercise the FFI
         // round-trip safely — a NULL target address is rejected (EINVAL, non-zero)
