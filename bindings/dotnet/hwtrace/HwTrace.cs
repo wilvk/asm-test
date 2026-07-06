@@ -1230,8 +1230,55 @@ namespace Asmtest
     public readonly struct AsmMethod
     {
         public AsmMethod(string name, long count) { Name = name; Count = count; }
+        /// <summary>The full name as recorded (jitdump/perf-map spelling
+        /// <c>&lt;ret&gt; [&lt;assembly&gt;] Type::Method(sig)[tier]</c>, or the listener's dotted
+        /// <c>Namespace.Method</c>).</summary>
         public string Name { get; }
+        /// <summary>Captured instructions attributed to the method.</summary>
         public long Count { get; }
+
+        /// <summary>The declaring assembly/module in the jitdump/perf-map spelling
+        /// <c>&lt;ret&gt; [&lt;assembly&gt;] Type::Method(sig)[tier]</c> — e.g.
+        /// <c>System.Private.CoreLib</c>, <c>System.Console</c>. Empty for a listener-spelled
+        /// name that carries no assembly tag. Anchored on the <c>[...]</c> immediately before
+        /// the <c>Type::Method</c> separator — NOT the first <c>[</c>, because the return type
+        /// can itself contain brackets (e.g. an array return <c>!0[]</c> or a generic).</summary>
+        public string Assembly => Bracketed(out string asm, out _) ? asm : "";
+
+        /// <summary>The method itself — <c>Type::Method(sig)</c> — without the return type,
+        /// <c>[assembly]</c>, or trailing <c>[tier]</c>. Falls back to <see cref="Name"/> for a
+        /// listener-spelled name.</summary>
+        public string ShortName
+        {
+            get
+            {
+                string s = Bracketed(out _, out int after) ? Name.Substring(after) : Name;
+                // Strip a trailing "[tier]" (e.g. "[PreJIT]") — the tag after the signature's ')'.
+                int rp = s.LastIndexOf(')');
+                int lt = s.LastIndexOf('[');
+                if (lt > rp && s.EndsWith("]")) s = s.Substring(0, lt);
+                return s.Trim();
+            }
+        }
+
+        // Locate the "[<assembly>] " tag: the last "] " that precedes the "Type::Method"
+        // separator ("::"). The return type may contain "[]" (array) or generic brackets, so
+        // the first "[" is unsafe; the arg list may contain "[Assembly]" too, so we look only
+        // left of "::". Returns false for a listener-spelled name (no such tag).
+        private bool Bracketed(out string assembly, out int afterTag)
+        {
+            assembly = ""; afterTag = 0;
+            int sep = Name.IndexOf("::");
+            int scan = sep < 0 ? Name.Length : sep;
+            if (scan < 2) return false;
+            int rb = Name.LastIndexOf("] ", scan - 1, System.StringComparison.Ordinal);
+            if (rb < 0) return false;
+            int lb = Name.LastIndexOf('[', rb);
+            if (lb < 0) return false;
+            assembly = Name.Substring(lb + 1, rb - lb - 1);
+            afterTag = rb + 2;
+            return true;
+        }
     }
 
     /// <summary>

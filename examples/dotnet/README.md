@@ -12,17 +12,20 @@ single-step cannot run.
 | [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
 | [methods/](methods/) | `using (new AsmTrace())` | labelling the captured window by **managed method** (§D0.1) — names an arbitrary **cold** method |
 | [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm + ReadyToRun (R2R) BCL** methods (§D0.2) via an in-process jitdump rundown — dependency-free, no launch knob |
+| [assemblies/](assemblies/) | `new AsmTrace(byMethod: true, withRundown: true)` | groups the labelled window **by declaring assembly**, listing the methods called in each (`AsmMethod.Assembly` / `.ShortName`) |
 
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all three, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all three, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all five, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all five, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
 dotnet run --project examples/dotnet/region/region.csproj
 dotnet run --project examples/dotnet/methods/methods.csproj
+dotnet run --project examples/dotnet/rundown/rundown.csproj
+dotnet run --project examples/dotnet/assemblies/assemblies.csproj
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -132,6 +135,37 @@ as these R2R callees.) Self-skips to the cold-only result where diagnostics are 
 (`DOTNET_EnableDiagnostics=0` → `rundown enabled: False`). See
 [dotnet-perfmap-rundown-plan.md](../../docs/plans/dotnet-perfmap-rundown-plan.md).
 
+## assemblies — grouping the window by declaring assembly (observed output)
+
+Same rundown capture, re-cut **by assembly** instead of a flat method list: `AsmMethod.Assembly`
+and `AsmMethod.ShortName` split each labelled name (`<ret> [<assembly>] Type::Method(sig)[tier]`)
+into its module and its bare `Type::Method(sig)`, so the demo just groups `ww.Methods` by
+`m.Assembly` and prints the methods under each. A one-line `Work()` (a `string.Join` + a
+`Console.WriteLine`) already spans three assemblies:
+
+```
+rundown enabled: True; 51 methods across 4 assemblies (1869 instructions labelled).
+
+  [System.Console]  — 10 method(s), 256 instructions
+        65  System.ConsolePal::Write(SafeFileHandle,ReadOnlySpan`1<uint8>,bool)
+        16  System.Console::WriteLine(string)
+        ...
+  [System.Private.CoreLib]  — 32 method(s), 1186 instructions
+       184  System.String::JoinCore(ReadOnlySpan`1<char>,ReadOnlySpan`1<string>)
+       105  System.IO.StreamWriter::WriteLine(string)
+        46  System.Buffers.SharedArrayPool`1[System.Char]::Rent(int32)
+        ...
+  [(in-scope / no assembly tag)]  — 7 method(s), 385 instructions
+       224  System.Buffer.Memmove          <- cold, listener-spelled (no assembly tag)
+        78  Program.Work
+```
+
+The parse anchors the assembly on the `] ` immediately before `::` (not the first `[`), so a
+bracketed return type (`instance !0[] [System.Private.CoreLib] …`, an array return) or a
+generic type right before `::` (`…[System.__Canon]::FromManaged`) is grouped by its real
+assembly, not a stray bracket. Listener-spelled cold names (`§D0.1`, dotted `Type.Method`)
+carry no tag and fall into the `(in-scope / no assembly tag)` bucket honestly.
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -145,6 +179,9 @@ as these R2R callees.) Self-skips to the cold-only result where diagnostics are 
 - `AsmTrace.Methods` / `.LabelledInstructions` / `.MethodsObserved` /
   `.InstructionsIn(name)` — the per-managed-method breakdown of a `byMethod` scope
   (data only; the caller presents it). Used by [methods/](methods/).
+- `AsmMethod.Assembly` / `.ShortName` — split a labelled name into its declaring assembly
+  and its bare `Type::Method(sig)` (empty assembly for a listener-spelled dotted name).
+  Used by [assemblies/](assemblies/).
 - `AsmTrace.Path` — the rendered disassembly (region-scoped form).
 - `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
 - `JitMethodMap` — the underlying in-process address→method map (§D0.1), if you want

@@ -86,6 +86,9 @@ static class HwTraceProgram
             return 0;
         }
 
+        // --- AsmMethod name parsing (pure, host-independent) --- //
+        AsmMethodChecks();
+
         try
         {
             // --- fixture 1: ROUTINE, exact instruction stream + block coverage --- //
@@ -330,6 +333,36 @@ static class HwTraceProgram
 
         Console.WriteLine($"1..{_n}");
         return _failed ? 1 : 0;
+    }
+
+    // Pure-parse checks for AsmMethod.Assembly / .ShortName (no backend needed). The
+    // jitdump/perf-map grammar is "<ret> [<assembly>] Type::Method(sig)[tier]"; the assembly
+    // must anchor on the "] " immediately before "::" — NOT the first "[" — so a bracketed
+    // return type ("!0[]" array / generic), a generic TYPE ("[System.__Canon]") right before
+    // "::", and an "[Assembly]" inside the ARG list are all handled.
+    static void AsmMethodChecks()
+    {
+        var plain = new AsmMethod("void [System.Console] System.Console::WriteLine(string)[PreJIT]", 1);
+        Check(plain.Assembly == "System.Console", $"AsmMethod.Assembly plain == System.Console (got '{plain.Assembly}')");
+        Check(plain.ShortName == "System.Console::WriteLine(string)", $"AsmMethod.ShortName plain (got '{plain.ShortName}')");
+
+        // Array return "!0[]": its "[]" must NOT be mistaken for the assembly tag.
+        var arr = new AsmMethod("instance !0[] [System.Private.CoreLib] System.Buffers.SharedArrayPool`1[System.Char]::Rent(int32)[PreJIT]", 1);
+        Check(arr.Assembly == "System.Private.CoreLib", $"AsmMethod.Assembly array-return == CoreLib (got '{arr.Assembly}')");
+        Check(arr.ShortName == "System.Buffers.SharedArrayPool`1[System.Char]::Rent(int32)", $"AsmMethod.ShortName array-return (got '{arr.ShortName}')");
+
+        // Generic type "[System.__Canon]" right before "::": assembly is still CoreLib.
+        var gen = new AsmMethod("void [System.Private.CoreLib] System.Runtime.InteropServices.Marshalling.SafeHandleMarshaller`1+ManagedToUnmanagedIn[System.__Canon]::FromManaged(!0)[PreJIT]", 1);
+        Check(gen.Assembly == "System.Private.CoreLib", $"AsmMethod.Assembly generic-type == CoreLib (got '{gen.Assembly}')");
+
+        // "[System.Runtime]" inside the arg list (after "::") must not be picked.
+        var arg = new AsmMethod("void [System.Console] System.ConsolePal::Write(class [System.Runtime]Microsoft.Win32.SafeHandles.SafeFileHandle,bool)[PreJIT]", 1);
+        Check(arg.Assembly == "System.Console", $"AsmMethod.Assembly arg-bracket == System.Console (got '{arg.Assembly}')");
+
+        // Listener-spelled dotted name carries no assembly tag.
+        var dotted = new AsmMethod("System.Buffer.Memmove", 1);
+        Check(dotted.Assembly == "", $"AsmMethod.Assembly dotted == '' (got '{dotted.Assembly}')");
+        Check(dotted.ShortName == "System.Buffer.Memmove", $"AsmMethod.ShortName dotted (got '{dotted.ShortName}')");
     }
 
     // mov rax,rdi; add rax,rsi; ret  (the bytes round-tripped through the code image)
