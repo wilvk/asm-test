@@ -11,6 +11,7 @@ single-step cannot run.
 | [wholewindow/](wholewindow/) | `using (new AsmTrace())` | zero-config whole-window capture + attributing two native leaves apart from the runtime |
 | [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
 | [methods/](methods/) | `using (new AsmTrace())` | labelling the captured window by **managed method** (§D0.1) — names an arbitrary **cold** method |
+| [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm** methods (§D0.2) via an in-process perf-map rundown — dependency-free, no launch knob |
 
 ## Run them
 
@@ -104,10 +105,36 @@ the **STRONG** whole-window PT tier (forward-look here). See
 [docs/plans/scoped-tracing-zeroconfig-plan.md](../../docs/plans/scoped-tracing-zeroconfig-plan.md)
 §Z3 and the managed plan's §D0.1.
 
+## rundown — naming WARM methods too (§D0.2, observed output)
+
+The §D0.1 `JitMethodMap` only names methods JIT'd *inside* the scope, so warm methods
+(e.g. `Program::Main`, the BCL) land in the runtime remainder. `withRundown: true` asks
+the runtime — over its own diagnostics socket, **no NuGet, no `DOTNET_PerfMapEnabled`** —
+to run down all already-JIT'd methods into `/tmp/perf-<pid>.map`, which `AsmTrace` folds
+into the breakdown:
+
+```
+rundown enabled: True; captured 973328 instructions (truncated); 8 methods labelled; 156 instructions.
+    ...
+    22  instance void [rundown] Asmtest.AsmTrace::.ctor(...)[MinOptJitted]   <- WARM (perf-map)
+    20  int32 [rundown] Program::Main()[MinOptJitted]                        <- WARM (perf-map)
+    11  Program.Work                                                          <- cold (listener)
+     6  System.Threading.Monitor.Enter                                        <- cold (listener)
+-> a WARM method — Program::Main, JIT'd at startup BEFORE the scope — is now named.
+```
+
+Warm methods carry the perf-map `::` spelling; cold in-scope methods keep the listener's
+dotted spelling. Self-skips to the cold-only result where diagnostics are off
+(`DOTNET_EnableDiagnostics=0` → `rundown enabled: False`). See
+[dotnet-perfmap-rundown-plan.md](../../docs/plans/dotnet-perfmap-rundown-plan.md).
+
 ## API used
 
-- `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` — the
-  empty-ctor, region-scoped, and method-labelling scopes.
+- `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
+  `new AsmTrace(withRundown: true)` — the empty-ctor, region-scoped, method-labelling
+  (cold), and rundown (warm + cold) scopes.
+- `AsmTrace.RundownEnabled` — whether the §D0.2 rundown was accepted; `DiagnosticsIpc` /
+  `JitMethodMap.LoadPerfMap` are the underlying pieces.
 - `AsmTrace.Addresses` — the raw absolute addresses a whole-window scope captured.
 - `AsmTrace.CountInRange(start, len)` — how many landed in a known native region
   (tells native leaves apart; used by [wholewindow/](wholewindow/)).

@@ -20,7 +20,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Tracing;
+using System.Globalization;
 using System.IO;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -1029,6 +1031,10 @@ namespace Asmtest
         public int MethodsObserved { get; private set; }
         /// <summary>§D0.1: captured instructions attributed to a managed method.</summary>
         public long LabelledInstructions { get; private set; }
+        /// <summary>§D0.2: true if the <c>withRundown</c> perf-map rundown was accepted by the
+        /// runtime — so <see cref="Methods"/> also names WARM methods (JIT'd before the scope).
+        /// False (a clean self-skip to the cold-only result) where diagnostics are off.</summary>
+        public bool RundownEnabled { get; private set; }
         /// <summary>The auto-generated (or explicit) region name.</summary>
         public string Name => _name;
 
@@ -1067,16 +1073,27 @@ namespace Asmtest
         /// exposes <see cref="Methods"/> / <see cref="LabelledInstructions"/> / <see
         /// cref="InstructionsIn"/> on close. Enables an in-process JIT map for the scope's
         /// lifetime (CoreCLR); leave false to skip that overhead.</param>
-        public AsmTrace(bool emit = true, bool byMethod = false,
+        /// <param name="withRundown">§D0.2: additionally resolve WARM methods (JIT'd before
+        /// the scope, e.g. <c>System.Console.WriteLine</c>) by asking the runtime for a
+        /// perf-map rundown over its own diagnostics socket (dependency-free, no launch
+        /// knob; see <see cref="DiagnosticsIpc"/>). Implies <paramref name="byMethod"/>.
+        /// Self-skips to the cold-only result where diagnostics are off. CoreCLR/Linux.</param>
+        public AsmTrace(bool emit = true, bool byMethod = false, bool withRundown = false,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
             _name = ScopeName(member, line);
             _emit = emit;
             _wholeWindow = true;
-            // §D0.1: enable the method map BEFORE arming, so it sees the methods JIT'd
+            // §D0.1/§D0.2: enable the method map BEFORE arming, so it sees the methods JIT'd
             // inside the scope (an in-proc listener sees only methods JIT'd after enable).
-            if (byMethod) _map = new JitMethodMap();
+            if (byMethod || withRundown) _map = new JitMethodMap();
+            // §D0.2: trigger the perf-map rundown BEFORE arming — its socket code must run
+            // at full speed, NOT under single-step (which would step the whole .NET socket
+            // stack). The rundown captures the already-JIT'd WARM methods retroactively; the
+            // runtime logs cold ones forward. A self-skip still gets DisablePerfMap on close,
+            // so it is enabled only briefly, never left on process-wide.
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
             _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
             // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
             // retained trace to the single-step window ring (SS_WINDOW_CAP = 1<<20) — a
@@ -1157,6 +1174,15 @@ namespace Asmtest
                 // the caller decides how to present Methods / LabelledInstructions.
                 if (_map != null)
                 {
+                    // §D0.2: fold in the perf-map rundown (WARM methods too) if it was
+                    // enabled; a missing/partial file just leaves the cold-only entries.
+                    // Then turn perf-map generation back off so it is not left on
+                    // process-wide (unbounded file growth / per-JIT overhead).
+                    if (RundownEnabled)
+                    {
+                        _map.LoadPerfMap(DiagnosticsIpc.PerfMapPath());
+                        DiagnosticsIpc.DisablePerfMap();
+                    }
                     _map.Freeze();
                     var by = new Dictionary<string, long>();
                     long labelled = 0;
@@ -1325,6 +1351,175 @@ namespace Asmtest
                 else return s[mid].Name;
             }
             return null;
+        }
+
+        /// <summary>§D0.2: fold in a perf-map file (<c>/tmp/perf-&lt;pid&gt;.map</c>, lines
+        /// <c>&lt;hexStart&gt; &lt;hexSize&gt; &lt;name&gt;</c>) — which, via a rundown, covers WARM
+        /// methods (JIT'd before the scope) the forward-only listener misses. Additive;
+        /// call before <see cref="Freeze"/>. Returns the number of entries loaded (0 on a
+        /// missing/unreadable file); never throws.</summary>
+        public int LoadPerfMap(string path)
+        {
+            int n = 0;
+            try
+            {
+                if (!File.Exists(path)) return 0;
+                // Skip any start address already known — so a cold in-scope method that
+                // BOTH the listener (dotted name) and the forward-logging perf-map
+                // (Type::Method name) recorded keeps its listener spelling, and only
+                // genuinely-new WARM entries are added (distinct methods/tiers have
+                // distinct start addresses). Prevents a nondeterministic Resolve winner.
+                HashSet<ulong> seen;
+                lock (_lock)
+                {
+                    seen = new HashSet<ulong>(_methods.Count);
+                    foreach (var m in _methods) seen.Add(m.Start);
+                }
+                foreach (string line in File.ReadLines(path))
+                {
+                    int sp1 = line.IndexOf(' ');
+                    if (sp1 <= 0) continue;
+                    int sp2 = line.IndexOf(' ', sp1 + 1);
+                    if (sp2 <= sp1) continue;
+                    // The .NET perf-map prints the address 0x-prefixed ("0x7f.. ab name"),
+                    // which NumberStyles.HexNumber rejects — strip a leading 0x on either field.
+                    ReadOnlySpan<char> startTok = Unprefix(line.AsSpan(0, sp1));
+                    ReadOnlySpan<char> sizeTok = Unprefix(line.AsSpan(sp1 + 1, sp2 - sp1 - 1));
+                    if (!ulong.TryParse(startTok, NumberStyles.HexNumber,
+                                        CultureInfo.InvariantCulture, out ulong start)) continue;
+                    if (!ulong.TryParse(sizeTok, NumberStyles.HexNumber,
+                                        CultureInfo.InvariantCulture, out ulong size)) continue;
+                    if (start == 0 || size == 0) continue;
+                    if (!seen.Add(start)) continue; // dedupe vs listener entries + repeats
+                    string name = line.Substring(sp2 + 1);
+                    lock (_lock)
+                    {
+                        _methods.Add(new Entry { Start = start, End = start + size, Name = name });
+                        _frozen = null;
+                    }
+                    n++;
+                }
+            }
+            catch { /* partial/unreadable perf-map: keep whatever loaded */ }
+            return n;
+        }
+
+        static ReadOnlySpan<char> Unprefix(ReadOnlySpan<char> t)
+            => (t.Length > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) ? t.Slice(2) : t;
+    }
+
+    /// <summary>
+    /// §D0.2 — a dependency-free client for the ONE CoreCLR diagnostics-IPC command we
+    /// need: <c>EnablePerfMap</c>. It asks the runtime (over the Unix domain socket the
+    /// runtime opens at startup) to run down ALL already-JIT'd methods into
+    /// <c>/tmp/perf-&lt;pid&gt;.map</c> and log new ones forward — so a whole-window capture can
+    /// be labelled by WARM methods too, with no NuGet package and no launch knob. It
+    /// hand-rolls the documented <c>DOTNET_IPC_V1</c> wire format (pinned to .NET 8+) using
+    /// only BCL sockets, and self-skips (returns false, never throws) where diagnostics are
+    /// off (<c>DOTNET_EnableDiagnostics=0</c>) or the protocol errors — the caller then falls
+    /// back to the cold-only <see cref="JitMethodMap"/> result.
+    /// </summary>
+    public static class DiagnosticsIpc
+    {
+        // DiagnosticsServerCommandSet.Process / ProcessCommandId.{Enable,Disable}PerfMap; PerfMapType.PerfMap.
+        const byte CommandSet_Process = 0x04;
+        const byte CommandId_EnablePerfMap = 0x05;
+        const byte CommandId_DisablePerfMap = 0x06;
+        const uint PerfMapType_PerfMap = 3;
+        const byte CommandSet_Server = 0xFF; // response command set
+        const byte CommandId_OK = 0x00;      // response OK
+        const int IpcTimeoutMs = 1000;       // never hang the traced scope on a stalled peer
+        static readonly byte[] Magic = System.Text.Encoding.ASCII.GetBytes("DOTNET_IPC_V1\0"); // 14 bytes
+
+        /// <summary>Ask the runtime to (rundown +) write <c>/tmp/perf-&lt;pid&gt;.map</c>.
+        /// Returns true on an OK response; false on any failure (clean self-skip).</summary>
+        public static bool EnablePerfMap() => Send(CommandId_EnablePerfMap, PerfMapType_PerfMap);
+
+        /// <summary>Turn perf-map generation back off (paired with <see cref="EnablePerfMap"/>
+        /// so it is not left enabled process-wide after the scope). Best-effort.</summary>
+        public static bool DisablePerfMap() => Send(CommandId_DisablePerfMap, null);
+
+        static bool Send(byte commandId, uint? payload)
+        {
+            try
+            {
+                string sock = FindSocket();
+                if (sock == null) return false;
+                using var s = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                s.SendTimeout = IpcTimeoutMs;
+                s.ReceiveTimeout = IpcTimeoutMs;
+                s.Connect(new UnixDomainSocketEndPoint(sock));
+
+                // IpcMessage: header(20) = magic(14) + size(u16 LE) + cmdSet + cmdId +
+                // reserved(u16); optional payload = u32 LE (EnablePerfMap: PerfMapType).
+                int total = payload.HasValue ? 24 : 20;
+                var msg = new byte[total];
+                Array.Copy(Magic, 0, msg, 0, 14);
+                msg[14] = (byte)(total & 0xff); msg[15] = (byte)(total >> 8);
+                msg[16] = CommandSet_Process;
+                msg[17] = commandId;
+                // reserved (18,19) stays 0
+                if (payload.HasValue)
+                {
+                    uint v = payload.Value;
+                    msg[20] = (byte)v; msg[21] = (byte)(v >> 8);
+                    msg[22] = (byte)(v >> 16); msg[23] = (byte)(v >> 24);
+                }
+                s.Send(msg);
+
+                var hdr = new byte[20];
+                if (!ReadExact(s, hdr, 20)) return false;
+                int size = hdr[14] | (hdr[15] << 8);
+                if (size > 20) { var pl = new byte[size - 20]; ReadExact(s, pl, pl.Length); }
+                return hdr[16] == CommandSet_Server && hdr[17] == CommandId_OK;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>The perf-map path the runtime writes for this process.</summary>
+        public static string PerfMapPath()
+            => Path.Combine(TempDir(), $"perf-{Environment.ProcessId}.map");
+
+        static string TempDir()
+        {
+            string t = Environment.GetEnvironmentVariable("TMPDIR");
+            return string.IsNullOrEmpty(t) ? "/tmp" : t;
+        }
+
+        static string FindSocket()
+        {
+            int pid = Environment.ProcessId;
+            foreach (string dir in new[] { TempDir(), "/tmp" })
+            {
+                if (!Directory.Exists(dir)) continue;
+                string[] hits;
+                try { hits = Directory.GetFiles(dir, $"dotnet-diagnostic-{pid}-*-socket"); }
+                catch { continue; }
+                if (hits.Length == 0) continue;
+                // Prefer the NEWEST socket — after PID reuse a stale one from a crashed
+                // prior process can share our pid, and its name may sort last.
+                string best = hits[0];
+                DateTime bestT = DateTime.MinValue;
+                foreach (string h in hits)
+                {
+                    try { DateTime t = File.GetLastWriteTimeUtc(h); if (t >= bestT) { bestT = t; best = h; } }
+                    catch { }
+                }
+                return best;
+            }
+            return null;
+        }
+
+        static bool ReadExact(Socket s, byte[] buf, int n)
+        {
+            int off = 0;
+            while (off < n)
+            {
+                int r = s.Receive(buf, off, n - off, SocketFlags.None);
+                if (r <= 0) return false;
+                off += r;
+            }
+            return true;
         }
     }
 

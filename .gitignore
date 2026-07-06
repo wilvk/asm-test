@@ -67,3 +67,7 @@ isolate-*.log
 # .NET build artifacts from the hwtrace-jit-dotnet sample
 examples/jit_dotnet/obj/
 examples/jit_dotnet/bin/
+
+# .NET build artifacts from the examples/dotnet demo projects
+examples/dotnet/**/obj/
+examples/dotnet/**/bin/
