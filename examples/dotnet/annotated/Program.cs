@@ -36,30 +36,25 @@ internal static class Program
     {
         Console.WriteLine("== annotated execution trace: each instruction next to its method ==\n");
 
-        if (!HwTrace.Available(HwBackend.SingleStep))
-        {
-            Console.WriteLine($"# self-skip: single-step backend unavailable: {HwTrace.SkipReason(HwBackend.SingleStep)}");
-            return 0;
-        }
-        HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
-                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)");
-
+        // No HwTrace.Init / Available pre-check: the whole-window ctor lazily brings up the
+        // portable single-step tier itself and reports honestly via Armed / SkipReason. So the
+        // setup is just the `using` — the aspirational zero-config form.
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))
             Work();
+
         if (!ww.Armed)
         {
             Console.WriteLine($"# self-skip: {ww.SkipReason}");
             return 0;
         }
-        Console.WriteLine($"rundown enabled: {ww.RundownEnabled}\n");
-
         if (!ww.DisassemblyAvailable)
         {
             Console.WriteLine("# self-skip: this build has no Capstone, so instructions cannot be disassembled.");
             return 0;
         }
+        Console.WriteLine("backend: single-step WEAK tier (auto-inited; the portable x86-64 Linux default)");
+        Console.WriteLine($"rundown enabled: {ww.RundownEnabled}\n");
 
         long runtime = ww.Addresses.Length - ww.LabelledInstructions;
         Console.WriteLine($"captured {ww.Addresses.Length} instructions; {ww.LabelledInstructions} labelled "

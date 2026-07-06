@@ -77,6 +77,14 @@ static class HwTraceProgram
             return 0;
         }
 
+        // --- §Z0 auto-init: a whole-window scope needs no explicit HwTrace.Init --- //
+        // BEFORE any Init below: the empty-ctor whole-window ctor must lazily bring up the
+        // single-step tier itself, so `using (new AsmTrace())` works with zero setup.
+        AsmTrace autoInit;
+        using (autoInit = new AsmTrace(emit: false)) { }
+        Check(autoInit.Armed,
+              $"AsmTrace(): ctor auto-inits the single-step tier without an explicit HwTrace.Init ({autoInit.SkipReason})");
+
         try
         {
             HwTrace.Init(HwBackend.SingleStep);

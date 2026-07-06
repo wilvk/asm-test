@@ -66,10 +66,16 @@ namespace Asmtest
     {
         const string HWTRACE = "asmtest_hwtrace";
 
+        // Must match include/asmtest_hwtrace.h exactly (ASMTEST_HW_*). NOTE: ESTATE is -2,
+        // NOT -4 — an earlier value was wrong but never exercised, since callers only hit
+        // begin_window's ESTATE path once the empty-ctor scope started auto-initing the tier.
         public const int ASMTEST_HW_OK = 0;
+        public const int ASMTEST_HW_EINVAL = -1;   // bad argument
+        public const int ASMTEST_HW_ESTATE = -2;   // tier not up / wrong state
         public const int ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available
-        public const int ASMTEST_HW_ESTATE = -4;   // tier not up
         public const int ASMTEST_HW_ENOSYS = -5;   // not built / not this platform
+        public const int ASMTEST_HW_EFULL = -6;    // this thread's range stack is full
+        public const int ASMTEST_HW_EDECODE = -8;  // capture/decode failure
         public const int SINGLESTEP = 3;
 
         // asmtest_hwtrace_scope_t: a region-free (§Z0/§Z1) scope handle — an index into
@@ -500,6 +506,13 @@ namespace Asmtest
 
         // ---- process-wide lifecycle ----
 
+        // Guards the process-wide tier init so the empty-ctor whole-window scope can
+        // lazily bring it up (see AsmTrace's auto-init) without a race against explicit
+        // Init/Shutdown. TierInited mirrors the native g_inited for the paths this binding
+        // controls; the lock serializes first-use init across threads.
+        internal static readonly object TierLock = new object();
+        internal static bool TierInited;
+
         /// <summary>
         /// True if the chosen backend can run on this host (self-skip otherwise).
         /// Never throws — a missing lib or unavailable backend returns false so
@@ -600,14 +613,25 @@ namespace Asmtest
         /// </summary>
         public static void Init(HwBackend backend = HwBackend.SingleStep)
         {
-            var opts = new HwNative.Options { Backend = (int)backend };
-            int rc = HwNative.asmtest_hwtrace_init(ref opts);
-            if (rc != HwNative.ASMTEST_HW_OK)
-                throw new HwTraceException($"asmtest_hwtrace_init failed: {rc}");
+            lock (TierLock)
+            {
+                var opts = new HwNative.Options { Backend = (int)backend };
+                int rc = HwNative.asmtest_hwtrace_init(ref opts);
+                if (rc != HwNative.ASMTEST_HW_OK)
+                    throw new HwTraceException($"asmtest_hwtrace_init failed: {rc}");
+                TierInited = true;
+            }
         }
 
         /// <summary>Tear the hardware-trace tier down.</summary>
-        public static void Shutdown() => HwNative.asmtest_hwtrace_shutdown();
+        public static void Shutdown()
+        {
+            lock (TierLock)
+            {
+                HwNative.asmtest_hwtrace_shutdown();
+                TierInited = false;
+            }
+        }
 
         // ---- per-trace ----
 
@@ -1106,6 +1130,15 @@ namespace Asmtest
             _name = ScopeName(member, line);
             _emit = emit;
             _wholeWindow = true;
+            // Honor the "never throws" contract: with no native lib loaded, the first P/Invoke
+            // (asmtest_trace_new) would throw DllNotFoundException. Self-skip cleanly (Armed
+            // stays false, SkipReason set) so `using (new AsmTrace())` degrades, not crashes —
+            // the same LibAvailable guard HwTrace.Available/Resolve/Auto already use.
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
             // §D0.1/§D0.2: enable the method map BEFORE arming, so it sees the methods JIT'd
             // inside the scope (an in-proc listener sees only methods JIT'd after enable).
             if (byMethod || withRundown) _map = new JitMethodMap();
@@ -1124,17 +1157,48 @@ namespace Asmtest
             int rc = _handle != IntPtr.Zero
                 ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
                 : HwNative.ASMTEST_HW_ENOSYS;
+            if (rc == HwNative.ASMTEST_HW_ESTATE)
+            {
+                // §Z0: the tier was never inited — auto-init the portable single-step backend
+                // and retry once, so `using (new AsmTrace())` needs no explicit HwTrace.Init.
+                // This fires ONLY when nothing is inited (begin_window returns ESTATE); an
+                // explicit Init of any backend is preserved (begin_window then returns OK or
+                // EUNAVAIL, never ESTATE). begin_window on ESTATE is a side-effect-free no-op,
+                // so the retry is safe.
+                int initRc = AutoInitSingleStep();
+                rc = initRc == HwNative.ASMTEST_HW_OK
+                    ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
+                    : initRc;
+            }
             Armed = rc == HwNative.ASMTEST_HW_OK;
             if (!Armed) SkipReason = WholeWindowSkipReason(rc);
         }
 
-        // §Z5: map a begin_window failure to an actionable, honest message.
+        // §Z0: lazily bring up the portable single-step tier for the empty-ctor whole-window
+        // scope, so callers need no explicit HwTrace.Init. Serialized via the shared TierLock;
+        // skips the native init if the tier is already up (explicit Init or a prior scope) so
+        // it can never re-init over a live capture. Returns the native init status.
+        static int AutoInitSingleStep()
+        {
+            lock (HwTrace.TierLock)
+            {
+                if (HwTrace.TierInited) return HwNative.ASMTEST_HW_OK;
+                var opts = new HwNative.Options { Backend = (int)HwBackend.SingleStep };
+                int rc = HwNative.asmtest_hwtrace_init(ref opts);
+                if (rc == HwNative.ASMTEST_HW_OK) HwTrace.TierInited = true;
+                return rc;
+            }
+        }
+
+        // §Z5: map a begin_window / auto-init failure to an actionable, honest message. The
+        // ctor auto-inits the single-step tier, so a failure means the host cannot run it.
         static string WholeWindowSkipReason(int rc) => rc switch
         {
             HwNative.ASMTEST_HW_EUNAVAIL =>
-                "no whole-window backend: needs bare-metal Intel PT / AMD LBR "
-                + "(the single-step WEAK tier requires HwTrace.Init with SingleStep)",
-            HwNative.ASMTEST_HW_ESTATE => "hwtrace tier not up — call HwTrace.Init first",
+                "single-step whole-window tier unavailable on this host (needs x86-64 Linux; "
+                + "whole-window is single-step only, so a non-single-step backend inited via "
+                + "HwTrace.Init will not arm it)",
+            HwNative.ASMTEST_HW_ESTATE => "hwtrace tier not up (auto-init failed)",
             HwNative.ASMTEST_HW_ENOSYS => "whole-window scope is Linux/x86-64 only",
             _ => "whole-window scope did not arm",
         };
@@ -1145,6 +1209,12 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = emit;
+            // Same "never throws" self-skip as the whole-window ctor (see above).
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
             _handle = HwNative.asmtest_trace_new((UIntPtr)256, (UIntPtr)64);
             if (_handle != IntPtr.Zero)
                 HwNative.asmtest_hwtrace_register_region(_name, code.Base, (UIntPtr)code.Length, _handle);
@@ -1162,6 +1232,9 @@ namespace Asmtest
         {
             if (_disposed) return;
             _disposed = true;
+            // With no native lib the ctor self-skipped and allocated no native resources; skip
+            // the (P/Invoking) teardown so Dispose also honors "never throws".
+            if (!HwNative.LibAvailable) { Path = ""; return; }
             // Always render (size-then-allocate) to populate Path — emit gates only the
             // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
             // and renders the recorded ABSOLUTE addresses from live self memory; the
