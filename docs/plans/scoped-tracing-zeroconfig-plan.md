@@ -589,10 +589,14 @@ moves) — they are **not** a correctness precondition the way the region form's
 assumption was. Single-step stays **forbidden** against live managed code, so the managed arm
 selects PT/LBR where the silicon exists, else routes to the §D3 stepper running L3.
 *(Superseded in practice for the shipped WEAK tier — see the §Z1 routing decision note:
-the .NET binding single-steps managed windows in-process today, convention-mitigated. The
-shipped managed labelling is also live-memory + pre-arm rundown, i.e. version-blind; the
-`render_versioned`/codeimage seam this section describes stays on the roadmap for the
-tiered-version case.)*
+the .NET binding single-steps managed windows in-process today, convention-mitigated.
+**Update 2026-07: the `render_versioned`/codeimage seam LANDED for the .NET `byMethod`
+path** — the `JitMethodMap` now feeds a self code-image (`asmtest_codeimage_track` per
+`MethodLoadVerbose`), and close-time disassembly decodes each captured address against
+the window-live version (`asmtest_hwtrace_render_versioned` is bound; the map falls back
+to live memory only for untracked native-runtime addresses). Labelling is no longer
+version-blind for tracked managed bytes. The whole-window `render_window` text path
+stays live-memory (native-leaf case); §D0.4 cross-thread stitching remains forward-look.)*
 
 **§Z3 tests.** *Host-testable half:* `test_zeroctor_managed_compose` drives a **synthetic**
 `MethodLoad` event stream through the `name→(addr,size)→track()` plumbing, asserts the

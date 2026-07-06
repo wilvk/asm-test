@@ -111,11 +111,21 @@ per-language analogues).
 > dependency-free: `DiagnosticsIpc` hand-rolls the `DOTNET_IPC_V1`
 > `EnablePerfMap(JitDump)` wire command instead of taking a `DiagnosticsClient`
 > dependency (see [dotnet-perfmap-rundown-plan.md](dotnet-perfmap-rundown-plan.md)).
-> **§D0.3 named-method form: not built, slated near-term.** **§D0.4 `AsyncLocal`
-> async-hop stitching: slated after §D0.3** — it additionally needs **bare-metal Intel
-> PT** for the per-thread events the cross-thread merge consumes (the §D4 merge *core*
-> is done + host-tested; the single-thread ptrace stepper cannot exercise a cross-thread
-> hop). Same shape for the Node (§D1) / JVM (§D2) async-hop hooks.
+> **§D0.3 named-method form LANDED (2026-07):** `AsmTrace.Method(Delegate)` resolves a
+> method's own JIT'd body (PrepareMethod + the `MethodLoadVerbose` listener, jitdump
+> rundown for a warm/R2R body), registers it as a region, and traces it with step-over
+> — reliable exact offsets where the whole-window form is best-effort. `Invoke(args…)`
+> is the library's own `NoInlining|NoOptimization` call site. **§D3 managed increment
+> LANDED:** `AsmTrace.Method(..., outOfProcess: true)` routes `Invoke` through
+> `asmtest_hwtrace_stealth_trace` so the body is stepped out of band (the calling thread
+> is never TF-armed); self-skips where Yama refuses the attach. **§Z3 versioned
+> labelling LANDED:** the `byMethod` map feeds a self code-image
+> (`asmtest_codeimage_track`) and close-time disassembly decodes against the window-live
+> version — so a body that re-tiers/moves after the window still renders what ran.
+> **§D0.4 `AsyncLocal` async-hop stitching: still forward-look** (the §D4 merge *core* is
+> done + host-tested, but the live per-runtime hook needs bare-metal Intel PT to
+> validate the cross-thread merge; deferred). Same shape for the Node (§D1) / JVM (§D2)
+> async-hop hooks.
 
 Builds directly on the bindings slice's `AsmTrace` construct. On **.NET 8+** the
 analysis shows leak 2 and leak 3 dissolve and leak 1 shrinks to "you must name the
@@ -163,14 +173,23 @@ the no-IPC path), whose jitdump the shipped `asmtest_jitdump_find`
 read. The design does **not** depend on this for the pure in-process case (the self
 recorder needs none of it); it is the lowest-overhead byte source when enableable.
 
-**§D0.3 — Named-method form.**
-`using var t = AsmTrace.Method(HotPath); int r = t.Invoke(data); …t.Path;` — `Invoke`
+**§D0.3 — Named-method form.** *(LANDED 2026-07 —
+[HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs) `AsmTrace.Method`.)*
+`using var t = AsmTrace.Method(HotPath); var r = t.Invoke(data); …t.Path;` — `Invoke`
 is the library's own call site, pinned `NoInlining | NoOptimization`, so the
 standalone JIT'd body is what runs; the arm-time listener resolves the address and
 keeps resolving as tiering moves it; decode is against the version live in the
 window (temporal-bytes rule). `DOTNET_TieredCompilation=0` and `[MethodImpl(NoInlining)]`
 become *noise* preferences, not correctness preconditions — with the profiler-ReJIT
 `RequestReJITWithInliners` escape hatch documented but not default.
+**As shipped:** `Method(Delegate)` forces the standalone JIT with
+`RuntimeHelpers.PrepareMethod`, resolves `(address, size)` from a fresh
+`MethodLoadVerbose` listener (a warm/R2R body PrepareMethod can't re-emit is found via
+the §D0.2 jitdump-rundown fallback), registers that body as a region, and arms with the
+§Z0 auto-init. Resolution or arm failure self-skips (`Armed` false, `SkipReason` set) —
+it never throws. The resolved body is the version live at arm time; following a
+*mid-scope* tier-up is the §Z3/§D0.4 forward-look, not this form. `outOfProcess: true`
+routes `Invoke` through the §D3 stealth stepper (below).
 
 **§D0.4 — `AsyncLocal<ScopeId>` async-hop stitching (the flagship Q1 mechanism).**
 This is the analysis's *canonical* enabler for following a logical operation across

@@ -379,10 +379,57 @@ The tier returns these (negative) statuses; `ASMTEST_HW_OK` is `0`:
 
 ---
 
+## Tracing live managed code (JIT runtimes)
+
+Everything above traces a native leaf whose bytes sit still. A managed runtime
+(.NET/CoreCLR, the JVM, Node/V8) is the hard case: the code you want to trace is
+the runtime's own **live JIT output**, emitted at an address that moves as the
+method re-tiers, on threads the GC and JIT coordinate with. Two rules follow, and
+they set the whole managed-tier contract.
+
+**Single-step is a per-thread footgun against a runtime.** EFLAGS.TF is a
+per-thread flag, but the `SIGTRAP` disposition it raises is process-wide — and a
+managed runtime's own signal layer (CoreCLR's PAL) already owns it. Arming TF on a
+runtime-scheduled thread also risks putting a sibling into runaway stepping, and it
+fights the JIT's relocating bytes. So the faithful managed paths are **out-of-band
+hardware trace** (Intel PT / AMD LBR + the code-image recorder) or the **§D3
+concealed out-of-process ptrace stepper**, never in-process single-step against the
+runtime's threads.
+
+**The whole-scope vs one-method fork.** Hardware trace captures everything cheaply
+and filters at decode; a stepper must decide per instruction what to step into. So
+the scope's promise degrades differently by shape:
+
+- **Whole-window** (`new AsmTrace()` in the .NET binding) — "trace whatever runs
+  here." Clean under PT; under single-step it is best-effort and **expected to
+  self-truncate** on a live runtime (the ~1M runtime instructions around a managed
+  leaf overflow the window). Honest by design: the raw `Addresses` are exposed, and
+  `byMethod`/`withRundown` labelling attributes them to managed methods.
+- **One JIT'd method** (`AsmTrace.Method(HotPath)`) — "trace this method's body."
+  A region + step-over: reliable, exact offsets. It costs the extra knowledge the
+  empty scope avoids — resolve the body's address (via the `MethodLoadVerbose`
+  listener, or the jitdump rundown for a warm/R2R method) and keep it un-inlined.
+
+**Temporal bytes.** Because a tiering method is re-emitted at a possibly-reused
+address, the managed labelling decodes each captured address against the code-image
+version **live in the window** (the recorder the `byMethod` map feeds), not whatever
+bytes are mapped at render time — so a body that moves *after* the scope still
+renders what actually ran.
+
+The .NET binding is the reference: see
+[docs/bindings/dotnet.md](../../bindings/dotnet.md) for the `AsmTrace` /
+`AsmTrace.Method` surface and the §D0.1/§D0.2 method-naming path. The async-hop
+model (following one logical operation across `await` thread hops) is a further,
+opt-in layer not covered here.
+
 ## Known limitations
 
 - **Single active region, single thread** in the MVP — capture state is one
   process-global slot; bracket one routine per begin/end pair.
+- **Live managed code needs PT/LBR or the ptrace stepper, never in-process
+  single-step** (above) — the whole-window single-step form works but self-truncates
+  on a runtime and perturbs the stepped thread's timing; the clean PT path is
+  hardware-gated.
 - **Bare-metal capture needs perf privilege.** Intel PT needs a bare-metal Intel
   host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its

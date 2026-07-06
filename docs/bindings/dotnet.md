@@ -323,11 +323,34 @@ using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))
 // ww.Disassembly          — the labelled stream (AsmInstruction: address, text, method)
 ```
 
-Tiering note: labelling disassembles from **live memory** on close — correct for
-the just-captured window; a method that re-tiers/moves inside a long window can
-mislabel (the code-image `render_versioned` seam is the roadmap fix). Runnable
-demos of every report live under
-[examples/dotnet/](https://github.com/wilvk/asm-test/tree/main/examples/dotnet).
+Tiering note: for a `byMethod` scope the labelling now decodes against the code-image
+**version live in the window** (the map feeds `asmtest_codeimage_track` per
+`MethodLoadVerbose`, and close-time disassembly renders at that version), so a body that
+re-tiers or moves *after* the window still renders the bytes that ran; only untracked
+native-runtime addresses fall back to live memory. Runnable demos of every report live
+under [examples/dotnet/](https://github.com/wilvk/asm-test/tree/main/examples/dotnet).
+
+**Named-method form (§D0.3)** — `AsmTrace.Method(delegate)` traces one managed method's
+own JIT'd body: reliable, exact offsets, where the whole-window form is best-effort. It
+resolves the standalone body (forcing the JIT via `PrepareMethod`, reading the address
+from the listener, or the jitdump rundown for a warm/R2R body), registers it as a region,
+and self-skips (never throws) if resolution or arming fails.
+
+```csharp
+using var t = AsmTrace.Method((Func<long,long,long>)HotPath, emit: false);
+var r = (long)t.Invoke(20L, 22L);   // Invoke is the library's own NoInlining call site
+// t.Path is exactly HotPath's executed body; t.Armed / t.SkipReason are the honesty bits
+```
+
+Pass `outOfProcess: true` to run `Invoke` under the §D3 concealed ptrace-stealth stepper
+— a bundled helper reverse-attaches and single-steps the body out of band, so the calling
+thread is **never** armed with `EFLAGS.TF` (the safe way to trace managed code; self-skips
+where Yama refuses the attach). This is the only managed form that does not perturb the
+traced thread's own signal state.
+
+**Structural classifiers** — `Disas.IsCall/IsBranch/IsRet(addr)` and
+`Disas.TryCallTarget(addr, out target)` classify a live instruction address (Capstone-gated),
+so a caller walking `Disassembly` can follow control flow without string-parsing mnemonics.
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 

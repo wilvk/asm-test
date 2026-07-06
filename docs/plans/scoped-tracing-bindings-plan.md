@@ -97,6 +97,9 @@ in the binding today (verified). New work:
   **authoritative** check is the native OS-tid §0.2 assert; the ctor's
   `Environment.CurrentManagedThreadId` is a **complementary** managed-level guard, a
   different id space from the OS tid the single-step TF and §0.2 assert key on).
+  **(Shipped 2026-07: every ctor captures the managed tid and Dispose sets
+  `Truncated` on a managed-thread mismatch — set-only, never cleared; §D3
+  out-of-process scopes are exempt since their body ran in the helper.)**
   **Always render** via `asmtest_hwtrace_render` to populate the `Path` property
   (readable after the block — statement form: `AsmTrace t; using (t = new AsmTrace(…,
   emit:false)) {…} … t.Path`); **`emit` gates only whether the rendered text is also
