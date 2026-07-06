@@ -23,8 +23,12 @@ internal static class Report
         if (stream.Count == 0) { Console.WriteLine("no labelled instructions captured."); return; }
 
         // Shadow stack of method names; classify each method transition by the PRIOR labelled
-        // instruction's mnemonic. `call` -> descend (edge caller->callee), `ret` -> pop, anything
-        // else (jmp/tail-call/stub-mediated) -> pop to it if already on the stack, else descend.
+        // instruction. `call` -> descend (edge caller->callee), `ret` -> pop, anything else
+        // (jmp/tail-call/stub-mediated) -> pop to it if already on the stack, else descend.
+        // The prior instruction is classified STRUCTURALLY via Disas.IsCall/IsRet over its live
+        // address (Capstone groups, robust to encoding variants) rather than by string-matching
+        // the rendered mnemonic; a Capstone-free build falls back to the mnemonic prefix.
+        bool structural = Disas.Available;
         var edges = new Dictionary<(string, string), long>();
         var stack = new List<string> { stream[0].ShortMethod };
         var parent = new Dictionary<string, string>();   // each method's first-entry caller
@@ -36,13 +40,15 @@ internal static class Report
         {
             string pm = stream[k - 1].ShortMethod, cm = stream[k].ShortMethod;
             if (cm == pm) continue;
-            string op = Mnemonic(stream[k - 1].Text);
-            if (op == "call")
+            ulong priorAddr = stream[k - 1].Address;
+            bool isCall = structural ? Disas.IsCall(priorAddr) : Mnemonic(stream[k - 1].Text) == "call";
+            bool isRet = structural ? Disas.IsRet(priorAddr) : IsRetMnemonic(Mnemonic(stream[k - 1].Text));
+            if (isCall)
             {
                 Edge(edges, pm, cm);
                 stack.Add(cm);
             }
-            else if (op == "ret" || op == "retn" || op == "retf")
+            else if (isRet)
             {
                 PopTo(stack, cm);
             }
@@ -76,7 +82,8 @@ internal static class Report
         for (int i = 0; i < ranked.Count && i < 20; i++)
             Console.WriteLine($"  {ranked[i].Value,4}x  {ranked[i].Key.Item1}  ->  {ranked[i].Key.Item2}");
 
-        Console.WriteLine("\n-> the tree/edges are reconstructed from the labelled stream (call/ret mnemonics);\n"
+        Console.WriteLine($"\n-> the tree/edges are reconstructed from the labelled stream, classifying each\n"
+                          + $"   transition {(structural ? "STRUCTURALLY via Disas.IsCall/IsRet (Capstone groups)" : "by mnemonic prefix (no Capstone)")};\n"
                           + "   approximate where a call reaches a method through a native runtime stub.");
     }
 
@@ -104,4 +111,6 @@ internal static class Report
         int sp = text.IndexOf(' ');
         return sp < 0 ? text : text.Substring(0, sp);
     }
+
+    static bool IsRetMnemonic(string op) => op == "ret" || op == "retn" || op == "retf";
 }
