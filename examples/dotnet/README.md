@@ -174,36 +174,32 @@ The other examples aggregate the window (per method, per assembly). This one kee
 per-instruction: `AsmTrace.Disassembly` is the **labelled execution stream** — every captured
 instruction that resolved to a managed method, disassembled from live memory (on close, while
 the code is still mapped) and paired with its method (`AsmInstruction.Text` / `.Method` /
-`.ShortMethod` / `.RuntimeBefore`). The ~million unnamed native-runtime instructions are
-elided; each labelled line carries how many ran just before it. `ww.Disassembly` holds the
-FULL stream (~1300 insns here); the demo prints a few instructions of each contiguous method
-run so the whole control flow — `Work` → `string.Join` → **the `Console.WriteLine` descent** —
-fits on screen instead of a flat prefix stuck in `Work`'s prologue:
+`.ShortMethod` / `.RuntimeBefore`). The demo prints the **complete** stream — all ~1300
+instructions, in execution order, at full width, **no truncation** (no per-run cap, no row
+cap, no name clipping). You see the whole control flow end to end: the scope arming, then
+`Work` → `string.Join` (→ `CastHelpers::StelemRef` ×3, `JoinCore`, `Buffer.Memmove` ×3) →
+**the full `Console.WriteLine` descent**:
 
 ```
-                  ... 339697 native-runtime insns ...
-  0x…1a80         push rbp                                Program.Work
-                  ... +16 more in Program.Work ...
-  0x…0020         push rbp                                …CastHelpers::StelemRef(clas…   <- array store ×3
-                  ... +13 more in …StelemRef …
-  ...
-  0x…7d40         push rbp                                System.String::Join(string,string[])
-  0x…83c0         push rbp                                System.String::JoinCore(…)      <- builds the joined string
-  0x…ec80         push rbp                                System.Buffer.Memmove           <- copies each element ×3
-  ...
-  0x…7d40         push rbp                                System.Console::WriteLine(string)   <-- HERE
-  0x…6db0         push rax                                System.Console::get_Out()
-  0x…9210         push rbp                                System.IO.TextWriter+SyncTextWriter::WriteLine(string)
-  0x…0270         push rbp                                System.IO.StreamWriter::WriteLine(string)
-  0x…8d0          push rbp                                System.IO.StreamWriter::Flush(bool,bool)
-  0x…f20          push rax                                …UTF8EncodingSealed::GetMaxByteCount(…)
-  0x…af0          push rbp                                System.Text.Encoder::GetBytes(…)   <- transcode → write()
+  address         instruction                                   method
+  --------------  --------------------------------------------  --------------------------------
+                  ... 4 native-runtime insns ...
+  0x…f7d40        push rbp                                      System.Console::WriteLine(string)   <-- HERE
+  0x…f7d4b        call qword ptr [rip + 0x3dcf7]                System.Console::WriteLine(string)
+  0x…f6db0        push rax                                      System.Console::get_Out()
+  0x…9210         push rbp                                      System.IO.TextWriter+SyncTextWriter::WriteLine(string)
+  0x…0270         push rbp                                      System.IO.StreamWriter::WriteLine(string)
+  0x…f8d0         push rbp                                      System.IO.StreamWriter::Flush(bool,bool)
+  0x…cf20         push rax                                      System.Text.UTF8Encoding+UTF8EncodingSealed::GetMaxByteCount(int32)
+  0x…af0          push rbp                                      System.Text.Encoder::GetBytes(...)   <- transcode → write()
 ```
 
-So `Console.WriteLine` is right there in the stream — it just sits ~380 instructions deep,
-past `string.Join`'s own BCL descent, which is why a naive "first N instructions" listing (and
-the aggregated examples) don't surface it. `Console::WriteLine(string)` is a thin forwarder;
-its actual work is the callees shown (`StreamWriter::WriteLine` → `Flush` → the UTF-8 encode
+The only rows NOT shown are the unlabelled native-runtime instructions between named runs
+(RyuJIT/GC/PAL) — they are not in `Disassembly` to disassemble, so their count is noted
+(`... N native-runtime insns ...`) instead. `Console.WriteLine` sits ~380 instructions deep
+(past `string.Join`'s own BCL descent), which is why the aggregated examples don't surface it.
+`Console::WriteLine(string)` is a thin forwarder; its actual work is the callees shown
+(`StreamWriter::WriteLine` → `Flush` → the UTF-8 encode
 that feeds the `write()` syscall).
 
 Because this is the single-step WEAK tier, the labelled stream is genuine dynamic execution

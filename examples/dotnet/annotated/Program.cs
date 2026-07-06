@@ -7,13 +7,15 @@
 //     foreach (AsmInstruction i in ww.Disassembly)   // labelled insns, execution order
 //         print(i.Text, i.ShortMethod);              // "mov rax, rdi"  ->  Program.Work
 //
-// ww.Disassembly holds the FULL labelled stream (~1200 insns for this workload). To keep the
-// listing readable this demo prints only the first few instructions of each contiguous
-// method run — so you see the whole control flow, Work -> string.Join -> the Console.WriteLine
-// descent (Console::WriteLine -> StreamWriter::WriteLine -> ConsolePal::Write -> Sys::Write),
-// rather than a flat prefix that never leaves Work's prologue. The unlabelled native-runtime
-// instructions (RyuJIT/GC/PAL) between named runs are elided, with a count. Single-step WEAK
-// tier; self-skips cleanly where single-step / Capstone is unavailable.
+// This demo prints the COMPLETE labelled stream (ww.Disassembly, ~1300 insns for this
+// workload) — every instruction, in execution order, at full width, with NO truncation: no
+// per-run cap, no row cap, no name clipping. You see the whole control flow end to end —
+// the scope arming, Program.Work, string.Join, and the full Console.WriteLine descent
+// (Console::WriteLine -> SyncTextWriter -> StreamWriter::WriteLine -> Flush -> the UTF-8
+// encode feeding write()). The only things NOT shown are the unlabelled native-runtime
+// instructions (RyuJIT/GC/PAL) between named runs — they are not in Disassembly to
+// disassemble, so their count is noted instead. Single-step WEAK tier; self-skips cleanly
+// where single-step / Capstone is unavailable.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -29,9 +31,6 @@ internal static class Program
         string joined = string.Join(",", new[] { "alpha", "beta", "gamma" });
         Console.WriteLine(joined);
     }
-
-    const int PerRun = 3;   // instructions shown per contiguous method run
-    const int MaxRows = 90; // total instruction rows printed (the binding holds them all)
 
     static int Main()
     {
@@ -67,53 +66,27 @@ internal static class Program
                           + $"by method across {ww.Methods.Count} methods");
         Console.WriteLine($"({runtime} native-runtime instructions elided — RyuJIT/GC/PAL, unnamed).\n");
 
-        // The scope arms mid-constructor, so the first labelled instructions are the tracer's
-        // own plumbing (AsmTrace::.ctor / set_Armed / the begin_window P/Invoke stub). Start at
-        // the workload (Program.Work) so the listing showcases the user code + the BCL it calls;
-        // that suffix is contiguous (Dispose runs AFTER the window closes), so RuntimeBefore
-        // stays exact. The binding still holds the full labelled stream in ww.Disassembly.
+        // Print the COMPLETE labelled stream — every instruction in ww.Disassembly, in
+        // execution order, at full width (no per-run cap, no row cap, no name clipping). The
+        // leading instructions are the scope arming itself (AsmTrace::.ctor / set_Armed / the
+        // begin_window P/Invoke stub), since the scope arms mid-constructor; Program.Work and
+        // the BCL it calls follow. Between named runs, the count of elided native-runtime
+        // (unlabelled) instructions is noted — those are not in Disassembly to disassemble.
         var all = ww.Disassembly;
-        int start = 0;
-        while (start < all.Count && !all[start].Method.Contains("Program.Work")) start++;
-        if (start >= all.Count) start = 0; // workload not found — show from the top
+        Console.WriteLine($"the complete labelled stream — all {all.Count} instructions, in execution order,");
+        Console.WriteLine("no truncation (the leading rows are the scope arming; Program.Work follows):\n");
+        Console.WriteLine($"  {"address",-14}  {"instruction",-44}  method");
+        Console.WriteLine($"  {new string('-', 14)}  {new string('-', 44)}  {new string('-', 40)}");
 
-        Console.WriteLine($"  {"address",-14}  {"instruction",-38}  method");
-        Console.WriteLine($"  {new string('-', 14)}  {new string('-', 38)}  {new string('-', 34)}");
-        if (start > 0)
-            Console.WriteLine($"  (skipped {start} labelled tracer-setup instructions before the workload)");
-
-        // Walk the labelled stream in execution order; print up to PerRun instructions of each
-        // contiguous same-method run (with a "+N more" note), and the native-runtime gap that
-        // preceded each shown instruction. This keeps the whole flow on screen instead of a
-        // flat prefix — so the Console.WriteLine descent (deep past string.Join) actually shows.
-        string cur = null, curShort = "";
-        int runLen = 0, elided = 0, rows = 0, consumed = 0;
-        for (int k = start; k < all.Count && rows < MaxRows; k++, consumed++)
+        foreach (AsmInstruction i in all)
         {
-            AsmInstruction i = all[k];
-            if (i.Method != cur) // entered a new method run
-            {
-                if (elided > 0) Console.WriteLine($"  {"",-14}  ... +{elided} more in {curShort} ...");
-                cur = i.Method; curShort = Clip(i.ShortMethod, 60); runLen = 0; elided = 0;
-            }
-            if (runLen < PerRun)
-            {
-                if (i.RuntimeBefore > 0)
-                    Console.WriteLine($"  {"",-14}  ... {i.RuntimeBefore} native-runtime insns ...");
-                Console.WriteLine($"  0x{i.Address,-12:x}  {Clip(i.Text, 38),-38}  {Clip(i.ShortMethod, 60)}");
-                rows++;
-            }
-            else elided++;
-            runLen++;
+            if (i.RuntimeBefore > 0)
+                Console.WriteLine($"  {"",-14}  ... {i.RuntimeBefore} native-runtime insns ...");
+            Console.WriteLine($"  0x{i.Address:x12}  {i.Text,-44}  {i.ShortMethod}");
         }
-        if (elided > 0) Console.WriteLine($"  {"",-14}  ... +{elided} more in {curShort} ...");
-        int left = (all.Count - start) - consumed;
-        if (left > 0)
-            Console.WriteLine($"\n  (stopped after {rows} rows; {left} more labelled instructions in ww.Disassembly)");
-        Console.WriteLine("\n-> each executed instruction is shown next to the method it ran in;\n"
-                          + "   the unnamed native-runtime instructions between the named runs are elided.");
+
+        Console.WriteLine($"\n-> all {all.Count} labelled instructions shown, each next to the method it ran in\n"
+                          + "   (counts mark the unnamed native-runtime instructions elided between named runs).");
         return 0;
     }
-
-    static string Clip(string s, int n) => s.Length <= n ? s : s.Substring(0, n - 1) + "…";
 }
