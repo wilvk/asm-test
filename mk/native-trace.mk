@@ -662,6 +662,8 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/wholewindow/wholewindow.csproj
 	@echo "== hwtrace-dotnet-example (region) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/region/region.csproj
+	@echo "== hwtrace-dotnet-example (methods) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/methods/methods.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="

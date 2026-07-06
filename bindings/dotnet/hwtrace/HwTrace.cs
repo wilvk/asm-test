@@ -18,6 +18,8 @@
 // The logical library "asmtest_hwtrace" is resolved by a DllImportResolver:
 // ASMTEST_HWTRACE_LIB -> <repo>/build/libasmtest_hwtrace.so -> NativeLibrary.Load.
 using System;
+using System.Collections.Generic;
+using System.Diagnostics.Tracing;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1126,6 +1128,126 @@ namespace Asmtest
                 HwNative.asmtest_trace_free(_handle);
             }
             if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
+        }
+    }
+
+    /// <summary>
+    /// §D0.1 — an in-process address→managed-method map, built from the CoreCLR
+    /// <c>MethodLoadVerbose</c> events, so a whole-window capture's ABSOLUTE addresses
+    /// (see <see cref="AsmTrace.Addresses"/>) can be labelled by managed method name —
+    /// turning "N runtime instructions" into a per-method breakdown, WITHOUT a launch
+    /// knob (no <c>DOTNET_PerfMapEnabled</c>) and without Intel PT.
+    ///
+    /// Construct it BEFORE the code under trace is JIT'd: an in-proc listener sees only
+    /// methods JIT'd AFTER it enables the keyword (there is no in-proc rundown of
+    /// already-jitted methods). Call <see cref="Freeze"/> after the scope closes, then
+    /// <see cref="Resolve"/> each captured address. CoreCLR only; a no-op elsewhere.
+    /// </summary>
+    public sealed class JitMethodMap : EventListener
+    {
+        // The CoreCLR runtime EventSource (the ETW provider name) + its JIT keyword.
+        const string RuntimeProvider = "Microsoft-Windows-DotNETRuntime";
+        const EventKeywords JitKeyword = (EventKeywords)0x10;
+
+        readonly object _lock = new object();
+        readonly List<Entry> _methods = new List<Entry>();
+        Entry[] _frozen; // sorted-by-start snapshot for binary search
+        volatile bool _stopped; // stop ingesting once the traced scope has closed
+
+        struct Entry { public ulong Start, End; public string Name; }
+
+        /// <summary>The number of JIT'd methods observed so far.</summary>
+        public int Count { get { lock (_lock) return _methods.Count; } }
+
+        protected override void OnEventSourceCreated(EventSource src)
+        {
+            if (src.Name == RuntimeProvider)
+                EnableEvents(src, EventLevel.Verbose, JitKeyword);
+        }
+
+        protected override void OnEventWritten(EventWrittenEventArgs e)
+        {
+            // EventListener's base ctor can dispatch callbacks BEFORE this instance's
+            // field initializers run, and a listener callback must never throw — so
+            // guard the not-yet-initialized state and wrap the whole body. `_stopped`
+            // freezes the map to exactly the methods seen while the scope was open.
+            if (_stopped || _lock == null || _methods == null) return;
+            try
+            {
+                // MethodLoadVerbose / _V1 / _V2 all carry MethodStartAddress + MethodSize
+                // + MethodNamespace/Name. Keep this allocation-light: handling the event
+                // can itself re-enter the JIT (reentrancy), so do only the record.
+                if (e.EventName == null || !e.EventName.StartsWith("MethodLoadVerbose"))
+                    return;
+                ulong start = 0, size = 0;
+                string ns = null, name = null;
+                var names = e.PayloadNames;
+                if (names == null) return;
+                for (int i = 0; i < names.Count; i++)
+                {
+                    object v = e.Payload[i];
+                    switch (names[i])
+                    {
+                        case "MethodStartAddress": start = Convert.ToUInt64(v); break;
+                        case "MethodSize": size = Convert.ToUInt64(v); break;
+                        case "MethodNamespace": ns = v as string; break;
+                        case "MethodName": name = v as string; break;
+                    }
+                }
+                if (start == 0 || size == 0) return;
+                string full = string.IsNullOrEmpty(ns) ? (name ?? "?") : ns + "." + name;
+                lock (_lock)
+                {
+                    _methods.Add(new Entry { Start = start, End = start + size, Name = full });
+                    _frozen = null; // invalidate the snapshot
+                }
+            }
+            catch
+            {
+                // A malformed/unexpected event payload must not tear down the listener.
+            }
+        }
+
+        /// <summary>Stop ingesting method events — call right after the traced scope
+        /// closes so the map holds exactly the methods seen while it was open (the
+        /// listener otherwise keeps recording the caller's own post-scope JIT).</summary>
+        public void Stop() { _stopped = true; }
+
+        /// <summary>Snapshot + sort the observed methods for O(log n) <see cref="Resolve"/>.
+        /// Call once after <see cref="Stop"/>.</summary>
+        public void Freeze()
+        {
+            lock (_lock)
+            {
+                // Sort a LOCAL, then publish the reference last — a lock-free Resolve
+                // reader must never observe a half-sorted (or torn) array.
+                var a = _methods.ToArray();
+                Array.Sort(a, (x, y) => x.Start.CompareTo(y.Start));
+                _frozen = a;
+            }
+        }
+
+        /// <summary>The managed method containing <paramref name="addr"/>, or null. Binary
+        /// search over the frozen snapshot (falls back to a linear scan if not frozen).</summary>
+        public string Resolve(ulong addr)
+        {
+            Entry[] s = _frozen;
+            if (s == null)
+            {
+                lock (_lock)
+                    foreach (var m in _methods)
+                        if (addr >= m.Start && addr < m.End) return m.Name;
+                return null;
+            }
+            int lo = 0, hi = s.Length - 1;
+            while (lo <= hi)
+            {
+                int mid = (int)(((uint)lo + (uint)hi) >> 1);
+                if (addr < s[mid].Start) hi = mid - 1;
+                else if (addr >= s[mid].End) lo = mid + 1;
+                else return s[mid].Name;
+            }
+            return null;
         }
     }
 

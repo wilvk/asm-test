@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Label a whole-window capture by managed method (§D0.1): an in-process
+       JitMethodMap (MethodLoadVerbose EventListener) maps JIT addresses -> method
+       names, so the empty scope's captured window is broken down per method, naming
+       an arbitrary cold managed method. A dependency-free console app that compiles
+       the binding source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no
+       NuGet, so `dotnet run` works offline. Run by `make hwtrace-dotnet-example`;
+       self-skips (exit 0) where single-step can't run.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>methods</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

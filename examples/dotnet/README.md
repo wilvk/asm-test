@@ -10,6 +10,7 @@ single-step cannot run.
 |---|---|---|
 | [wholewindow/](wholewindow/) | `using (new AsmTrace())` | zero-config whole-window capture + attributing two native leaves apart from the runtime |
 | [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
+| [methods/](methods/) | `using (new AsmTrace())` | labelling the captured window by **managed method** (§D0.1) — names an arbitrary **cold** method |
 
 ## Run them
 
@@ -64,6 +65,33 @@ rendered listing — EXACTLY the routine's executed instructions:
 truncated: False
 ```
 
+## methods — labelling the window by managed method (observed output)
+
+The closest thing to the fully aspirational snippet — `using (new AsmTrace()) {
+ColdPath(data); }` over an **arbitrary, cold** managed method — that runs without
+Intel PT. An in-process `JitMethodMap` (§D0.1) consumes CoreCLR `MethodLoadVerbose`
+events to map JIT addresses → method names, so the captured window breaks down per
+method and the cold method is **named**:
+
+```
+ColdPath(7,100) = 35350; captured 979374 instructions (truncated); 90 methods observed
+  by the JIT map; 1806 instructions labelled by method.
+
+top managed methods that executed in the window (by instruction count):
+        1733  Program.ColdPath          <- the arbitrary cold method, by name
+          26  dynamicClass.IL_STUB_PInvoke
+          22  Asmtest.AsmTrace..ctor
+-> the arbitrary COLD method 'ColdPath' is identified BY NAME: 1733 instructions.
+(the native runtime — RyuJIT, GC, PAL — is the unlabelled remainder: 977568 instructions.)
+```
+
+Honest limits: this is the single-step WEAK tier, so it also single-steps the JIT
+compiling the cold method (the ~977k "native runtime" instructions) — intrusive and
+slow. It needs no launch knob and no Intel PT, but the non-intrusive, clean path is
+the **STRONG** whole-window PT tier (forward-look here). See
+[docs/plans/scoped-tracing-zeroconfig-plan.md](../../docs/plans/scoped-tracing-zeroconfig-plan.md)
+§Z3 and the managed plan's §D0.1.
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` — the empty-ctor and region-scoped scopes.
@@ -71,3 +99,5 @@ truncated: False
   (range-classify these to attribute them).
 - `AsmTrace.Path` — the rendered disassembly (region-scoped form).
 - `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
+- `JitMethodMap` — in-process address→managed-method map (§D0.1); `Freeze()` then
+  `Resolve(addr)` after the scope closes.
