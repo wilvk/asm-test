@@ -211,6 +211,9 @@ module Asmtest
         ptrace_available:    func(LIB, "asmtest_ptrace_available", [], INT),
         ptrace_skip_reason:  func(LIB, "asmtest_ptrace_skip_reason", [VOIDP, SZ], VOID),
         ptrace_trace_call:   func(LIB, "asmtest_ptrace_trace_call", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP], INT),
+        ptrace_blockstep_available: func(LIB, "asmtest_ptrace_blockstep_available", [], INT),
+        ptrace_trace_call_blockstep:
+          func(LIB, "asmtest_ptrace_trace_call_blockstep", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP], INT),
         ptrace_trace_attached: func(LIB, "asmtest_ptrace_trace_attached", [INT, VOIDP, SZ, VOIDP, VOIDP], INT),
         ptrace_run_to:       func(LIB, "asmtest_ptrace_run_to", [INT, VOIDP], INT),
         proc_region_by_addr: func(LIB, "asmtest_proc_region_by_addr", [INT, VOIDP, VOIDP, VOIDP], INT),
@@ -500,6 +503,37 @@ module Asmtest
         Fiddle.free(argbuf.to_i)
         Fiddle.free(res.to_i)
         raise "asmtest_ptrace_trace_call failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
+      # branch instead of one per instruction) can run here: x86-64 Linux with a
+      # functional PTRACE_SINGLEBLOCK and Capstone for the intra-block
+      # reconstruction. Hang-proof, cached probe; callers self-skip cleanly on false.
+      def self.ptrace_blockstep_available?
+        return false if Asmtest::HwTrace::FN.nil?
+        Asmtest::HwTrace::FN[:ptrace_blockstep_available].call != 0
+      end
+
+      # Block-step variant of ptrace_trace_call: drives PTRACE_SINGLEBLOCK
+      # (DEBUGCTL.BTF), stopping once per TAKEN branch and reconstructing the
+      # intra-block instructions with Capstone — the same insns/blocks stream as
+      # ptrace_trace_call at a fraction of the stops. Probe first with
+      # ptrace_blockstep_available?. Complete at moderate overhead, NOT cheap: each
+      # block still costs a full ptrace round-trip.
+      def self.ptrace_trace_call_blockstep(code_base, code_len, args, trace)
+        n = args.length
+        argbuf = Fiddle::Pointer.new(Fiddle.malloc(8 * [n, 1].max), 8 * [n, 1].max)
+        argbuf[0, 8 * [n, 1].max] = "\x00".b * (8 * [n, 1].max)
+        argbuf[0, 8 * n] = args.pack("q*") if n > 0
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_call_blockstep].call(
+          code_base, code_len, argbuf, n, res, trace.handle)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(argbuf.to_i)
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_call_blockstep failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
         result
       end
 

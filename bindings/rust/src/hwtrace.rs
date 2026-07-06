@@ -395,6 +395,9 @@ struct HwFns {
     ptrace_available: Option<PtraceAvailableFn>,
     ptrace_skip_reason: Option<PtraceSkipReasonFn>,
     ptrace_trace_call: Option<PtraceTraceCallFn>,
+    // BTF block-step tier: same shapes as the per-instruction pair above.
+    ptrace_blockstep_available: Option<PtraceAvailableFn>,
+    ptrace_trace_call_blockstep: Option<PtraceTraceCallFn>,
     ptrace_trace_attached: Option<PtraceTraceAttachedFn>,
     ptrace_run_to: Option<PtraceRunToFn>,
     ptrace_trace_attached_versioned: Option<PtraceTraceAttachedVersionedFn>,
@@ -509,6 +512,7 @@ fn hw_fns() -> &'static HwFns {
                 truncated: None, block_at: None, insn_at: None,
                 ptrace_available: None, ptrace_skip_reason: None,
                 ptrace_trace_call: None, ptrace_trace_attached: None,
+                ptrace_blockstep_available: None, ptrace_trace_call_blockstep: None,
                 ptrace_run_to: None, ptrace_trace_attached_versioned: None,
                 proc_region_by_addr: None, proc_perfmap_symbol: None,
                 jitdump_find: None,
@@ -577,6 +581,8 @@ fn hw_fns() -> &'static HwFns {
             ptrace_available: load!("asmtest_ptrace_available", PtraceAvailableFn),
             ptrace_skip_reason: load!("asmtest_ptrace_skip_reason", PtraceSkipReasonFn),
             ptrace_trace_call: load!("asmtest_ptrace_trace_call", PtraceTraceCallFn),
+            ptrace_blockstep_available: load!("asmtest_ptrace_blockstep_available", PtraceAvailableFn),
+            ptrace_trace_call_blockstep: load!("asmtest_ptrace_trace_call_blockstep", PtraceTraceCallFn),
             ptrace_trace_attached: load!("asmtest_ptrace_trace_attached", PtraceTraceAttachedFn),
             ptrace_run_to: load!("asmtest_ptrace_run_to", PtraceRunToFn),
             ptrace_trace_attached_versioned: load!(
@@ -1247,6 +1253,47 @@ impl Ptrace {
             )
         };
         assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_call failed: {rc}");
+        result as i64
+    }
+
+    /// True if the BTF block-step variant (`PTRACE_SINGLEBLOCK` — one `#DB` per
+    /// TAKEN branch instead of one per instruction) can run here: x86-64 Linux
+    /// with a functional `PTRACE_SINGLEBLOCK` and Capstone for the intra-block
+    /// reconstruction. Hang-proof, cached probe; callers self-skip on `false`.
+    pub fn blockstep_available() -> bool {
+        match hw_fns().ptrace_blockstep_available {
+            Some(f) => unsafe { f() != 0 },
+            None => false,
+        }
+    }
+
+    /// Block-step variant of [`trace_call`](Ptrace::trace_call): drives
+    /// `PTRACE_SINGLEBLOCK` (`DEBUGCTL.BTF`), stopping once per TAKEN branch and
+    /// reconstructing the intra-block instructions with Capstone — the same
+    /// insns/blocks stream as `trace_call` at a fraction of the stops. Probe
+    /// first with [`blockstep_available`](Ptrace::blockstep_available). Complete
+    /// at moderate overhead, NOT cheap: each block still costs a full ptrace
+    /// round-trip. Panics on a failure or when the lib is absent.
+    pub fn trace_call_blockstep(code: &NativeCode, args: &[i64], trace: &Trace) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_call_blockstep
+            .expect("libasmtest_hwtrace not loaded (Ptrace::blockstep_available() is false)");
+        let cargs: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
+        let mut result: c_long = 0;
+        let rc = unsafe {
+            f(
+                code.base,
+                code.len,
+                cargs.as_ptr(),
+                cargs.len() as c_int,
+                &mut result,
+                trace.handle,
+            )
+        };
+        assert!(
+            rc == ASMTEST_PTRACE_OK,
+            "asmtest_ptrace_trace_call_blockstep failed: {rc}"
+        );
         result as i64
     }
 

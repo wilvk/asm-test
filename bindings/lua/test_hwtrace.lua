@@ -360,6 +360,24 @@ else
     code:free()
   end
 
+  -- test_ptrace_trace_call_blockstep — the BTF block-step tier: one #DB per TAKEN
+  -- branch, intra-block instructions reconstructed with Capstone, so the stream is
+  -- byte-identical to the per-instruction path above. Self-skips where
+  -- PTRACE_SINGLEBLOCK / Capstone are absent (e.g. AArch64).
+  if not HwTrace.ptrace_blockstep_available() then
+    print("# SKIP BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)")
+  else
+    local code = NativeCode.from_bytes(ROUTINE)
+    local tr = HwTrace.create(64, 64)
+    local result = HwTrace.ptrace_trace_call_blockstep(code.base, code.len, { 20, 22 }, tr)
+    eq(result, 42, "ptrace_trace_call_blockstep: call(20,22) == 42")
+    list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
+            "ptrace_trace_call_blockstep: insn stream identical to single-step")
+    ok(not tr:truncated(), "ptrace_trace_call_blockstep: not truncated")
+    tr:free()
+    code:free()
+  end
+
   -- ptrace_run_to drives an attached target to a resolved method (software
   -- breakpoint). A live foreign attach is covered by the C suite (forking + ptrace of a
   -- foreign process is impractical here, same as ptrace_trace_attached); exercise the

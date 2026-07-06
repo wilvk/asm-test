@@ -333,6 +333,9 @@ const Api = struct {
     ptrace_available: FnPtraceAvailable,
     ptrace_skip_reason: FnPtraceSkipReason,
     ptrace_trace_call: FnPtraceTraceCall,
+    // BTF block-step tier: same shapes as the per-instruction pair above.
+    ptrace_blockstep_available: FnPtraceAvailable,
+    ptrace_trace_call_blockstep: FnPtraceTraceCall,
     ptrace_trace_attached: FnPtraceTraceAttached,
     ptrace_trace_attached_versioned: FnPtraceTraceAttachedVersioned,
     ptrace_run_to: FnPtraceRunTo,
@@ -464,6 +467,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .ptrace_available = lib.lookup(FnPtraceAvailable, "asmtest_ptrace_available") orelse return null,
         .ptrace_skip_reason = lib.lookup(FnPtraceSkipReason, "asmtest_ptrace_skip_reason") orelse return null,
         .ptrace_trace_call = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call") orelse return null,
+        .ptrace_blockstep_available = lib.lookup(FnPtraceAvailable, "asmtest_ptrace_blockstep_available") orelse return null,
+        .ptrace_trace_call_blockstep = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call_blockstep") orelse return null,
         .ptrace_trace_attached = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached") orelse return null,
         .ptrace_trace_attached_versioned = lib.lookup(FnPtraceTraceAttachedVersioned, "asmtest_ptrace_trace_attached_versioned") orelse return null,
         .ptrace_run_to = lib.lookup(FnPtraceRunTo, "asmtest_ptrace_run_to") orelse return null,
@@ -985,6 +990,42 @@ pub const Ptrace = struct {
         const cargs: [*c]const c_long = @ptrCast(args.ptr);
         var result: c_long = 0;
         const rc = api.ptrace_trace_call(
+            code_ptr,
+            code_len,
+            cargs,
+            @intCast(args.len),
+            &result,
+            trace.handle,
+        );
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// True if the BTF block-step variant (`PTRACE_SINGLEBLOCK` — one `#DB` per
+    /// TAKEN branch instead of one per instruction) can run here: x86-64 Linux
+    /// with a functional `PTRACE_SINGLEBLOCK` and Capstone for the intra-block
+    /// reconstruction. Hang-proof, cached probe; callers self-skip on `false`.
+    pub fn blockstepAvailable() bool {
+        const api = load() orelse return false;
+        return api.ptrace_blockstep_available() != 0;
+    }
+
+    /// Block-step variant of `traceCall`: drives `PTRACE_SINGLEBLOCK`
+    /// (`DEBUGCTL.BTF`), stopping once per TAKEN branch and reconstructing the
+    /// intra-block instructions with Capstone — the same insns/blocks stream as
+    /// `traceCall` at a fraction of the stops. Probe first with
+    /// `blockstepAvailable()`. Complete at moderate overhead, NOT cheap: each
+    /// block still costs a full ptrace round-trip.
+    pub fn traceCallBlockstep(
+        code_ptr: ?*anyopaque,
+        code_len: usize,
+        args: []const i64,
+        trace: *const HwTrace,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        const cargs: [*c]const c_long = @ptrCast(args.ptr);
+        var result: c_long = 0;
+        const rc = api.ptrace_trace_call_blockstep(
             code_ptr,
             code_len,
             cargs,

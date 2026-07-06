@@ -243,6 +243,24 @@ function main() {
       tr.free();
     }
 
+    // BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+    // reconstructed with Capstone — the stream is byte-identical to the
+    // per-instruction path above. Self-skips where PTRACE_SINGLEBLOCK / Capstone
+    // are absent (e.g. AArch64).
+    if (!Ptrace.blockstepAvailable()) {
+      console.log('# SKIP BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)');
+    } else {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const tr = HwTrace.create({ blocks: 64, instructions: 64 });
+      const r = Ptrace.traceCallBlockstep(code, code.length, [20, 22], tr);
+      ok(Number(r) === 42, 'ptrace traceCallBlockstep returns 42');
+      assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
+      ok(true, 'ptrace traceCallBlockstep insn stream identical to single-step');
+      ok(!tr.truncated(), 'ptrace traceCallBlockstep !truncated()');
+      code.free();
+      tr.free();
+    }
+
     // run_to drives an attached target to a resolved method (software breakpoint). A
     // live foreign attach is covered by the C suite; exercise the FFI round-trip safely
     // — a NULL target address is rejected (EINVAL, non-zero) before any ptrace call.

@@ -188,6 +188,9 @@ static hw_trace_insn_at_fn    p_hw_trace_insn_at;
 static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
 static pt_trace_call_fn       p_pt_trace_call;
+// BTF block-step tier: same shapes as the per-instruction pair above.
+static pt_available_fn        p_pt_blockstep_available;
+static pt_trace_call_fn       p_pt_trace_call_blockstep;
 static pt_trace_attached_fn   p_pt_trace_attached;
 static pt_trace_attached_versioned_fn p_pt_trace_attached_versioned;
 static pt_run_to_fn           p_pt_run_to;
@@ -284,6 +287,8 @@ static void asmtest_hw_resolve(void) {
     p_pt_available         = (pt_available_fn)dlsym(h, "asmtest_ptrace_available");
     p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
     p_pt_trace_call        = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call");
+    p_pt_blockstep_available  = (pt_available_fn)dlsym(h, "asmtest_ptrace_blockstep_available");
+    p_pt_trace_call_blockstep = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call_blockstep");
     p_pt_trace_attached    = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached");
     p_pt_trace_attached_versioned = (pt_trace_attached_versioned_fn)dlsym(h, "asmtest_ptrace_trace_attached_versioned");
     p_pt_run_to            = (pt_run_to_fn)dlsym(h, "asmtest_ptrace_run_to");
@@ -340,6 +345,7 @@ static void asmtest_hw_resolve(void) {
                   p_hw_trace_insns_total && p_hw_trace_insns_len &&
                   p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
                   p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
+                  p_pt_blockstep_available && p_pt_trace_call_blockstep &&
                   p_pt_trace_attached && p_pt_trace_attached_versioned &&
                   p_pt_run_to && p_proc_region_by_addr &&
                   p_proc_perfmap_symbol && p_jitdump_find &&
@@ -454,6 +460,16 @@ static int asmtest_go_pt_available(void) { return p_pt_available ? p_pt_availabl
 static void asmtest_go_pt_skip_reason(char *buf, size_t buflen) {
     if (p_pt_skip_reason) p_pt_skip_reason(buf, buflen);
     else if (buflen) buf[0] = 0;
+}
+static int asmtest_go_pt_blockstep_available(void) {
+    return p_pt_blockstep_available ? p_pt_blockstep_available() : 0;
+}
+static int asmtest_go_pt_trace_call_blockstep(const void *code, size_t len,
+                                              const long *args, int nargs,
+                                              long *result, void *trace) {
+    return p_pt_trace_call_blockstep
+               ? p_pt_trace_call_blockstep(code, len, args, nargs, result, trace)
+               : -1;
 }
 static int asmtest_go_pt_trace_call(const void *code, size_t len, const long *args,
                                     int nargs, long *result, void *trace) {
@@ -1028,6 +1044,38 @@ func PtraceTraceCall(codeBase unsafe.Pointer, codeLen int, args []int64, trace *
 		C.int(n), &result, trace.h)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_call failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// PtraceBlockstepAvailable reports whether the BTF block-step variant
+// (PTRACE_SINGLEBLOCK — one #DB per TAKEN branch instead of one per instruction)
+// can run here: x86-64 Linux with a functional PTRACE_SINGLEBLOCK and Capstone for
+// the intra-block reconstruction. Hang-proof, cached; callers self-skip on false.
+func PtraceBlockstepAvailable() bool {
+	return C.asmtest_hw_is_loaded() != 0 && C.asmtest_go_pt_blockstep_available() != 0
+}
+
+// PtraceTraceCallBlockstep is the block-step variant of PtraceTraceCall: it drives
+// PTRACE_SINGLEBLOCK (DEBUGCTL.BTF), stopping once per TAKEN branch and
+// reconstructing the intra-block instructions with Capstone — the same
+// insns/blocks stream as PtraceTraceCall at a fraction of the stops. Probe first
+// with PtraceBlockstepAvailable. Complete at moderate overhead, NOT cheap: each
+// block still costs a full ptrace round-trip.
+func PtraceTraceCallBlockstep(codeBase unsafe.Pointer, codeLen int, args []int64, trace *HwTrace) (int64, error) {
+	n := len(args)
+	arr := make([]C.long, n)
+	if n == 0 {
+		arr = make([]C.long, 1)
+	}
+	for i, a := range args {
+		arr[i] = C.long(a)
+	}
+	var result C.long
+	rc := C.asmtest_go_pt_trace_call_blockstep(codeBase, C.size_t(codeLen), &arr[0],
+		C.int(n), &result, trace.h)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_call_blockstep failed: %d", int(rc))
 	}
 	return int64(result), nil
 }

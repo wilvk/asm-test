@@ -206,6 +206,26 @@ fn checkPtraceTraceCall(alloc: std.mem.Allocator) !void {
     try check(!tr.truncated(), "ptrace trace_call not truncated");
 }
 
+// BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+// reconstructed with Capstone — the stream is byte-identical to the per-instruction
+// path above. The caller self-skips where PTRACE_SINGLEBLOCK / Capstone are absent
+// (e.g. AArch64) via Ptrace.blockstepAvailable().
+fn checkPtraceTraceCallBlockstep(alloc: std.mem.Allocator) !void {
+    var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+    defer code.free();
+    var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
+    defer tr.free();
+
+    const args = [_]i64{ 20, 22 };
+    const result = try Ptrace.traceCallBlockstep(code.base, code.len, &args, &tr);
+    try check(result == 42, "ptrace trace_call_blockstep returns 42 (BTF block-step)");
+
+    const insns = try tr.insnOffsets(alloc);
+    defer alloc.free(insns);
+    try check(std.mem.eql(u64, insns, &[_]u64{ 0x0, 0x3, 0x6, 0xC, 0x11 }), "ptrace trace_call_blockstep stream identical to single-step");
+    try check(!tr.truncated(), "ptrace trace_call_blockstep not truncated");
+}
+
 // run_to drives an attached target to a resolved method (software breakpoint). A live
 // foreign attach is covered by the C suite (forking + ptrace of a foreign process is
 // impractical here, same as traceAttached); exercise the FFI round-trip safely — a NULL
@@ -538,6 +558,11 @@ pub fn main() !void {
         std.debug.print("# SKIP: ptrace backend unavailable: {s}\n", .{reason});
     } else {
         try checkPtraceTraceCall(alloc);
+        if (Ptrace.blockstepAvailable()) {
+            try checkPtraceTraceCallBlockstep(alloc);
+        } else {
+            std.debug.print("# SKIP: BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)\n", .{});
+        }
         try checkPtraceRunTo();
         try checkProcRegionByAddr();
         try checkProcPerfmapSymbol();

@@ -300,6 +300,26 @@ int main() {
             code.free();
         }
 
+        // trace_call_blockstep: the BTF block-step tier — one #DB per TAKEN branch,
+        // intra-block instructions reconstructed with Capstone, so the stream is
+        // byte-identical to the per-instruction path above. Self-skips where
+        // PTRACE_SINGLEBLOCK / Capstone are absent (e.g. AArch64).
+        if (!Ptrace::blockstepAvailable()) {
+            std::printf("# SKIP BTF block-step unavailable (needs x86-64 "
+                        "PTRACE_SINGLEBLOCK + Capstone)\n");
+        } else {
+            NativeCode code = NativeCode::from_bytes(ROUTINE);
+            HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
+            long result = Ptrace::traceCallBlockstep(code, {20, 22}, tr);
+            ok(result == 42, "ptrace: trace_call_blockstep(20, 22) == 42");
+            const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
+            ok(tr.insn_offsets() == expect,
+               "ptrace: trace_call_blockstep insn stream identical to single-step");
+            ok(!tr.truncated(), "ptrace: trace_call_blockstep !truncated()");
+            tr.free();
+            code.free();
+        }
+
         // run_to: a live foreign attach is covered by the C suite; here exercise the
         // FFI round-trip safely — a NULL target address is rejected (EINVAL, non-OK)
         // before any ptrace call.

@@ -445,6 +445,45 @@ func TestPtraceTraceCall(t *testing.T) {
 	}
 }
 
+// TestPtraceTraceCallBlockstep exercises the BTF block-step tier: one #DB per TAKEN
+// branch, intra-block instructions reconstructed with Capstone — the stream is
+// byte-identical to the per-instruction TestPtraceTraceCall above. Self-skips where
+// PTRACE_SINGLEBLOCK / Capstone are absent (e.g. AArch64).
+func TestPtraceTraceCallBlockstep(t *testing.T) {
+	skipIfNoPtrace(t)
+	if !PtraceBlockstepAvailable() {
+		t.Skip("BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)")
+	}
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+	tr := NewHwTrace(64, 64) // blocks=64, instructions=64
+	defer tr.Free()
+
+	result, err := PtraceTraceCallBlockstep(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, tr)
+	if err != nil {
+		t.Fatalf("PtraceTraceCallBlockstep: %v", err)
+	}
+	if result != 42 {
+		t.Fatalf("PtraceTraceCallBlockstep(20,22): got %d, want 42", result)
+	}
+	wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}
+	gotInsns := tr.InsnOffsets()
+	if len(gotInsns) != len(wantInsns) {
+		t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+	}
+	for i := range wantInsns {
+		if gotInsns[i] != wantInsns[i] {
+			t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
+		}
+	}
+	if tr.Truncated() {
+		t.Fatalf("Truncated: got true, want false")
+	}
+}
+
 // TestPtraceRunTo probes the run-to-address primitive's FFI round-trip. run_to drives
 // an attached target to a resolved method (software breakpoint); a live foreign attach
 // is covered by the C suite (forking + ptrace of a foreign process is impractical here,

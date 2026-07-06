@@ -353,6 +353,34 @@ fn ptrace_trace_call() {
     eprintln!("# PASS: Ptrace::trace_call (out-of-process single-step)");
 }
 
+#[test]
+fn ptrace_trace_call_blockstep() {
+    // BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+    // reconstructed with Capstone — the stream is byte-identical to the
+    // per-instruction trace_call. Self-skips where PTRACE_SINGLEBLOCK / Capstone
+    // are absent (e.g. AArch64).
+    if skip_if_no_ptrace() {
+        return;
+    }
+    if !Ptrace::blockstep_available() {
+        eprintln!("# SKIP: BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)");
+        return;
+    }
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let tr = HwTrace::new_trace(64, 64);
+
+    let result = Ptrace::trace_call_blockstep(&code, &[20, 22], &tr);
+
+    assert_eq!(result, 42, "block-stepped call returns 20+22");
+    assert_eq!(
+        tr.insn_offsets(),
+        vec![0x0, 0x3, 0x6, 0xC, 0x11],
+        "block-step stream is byte-identical to the per-instruction stream"
+    );
+    assert!(!tr.truncated(), "stream not truncated");
+    eprintln!("# PASS: Ptrace::trace_call_blockstep (BTF block-step)");
+}
+
 // Call descent (asmtest::hwtrace::Descent): a region R that calls an in-blob leaf S
 // records the call as an EDGE at level 1 and DESCENDS S as a nested frame at level 2.
 // R's traced region is 0xc bytes (R only); S lives beyond it in the SAME allocation,

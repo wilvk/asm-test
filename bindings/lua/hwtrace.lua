@@ -53,6 +53,8 @@ uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
 int  asmtest_ptrace_available(void);
 void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
 int  asmtest_ptrace_trace_call(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
+int  asmtest_ptrace_blockstep_available(void);
+int  asmtest_ptrace_trace_call_blockstep(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
 int  asmtest_ptrace_trace_attached(int pid, const void* base, size_t len, long* result, void* trace);
 int  asmtest_ptrace_run_to(int pid, const void* addr);
 int  asmtest_proc_region_by_addr(int pid, const void* addr, void** base_out, size_t* len_out);
@@ -534,6 +536,35 @@ function HwTrace.ptrace_trace_call(code_base, code_len, args_table, trace)
                                          code_len, arr, n, result, trace.h)
   if rc ~= ASMTEST_PTRACE_OK then
     error("asmtest_ptrace_trace_call failed: " .. tonumber(rc))
+  end
+  return u64(result[0])
+end
+
+-- True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN branch
+-- instead of one per instruction) can run here: x86-64 Linux with a functional
+-- PTRACE_SINGLEBLOCK and Capstone for the intra-block reconstruction. Hang-proof,
+-- cached probe; callers self-skip cleanly on false.
+function HwTrace.ptrace_blockstep_available()
+  if not L then return false end
+  return L.asmtest_ptrace_blockstep_available() ~= 0
+end
+
+-- Block-step variant of ptrace_trace_call: drives PTRACE_SINGLEBLOCK (DEBUGCTL.BTF),
+-- stopping once per TAKEN branch and reconstructing the intra-block instructions with
+-- Capstone — the same insns/blocks stream as ptrace_trace_call at a fraction of the
+-- stops. Probe first with ptrace_blockstep_available(). Complete at moderate
+-- overhead, NOT cheap: each block still costs a full ptrace round-trip.
+function HwTrace.ptrace_trace_call_blockstep(code_base, code_len, args_table, trace)
+  assert(L, "libasmtest_hwtrace not loaded")
+  args_table = args_table or {}
+  local n = #args_table
+  local arr = ffi.new("long[?]", n > 0 and n or 1)
+  for i = 1, n do arr[i - 1] = args_table[i] end
+  local result = ffi.new("long[1]")
+  local rc = L.asmtest_ptrace_trace_call_blockstep(ffi.cast("const void*", code_base),
+                                                   code_len, arr, n, result, trace.h)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_call_blockstep failed: " .. tonumber(rc))
   end
   return u64(result[0])
 end

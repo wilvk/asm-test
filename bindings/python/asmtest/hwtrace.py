@@ -278,6 +278,9 @@ def _declare(lib):
     lib.asmtest_ptrace_skip_reason.argtypes = [cc, sz]
     lib.asmtest_ptrace_trace_call.argtypes = [v, sz, pl, ci, pl, v]
     lib.asmtest_ptrace_trace_call.restype = ci
+    lib.asmtest_ptrace_blockstep_available.restype = ci
+    lib.asmtest_ptrace_trace_call_blockstep.argtypes = [v, sz, pl, ci, pl, v]
+    lib.asmtest_ptrace_trace_call_blockstep.restype = ci
     lib.asmtest_ptrace_trace_attached.argtypes = [ci, v, sz, pl, v]
     lib.asmtest_ptrace_trace_attached.restype = ci
     lib.asmtest_ptrace_run_to.argtypes = [ci, v]
@@ -720,6 +723,33 @@ class Ptrace:
             code.base, code.length, arr, n, C.byref(result), trace._handle)
         if rc != ASMTEST_PTRACE_OK:
             raise RuntimeError(f"asmtest_ptrace_trace_call failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def blockstep_available() -> bool:
+        """True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
+        branch instead of one per instruction) can run here: x86-64 Linux with a
+        functional PTRACE_SINGLEBLOCK and Capstone for the intra-block reconstruction.
+        A hang-proof, cached one-shot probe; callers self-skip cleanly on False."""
+        lib = _try_get()
+        if lib is None:
+            return False
+        return bool(lib.asmtest_ptrace_blockstep_available())
+
+    @staticmethod
+    def trace_call_blockstep(code: NativeCode, args, trace: "HwTrace") -> int:
+        """Block-step variant of trace_call: drives PTRACE_SINGLEBLOCK (DEBUGCTL.BTF),
+        stopping once per TAKEN branch and reconstructing the intra-block instructions
+        with Capstone — the same insns/blocks stream as trace_call at a fraction of the
+        stops. Probe first with blockstep_available(). Complete at moderate overhead,
+        NOT cheap: each block still costs a full ptrace round-trip."""
+        n = len(args)
+        arr = (C.c_long * max(n, 1))(*args)
+        result = C.c_long()
+        rc = _get().asmtest_ptrace_trace_call_blockstep(
+            code.base, code.length, arr, n, C.byref(result), trace._handle)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(f"asmtest_ptrace_trace_call_blockstep failed: {rc}")
         return result.value
 
     @staticmethod

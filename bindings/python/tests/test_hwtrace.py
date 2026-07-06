@@ -223,6 +223,24 @@ def test_ptrace_trace_call():
     code.free()
 
 
+def test_ptrace_trace_call_blockstep():
+    """BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+    reconstructed with Capstone — the stream is byte-identical to the
+    per-instruction trace_call. Self-skips where PTRACE_SINGLEBLOCK / Capstone
+    are absent (e.g. AArch64)."""
+    _skip_if_no_ptrace()
+    if not Ptrace.blockstep_available():
+        pytest.skip("BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)")
+    code = NativeCode.from_bytes(ROUTINE)
+    trace = HwTrace.new(blocks=64, instructions=64)
+    result = Ptrace.trace_call_blockstep(code, [20, 22], trace)
+    assert result == 42
+    assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xC, 0x11]
+    assert not trace.truncated()
+    trace.free()
+    code.free()
+
+
 def test_descent_edges_and_frames():
     """Call descent (asmtest.hwtrace.Descent): a region that calls an in-blob leaf S
     records the call as an edge at level 1 and descends S as a nested frame at level 2."""

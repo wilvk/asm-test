@@ -60,6 +60,12 @@ ALL asmtest_hwtrace_stitch            # §D4 async-hop merge core: pure C concat
 ALL asmtest_hwtrace_stealth_trace     # §D3 out-of-process ptrace-stealth stepper: C-internal to the scope façade
 ALL asmtest_hwtrace_region_name       # §3.1(c) address→name reverse resolver: whole-window noise attribution, C-level
 ALL asmtest_hwtrace_symbolize_bucket  # §3.1(c) IP bucketer: whole-window noise attribution, host-tested
+ALL asmtest_hwtrace_begin_window      # §Z1 region-free whole-window trio: the .NET managed tier's AsmTrace substrate
+ALL asmtest_hwtrace_end_window        #   (dotnet wraps it); the other bindings ship the name-keyed try_begin path and
+ALL asmtest_hwtrace_render_window     #   gain the trio when they grow a scope construct — same posture as §1 above
+ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: same family as region_name/symbolize_bucket
+ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
+ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 
 # DR-tier self-skip diagnostic (817cc72), the counterpart of asmtest_hwtrace_skip_reason.
 # Every binding gates the DynamoRIO tier on asmtest_dr_available()'s bool; none surfaces

@@ -6,6 +6,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **bindings-parity gate restored to green.** The block-step / whole-window / snapshot
+  commits added eight tier symbols wrapped only in the .NET binding, leaving the
+  `check-bindings-parity` CI gate failing with 75 missing (binding, symbol) pairs. The
+  BTF block-step pair (`asmtest_ptrace_blockstep_available`,
+  `asmtest_ptrace_trace_call_blockstep`) — siblings of the universally-wrapped
+  `asmtest_ptrace_trace_call` — is now genuinely wrapped in all ten bindings, each with
+  a self-skipping parity test asserting the block-step stream is byte-identical to the
+  single-step stream. The managed-tier / C-level symbols (the §Z1 whole-window trio,
+  §3.1(c) `attribute_window`, §D3 `trace_attached_windowed`, and the AMD boundary
+  snapshot) carry reasoned allow-list exemptions following the file's existing
+  conventions (the .NET tier keeps its real window-trio wraps).
+
 ### Added
 
 - **AMD hardware-trace improvements — Phases 0, 4, 5 of the

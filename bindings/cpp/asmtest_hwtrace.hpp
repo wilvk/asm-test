@@ -198,6 +198,10 @@ struct HwApi {
     void (*ptrace_skip_reason)(char *, size_t) = nullptr;
     int (*ptrace_trace_call)(const void *, size_t, const long *, int, long *,
                              void *) = nullptr;
+    // BTF block-step tier: same shapes as the per-instruction pair above.
+    int (*ptrace_blockstep_available)() = nullptr;
+    int (*ptrace_trace_call_blockstep)(const void *, size_t, const long *, int,
+                                       long *, void *) = nullptr;
     int (*ptrace_trace_attached)(int, const void *, size_t, long *,
                                  void *) = nullptr;
     int (*ptrace_run_to)(int, const void *) = nullptr;
@@ -333,6 +337,10 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_ptrace_available", t.ptrace_available);
         ok &= dlsym_into(h, "asmtest_ptrace_skip_reason", t.ptrace_skip_reason);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_call", t.ptrace_trace_call);
+        ok &= dlsym_into(h, "asmtest_ptrace_blockstep_available",
+                         t.ptrace_blockstep_available);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_call_blockstep",
+                         t.ptrace_trace_call_blockstep);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_attached",
                          t.ptrace_trace_attached);
         ok &= dlsym_into(h, "asmtest_ptrace_run_to", t.ptrace_run_to);
@@ -1101,6 +1109,44 @@ class Ptrace {
     static long traceCall(const NativeCode &code, const std::vector<long> &args,
                           const HwTrace &trace) {
         return traceCall(code.base(), code.length(), args, trace);
+    }
+
+    /// True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
+    /// branch instead of one per instruction) can run here: x86-64 Linux with a
+    /// functional PTRACE_SINGLEBLOCK and Capstone for the intra-block
+    /// reconstruction. Hang-proof, cached probe; callers self-skip on false.
+    static bool blockstepAvailable() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded())
+            return false;
+        return a.ptrace_blockstep_available() != 0;
+    }
+
+    /// Block-step variant of traceCall: drives PTRACE_SINGLEBLOCK (DEBUGCTL.BTF),
+    /// stopping once per TAKEN branch and reconstructing the intra-block
+    /// instructions with Capstone — the same insns/blocks stream as traceCall at a
+    /// fraction of the stops. Probe first with blockstepAvailable(). Complete at
+    /// moderate overhead, NOT cheap: each block still costs a full ptrace
+    /// round-trip. Throws std::runtime_error on a nonzero status.
+    static long traceCallBlockstep(const void *code, std::size_t len,
+                                   const std::vector<long> &args,
+                                   const HwTrace &trace) {
+        long result = 0;
+        int rc = detail::require().ptrace_trace_call_blockstep(
+            code, len, args.data(), static_cast<int>(args.size()), &result,
+            trace.raw());
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error(
+                "asmtest_ptrace_trace_call_blockstep failed: " +
+                std::to_string(rc));
+        return result;
+    }
+
+    /// Same, taking a NativeCode (uses its base/length).
+    static long traceCallBlockstep(const NativeCode &code,
+                                   const std::vector<long> &args,
+                                   const HwTrace &trace) {
+        return traceCallBlockstep(code.base(), code.length(), args, trace);
     }
 
     /// Descending trace_call: thread a Descent handle through the single-step loop so

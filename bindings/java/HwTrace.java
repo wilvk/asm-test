@@ -152,6 +152,7 @@ public final class HwTrace {
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
         PTRACE_AVAILABLE, PTRACE_SKIP_REASON, PTRACE_TRACE_CALL, PTRACE_TRACE_ATTACHED,
+        PTRACE_BLOCKSTEP_AVAILABLE, PTRACE_TRACE_CALL_BLOCKSTEP,
         PTRACE_TRACE_ATTACHED_VERSIONED, PTRACE_RUN_TO,
         PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND,
         // asmtest_codeimage.h — time-aware code-image recorder (a userspace TEXT_POKE).
@@ -286,6 +287,7 @@ public final class HwTrace {
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
             traceBlockAt = null, traceInsnAt = null,
             ptraceAvailable = null, ptraceSkipReason = null, ptraceTraceCall = null,
+            ptraceBlockstepAvailable = null, ptraceTraceCallBlockstep = null,
             ptraceTraceAttached = null, ptraceTraceAttachedVersioned = null, ptraceRunTo = null,
             procRegionByAddr = null, procPerfmapSymbol = null,
             jitdumpFind = null,
@@ -379,6 +381,12 @@ public final class HwTrace {
                 FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
             // asmtest_ptrace_trace_call(code, len, args, nargs, result, trace).
             ptraceTraceCall = h(lib, "asmtest_ptrace_trace_call",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
+                    ADDRESS, ADDRESS));
+            // BTF block-step tier: same shapes as the per-instruction pair above.
+            ptraceBlockstepAvailable = h(lib, "asmtest_ptrace_blockstep_available",
+                FunctionDescriptor.of(JAVA_INT));
+            ptraceTraceCallBlockstep = h(lib, "asmtest_ptrace_trace_call_blockstep",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
                     ADDRESS, ADDRESS));
             // asmtest_ptrace_trace_attached(pid, base, len, result, trace).
@@ -523,6 +531,8 @@ public final class HwTrace {
         TRACE_TRUNCATED = traceTruncated; TRACE_BLOCK_AT = traceBlockAt; TRACE_INSN_AT = traceInsnAt;
         PTRACE_AVAILABLE = ptraceAvailable; PTRACE_SKIP_REASON = ptraceSkipReason;
         PTRACE_TRACE_CALL = ptraceTraceCall; PTRACE_TRACE_ATTACHED = ptraceTraceAttached;
+        PTRACE_BLOCKSTEP_AVAILABLE = ptraceBlockstepAvailable;
+        PTRACE_TRACE_CALL_BLOCKSTEP = ptraceTraceCallBlockstep;
         PTRACE_TRACE_ATTACHED_VERSIONED = ptraceTraceAttachedVersioned; PTRACE_RUN_TO = ptraceRunTo;
         PROC_REGION_BY_ADDR = procRegionByAddr; PROC_PERFMAP_SYMBOL = procPerfmapSymbol;
         JITDUMP_FIND = jitdumpFind;
@@ -988,6 +998,39 @@ public final class HwTrace {
             int rc = (int) PTRACE_TRACE_CALL.invoke(code, len, argSeg, n, result, trace);
             if (rc != ASMTEST_PTRACE_OK)
                 throw new RuntimeException("asmtest_ptrace_trace_call failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
+     *  branch instead of one per instruction) can run here: x86-64 Linux with a
+     *  functional PTRACE_SINGLEBLOCK and Capstone for the intra-block reconstruction.
+     *  Hang-proof, cached probe; callers self-skip cleanly on false. */
+    public static boolean ptraceBlockstepAvailable() {
+        if (PTRACE_BLOCKSTEP_AVAILABLE == null) return false;
+        try { return (int) PTRACE_BLOCKSTEP_AVAILABLE.invoke() != 0; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Block-step variant of {@link #ptraceTraceCall}: drives PTRACE_SINGLEBLOCK
+     *  (DEBUGCTL.BTF), stopping once per TAKEN branch and reconstructing the
+     *  intra-block instructions with Capstone — the same insns/blocks stream as
+     *  ptraceTraceCall at a fraction of the stops. Probe first with
+     *  {@link #ptraceBlockstepAvailable}. Complete at moderate overhead, NOT cheap:
+     *  each block still costs a full ptrace round-trip. */
+    public static long ptraceTraceCallBlockstep(MemorySegment code, long len, long[] args,
+                                                MemorySegment trace) {
+        if (PTRACE_TRACE_CALL_BLOCKSTEP == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            int n = args.length;
+            MemorySegment argSeg = a.allocate(
+                MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+            for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+            MemorySegment result = a.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_CALL_BLOCKSTEP.invoke(code, len, argSeg, n, result, trace);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_call_blockstep failed: " + rc);
             return result.get(JAVA_LONG, 0);
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }

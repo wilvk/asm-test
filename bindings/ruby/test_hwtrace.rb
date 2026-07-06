@@ -243,6 +243,22 @@ if HwTrace.ptrace_available?
   ok(!pt_trace.truncated?, "ptrace trace_call not truncated")
   pt_trace.free
 
+  # BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+  # reconstructed with Capstone — the stream is byte-identical to the
+  # per-instruction path above. Self-skips where PTRACE_SINGLEBLOCK / Capstone are
+  # absent (e.g. AArch64).
+  if HwTrace.ptrace_blockstep_available?
+    bs_trace = HwTrace.create(blocks: 64, instructions: 64)
+    bs_result = HwTrace.ptrace_trace_call_blockstep(pt_code.base, pt_code.length, [20, 22], bs_trace)
+    ok(bs_result == 42, "ptrace trace_call_blockstep(20,22) == 42 (got #{bs_result})")
+    ok(bs_trace.insn_offsets == [0x0, 0x3, 0x6, 0xC, 0x11],
+       "ptrace trace_call_blockstep insn stream identical to single-step")
+    ok(!bs_trace.truncated?, "ptrace trace_call_blockstep not truncated")
+    bs_trace.free
+  else
+    puts "# SKIP BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)"
+  end
+
   # run_to drives an attached target to a resolved method (software breakpoint). A live
   # foreign attach is covered by the C suite (forking + ptrace of a foreign process is
   # impractical here, same as ptrace_trace_attached); exercise the FFI round-trip safely

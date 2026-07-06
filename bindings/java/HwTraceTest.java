@@ -83,6 +83,7 @@ public final class HwTraceTest {
         // ptrace backend is unavailable.
         try {
             ptraceTraceCall();
+            ptraceTraceCallBlockstep();
             ptraceRunTo();
             procRegionByAddr();
             procPerfmapSymbol();
@@ -334,6 +335,34 @@ public final class HwTraceTest {
         ok(Arrays.equals(insns, wantInsns),
             "ptrace insnOffsets == [0,3,6,12,17] (got " + Arrays.toString(insns) + ")");
         ok(!trace.truncated(), "ptrace !truncated");
+
+        trace.free();
+        code.free();
+    }
+
+    // BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
+    // reconstructed with Capstone — the stream is byte-identical to the
+    // per-instruction ptraceTraceCall above. Self-skips where PTRACE_SINGLEBLOCK /
+    // Capstone are absent (e.g. AArch64).
+    private static void ptraceTraceCallBlockstep() {
+        if (ptraceUnavailable()) return;
+        if (!HwTrace.ptraceBlockstepAvailable()) {
+            System.out.println(
+                "# SKIP BTF block-step unavailable (needs x86-64 PTRACE_SINGLEBLOCK + Capstone)");
+            return;
+        }
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        HwTrace.NativeTrace trace = HwTrace.create(64, 64);
+
+        long result = HwTrace.ptraceTraceCallBlockstep(MemorySegment.ofAddress(code.base()),
+            code.length(), new long[] {20, 22}, trace.handle());
+        ok(result == 42, "ptraceTraceCallBlockstep(20,22): result == 42 (got " + result + ")");
+
+        long[] insns = trace.insnOffsets();
+        long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
+        ok(Arrays.equals(insns, wantInsns),
+            "ptrace block-step insn stream identical to single-step (got " + Arrays.toString(insns) + ")");
+        ok(!trace.truncated(), "ptrace block-step !truncated");
 
         trace.free();
         code.free();

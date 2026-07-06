@@ -220,6 +220,8 @@ let _loadError = null;
     ptraceAvailable: lib.func('int asmtest_ptrace_available()'),
     ptraceSkipReason: lib.func('void asmtest_ptrace_skip_reason(_Out_ char*, size_t)'),
     ptraceTraceCall: lib.func('int asmtest_ptrace_trace_call(const void*, size_t, const long*, int, _Out_ long*, void*)'),
+    ptraceBlockstepAvailable: lib.func('int asmtest_ptrace_blockstep_available()'),
+    ptraceTraceCallBlockstep: lib.func('int asmtest_ptrace_trace_call_blockstep(const void*, size_t, const long*, int, _Out_ long*, void*)'),
     ptraceTraceAttached: lib.func('int asmtest_ptrace_trace_attached(int, const void*, size_t, _Out_ long*, void*)'),
     // Version-aware attach: traces a foreign region but resolves the bytes from a
     // code-image timeline (`img`) as of capture sequence `when`, not a late snapshot.
@@ -546,6 +548,30 @@ class Ptrace {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceCall(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
+   *  branch instead of one per instruction) can run here: x86-64 Linux with a
+   *  functional PTRACE_SINGLEBLOCK and Capstone for the intra-block reconstruction.
+   *  Hang-proof, cached one-shot probe; callers self-skip cleanly on false. */
+  static blockstepAvailable() {
+    if (!_lib) return false;
+    return _fn.ptraceBlockstepAvailable() !== 0;
+  }
+
+  /** Block-step variant of traceCall: drives PTRACE_SINGLEBLOCK (DEBUGCTL.BTF),
+   *  stopping once per TAKEN branch and reconstructing the intra-block instructions
+   *  with Capstone — the same insns/blocks stream as traceCall at a fraction of the
+   *  stops. Probe first with blockstepAvailable(). Complete at moderate overhead,
+   *  NOT cheap: each block still costs a full ptrace round-trip. */
+  static traceCallBlockstep(code, codeLen, args, trace) {
+    const n = args.length;
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const rc = _fn.ptraceTraceCallBlockstep(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call_blockstep failed: ${rc}`);
     return Number(resultBuf.readBigInt64LE(0));
   }
 
