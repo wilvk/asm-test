@@ -679,6 +679,8 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/callgraph/callgraph.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_native) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_native/ptrace_native.csproj
+	@echo "== hwtrace-dotnet-example (ptrace_dotnet) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="

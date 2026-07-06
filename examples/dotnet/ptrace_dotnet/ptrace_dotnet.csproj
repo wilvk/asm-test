@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Attach to a live CoreCLR (the jit_dotnet target) and single-step a real JIT method out of
+       process (Ptrace.ProcPerfmapSymbol/RunTo/TraceAttached + example-side PTRACE_ATTACH). A
+       dependency-free console app that compiles the binding source (HwTrace.cs) directly and
+       P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
+       `make hwtrace-dotnet-example`; self-skips (exit 0) where ptrace is denied / the SDK or
+       method is absent. EnableDefaultCompileItems=false so it compiles exactly Program.cs +
+       Report.cs + the one binding source (never globbing sibling examples or the binding's Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ptrace_dotnet</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

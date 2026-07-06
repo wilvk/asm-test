@@ -19,6 +19,7 @@ single-step cannot run.
 | [coverage/](coverage/) | `HwTrace.Create(blocks: N)` + `Region` | **basic-block coverage** of a branchy native routine across inputs — the never-covered block is the missing test case |
 | [callgraph/](callgraph/) | `new AsmTrace(byMethod: true, withRundown: true)` | reconstruct the dynamic **call tree + edges** from the labelled stream (shadow stack over `Disassembly`) |
 | [ptrace_native/](ptrace_native/) | `Ptrace.TraceCall(...)` | single-step native code running **out of process** (a forked `PTRACE_TRACEME` child) — no in-process SIGTRAP |
+| [ptrace_dotnet/](ptrace_dotnet/) | `Ptrace` attach to `jit_dotnet` | **attach to a live CoreCLR** and single-step a real JIT'd method in *another* process — what in-process single-step cannot do |
 
 See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for more proposed
 reports/examples (instruction mix, out-of-process attach/descent) and what the single-step tier
@@ -31,8 +32,8 @@ workload traced *out of process* by the C `jit_trace` harness — driven by
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all eleven, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all eleven, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all twelve, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all twelve, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
@@ -46,6 +47,7 @@ dotnet run --project examples/dotnet/hotspots/hotspots.csproj
 dotnet run --project examples/dotnet/coverage/coverage.csproj
 dotnet run --project examples/dotnet/callgraph/callgraph.csproj
 dotnet run --project examples/dotnet/ptrace_native/ptrace_native.csproj
+dotnet run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -338,6 +340,32 @@ executed instructions (disassembled from the child's code image), with step coun
 
 Self-skips (exit 0) where ptrace is denied (yama `ptrace_scope`, no privilege).
 
+## ptrace_dotnet — attach to a live CoreCLR and trace a real JIT method (observed output)
+
+The headline: single-step a method in *another*, live, GC'd, multi-threaded .NET runtime — the
+exact scenario in-process single-step is forbidden to do (the managed-I/O footgun). It launches
+the [jit_dotnet/](jit_dotnet/) target (spinning on `Program::Add`, `DOTNET_TieredCompilation=0`
+`DOTNET_PerfMapEnabled=1`), resolves `Add` from its perf-map, `PTRACE_ATTACH`es, `RunTo`s the
+entry, and single-steps one real invocation:
+
+```
+resolved 'int32 [jit_dotnet] Program::Add(int32,int32)[Optimized]'
+  @ 0x…1a30 (4 bytes) in live pid 181 (in an executable mapping).
+
+single-stepped 2 instructions of the REAL JIT'd Program::Add in the other process
+(it returned 100144877); entry covered: True.
+
+executed instructions (disassembled from the runtime's live code image):
+    0x00  x1   lea eax, [rdi + rsi]      <- the optimized a + b
+    0x03  x1   ret
+```
+
+The child is launched with libc `posix_spawn` and reaped with raw `waitpid`, **not**
+`System.Diagnostics.Process` — .NET's `Process` installs a SIGCHLD reaper that races the ptrace
+`waitpid` and hangs the attach. All ptrace calls run on one dedicated OS thread, kill-bounded by a
+watchdog, so a moved/re-tiered address self-skips rather than hangs. Self-skips (exit 0) where
+ptrace is denied or the SDK/method is absent.
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -361,6 +389,9 @@ Self-skips (exit 0) where ptrace is denied (yama `ptrace_scope`, no privilege).
 - `Ptrace.TraceCall(code, len, args, trace)` / `Ptrace.Available()` — single-step native code
   out of process (a self-contained forked child) into an `HwTrace` handle (`.Handle` /
   `InsnOffsets()` / `BlockOffsets()`). Used by [ptrace_native/](ptrace_native/).
+- `Ptrace.ProcPerfmapSymbol(pid, name)` / `.ProcRegionByAddr(pid, addr)` / `.RunTo(pid, addr)` /
+  `.TraceAttached(pid, base, len, trace)` — resolve + single-step a method in an
+  externally-attached process. Used by [ptrace_dotnet/](ptrace_dotnet/).
 - `AsmMethod.Tier` — the JIT/compilation tier (`PreJIT`/`MinOptJitted`/`OptimizedTier1`/…;
   empty for an untagged listener name). Used by [tiers/](tiers/).
 - `HwTrace.Create(blocks:N, instructions:M)` + `Register` + `Region` and

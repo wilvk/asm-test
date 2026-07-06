@@ -14,11 +14,13 @@ surface; it separates what can be **reported** (mostly cheap `Report.cs` additio
 
 ## Status
 
-**Built:** `tiers`, `hotspots`, `coverage` (+ `AsmMethod.Tier`), then `callgraph` (dynamic call
-tree from the labelled stream) and `ptrace_native` (out-of-process single-step via
-`Ptrace.TraceCall` — the foundation for the attach story). The rest are proposed, ranked
-best-first by (value × feasibility); the out-of-process headline `ptrace_dotnet` (attach to the
-live `jit_dotnet` target) builds directly on `ptrace_native`.
+**Built:** `tiers`, `hotspots`, `coverage` (+ `AsmMethod.Tier`), `callgraph` (dynamic call tree
+from the labelled stream), `ptrace_native` (out-of-process single-step via `Ptrace.TraceCall`),
+and **`ptrace_dotnet`** — the headline: attach to the live `jit_dotnet` CoreCLR and single-step a
+real JIT'd `Program::Add` (`lea eax,[rdi+rsi]; ret`). Non-obvious gotcha it surfaced: the child
+must be launched with libc `posix_spawn` + reaped with raw `waitpid`, NOT
+`System.Diagnostics.Process` — .NET's `Process` installs a SIGCHLD reaper that races the ptrace
+`waitpid` and hangs the attach. The rest are proposed, ranked best-first by (value × feasibility).
 
 ## New info to REPORT (feasible today from already-captured data)
 
@@ -42,7 +44,7 @@ live `jit_dotnet` target) builds directly on `ptrace_native`.
 - **hotspots** ✅ / **tiers** ✅ — as above, as standalone projects.
 - **instructionmix** — mnemonic-class histogram (move/arith/branch/call/SIMD/mem) + control-flow
   density. What *kind* of work runs. Source: `AsmInstruction.Text` first token.
-- **callgraph** — reconstruct the call tree/flame graph from the labelled stream: walk
+- **callgraph** ✅ — reconstruct the call tree/flame graph from the labelled stream: walk
   `Disassembly` with a shadow stack, classify transitions call/return by the prior mnemonic.
   Honest caveat: only labelled instructions, so approximate.
 - **perfannotate** — `perf annotate` but instruction-exact: per-instruction execution-count
@@ -50,9 +52,9 @@ live `jit_dotnet` target) builds directly on `ptrace_native`.
 - **loops** — per-loop trip counts from backedges (repeat counts + parsing branch targets).
 
 **Out-of-process (what in-process single-step structurally cannot do):**
-- **ptrace_native** — `Ptrace.TraceCall` forks a child that runs a native leaf while the parent
+- **ptrace_native** ✅ — `Ptrace.TraceCall` forks a child that runs a native leaf while the parent
   single-steps it — no in-process SIGTRAP perturbation. The foundation.
-- **ptrace_dotnet** — attach to the live [jit_dotnet](../../examples/dotnet/jit_dotnet/) target and
+- **ptrace_dotnet** ✅ — attach to the live [jit_dotnet](../../examples/dotnet/jit_dotnet/) target and
   trace a real JIT'd method in *another* GC'd, multi-threaded runtime — the scenario in-process
   tracing is forbidden to do. `RunTo`/`TraceAttached`/`ProcPerfmapSymbol` are all bound; the
   example owns attach/detach. Flow proven in C by [examples/jit_trace.c](../../examples/jit_trace.c).
