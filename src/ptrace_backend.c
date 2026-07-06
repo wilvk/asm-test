@@ -1618,6 +1618,134 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
     return rc;
 }
 
+/* Block-step variant of asmtest_ptrace_trace_attached: block-step a SEPARATE,
+ * already-ptrace-stopped process from its current stop — one #DB per TAKEN branch
+ * instead of one per instruction — reconstructing the same per-instruction stream.
+ * Same contract as the per-instruction attached tracer: the caller owns
+ * attach/detach, the target's bytes are read via process_vm_readv, the target is
+ * NEVER killed (it is foreign), and on a region return it is left stopped past the
+ * region for the caller. The rootless managed-runtime path at a fraction of the
+ * stops (the completeness fallback the AMD plan's Phase 2 scopes). */
+int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
+                                            size_t len, long *result,
+                                            asmtest_trace_t *trace) {
+    if (base == NULL || len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    if (!asmtest_ptrace_blockstep_available())
+        return ASMTEST_PTRACE_ENOSYS;
+
+    /* Foreign target: read the region bytes debugger-style. */
+    uint8_t *code = (uint8_t *)malloc(len);
+    if (code == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    struct iovec liov = {code, len};
+    struct iovec riov = {(void *)(uintptr_t)base, len};
+    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL) {
+        free(code);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
+    const uint64_t SENTINEL = ~(uint64_t)0;
+    uint64_t prev_off = SENTINEL; /* start of the open (not-yet-terminated) block */
+    uint32_t n = 0;
+    int overflow = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+
+    /* Both entry conventions of the per-instruction attached tracer: stopped
+     * EXACTLY at the region entry (asmtest_ptrace_run_to) — the current PC opens
+     * the first block; stopped before the region — block-step through the glue at
+     * native branch speed until the first in-region stop. */
+    {
+        uint64_t pc0, ret0;
+        if (read_pc_ret(pid, &pc0, &ret0, NULL, NULL) != 0) {
+            free(code);
+            free(stream);
+            return ASMTEST_PTRACE_ETRACE;
+        }
+        if (pc0 >= base_ip && pc0 < base_ip + len)
+            prev_off = pc0 - base_ip;
+    }
+
+    for (;;) {
+        if (ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break; /* target ended before/while in the region */
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            /* Same policy as the per-instruction attached loop: a non-trap signal
+             * mid-region truncates; the caller owns signal policy for its target. */
+            if (prev_off != SENTINEL)
+                overflow = 1;
+            break;
+        }
+
+        uint64_t pc, retval;
+        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        int in_region = (pc >= base_ip && pc < base_ip + len);
+
+        if (prev_off == SENTINEL) {
+            if (in_region)
+                prev_off = pc - base_ip; /* region entry opens the first block */
+            continue;
+        }
+
+        /* Open block from prev_off terminated by a taken branch reaching `pc`:
+         * reconstruct its straight-line run (trap-class #DB — pc is the TARGET). */
+        uint64_t last_off = 0;
+        if (!blockstep_reconstruct(code, len, base_ip, prev_off, pc, stream, &n,
+                                   &last_off)) {
+            overflow = 1;
+            break;
+        }
+
+        if (in_region) {
+            prev_off = pc - base_ip; /* the block's target opens the next block */
+            continue;
+        }
+
+        /* Left the region: a call-out to a helper (step over at native speed and
+         * resume), or the routine's return (leave the target stopped there). */
+        uint64_t resume_off = 0;
+        exit_kind_t k =
+            classify_region_exit(pid, code, len, base_ip, last_off, &resume_off);
+        if (k == EXIT_CALLOUT_RESUMED) {
+            prev_off = resume_off;
+            continue;
+        }
+        if (k == EXIT_CALLOUT_LOST) {
+            overflow = 1; /* callee never returned to the region — truncate */
+            break;
+        }
+        if (result != NULL)
+            *result = (long)retval;
+        break; /* region returned: target stays stopped for the caller */
+    }
+
+    if (rc == ASMTEST_PTRACE_OK)
+        normalize(trace, code, base_ip, len, stream, n, overflow);
+    free(stream);
+    free(code);
+    return rc;
+}
+
 #else /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent */
 int asmtest_ptrace_blockstep_available(void) { return 0; }
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
@@ -1627,6 +1755,16 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
     (void)len;
     (void)args;
     (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
+                                            size_t len, long *result,
+                                            asmtest_trace_t *trace) {
+    (void)pid;
+    (void)base;
+    (void)len;
     (void)result;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;
@@ -2144,6 +2282,17 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
     (void)win_base_p;
     (void)win_len;
     (void)chan;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
+                                            size_t len, long *result,
+                                            asmtest_trace_t *trace) {
+    (void)pid;
+    (void)base;
+    (void)len;
     (void)result;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;

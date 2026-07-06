@@ -81,6 +81,55 @@ int main(void) {
         }
     }
     asmtest_trace_free(tr);
+
+    /* Marker-path routing (AMD plan Phase 3 follow-up): opts.snapshot = 1 makes the
+     * ORDINARY region begin/end markers route to this same deterministic capture —
+     * no explicit exit offset, no run_fn callback; hwtrace derives the exit (the
+     * region's last ret) and arms/drains around the user's own call. The same tiny
+     * single-shot routine that the sampled path honestly truncates must reconstruct
+     * its entry block through the plain begin/end surface. */
+    {
+        asmtest_hwtrace_options_t opts;
+        memset(&opts, 0, sizeof opts);
+        opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+        opts.snapshot = 1;
+        if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+            printf("# SKIP branchsnap markers: AMD LBR tier unavailable\n");
+        } else {
+            asmtest_trace_t *mt = asmtest_trace_new(64, 64);
+            if (asmtest_hwtrace_register_region("bsnap", p, sizeof ROUTINE, mt) !=
+                ASMTEST_HW_OK) {
+                printf("not ok - branchsnap markers: register_region failed\n");
+                asmtest_hwtrace_shutdown();
+                asmtest_trace_free(mt);
+                munmap(p, sizeof ROUTINE);
+                return 1;
+            }
+            add2_fn fn = (add2_fn)p;
+            asmtest_hwtrace_begin("bsnap");
+            long r = fn(20, 22);
+            asmtest_hwtrace_end("bsnap");
+            int covered0 = asmtest_trace_covered(mt, 0);
+            unsigned long long ni = asmtest_emu_trace_insns_total(mt);
+            printf("branchsnap markers: add2(20,22)=%ld; begin/end snapshot decoded "
+                   "%llu insns, entry-block covered=%d, truncated=%d\n",
+                   (long)r, ni, covered0, asmtest_emu_trace_truncated(mt));
+            int okm = (r == 42) && covered0 && ni > 0;
+            if (okm)
+                printf("ok - branchsnap markers: opts.snapshot routes begin/end to "
+                       "the deterministic boundary capture\n");
+            else
+                printf("not ok - branchsnap markers: begin/end snapshot missed the "
+                       "single-shot routine\n");
+            asmtest_hwtrace_shutdown();
+            asmtest_trace_free(mt);
+            if (!okm) {
+                munmap(p, sizeof ROUTINE);
+                return 1;
+            }
+        }
+    }
+
     munmap(p, sizeof ROUTINE);
     return 0;
 }

@@ -376,6 +376,32 @@ static void test_amd_live(void) {
               "empty-yet-complete)");
         asmtest_hwtrace_shutdown();
         asmtest_trace_free(tr);
+
+        /* opts.snapshot = 1: the deterministic-boundary opt-in. Where the BPF
+         * substrate is present (docker-hwtrace-codeimage) begin/end route to the
+         * exit-breakpoint snapshot (test_branchsnap asserts the complete capture);
+         * on THIS lane (typically built without libbpf) the arm fails and the
+         * markers must fall back to the sampled path with the same honest result —
+         * never an error, never empty-yet-complete. */
+        memset(&opts, 0, sizeof opts);
+        opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+        opts.snapshot = 1;
+        CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+              "AMD LBR live snapshot-opt-in init");
+        asmtest_trace_t *st = asmtest_trace_new(64, 64);
+        CHECK(asmtest_hwtrace_register_region("amdsnap", p, sizeof ROUTINE, st) ==
+                  ASMTEST_HW_OK,
+              "AMD LBR live snapshot-opt-in register");
+        asmtest_hwtrace_begin("amdsnap");
+        long r2 = fn(20, 22);
+        asmtest_hwtrace_end("amdsnap");
+        CHECK(r2 == 42, "AMD LBR live snapshot-opt-in call returns 20+22");
+        CHECK(asmtest_emu_trace_truncated(st) ||
+                  asmtest_emu_trace_insns_total(st) > 0,
+              "AMD LBR live snapshot opt-in: honest result (deterministic "
+              "capture, or clean fallback to sampling)");
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(st);
         munmap(p, sizeof ROUTINE);
     }
 
@@ -2143,6 +2169,85 @@ static void test_ptrace_attach(void) {
     munmap((void *)go, sizeof(int));
 #else
     printf("# SKIP ptrace attach: not Linux x86-64/AArch64\n");
+#endif
+}
+
+/* Attached BLOCK-STEP: the same true-external-attach harness as test_ptrace_attach,
+ * but traced with asmtest_ptrace_trace_attached_blockstep — one #DB per TAKEN branch
+ * with the intra-block instructions reconstructed — asserting the stream is
+ * byte-identical to the per-instruction attached tracer. This is the rootless
+ * managed-runtime completeness fallback at a fraction of the stops (the third
+ * block-step entry point the AMD plan's Phase 2 scopes). x86-64 only. */
+static void test_ptrace_attach_blockstep(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_blockstep_available()) {
+        printf("# SKIP ptrace attach block-step: PTRACE_SINGLEBLOCK/Capstone "
+               "unavailable here\n");
+        return;
+    }
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+    volatile int *go = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (go == MAP_FAILED || p == MAP_FAILED) {
+        printf("# SKIP ptrace attach block-step: mmap failed\n");
+        return;
+    }
+    *go = 0;
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        while (!*go) {
+            /* user-space spin (no syscall) so the external attach catches us cleanly */
+        }
+        volatile long r = ((add2_fn)p)(20, 22);
+        (void)r;
+        _exit(0);
+    }
+
+    struct timespec ts = {0, 3 * 1000 * 1000}; /* 3 ms */
+    nanosleep(&ts, NULL);
+    int status = 0;
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 ||
+        waitpid(pid, &status, 0) < 0) {
+        printf("# SKIP ptrace attach block-step: PTRACE_ATTACH not permitted "
+               "(yama ptrace_scope)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return;
+    }
+    *go = 1;
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    long result = 0;
+    int rc = asmtest_ptrace_trace_attached_blockstep(pid, p, sizeof ROUTINE,
+                                                     &result, tr);
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+
+    CHECK(rc == ASMTEST_PTRACE_OK,
+          "attach block-step: trace_attached_blockstep succeeds externally");
+    CHECK(result == 42,
+          "attach block-step: result 42 read from the foreign return reg");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq,
+          "attach block-step: stream byte-identical to the per-insn attached "
+          "tracer");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2 &&
+              !asmtest_emu_trace_truncated(tr),
+          "attach block-step: two blocks, complete");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+    munmap((void *)go, sizeof(int));
+#else
+    printf("# SKIP ptrace attach block-step: not Linux x86-64\n");
 #endif
 }
 
@@ -4132,6 +4237,7 @@ int main(void) {
 
     /* Live: tracing a region in a SEPARATE, externally-attached process (W2 attach). */
     test_ptrace_attach();
+    test_ptrace_attach_blockstep();
 
     /* Live: discover a foreign region from /proc/<pid>/maps then attach+trace it, and
      * parse a JIT perf-map (the "point W2 at a running process" layer). */

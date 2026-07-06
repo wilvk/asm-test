@@ -104,6 +104,14 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
  * part): a richest-window count at the ceiling means the routine overflowed one
  * snapshot, so escalate from Tier-A to Tier-B stitching. */
 int asmtest_amd_lbr_depth(void);
+/* Deterministic boundary LBR snapshot (src/branchsnap.c): arm an LBR-on event + a HW
+ * execution breakpoint at base+exit_off + the bpf_get_branch_snapshot program, drain
+ * and decode at end. The `snapshot` option routes the AMD begin/end markers here;
+ * ANY nonzero from _begin (no BPF toolchain, no caps, no LbrExtV2 substrate) makes
+ * the marker path fall back to the sample_period=1 capture below. Internal plumbing,
+ * deliberately not part of the public tier surface. */
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off);
+int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
 #endif
 
 /* Single-step (EFLAGS.TF / SIGTRAP) stepper (ss_backend.c). Unlike the trace
@@ -559,7 +567,51 @@ static hw_region_t *find_region(const char *name) {
 /* at the region's last branch holds the complete <=16-entry history.  */
 /* ------------------------------------------------------------------ */
 #if defined(__linux__) && defined(__x86_64__)
+/* Nonzero while the active AMD region is captured by the deterministic boundary
+ * snapshot (branchsnap.c) instead of the sampled data ring below. Single-slot,
+ * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active. */
+static int g_amd_snap = 0;
+
+/* The offset of the region's LAST ret-class instruction — the exit the boundary
+ * snapshot plants its hardware breakpoint on. Walks the registered bytes with the
+ * Capstone length-decoder; returns (size_t)-1 when no ret is found before the walk
+ * ends or a byte fails to decode (multi-exit tails past undecodable padding simply
+ * fall back to the sampled path; a breakpoint on a wrong "ret" is harmless — the
+ * boundary is never hit and end() reports an honest truncated). */
+static size_t amd_last_ret_off(const void *base, size_t len) {
+    if (!asmtest_disas_available())
+        return (size_t)-1;
+    size_t o = 0, last_ret = (size_t)-1;
+    while (o < len) {
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
+                                 (uint64_t)(uintptr_t)base, o, NULL, 0);
+        if (l == 0)
+            break;
+        if (asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
+                                 o))
+            last_ret = o;
+        o += l;
+    }
+    return last_ret;
+}
+
 static int hwtrace_begin_amd(hw_region_t *r) {
+    /* Deterministic boundary snapshot opt-in (AMD plan Phase 3 follow-up): with
+     * opts.snapshot set, read the frozen 16-entry stack at the region's exit
+     * breakpoint instead of flooding sample_period=1 PMIs and guessing the richest
+     * window — the tiny single-shot routine the sampled path honestly truncates
+     * reconstructs completely here. Any arm failure (no BPF toolchain/caps, no
+     * LbrExtV2, no decodable ret) falls through to the sampled path unchanged. */
+    if (g_opts.snapshot) {
+        size_t exit_off = amd_last_ret_off(r->base, r->len);
+        if (exit_off != (size_t)-1 &&
+            asmtest_amd_snapshot_begin(r->base, r->len, exit_off) ==
+                ASMTEST_HW_OK) {
+            g_amd_snap = 1;
+            g_active = r; /* g_fd stays -1: no sampled ring in snapshot mode */
+            return 0;
+        }
+    }
     struct perf_event_attr a;
     memset(&a, 0, sizeof a);
     a.size = sizeof a;
@@ -602,6 +654,22 @@ static int hwtrace_begin_amd(hw_region_t *r) {
 }
 
 static void hwtrace_end_amd(void) {
+    if (g_amd_snap) {
+        /* Boundary-snapshot mode: drain + decode the frozen exit window. The same
+         * honesty invariant as the sampled path: an empty reconstruction is never
+         * a complete empty trace. */
+        hw_region_t *sr = g_active;
+        if (sr != NULL && sr->trace != NULL) {
+            asmtest_amd_snapshot_end(sr->trace);
+            if (sr->trace->insns_total == 0)
+                sr->trace->truncated = true;
+        } else {
+            asmtest_amd_snapshot_end(NULL); /* no trace: just release the slot */
+        }
+        g_amd_snap = 0;
+        g_active = NULL;
+        return;
+    }
     ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
     struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
     long pg = sysconf(_SC_PAGESIZE);

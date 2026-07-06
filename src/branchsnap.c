@@ -81,14 +81,52 @@ static int bsnap_on_event(void *ctx, void *data, size_t sz) {
     return 0;
 }
 
-int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
-                               void (*run_fn)(void *), void *arg,
-                               asmtest_trace_t *trace) {
-    if (base == NULL || len == 0 || exit_off >= len || run_fn == NULL ||
-        trace == NULL)
+/* Armed-capture state: a single process-global slot, matching hwtrace.c's
+ * single-active-region invariant (the marker path arms at begin() and drains at
+ * end(); the one-shot below is begin -> run_fn -> end over the same slot). */
+struct bsnap_state {
+    int active;
+    int lfd; /* LBR-on branch-stack event (never read; powers the hardware)   */
+    int bfd; /* HW execution breakpoint at the region exit                    */
+    struct branchsnap_bpf *skel;
+    struct bpf_link *link;
+    struct ring_buffer *rb;
+    struct bsnap_drain drain;
+};
+static struct bsnap_state g_bsnap;
+
+static void bsnap_teardown(void) {
+    if (g_bsnap.rb != NULL)
+        ring_buffer__free(g_bsnap.rb);
+    if (g_bsnap.link != NULL)
+        bpf_link__destroy(g_bsnap.link);
+    if (g_bsnap.skel != NULL)
+        branchsnap_bpf__destroy(g_bsnap.skel);
+    if (g_bsnap.bfd >= 0)
+        close(g_bsnap.bfd);
+    if (g_bsnap.lfd >= 0)
+        close(g_bsnap.lfd);
+    memset(&g_bsnap, 0, sizeof g_bsnap);
+    g_bsnap.lfd = g_bsnap.bfd = -1;
+}
+
+/* ARM the deterministic boundary snapshot for [base, base+len): LBR on + a hardware
+ * execution breakpoint at base+exit_off + the BPF snapshot program attached to it.
+ * The region begin marker calls this when the `snapshot` option is set; on ANY
+ * failure it returns nonzero having released everything, so the caller can fall
+ * back to the sample_period=1 path. Single-slot: a second arm while active fails. */
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off) {
+    if (base == NULL || len == 0 || exit_off >= len)
         return ASMTEST_HW_EINVAL;
+    if (g_bsnap.active)
+        return ASMTEST_HW_ESTATE;
     if (!asmtest_amd_snapshot_available())
         return ASMTEST_HW_EUNAVAIL;
+
+    memset(&g_bsnap, 0, sizeof g_bsnap);
+    g_bsnap.lfd = g_bsnap.bfd = -1;
+    g_bsnap.drain.base = base;
+    g_bsnap.drain.len = len;
 
     /* (1) Enable LBR recording on this thread (a branch-stack event; we never read its
      * ring — it just turns the hardware on so the snapshot has data). */
@@ -105,6 +143,7 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
     long lfd = bsnap_perf_open(&la, 0, -1, -1, 0);
     if (lfd < 0)
         return ASMTEST_HW_EUNAVAIL;
+    g_bsnap.lfd = (int)lfd;
 
     /* (2) HW execution breakpoint at the region exit. */
     struct perf_event_attr ba;
@@ -120,59 +159,93 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
     ba.disabled = 1;
     long bfd = bsnap_perf_open(&ba, 0, -1, -1, 0);
     if (bfd < 0) {
-        close((int)lfd);
+        bsnap_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    g_bsnap.bfd = (int)bfd;
+
+    /* (3) Load + attach the snapshot BPF program to the breakpoint event. */
+    g_bsnap.skel = branchsnap_bpf__open();
+    if (g_bsnap.skel == NULL || branchsnap_bpf__load(g_bsnap.skel) != 0) {
+        bsnap_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    g_bsnap.link = bpf_program__attach_perf_event(
+        g_bsnap.skel->progs.asmtest_branchsnap, g_bsnap.bfd);
+    if (g_bsnap.link == NULL) {
+        bsnap_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    g_bsnap.rb = ring_buffer__new(bpf_map__fd(g_bsnap.skel->maps.snaps),
+                                  bsnap_on_event, &g_bsnap.drain, NULL);
+    if (g_bsnap.rb == NULL) {
+        bsnap_teardown();
         return ASMTEST_HW_EUNAVAIL;
     }
 
-    /* (3) Load + attach the snapshot BPF program to the breakpoint event. */
-    struct branchsnap_bpf *skel = branchsnap_bpf__open();
-    int rc = ASMTEST_HW_EUNAVAIL;
-    struct bpf_link *link = NULL;
-    struct ring_buffer *rb = NULL;
-    struct bsnap_drain drain;
-    memset(&drain, 0, sizeof drain);
-    drain.base = base;
-    drain.len = len;
-    if (skel != NULL && branchsnap_bpf__load(skel) == 0) {
-        link = bpf_program__attach_perf_event(skel->progs.asmtest_branchsnap,
-                                              (int)bfd);
-        if (link != NULL)
-            rb = ring_buffer__new(bpf_map__fd(skel->maps.snaps), bsnap_on_event,
-                                  &drain, NULL);
-    }
-    if (rb != NULL) {
-        /* (4) Run the workload with LBR + breakpoint live, then drain + decode. */
-        ioctl((int)lfd, PERF_EVENT_IOC_RESET, 0);
-        ioctl((int)lfd, PERF_EVENT_IOC_ENABLE, 0);
-        ioctl((int)bfd, PERF_EVENT_IOC_RESET, 0);
-        ioctl((int)bfd, PERF_EVENT_IOC_ENABLE, 0);
-        run_fn(arg);
-        ioctl((int)bfd, PERF_EVENT_IOC_DISABLE, 0);
-        ioctl((int)lfd, PERF_EVENT_IOC_DISABLE, 0);
-        ring_buffer__poll(rb, 200);
+    /* (4) Live: the workload runs with LBR + breakpoint enabled until end(). */
+    ioctl(g_bsnap.lfd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(g_bsnap.lfd, PERF_EVENT_IOC_ENABLE, 0);
+    ioctl(g_bsnap.bfd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(g_bsnap.bfd, PERF_EVENT_IOC_ENABLE, 0);
+    g_bsnap.active = 1;
+    return ASMTEST_HW_OK;
+}
 
-        if (drain.best_inregion > 0)
-            rc = asmtest_amd_decode(
-                (const struct perf_branch_entry *)drain.best,
-                (size_t)drain.best_nr, base, len, trace);
-        else {
-            trace->truncated = true; /* boundary never hit / no in-region branch */
-            rc = ASMTEST_HW_OK;
-        }
+/* DRAIN the armed snapshot: disable the events, poll the BPF ring, decode the
+ * richest boundary window into `trace` (truncated if the boundary was never hit),
+ * and release everything. The region end marker's counterpart to _begin. */
+int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
+    if (!g_bsnap.active)
+        return ASMTEST_HW_ESTATE;
+    if (trace == NULL) {
+        bsnap_teardown();
+        return ASMTEST_HW_EINVAL;
     }
+    ioctl(g_bsnap.bfd, PERF_EVENT_IOC_DISABLE, 0);
+    ioctl(g_bsnap.lfd, PERF_EVENT_IOC_DISABLE, 0);
+    ring_buffer__poll(g_bsnap.rb, 200);
 
-    if (rb != NULL)
-        ring_buffer__free(rb);
-    if (link != NULL)
-        bpf_link__destroy(link);
-    if (skel != NULL)
-        branchsnap_bpf__destroy(skel);
-    close((int)bfd);
-    close((int)lfd);
+    int rc;
+    if (g_bsnap.drain.best_inregion > 0)
+        rc = asmtest_amd_decode(
+            (const struct perf_branch_entry *)g_bsnap.drain.best,
+            (size_t)g_bsnap.drain.best_nr, g_bsnap.drain.base,
+            g_bsnap.drain.len, trace);
+    else {
+        trace->truncated = true; /* boundary never hit / no in-region branch */
+        rc = ASMTEST_HW_OK;
+    }
+    bsnap_teardown();
     return rc;
 }
 
+int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
+                               void (*run_fn)(void *), void *arg,
+                               asmtest_trace_t *trace) {
+    if (base == NULL || len == 0 || exit_off >= len || run_fn == NULL ||
+        trace == NULL)
+        return ASMTEST_HW_EINVAL;
+    int rc = asmtest_amd_snapshot_begin(base, len, exit_off);
+    if (rc != ASMTEST_HW_OK)
+        return rc;
+    run_fn(arg);
+    return asmtest_amd_snapshot_end(trace);
+}
+
 #else /* no BPF toolchain / not x86-64 Linux */
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off) {
+    (void)base;
+    (void)len;
+    (void)exit_off;
+    return ASMTEST_HW_ENOSYS;
+}
+
+int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
+    (void)trace;
+    return ASMTEST_HW_ENOSYS;
+}
+
 int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
                                void (*run_fn)(void *), void *arg,
                                asmtest_trace_t *trace) {

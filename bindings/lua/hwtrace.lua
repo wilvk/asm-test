@@ -55,6 +55,7 @@ void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
 int  asmtest_ptrace_trace_call(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
 int  asmtest_ptrace_blockstep_available(void);
 int  asmtest_ptrace_trace_call_blockstep(const void* code, size_t len, const long* args, int nargs, long* result, void* trace);
+int  asmtest_ptrace_trace_attached_blockstep(int pid, const void* base, size_t len, long* result, void* trace);
 int  asmtest_ptrace_trace_attached(int pid, const void* base, size_t len, long* result, void* trace);
 int  asmtest_ptrace_run_to(int pid, const void* addr);
 int  asmtest_proc_region_by_addr(int pid, const void* addr, void** base_out, size_t* len_out);
@@ -580,6 +581,21 @@ function HwTrace.ptrace_trace_attached(pid, base, len, trace)
                                              len, result, trace.h)
   if rc ~= ASMTEST_PTRACE_OK then
     error("asmtest_ptrace_trace_attached failed: " .. tonumber(rc))
+  end
+  return u64(result[0])
+end
+
+-- Block-step variant of ptrace_trace_attached: one #DB per TAKEN branch (intra-block
+-- instructions reconstructed with Capstone), same contract otherwise — the rootless
+-- managed-runtime completeness fallback at a fraction of the stops. Probe first with
+-- ptrace_blockstep_available().
+function HwTrace.ptrace_trace_attached_blockstep(pid, base, len, trace)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local result = ffi.new("long[1]")
+  local rc = L.asmtest_ptrace_trace_attached_blockstep(pid, ffi.cast("const void*", base),
+                                                       len, result, trace.h)
+  if rc ~= ASMTEST_PTRACE_OK then
+    error("asmtest_ptrace_trace_attached_blockstep failed: " .. tonumber(rc))
   end
   return u64(result[0])
 end

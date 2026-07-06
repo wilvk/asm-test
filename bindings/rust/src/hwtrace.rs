@@ -395,9 +395,10 @@ struct HwFns {
     ptrace_available: Option<PtraceAvailableFn>,
     ptrace_skip_reason: Option<PtraceSkipReasonFn>,
     ptrace_trace_call: Option<PtraceTraceCallFn>,
-    // BTF block-step tier: same shapes as the per-instruction pair above.
+    // BTF block-step tier: same shapes as the per-instruction trio above.
     ptrace_blockstep_available: Option<PtraceAvailableFn>,
     ptrace_trace_call_blockstep: Option<PtraceTraceCallFn>,
+    ptrace_trace_attached_blockstep: Option<PtraceTraceAttachedFn>,
     ptrace_trace_attached: Option<PtraceTraceAttachedFn>,
     ptrace_run_to: Option<PtraceRunToFn>,
     ptrace_trace_attached_versioned: Option<PtraceTraceAttachedVersionedFn>,
@@ -513,6 +514,7 @@ fn hw_fns() -> &'static HwFns {
                 ptrace_available: None, ptrace_skip_reason: None,
                 ptrace_trace_call: None, ptrace_trace_attached: None,
                 ptrace_blockstep_available: None, ptrace_trace_call_blockstep: None,
+                ptrace_trace_attached_blockstep: None,
                 ptrace_run_to: None, ptrace_trace_attached_versioned: None,
                 proc_region_by_addr: None, proc_perfmap_symbol: None,
                 jitdump_find: None,
@@ -583,6 +585,7 @@ fn hw_fns() -> &'static HwFns {
             ptrace_trace_call: load!("asmtest_ptrace_trace_call", PtraceTraceCallFn),
             ptrace_blockstep_available: load!("asmtest_ptrace_blockstep_available", PtraceAvailableFn),
             ptrace_trace_call_blockstep: load!("asmtest_ptrace_trace_call_blockstep", PtraceTraceCallFn),
+            ptrace_trace_attached_blockstep: load!("asmtest_ptrace_trace_attached_blockstep", PtraceTraceAttachedFn),
             ptrace_trace_attached: load!("asmtest_ptrace_trace_attached", PtraceTraceAttachedFn),
             ptrace_run_to: load!("asmtest_ptrace_run_to", PtraceRunToFn),
             ptrace_trace_attached_versioned: load!(
@@ -1311,6 +1314,26 @@ impl Ptrace {
             f(pid as c_int, base as *const c_void, len, &mut result, trace.handle)
         };
         assert!(rc == ASMTEST_PTRACE_OK, "asmtest_ptrace_trace_attached failed: {rc}");
+        result as i64
+    }
+
+    /// Block-step variant of [`trace_attached`](Ptrace::trace_attached): one `#DB`
+    /// per TAKEN branch (intra-block instructions reconstructed with Capstone), same
+    /// contract otherwise — the rootless managed-runtime completeness fallback at a
+    /// fraction of the stops. Probe first with
+    /// [`blockstep_available`](Ptrace::blockstep_available).
+    pub fn trace_attached_blockstep(pid: i32, base: usize, len: usize, trace: &Trace) -> i64 {
+        let f = hw_fns()
+            .ptrace_trace_attached_blockstep
+            .expect("libasmtest_hwtrace not loaded (Ptrace::blockstep_available() is false)");
+        let mut result: c_long = 0;
+        let rc = unsafe {
+            f(pid as c_int, base as *const c_void, len, &mut result, trace.handle)
+        };
+        assert!(
+            rc == ASMTEST_PTRACE_OK,
+            "asmtest_ptrace_trace_attached_blockstep failed: {rc}"
+        );
         result as i64
     }
 

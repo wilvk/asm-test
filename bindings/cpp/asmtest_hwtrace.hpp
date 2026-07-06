@@ -198,10 +198,12 @@ struct HwApi {
     void (*ptrace_skip_reason)(char *, size_t) = nullptr;
     int (*ptrace_trace_call)(const void *, size_t, const long *, int, long *,
                              void *) = nullptr;
-    // BTF block-step tier: same shapes as the per-instruction pair above.
+    // BTF block-step tier: same shapes as the per-instruction trio above.
     int (*ptrace_blockstep_available)() = nullptr;
     int (*ptrace_trace_call_blockstep)(const void *, size_t, const long *, int,
                                        long *, void *) = nullptr;
+    int (*ptrace_trace_attached_blockstep)(int, const void *, size_t, long *,
+                                           void *) = nullptr;
     int (*ptrace_trace_attached)(int, const void *, size_t, long *,
                                  void *) = nullptr;
     int (*ptrace_run_to)(int, const void *) = nullptr;
@@ -341,6 +343,8 @@ inline HwApi &api() {
                          t.ptrace_blockstep_available);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_call_blockstep",
                          t.ptrace_trace_call_blockstep);
+        ok &= dlsym_into(h, "asmtest_ptrace_trace_attached_blockstep",
+                         t.ptrace_trace_attached_blockstep);
         ok &= dlsym_into(h, "asmtest_ptrace_trace_attached",
                          t.ptrace_trace_attached);
         ok &= dlsym_into(h, "asmtest_ptrace_run_to", t.ptrace_run_to);
@@ -1191,6 +1195,22 @@ class Ptrace {
         if (rc != ASMTEST_PTRACE_OK)
             throw std::runtime_error("asmtest_ptrace_trace_attached failed: " +
                                      std::to_string(rc));
+        return result;
+    }
+
+    /// Block-step variant of traceAttached: one #DB per TAKEN branch (intra-block
+    /// instructions reconstructed with Capstone), same contract otherwise — the
+    /// rootless managed-runtime completeness fallback at a fraction of the stops.
+    /// Probe first with blockstepAvailable(). Throws on a nonzero status.
+    static long traceAttachedBlockstep(int pid, const void *base, std::size_t len,
+                                       const HwTrace &trace) {
+        long result = 0;
+        int rc = detail::require().ptrace_trace_attached_blockstep(
+            pid, base, len, &result, trace.raw());
+        if (rc != ASMTEST_PTRACE_OK)
+            throw std::runtime_error(
+                "asmtest_ptrace_trace_attached_blockstep failed: " +
+                std::to_string(rc));
         return result;
     }
 

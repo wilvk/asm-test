@@ -114,6 +114,17 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
  * cached one-shot probe. Callers self-skip cleanly where it is 0. */
 int asmtest_ptrace_blockstep_available(void);
 
+/* Block-step variant of asmtest_ptrace_trace_attached: block-step a SEPARATE,
+ * already-ptrace-stopped process from its current stop — one #DB per TAKEN branch —
+ * reconstructing the identical per-instruction stream for [base, base+len) in the
+ * TARGET'S address space (bytes read via process_vm_readv). Same contract as the
+ * per-instruction attached tracer: the caller owns attach/detach (and run_to), the
+ * target is never killed, and on a region return it is left stopped past the region.
+ * The rootless managed-runtime completeness fallback at a fraction of the stops.
+ * Probe with asmtest_ptrace_blockstep_available; ENOSYS where block-step cannot run. */
+int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base, size_t len,
+                                            long *result, asmtest_trace_t *trace);
+
 /* §D3 whole-window multi-region capture: single-step an attached tracee across a
  * WINDOW frame (run_to `win_base` first; the window ends when control returns to the
  * frame's caller), recording the ABSOLUTE address of every instruction that falls in

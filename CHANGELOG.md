@@ -22,6 +22,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AMD tracing plan Phase 2 & 3 follow-ups — attached block-step + snapshot marker
+  routing.** Completes the two sub-items the earlier block-step / snapshot commits left open:
+  - **`asmtest_ptrace_trace_attached_blockstep`** — the third public block-step symbol.
+    Block-steps a SEPARATE, externally-attached process (one debug exception per taken
+    branch, intra-block instructions reconstructed with Capstone), reading foreign bytes via
+    `process_vm_readv` and leaving the target stopped past the region for the caller — the
+    rootless managed-runtime completeness fallback. Wrapped in all ten bindings; a new
+    `test_ptrace_attach_blockstep` asserts the stream is byte-identical to the per-instruction
+    attached tracer over a true external attach.
+  - **`opts.snapshot` begin/end routing on AMD** — the deterministic boundary LBR snapshot
+    (`bpf_get_branch_snapshot` at a region-exit hardware breakpoint) is now reachable through
+    the ordinary `begin`/`end` markers, not just the standalone `asmtest_amd_snapshot_trace`.
+    The capture split into `asmtest_amd_snapshot_begin`/`_end` (armed single-slot); the AMD
+    marker path derives the exit from the region's last `ret` and falls back to the
+    `sample_period=1` sampled path when the BPF toolchain/caps/LbrExtV2 substrate is absent.
+
 - **AMD hardware-trace improvements — Phases 0, 4, 5 of the
   [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/amd-tracing-plan.md).**
   Completes the P0/P1 near-term work on the AMD LBR backend, all validated live on the

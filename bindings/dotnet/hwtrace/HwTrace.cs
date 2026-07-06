@@ -321,6 +321,8 @@ namespace Asmtest
             IntPtr code, UIntPtr len, long[] args, int nargs, out long result, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached(
             int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_blockstep(
+            int pid, IntPtr @base, UIntPtr len, out long result, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_run_to(int pid, IntPtr addr);
         [DllImport(HWTRACE)] public static extern int asmtest_proc_region_by_addr(
             int pid, IntPtr addr, out IntPtr baseOut, out UIntPtr lenOut);
@@ -909,6 +911,21 @@ namespace Asmtest
                 pid, @base, (UIntPtr)len, out long result, trace);
             if (rc != HwNative.ASMTEST_PTRACE_OK)
                 throw new HwTraceException($"asmtest_ptrace_trace_attached failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
+        /// Block-step variant of <see cref="TraceAttached"/>: one debug exception per
+        /// TAKEN branch (intra-block instructions reconstructed with Capstone), same
+        /// contract otherwise — the rootless managed-runtime completeness fallback at a
+        /// fraction of the stops. Probe first with <see cref="BlockstepAvailable"/>.
+        /// </summary>
+        public static long TraceAttachedBlockstep(int pid, IntPtr @base, nuint len, IntPtr trace)
+        {
+            int rc = HwNative.asmtest_ptrace_trace_attached_blockstep(
+                pid, @base, (UIntPtr)len, out long result, trace);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_attached_blockstep failed: {rc}");
             return result;
         }
 

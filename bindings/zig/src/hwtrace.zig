@@ -333,9 +333,10 @@ const Api = struct {
     ptrace_available: FnPtraceAvailable,
     ptrace_skip_reason: FnPtraceSkipReason,
     ptrace_trace_call: FnPtraceTraceCall,
-    // BTF block-step tier: same shapes as the per-instruction pair above.
+    // BTF block-step tier: same shapes as the per-instruction trio above.
     ptrace_blockstep_available: FnPtraceAvailable,
     ptrace_trace_call_blockstep: FnPtraceTraceCall,
+    ptrace_trace_attached_blockstep: FnPtraceTraceAttached,
     ptrace_trace_attached: FnPtraceTraceAttached,
     ptrace_trace_attached_versioned: FnPtraceTraceAttachedVersioned,
     ptrace_run_to: FnPtraceRunTo,
@@ -469,6 +470,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .ptrace_trace_call = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call") orelse return null,
         .ptrace_blockstep_available = lib.lookup(FnPtraceAvailable, "asmtest_ptrace_blockstep_available") orelse return null,
         .ptrace_trace_call_blockstep = lib.lookup(FnPtraceTraceCall, "asmtest_ptrace_trace_call_blockstep") orelse return null,
+        .ptrace_trace_attached_blockstep = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached_blockstep") orelse return null,
         .ptrace_trace_attached = lib.lookup(FnPtraceTraceAttached, "asmtest_ptrace_trace_attached") orelse return null,
         .ptrace_trace_attached_versioned = lib.lookup(FnPtraceTraceAttachedVersioned, "asmtest_ptrace_trace_attached_versioned") orelse return null,
         .ptrace_run_to = lib.lookup(FnPtraceRunTo, "asmtest_ptrace_run_to") orelse return null,
@@ -1052,6 +1054,23 @@ pub const Ptrace = struct {
         const api = load() orelse return Error.LibUnavailable;
         var result: c_long = 0;
         const rc = api.ptrace_trace_attached(pid, base, len, &result, trace.handle);
+        if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
+        return @intCast(result);
+    }
+
+    /// Block-step variant of `traceAttached`: one `#DB` per TAKEN branch (intra-block
+    /// instructions reconstructed with Capstone), same contract otherwise — the
+    /// rootless managed-runtime completeness fallback at a fraction of the stops.
+    /// Probe first with `blockstepAvailable()`.
+    pub fn traceAttachedBlockstep(
+        pid: c_int,
+        base: ?*const anyopaque,
+        len: usize,
+        trace: *const HwTrace,
+    ) Error!i64 {
+        const api = load() orelse return Error.LibUnavailable;
+        var result: c_long = 0;
+        const rc = api.ptrace_trace_attached_blockstep(pid, base, len, &result, trace.handle);
         if (rc != ASMTEST_PTRACE_OK) return Error.TraceFailed;
         return @intCast(result);
     }

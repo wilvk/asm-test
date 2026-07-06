@@ -153,6 +153,7 @@ public final class HwTrace {
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
         PTRACE_AVAILABLE, PTRACE_SKIP_REASON, PTRACE_TRACE_CALL, PTRACE_TRACE_ATTACHED,
         PTRACE_BLOCKSTEP_AVAILABLE, PTRACE_TRACE_CALL_BLOCKSTEP,
+        PTRACE_TRACE_ATTACHED_BLOCKSTEP,
         PTRACE_TRACE_ATTACHED_VERSIONED, PTRACE_RUN_TO,
         PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND,
         // asmtest_codeimage.h — time-aware code-image recorder (a userspace TEXT_POKE).
@@ -288,6 +289,7 @@ public final class HwTrace {
             traceBlockAt = null, traceInsnAt = null,
             ptraceAvailable = null, ptraceSkipReason = null, ptraceTraceCall = null,
             ptraceBlockstepAvailable = null, ptraceTraceCallBlockstep = null,
+            ptraceTraceAttachedBlockstep = null,
             ptraceTraceAttached = null, ptraceTraceAttachedVersioned = null, ptraceRunTo = null,
             procRegionByAddr = null, procPerfmapSymbol = null,
             jitdumpFind = null,
@@ -391,6 +393,10 @@ public final class HwTrace {
                     ADDRESS, ADDRESS));
             // asmtest_ptrace_trace_attached(pid, base, len, result, trace).
             ptraceTraceAttached = h(lib, "asmtest_ptrace_trace_attached",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
+                    ADDRESS));
+            // asmtest_ptrace_trace_attached_blockstep(pid, base, len, result, trace).
+            ptraceTraceAttachedBlockstep = h(lib, "asmtest_ptrace_trace_attached_blockstep",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
                     ADDRESS));
             // asmtest_ptrace_trace_attached_versioned(pid, base, len, img, when, result,
@@ -533,6 +539,7 @@ public final class HwTrace {
         PTRACE_TRACE_CALL = ptraceTraceCall; PTRACE_TRACE_ATTACHED = ptraceTraceAttached;
         PTRACE_BLOCKSTEP_AVAILABLE = ptraceBlockstepAvailable;
         PTRACE_TRACE_CALL_BLOCKSTEP = ptraceTraceCallBlockstep;
+        PTRACE_TRACE_ATTACHED_BLOCKSTEP = ptraceTraceAttachedBlockstep;
         PTRACE_TRACE_ATTACHED_VERSIONED = ptraceTraceAttachedVersioned; PTRACE_RUN_TO = ptraceRunTo;
         PROC_REGION_BY_ADDR = procRegionByAddr; PROC_PERFMAP_SYMBOL = procPerfmapSymbol;
         JITDUMP_FIND = jitdumpFind;
@@ -1048,6 +1055,23 @@ public final class HwTrace {
             int rc = (int) PTRACE_TRACE_ATTACHED.invoke(pid, base, len, result, trace);
             if (rc != ASMTEST_PTRACE_OK)
                 throw new RuntimeException("asmtest_ptrace_trace_attached failed: " + rc);
+            return result.get(JAVA_LONG, 0);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Block-step variant of {@link #ptraceTraceAttached}: one #DB per TAKEN branch
+     *  (intra-block instructions reconstructed with Capstone), same contract
+     *  otherwise — the rootless managed-runtime completeness fallback at a fraction
+     *  of the stops. Probe first with {@link #ptraceBlockstepAvailable}. */
+    public static long ptraceTraceAttachedBlockstep(int pid, MemorySegment base, long len,
+                                                    MemorySegment trace) {
+        if (PTRACE_TRACE_ATTACHED_BLOCKSTEP == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment result = a.allocate(JAVA_LONG);
+            int rc = (int) PTRACE_TRACE_ATTACHED_BLOCKSTEP.invoke(pid, base, len, result, trace);
+            if (rc != ASMTEST_PTRACE_OK)
+                throw new RuntimeException("asmtest_ptrace_trace_attached_blockstep failed: " + rc);
             return result.get(JAVA_LONG, 0);
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }

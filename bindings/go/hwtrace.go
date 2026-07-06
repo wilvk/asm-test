@@ -188,9 +188,10 @@ static hw_trace_insn_at_fn    p_hw_trace_insn_at;
 static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
 static pt_trace_call_fn       p_pt_trace_call;
-// BTF block-step tier: same shapes as the per-instruction pair above.
+// BTF block-step tier: same shapes as the per-instruction trio above.
 static pt_available_fn        p_pt_blockstep_available;
 static pt_trace_call_fn       p_pt_trace_call_blockstep;
+static pt_trace_attached_fn   p_pt_trace_attached_blockstep;
 static pt_trace_attached_fn   p_pt_trace_attached;
 static pt_trace_attached_versioned_fn p_pt_trace_attached_versioned;
 static pt_run_to_fn           p_pt_run_to;
@@ -289,6 +290,7 @@ static void asmtest_hw_resolve(void) {
     p_pt_trace_call        = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call");
     p_pt_blockstep_available  = (pt_available_fn)dlsym(h, "asmtest_ptrace_blockstep_available");
     p_pt_trace_call_blockstep = (pt_trace_call_fn)dlsym(h, "asmtest_ptrace_trace_call_blockstep");
+    p_pt_trace_attached_blockstep = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached_blockstep");
     p_pt_trace_attached    = (pt_trace_attached_fn)dlsym(h, "asmtest_ptrace_trace_attached");
     p_pt_trace_attached_versioned = (pt_trace_attached_versioned_fn)dlsym(h, "asmtest_ptrace_trace_attached_versioned");
     p_pt_run_to            = (pt_run_to_fn)dlsym(h, "asmtest_ptrace_run_to");
@@ -346,6 +348,7 @@ static void asmtest_hw_resolve(void) {
                   p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
                   p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
                   p_pt_blockstep_available && p_pt_trace_call_blockstep &&
+                  p_pt_trace_attached_blockstep &&
                   p_pt_trace_attached && p_pt_trace_attached_versioned &&
                   p_pt_run_to && p_proc_region_by_addr &&
                   p_proc_perfmap_symbol && p_jitdump_find &&
@@ -478,6 +481,13 @@ static int asmtest_go_pt_trace_call(const void *code, size_t len, const long *ar
 static int asmtest_go_pt_trace_attached(int pid, const void *base, size_t len,
                                         long *result, void *trace) {
     return p_pt_trace_attached ? p_pt_trace_attached(pid, base, len, result, trace) : -1;
+}
+static int asmtest_go_pt_trace_attached_blockstep(int pid, const void *base,
+                                                  size_t len, long *result,
+                                                  void *trace) {
+    return p_pt_trace_attached_blockstep
+               ? p_pt_trace_attached_blockstep(pid, base, len, result, trace)
+               : -1;
 }
 static int asmtest_go_pt_trace_attached_versioned(int pid, const void *base, size_t len,
                                                   void *img, uint64_t when,
@@ -1090,6 +1100,20 @@ func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int
 		C.size_t(length), &result, trace.h)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached failed: %d", int(rc))
+	}
+	return int64(result), nil
+}
+
+// PtraceTraceAttachedBlockstep is the block-step variant of PtraceTraceAttached:
+// one #DB per TAKEN branch (intra-block instructions reconstructed with Capstone),
+// same contract otherwise — the rootless managed-runtime completeness fallback at
+// a fraction of the stops. Probe first with PtraceBlockstepAvailable.
+func PtraceTraceAttachedBlockstep(pid int, base uintptr, length int, trace *HwTrace) (int64, error) {
+	var result C.long
+	rc := C.asmtest_go_pt_trace_attached_blockstep(C.int(pid), unsafe.Pointer(base),
+		C.size_t(length), &result, trace.h)
+	if rc != ptraceOK {
+		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_blockstep failed: %d", int(rc))
 	}
 	return int64(result), nil
 }

@@ -222,6 +222,7 @@ let _loadError = null;
     ptraceTraceCall: lib.func('int asmtest_ptrace_trace_call(const void*, size_t, const long*, int, _Out_ long*, void*)'),
     ptraceBlockstepAvailable: lib.func('int asmtest_ptrace_blockstep_available()'),
     ptraceTraceCallBlockstep: lib.func('int asmtest_ptrace_trace_call_blockstep(const void*, size_t, const long*, int, _Out_ long*, void*)'),
+    ptraceTraceAttachedBlockstep: lib.func('int asmtest_ptrace_trace_attached_blockstep(int, const void*, size_t, _Out_ long*, void*)'),
     ptraceTraceAttached: lib.func('int asmtest_ptrace_trace_attached(int, const void*, size_t, _Out_ long*, void*)'),
     // Version-aware attach: traces a foreign region but resolves the bytes from a
     // code-image timeline (`img`) as of capture sequence `when`, not a late snapshot.
@@ -629,6 +630,17 @@ class Ptrace {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceAttached(pid, _addr(base), len, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached failed: ${rc}`);
+    return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Block-step variant of traceAttached: one #DB per TAKEN branch (intra-block
+   *  instructions reconstructed with Capstone), same contract otherwise — the
+   *  rootless managed-runtime completeness fallback at a fraction of the stops.
+   *  Probe first with blockstepAvailable(). */
+  static traceAttachedBlockstep(pid, base, len, trace) {
+    const resultBuf = Buffer.alloc(8);
+    const rc = _fn.ptraceTraceAttachedBlockstep(pid, _addr(base), len, resultBuf, trace._handle);
+    if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached_blockstep failed: ${rc}`);
     return Number(resultBuf.readBigInt64LE(0));
   }
 

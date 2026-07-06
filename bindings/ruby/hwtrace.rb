@@ -214,6 +214,8 @@ module Asmtest
         ptrace_blockstep_available: func(LIB, "asmtest_ptrace_blockstep_available", [], INT),
         ptrace_trace_call_blockstep:
           func(LIB, "asmtest_ptrace_trace_call_blockstep", [VOIDP, SZ, VOIDP, INT, VOIDP, VOIDP], INT),
+        ptrace_trace_attached_blockstep:
+          func(LIB, "asmtest_ptrace_trace_attached_blockstep", [INT, VOIDP, SZ, VOIDP, VOIDP], INT),
         ptrace_trace_attached: func(LIB, "asmtest_ptrace_trace_attached", [INT, VOIDP, SZ, VOIDP, VOIDP], INT),
         ptrace_run_to:       func(LIB, "asmtest_ptrace_run_to", [INT, VOIDP], INT),
         proc_region_by_addr: func(LIB, "asmtest_proc_region_by_addr", [INT, VOIDP, VOIDP, VOIDP], INT),
@@ -550,6 +552,22 @@ module Asmtest
         result = res[0, 8].unpack1("q")
         Fiddle.free(res.to_i)
         raise "asmtest_ptrace_trace_attached failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
+        result
+      end
+
+      # Block-step variant of ptrace_trace_attached: one #DB per TAKEN branch
+      # (intra-block instructions reconstructed with Capstone), same contract
+      # otherwise — the rootless managed-runtime completeness fallback at a fraction
+      # of the stops. Probe first with ptrace_blockstep_available?.
+      def self.ptrace_trace_attached_blockstep(pid, base, len, trace)
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8)
+        res[0, 8] = "\x00".b * 8
+        base_p = Fiddle::Pointer.new(base)
+        rc = Asmtest::HwTrace::FN[:ptrace_trace_attached_blockstep].call(
+          pid, base_p, len, res, trace.handle)
+        result = res[0, 8].unpack1("q")
+        Fiddle.free(res.to_i)
+        raise "asmtest_ptrace_trace_attached_blockstep failed: #{rc}" if rc != Asmtest::HwTrace::PTRACE_OK
         result
       end
 

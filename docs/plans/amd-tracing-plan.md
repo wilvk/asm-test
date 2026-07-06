@@ -636,9 +636,12 @@ validated on the Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`):
   the dev box confirms 16) that removes the assumption. *(The freeze-bit reader this phase
   also scoped shipped earlier with Phase 1.)*
 - **Phase 1 (freeze gate)** — landed (see Part II #3).
-- **Phase 2 (BTF block-step)** — landed (`asmtest_ptrace_trace_call_blockstep` /
-  `asmtest_ptrace_blockstep_available`, [src/ptrace_backend.c](../../src/ptrace_backend.c)).
-- **Phase 3 (software-event snapshot)** — landed (see Part II #2).
+- **Phase 2 (BTF block-step)** — landed, now including the attached variant
+  `asmtest_ptrace_trace_attached_blockstep` (all three public symbols; wrapped in all ten
+  bindings), [src/ptrace_backend.c](../../src/ptrace_backend.c).
+- **Phase 3 (software-event snapshot)** — landed, including the `snapshot: true`
+  begin/end marker-path opt-in ([src/branchsnap.c](../../src/branchsnap.c) +
+  [src/hwtrace.c](../../src/hwtrace.c)); see Part II #2.
 - **Phase 4 (LbrExtV2 spec filtering)** — landed (below).
 - **Phase 5 (stitch decodable-distance guard + ring hardening)** — landed (below).
 
@@ -717,7 +720,23 @@ box (which reports freeze present), so it ships behind the Phase-0 self-skip + t
 synthetic fixture and stays **pending real freeze-absent Zen 4 hardware**, per the house
 "no untested hardware code" rule (see Risks).
 
-## Improvement Phase 2 — BTF block-step mode in the W2 ptrace stepper (`src/ptrace_backend.c`) *(planned)*
+## Improvement Phase 2 — BTF block-step mode in the W2 ptrace stepper (`src/ptrace_backend.c`) *(landed 2026-07-06)*
+
+> **Status (2026-07-06): LANDED — all three public symbols now ship.** The core
+> block-step (`asmtest_ptrace_blockstep_available`, `asmtest_ptrace_trace_call_blockstep`
+> and the `blockstep_reconstruct` intra-block walk in
+> [src/ptrace_backend.c](../../src/ptrace_backend.c)) landed earlier; the **attached
+> variant `asmtest_ptrace_trace_attached_blockstep`** — the deliverable this section
+> scoped as its third symbol — now also ships, block-stepping a SEPARATE,
+> externally-attached process from its current stop (foreign bytes via
+> `process_vm_readv`, target never killed, left stopped past the region for the caller),
+> so a live JIT/managed method traces rootless at a fraction of the stops. All three are
+> wrapped in **all ten bindings** (parity gate green at 98 symbols) and validated:
+> `test_ptrace_attach_blockstep` ([examples/test_hwtrace.c](../../examples/test_hwtrace.c))
+> reuses the true-external-attach harness and asserts the block-step stream is
+> byte-identical to the per-instruction attached tracer; runs live under a plain
+> `docker run` (ptrace of its own child, no caps) in `make docker-hwtrace-amd` (272/272)
+> and self-skips on aarch64 / where `PTRACE_SINGLEBLOCK` is unwired.
 
 **Goal.** A complete, exactly-ordered in-region trace at **one `#DB` per taken branch**
 (≈ per basic block) instead of one per instruction — on *every* Zen (including Zen 2,
@@ -807,7 +826,24 @@ single-step test) shows the block-step stream is **byte-identical** — `insns[]
 fixtures, with a materially lower stop count; runs live under a **plain** `docker run` (no
 `--cap-add`), and self-skips on aarch64/non-x86 with a clear reason.
 
-## Improvement Phase 3 — Software-event / eBPF on-demand LBR snapshot (`src/hwtrace.c` + optional BPF) *(planned)*
+## Improvement Phase 3 — Software-event / eBPF on-demand LBR snapshot (`src/hwtrace.c` + optional BPF) *(landed 2026-07-06)*
+
+> **Status (2026-07-06): LANDED — including the marker-path opt-in follow-up.** The
+> deterministic capture (`asmtest_amd_snapshot_trace`, [src/branchsnap.c](../../src/branchsnap.c))
+> and its substrate probe landed earlier. The **`snapshot: true` opt-in** this section's
+> follow-up scoped now ships: the capture is split into `asmtest_amd_snapshot_begin` /
+> `asmtest_amd_snapshot_end` (a single process-global armed slot, matching hwtrace.c's
+> single-active-region invariant), and `hwtrace_begin_amd`/`hwtrace_end_amd`
+> ([src/hwtrace.c](../../src/hwtrace.c)) route the **ordinary region begin/end markers**
+> there when `opts.snapshot` is set — deriving the exit breakpoint from the region's last
+> `ret` (`amd_last_ret_off`) and falling back to the `sample_period=1` path on any arm
+> failure (no BPF toolchain/caps/LbrExtV2, no decodable ret). So a caller gets the
+> deterministic boundary snapshot through the plain begin/end surface, not just the
+> standalone entry point. Validated: `test_branchsnap` grew a marker-path case (the tiny
+> single-shot routine reconstructs its entry block through `begin`/`end`), green in
+> `make docker-hwtrace-codeimage`; the clean fallback is asserted in `test_amd_live`
+> (`make docker-hwtrace-amd`, built without libbpf → honest sampled result). `opts.snapshot`
+> is documented for both backends in [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h).
 
 **Goal.** Read the 16-entry LbrExtV2 stack **deterministically at the region boundary** via
 `bpf_get_branch_snapshot()` (`amd_pmu_v2_snapshot_branch_stack`), eliminating the two live
@@ -996,20 +1032,32 @@ next to the other CPUID probes) rather than `hwtrace.c`.*
   the decodable-distance guard (`amd_span_decodable`); `asmtest_amd_lbr_depth()` cached
   CPUID accessor and the runtime-depth overflow check in `asmtest_amd_decode` — all
   mirrored in the non-Linux stub block and hwtrace.c's forward decls.
-- **ptrace_backend.c + asmtest_ptrace.h:** the block-step `step_mode` through
-  `trace_attached_impl` / `trace_call`; three new public symbols
-  (`asmtest_ptrace_blockstep_available`, `_trace_call_blockstep`, `_trace_attached_blockstep`)
-  with non-supported-host stubs.
-- **Build/test:** the optional libbpf lane knob mirroring `CODEIMAGE_SKEL`; a
-  `Dockerfile.hwtrace-lbr-snapshot` + `docker-hwtrace-lbr-snapshot` target; a block-step
-  host test + docker lane (plain `docker run`); host self-skip additions to
-  [examples/test_hwtrace.c](../../examples/test_hwtrace.c).
-- **Bindings:** the three new `asmtest_ptrace_*` symbols wrapped (whole-word) in each of the
-  10 bindings' `hwtrace.*` wrappers so
-  [scripts/check-bindings-parity.sh](../../scripts/check-bindings-parity.sh) stays green (the
-  tier-symbol × 10 count grows by three); no new `asmtest_trace_choice_t` field (the `3 *
-  sizeof(int)` static-assert at [asmtest_trace_auto.h:83-84](../../include/asmtest_trace_auto.h)
-  must hold).
+- **ptrace_backend.c + asmtest_ptrace.h:** three public block-step symbols —
+  `asmtest_ptrace_blockstep_available`, `asmtest_ptrace_trace_call_blockstep`, and
+  `asmtest_ptrace_trace_attached_blockstep` (the attached variant reuses the
+  `blockstep_reconstruct` intra-block walk and `classify_region_exit` call-out handling,
+  reading foreign bytes via `process_vm_readv` exactly as `trace_attached_impl` does) — each
+  with a non-supported-host stub. *(Delta from the original sketch: the block-step loops are
+  their own functions rather than a `step_mode` flag threaded through the single-step bodies;
+  the reconstruction differs enough — trap-class target vs. per-instruction RIP — that
+  sharing the loop obscured more than it saved.)*
+- **branchsnap.c + hwtrace.c:** the `snapshot: true` marker-path opt-in —
+  `asmtest_amd_snapshot_begin` / `_end` (armed single-slot) called from
+  `hwtrace_begin_amd`/`hwtrace_end_amd`, with `amd_last_ret_off` deriving the exit
+  breakpoint and a clean fallback to the sampled path.
+- **Build/test:** the block-step host + attached-block-step tests
+  ([examples/test_hwtrace.c](../../examples/test_hwtrace.c)) run under a plain `docker run`;
+  the snapshot marker-path test in [examples/test_branchsnap.c](../../examples/test_branchsnap.c)
+  (BPF lane); all self-skipping. *(The `docker-hwtrace-lbr-snapshot` split-Dockerfile lane was
+  not needed: the existing `docker-hwtrace-codeimage` BPF-toolchain image already builds +
+  runs branchsnap-test.)*
+- **Bindings:** the three `asmtest_ptrace_*` block-step symbols wrapped (whole-word) in each
+  of the 10 bindings' `hwtrace.*` wrappers so
+  [scripts/check-bindings-parity.sh](../../scripts/check-bindings-parity.sh) stays green (98
+  tier symbols × 10 bindings); `asmtest_amd_snapshot_trace` and the whole-window trio carry
+  allow-list exemptions (C-level / managed-tier reach). No new `asmtest_trace_choice_t` field
+  (the `3 * sizeof(int)` static-assert at
+  [asmtest_trace_auto.h:83-84](../../include/asmtest_trace_auto.h) holds).
 - **Docs:** correct the `PTRACE_SINGLEBLOCK` claim in
   [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) (Phase 2 makes it real);
   update the "AMD LBR is finished" framing in [native-tracing.md](../guides/tracing/native-tracing.md) /

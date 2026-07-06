@@ -73,7 +73,12 @@ typedef struct {
                          256KB for the AMD backend (where this ring holds the
                          sample_period=1 windows and so bounds the Tier-B stitched run
                          before the kernel drops the newest samples) */
-    int snapshot; /* nonzero: circular snapshot ring; 0: linear (drain)       */
+    int snapshot; /* nonzero: Intel PT maps a circular snapshot ring (0: linear
+                     drain). On the AMD backend it opts the begin/end markers into
+                     the DETERMINISTIC boundary LBR snapshot (bpf_get_branch_snapshot
+                     at a region-exit hardware breakpoint) instead of the
+                     sample_period=1 flood — falling back to sampling when the BPF
+                     toolchain/caps/LbrExtV2 substrate is absent */
     const char
         *object_hint; /* optional object-file path for hw address filters  */
 } asmtest_hwtrace_options_t;

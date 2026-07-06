@@ -281,6 +281,8 @@ def _declare(lib):
     lib.asmtest_ptrace_blockstep_available.restype = ci
     lib.asmtest_ptrace_trace_call_blockstep.argtypes = [v, sz, pl, ci, pl, v]
     lib.asmtest_ptrace_trace_call_blockstep.restype = ci
+    lib.asmtest_ptrace_trace_attached_blockstep.argtypes = [ci, v, sz, pl, v]
+    lib.asmtest_ptrace_trace_attached_blockstep.restype = ci
     lib.asmtest_ptrace_trace_attached.argtypes = [ci, v, sz, pl, v]
     lib.asmtest_ptrace_trace_attached.restype = ci
     lib.asmtest_ptrace_run_to.argtypes = [ci, v]
@@ -806,6 +808,21 @@ class Ptrace:
             pid, C.c_void_p(base), length, C.byref(result), trace._handle)
         if rc != ASMTEST_PTRACE_OK:
             raise RuntimeError(f"asmtest_ptrace_trace_attached failed: {rc}")
+        return result.value
+
+    @staticmethod
+    def trace_attached_blockstep(pid: int, base: int, length: int,
+                                 trace: "HwTrace") -> int:
+        """Block-step variant of trace_attached: one #DB per TAKEN branch (intra-block
+        instructions reconstructed with Capstone), same contract otherwise — the
+        rootless managed-runtime completeness fallback at a fraction of the stops.
+        Probe first with blockstep_available()."""
+        result = C.c_long()
+        rc = _get().asmtest_ptrace_trace_attached_blockstep(
+            pid, C.c_void_p(base), length, C.byref(result), trace._handle)
+        if rc != ASMTEST_PTRACE_OK:
+            raise RuntimeError(
+                f"asmtest_ptrace_trace_attached_blockstep failed: {rc}")
         return result.value
 
     @staticmethod
