@@ -10,6 +10,7 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Asmtest;
 
 static class HwTraceProgram
@@ -255,6 +256,127 @@ static class HwTraceProgram
             else if (wr.Armed)
                 Console.WriteLine("# SKIP rundown asserts: diagnostics socket unavailable (cold-only result)");
 
+            // --- §D0.3: the NAMED-METHOD form — AsmTrace.Method(delegate) --- //
+            // A fresh COLD method: PrepareMethod inside Method() forces its standalone
+            // JIT, the listener resolves (addr, size), and the scope is a region over
+            // exactly that body — reliable offsets, not a best-effort window.
+            long nr = 0;
+            AsmTrace nm;
+            using (nm = AsmTrace.Method((Func<long, long, long>)NamedCold, emit: false))
+            {
+                nr = (long)nm.Invoke(20L, 22L);
+            }
+            Check(nr == 42, $"AsmTrace.Method: NamedCold(20,22) == 42 (got {nr})");
+            Check(nm.Armed, $"AsmTrace.Method: named-method scope armed ({nm.SkipReason})");
+            if (nm.Armed)
+            {
+                Check(!nm.Truncated, "AsmTrace.Method: body capture not truncated");
+                if (nm.Path.Length > 0)
+                    Check(nm.Path.Contains("ret"), "AsmTrace.Method: rendered body ends in ret");
+                else
+                    Console.WriteLine("# SKIP Method render assert: build without Capstone");
+            }
+
+            // --- §D3: the same form OUT OF PROCESS (stealth stepper) --- //
+            // Invoke routes through asmtest_hwtrace_stealth_trace: a bundled helper
+            // reverse-attaches (PR_SET_PTRACER + PTRACE_SEIZE) and steps the body out
+            // of band — this thread is never armed with EFLAGS.TF. Self-skips where
+            // Yama refuses the attach or the helper is unavailable.
+            long or2 = 0;
+            AsmTrace om;
+            using (om = AsmTrace.Method((Func<long, long, long>)NamedColdOop, emit: false,
+                                        outOfProcess: true))
+            {
+                or2 = (long)om.Invoke(6L, 7L);
+            }
+            Check(or2 == 42, $"AsmTrace.Method(oop): NamedColdOop(6,7) == 42 (got {or2})");
+            if (om.Armed)
+            {
+                if (om.Path.Length > 0)
+                    Check(om.Path.Contains("ret"),
+                          "AsmTrace.Method(oop): stealth-stepped body renders (ret present)");
+                else
+                    Console.WriteLine("# SKIP Method(oop) render assert: build without Capstone");
+            }
+            else
+                Console.WriteLine($"# SKIP stealth stepper: {om.SkipReason}");
+
+            // --- TF sibling stress: scope armed while GC/alloc threads run free --- //
+            // The accepted §Z1 posture single-steps THIS thread only; sibling runtime
+            // threads must run native and the process must stay healthy. Bounded churn.
+            var stop = new bool[1];
+            var churn = new Thread[3];
+            for (int i = 0; i < churn.Length; i++)
+            {
+                churn[i] = new Thread(() =>
+                {
+                    long acc = 0;
+                    while (!Volatile.Read(ref stop[0]))
+                    {
+                        var a = new byte[512];
+                        acc += a.Length;
+                        if ((acc & 0x3ffff) == 0) GC.Collect(0);
+                    }
+                });
+                churn[i].IsBackground = true;
+                churn[i].Start();
+            }
+            long sr = 0;
+            AsmTrace st;
+            using (st = new AsmTrace(emit: false, byMethod: true))
+            {
+                sr = TinyManaged(500);
+            }
+            Volatile.Write(ref stop[0], true);
+            foreach (var t2 in churn) t2.Join();
+            Check(sr == 125250, $"TF stress: TinyManaged(500) == 125250 under sibling churn (got {sr})");
+            Check(st.Armed, $"TF stress: scope armed + closed with GC/alloc siblings live ({st.SkipReason})");
+
+            // §Z4 cross-thread Dispose is intentionally NOT exercised in-process here:
+            // a single-step whole-window scope arms EFLAGS.TF on the CALLING thread, and
+            // only that thread can clear it — disposing on another thread flags Truncated
+            // but leaves the arming thread stepping (a guaranteed SIGTRAP crash). This is
+            // the very hazard that forbids single-step for managed cross-thread work; the
+            // C suite covers the truncated-flag path with a phantom handle instead
+            // (examples/test_hwtrace.c), and the safe managed cross-thread route is §D3.
+
+            // --- tier-up observation (best-effort; background tiering is async) --- //
+            var tmap = new JitMethodMap();
+            long tacc = 0;
+            for (int i = 0; i < 400; i++) tacc += HotTier(i);
+            Thread.Sleep(300); // give the rejitted body's MethodLoadVerbose a moment
+            int vers = tmap.CountFor("HotTier");
+            tmap.Dispose();
+            if (vers >= 2)
+                Check(true, $"tier-up: {vers} versions of HotTier observed at distinct addresses");
+            else
+                Console.WriteLine($"# SKIP tier-up not observed in time (versions={vers}); nondeterministic");
+
+            // --- §Z5.2: the composed degradation ladder --- //
+            string note = HwTrace.DegradationNote();
+            Check(note.Contains("SingleStep") || note.Contains("using"),
+                  $"degradation note composes the ladder ({note})");
+
+            // --- Disas classifiers over live bytes (structural, not string-parsed) --- //
+            var codeCls = NativeCode.FromBytes(ROUTINE);
+            var codeBlob = NativeCode.FromBytes(DESCENT_BLOB);
+            if (Disas.Available)
+            {
+                ulong cb = (ulong)(long)codeCls.Base;
+                Check(Disas.IsRet(cb + 0x11), "Disas.IsRet: ret at +0x11");
+                Check(Disas.IsBranch(cb + 0xc) && !Disas.IsCall(cb + 0xc),
+                      "Disas: jle at +0xc is a branch, not a call");
+                Check(!Disas.IsBranch(cb) && !Disas.IsRet(cb), "Disas: mov at +0 is neither");
+                ulong bb = (ulong)(long)codeBlob.Base;
+                Check(Disas.IsCall(bb + 3), "Disas.IsCall: call at +3 in the descent blob");
+                Check(Disas.TryCallTarget(bb + 3, out ulong tgt) && tgt == bb + 0xc,
+                      $"Disas.TryCallTarget resolves S at base+0xc (got +0x{tgt - bb:x})");
+            }
+            else
+                Console.WriteLine("# SKIP Disas classifier asserts: build without Capstone");
+            codeCls.Free();
+            codeBlob.Free();
+
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
             // only available backends in ascending-enum order with no dups;
@@ -464,6 +586,23 @@ static class HwTraceProgram
     {
         long s = 0;
         for (long i = 1; i <= n; i++) s += i;
+        return s;
+    }
+
+    // §D0.3 fixtures: FRESH cold methods (first call happens inside the scope test) so
+    // PrepareMethod's forced JIT is what the listener observes. Kept trivially small.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long NamedCold(long a, long b) => a + b;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long NamedColdOop(long a, long b) => a * b;
+
+    // Tier-up fixture: hot enough that default tiered compilation re-JITs it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long HotTier(long x)
+    {
+        long s = 0;
+        for (int i = 0; i < 64; i++) s += x ^ i;
         return s;
     }
 

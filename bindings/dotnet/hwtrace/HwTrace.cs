@@ -237,6 +237,27 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_end_window(HwScope handle, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_window(HwScope handle, byte[] buf, UIntPtr buflen);
 
+        // §Z3 — version-aware render: disassemble trace's ABSOLUTE addresses against a
+        // code-image as of `when` (asmtest_codeimage_now), instead of live self memory.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_versioned(
+            IntPtr img, ulong when, IntPtr trace, byte[] buf, UIntPtr buflen);
+
+        // §D3 — concealed out-of-process ptrace-stealth stepper: run_region(arg) runs on
+        // the CALLING thread while a helper process reverse-attaches and single-steps the
+        // [base,len) region out of band. Cdecl upcall; keep the delegate alive across it.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void StealthRunFn(IntPtr arg);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_trace(
+            IntPtr @base, UIntPtr len, IntPtr trace, out long result, StealthRunFn run, IntPtr arg);
+
+        // Single-instruction classifiers (asmtest_trace.h; Capstone-gated, 0 without it).
+        // IntPtr `code` so a LIVE in-process address can be classified directly.
+        [DllImport(HWTRACE)] public static extern int asmtest_disas_is_call(int arch, IntPtr code, UIntPtr codeLen, ulong off);
+        [DllImport(HWTRACE)] public static extern int asmtest_disas_is_branch(int arch, IntPtr code, UIntPtr codeLen, ulong off);
+        [DllImport(HWTRACE)] public static extern int asmtest_disas_is_ret(int arch, IntPtr code, UIntPtr codeLen, ulong off);
+        [DllImport(HWTRACE)] public static extern int asmtest_disas_call_target(
+            int arch, IntPtr code, UIntPtr codeLen, ulong baseAddr, ulong off, out ulong target);
+
         // ---- single-instruction disassembler (Capstone-backed; §0.3 helpers) ----
         // asmtest_disas decodes ONE instruction at `code` (an absolute in-process address
         // for a live capture), formatting "<mnemonic> <operands>" into `outbuf`; base_addr
@@ -540,6 +561,31 @@ namespace Asmtest
             HwNative.asmtest_hwtrace_skip_reason((int)backend, buf, (UIntPtr)buf.Length);
             int z = Array.IndexOf(buf, (byte)0);
             return System.Text.Encoding.UTF8.GetString(buf, 0, z < 0 ? buf.Length : z);
+        }
+
+        /// <summary>
+        /// §Z5.2 — the composed degradation LADDER: walk the backends most-faithful
+        /// first (Intel PT → AMD LBR → single-step → CoreSight), naming each
+        /// unavailable tier WITH its reason, ending at the first available one ("using
+        /// SingleStep") or, when none arms, at whether the out-of-process ptrace
+        /// stepper can still serve as the fallback. One honest sentence a scope's
+        /// self-skip (and a user's bug report) can carry.
+        /// </summary>
+        public static string DegradationNote()
+        {
+            if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
+            var parts = new System.Collections.Generic.List<string>(5);
+            foreach (var b in new[] { HwBackend.IntelPt, HwBackend.AmdLbr,
+                                      HwBackend.SingleStep, HwBackend.CoreSight })
+            {
+                if (Available(b)) { parts.Add($"using {b}"); break; }
+                parts.Add($"{b} unavailable ({SkipReason(b)})");
+            }
+            if (!parts[parts.Count - 1].StartsWith("using", StringComparison.Ordinal))
+                parts.Add(Ptrace.Available()
+                    ? "out-of-process ptrace stepper available as the fallback"
+                    : $"no ptrace fallback ({Ptrace.SkipReason()})");
+            return string.Join("; ", parts);
         }
 
         /// <summary>
@@ -1042,6 +1088,12 @@ namespace Asmtest
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
         readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
         readonly JitMethodMap _map; // §D0.1: managed-method labelling (byMethod only)
+        readonly Delegate _target;  // §D0.3: the named method (Method(...) scopes only)
+        readonly IntPtr _methodBase; // §D0.3: resolved JIT'd body base
+        readonly UIntPtr _methodLen; // §D0.3: resolved JIT'd body length
+        readonly bool _oop;         // §D3: route Invoke through the stealth stepper
+        bool _began;                // an in-process begin succeeded (Dispose must end)
+        readonly int _armTid;       // §0.2/B5: managed thread that armed (complements the native OS-tid check)
         HwNative.HwScope _scope;    // region-free scope handle (whole-window only)
         bool _disposed;
 
@@ -1141,6 +1193,7 @@ namespace Asmtest
             _emit = emit;
             _wholeWindow = true;
             _renderPath = renderPath;
+            _armTid = Environment.CurrentManagedThreadId;
             // Honor the "never throws" contract: with no native lib loaded, the first P/Invoke
             // (asmtest_trace_new) would throw DllNotFoundException. Self-skip cleanly (Armed
             // stays false, SkipReason set) so `using (new AsmTrace())` degrades, not crashes —
@@ -1152,7 +1205,9 @@ namespace Asmtest
             }
             // §D0.1/§D0.2: enable the method map BEFORE arming, so it sees the methods JIT'd
             // inside the scope (an in-proc listener sees only methods JIT'd after enable).
-            if (byMethod || withRundown) _map = new JitMethodMap();
+            // trackBytes (§Z3): also snapshot each method's bytes into a code-image so the
+            // close-time render/disassembly can decode the version live in the window.
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
             // §D0.2: trigger the perf-map rundown BEFORE arming — its socket code must run
             // at full speed, NOT under single-step (which would step the whole .NET socket
             // stack). The rundown captures the already-JIT'd WARM methods retroactively; the
@@ -1204,12 +1259,14 @@ namespace Asmtest
 
         // §Z5: map a begin_window / auto-init failure to an actionable, honest message. The
         // ctor auto-inits the single-step tier, so a failure means the host cannot run it.
+        // The EUNAVAIL case appends the §Z5.2 composed LADDER (which tiers were probed and
+        // why each self-skipped), so the message names the missing capability, not just "no".
         static string WholeWindowSkipReason(int rc) => rc switch
         {
             HwNative.ASMTEST_HW_EUNAVAIL =>
                 "single-step whole-window tier unavailable on this host (needs x86-64 Linux; "
                 + "whole-window is single-step only, so a non-single-step backend inited via "
-                + "HwTrace.Init will not arm it)",
+                + "HwTrace.Init will not arm it) — " + HwTrace.DegradationNote(),
             HwNative.ASMTEST_HW_ESTATE => "hwtrace tier not up (auto-init failed)",
             HwNative.ASMTEST_HW_ENOSYS => "whole-window scope is Linux/x86-64 only",
             _ => "whole-window scope did not arm",
@@ -1221,6 +1278,7 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = emit;
+            _armTid = Environment.CurrentManagedThreadId;
             // Same "never throws" self-skip as the whole-window ctor (see above).
             if (!HwNative.LibAvailable)
             {
@@ -1232,13 +1290,150 @@ namespace Asmtest
                 HwNative.asmtest_hwtrace_register_region(_name, code.Base, (UIntPtr)code.Length, _handle);
             // Register-then-begin under the same generated name (Core §0.4 idempotent).
             int brc = HwNative.asmtest_hwtrace_try_begin(_name);
-            Armed = brc == HwNative.ASMTEST_HW_OK;
+            Armed = _began = brc == HwNative.ASMTEST_HW_OK;
             // §Z5: the region form has no auto-init retry (only the whole-window ctor
             // does), so say why the arm failed rather than leaving SkipReason empty.
             if (!Armed)
                 SkipReason = brc == HwNative.ASMTEST_HW_ESTATE
                     ? "hwtrace tier not up — call HwTrace.Init (the region scope does not auto-init)"
                     : $"region scope did not arm (rc={brc})";
+        }
+
+        /// <summary>
+        /// §D0.3 — the NAMED-METHOD form: trace one managed method's own JIT'd body.
+        /// <c>using var t = AsmTrace.Method(HotPath); var r = t.Invoke(args…); … t.Path;</c>
+        /// Resolves the standalone body via a fresh <see cref="JitMethodMap"/> around
+        /// <c>RuntimeHelpers.PrepareMethod</c> (a WARM method the listener cannot see is
+        /// found via the §D0.2 jitdump-rundown fallback), registers it as a region, and
+        /// arms — auto-initing the single-step tier like the empty ctor (§Z0). Reliable
+        /// where the whole-window form is best-effort: region + step-over, exact body
+        /// offsets in <see cref="Path"/> on close. Never throws on this path: resolution
+        /// or arm failure self-skips (<see cref="Armed"/> false, <see cref="SkipReason"/>
+        /// says why). The resolved body is the version live at arm time — a mid-scope
+        /// tier-up is not followed (§Z3 forward-look).
+        /// </summary>
+        /// <param name="target">The method to trace, as a delegate (e.g.
+        /// <c>(Func&lt;long,long,long&gt;)HotPath</c>). Delegate invocation is indirect, so
+        /// the standalone JIT'd body is what runs — the caller cannot inline it away.</param>
+        /// <param name="outOfProcess">§D3: run <see cref="Invoke"/> under the concealed
+        /// out-of-process ptrace-stealth stepper instead of in-process single-step — the
+        /// calling thread is never armed with EFLAGS.TF (a bundled helper reverse-attaches
+        /// and steps the body out of band). Self-skips (plain uninstrumented call, reason
+        /// recorded) where the attach is denied (Yama) or the helper is unavailable.</param>
+        public static AsmTrace Method(Delegate target, bool emit = true, bool outOfProcess = false,
+                                      [CallerMemberName] string member = null,
+                                      [CallerLineNumber] int line = 0)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            ulong start = 0, size = 0;
+            bool found = false;
+            if (HwNative.LibAvailable)
+            {
+                // Map BEFORE PrepareMethod: an in-proc listener only sees methods JIT'd
+                // after it enables the keyword (§D0.1 caveat i).
+                using (var map = new JitMethodMap())
+                {
+                    try { RuntimeHelpers.PrepareMethod(target.Method.MethodHandle); }
+                    catch { /* generic/abstract handles: fall through to the rundown */ }
+                    string typed = (target.Method.DeclaringType?.Name ?? "") + "." + target.Method.Name;
+                    found = map.TryResolveEntry(typed, out start, out size)
+                         || map.TryResolveEntry("." + target.Method.Name, out start, out size);
+                    if (!found && DiagnosticsIpc.EnablePerfMap())
+                    {
+                        // WARM body (JIT'd before this call): PrepareMethod was a no-op and
+                        // no event fired — the jitdump rundown names it ("Type::Method(sig)").
+                        map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
+                        DiagnosticsIpc.DisablePerfMap();
+                        found = map.TryResolveEntry("::" + target.Method.Name + "(", out start, out size)
+                             || map.TryResolveEntry(typed, out start, out size);
+                    }
+                }
+            }
+            return new AsmTrace(target, start, size, found, emit, outOfProcess, member, line);
+        }
+
+        // §D0.3/§D3 private ctor: region scope over a resolved managed-method body.
+        AsmTrace(Delegate target, ulong start, ulong size, bool found, bool emit, bool oop,
+                 string member, int line)
+        {
+            _name = ScopeName(member, line);
+            _emit = emit;
+            _armTid = Environment.CurrentManagedThreadId;
+            _target = target;
+            _oop = oop;
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
+            if (!found || size == 0)
+            {
+                SkipReason = $"could not resolve a JIT'd body for {target.Method.Name} "
+                           + "(no MethodLoadVerbose event and the jitdump-rundown fallback missed)";
+                return;
+            }
+            _methodBase = new IntPtr(unchecked((long)start));
+            _methodLen = (UIntPtr)size;
+            // Managed bodies run hot loops: size the instruction buffer well past a
+            // native-leaf's (region filtering keeps only in-body offsets, so this is
+            // the retained stream, committed as it fills).
+            _handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 16), (UIntPtr)256);
+            if (_handle == IntPtr.Zero)
+            {
+                SkipReason = "trace allocation failed";
+                return;
+            }
+            HwNative.asmtest_hwtrace_register_region(_name, _methodBase, _methodLen, _handle);
+            if (_oop) return; // §D3: armed lazily by Invoke (the helper steps, not TF)
+            int rc = HwNative.asmtest_hwtrace_try_begin(_name);
+            if (rc == HwNative.ASMTEST_HW_ESTATE)
+            {
+                // §Z0 parity with the empty ctor: auto-init the portable tier and retry.
+                rc = AutoInitSingleStep() == HwNative.ASMTEST_HW_OK
+                    ? HwNative.asmtest_hwtrace_try_begin(_name)
+                    : rc;
+            }
+            Armed = _began = rc == HwNative.ASMTEST_HW_OK;
+            if (!Armed) SkipReason = $"named-method scope did not arm (rc={rc})";
+        }
+
+        /// <summary>
+        /// §D0.3: invoke the named method inside this scope through the library's own
+        /// call site. In-process, this is a plain (indirect) delegate invocation — the
+        /// armed region records exactly the body's executed offsets, and the
+        /// reflection overhead around it is out-of-range noise the region filter drops.
+        /// With <c>outOfProcess: true</c> (§D3), the call runs under the stealth
+        /// stepper: a helper process reverse-attaches, steps the body out of band, and
+        /// this thread is never armed with EFLAGS.TF; on a refused attach the method
+        /// still runs (uninstrumented) and <see cref="SkipReason"/> says why.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        public object Invoke(params object[] args)
+        {
+            if (_target == null)
+                throw new HwTraceException("Invoke is only valid on an AsmTrace.Method(...) scope");
+            if (_disposed)
+                throw new HwTraceException("Invoke after Dispose");
+            if (!_oop || !HwNative.LibAvailable || _handle == IntPtr.Zero)
+                return _target.DynamicInvoke(args);
+            object ret = null;
+            Exception thrown = null;
+            bool ran = false;
+            HwNative.StealthRunFn cb = _ =>
+            {
+                ran = true;
+                try { ret = _target.DynamicInvoke(args); }
+                catch (Exception e) { thrown = e; }
+            };
+            int rc = HwNative.asmtest_hwtrace_stealth_trace(
+                _methodBase, _methodLen, _handle, out long _, cb, IntPtr.Zero);
+            GC.KeepAlive(cb);
+            if (rc == HwNative.ASMTEST_HW_OK) Armed = true;
+            else SkipReason = $"stealth stepper did not run (rc={rc}) — Yama ptrace_scope, "
+                            + "missing asmtest-stealth-helper, or non-x86-64-Linux";
+            if (!ran) ret = _target.DynamicInvoke(args); // never lose the call itself
+            if (thrown != null) throw thrown;
+            return ret;
         }
 
         static string ScopeName(string member, int line)
@@ -1265,10 +1460,17 @@ namespace Asmtest
                 HwNative.asmtest_hwtrace_end_window(_scope, _handle);
                 // §D0.1: freeze the JIT map to exactly the methods seen while the scope
                 // was open (before the readback/classification below JITs anything more).
+                // §Z3: also pin the code-image version AT CLOSE — the labelled
+                // disassembly below decodes against it, so a method that re-tiers/moves
+                // AFTER the window still renders the bytes that actually ran.
+                IntPtr img = IntPtr.Zero;
+                ulong when = 0;
                 if (_map != null)
                 {
                     _map.Stop();
                     MethodsObserved = _map.Count;
+                    img = _map.ImageHandle;
+                    when = _map.ImageNow;
                 }
                 // Capture the raw ABSOLUTE addresses (before the trace is freed below).
                 // A whole-window trace can be a million runtime instructions, so we do
@@ -1306,11 +1508,12 @@ namespace Asmtest
                         labelled++;
                         by.TryGetValue(m, out long c);
                         by[m] = c + 1;
-                        // Disassemble the labelled instruction from LIVE memory — the code is
-                        // still mapped (closing the scope does not unload managed methods), so
-                        // this is safe here even though the trace handle is freed just below.
+                        // Disassemble the labelled instruction — §Z3 versioned-first (the
+                        // code-image bytes as of the window close), falling back to LIVE
+                        // memory where the address has no tracked version (still mapped;
+                        // closing the scope does not unload managed methods).
                         if (disasOk)
-                            insns.Add(new AsmInstruction(ip, DisasAt(ip, dbuf), m, runtimeRun));
+                            insns.Add(new AsmInstruction(ip, DisasAt(img, when, ip, dbuf), m, runtimeRun));
                         runtimeRun = 0;
                     }
                     LabelledInstructions = labelled;
@@ -1346,7 +1549,9 @@ namespace Asmtest
             }
             else
             {
-                HwNative.asmtest_hwtrace_end(_name);
+                // §D3: an out-of-process Method scope never began in-process — the
+                // helper filled the trace out of band, so there is nothing to end.
+                if (_began) HwNative.asmtest_hwtrace_end(_name);
                 need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
                 if (need > 0)
                 {
@@ -1361,16 +1566,40 @@ namespace Asmtest
                 Truncated = HwNative.asmtest_emu_trace_truncated(_handle) != 0;
                 HwNative.asmtest_trace_free(_handle);
             }
+            // §0.2/B5: complementary managed-thread guard. The native side is authoritative
+            // (it flags a cross-OS-thread close via the arm-tid check), but a managed thread
+            // can migrate OS threads under the CLR scheduler, so also flag when Dispose runs
+            // on a different MANAGED thread than the ctor — never present a hopped scope as a
+            // complete single-thread window. An out-of-process (§D3) scope is exempt: its
+            // body ran in the helper, not on this thread, so a Dispose hop is not a capture
+            // hop. Honest-conservative: this only ever SETS Truncated, never clears it.
+            if (!_oop && _armTid != 0 && Environment.CurrentManagedThreadId != _armTid)
+                Truncated = true;
             if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
         }
 
-        // Disassemble the single instruction at absolute address `addr` from live in-process
-        // memory into "<mnemonic> <operands>" (or "(undecodable)"). `scratch` is a reusable
-        // ≥16-byte buffer. asmtest_disas reads up to 15 bytes at `addr` and NUL-terminates
-        // `scratch`; the read is safe for a captured (executed) address — its page is mapped.
-        static string DisasAt(ulong addr, byte[] scratch)
+        // Disassemble the single instruction at absolute address `addr` into
+        // "<mnemonic> <operands>" (or "(undecodable)"). §Z3 versioned-first: when a
+        // code-image `img` is tracking, decode the bytes live AT `when` (the window
+        // close) so a body that re-tiers/moves after the window renders what actually
+        // ran; addresses with no tracked version (native runtime) fall back to LIVE
+        // memory — safe for a captured (executed) address, its page is mapped.
+        // `scratch` is a reusable ≥16-byte buffer; asmtest_disas NUL-terminates it.
+        static string DisasAt(IntPtr img, ulong when, ulong addr, byte[] scratch)
         {
             scratch[0] = 0;
+            if (img != IntPtr.Zero &&
+                HwNative.asmtest_codeimage_bytes_at(img, new IntPtr(unchecked((long)addr)), when,
+                                                    out IntPtr vb, out UIntPtr vl) == HwNative.ASMTEST_CI_OK &&
+                vb != IntPtr.Zero && (ulong)vl > 0)
+            {
+                ulong take = (ulong)vl < 16UL ? (ulong)vl : 16UL;
+                HwNative.asmtest_disas(0 /* ASMTEST_ARCH_X86_64 */, vb, (UIntPtr)take,
+                                       addr, 0, scratch, (UIntPtr)scratch.Length);
+                int zv = System.Array.IndexOf<byte>(scratch, 0);
+                if (zv > 0) return System.Text.Encoding.ASCII.GetString(scratch, 0, zv);
+                scratch[0] = 0; // undecodable at-version: fall through to the live read
+            }
             HwNative.asmtest_disas(0 /* ASMTEST_ARCH_X86_64 */, new IntPtr(unchecked((long)addr)),
                                    (UIntPtr)16, addr, 0, scratch, (UIntPtr)scratch.Length);
             int z = System.Array.IndexOf<byte>(scratch, 0);
@@ -1482,6 +1711,48 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// Single-instruction classifiers over LIVE in-process addresses (Capstone-gated —
+    /// every predicate is false without it, mirroring the native contract). Lets a
+    /// caller walking <see cref="AsmTrace.Disassembly"/> classify control flow
+    /// structurally (call/branch/ret + direct-call target) instead of string-parsing
+    /// <see cref="AsmInstruction.Text"/> mnemonics.
+    /// </summary>
+    public static class Disas
+    {
+        const int X86_64 = 0;   // ASMTEST_ARCH_X86_64
+        const int MAXLEN = 16;  // one x86 instruction is at most 15 bytes
+
+        /// <summary>True if this build links Capstone (classifiers work).</summary>
+        public static bool Available =>
+            HwNative.LibAvailable && HwNative.asmtest_disas_available();
+
+        /// <summary>The instruction at live <paramref name="addr"/> is a CALL.</summary>
+        public static bool IsCall(ulong addr) => HwNative.LibAvailable &&
+            HwNative.asmtest_disas_is_call(X86_64, Ptr(addr), (UIntPtr)MAXLEN, 0) != 0;
+
+        /// <summary>The instruction at live <paramref name="addr"/> is any branch-class
+        /// control transfer (jump, call, or return).</summary>
+        public static bool IsBranch(ulong addr) => HwNative.LibAvailable &&
+            HwNative.asmtest_disas_is_branch(X86_64, Ptr(addr), (UIntPtr)MAXLEN, 0) != 0;
+
+        /// <summary>The instruction at live <paramref name="addr"/> is a RETURN.</summary>
+        public static bool IsRet(ulong addr) => HwNative.LibAvailable &&
+            HwNative.asmtest_disas_is_ret(X86_64, Ptr(addr), (UIntPtr)MAXLEN, 0) != 0;
+
+        /// <summary>Resolve the DIRECT-call target of the instruction at live
+        /// <paramref name="addr"/> (absolute). False for indirect calls, non-calls,
+        /// undecodable bytes, or a Capstone-free build.</summary>
+        public static bool TryCallTarget(ulong addr, out ulong target)
+        {
+            target = 0;
+            return HwNative.LibAvailable && HwNative.asmtest_disas_call_target(
+                X86_64, Ptr(addr), (UIntPtr)MAXLEN, addr, 0, out target) != 0;
+        }
+
+        static IntPtr Ptr(ulong addr) => new IntPtr(unchecked((long)addr));
+    }
+
+    /// <summary>
     /// §D0.1 — an in-process address→managed-method map, built from the CoreCLR
     /// <c>MethodLoadVerbose</c> events, so a whole-window capture's ABSOLUTE addresses
     /// (see <see cref="AsmTrace.Addresses"/>) can be labelled by managed method name —
@@ -1501,13 +1772,62 @@ namespace Asmtest
 
         readonly object _lock = new object();
         readonly List<Entry> _methods = new List<Entry>();
+        IntPtr _img; // §Z3: optional self code-image tracking JIT'd bytes (zeroed on Dispose)
         Entry[] _frozen; // sorted-by-start snapshot for binary search
         volatile bool _stopped; // stop ingesting once the traced scope has closed
 
         struct Entry { public ulong Start, End; public string Name; }
 
+        public JitMethodMap() : this(false) { }
+
+        /// <summary>§Z3: with <paramref name="trackBytes"/>, each observed method's bytes
+        /// are also snapshotted into a self code-image (<c>asmtest_codeimage_track</c>),
+        /// so a close-time render can decode against the version live in the window
+        /// (<see cref="ImageHandle"/>/<see cref="ImageNow"/>) instead of live memory.</summary>
+        public JitMethodMap(bool trackBytes)
+        {
+            if (trackBytes && HwNative.LibAvailable)
+                _img = HwNative.asmtest_codeimage_new(0); // 0 == self; IntPtr.Zero on failure
+        }
+
+        /// <summary>§Z3: the optional code-image handle (IntPtr.Zero when not tracking).</summary>
+        public IntPtr ImageHandle => _img;
+
+        /// <summary>§Z3: the image's current version sequence (0 when not tracking).</summary>
+        public ulong ImageNow => _img != IntPtr.Zero ? HwNative.asmtest_codeimage_now(_img) : 0;
+
         /// <summary>The number of JIT'd methods observed so far.</summary>
         public int Count { get { lock (_lock) return _methods.Count; } }
+
+        /// <summary>Observed entries whose name contains <paramref name="nameSubstring"/> —
+        /// ≥ 2 for one method means a re-JIT (tier-up) was observed at a new address.</summary>
+        public int CountFor(string nameSubstring)
+        {
+            int n = 0;
+            lock (_lock)
+                foreach (var m in _methods)
+                    if (m.Name.Contains(nameSubstring)) n++;
+            return n;
+        }
+
+        /// <summary>§D0.3: the LATEST observed entry whose name contains
+        /// <paramref name="nameSubstring"/> (later entry wins — a re-JIT'd body
+        /// supersedes its tier-0 predecessor). False if none seen.</summary>
+        public bool TryResolveEntry(string nameSubstring, out ulong start, out ulong size)
+        {
+            start = 0; size = 0;
+            lock (_lock)
+            {
+                for (int i = _methods.Count - 1; i >= 0; i--)
+                    if (_methods[i].Name.Contains(nameSubstring))
+                    {
+                        start = _methods[i].Start;
+                        size = _methods[i].End - _methods[i].Start;
+                        return true;
+                    }
+            }
+            return false;
+        }
 
         protected override void OnEventSourceCreated(EventSource src)
         {
@@ -1551,6 +1871,10 @@ namespace Asmtest
                     _methods.Add(new Entry { Start = start, End = start + size, Name = full });
                     _frozen = null; // invalidate the snapshot
                 }
+                // §Z3: snapshot the freshly JIT'd bytes into the code-image (native call,
+                // no managed allocation — safe for the reentrancy-light contract above).
+                if (_img != IntPtr.Zero)
+                    HwNative.asmtest_codeimage_track(_img, new IntPtr(unchecked((long)start)), (UIntPtr)size);
             }
             catch
             {
@@ -1562,6 +1886,13 @@ namespace Asmtest
         /// closes so the map holds exactly the methods seen while it was open (the
         /// listener otherwise keeps recording the caller's own post-scope JIT).</summary>
         public void Stop() { _stopped = true; }
+
+        public override void Dispose()
+        {
+            _stopped = true;
+            if (_img != IntPtr.Zero) { HwNative.asmtest_codeimage_free(_img); _img = IntPtr.Zero; }
+            base.Dispose();
+        }
 
         /// <summary>Snapshot + sort the observed methods for O(log n) <see cref="Resolve"/>.
         /// Call once after <see cref="Stop"/>.</summary>
