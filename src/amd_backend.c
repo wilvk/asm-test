@@ -36,6 +36,9 @@
 #if defined(__linux__) && defined(__x86_64__)
 #include <cpuid.h>
 #include <linux/perf_event.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/utsname.h>
 
 int asmtest_amd_decoder_present(void) {
     /* Reconstruction needs the Capstone length-decoder (via asmtest_disas). */
@@ -65,6 +68,53 @@ int asmtest_amd_freeze_available(void) {
         return cached;
     }
     cached = (eax & (1u << 2)) ? 1 : 0; /* EAX[2] = LbrAndPmcFreeze */
+    return cached;
+}
+
+/* Whether this host has the SUBSTRATE for a deterministic software-event LBR snapshot
+ * (AMD-plan P0 #2: a BPF program calling bpf_get_branch_snapshot() at the region
+ * boundary reads the frozen 16-entry stack at a DETERMINISTIC point, replacing the
+ * sample_period=1 flood + "richest-window" guessing that truncates a too-fast tiny
+ * routine). The kernel's amd_pmu_v2_snapshot_branch_stack (merged 2024, wired into
+ * perf_snapshot_branch_stack) gates it on: (1) AMD LbrExtV2 — the `amd_lbr_v2` CPU
+ * feature (Zen 4/5); (2) perfmon v2 — the `perfmon_v2` feature; (3) Linux >= 6.10.
+ * This reports whether all three hold — the capability's HARDWARE+KERNEL floor. The
+ * actual capture additionally needs CAP_BPF/CAP_PERFMON at run time (checked when the
+ * BPF program loads), so a 1 here means "the substrate is present," not "it will run
+ * unprivileged." Returns 0 off AMD/Linux or where any gate is unmet. Cached. */
+int asmtest_amd_snapshot_available(void) {
+    static int cached = -1;
+    if (cached >= 0)
+        return cached;
+    cached = 0;
+    /* (1)+(2): the amd_lbr_v2 and perfmon_v2 CPU features, from /proc/cpuinfo flags
+     * (the kernel only sets amd_lbr_v2 on parts whose LBR the snapshot path drives). */
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    if (f == NULL)
+        return cached;
+    int have_lbr_v2 = 0, have_perfmon_v2 = 0;
+    char line[4096];
+    while (fgets(line, sizeof line, f) != NULL) {
+        if (strncmp(line, "flags", 5) == 0) {
+            if (strstr(line, " amd_lbr_v2") != NULL)
+                have_lbr_v2 = 1;
+            if (strstr(line, " perfmon_v2") != NULL)
+                have_perfmon_v2 = 1;
+            break; /* one flags line describes every (identical) core */
+        }
+    }
+    fclose(f);
+    if (!have_lbr_v2 || !have_perfmon_v2)
+        return cached;
+    /* (3): Linux >= 6.10 (the AMD snapshot backport floor). */
+    struct utsname u;
+    if (uname(&u) != 0)
+        return cached;
+    int maj = 0, min = 0;
+    if (sscanf(u.release, "%d.%d", &maj, &min) != 2)
+        return cached;
+    if (maj > 6 || (maj == 6 && min >= 10))
+        cached = 1;
     return cached;
 }
 
@@ -271,6 +321,7 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 
 int asmtest_amd_decoder_present(void) { return 0; }
 int asmtest_amd_freeze_available(void) { return 0; }
+int asmtest_amd_snapshot_available(void) { return 0; }
 
 /* struct perf_branch_entry is Linux-only; use void* so the prototypes in
  * hwtrace.c's dispatch still link on other platforms. */

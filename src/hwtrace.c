@@ -128,6 +128,10 @@ int asmtest_amd_decoder_present(void);
 /* AMD LBR-stack freeze-on-PMI availability (CPUID 0x80000022 EAX[2]); without it a
  * sampled window cannot be trusted to end at the region exit (see hwtrace_end_amd). */
 int asmtest_amd_freeze_available(void);
+/* Whether the deterministic software-event LBR-snapshot substrate is present (AMD
+ * LbrExtV2 + perfmon v2 + Linux >= 6.10); the boundary-snapshot capture's hardware+
+ * kernel floor (run-time use still needs CAP_BPF/CAP_PERFMON). */
+int asmtest_amd_snapshot_available(void);
 
 /* ------------------------------------------------------------------ */
 /* Gating: detect-and-skip                                             */

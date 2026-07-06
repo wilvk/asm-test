@@ -40,6 +40,7 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 int asmtest_amd_decoder_present(void);
 int asmtest_amd_freeze_available(void);
+int asmtest_amd_snapshot_available(void);
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
                           struct perf_branch_entry *out, size_t out_cap,
@@ -116,6 +117,17 @@ static void test_amd_freeze_probe(void) {
     printf("# AMD LBR freeze-on-PMI (CPUID 0x80000022 EAX[2]) on this host: %s\n",
            a ? "PRESENT (single-window Tier-A trusted)"
              : "ABSENT (Tier-A window trusted only if it captured the region exit)");
+
+    /* The deterministic software-event LBR-snapshot substrate (P0 #2 gate): AMD
+     * LbrExtV2 + perfmon v2 + Linux >= 6.10. Unprivileged (flags + uname), so it
+     * reports the hardware+kernel floor even where the capture would need CAP_BPF. */
+    int s1 = asmtest_amd_snapshot_available();
+    int s2 = asmtest_amd_snapshot_available();
+    CHECK(s1 == 0 || s1 == 1, "AMD snapshot-substrate probe returns a definite 0/1");
+    CHECK(s1 == s2, "AMD snapshot-substrate probe is stable (cached)");
+    printf("# AMD deterministic LBR-snapshot substrate (LbrExtV2+perfmon_v2+kernel>=6.10): %s\n",
+           s1 ? "PRESENT (boundary bpf_get_branch_snapshot buildable; run needs CAP_BPF)"
+              : "ABSENT (falls back to sample_period=1 windows)");
 #else
     printf("# SKIP AMD freeze probe: x86-64 Linux only\n");
 #endif
