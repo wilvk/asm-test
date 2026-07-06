@@ -653,6 +653,27 @@ hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="
 	$(hwtrace_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
+# Forward-runtime drift check: the same self-test on .NET 9. The images carry only
+# dotnet-sdk-8.0, so install net9 user-local via the official dotnet-install script
+# into a scratch dir, flip the TFM in a scratch COPY of the project (the tree is
+# never modified), and run. Guards the diagnostics-IPC (DOTNET_IPC_V1) and
+# MethodLoadVerbose surfaces against runtime drift — the two places a new runtime
+# would silently regress the rundown/labelling paths. Network-dependent (dot.net):
+# self-skips, never fails, when the toolchain cannot be fetched.
+.PHONY: hwtrace-dotnet9-test
+hwtrace-dotnet9-test: shared-hwtrace
+	@echo "== hwtrace-dotnet9-test (forward-runtime drift check) =="
+	@set -e; d9=$$(mktemp -d); trap 'rm -rf "$$d9"' EXIT; \
+	if ! curl -fsSL --max-time 60 https://dot.net/v1/dotnet-install.sh -o $$d9/di.sh; then \
+	  echo "# SKIP net9: dotnet-install.sh unreachable"; exit 0; fi; \
+	if ! bash $$d9/di.sh --channel 9.0 --install-dir $$d9/dotnet >$$d9/install.log 2>&1; then \
+	  echo "# SKIP net9: install failed"; tail -3 $$d9/install.log; exit 0; fi; \
+	cp -r bindings/dotnet $$d9/dn && rm -rf $$d9/dn/*/obj $$d9/dn/*/bin; \
+	sed -i 's#<TargetFramework>net8.0</TargetFramework>#<TargetFramework>net9.0</TargetFramework>#' \
+	  $$d9/dn/hwtrace/hwtrace.csproj; \
+	cd $$d9/dn/hwtrace && $(hwtrace_env) DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  $$d9/dotnet/dotnet run
+
 # Runnable demos of the scoped-trace facility (§Z0/§Z1) on the single-step WEAK tier:
 # one project per report — see examples/dotnet/README.md for what each shows.
 .PHONY: hwtrace-dotnet-example

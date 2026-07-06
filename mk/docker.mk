@@ -340,6 +340,13 @@ $(foreach L,$(HWTRACE_DOCKER_LANGS),$(eval $(call docker_hwtrace_lang_rule,$(L))
 
 docker-hwtrace-bindings: $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
+# Forward-runtime drift check: the dotnet hwtrace self-test on .NET 9, in the same
+# asmtest-dotnet image (net9 installed user-local at run time; self-skips offline).
+.PHONY: docker-hwtrace-dotnet9
+docker-hwtrace-dotnet9: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
+	  make hwtrace-dotnet9-test
+
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND
 # disassembler path under `make <lang>-test` — there is no separate asm image.
