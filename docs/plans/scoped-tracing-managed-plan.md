@@ -18,11 +18,14 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 > are implemented and host-tested (`test_stitch_slices`, `test_render_versioned`). The
 > **Node (§D1)** `scope`/`using`-fallback and **Java (§D2)** try-with-resources
 > `AsmTrace` scope constructs over a native leaf are implemented + tested in their
-> `hwtrace-<lang>-test` lanes. **Forward-look (not yet landed):** the live managed-JIT
-> capability — §D0 .NET `MethodLoadVerbose`/`AsyncLocal`, the §D1/§D2 per-runtime
-> async-hop hooks, and the §D3 concealed out-of-process ptrace-stealth stepper
-> (reverse-attach protocol + cross-process address channel + per-ecosystem bundling) —
-> which need managed runtimes / PT hardware / a second process to validate. See
+> `hwtrace-<lang>-test` lanes. **Landed since (2026-07):** §D0.1 `MethodLoadVerbose`
+> labelling (`JitMethodMap`) and the §D0.2 dependency-free jitdump rundown
+> (`DiagnosticsIpc`) ship in the .NET binding as `new AsmTrace(byMethod:, withRundown:)`
+> — commits 69ace98, d4e7deb, 8bf7d52, 4aaf473 — exercised by `hwtrace-dotnet-test` and
+> the `examples/dotnet/*` lanes. **Forward-look (not yet landed):** §D0.3's named-method
+> form and §D0.4 `AsyncLocal` stitching (both slated near-term), the §D1/§D2 per-runtime
+> async-hop hooks, and the §D3 live-JIT cross-process address channel — the parts that
+> need PT hardware / a second process to validate. See
 > [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
 >
 > Status legend: **planned**, forward-look. The clean managed path needs the
@@ -94,18 +97,25 @@ per-language analogues).
 
 ---
 
-## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(forward-look; needs a live .NET runtime + Intel PT for the clean path)*
+## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(§D0.1/§D0.2 landed; §D0.3/§D0.4 slated near-term)*
 
-> **Remaining, by requirement.** The `AsmTrace` native-leaf reference shim ships (see
-> the bindings slice). The *live managed-JIT* pieces need substrate: **§D0.1
-> `MethodLoadVerbose` address resolution** + **§D0.2 pre-arm rundown** + **§D0.3
-> named-method form** are **Docker-reachable** on a **live .NET runtime** (the
-> `docker-hwtrace-jit-dotnet` lane already traces a live CoreCLR method out of band via
-> the §D3 ptrace path) — implementable there, just not yet built. **§D0.4 `AsyncLocal`
-> async-hop stitching** additionally needs **bare-metal Intel PT** for the per-thread
-> events the cross-thread merge consumes (the §D4 merge *core* is done + host-tested;
-> the single-thread ptrace stepper cannot exercise a cross-thread hop). Same shape for
-> the Node (§D1) / JVM (§D2) async-hop hooks.
+> **Status, by requirement (updated 2026-07-06).** The `AsmTrace` native-leaf reference
+> shim ships (see the bindings slice). **§D0.1 landed** as `JitMethodMap` — an in-proc
+> `MethodLoadVerbose` `EventListener` labelling the single-step whole-window capture
+> (`new AsmTrace(byMethod: true)`). A deliberate divergence from this section's framing:
+> the map attributes captured ABSOLUTE addresses **post-hoc** with live-memory
+> disassembly rather than feeding `asmtest_codeimage_track` for a PT decode — that seam
+> stays forward-look with §Z2/§Z3, and the shipped labelling is version-blind (accepted
+> for non-re-tiering windows; the in-process single-step posture itself is an accepted
+> decision, see the zero-config plan's §Z1 routing note). **§D0.2 landed**
+> dependency-free: `DiagnosticsIpc` hand-rolls the `DOTNET_IPC_V1`
+> `EnablePerfMap(JitDump)` wire command instead of taking a `DiagnosticsClient`
+> dependency (see [dotnet-perfmap-rundown-plan.md](dotnet-perfmap-rundown-plan.md)).
+> **§D0.3 named-method form: not built, slated near-term.** **§D0.4 `AsyncLocal`
+> async-hop stitching: slated after §D0.3** — it additionally needs **bare-metal Intel
+> PT** for the per-thread events the cross-thread merge consumes (the §D4 merge *core*
+> is done + host-tested; the single-thread ptrace stepper cannot exercise a cross-thread
+> hop). Same shape for the Node (§D1) / JVM (§D2) async-hop hooks.
 
 Builds directly on the bindings slice's `AsmTrace` construct. On **.NET 8+** the
 analysis shows leak 2 and leak 3 dissolve and leak 1 shrinks to "you must name the

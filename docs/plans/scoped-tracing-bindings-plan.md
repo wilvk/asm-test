@@ -122,10 +122,13 @@ in the binding today (verified). New work:
   [:100](../../bindings/dotnet/hwtrace/HwTrace.cs#L100) already handles library
   resolution; `[ModuleInitializer]` only front-loads the availability probe.)
   **Packaging:** a `[ModuleInitializer]` fires for consumers only if its compiland ships
-  in the packable library. Today `HwTrace.cs` compiles into the hwtrace **smoke-test exe**
+  in the packable library. ~~Today `HwTrace.cs` compiles into the hwtrace **smoke-test exe**
   (`hwtrace.csproj`, `OutputType Exe`), not the packable NuGet lib (`asmtest-lib.csproj`,
   which includes only `Asmtest.cs`) — so add `HwTrace.cs` (or a new `AsmTrace.cs`) to the
-  packable compile items, or ship `AsmTrace` in a separate hwtrace package.
+  packable compile items, or ship `AsmTrace` in a separate hwtrace package.~~
+  **(Done 2026-07-06: `asmtest-lib.csproj` now compiles `hwtrace/HwTrace.cs` into the
+  packable `AsmTest.dll` — a NuGet consumer gets `AsmTrace`. The `[ModuleInitializer]`
+  itself remains unimplemented by choice; lazy first-scope arming covers it.)**
   **Analyzer note (CA2255).** A `[ModuleInitializer]` compiled into a *shipped library*
   **does** fire for downstream consumers — it runs on first use of any type in the module,
   in the consumer's process, not only when this assembly is built directly — which is

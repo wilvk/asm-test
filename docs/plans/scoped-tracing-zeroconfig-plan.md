@@ -384,6 +384,17 @@ handle:
   `#DB` per taken branch, ~4–10× fewer stops, byte-identical output — with no change to
   the seam.
 
+  > **Decision (2026-07-06): the shipped .NET WEAK tier accepts in-process single-step of
+  > managed windows.** The §D0.1/§D0.2 `byMethod`/`withRundown` empty-ctor scopes (the
+  > .NET binding + the `examples/dotnet/*` lanes) single-step live managed code
+  > in-process today, mitigated by convention rather than routing: the window is
+  > single-threaded and kept tight, the rundown's socket I/O runs **before** arming
+  > (never under TF), and overflow / cross-thread closes surface as `Truncated`, never
+  > as a silent partial. The routing above — PT/LBR where the silicon exists, else the
+  > §D3 stepper — remains the roadmap for the *safe* managed arm
+  > (`test_wholewindow_ss_managed_routes` gates that seam when it lands), but "refuse
+  > in-process single-step of managed code" is no longer a shipping precondition.
+
 #### §Z1.2 — STRONG: PT recorder-backed whole-window arm
 
 The out-of-band tier that makes the empty ctor honest *and* quiet. A per-thread `perf` AUX
@@ -577,6 +588,11 @@ construction** — the JIT that compiled the method and any GC that ran, interle
 moves) — they are **not** a correctness precondition the way the region form's stable-blob
 assumption was. Single-step stays **forbidden** against live managed code, so the managed arm
 selects PT/LBR where the silicon exists, else routes to the §D3 stepper running L3.
+*(Superseded in practice for the shipped WEAK tier — see the §Z1 routing decision note:
+the .NET binding single-steps managed windows in-process today, convention-mitigated. The
+shipped managed labelling is also live-memory + pre-arm rundown, i.e. version-blind; the
+`render_versioned`/codeimage seam this section describes stays on the roadmap for the
+tiered-version case.)*
 
 **§Z3 tests.** *Host-testable half:* `test_zeroctor_managed_compose` drives a **synthetic**
 `MethodLoad` event stream through the `name→(addr,size)→track()` plumbing, asserts the
@@ -758,6 +774,14 @@ The render on close must label and banner, never present a prefix as the whole:
 
 Together: **every** outcome is a labelled complete window, a labelled+bannered partial window,
 or a self-skip note with `SkipReason`.
+
+> **Shipped .NET presentation (decision, 2026-07-06).** The .NET whole-window scope
+> defaults to **data-only**: `Path` stays empty and the caller reads
+> `Addresses`/`Methods`/`Disassembly` (the `examples/dotnet/*` Report files own the
+> presentation); the self-skip note lives in a dedicated `SkipReason` property, not in
+> `Path`. The rendered form is **opt-in** via `new AsmTrace(renderPath: true)`, which
+> routes through the native `render_window` (live-memory disassembly + the §3.2
+> truncation banner). Both modes are supported by design; neither is a drift.
 
 ### §Z5.4 One-time provisioning + the Linux-only floor *(documented)*
 
