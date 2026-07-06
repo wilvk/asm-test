@@ -3273,6 +3273,365 @@ static void test_wholewindow_buckets(void) {
 #endif
 }
 
+/* §Z0 gate extras — empty-ctor scope hygiene. (a) NESTED scopes: a region-free
+ * whole window composes with a region scope registered+begun INSIDE it (a shim
+ * nesting `using (new AsmTrace())` around the region form); both close in LIFO
+ * order, the inner region still yields exact offsets, and the process-wide SIGTRAP
+ * disposition is installed ONCE (the 0->1 arm-refcount transition) and restored
+ * ONCE to the caller's pre-init handler after full teardown — a double install
+ * would overwrite g_old_sa and restore asm-test's own handler; a premature restore
+ * would show the pre-init handler while the outer window is still armed. The
+ * before/mid/after sigaction probes catch both. (b) construct/dispose CHURN: 300
+ * begin_window/end_window (+ trace_new/trace_free) cycles on one thread must all
+ * return OK — the per-thread frame stack unwinds to empty each cycle and the
+ * generation counter neither exhausts nor aliases — and a capture AFTER the churn
+ * still records exactly. */
+static void test_zeroctor_scope_hygiene(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP zeroctor scope hygiene: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP zeroctor scope hygiene: mmap failed\n");
+        return;
+    }
+    /* The pre-init SIGTRAP disposition (glibc/musl union sa_handler/sa_sigaction,
+     * so the one field read covers both registration forms). */
+    struct sigaction sa_before, sa_mid, sa_after;
+    memset(&sa_before, 0, sizeof sa_before);
+    sigaction(SIGTRAP, NULL, &sa_before);
+
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "scope hygiene init");
+
+    /* (a) Nested: open a region-free window, then a region scope INSIDE it. */
+    asmtest_trace_t *tr_win = asmtest_trace_new(65536, 0);
+    asmtest_trace_t *tr_in = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("hyg_inner", p, sizeof ROUTINE, tr_in);
+    asmtest_hwtrace_scope_t win = {0xffffffffu, 0};
+    int rc_win = asmtest_hwtrace_begin_window(tr_win, &win);
+    if (rc_win != ASMTEST_HW_OK) {
+        /* Whole-window is Linux/x86-64-only today; self-skip cleanly elsewhere. */
+        printf("# SKIP zeroctor scope hygiene: begin_window unavailable here "
+               "(rc=%d)\n",
+               rc_win);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr_win);
+        asmtest_trace_free(tr_in);
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
+    int rc_in = asmtest_hwtrace_try_begin("hyg_inner"); /* nested region frame */
+    add2_fn fn = (add2_fn)p;
+    long r = (rc_in == ASMTEST_HW_OK) ? fn(20, 22) : -1;
+    if (rc_in == ASMTEST_HW_OK)
+        asmtest_hwtrace_end("hyg_inner"); /* LIFO: pop the inner frame first */
+    /* Probe while the OUTER window is still armed: the installed disposition must
+     * be asm-test's (not the pre-init one), i.e. the nested inner close did NOT
+     * prematurely restore it (the restore belongs to the outermost close only). */
+    memset(&sa_mid, 0, sizeof sa_mid);
+    sigaction(SIGTRAP, NULL, &sa_mid);
+    int rc_endwin = asmtest_hwtrace_end_window(win, tr_win);
+
+    CHECK(rc_win == ASMTEST_HW_OK && rc_in == ASMTEST_HW_OK,
+          "hygiene: region-free window + nested region scope both open OK");
+    CHECK(rc_endwin == ASMTEST_HW_OK && r == 42,
+          "hygiene: both scopes close in LIFO order and the traced call returns "
+          "42");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int exact = (asmtest_emu_trace_insns_total(tr_in) == 5);
+    for (size_t i = 0; exact && i < 5; i++)
+        exact = (tr_in->insns[i] == EXPECT[i]);
+    CHECK(exact && !asmtest_emu_trace_truncated(tr_in),
+          "hygiene: the nested inner region still yields exact offsets "
+          "[0,3,6,c,11]");
+    uint64_t b = (uint64_t)(uintptr_t)p;
+    int found_all = 1;
+    for (size_t k = 0; k < 5; k++) {
+        int hit = 0;
+        for (size_t i = 0; i < tr_win->insns_len && !hit; i++)
+            hit = (tr_win->insns[i] == b + EXPECT[k]);
+        found_all = found_all && hit;
+    }
+    CHECK(found_all,
+          "hygiene: the outer window captured the routine's absolute addresses "
+          "too");
+    CHECK(sa_mid.sa_sigaction != sa_before.sa_sigaction,
+          "hygiene: SIGTRAP disposition installed while armed; the nested close "
+          "did not prematurely restore it");
+
+    /* (b) Churn: 300 construct/dispose cycles on this one thread. Every rc must
+     * be OK — an EFULL here would mean the frame stack or generation state leaks
+     * across begin/end pairs. */
+    int bad = 0;
+    for (int i = 0; i < 300; i++) {
+        asmtest_trace_t *t = asmtest_trace_new(16, 0);
+        asmtest_hwtrace_scope_t sc = {0xffffffffu, 0};
+        int rb = (t != NULL) ? asmtest_hwtrace_begin_window(t, &sc)
+                             : ASMTEST_HW_EINVAL;
+        int re = (rb == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(sc, t)
+                                       : ASMTEST_HW_EINVAL;
+        if (rb != ASMTEST_HW_OK || re != ASMTEST_HW_OK)
+            bad++;
+        asmtest_trace_free(t);
+    }
+    CHECK(bad == 0,
+          "hygiene churn: 300 begin/end_window + trace_new/free cycles all "
+          "return OK (no frame/generation exhaustion)");
+
+    /* Capture #301: the surface still works after the churn. */
+    asmtest_trace_t *tr_f = asmtest_trace_new(65536, 0);
+    asmtest_hwtrace_scope_t fsc = {0xffffffffu, 0};
+    int rb_f = asmtest_hwtrace_begin_window(tr_f, &fsc);
+    long r_f = (rb_f == ASMTEST_HW_OK) ? fn(20, 22) : -1;
+    int re_f = (rb_f == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(fsc, tr_f)
+                                       : ASMTEST_HW_EINVAL;
+    int final_ok = (rb_f == ASMTEST_HW_OK && re_f == ASMTEST_HW_OK && r_f == 42);
+    for (size_t k = 0; final_ok && k < 5; k++) {
+        int hit = 0;
+        for (size_t i = 0; i < tr_f->insns_len && !hit; i++)
+            hit = (tr_f->insns[i] == b + EXPECT[k]);
+        final_ok = hit;
+    }
+    CHECK(final_ok,
+          "hygiene churn: capture #301 still records the routine's absolute "
+          "addresses");
+
+    asmtest_hwtrace_shutdown();
+    /* Full teardown done (the last end_window dropped the arm-refcount to 0):
+     * the pre-init SIGTRAP handler must be back — installed once, restored once. */
+    memset(&sa_after, 0, sizeof sa_after);
+    sigaction(SIGTRAP, NULL, &sa_after);
+    CHECK(sa_after.sa_sigaction == sa_before.sa_sigaction,
+          "hygiene: SIGTRAP handler restored to the pre-init value after full "
+          "teardown (installed once, restored once)");
+
+    asmtest_trace_free(tr_win);
+    asmtest_trace_free(tr_in);
+    asmtest_trace_free(tr_f);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP zeroctor scope hygiene: x86-64 Linux only\n");
+#endif
+}
+
+/* §Z5.3 — the never-emit-partial presentation contract: a genuinely OVERFLOWED
+ * whole-window capture renders as a labelled, BANNERED prefix, never
+ * cap-as-complete. The trace is allocated with a tiny 8-insn cap and the window
+ * brackets a 40-trip loop, so the recorded stream far exceeds it: trace_append_insn
+ * keeps the first 8 entries, bumps insns_total for the rest, and flags `truncated`;
+ * render_window must then END its output with the "; trace truncated — N of M
+ * instructions shown" banner over well-formed "<hex>:\t<text>" prefix lines. */
+static void test_wholewindow_banner(void) {
+#if defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP whole-window banner: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(AMD_LOOP, sizeof AMD_LOOP);
+    if (p == NULL) {
+        printf("# SKIP whole-window banner: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "whole-window banner init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(8, 0); /* tiny cap: force overflow */
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    long (*fn)(long, long) = (long (*)(long, long))p;
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    if (rc_begin != ASMTEST_HW_OK) {
+        printf("# SKIP whole-window banner: begin_window unavailable here "
+               "(rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(p, sizeof AMD_LOOP);
+        return;
+    }
+    long r = fn(1, 40); /* 40 trips: 122 in-region insns alone, far past cap 8 */
+    int rc_end = asmtest_hwtrace_end_window(scope, tr);
+    CHECK(rc_begin == ASMTEST_HW_OK && rc_end == ASMTEST_HW_OK && r == 40,
+          "banner: the overflowing whole window opens, runs, and closes OK");
+    CHECK(tr->insns_len == 8 && tr->insns_total > tr->insns_len &&
+              asmtest_emu_trace_truncated(tr),
+          "banner: the tiny cap yields an honest truncated prefix (8 kept, more "
+          "ran)");
+
+    int need = asmtest_hwtrace_render_window(scope, NULL, 0);
+    if (need == ASMTEST_HW_ENOSYS) {
+        /* No Capstone: the render half self-skips; the truncation-honesty half
+         * above already ran. */
+        printf("# SKIP whole-window banner render: built without Capstone\n");
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(p, sizeof AMD_LOOP);
+        return;
+    }
+    char *buf = (char *)malloc(need > 0 ? (size_t)need + 1 : 1);
+    buf[0] = '\0';
+    int wrote = (need > 0)
+                    ? asmtest_hwtrace_render_window(scope, buf, (size_t)need + 1)
+                    : need;
+    CHECK(need > 0 && wrote == need,
+          "banner: render sizes and fills consistently (snprintf semantics)");
+
+    /* The output must END with the truncation banner naming N of M. */
+    char banner[160];
+    snprintf(banner, sizeof banner,
+             "; trace truncated — %llu of %llu instructions shown\n",
+             (unsigned long long)tr->insns_len,
+             (unsigned long long)tr->insns_total);
+    size_t tlen = strlen(buf), blen = strlen(banner);
+    CHECK(strstr(buf, "trace truncated") != NULL && tlen >= blen &&
+              memcmp(buf + tlen - blen, banner, blen) == 0,
+          "banner: render ENDS with the truncation banner (8 of M instructions "
+          "shown)");
+
+    /* Every line before the banner is a well-formed "<hex>:\t<text>" row:
+     * space-padded lowercase hex, then ':', then '\t', then nonempty text. */
+    int rows = 0, well = (tlen >= blen);
+    const char *line = buf;
+    const char *stop = buf + (tlen >= blen ? tlen - blen : 0);
+    while (well && line < stop) {
+        const char *nl = memchr(line, '\n', (size_t)(stop - line));
+        const char *tab =
+            (nl != NULL) ? memchr(line, '\t', (size_t)(nl - line)) : NULL;
+        if (nl == NULL || tab == NULL || tab == line || tab[-1] != ':' ||
+            tab + 1 >= nl) {
+            well = 0;
+            break;
+        }
+        int digits = 0;
+        for (const char *q = line; well && q < tab - 1; q++) {
+            if (*q == ' ' && digits == 0)
+                continue; /* %12llx left-pads with spaces */
+            if ((*q >= '0' && *q <= '9') || (*q >= 'a' && *q <= 'f'))
+                digits++;
+            else
+                well = 0;
+        }
+        if (digits == 0)
+            well = 0;
+        rows++;
+        line = nl + 1;
+    }
+    CHECK(well && rows == 8,
+          "banner: the 8 shown prefix lines are well-formed \"<hex>:\\t<text>\"");
+
+    free(buf);
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(p, sizeof AMD_LOOP);
+#else
+    printf("# SKIP whole-window banner: x86-64 Linux only\n");
+#endif
+}
+
+/* §Z3 (host-testable half) — the managed name→(addr,size)→track→versioned-render
+ * composition, with NO managed runtime. A synthetic §D0.1 MethodLoad event hands
+ * over the (addr,size) of a "JIT'd" method: its v0 bytes are published W^X-style
+ * (mmap RW -> copy -> mprotect RX), tracked into a self code-image (when0); then
+ * the method is re-JIT'd IN PLACE — same address, new bytes, the tier-up — and
+ * refresh() stamps when1. A synthetic whole-window trace holding v0's ABSOLUTE
+ * executed addresses must render_versioned at when0 as v0's text (its distinctive
+ * `add`) and at when1 as v1's (`sub`) — decode-at-VERSION, not live bytes (live
+ * memory holds only v1 at render time). Mirrors how test_pt_image_from_codeimage
+ * drives the recorder. */
+static void test_zeroctor_managed_compose(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_codeimage_available() || !asmtest_disas_available()) {
+        char why[200];
+        asmtest_codeimage_skip_reason(why, sizeof why);
+        printf("# SKIP zeroctor managed compose: %s\n",
+               asmtest_disas_available() ? why : "built without Capstone");
+        return;
+    }
+    /* v0 — the file-scope add2 fixture; v1 — the same method re-JIT'd with its
+     * `add rax,rsi` (48 01 f0 at offset 3) flipped to `sub rax,rsi` (48 29 f0):
+     * same layout, one distinctive instruction — the minimal tier-up. */
+    unsigned char v1[sizeof ROUTINE];
+    memcpy(v1, ROUTINE, sizeof ROUTINE);
+    v1[4] = 0x29;
+    long ps = sysconf(_SC_PAGESIZE);
+    unsigned char *p = (unsigned char *)mmap(NULL, (size_t)ps,
+                                             PROT_READ | PROT_WRITE,
+                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP zeroctor managed compose: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC); /* the JIT publishes X bytes */
+
+    /* The synthetic MethodLoad event — what the §D0.1 listener would deliver for
+     * a method JIT'd inside the window; its (addr,size) feeds track(). */
+    struct {
+        const char *name;
+        const void *addr;
+        size_t size;
+    } method_load = {"HotPath", p, sizeof ROUTINE};
+
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    if (img == NULL) {
+        printf("# SKIP zeroctor managed compose: codeimage alloc failed\n");
+        munmap(p, (size_t)ps);
+        return;
+    }
+    int rc_track =
+        asmtest_codeimage_track(img, method_load.addr, method_load.size);
+    uint64_t when0 = asmtest_codeimage_now(img);
+
+    /* The tier-up: same address, new bytes (RX -> RW to overwrite -> RX). */
+    mprotect(p, (size_t)ps, PROT_READ | PROT_WRITE);
+    memcpy(p, v1, sizeof v1);
+    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC);
+    int nver = asmtest_codeimage_refresh(img);
+    uint64_t when1 = asmtest_codeimage_now(img);
+    CHECK(rc_track == ASMTEST_CI_OK && nver > 0 && when1 > when0,
+          "managed compose: track()+refresh() record the tier-up as a second "
+          "version (when0 < when1)");
+
+    /* The synthetic whole-window trace: ABSOLUTE addresses of v0's executed path
+     * {0,3,6,c,11} — what the region-free capture recorded while v0 was live. */
+    asmtest_trace_t *tr = asmtest_trace_new(8, 0);
+    static const uint64_t OFF[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    for (size_t i = 0; i < 5; i++)
+        trace_append_insn(tr, (uint64_t)(uintptr_t)p + OFF[i]);
+
+    char b0[512], b1[512], g_add[64], g_sub[64];
+    int n0 = asmtest_hwtrace_render_versioned(img, when0, tr, b0, sizeof b0);
+    int n1 = asmtest_hwtrace_render_versioned(img, when1, tr, b1, sizeof b1);
+    /* Ground truth for the distinctive instruction at p+3, per version. */
+    asmtest_disas(ASMTEST_ARCH_X86_64, ROUTINE, sizeof ROUTINE,
+                  (uint64_t)(uintptr_t)p, 3, g_add, sizeof g_add);
+    asmtest_disas(ASMTEST_ARCH_X86_64, v1, sizeof v1, (uint64_t)(uintptr_t)p, 3,
+                  g_sub, sizeof g_sub);
+    CHECK(n0 > 0 && g_add[0] != '\0' && strstr(b0, g_add) != NULL,
+          "managed compose: when0 renders the FIRST routine's distinctive add");
+    CHECK(n1 > 0 && g_sub[0] != '\0' && strstr(b1, g_sub) != NULL,
+          "managed compose: when1 renders the re-JIT'd sub at the same addresses");
+    /* Live memory holds ONLY v1 at render time, so when0's text showing no `sub`
+     * (and differing from when1's) proves decode-at-version, not live bytes. */
+    CHECK(strstr(b0, "sub") == NULL && strcmp(b0, b1) != 0,
+          "managed compose: decode is at-version, not live bytes (when0 has no "
+          "sub; when0 != when1)");
+
+    asmtest_trace_free(tr);
+    asmtest_codeimage_free(img);
+    munmap(p, (size_t)ps);
+#else
+    printf("# SKIP zeroctor managed compose: x86-64 Linux only (x86 fixture)\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -3346,6 +3705,19 @@ int main(void) {
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
     test_wholewindow_buckets();
+
+    /* §Z0 gate extras: nested region-free + region scopes (SIGTRAP installed
+     * once, restored once to the pre-init handler) and 300-cycle
+     * construct/dispose churn. */
+    test_zeroctor_scope_hygiene();
+
+    /* §Z5.3: an overflowed whole window renders a labelled, BANNERED prefix —
+     * never cap-as-complete. */
+    test_wholewindow_banner();
+
+    /* §Z3 (host-testable half): the synthetic managed name→(addr,size)→track→
+     * versioned-render chain — decode-at-version against the window-live image. */
+    test_zeroctor_managed_compose();
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
