@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-06
+
 ### Fixed
 
 - **Review-driven defect sweep (2026-07-02).** Resolved the full backlog from the
@@ -28,6 +30,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Scoped in-process tracing for .NET — the managed tier (§Z0–§Z5, §D0).** The
+  zero-config scope construct over the single-step hardware-trace tier:
+  `using (new AsmTrace()) { … }` captures whatever the thread executes (no region,
+  no `HwTrace.Init` — the ctor auto-inits the portable backend and self-skips with
+  an honest `SkipReason` where it cannot run). `byMethod: true` labels the captured
+  window by managed method via an in-process `MethodLoadVerbose` listener
+  (`JitMethodMap`), and `withRundown: true` also names warm + ReadyToRun BCL
+  methods through a dependency-free `DOTNET_IPC_V1` jitdump rundown over the
+  runtime's own diagnostics socket (no NuGet package, no launch knob). Results are
+  data-first (`Addresses`, `Methods`, `Disassembly`, `AsmMethod.Assembly/.Tier`),
+  with `renderPath: true` as the rendered opt-in. Labelling decodes against the
+  code-image **version live in the window** (the map feeds
+  `asmtest_codeimage_track` per method load), so bodies that re-tier/move after
+  the scope still render the bytes that ran.
+- **Named-method form — `AsmTrace.Method(delegate)` (§D0.3).** Trace one managed
+  method's own JIT'd body: resolution via `PrepareMethod` + the listener (jitdump
+  rundown fallback for warm/R2R bodies), a region + step-over capture with exact
+  offsets, and `Invoke(args…)` as the library-owned non-inlinable call site.
+  `outOfProcess: true` (§D3) routes `Invoke` through the concealed ptrace-stealth
+  stepper — a bundled helper reverse-attaches and steps the body out of band, so
+  the calling thread is never armed with `EFLAGS.TF`.
+- **Honest-degradation surface.** `HwTrace.DegradationNote()` composes the tier
+  ladder (Intel PT → AMD LBR → single-step → CoreSight, each with its skip
+  reason, plus the ptrace fallback); cross-thread closes and overflows flag
+  `Truncated` (native OS-tid assert + a complementary managed-thread guard);
+  `Disas.IsCall/IsBranch/IsRet/TryCallTarget` classify live instructions
+  structurally. The packable `AsmTest` NuGet now ships `AsmTrace` and the whole
+  hwtrace wrapper alongside the bundled native payload.
+- **Eleven runnable .NET examples** under `examples/dotnet/` (whole-window,
+  region, methods, rundown, assemblies, annotated, tiers, hotspots, coverage,
+  callgraph, ptrace_native — plus the out-of-process `ptrace_dotnet` attach
+  demo), each split Program/Report, wired into `make hwtrace-dotnet-example`
+  and `make dev-dotnet`. Validated on .NET 8 **and** .NET 9 (no diagnostics-IPC
+  or `MethodLoadVerbose` drift).
 - **Single-step native-trace tier: macOS-Intel front-end.** The exact, unprivileged
   EFLAGS.TF (`#DB` → `SIGTRAP`) single-step backend now runs in-process on x86-64
   **macOS**, not just Linux — the first Phase-5 front-end a Linux CI host (or
@@ -1123,5 +1159,6 @@ Track A self-test suite and Track B packaging.
   `asmtest.pc` pkg-config file; and `make amalgamate` producing the single-header
   `asmtest_single.h`.
 
-[Unreleased]: https://github.com/wilvk/asm-test/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/wilvk/asm-test/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/wilvk/asm-test/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/wilvk/asm-test/releases/tag/v1.0.0
