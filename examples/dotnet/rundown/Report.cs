@@ -1,17 +1,19 @@
-// examples/dotnet/rundown — reporting (presentation only), split from Program.cs.
-// Prints the JIT/warm/R2R method breakdown of the closed rundown scope. No tracing here.
+// examples/dotnet/rundown — reporting + verdict, split from Program.cs.
+// Prints the JIT/warm/R2R method breakdown of the closed rundown scope and returns
+// false when an enabled rundown failed to name any R2R method (the §D0.2 claim this
+// example exists to demonstrate) — so the lane exits nonzero on a real regression.
 
 using System;
 using Asmtest;
 
 internal static class Report
 {
-    public static void Print(AsmTrace ww)
+    public static bool Print(AsmTrace ww)
     {
         if (!ww.Armed)
         {
             Console.WriteLine($"# self-skip: {ww.SkipReason}");
-            return;
+            return true;
         }
 
         int r2r = 0;
@@ -31,8 +33,11 @@ internal static class Report
                        + ww.InstructionsIn("ConsolePal::Write");
         Console.WriteLine();
         if (!ww.RundownEnabled)
+        {
             Console.WriteLine("-> rundown self-skipped (diagnostics off?); only cold methods are named.");
-        else if (writePath > 0)
+            return true; // honest degradation, not a failure
+        }
+        if (writePath > 0)
             Console.WriteLine($"-> the R2R BCL Console write path is NAMED ({writePath} instructions in\n"
                               + $"   StreamWriter::WriteLine + ConsolePal::Write, both [PreJIT]=ReadyToRun) —\n"
                               + $"   precompiled methods the cold-only §D0.1 path can never see. Program::Main\n"
@@ -40,5 +45,10 @@ internal static class Report
         else
             Console.WriteLine($"-> rundown enabled; {r2r} R2R ([PreJIT]) methods named above, which the cold-only\n"
                               + "   path cannot see.");
+        // The verdict: an enabled rundown must name at least one R2R method — Work()
+        // ran Console.WriteLine in-window, whose write path is R2R BCL by construction.
+        if (r2r == 0)
+            Console.WriteLine("FAIL: rundown enabled but no [PreJIT] (R2R) method was named");
+        return r2r > 0;
     }
 }

@@ -6,8 +6,8 @@
        libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
        `make hwtrace-dotnet-example`; self-skips (exit 0) where single-step / Capstone can't run.
 
-       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one binding
-       source (never globbing sibling examples or the binding's own Main). -->
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>

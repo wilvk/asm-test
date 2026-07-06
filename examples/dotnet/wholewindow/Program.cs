@@ -30,14 +30,17 @@ internal static class Program
     {
         Console.WriteLine("== empty-ctor whole-window scope: using (new AsmTrace()) ==\n");
 
+        // The guard covers the NativeCode allocations below, which need the native lib;
+        // the scope itself needs NO HwTrace.Init — the empty ctor auto-inits the
+        // portable single-step tier (§Z0 zero config).
         if (!HwTrace.Available(HwBackend.SingleStep))
         {
             Console.WriteLine($"# self-skip: single-step backend unavailable: {HwTrace.SkipReason(HwBackend.SingleStep)}");
             return 0;
         }
-        HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
-                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default,\n"
+                          + "auto-inited by the AsmTrace ctor (the STRONG Intel-PT / CEILING\n"
+                          + "AMD-LBR tiers are forward-look)\n");
 
         var add2 = NativeCode.FromBytes(ADD2);   // leaf A
         var sub2 = NativeCode.FromBytes(SUB2);   // leaf B (a distinct mapping)

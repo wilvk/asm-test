@@ -9,7 +9,7 @@
        AllowUnsafeBlocks: the demo invokes the native leaves through unmanaged
        function pointers (calli), which skips the Marshal delegate's P/Invoke
        transition stub — a far shorter window under single-step, so the leaves show.
-       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
        binding source (never globbing sibling examples or the binding's own Main). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>

@@ -33,14 +33,12 @@ internal static class Program
     {
         Console.WriteLine("== labelling a cold managed method in a whole-window scope (§D0.1) ==\n");
 
-        if (!HwTrace.Available(HwBackend.SingleStep))
-        {
-            Console.WriteLine($"# self-skip: single-step backend unavailable: {HwTrace.SkipReason(HwBackend.SingleStep)}");
-            return 0;
-        }
-        HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
-                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
+        // Zero config (§Z0): no HwTrace.Available/Init dance — the empty-ctor AsmTrace
+        // auto-inits the portable single-step tier and self-skips (Report prints
+        // SkipReason) where it cannot run.
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default,\n"
+                          + "auto-inited by the AsmTrace ctor (the STRONG Intel-PT / CEILING\n"
+                          + "AMD-LBR tiers are forward-look)\n");
 
         long r;
         AsmTrace ww;

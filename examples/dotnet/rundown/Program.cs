@@ -32,19 +32,16 @@ internal static class Program
     {
         Console.WriteLine("== §D0.2: naming WARM + R2R methods via an in-process jitdump rundown ==\n");
 
-        if (!HwTrace.Available(HwBackend.SingleStep))
-        {
-            Console.WriteLine($"# self-skip: single-step backend unavailable: {HwTrace.SkipReason(HwBackend.SingleStep)}");
-            return 0;
-        }
-        HwTrace.Init(HwBackend.SingleStep);
-        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default\n"
-                          + "(the STRONG Intel-PT / CEILING AMD-LBR tiers are forward-look)\n");
+        // Zero config (§Z0): no HwTrace.Available/Init dance — the empty-ctor AsmTrace
+        // auto-inits the portable single-step tier and self-skips (Report prints
+        // SkipReason) where it cannot run.
+        Console.WriteLine("backend: single-step WEAK tier — the portable x86-64 Linux default,\n"
+                          + "auto-inited by the AsmTrace ctor (the STRONG Intel-PT / CEILING\n"
+                          + "AMD-LBR tiers are forward-look)\n");
 
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))
             Work();
-        Report.Print(ww);
-        return 0;
+        return Report.Print(ww) ? 0 : 1;
     }
 }
