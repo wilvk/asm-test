@@ -1231,7 +1231,14 @@ namespace Asmtest
             if (_handle != IntPtr.Zero)
                 HwNative.asmtest_hwtrace_register_region(_name, code.Base, (UIntPtr)code.Length, _handle);
             // Register-then-begin under the same generated name (Core §0.4 idempotent).
-            Armed = HwNative.asmtest_hwtrace_try_begin(_name) == HwNative.ASMTEST_HW_OK;
+            int brc = HwNative.asmtest_hwtrace_try_begin(_name);
+            Armed = brc == HwNative.ASMTEST_HW_OK;
+            // §Z5: the region form has no auto-init retry (only the whole-window ctor
+            // does), so say why the arm failed rather than leaving SkipReason empty.
+            if (!Armed)
+                SkipReason = brc == HwNative.ASMTEST_HW_ESTATE
+                    ? "hwtrace tier not up — call HwTrace.Init (the region scope does not auto-init)"
+                    : $"region scope did not arm (rc={brc})";
         }
 
         static string ScopeName(string member, int line)

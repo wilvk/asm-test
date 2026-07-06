@@ -1,12 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- The *library* build of the .NET binding AND its NuGet package: compiles the
-       reusable module (Asmtest.cs) into AsmTest.dll, excluding the conformance
-       runner (Program.cs, the dev test entry point built by asmtest.csproj).
-       `make dotnet-package` stages the prebuilt libasmtest_emu into
-       runtimes/<rid>/native/ (from build/dist/native/) and then `dotnet pack`
-       here emits AsmTest.<version>.nupkg carrying lib/<tfm>/AsmTest.dll + those
-       native assets, in the RID layout the .NET loader resolves automatically. -->
+       reusable modules (Asmtest.cs + the hwtrace wrapper's HwTrace.cs, which carries
+       the scoped-tracing AsmTrace construct) into AsmTest.dll, excluding the dev
+       test entry points (Program.cs via asmtest.csproj, HwTraceProgram.cs via
+       hwtrace/hwtrace.csproj). `make dotnet-package` stages the prebuilt native
+       libs into runtimes/<rid>/native/ (from build/dist/native/) and then
+       `dotnet pack` here emits AsmTest.<version>.nupkg carrying lib/<tfm>/AsmTest.dll
+       + those native assets, in the RID layout the .NET loader resolves
+       automatically (HwNative probes that slot before the dev build/ tree). -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>AsmTest</AssemblyName>
@@ -29,12 +31,15 @@
     <PackageProjectUrl>https://github.com/wilvk/asm-test</PackageProjectUrl>
     <Description>.NET binding for the asm-test assembly unit-testing framework:
       run, capture, and emulate assembly routines via P/Invoke over the
-      opaque-handle binding ABI. The emulator native lib links libunicorn.</Description>
-    <PackageTags>assembly;testing;abi;emulator;unicorn;pinvoke</PackageTags>
+      opaque-handle binding ABI. The emulator native lib links libunicorn.
+      Includes the scoped-tracing AsmTrace construct over the hardware-trace
+      tier (libasmtest_hwtrace — optional; AsmTrace self-skips without it).</Description>
+    <PackageTags>assembly;testing;abi;emulator;unicorn;pinvoke;tracing;scoped-tracing</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Asmtest.cs" />
+    <Compile Include="hwtrace/HwTrace.cs" />
     <!-- Native payload staged by `make dotnet-package` into runtimes/<rid>/native/;
          packed into the nupkg so the .NET loader resolves it per RID at run time. -->
     <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/" Condition="Exists('runtimes')" />

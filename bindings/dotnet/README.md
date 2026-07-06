@@ -90,9 +90,46 @@ It is its own project (`drtrace/drtrace.csproj`, `EnableDefaultCompileItems=fals
 + explicit `Compile` includes) and `asmtest.csproj` excludes the `drtrace/`
 subtree (one `<Compile Remove>`), so the two never glob-collide.
 
+## Hardware tracing + scoped tracing (single-step tier)
+
+The hardware-trace peer, needing **no** DynamoRIO install: the wrapper is
+[`hwtrace/HwTrace.cs`](hwtrace/HwTrace.cs), P/Invoking `libasmtest_hwtrace` via a
+`DllImportResolver` (`ASMTEST_HWTRACE_LIB` → the NuGet `runtimes/<rid>/native/`
+slot → `<repo>/build/` → by soname). The portable default is the single-step
+backend (any x86-64 Linux, no PMU, no privilege); PT/LBR/CoreSight self-skip off
+their hardware. It also compiles into the packable `AsmTest.dll`
+(`asmtest-lib.csproj`), so NuGet consumers get the whole surface:
+
+- **`AsmTrace : IDisposable`** — the scoped-tracing construct
+  (import + `using`, auto-named from the call site, never throws):
+  - `new AsmTrace(code)` — region scope over a `NativeCode` routine; `Path` holds
+    the rendered listing on close.
+  - `new AsmTrace()` — the zero-config whole-window scope; auto-inits the tier
+    (no `HwTrace.Init` needed), exposes `Addresses` (data-only default) —
+    `renderPath: true` opts into rendering `Path`.
+  - `byMethod: true` — label the window by managed method (`Methods`,
+    `Disassembly`, `InstructionsIn`); `withRundown: true` also names warm +
+    ReadyToRun BCL methods via an in-process diagnostics-socket rundown.
+- **`HwTrace`** — tier lifecycle (`Available`/`Init`/`Shutdown`), per-trace
+  coverage recorders (`Create`/`Register`/`Region`), backend/tier auto-selection
+  (`Resolve`/`Auto`/`ResolveTiers`/`AutoTier`).
+- **`Ptrace` / `Descent` / `CodeImage`** — out-of-process tracing, call descent,
+  and the time-aware code-image recorder.
+
+The runnable smoke test (TAP-style, self-skips off x86-64 Linux):
+
+```sh
+make hwtrace-dotnet-test           # or, directly:
+dotnet run --project bindings/dotnet/hwtrace/hwtrace.csproj
+```
+
+Live demos live under [`examples/dotnet/`](../../examples/dotnet/) (`make
+hwtrace-dotnet-example`); the API story is in
+[docs/bindings/dotnet.md](../../docs/bindings/dotnet.md).
+
 ## Deferred
 
-A published NuGet package with `runtimes/<rid>/native/` payloads, a
-`LibraryImport` source generator, and xUnit/NUnit integration of the `Assert`
-helpers are future work; the reusable library module with Tier-2 assertions ships
-today.
+A `LibraryImport` source generator and xUnit/NUnit integration of the `Assert`
+helpers are future work. (The NuGet package with `runtimes/<rid>/native/`
+payloads ships today — `make dotnet-package` builds it and the release workflow
+publishes it.)
