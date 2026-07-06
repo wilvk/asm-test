@@ -75,9 +75,11 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> /* syscall (§Z4 arm-tid) */
 #if defined(__APPLE__)
 #include <sys/ucontext.h>
 #else
+#include <sys/syscall.h> /* SYS_gettid (Linux) */
 #include <ucontext.h>
 #endif
 
@@ -87,9 +89,21 @@
 #if defined(__APPLE__)
 #define SS_RIP(uc)    ((uint64_t)(uc)->uc_mcontext->__ss.__rip)
 #define SS_SET_TF(uc) ((uc)->uc_mcontext->__ss.__rflags |= SS_TF)
+/* §Z4: the OS thread id that armed a frame (region-free close assert). Linux uses the
+ * gettid syscall; Darwin uses the 64-bit pthread thread id, narrowed to int. */
+#define SS_ARM_TID()  ss_darwin_tid()
 #else
 #define SS_RIP(uc)    ((uint64_t)(uc)->uc_mcontext.gregs[REG_RIP])
 #define SS_SET_TF(uc) ((uc)->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_TF)
+#define SS_ARM_TID()  ((int)syscall(SYS_gettid))
+#endif
+
+#if defined(__APPLE__)
+static inline int ss_darwin_tid(void) {
+    uint64_t t = 0;
+    pthread_threadid_np(NULL, &t);
+    return (int)t;
+}
 #endif
 
 #define SS_TF 0x100ULL /* EFLAGS.TF, bit 8 */
@@ -111,16 +125,27 @@
 #endif
 
 /* One active capture frame. base/base_ip/len/trace describe the region; stream is
- * the heap ordered-RIP buffer; gen tags the frame for stale-handle rejection. */
+ * the heap ordered-RIP buffer; gen tags the frame for stale-handle rejection.
+ *
+ * WHOLE-WINDOW (§Z1, the region-free empty-ctor form). When `whole_window` is set the
+ * frame has NO [base,len): base=NULL, base_ip=0, len=0. The handler then records the
+ * ABSOLUTE rip of every instruction this thread executes in the window (no in-range
+ * filter — "trace whatever ran"), and the post-pass appends those absolute addresses
+ * to the trace as-is (a whole-window trace's insns[] hold absolute addresses, which
+ * asmtest_hwtrace_render_window / _render_versioned decode; contrast the region form's
+ * base-relative offsets). It overflows the same bounded ring and is honestly flagged
+ * `truncated` — a DESCEND_ALL window emits far more RIPs than any leaf. */
 typedef struct {
     const uint8_t *base;
     uint64_t base_ip;
     size_t len;
     asmtest_trace_t *trace;
-    uint64_t *stream; /* heap-malloc'd ordered in-region RIP offsets */
+    uint64_t *stream; /* heap-malloc'd ordered RIPs (offsets, or absolute if whole) */
     volatile uint32_t stream_len;
     volatile sig_atomic_t overflow;
     uint32_t gen;
+    int whole_window; /* §Z1: 1 => record absolute RIPs, no [base,len) filter */
+    int arm_tid;      /* §Z4: OS tid that armed this frame (region-free close assert) */
 } ss_frame_t;
 
 /* Per-thread range stack + depth + generation counter. INITIAL-EXEC: the handler
@@ -174,7 +199,14 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
 
     for (int i = 0; i < d; i++) {
         ss_frame_t *f = &tls_frames[i];
-        if (rip >= f->base_ip && rip < f->base_ip + f->len) {
+        if (f->whole_window) {
+            /* §Z1: region-free — record the ABSOLUTE rip of every executed
+             * instruction (no [base,len) filter). Same bounded-ring overflow. */
+            if (f->stream_len < SS_STREAM_CAP)
+                f->stream[f->stream_len++] = rip;
+            else
+                f->overflow = 1;
+        } else if (rip >= f->base_ip && rip < f->base_ip + f->len) {
             if (f->stream_len < SS_STREAM_CAP)
                 f->stream[f->stream_len++] = rip - f->base_ip;
             else
@@ -190,11 +222,16 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
  * process-wide SIGTRAP disposition (0->1 arm-refcount) and arm this thread's TF.
  * Returns the frame handle (idx/gen) via out params (either may be NULL), or a
  * negative status: EFULL when this thread's range stack is full, EINVAL on bad args
- * / allocation / sigaction failure. */
-int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
-                        uint32_t *out_idx, uint32_t *out_gen) {
-    if (base == NULL || len == 0)
+ * / allocation / sigaction failure. `whole_window` selects the region-free §Z1 mode
+ * (base/len must be NULL/0); the region mode requires a non-NULL base + nonzero len. */
+static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
+                         int whole_window, uint32_t *out_idx, uint32_t *out_gen) {
+    if (whole_window) {
+        if (base != NULL || len != 0)
+            return ASMTEST_HW_EINVAL; /* region-free frame carries no [base,len) */
+    } else if (base == NULL || len == 0) {
         return ASMTEST_HW_EINVAL;
+    }
     if (tls_depth >= SS_MAX_FRAMES)
         return ASMTEST_HW_EFULL; /* this thread's range stack is full */
     uint64_t *stream =
@@ -205,13 +242,15 @@ int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
     int idx = tls_depth;
     ss_frame_t *f = &tls_frames[idx];
     f->base = (const uint8_t *)base;
-    f->base_ip = (uint64_t)(uintptr_t)base;
+    f->base_ip = whole_window ? 0 : (uint64_t)(uintptr_t)base;
     f->len = len;
     f->trace = trace;
     f->stream = stream;
     f->stream_len = 0;
     f->overflow = 0;
     f->gen = ++tls_gen_ctr;
+    f->whole_window = whole_window;
+    f->arm_tid = SS_ARM_TID();
     if (out_idx != NULL)
         *out_idx = (uint32_t)idx;
     if (out_gen != NULL)
@@ -245,9 +284,24 @@ int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
     return ASMTEST_HW_OK;
 }
 
+/* Region-keyed / handle-keyed begin: a bounded [base,len) frame (register form). */
+int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
+                        uint32_t *out_idx, uint32_t *out_gen) {
+    return ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+}
+
 /* Compat wrapper for the name-keyed single-region path. */
 int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
     return asmtest_ss_begin_ex(base, len, trace, NULL, NULL);
+}
+
+/* §Z1: region-free whole-window begin. Pushes a frame with no [base,len); the
+ * handler records absolute RIPs for every instruction this thread runs in the window
+ * (native-leaf only — pointing single-step at live managed code is forbidden, see
+ * the scoped-tracing plans). Same handle + EFULL/EINVAL convention as _begin_ex. */
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
+                            uint32_t *out_gen) {
+    return ss_push_frame(NULL, 0, trace, 1, out_idx, out_gen);
 }
 
 /* Post-pass: replay a frame's captured ordered offsets into its trace, deriving the
@@ -257,6 +311,29 @@ static void ss_normalize(ss_frame_t *fr) {
     asmtest_trace_t *t = fr->trace;
     if (t == NULL)
         return;
+
+    /* §Z1 whole-window: the stream holds ABSOLUTE RIPs and there is no [base,len)
+     * to disassemble against here (the bytes are decoded later — from live self
+     * memory by asmtest_hwtrace_render_window, or a versioned code-image for moving
+     * managed code). So the post-pass only replays the absolute addresses into the
+     * trace (collapsing REP self-repeats) and propagates overflow as `truncated`; no
+     * per-offset disas and no block partition (attributed at render, not here). */
+    if (fr->whole_window) {
+        uint64_t prev = 0;
+        int have_prev = 0;
+        for (uint32_t i = 0; i < fr->stream_len; i++) {
+            uint64_t addr = fr->stream[i];
+            if (have_prev && addr == prev)
+                continue; /* collapse a TF self-repeat (REP string insn) */
+            trace_append_insn(t, addr); /* insns[] carries absolute addresses */
+            prev = addr;
+            have_prev = 1;
+        }
+        if (fr->overflow)
+            t->truncated = true; /* whole-window run exceeded the capture buffer */
+        return;
+    }
+
     const uint8_t *g_base = fr->base;
     uint64_t g_base_ip = fr->base_ip;
     size_t g_len = fr->len;

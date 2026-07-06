@@ -113,6 +113,9 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace);
 /* §1: handle-producing push (per-thread range stack) + calling-thread frame lookup. */
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
                         uint32_t *out_idx, uint32_t *out_gen);
+/* §Z1: region-free whole-window push (records absolute RIPs; no [base,len)). */
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
+                            uint32_t *out_gen);
 int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
                             size_t *len, asmtest_trace_t **trace);
 void asmtest_ss_end(void);
@@ -1281,6 +1284,136 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
         }
     }
     return (int)total;
+}
+
+/* ------------------------------------------------------------------ */
+/* §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface    */
+/*                                                                     */
+/* The aspirational `using (new AsmTrace())` form: no NativeCode, no    */
+/* [base,len). begin_window arms the calling thread with NO registered  */
+/* region; the single-step handler records the absolute RIP of every    */
+/* instruction the thread runs in the window (the WEAK tier — native    */
+/* leaves only; whole-window PT/LBR is the forward-look STRONG tier and  */
+/* self-skips here). end_window closes the handle's frame and, on a      */
+/* cross-thread close (the handle does not resolve on the closing        */
+/* thread), flags `truncated` — the §Z4 thread-scope honesty default.   */
+/* render_window decodes the recorded ABSOLUTE addresses from LIVE self  */
+/* memory (valid for non-moving native code); moving/managed bytes use   */
+/* asmtest_hwtrace_render_versioned against a code-image instead (§Z3).  */
+/* ------------------------------------------------------------------ */
+
+int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
+                                 asmtest_hwtrace_scope_t *out) {
+    if (out != NULL) {
+        out->idx = 0xffffffffu;
+        out->gen = 0;
+    }
+    if (trace == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    if (!g_inited)
+        return ASMTEST_HW_ESTATE;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        uint32_t idx = 0, gen = 0;
+        g_arm_tid = (int)syscall(SYS_gettid); /* §Z4: best-effort arming-tid accessor */
+        int rc = asmtest_ss_begin_window(trace, &idx, &gen);
+        if (rc != ASMTEST_HW_OK) {
+            g_arm_tid = -1;
+            return rc;
+        }
+        if (out != NULL) {
+            out->idx = idx;
+            out->gen = gen;
+        }
+        return ASMTEST_HW_OK;
+    }
+#endif
+    /* PT / AMD LBR / CoreSight whole-window capture is the forward-look STRONG tier
+     * (needs bare-metal Intel PT / Zen 3+ to validate live); self-skip cleanly. */
+    return ASMTEST_HW_EUNAVAIL;
+#else
+    (void)trace;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
+                               asmtest_trace_t *trace) {
+#if defined(__linux__) && defined(__x86_64__)
+    const void *base = NULL;
+    size_t len = 0;
+    asmtest_trace_t *ftrace = NULL;
+    /* §Z4: the region-free frame lives in the ARMING thread's TLS. If the handle
+     * resolves here, this is the arming thread — close normally. If it does NOT
+     * (the traced work hopped threads and Dispose ran elsewhere), the frame is
+     * invisible and uncloseable here: flag the trace truncated rather than present
+     * a thread-window as a complete logical-operation trace. Errs false-truncated. */
+    if (asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &ftrace)) {
+        asmtest_ss_end(); /* closes the calling thread's top frame + normalizes */
+        g_arm_tid = -1;
+        return ASMTEST_HW_OK;
+    }
+    if (trace != NULL)
+        trace->truncated = true;
+    return ASMTEST_HW_OK;
+#else
+    (void)handle;
+    if (trace != NULL)
+        trace->truncated = true;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
+                                  size_t buflen) {
+#if defined(__linux__) && defined(__x86_64__)
+    const void *base = NULL;
+    size_t len = 0;
+    asmtest_trace_t *trace = NULL;
+    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &trace) ||
+        trace == NULL)
+        return ASMTEST_HW_EINVAL; /* stale/unknown handle (or non-single-step) */
+    if (!asmtest_disas_available())
+        return ASMTEST_HW_ENOSYS; /* no Capstone: cannot render text */
+    /* WEAK-tier render: insns[] hold ABSOLUTE addresses; disassemble each from LIVE
+     * self memory (the code we just stepped through is mapped + non-moving for a
+     * native leaf). Moving/managed bytes route to _render_versioned (§Z3) instead. */
+    if (buf != NULL && buflen > 0)
+        buf[0] = '\0';
+    size_t total = 0;
+    char lineb[192];
+    for (size_t i = 0; i < trace->insns_len; i++) {
+        uint64_t addr = trace->insns[i];
+        char txt[128];
+        txt[0] = '\0';
+        asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)(uintptr_t)addr, 16,
+                      addr, 0, txt, sizeof txt);
+        int n = snprintf(lineb, sizeof lineb, "%12llx:\t%s\n",
+                         (unsigned long long)addr,
+                         txt[0] != '\0' ? txt : "(undecodable)");
+        if (n < 0)
+            continue;
+        render_emit(buf, buflen, total, lineb, (size_t)n);
+        total += (size_t)n;
+    }
+    if (trace->truncated || trace->insns_total > trace->insns_len) {
+        int n = snprintf(lineb, sizeof lineb,
+                         "; trace truncated — %llu of %llu instructions shown\n",
+                         (unsigned long long)trace->insns_len,
+                         (unsigned long long)trace->insns_total);
+        if (n > 0) {
+            render_emit(buf, buflen, total, lineb, (size_t)n);
+            total += (size_t)n;
+        }
+    }
+    return (int)total;
+#else
+    (void)handle;
+    (void)buf;
+    (void)buflen;
+    return ASMTEST_HW_ENOSYS;
+#endif
 }
 
 /* ------------------------------------------------------------------ */

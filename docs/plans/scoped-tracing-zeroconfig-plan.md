@@ -24,13 +24,16 @@ The **only genuinely new** engineering is a region-free arm surface plus the arm
 composition and honest-degradation UX that wire shipped-but-disconnected pieces together —
 the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the split.
 
-> **Status: NOT yet reached — the mechanism exists, but four hard, dependency-ordered
-> gaps stand between shipped and target.** (1) **Region is mandatory:** every
-> `begin`/`register` keys on a name→`[base,len)` through `find_region`
-> ([src/hwtrace.c:486](../../src/hwtrace.c#L486)) and `asmtest_hwtrace_register_region`
-> ([:432](../../src/hwtrace.c#L432)); the single-step arm rejects a null range
-> ([src/ss_backend.c:162](../../src/ss_backend.c#L162)) — **needs a new region-free arm
-> surface**. (2) **Whole-window PT decode is stubbed/unvalidated:** the real
+> **Status: partially reached — the region-free WEAK path now works end-to-end on any
+> x86-64 Linux; three hardware/runtime gaps remain to the full managed target.**
+> (1) ~~Region is mandatory~~ **DONE (§Z0 + §Z1 WEAK):** the region-free arm surface ships —
+> `asmtest_hwtrace_begin_window`/`_end_window`/`_render_window`
+> ([src/hwtrace.c](../../src/hwtrace.c)) over `asmtest_ss_begin_window`
+> ([src/ss_backend.c](../../src/ss_backend.c)), with the parameterless `new AsmTrace()`
+> ctor in the .NET reference shim. `using (new AsmTrace())` renders a real trace of a
+> native leaf on this AMD host today (single-step WEAK tier; host-tested 201/0 + 33/0).
+> The remaining gaps are all about the *managed / non-intrusive* target:
+> (2) **Whole-window PT decode is stubbed/unvalidated:** the real
 > `read_recorder`-backed body ([src/pt_backend.c:198](../../src/pt_backend.c#L198)) is
 > `#ifdef ASMTEST_HAVE_LIBIPT` ([:62](../../src/pt_backend.c#L62)); every current CI/AMD
 > host compiles the `ENOSYS` stub ([:266](../../src/pt_backend.c#L266)) — **needs a
@@ -140,12 +143,18 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 
 ## §Z0 — Parameterless ctor + region-free arm surface
 
-> **Status: planned.** Adds the region-free arm ABI in the C core and the empty scope
-> across all ten bindings. Pure surface + shim work — **host-testable on any x86-64
-> Linux** (new `test_zeroctor_scope`, `docker-hwtrace` / `docker-hwtrace-bindings`) — but
-> the *capture* behind the seam is a clean self-skip stub until [§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)
-> fills the record policy. Lands the §Z5 self-skip scaffold with it, so the surface is
-> honest from day one, before any capture backend exists.
+> **Status: LANDED (C core + .NET reference shim).** The region-free arm ABI ships as
+> `asmtest_hwtrace_begin_window` / `_end_window` / `_render_window`
+> ([src/hwtrace.c](../../src/hwtrace.c), [include/asmtest_hwtrace.h](../../include/asmtest_hwtrace.h)),
+> backed by a whole-window frame mode in `asmtest_ss_begin_window`
+> ([src/ss_backend.c](../../src/ss_backend.c)); the .NET reference shim gains the
+> parameterless `new AsmTrace()` ctor + `SkipReason` (§Z5)
+> ([bindings/dotnet/hwtrace/HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)).
+> Host-tested green on this AMD host: `test_wholewindow_singlestep` (`make docker-hwtrace`
+> → 201/0) and the .NET `AsmTrace()` case (`make docker-hwtrace-dotnet` → 33/0). The §Z5
+> self-skip scaffold landed with it (`SkipReason` is set + `Armed` false where no faithful
+> backend exists). **Forward-look:** the other nine binding shims (mechanical mirrors of
+> the .NET reference) and the STRONG whole-window capture behind the seam ([§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)).
 
 **Goal.** Deliver the single net-new *surface* that makes `using (new AsmTrace())`
 compile and run — a legitimately **region-free arm** — without yet committing to a
@@ -270,11 +279,15 @@ exhausts the frame stack nor leaks the stream buffer.
 
 ## §Z1 — Region-free whole-window capture mode *(planned, forward-look)*
 
-> **Status: planned.** Fills the record-policy/backend seam behind
-> [§Z0](#z0--parameterless-ctor--region-free-arm-surface)'s arm. The **WEAK** single-step tier
-> is CI-runnable unprivileged (`docker-hwtrace`) — the **first** place
-> `using (new AsmTrace())` renders a real, honestly-truncated trace end-to-end on a no-hardware
-> host. The **STRONG** PT tier stands up here but is **not believed until
+> **Status: WEAK single-step tier LANDED; STRONG/CEILING forward-look.** Fills the
+> record-policy/backend seam behind
+> [§Z0](#z0--parameterless-ctor--region-free-arm-surface)'s arm. The **WEAK** single-step
+> tier is implemented + host-tested green (`test_wholewindow_singlestep`, `docker-hwtrace`
+> → 201/0): `asmtest_ss_begin_window` records ABSOLUTE RIPs into the shipped bounded ring
+> (overflow → `truncated`), and `asmtest_hwtrace_render_window` disassembles them from live
+> self memory — the **first** place `using (new AsmTrace())` renders a real, honestly-noisy
+> trace end-to-end on a no-hardware host (validated for a native leaf on this AMD box). The
+> **STRONG** PT tier stands up here but is **not believed until
 > [§Z2](#z2--live-whole-window-decode-validation-synthetic-fixture-front-loaded-live-pt-forward-look)'s
 > synthetic fixture is green**; the **CEILING** AMD LBR tier rides
 > [amd-tracing-plan.md](amd-tracing-plan.md)'s shipped backend — a bounded *complement*,

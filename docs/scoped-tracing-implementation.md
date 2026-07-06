@@ -114,9 +114,40 @@ concatenation by `seq` (no decode), host-testable from synthetic pre-decoded sli
 Test: `test_stitch_slices`. This closes the async-hop **merge** test hole; the live
 per-runtime tag→merge hooks remain forward-look.
 
-**Core test results:** `make hwtrace-test` → **192 passed, 0 failed** (up from 137;
-+9 for the §D3 bundled-helper discovery + dual-path assertions); `make codeimage-test`
-→ 12 passed; all on any x86-64 Linux, no hardware.
+**Core test results:** `make hwtrace-test` → **201 passed, 0 failed** (up from 137;
++9 for the §D3 bundled-helper discovery + dual-path assertions, +9 for the §Z0/§Z1
+region-free whole-window scope); `make codeimage-test` → 12 passed; all on any x86-64
+Linux, no hardware.
+
+## Zero-config (capstone) slice — the empty-ctor form, §Z0/§Z1 WEAK tier (DONE) + forward-look
+
+The aspirational `using (new AsmTrace())` — no `NativeCode`, no `[base,len)` — now works
+end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
+[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-zeroconfig-plan.md).
+
+- **§Z0 region-free arm surface (DONE).** New C entry points
+  `asmtest_hwtrace_begin_window` / `_end_window` / `_render_window`
+  ([src/hwtrace.c](../src/hwtrace.c)) over a whole-window frame mode in
+  `asmtest_ss_begin_window` ([src/ss_backend.c](../src/ss_backend.c)): the frame carries
+  no `[base,len)`, so the SIGTRAP handler records the **absolute** RIP of every
+  instruction the thread runs in the window (no in-range filter) into the shipped bounded
+  ring — overflow honestly flags `truncated`. The `.NET` reference shim gains the
+  parameterless `new AsmTrace()` ctor + `SkipReason` ([bindings/dotnet/hwtrace/HwTrace.cs](../bindings/dotnet/hwtrace/HwTrace.cs)).
+- **§Z1 WEAK tier (DONE).** `asmtest_hwtrace_render_window` disassembles the recorded
+  absolute addresses from **live self memory** (valid for non-moving native code); moving
+  managed bytes route to the shipped `asmtest_hwtrace_render_versioned` (§Z3, forward-look).
+- **§Z4 default + §Z5 scaffold (DONE).** `end_window` flags `truncated` when the handle
+  does not resolve on the closing thread (the cross-thread-hop honesty default); the empty
+  ctor self-skips with an actionable `SkipReason` (never throws) where no faithful backend
+  exists.
+- **Tests:** `test_wholewindow_singlestep` (checks 119–127: region-free arm, absolute-address
+  capture, live-memory render finding `ret`, cross-thread `truncated`) in `make docker-hwtrace`
+  (201/0); the `.NET` `AsmTrace()` case in `make docker-hwtrace-dotnet` (33/0). Both validated
+  on this AMD host.
+- **Forward-look:** the STRONG whole-window PT / CEILING AMD LBR capture tiers (bare-metal
+  Intel PT / Zen 3+), §Z2 live decode, §Z3 arbitrary-managed-method capture (needs a live
+  runtime + MethodLoadVerbose), the §Z4 stitching escalation, and the other nine binding
+  shims (mechanical mirrors of the .NET reference). All ship self-skipping and gated.
 
 ## Bindings slice — the scope construct across all ten tiers (DONE)
 

@@ -64,7 +64,19 @@ namespace Asmtest
 
         public const int ASMTEST_HW_OK = 0;
         public const int ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available
+        public const int ASMTEST_HW_ESTATE = -4;   // tier not up
+        public const int ASMTEST_HW_ENOSYS = -5;   // not built / not this platform
         public const int SINGLESTEP = 3;
+
+        // asmtest_hwtrace_scope_t: a region-free (§Z0/§Z1) scope handle — an index into
+        // the calling thread's range stack tagged with a generation counter. Marshals
+        // as two consecutive C uint32.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct HwScope
+        {
+            public uint Idx;
+            public uint Gen;
+        }
 
         // asmtest_trace_choice_t: three int-sized enum fields, no padding (pinned by a
         // static_assert in asmtest_trace_auto.h), so it marshals as three consecutive C
@@ -209,6 +221,11 @@ namespace Asmtest
         [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
         public static extern int asmtest_hwtrace_render([MarshalAs(UnmanagedType.LPStr)] string name, byte[] buf, UIntPtr buflen);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_arm_tid();
+
+        // §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_begin_window(IntPtr trace, ref HwScope @out);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_end_window(HwScope handle, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_window(HwScope handle, byte[] buf, UIntPtr buflen);
 
         // ---- host-native executable code (out-param form, NOT a struct) ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_exec_alloc(
@@ -983,16 +1000,58 @@ namespace Asmtest
         readonly string _name;
         readonly IntPtr _handle;
         readonly bool _emit;
+        readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
+        HwNative.HwScope _scope;    // region-free scope handle (whole-window only)
         bool _disposed;
 
         /// <summary>The rendered assembly listing (populated on close).</summary>
         public string Path { get; private set; }
-        /// <summary>True if the scope armed (a backend was available and try_begin succeeded).</summary>
+        /// <summary>True if the scope armed (a backend was available and begin succeeded).</summary>
         public bool Armed { get; private set; }
-        /// <summary>True if the close hopped OS threads / the capture overflowed (§0.2/§1).</summary>
+        /// <summary>True if the close hopped OS threads / the capture overflowed (§0.2/§1/§Z4).</summary>
         public bool Truncated { get; private set; }
+        /// <summary>§Z5: when the scope did NOT arm, the honest human-readable reason
+        /// (no faithful backend, tier not up, not Linux). Empty when armed.</summary>
+        public string SkipReason { get; private set; } = "";
         /// <summary>The auto-generated (or explicit) region name.</summary>
         public string Name => _name;
+
+        /// <summary>
+        /// §Z0/§Z1 — the aspirational EMPTY-ctor form: <c>using (new AsmTrace()) { HotPath(data); }</c>.
+        /// No <see cref="NativeCode"/>, no <c>[base,len)</c>; arms a region-free WHOLE-WINDOW
+        /// capture on the calling thread and renders whatever executed on <see cref="Dispose"/>.
+        /// Honest envelope (see the zero-config plan): the single-step WEAK tier runs on any
+        /// x86-64 Linux for a NATIVE leaf; the STRONG whole-window PT / AMD LBR tiers are
+        /// forward-look and this ctor <b>self-skips</b> (records <see cref="SkipReason"/>,
+        /// leaves <see cref="Armed"/> false) where no faithful backend is available — never
+        /// throws. Requires the tier to be up (<see cref="HwTrace.Init"/>).
+        /// </summary>
+        public AsmTrace(bool emit = true,
+                        [CallerMemberName] string member = null,
+                        [CallerLineNumber] int line = 0)
+        {
+            _name = ScopeName(member, line);
+            _emit = emit;
+            _wholeWindow = true;
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            _handle = HwNative.asmtest_trace_new((UIntPtr)4096, (UIntPtr)0);
+            int rc = _handle != IntPtr.Zero
+                ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
+                : HwNative.ASMTEST_HW_ENOSYS;
+            Armed = rc == HwNative.ASMTEST_HW_OK;
+            if (!Armed) SkipReason = WholeWindowSkipReason(rc);
+        }
+
+        // §Z5: map a begin_window failure to an actionable, honest message.
+        static string WholeWindowSkipReason(int rc) => rc switch
+        {
+            HwNative.ASMTEST_HW_EUNAVAIL =>
+                "no whole-window backend: needs bare-metal Intel PT / AMD LBR "
+                + "(the single-step WEAK tier requires HwTrace.Init with SingleStep)",
+            HwNative.ASMTEST_HW_ESTATE => "hwtrace tier not up — call HwTrace.Init first",
+            HwNative.ASMTEST_HW_ENOSYS => "whole-window scope is Linux/x86-64 only",
+            _ => "whole-window scope did not arm",
+        };
 
         public AsmTrace(NativeCode code, bool emit = true,
                         [CallerMemberName] string member = null,
@@ -1017,17 +1076,35 @@ namespace Asmtest
         {
             if (_disposed) return;
             _disposed = true;
-            HwNative.asmtest_hwtrace_end(_name);
             // Always render (size-then-allocate) to populate Path — emit gates only the
-            // sink write, not producing Path.
-            int need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
-            if (need > 0)
+            // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
+            // and renders the recorded ABSOLUTE addresses from live self memory; the
+            // region path is name-keyed and renders base-relative offsets.
+            int need;
+            if (_wholeWindow)
             {
-                byte[] buf = new byte[need + 1];
-                HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
-                Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+                HwNative.asmtest_hwtrace_end_window(_scope, _handle);
+                need = HwNative.asmtest_hwtrace_render_window(_scope, null, UIntPtr.Zero);
+                if (need > 0)
+                {
+                    byte[] buf = new byte[need + 1];
+                    HwNative.asmtest_hwtrace_render_window(_scope, buf, (UIntPtr)(need + 1));
+                    Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+                }
+                else Path = "";
             }
-            else Path = "";
+            else
+            {
+                HwNative.asmtest_hwtrace_end(_name);
+                need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                if (need > 0)
+                {
+                    byte[] buf = new byte[need + 1];
+                    HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
+                    Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+                }
+                else Path = "";
+            }
             if (_handle != IntPtr.Zero)
             {
                 Truncated = HwNative.asmtest_emu_trace_truncated(_handle) != 0;

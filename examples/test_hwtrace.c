@@ -3086,6 +3086,102 @@ static void test_descent_attach(void) {
 #endif
 }
 
+/* §Z0/§Z1 — the region-free (empty-ctor) whole-window scope, WEAK single-step tier.
+ * begin_window arms with NO registered region and NO [base,len); the handler records
+ * the ABSOLUTE address of every instruction the thread runs in the window, so the
+ * routine's executed addresses appear as a SUBSET of the captured stream (which also
+ * holds the surrounding harness instructions — whole-window is honest-but-noisy).
+ * render_window decodes those absolute addresses from live self memory. Any x86-64
+ * Linux; no PMU/perf/privilege. */
+static void test_wholewindow_singlestep(void) {
+#if defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP whole-window scope: single-step unavailable\n");
+        return;
+    }
+    /* begin_window rejects a NULL trace deterministically (no backend needed). */
+    asmtest_hwtrace_scope_t bad = {0, 0};
+    CHECK(asmtest_hwtrace_begin_window(NULL, &bad) == ASMTEST_HW_EINVAL,
+          "whole-window: begin_window(NULL trace) is EINVAL");
+
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP whole-window: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "whole-window init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    add2_fn fn = (add2_fn)p;
+    /* Bracket ONLY the call — no CHECK/printf inside the window (single-step steps
+     * every instruction, so keep the window tight; check the return codes after). */
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    long r = fn(20, 22); /* 42 <= 100: jle taken, dec (0xe) skipped */
+    int rc_end = asmtest_hwtrace_end_window(scope, tr);
+
+    /* The empty-ctor form: no register_region, no [base,len) — just arm the thread. */
+    CHECK(rc_begin == ASMTEST_HW_OK,
+          "whole-window: begin_window arms with no registered region");
+    CHECK(rc_end == ASMTEST_HW_OK,
+          "whole-window: end_window closes the arming-thread frame");
+    CHECK(r == 42, "whole-window: the traced call still returns 20+22");
+
+    /* insns[] hold ABSOLUTE addresses. The routine's five executed addresses
+     * [p+0,+3,+6,+c,+11] must all appear (as a subset of the noisy whole window). */
+    uint64_t b = (uint64_t)(uintptr_t)p;
+    static const uint64_t OFF[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int found_all = 1;
+    for (size_t k = 0; k < 5; k++) {
+        int hit = 0;
+        for (size_t i = 0; i < tr->insns_len; i++)
+            if (tr->insns[i] == b + OFF[k]) {
+                hit = 1;
+                break;
+            }
+        found_all = found_all && hit;
+    }
+    CHECK(found_all,
+          "whole-window: the routine's absolute addresses are all captured");
+    CHECK(tr->insns_len >= 5,
+          "whole-window: captured at least the routine (plus harness noise)");
+
+    /* render_window decodes the absolute addresses from live self memory. Where
+     * Capstone is built the routine's `ret` (at p+0x11) renders as text. */
+    int need = asmtest_hwtrace_render_window(scope, NULL, 0);
+    if (need > 0) {
+        char *buf = (char *)malloc((size_t)need + 1);
+        asmtest_hwtrace_render_window(scope, buf, (size_t)need + 1);
+        CHECK(strstr(buf, "ret") != NULL,
+              "whole-window: render_window disassembles the live bytes (ret)");
+        free(buf);
+    } else {
+        printf("# SKIP whole-window render text: %s\n",
+               need == ASMTEST_HW_ENOSYS ? "built without Capstone"
+                                         : "render unavailable");
+    }
+
+    /* §Z4 thread-scope honesty: a close whose handle does NOT resolve on the calling
+     * thread (the cross-thread-hop case, simulated with a never-armed handle) flags
+     * the trace truncated rather than presenting a thread window as complete. */
+    asmtest_trace_t *tr2 = asmtest_trace_new(16, 0);
+    asmtest_hwtrace_scope_t phantom = {5, 999};
+    asmtest_hwtrace_end_window(phantom, tr2);
+    CHECK(asmtest_emu_trace_truncated(tr2) != 0,
+          "whole-window: a cross-thread (unresolvable-handle) close flags truncated");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    asmtest_trace_free(tr2);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP whole-window scope: x86-64 Linux only\n");
+#endif
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -3154,6 +3250,10 @@ int main(void) {
     test_concurrent_singlestep();
     test_concurrent_samename();
     test_render_versioned();
+
+    /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
+     * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
+    test_wholewindow_singlestep();
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();

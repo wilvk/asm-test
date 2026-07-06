@@ -232,6 +232,50 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
                                      size_t buflen);
 
 /* ------------------------------------------------------------------ */
+/* §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface    */
+/*                                                                     */
+/* The aspirational `using (new AsmTrace())` form: bracket a region     */
+/* with NO NativeCode and NO [base,len) and capture whatever the        */
+/* calling thread executes inside it. Unlike register_region + begin,   */
+/* begin_window arms with no registered region; the trace's insns[]     */
+/* then hold ABSOLUTE addresses (not base-relative offsets).            */
+/*                                                                     */
+/* Backend reality (the honest, self-skipping envelope): the WEAK       */
+/* single-step tier records every executed instruction and is           */
+/* CI-runnable on any x86-64 Linux for a NATIVE LEAF (pointing          */
+/* single-step at live managed code is forbidden — it fights the        */
+/* runtime's SIGTRAP/JIT). The STRONG whole-window PT / CEILING AMD LBR  */
+/* tiers are forward-look (bare-metal Intel PT / Zen 3+) and            */
+/* begin_window self-skips to ASMTEST_HW_EUNAVAIL on them here. The      */
+/* whole facility is Linux-only.                                        */
+/* ------------------------------------------------------------------ */
+
+/* Arm a region-free whole-window capture on the calling thread, recording into
+ * `trace` (caller-owned; insns[] will hold ABSOLUTE addresses). Returns the scope
+ * handle in *out and ASMTEST_HW_OK, or a negative status that is a clean self-skip:
+ * ASMTEST_HW_EUNAVAIL on a non-single-step backend (whole-window HW trace is
+ * forward-look), ASMTEST_HW_ESTATE if the tier is not up, ASMTEST_HW_EFULL if this
+ * thread's range stack is full, ASMTEST_HW_EINVAL on a NULL trace. */
+int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
+                                 asmtest_hwtrace_scope_t *out);
+
+/* Close a region-free scope opened by begin_window. On the ARMING thread the frame
+ * resolves and is closed + normalized; on any OTHER thread (the traced work hopped
+ * and Dispose ran elsewhere) the frame is invisible, so `trace` is flagged
+ * `truncated` — the §Z4 thread-scope honesty default (never present a thread window
+ * as a complete logical-operation trace). Returns ASMTEST_HW_OK. */
+int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
+                               asmtest_trace_t *trace);
+
+/* Render a region-free scope's recorded ABSOLUTE addresses to disassembly text by
+ * decoding the LIVE self-memory bytes at each address (valid for non-moving native
+ * code — the WEAK tier). snprintf-style size-then-allocate; negative ASMTEST_HW_* on
+ * a stale/unknown handle or unavailable decoder. Moving/managed bytes (a JIT that
+ * tiers/relocates) must use asmtest_hwtrace_render_versioned against a code-image. */
+int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
+                                  size_t buflen);
+
+/* ------------------------------------------------------------------ */
 /* §D4 — async-hop stitching: the shared logical-operation merge core   */
 /*                                                                     */
 /* When a scope follows a logical operation across await/continuation   */

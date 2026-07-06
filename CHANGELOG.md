@@ -61,6 +61,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   core). Linux-only; self-skips to a recorded no-op where no faithful backend is
   available. See [docs/scoped-tracing-implementation.md](https://github.com/wilvk/asm-test/blob/main/docs/scoped-tracing-implementation.md)
   and [docs/plans/scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-inprocess-tracing-plan.md).
+  - **§Z0/§Z1 the aspirational empty-ctor form — `using (new AsmTrace())`.** A region-free
+    whole-window scope with **no `NativeCode` and no `[base,len)`**: new C entry points
+    `asmtest_hwtrace_begin_window`/`_end_window`/`_render_window` over a whole-window frame
+    mode in `asmtest_ss_begin_window` (the single-step handler records ABSOLUTE RIPs into
+    the bounded ring, overflow → `truncated`), rendered from live self memory. The .NET
+    reference shim gains the parameterless `new AsmTrace()` ctor + `SkipReason` (honest
+    self-skip). This is the single-step **WEAK** tier — native-leaf only, on any x86-64
+    Linux (`test_wholewindow_singlestep`, `make docker-hwtrace` → 201/0; `.NET`
+    `make docker-hwtrace-dotnet` → 33/0). The STRONG whole-window PT / AMD LBR tiers,
+    arbitrary-managed-method capture, and the other nine binding shims remain forward-look.
+    See [docs/plans/scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-zeroconfig-plan.md).
   - **§D3 concealed ptrace-stealth stepper — now a bundled standalone binary.** The
     hardware-free scope path (Zen 2 / Docker-on-Mac) reverse-attaches a helper to the
     caller (`PR_SET_PTRACER` + `PTRACE_SEIZE`) and single-steps the region out of band.

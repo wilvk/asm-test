@@ -145,6 +145,33 @@ static class HwTraceProgram
             Check(scope.Name.Contains(":"), $"AsmTrace: auto-name is member:line (got {scope.Name})");
             code3.Free();
 
+            // --- §Z0/§Z1: the aspirational EMPTY-ctor form: using (new AsmTrace()) --- //
+            // Region-free WHOLE-WINDOW capture — no NativeCode. The single-step WEAK tier
+            // records the ABSOLUTE addresses of whatever ran on the thread; the native
+            // routine's `ret` appears in the (honest-but-noisy) rendered listing. Warm the
+            // call first so the tight window steps compiled code, not the first-call JIT.
+            var code4 = NativeCode.FromBytes(ROUTINE);
+            long r4pre = code4.Call(20, 22); // warm (JIT) the call path before the window
+            long r4 = 0;
+            AsmTrace ww;
+            using (ww = new AsmTrace(emit: false)) // EMPTY ctor — no region, auto-named here
+            {
+                r4 = code4.Call(20, 22);
+            }
+            if (ww.Armed)
+            {
+                Check(r4 == 42 && r4pre == 42, $"AsmTrace(): whole-window call returns 42 (got {r4})");
+                Check(ww.Path != null && ww.Path.Contains("ret"),
+                      "AsmTrace(): whole-window render includes the native routine's ret");
+                Check(ww.Name.Contains(":"), $"AsmTrace(): auto-name is member:line (got {ww.Name})");
+            }
+            else
+            {
+                // Honest self-skip (§Z5): no faithful whole-window backend on this host.
+                Check(ww.SkipReason.Length > 0, $"AsmTrace(): self-skip records a reason ({ww.SkipReason})");
+            }
+            code4.Free();
+
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
             // only available backends in ascending-enum order with no dups;
