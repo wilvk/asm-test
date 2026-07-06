@@ -14,12 +14,19 @@ single-step cannot run.
 | [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm + ReadyToRun (R2R) BCL** methods (§D0.2) via an in-process jitdump rundown — dependency-free, no launch knob |
 | [assemblies/](assemblies/) | `new AsmTrace(byMethod: true, withRundown: true)` | groups the labelled window **by declaring assembly**, listing the methods called in each (`AsmMethod.Assembly` / `.ShortName`) |
 | [annotated/](annotated/) | `new AsmTrace(byMethod: true, withRundown: true)` | an **annotated execution trace** — each executed instruction next to the method it ran in (`AsmTrace.Disassembly` / `AsmInstruction`) |
+| [tiers/](tiers/) | `new AsmTrace(byMethod: true, withRundown: true)` | executed instructions grouped **by JIT tier** — R2R vs cold/hot JIT (`AsmMethod.Tier`) |
+| [hotspots/](hotspots/) | `new AsmTrace(byMethod: true)` | the **most-executed instructions** — a loop pops out of the dynamic trace (dedup `Disassembly` by `Address`) |
+| [coverage/](coverage/) | `HwTrace.Create(blocks: N)` + `Region` | **basic-block coverage** of a branchy native routine across inputs — the never-covered block is the missing test case |
+
+See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for more proposed
+reports/examples (call graph, instruction mix, out-of-process ptrace/descent) and what the
+single-step tier honestly cannot do.
 
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all six, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all six, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all nine, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all nine, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
@@ -28,6 +35,9 @@ dotnet run --project examples/dotnet/methods/methods.csproj
 dotnet run --project examples/dotnet/rundown/rundown.csproj
 dotnet run --project examples/dotnet/assemblies/assemblies.csproj
 dotnet run --project examples/dotnet/annotated/annotated.csproj
+dotnet run --project examples/dotnet/tiers/tiers.csproj
+dotnet run --project examples/dotnet/hotspots/hotspots.csproj
+dotnet run --project examples/dotnet/coverage/coverage.csproj
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -211,6 +221,66 @@ the just-captured window; a long-lived process that recompiles/relocates a metho
 scope would want the code-image `render_versioned` path (§Z3, forward-look). Self-skips (exit 0)
 where single-step or Capstone is unavailable.
 
+## tiers — executed instructions by JIT tier (observed output)
+
+The method names carry a JIT-tier tag (`[PreJIT]`=ReadyToRun, `[MinOptJitted]`/`[Tier0]`=cold JIT,
+`[OptimizedTier1]`=hot), exposed as `AsmMethod.Tier`. Summing `Count` by tier answers a .NET
+question the per-method/per-assembly views don't — how much executed code ran precompiled vs
+freshly JIT'd:
+
+```
+rundown enabled: True; 1300 labelled instructions across 41 methods, 4 tiers.
+
+  tier                                   methods       insns   share
+  ----------------------------------------------------------------
+  PreJIT — R2R (precompiled BCL)              32        1012   77.8%
+  (untagged) — cold, listener-observed         6         198   15.2%
+  OptimizedTier1 — hot JIT                     1          48    3.7%
+  MinOptJitted — cold JIT                      2          42    3.2%
+```
+
+Most of a one-line `Work()` runs precompiled R2R BCL. `RundownEnabled` gates whether `[PreJIT]`
+methods are present at all (reported for honesty).
+
+## hotspots — the most-executed instructions (observed output)
+
+`Addresses`/`Disassembly` are a *dynamic* trace (with repeats), so dedup by address → execution
+count. A loop body pops out at ~N×; the per-method examples aggregate that away:
+
+```
+3885 labelled instruction executions over 97 distinct instructions (40.1x average reuse — the loop).
+
+     count  heat                  instruction   [method]
+       201  ####################  0x…db86 jne 0x…db44               [Program.HotLoop]   <- loop back-edge
+       200  ####################  0x…db54 sar rcx, 1                 [Program.HotLoop]
+       200  ####################  0x…db57 xor rax, rcx               [Program.HotLoop]
+       ...
+```
+
+## coverage — basic-block coverage of a native routine (observed output)
+
+The biggest unused capability: no other example touches `HwTrace.Create(blocks:N)` /
+`BlockOffsets` / `Covered`. Run a branchy native routine over several inputs (a fresh trace each,
+unioned in managed), then compare a "test suite" of inputs against the full reachable block set —
+region scope makes it deterministic and CI-runnable with zero runtime noise:
+
+```
+classify(-5)=1, classify(50)=2, classify(200)=3  (expect 1, 2, 3)
+
+test inputs {50,200} cover 5 of 6 reachable basic blocks (83%):
+
+  block    covered  entry instruction
+  0x00       yes    cmp rdi, 0
+  0x06       yes    cmp rdi, 0x64
+  0x0c       yes    mov rax, 3
+  0x15       yes    mov rax, 2
+  0x1e       NO     mov rax, 1
+  0x25       yes    ret
+
+-> block 0x1e (mov rax, 1) is NEVER covered by the positive-only tests —
+   the missing test case is a NEGATIVE input (x < 0). This is exact, not sampled.
+```
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -230,7 +300,13 @@ where single-step or Capstone is unavailable.
 - `AsmTrace.Disassembly` / `.DisassemblyAvailable` and `AsmInstruction` (`.Address` / `.Text`
   / `.Method` / `.ShortMethod` / `.Assembly` / `.RuntimeBefore`) — the labelled execution
   stream, each instruction disassembled and paired with its method. Used by
-  [annotated/](annotated/).
+  [annotated/](annotated/) and [hotspots/](hotspots/).
+- `AsmMethod.Tier` — the JIT/compilation tier (`PreJIT`/`MinOptJitted`/`OptimizedTier1`/…;
+  empty for an untagged listener name). Used by [tiers/](tiers/).
+- `HwTrace.Create(blocks:N, instructions:M)` + `Register` + `Region` and
+  `BlockOffsets()` / `Covered(off)` / `BlocksLen()` / `InsnOffsets()` / `InsnsTotal()` /
+  `Truncated()` — region **coverage** (basic blocks + instruction offsets). Used by
+  [coverage/](coverage/).
 - `AsmTrace.Path` — the rendered disassembly (region-scoped form).
 - `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
 - `JitMethodMap` — the underlying in-process address→method map (§D0.1), if you want

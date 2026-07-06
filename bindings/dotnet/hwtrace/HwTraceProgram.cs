@@ -181,6 +181,24 @@ static class HwTraceProgram
                 // Honest self-skip (§Z5): no faithful whole-window backend on this host.
                 Check(ww.SkipReason.Length > 0, $"AsmTrace(): self-skip records a reason ({ww.SkipReason})");
             }
+
+            // --- §Z5 renderPath: opt-in whole-window render into Path --- //
+            // The data-only default leaves Path empty (Addresses/Disassembly instead);
+            // renderPath: true renders the window via the native render_window. The
+            // routine's `ret` executed in-window, so it must appear in the text.
+            AsmTrace wp;
+            using (wp = new AsmTrace(emit: false, renderPath: true))
+            {
+                code4.Call(20, 22);
+            }
+            if (wp.Armed)
+            {
+                if (HwNative.asmtest_disas_available())
+                    Check(wp.Path.Length > 0 && wp.Path.Contains("ret"),
+                          $"AsmTrace(renderPath): whole-window Path renders the live bytes ({wp.Path.Length} chars)");
+                else
+                    Console.WriteLine("# SKIP renderPath assert: build without Capstone");
+            }
             code4.Free();
 
             // --- §Z1 byMethod: annotated disassembly (Disassembly) --- //
@@ -213,6 +231,29 @@ static class HwTraceProgram
                 else
                     Console.WriteLine("# SKIP annotated disassembly asserts: build without Capstone");
             }
+
+            // --- §D0.2 withRundown: WARM + R2R naming via the diagnostics-socket rundown --- //
+            // Console's write path is R2R BCL (precompiled, never JIT'd), so the cold-only
+            // listener can never name it; only the jitdump rundown can. Any [PreJIT] entry
+            // in Methods proves both halves: the rundown named an R2R method AND captured
+            // instructions were attributed to it. Self-skips (no failure) where the
+            // diagnostics socket is off (DOTNET_EnableDiagnostics=0) — RundownEnabled is
+            // then false and only cold methods are named.
+            AsmTrace wr;
+            using (wr = new AsmTrace(emit: false, byMethod: true, withRundown: true))
+            {
+                Console.WriteLine("# (inside the rundown window — this write path is R2R BCL)");
+            }
+            if (wr.Armed && wr.RundownEnabled)
+            {
+                bool r2rNamed = false;
+                foreach (AsmMethod m in wr.Methods)
+                    if (m.Name.Contains("[PreJIT]")) { r2rNamed = true; break; }
+                Check(r2rNamed,
+                      $"AsmTrace(withRundown): an R2R [PreJIT] method is named in the window ({wr.Methods.Count} methods)");
+            }
+            else if (wr.Armed)
+                Console.WriteLine("# SKIP rundown asserts: diagnostics socket unavailable (cold-only result)");
 
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
@@ -403,6 +444,16 @@ static class HwTraceProgram
         var dotted = new AsmMethod("System.Buffer.Memmove", 1);
         Check(dotted.Assembly == "", $"AsmMethod.Assembly dotted == '' (got '{dotted.Assembly}')");
         Check(dotted.ShortName == "System.Buffer.Memmove", $"AsmMethod.ShortName dotted (got '{dotted.ShortName}')");
+
+        // .Tier — the trailing [tier] tag, NOT a generic-arg bracket or a missing tag.
+        Check(plain.Tier == "PreJIT", $"AsmMethod.Tier plain == PreJIT (got '{plain.Tier}')");
+        Check(arr.Tier == "PreJIT", $"AsmMethod.Tier array-return == PreJIT (got '{arr.Tier}')");
+        var warm = new AsmMethod("void [prog] Program::Main()[MinOptJitted]", 1);
+        Check(warm.Tier == "MinOptJitted", $"AsmMethod.Tier warm == MinOptJitted (got '{warm.Tier}')");
+        Check(dotted.Tier == "", $"AsmMethod.Tier dotted == '' (got '{dotted.Tier}')");
+        // A name ending in a generic-arg bracket (no tier) must NOT report it as a tier.
+        var genEnd = new AsmMethod("System.Collections.Generic.List`1[System.String]", 1);
+        Check(genEnd.Tier == "", $"AsmMethod.Tier generic-end == '' (got '{genEnd.Tier}')");
     }
 
     // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic

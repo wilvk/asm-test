@@ -1039,6 +1039,8 @@ namespace Asmtest
         readonly IntPtr _handle;
         readonly bool _emit;
         readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
+        readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
+        readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
         readonly JitMethodMap _map; // §D0.1: managed-method labelling (byMethod only)
         HwNative.HwScope _scope;    // region-free scope handle (whole-window only)
         bool _disposed;
@@ -1112,7 +1114,8 @@ namespace Asmtest
         /// x86-64 Linux for a NATIVE leaf; the STRONG whole-window PT / AMD LBR tiers are
         /// forward-look and this ctor <b>self-skips</b> (records <see cref="SkipReason"/>,
         /// leaves <see cref="Armed"/> false) where no faithful backend is available — never
-        /// throws. Requires the tier to be up (<see cref="HwTrace.Init"/>).
+        /// throws. No <see cref="HwTrace.Init"/> needed: when nothing is inited the ctor
+        /// auto-inits the portable single-step tier itself (§Z0).
         /// </summary>
         /// <param name="byMethod">§D0.1: also label the captured window by managed method —
         /// exposes <see cref="Methods"/> / <see cref="LabelledInstructions"/> / <see
@@ -1123,13 +1126,21 @@ namespace Asmtest
         /// perf-map rundown over its own diagnostics socket (dependency-free, no launch
         /// knob; see <see cref="DiagnosticsIpc"/>). Implies <paramref name="byMethod"/>.
         /// Self-skips to the cold-only result where diagnostics are off. CoreCLR/Linux.</param>
+        /// <param name="renderPath">§Z5 (opt-in): also render the whole window into
+        /// <see cref="Path"/> on close, via the native <c>render_window</c> (live-memory
+        /// disassembly, truncation banner included). Default-off because a whole window is
+        /// often the raw million-instruction runtime stream; the data-only default exposes
+        /// <see cref="Addresses"/> / <see cref="Disassembly"/> instead. Needs Capstone
+        /// (<see cref="Path"/> stays empty without it).</param>
         public AsmTrace(bool emit = true, bool byMethod = false, bool withRundown = false,
+                        bool renderPath = false,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
             _name = ScopeName(member, line);
             _emit = emit;
             _wholeWindow = true;
+            _renderPath = renderPath;
             // Honor the "never throws" contract: with no native lib loaded, the first P/Invoke
             // (asmtest_trace_new) would throw DllNotFoundException. Self-skip cleanly (Armed
             // stays false, SkipReason set) so `using (new AsmTrace())` degrades, not crashes —
@@ -1147,6 +1158,7 @@ namespace Asmtest
             // stack). The rundown captures the already-JIT'd WARM methods retroactively; the
             // runtime logs cold ones forward. A self-skip still gets DisablePerfMap on close,
             // so it is enabled only briefly, never left on process-wide.
+            _rundownRequested = withRundown;
             if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
             _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
             // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
@@ -1270,13 +1282,8 @@ namespace Asmtest
                 {
                     // §D0.2: fold in the jitdump rundown (WARM + R2R methods too) if it was
                     // enabled; a missing/partial file just leaves the cold-only entries.
-                    // Then turn perf-map generation back off so it is not left on
-                    // process-wide (unbounded file growth / per-JIT overhead).
                     if (RundownEnabled)
-                    {
                         _map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
-                        DiagnosticsIpc.DisablePerfMap();
-                    }
                     _map.Freeze();
                     bool disasOk = HwNative.asmtest_disas_available();
                     DisassemblyAvailable = disasOk;
@@ -1307,7 +1314,28 @@ namespace Asmtest
                     Methods = list;
                     _map.Dispose();
                 }
+                // §D0.2: turn perf-map generation back off so it is not left on
+                // process-wide (unbounded jitdump growth / per-JIT overhead). Keyed on
+                // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
+                // while its response read times out (reported false), and Disable is a
+                // harmless no-op when it never took effect.
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                // §Z5 (opt-in): render the whole window into Path via the native
+                // render_window — live-memory disassembly with the truncation banner.
+                // The frame stays resolvable after end_window (same order the C
+                // harness uses), and the code it decodes is still mapped; must run
+                // BEFORE the trace_free below, which the frame's trace points into.
                 Path = "";
+                if (_renderPath && _handle != IntPtr.Zero)
+                {
+                    int wneed = HwNative.asmtest_hwtrace_render_window(_scope, null, UIntPtr.Zero);
+                    if (wneed > 0)
+                    {
+                        byte[] wbuf = new byte[wneed + 1];
+                        HwNative.asmtest_hwtrace_render_window(_scope, wbuf, (UIntPtr)(wneed + 1));
+                        Path = System.Text.Encoding.ASCII.GetString(wbuf, 0, wneed);
+                    }
+                }
             }
             else
             {
@@ -1403,6 +1431,26 @@ namespace Asmtest
                 int lt = s.LastIndexOf('[');
                 if (lt > rp && s.EndsWith("]")) s = s.Substring(0, lt);
                 return s.Trim();
+            }
+        }
+
+        /// <summary>The JIT/compilation tier — the trailing <c>[tier]</c> tag: <c>PreJIT</c>
+        /// (ReadyToRun, precompiled), <c>MinOptJitted</c>/<c>Tier0</c> (cold JIT),
+        /// <c>OptimizedTier1</c> (hot), etc. Empty for a listener-spelled dotted name (which
+        /// carries no tag). Anchored on the last <c>[..]</c> AFTER the signature's <c>)</c> — so
+        /// a generic-arg bracket in the type/return is never mistaken for a tier.</summary>
+        public string Tier
+        {
+            get
+            {
+                if (Name.Length == 0 || Name[Name.Length - 1] != ']') return "";
+                int lt = Name.LastIndexOf('[');
+                int rp = Name.LastIndexOf(')');
+                if (lt <= rp || lt < 0) return "";
+                string t = Name.Substring(lt + 1, Name.Length - lt - 2);
+                // Tiers are bare identifiers (PreJIT, Tier0, OptimizedTier1, MinOptJitted); a
+                // dotted token is a generic-arg bracket (e.g. [System.Char]), not a tier.
+                return t.IndexOf('.') < 0 ? t : "";
             }
         }
 

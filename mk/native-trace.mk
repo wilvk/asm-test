@@ -670,6 +670,12 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/assemblies/assemblies.csproj
 	@echo "== hwtrace-dotnet-example (annotated) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/annotated/annotated.csproj
+	@echo "== hwtrace-dotnet-example (tiers) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/tiers/tiers.csproj
+	@echo "== hwtrace-dotnet-example (hotspots) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/hotspots/hotspots.csproj
+	@echo "== hwtrace-dotnet-example (coverage) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/coverage/coverage.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="
