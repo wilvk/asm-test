@@ -1360,6 +1360,278 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     return rc;
 }
 
+/* ------------------------------------------------------------------ */
+/* BTF block-step (P2): PTRACE_SINGLEBLOCK — one #DB per TAKEN branch   */
+/* instead of one per instruction (~4-10x fewer stops on compute        */
+/* kernels), reconstructing the SAME per-instruction offset stream.     */
+/* x86-64 only (SINGLEBLOCK is x86/ppc/s390; AArch64 has no equivalent  */
+/* and the whole file's tracer is x86/arm64). Rootless, works under any  */
+/* perf_event_paranoid — it is just ptrace of one's own child. See       */
+/* docs/plans/amd-tracing-plan.md "BTF block-step is available on x86". */
+/* ------------------------------------------------------------------ */
+#if defined(__x86_64__)
+
+#ifndef PTRACE_SINGLEBLOCK
+#define PTRACE_SINGLEBLOCK 33 /* <sys/ptrace.h> omits it though the kernel wires it */
+#endif
+
+/* Hang-proof one-shot probe: does PTRACE_SINGLEBLOCK actually advance a child here?
+ * It is unwired under some sandboxes/emulators (returns EIO), so probe rather than
+ * assume. Mirrors probe_singlestep's WNOHANG-with-deadline shape so it can never hang
+ * CI, and caches. */
+static int probe_singleblock(void) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return 0;
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(0);
+    }
+    int st, got = 0, stepped = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid && WIFSTOPPED(st)) {
+            got = 1;
+            break;
+        }
+        if (w < 0)
+            break;
+        struct timespec ts = {0, 1000000};
+        nanosleep(&ts, NULL);
+    }
+    if (got && ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) == 0) {
+        for (int i = 0; i < 200; i++) {
+            pid_t w = waitpid(pid, &st, WNOHANG);
+            if (w == pid) {
+                stepped = WIFSTOPPED(st) && WSTOPSIG(st) == SIGTRAP;
+                break;
+            }
+            if (w < 0)
+                break;
+            struct timespec ts = {0, 1000000};
+            nanosleep(&ts, NULL);
+        }
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return stepped;
+}
+
+int asmtest_ptrace_blockstep_available(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = probe_singleblock() && asmtest_disas_available();
+    return cached;
+}
+
+/* Reconstruct the straight-line run of one basic block into `stream`. A block-step
+ * #DB is TRAP-class: the stop RIP is the branch TARGET, so between the block start
+ * `from_off` and the observed next stop `next_pc` the CPU ran from `from_off` up to a
+ * terminating TAKEN branch. Walk instructions from `from_off`, appending each offset,
+ * until the terminator: a `ret`/indirect branch (always taken) or a direct branch
+ * whose target == next_pc (taken); a direct conditional whose target != next_pc was
+ * NOT taken (BTF does not fire on it) so we fall through and keep walking. Returns 1 on
+ * a clean terminator (with *last_off = its offset), 0 on overflow/undecodable/no
+ * region terminator (caller marks truncated). */
+static int blockstep_reconstruct(const uint8_t *code, size_t len, uint64_t base_ip,
+                                 uint64_t from_off, uint64_t next_pc,
+                                 uint64_t *stream, uint32_t *pn, uint64_t *last_off) {
+    uint64_t walk = from_off;
+    /* Bounded by the region instruction count: a block cannot revisit an offset, so
+     * more than `len` steps means the walk is not converging. */
+    for (size_t guard = 0; guard <= len; guard++) {
+        if (walk >= len)
+            return 0; /* ran off the region without a terminator */
+        if (*pn >= PTRACE_STREAM_CAP)
+            return 0; /* stream full */
+        stream[(*pn)++] = walk;
+        *last_off = walk;
+        int is_call = 0, is_ret = 0;
+        size_t l = asmtest_disas_probe(PTRACE_TRACE_ARCH, code, len, walk,
+                                       &is_call, &is_ret);
+        if (l == 0)
+            return 0; /* undecodable */
+        if (!asmtest_disas_is_branch(PTRACE_TRACE_ARCH, code, len, walk)) {
+            walk += l;
+            continue; /* straight-line instruction: block continues */
+        }
+        if (is_ret)
+            return 1; /* return: indirect, terminator */
+        uint64_t target = 0;
+        if (!asmtest_disas_branch_target(PTRACE_TRACE_ARCH, code, len, base_ip,
+                                         walk, &target))
+            return 1; /* indirect jmp/call: unconditionally taken, terminator */
+        if (target == next_pc)
+            return 1; /* direct branch TAKEN to the observed next stop: terminator */
+        walk += l;    /* direct conditional NOT taken: fall through, keep walking */
+    }
+    return 0;
+}
+
+int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
+                                        const long *args, int nargs, long *result,
+                                        asmtest_trace_t *trace) {
+    if (code == NULL || len == 0 || nargs < 0 || nargs > 6 ||
+        (nargs > 0 && args == NULL))
+        return ASMTEST_PTRACE_EINVAL;
+    if (!asmtest_ptrace_blockstep_available())
+        return ASMTEST_PTRACE_ENOSYS;
+
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs; i++)
+        a[i] = args[i];
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        free(stream);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)
+            _exit(127);
+        raise(SIGSTOP);
+        volatile long r = ((fn6_t)code)(a[0], a[1], a[2], a[3], a[4], a[5]);
+        (void)r;
+        _exit(0);
+    }
+
+    const uint64_t base_ip = (uint64_t)(uintptr_t)code;
+    const uint64_t SENTINEL = ~(uint64_t)0;
+    uint64_t prev_off = SENTINEL; /* start of the open (not-yet-terminated) block */
+    uint32_t n = 0;
+    int overflow = 0, returned = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+    int pending_sig = 0;
+
+    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        free(stream);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+    ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(uintptr_t)PTRACE_O_EXITKILL);
+
+    for (;;) {
+        if (ptrace(PTRACE_SINGLEBLOCK, pid, NULL,
+                   (void *)(uintptr_t)pending_sig) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        pending_sig = 0;
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            int sig = WSTOPSIG(status);
+            /* A #DB also fires on interrupts/exceptions (APM §13.2); a fault signal
+             * from the routine is terminal, any other (process-group) signal is
+             * unrelated — forward it and keep block-stepping, same policy as the
+             * single-step loop. */
+            if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+                sig == SIGFPE) {
+                overflow = 1;
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                break;
+            }
+            pending_sig = sig;
+            continue;
+        }
+
+        uint64_t pc, retval;
+        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        int in_region = (pc >= base_ip && pc < base_ip + len);
+
+        if (prev_off == SENTINEL) {
+            /* Not entered yet: block-step through the entry glue at native speed.
+             * The first in-region stop is the region entry (the call target). */
+            if (in_region)
+                prev_off = pc - base_ip;
+            continue;
+        }
+
+        /* We have an open block starting at prev_off; the current stop `pc` is the
+         * target its terminating taken branch reached. Reconstruct that block. */
+        uint64_t last_off = 0;
+        if (!blockstep_reconstruct((const uint8_t *)code, len, base_ip, prev_off,
+                                   pc, stream, &n, &last_off)) {
+            overflow = 1;
+            break;
+        }
+
+        if (in_region) {
+            prev_off = pc - base_ip; /* the block's target opens the next block */
+            continue;
+        }
+
+        /* The block left the region: routine return or a call-out to a helper. Reuse
+         * the single-step classifier (it plants a breakpoint at the call's return and
+         * runs the callee at native speed), so a method calling runtime helpers still
+         * traces, not just a pure leaf. */
+        uint64_t resume_off = 0;
+        exit_kind_t k = classify_region_exit(pid, (const uint8_t *)code, len,
+                                             base_ip, last_off, &resume_off);
+        if (k == EXIT_CALLOUT_RESUMED) {
+            prev_off = resume_off; /* resume block-stepping from the call's return */
+            continue;
+        }
+        if (k == EXIT_CALLOUT_LOST) {
+            overflow = 1;
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+        if (result != NULL)
+            *result = (long)retval;
+        returned = 1;
+        ptrace(PTRACE_CONT, pid, NULL, NULL);
+        if (waitpid(pid, &status, 0) >= 0 && WIFSTOPPED(status)) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+        }
+        break;
+    }
+    (void)returned;
+
+    if (rc == ASMTEST_PTRACE_OK)
+        normalize(trace, (const uint8_t *)code, base_ip, len, stream, n,
+                  overflow);
+    else {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+    }
+    free(stream);
+    return rc;
+}
+
+#else /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent */
+int asmtest_ptrace_blockstep_available(void) { return 0; }
+int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
+                                        const long *args, int nargs, long *result,
+                                        asmtest_trace_t *trace) {
+    (void)code;
+    (void)len;
+    (void)args;
+    (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+#endif /* __x86_64__ */
+
 /* Shared body for the live-snapshot and time-versioned variants below. The ONLY
  * difference between them is the byte source handed to the block normalizer: a single
  * process_vm_readv (img == NULL) versus the time-correct bytes the code-image recorder
@@ -1693,6 +1965,20 @@ void asmtest_ptrace_skip_reason(char *buf, size_t buflen) {
 
 int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
                               int nargs, long *result, asmtest_trace_t *trace) {
+    (void)code;
+    (void)len;
+    (void)args;
+    (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_blockstep_available(void) { return 0; }
+
+int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
+                                        const long *args, int nargs, long *result,
+                                        asmtest_trace_t *trace) {
     (void)code;
     (void)len;
     (void)args;

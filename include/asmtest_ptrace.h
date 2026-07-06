@@ -94,6 +94,25 @@ void asmtest_ptrace_skip_reason(char *buf, size_t buflen);
 int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
                               int nargs, long *result, asmtest_trace_t *trace);
 
+/* BTF block-step variant of asmtest_ptrace_trace_call: drives PTRACE_SINGLEBLOCK
+ * (one #DB per TAKEN branch, ~4-10x fewer tracer round-trips than per-instruction
+ * single-step) and reconstructs the IDENTICAL per-instruction asmtest_trace_t by
+ * disassembling each block's straight-line run between branch targets. The only exact
+ * real-CPU capture on Zen 2 (no branch-record hardware) and a rootless completeness
+ * fallback everywhere (no CAP_PERFMON, any perf_event_paranoid). Same args/result
+ * contract as asmtest_ptrace_trace_call. Returns ASMTEST_PTRACE_ENOSYS off x86-64
+ * Linux or where PTRACE_SINGLEBLOCK / Capstone are unavailable (probe first with
+ * asmtest_ptrace_blockstep_available). Complete at moderate overhead, NOT cheap: each
+ * block still costs a full ptrace round-trip and perturbs timing heavily. */
+int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
+                                        const long *args, int nargs, long *result,
+                                        asmtest_trace_t *trace);
+
+/* 1 if PTRACE_SINGLEBLOCK block-step can run here (x86-64 Linux with a functional
+ * PTRACE_SINGLEBLOCK and Capstone for the reconstruction), else 0 — a hang-proof,
+ * cached one-shot probe. Callers self-skip cleanly where it is 0. */
+int asmtest_ptrace_blockstep_available(void);
+
 /* Trace a region in a SEPARATE, already-running process you have attached to — the
  * foreign / managed-runtime path (the building block for tracing a JVM/.NET/Node on
  * a host without Intel PT). `pid` must already be in a ptrace-stop: the caller owns

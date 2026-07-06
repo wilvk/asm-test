@@ -362,6 +362,76 @@ int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code,
 #endif
 }
 
+/* Resolve the DIRECT-branch target at `code+off` into *target (absolute = base_addr +
+ * displacement) for ANY direct control transfer — an unconditional `jmp rel`, a
+ * conditional `jcc rel`, or a `call rel` (x86); `b`/`b.cond`/`bl` (AArch64). Like
+ * asmtest_disas_call_target but for the whole JUMP/CALL class: the block-step
+ * reconstructor uses it to tell a TAKEN direct branch (target == the observed next
+ * block start) from a NOT-TAKEN conditional (target != next start, execution fell
+ * through). Returns 1 (direct branch, *target set) or 0 (indirect branch — `jmp
+ * r/m`, `ret`, `br`/`blr` — a non-branch, undecodable bytes, or no Capstone), in
+ * which case an indirect branch is treated as unconditionally taken (its live next
+ * stop is the target). */
+int asmtest_disas_branch_target(asmtest_arch_t arch, const uint8_t *code,
+                                size_t code_len, uint64_t base_addr, uint64_t off,
+                                uint64_t *target) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn *insn = NULL;
+    /* Decode at base_addr+off so Capstone resolves rel8/rel32/imm to the ABSOLUTE
+     * target immediate directly (mirrors asmtest_disas_call_target). */
+    size_t count = cs_disasm(h, code + off, code_len - (size_t)off,
+                             base_addr + off, 1, &insn);
+    int ok = 0;
+    if (count > 0) {
+        /* Only JUMP/CALL-class transfers carry a direct target immediate; RET and
+         * IRET are indirect (target on the stack). */
+        int is_xfer = cs_insn_group(h, &insn[0], CS_GRP_JUMP) ||
+                      cs_insn_group(h, &insn[0], CS_GRP_CALL);
+        const cs_detail *d = insn[0].detail;
+        if (is_xfer && d != NULL) {
+            if (a == CS_ARCH_X86) {
+                for (int i = 0; i < d->x86.op_count; i++)
+                    if (d->x86.operands[i].type == X86_OP_IMM) {
+                        if (target != NULL)
+                            *target = (uint64_t)d->x86.operands[i].imm;
+                        ok = 1;
+                        break;
+                    }
+            } else if (a == CS_ARCH_ARM64) {
+                for (int i = 0; i < d->arm64.op_count; i++)
+                    if (d->arm64.operands[i].type == ARM64_OP_IMM) {
+                        if (target != NULL)
+                            *target = (uint64_t)d->arm64.operands[i].imm;
+                        ok = 1;
+                        break;
+                    }
+            }
+        }
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return ok;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)base_addr;
+    (void)off;
+    (void)target;
+    return 0;
+#endif
+}
+
 /* Copy `n` block offsets into a freshly malloc'd ascending array (caller frees);
  * *out_n receives the count. NULL on empty/oom. Mirrors trace.c's sorted_blocks
  * so the disassembling reports list blocks in the same order as the plain ones. */

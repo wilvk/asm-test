@@ -1589,6 +1589,88 @@ static void test_ptrace_oop(void) {
     munmap(q, LPN);
 }
 
+/* BTF block-step (PTRACE_SINGLEBLOCK) must reconstruct the IDENTICAL per-instruction
+ * stream as per-instruction single-step, at ~1 trap/branch instead of 1 trap/insn.
+ * The proof is a byte-for-byte stream match against the single-step ground truth over
+ * two fixtures: ROUTINE (a TAKEN forward conditional — jle), and LOOP (a backward
+ * conditional taken 19x then falling through — the reconstruction across a loop
+ * back-edge, and the not-taken tail). x86-64 only (SINGLEBLOCK has no AArch64 form). */
+static void test_ptrace_blockstep(void) {
+#if defined(__x86_64__)
+    if (!asmtest_ptrace_blockstep_available()) {
+        printf("# SKIP ptrace block-step: PTRACE_SINGLEBLOCK/Capstone unavailable "
+               "here\n");
+        return;
+    }
+
+    /* --- ROUTINE: taken forward conditional (42 <= 100 -> jle taken, dec skipped) --- */
+    static const uint64_t R_EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    const size_t R_NEXP = sizeof R_EXPECT / sizeof R_EXPECT[0];
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace block-step: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_trace_t *bs = asmtest_trace_new(64, 64);
+    long args[2] = {20, 22}, bres = 0;
+    int rc = asmtest_ptrace_trace_call_blockstep(p, sizeof ROUTINE, args, 2, &bres, bs);
+    CHECK(rc == ASMTEST_PTRACE_OK, "block-step trace_call succeeds");
+    CHECK(bres == 42, "block-step traced call returns 20+22");
+    int seq = (asmtest_emu_trace_insns_total(bs) == R_NEXP);
+    for (size_t i = 0; seq && i < R_NEXP; i++)
+        seq = (bs->insns[i] == R_EXPECT[i]);
+    CHECK(seq, "block-step reconstructs the exact single-step stream (ROUTINE)");
+    CHECK(asmtest_emu_trace_blocks_len(bs) == 2,
+          "block-step yields the same 2-block partition (ROUTINE)");
+    CHECK(!asmtest_emu_trace_truncated(bs), "block-step ROUTINE trace is complete");
+    asmtest_trace_free(bs);
+    munmap(p, sizeof ROUTINE);
+
+    /* --- LOOP: 20 trips (19 taken back-edges + 1 not-taken tail to ret) --- */
+    static const unsigned char LOOP_X86[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00,
+                                             0x00, 0x48, 0x01, 0xf8, 0x48, 0xff,
+                                             0xce, 0x75, 0xf8, 0xc3};
+    void *q = mmap(NULL, sizeof LOOP_X86, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED)
+        return;
+    memcpy(q, LOOP_X86, sizeof LOOP_X86);
+    mprotect(q, sizeof LOOP_X86, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof LOOP_X86);
+
+    /* Ground truth: the SAME loop under per-instruction single-step. */
+    asmtest_trace_t *ss = asmtest_trace_new(256, 64);
+    long largs[2] = {1, 20}, sres = 0;
+    asmtest_ptrace_trace_call(q, sizeof LOOP_X86, largs, 2, &sres, ss);
+
+    asmtest_trace_t *lb = asmtest_trace_new(256, 64);
+    long lres = 0;
+    asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2, &lres, lb);
+    CHECK(lres == 20 && sres == 20, "block-step loop returns 20 (sum of 1, 20x)");
+
+    unsigned long long sn = asmtest_emu_trace_insns_total(ss);
+    unsigned long long bn = asmtest_emu_trace_insns_total(lb);
+    int loop_seq = (bn == sn && bn == 62); /* 1 + 20*3 + ret */
+    for (unsigned long long i = 0; loop_seq && i < bn; i++)
+        loop_seq = (lb->insns[i] == ss->insns[i]);
+    CHECK(loop_seq,
+          "block-step reconstructs single-step across the loop back-edge (62 insns)");
+    CHECK(asmtest_emu_trace_blocks_len(lb) == asmtest_emu_trace_blocks_len(ss),
+          "block-step loop yields the same block partition as single-step");
+    CHECK(!asmtest_emu_trace_truncated(lb), "block-step loop trace is complete");
+    asmtest_trace_free(ss);
+    asmtest_trace_free(lb);
+    munmap(q, sizeof LOOP_X86);
+#else
+    printf("# SKIP ptrace block-step: x86-64 only (no AArch64 PTRACE_SINGLEBLOCK)\n");
+#endif
+}
+
 /* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
  * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
  * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
@@ -3721,6 +3803,7 @@ int main(void) {
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
+    test_ptrace_blockstep();
 
     /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
     test_ptrace_faulting_no_leak();
