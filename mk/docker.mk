@@ -247,6 +247,29 @@ docker-hwtrace-jit-dotnet: docker-dotnet
 docker-hwtrace-dotnet-example: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-dotnet-example
 
+# Interactive dev shell in the asmtest-dotnet container for building + running the
+# dotnet examples. The working tree is LIVE-mounted at /src (edit examples/bindings on
+# the host, rebuild + run inside), while build/ is a container-local NAMED VOLUME — a
+# Capstone-enabled build isolated from the host's build/ (which is built without
+# Capstone, so the region example's rendering would otherwise break). The shared lib is
+# built on entry and the DllImport-resolver env vars are set, so `dotnet run` works at
+# once. `docker volume rm asmtest-dotnet-build` for a clean rebuild.
+.PHONY: dev-dotnet
+dev-dotnet: docker-build-dotnet
+	@echo ''
+	@echo 'dev-dotnet: interactive shell in asmtest-dotnet (working tree live at /src).'
+	@echo 'Building shared-hwtrace on entry; then run e.g.:'
+	@echo '  dotnet run --project examples/dotnet/methods/methods.csproj'
+	@echo '  dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj'
+	@echo '  dotnet run --project examples/dotnet/region/region.csproj'
+	@echo '  make hwtrace-dotnet-example   # all three   |   make hwtrace-dotnet-test'
+	@echo ''
+	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_RUNENV_dotnet) \
+	  -v "$(CURDIR)":/src -v asmtest-dotnet-build:/src/build -w /src \
+	  -e ASMTEST_HWTRACE_LIB=/src/build/libasmtest_hwtrace.so \
+	  -e LD_LIBRARY_PATH=/src/build \
+	  asmtest-dotnet bash -c 'make shared-hwtrace; exec bash'
+
 docker-hwtrace-jit-dotnet-bcl: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-bcl
 

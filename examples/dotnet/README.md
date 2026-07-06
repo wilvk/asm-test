@@ -15,12 +15,23 @@ single-step cannot run.
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs both, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs both, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all three, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all three, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
 dotnet run --project examples/dotnet/region/region.csproj
+dotnet run --project examples/dotnet/methods/methods.csproj
+```
+
+To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
+tree live-mounted at `/src` (edit on the host, build + run inside), the shared lib built,
+and the resolver env set:
+
+```sh
+make dev-dotnet
+# then, inside the container:
+#   dotnet run --project examples/dotnet/methods/methods.csproj
 ```
 
 Each project is dependency-free — it compiles the binding source
