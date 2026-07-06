@@ -67,22 +67,23 @@ truncated: False
 
 ## methods — labelling the window by managed method (observed output)
 
-The closest thing to the fully aspirational snippet — `using (new AsmTrace()) {
-ColdPath(data); }` over an **arbitrary, cold** managed method — that runs without
-Intel PT. An in-process `JitMethodMap` (§D0.1) consumes CoreCLR `MethodLoadVerbose`
-events to map JIT addresses → method names, so the captured window breaks down per
-method and the cold method is **named**:
+The closest thing to the fully aspirational snippet — `using (new AsmTrace(byMethod:
+true)) { ColdPath(data); }` over an **arbitrary, cold** managed method — that runs
+without Intel PT. Pass `byMethod: true` and the scope itself owns an in-process
+`JitMethodMap` (§D0.1, CoreCLR `MethodLoadVerbose`) and, on close, exposes the
+per-method breakdown as data — `ww.Methods`, `ww.LabelledInstructions`,
+`ww.InstructionsIn("ColdPath")` — so the demo has no map lifecycle or classification
+loop of its own:
 
 ```
-ColdPath(7,100) = 35350; captured 979374 instructions (truncated); 90 methods observed
-  by the JIT map; 1806 instructions labelled by method.
+ColdPath(7,100) = 35350; captured 973472 instructions (truncated); 84 methods observed;
+  1784 labelled by method.
 
-top managed methods that executed in the window (by instruction count):
+managed methods that executed in the window (by instruction count):
         1733  Program.ColdPath          <- the arbitrary cold method, by name
           26  dynamicClass.IL_STUB_PInvoke
-          22  Asmtest.AsmTrace..ctor
 -> the arbitrary COLD method 'ColdPath' is identified BY NAME: 1733 instructions.
-(the native runtime — RyuJIT, GC, PAL — is the unlabelled remainder: 977568 instructions.)
+(the native runtime — RyuJIT, GC, PAL — is the unlabelled remainder: 971688 instructions.)
 ```
 
 Honest limits: this is the single-step WEAK tier, so it also single-steps the JIT
@@ -94,10 +95,15 @@ the **STRONG** whole-window PT tier (forward-look here). See
 
 ## API used
 
-- `new AsmTrace()` / `new AsmTrace(code)` — the empty-ctor and region-scoped scopes.
-- `AsmTrace.Addresses` — the raw absolute addresses a whole-window scope captured
-  (range-classify these to attribute them).
+- `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` — the
+  empty-ctor, region-scoped, and method-labelling scopes.
+- `AsmTrace.Addresses` — the raw absolute addresses a whole-window scope captured.
+- `AsmTrace.CountInRange(start, len)` — how many landed in a known native region
+  (tells native leaves apart; used by [wholewindow/](wholewindow/)).
+- `AsmTrace.Methods` / `.LabelledInstructions` / `.MethodsObserved` /
+  `.InstructionsIn(name)` — the per-managed-method breakdown of a `byMethod` scope
+  (data only; the caller presents it). Used by [methods/](methods/).
 - `AsmTrace.Path` — the rendered disassembly (region-scoped form).
 - `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
-- `JitMethodMap` — in-process address→managed-method map (§D0.1); `Freeze()` then
-  `Resolve(addr)` after the scope closes.
+- `JitMethodMap` — the underlying in-process address→method map (§D0.1), if you want
+  it standalone; `Stop()` then `Freeze()` then `Resolve(addr)`.

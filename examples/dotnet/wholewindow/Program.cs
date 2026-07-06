@@ -62,15 +62,9 @@ internal static class Program
 
         // Attribute every captured address to its origin by range — the leaves are
         // known [base,len) mappings; everything else is the runtime.
-        ulong aLo = (ulong)add2.Base.ToInt64(), aHi = aLo + (ulong)add2.Length;
-        ulong bLo = (ulong)sub2.Base.ToInt64(), bHi = bLo + (ulong)sub2.Length;
-        long ca = 0, cb = 0, other = 0;
-        foreach (ulong ip in ww.Addresses)
-        {
-            if (ip >= aLo && ip < aHi) ca++;
-            else if (ip >= bLo && ip < bHi) cb++;
-            else other++;
-        }
+        long ca = ww.CountInRange((ulong)add2.Base.ToInt64(), (ulong)add2.Length);
+        long cb = ww.CountInRange((ulong)sub2.Base.ToInt64(), (ulong)sub2.Length);
+        long other = ww.Addresses.Length - ca - cb;
         Console.WriteLine($"armed '{ww.Name}', add2={r1}, sub2={r2}, captured {ww.Addresses.Length} instructions"
                           + (ww.Truncated ? " (truncated)" : "") + ".");
         Console.WriteLine("attribution of the captured window, by origin:");

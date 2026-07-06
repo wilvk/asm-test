@@ -1003,6 +1003,7 @@ namespace Asmtest
         readonly IntPtr _handle;
         readonly bool _emit;
         readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
+        readonly JitMethodMap _map; // §D0.1: managed-method labelling (byMethod only)
         HwNative.HwScope _scope;    // region-free scope handle (whole-window only)
         bool _disposed;
 
@@ -1019,8 +1020,38 @@ namespace Asmtest
         /// execution order (empty for the region-scoped form). Range-classify these
         /// against known native regions to tell multiple leaves apart.</summary>
         public ulong[] Addresses { get; private set; } = System.Array.Empty<ulong>();
+        /// <summary>§D0.1: for a <c>byMethod</c> whole-window scope, the managed methods
+        /// that executed in the window, sorted by attributed instruction count
+        /// (descending); empty otherwise. The native-runtime remainder is not included —
+        /// it is <see cref="Addresses"/>.Length − <see cref="LabelledInstructions"/>.</summary>
+        public IReadOnlyList<AsmMethod> Methods { get; private set; } = System.Array.Empty<AsmMethod>();
+        /// <summary>§D0.1: managed methods the JIT map observed while the scope was open.</summary>
+        public int MethodsObserved { get; private set; }
+        /// <summary>§D0.1: captured instructions attributed to a managed method.</summary>
+        public long LabelledInstructions { get; private set; }
         /// <summary>The auto-generated (or explicit) region name.</summary>
         public string Name => _name;
+
+        /// <summary>Captured whole-window instructions whose ABSOLUTE address falls in
+        /// <c>[start, start+length)</c> — e.g. count a known native leaf's executions.</summary>
+        public long CountInRange(ulong start, ulong length)
+        {
+            ulong end = start + length;
+            long n = 0;
+            foreach (ulong ip in Addresses)
+                if (ip >= start && ip < end) n++;
+            return n;
+        }
+
+        /// <summary>§D0.1: captured instructions in managed methods whose name contains
+        /// <paramref name="nameSubstring"/>; 0 unless this is a <c>byMethod</c> scope.</summary>
+        public long InstructionsIn(string nameSubstring)
+        {
+            long n = 0;
+            foreach (var m in Methods)
+                if (m.Name.Contains(nameSubstring)) n += m.Count;
+            return n;
+        }
 
         /// <summary>
         /// §Z0/§Z1 — the aspirational EMPTY-ctor form: <c>using (new AsmTrace()) { HotPath(data); }</c>.
@@ -1032,13 +1063,20 @@ namespace Asmtest
         /// leaves <see cref="Armed"/> false) where no faithful backend is available — never
         /// throws. Requires the tier to be up (<see cref="HwTrace.Init"/>).
         /// </summary>
-        public AsmTrace(bool emit = true,
+        /// <param name="byMethod">§D0.1: also label the captured window by managed method —
+        /// exposes <see cref="Methods"/> / <see cref="LabelledInstructions"/> / <see
+        /// cref="InstructionsIn"/> on close. Enables an in-process JIT map for the scope's
+        /// lifetime (CoreCLR); leave false to skip that overhead.</param>
+        public AsmTrace(bool emit = true, bool byMethod = false,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
             _name = ScopeName(member, line);
             _emit = emit;
             _wholeWindow = true;
+            // §D0.1: enable the method map BEFORE arming, so it sees the methods JIT'd
+            // inside the scope (an in-proc listener sees only methods JIT'd after enable).
+            if (byMethod) _map = new JitMethodMap();
             _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
             // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
             // retained trace to the single-step window ring (SS_WINDOW_CAP = 1<<20) — a
@@ -1095,6 +1133,13 @@ namespace Asmtest
             if (_wholeWindow)
             {
                 HwNative.asmtest_hwtrace_end_window(_scope, _handle);
+                // §D0.1: freeze the JIT map to exactly the methods seen while the scope
+                // was open (before the readback/classification below JITs anything more).
+                if (_map != null)
+                {
+                    _map.Stop();
+                    MethodsObserved = _map.Count;
+                }
                 // Capture the raw ABSOLUTE addresses (before the trace is freed below).
                 // A whole-window trace can be a million runtime instructions, so we do
                 // NOT auto-render its disassembly (Path) — the caller ATTRIBUTES the
@@ -1107,6 +1152,28 @@ namespace Asmtest
                     for (ulong i = 0; i < n; i++)
                         addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
                     Addresses = addrs;
+                }
+                // §D0.1: attribute the captured addresses to managed methods — DATA only;
+                // the caller decides how to present Methods / LabelledInstructions.
+                if (_map != null)
+                {
+                    _map.Freeze();
+                    var by = new Dictionary<string, long>();
+                    long labelled = 0;
+                    foreach (ulong ip in Addresses)
+                    {
+                        string m = _map.Resolve(ip);
+                        if (m == null) continue;
+                        labelled++;
+                        by.TryGetValue(m, out long c);
+                        by[m] = c + 1;
+                    }
+                    LabelledInstructions = labelled;
+                    var list = new List<AsmMethod>(by.Count);
+                    foreach (var kv in by) list.Add(new AsmMethod(kv.Key, kv.Value));
+                    list.Sort((x, y) => y.Count.CompareTo(x.Count));
+                    Methods = list;
+                    _map.Dispose();
                 }
                 Path = "";
             }
@@ -1129,6 +1196,16 @@ namespace Asmtest
             }
             if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
         }
+    }
+
+    /// <summary>One managed method's share of a whole-window capture: its fully-qualified
+    /// name and the number of captured instructions attributed to it. See
+    /// <see cref="AsmTrace.Methods"/>.</summary>
+    public readonly struct AsmMethod
+    {
+        public AsmMethod(string name, long count) { Name = name; Count = count; }
+        public string Name { get; }
+        public long Count { get; }
     }
 
     /// <summary>
