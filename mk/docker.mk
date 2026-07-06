@@ -242,7 +242,7 @@ docker-hwtrace-jit: docker-node
 docker-hwtrace-jit-dotnet: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet
 
-# The empty-ctor whole-window scope demo (examples/dotnet), in the .NET image.
+# The scoped-tracing demos (examples/dotnet, all projects), in the .NET image.
 .PHONY: docker-hwtrace-dotnet-example
 docker-hwtrace-dotnet-example: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-dotnet-example
@@ -262,7 +262,7 @@ dev-dotnet: docker-build-dotnet
 	@echo '  dotnet run --project examples/dotnet/methods/methods.csproj'
 	@echo '  dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj'
 	@echo '  dotnet run --project examples/dotnet/region/region.csproj'
-	@echo '  make hwtrace-dotnet-example   # all three   |   make hwtrace-dotnet-test'
+	@echo '  make hwtrace-dotnet-example   # all demos   |   make hwtrace-dotnet-test'
 	@echo ''
 	$(DOCKER) run --rm -it $(_docker_plat) $(DOCKER_RUNENV_dotnet) \
 	  -v "$(CURDIR)":/src -v asmtest-dotnet-build:/src/build -w /src \

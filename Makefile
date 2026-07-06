@@ -96,6 +96,8 @@ help:
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
+	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
+	@echo '  dev-dotnet      interactive container shell for the .NET examples'
 	@echo ''
 	@echo 'Packaging & install:'
 	@echo '  lib             build the static libasmtest.a'

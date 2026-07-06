@@ -60,6 +60,13 @@ assembly language
   maps almost directly to a single operation the {term}`CPU` performs. This is
   the code asm-test is built to test.
 
+AUX
+  The auxiliary buffer of a Linux {term}`perf_event` — a second ring the kernel
+  maps beside the main data ring for high-bandwidth streams. Hardware trace
+  bytes ({term}`Intel PT`, {term}`CoreSight`) land in the AUX ring; the
+  `aux_size` option on the hardware-trace API (and each binding's `Options`)
+  sizes it.
+
 AVX2
   *[Advanced Vector Extensions 2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions).* The 256-bit {term}`SIMD` instruction set on
   {term}`x86-64`, widening the 128-bit {term}`XMM` registers to 256-bit
@@ -86,6 +93,21 @@ branch coverage
   A measure of how many of the possible decision paths (branches) through a
   routine were actually exercised by your tests. The {term}`emulator` tier can
   report this.
+
+BCL
+  *Base Class Library.* The standard library shipped with .NET
+  (`System.Private.CoreLib`, `System.Console`, …). Most of it is precompiled
+  {term}`ReadyToRun` code the {term}`JIT` never compiles, so naming executed
+  BCL methods in a trace needs the {term}`jitdump` rundown (`withRundown`),
+  not just the in-scope JIT listener.
+
+BTF
+  Two unrelated meanings in these docs. (1) *Branch Trap Flag* — the x86
+  `DebugCtl` bit that turns {term}`single-step` into **block**-step: one debug
+  exception per taken *branch* rather than per instruction (the planned
+  `PTRACE_SINGLEBLOCK` upgrade for the ptrace stepper). (2) *BPF Type Format* —
+  the kernel's type metadata for {term}`eBPF`; the code-image emission detector
+  self-skips where the kernel lacks it ("kernel BTF unavailable").
 
 callee-saved register
   A {term}`CPU register` that a called function must preserve: if it uses the
@@ -195,7 +217,8 @@ DWARF
   and {term}`ABI` details.
 
 DynamoRIO
-  An open-source {term}`DBI` engine. asm-test's [DynamoRIO](https://dynamorio.org/) tier attaches it
+  An open-source {term}`DBI` engine (often shortened to **DR** in these docs).
+  asm-test's [DynamoRIO](https://dynamorio.org/) tier attaches it
   **in-process** to trace native code as it runs on the real {term}`CPU` at
   native speed. It is a {term}`native tier`-trace back-end, distinct from the
   {term}`emulator`. See [Native runtime tracing](../guides/tracing/native-tracing.md).
@@ -320,6 +343,12 @@ Intel PT
   instructions executed. The most faithful {term}`hardware trace` backend, but
   bare-metal Intel only.
 
+IPC
+  *Inter-process communication.* In these docs, nearly always the **.NET
+  diagnostics IPC**: the Unix-domain socket every {term}`CoreCLR` process
+  exposes. asm-test's .NET binding speaks the `DOTNET_IPC_V1` protocol over it
+  to request the {term}`jitdump` rundown — no NuGet package, no launch knob.
+
 ISA
   *[Instruction Set Architecture](https://en.wikipedia.org/wiki/Instruction_set_architecture).* The instructions and registers a processor
   family understands — {term}`x86-64`, {term}`AArch64`, {term}`RISC-V`,
@@ -343,6 +372,11 @@ JUnit XML
   A widely understood XML file format for test results, originally from the [JUnit](https://junit.org/)
   framework. asm-test can emit it so {term}`CI` dashboards can display the
   results.
+
+JVM
+  *Java Virtual Machine.* The {term}`managed runtime` that executes Java
+  bytecode; {term}`HotSpot` is the implementation OpenJDK ships. The peer of
+  {term}`CoreCLR` (.NET) and {term}`V8` (Node.js) in the managed-tier docs.
 
 Keystone
   An [assembler](https://www.keystone-engine.org/) *library* (the counterpart to the Unicorn {term}`emulator`) that
@@ -379,6 +413,12 @@ managed runtime
   {term}`GC` threads make in-process tracing hazardous, so asm-test traces them
   out-of-process via {term}`ptrace` or with a {term}`hardware trace` backend that
   observes out of band.
+
+MSR
+  *Model-Specific Register.* A privileged per-core configuration register the
+  kernel programs (`rdmsr`/`wrmsr`) — how AMD's {term}`LBR` and the `DebugCtl`
+  {term}`BTF` bit are switched on. asm-test never touches MSRs itself;
+  {term}`perf_event` programs them on its behalf.
 
 mutation testing
   [Deliberately introducing small faults](https://en.wikipedia.org/wiki/Mutation_testing) ("mutants") into a routine and checking
@@ -426,6 +466,12 @@ OpenCSD
   The BSD-licensed [decoder library](https://github.com/Linaro/OpenCSD) for ARM {term}`CoreSight` trace streams — the
   CoreSight counterpart to {term}`libipt`.
 
+PAL
+  *Platform Adaptation Layer.* {term}`CoreCLR`'s internal portability layer,
+  which owns process-wide resources on Linux — including the {term}`SIGTRAP`
+  disposition that the in-process {term}`single-step` tracer also needs, the
+  root of the managed single-step trade-off (see {term}`TF`).
+
 PE
   *[Portable Executable](https://en.wikipedia.org/wiki/Portable_Executable).* The program and library file format used on Windows.
   Compare {term}`ELF` on Linux. Relevant to the {term}`Win64 ABI` tier.
@@ -454,6 +500,13 @@ PLT
   *Procedure Linkage Table.* The stub table through which a program calls into
   shared libraries. A traced routine's calls into PLT stubs are among the
   call-outs the {term}`single-step` tracer steps over by default.
+
+PMI
+  *Performance Monitoring Interrupt.* The interrupt a {term}`PMU` counter
+  raises on overflow. The AMD {term}`LBR` backend arms a counter to fire on
+  every taken branch ("freeze-on-PMI"), snapshotting the 16-entry branch stack
+  at each interrupt — the samples {term}`Tier-B stitching` joins into a
+  continuous trace.
 
 PMU
   *Performance Monitoring Unit.* The dedicated counters and trace hardware built
@@ -489,6 +542,13 @@ ptrace
   touching that target's signal disposition or code cache, the safe path for a
   {term}`managed runtime`.
 
+RAII
+  *[Resource Acquisition Is Initialization](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization).* The idiom of tying a resource's
+  lifetime to a lexical scope. The scoped-tracing constructs are RAII shapes —
+  C#'s `using (new AsmTrace())`, Java's try-with-resources, Python's `with` —
+  the trace opens in the constructor and renders in the disposer, so the
+  developer footprint stays *import + scope*.
+
 ReadyToRun
   *[R2R](https://learn.microsoft.com/en-us/dotnet/core/deploying/ready-to-run).* Precompiled native code shipped inside .NET assemblies so the
   {term}`JIT` need not compile them at run time. Tracing a precompiled framework
@@ -503,6 +563,13 @@ reference model
 RFLAGS
   The {term}`x86-64` {term}`CPU register` that holds the status {term}`flags`
   (such as {term}`CF`, {term}`ZF`, {term}`OF`, {term}`SF`, {term}`PF`).
+
+RIP
+  The {term}`x86-64` instruction-pointer register — the architecture's
+  {term}`program counter`. A {term}`single-step` trace is a sequence of RIP
+  values; **RIP-relative** addressing is how x86-64 code reaches nearby
+  globals, and why {term}`JIT` bytes must be decoded at the address they
+  ran at.
 
 RISC-V
   An [open, free processor architecture](https://riscv.org/). Its 64-bit variant (**RV64**) is one of
@@ -579,6 +646,12 @@ soft-dirty
   was last cleared. asm-test uses it to notice when a {term}`JIT` has re-emitted
   code, even in another process — the foreign-JIT case.
 
+SP
+  The *stack pointer* register (`rsp` on {term}`x86-64`, `sp` on
+  {term}`AArch64`) — points at the top of the call stack. Guest register
+  accessors take it by name (`Reg("sp")`), and {term}`ABI preservation`
+  checks assert it is restored on return.
+
 struct-by-value
   Passing a whole structure (a bundle of fields) to a function as a copy, rather
   than passing a pointer to it. The {term}`calling convention` has detailed rules
@@ -598,6 +671,11 @@ suite
   A collection of related tests built into a single test program (one binary per
   suite, e.g. `build/test_foo`).
 
+SVE
+  *Scalable Vector Extension.* ARM's length-agnostic {term}`SIMD` extension
+  for {term}`AArch64` — the ARM peer of x86 {term}`AVX2` and RISC-V
+  {term}`RVV`.
+
 System V AMD64 ABI
   The {term}`calling convention` used on Linux and macOS for {term}`x86-64`
   programs (the [x86-64 psABI](https://gitlab.com/x86-psABIs/x86-64-ABI)). It dictates that the first integer arguments go in specific registers,
@@ -608,6 +686,16 @@ TAP
   *[Test Anything Protocol](https://testanything.org/).* A simple, line-oriented text format for reporting
   test results (`ok 1`, `not ok 2`, …). asm-test prints colored TAP output by
   default.
+
+TF
+  The *trap flag* — bit 8 of {term}`EFLAGS`/{term}`RFLAGS`. When set, the
+  {term}`CPU` raises a debug exception (**#DB**) after every instruction,
+  delivered on Linux as {term}`SIGTRAP` — the mechanism the in-process
+  {term}`single-step` backend arms. Because the flag is per-thread but the
+  SIGTRAP disposition is process-wide (and shared with a
+  {term}`managed runtime`'s own signal handling), arming TF against live managed
+  code is intrusive — the trade-off the scoped-tracing plans' single-step
+  posture notes discuss.
 
 tier
   One of asm-test's execution back-ends. The **native tier** runs routines on the
@@ -633,6 +721,13 @@ tiered compilation
   replacement, swapping optimized code in mid-loop). Because it re-emits a method
   at a possibly reused address, asm-test keys recovered bytes by timestamp — see
   {term}`jitdump`.
+
+TLS
+  *Thread-local storage* — per-thread variables (`__thread` in C,
+  `[ThreadStatic]` in C#). The hwtrace scope state lives in TLS, which is why
+  a scope must close on the thread that opened it (both the {term}`TF` trap
+  flag and the per-thread range stack are thread-local) — a cross-thread close
+  flags the trace `truncated`. Not the network TLS (Transport Layer Security).
 
 trampoline
   See {term}`capture trampoline`.

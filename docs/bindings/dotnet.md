@@ -97,7 +97,7 @@ the x86 emulator can't run.
 
 ## Function reference
 
-Every public member of `Asmtest.cs`, with an example and its options. All four
+Every public member of `Asmtest.cs`, with an example and its options. All six
 handle types (`Regs`, `Emu`, `EmuResult`, `Trace`, `Guest`, `GuestResult`)
 are `IDisposable` — wrap them in `using`. A routine reference is an `IntPtr`
 address (`Corpus.Routine(name)` or `NativeLibrary.GetExport`); the byte-array
@@ -289,6 +289,45 @@ using (scope = new AsmTrace(code, emit: false))   // auto-named "Method:<line>"
 // scope.Path holds the disassembly that executed; scope.Truncated is the thread-scope bit
 HwTrace.Shutdown();
 ```
+
+**Whole-window (zero-config) scope** — the empty ctor needs no region and no
+`HwTrace.Init` (it auto-inits the portable single-step tier, §Z0) and never
+throws: where no backend can run it self-skips with `Armed == false` and a
+human-readable `SkipReason`. The default is **data-only** — `Path` stays empty
+and the scope exposes the captured window as data; `renderPath: true` opts into
+rendering `Path` (live-memory disassembly + truncation banner).
+
+```csharp
+AsmTrace ww;
+using (ww = new AsmTrace(emit: false))     // zero config: captures whatever runs here
+    HotPath(data);
+// ww.Addresses    — the raw absolute addresses, in execution order
+// ww.CountInRange(base, len)              — attribute a known native region
+// ww.Truncated / ww.Armed / ww.SkipReason — the honesty surface
+```
+
+**Managed-method labelling (§D0.1/§D0.2)** — `byMethod: true` gives the scope an
+in-process JIT map (CoreCLR `MethodLoadVerbose`) that names methods JIT'd inside
+the window; `withRundown: true` additionally asks the runtime — over its own
+diagnostics socket, no NuGet dependency, no launch knob — for a jitdump rundown,
+so **warm** (JIT'd before the scope) and **ReadyToRun BCL** methods are named
+too. `RundownEnabled` reports whether the runtime accepted it (false ⇒ clean
+cold-only degradation, e.g. under `DOTNET_EnableDiagnostics=0`).
+
+```csharp
+AsmTrace ww;
+using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))
+    Work();
+// ww.Methods              — per-method instruction counts (AsmMethod.Assembly/.ShortName)
+// ww.InstructionsIn(name) — instructions attributed to methods matching `name`
+// ww.Disassembly          — the labelled stream (AsmInstruction: address, text, method)
+```
+
+Tiering note: labelling disassembles from **live memory** on close — correct for
+the just-captured window; a method that re-tiers/moves inside a long window can
+mislabel (the code-image `render_versioned` seam is the roadmap fix). Runnable
+demos of every report live under
+[examples/dotnet/](https://github.com/wilvk/asm-test/tree/main/examples/dotnet).
 
 ### Cross-arch guests — `Guest` / `GuestResult`
 
