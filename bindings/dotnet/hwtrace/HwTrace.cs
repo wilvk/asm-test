@@ -1174,13 +1174,13 @@ namespace Asmtest
                 // the caller decides how to present Methods / LabelledInstructions.
                 if (_map != null)
                 {
-                    // §D0.2: fold in the perf-map rundown (WARM methods too) if it was
+                    // §D0.2: fold in the jitdump rundown (WARM + R2R methods too) if it was
                     // enabled; a missing/partial file just leaves the cold-only entries.
                     // Then turn perf-map generation back off so it is not left on
                     // process-wide (unbounded file growth / per-JIT overhead).
                     if (RundownEnabled)
                     {
-                        _map.LoadPerfMap(DiagnosticsIpc.PerfMapPath());
+                        _map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
                         DiagnosticsIpc.DisablePerfMap();
                     }
                     _map.Freeze();
@@ -1353,87 +1353,107 @@ namespace Asmtest
             return null;
         }
 
-        /// <summary>§D0.2: fold in a perf-map file (<c>/tmp/perf-&lt;pid&gt;.map</c>, lines
-        /// <c>&lt;hexStart&gt; &lt;hexSize&gt; &lt;name&gt;</c>) — which, via a rundown, covers WARM
-        /// methods (JIT'd before the scope) the forward-only listener misses. Additive;
-        /// call before <see cref="Freeze"/>. Returns the number of entries loaded (0 on a
-        /// missing/unreadable file); never throws.</summary>
-        public int LoadPerfMap(string path)
+        /// <summary>§D0.2: fold in a perf **jitdump** (<c>/tmp/jit-&lt;pid&gt;.dump</c>, the binary
+        /// perf JIT_CODE_LOAD format) — which, unlike the text perf-map, ALSO carries
+        /// ReadyToRun (R2R, precompiled) methods (e.g. <c>System.Console::WriteLine</c>), so a
+        /// whole-window capture can be labelled by warm AND R2R BCL methods. Additive; call
+        /// before <see cref="Freeze"/>. Dedupes by start address so a cold in-scope method
+        /// the listener already recorded keeps its spelling. Returns entries loaded (0 on a
+        /// missing/unreadable file); never throws. x86-64 little-endian.</summary>
+        public int LoadJitDump(string path)
         {
             int n = 0;
             try
             {
                 if (!File.Exists(path)) return 0;
-                // Skip any start address already known — so a cold in-scope method that
-                // BOTH the listener (dotted name) and the forward-logging perf-map
-                // (Type::Method name) recorded keeps its listener spelling, and only
-                // genuinely-new WARM entries are added (distinct methods/tiers have
-                // distinct start addresses). Prevents a nondeterministic Resolve winner.
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+                if (fs.Length < 40 || br.ReadUInt32() != 0x4A695444u) return 0; // magic "JiTD" (LE)
+                br.ReadUInt32();                       // version
+                uint headerSize = br.ReadUInt32();     // total header size
+                if (headerSize < 40 || headerSize > fs.Length) return 0;
+                fs.Position = headerSize;              // skip to the first record
+
                 HashSet<ulong> seen;
                 lock (_lock)
                 {
                     seen = new HashSet<ulong>(_methods.Count);
                     foreach (var m in _methods) seen.Add(m.Start);
                 }
-                foreach (string line in File.ReadLines(path))
+                // Records: [u32 id][u32 total_size][u64 timestamp] + body. id 0 = JIT_CODE_LOAD:
+                // [u32 pid][u32 tid][u64 vma][u64 code_addr][u64 code_size][u64 code_index]
+                // [name\0][code bytes]. total_size advances to the next record.
+                while (fs.Position + 16 <= fs.Length)
                 {
-                    int sp1 = line.IndexOf(' ');
-                    if (sp1 <= 0) continue;
-                    int sp2 = line.IndexOf(' ', sp1 + 1);
-                    if (sp2 <= sp1) continue;
-                    // The .NET perf-map prints the address 0x-prefixed ("0x7f.. ab name"),
-                    // which NumberStyles.HexNumber rejects — strip a leading 0x on either field.
-                    ReadOnlySpan<char> startTok = Unprefix(line.AsSpan(0, sp1));
-                    ReadOnlySpan<char> sizeTok = Unprefix(line.AsSpan(sp1 + 1, sp2 - sp1 - 1));
-                    if (!ulong.TryParse(startTok, NumberStyles.HexNumber,
-                                        CultureInfo.InvariantCulture, out ulong start)) continue;
-                    if (!ulong.TryParse(sizeTok, NumberStyles.HexNumber,
-                                        CultureInfo.InvariantCulture, out ulong size)) continue;
-                    if (start == 0 || size == 0) continue;
-                    if (!seen.Add(start)) continue; // dedupe vs listener entries + repeats
-                    string name = line.Substring(sp2 + 1);
-                    lock (_lock)
+                    long rec = fs.Position;
+                    uint id = br.ReadUInt32();
+                    uint recSize = br.ReadUInt32();
+                    br.ReadUInt64();                   // timestamp
+                    if (recSize < 16 || rec + recSize > fs.Length) break;
+                    // JIT_CODE_LOAD body is 40B fixed + name(>=1) + code; a shorter record
+                    // would read code_addr/size from the wrong offsets — skip it.
+                    if (id == 0 && recSize >= 57)       // JIT_CODE_LOAD
                     {
-                        _methods.Add(new Entry { Start = start, End = start + size, Name = name });
-                        _frozen = null;
+                        br.ReadUInt32(); br.ReadUInt32(); br.ReadUInt64(); // pid, tid, vma
+                        ulong codeAddr = br.ReadUInt64();
+                        ulong codeSize = br.ReadUInt64();
+                        br.ReadUInt64();               // code_index
+                        var nb = new List<byte>(64);
+                        int b;
+                        while ((b = fs.ReadByte()) > 0) nb.Add((byte)b);
+                        if (codeAddr != 0 && codeSize != 0 && seen.Add(codeAddr))
+                        {
+                            string name = System.Text.Encoding.UTF8.GetString(nb.ToArray());
+                            lock (_lock)
+                            {
+                                _methods.Add(new Entry { Start = codeAddr, End = codeAddr + codeSize, Name = name });
+                                _frozen = null;
+                            }
+                            n++;
+                        }
                     }
-                    n++;
+                    fs.Position = rec + recSize;        // next record
                 }
             }
-            catch { /* partial/unreadable perf-map: keep whatever loaded */ }
+            catch { /* partial/unreadable jitdump: keep whatever loaded */ }
             return n;
         }
-
-        static ReadOnlySpan<char> Unprefix(ReadOnlySpan<char> t)
-            => (t.Length > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) ? t.Slice(2) : t;
     }
 
     /// <summary>
     /// §D0.2 — a dependency-free client for the ONE CoreCLR diagnostics-IPC command we
-    /// need: <c>EnablePerfMap</c>. It asks the runtime (over the Unix domain socket the
-    /// runtime opens at startup) to run down ALL already-JIT'd methods into
-    /// <c>/tmp/perf-&lt;pid&gt;.map</c> and log new ones forward — so a whole-window capture can
-    /// be labelled by WARM methods too, with no NuGet package and no launch knob. It
-    /// hand-rolls the documented <c>DOTNET_IPC_V1</c> wire format (pinned to .NET 8+) using
-    /// only BCL sockets, and self-skips (returns false, never throws) where diagnostics are
-    /// off (<c>DOTNET_EnableDiagnostics=0</c>) or the protocol errors — the caller then falls
-    /// back to the cold-only <see cref="JitMethodMap"/> result.
+    /// need: <c>EnablePerfMap(JitDump)</c>. It asks the runtime (over the Unix domain socket
+    /// the runtime opens at startup) to run down ALL already-loaded methods — JIT'd AND
+    /// <b>ReadyToRun</b> (R2R, precompiled BCL like <c>System.Console::WriteLine</c>) — into
+    /// <c>/tmp/jit-&lt;pid&gt;.dump</c> and log new ones forward, so a whole-window capture can be
+    /// labelled by warm + R2R methods too, with no NuGet package and no launch knob (no
+    /// <c>DOTNET_PerfMapEnabled</c>). It hand-rolls the documented <c>DOTNET_IPC_V1</c> wire
+    /// format (pinned to .NET 8+) using only BCL sockets, and self-skips (returns false,
+    /// never throws) where diagnostics are off (<c>DOTNET_EnableDiagnostics=0</c>) or the
+    /// protocol errors — the caller then falls back to the cold-only <see cref="JitMethodMap"/>
+    /// result. NB: R2R names go ONLY to the binary jitdump, never the text perf-map, and only
+    /// <c>PerfMapType.JitDump</c>/<c>All</c> (not <c>PerfMap</c>) run the R2R rundown.
     /// </summary>
     public static class DiagnosticsIpc
     {
-        // DiagnosticsServerCommandSet.Process / ProcessCommandId.{Enable,Disable}PerfMap; PerfMapType.PerfMap.
+        // DiagnosticsServerCommandSet.Process / ProcessCommandId.{Enable,Disable}PerfMap.
         const byte CommandSet_Process = 0x04;
         const byte CommandId_EnablePerfMap = 0x05;
         const byte CommandId_DisablePerfMap = 0x06;
-        const uint PerfMapType_PerfMap = 3;
+        // PerfMapType.JitDump(2) — NOT PerfMap(3): only JitDump/All run the ReadyToRun
+        // rundown (ReadyToRunInfo::MethodIterator in coreclr PerfMap::Enable), so it names
+        // R2R/precompiled BCL methods too; PerfMap(3) writes the text perf-map, which is
+        // JIT-only and never contains R2R. JitDump goes to /tmp/jit-<pid>.dump (binary).
+        const uint PerfMapType_JitDump = 2;
         const byte CommandSet_Server = 0xFF; // response command set
         const byte CommandId_OK = 0x00;      // response OK
         const int IpcTimeoutMs = 1000;       // never hang the traced scope on a stalled peer
         static readonly byte[] Magic = System.Text.Encoding.ASCII.GetBytes("DOTNET_IPC_V1\0"); // 14 bytes
 
-        /// <summary>Ask the runtime to (rundown +) write <c>/tmp/perf-&lt;pid&gt;.map</c>.
-        /// Returns true on an OK response; false on any failure (clean self-skip).</summary>
-        public static bool EnablePerfMap() => Send(CommandId_EnablePerfMap, PerfMapType_PerfMap);
+        /// <summary>Ask the runtime to (rundown +) write <c>/tmp/jit-&lt;pid&gt;.dump</c> — the
+        /// jitdump, which includes JIT + R2R methods. Returns true on an OK response; false
+        /// on any failure (clean self-skip).</summary>
+        public static bool EnablePerfMap() => Send(CommandId_EnablePerfMap, PerfMapType_JitDump);
 
         /// <summary>Turn perf-map generation back off (paired with <see cref="EnablePerfMap"/>
         /// so it is not left enabled process-wide after the scope). Best-effort.</summary>
@@ -1476,9 +1496,9 @@ namespace Asmtest
             catch { return false; }
         }
 
-        /// <summary>The perf-map path the runtime writes for this process.</summary>
-        public static string PerfMapPath()
-            => Path.Combine(TempDir(), $"perf-{Environment.ProcessId}.map");
+        /// <summary>The jitdump path the runtime writes for this process.</summary>
+        public static string JitDumpPath()
+            => Path.Combine(TempDir(), $"jit-{Environment.ProcessId}.dump");
 
         static string TempDir()
         {

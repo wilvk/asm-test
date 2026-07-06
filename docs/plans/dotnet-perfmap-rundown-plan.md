@@ -1,35 +1,42 @@
-# asm-test — dependency-free in-process perf-map rundown (§D0.2, hand-rolled): implementation plan
+# asm-test — dependency-free in-process jitdump rundown (§D0.2, hand-rolled): implementation plan
 
 Make the whole-window managed-method breakdown
-([examples/dotnet/methods](../../examples/dotnet/methods/)) name **warm** methods
-(JIT-compiled *before* the scope — e.g. `System.Console.WriteLine`), not only the
-**cold** methods JIT'd inside it — **without a NuGet dependency and without a launch
-knob**. This is the "Option B, hand-rolled" realisation of the managed plan's
+([examples/dotnet/rundown](../../examples/dotnet/rundown/)) name **warm** methods
+(JIT-compiled *before* the scope) **and ReadyToRun (R2R) precompiled BCL methods** (e.g.
+the whole `System.Console.WriteLine` write path), not only the **cold** methods JIT'd
+inside it — **without a NuGet dependency and without a launch knob**. This is the
+"Option B, hand-rolled" realisation of the managed plan's
 [§D0.2 pre-arm rundown](scoped-tracing-managed-plan.md); the shipped `JitMethodMap`
 (an in-proc `MethodLoadVerbose` `EventListener`) sees only methods JIT'd *after* it is
-enabled, so warm methods land in the unlabelled `[native runtime]` remainder.
+enabled, so warm and R2R methods land in the unlabelled `[native runtime]` remainder.
 
-> **Status: BUILT + validated.** Shipped as `DiagnosticsIpc` + `JitMethodMap.LoadPerfMap`
+> **Status: BUILT + validated.** Shipped as `DiagnosticsIpc` + `JitMethodMap.LoadJitDump`
 > + `AsmTrace(withRundown: true)` in [bindings/dotnet/hwtrace/HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs),
 > demoed by [examples/dotnet/rundown](../../examples/dotnet/rundown/). Validated in the
-> asmtest-dotnet container: rundown-on names warm `Program::Main`; `DOTNET_EnableDiagnostics=0`
-> → `RundownEnabled=false`, clean fallback to the cold-only `JitMethodMap`; binding test 33/0.
-> Adversarially reviewed (socket timeouts so it never hangs the scope, `.`/`::` dedupe,
-> `DisablePerfMap` on close, EnablePerfMap once before arming — never single-steps the socket).
+> asmtest-dotnet container: rundown-on names the R2R Console write path
+> (`StreamWriter::WriteLine[PreJIT]`, `ConsolePal::Write[PreJIT]`) + warm `Program::Main`
+> — 38 methods / 30 R2R; `DOTNET_EnableDiagnostics=0` → `RundownEnabled=false`, clean fallback
+> to the cold-only `JitMethodMap`; binding test 33/0. Adversarially reviewed (socket timeouts
+> so it never hangs the scope, `.`/`::` dedupe, `DisablePerfMap` on close, EnablePerfMap once
+> before arming — never single-steps the socket).
 
-## Why a rundown, and why hand-rolled
+## Why a rundown, and why the jitdump (NOT the perf-map)
 
-Warm methods need a **rundown** — an enumeration of *already*-JIT'd methods. An
+Warm + R2R methods need a **rundown** — an enumeration of *already-loaded* methods. An
 in-process `EventListener` cannot get one (rundown is an EventPipe/diagnostics-session
 concept). The runtime *can* be told, at runtime, to enable perf-map generation, and
-CoreCLR's `PerfMap::Enable` **runs down all already-JIT'd methods** (walks the loaded
-R2R assemblies + JIT code heap) into `/tmp/perf-<pid>.map`, then logs new ones forward.
-The public client for that is `DiagnosticsClient.EnablePerfMap` in the
-`Microsoft.Diagnostics.NETCore.Client` NuGet package — but it is just a client for a
-documented binary protocol over a socket the runtime already opens. Hand-rolling that
-one message keeps the binding **dependency-free** (BCL sockets only) and needs no
-`DOTNET_PerfMapEnabled` launch knob. The cost is a small, version-pinned slice of a
-binary protocol we maintain ourselves (see Risks).
+CoreCLR's `PerfMap::Enable` runs down loaded methods. **Crucial correction (verified in
+`coreclr/vm/perfmap.cpp`):** R2R method names go ONLY to the binary jitdump
+(`/tmp/jit-<pid>.dump`), NEVER the text perf-map (`/tmp/perf-<pid>.map`, which is
+JIT-only), and the R2R rundown (`ReadyToRunInfo::MethodIterator`) runs ONLY for
+`PerfMapType.JitDump`/`All` — **not** `PerfMap`. So the command must request `JitDump(2)`,
+not `PerfMap(3)`, and read the jitdump. (An earlier iteration requested `PerfMap` and
+missed R2R entirely — the whole BCL.) The public client for the command is
+`DiagnosticsClient.EnablePerfMap` in the `Microsoft.Diagnostics.NETCore.Client` NuGet
+package — but it is just a client for a documented binary protocol over a socket the
+runtime already opens. Hand-rolling that one message keeps the binding **dependency-free**
+(BCL sockets only) and needs no `DOTNET_PerfMapEnabled` launch knob. The cost is a small,
+version-pinned slice of a binary protocol we maintain ourselves (see Risks).
 
 ## The verified wire protocol (pinned to .NET 8+)
 
@@ -46,35 +53,39 @@ Header:
   commandId   u8          0x05               (EnablePerfMap)
   reserved    u16         0x0000
 Payload:
-  perfMapType u32 LE      3                  (PerfMapType.PerfMap -> /tmp/perf-<pid>.map)
+  perfMapType u32 LE      2                  (PerfMapType.JitDump -> /tmp/jit-<pid>.dump, JIT + R2R)
 ```
 
-`PerfMapType`: `None=0, All=1, JitDump=2, PerfMap=3`. Response is an IpcMessage whose
+`PerfMapType`: `None=0, All=1, JitDump=2, PerfMap=3`. **Use `JitDump(2)`** — only
+JitDump/All run the R2R rundown; `PerfMap(3)` is JIT-only. Response is an IpcMessage whose
 header `commandSet == 0xFF` (Server) and `commandId == 0x00` (OK) on success (payload a
-u32 HRESULT). We read + validate the response, then confirm the perf-map file appears.
+u32 HRESULT). We read + validate, then read the jitdump. Paired `DisablePerfMap` = command
+`0x06`, no payload. The jitdump is the perf `JIT_CODE_LOAD` binary format (magic `"JiTD"`,
+records carrying `code_addr`+`code_size`+name); `JitMethodMap.LoadJitDump` parses it into
+the address→name map (dedup by start address vs the listener's cold entries).
 
 ## Pieces to build (all in `bindings/dotnet/hwtrace/`, examples in `examples/dotnet/`)
 
 1. **`DiagnosticsIpc` (new, C#).** BCL-sockets-only client for the one command:
    - Glob `/tmp/dotnet-diagnostic-<Environment.ProcessId>-*-socket`; connect a
      `Socket(AddressFamily.Unix, Stream, unspecified)` to the newest match.
-   - Send the 24-byte `EnablePerfMap(PerfMap)` message above; read + validate the
-     response header.
+   - Send the 24-byte `EnablePerfMap(JitDump)` message above; read + validate the
+     response header. (Paired `DisablePerfMap`, command `0x06`, no payload.)
    - Return `bool` — false (clean self-skip) if the socket is absent, connect/send/recv
      fails, or the response is not OK. Never throws.
-2. **`JitMethodMap.LoadPerfMap(path)` (extend the shipped class).** Parse
-   `/tmp/perf-<pid>.map` lines `<hexStart> <hexSize> <name>` into the existing
-   `(Start,End,Name)` entries, then `Freeze()`; `Resolve` already binary-searches. This
-   makes the map cover **warm + cold** (the perf-map rundown superset).
-3. **`AsmTrace(..., bool withRundown = false)`.** Opt-in. In the ctor (so the rundown
-   captures pre-scope warm methods and forward-logs the cold ones), call
-   `DiagnosticsIpc.EnablePerfMap()`. On `Dispose`, after capture, `LoadPerfMap` the file
-   and attribute the captured `Addresses` against it → `Methods` now includes warm
-   methods. If the rundown self-skips or the file never appears, fall back to the
-   existing cold-only `JitMethodMap` result (and record why via `SkipReason`-style note).
-4. **Example.** Extend or add an [examples/dotnet/methods](../../examples/dotnet/methods/)
-   run with `withRundown: true`, asserting a known **warm** method (e.g.
-   `System.Console.WriteLine`) now appears in the breakdown.
+2. **`JitMethodMap.LoadJitDump(path)` (extend the shipped class).** Parse the binary
+   `/tmp/jit-<pid>.dump` (perf `JIT_CODE_LOAD` records: `code_addr`+`code_size`+name) into
+   the existing `(Start,End,Name)` entries, then `Freeze()`; `Resolve` already binary-
+   searches. This makes the map cover **JIT + warm + R2R** (the jitdump superset), deduped
+   by start address vs the listener entries.
+3. **`AsmTrace(..., bool withRundown = false)`.** Opt-in. In the ctor (BEFORE arming, so
+   the rundown's socket code is not single-stepped), call `DiagnosticsIpc.EnablePerfMap()`.
+   On `Dispose`, after capture, `LoadJitDump` the file + `DisablePerfMap`, and attribute the
+   captured `Addresses` → `Methods` now includes warm + R2R methods. If the rundown
+   self-skips or the file never appears, fall back to the cold-only `JitMethodMap` result.
+4. **Example.** [examples/dotnet/rundown](../../examples/dotnet/rundown/) runs
+   `withRundown: true` and asserts the R2R BCL Console write path
+   (`StreamWriter::WriteLine[PreJIT]`, `ConsolePal::Write[PreJIT]`) now appears.
 
 ## Timing / flush
 
@@ -108,7 +119,15 @@ the build, not assumed.
 - **Protocol drift.** A wrong byte fails at runtime (self-skip), not build. Mitigated by
   pinning to the verified values + the fall-back to cold-only. If a future runtime moves
   the command, the feature self-skips rather than misbehaving.
-- **Perf-map buffering** (the timing/flush point above).
+- **Jitdump size / accumulating cost.** Unlike the tiny text perf-map, the jitdump embeds
+  every method's machine code, and the runtime re-runs the warm+R2R rundown on *every*
+  `withRundown` scope, appending to `jit-<pid>.dump` (never deleted) — so a long-lived
+  process opening *many* rundown scopes pays growing disk + re-parse cost (O(cumulative
+  methods) per scope; the parser skips code bytes, so memory stays bounded). Fine for the
+  intended occasional-introspection use (single/few scopes, validated); if it matters,
+  parse only the appended tail or truncate between scopes. Opt-in keeps it off by default.
+- **Jitdump flush/partial file** at Dispose — a trailing unflushed record is bounded off by
+  `rec + recSize > fs.Length` and skipped; the scope-open rundown is long flushed.
 - **Self-diagnostics deadlock** for heavy ops — not this light command, but kept opt-in.
 
 ## Relationship

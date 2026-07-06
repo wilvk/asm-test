@@ -1,15 +1,18 @@
-// examples/dotnet/rundown — name WARM methods too, via an in-process perf-map rundown
-// (§D0.2), dependency-free and with no launch knob.
+// examples/dotnet/rundown — name WARM + ReadyToRun (R2R) methods via an in-process
+// jitdump rundown (§D0.2), dependency-free and with NO launch knob.
 //
 //     using (var ww = new AsmTrace(byMethod: true, withRundown: true))
-//         Work();          // Work is cold; it calls Console.WriteLine, which is WARM
-//     // ww.Methods now includes System.Console.WriteLine — a method JIT'd BEFORE the scope.
+//         Work();          // Work calls Console.WriteLine — whose write path is R2R BCL
+//     // ww.Methods now names the R2R BCL write path (StreamWriter::WriteLine, ConsolePal
+//     // ::Write, the write syscall) — methods the cold-only §D0.1 listener never sees.
 //
-// The cold-only JitMethodMap (§D0.1) sees only methods JIT'd inside the scope, so warm
-// BCL methods fall into the unlabelled runtime remainder. `withRundown: true` asks the
-// runtime — over its own diagnostics socket, no NuGet, no DOTNET_PerfMapEnabled — to run
-// down ALL already-JIT'd methods into /tmp/perf-<pid>.map, which AsmTrace folds into the
-// breakdown. Self-skips to the cold-only result where diagnostics are off.
+// The cold-only JitMethodMap (§D0.1) sees only methods JIT'd INSIDE the scope. Two kinds
+// are missed: WARM methods (JIT'd before the scope) and — the bigger set — the ReadyToRun
+// BCL, which is AOT-precompiled and never JIT'd at all. `withRundown: true` asks the
+// runtime — over its own diagnostics socket, no NuGet, no DOTNET_PerfMapEnabled — for a
+// perf-map rundown of PerfMapType.JitDump, which (unlike the text perf-map, which is
+// JIT-only) runs the R2R rundown into /tmp/jit-<pid>.dump. AsmTrace folds that in, so warm
+// AND R2R methods get named. Self-skips to the cold-only result where diagnostics are off.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -17,17 +20,17 @@ using Asmtest;
 
 internal static class Program
 {
-    // Cold (JIT'd inside the scope). It calls Console.WriteLine, which is WARM — already
-    // JIT'd by the header prints in Main, before the scope's map exists.
+    // Cold (JIT'd inside the scope). It calls Console.WriteLine, whose whole write path —
+    // SyncTextWriter/StreamWriter/ConsolePal/encoding/the write syscall — is R2R BCL.
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void Work()
     {
-        Console.WriteLine("[Work] running inside the scope (calls warm Console.WriteLine)");
+        Console.WriteLine("[Work] running inside the scope (its R2R write path is what we name)");
     }
 
     static int Main()
     {
-        Console.WriteLine("== §D0.2: naming WARM methods via an in-process perf-map rundown ==\n");
+        Console.WriteLine("== §D0.2: naming WARM + R2R methods via an in-process jitdump rundown ==\n");
 
         if (!HwTrace.Available(HwBackend.SingleStep))
         {
@@ -39,37 +42,39 @@ internal static class Program
 
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))
-            Work();   // Work: cold; Console.WriteLine: warm
+            Work();
         if (!ww.Armed)
         {
             Console.WriteLine($"# self-skip: {ww.SkipReason}");
             return 0;
         }
 
+        int r2r = 0;
+        foreach (AsmMethod m in ww.Methods) if (m.Name.Contains("[PreJIT]")) r2r++;
         Console.WriteLine($"rundown enabled: {ww.RundownEnabled}; captured {ww.Addresses.Length} instructions"
                           + (ww.Truncated ? " (truncated)" : "")
-                          + $"; {ww.Methods.Count} methods labelled; {ww.LabelledInstructions} instructions.\n");
+                          + $"; {ww.Methods.Count} methods labelled ({r2r} R2R); {ww.LabelledInstructions} instructions.\n");
 
-        Console.WriteLine("methods that executed in the window (warm + cold):");
+        Console.WriteLine("methods that executed in the window (JIT, warm, and R2R BCL):");
         foreach (AsmMethod m in ww.Methods)
             Console.WriteLine($"    {m.Count,8}  {m.Name}");
 
-        // Program::Main is unambiguously WARM — it was JIT'd at startup, before the scope
-        // existed, so the cold-only §D0.1 listener can never name it. (Console.WriteLine
-        // itself is a thin, inlined forwarder, so the work you'd expect under it shows up
-        // as its warm callees — System.Threading.Monitor::Enter, System.Buffer::Memmove.)
-        long warmMain = ww.InstructionsIn("Program::Main");
+        // The R2R Console write path — precompiled BCL, never JIT'd, invisible to §D0.1.
+        // (Console::WriteLine(string) itself is an inlined forwarder, so its work shows up
+        // as these R2R callees: SyncTextWriter/StreamWriter::WriteLine, ConsolePal::Write.)
+        long writePath = ww.InstructionsIn("StreamWriter::WriteLine")
+                       + ww.InstructionsIn("ConsolePal::Write");
         Console.WriteLine();
         if (!ww.RundownEnabled)
             Console.WriteLine("-> rundown self-skipped (diagnostics off?); only cold methods are named.");
-        else if (warmMain > 0)
-            Console.WriteLine($"-> a WARM method — Program::Main, JIT'd at startup BEFORE the scope — is now\n"
-                              + $"   named ({warmMain} instructions), alongside warm BCL methods (Monitor::Enter,\n"
-                              + $"   Buffer::Memmove). The cold-only §D0.1 path names only methods JIT'd inside\n"
-                              + $"   the scope (here just Program.Work).");
+        else if (writePath > 0)
+            Console.WriteLine($"-> the R2R BCL Console write path is NAMED ({writePath} instructions in\n"
+                              + $"   StreamWriter::WriteLine + ConsolePal::Write, both [PreJIT]=ReadyToRun) —\n"
+                              + $"   precompiled methods the cold-only §D0.1 path can never see. Program::Main\n"
+                              + $"   (warm, JIT'd) is named too: {ww.InstructionsIn("Program::Main")} instructions.");
         else
-            Console.WriteLine("-> rundown enabled; the perf-map named warm methods above (::-format), which the\n"
-                              + "   cold-only path cannot see.");
+            Console.WriteLine($"-> rundown enabled; {r2r} R2R ([PreJIT]) methods named above, which the cold-only\n"
+                              + "   path cannot see.");
         return 0;
     }
 }

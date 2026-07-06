@@ -11,7 +11,7 @@ single-step cannot run.
 | [wholewindow/](wholewindow/) | `using (new AsmTrace())` | zero-config whole-window capture + attributing two native leaves apart from the runtime |
 | [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
 | [methods/](methods/) | `using (new AsmTrace())` | labelling the captured window by **managed method** (§D0.1) — names an arbitrary **cold** method |
-| [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm** methods (§D0.2) via an in-process perf-map rundown — dependency-free, no launch knob |
+| [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm + ReadyToRun (R2R) BCL** methods (§D0.2) via an in-process jitdump rundown — dependency-free, no launch knob |
 
 ## Run them
 
@@ -105,26 +105,30 @@ the **STRONG** whole-window PT tier (forward-look here). See
 [docs/plans/scoped-tracing-zeroconfig-plan.md](../../docs/plans/scoped-tracing-zeroconfig-plan.md)
 §Z3 and the managed plan's §D0.1.
 
-## rundown — naming WARM methods too (§D0.2, observed output)
+## rundown — naming WARM + R2R BCL methods too (§D0.2, observed output)
 
-The §D0.1 `JitMethodMap` only names methods JIT'd *inside* the scope, so warm methods
-(e.g. `Program::Main`, the BCL) land in the runtime remainder. `withRundown: true` asks
-the runtime — over its own diagnostics socket, **no NuGet, no `DOTNET_PerfMapEnabled`** —
-to run down all already-JIT'd methods into `/tmp/perf-<pid>.map`, which `AsmTrace` folds
-into the breakdown:
+The §D0.1 `JitMethodMap` only names methods JIT'd *inside* the scope, so it misses both
+warm methods (JIT'd before the scope) and — the bigger set — the **ReadyToRun (R2R)** BCL,
+which is AOT-precompiled and never JIT'd at all. `withRundown: true` asks the runtime — over
+its own diagnostics socket, **no NuGet, no `DOTNET_PerfMapEnabled`** — for a
+`PerfMapType.JitDump` rundown, which (unlike the text perf-map, which is JIT-only) runs the
+R2R rundown into `/tmp/jit-<pid>.dump`. `AsmTrace` folds that in, so the whole R2R Console
+write path gets named:
 
 ```
-rundown enabled: True; captured 973328 instructions (truncated); 8 methods labelled; 156 instructions.
+rundown enabled: True; captured 973328 instructions (truncated); 38 methods labelled (30 R2R); 995 instructions.
     ...
-    22  instance void [rundown] Asmtest.AsmTrace::.ctor(...)[MinOptJitted]   <- WARM (perf-map)
-    20  int32 [rundown] Program::Main()[MinOptJitted]                        <- WARM (perf-map)
-    11  Program.Work                                                          <- cold (listener)
-     6  System.Threading.Monitor.Enter                                        <- cold (listener)
--> a WARM method — Program::Main, JIT'd at startup BEFORE the scope — is now named.
+    105  System.IO.StreamWriter::WriteLine(string)[PreJIT]        <- R2R BCL
+     65  System.ConsolePal::Write(SafeFileHandle,...)[PreJIT]     <- R2R BCL
+     20  Program::Main()[MinOptJitted]                            <- warm (JIT'd)
+     11  Program.Work                                              <- cold (listener)
+-> the R2R BCL Console write path is NAMED (StreamWriter::WriteLine + ConsolePal::Write,
+   both [PreJIT]=ReadyToRun) — precompiled methods the cold-only §D0.1 path can never see.
 ```
 
-Warm methods carry the perf-map `::` spelling; cold in-scope methods keep the listener's
-dotted spelling. Self-skips to the cold-only result where diagnostics are off
+`[PreJIT]` marks R2R (precompiled) methods; `[MinOptJitted]`/`[OptimizedTier1]` are JIT
+tiers. (`Console::WriteLine(string)` itself is an inlined forwarder, so its *work* shows up
+as these R2R callees.) Self-skips to the cold-only result where diagnostics are off
 (`DOTNET_EnableDiagnostics=0` → `rundown enabled: False`). See
 [dotnet-perfmap-rundown-plan.md](../../docs/plans/dotnet-perfmap-rundown-plan.md).
 
@@ -133,8 +137,8 @@ dotted spelling. Self-skips to the cold-only result where diagnostics are off
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
   `new AsmTrace(withRundown: true)` — the empty-ctor, region-scoped, method-labelling
   (cold), and rundown (warm + cold) scopes.
-- `AsmTrace.RundownEnabled` — whether the §D0.2 rundown was accepted; `DiagnosticsIpc` /
-  `JitMethodMap.LoadPerfMap` are the underlying pieces.
+- `AsmTrace.RundownEnabled` — whether the §D0.2 rundown was accepted; `DiagnosticsIpc`
+  (`EnablePerfMap(JitDump)`) / `JitMethodMap.LoadJitDump` are the underlying pieces.
 - `AsmTrace.Addresses` — the raw absolute addresses a whole-window scope captured.
 - `AsmTrace.CountInRange(start, len)` — how many landed in a known native region
   (tells native leaves apart; used by [wholewindow/](wholewindow/)).
