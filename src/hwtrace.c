@@ -94,14 +94,16 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
  * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
+                          const void *base, uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap);
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
                                 const void *base, size_t len,
                                 asmtest_trace_t *trace, int gap);
-/* AMD branch stack depth: a richest-window count at the ceiling means the routine
- * overflowed one snapshot, so escalate from Tier-A to Tier-B stitching. */
-#define AMD_LBR_DEPTH 16
+/* AMD branch stack depth (runtime, from CPUID 0x80000022 EBX; 16 on every shipping
+ * part): a richest-window count at the ceiling means the routine overflowed one
+ * snapshot, so escalate from Tier-A to Tier-B stitching. */
+int asmtest_amd_lbr_depth(void);
 #endif
 
 /* Single-step (EFLAGS.TF / SIGTRAP) stepper (ss_backend.c). Unlike the trace
@@ -576,7 +578,13 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
-    g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 64 * 1024);
+    /* The AMD data ring holds the sample_period=1 branch-stack windows the Tier-B
+     * stitch splices; its size bounds how long a run reconstructs before the kernel
+     * drops the newest samples (a PERF_RECORD_LOST -> honest truncation). 256KB (vs
+     * Intel PT's 8KB base ring) buys more gapless stitch reach; raise data_size, and
+     * kernel.perf_event_max_sample_rate / kernel.perf_cpu_time_max_percent=0 on the
+     * runner, to extend it further (see docs/plans/amd-tracing-plan.md Phase 5). */
+    g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 256 * 1024);
     g_base_map =
         mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
     if (g_base_map == MAP_FAILED) {
@@ -714,10 +722,11 @@ static void hwtrace_end_amd(void) {
      * gaplessly). Treat a (near-)full ring as loss: if less than one maximum-size
      * branch-stack sample of headroom remains, the tail was almost certainly
      * dropped and the trace must be honestly truncated rather than claimed complete. */
+    const int amd_depth = asmtest_amd_lbr_depth();
     {
         size_t max_sample =
             sizeof(struct perf_event_header) + sizeof(uint64_t) +
-            (size_t)AMD_LBR_DEPTH * sizeof(struct perf_branch_entry);
+            (size_t)amd_depth * sizeof(struct perf_branch_entry);
         if (dsz > 0 && span + max_sample > dsz)
             lost = 1;
     }
@@ -733,16 +742,17 @@ static void hwtrace_end_amd(void) {
      * >16-branch trace where a single window cannot. */
     int done = 0;
     if (best != NULL && best_nr > 0 && best_inregion > 0) {
-        if (best_nr >= AMD_LBR_DEPTH && n_samples > 1 && samples != NULL &&
+        if (best_nr >= (uint64_t)amd_depth && n_samples > 1 && samples != NULL &&
             nrs != NULL) {
-            size_t out_cap = n_samples + AMD_LBR_DEPTH;
+            size_t out_cap = n_samples + (size_t)amd_depth;
             struct perf_branch_entry *out =
                 (struct perf_branch_entry *)malloc(out_cap * sizeof *out);
             if (out != NULL) {
                 int gap = 0;
                 size_t st = asmtest_amd_stitch(
                     (const struct perf_branch_entry *const *)samples, nrs,
-                    n_samples, out, out_cap, &gap);
+                    n_samples, r->base, (uint64_t)(uintptr_t)r->base, r->len,
+                    out, out_cap, &gap);
                 if (st > 0) {
                     asmtest_amd_decode_stitched(out, st, r->base, r->len,
                                                 r->trace, gap || lost);

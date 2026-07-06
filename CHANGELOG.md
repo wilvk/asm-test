@@ -6,6 +6,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **AMD hardware-trace improvements — Phases 0, 4, 5 of the
+  [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/amd-tracing-plan.md).**
+  Completes the P0/P1 near-term work on the AMD LBR backend, all validated live on the
+  Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`) via `make docker-hwtrace-amd`:
+  - **Phase 4 — LbrExtV2 speculation-bit filtering.** `amd_replay` now drops a
+    `perf_branch_entry` whose `spec == PERF_BR_SPEC_WRONG_PATH` (a speculative,
+    never-retired phantom edge) before reconstruction; dropping it is expected, so it does
+    not set `truncated`. The `spec` field (Linux ≥ 6.1) is gated behind a
+    `-fsyntax-only` struct-member build probe (`ASMTEST_HAVE_PERF_BR_SPEC`), so the filter
+    compiles out cleanly on older headers / Zen 3 BRS. `amd_edge_eq` (the stitcher's
+    from+to overlap key) is untouched.
+  - **Phase 5 — Tier-B stitch hardening.** `asmtest_amd_stitch` gained a
+    decodable-distance guard: a smallest-overlap match is accepted only if the adjacency
+    it splices is real straight-line code, so a dropped/throttled-sample mis-stitch
+    becomes an honest gap instead of a silently-wrong trace. The AMD data ring default
+    grew 64 KB → 256 KB to extend gapless stitch reach before the kernel drops samples;
+    the `data_size` header comment now documents both backend defaults.
+  - **Phase 0 — runtime branch-stack depth.** `asmtest_amd_lbr_depth()` reads the true
+    depth from CPUID `0x80000022` EBX[9:4] (`lbr_v2_stack_sz`), replacing the hardcoded 16
+    in the Tier-A/Tier-B split, stitch bound, and LOST heuristic. A no-op today (every
+    shipping Zen reports 16) that removes the assumption.
+  - Phases 6 (Zen 3 BRS period-adjust) and 7 (IBS-Op coverage) remain forward-look — they
+    require Zen 3 / Zen 2 silicon the dev box lacks, and the project does not ship
+    hardware code it cannot self-validate.
+
 ## [1.1.0] — 2026-07-06
 
 ### Fixed

@@ -111,8 +111,9 @@ The tier reuses the native-trace begin/end region model. The five calls are:
 
 `asmtest_hwtrace_options_t` controls the rings: `aux_size` (trace ring bytes,
 rounded up to a power-of-two pages, `0` → 64 KB), `data_size` (base perf ring, `0` →
-8 KB for PT/CoreSight; the AMD backend floors it at 64 KB, and it bounds the Tier-B
-stitched capture), `snapshot` (nonzero maps a circular snapshot ring instead of a linear drain —
+8 KB for PT/CoreSight; the AMD backend defaults it to 256 KB, and it bounds the Tier-B
+stitched capture — raise it, and `kernel.perf_event_max_sample_rate` /
+`kernel.perf_cpu_time_max_percent=0` on the runner, to extend reach), `snapshot` (nonzero maps a circular snapshot ring instead of a linear drain —
 capture-side only so far: `end()` decodes the linear ring, and the circular-ring walk
 from `aux_tail` is a named follow-up), and an optional `object_hint` path for hardware
 address filters.

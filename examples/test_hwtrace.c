@@ -41,8 +41,10 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_decoder_present(void);
 int asmtest_amd_freeze_available(void);
 int asmtest_amd_snapshot_available(void);
+int asmtest_amd_lbr_depth(void);
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
+                          const void *base, uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap);
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
@@ -128,6 +130,16 @@ static void test_amd_freeze_probe(void) {
     printf("# AMD deterministic LBR-snapshot substrate (LbrExtV2+perfmon_v2+kernel>=6.10): %s\n",
            s1 ? "PRESENT (boundary bpf_get_branch_snapshot buildable; run needs CAP_BPF)"
               : "ABSENT (falls back to sample_period=1 windows)");
+
+    /* AMD Phase 0 — runtime branch-stack depth (CPUID 0x80000022 EBX), replacing the
+     * hardcoded 16 that drives the Tier-A/Tier-B overflow split. Every shipping Zen
+     * part reports 16; assert a sane, stable positive value and print this host's. */
+    int d1 = asmtest_amd_lbr_depth();
+    int d2 = asmtest_amd_lbr_depth();
+    CHECK(d1 >= 1 && d1 <= 64, "AMD LBR depth is a sane positive value");
+    CHECK(d1 == d2, "AMD LBR depth is stable (cached)");
+    printf("# AMD LBR branch-stack depth on this host: %d (16 on every shipping Zen)\n",
+           d1);
 #else
     printf("# SKIP AMD freeze probe: x86-64 Linux only\n");
 #endif
@@ -178,6 +190,58 @@ static void test_amd_reconstruction(void) {
     asmtest_trace_free(ot);
 #else
     printf("# SKIP AMD reconstruction: not Linux x86-64\n");
+#endif
+}
+
+/* AMD Phase 4 — LbrExtV2 speculation-bit filtering. A wrong-path branch record
+ * (spec == PERF_BR_SPEC_WRONG_PATH — executed speculatively, never retired) is a
+ * phantom edge LbrExtV2 still delivers; amd_replay must DROP it before replay, and
+ * dropping it is expected, so it must NOT set truncated. Feed the clean add2 Tier-A
+ * stack an extra newest phantom whose target (0x6) would, if trusted, add a spurious
+ * block; assert the reconstruction stays byte-identical to the no-phantom case
+ * (same insns, the same {0, 0x11} partition, complete). Host-independent, like
+ * test_amd_reconstruction. Needs the `spec` bitfield (Linux >= 6.1 header); self-skips
+ * otherwise — on such builds the filter is a compile-out no-op (Zen 3 BRS is
+ * retired-only and has no spec bits either). */
+static void test_amd_spec_filter(void) {
+#if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_PERF_BR_SPEC)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD spec filter: built without Capstone\n");
+        return;
+    }
+    uint64_t b = (uint64_t)(uintptr_t)ROUTINE;
+    /* newest-first: [phantom, ret, jle]. The phantom sits newest, so it replays
+     * LAST — after ret has left the region; if TRUSTED its to=0x6 would append a
+     * spurious block at 0x6. jle(0xc->0x11) then ret(0x11->out) are the real edges. */
+    struct perf_branch_entry br[3];
+    memset(br, 0, sizeof br);
+    br[0].from = b + 0x3;  /* phantom source (in-region, arbitrary)              */
+    br[0].to = b + 0x6;    /* phantom target — a spurious block 0x6 if unfiltered */
+    br[0].spec = PERF_BR_SPEC_WRONG_PATH; /* header enum: exists with the field  */
+    br[1].from = b + 0x11;
+    br[1].to = b + sizeof ROUTINE; /* ret -> outside */
+    br[2].from = b + 0xc;
+    br[2].to = b + 0x11; /* jle -> ret */
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    int rc = asmtest_amd_decode(br, 3, ROUTINE, sizeof ROUTINE, tr);
+    CHECK(rc == 0, "AMD decode succeeds with a wrong-path phantom in the stack");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "AMD wrong-path filter: instruction stream matches the clean case");
+    CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
+          "AMD wrong-path filter: block partition stays {0, 0x11}");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
+          "AMD wrong-path filter: no spurious block from the phantom target");
+    CHECK(!asmtest_trace_covered(tr, 0x6),
+          "AMD wrong-path filter: the phantom target (0x6) is NOT a block start");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "AMD wrong-path filter: dropping a phantom does NOT truncate");
+    asmtest_trace_free(tr);
+#else
+    printf("# SKIP AMD spec filter: needs x86-64 Linux with the perf spec bitfield\n");
 #endif
 }
 
@@ -391,7 +455,9 @@ static void test_amd_stitch(void) {
 
     struct perf_branch_entry stitched[64];
     int gap = 0;
-    size_t n = asmtest_amd_stitch(samples, nrs, K, stitched, 64, &gap);
+    size_t n = asmtest_amd_stitch(samples, nrs, K, AMD_LOOP,
+                                  (uint64_t)(uintptr_t)AMD_LOOP, sizeof AMD_LOOP,
+                                  stitched, 64, &gap);
     CHECK(n == K && gap == 0,
           "AMD stitch recovers all 18 branches past the 16-deep window");
 
@@ -433,11 +499,73 @@ static void test_amd_stitch(void) {
     size_t gnrs[2] = {1, 16};
     struct perf_branch_entry gout[64];
     int gap2 = 0;
-    asmtest_amd_stitch(gsamples, gnrs, 2, gout, 64, &gap2);
+    asmtest_amd_stitch(gsamples, gnrs, 2, AMD_LOOP,
+                       (uint64_t)(uintptr_t)AMD_LOOP, sizeof AMD_LOOP, gout, 64,
+                       &gap2);
     CHECK(gap2 == 1,
           "AMD stitch flags a gap when windows lose overlap (throttled drop)");
 #else
     printf("# SKIP AMD stitch: not Linux x86-64\n");
+#endif
+}
+
+/* AMD Phase 5 — decodable-distance stitch guard. The smallest-overlap heuristic keys
+ * on from+to equality alone, so a dropped/throttled sample can make it splice two
+ * edges that aren't connected by real straight-line code. The guard requires the
+ * tail's newest branch target to Capstone-decode forward to the next branch source;
+ * an indecodable splice is rejected (larger shift / honest gap) rather than silently
+ * stitched wrong. A legitimate contiguous splice is unaffected. Host-independent. */
+static void test_amd_stitch_decodable(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD stitch decodable-distance: built without Capstone\n");
+        return;
+    }
+    const uint64_t b = (uint64_t)(uintptr_t)AMD_LOOP;
+    struct perf_branch_entry A; /* the real back-edge jnz @0xd -> L @0x7 */
+    memset(&A, 0, sizeof A);
+    A.from = b + 0xd;
+    A.to = b + 0x7;
+
+    /* (1) Legitimate contiguous splice: seed [A], then window [A, A] whose splice
+     * A.to(0x7) -> A.from(0xd) is the decodable loop body. Guard accepts, gap == 0. */
+    {
+        struct perf_branch_entry w0[1] = {A};
+        struct perf_branch_entry w1[2] = {A, A}; /* newest-first */
+        const struct perf_branch_entry *ss[2] = {w0, w1};
+        size_t nn[2] = {1, 2};
+        struct perf_branch_entry out[8];
+        int gap = 0;
+        size_t n = asmtest_amd_stitch(ss, nn, 2, AMD_LOOP, b, sizeof AMD_LOOP,
+                                      out, 8, &gap);
+        CHECK(n == 2 && gap == 0,
+              "AMD stitch guard: a decodable contiguous splice is accepted");
+    }
+
+    /* (2) Corrupt splice: the second window's newest edge B has from=0x3, so the
+     * splice A.to(0x7) -> B.from(0x3) is BACKWARDS — not real code. The from+to
+     * overlap on A still matches (the old heuristic would append B); the guard
+     * rejects it and reports an honest gap instead of a silently-wrong stitch. */
+    {
+        struct perf_branch_entry B;
+        memset(&B, 0, sizeof B);
+        B.from = b + 0x3; /* before A.to (0x7): a backwards, indecodable splice */
+        B.to = b + 0x9;
+        struct perf_branch_entry w0[1] = {A};
+        struct perf_branch_entry w1[2] = {B, A}; /* newest-first: [B, A] */
+        const struct perf_branch_entry *ss[2] = {w0, w1};
+        size_t nn[2] = {1, 2};
+        struct perf_branch_entry out[8];
+        int gap = 0;
+        size_t n = asmtest_amd_stitch(ss, nn, 2, AMD_LOOP, b, sizeof AMD_LOOP,
+                                      out, 8, &gap);
+        CHECK(gap == 1,
+              "AMD stitch guard: an indecodable splice yields an honest gap");
+        CHECK(n == 1,
+              "AMD stitch guard: the rejected corrupt window is not spliced in");
+    }
+#else
+    printf("# SKIP AMD stitch decodable-distance: not Linux x86-64\n");
 #endif
 }
 
@@ -473,7 +601,9 @@ static void test_amd_drain_reconstruction(void) {
     }
     struct perf_branch_entry stitched[K + 16];
     int gap = 0;
-    size_t n = asmtest_amd_stitch(samples, nrs, K, stitched, K + 16, &gap);
+    size_t n = asmtest_amd_stitch(samples, nrs, K, AMD_LOOP,
+                                  (uint64_t)(uintptr_t)AMD_LOOP, sizeof AMD_LOOP,
+                                  stitched, K + 16, &gap);
     CHECK(n == K && gap == 0,
           "AMD drain: stitches a stream far larger than one window, gaplessly");
     asmtest_trace_t *tb = asmtest_trace_new(512, 64);
@@ -3908,6 +4038,7 @@ int main(void) {
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_freeze_probe();
     test_amd_reconstruction();
+    test_amd_spec_filter();
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */
     test_stitch_slices();
@@ -3950,6 +4081,7 @@ int main(void) {
 
     /* AMD Tier-B stitching past the 16-deep window (host-validated, synthetic). */
     test_amd_stitch();
+    test_amd_stitch_decodable();
 
     /* §3.2 AMD data_tail drain reconstruction (host-testable half; live needs Zen 3+). */
     test_amd_drain_reconstruction();

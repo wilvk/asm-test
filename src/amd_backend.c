@@ -118,11 +118,49 @@ int asmtest_amd_snapshot_available(void) {
     return cached;
 }
 
-/* AMD's 16-deep branch stack. A full stack (nbr >= AMD_LBR_DEPTH) means the
- * routine took at least that many branches and earlier ones were lost — the
- * window overflowed, so a single-snapshot (Tier-A) reconstruction cannot be
- * complete. Tier-B stitching (asmtest_amd_stitch) lifts that ceiling. */
+/* AMD's branch stack is 16 deep on every shipping Zen part. A full stack (nbr >=
+ * depth) means the routine took at least that many branches and earlier ones were
+ * lost — the window overflowed, so a single-snapshot (Tier-A) reconstruction cannot be
+ * complete. Tier-B stitching (asmtest_amd_stitch) lifts that ceiling. AMD_LBR_DEPTH is
+ * the fallback constant; asmtest_amd_lbr_depth() reads the true runtime depth. */
 #define AMD_LBR_DEPTH 16
+
+/* The runtime LbrExtV2 branch-stack depth from CPUID 0x80000022 EBX (lbr_v2_stack_sz),
+ * replacing the hardcoded 16 that drives the Tier-A/Tier-B overflow split and the stitch
+ * bound. Every shipping Zen part reports 16, so this is future-proofing hygiene — a no-op
+ * today, not a behavior change — that removes the silent assumption. Falls back to
+ * AMD_LBR_DEPTH when the leaf is unsupported (Zen 3 BRS / pre-LbrExtV2, whose stack is
+ * also 16 deep) or reports an out-of-range size. Cached. */
+int asmtest_amd_lbr_depth(void) {
+    static int cached = 0;
+    if (cached > 0)
+        return cached;
+    int depth = AMD_LBR_DEPTH;
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (__get_cpuid(0x80000000u, &eax, &ebx, &ecx, &edx) != 0 &&
+        eax >= 0x80000022u &&
+        __get_cpuid_count(0x80000022u, 0, &eax, &ebx, &ecx, &edx) != 0) {
+        /* EBX layout (kernel union cpuid_0x80000022_ebx): [3:0] num_core_pmc,
+         * [9:4] lbr_v2_stack_sz, ... — the LBR depth is bits [9:4], NOT the low byte
+         * (that is the core PMC count). */
+        unsigned int sz = (ebx >> 4) & 0x3fu;
+        if (sz >= 1 && sz <= 64)
+            depth = (int)sz;
+    }
+    cached = depth;
+    return cached;
+}
+
+/* PERF_BR_SPEC_WRONG_PATH — a branch that executed SPECULATIVELY on the wrong path
+ * and never retired: a phantom edge LbrExtV2 (Zen 4/5) still records. Its stable UAPI
+ * value is 1; named locally so we never textually redefine the header's own enum. The
+ * `spec` bitfield only exists on Linux >= 6.1 <linux/perf_event.h>, so its use is gated
+ * on ASMTEST_HAVE_PERF_BR_SPEC (the mk/native-trace.mk `-fsyntax-only` member probe).
+ * Absent (older header / Zen 3 BRS, which is retired-only with no spec bits) the filter
+ * compiles out — a no-op, never a desync. */
+#ifdef ASMTEST_HAVE_PERF_BR_SPEC
+#define ASMTEST_PERF_BR_SPEC_WRONG_PATH 1
+#endif
 
 /* Replay an ordered (newest-first) taken-branch array into the trace, decoding the
  * in-region straight-line runs between branches with Capstone. Shared by Tier-A
@@ -143,6 +181,12 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
         const struct perf_branch_entry *e = &br[k];
         if (e->abort)
             continue; /* transactional abort: path rolled back, not executed */
+#ifdef ASMTEST_HAVE_PERF_BR_SPEC
+        if (e->spec == ASMTEST_PERF_BR_SPEC_WRONG_PATH)
+            continue; /* speculative wrong-path branch: never retired — drop the
+                       * phantom edge. Expected, NOT a decode desync, so (unlike the
+                       * truncation sites below) it must not set trace->truncated. */
+#endif
         uint64_t from = e->from, to = e->to;
 
         /* Decode the straight-line run from the current in-region IP up to and
@@ -200,7 +244,7 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
      * reconstruction is incomplete — flag it (the caller falls back to the
      * DynamoRIO tier, or to Tier-B stitching, which have no depth ceiling). Never
      * emit partial as complete. */
-    if (nbr >= AMD_LBR_DEPTH)
+    if ((int)nbr >= asmtest_amd_lbr_depth())
         trace->truncated = true;
     return ASMTEST_HW_OK;
 }
@@ -210,6 +254,39 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
 static int amd_edge_eq(const struct perf_branch_entry *a,
                        const struct perf_branch_entry *b) {
     return a->from == b->from && a->to == b->to;
+}
+
+/* Straight-line decodability of the span [from_ip, to_ip): is `to_ip` reachable by a
+ * forward Capstone instruction-length walk from `from_ip` (a branch TARGET / block
+ * start) that lands EXACTLY on `to_ip` (the next branch's SOURCE)? The stitcher uses it
+ * to reject a from+to overlap match that would splice two edges NOT connected by real
+ * code. On an internally-consistent hardware branch-stack window this always holds
+ * (from+to adjacency implies byte adjacency), so it is a no-op there; it fires only when
+ * DROPPED/throttled samples make the smallest-overlap heuristic splice non-contiguous
+ * edges — where an honest gap beats a silently-wrong stitch. Accepts (cannot disprove)
+ * when either endpoint is outside [base_ip, base_ip+len) (the span is inside a callee
+ * whose bytes we do not hold) or when Capstone is unavailable; rejects a backwards span,
+ * an overshoot, or an undecodable byte. */
+static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
+                              uint64_t from_ip, uint64_t to_ip) {
+    const uint64_t end_ip = base_ip + len;
+    if (base == NULL || len == 0 || !asmtest_disas_available())
+        return 1;
+    if (from_ip < base_ip || from_ip >= end_ip || to_ip < base_ip ||
+        to_ip > end_ip)
+        return 1; /* endpoint in a callee / at the region edge: cannot disprove */
+    if (to_ip < from_ip)
+        return 0; /* branch source before its block start: not real code */
+    uint64_t o = from_ip - base_ip;
+    const uint64_t fo = to_ip - base_ip;
+    while (o < fo) {
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
+                                 base_ip, o, NULL, 0);
+        if (l == 0 || o + l > fo)
+            return 0; /* undecodable byte, or the walk overshoots the source */
+        o += l;
+    }
+    return 1; /* o == fo: a clean, whole-instruction forward decode */
 }
 
 /* Tier-B stitching: splice the overlapping 16-deep windows that sample_period=1
@@ -225,9 +302,17 @@ static int amd_edge_eq(const struct perf_branch_entry *a,
  * repeated identical edges stitch correctly (each window contributes one). If a
  * window shares no edge with the tail (>= a full window of samples were dropped to
  * perf throttling) the sequence has a real gap: *gap is set and stitching stops at
- * the correct prefix. *gap is also set if `out` fills before the merge completes. */
+ * the correct prefix. *gap is also set if `out` fills before the merge completes.
+ *
+ * `base`/`base_ip`/`len` describe the registered code the from/to addresses index
+ * (may be NULL/0 to disable the check). A candidate smallest-overlap match is accepted
+ * only if the adjacency it would splice (the tail's newest branch target -> the first
+ * newly-appended branch source) is real straight-line code (amd_span_decodable); an
+ * indecodable splice — a dropped-sample artifact the from+to overlap alone cannot see —
+ * is rejected in favor of a larger shift, and an honest gap if none decodes. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
+                          const void *base, uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap) {
     if (gap != NULL)
@@ -268,7 +353,13 @@ size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                     break;
                 }
             }
-            if (match) {
+            /* Reject a from+to match whose spliced adjacency isn't real code: the
+             * tail's newest target (out[n-1].to) must straight-line-decode to the
+             * first edge this shift would append (s[d-1].from). No-op on consistent
+             * hardware windows; catches a dropped-sample mis-stitch -> larger shift/gap. */
+            if (match &&
+                amd_span_decodable(base, base_ip, len, out[n - 1].to,
+                                   s[d - 1].from)) {
                 best_d = d;
                 break;
             }
@@ -322,6 +413,7 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_decoder_present(void) { return 0; }
 int asmtest_amd_freeze_available(void) { return 0; }
 int asmtest_amd_snapshot_available(void) { return 0; }
+int asmtest_amd_lbr_depth(void) { return 16; }
 
 /* struct perf_branch_entry is Linux-only; use void* so the prototypes in
  * hwtrace.c's dispatch still link on other platforms. */
@@ -336,11 +428,14 @@ int asmtest_amd_decode(const void *br, size_t nbr, const void *base, size_t len,
 }
 
 size_t asmtest_amd_stitch(const void *const *samples, const size_t *nrs,
-                          size_t n_samples, void *out, size_t out_cap,
-                          int *gap) {
+                          size_t n_samples, const void *base, uint64_t base_ip,
+                          size_t len, void *out, size_t out_cap, int *gap) {
     (void)samples;
     (void)nrs;
     (void)n_samples;
+    (void)base;
+    (void)base_ip;
+    (void)len;
     (void)out;
     (void)out_cap;
     if (gap != NULL)

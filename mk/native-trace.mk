@@ -164,6 +164,14 @@ ifeq ($(shell pkg-config --exists libopencsd 2>/dev/null && echo 1),1)
 OPENCSD_DEF := -DASMTEST_HAVE_OPENCSD
 endif
 
+# LbrExtV2 speculation flags (AMD Phase 4): struct perf_branch_entry gained the
+# `spec:2` bitfield (PERF_BR_SPEC_WRONG_PATH) in Linux 6.1. Older
+# <linux/perf_event.h> lack it, so probe the member (a `-fsyntax-only` semantic
+# check, no link) and only then build amd_backend.c -DASMTEST_HAVE_PERF_BR_SPEC.
+# Without the define the wrong-path filter compiles out — a no-op, exactly as on
+# Zen 3 BRS / non-Linux where there are no spec bits. Mirrors the LIBIPT_DEF probe.
+PERF_BR_SPEC_DEF := $(shell printf '#include <linux/perf_event.h>\nint f(struct perf_branch_entry *e){return (int)e->spec;}\n' | $(CC) -fsyntax-only -xc - >/dev/null 2>&1 && echo -DASMTEST_HAVE_PERF_BR_SPEC)
+
 # Optional eBPF JIT code-emission detector (libbpf CO-RE) — the sideband accelerator for
 # the code-image recorder (src/codeimage.c): it detects mprotect/mmap PROT_EXEC +
 # memfd_create for a target PID and raises events into a bpf_ringbuf the recorder drains.
@@ -214,8 +222,9 @@ $(BUILD)/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -c $< -o $@
 # AMD branch-record reconstruction reuses the Capstone layer (disasm.o) via
 # asmtest_disas for instruction lengths — no new decoder lib, just Capstone.
+# $(PERF_BR_SPEC_DEF) enables the LbrExtV2 wrong-path filter where the header has it.
 $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(PERF_BR_SPEC_DEF) -c $< -o $@
 # Single-step (EFLAGS.TF / SIGTRAP) backend: no external library at all, just the
 # same Capstone length-decoder (disasm.o) for block normalization. Runs on ANY
 # x86-64 Linux OR macOS host with no PMU/perf/privilege — the universal hardware-tier
@@ -269,6 +278,9 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
+# The test builds a synthetic wrong-path perf_branch_entry (test_amd_spec_filter), so
+# it needs $(PERF_BR_SPEC_DEF) too — it guards the .spec field the same way amd_backend.c does.
+$(BUILD)/test_hwtrace.o: CFLAGS += $(PERF_BR_SPEC_DEF)
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 
@@ -763,7 +775,7 @@ $(BUILD)/pic/pt_backend.o: src/pt_backend.c include/asmtest_trace.h | $(BUILD)/p
 $(BUILD)/pic/cs_backend.o: src/cs_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(OPENCSD_DEF) $(OPENCSD_CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)/pic
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+	$(CC) $(CFLAGS) $(PERF_BR_SPEC_DEF) -fPIC -c $< -o $@
 $(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \

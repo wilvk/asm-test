@@ -463,11 +463,11 @@ CPU do the block-stepping.
 | **P0** | **Software-event / eBPF on-demand LBR snapshot** (`bpf_get_branch_snapshot` / `amd_pmu_v2_snapshot_branch_stack`) | Kills both live Zen-5 failure modes: tiny-single-shot "too fast to sample," and post-glue window contamination that forced the "richest-in-region" heuristic; HW-attributed managed-runtime lane | **Zen 4/5**, Linux **≥6.10**, `CAP_PERFMON`/`CAP_BPF` | real, gated | Medium |
 | **P0** | **Probe `X86_FEATURE_AMD_LBR_PMC_FREEZE`** (CPUID `0x80000022` EAX[2]) and gate window-trust on it | Silent-correctness bug: freeze-on-PMI is **not** universal on Zen 4; without it the 16-entry window drifts past the overflow point and may not reach region exit | Zen 4/5 | **LANDED** (2026-07) | Small |
 | **P1** | **BRS period-adjust single-window capture** (fixed period ≈ N−16) | Replaces `sample_period=1` — the dominant Tier-B throttle / ring-overflow truncation cause — with **one** frozen overflow for ≤16-branch routines | **Zen 3 BRS**, Linux ≥5.19 | SUPPORTED | Small–Med |
-| **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | real, modest gain | Small |
-| **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | operational | Small |
-| **P1** | **Add a decodable-distance invariant to the stitcher** | Closes the open question in amd_backend.c: the smallest-overlap heuristic can silently *mis-stitch* a self-overlapping loop; cross-check reconstructed insn count == static decode distance, else honest gap | Zen 3/4/5 | closes a silent-wrong risk | Small–Med |
-| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (precise-IP source→target via `MSR_AMD64_IBSBRTARGET`, gated on `IBS_CAPS_BRNTRGT`); coverage-confirmer to shrink block-step/DR residual | all Zen, `CAP_PERFMON` | statistical, not ordered | Medium |
-| **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | zero downside, low value | Tiny |
+| **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | **LANDED** (2026-07, Phase 4) | Small |
+| **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | **LANDED** (ring 64KB→256KB, Phase 5) | Small |
+| **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
+| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (precise-IP source→target via `MSR_AMD64_IBSBRTARGET`, gated on `IBS_CAPS_BRNTRGT`); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered — **forward-look (needs Zen 2)** | Medium |
+| **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
 
 ### The three to build first
 
@@ -622,20 +622,39 @@ shipped LBR backend.
 
 ## Implementation status
 
-**All phases planned.** Nothing in Part III has landed. The recommendations, their
-external verification, and the confirmed dead ends are in Part II; this is the
-implementation decomposition. Build order follows the Part II priorities: Phase 0
-(gating) → Phase 1 (freeze correctness) → Phase 2 (BTF block-step) → Phase 3
-(software-event snapshot) are the P0/near-term work; Phases 4–5 are P1 refinements;
-Phases 6–7 are forward-look.
+**Phases 0–5 landed; Phases 6–7 remain forward-look (hardware-blocked).** Build order
+followed the Part II priorities: Phase 0 (gating) → Phase 1 (freeze correctness) →
+Phase 2 (BTF block-step) → Phase 3 (software-event snapshot) were the P0/near-term work;
+Phases 4–5 are the P1 refinements. As of **2026-07-06** all of them ship and are
+validated on the Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`):
 
-Two **documentation corrections** Part II surfaced ship alongside Phase 0/2 (see
+- **Phase 0 (runtime depth).** `asmtest_amd_lbr_depth()`
+  ([src/amd_backend.c](../../src/amd_backend.c)) reads CPUID `0x80000022` EBX[9:4]
+  (`lbr_v2_stack_sz`) — the true branch-stack depth — replacing the hardcoded 16 in the
+  Tier-A/Tier-B overflow split, the stitch bound, and the LOST heuristic
+  ([src/hwtrace.c](../../src/hwtrace.c)). A no-op today (every shipping Zen reports 16 —
+  the dev box confirms 16) that removes the assumption. *(The freeze-bit reader this phase
+  also scoped shipped earlier with Phase 1.)*
+- **Phase 1 (freeze gate)** — landed (see Part II #3).
+- **Phase 2 (BTF block-step)** — landed (`asmtest_ptrace_trace_call_blockstep` /
+  `asmtest_ptrace_blockstep_available`, [src/ptrace_backend.c](../../src/ptrace_backend.c)).
+- **Phase 3 (software-event snapshot)** — landed (see Part II #2).
+- **Phase 4 (LbrExtV2 spec filtering)** — landed (below).
+- **Phase 5 (stitch decodable-distance guard + ring hardening)** — landed (below).
+
+**Phases 6 (BRS period-adjust, Zen 3 only) and 7 (IBS-Op, Zen 2 / statistical) stay
+forward-look**: both require silicon this dev box does not have (Zen 3 BRS; Zen 2 with
+`CAP_PERFMON`), so per the house "no untested hardware code" rule they are not
+implemented — a lane that cannot self-validate on its target silicon must not ship
+unproven. They remain fully specified below for when that hardware is available.
+
+Two **documentation corrections** Part II surfaced shipped alongside Phase 0/2 (see
 Deliverables): the `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim in
 [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md), and the "AMD LBR is
 finished, no forward-look" framing in [native-tracing.md](../guides/tracing/native-tracing.md) /
 [hardware-tracing.md](../guides/tracing/hardware-tracing.md).
 
-## Improvement Phase 0 — Feature detection & gating (`src/hwtrace.c`) *(planned)*
+## Improvement Phase 0 — Feature detection & gating (`src/hwtrace.c`) *(landed 2026-07-06)*
 
 **Goal.** Detect the per-uarch/per-kernel capabilities the later phases depend on, so
 every new lane self-skips cleanly instead of misbehaving on the wrong silicon.
@@ -820,7 +839,22 @@ with clang+libbpf+bpftool, `--cap-add=BPF --cap-add=PERFMON --cap-add=SYS_PTRACE
 single-shot routine** that the sampling path marks `truncated`, and reconstructs it
 complete. Self-skips cleanly without libbpf / the caps / a Zen 4+ host.
 
-## Improvement Phase 4 — LbrExtV2 speculation-bit filtering (`src/amd_backend.c`) *(planned)*
+## Improvement Phase 4 — LbrExtV2 speculation-bit filtering (`src/amd_backend.c`) *(landed 2026-07-06)*
+
+> **Status (2026-07-06): LANDED and validated on the Zen 5 dev box.** `amd_replay`
+> ([src/amd_backend.c](../../src/amd_backend.c)) now drops a record whose
+> `perf_branch_entry.spec == PERF_BR_SPEC_WRONG_PATH` (a speculative, never-retired
+> phantom edge) right after the existing `abort` guard — and dropping it is expected, so
+> it does **not** set `truncated`. The `spec` bitfield only exists on Linux ≥ 6.1
+> headers, so access is gated on `-DASMTEST_HAVE_PERF_BR_SPEC`, set by a
+> `-fsyntax-only` struct-member probe in [mk/native-trace.mk](../../mk/native-trace.mk)
+> (mirroring `LIBIPT_DEF`); without it the filter compiles out — a no-op, exactly as on
+> Zen 3 BRS (retired-only, no spec bits) and non-Linux. `amd_edge_eq` is left untouched
+> (its from+to-only overlap semantics the stitcher depends on). Validated
+> host-independently by `test_amd_spec_filter`
+> ([examples/test_hwtrace.c](../../examples/test_hwtrace.c)): a wrong-path phantom whose
+> target would add a spurious block is dropped, leaving a byte-identical trace and no
+> truncation — green in `make docker-hwtrace-amd` on the Ryzen 9 9950X.
 
 **Goal.** Drop speculative / wrong-path phantom edges before replay. Today `amd_replay`
 filters only aborts (`if (e->abort) continue;`, [amd_backend.c:67-68](../../src/amd_backend.c))
@@ -844,7 +878,32 @@ other flag.
 synthesized wrong-path entry without the phantom edge; behavior is unchanged where the
 `spec` field is unavailable or all entries are correct-path.
 
-## Improvement Phase 5 — Tier-B stitch hardening + throttle config (`src/amd_backend.c`, `src/hwtrace.c`) *(planned)*
+## Improvement Phase 5 — Tier-B stitch hardening + throttle config (`src/amd_backend.c`, `src/hwtrace.c`) *(landed 2026-07-06)*
+
+> **Status (2026-07-06): LANDED and validated on the Zen 5 dev box.** Three parts ship:
+> (1) **Decodable-distance guard.** `asmtest_amd_stitch`
+> ([src/amd_backend.c](../../src/amd_backend.c)) now takes `base`/`base_ip`/`len` (threaded
+> through the [hwtrace.c](../../src/hwtrace.c) call site and the non-Linux stub) and, before
+> accepting a smallest-overlap shift, checks that the adjacency it would splice — the tail's
+> newest branch target → the first newly-appended branch source — is real straight-line code
+> (`amd_span_decodable`: a forward Capstone length-walk that lands exactly on the source).
+> An indecodable splice is rejected in favor of a larger shift, else an honest gap.
+> **Honest scope (corrects this plan's earlier overclaim):** on an *internally-consistent*
+> hardware branch-stack window, from+to adjacency already implies byte adjacency, so the
+> guard is a no-op there; it does **not** — and byte-level decodability *cannot* — catch a
+> control-flow *phase* alias (a byte-decodable-but-wrong stitch). What it does catch is a
+> **dropped/throttled-sample** mis-stitch whose smallest-overlap match splices non-contiguous
+> edges (a backwards/overshoot span), converting a silently-wrong stitch into an honest gap —
+> complementing the replay-side desync→`truncated` already downstream. (2) **Ring hardening.**
+> The AMD data ring default grew 64KB → 256KB ([hwtrace.c](../../src/hwtrace.c)), extending
+> gapless stitch reach before the kernel drops the newest samples; the
+> `PERF_RECORD_LOST`/throttle → `lost` detection is unchanged. (3) **`data_size` doc fix.**
+> The [asmtest_hwtrace.h](../../include/asmtest_hwtrace.h) comment now documents both backend
+> defaults (Intel PT 8KB, AMD 256KB) instead of the stale single "0=8KB". Validated by
+> `test_amd_stitch_decodable` ([examples/test_hwtrace.c](../../examples/test_hwtrace.c)) — a
+> decodable contiguous splice is accepted, an indecodable one yields an honest gap — plus the
+> existing stitch/drain fixtures staying green (no over-rejection); `make docker-hwtrace-amd`
+> on the Ryzen 9 9950X.
 
 **Goal.** Reduce silent mis-stitches and extend Tier-B reach before honest truncation,
 without pretending an unavailable HW facility exists (Intel's `hw_idx`-based stitch cannot
@@ -920,15 +979,23 @@ block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_PERF
 
 ## Deliverables (Improvement Phases 0–5)
 
-- **hwtrace.c:** a `<cpuid.h>` leaf-`0x80000022` reader (freeze bit + depth) near
-  `amd_branch_probe`; runtime `AMD_LBR_DEPTH` threaded as a decoder parameter across both
-  TUs; freeze-gated Tier-A `truncated` logic in `hwtrace_end_amd`; enlarged AMD data ring;
-  new/updated skip-reason strings; the software-event snapshot capture path.
-- **amd_backend.c:** spec/wrong-path filter in `amd_replay`; `base`/`len`-threaded
-  `asmtest_amd_stitch` with the decodable-distance invariant; depth-as-parameter on
-  `asmtest_amd_decode` / `asmtest_amd_decode_stitched` — all mirrored in the non-Linux stub
-  block ([amd_backend.c:233-272](../../src/amd_backend.c)) and hwtrace.c's forward decls
-  ([hwtrace.c:45-53](../../src/hwtrace.c)).
+*As shipped (2026-07-06). Two small design deltas from the original decomposition, both
+noted inline: runtime depth is a shared cached accessor rather than a decode-function
+parameter (lower blast radius, no ABI churn on the internal decode signatures — depth is
+a pure cached function of the CPU, not a mutable global), and the freeze/depth CPUID
+readers live in `amd_backend.c` (`asmtest_amd_freeze_available` / `asmtest_amd_lbr_depth`,
+next to the other CPUID probes) rather than `hwtrace.c`.*
+
+- **hwtrace.c:** consumes `asmtest_amd_lbr_depth()` (runtime, from CPUID `0x80000022`
+  EBX[9:4]) in place of the hardcoded `AMD_LBR_DEPTH` for the Tier-A/B split, stitch cap,
+  and LOST heuristic; freeze-gated Tier-A `truncated` logic in `hwtrace_end_amd`; AMD data
+  ring default 64KB → 256KB; the software-event snapshot capture path; threads
+  `base`/`base_ip`/`len` into the `asmtest_amd_stitch` call.
+- **amd_backend.c:** spec/wrong-path filter in `amd_replay` (gated on
+  `ASMTEST_HAVE_PERF_BR_SPEC`); `base`/`base_ip`/`len`-threaded `asmtest_amd_stitch` with
+  the decodable-distance guard (`amd_span_decodable`); `asmtest_amd_lbr_depth()` cached
+  CPUID accessor and the runtime-depth overflow check in `asmtest_amd_decode` — all
+  mirrored in the non-Linux stub block and hwtrace.c's forward decls.
 - **ptrace_backend.c + asmtest_ptrace.h:** the block-step `step_mode` through
   `trace_attached_impl` / `trace_call`; three new public symbols
   (`asmtest_ptrace_blockstep_available`, `_trace_call_blockstep`, `_trace_attached_blockstep`)

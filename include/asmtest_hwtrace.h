@@ -68,8 +68,11 @@ typedef struct {
     asmtest_trace_backend_t backend;
     size_t
         aux_size; /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
-    size_t data_size; /* base perf ring bytes; 2^n pages (0=8KB; the AMD backend
-                         floors it at 64KB and it bounds the Tier-B stitched run) */
+    size_t data_size; /* base perf ring bytes, rounded up to 2^n pages. 0 selects a
+                         backend default: 8KB for Intel PT (control flows through AUX),
+                         256KB for the AMD backend (where this ring holds the
+                         sample_period=1 windows and so bounds the Tier-B stitched run
+                         before the kernel drops the newest samples) */
     int snapshot; /* nonzero: circular snapshot ring; 0: linear (drain)       */
     const char
         *object_hint; /* optional object-file path for hw address filters  */
