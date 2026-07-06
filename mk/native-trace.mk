@@ -654,8 +654,7 @@ hwtrace-dotnet-test: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
 # Runnable demos of the scoped-trace facility (§Z0/§Z1) on the single-step WEAK tier:
-# one project per scope form — the empty-ctor whole-window + two-leaf attribution, and
-# the region-scoped clean capture.
+# one project per report — see examples/dotnet/README.md for what each shows.
 .PHONY: hwtrace-dotnet-example
 hwtrace-dotnet-example: shared-hwtrace
 	@echo "== hwtrace-dotnet-example (wholewindow) =="
@@ -676,6 +675,10 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/hotspots/hotspots.csproj
 	@echo "== hwtrace-dotnet-example (coverage) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/coverage/coverage.csproj
+	@echo "== hwtrace-dotnet-example (callgraph) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/callgraph/callgraph.csproj
+	@echo "== hwtrace-dotnet-example (ptrace_native) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_native/ptrace_native.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="

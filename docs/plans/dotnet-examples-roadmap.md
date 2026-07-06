@@ -14,8 +14,11 @@ surface; it separates what can be **reported** (mostly cheap `Report.cs` additio
 
 ## Status
 
-**Built (this pass):** `tiers`, `hotspots`, `coverage` — plus `AsmMethod.Tier` on the binding.
-The rest are proposed, ranked best-first by (value × feasibility).
+**Built:** `tiers`, `hotspots`, `coverage` (+ `AsmMethod.Tier`), then `callgraph` (dynamic call
+tree from the labelled stream) and `ptrace_native` (out-of-process single-step via
+`Ptrace.TraceCall` — the foundation for the attach story). The rest are proposed, ranked
+best-first by (value × feasibility); the out-of-process headline `ptrace_dotnet` (attach to the
+live `jit_dotnet` target) builds directly on `ptrace_native`.
 
 ## New info to REPORT (feasible today from already-captured data)
 

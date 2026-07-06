@@ -2,7 +2,7 @@
 
 Runnable .NET demos of the scoped-trace facility from the
 [zero-config plan](../../docs/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
-one project per scope form. Both run live on this dev box — an AMD Zen 5 with no
+one project per report. All run live on this dev box — an AMD Zen 5 with no
 Intel PT — via the single-step **WEAK** tier, and self-skip cleanly (exit 0) where
 single-step cannot run.
 
@@ -17,16 +17,22 @@ single-step cannot run.
 | [tiers/](tiers/) | `new AsmTrace(byMethod: true, withRundown: true)` | executed instructions grouped **by JIT tier** — R2R vs cold/hot JIT (`AsmMethod.Tier`) |
 | [hotspots/](hotspots/) | `new AsmTrace(byMethod: true)` | the **most-executed instructions** — a loop pops out of the dynamic trace (dedup `Disassembly` by `Address`) |
 | [coverage/](coverage/) | `HwTrace.Create(blocks: N)` + `Region` | **basic-block coverage** of a branchy native routine across inputs — the never-covered block is the missing test case |
+| [callgraph/](callgraph/) | `new AsmTrace(byMethod: true, withRundown: true)` | reconstruct the dynamic **call tree + edges** from the labelled stream (shadow stack over `Disassembly`) |
+| [ptrace_native/](ptrace_native/) | `Ptrace.TraceCall(...)` | single-step native code running **out of process** (a forked `PTRACE_TRACEME` child) — no in-process SIGTRAP |
 
 See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for more proposed
-reports/examples (call graph, instruction mix, out-of-process ptrace/descent) and what the
-single-step tier honestly cannot do.
+reports/examples (instruction mix, out-of-process attach/descent) and what the single-step tier
+honestly cannot do.
+
+(The sibling [jit_dotnet/](jit_dotnet/) is **not** a scope demo: it is a bare CoreCLR
+workload traced *out of process* by the C `jit_trace` harness — driven by
+`make hwtrace-jit-dotnet` and friends, not by the example lane below.)
 
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all nine, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all nine, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all eleven, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all eleven, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
@@ -38,6 +44,8 @@ dotnet run --project examples/dotnet/annotated/annotated.csproj
 dotnet run --project examples/dotnet/tiers/tiers.csproj
 dotnet run --project examples/dotnet/hotspots/hotspots.csproj
 dotnet run --project examples/dotnet/coverage/coverage.csproj
+dotnet run --project examples/dotnet/callgraph/callgraph.csproj
+dotnet run --project examples/dotnet/ptrace_native/ptrace_native.csproj
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -281,6 +289,55 @@ test inputs {50,200} cover 5 of 6 reachable basic blocks (83%):
    the missing test case is a NEGATIVE input (x < 0). This is exact, not sampled.
 ```
 
+## callgraph — dynamic call tree from the labelled stream (observed output)
+
+The per-method/per-assembly views flatten the call *structure*. Walk `ww.Disassembly` with a
+shadow stack — a method change right after a `call` is an edge; a `ret` pops — to reconstruct it
+(approximate: a call reaching a method through a native runtime stub shows as a `RuntimeBefore`
+gap). One `Work()` (a `string.Join` + `Console.WriteLine`) reaches depth 13:
+
+```
+call tree (first entry into each method, indented by depth):
+  Program.Work
+    System.Runtime.CompilerServices.CastHelpers::StelemRef(...)
+    System.String::Join(string,string[])
+      System.String::JoinCore(...)
+        System.Buffer.Memmove
+    System.Console::WriteLine(string)
+      System.IO.TextWriter+SyncTextWriter::WriteLine(string)
+        System.IO.StreamWriter::WriteLine(string)
+          System.IO.StreamWriter::Flush(bool,bool)
+            System.Text.Encoder::GetBytes(...)  ->  ... -> System.Text.Ascii::NarrowUtf16ToAscii(...)
+          System.ConsolePal::Write(...)  ->  Interop+Sys::Write(...)  (the write syscall)
+
+top call edges (by frequency):
+     3x  Program.Work  ->  ...CastHelpers::StelemRef(...)      (one per array element)
+     3x  System.String::JoinCore(...)  ->  System.Buffer.Memmove
+```
+
+The exact, noise-free tree (with self-vs-inclusive counts) is the out-of-process descent example
+(forward-look); this is the honest in-process reconstruction.
+
+## ptrace_native — out-of-process single-step (observed output)
+
+Every `AsmTrace` example arms the *calling* thread. `Ptrace.TraceCall` instead forks a
+`PTRACE_TRACEME` child that runs the code while the parent single-steps it — so nothing in this
+process is ever armed with `EFLAGS.TF`. Self-contained (no external process, no perf-map),
+CI-runnable, and the foundation the attach story builds on:
+
+```
+child computed sum(3,5) = 15 (expect 15); the tracer single-stepped 17 instructions across the process boundary.
+
+executed instructions (disassembled from the child's code image), with step count:
+    0x00  x1    mov rax, 0
+    0x07  x5    add rax, rdi        <- loop body, 5 iterations
+    0x0a  x5    dec rsi
+    0x0d  x5    jne 0x…07
+    0x0f  x1    ret
+```
+
+Self-skips (exit 0) where ptrace is denied (yama `ptrace_scope`, no privilege).
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -300,7 +357,10 @@ test inputs {50,200} cover 5 of 6 reachable basic blocks (83%):
 - `AsmTrace.Disassembly` / `.DisassemblyAvailable` and `AsmInstruction` (`.Address` / `.Text`
   / `.Method` / `.ShortMethod` / `.Assembly` / `.RuntimeBefore`) — the labelled execution
   stream, each instruction disassembled and paired with its method. Used by
-  [annotated/](annotated/) and [hotspots/](hotspots/).
+  [annotated/](annotated/), [hotspots/](hotspots/), and [callgraph/](callgraph/).
+- `Ptrace.TraceCall(code, len, args, trace)` / `Ptrace.Available()` — single-step native code
+  out of process (a self-contained forked child) into an `HwTrace` handle (`.Handle` /
+  `InsnOffsets()` / `BlockOffsets()`). Used by [ptrace_native/](ptrace_native/).
 - `AsmMethod.Tier` — the JIT/compilation tier (`PreJIT`/`MinOptJitted`/`OptimizedTier1`/…;
   empty for an untagged listener name). Used by [tiers/](tiers/).
 - `HwTrace.Create(blocks:N, instructions:M)` + `Register` + `Region` and
