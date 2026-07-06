@@ -461,7 +461,7 @@ CPU do the block-stepping.
 |---|---|---|---|---|---|
 | **P0** | **BTF block-step tier** (`PTRACE_SINGLEBLOCK`) | Complete ordered flow at ~1 trap/branch; only exact real-CPU option on **Zen 2**; rootless (no `CAP_PERFMON`) | all Zen; any Linux x86-64 | real (corrects the plan) | Medium |
 | **P0** | **Software-event / eBPF on-demand LBR snapshot** (`bpf_get_branch_snapshot` / `amd_pmu_v2_snapshot_branch_stack`) | Kills both live Zen-5 failure modes: tiny-single-shot "too fast to sample," and post-glue window contamination that forced the "richest-in-region" heuristic; HW-attributed managed-runtime lane | **Zen 4/5**, Linux **≥6.10**, `CAP_PERFMON`/`CAP_BPF` | real, gated | Medium |
-| **P0** | **Probe `X86_FEATURE_AMD_LBR_PMC_FREEZE`** (CPUID `0x80000022` EAX[2]) and gate window-trust on it | Silent-correctness bug: freeze-on-PMI is **not** universal on Zen 4; without it the 16-entry window drifts past the overflow point and may not reach region exit | Zen 4/5 | confirmed gap | Small |
+| **P0** | **Probe `X86_FEATURE_AMD_LBR_PMC_FREEZE`** (CPUID `0x80000022` EAX[2]) and gate window-trust on it | Silent-correctness bug: freeze-on-PMI is **not** universal on Zen 4; without it the 16-entry window drifts past the overflow point and may not reach region exit | Zen 4/5 | **LANDED** (2026-07) | Small |
 | **P1** | **BRS period-adjust single-window capture** (fixed period ≈ N−16) | Replaces `sample_period=1` — the dominant Tier-B throttle / ring-overflow truncation cause — with **one** frozen overflow for ≤16-branch routines | **Zen 3 BRS**, Linux ≥5.19 | SUPPORTED | Small–Med |
 | **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | real, modest gain | Small |
 | **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | operational | Small |
@@ -493,14 +493,23 @@ evict real entries. **Gates:** Zen 4/5 (perfmon v2) only — Zen 3 BRS and Zen 2
 through `amd_pmu_v2_handle_irq`; Linux ≥6.10 (a 6.6.y backport was still being requested
 in Jan 2026); `CAP_PERFMON`/`CAP_BPF`.
 
-**3 — Freeze-availability probe (P0).** Smallest change, real correctness. The 2024
-kernel fix made `DEBUGCTLMSR_FREEZE_LBRS_ON_PMI` conditional on
+**3 — Freeze-availability probe (P0). LANDED (2026-07).** Smallest change, real
+correctness. The 2024 kernel fix made `DEBUGCTLMSR_FREEZE_LBRS_ON_PMI` conditional on
 `X86_FEATURE_AMD_LBR_PMC_FREEZE` (CPUID `0x80000022` EAX[2]) precisely because *"this may
 not be the case for all Zen 4 processors."* Without freeze the recorded stack keeps
 advancing after the overflow transitions to CPL0, so a PMI window can silently **not** end
-at region exit — yet the current AMD capture path trusts it. Probe the bit at init; where
-freeze is absent, prefer the software-event snapshot (path #2, which stops LBR in
-software) and do not assume a PMI window reaches the region exit.
+at region exit — yet the current AMD capture path trusts it. **As shipped:**
+`asmtest_amd_freeze_available()` ([src/amd_backend.c](../../src/amd_backend.c)) probes the
+bit (cached); the Tier-A single-window decode in `hwtrace_end_amd`
+([src/hwtrace.c](../../src/hwtrace.c)) now trusts a freeze-less window as complete **only
+if it actually captured the region-exit branch** (an entry with `from` in-region and `to`
+outside), else flags `truncated` — the honest "do not assume the window reached exit"
+posture. On a freeze-capable part the check is skipped (behavior unchanged).
+`test_amd_freeze_probe` ([examples/test_hwtrace.c](../../examples/test_hwtrace.c)) asserts
+a definite/stable answer and prints this host's support (the dev Zen 5 / Ryzen 9 9950X
+reports freeze **PRESENT**, so the gate is a no-op there — confirming the concern is
+Zen-4-specific, not universal). Preferring the software-event snapshot (path #2) where
+freeze is absent remains folded into that item.
 
 ## Matrix 2 — Squeezing the existing window (P1 detail)
 

@@ -39,6 +39,7 @@
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
 int asmtest_amd_decoder_present(void);
+int asmtest_amd_freeze_available(void);
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples,
                           struct perf_branch_entry *out, size_t out_cap,
@@ -102,6 +103,24 @@ static int checks, failures;
  * and assert it reconstructs the exact same offsets the PT/DynamoRIO backends do.
  * Runs on any Linux x86-64 host with Capstone (incl. this Zen 2 box, where live
  * AMD capture self-skips). */
+/* AMD freeze-on-PMI probe (CPUID 0x80000022 EAX[2]). Unprivileged (CPUID needs no
+ * perf access), so it runs even where the AMD LBR CAPTURE self-skips. Asserts the probe
+ * returns a definite, stable answer; prints this host's actual support so the freeze gate
+ * in hwtrace_end_amd is observable. On non-AMD / non-x86 it is honestly 0. */
+static void test_amd_freeze_probe(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    int a = asmtest_amd_freeze_available();
+    int b = asmtest_amd_freeze_available();
+    CHECK(a == 0 || a == 1, "AMD freeze probe returns a definite 0/1");
+    CHECK(a == b, "AMD freeze probe is stable (cached across calls)");
+    printf("# AMD LBR freeze-on-PMI (CPUID 0x80000022 EAX[2]) on this host: %s\n",
+           a ? "PRESENT (single-window Tier-A trusted)"
+             : "ABSENT (Tier-A window trusted only if it captured the region exit)");
+#else
+    printf("# SKIP AMD freeze probe: x86-64 Linux only\n");
+#endif
+}
+
 static void test_amd_reconstruction(void) {
 #if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_amd_decoder_present()) {
@@ -3875,6 +3894,7 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
     /* Backend-independent: validate the AMD reconstruction decoder. */
+    test_amd_freeze_probe();
     test_amd_reconstruction();
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */

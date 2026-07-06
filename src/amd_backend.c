@@ -34,11 +34,38 @@
 #define ASMTEST_HW_EDECODE (-8)
 
 #if defined(__linux__) && defined(__x86_64__)
+#include <cpuid.h>
 #include <linux/perf_event.h>
 
 int asmtest_amd_decoder_present(void) {
     /* Reconstruction needs the Capstone length-decoder (via asmtest_disas). */
     return asmtest_disas_available() ? 1 : 0;
+}
+
+/* Probe X86_FEATURE_AMD_LBR_PMC_FREEZE (CPUID 0x80000022 EAX[2]): whether this part
+ * freezes the LBR stack on a performance-monitor interrupt. The 2024 kernel fix made
+ * DEBUGCTLMSR_FREEZE_LBRS_ON_PMI conditional on this bit precisely because it is "not
+ * the case for all Zen 4 processors." WITHOUT freeze, the recorded branch stack keeps
+ * advancing after the counter overflow transitions to CPL0, so a sampled window can
+ * silently NOT end at the region exit — the capture path must not trust a single-window
+ * (Tier-A) result to be complete unless the window's newest branch actually left the
+ * region. Cached; returns 1 (freeze present), 0 (absent or the leaf is unsupported). */
+int asmtest_amd_freeze_available(void) {
+    static int cached = -1;
+    if (cached >= 0)
+        return cached;
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    /* The extended leaf must exist before it can report the bit. */
+    if (__get_cpuid(0x80000000u, &eax, &ebx, &ecx, &edx) == 0 || eax < 0x80000022u) {
+        cached = 0;
+        return cached;
+    }
+    if (__get_cpuid_count(0x80000022u, 0, &eax, &ebx, &ecx, &edx) == 0) {
+        cached = 0;
+        return cached;
+    }
+    cached = (eax & (1u << 2)) ? 1 : 0; /* EAX[2] = LbrAndPmcFreeze */
+    return cached;
 }
 
 /* AMD's 16-deep branch stack. A full stack (nbr >= AMD_LBR_DEPTH) means the
@@ -243,6 +270,7 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 #else /* not Linux x86-64 */
 
 int asmtest_amd_decoder_present(void) { return 0; }
+int asmtest_amd_freeze_available(void) { return 0; }
 
 /* struct perf_branch_entry is Linux-only; use void* so the prototypes in
  * hwtrace.c's dispatch still link on other platforms. */

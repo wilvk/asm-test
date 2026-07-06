@@ -125,6 +125,9 @@ void asmtest_ss_end(void);
 int asmtest_pt_decoder_present(void);
 int asmtest_cs_decoder_present(void);
 int asmtest_amd_decoder_present(void);
+/* AMD LBR-stack freeze-on-PMI availability (CPUID 0x80000022 EAX[2]); without it a
+ * sampled window cannot be trusted to end at the region exit (see hwtrace_end_amd). */
+int asmtest_amd_freeze_available(void);
 
 /* ------------------------------------------------------------------ */
 /* Gating: detect-and-skip                                             */
@@ -744,9 +747,31 @@ static void hwtrace_end_amd(void) {
                 free(out);
             }
         }
-        if (!done)
+        if (!done) {
             asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len,
                                r->trace);
+            /* Freeze gate (CPUID 0x80000022 EAX[2]). WITHOUT LBR freeze-on-PMI the
+             * sampled stack keeps advancing after the overflow reaches CPL0, so a
+             * single Tier-A window may not have halted at the region exit — trust it
+             * complete only if it actually CONTAINS the region-exit branch (from
+             * in-region, to outside the region, i.e. the routine's ret/tail-jump).
+             * Otherwise the exit was not captured, so flag truncated rather than
+             * present a possibly-mid-routine window as complete. On a freeze-capable
+             * part this check is skipped and behavior is unchanged. */
+            if (r->trace != NULL && !asmtest_amd_freeze_available()) {
+                int saw_exit = 0;
+                for (uint64_t i = 0; i < best_nr; i++) {
+                    uint64_t f = best[i].from, t = best[i].to;
+                    if (f >= base_ip && f < end_ip &&
+                        (t < base_ip || t >= end_ip)) {
+                        saw_exit = 1;
+                        break;
+                    }
+                }
+                if (!saw_exit)
+                    r->trace->truncated = true;
+            }
+        }
     } else if (r->trace != NULL) {
         r->trace->truncated =
             true; /* no in-region branches captured: not complete */
