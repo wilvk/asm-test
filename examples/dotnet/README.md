@@ -42,7 +42,10 @@ make dev-dotnet
 
 Each project is dependency-free — it compiles the binding source
 ([HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)) directly and P/Invokes
-`libasmtest_hwtrace` (auto-resolved from the in-tree `build/`).
+`libasmtest_hwtrace` (auto-resolved from the in-tree `build/`). Each is split in two:
+`Program.cs` holds the setup, workload, and the `using (new AsmTrace(...))` scope, and
+`Report.cs` (a `static Report.Print(...)`) holds the presentation — reading the closed
+scope's data and printing it, with no tracing logic.
 
 ## wholewindow — `using (new AsmTrace())` (observed output)
 

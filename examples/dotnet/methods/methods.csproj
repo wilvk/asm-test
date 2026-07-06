@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
     <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
   </ItemGroup>
 

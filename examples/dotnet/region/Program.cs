@@ -43,22 +43,7 @@ internal static class Program
         {
             r = code.Call(20, 22);
         }
-        if (!scope.Armed)
-        {
-            Console.WriteLine($"# self-skip: {scope.SkipReason}");
-            code.Free();
-            return 0;
-        }
-
-        Console.WriteLine($"armed '{scope.Name}', add2(20,22) = {r}.");
-        Console.WriteLine("rendered listing — EXACTLY the routine's executed instructions:");
-        foreach (string line in (scope.Path ?? "").Split('\n'))
-            if (line.Length > 0 && line[0] != ';')
-                Console.WriteLine($"    {line}");
-        Console.WriteLine($"truncated: {scope.Truncated}");
-        Console.WriteLine("-> region-scoped gives the clean, isolated assembly path "
-                          + "(the dec at 0xc is absent: add2(20,22)=42<=100, so the jle is taken).");
-
+        Report.Print(scope, r);
         code.Free();
         return 0;
     }

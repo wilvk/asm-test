@@ -46,24 +46,7 @@ internal static class Program
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true))
             r = ColdPath(7, 100);   // COLD: JIT compiles it here, then the body runs
-        if (!ww.Armed)
-        {
-            Console.WriteLine($"# self-skip: {ww.SkipReason}");
-            return 0;
-        }
-
-        Console.WriteLine($"ColdPath(7,100) = {r}; captured {ww.Addresses.Length} instructions"
-                          + (ww.Truncated ? " (truncated)" : "")
-                          + $"; {ww.MethodsObserved} methods observed; {ww.LabelledInstructions} labelled by method.\n");
-
-        Console.WriteLine("managed methods that executed in the window (by instruction count):");
-        foreach (AsmMethod m in ww.Methods)
-            Console.WriteLine($"    {m.Count,8}  {m.Name}");
-
-        Console.WriteLine($"\n-> the arbitrary COLD method 'ColdPath' is identified BY NAME: "
-                          + $"{ww.InstructionsIn("ColdPath")} instructions.");
-        Console.WriteLine($"(the native runtime — RyuJIT, GC, PAL — is the unlabelled remainder: "
-                          + $"{ww.Addresses.Length - ww.LabelledInstructions} instructions.)");
+        Report.Print(ww, r);
         return 0;
     }
 }
