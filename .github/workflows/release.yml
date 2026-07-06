@@ -30,7 +30,7 @@ jobs:
         # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
         run: |
           make deps DEPS_ARGS=--asm
@@ -47,7 +47,7 @@ jobs:
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
       - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
         run: make package-libs
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: native-payload-${{ matrix.os }}
           path: build/dist/native/
@@ -59,9 +59,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Download every per-OS/arch payload
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: native-payload-*
           path: payloads
@@ -76,7 +76,7 @@ jobs:
           # while every job stayed green). A dropped matrix leg now fails here.
           make package-libs-verify \
             EXPECT_PLATFORMS="linux-x86_64 linux-aarch64 darwin-x86_64 darwin-arm64"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: native-all
           path: build/dist/native/
@@ -98,8 +98,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with: { name: native-all, path: build/dist/native }
       - name: Assemble the corresponding-source archive
         run: |
@@ -109,7 +109,7 @@ jobs:
           [ -n "$uv" ] || uv=2.1.4
           echo "Unicorn version(s) shipped: $uv"
           UNICORN_VERSIONS="$uv" scripts/fetch-corresponding-source.sh corresponding-source
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: corresponding-source
           path: corresponding-source/
@@ -152,7 +152,7 @@ jobs:
         # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - name: Install build deps + patchelf + tier deps, build Keystone + Capstone
@@ -215,7 +215,7 @@ jobs:
               assert drtrace.NativeTrace.available(), "drtrace not available from the wheel (bundled libdynamorio not found)"
           print("python clean-room ok: native-trace tiers resolve from the wheel")
           PY
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}
           path: wheelhouse/*.whl
@@ -275,9 +275,9 @@ jobs:
               printf 'using Asmtest; class P { static void Main(){ if(!Emu.DisasAvailable) throw new System.Exception("disassembler tier not available from the self-contained nupkg"); System.Console.WriteLine("dotnet ok: disas available"); } }' > Program.cs
               dotnet run
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - if: ${{ matrix.lang == 'node' }}
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with: { node-version: "20" }
       - if: ${{ matrix.lang == 'ruby' }}
         uses: ruby/setup-ruby@v1
@@ -294,7 +294,7 @@ jobs:
       - if: ${{ matrix.lang == 'lua' }}
         name: Install LuaJIT
         run: if [ "$RUNNER_OS" = "macOS" ]; then brew install luajit; else sudo apt-get update && sudo apt-get install -y luajit; fi
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with: { name: native-all, path: build/dist/native }
       - name: Build the ${{ matrix.lang }} package
         run: make ${{ matrix.lang }}-package
@@ -335,7 +335,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # libasmtest_emu is the superset, so building/linking it needs Keystone +
       # Capstone (no apt package for Keystone — pinned source build).
       - run: make deps DEPS_ARGS=--asm
@@ -357,7 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version: "stable" }
       # libasmtest_emu is the superset, so it needs Keystone + Capstone at build
@@ -389,7 +389,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # libasmtest_emu is the superset, so it needs Keystone + Capstone at build
       # time (no apt package for Keystone — pinned source build).
       - run: make deps DEPS_ARGS=--asm
@@ -409,8 +409,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
         with: { version: "0.13.0" }
       # libasmtest_emu is the superset, so it needs Keystone + Capstone at build
       # time (no apt package for Keystone — pinned source build).
