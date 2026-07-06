@@ -493,28 +493,32 @@ evict real entries. **Gates:** Zen 4/5 (perfmon v2) only — Zen 3 BRS and Zen 2
 through `amd_pmu_v2_handle_irq`; Linux ≥6.10 (a 6.6.y backport was still being requested
 in Jan 2026); `CAP_PERFMON`/`CAP_BPF`.
 
-> **Status (2026-07): substrate probe LANDED; feasibility CONFIRMED on this host; the
-> BPF capture is the remaining build.** `asmtest_amd_snapshot_available()`
-> ([src/amd_backend.c](../../src/amd_backend.c)) reports the hardware+kernel floor
-> (AMD `amd_lbr_v2` + `perfmon_v2` CPU flags + Linux ≥ 6.10), tested by
-> `test_amd_freeze_probe`. **Confirmed reachable here:** the dev Zen 5 (Ryzen 9 9950X)
-> reports the substrate PRESENT, and — the load-bearing feasibility check — the EXISTING
-> AMD LBR hardware capture (`test_amd_live`, checks 67–74) runs green in a
-> `--cap-add=PERFMON --security-opt seccomp=unconfined` container (`make
-> docker-hwtrace-amd`), reconstructing a real >16-branch loop via Tier-B. So the snapshot
-> path is validatable on this box, not just in theory. **Remaining build (shovel-ready):**
-> a CO-RE BPF program (`bpf/branchsnap.bpf.c`, mirroring `bpf/codeimage.bpf.c`'s skeleton
-> + ringbuf shape) with a uprobe at the region ENTRY and EXIT that calls
-> `bpf_get_branch_snapshot()` into a ringbuf; a userspace loader beside the codeimage one
-> (`codeimage_bpf__open/load/attach` pattern) that resolves the region base/exit, attaches
-> the uprobes, drains the boundary snapshot, and feeds it to the existing `amd_replay`;
-> and a `snapshot: true` opt-in on `hwtrace_begin_amd` that takes this deterministic path
-> instead of `sample_period=1`. Its win is exactly the `test_amd_live` tiny-single-shot
-> case that currently self-truncates — a boundary snapshot captures that routine's
-> branches where a sample never fires in-region. **Note:** the AMD hardware lane
-> (`docker-hwtrace-amd`) is not in `.github/workflows/ci.yml` — it needs a self-hosted
-> AMD runner with the caps, so the whole AMD hardware path (existing + snapshot) has no
-> hosted-CI coverage; it is validated on the dev box.
+> **Status (2026-07): LANDED and validated on this host.** Both the substrate probe and
+> the deterministic-snapshot CAPTURE ship. `asmtest_amd_snapshot_available()`
+> ([src/amd_backend.c](../../src/amd_backend.c)) reports the hardware+kernel floor (AMD
+> `amd_lbr_v2` + `perfmon_v2` CPU flags + Linux ≥ 6.10). `asmtest_amd_snapshot_trace()`
+> ([src/branchsnap.c](../../src/branchsnap.c)) is the capture: it enables the LBR, plants a
+> **hardware execution breakpoint** at the region exit, and a CO-RE BPF program
+> ([bpf/branchsnap.bpf.c](../../bpf/branchsnap.bpf.c), `SEC("perf_event")` attached to the
+> breakpoint) calls `bpf_get_branch_snapshot()` to read the frozen 16-entry stack at that
+> ONE deterministic point. The raw `perf_branch_entry` array is decoded by the SAME
+> `asmtest_amd_decode` the sampled path uses (in-region-filtered, so kernel-entry entries
+> drop out) — reconstruction unchanged and already tested. **Design note:** a HARDWARE
+> breakpoint (not a uprobe/fentry) is the trigger, because the region is anonymous
+> executable memory (a JIT/mmap blob) with no inode+offset for a uprobe; the empirical
+> **feasibility spike settled the open risk** — a `#DB` breakpoint does NOT evict the
+> region's in-region branches before the helper reads them on this AMD part (the freeze
+> path holds). **Validated:** `test_branchsnap` ([examples/test_branchsnap.c](../../examples/test_branchsnap.c),
+> `make branchsnap-test`) drives a tiny single-shot routine — the exact case the
+> `sample_period=1` path self-truncates — and asserts the boundary snapshot reconstructs
+> its entry block; green on the dev Zen 5 (Ryzen 9 9950X) in the
+> `docker-hwtrace-codeimage` lane (BPF + PERFMON caps), which now runs `branchsnap-test`
+> after `codeimage-test`. **Remaining (follow-up):** a `snapshot: true` opt-in on
+> `hwtrace_begin_amd` so the region begin/end markers route to this path automatically
+> (today it is the standalone `asmtest_amd_snapshot_trace` entry point). **Note:** the AMD
+> hardware lanes (`docker-hwtrace-amd`, `docker-hwtrace-codeimage`'s branchsnap step) are
+> not in `.github/workflows/ci.yml` — they need a self-hosted AMD runner with the caps, so
+> the AMD hardware path is validated on the dev box, not hosted CI.
 
 **3 — Freeze-availability probe (P0). LANDED (2026-07).** Smallest change, real
 correctness. The 2024 kernel fix made `DEBUGCTLMSR_FREEZE_LBRS_ON_PMI` conditional on

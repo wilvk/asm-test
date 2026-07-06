@@ -179,6 +179,7 @@ LIBBPF_LIBS   ?= $(shell pkg-config --libs libbpf 2>/dev/null)
 ifeq ($(shell pkg-config --exists libbpf 2>/dev/null && command -v $(CLANG) >/dev/null 2>&1 && command -v $(BPFTOOL) >/dev/null 2>&1 && echo 1),1)
 LIBBPF_DEF     := -DASMTEST_HAVE_LIBBPF
 CODEIMAGE_SKEL := $(BUILD)/codeimage.skel.h
+BRANCHSNAP_SKEL := $(BUILD)/branchsnap.skel.h
 CODEIMAGE_INC  := -I$(BUILD)
 LINK_LIBBPF    := $(LIBBPF_LIBS)
 endif
@@ -194,6 +195,15 @@ $(BUILD)/codeimage.bpf.o: bpf/codeimage.bpf.c bpf/codeimage_event.h $(BUILD)/vml
 	$(CLANG) -target bpf -D__TARGET_ARCH_x86 -g -O2 -Wall -I$(BUILD) -Ibpf -c $< -o $@
 $(BUILD)/codeimage.skel.h: $(BUILD)/codeimage.bpf.o | $(BUILD)
 	$(BPFTOOL) gen skeleton $< > $@
+
+# AMD-P0 deterministic LBR snapshot: the branchsnap BPF program + its skeleton, built on
+# the SAME BPF-toolchain gate as codeimage (BRANCHSNAP_SKEL is set only inside the ifeq
+# above, so without the toolchain branchsnap.o has no skeleton prereq and compiles its stub).
+$(BUILD)/branchsnap.bpf.o: bpf/branchsnap.bpf.c bpf/branchsnap_event.h $(BUILD)/vmlinux.h | $(BUILD)
+	$(CLANG) -target bpf -D__TARGET_ARCH_x86 -g -O2 -Wall -I$(BUILD) -Ibpf -c $< -o $@
+$(BUILD)/branchsnap.skel.h: $(BUILD)/branchsnap.bpf.o | $(BUILD)
+	$(BPFTOOL) gen skeleton $< > $@
+
 
 $(BUILD)/hwtrace.o: src/hwtrace.c include/asmtest_hwtrace.h \
                     include/asmtest_trace.h | $(BUILD)
@@ -236,6 +246,11 @@ $(BUILD)/descent.o: src/descent.c include/asmtest_ptrace.h \
 # that probe fires (see Phase C).
 $(BUILD)/codeimage.o: src/codeimage.c include/asmtest_codeimage.h $(CODEIMAGE_SKEL) | $(BUILD)
 	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -c $< -o $@
+# AMD-P0 deterministic LBR snapshot (src/branchsnap.c). Same libbpf gate as codeimage:
+# with the toolchain it compiles the real bpf_get_branch_snapshot loader (needs the
+# skeleton + -Ibpf for branchsnap_event.h); without it, the self-skipping #else stub.
+$(BUILD)/branchsnap.o: src/branchsnap.c include/asmtest_hwtrace.h $(BRANCHSNAP_SKEL) | $(BUILD)
+	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) -I$(BUILD) -Ibpf -c $< -o $@
 # §D3 concealed ptrace-stealth stepper: the shared stepping body + bundled-binary
 # discovery (dladdr-sibling, mirroring drtrace_app.c's dr_bundled_lib). Compiled
 # into BOTH libasmtest_hwtrace (the in-process forked-child fallback path) and the
@@ -251,11 +266,21 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
-                $(BUILD)/codeimage.o \
+                $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 $(BUILD)/test_hwtrace: $(HWTRACE_OBJS) $(BUILD)/test_hwtrace.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
+
+# AMD deterministic LBR-snapshot test: drives the public asmtest_amd_snapshot_trace()
+# (in branchsnap.o, part of HWTRACE_OBJS above). Self-skips (exit 0) without the BPF
+# toolchain / privilege / AMD substrate. Defined AFTER HWTRACE_OBJS so the prerequisite
+# is non-empty (Make expands prerequisites when the rule is read).
+$(BUILD)/test_branchsnap: $(HWTRACE_OBJS) $(BUILD)/test_branchsnap.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
+.PHONY: branchsnap-test
+branchsnap-test: $(BUILD)/test_branchsnap
+	./$(BUILD)/test_branchsnap
 
 # §D3 bundled stepper: a real separate process the managed packages ship (vs. the
 # in-process forked child). Links only the ptrace stepper + Capstone length-decoder
@@ -754,6 +779,9 @@ $(BUILD)/pic/descent.o: src/descent.c include/asmtest_ptrace.h \
 $(BUILD)/pic/codeimage.o: src/codeimage.c include/asmtest_codeimage.h \
                           $(CODEIMAGE_SKEL) | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) $(CODEIMAGE_INC) -fPIC -c $< -o $@
+$(BUILD)/pic/branchsnap.o: src/branchsnap.c include/asmtest_hwtrace.h \
+                           $(BRANCHSNAP_SKEL) | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(LIBBPF_DEF) $(LIBBPF_CFLAGS) -I$(BUILD) -Ibpf -fPIC -c $< -o $@
 $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
                                include/asmtest_hwtrace.h include/asmtest_ptrace.h \
                                include/asmtest_trace.h | $(BUILD)/pic
@@ -768,7 +796,7 @@ $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
 NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
     $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
-    $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o
+    $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
@@ -783,6 +811,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/descent.o \
                                        $(BUILD)/pic/stealth_helper.o \
                                        $(BUILD)/pic/codeimage.o \
+                                       $(BUILD)/pic/branchsnap.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \

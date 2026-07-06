@@ -339,6 +339,24 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
                                   void (*run_region)(void *), void *arg);
 
 /* ------------------------------------------------------------------ */
+/* AMD-P0 — deterministic software-event LBR snapshot (src/branchsnap.c) */
+/* ------------------------------------------------------------------ */
+/* Capture [base, base+len) via a DETERMINISTIC boundary LBR snapshot instead of the
+ * sample_period=1 flood + richest-window heuristic: enable the LBR, plant a hardware
+ * execution breakpoint at base+exit_off, run run_fn(arg), and when the boundary is hit a
+ * BPF program calls bpf_get_branch_snapshot() to read the frozen 16-entry stack. The raw
+ * branch array is decoded by the shared amd_decode (in-region-filtered). Its win over the
+ * sampled path: a tiny single-shot routine — too fast to be sampled in-region — is
+ * captured, not truncated. `exit_off` is the offset of the region's exit instruction (the
+ * final ret / tail branch). Fills `trace`; sets trace->truncated if the boundary was
+ * never reached. Returns ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL where the substrate/privilege
+ * is absent (see asmtest_amd_snapshot_available), or ASMTEST_HW_ENOSYS built without the
+ * BPF toolchain. Needs CAP_BPF + CAP_PERFMON + AMD LbrExtV2 + Linux >= 6.10. */
+int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
+                               void (*run_fn)(void *), void *arg,
+                               asmtest_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
 /* §3.1(c) — whole-window noise attribution: address→name reverse       */
 /* resolver + IP bucketer.                                              */
 /*                                                                     */
