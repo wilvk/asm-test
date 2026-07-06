@@ -1034,7 +1034,10 @@ namespace Asmtest
             _emit = emit;
             _wholeWindow = true;
             _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
-            _handle = HwNative.asmtest_trace_new((UIntPtr)4096, (UIntPtr)0);
+            // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
+            // retained trace to the single-step ring (SS_STREAM_CAP) — a tiny native
+            // leaf can otherwise fall past a small cap behind the managed call machinery.
+            _handle = HwNative.asmtest_trace_new((UIntPtr)65536, (UIntPtr)0);
             int rc = _handle != IntPtr.Zero
                 ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
                 : HwNative.ASMTEST_HW_ENOSYS;

@@ -242,6 +242,11 @@ docker-hwtrace-jit: docker-node
 docker-hwtrace-jit-dotnet: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet
 
+# The empty-ctor whole-window scope demo (examples/dotnet), in the .NET image.
+.PHONY: docker-hwtrace-dotnet-example
+docker-hwtrace-dotnet-example: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-dotnet-example
+
 docker-hwtrace-jit-dotnet-bcl: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-bcl
 

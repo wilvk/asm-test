@@ -653,6 +653,13 @@ hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="
 	$(hwtrace_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
+# Runnable demo of the empty-ctor whole-window scope (§Z0/§Z1) — `using (new AsmTrace())`
+# capturing a native leaf's executed asm via the single-step WEAK tier on this host.
+.PHONY: hwtrace-dotnet-example
+hwtrace-dotnet-example: shared-hwtrace
+	@echo "== hwtrace-dotnet-example =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/asmscope.csproj
+
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="
 	cd bindings/ruby && $(hwtrace_env) $(RUBY) test_hwtrace.rb
