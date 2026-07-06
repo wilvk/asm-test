@@ -179,7 +179,7 @@ re-arms a fresh per-thread PT event on the resuming one; §D4 owns the merge. De
 stays the honest thread-scope-with-mismatch-flag; the stitched mode is an explicit
 opt-in.
 
-**§D0 tests.** Extend [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs)
+**§D0 tests.** Extend [examples/dotnet/jit_dotnet/Program.cs](../../examples/dotnet/jit_dotnet/Program.cs)
 and the `jit_trace` harness ([examples/jit_trace.c](../../examples/jit_trace.c)); run
 under the existing `docker-hwtrace-jit-dotnet` lane
 ([mk/docker.mk:222-272](../../mk/docker.mk#L222), recipe

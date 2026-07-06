@@ -328,7 +328,7 @@ hwtrace-jit-jitdump: $(BUILD)/jit_trace
 hwtrace-jit-dotnet: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet (real .NET CoreCLR JIT method) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
 
 # .NET (CoreCLR) FRAMEWORK method: trace System.Console::WriteLine — BCL code that ships as
@@ -339,7 +339,7 @@ hwtrace-jit-dotnet: $(BUILD)/jit_trace
 hwtrace-jit-dotnet-bcl: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-bcl (real .NET CoreCLR BCL method: Console.WriteLine) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet-bcl $(BUILD)/jit_dotnet/jit_dotnet.dll
 
 # Binary jitdump path against a THIRD producer: .NET CoreCLR. Unlike HotSpot, CoreCLR writes
@@ -351,7 +351,7 @@ hwtrace-jit-dotnet-bcl: $(BUILD)/jit_trace
 hwtrace-jit-dotnet-jitdump: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-jitdump (real .NET CoreCLR jitdump byte recovery) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
 
 # OpenJDK (HotSpot): compile the one-method hot loop and trace its `Hot.asmtjit` C2 body.
@@ -379,12 +379,12 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 hwtrace-jit-dotnet-descend hwtrace-jit-dotnet-descend-all: hwtrace-jit-dotnet-%: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-$* (descend into CoreCLR sibling JIT methods) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
 hwtrace-jit-dotnet-bcl-descend hwtrace-jit-dotnet-bcl-descend-all: hwtrace-jit-dotnet-bcl-%: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-bcl-$* (descend Console.WriteLine -> get_Out) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-	  dotnet build examples/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	./$(BUILD)/jit_trace dotnet-bcl-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
 hwtrace-jit-java-descend hwtrace-jit-java-descend-all: hwtrace-jit-java-%: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-java-$* (descend into HotSpot sibling JIT methods) =="

@@ -229,7 +229,7 @@ local specifics.
   [src/pt_backend.c:108](../../src/pt_backend.c#L108),
   [src/ss_backend.c:99](../../src/ss_backend.c#L99)) is clean. Docs must set this
   expectation and point at the warm/`NoInlining`/tiering-pinned discipline in
-  [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs).
+  [examples/dotnet/jit_dotnet/Program.cs](../../examples/dotnet/jit_dotnet/Program.cs).
 - **`begin` keys on the region name.** `end` closes the active slot regardless of
   name, but `begin` looks the name up via `find_region`
   ([src/hwtrace.c:413](../../src/hwtrace.c#L413), used at

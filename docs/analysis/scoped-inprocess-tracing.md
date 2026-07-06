@@ -223,7 +223,7 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    console locking/encoding, and the write path: tens of thousands of instructions for
    a few visible statements. That is honest — it *is* the assembly path that executed —
    but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
-   [examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs) exists
+   [examples/dotnet/jit_dotnet/Program.cs](../../examples/dotnet/jit_dotnet/Program.cs) exists
    precisely to get a *clean* single-method trace instead of the runtime's plumbing.
 3. **The window has a bandwidth budget, not a semantic limit.** PT emits hundreds of
    MB/s per core encoded ([perf-intel-pt][perf-intel-pt]); a scope around seconds of hot
@@ -576,7 +576,7 @@ against the lowest common denominator; the next section shows how much dissolves
    "the full body of `HotPath`, every block, guaranteed," you must (a) keep it hot and
    un-inlined so it exists as a standalone body — the examples do this with
    `[MethodImpl(MethodImplOptions.NoInlining)]` and `DOTNET_TieredCompilation=0`
-   ([examples/jit_dotnet/Program.cs](../../examples/jit_dotnet/Program.cs)) — which is
+   ([examples/dotnet/jit_dotnet/Program.cs](../../examples/dotnet/jit_dotnet/Program.cs)) — which is
    *extra* beyond "just using," and (b) resolve its native address.
 2. **In-process method→address resolution is version-fragile on .NET.** Up to .NET 6,
    `RuntimeHelpers.PrepareMethod(m.MethodHandle)` then `m.MethodHandle.GetFunctionPointer()`

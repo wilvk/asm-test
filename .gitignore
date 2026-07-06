@@ -64,10 +64,6 @@ bindings/**/*.gem
 # V8 isolate logs from the hwtrace-jit lane (node --perf-basic-prof)
 isolate-*.log
 
-# .NET build artifacts from the hwtrace-jit-dotnet sample
-examples/jit_dotnet/obj/
-examples/jit_dotnet/bin/
-
-# .NET build artifacts from the examples/dotnet demo projects
+# .NET build artifacts from the examples/dotnet demo projects (incl. jit_dotnet)
 examples/dotnet/**/obj/
 examples/dotnet/**/bin/
