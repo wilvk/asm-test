@@ -301,6 +301,59 @@ static class HwTraceProgram
             else
                 Console.WriteLine($"# SKIP stealth stepper: {om.SkipReason}");
 
+            // --- §1 handle-keyed scopes: concurrent SAME-SITE regions don't alias --- //
+            // Both threads construct their scope through SameSiteScope below, so they
+            // share ONE auto-name (member:line). begin_scope gives each its own
+            // per-thread frame + handle; each Dispose must render ITS OWN routine.
+            // Event-sequenced so the arm windows overlap deterministically:
+            // A arms -> B arms -> A runs+closes -> B runs+closes.
+            var codeA = NativeCode.FromBytes(ROUTINE);   // renders cmp/jle
+            var codeB = NativeCode.FromBytes(LOOP);      // renders dec/jne
+            string pathA = null, pathB = null;
+            bool armedA = false, armedB = false;
+            using (var aArmed = new ManualResetEventSlim(false))
+            using (var bArmed = new ManualResetEventSlim(false))
+            using (var aClosed = new ManualResetEventSlim(false))
+            {
+                var ta = new Thread(() =>
+                {
+                    var s = SameSiteScope(codeA);
+                    armedA = s.Armed;
+                    aArmed.Set();
+                    bArmed.Wait(5000);       // both same-site scopes armed concurrently
+                    codeA.Call(20, 22);
+                    s.Dispose();
+                    pathA = s.Path;
+                    aClosed.Set();
+                });
+                var tb = new Thread(() =>
+                {
+                    aArmed.Wait(5000);
+                    var s = SameSiteScope(codeB);
+                    armedB = s.Armed;
+                    bArmed.Set();
+                    aClosed.Wait(5000);      // A ran and closed while B stayed open
+                    codeB.Call(7, 3);
+                    s.Dispose();
+                    pathB = s.Path;
+                });
+                ta.Start(); tb.Start();
+                ta.Join(); tb.Join();
+            }
+            if (armedA && armedB)
+            {
+                Check(pathA != null && pathA.Contains("cmp"),
+                      "handle-keyed: thread A's same-site scope renders ITS routine (cmp)");
+                Check(pathB != null && (pathB.Contains("dec") || pathB.Contains("jne")),
+                      "handle-keyed: thread B's same-site scope renders ITS loop (dec/jne)");
+                Check(pathB != null && !pathB.Contains("cmp"),
+                      "handle-keyed: B's slice carries none of A's instructions");
+            }
+            else
+                Console.WriteLine($"# SKIP handle-keyed concurrency: arm failed (A={armedA}, B={armedB})");
+            codeA.Free();
+            codeB.Free();
+
             // --- TF sibling stress: scope armed while GC/alloc threads run free --- //
             // The accepted §Z1 posture single-steps THIS thread only; sibling runtime
             // threads must run native and the process must stay healthy. Bounded churn.
@@ -588,6 +641,11 @@ static class HwTraceProgram
         for (long i = 1; i <= n; i++) s += i;
         return s;
     }
+
+    // §1 fixture: ONE construction site shared by every caller, so concurrent callers
+    // collide on the same [CallerMemberName]:[CallerLineNumber] auto-name — exactly
+    // the aliasing case the handle-keyed begin_scope exists to disambiguate.
+    static AsmTrace SameSiteScope(NativeCode c) => new AsmTrace(c, emit: false);
 
     // §D0.3 fixtures: FRESH cold methods (first call happens inside the scope test) so
     // PrepareMethod's forced JIT is what the listener observes. Kept trivially small.

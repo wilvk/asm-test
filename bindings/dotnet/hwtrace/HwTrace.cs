@@ -231,6 +231,14 @@ namespace Asmtest
         [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
         public static extern int asmtest_hwtrace_render([MarshalAs(UnmanagedType.LPStr)] string name, byte[] buf, UIntPtr buflen);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_arm_tid();
+        // §1 handle-keyed trio: begin_scope pushes a PER-THREAD range-stack frame and
+        // returns its handle, so two threads entering the same auto-named site
+        // concurrently each keep their own slice; render_scope renders by handle. On a
+        // non-single-step backend begin_scope falls back to the name-keyed try_begin
+        // and leaves *out a sentinel (Idx 0xffffffff) — callers then render by name.
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_hwtrace_begin_scope([MarshalAs(UnmanagedType.LPStr)] string name, ref HwScope @out);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_scope(HwScope handle, byte[] buf, UIntPtr buflen);
 
         // §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface.
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_begin_window(IntPtr trace, ref HwScope @out);
@@ -1288,8 +1296,12 @@ namespace Asmtest
             _handle = HwNative.asmtest_trace_new((UIntPtr)256, (UIntPtr)64);
             if (_handle != IntPtr.Zero)
                 HwNative.asmtest_hwtrace_register_region(_name, code.Base, (UIntPtr)code.Length, _handle);
-            // Register-then-begin under the same generated name (Core §0.4 idempotent).
-            int brc = HwNative.asmtest_hwtrace_try_begin(_name);
+            // Register-then-begin under the same generated name (Core §0.4 idempotent),
+            // via the §1 HANDLE-KEYED begin: each thread entering this same auto-named
+            // site gets its own range-stack frame, so concurrent same-site scopes no
+            // longer alias; Dispose renders this scope's own slice by handle.
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            int brc = HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope);
             Armed = _began = brc == HwNative.ASMTEST_HW_OK;
             // §Z5: the region form has no auto-init retry (only the whole-window ctor
             // does), so say why the arm failed rather than leaving SkipReason empty.
@@ -1385,12 +1397,13 @@ namespace Asmtest
             }
             HwNative.asmtest_hwtrace_register_region(_name, _methodBase, _methodLen, _handle);
             if (_oop) return; // §D3: armed lazily by Invoke (the helper steps, not TF)
-            int rc = HwNative.asmtest_hwtrace_try_begin(_name);
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            int rc = HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope);
             if (rc == HwNative.ASMTEST_HW_ESTATE)
             {
                 // §Z0 parity with the empty ctor: auto-init the portable tier and retry.
                 rc = AutoInitSingleStep() == HwNative.ASMTEST_HW_OK
-                    ? HwNative.asmtest_hwtrace_try_begin(_name)
+                    ? HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope)
                     : rc;
             }
             Armed = _began = rc == HwNative.ASMTEST_HW_OK;
@@ -1552,11 +1565,23 @@ namespace Asmtest
                 // §D3: an out-of-process Method scope never began in-process — the
                 // helper filled the trace out of band, so there is nothing to end.
                 if (_began) HwNative.asmtest_hwtrace_end(_name);
-                need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                // §1: render THIS scope's slice by handle where begin_scope produced
+                // one (concurrent same-site scopes each render their own); fall back
+                // to the name-keyed render (oop scopes, non-single-step fallback).
+                bool byHandle = _began && _scope.Idx != 0xffffffffu;
+                need = byHandle
+                    ? HwNative.asmtest_hwtrace_render_scope(_scope, null, UIntPtr.Zero)
+                    : HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                if (need <= 0 && byHandle)
+                {
+                    byHandle = false;
+                    need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                }
                 if (need > 0)
                 {
                     byte[] buf = new byte[need + 1];
-                    HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
+                    if (byHandle) HwNative.asmtest_hwtrace_render_scope(_scope, buf, (UIntPtr)(need + 1));
+                    else HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
                     Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
                 }
                 else Path = "";
