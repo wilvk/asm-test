@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The empty-ctor whole-window scope demo (§Z0/§Z1): `using (new AsmTrace())`
+       over two native leaves, attributing the captured addresses. A dependency-free
+       console app that compiles the binding source (HwTrace.cs) directly and
+       P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
+       `make hwtrace-dotnet-example`; self-skips (exit 0) where single-step can't run.
+
+       AllowUnsafeBlocks: the demo invokes the native leaves through unmanaged
+       function pointers (calli), which skips the Marshal delegate's P/Invoke
+       transition stub — a far shorter window under single-step, so the leaves show.
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>wholewindow</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

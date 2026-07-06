@@ -1,77 +1,73 @@
 # examples/dotnet — scoped in-process tracing, live
 
-A runnable .NET demo of the scoped-trace facility, centred on the aspirational
-**empty-ctor** form from the
-[zero-config plan](../../docs/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1):
+Runnable .NET demos of the scoped-trace facility from the
+[zero-config plan](../../docs/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
+one project per scope form. Both run live on this dev box — an AMD Zen 5 with no
+Intel PT — via the single-step **WEAK** tier, and self-skip cleanly (exit 0) where
+single-step cannot run.
 
-```csharp
-using (new AsmTrace())      // no NativeCode, no [base,len) — zero config
-{
-    HotPath(data);          // whatever runs here is captured …
-}                           // … and its executed asm rendered on Dispose
-```
+| Project | Scope form | Shows |
+|---|---|---|
+| [wholewindow/](wholewindow/) | `using (new AsmTrace())` | zero-config whole-window capture + attributing two native leaves apart from the runtime |
+| [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
 
-## Run it
+## Run them
 
 ```sh
-make hwtrace-dotnet-example          # in a plain container / on this host
-make docker-hwtrace-dotnet-example   # in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs both, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs both, in the asmtest-dotnet image
+
+# or one at a time:
+dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
+dotnet run --project examples/dotnet/region/region.csproj
 ```
 
-It self-skips cleanly (exit 0) where the single-step backend cannot run (e.g. off
-Linux). On this dev box — an AMD Zen 5 with no Intel PT — it runs via the
-single-step **WEAK** tier: the CPU traps after every instruction the thread
-executes inside the scope, and the recorded absolute addresses are disassembled
-from live memory on `Dispose`.
+Each project is dependency-free — it compiles the binding source
+([HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)) directly and P/Invokes
+`libasmtest_hwtrace` (auto-resolved from the in-tree `build/`).
 
-## What it shows (observed output on this machine)
+## wholewindow — `using (new AsmTrace())` (observed output)
 
-The example runs the **same scope two ways** so the honest trade-off is visible.
-
-**(1) `new AsmTrace()` — zero config, whole-window.** It captures *everything* the
-thread ran. For a managed caller that is the .NET runtime's own JIT'd code, so the
-window is large and honestly `truncated`:
+The empty ctor captures *everything* the thread ran, into a large **sparse** buffer
+(no fixed 64k cap). The demo calls two native leaves in one scope and **attributes**
+each captured address to its origin by range:
 
 ```
-    armed, auto-named 'Main:64', call returned 42.
-    captured 65536 instructions of real executed machine code (window overflowed — truncated).
-    a sample of the disassembly (this is the .NET runtime's own
-    JIT'd code executing the call — the honest whole-window cost):
-        pop rbp
-        ret
-        mov eax, 0
-        mov rdx, qword ptr [rbp - 8]
-        sub rdx, qword ptr fs:[0x28]      <- a real CLR stack-canary check
-        je 0x...
+armed 'Main:57', add2=42, sub2=18, captured 1048576 instructions (truncated).
+attribution of the captured window, by origin:
+    leaf A  (add2)         : 5      <- mov,add,cmp,jle,ret
+    leaf B  (sub2)         : 3      <- mov,sub,ret
+    runtime (.NET / other) : 1048568
+-> multiple leaves are told apart from each other and from the runtime.
 ```
 
-This is the plan's *"you get everything, including the runtime"* — faithful, and
-noisy. Pointing single-step at live managed code is a documented footgun; the tiny
-native leaf is buried in the CLR's own code, which is why the clean managed path
-is the **STRONG** whole-window PT tier (region-filtered at decode), forward-look on
-this AMD host.
+The ~1M runtime instructions are the .NET runtime's own JIT'd code — single-step of
+a managed caller amplifies enormously, which is why the leaves sit past the old 64k
+window and the buffer had to grow (and is honestly `truncated`). The same separation
+is proven deterministically, with no runtime noise, by the C host test
+`test_wholewindow_buckets` (two native leaves → `leafA: 5`, `leafB: 5` as separate
+named buckets via `asmtest_hwtrace_attribute_window`). The clean managed path is the
+**STRONG** whole-window PT tier (region-filtered at decode), forward-look here.
 
-**(2) `new AsmTrace(code)` — same import + scope, scoped to one routine.** The same
-facility, scoped to a native region, yields *exactly* its executed instructions:
+## region — `using (new AsmTrace(code))` (observed output)
+
+The same facility, scoped to a native region, yields *exactly* its instructions:
 
 ```
-    armed, auto-named 'Main:88', call returned 42.
-    rendered listing — EXACTLY the routine's executed instructions:
-             0:	mov rax, rdi
-             3:	add rax, rsi
-             6:	cmp rax, 0x64
-             c:	jle 0x...
-            11:	ret
-    truncated: False
-    -> region-scoped gives the clean, isolated assembly path.
+armed 'Main:49', add2(20,22) = 42.
+rendered listing — EXACTLY the routine's executed instructions:
+    0:	mov rax, rdi
+    3:	add rax, rsi
+    6:	cmp rax, 0x64
+    c:	jle 0x...
+    11:	ret
+truncated: False
 ```
 
-`add2(20, 22) = 42`, so the `cmp`/`jle` is taken and the `dec` at offset `0xc` is
-correctly absent from the trace.
+## API used
 
-## Files
-
-- [Program.cs](Program.cs) — the demo (both scope forms).
-- [asmscope.csproj](asmscope.csproj) — dependency-free console app; compiles the
-  binding source ([HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)) directly
-  and P/Invokes `libasmtest_hwtrace` (auto-resolved from the in-tree `build/`).
+- `new AsmTrace()` / `new AsmTrace(code)` — the empty-ctor and region-scoped scopes.
+- `AsmTrace.Addresses` — the raw absolute addresses a whole-window scope captured
+  (range-classify these to attribute them).
+- `AsmTrace.Path` — the rendered disassembly (region-scoped form).
+- `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.

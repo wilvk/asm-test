@@ -371,6 +371,31 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
                                         asmtest_hwtrace_bucket_t *buckets,
                                         size_t cap);
 
+/* A caller-known code region, for attributing a whole-window trace: any captured
+ * address in [base, base+len) is labelled `name`. Lets several native leaves (each a
+ * distinct exec_alloc'd blob that maps resolution would collapse into one "[anon]")
+ * come back as separate, named buckets. `name` is truncated to fit. */
+typedef struct {
+    char name[64];
+    uint64_t base;
+    uint64_t len;
+} asmtest_hwtrace_named_region_t;
+
+/* Attribute the whole-window scope `handle`'s captured ABSOLUTE addresses into
+ * labelled `buckets[0..cap)`: each address is matched against the caller's `regions`
+ * first (exact, symbol-free — this is how multiple leaves separate), then falls back
+ * to the perf-map JIT symbol / mapped-file region for the runtime remainder. Writes
+ * *nbuckets (distinct labels, <= cap; surplus dropped). Returns ASMTEST_HW_OK, or
+ * ASMTEST_HW_EINVAL on a stale/unknown handle, a REGION-scope handle (its insns are
+ * relative offsets, not the absolute addresses this needs), or bad args;
+ * ASMTEST_HW_ENOSYS where the whole-window path is unavailable (it is Linux/x86-64 —
+ * a subset of the single-step tier, which also covers macOS x86-64). Host-testable. */
+int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t handle,
+                                     const asmtest_hwtrace_named_region_t *regions,
+                                     size_t nregions,
+                                     asmtest_hwtrace_bucket_t *buckets, size_t cap,
+                                     size_t *nbuckets);
+
 #ifdef __cplusplus
 }
 #endif

@@ -75,7 +75,8 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h> /* syscall (§Z4 arm-tid) */
+#include <sys/mman.h> /* mmap/munmap (§Z1 sparse whole-window buffer) */
+#include <unistd.h>   /* syscall (§Z4 arm-tid) */
 #if defined(__APPLE__)
 #include <sys/ucontext.h>
 #else
@@ -114,7 +115,19 @@ static inline int ss_darwin_tid(void) {
  * small-routine envelope; a routine that executes more in-region instructions than
  * this overflows and is honestly flagged truncated (never emit partial as complete). */
 #ifndef SS_STREAM_CAP
-#define SS_STREAM_CAP (1u << 16) /* 65536 offsets = 512 KiB */
+#define SS_STREAM_CAP (1u << 16) /* 65536 offsets = 512 KiB (region frames: malloc'd) */
+#endif
+
+/* WHOLE-WINDOW capacity (§Z1). A region frame captures a small leaf, but a region-free
+ * whole-window frame records EVERY instruction the thread runs — for a managed caller
+ * that is the whole runtime, far past 64k. So its buffer is a large SPARSE mmap
+ * (lazily page-committed, so RAM cost is only what is actually recorded) instead of a
+ * fixed malloc: the cap becomes millions of instructions at ~zero cost for small
+ * windows. Still bounded (overflow → truncated), just a much higher, cheap ceiling.
+ * Writing to an as-yet-uncommitted anonymous page from the SIGTRAP handler takes a
+ * transparent minor page fault (kernel-serviced, not a userspace signal) — safe. */
+#ifndef SS_WINDOW_CAP
+#define SS_WINDOW_CAP (1u << 20) /* 1,048,576 addresses = 8 MiB VA, sparse */
 #endif
 
 /* Per-thread nesting depth bound. Kept SMALL and fixed because the range stack is
@@ -140,11 +153,12 @@ typedef struct {
     uint64_t base_ip;
     size_t len;
     asmtest_trace_t *trace;
-    uint64_t *stream; /* heap-malloc'd ordered RIPs (offsets, or absolute if whole) */
+    uint64_t *stream; /* ordered RIPs (offsets, or absolute if whole); malloc or mmap */
+    size_t cap;       /* stream capacity in entries (SS_STREAM_CAP or SS_WINDOW_CAP)  */
     volatile uint32_t stream_len;
     volatile sig_atomic_t overflow;
     uint32_t gen;
-    int whole_window; /* §Z1: 1 => record absolute RIPs, no [base,len) filter */
+    int whole_window; /* §Z1: 1 => record absolute RIPs, no [base,len) filter; mmap'd */
     int arm_tid;      /* §Z4: OS tid that armed this frame (region-free close assert) */
 } ss_frame_t;
 
@@ -201,13 +215,14 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
         ss_frame_t *f = &tls_frames[i];
         if (f->whole_window) {
             /* §Z1: region-free — record the ABSOLUTE rip of every executed
-             * instruction (no [base,len) filter). Same bounded-ring overflow. */
-            if (f->stream_len < SS_STREAM_CAP)
+             * instruction (no [base,len) filter). Bounded by the sparse-mmap cap;
+             * writing an uncommitted page here takes a transparent minor fault. */
+            if (f->stream_len < f->cap)
                 f->stream[f->stream_len++] = rip;
             else
                 f->overflow = 1;
         } else if (rip >= f->base_ip && rip < f->base_ip + f->len) {
-            if (f->stream_len < SS_STREAM_CAP)
+            if (f->stream_len < f->cap)
                 f->stream[f->stream_len++] = rip - f->base_ip;
             else
                 f->overflow = 1;
@@ -216,6 +231,18 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
 
     /* Re-assert TF so sigreturn resumes stepping (in-region OR in a callee). */
     SS_SET_TF(uc);
+}
+
+/* Release a frame's ordered-RIP buffer with the matching deallocator: whole-window
+ * frames are sparse-mmap'd (munmap by capacity), region frames are malloc'd. */
+static void ss_free_stream(ss_frame_t *f) {
+    if (f->stream == NULL)
+        return;
+    if (f->whole_window)
+        munmap(f->stream, f->cap * sizeof(uint64_t));
+    else
+        free(f->stream);
+    f->stream = NULL;
 }
 
 /* Push a capture frame on this thread. On the OUTERMOST push, install the
@@ -234,10 +261,22 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
     }
     if (tls_depth >= SS_MAX_FRAMES)
         return ASMTEST_HW_EFULL; /* this thread's range stack is full */
-    uint64_t *stream =
-        (uint64_t *)malloc((size_t)SS_STREAM_CAP * sizeof(uint64_t));
-    if (stream == NULL)
-        return ASMTEST_HW_EINVAL;
+    /* Region frames use a fixed malloc; whole-window frames use a large SPARSE mmap
+     * (lazily committed) so the cap is millions of instructions at ~zero cost for
+     * small windows. Either failure is a clean EINVAL. */
+    size_t cap = whole_window ? (size_t)SS_WINDOW_CAP : (size_t)SS_STREAM_CAP;
+    uint64_t *stream;
+    if (whole_window) {
+        stream = (uint64_t *)mmap(NULL, cap * sizeof(uint64_t),
+                                  PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (stream == MAP_FAILED)
+            return ASMTEST_HW_EINVAL;
+    } else {
+        stream = (uint64_t *)malloc(cap * sizeof(uint64_t));
+        if (stream == NULL)
+            return ASMTEST_HW_EINVAL;
+    }
 
     int idx = tls_depth;
     ss_frame_t *f = &tls_frames[idx];
@@ -246,6 +285,7 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
     f->len = len;
     f->trace = trace;
     f->stream = stream;
+    f->cap = cap;
     f->stream_len = 0;
     f->overflow = 0;
     f->gen = ++tls_gen_ctr;
@@ -268,8 +308,7 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
         sigemptyset(&sa.sa_mask);
         if (sigaction(SIGTRAP, &sa, &g_old_sa) != 0) {
             pthread_mutex_unlock(&g_ss_lock);
-            free(stream);
-            f->stream = NULL;
+            ss_free_stream(f);
             return ASMTEST_HW_EINVAL;
         }
         g_installed = 1;
@@ -401,8 +440,7 @@ void asmtest_ss_end(void) {
         tls_depth = d - 1; /* nested pop: outer frames keep stepping */
     }
     ss_normalize(fr);
-    free(fr->stream);
-    fr->stream = NULL; /* keep base/len/trace/gen for a post-close render_scope */
+    ss_free_stream(fr); /* munmap (whole-window) or free (region); keeps base/len/gen */
 
     pthread_mutex_lock(&g_ss_lock);
     if (g_arm_refcount > 0)
@@ -454,6 +492,13 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
     (void)base;
     (void)len;
     (void)trace;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
+                            uint32_t *out_gen) {
+    (void)trace;
+    (void)out_idx;
+    (void)out_gen;
     return ASMTEST_HW_ENOSYS;
 }
 void asmtest_ss_end(void) {}

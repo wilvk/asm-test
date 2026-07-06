@@ -1013,6 +1013,10 @@ namespace Asmtest
         /// <summary>§Z5: when the scope did NOT arm, the honest human-readable reason
         /// (no faithful backend, tier not up, not Linux). Empty when armed.</summary>
         public string SkipReason { get; private set; } = "";
+        /// <summary>§Z1: the raw ABSOLUTE addresses captured by a whole-window scope, in
+        /// execution order (empty for the region-scoped form). Range-classify these
+        /// against known native regions to tell multiple leaves apart.</summary>
+        public ulong[] Addresses { get; private set; } = System.Array.Empty<ulong>();
         /// <summary>The auto-generated (or explicit) region name.</summary>
         public string Name => _name;
 
@@ -1035,9 +1039,10 @@ namespace Asmtest
             _wholeWindow = true;
             _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
             // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
-            // retained trace to the single-step ring (SS_STREAM_CAP) — a tiny native
-            // leaf can otherwise fall past a small cap behind the managed call machinery.
-            _handle = HwNative.asmtest_trace_new((UIntPtr)65536, (UIntPtr)0);
+            // retained trace to the single-step window ring (SS_WINDOW_CAP = 1<<20) — a
+            // tiny native leaf can otherwise fall past a small cap behind the managed
+            // call machinery. Cheap: the trace buffer is only committed as it fills.
+            _handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 20), (UIntPtr)0);
             int rc = _handle != IntPtr.Zero
                 ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
                 : HwNative.ASMTEST_HW_ENOSYS;
@@ -1084,17 +1089,24 @@ namespace Asmtest
             // and renders the recorded ABSOLUTE addresses from live self memory; the
             // region path is name-keyed and renders base-relative offsets.
             int need;
+            need = 0;
             if (_wholeWindow)
             {
                 HwNative.asmtest_hwtrace_end_window(_scope, _handle);
-                need = HwNative.asmtest_hwtrace_render_window(_scope, null, UIntPtr.Zero);
-                if (need > 0)
+                // Capture the raw ABSOLUTE addresses (before the trace is freed below).
+                // A whole-window trace can be a million runtime instructions, so we do
+                // NOT auto-render its disassembly (Path) — the caller ATTRIBUTES the
+                // Addresses instead (classify by known native regions to tell leaves
+                // apart; §Z1). Path stays empty for the whole-window form.
+                if (_handle != IntPtr.Zero)
                 {
-                    byte[] buf = new byte[need + 1];
-                    HwNative.asmtest_hwtrace_render_window(_scope, buf, (UIntPtr)(need + 1));
-                    Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+                    ulong n = HwNative.asmtest_emu_trace_insns_len(_handle);
+                    var addrs = new ulong[n];
+                    for (ulong i = 0; i < n; i++)
+                        addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
+                    Addresses = addrs;
                 }
-                else Path = "";
+                Path = "";
             }
             else
             {

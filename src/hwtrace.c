@@ -1613,6 +1613,80 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
     return nb;
 }
 
+/* §Z1: attribute a whole-window scope's captured addresses to labelled buckets.
+ * Each recorded ABSOLUTE address is classified against the caller's NAMED regions
+ * first (so several leaves — distinct exec_alloc'd blobs that would otherwise both
+ * resolve to "[anon]" — come back as separate, named buckets), then falls back to
+ * the perf-map JIT symbol / mapped-file region for the runtime remainder. Buckets
+ * accumulate by label; *nbuckets gets the distinct count; surplus labels past `cap`
+ * are dropped (size `cap` to the expected label count for exact totals). */
+int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t handle,
+                                     const asmtest_hwtrace_named_region_t *regions,
+                                     size_t nregions,
+                                     asmtest_hwtrace_bucket_t *buckets, size_t cap,
+                                     size_t *nbuckets) {
+    if (nbuckets != NULL)
+        *nbuckets = 0;
+    if (buckets == NULL || cap == 0)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__) && defined(__x86_64__)
+    const void *base = NULL;
+    size_t len = 0;
+    asmtest_trace_t *trace = NULL;
+    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &trace) ||
+        trace == NULL)
+        return ASMTEST_HW_EINVAL; /* stale/unknown handle (or non-single-step) */
+    /* A whole-window frame is uniquely base==NULL/len==0 (ss_push_frame). Reject a
+     * REGION-scope handle: its insns[] hold base-RELATIVE offsets, not the absolute
+     * addresses this classifies — silently bucketing them all as "[unknown]". */
+    if (base != NULL || len != 0)
+        return ASMTEST_HW_EINVAL;
+    size_t nb = 0;
+    for (size_t i = 0; i < trace->insns_len; i++) {
+        uint64_t addr = trace->insns[i];
+        char label[128];
+        label[0] = '\0';
+        /* Caller's named regions win (exact, symbol-free). */
+        for (size_t r = 0; regions != NULL && r < nregions; r++)
+            if (regions[r].len != 0 && addr >= regions[r].base &&
+                addr < regions[r].base + regions[r].len) {
+                snprintf(label, sizeof label, "%s", regions[r].name);
+                break;
+            }
+        if (label[0] == '\0') {
+            /* Runtime remainder: prefer a JIT perf-map symbol, else the mapped file. */
+            if (!perfmap_symbol_at(0, addr, label, sizeof label)) {
+                uint64_t s = 0, e = 0;
+                if (!asmtest_hwtrace_region_name(0, addr, label, sizeof label, &s,
+                                                 &e))
+                    snprintf(label, sizeof label, "[unknown]");
+            }
+        }
+        size_t j;
+        for (j = 0; j < nb; j++)
+            if (strcmp(buckets[j].label, label) == 0)
+                break;
+        if (j == nb) {
+            if (nb >= cap)
+                continue; /* out of bucket space: surplus label dropped */
+            snprintf(buckets[nb].label, sizeof buckets[nb].label, "%s", label);
+            buckets[nb].count = 0;
+            j = nb;
+            nb++;
+        }
+        buckets[j].count++;
+    }
+    if (nbuckets != NULL)
+        *nbuckets = nb;
+    return ASMTEST_HW_OK;
+#else
+    (void)handle;
+    (void)regions;
+    (void)nregions;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
 /* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
 /* ------------------------------------------------------------------ */

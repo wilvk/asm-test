@@ -3120,6 +3120,16 @@ static void test_wholewindow_singlestep(void) {
     /* Bracket ONLY the call — no CHECK/printf inside the window (single-step steps
      * every instruction, so keep the window tight; check the return codes after). */
     int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    if (rc_begin != ASMTEST_HW_OK) {
+        /* Whole-window is Linux/x86-64 today; on other single-step platforms (macOS
+         * x86-64, where available(SINGLESTEP) is true) begin_window self-skips. */
+        printf("# SKIP whole-window capture: begin_window unavailable here (rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
     long r = fn(20, 22); /* 42 <= 100: jle taken, dec (0xe) skipped */
     int rc_end = asmtest_hwtrace_end_window(scope, tr);
 
@@ -3179,6 +3189,87 @@ static void test_wholewindow_singlestep(void) {
     munmap(p, sizeof ROUTINE);
 #else
     printf("# SKIP whole-window scope: x86-64 Linux only\n");
+#endif
+}
+
+/* §Z1 attribution: MULTIPLE native leaves in one region-free whole-window scope come
+ * back as SEPARATE, named buckets. Two distinct exec_alloc'd routines would both
+ * resolve to "[anon]" via /proc/self/maps, so asmtest_hwtrace_attribute_window keys
+ * on the caller's named ranges first — proving the leaves are told apart. Also
+ * exercises the sparse whole-window buffer (no fixed 64k cap). */
+static void test_wholewindow_buckets(void) {
+#if defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP whole-window buckets: single-step unavailable\n");
+        return;
+    }
+    void *a = ss_map_exec(ROUTINE, sizeof ROUTINE); /* leaf A */
+    void *b = ss_map_exec(ROUTINE, sizeof ROUTINE); /* leaf B (distinct mapping) */
+    if (a == NULL || b == NULL) {
+        printf("# SKIP whole-window buckets: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "whole-window buckets init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    add2_fn fa = (add2_fn)a, fb = (add2_fn)b;
+    /* Bracket ONLY the two calls — both leaves run inside one empty scope. */
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    if (rc_begin != ASMTEST_HW_OK) {
+        printf("# SKIP whole-window buckets: begin_window unavailable here (rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(a, sizeof ROUTINE);
+        munmap(b, sizeof ROUTINE);
+        return;
+    }
+    long ra = fa(20, 22);
+    long rb = fb(30, 12);
+    int rc_end = asmtest_hwtrace_end_window(scope, tr);
+
+    CHECK(rc_begin == ASMTEST_HW_OK && rc_end == ASMTEST_HW_OK,
+          "whole-window buckets: scope opened and closed");
+    CHECK(ra == 42 && rb == 42, "whole-window buckets: both leaves returned 42");
+
+    asmtest_hwtrace_named_region_t regions[2];
+    memset(regions, 0, sizeof regions);
+    snprintf(regions[0].name, sizeof regions[0].name, "leafA");
+    regions[0].base = (uint64_t)(uintptr_t)a;
+    regions[0].len = sizeof ROUTINE;
+    snprintf(regions[1].name, sizeof regions[1].name, "leafB");
+    regions[1].base = (uint64_t)(uintptr_t)b;
+    regions[1].len = sizeof ROUTINE;
+
+    asmtest_hwtrace_bucket_t buckets[8];
+    memset(buckets, 0, sizeof buckets);
+    size_t nb = 0;
+    int rc = asmtest_hwtrace_attribute_window(scope, regions, 2, buckets, 8, &nb);
+    CHECK(rc == ASMTEST_HW_OK, "whole-window buckets: attribute_window ok");
+
+    /* add2(_, _) executes 5 in-region instructions (mov,add,cmp,jle,ret), so each
+     * leaf's named bucket must hold exactly 5 — told apart despite identical bytes. */
+    uint64_t ca = 0, cb = 0;
+    int seen_a = 0, seen_b = 0;
+    for (size_t i = 0; i < nb; i++) {
+        if (strcmp(buckets[i].label, "leafA") == 0) { ca = buckets[i].count; seen_a = 1; }
+        if (strcmp(buckets[i].label, "leafB") == 0) { cb = buckets[i].count; seen_b = 1; }
+    }
+    CHECK(seen_a && seen_b && nb >= 2,
+          "whole-window buckets: two leaves are SEPARATE named buckets");
+    CHECK(ca == 5 && cb == 5,
+          "whole-window buckets: each leaf attributed exactly its 5 instructions");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(a, sizeof ROUTINE);
+    munmap(b, sizeof ROUTINE);
+#else
+    printf("# SKIP whole-window buckets: x86-64 Linux only\n");
 #endif
 }
 
@@ -3254,6 +3345,7 @@ int main(void) {
     /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
+    test_wholewindow_buckets();
 
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();

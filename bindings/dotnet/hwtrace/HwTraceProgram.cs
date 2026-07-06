@@ -147,11 +147,10 @@ static class HwTraceProgram
 
             // --- §Z0/§Z1: the aspirational EMPTY-ctor form: using (new AsmTrace()) --- //
             // Region-free WHOLE-WINDOW capture — no NativeCode. The single-step WEAK tier
-            // records the ABSOLUTE addresses of whatever ran on the thread; the native
-            // routine's `ret` appears in the (honest-but-noisy) rendered listing. Warm the
-            // call first so the tight window steps compiled code, not the first-call JIT.
+            // records the ABSOLUTE addresses of WHATEVER ran on the thread (the runtime
+            // included), exposed as Addresses for attribution — not auto-rendered.
             var code4 = NativeCode.FromBytes(ROUTINE);
-            long r4pre = code4.Call(20, 22); // warm (JIT) the call path before the window
+            long r4pre = code4.Call(20, 22); // warm the call path before the window
             long r4 = 0;
             AsmTrace ww;
             using (ww = new AsmTrace(emit: false)) // EMPTY ctor — no region, auto-named here
@@ -161,8 +160,8 @@ static class HwTraceProgram
             if (ww.Armed)
             {
                 Check(r4 == 42 && r4pre == 42, $"AsmTrace(): whole-window call returns 42 (got {r4})");
-                Check(ww.Path != null && ww.Path.Contains("ret"),
-                      "AsmTrace(): whole-window render includes the native routine's ret");
+                Check(ww.Addresses.Length > 0,
+                      $"AsmTrace(): whole-window captured instructions (got {ww.Addresses.Length})");
                 Check(ww.Name.Contains(":"), $"AsmTrace(): auto-name is member:line (got {ww.Name})");
             }
             else
