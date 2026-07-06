@@ -231,6 +231,16 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_end_window(HwScope handle, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_window(HwScope handle, byte[] buf, UIntPtr buflen);
 
+        // ---- single-instruction disassembler (Capstone-backed; §0.3 helpers) ----
+        // asmtest_disas decodes ONE instruction at `code` (an absolute in-process address
+        // for a live capture), formatting "<mnemonic> <operands>" into `outbuf`; base_addr
+        // = the address the bytes run at, so PC-relative operands resolve to absolute
+        // targets. Returns the instruction byte length (0 if undecodable / no Capstone).
+        [DllImport(HWTRACE)] [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool asmtest_disas_available();
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)] public static extern UIntPtr asmtest_disas(
+            int arch, IntPtr code, UIntPtr codeLen, ulong baseAddr, ulong off, byte[] outbuf, UIntPtr outlen);
+
         // ---- host-native executable code (out-param form, NOT a struct) ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_exec_alloc(
             byte[] bytes, UIntPtr len, out IntPtr baseOut, out UIntPtr lenOut);
@@ -1035,6 +1045,17 @@ namespace Asmtest
         /// runtime — so <see cref="Methods"/> also names WARM methods (JIT'd before the scope).
         /// False (a clean self-skip to the cold-only result) where diagnostics are off.</summary>
         public bool RundownEnabled { get; private set; }
+        /// <summary>§Z1: the LABELLED executed instructions of a <c>byMethod</c> whole-window
+        /// scope, in execution order — each captured instruction that resolved to a managed
+        /// method, disassembled from live memory and paired with its method name (and the
+        /// run of native-runtime instructions elided just before it). Empty for a non-<c>byMethod</c>
+        /// scope, or when this build has no Capstone (<see cref="DisassemblyAvailable"/> is
+        /// then false). The unlabelled native-runtime instructions are intentionally omitted —
+        /// this is the named instruction stream, not the raw million-instruction window.</summary>
+        public IReadOnlyList<AsmInstruction> Disassembly { get; private set; } = System.Array.Empty<AsmInstruction>();
+        /// <summary>True if this build links Capstone, so <see cref="Disassembly"/> carries
+        /// real instruction text; false (empty <see cref="Disassembly"/>) without it.</summary>
+        public bool DisassemblyAvailable { get; private set; }
         /// <summary>The auto-generated (or explicit) region name.</summary>
         public string Name => _name;
 
@@ -1184,17 +1205,29 @@ namespace Asmtest
                         DiagnosticsIpc.DisablePerfMap();
                     }
                     _map.Freeze();
+                    bool disasOk = HwNative.asmtest_disas_available();
+                    DisassemblyAvailable = disasOk;
+                    byte[] dbuf = disasOk ? new byte[128] : null;
                     var by = new Dictionary<string, long>();
+                    var insns = new List<AsmInstruction>();
                     long labelled = 0;
+                    int runtimeRun = 0; // native-runtime insns since the last labelled one
                     foreach (ulong ip in Addresses)
                     {
                         string m = _map.Resolve(ip);
-                        if (m == null) continue;
+                        if (m == null) { runtimeRun++; continue; }
                         labelled++;
                         by.TryGetValue(m, out long c);
                         by[m] = c + 1;
+                        // Disassemble the labelled instruction from LIVE memory — the code is
+                        // still mapped (closing the scope does not unload managed methods), so
+                        // this is safe here even though the trace handle is freed just below.
+                        if (disasOk)
+                            insns.Add(new AsmInstruction(ip, DisasAt(ip, dbuf), m, runtimeRun));
+                        runtimeRun = 0;
                     }
                     LabelledInstructions = labelled;
+                    Disassembly = insns;
                     var list = new List<AsmMethod>(by.Count);
                     foreach (var kv in by) list.Add(new AsmMethod(kv.Key, kv.Value));
                     list.Sort((x, y) => y.Count.CompareTo(x.Count));
@@ -1222,6 +1255,45 @@ namespace Asmtest
             }
             if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
         }
+
+        // Disassemble the single instruction at absolute address `addr` from live in-process
+        // memory into "<mnemonic> <operands>" (or "(undecodable)"). `scratch` is a reusable
+        // ≥16-byte buffer. asmtest_disas reads up to 15 bytes at `addr` and NUL-terminates
+        // `scratch`; the read is safe for a captured (executed) address — its page is mapped.
+        static string DisasAt(ulong addr, byte[] scratch)
+        {
+            scratch[0] = 0;
+            HwNative.asmtest_disas(0 /* ASMTEST_ARCH_X86_64 */, new IntPtr(unchecked((long)addr)),
+                                   (UIntPtr)16, addr, 0, scratch, (UIntPtr)scratch.Length);
+            int z = System.Array.IndexOf<byte>(scratch, 0);
+            if (z < 0) z = scratch.Length;
+            return z == 0 ? "(undecodable)" : System.Text.Encoding.ASCII.GetString(scratch, 0, z);
+        }
+    }
+
+    /// <summary>One LABELLED executed instruction of a whole-window capture: its absolute
+    /// address, disassembled text, the managed method it belongs to, and how many
+    /// native-runtime (unlabelled) instructions ran immediately before it. See
+    /// <see cref="AsmTrace.Disassembly"/>.</summary>
+    public readonly struct AsmInstruction
+    {
+        public AsmInstruction(ulong address, string text, string method, int runtimeBefore)
+        { Address = address; Text = text; Method = method; RuntimeBefore = runtimeBefore; }
+        /// <summary>The instruction's absolute in-process address.</summary>
+        public ulong Address { get; }
+        /// <summary>The disassembled <c>&lt;mnemonic&gt; &lt;operands&gt;</c> (or <c>(undecodable)</c>).</summary>
+        public string Text { get; }
+        /// <summary>The full method name this instruction belongs to (jitdump/perf-map or
+        /// listener spelling); split with <see cref="ShortMethod"/> / <see cref="Assembly"/>.</summary>
+        public string Method { get; }
+        /// <summary>Native-runtime (unlabelled) instructions executed immediately before this
+        /// one — the gap elided from this named instruction stream.</summary>
+        public int RuntimeBefore { get; }
+        /// <summary>The bare <c>Type::Method(sig)</c> of <see cref="Method"/> (reuses the
+        /// <see cref="AsmMethod"/> name parser).</summary>
+        public string ShortMethod => new AsmMethod(Method, 0).ShortName;
+        /// <summary>The declaring assembly of <see cref="Method"/> (empty if untagged).</summary>
+        public string Assembly => new AsmMethod(Method, 0).Assembly;
     }
 
     /// <summary>One managed method's share of a whole-window capture: its fully-qualified

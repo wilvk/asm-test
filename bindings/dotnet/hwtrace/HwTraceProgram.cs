@@ -8,6 +8,7 @@
 // "ok N - ..." lines, and returns nonzero on any assertion failure.
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Asmtest;
 
@@ -173,6 +174,37 @@ static class HwTraceProgram
                 Check(ww.SkipReason.Length > 0, $"AsmTrace(): self-skip records a reason ({ww.SkipReason})");
             }
             code4.Free();
+
+            // --- §Z1 byMethod: annotated disassembly (Disassembly) --- //
+            // A byMethod whole-window scope over a COLD, pure-compute managed method: the
+            // labelled instructions are disassembled from live memory and paired with their
+            // method name. Assert the invariant Disassembly.Count == LabelledInstructions
+            // (Capstone present) and that the cold method is named in the stream.
+            long tm = 0;
+            AsmTrace wm;
+            using (wm = new AsmTrace(emit: false, byMethod: true)) // cold-only labelling
+            {
+                tm = TinyManaged(1000);
+            }
+            if (wm.Armed)
+            {
+                Check(tm == 500500, $"AsmTrace(byMethod): TinyManaged(1000) == 500500 (got {tm})");
+                if (wm.DisassemblyAvailable)
+                {
+                    Check(wm.Disassembly.Count == wm.LabelledInstructions,
+                          $"AsmTrace(byMethod): Disassembly.Count == LabelledInstructions ({wm.Disassembly.Count} vs {wm.LabelledInstructions})");
+                    bool allText = wm.Disassembly.Count > 0, named = false;
+                    foreach (AsmInstruction ins in wm.Disassembly)
+                    {
+                        if (string.IsNullOrEmpty(ins.Text) || string.IsNullOrEmpty(ins.Method)) allText = false;
+                        if (ins.Method.Contains("TinyManaged")) named = true;
+                    }
+                    Check(allText, "AsmTrace(byMethod): every disassembled insn has text + a method");
+                    Check(named, "AsmTrace(byMethod): the cold method 'TinyManaged' is named in the stream");
+                }
+                else
+                    Console.WriteLine("# SKIP annotated disassembly asserts: build without Capstone");
+            }
 
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
@@ -363,6 +395,17 @@ static class HwTraceProgram
         var dotted = new AsmMethod("System.Buffer.Memmove", 1);
         Check(dotted.Assembly == "", $"AsmMethod.Assembly dotted == '' (got '{dotted.Assembly}')");
         Check(dotted.ShortName == "System.Buffer.Memmove", $"AsmMethod.ShortName dotted (got '{dotted.ShortName}')");
+    }
+
+    // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic
+    // only (no I/O: single-stepping a managed Console call is the documented footgun).
+    // TinyManaged(1000) == 1000*1001/2 == 500500.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long TinyManaged(long n)
+    {
+        long s = 0;
+        for (long i = 1; i <= n; i++) s += i;
+        return s;
     }
 
     // mov rax,rdi; add rax,rsi; ret  (the bytes round-tripped through the code image)
