@@ -28,6 +28,7 @@
  */
 #define _GNU_SOURCE
 
+#include "asmtest_addr_channel.h"
 #include "asmtest_codeimage.h"
 #include "asmtest_descent_internal.h"
 #include "asmtest_ptrace.h"
@@ -1632,6 +1633,153 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
 }
 #endif /* __x86_64__ */
 
+/* ------------------------------------------------------------------ */
+/* §D3 — whole-window multi-region capture over a cross-process channel */
+/* (this whole file section is already inside the linux + x86-64/arm64  */
+/* guard; the non-supported stub is in the outer #else at end-of-file). */
+/* ------------------------------------------------------------------ */
+
+/* 1 if `pc` is inside the window frame OR any channel-published JIT region. */
+static int in_region_set(uint64_t pc, uint64_t win_base, uint64_t win_len,
+                         const asmtest_addr_rec_t *regs, uint32_t nreg) {
+    if (pc >= win_base && pc < win_base + win_len)
+        return 1;
+    for (uint32_t i = 0; i < nreg; i++)
+        if (regs[i].len && pc >= regs[i].base && pc < regs[i].base + regs[i].len)
+            return 1;
+    return 0;
+}
+
+/* Decode the instruction length at absolute `at` in the tracee via a small foreign
+ * read (0 if unreadable/undecodable) — used to detect block boundaries in the
+ * absolute-address stream a multi-region capture records. */
+static size_t foreign_insn_len(pid_t pid, uint64_t at) {
+    uint8_t buf[16];
+    struct iovec l = {buf, sizeof buf};
+    struct iovec r = {(void *)(uintptr_t)at, sizeof buf};
+    ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+    if (got <= 0)
+        return 0;
+    return asmtest_disas(PTRACE_TRACE_ARCH, buf, (size_t)got, 0, 0, NULL, 0);
+}
+
+int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
+                                           size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           long *result, asmtest_trace_t *trace) {
+    if (win_base_p == NULL || win_len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    const uint64_t win_base = (uint64_t)(uintptr_t)win_base_p;
+
+    /* The caller has run_to'd win_base (the window frame's entry). Capture the frame's
+     * RETURN address so we can end the window when control returns to it — the
+     * region-agnostic window boundary (the alternative, "pc left the region," has no
+     * meaning across a set of regions the JIT keeps growing). */
+    uint64_t pc0 = 0, sp0 = 0, win_ret = 0;
+    if (read_pc_ret(pid, &pc0, NULL, &sp0, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+#if defined(__x86_64__)
+    { /* just after `call`, [rsp] holds the return address */
+        struct iovec l = {&win_ret, sizeof win_ret};
+        struct iovec r = {(void *)(uintptr_t)sp0, sizeof win_ret};
+        if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof win_ret)
+            return ASMTEST_PTRACE_ETRACE;
+    }
+#else
+    read_pc_ret(pid, NULL, NULL, NULL, &win_ret); /* AArch64: LR holds the return */
+#endif
+
+    /* Accumulated published regions (window frame + every JIT method the parent
+     * streams). Drained from the channel at entry and after every step. */
+    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
+    uint32_t nreg = 0;
+    if (chan != NULL)
+        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    uint32_t n = 0;
+    int overflow = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+    long retval_final = 0;
+
+    if (in_region_set(pc0, win_base, win_len, regs, nreg) && n < PTRACE_STREAM_CAP)
+        stream[n++] = pc0; /* record the window entry */
+
+    for (;;) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            overflow = 1;
+            break;
+        }
+        uint64_t pc = 0, rax = 0;
+        if (read_pc_ret(pid, &pc, &rax, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        /* Pick up regions the parent published since the last step (a method JIT'd
+         * mid-window) — this is the cross-process address channel doing its job. */
+        if (chan != NULL && nreg < ASMTEST_ADDR_CHAN_CAP)
+            nreg += asmtest_addr_channel_drain(chan, regs + nreg,
+                                               ASMTEST_ADDR_CHAN_CAP - nreg);
+
+        if (pc == win_ret) { /* control returned to the window's caller: done */
+            retval_final = (long)rax;
+            break;
+        }
+        if (in_region_set(pc, win_base, win_len, regs, nreg)) {
+            if (n < PTRACE_STREAM_CAP)
+                stream[n++] = pc; /* record ABSOLUTE — the caller classifies by region */
+            else {
+                overflow = 1;
+                break;
+            }
+        }
+        /* pc outside every published region: runtime/glue between managed methods.
+         * Not recorded (the noise the managed capture elides); single-stepping still
+         * carries us through it back to the next published region. */
+    }
+    if (result != NULL)
+        *result = retval_final;
+
+    /* Materialize the ABSOLUTE-address stream: a new block starts at a discontinuity
+     * (this address is not the fall-through of the previous recorded one), matching
+     * the block partition of every other backend. Lengths come from foreign reads. */
+    if (rc == ASMTEST_PTRACE_OK) {
+        int have_prev = 0;
+        uint64_t expected_next = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            uint64_t at = stream[i];
+            if (!have_prev || at != expected_next)
+                trace_append_block(trace, at);
+            trace_append_insn(trace, at);
+            size_t l = foreign_insn_len(pid, at);
+            if (l == 0) {
+                trace->truncated = true;
+                break;
+            }
+            expected_next = at + l;
+            have_prev = 1;
+        }
+        if (overflow)
+            trace->truncated = true;
+    }
+    free(stream);
+    return rc;
+}
+
 /* Shared body for the live-snapshot and time-versioned variants below. The ONLY
  * difference between them is the byte source handed to the block normalizer: a single
  * process_vm_readv (img == NULL) versus the time-correct bytes the code-image recorder
@@ -1983,6 +2131,19 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
     (void)len;
     (void)args;
     (void)nargs;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
+                                           size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           long *result, asmtest_trace_t *trace) {
+    (void)pid;
+    (void)win_base_p;
+    (void)win_len;
+    (void)chan;
     (void)result;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;

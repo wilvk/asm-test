@@ -1671,6 +1671,163 @@ static void test_ptrace_blockstep(void) {
 #endif
 }
 
+/* §D3 whole-window multi-region capture over the cross-process JIT-address channel.
+ * The out-of-process analog of the in-process whole-window scope: the stepper is a
+ * SEPARATE process that cannot see the runtime's MethodLoadVerbose events, so it learns
+ * the JIT'd method addresses through a shared-memory channel the parent publishes into.
+ * Fixture (no managed runtime needed): a DRIVER blob that calls two leaf "methods" at
+ * their own mmaps via absolute-address indirect calls; the tracee publishes both method
+ * regions to the channel BEFORE the window, then runs the driver. The windowed capture
+ * must record instructions from the driver AND both channel-published methods (following
+ * the indirect calls into them), in execution order, proving the cross-process address
+ * handoff + multi-region record/follow. x86-64 only. */
+static void test_ptrace_windowed(void) {
+#if defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace windowed: %s\n", why);
+        return;
+    }
+
+    /* Two "JIT'd methods": pure-register leaves at separate executable mappings. */
+    static const unsigned char M1[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x01, 0xf0, 0xc3}; /* mov rax,rdi; add rax,rsi; ret */
+    static const unsigned char M2[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x29, 0xf0, 0xc3}; /* mov rax,rdi; sub rax,rsi; ret */
+    void *m1 = mmap(NULL, sizeof M1, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *m2 = mmap(NULL, sizeof M2, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m1 == MAP_FAILED || m2 == MAP_FAILED) {
+        printf("# SKIP ptrace windowed: mmap failed\n");
+        return;
+    }
+    memcpy(m1, M1, sizeof M1);
+    memcpy(m2, M2, sizeof M2);
+    mprotect(m1, sizeof M1, PROT_READ | PROT_EXEC);
+    mprotect(m2, sizeof M2, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)m1, (char *)m1 + sizeof M1);
+    __builtin___clear_cache((char *)m2, (char *)m2 + sizeof M2);
+    uint64_t a1 = (uint64_t)(uintptr_t)m1, a2 = (uint64_t)(uintptr_t)m2;
+
+    /* Driver: movabs rax,m1; call rax; movabs rax,m2; call rax; ret. */
+    unsigned char DRV[25] = {0x48, 0xB8, 0, 0, 0, 0, 0,    0, 0, 0, 0xFF, 0xD0, 0x48,
+                             0xB8, 0,    0, 0, 0, 0, 0,    0, 0, 0xFF, 0xD0, 0xC3};
+    memcpy(DRV + 2, &a1, 8);
+    memcpy(DRV + 14, &a2, 8);
+    void *drv = mmap(NULL, sizeof DRV, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (drv == MAP_FAILED) {
+        printf("# SKIP ptrace windowed: mmap failed\n");
+        return;
+    }
+    memcpy(drv, DRV, sizeof DRV);
+    mprotect(drv, sizeof DRV, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)drv, (char *)drv + sizeof DRV);
+
+    /* The cross-process channel lives in shared memory the forked tracee inherits. */
+    asmtest_addr_channel_t *chan =
+        mmap(NULL, sizeof *chan, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (chan == MAP_FAILED) {
+        printf("# SKIP ptrace windowed: channel mmap failed\n");
+        return;
+    }
+    asmtest_addr_channel_init(chan);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("# SKIP ptrace windowed: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        /* The runtime's listener publishes each JIT'd method's (base,len) — here,
+         * before the window opens (the pre-arm rundown case). */
+        asmtest_addr_channel_publish(chan, a1, sizeof M1, 0);
+        asmtest_addr_channel_publish(chan, a2, sizeof M2, 0);
+        raise(SIGSTOP);
+        ((void (*)(void))drv)();
+        _exit(0);
+    }
+
+    int st = 0;
+    long res = 0;
+    int rc = ASMTEST_PTRACE_ETRACE;
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
+        asmtest_ptrace_run_to(pid, drv) == ASMTEST_PTRACE_OK)
+        rc = asmtest_ptrace_trace_attached_windowed(pid, drv, sizeof DRV, chan, &res,
+                                                    tr);
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+
+    CHECK(rc == ASMTEST_PTRACE_OK, "windowed multi-region trace succeeds");
+    uint64_t dv = (uint64_t)(uintptr_t)drv;
+    int hit_drv = 0, hit_m1 = 0, hit_m2 = 0;
+    unsigned long long ni = asmtest_emu_trace_insns_len(tr);
+    long first_m1 = -1, first_m2 = -1;
+    for (unsigned long long i = 0; i < ni; i++) {
+        uint64_t at = tr->insns[i];
+        if (at >= dv && at < dv + sizeof DRV)
+            hit_drv = 1;
+        if (at >= a1 && at < a1 + sizeof M1) {
+            hit_m1 = 1;
+            if (first_m1 < 0)
+                first_m1 = (long)i;
+        }
+        if (at >= a2 && at < a2 + sizeof M2) {
+            hit_m2 = 1;
+            if (first_m2 < 0)
+                first_m2 = (long)i;
+        }
+    }
+    CHECK(hit_drv && hit_m1 && hit_m2,
+          "windowed capture records the driver AND both channel-published methods");
+    CHECK(first_m1 >= 0 && first_m2 > first_m1,
+          "windowed capture follows the calls in order (m1 before m2)");
+    CHECK(!asmtest_emu_trace_truncated(tr), "windowed capture is complete");
+
+    /* chan == NULL degrades to just the window frame (no published regions). */
+    asmtest_trace_t *tr2 = asmtest_trace_new(64, 64);
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        ((void (*)(void))drv)();
+        _exit(0);
+    }
+    int only_drv = 1;
+    if (waitpid(pid2, &st, 0) >= 0 && WIFSTOPPED(st) &&
+        asmtest_ptrace_run_to(pid2, drv) == ASMTEST_PTRACE_OK &&
+        asmtest_ptrace_trace_attached_windowed(pid2, drv, sizeof DRV, NULL, &res,
+                                               tr2) == ASMTEST_PTRACE_OK) {
+        unsigned long long n2 = asmtest_emu_trace_insns_len(tr2);
+        for (unsigned long long i = 0; i < n2; i++) {
+            uint64_t at = tr2->insns[i];
+            if (!(at >= dv && at < dv + sizeof DRV))
+                only_drv = 0; /* nothing outside the window frame (m1/m2 not published) */
+        }
+        CHECK(only_drv,
+              "windowed with chan==NULL records only the window frame, not the methods");
+    } else {
+        printf("# SKIP windowed chan==NULL leg: setup failed\n");
+    }
+    kill(pid2, SIGKILL);
+    waitpid(pid2, &st, 0);
+
+    asmtest_trace_free(tr);
+    asmtest_trace_free(tr2);
+    munmap(chan, sizeof *chan);
+    munmap(drv, sizeof DRV);
+    munmap(m1, sizeof M1);
+    munmap(m2, sizeof M2);
+#else
+    printf("# SKIP ptrace windowed: x86-64 only\n");
+#endif
+}
+
 /* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
  * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
  * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
@@ -3804,6 +3961,7 @@ int main(void) {
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
     test_ptrace_blockstep();
+    test_ptrace_windowed();
 
     /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
     test_ptrace_faulting_no_leak();

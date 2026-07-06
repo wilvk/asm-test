@@ -50,6 +50,7 @@
 #include <stdint.h>
 #include <sys/types.h> /* pid_t */
 
+#include "asmtest_addr_channel.h" /* §D3 cross-process JIT-address channel */
 #include "asmtest_trace.h"
 
 #ifdef __cplusplus
@@ -112,6 +113,24 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
  * PTRACE_SINGLEBLOCK and Capstone for the reconstruction), else 0 — a hang-proof,
  * cached one-shot probe. Callers self-skip cleanly where it is 0. */
 int asmtest_ptrace_blockstep_available(void);
+
+/* §D3 whole-window multi-region capture: single-step an attached tracee across a
+ * WINDOW frame (run_to `win_base` first; the window ends when control returns to the
+ * frame's caller), recording the ABSOLUTE address of every instruction that falls in
+ * the window frame OR any region the parent has published on `chan` — the
+ * cross-process JIT-address channel (asmtest_addr_channel.h). Methods the parent JITs
+ * mid-window are picked up as their (base,len) stream in; runtime/glue between managed
+ * methods is stepped through but NOT recorded (the noise the managed capture elides).
+ * This is the out-of-process analog of the in-process whole-window scope: the stepper
+ * is a SEPARATE process, so it learns the live JIT's addresses only through `chan`.
+ * `chan` may be NULL to record just the window frame. *result gets the frame's return
+ * value; the caller owns attach/detach. trace->insns hold absolute addresses (classify
+ * them by region), blocks partition on fall-through discontinuity like every backend.
+ * ENOSYS off x86-64/AArch64 Linux. */
+int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base,
+                                           size_t win_len,
+                                           asmtest_addr_channel_t *chan, long *result,
+                                           asmtest_trace_t *trace);
 
 /* Trace a region in a SEPARATE, already-running process you have attached to — the
  * foreign / managed-runtime path (the building block for tracing a JVM/.NET/Node on

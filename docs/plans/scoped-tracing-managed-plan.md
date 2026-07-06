@@ -341,8 +341,20 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 > full `package-libs` slot passes the complete-set gate, `ldd asmtest-stealth-helper`
 > resolves the in-slot `libcapstone.so.5`, and a `dlopen` of the bundled
 > `libasmtest_hwtrace.so` discovers the helper as its dladdr sibling with the environment
-> scrubbed. **Forward-look:** only the cross-process channel that feeds the helper a live
-> JIT's `MethodLoadVerbose` addresses (needs a live managed runtime) remains.
+> scrubbed. **The cross-process address channel LANDED (2026-07):** a header-only SPSC
+> ring ([include/asmtest_addr_channel.h](../../include/asmtest_addr_channel.h)) the parent
+> publishes each JIT'd method's `(base, len, version)` into and the stepper drains between
+> steps, plus `asmtest_ptrace_trace_attached_windowed`
+> ([src/ptrace_backend.c](../../src/ptrace_backend.c)) — a whole-window multi-region
+> capture that single-steps an attached tracee across a window frame and records the
+> ABSOLUTE address of every instruction in the frame OR any channel-published region,
+> following calls into published methods and eliding the runtime noise between them.
+> `test_ptrace_windowed` ([examples/test_hwtrace.c](../../examples/test_hwtrace.c)) proves
+> the cross-process handoff with a driver blob calling two channel-published leaves — the
+> stepper records both without knowing their addresses at fork time. **Forward-look:** the
+> .NET-binding composition that publishes from the `JitMethodMap` listener into a shared
+> channel and drives the windowed helper end-to-end against a live CoreCLR (needs a live
+> managed runtime to validate the noisy whole-window path).
 
 The hardware-free path, hidden behind the same scope constructs, for hosts with no
 PT/LBR (Zen 2 — [src/hwtrace.c:183](../../src/hwtrace.c#L183) classifies it
