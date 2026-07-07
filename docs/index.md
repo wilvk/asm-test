@@ -79,6 +79,8 @@ comparison and roadmap.
   & ABI capture, differential testing, benchmarking, and crash/hang containment.
 - Want the full capability list and what's available across architectures, OSes,
   and languages? See [Features & support matrix](reference/features.md).
+- Weighing this against cmocka/Criterion + `.s`, raw Unicorn scripting, or
+  qemu+gdb? See [asm-test vs. alternatives](reference/comparison.md).
 - Consuming the framework from another project? See
   [Using asm-test in your project](reference/integration.md).
 - Driving it from another language? See [Language bindings](bindings/index.md) for the
@@ -119,6 +121,7 @@ guides/win64
 :hidden:
 
 reference/features
+reference/comparison
 reference/portability
 reference/integration
 reference/packaging

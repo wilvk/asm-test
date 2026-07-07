@@ -41,10 +41,10 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 40 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 |
+| ✅ Fixed & verified | 41 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 |
 | ⏸ Confirmed, deferred | 2 | K1 (CI-cache PR — needs a CI run), N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
-| ⬜ Open expansions (step 5) | 5 | P1 P2 P3 P4 P5 |
+| ⬜ Open expansions (step 5) | 4 | P1 P2 P3 P5 |
 
 Landed across: **59adb74** (step 1), **817cc72** (step 2), **356b0ff** + **2b8e8f9**
 (step 3), **8fb7c14** (step 4), **a8f7054** (step 6). Each "fixed" row was
@@ -162,7 +162,7 @@ can't assemble — none of which any current gate catches.
 | D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | ✅ fixed (step 4) |
 | P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | verified |
 | P3 | RISC-V is emulator-guest only; no native RISC-V host tier | Medium | expansion | verified |
-| P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | verified |
+| P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | ✅ fixed (post-review) |
 | P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | verified |
 | R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | ✅ fixed (step 4) |
 | N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | ⚪ not a defect — packaging is scaffolding by design (packaging.md); only nit is an unused `LUAROCKS` var |

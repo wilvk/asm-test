@@ -109,9 +109,9 @@ against memory dirtied by its predecessors. Bracket the sweep with a snapshot:
 
 ```c
 emu_snapshot_t *s = emu_snapshot(E);   /* registers + every mapped region */
-for (…each candidate…) {
+for (int i = 0; i < ncandidates; i++) {
     emu_restore(E, s);                 /* pristine, identical starting state */
-    emu_call(E, …);
+    emu_call(E, candidate[i].code, candidate[i].len, args, 1, 0, &r);
 }
 emu_snapshot_free(s);
 ```

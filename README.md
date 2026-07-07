@@ -113,6 +113,7 @@ Where to start:
   LBR, ARM CoreSight, single-step) — see [docs/](docs/index.md).
 - **Reference** — [API reference](docs/reference/api-reference.md) ·
   [Integration](docs/reference/integration.md) ·
+  [vs. alternatives](docs/reference/comparison.md) ·
   [Packaging](docs/reference/packaging.md) ·
   [CI & Docker](docs/reference/ci.md) ·
   [Troubleshooting & FAQ](docs/reference/troubleshooting.md)

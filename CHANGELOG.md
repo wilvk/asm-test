@@ -8,6 +8,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Docs: ["asm-test vs. alternatives"](https://github.com/wilvk/asm-test/blob/main/docs/reference/comparison.md)**
+  (P4 of the 2026-07-04 review). A maintained comparison against the four workflows
+  people actually use instead — a C unit framework with `.s` files linked in
+  (cmocka/Criterion/Unity/gtest), raw Unicorn scripting, qemu+gdb, and
+  asmUnit-style in-asm macros — including an honest "when the alternative is the
+  better choice" for each, a "what asm-test does not try to be" calibration list,
+  and a capability matrix. Linked from the README reference funnel and the docs
+  index "Where to start".
+
 - **Call-descent built-in default denylist — `asmtest_descent_use_default_denylist`**
   (the one unshipped Phase-5 deliverable of the
   [call-descent plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/call-descent-plan.md)).
