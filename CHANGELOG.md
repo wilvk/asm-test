@@ -6,6 +6,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Runner flow control — `--fail-fast`, `--repeat=N`, `--shard=K/N`** (R5 of the
+  [2026-07-04 review](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-04-repo-review.md)).
+  `--fail-fast` stops dispatching at the first failing test (forces the serial path;
+  the TAP plan moves to the end of the stream so it covers exactly what ran).
+  `--repeat=N` block-replicates the selection N times — with `--shuffle`/`--seed`,
+  the flake-hunting loop. `--shard=K/N` runs the K-th of N round-robin slices of the
+  filtered selection, so N CI jobs can split one suite with no test lost or
+  duplicated (self-tested: shards 1/2 + 2/2 reassemble `--list` exactly). Self-tests
+  43 → 49.
+
 ### Fixed
 
 - **bindings-parity gate restored to green.** The block-step / whole-window / snapshot

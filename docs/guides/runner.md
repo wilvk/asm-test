@@ -29,6 +29,11 @@ robustness model.
 | `--no-fork` | Run tests in-process instead of one child per test |
 | `-jN` | Run up to `N` tests concurrently (order preserved in the report) |
 | `--format=tap\|junit` | Output format; TAP (colored) is the default |
+| `--color=auto\|always\|never` | Colorize; `auto` (default) colors a tty and honors `NO_COLOR` |
+| `--fail-fast` | Stop at the first failing test (forces serial; the TAP plan moves to the end of the stream, covering exactly what ran) |
+| `--repeat=N` | Run the selection `N` times — with `--shuffle`/`--seed`, the flake-hunting loop |
+| `--shard=K/N` | Run the `K`-th of `N` round-robin slices (1-based) — split one suite across CI jobs with no test lost or duplicated |
+| `--fail-if-no-tests` | Exit nonzero when the selection is empty (e.g. a typo'd `--filter`) |
 | `--bench` | Run `BENCH` cases instead of tests — see [Benchmarks](benchmarks.md) |
 
 ## Isolation and robustness

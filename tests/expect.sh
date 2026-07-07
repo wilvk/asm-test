@@ -229,6 +229,39 @@ else
     echo "  - SKIP junit XML validation (xmllint not installed)"
 fi
 
+# ---- --fail-fast / --repeat / --shard ----
+
+# --fail-fast stops at the first failure: the negative suite's first test fails,
+# so exactly one result line runs, the trailing plan is 1..1, and exit is nonzero.
+ff=$("$NEG" --fail-fast --timeout=1 2>/dev/null)
+ffrc=$?
+ffn=$(printf '%s\n' "$ff" | grep -cE '^(ok|not ok)')
+ffplan=$(printf '%s\n' "$ff" | grep -c '^1\.\.1$')
+if [ "$ffrc" -ne 0 ] && [ "$ffn" = 1 ] && [ "$ffplan" = 1 ]; then
+    ok "--fail-fast stops after the first failure (trailing 1..1)"
+else
+    bad "--fail-fast stops after the first failure (trailing 1..1)" "rc=$ffrc results=$ffn plan1=$ffplan"
+fi
+# ...and a fully-passing run under --fail-fast still runs everything and exits 0.
+expect_exit "--fail-fast passes a green suite" 0 "$POS" --fail-fast
+
+# --repeat=N runs the selection N times.
+rep=$("$POS" --filter=posit.eq --repeat=3 2>/dev/null | grep -c '^ok')
+if [ "$rep" = 3 ]; then ok "--repeat=3 runs the selection 3x"; else bad "--repeat=3 runs the selection 3x" "ran $rep"; fi
+
+# --shard=K/N partitions: shards 1/2 and 2/2 are disjoint and their union is
+# exactly the full --list.
+all=$("$POS" --list 2>/dev/null | sort)
+merged=$({ "$POS" --list --shard=1/2 && "$POS" --list --shard=2/2; } 2>/dev/null | sort)
+if [ -n "$all" ] && [ "$all" = "$merged" ]; then
+    ok "--shard 1/2 + 2/2 partition the selection"
+else
+    bad "--shard 1/2 + 2/2 partition the selection"
+fi
+# An out-of-range shard is a CLI error.
+expect_exit "--shard=3/2 exits 2" 2 "$POS" --shard=3/2
+expect_exit "--repeat=0 exits 2"  2 "$POS" --repeat=0
+
 # Unknown option exits 2; --help exits 0.
 expect_exit "unknown option exits 2" 2 "$POS" --bogus-option
 expect_exit "--help exits 0"         0 "$POS" --help

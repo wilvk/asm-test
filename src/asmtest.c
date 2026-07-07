@@ -6,6 +6,7 @@
 #include "platform.h" /* POSIX vs Win32 includes + ASMTEST_FNMATCH */
 
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <setjmp.h> /* sig{setjmp,longjmp}; no longer pulled in via asmtest.h */
 #include <stdarg.h>
@@ -1440,6 +1441,9 @@ typedef struct {
     int bench_json;  /* --bench-format=json: machine-readable bench output */
     int fail_if_no_tests; /* exit nonzero when the selection is empty */
     int color;            /* 0 auto, 1 always, 2 never (--color=) */
+    int fail_fast;        /* stop at the first failing test (forces serial) */
+    long repeat;          /* run the selection N times (default 1) */
+    int shard_k, shard_n; /* --shard=K/N slice; shard_n = 0 disables */
 } options_t;
 
 enum { COLOR_AUTO = 0, COLOR_ALWAYS = 1, COLOR_NEVER = 2 };
@@ -1477,6 +1481,13 @@ static void usage(const char *prog) {
         "  --color=auto|always|never  colorize (default auto; honors NO_COLOR)\n"
         "  --fail-if-no-tests   exit nonzero if the selection is empty (e.g. a "
         "typo'd --filter)\n"
+        "  --fail-fast          stop at the first failing test (forces serial;\n"
+        "                       TAP plan moves to the end of the stream)\n"
+        "  --repeat=N           run the selection N times (flake hunting; pairs\n"
+        "                       with --shuffle/--seed)\n"
+        "  --shard=K/N          run the K-th of N round-robin slices of the\n"
+        "                       selection (1-based; split a suite across CI "
+        "jobs)\n"
         "  --bench              run registered benchmarks (BENCH) instead of "
         "tests\n"
         "  --bench-reps=N       fixed inner reps per round (default: "
@@ -1879,6 +1890,7 @@ int main(int argc, char **argv) {
     opt.fork_tests = 1;
     opt.jobs = 1;
     opt.timeout = -1;
+    opt.repeat = 1;
     /* Win64 isolates per test by re-exec (Track B), matching POSIX's fork
      * default; --no-fork opts into the in-process facility (vectored handler +
      * watchdog). Both contain a crash/hang; isolation adds the process-death
@@ -1970,6 +1982,26 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(a, "--fail-if-no-tests") == 0) {
             opt.fail_if_no_tests = 1;
+        } else if (strcmp(a, "--fail-fast") == 0) {
+            opt.fail_fast = 1;
+        } else if (opt_prefix(a, "--repeat=", &v)) {
+            opt.repeat = strtol(v, NULL, 0);
+            if (opt.repeat < 1) {
+                fprintf(stderr, "invalid --repeat: %s\n", v);
+                return 2;
+            }
+        } else if (opt_prefix(a, "--shard=", &v)) {
+            char *slash = NULL;
+            long k = strtol(v, &slash, 10);
+            long ns = (slash != NULL && *slash == '/')
+                          ? strtol(slash + 1, NULL, 10)
+                          : 0;
+            if (k < 1 || ns < 1 || k > ns || ns > 1000000) {
+                fprintf(stderr, "invalid --shard (want K/N, 1<=K<=N): %s\n", v);
+                return 2;
+            }
+            opt.shard_k = (int)k;
+            opt.shard_n = (int)ns;
         } else {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
@@ -2064,12 +2096,50 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* --shard=K/N: keep the K-th of N round-robin slices of the filtered,
+     * registration-ordered selection. Round-robin (index mod N) is deterministic
+     * and balances suites across shards, so N CI jobs splitting a run neither
+     * lose nor duplicate a test. Applied before --list (so a shard can be
+     * inspected) and before --repeat/--shuffle (so all shards partition the same
+     * base selection). */
+    if (opt.shard_n > 1) {
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % opt.shard_n == opt.shard_k - 1) {
+                sel[m] = sel[i];
+                gidx[m] = gidx[i];
+                m++;
+            }
+        }
+        n = m;
+    }
+
     if (opt.do_list) {
         for (int i = 0; i < n; i++)
             printf("%s.%s\n", sel[i]->suite, sel[i]->name);
         free(sel);
         free(gidx);
         return 0;
+    }
+
+    /* --repeat=N: block-replicate the selection N times (with --shuffle the
+     * rounds interleave) — pairs with --shuffle/--seed for flake hunting. */
+    if (opt.repeat > 1 && n > 0) {
+        if ((long)n > (long)INT_MAX / opt.repeat) {
+            fprintf(stderr, "--repeat=%ld overflows the selection\n",
+                    opt.repeat);
+            return 2;
+        }
+        size_t reps = (size_t)opt.repeat;
+        sel = (asmtest_case_t **)asmtest_xalloc(
+            realloc(sel, (size_t)n * reps * sizeof *sel), "repeat selection");
+        gidx = (int *)asmtest_xalloc(
+            realloc(gidx, (size_t)n * reps * sizeof *gidx), "repeat index");
+        for (size_t r = 1; r < reps; r++) {
+            memcpy(sel + r * (size_t)n, sel, (size_t)n * sizeof *sel);
+            memcpy(gidx + r * (size_t)n, gidx, (size_t)n * sizeof *gidx);
+        }
+        n = (int)((size_t)n * reps);
     }
 
     uint64_t shuffle_seed = 0;
@@ -2111,9 +2181,13 @@ int main(int argc, char **argv) {
 
     if (!opt.format_junit) {
         /* TAP 13: the version line must be the first line of output, so the
-         * shuffle-seed diagnostic goes *after* the plan, not before the version. */
+         * shuffle-seed diagnostic goes *after* the plan, not before the version.
+         * With --fail-fast the number of tests that will run is unknown up
+         * front, so the plan moves to the end of the stream (equally valid
+         * TAP), covering exactly what ran. */
         printf("TAP version 13\n");
-        printf("1..%d\n", n);
+        if (!opt.fail_fast)
+            printf("1..%d\n", n);
         if (did_shuffle)
             printf("# shuffle seed=0x%llx\n", (unsigned long long)shuffle_seed);
     }
@@ -2133,6 +2207,7 @@ int main(int argc, char **argv) {
     test_result_t *results = (test_result_t *)asmtest_xalloc(
         malloc((size_t)(n > 0 ? n : 1) * sizeof *results), "results buffer");
     int passed = 0, failed = 0, skipped = 0;
+    int ran = n; /* < n only when --fail-fast stops the loop early */
 
     /* JUnit's `<?xml?>` declaration must be the first bytes of the document, but
      * forked/in-process test bodies inherit stdout and may printf to it. Point
@@ -2161,7 +2236,10 @@ int main(int argc, char **argv) {
      * serial. Run concurrently when -jN>1, otherwise run (and stream) serially.
      * In both cases results[] is filled in registration order; parallel renders
      * after the run so output stays deterministic regardless of finish order. */
-    int parallel = opt.fork_tests && opt.jobs > 1 && n > 1;
+    /* --fail-fast wants to stop dispatching at the first failure, so it forces
+     * the serial path (a parallel batch would keep running past it). */
+    int parallel =
+        opt.fork_tests && opt.jobs > 1 && n > 1 && !opt.fail_fast;
     if (parallel) {
         for (int i = 0; i < n; i++)
             memset(&results[i], 0, sizeof results[i]);
@@ -2202,10 +2280,13 @@ int main(int argc, char **argv) {
         else
             failed++;
 
-        if (opt.format_junit)
-            continue; /* JUnit is rendered in one pass at the end */
+        if (!opt.format_junit) /* JUnit is rendered in one pass at the end */
+            print_tap_result(i + 1, r, &pal);
 
-        print_tap_result(i + 1, r, &pal);
+        if (opt.fail_fast && r->outcome == ST_FAIL) {
+            ran = i + 1; /* results[ran..) never ran; render only [0, ran) */
+            break;
+        }
     }
 
     char *junit_sysout = NULL;
@@ -2231,11 +2312,16 @@ int main(int argc, char **argv) {
 #endif
 
     if (opt.format_junit) {
-        render_junit(results, n, junit_sysout);
+        render_junit(results, ran, junit_sysout);
     } else {
+        if (opt.fail_fast) {
+            printf("1..%d\n", ran); /* the trailing plan covers what ran */
+            if (ran < n)
+                printf("# fail-fast: stopped after %d of %d tests\n", ran, n);
+        }
         const char *summary_color = failed ? pal.red : pal.grn;
         printf("%s# %d passed, %d failed, %d skipped, %d total%s\n",
-               summary_color, passed, failed, skipped, n, pal.rst);
+               summary_color, passed, failed, skipped, ran, pal.rst);
     }
 
     free(results);
