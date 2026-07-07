@@ -12,8 +12,13 @@
 > **DynamoRIO plan's stale heading markers** reconciled, and from the review
 > backlog: R5, A6, A7, E7, E5, P4, P2, K1 (pending a CI run), and N4 — see the
 > [2026-07-04 review's status tables](../reviews/2026-07-04-repo-review.md) for
-> the authoritative disposition. Still open from §1: the single-step Phase 5
-> Windows-VEH / macOS-Intel front-ends and the review's P1/P3/P5 expansions.
+> the authoritative disposition. **Further landed 2026-07-07:** K1 validated on
+> a real Actions run (all 45 actioned review items closed) and BOTH single-step
+> Phase 5 fronts — macOS-Intel and the **Windows x86-64 VEH front-end**
+> (`src/ss_win64.c`, `make win64-ss-test`, Wine + real-Windows CI) — leaving the
+> AArch64 ptrace tracer as the only forward-look front. Still open from §1: the
+> review's P1/P3 expansions (P1 user-gated behind the first real tag; P3 the
+> large RISC-V native host tier).
 > §2 (hardware/privilege-blocked) and §3 (maintainer/credential actions —
 > the first real tag remains user-gated) are unchanged.
 
