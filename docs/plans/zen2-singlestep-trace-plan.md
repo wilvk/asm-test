@@ -113,9 +113,19 @@ access (`uc_mcontext->__ss.__rip`/`__rflags` vs. Linux's `gregs[REG_RIP]`/`[REG_
 isolated behind two shims in [src/ss_backend.c](../../src/ss_backend.c); the
 [src/hwtrace.c](../../src/hwtrace.c) facade runs the full single-step lifecycle on
 x86-64 Darwin, validated live by `make hwtrace-test` there (61 pass) with the Linux
-tier unchanged (`make docker-hwtrace`, 178 pass). The remaining Phase-5 fronts
-(Windows VEH and the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
-so out-of-process is its *only* single-step form) stay forward-look, as does the richer
+tier unchanged (`make docker-hwtrace`, 178 pass). The **Windows x86-64 VEH
+front-end has since landed** in the win64 native tier
+([src/ss_win64.c](../../src/ss_win64.c), `asmtest_win64_ss_trace_call`): the same
+EFLAGS.TF mechanism, delivered as `EXCEPTION_SINGLE_STEP` to a Vectored Exception
+Handler that records the in-region offsets and re-arms TF in the resumed CONTEXT —
+with stepping ENDED BY THE HANDLER at the call's return landing rather than by a
+popfq disarm, because NtContinue does not reproduce the popf trap-suppression the
+POSIX steppers rely on. Its fixtures are the Win64-ABI twins of the Linux suite's
+ROUTINE/LOOP blobs, so the identical expected streams ([0x0,0x3,0x6,0xc,0x11]; 62
+steps across the loop back-edge) prove front-end parity — validated under Wine
+(`make win64-ss-test`, in `win64-check`) and on real Windows in CI. The remaining
+Phase-5 front (the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
+so out-of-process is its *only* single-step form) stays forward-look, as does the richer
 **binary jitdump** code-image reader (the text perf-map is the portable lowest common
 denominator already supported).
 
@@ -260,9 +270,11 @@ the in-process variant does not exist on ARM. Each is an additive front-end behi
 swappable "stepper" seam designed in Phase 1; none is required for the shippable
 Linux/x86-64 backend.
 
-- **Windows (x86-64).** Same `TF`, delivered as `EXCEPTION_SINGLE_STEP` to a Vectored
-  Exception Handler (the classic technique); ~6× the Linux per-step cost. Slots into
-  the [win64 native tier](../archive/plans/win64-native-tier-plan.md).
+- **Windows (x86-64)** *(shipped — see the status note above)*. Same `TF`, delivered
+  as `EXCEPTION_SINGLE_STEP` to a Vectored Exception Handler (the classic technique);
+  ~6× the Linux per-step cost. Landed in the
+  [win64 native tier](../archive/plans/win64-native-tier-plan.md) as
+  `src/ss_win64.c` + `make win64-ss-test` (Wine + real-Windows CI).
 - **macOS (Intel).** The BSD signal layer delivers `SIGTRAP` in-process like Linux;
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
   entitlement. Slots into the [macOS clean-test plan](macos-clean-test-plan.md).
