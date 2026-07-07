@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Mnemonic-class histogram of the labelled stream (move / arith / branch / call / compare /
+       SIMD / stack / other) + control-flow density — what KIND of work runs. Source:
+       AsmInstruction.Text first token, classified structurally via Disas where Capstone is
+       present. Dependency-free: compiles the binding source (HwTrace.cs) directly and P/Invokes
+       libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
+       `make hwtrace-dotnet-example`; self-skips (exit 0) where single-step can't run.
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>instructionmix</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

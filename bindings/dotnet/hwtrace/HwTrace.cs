@@ -113,6 +113,15 @@ namespace Asmtest
             public IntPtr ObjectHint; // const char*: optional object-file path
         }
 
+        // asmtest_hwtrace_bucket_t: an inline char[128] label + a uint64_t count. On
+        // x86-64 the u64 follows the 128-byte label with no padding (128 is 8-aligned),
+        // so the struct is a flat 136 bytes. We marshal the bucket ARRAY as a raw byte
+        // buffer (cap * 136) and slice each label/count out by hand — the by-hand idiom
+        // this file already uses for opaque-handle reads — which sidesteps the ByValArray
+        // round-trip entirely.
+        public const int BucketSize = 136; // sizeof(asmtest_hwtrace_bucket_t)
+        public const int BucketLabelLen = 128;
+
         // The resolved libasmtest_hwtrace handle (IntPtr.Zero if it could not load).
         // Loaded eagerly here — NOT in the static ctor — because C# runs static
         // FIELD initializers (LibHandle, LibAvailable below) BEFORE the static
@@ -275,6 +284,15 @@ namespace Asmtest
         public static extern bool asmtest_disas_available();
         [DllImport(HWTRACE, CharSet = CharSet.Ansi)] public static extern UIntPtr asmtest_disas(
             int arch, IntPtr code, UIntPtr codeLen, ulong baseAddr, ulong off, byte[] outbuf, UIntPtr outlen);
+
+        // §3.1(c) whole-window noise attribution: bucket ips[0..n) by the containing
+        // perf-map JIT symbol (preferred) or mapped-file region into buckets[0..cap),
+        // returning the distinct-label count (<= cap). `buckets` is the raw byte backing
+        // of an asmtest_hwtrace_bucket_t[cap] (BucketSize each); pid 0 == self. Reads
+        // /proc/<pid>/maps + the perf-map, so it is post-close safe on a whole-window
+        // scope's captured ABSOLUTE addresses.
+        [DllImport(HWTRACE)] public static extern UIntPtr asmtest_hwtrace_symbolize_bucket(
+            int pid, ulong[] ips, UIntPtr n, byte[] buckets, UIntPtr cap);
 
         // ---- host-native executable code (out-param form, NOT a struct) ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_exec_alloc(
@@ -528,6 +546,22 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// One labelled bucket of a symbolized address list (mirrors asmtest_hwtrace_bucket_t):
+    /// the module/JIT-symbol <see cref="Label"/> and the number of addresses that fell in
+    /// it. See <see cref="HwTrace.SymbolizeBuckets"/>.
+    /// </summary>
+    public readonly struct HwBucket
+    {
+        public HwBucket(string label, ulong count) { Label = label; Count = count; }
+        /// <summary>The perf-map JIT symbol, mapped-file pathname, or a "[...]" pseudo-name
+        /// (<c>[anon]</c>/<c>[unknown]</c>) the addresses resolved to.</summary>
+        public string Label { get; }
+        /// <summary>How many addresses bucketed to this label.</summary>
+        public ulong Count { get; }
+        public override string ToString() => $"HwBucket(label={Label}, count={Count})";
+    }
+
+    /// <summary>
     /// A coverage recorder for a registered native region, via the hardware tier.
     /// Bring the tier up once with <see cref="Init"/>, allocate per-trace recorders
     /// with <see cref="Create"/>, register a <see cref="NativeCode"/> under a name,
@@ -665,6 +699,38 @@ namespace Asmtest
             int rc = HwNative.asmtest_trace_auto((uint)policy, out var c);
             if (rc != HwNative.ASMTEST_HW_OK) return null;
             return new TierChoice((TraceTier)c.Tier, (HwBackend)c.Backend, (TraceFidelity)c.Fidelity);
+        }
+
+        /// <summary>
+        /// §3.1(c) — bucket the ABSOLUTE addresses <paramref name="ips"/> by the perf-map
+        /// JIT symbol / mapped-file region containing each (in process <paramref name="pid"/>,
+        /// 0 = self), naming the runtime lump a whole-window scope captured
+        /// (<see cref="AsmTrace.Addresses"/>). Post-close safe: it reads
+        /// <c>/proc/&lt;pid&gt;/maps</c> and the perf-map, not the trace. Addresses that
+        /// resolve to nothing bucket under <c>[unknown]</c>; if more than
+        /// <paramref name="cap"/> distinct labels appear the surplus addresses are dropped,
+        /// so size <paramref name="cap"/> to the expected module count. Empty where the lib
+        /// is missing or the input is empty.
+        /// </summary>
+        public static HwBucket[] SymbolizeBuckets(ulong[] ips, int pid = 0, int cap = 64)
+        {
+            if (!HwNative.LibAvailable || ips == null || ips.Length == 0 || cap <= 0)
+                return Array.Empty<HwBucket>();
+            var raw = new byte[cap * HwNative.BucketSize];
+            int n = (int)HwNative.asmtest_hwtrace_symbolize_bucket(
+                pid, ips, (UIntPtr)(nuint)ips.Length, raw, (UIntPtr)(nuint)cap);
+            if (n > cap) n = cap;
+            var outb = new HwBucket[n];
+            for (int i = 0; i < n; i++)
+            {
+                int off = i * HwNative.BucketSize;
+                int z = Array.IndexOf(raw, (byte)0, off, HwNative.BucketLabelLen);
+                int len = (z < 0 ? off + HwNative.BucketLabelLen : z) - off;
+                string label = System.Text.Encoding.UTF8.GetString(raw, off, len);
+                ulong count = BitConverter.ToUInt64(raw, off + HwNative.BucketLabelLen);
+                outb[i] = new HwBucket(label, count);
+            }
+            return outb;
         }
 
         /// <summary>

@@ -752,6 +752,28 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/blockstep/blockstep.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_dotnet) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
+	@echo "== hwtrace-dotnet-example (flatprofile) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/flatprofile/flatprofile.csproj
+	@echo "== hwtrace-dotnet-example (amplification) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/amplification/amplification.csproj
+	@echo "== hwtrace-dotnet-example (runtimegaps) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/runtimegaps/runtimegaps.csproj
+	@echo "== hwtrace-dotnet-example (footprint) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/footprint/footprint.csproj
+	@echo "== hwtrace-dotnet-example (runtimebuckets) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/runtimebuckets/runtimebuckets.csproj
+	@echo "== hwtrace-dotnet-example (instructionmix) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/instructionmix/instructionmix.csproj
+	@echo "== hwtrace-dotnet-example (perfannotate) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/perfannotate/perfannotate.csproj
+	@echo "== hwtrace-dotnet-example (loops) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/loops/loops.csproj
+	@echo "== hwtrace-dotnet-example (descent) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/descent/descent.csproj
+	@echo "== hwtrace-dotnet-example (descent_dotnet) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
+	@echo "== hwtrace-dotnet-example (codeimage) =="
+	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/codeimage/codeimage.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="
