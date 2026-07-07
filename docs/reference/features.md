@@ -45,13 +45,19 @@ Drive a routine through the **real calling convention** and snapshot the result.
 - **Struct-by-value parameters** (small via eightbytes, large via
   `asm_call_capture_bigstruct`).
 - **Floating-point** via `ASM_FCALLn` / `ASM_FCALLN` (captures `regs.fret`).
+- **Mixed integer + FP arguments** via `ASM_MIXCALL` (the ptr+len+scalar shape).
 - **128-bit SIMD** via `ASM_VCALLn` / `ASM_VCALLN` (captures the vector file).
 - **256-bit AVX2** via `ASM_VCALL256n` (x86-64; self-skips without AVX2).
 
 ### Differential / property testing
 
 - `ASSERT_MATCHES_REF{1,2,3}(fn, ref, gen, n)` — fuzz `n` random inputs through
-  the routine and a C reference model, report the first disagreement.
+  the routine and a C reference model, report the first disagreement — shrunk
+  toward the boundary values (`0`, `±1`, `LONG_MIN/MAX`, halving) where asm
+  bugs actually live.
+- `ASSERT_MATCHES_FREF{1,2,3}(fn, ref, gen, n, ulps)` — the FP counterpart:
+  `double` tuples through the FP register file, agreement judged by ULP
+  distance (NaN matches only NaN).
 - Seedable splitmix64 RNG (`asmtest_rng_*`); fixed seed by default, overridable
   with `ASMTEST_SEED`. ([Property testing](../guides/property-testing.md))
 

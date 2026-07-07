@@ -145,8 +145,13 @@ expect_fail_re  "SIGBUS contained"  'SIGBUS' "$NEG" --filter=neg.bus_error
 # longer exercised only in the exit-code-ignored demo.
 expect_fail_re  "guard-page overrun faults"  "$CRASH_RE" "$NEG" --filter=neg.guard_page_overrun
 expect_fail_re  "guard-page underrun faults" "$CRASH_RE" "$NEG" --filter=neg.guard_page_underrun
-# Differential testing reports the first disagreeing input.
+# Differential testing reports the first disagreeing input...
 expect_fail_msg "ref-model mismatch reported" "trial 0 input" "$NEG" --filter=neg.ref_model_mismatch
+# ...shrunk to boundary values (buggy_sum diverges for any b != 0, so the greedy
+# shrink lands exactly on [0, 1] regardless of the random draw)...
+expect_fail_msg "ref-model mismatch shrinks input" "shrinks to [0, 1]" "$NEG" --filter=neg.ref_model_mismatch
+# ...and the FP engine reports a ULP-judged mismatch.
+expect_fail_msg "FP ref-model mismatch reported" "ASSERT_MATCHES_FREF2" "$NEG" --filter=neg.fref_model_mismatch
 
 # ---- SKIP ----
 expect_contains "SKIP reported"    "# SKIP" "$POS" --filter=posit.skip_reports

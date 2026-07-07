@@ -175,6 +175,21 @@ TEST(neg, ref_model_mismatch) {
     ASSERT_MATCHES_REF2(buggy_sum, ref_sum, gen_two, 1000);
 }
 
+/* The FP counterpart: buggy_fsum subtracts where the model adds, and the
+ * generator draws b >= 1, so the very first trial exceeds 0 ulps. */
+static double fref_sum(double a, double b) { return a + b; }
+static double buggy_fsum(double a, double b) { return a - b; }
+static int gen_ftwo(asmtest_rng_t *rng, double *out, int cap) {
+    if (cap < 2)
+        return 0;
+    out[0] = (double)(asmtest_rng_u64(rng) % 100);
+    out[1] = 1.0 + (double)(asmtest_rng_u64(rng) % 100);
+    return 2;
+}
+TEST(neg, fref_model_mismatch) {
+    ASSERT_MATCHES_FREF2(buggy_fsum, fref_sum, gen_ftwo, 1000, 0);
+}
+
 /* An assertion message full of XML metacharacters, so the JUnit output must
  * escape `< & > "` — the escaping was never validated (xmllint ran only on the
  * all-passing suite). tests/expect.sh xmllint-checks this suite's JUnit. */

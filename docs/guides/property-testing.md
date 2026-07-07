@@ -27,6 +27,34 @@ pointer's arity. `n` is the number of random inputs to try.
 On the **first mismatch**, the offending input, both results, and the seed are
 reported, and the test fails. Matching inputs are silent.
 
+Before reporting, the failing tuple is **shrunk**: each position is greedily
+replaced with `0`, `1`, `-1`, `LONG_MAX`, or `LONG_MIN` (else halved toward
+zero) while the disagreement persists, so the report leads with the boundary
+value that actually triggers the bug — `shrinks to [0, 1]` — instead of a raw
+64-bit draw. The shrink is deterministic, adds at most a few hundred extra
+calls, and the original input is still reported alongside it.
+
+## The FP variants
+
+```c
+ASSERT_MATCHES_FREF1(fn, ref, gen, n, ulps);  // 1 double
+ASSERT_MATCHES_FREF2(fn, ref, gen, n, ulps);  // 2 doubles
+ASSERT_MATCHES_FREF3(fn, ref, gen, n, ulps);  // 3 doubles
+```
+
+The double counterparts for the FP/SIMD surface, where rounding, NaN, and lane
+bugs live. `fn` takes 1–3 `double`s in the FP register file (called through
+`asm_call_capture_fp`) and returns a `double`; `ref` is the C model; `gen`
+fills a `double` tuple:
+
+```c
+typedef int (*asmtest_fgen_fn)(asmtest_rng_t *rng, double *args, int cap);
+```
+
+Agreement is judged by **ULP distance** — `ulps = 0` demands bit-exactness,
+and NaN matches only NaN. On a mismatch the input tuple (printed as `%.17g`,
+so it round-trips), both results, the ULP distance, and the seed are reported.
+
 ## The generator
 
 A generator pulls from a seedable [splitmix64] RNG and writes up to `cap`

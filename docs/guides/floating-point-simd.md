@@ -132,8 +132,20 @@ idx, expect)` is the 32-byte whole-register compare. Lane counts double versus
 
 ## Mixed integer and FP arguments
 
-A routine taking both integer and `double` arguments is handled by the FP capture
-path, which fills the integer **and** FP argument registers. The
+A routine taking both integer and `double` arguments — the canonical
+ptr+len+scalar shape — is called with `ASM_MIXCALL`, whose two parenthesized
+groups marshal into the integer and FP register files respectively:
+
+```c
+extern double scale_buf(const double *buf, long n, double s);
+
+regs_t r;
+ASM_MIXCALL(&r, scale_buf, (buf, n), (0.5));
+ASSERT_FP_EQ(&r, expected);
+```
+
+Each group needs at least one element, up to 6 integer and 8 double arguments —
+the register files the FP capture path loads. The
 [API reference](../reference/api-reference.md#capture-functions) documents the underlying
 `asm_call_capture_fp` / `asm_call_capture_vec` (and their `_n` stack-spilling
 variants) for direct use.

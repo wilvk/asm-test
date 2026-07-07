@@ -19,6 +19,7 @@ void asmtest_c11_smoke(void) {
     ASM_CALL0(&r, some_routine);
     ASM_CALL2(&r, some_routine, 1, 2);
     ASM_CALLN(&r, some_routine, 1, 2, 3);
+    ASM_MIXCALL(&r, some_routine, (1, 2), (0.5));
     ASSERT_EQ(1 + 1, 2);
     ASSERT_UEQ(2u, 2u);
     (void)r;

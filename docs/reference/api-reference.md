@@ -25,6 +25,7 @@ See [Writing tests](../getting-started/writing-tests.md).
 | `ASM_SRET(&r, fn, &out, …)` | Large struct return via the hidden pointer |
 | `ASM_FCALL1`…`ASM_FCALL3(&r, fn, …)` | 1–3 `double` args |
 | `ASM_FCALLN(&r, fn, …)` | Any number of `double` args |
+| `ASM_MIXCALL(&r, fn, (i…), (f…))` | Mixed integer-file + FP-file args; each parenthesized group needs ≥1 element (up to 6 int + 8 double) |
 | `ASM_VCALL1`…`ASM_VCALL3(&r, fn, …)` | 1–3 `vec128_t` args |
 | `ASM_VCALLN(&r, fn, …)` | Any number of `vec128_t` args |
 | `ASM_VCALL256_1`/`_2(out, fn, …)` | 1–2 `vec256_t` (AVX2 ymm) args; **self-skips** without AVX2. `out` is a `vec256_t[16]` |
@@ -69,7 +70,8 @@ See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guide
 
 | Macro | Purpose |
 |---|---|
-| `ASSERT_MATCHES_REF1/2/3(fn, ref, gen, n)` | fuzz `n` inputs, compare to a C model |
+| `ASSERT_MATCHES_REF1/2/3(fn, ref, gen, n)` | fuzz `n` integer inputs, compare to a C model; a failing input is shrunk toward boundary values before reporting |
+| `ASSERT_MATCHES_FREF1/2/3(fn, ref, gen, n, ulps)` | fuzz `n` `double` inputs through the FP register file, judged by ULP distance (NaN matches only NaN) |
 
 See [Property testing](../guides/property-testing.md).
 

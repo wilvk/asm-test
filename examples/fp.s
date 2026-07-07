@@ -8,6 +8,9 @@
  * double int_to_double(long n);       (double)n  — an integer arg into an XMM
  *   result, so an emulator run reachable via integer args still exercises the
  *   guest XMM file (x86-64: n -> %rdi, result -> %xmm0; AArch64: x0 -> d0).
+ * double scale_long(long n, double s); (double)n * s — one integer-file arg
+ *   plus one FP-file arg, the mixed shape ASM_MIXCALL marshals
+ *   (x86-64: n -> %rdi, s -> %xmm0; AArch64: n -> x0, s -> d0).
  */
 #include "asm.h"
 
@@ -40,3 +43,15 @@ ASM_FUNC int_to_double
     ret
 #endif
 ASM_ENDFUNC int_to_double
+
+ASM_FUNC scale_long
+#if defined(__x86_64__)
+    cvtsi2sd %rdi, %xmm1        /* xmm1 = (double)n */
+    mulsd   %xmm1, %xmm0        /* xmm0 = s * (double)n */
+    ret
+#elif defined(__aarch64__)
+    scvtf   d1, x0
+    fmul    d0, d0, d1
+    ret
+#endif
+ASM_ENDFUNC scale_long

@@ -23,6 +23,7 @@ void asmtest_cpp_smoke() {
     ASM_CALL2(&r, some_routine, 1, 2);
     ASM_CALL6(&r, some_routine, 1, 2, 3, 4, 5, 6);
     ASM_CALLN(&r, some_routine, 1, 2, 3);
+    ASM_MIXCALL(&r, some_routine, (1, 2), (0.5));
     ASM_FCALL1(&r, some_routine, 1.5);
     ASM_FCALL3(&r, some_routine, 1.0, 2.0, 3.0);
     ASM_FCALLN(&r, some_routine, 1.0, 2.0);

@@ -647,87 +647,226 @@ static uint64_t asmtest_seed(void) {
     return seed;
 }
 
-void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
-                        void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
-                        int trials) {
+/* One engine drives all three arities: `ref` travels as a generic function
+ * pointer and is called back through its real type, selected by `arity`. */
+typedef void (*asmtest_anyfn_t)(void);
+
+/* Run fn through the real ABI and ref on one tuple; return 1 if they disagree
+ * (filling *got and *want either way). */
+static int match_ref_diverges(void *fn, asmtest_anyfn_t ref, int arity,
+                              const long *a, long *got, long *want) {
+    long expected;
+    switch (arity) {
+    case 1:
+        expected = ((asmtest_ref1_fn)ref)(a[0]);
+        break;
+    case 2:
+        expected = ((asmtest_ref2_fn)ref)(a[0], a[1]);
+        break;
+    default:
+        expected = ((asmtest_ref3_fn)ref)(a[0], a[1], a[2]);
+        break;
+    }
+    long args[8] = {0};
+    memcpy(args, a, (size_t)arity * sizeof *args);
+    regs_t r;
+    asm_call_capture_args(&r, fn, args, arity);
+    *got = (long)r.ret;
+    *want = expected;
+    return *got != expected;
+}
+
+/* Shrink a failing tuple toward the boundary values where asm bugs actually
+ * live, so the report leads with e.g. [0, -1] instead of a raw 64-bit draw.
+ * One ordered pass per position: try 0 / 1 / -1 / LONG_MAX / LONG_MIN, else
+ * halve toward zero — keeping only replacements that still diverge from the
+ * model, so the tuple stays a counterexample throughout. Deterministic (no
+ * RNG) and bounded (~70 extra calls per position). Greedy per position, so
+ * not globally minimal — it is a readability aid, not a proof. */
+static void match_ref_shrink(void *fn, asmtest_anyfn_t ref, int arity,
+                             long *a) {
+    static const long cand[] = {0, 1, -1, LONG_MAX, LONG_MIN};
+    long got, want;
+    for (int i = 0; i < arity; i++) {
+        long keep = a[i];
+        int replaced = 0;
+        for (size_t c = 0; c < sizeof cand / sizeof cand[0]; c++) {
+            if (cand[c] == keep)
+                continue;
+            a[i] = cand[c];
+            if (match_ref_diverges(fn, ref, arity, a, &got, &want)) {
+                replaced = 1;
+                break;
+            }
+        }
+        if (!replaced) {
+            a[i] = keep;
+            while (a[i] != 0) { /* halve toward zero while it still fails */
+                long prev = a[i];
+                a[i] = prev / 2;
+                if (!match_ref_diverges(fn, ref, arity, a, &got, &want)) {
+                    a[i] = prev;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+static void fmt_tuple(char *buf, size_t cap, const long *a, int arity) {
+    size_t off = (size_t)snprintf(buf, cap, "[");
+    for (int i = 0; i < arity; i++)
+        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0,
+                                "%s%ld", i ? ", " : "", a[i]);
+    snprintf(buf + off, off < cap ? cap - off : 0, "]");
+}
+
+static void match_ref_run(const char *file, int line, const char *fnexpr,
+                          void *fn, asmtest_anyfn_t ref, asmtest_gen_fn gen,
+                          int trials, int arity) {
     asmtest_rng_t rng = {asmtest_seed()};
     for (int t = 0; t < trials; t++) {
         long a[8] = {0};
         int n = gen(&rng, a, 8);
-        if (n != 1)
-            asmtest_fail(
-                file, line,
-                "ASSERT_MATCHES_REF1(%s): generator returned arity %d, "
-                "expected 1",
-                fnexpr, n);
-        long expected = ref(a[0]);
-        regs_t r;
-        asm_call_capture_args(&r, fn, a, 1);
-        long actual = (long)r.ret;
-        if (actual != expected)
+        if (n != arity)
             asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF1(%s): trial %d input [%ld]: got "
-                         "%ld (0x%lx), reference %ld (0x%lx) [seed=0x%llx]",
-                         fnexpr, t, a[0], actual, (unsigned long)actual,
-                         expected, (unsigned long)expected,
-                         (unsigned long long)asmtest_seed());
+                         "ASSERT_MATCHES_REF%d(%s): generator returned arity "
+                         "%d, expected %d",
+                         arity, fnexpr, n, arity);
+        long got, want;
+        if (!match_ref_diverges(fn, ref, arity, a, &got, &want))
+            continue;
+        long s[8];
+        memcpy(s, a, sizeof s);
+        match_ref_shrink(fn, ref, arity, s);
+        char orig[176], shrunk[224] = "";
+        fmt_tuple(orig, sizeof orig, a, arity);
+        if (memcmp(s, a, (size_t)arity * sizeof *a) != 0) {
+            long sg, sw;
+            char st[176];
+            match_ref_diverges(fn, ref, arity, s, &sg, &sw);
+            fmt_tuple(st, sizeof st, s, arity);
+            snprintf(shrunk, sizeof shrunk,
+                     "; shrinks to %s: got %ld, reference %ld", st, sg, sw);
+        }
+        asmtest_fail(file, line,
+                     "ASSERT_MATCHES_REF%d(%s): trial %d input %s: got %ld "
+                     "(0x%lx), reference %ld (0x%lx)%s [seed=0x%llx]",
+                     arity, fnexpr, t, orig, got, (unsigned long)got, want,
+                     (unsigned long)want, shrunk,
+                     (unsigned long long)asmtest_seed());
     }
+}
+
+void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
+                        void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
+                        int trials) {
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                  1);
 }
 
 void asmtest_match_ref2(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref2_fn ref, asmtest_gen_fn gen,
                         int trials) {
-    asmtest_rng_t rng = {asmtest_seed()};
-    for (int t = 0; t < trials; t++) {
-        long a[8] = {0};
-        int n = gen(&rng, a, 8);
-        if (n != 2)
-            asmtest_fail(
-                file, line,
-                "ASSERT_MATCHES_REF2(%s): generator returned arity %d, "
-                "expected 2",
-                fnexpr, n);
-        long expected = ref(a[0], a[1]);
-        regs_t r;
-        asm_call_capture_args(&r, fn, a, 2);
-        long actual = (long)r.ret;
-        if (actual != expected)
-            asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF2(%s): trial %d input [%ld, %ld]: "
-                         "got %ld (0x%lx), reference %ld (0x%lx) [seed=0x%llx]",
-                         fnexpr, t, a[0], a[1], actual, (unsigned long)actual,
-                         expected, (unsigned long)expected,
-                         (unsigned long long)asmtest_seed());
-    }
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                  2);
 }
 
 void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref3_fn ref, asmtest_gen_fn gen,
                         int trials) {
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                  3);
+}
+
+/* --- FP differential engine (ASSERT_MATCHES_FREF{1,2,3}) --- */
+
+/* As match_ref_diverges, but through the FP register file, judged by ULP
+ * distance. NaN matches only NaN (any max_ulps). */
+static int match_fref_diverges(void *fn, asmtest_anyfn_t ref, int arity,
+                               const double *f, unsigned long max_ulps,
+                               double *got, double *want, uint64_t *dist) {
+    double expected;
+    switch (arity) {
+    case 1:
+        expected = ((asmtest_fref1_fn)ref)(f[0]);
+        break;
+    case 2:
+        expected = ((asmtest_fref2_fn)ref)(f[0], f[1]);
+        break;
+    default:
+        expected = ((asmtest_fref3_fn)ref)(f[0], f[1], f[2]);
+        break;
+    }
+    long ia[6] = {0};
+    double fa[8] = {0};
+    memcpy(fa, f, (size_t)arity * sizeof *fa);
+    regs_t r;
+    asm_call_capture_fp(&r, fn, ia, fa);
+    *got = r.fret;
+    *want = expected;
+    *dist = 0;
+    if (isnan(r.fret) || isnan(expected))
+        return !(isnan(r.fret) && isnan(expected));
+    *dist = fp_ulp_distance(r.fret, expected);
+    return *dist > max_ulps;
+}
+
+static void fmt_ftuple(char *buf, size_t cap, const double *f, int arity) {
+    size_t off = (size_t)snprintf(buf, cap, "[");
+    for (int i = 0; i < arity; i++)
+        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0,
+                                "%s%.17g", i ? ", " : "", f[i]);
+    snprintf(buf + off, off < cap ? cap - off : 0, "]");
+}
+
+static void match_fref_run(const char *file, int line, const char *fnexpr,
+                           void *fn, asmtest_anyfn_t ref, asmtest_fgen_fn gen,
+                           int trials, int arity, unsigned long max_ulps) {
     asmtest_rng_t rng = {asmtest_seed()};
     for (int t = 0; t < trials; t++) {
-        long a[8] = {0};
-        int n = gen(&rng, a, 8);
-        if (n != 3)
-            asmtest_fail(
-                file, line,
-                "ASSERT_MATCHES_REF3(%s): generator returned arity %d, "
-                "expected 3",
-                fnexpr, n);
-        long expected = ref(a[0], a[1], a[2]);
-        regs_t r;
-        asm_call_capture_args(&r, fn, a, 3);
-        long actual = (long)r.ret;
-        if (actual != expected)
+        double f[8] = {0};
+        int n = gen(&rng, f, 8);
+        if (n != arity)
             asmtest_fail(file, line,
-                         "ASSERT_MATCHES_REF3(%s): trial %d input [%ld, %ld, "
-                         "%ld]: got %ld (0x%lx), reference %ld (0x%lx) "
-                         "[seed=0x%llx]",
-                         fnexpr, t, a[0], a[1], a[2], actual,
-                         (unsigned long)actual, expected,
-                         (unsigned long)expected,
-                         (unsigned long long)asmtest_seed());
+                         "ASSERT_MATCHES_FREF%d(%s): generator returned arity "
+                         "%d, expected %d",
+                         arity, fnexpr, n, arity);
+        double got, want;
+        uint64_t dist;
+        if (!match_fref_diverges(fn, ref, arity, f, max_ulps, &got, &want,
+                                 &dist))
+            continue;
+        char tup[224];
+        fmt_ftuple(tup, sizeof tup, f, arity);
+        asmtest_fail(file, line,
+                     "ASSERT_MATCHES_FREF%d(%s): trial %d input %s: got %.17g,"
+                     " reference %.17g (%llu ulps, max %lu) [seed=0x%llx]",
+                     arity, fnexpr, t, tup, got, want,
+                     (unsigned long long)dist, max_ulps,
+                     (unsigned long long)asmtest_seed());
     }
+}
+
+void asmtest_match_fref1(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref1_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps) {
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                   1, max_ulps);
+}
+
+void asmtest_match_fref2(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref2_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps) {
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                   2, max_ulps);
+}
+
+void asmtest_match_fref3(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref3_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps) {
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
+                   3, max_ulps);
 }
 
 /* ------------------------------------------------------------------ */

@@ -458,6 +458,25 @@ void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref3_fn ref, asmtest_gen_fn gen,
                         int trials);
 
+/* FP differential testing: the double-argument counterparts, for the FP/SIMD
+ * surface where rounding, NaN, and lane bugs live. The generator fills
+ * args[0..arity-1] with one random double tuple (cap >= 8); results compare by
+ * ULP distance (max_ulps = 0 demands bit-exactness; NaN matches only NaN). */
+typedef int (*asmtest_fgen_fn)(asmtest_rng_t *rng, double *args, int cap);
+typedef double (*asmtest_fref1_fn)(double);
+typedef double (*asmtest_fref2_fn)(double, double);
+typedef double (*asmtest_fref3_fn)(double, double, double);
+
+void asmtest_match_fref1(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref1_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps);
+void asmtest_match_fref2(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref2_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps);
+void asmtest_match_fref3(const char *file, int line, const char *fnexpr,
+                         void *fn, asmtest_fref3_fn ref, asmtest_fgen_fn gen,
+                         int trials, unsigned long max_ulps);
+
 /* ------------------------------------------------------------------ */
 /* Runtime support (src/asmtest.c)                                     */
 /* ------------------------------------------------------------------ */
@@ -789,7 +808,7 @@ void asmtest_guarded_free_under(void *p, size_t n);
 
 /* ASM_FCALLn: call fn with n double args (in FP registers) and capture; the
  * double return lands in out->fret. For routines mixing integer and float
- * args, call asm_call_capture_fp directly. */
+ * args, use ASM_MIXCALL below. */
 #define ASM_FCALL1(out, fn, x)                                                 \
     do {                                                                       \
         long asmtest_ia_[6] = {0};                                             \
@@ -807,6 +826,23 @@ void asmtest_guarded_free_under(void *p, size_t n);
         long asmtest_ia_[6] = {0};                                             \
         double asmtest_fa_[8] = {(double)(x), (double)(y), (double)(z),        \
                                  0, 0, 0, 0, 0};                               \
+        asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
+    } while (0)
+
+/* ASM_MIXCALL: call fn taking BOTH integer/pointer args (integer register
+ * file) and double args (FP register file) — the canonical ptr+len+scalar
+ * shape. Each group is parenthesized and needs at least one element:
+ *   ASM_MIXCALL(&r, scale_buf, (buf, n), (0.5));
+ * marshals buf/n into rdi/rsi (x0/x1) and 0.5 into xmm0 (d0). Up to 6 integer
+ * and 8 double args — the register files asm_call_capture_fp loads; an excess
+ * element is a compile error. The int return is r.ret, a double return r.fret. */
+#define ASMTEST_UNPAREN(...) __VA_ARGS__
+#define ASM_MIXCALL(out, fn, iargs, fargs)                                     \
+    do {                                                                       \
+        long asmtest_ia_[6] = {                                                \
+            ASMTEST_MAP_CAST(long, ASMTEST_UNPAREN iargs)};                    \
+        double asmtest_fa_[8] = {                                              \
+            ASMTEST_MAP_CAST(double, ASMTEST_UNPAREN fargs)};                  \
         asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
     } while (0)
 
@@ -1032,6 +1068,22 @@ void asmtest_guarded_free_under(void *p, size_t n);
     asmtest_match_ref2(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
 #define ASSERT_MATCHES_REF3(fn, ref, gen, n)                                   \
     asmtest_match_ref3(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen), (n))
+
+/* FP variants: `fn` takes 1..3 doubles (in FP registers) and returns a double;
+ * `ref` is the C model; `gen` fills a double tuple; results must agree within
+ * `ulps` units-in-the-last-place (0 = bit-exact; NaN matches only NaN):
+ *   ASSERT_MATCHES_FREF1(rsqrt, ref_rsqrt, gen_unit_range, 10000, 2);
+ * On a mismatch the failing input (as %.17g, so it round-trips), both results,
+ * the ULP distance, and the seed are reported. */
+#define ASSERT_MATCHES_FREF1(fn, ref, gen, n, ulps)                            \
+    asmtest_match_fref1(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen),   \
+                        (n), (ulps))
+#define ASSERT_MATCHES_FREF2(fn, ref, gen, n, ulps)                            \
+    asmtest_match_fref2(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen),   \
+                        (n), (ulps))
+#define ASSERT_MATCHES_FREF3(fn, ref, gen, n, ulps)                            \
+    asmtest_match_fref3(__FILE__, __LINE__, #fn, (void *)(fn), (ref), (gen),   \
+                        (n), (ulps))
 
 #ifdef __cplusplus
 } /* extern "C" */

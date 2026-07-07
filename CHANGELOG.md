@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`ASM_MIXCALL` — mixed integer + FP argument capture** (A6 of the 2026-07-04
+  review). The canonical ptr+len+scalar shape gets a first-class macro:
+  `ASM_MIXCALL(&r, fn, (buf, n), (0.5))` marshals each parenthesized group into its
+  register file via the existing `asm_call_capture_fp` — no more hand-built compound
+  literals (the repo's own `test_structparam.c` hand-roll is converted). Covered by a
+  new `scale_long` example routine (x86-64 + AArch64) and the strict-c11/C++
+  header-portability gate.
+
+- **FP reference models — `ASSERT_MATCHES_FREF{1,2,3}`** (A7). Differential testing
+  now covers the FP surface where rounding/NaN/lane bugs live: double tuples from an
+  `asmtest_fgen_fn` generator run through the FP register file
+  (`asm_call_capture_fp`) and the C model, judged by ULP distance (`ulps = 0` =
+  bit-exact; NaN matches only NaN). Example property tests pin `fp_add`/`fp_mul`
+  against C models over dyadic rationals and a specials table (±0, ±inf, NaN,
+  DBL_MIN/MAX).
+
+- **Failing-input shrinking in `ASSERT_MATCHES_REF*`** (E7). On a mismatch the
+  tuple is greedily shrunk toward `0` / `±1` / `LONG_MAX` / `LONG_MIN` (else halved
+  toward zero) while the disagreement persists, so the report leads with the
+  boundary value that triggers the bug — `shrinks to [0, 1]` — alongside the
+  original draw. Deterministic, bounded, and self-tested (the negative suite's
+  mismatch now asserts the exact shrunk tuple).
+
 - **Runner flow control — `--fail-fast`, `--repeat=N`, `--shard=K/N`** (R5 of the
   [2026-07-04 review](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-04-repo-review.md)).
   `--fail-fast` stops dispatching at the first failing test (forces the serial path;

@@ -39,8 +39,7 @@ TEST(structparam, mixed_struct_int_plus_sse) {
     __builtin_memcpy(&bbits, &m.b, sizeof bbits);
     ASM_CALL2(&r, pst_mixed, m.a, bbits);
 #else
-    asm_call_capture_fp(&r, (void *)pst_mixed, (long[6]){m.a},
-                        (double[8]){m.b});
+    ASM_MIXCALL(&r, pst_mixed, (m.a), (m.b));
 #endif
     ASSERT_EQ(r.ret, 42);
 }
