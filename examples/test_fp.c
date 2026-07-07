@@ -9,7 +9,7 @@
 
 extern double fp_add(double a, double b);
 extern double fp_mul(double a, double b);
-extern double scale_long(long n, double s);
+extern double mix_scale(long n, double x);
 
 TEST(fp, add_returns_double) {
     regs_t r;
@@ -45,11 +45,11 @@ TEST(fp, abi_preserved_across_fp_call) {
 }
 
 TEST(fp, mixcall_marshals_both_register_files) {
-    /* scale_long takes n in the integer file and s in the FP file — the
+    /* mix_scale takes n in the integer file and x in the FP file — the
      * ptr+len+scalar shape. ASM_MIXCALL marshals each parenthesized group into
      * its register file; no hand-built arrays. */
     regs_t r;
-    ASM_MIXCALL(&r, scale_long, (21), (2.0));
+    ASM_MIXCALL(&r, mix_scale, (21), (2.0));
     ASSERT_FP_EQ(&r, 42.0);
     ASSERT_ABI_PRESERVED(&r);
 }

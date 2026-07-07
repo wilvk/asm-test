@@ -9,7 +9,7 @@
  */
 #include "asmtest.hpp"
 
-// Routines under test (examples/{add,flags,fp,simd}.s), C symbols.
+// Routines under test (examples/{add,args,flags,fp,simd,structs}.s), C symbols.
 extern "C" {
 long add_signed(long, long);
 long sum_via_rbx(long, long);   // ABI-compliant: saves/restores rbx
@@ -22,6 +22,9 @@ void vec_add4d(void);  // vec256 in/out (AVX2); only its address is needed
 void vec_add8d(void);  // vec512 in/out (AVX-512); only its address is needed
 long read_fault(const long *);  // loads *p; faults if p is unmapped
 double int_to_double(long);     // (double)n into xmm0 from an integer arg
+long sum8(long, long, long, long, long, long, long, long);  // wide arity
+double mix_scale(long, double);  // mixed int+FP argument files
+void make_big(void);  // struct big(24B) via hidden sret ptr; address only
 }
 
 using namespace asmtest;
@@ -59,6 +62,34 @@ TEST(cpp, flags_clear) {
 TEST(cpp, fp_return) {
     regs_t r = capture_fp(reinterpret_cast<void *>(fp_add), {}, {1.5, 2.25});
     ASSERT_FP_EQ(&r, 3.75);
+}
+
+TEST(cpp, wide_arity_sum8) {
+    // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+    regs_t r = capture_args(reinterpret_cast<void *>(sum8),
+                            {1, 2, 3, 4, 5, 6, 7, 8});
+    ASSERT_EQ(r.ret, 36);
+    ASSERT_TRUE(abi_preserved(r));
+}
+
+TEST(cpp, mixed_int_fp) {
+    // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+    regs_t r = capture_fp(reinterpret_cast<void *>(mix_scale), {3}, {2.5});
+    ASSERT_FP_EQ(&r, 7.5);
+}
+
+TEST(cpp, struct_return_sret) {
+    // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+    struct big {
+        long a, b, c;
+    } result = {0, 0, 0};
+    regs_t r = capture_sret(reinterpret_cast<void *>(make_big), &result,
+                            {7, 8, 9});
+    ASSERT_EQ(result.a, 7);
+    ASSERT_EQ(result.b, 8);
+    ASSERT_EQ(result.c, 9);
+    // make_big also returns the result pointer (rax / x0).
+    ASSERT_UEQ(r.ret, reinterpret_cast<unsigned long long>(&result));
 }
 
 // Tier-2 assert_* helpers: the pass paths succeed and the failure path throws.

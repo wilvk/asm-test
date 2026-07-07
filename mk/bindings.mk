@@ -87,8 +87,9 @@ else
 CORPUS_LIB     := $(BUILD)/libasmtest_corpus.so
 CORPUS_LDFLAGS := -shared
 endif
-CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/flags.o \
-                       $(BUILD)/pic/fp.o $(BUILD)/pic/simd.o \
+CORPUS_ROUTINE_OBJS := $(BUILD)/pic/add.o $(BUILD)/pic/args.o \
+                       $(BUILD)/pic/flags.o $(BUILD)/pic/fp.o \
+                       $(BUILD)/pic/simd.o $(BUILD)/pic/structs.o \
                        $(BUILD)/pic/fault.o $(BUILD)/pic/corpus_routines.o
 
 # name -> routine-address lookup, so bindings need no per-FFI symbol-address API.
@@ -128,8 +129,9 @@ $(BUILD)/test_cpp.o: bindings/cpp/test_cpp.cpp bindings/cpp/asmtest.hpp \
 
 $(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/trace.o \
                    $(BUILD)/fuzz.o $(BUILD)/assemble.o $(BUILD)/disasm.o \
-                   $(BUILD)/add.o $(BUILD)/flags.o $(BUILD)/fp.o \
-                   $(BUILD)/simd.o $(BUILD)/fault.o $(BUILD)/test_cpp.o
+                   $(BUILD)/add.o $(BUILD)/args.o $(BUILD)/flags.o \
+                   $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/structs.o \
+                   $(BUILD)/fault.o $(BUILD)/test_cpp.o
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp

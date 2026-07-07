@@ -65,7 +65,8 @@ public final class Asmtest {
     private static final String EMU_PATH;  // resolved native-lib path (see libraryPath())
 
     private static final MethodHandle CORPUS_ROUTINE, REGS_NEW, REGS_FREE, CAPTURE6,
-        CAPTURE_FP2, CAPTURE_VEC_F32, REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
+        CAPTURE_FP2, CAPTURE_VEC_F32, CAPTURE_ARGS, CAPTURE_MIX, CAPTURE_SRET,
+        REGS_RET, REGS_FRET, REGS_VEC_F32, REGS_FLAG_SET,
         CHECK_ABI, EMU_OPEN, EMU_CLOSE, EMU_RES_NEW, EMU_RES_FREE, EMU_CALL2, EMU_CALL_ASM6,
         ASM_BYTES, ASM_LAST_ERROR, EMU_DISAS, EMU_DISAS_AVAIL,
         EMU_FAULTED, EMU_FAULT_ADDR, EMU_FAULT_KIND, EMU_REG,
@@ -180,6 +181,12 @@ public final class Asmtest {
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE));
         CAPTURE_VEC_F32 = h(emu, "asmtest_capture_vec_f32",
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
+        CAPTURE_ARGS = h(emu, "asmtest_capture_args",
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
+        CAPTURE_MIX = h(emu, "asmtest_capture_mix",
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
+        CAPTURE_SRET = h(emu, "asmtest_capture_sret",
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
         REGS_RET = h(emu, "asmtest_regs_ret", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
         REGS_FRET = h(emu, "asmtest_regs_fret", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS));
         REGS_VEC_F32 = h(emu, "asmtest_regs_vec_f32",
@@ -430,6 +437,33 @@ public final class Asmtest {
         /** Call fn with two double args, capturing the FP return. */
         public void captureFp2(MemorySegment fn, double f0, double f1) {
             try { CAPTURE_FP2.invoke(h, fn, f0, f1); } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Call fn with any number of integer args (wide arity): the first 6 go
+         *  in registers, the rest spill onto the stack per the ABI. */
+        public void captureArgs(MemorySegment fn, long... args) {
+            try (Arena a = Arena.ofConfined()) {
+                CAPTURE_ARGS.invoke(h, fn, longsSeg(a, args), args.length);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Call fn with integer AND double args in one call (mixed register
+         *  files); the FP return is fret(), the integer one ret(). */
+        public void captureMix(MemorySegment fn, long[] iargs, double[] fargs) {
+            try (Arena a = Arena.ofConfined()) {
+                CAPTURE_MIX.invoke(h, fn, longsSeg(a, iargs), iargs.length,
+                    doublesSeg(a, fargs), fargs.length);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+        /** Call fn returning a large (memory-class) struct via the hidden result
+         *  pointer. Returns the struct as a byte[] of {@code resultSize}, to be
+         *  unpacked per the fixture's layout (no C struct layout is mirrored). */
+        public byte[] captureSret(MemorySegment fn, int resultSize, long... args) {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment out = a.allocate(Math.max(resultSize, 1));
+                CAPTURE_SRET.invoke(h, fn, out, longsSeg(a, args), args.length);
+                byte[] b = new byte[resultSize];
+                MemorySegment.copy(out, JAVA_BYTE, 0, b, 0, resultSize);
+                return b;
+            } catch (Throwable t) { throw rethrow(t); }
         }
         /** Call fn with up to eight 128-bit vector args (each four float32 lanes),
          *  capturing the vector register file. Read the vector return with vecF32(0). */

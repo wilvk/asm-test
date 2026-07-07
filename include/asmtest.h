@@ -564,6 +564,21 @@ void asmtest_capture_fp2(regs_t *out, void *fn, double f0, double f1);
  * asmtest_regs_vec_f32. nvec is clamped to [0, 8]. */
 void asmtest_capture_vec_f32(regs_t *out, void *fn, const float *lanes,
                              int nvec);
+/* Wide arity: all `nargs` integer args in one flat array — the first 6 go in
+ * registers, the rest spill onto the stack per the ABI (asm_call_capture_args).
+ * nargs is clamped to >= 0. */
+void asmtest_capture_args(regs_t *out, void *fn, const long *args, int nargs);
+/* Mixed integer+FP argument files in one call (asm_call_capture_fp): ni is
+ * clamped to [0, 6] and nf to [0, 8]; unused slots are zero-filled. The integer
+ * return lands in out->ret, the FP return in out->fret. */
+void asmtest_capture_mix(regs_t *out, void *fn, const long *iargs, int ni,
+                         const double *fargs, int nf);
+/* Struct return through the hidden pointer (asm_call_capture_sret): the
+ * memory-class struct is written into `result` (a caller-allocated byte
+ * buffer); the `nargs` visible integer args follow the ABI. nargs is clamped
+ * to >= 0. */
+void asmtest_capture_sret(regs_t *out, void *fn, void *result,
+                          const long *args, int nargs);
 void asmtest_assert_double_eq(const char *file, int line, double actual,
                               double expected);
 void asmtest_assert_double_near(const char *file, int line, double actual,

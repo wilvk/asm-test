@@ -350,6 +350,19 @@ extern "C" {
         iargs: *const c_long,
         vargs: *const Vec128,
     );
+    fn asm_call_capture_args(
+        out: *mut Regs,
+        f: *mut c_void,
+        args: *const c_long,
+        nargs: c_int,
+    );
+    fn asm_call_capture_sret(
+        out: *mut Regs,
+        f: *mut c_void,
+        result: *mut c_void,
+        args: *const c_long,
+        nargs: c_int,
+    );
     fn asmtest_check_abi(r: *const Regs, msg: *mut c_char, n: usize) -> c_int;
 
     fn emu_open() -> *mut emu_t;
@@ -400,7 +413,38 @@ pub fn capture(f: *mut c_void, args: &[i64]) -> Regs {
     r
 }
 
+/// Call `f` with an arbitrary number of integer args (wide arity): the first 6
+/// go in registers, the rest spill onto the stack per the ABI.
+pub fn capture_args(f: *mut c_void, args: &[i64]) -> Regs {
+    let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+    let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+    let mut r = Regs::default();
+    unsafe { asm_call_capture_args(&mut r, f, ptr, args.len() as c_int) };
+    r
+}
+
+/// Call `f` returning a large (memory-class) struct via the hidden result
+/// pointer (SysV rdi / AAPCS64 x8): the struct bytes are written into `result`
+/// and the visible integer args follow the ABI.
+pub fn capture_sret(f: *mut c_void, result: &mut [u8], args: &[i64]) -> Regs {
+    let av: Vec<c_long> = args.iter().map(|x| *x as c_long).collect();
+    let ptr = if av.is_empty() { std::ptr::null() } else { av.as_ptr() };
+    let mut r = Regs::default();
+    unsafe {
+        asm_call_capture_sret(
+            &mut r,
+            f,
+            result.as_mut_ptr() as *mut c_void,
+            ptr,
+            args.len() as c_int,
+        )
+    };
+    r
+}
+
 /// Call `f` marshalling up to 8 doubles into the FP argument registers.
+/// `iargs` fills the integer registers in the same call, so a mixed integer+FP
+/// signature (e.g. `double mix_scale(long, double)`) is `capture_fp(f, &[n], &[x])`.
 pub fn capture_fp(f: *mut c_void, iargs: &[i64], fargs: &[f64]) -> Regs {
     let ia = args6(iargs);
     let mut fa = [0.0f64; 8];

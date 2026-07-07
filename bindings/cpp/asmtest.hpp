@@ -61,7 +61,29 @@ inline regs_t capture(void *fn, std::initializer_list<long> args = {}) {
     return r;
 }
 
+/// Call `fn` with an arbitrary number of integer args (wide arity): the first
+/// 6 go in registers, the rest spill onto the stack per the ABI.
+inline regs_t capture_args(void *fn, std::initializer_list<long> args) {
+    regs_t r{};
+    std::vector<long> a(args);
+    asm_call_capture_args(&r, fn, a.data(), static_cast<int>(a.size()));
+    return r;
+}
+
+/// Call `fn` returning a large (memory-class) struct via the hidden result
+/// pointer (SysV rdi / AAPCS64 x8): the struct is written into `*result` and
+/// the visible integer args follow the ABI.
+inline regs_t capture_sret(void *fn, void *result,
+                           std::initializer_list<long> args) {
+    regs_t r{};
+    std::vector<long> a(args);
+    asm_call_capture_sret(&r, fn, result, a.data(), static_cast<int>(a.size()));
+    return r;
+}
+
 /// Call `fn` marshalling up to 8 doubles into the FP argument registers.
+/// `iargs` fills the integer registers in the same call, so a mixed integer+FP
+/// signature (e.g. `double mix_scale(long, double)`) is `capture_fp(fn, {n}, {x})`.
 inline regs_t capture_fp(void *fn, std::initializer_list<long> iargs,
                          std::initializer_list<double> fargs) {
     regs_t r{};

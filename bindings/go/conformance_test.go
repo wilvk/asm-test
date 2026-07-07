@@ -13,6 +13,7 @@
 package asmtest
 
 import (
+	"encoding/binary"
 	"fmt"
 	"runtime"
 	"testing"
@@ -75,6 +76,40 @@ func TestVec(t *testing.T) {
 	defer r.Free()
 	r.CaptureVecF32(CorpusRoutine("vec_add4f"), [][4]float32{{1, 2, 3, 4}, {10, 20, 30, 40}})
 	AssertVecF32(t, r, 0, [4]float32{11, 22, 33, 44})
+}
+
+// sum8 takes 8 integer args — the first 6 in registers, args 7-8 on the stack
+// (x86-64) — so CaptureArgs reaches past the register file.
+func TestWideArity(t *testing.T) {
+	r := NewRegs()
+	defer r.Free()
+	r.CaptureArgs(CorpusRoutine("sum8"), 1, 2, 3, 4, 5, 6, 7, 8)
+	AssertRet(t, r, 36)
+	AssertABIPreserved(t, r)
+}
+
+// mix_scale(n, x) = (double)n * x reads BOTH argument register files in one call.
+func TestMixedIntFP(t *testing.T) {
+	r := NewRegs()
+	defer r.Free()
+	r.CaptureMix(CorpusRoutine("mix_scale"), []int64{3}, []float64{2.5})
+	AssertFP(t, r, 7.5)
+}
+
+// make_big returns a 24-byte struct{long a,b,c} via the hidden result pointer.
+func TestStructReturnSret(t *testing.T) {
+	r := NewRegs()
+	defer r.Free()
+	big := r.CaptureSret(CorpusRoutine("make_big"), 24, 7, 8, 9)
+	for i, want := range []uint64{7, 8, 9} {
+		got := binary.LittleEndian.Uint64(big[i*8 : i*8+8])
+		if got != want {
+			t.Fatalf("struct field %d: got %d, want %d", i, got, want)
+		}
+	}
+	if r.Ret() == 0 {
+		t.Fatal("make_big should return the result pointer (rax / x0), got 0")
+	}
 }
 
 // --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------

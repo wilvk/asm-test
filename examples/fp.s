@@ -8,9 +8,11 @@
  * double int_to_double(long n);       (double)n  — an integer arg into an XMM
  *   result, so an emulator run reachable via integer args still exercises the
  *   guest XMM file (x86-64: n -> %rdi, result -> %xmm0; AArch64: x0 -> d0).
- * double scale_long(long n, double s); (double)n * s — one integer-file arg
- *   plus one FP-file arg, the mixed shape ASM_MIXCALL marshals
- *   (x86-64: n -> %rdi, s -> %xmm0; AArch64: n -> x0, s -> d0).
+ * double mix_scale(long n, double x); (double)n * x — one INTEGER and one FP
+ *   arg in the same call, so the mixed-file capture path (ASM_MIXCALL /
+ *   asm_call_capture_fp with both iargs and fargs / asmtest_capture_mix) has a
+ *   fixture that reads from both argument register files (x86-64: n -> %rdi,
+ *   x -> %xmm0; AArch64: n -> x0, x -> d0).
  */
 #include "asm.h"
 
@@ -44,14 +46,14 @@ ASM_FUNC int_to_double
 #endif
 ASM_ENDFUNC int_to_double
 
-ASM_FUNC scale_long
+ASM_FUNC mix_scale
 #if defined(__x86_64__)
     cvtsi2sd %rdi, %xmm1        /* xmm1 = (double)n */
-    mulsd   %xmm1, %xmm0        /* xmm0 = s * (double)n */
+    mulsd   %xmm1, %xmm0        /* xmm0 = x * (double)n */
     ret
 #elif defined(__aarch64__)
-    scvtf   d1, x0
-    fmul    d0, d0, d1
+    scvtf   d1, x0              /* d1 = (double)n */
+    fmul    d0, d0, d1          /* d0 = x * (double)n */
     ret
 #endif
-ASM_ENDFUNC scale_long
+ASM_ENDFUNC mix_scale

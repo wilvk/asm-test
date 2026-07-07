@@ -73,6 +73,12 @@ def declare(lib):
     lib.asm_call_capture_fp.restype = None
     lib.asm_call_capture_vec.argtypes = [v, v, v, v]
     lib.asm_call_capture_vec.restype = None
+    # Wide arity (register + stack args) and struct return via the hidden
+    # pointer — the array forms the capture/capture_fp wrappers already use.
+    lib.asm_call_capture_args.argtypes = [v, v, v, C.c_int]
+    lib.asm_call_capture_args.restype = None
+    lib.asm_call_capture_sret.argtypes = [v, v, v, v, C.c_int]
+    lib.asm_call_capture_sret.restype = None
     # AVX2 256-bit capture (Track D) + the CPUID feature probes that gate it.
     lib.asm_call_capture_vec256.argtypes = [v, v, v, v]
     lib.asm_call_capture_vec256.restype = None

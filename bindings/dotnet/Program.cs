@@ -47,6 +47,20 @@ static class Conformance
                 new float[][] { new float[] { 1, 2, 3, 4 }, new float[] { 10, 20, 30, 40 } });
             var v = r.VecF32(0);
             Check("vec_add4f.basic", v[0] == 11 && v[1] == 22 && v[2] == 33 && v[3] == 44);
+
+            // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+            r.CaptureArgs(Routine("sum8"), 1, 2, 3, 4, 5, 6, 7, 8);
+            Check("sum8.wide_arity", r.Ret == 36 && r.AbiPreserved);
+
+            // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+            r.CaptureMix(Routine("mix_scale"), new long[] { 3 }, new double[] { 2.5 });
+            Check("mix_scale.mixed_int_fp", r.FRet == 7.5);
+
+            // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+            var big = r.CaptureSret(Routine("make_big"), 24, 7, 8, 9);
+            Check("make_big.struct_return_sret",
+                BitConverter.ToInt64(big, 0) == 7 && BitConverter.ToInt64(big, 8) == 8
+                && BitConverter.ToInt64(big, 16) == 9 && r.Ret != 0);
         }
 
         // --- Tier 1: corpus replay (emulator, x86-64 guest) ----------------- //

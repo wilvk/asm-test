@@ -4,7 +4,7 @@
  * Lets a binding obtain a routine pointer with one ordinary call
  * (asmtest_corpus_routine("add_signed")) instead of each FFI's symbol-address
  * mechanism. Compiled into the libasmtest_corpus fixture lib alongside the
- * routine objects (examples/{add,flags,fp,simd}.s).
+ * routine objects (examples/{add,args,flags,fp,simd,structs}.s).
  */
 #include <string.h>
 
@@ -17,6 +17,12 @@ extern double fp_add(double, double);
 extern void vec_add4f(void);
 extern long read_fault(const long *);
 extern double int_to_double(long);
+extern double mix_scale(long, double); /* mixed int+FP args (capture_mix) */
+extern long sum3(long, long, long);
+extern long sum8(long, long, long, long, long, long, long, long);
+extern long sum10(long, long, long, long, long, long, long, long, long, long);
+extern void make_big(void);  /* struct big(24B) via hidden sret ptr; address only */
+extern void make_pair(void); /* struct pair(16B) in registers; address only */
 #if defined(__x86_64__)
 extern void vec_add4d(void); /* AVX2 256-bit (Track D); x86-64 only */
 extern void vec_add8d(void); /* AVX-512 512-bit (Track D); x86-64 only */
@@ -49,5 +55,17 @@ void *asmtest_corpus_routine(const char *name) {
         return (void *)read_fault;
     if (!strcmp(name, "int_to_double"))
         return (void *)int_to_double;
+    if (!strcmp(name, "mix_scale"))
+        return (void *)mix_scale;
+    if (!strcmp(name, "sum3"))
+        return (void *)sum3;
+    if (!strcmp(name, "sum8"))
+        return (void *)sum8;
+    if (!strcmp(name, "sum10"))
+        return (void *)sum10;
+    if (!strcmp(name, "make_big"))
+        return (void *)make_big;
+    if (!strcmp(name, "make_pair"))
+        return (void *)make_pair;
     return (void *)0;
 }

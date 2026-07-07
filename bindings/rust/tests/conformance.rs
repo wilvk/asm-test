@@ -21,6 +21,9 @@ extern "C" {
     fn vec_add4f();
     fn read_fault(p: *const i64) -> i64;
     fn int_to_double(n: i64) -> f64;
+    fn sum8(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64) -> i64;
+    fn mix_scale(n: i64, x: f64) -> f64; // mixed int+FP argument files
+    fn make_big(); // struct big(24B) via hidden sret pointer; address only
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -69,6 +72,34 @@ fn clear_carry_cf_clear() {
 fn fp_add_basic() {
     let r = asmtest::capture_fp(pm(fp_add as usize), &[], &[1.5, 2.25]);
     assert_eq!(r.fret, 3.75);
+}
+
+#[test]
+fn sum8_wide_arity() {
+    // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+    let r = asmtest::capture_args(pm(sum8 as usize), &[1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(r.ret, 36);
+    assert!(asmtest::abi_preserved(&r));
+}
+
+#[test]
+fn mix_scale_mixed_int_fp() {
+    // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+    let r = asmtest::capture_fp(pm(mix_scale as usize), &[3], &[2.5]);
+    assert_eq!(r.fret, 7.5);
+}
+
+#[test]
+fn make_big_struct_return_sret() {
+    // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+    let mut result = [0u8; 24];
+    let r = asmtest::capture_sret(pm(make_big as usize), &mut result, &[7, 8, 9]);
+    let field = |i: usize| i64::from_le_bytes(result[i * 8..i * 8 + 8].try_into().unwrap());
+    assert_eq!(field(0), 7);
+    assert_eq!(field(1), 8);
+    assert_eq!(field(2), 9);
+    // make_big also returns the result pointer (rax / x0).
+    assert_eq!(r.ret, result.as_ptr() as u64);
 }
 
 #[test]

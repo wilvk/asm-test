@@ -1,5 +1,22 @@
 # asm-test — Plans vs. codebase: remaining-items analysis (2026-07-04)
 
+> **2026-07-07 update — most of §1 has since landed.** This document is a
+> snapshot; the text below is preserved as written on 2026-07-04. Landed since:
+> the **AMD tracing Part III software items** (P3-0/1/2/3/4/5 — spec filter,
+> stitch guard, runtime depth, freeze probe, block-step tiers, and even the
+> "blocked" P3-3 eBPF LBR snapshot, validated live on the Zen 5 box), the
+> **call-descent Phase 5 built-in default denylist**
+> (`asmtest_descent_use_default_denylist`), **macOS clean-room Track E**
+> (release.yml smokes under `clean-env.sh`, `docs/clean-room-testing.md`) with
+> Tracks C/D written-per-plan (unvalidated: no tart/KVM host here), the
+> **DynamoRIO plan's stale heading markers** reconciled, and from the review
+> backlog: R5, A6, A7, E7, E5, P4, P2, K1 (pending a CI run), and N4 — see the
+> [2026-07-04 review's status tables](../reviews/2026-07-04-repo-review.md) for
+> the authoritative disposition. Still open from §1: the single-step Phase 5
+> Windows-VEH / macOS-Intel front-ends and the review's P1/P3/P5 expansions.
+> §2 (hardware/privilege-blocked) and §3 (maintainer/credential actions —
+> the first real tag remains user-gated) are unchanged.
+
 **Scope:** a cross-check of all 11 active plans in [docs/plans/](../plans/) plus the
 still-open items from the [2026-07-04 repo review](../reviews/2026-07-04-repo-review.md)
 against the actual codebase (`src/`, `include/`, `mk/`, `Makefile`, `tests/`,

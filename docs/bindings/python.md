@@ -141,7 +141,9 @@ gate optional tiers) or read manifest layout.
 
 ```python
 r = asmtest.capture(fn, 40, 2)            # up to 6 integer args -> Regs
+r = asmtest.capture_args(fn, 1, 2, 3, 4, 5, 6, 7, 8)  # wide arity: 7+ spill to stack
 r = asmtest.capture_fp(fn, iargs=[1], fargs=[1.5, 2.25])  # ints + up to 8 doubles
+r, raw = asmtest.capture_sret(fn, 24, 7, 8, 9)  # struct return -> (Regs, 24 bytes)
 r = asmtest.capture_vec(fn, vargs=[asmtest.vec_f32(1,2,3,4)])  # up to 8 128-bit vecs
 out = asmtest.capture_vec256(fn, vargs=[v256])  # AVX2: 32-byte vecs, if cpu_has_avx2()
 v = asmtest.vec_f32(1.0, 2.0, 3.0, 4.0)   # pack 4 float32 lanes -> 16-byte arg
@@ -150,8 +152,14 @@ v = asmtest.vec_f64(1.0, 2.0)             # pack 2 float64 lanes -> 16-byte arg
 
 * `capture(fn, *args)` — calls `fn` through the integer System V ABI. Extra args
   past six are ignored (the trampoline has six integer slots).
+* `capture_args(fn, *args)` — wide arity: any number of integer args, the first
+  6 in registers and the rest on the stack per the ABI.
 * `capture_fp(fn, iargs=(), fargs=())` — `iargs` go in the GP registers, `fargs`
-  (up to 8 `double`s) in xmm0..7. The scalar double return is `r.fret`.
+  (up to 8 `double`s) in xmm0..7. The scalar double return is `r.fret`. Filling
+  both reaches a mixed integer+FP signature (e.g. `double mix_scale(long, double)`).
+* `capture_sret(fn, result_size, *args)` — struct return: a large (memory-class)
+  struct comes back via the hidden result pointer; returns `(Regs, bytes)` with
+  the struct's `result_size` raw bytes to unpack with `struct.unpack`.
 * `capture_vec(fn, iargs=(), vargs=())` — each `vargs` entry is exactly 16 bytes
   (use the packers, or any `bytes`); a `ValueError` is raised otherwise. The
   vector return is `r.vec_f32(0)` / `r.vec_f64(0)`.

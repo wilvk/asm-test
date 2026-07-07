@@ -43,6 +43,9 @@ const fn = {
   capture6: L.func('void asmtest_capture6(void *, void *, long, long, long, long, long, long)'),
   captureFp2: L.func('void asmtest_capture_fp2(void *, void *, double, double)'),
   captureVecF32: L.func('void asmtest_capture_vec_f32(void *, void *, float *, int)'),
+  captureArgs: L.func('void asmtest_capture_args(void *, void *, void *, int)'),
+  captureMix: L.func('void asmtest_capture_mix(void *, void *, void *, int, void *, int)'),
+  captureSret: L.func('void asmtest_capture_sret(void *, void *, _Out_ uint8_t *, void *, int)'),
   regsRet: L.func('unsigned long asmtest_regs_ret(void *)'),
   regsFret: L.func('double asmtest_regs_fret(void *)'),
   regsVecF32: L.func('float asmtest_regs_vec_f32(void *, int, int)'),
@@ -200,6 +203,27 @@ class Regs {
   }
   /** Call fn with two double args, capturing the FP return. */
   captureFp2(routine, f0, f1) { fn.captureFp2(this._h, routine, f0, f1); }
+  /** Call fn with any number of integer args (wide arity): the first 6 go in
+   * registers, the rest spill onto the stack per the ABI. */
+  captureArgs(routine, args = []) {
+    fn.captureArgs(this._h, routine, packLongs(args), args.length);
+  }
+  /** Call fn with integer AND double args in one call (mixed register files);
+   * the FP return is fret(), the integer one ret(). */
+  captureMix(routine, iargs = [], fargs = []) {
+    fn.captureMix(this._h, routine, packLongs(iargs), iargs.length,
+      packDoubles(fargs), fargs.length);
+  }
+  /**
+   * Call fn returning a large (memory-class) struct via the hidden result
+   * pointer. Returns a Buffer of `resultSize` bytes holding the struct, to be
+   * unpacked per the fixture's layout (no C struct layout is mirrored).
+   */
+  captureSret(routine, resultSize, args = []) {
+    const out = Buffer.alloc(resultSize);
+    fn.captureSret(this._h, routine, out, packLongs(args), args.length);
+    return out;
+  }
   /**
    * Call fn with up to eight 128-bit vector args, capturing the vector register
    * file. `vectors` is an array of four-float32-lane arrays; the vector return
