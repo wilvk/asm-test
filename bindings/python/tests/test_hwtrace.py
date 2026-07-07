@@ -54,6 +54,23 @@ def test_singlestep_live_trace(hwtrace):
     code.free()
 
 
+def test_call_scoped_traces_a_native_call(hwtrace):
+    # call_scoped: arm + call + disarm entirely in native code — registry-free, returns
+    # the call result and the executed body disassembly in one step.
+    code = NativeCode.from_bytes(ROUTINE)
+    res = HwTrace.call_scoped(code, 20, 22)  # 42 <= 100 -> jle taken, dec skipped
+    assert res.result == 42
+    assert res.rc == 0
+    assert not res.truncated
+    if res.path:  # non-empty when Capstone is present
+        assert "ret" in res.path.lower()
+        assert res.path.count("\n") == 5  # 5 rendered instruction lines (taken path)
+    # Registry-free: many calls must NOT exhaust the fixed 32-slot region table.
+    for i in range(40):
+        assert HwTrace.call_scoped(code, i, 1).result == i + 1
+    code.free()
+
+
 def test_scoped_trace_matches_callback(hwtrace):
     # The scope object is a faithful wrapper of the callback region() form: it
     # produces the same offsets, renders the assembly on close, and auto-names from

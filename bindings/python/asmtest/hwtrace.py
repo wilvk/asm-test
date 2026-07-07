@@ -249,6 +249,13 @@ def _declare(lib):
     lib.asmtest_hwtrace_try_begin.restype = ci
     lib.asmtest_hwtrace_render.argtypes = [cc, cc, sz]
     lib.asmtest_hwtrace_render.restype = ci
+    # Registry-free lazy-arm call + handle-keyed render (call_scoped path).
+    lib.asmtest_hwtrace_call_scoped_ex.argtypes = [
+        v, sz, v, v, C.POINTER(C.c_long), ci, C.POINTER(C.c_long),
+        C.POINTER(_HwScope)]
+    lib.asmtest_hwtrace_call_scoped_ex.restype = ci
+    lib.asmtest_hwtrace_render_scope.argtypes = [_HwScope, cc, sz]
+    lib.asmtest_hwtrace_render_scope.restype = ci
     lib.asmtest_hwtrace_arm_tid.restype = ci
     lib.asmtest_hwtrace_shutdown.restype = None
     lib.asmtest_hwtrace_exec_alloc.argtypes = [v, sz, C.POINTER(v), C.POINTER(sz)]
@@ -384,6 +391,27 @@ def library_path():
     tree — satisfied the load."""
     _get()
     return _resolved_path
+
+
+class _HwScope(C.Structure):
+    """asmtest_hwtrace_scope_t — an opaque per-scope capture handle (idx + generation)."""
+    _fields_ = [("idx", C.c_uint32), ("gen", C.c_uint32)]
+
+
+class CallScopedResult:
+    """The outcome of :meth:`HwTrace.call_scoped`: the call's return value, the executed
+    body's disassembly (:attr:`path`), and the honesty bits."""
+    __slots__ = ("result", "path", "truncated", "rc")
+
+    def __init__(self, result, path, truncated, rc):
+        self.result = result
+        self.path = path
+        self.truncated = truncated
+        self.rc = rc
+
+    def __repr__(self):
+        return (f"CallScopedResult(result={self.result}, "
+                f"truncated={self.truncated}, rc={self.rc})")
 
 
 class NativeCode:
@@ -634,6 +662,45 @@ class HwTrace:
         lib.asmtest_hwtrace_register_region(
             name.encode(), code.base, code.length, handle)
         return _ScopedTrace(lib, handle, name, emit, sink)
+
+    @classmethod
+    def call_scoped(cls, code: "NativeCode", *args,
+                    instructions=256, blocks=64) -> "CallScopedResult":
+        """Trace ONE native call the managed-safe way: arm, call ``code(*args)``, and
+        disarm entirely in native code (``asmtest_hwtrace_call_scoped_ex``), so nothing
+        the binding runs between arm and disarm is stepped — a tighter window than the
+        ``scope`` form, where the FFI-dispatch of ``code.call`` runs (out-of-region, so
+        filtered, but stepped). REGISTRY-FREE — consumes no MAX_REGIONS slot — so it is
+        safe in a tight loop. Args pass as C longs (SysV integer ABI, up to 6). Returns a
+        :class:`CallScopedResult` (``.result`` the call's return, ``.path`` the executed
+        body disassembly, ``.truncated``). Self-skips (``.result`` None, negative ``.rc``)
+        where no single-step backend is available."""
+        lib = _get()
+        cls._lazy_arm()
+        handle = lib.asmtest_trace_new(instructions, blocks)
+        if not handle:
+            raise RuntimeError("asmtest_trace_new returned NULL")
+        try:
+            n = len(args)
+            arr = (C.c_long * n)(*args) if n else None
+            result = C.c_long(0)
+            scope = _HwScope()
+            rc = int(lib.asmtest_hwtrace_call_scoped_ex(
+                code.base, code.length, handle, code.base,
+                arr, n, C.byref(result), C.byref(scope)))
+            if rc != ASMTEST_HW_OK:
+                return CallScopedResult(None, "", False, rc)
+            # Render the body from the just-captured (thread-local) scope handle.
+            need = int(lib.asmtest_hwtrace_render_scope(scope, None, 0))
+            path = ""
+            if need > 0:
+                buf = C.create_string_buffer(need + 1)
+                lib.asmtest_hwtrace_render_scope(scope, buf, need + 1)
+                path = buf.value.decode(errors="replace")
+            trunc = bool(lib.asmtest_emu_trace_truncated(handle))
+            return CallScopedResult(int(result.value), path, trunc, rc)
+        finally:
+            lib.asmtest_trace_free(handle)
 
     @staticmethod
     def shutdown():
