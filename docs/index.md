@@ -111,6 +111,7 @@ guides/emulator
 guides/tracing/index
 guides/disassembly
 guides/win64
+clean-room-testing
 ```
 
 ```{toctree}

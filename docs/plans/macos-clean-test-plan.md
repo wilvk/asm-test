@@ -66,7 +66,7 @@ thing that could have satisfied the load. Two concrete leaks in the current code
 
 ---
 
-## Track A — Scrubbed-env clean-room smoke — **done (harness + all dlopen bindings + Docker + CI); release.yml consolidation pending (Track E)**
+## Track A — Scrubbed-env clean-room smoke — **done (harness + all dlopen bindings + Docker + CI + release.yml smokes)**
 
 > **Status: implemented, 2026-07-01.** `make clean-room-test` (any host;
 > `make macos-clean-test` is the darwin alias),
@@ -93,8 +93,13 @@ thing that could have satisfied the load. Two concrete leaks in the current code
 > pass). A **`clean-room` CI job** over those five now gates every push, alongside the
 > conformance `bindings` job; python's clean-room stays in the release.yml python job.
 >
-> **Remaining:** replacing the release.yml `cd /tmp && <smoke>` blocks with
-> `source clean-env.sh` (the 4th bullet below) is folded into **Track E**.
+> **Done (Track E, 2026-07-07):** the release.yml `cd /tmp && <smoke>` /
+> `env -u …` blocks (the 4th bullet below) now `source scripts/clean-env.sh` —
+> interpreters resolved to absolute paths before the scrub, installs/builds with
+> the full env, only the load under the scrub. The dlopen smokes keep their
+> availability assertions; the per-binding resolved-**path** assertion continues
+> to live in the ci.yml `clean-room` job (all five docker lanes) and the
+> release.yml python job (asserts on the repaired wheel).
 
 Make "install fresh, no `ASMTEST_LIB`" mean what it says, on **every** binding and
 **both** hosted arches, at zero extra infra.
@@ -161,7 +166,15 @@ install-name) at **build time**, on the existing Linux collector — no macOS ne
   per-OS payload on `ubuntu-latest`; it carries `llvm` tools, so these assertions run
   there for free and gate the merged tree before it's published.
 
-## Track C — tart ephemeral arm64 clean-room — **planned**
+## Track C — tart ephemeral arm64 clean-room — **written per spec (2026-07-07), UNVALIDATED**
+
+> **Status: written, never executed.** [`scripts/osx-vm.sh`](../../scripts/osx-vm.sh)
+> + `make osx-vm-test` implement the spec below (clone → headless boot → copy the
+> tree with host-staged packages in → run the Track-A test over SSH with
+> `ASMTEST_CLEANROOM_PREBUILT=1` — the vanilla guest is toolchain-free, so
+> packaging stays on the host — → delete). **No Apple-Silicon host with tart was
+> available where this was authored, so the lane has never run**; treat the first
+> run as a shakedown and flip this status to *done* when it goes green.
 
 The highest-fidelity arm64 clean room: a **vanilla macOS image with no Xcode/Homebrew**,
 reverted between runs — something a hosted runner structurally cannot be. Local on any
@@ -178,7 +191,18 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 - **EULA note in the doc** — macOS's license permits up to **2 macOS VMs on Apple
   hardware**, so tart-on-Mac is above board (unlike Track D on non-Apple hosts).
 
-## Track D — Docker-OSX x86 clean-room — **planned**
+## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED**
+
+> **Status: written, never executed.**
+> [`scripts/docker-osx-bindings.sh`](../../scripts/docker-osx-bindings.sh) +
+> `make docker-osx-bindings` ([mk/docker.mk](../../mk/docker.mk)) implement the
+> spec below, including the `HAVE_KVM` guard (the target hard-errors with a clear
+> message when `/dev/kvm` is absent) and the `make help` + docs tradeoff notes.
+> Like Track C it copies host-staged packages in and runs the Track-A test with
+> `ASMTEST_CLEANROOM_PREBUILT=1` (a Linux host cannot build the darwin-x86_64
+> payload — fetch a release `native-all` artifact or build it on an Intel mac).
+> **No bare-metal KVM host was available where this was authored, so the lane has
+> never run**; treat the first run as a shakedown and flip this status when green.
 
 On-demand **x86 macOS** clean room that doesn't wait on the scarce nightly `macos-13`
 runner. **Self-hosted bare-metal Linux only** (needs `/dev/kvm`; GitHub hosted runners
@@ -200,7 +224,21 @@ convention.
   `test-macos-x86-rosetta` — that proves the x86 *ABI* under Rosetta on Apple Silicon;
   this proves a *clean-room x86 dlopen* on a vanilla Intel macOS userland.
 
-## Track E — CI wiring + docs — **planned**
+## Track E — CI wiring + docs — **done (2026-07-07), with two honest exceptions**
+
+> **Status: implemented.** The hosted lanes are all wired: the release.yml
+> per-binding smokes now run under `source scripts/clean-env.sh` (see Track A's
+> status note for the shape), the ci.yml `clean-room` job gates every push, and
+> Track B runs on the collector. Docs shipped:
+> [`docs/clean-room-testing.md`](../clean-room-testing.md) (linked from the
+> docs-site Guides list) with cross-links from
+> [portability.md](../reference/portability.md), [packaging.md](../reference/packaging.md),
+> and [ci.md](../reference/ci.md), plus a `make help` "Clean-room (macOS)" section.
+> **Exceptions:** (1) the optional self-hosted CI lanes for Tracks C/D are *not*
+> wired — those tracks are written but unvalidated and this repo registers no
+> self-hosted runners, so a `workflow_dispatch` job would only queue forever; add
+> them once a runner exists and the lanes have run green. (2) the CHANGELOG entry
+> is deferred to the next release cut.
 
 - **Free lanes on hosted CI:** Track A (scrubbed smoke + path assert) into
   [`release.yml`](../../.github/workflows/release.yml) and the

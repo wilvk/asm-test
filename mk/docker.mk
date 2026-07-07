@@ -351,6 +351,24 @@ docker-hwtrace-dotnet9: docker-dotnet
 # + Capstone, so each per-language image exercises the in-line-assembler AND
 # disassembler path under `make <lang>-test` — there is no separate asm image.
 
+# --- Track D: Docker-OSX x86 macOS clean room (macOS clean-room plan) --------
+# On-demand x86-64 macOS clean room on a bare-metal Linux host with KVM — the
+# vanilla-Intel-userland counterpart of the tart lane (Track C / osx-vm-test).
+# Boots sickcodes/Docker-OSX headless (QEMU + OpenCore + a macOS recovery
+# image), SSHes in on localhost:50922, and runs the same Track-A clean-room
+# install test (scripts/docker-osx-bindings.sh). Hard-errors without /dev/kvm —
+# hosted CI runners and most laptops don't have it, by design.
+# WRITTEN PER docs/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
+# without a KVM-capable bare-metal host; see docs/clean-room-testing.md.
+DOCKER_OSX_IMAGE ?= sickcodes/docker-osx:ventura
+.PHONY: docker-osx-bindings
+docker-osx-bindings:
+	@[ -e /dev/kvm ] || { \
+	  echo "docker-osx-bindings: /dev/kvm absent — needs a bare-metal Linux host with KVM (hosted CI/laptops: unsupported by design; see docs/clean-room-testing.md)"; \
+	  exit 1; }
+	DOCKER_OSX_IMAGE="$(DOCKER_OSX_IMAGE)" ASMTEST_REPO_ROOT="$(CURDIR)" \
+	  sh scripts/docker-osx-bindings.sh
+
 docker-bindings-clean:
 	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \
 	  $(DOCKER_BINDINGS_BASE)

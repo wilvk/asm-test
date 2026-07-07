@@ -16,7 +16,7 @@ jobs cover the rest of the surface:
   (hardware-trace decode + self-skip gating), `hwtrace-bindings` (every language
   wrapper's single-step tracer), and `codeimage` (the eBPF emission detector).
 - **Language bindings** — the 10-language `bindings` matrix, plus `clean-room`
-  (fresh-install resolution) and `bindings-parity`.
+  ([fresh-install resolution](../clean-room-testing.md)) and `bindings-parity`.
 - **Windows** — `win64` (mingw cross-compile + Wine) and `windows` (native).
 - **Quality** — `valgrind`, `sanitize` (ASan + UBSan), `analyze` (clang-tidy),
   `format` (clang-format drift), and `coverage` (gcov).
