@@ -89,6 +89,14 @@ docker-clean:
 #        -ruby / -lua / -go    just that language
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
+# K1 (repo-review 2026-07-04): how the shared bindings-base image is built. Its
+# Keystone (trimmed LLVM) + Capstone source-build layer is the expensive part of
+# every docker lane, so CI overrides this with a buildx invocation carrying
+# `--cache-from/--cache-to type=gha` (see the ci.yml docker jobs) to reuse that
+# layer across jobs and pushes. The default stays a plain `docker build`, so
+# local behavior is unchanged; a cold cache is a no-op and the CI cache-to uses
+# ignore-error=true, so an unavailable cache backend can never fail the build.
+DOCKER_BASE_BUILD ?= $(DOCKER) build
 BINDING_LANGS := python cpp rust zig node java dotnet ruby lua go
 # Bindings that ship a DynamoRIO native-trace wrapper test (Python has its own
 # drtrace-python-test lane). Defined here so both the docker-drtrace-<lang> rules
@@ -130,7 +138,7 @@ DOCKER_RUNENV_dotnet := -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1
         $(addprefix docker-clean-,$(BINDING_LANGS))
 
 docker-bindings-base:
-	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-base \
+	$(DOCKER_BASE_BUILD) $(_docker_plat) -f Dockerfile.bindings-base \
 	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_BASE) .
 
 # Generate, per language: `docker-build-<lang>` (build the image on the base),

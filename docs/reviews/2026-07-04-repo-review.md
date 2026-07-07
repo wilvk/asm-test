@@ -42,7 +42,8 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 | Disposition | Count | Items |
 |---|---|---|
 | ✅ Fixed & verified | 35 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 |
-| ⏸ Confirmed, deferred | 2 | K1 (CI-cache PR — needs a CI run), N4 (multi-binding expansion) |
+| 🟡 Fixed, CI-run validation pending | 1 | K1 (cache config landed 2026-07-07; the gha cache only exercises on a real Actions run) |
+| ⏸ Confirmed, deferred | 1 | N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
 | ⬜ Open expansions (step 5) | 10 | P1 E7 A6 A7 R5 E5 P2 P3 P4 P5 |
 
@@ -72,10 +73,12 @@ Per-step detail:
   wrappers and the eBPF codeimage detector into CI. Verified in the CI container
   (docker-analyze, docker-coverage, docker-sanitize, docker-hwtrace-codeimage
   19/19, docker-hwtrace-go all green). **K1** (cache the Keystone/Capstone builds)
-  is **deferred**: it is a CI-throughput optimization whose mechanisms (docker
+  was **deferred** here — a CI-throughput optimization whose mechanisms (docker
   buildx `type=gha` cache; host `actions/cache` of a compiled toolchain) are
-  GitHub-Actions-runtime-specific, can't be validated locally, and touch the
-  release pipeline — it wants its own PR with a CI run to confirm the cache config.
+  GitHub-Actions-runtime-specific and can't be validated locally — and then
+  **landed 2026-07-07 in its own commit**: ci.yml only (release.yml stays
+  cache-free on purpose), non-fatal on any cache miss/outage; a CI run must
+  still confirm the warm-cache path.
 - **Step 4 — DX & docs (R4, R6, R7, K6, K7, D2, D4, D5, E3, E4, E6)** — fixed.
   Runner: complete JUnit (`<error>`/`errors=`/`time=`/`<system-out>`), bench
   dispersion + `--bench-format=json`, and `--color`/`NO_COLOR`. Emulator: a
@@ -139,7 +142,7 @@ can't assemble — none of which any current gate catches.
 | D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | ✅ fixed (step 2) |
 | A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | ✅ fixed (step 2) |
 | N7 | `vec_add8d` missing from the corpus name table | Low | defect | ✅ fixed (step 2) |
-| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | ⏸ deferred (CI-only; needs a CI run to validate cache config — see step-3 note) |
+| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | 🟡 fixed (2026-07-07 — actions/cache on the host builds + a gha-scoped buildx layer cache on the docker bindings-base; designed non-fatal on a cold/unavailable cache; CI-run validation pending) |
 | K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | ✅ fixed (step 3) |
 | K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | ✅ fixed (step 3) |
 | E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | ✅ fixed (step 4) |
