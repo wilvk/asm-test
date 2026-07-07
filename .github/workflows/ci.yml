@@ -566,15 +566,13 @@ jobs:
       - name: Run clang-tidy
         run: make tidy
 
-  # Quality: clang-format drift (style in .clang-format). Informational, like
-  # `analyze` — the hand-tuned tree is not bulk-reformatted, so this reports drift
-  # without gating (continue-on-error). Promote to a gate after a reviewed
-  # one-shot `make fmt` pass.
+  # Quality: clang-format drift (style in .clang-format). A GATE since the
+  # one-shot `make fmt` pass (e32a12f) brought the tree clean — new drift now
+  # fails the run. Fix with `make fmt` (CI uses ubuntu-latest's clang-format).
   format:
     name: format (clang-format)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - name: Install clang-format
