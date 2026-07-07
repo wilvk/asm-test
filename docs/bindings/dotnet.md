@@ -339,7 +339,7 @@ a region, and self-skips (never throws) if resolution or arming fails. `Invoke` 
 `arm → call → disarm` entirely in native code (`asmtest_hwtrace_call_scoped`), so neither
 `DynamicInvoke` nor any runtime machinery runs under `EFLAGS.TF` — an in-window
 `pthread_create` cannot fault the process (the whole-window form has no such guarantee). See
-[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
+[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/managed-singlestep-lazy-arm-plan.md).
 
 ```csharp
 using var t = AsmTrace.Method((Func<long,long,long>)HotPath, emit: false);

@@ -250,6 +250,31 @@ int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
                                 int nargs, long *result_out,
                                 asmtest_hwtrace_scope_t *out);
 
+/* FP sibling of asmtest_hwtrace_call_scoped for a homogeneous (double…)->double method
+ * — the signature family the integer shim set cannot express (args in xmm0..xmm7,
+ * return in xmm0). Same routing, managed-safe guarantee, and status codes; `nargs` is
+ * 0-8 (register-resident, no stack spill), and *result_out (may be NULL) receives fn's
+ * double return. Mixed integer/FP signatures are not covered — those fall back to the
+ * out-of-process stepper. */
+int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
+                                   const double *args, int nargs,
+                                   double *result_out,
+                                   asmtest_hwtrace_scope_t *out);
+
+/* Registry-free lazy-arm call: the code region is given DIRECTLY as [base,len) with a
+ * caller-owned `trace`, so — unlike asmtest_hwtrace_call_scoped — NO named region is
+ * registered and NO fixed-table slot (MAX_REGIONS) is consumed. For high-churn callers
+ * that capture many distinct one-shot bodies (e.g. an async-hop stitching producer that
+ * captures a fresh body per hop) and would otherwise exhaust the registry, which has no
+ * release path and assumes call-site-constant names. Integer args (0-6); *out (may be
+ * NULL) is the scope handle for asmtest_hwtrace_render_scope, valid on the CAPTURING
+ * thread only until it pushes another scope — so render before returning to a hop that
+ * may resume elsewhere. Same status codes as the named form. */
+int asmtest_hwtrace_call_scoped_ex(void *base, size_t len, asmtest_trace_t *trace,
+                                   void *fn, const long *args, int nargs,
+                                   long *result_out,
+                                   asmtest_hwtrace_scope_t *out);
+
 /* Handle-keyed render — the calling thread's slice for `handle`, version-blind (live
  * bytes at [base, len)). snprintf-style size-then-allocate; negative ASMTEST_HW_* on
  * a stale/unknown handle or unavailable decoder. */
@@ -346,6 +371,22 @@ int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
                            asmtest_trace_t *out,
                            asmtest_hwtrace_slice_bound_t *bounds,
                            size_t *nbounds);
+
+/* §D0.4 live-producer bridge. Stitch N already-captured traces (each behind a handle,
+ * one per async hop) with their parallel (scope_id, seq, tid, version) scalar arrays
+ * (each may be NULL → seq defaults to the index, the rest to 0). The binding-facing
+ * form of asmtest_hwtrace_stitch: the slice struct embeds an asmtest_trace_t with heap
+ * pointers a binding cannot marshal by value, but an array of opaque trace handles +
+ * blittable scalar arrays it can. The handles must outlive the call (their heap arrays
+ * are shallow-copied, not duplicated). Same `out`/`bounds`/`nbounds` and status codes
+ * as asmtest_hwtrace_stitch. */
+int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
+                                   const uint64_t *scope_ids,
+                                   const uint32_t *seqs, const int *tids,
+                                   const uint64_t *versions, size_t n,
+                                   asmtest_trace_t *out,
+                                   asmtest_hwtrace_slice_bound_t *bounds,
+                                   size_t *nbounds);
 
 /* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */

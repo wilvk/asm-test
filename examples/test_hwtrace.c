@@ -929,6 +929,184 @@ static void test_call_scoped(void) {
     munmap(p, sizeof ROUTINE);
 }
 
+/* B (lazy-arm) FP shim family: asmtest_hwtrace_call_scoped_fp dispatches a
+ * (double…)->double body through the SysV FP ABI (xmm0..7 args, xmm0 return) — the
+ * signature family the integer shim set can't express. Over a native double-add leaf
+ * (addsd xmm0,xmm1; ret) it must return the FP result and record the body offsets. */
+static void test_call_scoped_fp(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP call_scoped_fp: single-step unavailable\n");
+        return;
+    }
+    /* addsd xmm0, xmm1 (F2 0F 58 C1) ; ret (C3) — double add2d(a,b)=a+b. */
+    static const unsigned char DADD[] = {0xf2, 0x0f, 0x58, 0xc1, 0xc3};
+    void *p = ss_map_exec(DADD, sizeof DADD);
+    if (p == NULL) {
+        printf("# SKIP call_scoped_fp: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "call_scoped_fp init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    CHECK(asmtest_hwtrace_register_region("csdadd", p, sizeof DADD, tr) ==
+              ASMTEST_HW_OK,
+          "call_scoped_fp register region");
+
+    const double fargs[2] = {1.5, 2.5};
+    double dresult = -1.0;
+    asmtest_hwtrace_scope_t sc;
+    int rc = asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 2, &dresult, &sc);
+    CHECK(rc == ASMTEST_HW_OK, "call_scoped_fp returns OK");
+    CHECK(dresult == 4.0, "call_scoped_fp returns fn's FP value (1.5+2.5)");
+
+    /* addsd at 0, ret at 4 — the exact executed body, no straddling caller insns. */
+    static const uint64_t EXPECT[] = {0x0, 0x4};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 2);
+    for (size_t i = 0; seq && i < 2; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "call_scoped_fp records the exact FP body stream [0,4]");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "call_scoped_fp trace is complete (not truncated)");
+    CHECK(asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 9, &dresult, &sc) ==
+              ASMTEST_HW_EINVAL,
+          "call_scoped_fp rejects arity > 8 (caller falls back out-of-process)");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(p, sizeof DADD);
+}
+
+/* Registry-free lazy-arm: asmtest_hwtrace_call_scoped_ex takes [base,len) directly, so it
+ * consumes NO region-registry slot — a high-churn caller (the §D0.4 async-hop stitching
+ * producer) can capture far more than MAX_REGIONS(=32) one-shot bodies without exhausting
+ * the table. Assert one call is correct + renders by handle, then run 64 back-to-back
+ * calls (2x the registry ceiling) and require every one to arm and record. */
+static void test_call_scoped_ex(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP call_scoped_ex: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP call_scoped_ex: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    asmtest_hwtrace_init(&opts);
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    const long args[2] = {20, 22};
+    long r = 0;
+    asmtest_hwtrace_scope_t sc;
+    int rc = asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, tr, p, args, 2, &r, &sc);
+    CHECK(rc == ASMTEST_HW_OK && r == 42,
+          "call_scoped_ex: registry-free call returns 42");
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "call_scoped_ex: records the exact body stream [0,3,6,c,11]");
+    CHECK(asmtest_hwtrace_render_scope(sc, NULL, 0) > 0,
+          "call_scoped_ex: handle renders on the capturing thread");
+    asmtest_trace_free(tr);
+
+    /* 64 back-to-back registry-free captures (2x MAX_REGIONS) — none may EFULL. */
+    int all_ok = 1;
+    for (int i = 0; i < 64; i++) {
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        long ri = 0;
+        asmtest_hwtrace_scope_t sci;
+        int rci =
+            asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, t, p, args, 2, &ri, &sci);
+        if (rci != ASMTEST_HW_OK || ri != 42 ||
+            asmtest_emu_trace_insns_total(t) != 5)
+            all_ok = 0;
+        asmtest_trace_free(t);
+    }
+    CHECK(all_ok,
+          "call_scoped_ex: 64 registry-free calls all arm (no MAX_REGIONS exhaustion)");
+
+    asmtest_hwtrace_shutdown();
+    munmap(p, sizeof ROUTINE);
+}
+
+/* §D0.4 live-producer bridge: asmtest_hwtrace_stitch_handles takes N real captured
+ * trace HANDLES (one per async hop) + parallel (scope_id, seq, tid, version) arrays
+ * and merges them in SEQ order (not capture order). Capture two live single-step
+ * traces of the same leaf on DIFFERENT arg paths (5 insns vs 6), hand them out of
+ * capture order, and assert the merge orders by seq, the bounds mark each slice's
+ * start, and the (tid, version) ride through. This is the first LIVE exercise of the
+ * stitch core (previously host-tested only from synthetic slices). */
+static void test_stitch_handles(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP stitch_handles: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP stitch_handles: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    asmtest_hwtrace_init(&opts);
+
+    /* Hop A: add2(20,22)=42 → jle taken → 5 insns {0,3,6,c,11}. */
+    asmtest_trace_t *trA = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("hop", p, sizeof ROUTINE, trA);
+    const long argsA[2] = {20, 22};
+    long rA = 0;
+    asmtest_hwtrace_scope_t scA;
+    asmtest_hwtrace_call_scoped("hop", p, argsA, 2, &rA, &scA);
+    /* Hop B: add2(60,60): sum 120 > 100 → jle NOT taken → dec runs → returns 119,
+     * 6 insns {0,3,6,c,e,11} (the taken-path A skips the dec at 0xe). */
+    asmtest_trace_t *trB = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("hop", p, sizeof ROUTINE, trB);
+    const long argsB[2] = {60, 60};
+    long rB = 0;
+    asmtest_hwtrace_scope_t scB;
+    asmtest_hwtrace_call_scoped("hop", p, argsB, 2, &rB, &scB);
+    CHECK(rA == 42 && rB == 119, "stitch_handles: both hops captured live");
+
+    /* Hand them OUT of seq order (B first, but B is seq 1) to prove seq-ordering. */
+    const asmtest_trace_t *traces[2] = {trB, trA};
+    const uint64_t scope_ids[2] = {0x51, 0x51};
+    const uint32_t seqs[2] = {1, 0};
+    const int tids[2] = {701, 700};
+    const uint64_t versions[2] = {9, 9};
+    asmtest_trace_t *merged = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_slice_bound_t bounds[2];
+    size_t nb = 0;
+    int rc = asmtest_hwtrace_stitch_handles(traces, scope_ids, seqs, tids,
+                                            versions, 2, merged, bounds, &nb);
+    CHECK(rc == ASMTEST_HW_OK && nb == 2, "stitch_handles: merged 2 slices");
+    /* Seq order is A(seq0,5 insns) then B(seq1,6 insns) = 11 total, A's stream first. */
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11,
+                                      0x0, 0x3, 0x6, 0xc, 0xe, 0x11};
+    int ok = (asmtest_emu_trace_insns_total(merged) == 11);
+    for (size_t i = 0; ok && i < 11; i++)
+        ok = (merged->insns[i] == EXPECT[i]);
+    CHECK(ok, "stitch_handles: merged stream is seq-ordered (hop0 then hop1)");
+    CHECK(bounds[0].insn_off == 0 && bounds[0].seq == 0 && bounds[0].tid == 700 &&
+              bounds[1].insn_off == 5 && bounds[1].seq == 1 &&
+              bounds[1].tid == 701,
+          "stitch_handles: bounds mark each slice's start + carry (seq,tid)");
+    CHECK(bounds[0].scope_id == 0x51 && bounds[0].version == 9,
+          "stitch_handles: bounds carry scope_id + version through");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(trA);
+    asmtest_trace_free(trB);
+    asmtest_trace_free(merged);
+    munmap(p, sizeof ROUTINE);
+}
+
 /* §0.1/§1 — try_begin returns EINVAL on an unregistered name; under §1 a second
  * same-thread begin COMPOSES (per-thread range stack), so the refusal moves from
  * ESTATE-on-busy to EFULL when this thread's range stack is full. */
@@ -4381,6 +4559,10 @@ int main(void) {
 
     /* B (lazy-arm): the managed-safe arm→call→disarm scope, over a native leaf. */
     test_call_scoped();
+    test_call_scoped_fp();
+    test_call_scoped_ex();
+    /* §D0.4 live-producer bridge: stitch real captured trace handles by seq. */
+    test_stitch_handles();
 
     /* Scoped-tracing shared-core §0: try_begin signal, arm-thread assert,
      * render-on-close, and idempotent-by-name register (all single-step). */

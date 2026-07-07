@@ -415,7 +415,7 @@ worker resident (`DOTNET_TC_BackgroundWorkerTimeoutMs`, see `hwtrace_dotnet_env`
 `mk/native-trace.mk`), the same mitigation applies to any app arming an in-process
 whole managed window, and the §D3 out-of-process form is immune (the thread is never
 TF-armed). See
-[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
+[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/managed-singlestep-lazy-arm-plan.md).
 
 **The whole-scope vs one-method fork.** Hardware trace captures everything cheaply
 and filters at decode; a stepper must decide per instruction what to step into. So

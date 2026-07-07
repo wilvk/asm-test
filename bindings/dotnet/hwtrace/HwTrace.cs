@@ -25,6 +25,8 @@ using System.IO;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 
 namespace Asmtest
 {
@@ -256,6 +258,16 @@ namespace Asmtest
         public static extern int asmtest_hwtrace_call_scoped(
             [MarshalAs(UnmanagedType.LPStr)] string name, IntPtr fn, long[] args, int nargs,
             out long result, ref HwScope @out);
+        // B (lazy-arm) FP sibling: a homogeneous (double…)->double body (xmm0..7 args).
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_hwtrace_call_scoped_fp(
+            [MarshalAs(UnmanagedType.LPStr)] string name, IntPtr fn, double[] args, int nargs,
+            out double result, ref HwScope @out);
+        // Registry-FREE lazy-arm call ([base,len) direct, no MAX_REGIONS slot) — for the
+        // async-hop stitching producer, which captures many distinct one-shot bodies.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_call_scoped_ex(
+            IntPtr @base, UIntPtr len, IntPtr trace, IntPtr fn, long[] args, int nargs,
+            out long result, ref HwScope @out);
 
         // §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface.
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_begin_window(IntPtr trace, ref HwScope @out);
@@ -266,6 +278,23 @@ namespace Asmtest
         // code-image as of `when` (asmtest_codeimage_now), instead of live self memory.
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_versioned(
             IntPtr img, ulong when, IntPtr trace, byte[] buf, UIntPtr buflen);
+
+        // §D0.4 — async-hop stitching. asmtest_hwtrace_slice_bound_t (one per merged hop).
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SliceBound
+        {
+            public UIntPtr InsnOff; // size_t offset into out->insns where this slice begins
+            public ulong ScopeId;
+            public uint Seq;
+            public int Tid;
+            public ulong Version;
+        }
+        // Merge N already-captured trace HANDLES (one per hop) by seq into `out`; the
+        // binding-facing form of asmtest_hwtrace_stitch (the slice struct embeds an
+        // asmtest_trace_t with heap pointers a binding cannot marshal by value).
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stitch_handles(
+            IntPtr[] traces, ulong[] scopeIds, uint[] seqs, int[] tids, ulong[] versions,
+            UIntPtr n, IntPtr @out, [Out] SliceBound[] bounds, out UIntPtr nbounds);
 
         // §D3 — concealed out-of-process ptrace-stealth stepper: run_region(arg) runs on
         // the CALLING thread while a helper process reverse-attaches and single-steps the
@@ -1389,7 +1418,7 @@ namespace Asmtest
         // scope, so callers need no explicit HwTrace.Init. Serialized via the shared TierLock;
         // skips the native init if the tier is already up (explicit Init or a prior scope) so
         // it can never re-init over a live capture. Returns the native init status.
-        static int AutoInitSingleStep()
+        internal static int AutoInitSingleStep()
         {
             lock (HwTrace.TierLock)
             {
@@ -1473,31 +1502,42 @@ namespace Asmtest
                                       [CallerLineNumber] int line = 0)
         {
             if (target == null) throw new ArgumentNullException(nameof(target));
-            ulong start = 0, size = 0;
-            bool found = false;
-            if (HwNative.LibAvailable)
-            {
-                // Map BEFORE PrepareMethod: an in-proc listener only sees methods JIT'd
-                // after it enables the keyword (§D0.1 caveat i).
-                using (var map = new JitMethodMap())
-                {
-                    try { RuntimeHelpers.PrepareMethod(target.Method.MethodHandle); }
-                    catch { /* generic/abstract handles: fall through to the rundown */ }
-                    string typed = (target.Method.DeclaringType?.Name ?? "") + "." + target.Method.Name;
-                    found = map.TryResolveEntry(typed, out start, out size)
-                         || map.TryResolveEntry("." + target.Method.Name, out start, out size);
-                    if (!found && DiagnosticsIpc.EnablePerfMap())
-                    {
-                        // WARM body (JIT'd before this call): PrepareMethod was a no-op and
-                        // no event fired — the jitdump rundown names it ("Type::Method(sig)").
-                        map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
-                        DiagnosticsIpc.DisablePerfMap();
-                        found = map.TryResolveEntry("::" + target.Method.Name + "(", out start, out size)
-                             || map.TryResolveEntry(typed, out start, out size);
-                    }
-                }
-            }
+            bool found = ResolveJitBody(target, out ulong start, out ulong size);
             return new AsmTrace(target, start, size, found, emit, outOfProcess, member, line);
+        }
+
+        /// <summary>
+        /// §D0.1/§D0.2 — resolve a managed delegate's own standalone JIT'd body to
+        /// (start, size): <c>PrepareMethod</c> forces the JIT, a fresh
+        /// <see cref="JitMethodMap"/> (MethodLoadVerbose) reads the address, and a WARM /
+        /// ReadyToRun body falls back to the §D0.2 jitdump rundown. Shared by
+        /// <see cref="Method"/> and <see cref="AsmStitchedTrace"/>. Returns false
+        /// (start=size=0) when the lib is absent or no body resolves.
+        /// </summary>
+        internal static bool ResolveJitBody(Delegate target, out ulong start, out ulong size)
+        {
+            start = 0; size = 0;
+            if (!HwNative.LibAvailable) return false;
+            // Map BEFORE PrepareMethod: an in-proc listener only sees methods JIT'd after
+            // it enables the keyword (§D0.1 caveat i).
+            using (var map = new JitMethodMap())
+            {
+                try { RuntimeHelpers.PrepareMethod(target.Method.MethodHandle); }
+                catch { /* generic/abstract handles: fall through to the rundown */ }
+                string typed = (target.Method.DeclaringType?.Name ?? "") + "." + target.Method.Name;
+                bool found = map.TryResolveEntry(typed, out start, out size)
+                          || map.TryResolveEntry("." + target.Method.Name, out start, out size);
+                if (!found && DiagnosticsIpc.EnablePerfMap())
+                {
+                    // WARM body (JIT'd before this call): PrepareMethod was a no-op and no
+                    // event fired — the jitdump rundown names it ("Type::Method(sig)").
+                    map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
+                    DiagnosticsIpc.DisablePerfMap();
+                    found = map.TryResolveEntry("::" + target.Method.Name + "(", out start, out size)
+                         || map.TryResolveEntry(typed, out start, out size);
+                }
+                return found;
+            }
         }
 
         // §D0.3/§D3 private ctor: region scope over a resolved managed-method body.
@@ -1575,16 +1615,26 @@ namespace Asmtest
         // routes OUT-OF-PROCESS rather than stepping DynamicInvoke in a managed window.
         long[] MarshalIntArgs(object[] args, out bool shimmable)
         {
-            shimmable = false;
+            shimmable = TryBuildIntShim(_target, args, out _shim, out long[] iargs);
+            return iargs ?? System.Array.Empty<long>();
+        }
+
+        // Shared with AsmStitchedTrace: build an integer (long…)->long reverse-P/Invoke
+        // shim + long[] args for `target`, or return false (arity > 6, signature not
+        // (long…)->long, or a non-integer-convertible arg). The caller keeps `shim` alive
+        // across the native call.
+        internal static bool TryBuildIntShim(Delegate target, object[] args, out Delegate shim, out long[] iargs)
+        {
+            shim = null; iargs = null;
             int n = args?.Length ?? 0;
-            if (n > 6) return System.Array.Empty<long>();
-            try { _shim = Delegate.CreateDelegate(ShimTypes[n], _target.Target, _target.Method); }
-            catch { return System.Array.Empty<long>(); }
+            if (n > 6) return false;
+            try { shim = Delegate.CreateDelegate(ShimTypes[n], target.Target, target.Method); }
+            catch { return false; }
             var a = new long[n];
             try { for (int i = 0; i < n; i++) a[i] = ToLong(args[i]); }
-            catch { _shim = null; return System.Array.Empty<long>(); }
-            shimmable = true;
-            return a;
+            catch { shim = null; return false; }
+            iargs = a;
+            return true;
         }
 
         static long ToLong(object o) => o switch
@@ -1594,6 +1644,48 @@ namespace Asmtest
             IntPtr p => (long)p,
             bool b => b ? 1L : 0L,
             _ => Convert.ToInt64(o),
+        };
+
+        // B (lazy-arm) FP shim table — the homogeneous (double…)->double delegates, args
+        // in xmm0..7 (8 register-resident slots, so 0-8 arities), used when the integer
+        // family cannot express the signature. Cdecl == SysV on Linux x86-64.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD0();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD1(double a);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD2(double a, double b);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD3(double a, double b, double c);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD4(double a, double b, double c, double d);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD5(double a, double b, double c, double d, double e);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD6(double a, double b, double c, double d, double e, double f);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD7(double a, double b, double c, double d, double e, double f, double g);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double AsmBodyD8(double a, double b, double c, double d, double e, double f, double g, double h);
+        static readonly Type[] ShimTypesFp = {
+            typeof(AsmBodyD0), typeof(AsmBodyD1), typeof(AsmBodyD2), typeof(AsmBodyD3),
+            typeof(AsmBodyD4), typeof(AsmBodyD5), typeof(AsmBodyD6), typeof(AsmBodyD7),
+            typeof(AsmBodyD8),
+        };
+
+        // Build the FP reverse-P/Invoke shim for _target and marshal args to double[].
+        // shimmable=false when the arity is > 8 or the signature is not (double…)->double.
+        double[] MarshalFpArgs(object[] args, out bool shimmable)
+        {
+            shimmable = false;
+            int n = args?.Length ?? 0;
+            if (n > 8) return System.Array.Empty<double>();
+            try { _shim = Delegate.CreateDelegate(ShimTypesFp[n], _target.Target, _target.Method); }
+            catch { return System.Array.Empty<double>(); }
+            var a = new double[n];
+            try { for (int i = 0; i < n; i++) a[i] = ToDouble(args[i]); }
+            catch { _shim = null; return System.Array.Empty<double>(); }
+            shimmable = true;
+            return a;
+        }
+
+        static double ToDouble(object o) => o switch
+        {
+            null => 0.0,
+            double d => d,
+            float f => f,
+            _ => Convert.ToDouble(o),
         };
 
         /// <summary>
@@ -1622,8 +1714,8 @@ namespace Asmtest
             // than stepping DynamicInvoke in a managed window (the crash surface).
             if (!_oop)
             {
-                long[] iargs = MarshalIntArgs(args, out bool shimmable);
-                if (shimmable)
+                long[] iargs = MarshalIntArgs(args, out bool intShim);
+                if (intShim)
                 {
                     IntPtr fn = Marshal.GetFunctionPointerForDelegate(_shim);
                     int rc = HwNative.asmtest_hwtrace_call_scoped(
@@ -1634,9 +1726,24 @@ namespace Asmtest
                     SkipReason = $"in-process lazy-arm did not run (rc={rc}); falling back out-of-process";
                 }
                 else
-                    // B3: signature outside the shim set — route out-of-process rather than
-                    // stepping the managed reflection machinery under EFLAGS.TF.
-                    SkipReason = "signature outside the (long…)->long shim set; routing out-of-process";
+                {
+                    // Integer shims don't fit — try the (double…)->double FP family before
+                    // giving up to out-of-process.
+                    double[] fargs = MarshalFpArgs(args, out bool fpShim);
+                    if (fpShim)
+                    {
+                        IntPtr fn = Marshal.GetFunctionPointerForDelegate(_shim);
+                        int rc = HwNative.asmtest_hwtrace_call_scoped_fp(
+                            _name, fn, fargs, fargs.Length, out double dr, ref _scope);
+                        GC.KeepAlive(_shim);
+                        if (rc == HwNative.ASMTEST_HW_OK) { Armed = true; return dr; }
+                        SkipReason = $"in-process FP lazy-arm did not run (rc={rc}); falling back out-of-process";
+                    }
+                    else
+                        // B3: signature outside BOTH shim sets — route out-of-process rather
+                        // than stepping the managed reflection machinery under EFLAGS.TF.
+                        SkipReason = "signature outside the (long…)->long / (double…)->double shim sets; routing out-of-process";
+                }
             }
 
             // Out-of-process (explicit outOfProcess, or the B3 auto-fallback above). The
@@ -2771,5 +2878,203 @@ namespace Asmtest
 
         /// <summary>Dispose pattern over <see cref="Free"/>.</summary>
         public void Dispose() => Free();
+    }
+
+    /// <summary>One stitched hop's position + provenance in the merged trace.</summary>
+    public readonly struct StitchHop
+    {
+        /// <summary>Hop order within the logical operation (0-based).</summary>
+        public uint Seq { get; }
+        /// <summary>The managed thread the hop was captured on.</summary>
+        public int Tid { get; }
+        /// <summary>Where this hop's instructions begin in the merged offset stream.</summary>
+        public long InsnOffset { get; }
+        public StitchHop(uint seq, int tid, long insnOffset)
+        { Seq = seq; Tid = tid; InsnOffset = insnOffset; }
+    }
+
+    /// <summary>
+    /// §D0.4 — follow ONE logical operation across async / thread hops and stitch each
+    /// hop's lazy-arm capture into a single ordered trace. An <see cref="AsyncLocal{T}"/>
+    /// scope id flows through <c>await</c> continuations (which may resume on a different
+    /// thread-pool thread), so slices captured on different threads are recognised as the
+    /// same operation; the shipped <c>asmtest_hwtrace_stitch</c> merge core (reached via
+    /// <c>asmtest_hwtrace_stitch_handles</c>) concatenates them by hop <see cref="StitchHop.Seq"/>.
+    /// This is the first LIVE producer for that core (previously exercised only from
+    /// synthetic slices). Each hop reuses the managed-safe lazy-arm path
+    /// (<see cref="AsmTrace"/>'s body resolution + <c>call_scoped</c>), so no runtime
+    /// machinery is ever stepped.
+    /// <code>
+    /// using var op = new AsmStitchedTrace();
+    /// long r0 = (long)op.Step((Func&lt;long,long,long&gt;)Work, 20, 22);          // hop 0
+    /// long r1 = (long)await Task.Run(() => op.Step((Func&lt;long,long,long&gt;)Work, 1, 2)); // hop 1, pool thread
+    /// op.Complete();
+    /// // op.Path — merged per-hop disassembly; op.Hops — each hop's (seq, tid, offset)
+    /// </code>
+    /// Only integer <c>(long…)-&gt;long</c> hop signatures are captured in-process today;
+    /// any other signature runs uninstrumented for that hop (recorded, never a crash).
+    /// </summary>
+    public sealed class AsmStitchedTrace : IDisposable
+    {
+        static readonly AsyncLocal<long> _current = new AsyncLocal<long>();
+        static long _nextScopeId;
+
+        sealed class Hop { public IntPtr Handle; public string Text; public uint Seq; public int Tid; public bool Captured; }
+
+        readonly long _scopeId;
+        readonly List<Hop> _hops = new List<Hop>();
+        readonly object _lock = new object();
+        IntPtr _merged = IntPtr.Zero;
+        uint _seq;
+        bool _completed;
+        bool _disposed;
+
+        /// <summary>The scope id flowing through <see cref="AsyncLocal{T}"/> for the active operation (0 = none).</summary>
+        public static long CurrentScopeId => _current.Value;
+        /// <summary>This operation's scope id.</summary>
+        public long ScopeId => _scopeId;
+        /// <summary>Honest self-skip reason for any hop that could not be captured in-process ("" when all captured).</summary>
+        public string SkipReason { get; private set; } = "";
+        /// <summary>Merged per-hop disassembly in seq order (empty until <see cref="Complete"/> / when nothing captured).</summary>
+        public string Path { get; private set; } = "";
+        /// <summary>True when any stitched hop's trace was truncated.</summary>
+        public bool Truncated { get; private set; }
+        /// <summary>Per-hop bounds after <see cref="Complete"/>, in seq order.</summary>
+        public IReadOnlyList<StitchHop> Hops { get; private set; } = System.Array.Empty<StitchHop>();
+        /// <summary>Hops attempted (including any that ran uninstrumented).</summary>
+        public int HopCount { get { lock (_lock) return _hops.Count; } }
+
+        public AsmStitchedTrace()
+        {
+            _scopeId = Interlocked.Increment(ref _nextScopeId);
+            _current.Value = _scopeId; // captured into async continuations via ExecutionContext
+        }
+
+        /// <summary>
+        /// Capture one hop of the operation: lazily arm ONLY <paramref name="target"/>'s
+        /// resolved body (<c>call_scoped</c>), tag the slice with this operation's scope id,
+        /// the current thread, and the next seq. The call always runs and its result is
+        /// returned; an unsupported signature or a failed arm runs uninstrumented (the hop
+        /// is recorded, so the seq numbering stays dense) and sets <see cref="SkipReason"/>.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        public object Step(Delegate target, params object[] args)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (_disposed) throw new HwTraceException("Step after Dispose");
+            if (_completed) throw new HwTraceException("Step after Complete");
+            uint seq; lock (_lock) seq = _seq++;
+            int tid = Environment.CurrentManagedThreadId;
+            _current.Value = _scopeId; // re-assert on whatever context this hop runs on
+
+            if (HwNative.LibAvailable
+                && AsmTrace.ResolveJitBody(target, out ulong start, out ulong size) && size != 0
+                && AsmTrace.TryBuildIntShim(target, args, out Delegate shim, out long[] iargs)
+                && AsmTrace.AutoInitSingleStep() == HwNative.ASMTEST_HW_OK)
+            {
+                IntPtr handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 16), (UIntPtr)256);
+                if (handle != IntPtr.Zero)
+                {
+                    // REGISTRY-FREE capture ([base,len) direct): a long operation with many
+                    // hops must not consume a MAX_REGIONS slot per hop (the fixed 32-slot C
+                    // table has no release path — it would exhaust process-wide and silently
+                    // disable ALL hwtrace capture). Render THIS hop's body NOW, on this
+                    // (possibly pool) thread, while its scope handle is live — the handle is
+                    // thread-local and only valid until the next scope on this thread.
+                    var scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+                    int rc = HwNative.asmtest_hwtrace_call_scoped_ex(
+                        new IntPtr(unchecked((long)start)), (UIntPtr)size, handle,
+                        Marshal.GetFunctionPointerForDelegate(shim), iargs, iargs.Length, out long r, ref scope);
+                    GC.KeepAlive(shim);
+                    if (rc == HwNative.ASMTEST_HW_OK)
+                    {
+                        string text = RenderScope(scope);
+                        lock (_lock) _hops.Add(new Hop { Handle = handle, Text = text, Seq = seq, Tid = tid, Captured = true });
+                        return r;
+                    }
+                    HwNative.asmtest_trace_free(handle);
+                    SkipReason = $"hop {seq} did not arm (rc={rc}); ran uninstrumented";
+                }
+            }
+            else if (SkipReason.Length == 0)
+                SkipReason = $"hop {seq} signature/resolution unsupported; ran uninstrumented";
+            lock (_lock) _hops.Add(new Hop { Handle = IntPtr.Zero, Text = null, Seq = seq, Tid = tid, Captured = false });
+            return target.DynamicInvoke(args);
+        }
+
+        /// <summary>
+        /// Close the operation and stitch every captured hop into one ordered trace by seq.
+        /// Populates <see cref="Hops"/>, <see cref="Path"/>, and <see cref="Truncated"/>.
+        /// Idempotent; clears the AsyncLocal scope for this context.
+        /// </summary>
+        public void Complete()
+        {
+            if (_completed) return;
+            _completed = true;
+            _current.Value = 0;
+            List<Hop> cap;
+            lock (_lock) cap = _hops.FindAll(h => h.Captured && h.Handle != IntPtr.Zero);
+            if (cap.Count == 0 || !HwNative.LibAvailable) { Path = ""; return; }
+
+            var traces = new IntPtr[cap.Count];
+            var scopeIds = new ulong[cap.Count];
+            var seqs = new uint[cap.Count];
+            var tids = new int[cap.Count];
+            var versions = new ulong[cap.Count];
+            for (int i = 0; i < cap.Count; i++)
+            {
+                traces[i] = cap[i].Handle; scopeIds[i] = (ulong)_scopeId;
+                seqs[i] = cap[i].Seq; tids[i] = cap[i].Tid; versions[i] = 0;
+            }
+            _merged = HwNative.asmtest_trace_new((UIntPtr)(1 << 16), (UIntPtr)256);
+            if (_merged == IntPtr.Zero) { SkipReason = "merged trace allocation failed"; return; }
+            var bounds = new HwNative.SliceBound[cap.Count];
+            int rc = HwNative.asmtest_hwtrace_stitch_handles(
+                traces, scopeIds, seqs, tids, versions, (UIntPtr)cap.Count, _merged, bounds, out UIntPtr nbUp);
+            if (rc != HwNative.ASMTEST_HW_OK) { SkipReason = $"stitch failed (rc={rc})"; return; }
+            int nb = (int)nbUp;
+            var hops = new List<StitchHop>(nb);
+            for (int i = 0; i < nb; i++)
+                hops.Add(new StitchHop(bounds[i].Seq, bounds[i].Tid, (long)(ulong)bounds[i].InsnOff));
+            Hops = hops;
+            Truncated = HwNative.asmtest_emu_trace_truncated(_merged) != 0;
+
+            // Each hop's offsets are RELATIVE TO ITS OWN body, so each hop was rendered at
+            // CAPTURE time (in Step, while its handle was live on its own thread) and the
+            // text stored; concatenate in seq order. The merged offset stream + bounds are
+            // the structural join; Path is the readable per-hop disassembly.
+            var sb = new StringBuilder();
+            foreach (var b in hops)
+            {
+                Hop h = cap.Find(x => x.Seq == b.Seq);
+                sb.Append($"; hop {b.Seq} (tid {b.Tid}, +{b.InsnOffset}):\n");
+                if (h != null && !string.IsNullOrEmpty(h.Text)) sb.Append(h.Text);
+            }
+            Path = sb.ToString();
+        }
+
+        // Render a hop's body from its live scope handle (call this on the CAPTURING thread
+        // immediately after the call — the ss frame is thread-local and short-lived).
+        static string RenderScope(HwNative.HwScope scope)
+        {
+            if (!HwNative.asmtest_disas_available()) return "";
+            int need = HwNative.asmtest_hwtrace_render_scope(scope, null, UIntPtr.Zero);
+            if (need <= 0) return "";
+            var buf = new byte[need + 1];
+            HwNative.asmtest_hwtrace_render_scope(scope, buf, (UIntPtr)(need + 1));
+            return Encoding.ASCII.GetString(buf, 0, need);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (!_completed) Complete();
+            if (!HwNative.LibAvailable) return;
+            lock (_lock)
+                foreach (var h in _hops)
+                    if (h.Handle != IntPtr.Zero) HwNative.asmtest_trace_free(h.Handle);
+            if (_merged != IntPtr.Zero) { HwNative.asmtest_trace_free(_merged); _merged = IntPtr.Zero; }
+        }
     }
 }

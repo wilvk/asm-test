@@ -132,6 +132,11 @@ int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
                            void *fn, const long *args, int nargs,
                            long *result_out, uint32_t *out_idx,
                            uint32_t *out_gen);
+/* FP sibling: the (double…)->double shim family (xmm0..7 args, xmm0 return). */
+int asmtest_ss_call_scoped_fp(const void *base, size_t len,
+                              asmtest_trace_t *trace, void *fn,
+                              const double *args, int nargs, double *result_out,
+                              uint32_t *out_idx, uint32_t *out_gen);
 int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
                             size_t *len, asmtest_trace_t **trace);
 void asmtest_ss_end(void);
@@ -1378,7 +1383,10 @@ int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
     }
 #endif
     /* Out-of-band backends have no in-process TF crash surface, so the lazy-arm
-     * restructure is single-step-only; signal that and let the caller use begin/end. */
+     * restructure is single-step-only; signal that and let the caller use begin/end.
+     * `name` is only read in the __x86_64__ block above, so cast it here too — on
+     * aarch64-Linux (LIFECYCLE defined, not x86_64) it would otherwise be unused. */
+    (void)name;
     (void)fn;
     (void)args;
     (void)nargs;
@@ -1386,6 +1394,114 @@ int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
     return ASMTEST_HW_EUNAVAIL;
 #else
     (void)name;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* FP sibling of asmtest_hwtrace_call_scoped: the (double…)->double lazy-arm scope for
+ * managed methods whose signature is homogeneous double (0-8 args, double return),
+ * which the integer shim family cannot dispatch. Same routing, guarantees, and return
+ * codes as the integer form; *result_out (may be NULL) receives fn's double return. */
+int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
+                                   const double *args, int nargs,
+                                   double *result_out,
+                                   asmtest_hwtrace_scope_t *out) {
+    if (out != NULL) {
+        out->idx = 0xffffffffu;
+        out->gen = 0;
+    }
+#if defined(HWTRACE_LIFECYCLE)
+    if (!g_inited)
+        return ASMTEST_HW_ESTATE;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        hw_region_t *r = find_region(name);
+        if (r == NULL)
+            return ASMTEST_HW_EINVAL;
+        int tid = hw_current_tid();
+        r->arm_tid = tid;
+        g_arm_tid = tid;
+        uint32_t idx = 0, gen = 0;
+        int rc = asmtest_ss_call_scoped_fp(r->base, r->len, r->trace, fn, args,
+                                           nargs, result_out, &idx, &gen);
+        if (rc != ASMTEST_HW_OK)
+            return rc;
+        if (out != NULL) {
+            out->idx = idx;
+            out->gen = gen;
+        }
+        return ASMTEST_HW_OK;
+    }
+#endif
+    (void)name; /* only read in the __x86_64__ block above (aarch64-Linux: unused) */
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    return ASMTEST_HW_EUNAVAIL;
+#else
+    (void)name;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* Registry-free lazy-arm call. Same arm→call→disarm managed-safe guarantee as
+ * asmtest_hwtrace_call_scoped, but the code region is given DIRECTLY as [base,len) with a
+ * caller-owned `trace`, so NO named region is registered and NO fixed-table slot
+ * (MAX_REGIONS) is consumed. For high-churn callers that capture many distinct one-shot
+ * bodies — notably the §D0.4 async-hop stitching producer, which captures one fresh body
+ * per hop and would otherwise exhaust the 32-slot registry over process lifetime (the
+ * registry has no release path and assumes call-site-constant names). *out (may be NULL)
+ * is the scope handle for asmtest_hwtrace_render_scope, valid on the CAPTURING thread and
+ * only until that thread pushes another scope. Same status codes as the named form;
+ * ASMTEST_HW_EINVAL on a NULL base / zero len / NULL trace. */
+int asmtest_hwtrace_call_scoped_ex(void *base, size_t len, asmtest_trace_t *trace,
+                                   void *fn, const long *args, int nargs,
+                                   long *result_out,
+                                   asmtest_hwtrace_scope_t *out) {
+    if (out != NULL) {
+        out->idx = 0xffffffffu;
+        out->gen = 0;
+    }
+#if defined(HWTRACE_LIFECYCLE)
+    if (!g_inited)
+        return ASMTEST_HW_ESTATE;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        if (base == NULL || len == 0 || trace == NULL)
+            return ASMTEST_HW_EINVAL;
+        uint32_t idx = 0, gen = 0;
+        int rc = asmtest_ss_call_scoped(base, len, trace, fn, args, nargs,
+                                        result_out, &idx, &gen);
+        if (rc != ASMTEST_HW_OK)
+            return rc;
+        if (out != NULL) {
+            out->idx = idx;
+            out->gen = gen;
+        }
+        return ASMTEST_HW_OK;
+    }
+#endif
+    (void)base;
+    (void)len;
+    (void)trace;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    return ASMTEST_HW_EUNAVAIL;
+#else
+    (void)base;
+    (void)len;
+    (void)trace;
     (void)fn;
     (void)args;
     (void)nargs;
@@ -1656,6 +1772,51 @@ int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
         *nbounds = n;
     free(order);
     return ASMTEST_HW_OK;
+}
+
+/* §D0.4 live-producer bridge for asmtest_hwtrace_stitch. A binding captures one
+ * lazy-arm slice per async hop (each a populated asmtest_trace_t behind a handle) and
+ * hands the HANDLES here with their per-slice (scope_id, seq, tid, version); this
+ * assembles the asmtest_hwtrace_slice_t array (a shallow struct copy of each trace —
+ * the insns/blocks heap arrays stay owned by the handles, which must outlive this
+ * call) and stitches into `out` in seq order. Exists because the slice struct embeds
+ * an asmtest_trace_t with heap pointers, which a language binding cannot marshal by
+ * value; an array of opaque handles + parallel scalar arrays is blittable. The scalar
+ * arrays may each be NULL (defaults: seq=index, others 0). Same bounds/nbounds and
+ * status codes as asmtest_hwtrace_stitch; ASMTEST_HW_EINVAL on a NULL traces/out or a
+ * NULL entry, ASMTEST_HW_EUNAVAIL on allocation failure. */
+int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
+                                   const uint64_t *scope_ids,
+                                   const uint32_t *seqs, const int *tids,
+                                   const uint64_t *versions, size_t n,
+                                   asmtest_trace_t *out,
+                                   asmtest_hwtrace_slice_bound_t *bounds,
+                                   size_t *nbounds) {
+    if (traces == NULL || out == NULL)
+        return ASMTEST_HW_EINVAL;
+    if (n == 0) {
+        if (nbounds != NULL)
+            *nbounds = 0;
+        return ASMTEST_HW_OK;
+    }
+    asmtest_hwtrace_slice_t *sl =
+        (asmtest_hwtrace_slice_t *)calloc(n, sizeof *sl);
+    if (sl == NULL)
+        return ASMTEST_HW_EUNAVAIL;
+    for (size_t i = 0; i < n; i++) {
+        if (traces[i] == NULL) {
+            free(sl);
+            return ASMTEST_HW_EINVAL;
+        }
+        sl[i].scope_id = scope_ids != NULL ? scope_ids[i] : 0;
+        sl[i].seq = seqs != NULL ? seqs[i] : (uint32_t)i;
+        sl[i].tid = tids != NULL ? tids[i] : 0;
+        sl[i].version = versions != NULL ? versions[i] : 0;
+        sl[i].trace = *traces[i]; /* shallow copy: heap arrays owned by the handle */
+    }
+    int rc = asmtest_hwtrace_stitch(sl, n, out, bounds, nbounds);
+    free(sl);
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */

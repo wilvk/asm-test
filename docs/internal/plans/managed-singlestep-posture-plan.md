@@ -10,10 +10,10 @@ a managed runtime's threads?**
 > approved posture (lazy-arm the body in-process, out-of-process fallback for the
 > signatures the shim set can't cover, the honesty note, and the pinned-worker
 > mitigation retained) is built and validated in
-> [managed-singlestep-lazy-arm-plan.md](managed-singlestep-lazy-arm-plan.md) — with
-> one item still open there: slow-host (throttled-CI) confirmation of the
-> crash-avoidance property. Options are ordered by increasing invasiveness; the
-> recommendation is at the end.
+> [managed-singlestep-lazy-arm-plan.md](../archive/plans/managed-singlestep-lazy-arm-plan.md)
+> (now **archived — complete**, including the slow-host / throttled-CI confirmation
+> of the crash-avoidance property, which passed on a real loaded GitHub runner).
+> Options are ordered by increasing invasiveness; the recommendation is at the end.
 
 ## The forcing evidence (2026-07-07, `4c26de6`)
 

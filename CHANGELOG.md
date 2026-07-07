@@ -8,6 +8,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **§D0.4 async-hop stitching now has a LIVE producer — `AsmStitchedTrace` (.NET).** The
+  shipped `asmtest_hwtrace_stitch` merge core previously had no live producer (only
+  synthetic-slice host tests). New `asmtest_hwtrace_stitch_handles(traces[], scope_ids,
+  seqs, tids, versions, n, out, bounds, nbounds)` (`src/hwtrace.c`) is the binding-facing
+  bridge — it merges N already-captured trace *handles* (the slice struct embeds heap
+  pointers a binding can't marshal by value). On top of it, the .NET `AsmStitchedTrace`
+  carries an `AsyncLocal<scopeId>` across `await`/thread hops and feeds each hop's
+  managed-safe lazy-arm capture to the core, so one logical operation traced across a
+  real `Task.Run` thread hop stitches its per-thread slices in seq order. Each hop uses
+  the new **registry-free** `asmtest_hwtrace_call_scoped_ex` (`[base,len)` direct, no
+  `MAX_REGIONS` slot) so a long-running operation with many hops cannot exhaust the fixed
+  32-slot region table process-wide. Validated on the **single-step** tier (no Intel PT
+  needed): host `test_stitch_handles` / `test_call_scoped_ex` (incl. a 64-call
+  no-exhaustion check) and the .NET lane (scope id flows across the hop; two
+  different-thread hops merge with correct bounds; 40 operations all capture).
+
+- **FP shim family for the lazy-arm scope — `(double…)->double` methods trace in-process.**
+  `asmtest_hwtrace_call_scoped_fp` (`src/ss_backend.c` / `src/hwtrace.c`) dispatches a
+  homogeneous double signature through the SysV FP ABI (xmm0..7 args, 0-8 arity). The
+  .NET `AsmTrace.Method(...).Invoke` now tries the integer `(long…)->long` shim, then the
+  FP family, before falling back out-of-process — so a `double`-signature method is
+  captured in-process instead of degrading. Host-tested (`test_call_scoped_fp`) and on
+  the .NET lane. See
+  [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/managed-singlestep-lazy-arm-plan.md).
+
 - **Managed single-step is now safe by construction — `AsmTrace.Method()` lazy-arms
   only the method body.** New `asmtest_hwtrace_call_scoped(name, fn, args, nargs,
   result, out)` (`src/ss_backend.c` / `src/hwtrace.c`) arms the single-step window,
@@ -21,7 +46,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   — never a silent miss. `HwTrace.DegradationNote()` gains the honest managed-window
   warning. Host-tested (`test_call_scoped`, byte-for-byte parity with begin/end) and
   validated on the .NET lane; see
-  [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
+  [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/managed-singlestep-lazy-arm-plan.md).
 
 - **Slow-host crash-avoidance stress lane** (`make hwtrace-dotnet-stress`, CI:
   `docker-hwtrace-dotnet-stress` in the `hwtrace-bindings` job) — the lazy-arm plan's

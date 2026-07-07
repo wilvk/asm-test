@@ -1,16 +1,25 @@
 # asm-test — Managed single-step: the lazy-arm implementation (Option B + C-fallback + D)
 
 Implementation plan for the posture the
-[managed single-step decision doc](managed-singlestep-posture-plan.md) recommended
-and that is now approved: **B** (lazy-arm around a native-dispatched call) as the
-in-process default for `AsmTrace.Method()`, **C** (out-of-process stepper) as the
+[managed single-step decision doc](../../plans/managed-singlestep-posture-plan.md)
+recommended and that is now approved: **B** (lazy-arm around a native-dispatched call)
+as the in-process default for `AsmTrace.Method()`, **C** (out-of-process stepper) as the
 automatic fallback for signatures B cannot cover, **D** (a runtime honesty note)
 immediately, and **A** (the pinned-worker suite mitigation) retained regardless.
 
-> Status legend: **landed** — in this change, built and host-tested; **landed
-> (managed-lane)** — in this change, exercised by the .NET Docker lane, but the
-> *crash-avoidance* property it targets is only observable on a slow host (see
-> "Sharpening 1"); **forward-look** — deferred, named here so the seams are visible.
+> **COMPLETE (2026-07-07) — archived.** All of B0–B3, C-fallback, D, and A shipped and
+> are green in CI, and **Sharpening 1 is now validated**: the unpinned tiering-worker
+> stress lane (`make hwtrace-dotnet-stress`, the `hwtrace-bindings` CI job) passed on a
+> real loaded GitHub runner — the exact environment where the old stepped-`DynamicInvoke`
+> path died with exit 133. Extended since: the **(double…)->double FP shim family**
+> (`asmtest_hwtrace_call_scoped_fp`, §B2) so double-signature methods trace in-process
+> instead of falling back out-of-process. The remaining forward-look items (mixed int/FP
+> signatures, per-binding adoption of `call_scoped`) are tracked as ordinary follow-ups,
+> not part of this plan's committed scope.
+
+> Status legend: **landed** — built and host-tested; **landed (managed-lane)** —
+> exercised by the .NET Docker lane; **validated (slow-host)** — Sharpening 1, now
+> confirmed on a loaded CI runner; **forward-look** — deferred, named so the seams show.
 
 ## Why (one paragraph, full evidence in the decision doc)
 
@@ -27,9 +36,9 @@ stepping the runtime machinery at all.
 ## The mechanism
 
 The single-step backend already filters recorded RIPs to the registered
-`[base, len)` ([src/ss_backend.c](../../../src/ss_backend.c) `ss_on_sigtrap`). So if
+`[base, len)` ([src/ss_backend.c](../../../../src/ss_backend.c) `ss_on_sigtrap`). So if
 we (1) resolve the method body's `[base, len)` (already done —
-[HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs) `Method()` via
+[HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs) `Method()` via
 `JitMethodMap`/`PrepareMethod`), (2) mint a native function pointer for the body
 *before* arming (reverse-P/Invoke over a non-generic per-arity delegate shim), and
 (3) **arm, call the pointer, disarm — all in native C**, then the armed window
@@ -44,7 +53,7 @@ The crash surface is removed *by construction* for covered signatures, and the
 ### B0 — D's runtime honesty note *(landed)*
 
 Add one sentence to `HwTrace.DegradationNote()` and a caveat to
-[docs/bindings/dotnet.md](../../../docs/bindings/dotnet.md): an in-process managed
+[docs/bindings/dotnet.md](../../../../docs/bindings/dotnet.md): an in-process managed
 window is fatal if the runtime spawns a thread in-window; pin the tiering worker or
 use the out-of-process path. Zero protection, full honesty — lands first because it
 protects users on day one independent of the rest.
@@ -52,17 +61,17 @@ protects users on day one independent of the rest.
 ### B1 — the C helper `asmtest_hwtrace_call_scoped` *(landed, host-tested)*
 
 - `asmtest_ss_call_scoped(base, len, trace, fn, args, nargs, result_out, out_idx,
-  out_gen)` in [src/ss_backend.c](../../../src/ss_backend.c): push a region frame
+  out_gen)` in [src/ss_backend.c](../../../../src/ss_backend.c): push a region frame
   (arms TF), dispatch `fn(args…)` through the SysV integer ABI (0–6 register args),
   pop+normalize (disarms). Only `fn`'s in-`[base,len)` body is recorded; the
   dispatcher and any thunk are filtered. `>6` args or non-integer args return
   `ASMTEST_HW_EINVAL` so the caller falls back (B3).
 - `asmtest_hwtrace_call_scoped(name, fn, args, nargs, result_out, out)` in
-  [src/hwtrace.c](../../../src/hwtrace.c): region-name lookup + arm-tid bookkeeping
+  [src/hwtrace.c](../../../../src/hwtrace.c): region-name lookup + arm-tid bookkeeping
   (mirrors `begin_scope`), routes to the single-step helper; `ASMTEST_HW_EUNAVAIL`
   on the PT/AMD/CoreSight backends (they observe out-of-band and have no crash
   surface — the normal begin/end path is correct there).
-- Host test in [examples/test_hwtrace.c](../../../examples/test_hwtrace.c): a native
+- Host test in [examples/test_hwtrace.c](../../../../examples/test_hwtrace.c): a native
   leaf `exec_alloc`'d, called via `call_scoped`, asserting (a) the recorded body
   offsets match the plain begin/end trace **byte-for-byte** (the parity invariant the
   managed rewire must preserve) and (b) the return value is correct. No managed

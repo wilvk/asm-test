@@ -130,10 +130,16 @@ per-language analogues).
 > labelling LANDED:** the `byMethod` map feeds a self code-image
 > (`asmtest_codeimage_track`) and close-time disassembly decodes against the window-live
 > version — so a body that re-tiers/moves after the window still renders what ran.
-> **§D0.4 `AsyncLocal` async-hop stitching: still forward-look** (the §D4 merge *core* is
-> done + host-tested, but the live per-runtime hook needs bare-metal Intel PT to
-> validate the cross-thread merge; deferred). Same shape for the Node (§D1) / JVM (§D2)
-> async-hop hooks.
+> **§D0.4 `AsyncLocal` async-hop stitching: a LIVE producer now ships** (2026-07-07). The
+> .NET `AsmStitchedTrace` carries an `AsyncLocal<scopeId>` across `await`/thread hops and
+> feeds each hop's lazy-arm capture to the §D4 merge core via the new
+> `asmtest_hwtrace_stitch_handles` bridge — validated on the **single-step** tier (no
+> Intel PT needed): a logical operation captured across a real `Task.Run` thread hop
+> stitches its two per-thread slices in seq order (`hwtrace-dotnet-test`, and the
+> host-side `test_stitch_handles`). This closes the "merge core has no live producer" gap.
+> Still forward-look: the *clean* whole-window managed variant (PT-decoded per-hop
+> slices) and the Node (§D1) / JVM (§D2) async-hop hooks — same shape, different runtime
+> event source.
 
 Builds directly on the bindings slice's `AsmTrace` construct. On **.NET 8+** the
 analysis shows leak 2 and leak 3 dissolve and leak 1 shrinks to "you must name the

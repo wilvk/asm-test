@@ -513,6 +513,61 @@ int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
     return ASMTEST_HW_OK;
 }
 
+/* Floating-point sibling of ss_dispatch_call: call fn(args…) through the SysV FP ABI,
+ * a homogeneous (double…)->double signature. Register-resident arities only (0-8):
+ * the eight FP arg registers xmm0..xmm7 are exactly the cast's slots, no stack spill.
+ * Same region-filter guarantee — every instruction here is outside [base,len). */
+static double ss_dispatch_call_fp(void *fn, const double *a, int n) {
+    switch (n) {
+    case 0:
+        return ((double (*)(void))fn)();
+    case 1:
+        return ((double (*)(double))fn)(a[0]);
+    case 2:
+        return ((double (*)(double, double))fn)(a[0], a[1]);
+    case 3:
+        return ((double (*)(double, double, double))fn)(a[0], a[1], a[2]);
+    case 4:
+        return ((double (*)(double, double, double, double))fn)(a[0], a[1], a[2],
+                                                                a[3]);
+    case 5:
+        return ((double (*)(double, double, double, double, double))fn)(
+            a[0], a[1], a[2], a[3], a[4]);
+    case 6:
+        return ((double (*)(double, double, double, double, double, double))fn)(
+            a[0], a[1], a[2], a[3], a[4], a[5]);
+    case 7:
+        return ((double (*)(double, double, double, double, double, double,
+                            double))fn)(a[0], a[1], a[2], a[3], a[4], a[5],
+                                        a[6]);
+    default:
+        return ((double (*)(double, double, double, double, double, double,
+                            double, double))fn)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5], a[6], a[7]);
+    }
+}
+
+/* FP variant of asmtest_ss_call_scoped (managed-singlestep-lazy-arm-plan §B2, the
+ * (double…)->double shim family): arm [base,len), call the FP-ABI fn, disarm. Same
+ * managed-safe guarantee — only fn's body is stepped. Homogeneous double args only,
+ * 0-8; a NULL fn / nargs outside 0-8 returns EINVAL so the caller falls back
+ * out-of-process. *result_out (may be NULL) gets fn's xmm0 return. */
+int asmtest_ss_call_scoped_fp(const void *base, size_t len,
+                              asmtest_trace_t *trace, void *fn,
+                              const double *args, int nargs, double *result_out,
+                              uint32_t *out_idx, uint32_t *out_gen) {
+    if (fn == NULL || nargs < 0 || nargs > 8 || (nargs > 0 && args == NULL))
+        return ASMTEST_HW_EINVAL;
+    int rc = ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+    if (rc != ASMTEST_HW_OK)
+        return rc;
+    double r = ss_dispatch_call_fp(fn, args, nargs);
+    asmtest_ss_end();
+    if (result_out != NULL)
+        *result_out = r;
+    return ASMTEST_HW_OK;
+}
+
 /* Resolve a frame handle (idx+gen) on the CALLING thread to its region + trace. The
  * frame data survives a pop (only stream is freed), so a render-on-close can read the
  * normalized trace. Returns 1 + fills the out params on a live match, 0 on a
@@ -563,6 +618,21 @@ int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
                            void *fn, const long *args, int nargs,
                            long *result_out, uint32_t *out_idx,
                            uint32_t *out_gen) {
+    (void)base;
+    (void)len;
+    (void)trace;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    (void)out_idx;
+    (void)out_gen;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_ss_call_scoped_fp(const void *base, size_t len,
+                              asmtest_trace_t *trace, void *fn,
+                              const double *args, int nargs, double *result_out,
+                              uint32_t *out_idx, uint32_t *out_gen) {
     (void)base;
     (void)len;
     (void)trace;

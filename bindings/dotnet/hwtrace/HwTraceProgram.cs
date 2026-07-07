@@ -322,6 +322,25 @@ static class HwTraceProgram
             else
                 Console.WriteLine($"# SKIP stealth stepper: {om.SkipReason}");
 
+            // --- Option B FP shim: a (double...)->double method traces IN-PROCESS --- //
+            // The integer (long...)->long shim set can't express this signature; the FP
+            // family (call_scoped_fp, xmm0..7) keeps it in-process instead of forcing the
+            // out-of-process fallback. Same managed-safe lazy-arm guarantee.
+            double fr = 0;
+            AsmTrace fm;
+            using (fm = AsmTrace.Method((Func<double, double, double>)NamedFpCold, emit: false))
+            {
+                fr = (double)fm.Invoke(1.5, 2.5);
+            }
+            Check(fr == 4.0, $"AsmTrace.Method(fp): NamedFpCold(1.5,2.5) == 4.0 (got {fr})");
+            Check(fm.Armed, $"AsmTrace.Method(fp): FP lazy-arm scope armed in-process ({fm.SkipReason})");
+            if (fm.Armed && HwNative.asmtest_disas_available())
+                Check(fm.Path.Length > 0 && fm.Path.Contains("ret"),
+                      "AsmTrace.Method(fp): FP body captured in-process (non-empty, ends in ret)");
+
+            // --- §D0.4 async-hop stitching: one logical op across a real thread hop --- //
+            StitchChecks().GetAwaiter().GetResult();
+
             // --- §1 handle-keyed scopes: concurrent SAME-SITE regions don't alias --- //
             // Both threads construct their scope through SameSiteScope below, so they
             // share ONE auto-name (member:line). begin_scope gives each its own
@@ -694,6 +713,66 @@ static class HwTraceProgram
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     static long NamedColdOop(long a, long b) => a * b;
+
+    // (double…)->double: the FP shim family — the integer family can't express it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static double NamedFpCold(double a, double b) => a + b;
+
+    // §D0.4 stitched-hop fixture: a fresh managed method resolved + lazy-arm captured
+    // per hop; kept NoInlining so the standalone JIT'd body is what runs and is traced.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long StitchWork(long a, long b) => a + b;
+
+    // §D0.4 — one logical operation across a REAL thread hop (Task.Run resumes on a
+    // pool thread). The AsyncLocal scope id must flow across the hop, and the two per-hop
+    // lazy-arm captures must stitch in seq order into one merged trace.
+    static async System.Threading.Tasks.Task StitchChecks()
+    {
+        using var op = new AsmStitchedTrace();
+        Check(AsmStitchedTrace.CurrentScopeId == op.ScopeId,
+              "stitched: AsyncLocal carries the operation scope id");
+
+        long r0 = (long)op.Step((Func<long, long, long>)StitchWork, 20, 22); // hop 0, this thread
+        long scopeInHop = -1;
+        long r1 = (long)await System.Threading.Tasks.Task.Run(() =>
+        {
+            scopeInHop = AsmStitchedTrace.CurrentScopeId; // flowed across the thread hop
+            return op.Step((Func<long, long, long>)StitchWork, 60, 60);       // hop 1, pool thread
+        });
+        op.Complete();
+
+        Check(r0 == 42 && r1 == 120, $"stitched: both hops ran (r0={r0}, r1={r1})");
+        Check(scopeInHop == op.ScopeId,
+              $"stitched: scope id flowed across the await/thread hop ({scopeInHop} vs {op.ScopeId})");
+        Check(op.Hops.Count == 2, $"stitched: two hops stitched ({op.Hops.Count}; skip='{op.SkipReason}')");
+        if (op.Hops.Count == 2)
+        {
+            Check(op.Hops[0].Seq == 0 && op.Hops[1].Seq == 1, "stitched: hops merged in seq order");
+            Check(op.Hops[0].InsnOffset == 0 && op.Hops[1].InsnOffset > 0,
+                  $"stitched: hop 1 concatenates AFTER hop 0 (offset {op.Hops[1].InsnOffset})");
+            if (op.Hops[0].Tid != op.Hops[1].Tid)
+                Check(true, "stitched: hops captured on DIFFERENT threads (real async hop)");
+            else
+                Console.WriteLine("# note stitched: both hops on the same thread (pool reused caller); stitch still correct");
+            if (HwNative.asmtest_disas_available())
+                Check(op.Path.Contains("hop 0") && op.Path.Contains("hop 1") && op.Path.Contains("ret"),
+                      "stitched: merged Path renders both hops (per-hop disassembly)");
+        }
+
+        // Registry-exhaustion guard: >MAX_REGIONS (32) captured hops process-wide must NOT
+        // silently disable capture — AsmStitchedTrace uses the registry-free call path, so
+        // 40 operations all capture (the old register_region-per-hop path EFULL'd after 32).
+        int captured = 0;
+        for (int i = 0; i < 40; i++)
+        {
+            using var o = new AsmStitchedTrace();
+            o.Step((Func<long, long, long>)StitchWork, i, 1);
+            o.Complete();
+            if (o.Hops.Count == 1) captured++;
+        }
+        Check(captured == 40,
+              $"stitched: 40 operations (>32 MAX_REGIONS) all captured ({captured}/40) — registry-free, no exhaustion");
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     static long NamedStress(long a, long b) => a + b;
