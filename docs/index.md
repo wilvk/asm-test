@@ -80,7 +80,9 @@ comparison and roadmap.
 - Want the full capability list and what's available across architectures, OSes,
   and languages? See [Features & support matrix](reference/features.md).
 - Consuming the framework from another project? See
-  [Using asm-test in your project](reference/integration.md).
+  [Using asm-test in your project](reference/integration.md), and
+  [Using asm-test in your CI](guides/ci-integration.md) for the GitHub
+  Action / GitLab template.
 - Driving it from another language? See [Language bindings](bindings/index.md) for the
   shared overview, then the per-language page (Python, .NET, Go, Rust, C++, Zig,
   Node, Java, Ruby, Lua).
@@ -111,6 +113,7 @@ guides/emulator
 guides/tracing/index
 guides/disassembly
 guides/win64
+guides/ci-integration
 clean-room-testing
 ```
 

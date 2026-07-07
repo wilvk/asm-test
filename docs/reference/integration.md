@@ -2,7 +2,9 @@
 
 There are two ways to consume the framework from a project of your own. The
 **static library** is the primary, recommended path; the single-header
-amalgamation is a lighter-weight alternative.
+amalgamation is a lighter-weight alternative. To run your suites in CI with
+either, see [Using asm-test in your CI](../guides/ci-integration.md) — a
+GitHub Action, a GitLab template, and the raw recipe.
 
 ## 1. Static library + pkg-config (recommended)
 

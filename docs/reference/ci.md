@@ -2,7 +2,9 @@
 
 asm-test is tested by a GitHub Actions matrix, and the Linux half of that matrix
 can be reproduced locally in a container so you can debug a CI failure on your own
-machine.
+machine. (Looking to run **your own** asm-test suites in CI instead? See
+[Using asm-test in your CI](../guides/ci-integration.md) — a GitHub Action, a
+GitLab template, and the raw recipe.)
 
 ## What CI covers
 

@@ -41,11 +41,11 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 35 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 |
+| ✅ Fixed & verified | 36 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · P2 |
 | 🟡 Fixed, CI-run validation pending | 1 | K1 (cache config landed 2026-07-07; the gha cache only exercises on a real Actions run) |
 | ⏸ Confirmed, deferred | 1 | N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
-| ⬜ Open expansions (step 5) | 10 | P1 E7 A6 A7 R5 E5 P2 P3 P4 P5 |
+| ⬜ Open expansions (step 5) | 9 | P1 E7 A6 A7 R5 E5 P3 P4 P5 |
 
 Landed across: **59adb74** (step 1), **817cc72** (step 2), **356b0ff** + **2b8e8f9**
 (step 3), **8fb7c14** (step 4), **a8f7054** (step 6). Each "fixed" row was
@@ -163,7 +163,7 @@ can't assemble — none of which any current gate catches.
 | E2 | `emulator.md` still claims register state is retained across calls | Medium | docs | ✅ fixed (step 2) |
 | D4 | API-reference index omits the post-1.0 surface (Win64, AVX2/512) | Medium | docs | ✅ fixed (step 4) |
 | D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | ✅ fixed (step 4) |
-| P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | verified |
+| P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | ✅ fixed (2026-07-07 — root `action.yml` composite Action, `ci/asmtest.gitlab-ci.yml` include template, `docs/guides/ci-integration.md`; the Action itself can only be exercised from a consumer workflow) |
 | P3 | RISC-V is emulator-guest only; no native RISC-V host tier | Medium | expansion | verified |
 | P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | verified |
 | P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | verified |

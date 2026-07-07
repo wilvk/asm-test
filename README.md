@@ -105,7 +105,8 @@ Where to start:
   [Property testing](docs/guides/property-testing.md) ·
   [Emulator](docs/guides/emulator.md) ·
   [Disassembly](docs/guides/disassembly.md) ·
-  [Windows x64 tier](docs/guides/win64.md)
+  [Windows x64 tier](docs/guides/win64.md) ·
+  [CI integration](docs/guides/ci-integration.md)
 - **Language bindings** — [overview](docs/bindings/index.md) for C++, Rust, Zig,
   Go, Node, Python, Ruby, Lua, Java, and .NET.
 - **Tracing tiers** — [Unicorn emulator](docs/guides/emulator.md), in-process

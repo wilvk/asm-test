@@ -1,0 +1,120 @@
+# action.yml — the consumer-facing "Setup asm-test" composite action (P2 from
+# the 2026-07-04 repo review). Lives at the repo root so `uses:
+# wilvk/asm-test@<ref>` works directly and a later Marketplace listing needs no
+# restructuring. Composite POSIX-sh steps only — no Node runtime, no container —
+# so it runs on any Linux/macOS runner with make + a C compiler.
+#
+# What it does:
+#   1. installs asm-test (headers + libasmtest.a + asmtest.pc) into a prefix —
+#      by default from the very checkout this action ships with, so the ref in
+#      your `uses:` line pins the framework version;
+#   2. exports PKG_CONFIG_PATH for every later step in the job;
+#   3. optionally builds the emulator/assembler/disassembler tiers
+#      (libunicorn + pinned Keystone/Capstone source builds + libasmtest_emu);
+#   4. optionally runs your suite command with that environment set.
+#
+# See docs/guides/ci-integration.md for usage, the GitLab equivalent
+# (ci/asmtest.gitlab-ci.yml), and the raw `make install` fallback.
+name: "Setup asm-test"
+description: >-
+  Install the asm-test assembly-testing framework (headers, static library,
+  pkg-config file) into a prefix, export PKG_CONFIG_PATH for later steps,
+  optionally build the emulator/assembler tiers, and optionally run your test
+  suite command.
+author: wilvk
+branding:
+  icon: cpu
+  color: gray-dark
+
+inputs:
+  version:
+    description: >-
+      Git ref (tag, branch, or SHA) of asm-test to build and install. Leave
+      empty (the default) to use the checkout this action ships with — the ref
+      in your `uses:` line then pins the framework version, which is the
+      recommended way.
+    required: false
+    default: ""
+  prefix:
+    description: >-
+      Install prefix (passed to `make install PREFIX=...`). Defaults to
+      "$HOME/.asmtest" — a user-writable prefix that needs no sudo.
+    required: false
+    default: ""
+  optional-tiers:
+    description: >-
+      Set "true" to also provision the optional native tiers: installs
+      libunicorn via the system package manager, builds the pinned Keystone +
+      Capstone from source, and installs the shared superset library
+      (libasmtest_emu) into the prefix, exporting LD_LIBRARY_PATH /
+      DYLD_LIBRARY_PATH for later steps. Slower (Keystone is a trimmed LLVM);
+      needs a runner with sudo (Linux) or brew (macOS).
+    required: false
+    default: "false"
+  test-command:
+    description: >-
+      Optional command to run (in your workspace) once the install is done,
+      with PKG_CONFIG_PATH — and, when optional-tiers is true, the library
+      path — already exported. Example: "make -C tests check".
+    required: false
+    default: ""
+
+outputs:
+  prefix:
+    description: The resolved install prefix asm-test was installed into.
+    value: ${{ steps.install.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the asm-test source tree
+      id: src
+      shell: sh
+      env:
+        ASMTEST_SETUP_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$ASMTEST_SETUP_VERSION" ]; then
+          dir="$RUNNER_TEMP/asm-test-src"
+          rm -rf "$dir"
+          git clone https://github.com/wilvk/asm-test "$dir"
+          git -C "$dir" checkout --detach "$ASMTEST_SETUP_VERSION"
+        else
+          # The action's own files ARE the framework at the `uses:` ref.
+          dir="$GITHUB_ACTION_PATH"
+        fi
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+    - name: Install asm-test (headers + static lib + pkg-config)
+      id: install
+      shell: sh
+      env:
+        ASMTEST_SETUP_PREFIX: ${{ inputs.prefix }}
+      run: |
+        prefix="$ASMTEST_SETUP_PREFIX"
+        [ -n "$prefix" ] || prefix="$HOME/.asmtest"
+        make -C "${{ steps.src.outputs.dir }}" install PREFIX="$prefix"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        # Make `pkg-config asmtest` work in every subsequent step of the job.
+        echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
+    - name: Build + install the optional native tiers (emulator/assembler/disassembler)
+      if: ${{ inputs.optional-tiers == 'true' }}
+      shell: sh
+      run: |
+        src="${{ steps.src.outputs.dir }}"
+        prefix="${{ steps.install.outputs.prefix }}"
+        # libunicorn (+ pkg-config) from the system package manager, then the
+        # pinned Keystone/Capstone source builds (no distro package exists).
+        make -C "$src" deps DEPS_ARGS=--emu
+        "$src"/scripts/build-keystone.sh
+        "$src"/scripts/build-capstone.sh
+        make -C "$src" install-shared install-shared-emu PREFIX="$prefix"
+        echo "LD_LIBRARY_PATH=$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        echo "DYLD_LIBRARY_PATH=$prefix/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+    - name: Run the consumer test suite
+      if: ${{ inputs.test-command != '' }}
+      shell: sh
+      # The consumer's own command, run verbatim in their workspace with the
+      # asm-test environment exported above.
+      run: ${{ inputs.test-command }}
