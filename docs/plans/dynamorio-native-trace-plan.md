@@ -16,7 +16,9 @@ forward-look that once lived here as Phases 9–10 now have their own
 [hardware-trace plan](hardware-trace-plan.md); this plan covers the DynamoRIO
 tier (Phases 0–8) plus the shared trace substrate all backends reuse.
 
-> Status legend: **planned** unless noted. Update this file as phases land, the
+> Status legend: Phases 0–8 are **✅ landed** (see "Implementation status" below;
+> the one open stretch is Phase 7's drsyms internal-symbol mode). Headings were
+> retagged 2026-07-07 to match. Update this file as changes land, the
 > way [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) and
 > [win64-native-tier-plan.md](../archive/plans/win64-native-tier-plan.md) track theirs.
 
@@ -373,7 +375,7 @@ model is fine because nothing is churning code concurrently.
 
 ---
 
-## Phase 0 - Configuration and lifecycle spike *(planned)*
+## Phase 0 - Configuration and lifecycle spike *(✅ landed)*
 
 **Goal.** Prove the in-process attach path before building the full trace system.
 
@@ -482,7 +484,7 @@ or in parallel with this spike.
 
 ---
 
-## Phase 1 - Extract a generic trace substrate *(planned)*
+## Phase 1 - Extract a generic trace substrate *(✅ landed)*
 
 **Goal.** Make trace allocation/reporting engine-neutral so Unicorn and
 DynamoRIO can share it.
@@ -531,7 +533,7 @@ Unicorn behavior change.
 
 ---
 
-## Phase 2 - DynamoRIO client: marker regions and block coverage *(planned)*
+## Phase 2 - DynamoRIO client: marker regions and block coverage *(✅ landed)*
 
 **Goal.** Record native basic-block coverage for explicit begin/end regions.
 
@@ -647,7 +649,7 @@ VM/helper-thread blocks.
 
 ---
 
-## Phase 3 - Application API and runner tests *(planned)*
+## Phase 3 - Application API and runner tests *(✅ landed)*
 
 **Goal.** Provide the normal-library API that C tests and language wrappers will
 call.
@@ -690,7 +692,7 @@ win64 tier gave its runner port its own phase + decision gate.
 
 ---
 
-## Phase 4 - Host-native Keystone executable code *(planned)*
+## Phase 4 - Host-native Keystone executable code *(✅ landed)*
 
 **Goal.** Let Keystone-generated host-native bytes be traced by DynamoRIO.
 
@@ -743,7 +745,7 @@ Implementation notes:
 
 ---
 
-## Phase 5 - Instruction trace mode *(planned)*
+## Phase 5 - Instruction trace mode *(✅ landed)*
 
 **Goal.** Add ordered instruction offsets for native regions.
 
@@ -778,7 +780,7 @@ instruction offset sequence on x86-64.
 
 ---
 
-## Phase 6 - Language wrapper surface *(planned)*
+## Phase 6 - Language wrapper surface *(✅ landed)*
 
 **Goal.** Give dynamic languages an ergonomic in-process API while keeping the
 advanced nature visible.
@@ -835,7 +837,7 @@ binding.
 
 ---
 
-## Phase 7 - Optional symbol/function mode *(planned)*
+## Phase 7 - Optional symbol/function mode *(✅ landed — drsyms internal-symbol stretch still open)*
 
 **Goal.** Trace a named native function without explicit begin/end markers.
 
@@ -861,7 +863,7 @@ manual region calls in the test body.
 
 ---
 
-## Phase 8 - Docs, packaging, and CI *(planned)*
+## Phase 8 - Docs, packaging, and CI *(✅ landed)*
 
 **Docs.**
 

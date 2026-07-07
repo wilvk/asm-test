@@ -41,11 +41,11 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 42 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 |
+| ✅ Fixed & verified | 43 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 P5 (in-repo scope) |
 | 🟡 Fixed, CI-run validation pending | 1 | K1 (cache config landed 2026-07-07; the gha cache only exercises on a real Actions run) |
 | ⏸ Confirmed, deferred | 1 | N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
-| ⬜ Open expansions (step 5) | 3 | P1 P3 P5 |
+| ⬜ Open expansions (step 5) | 2 | P1 (sequenced behind the first real tag), P3 (large: RISC-V native host tier) |
 
 Landed across: **59adb74** (step 1), **817cc72** (step 2), **356b0ff** + **2b8e8f9**
 (step 3), **8fb7c14** (step 4), **a8f7054** (step 6). Each "fixed" row was
@@ -166,7 +166,7 @@ can't assemble — none of which any current gate catches.
 | P2 | No consumer-facing CI integration (GitHub Action / GitLab template) | Medium | expansion | ✅ fixed (2026-07-07 — root `action.yml` composite Action, `ci/asmtest.gitlab-ci.yml` include template, `docs/guides/ci-integration.md`; the Action itself can only be exercised from a consumer workflow) |
 | P3 | RISC-V is emulator-guest only; no native RISC-V host tier | Medium | expansion | verified |
 | P4 | No maintained "asm-test vs alternatives" comparison page | Medium | docs | ✅ fixed (post-review) |
-| P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | verified |
+| P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | ✅ fixed in-repo (instructor guide + Classroom autograding recipe; the separate template repo stays a maintainer action) |
 | R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | ✅ fixed (step 4) |
 | N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | ⚪ not a defect — packaging is scaffolding by design (packaging.md); only nit is an unused `LUAROCKS` var |
 | N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | ⏸ confirmed; deferred (genuine multi-binding expansion — C entry points exist + are FFI-friendly, just unwrapped) |

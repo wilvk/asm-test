@@ -8,6 +8,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Docs: [Teaching with asm-test](https://github.com/wilvk/asm-test/blob/main/docs/guides/classroom.md)**
+  (the in-repo scope of P5 from the 2026-07-04 review). The instructor recipe the
+  primitives always supported but nothing documented: a three-file assignment
+  layout (student `.s`, rubric `grade.c`, grade-time `Makefile`), a complete
+  GitHub Classroom autograding config (one scored step per rubric item via
+  `--filter` + `--fail-if-no-tests`, so a deleted rubric test is a scored zero,
+  not a free pass), and instructor notes on hidden tests, timeouts, and grading
+  non-x86 courses through the emulator tier. The separate "Use this template"
+  assignment repository remains a maintainer action.
+
+- **.NET examples roadmap — the full remaining tail** (11 items from
+  [dotnet-examples-roadmap.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/dotnet-examples-roadmap.md),
+  all instruction-count-honest, all green in the docker lane). Five new reports:
+  `flatprofile` (perf-report parity: self / Overhead % / cumulative %),
+  `amplification` (user vs BCL vs native-runtime split + the WEAK-tier factor),
+  `runtimegaps` (largest `RuntimeBefore` bursts by the method they precede),
+  `footprint` (code working-set pages + jump-distance locality), and
+  `runtimebuckets` (the ~1M-insn runtime lump named by module — resolved per 4 KB
+  page, not per address, so ~hundreds of `/proc` lookups instead of ~1M). Six new
+  example projects: `instructionmix`, `perfannotate`, `loops` (backedge trip
+  counts), `descent` (native call-descent tree with self/inclusive counts),
+  `descent_dotnet` (out-of-process call descent into a **live CoreCLR** — descends
+  `Program::Leaf` twice as nested frames; `jit_dotnet` gained an additive `chain`
+  mode), and `codeimage` (one address, two code bodies over logical time). The
+  binding gained `HwTrace.SymbolizeBuckets` over the already-exported
+  `asmtest_hwtrace_symbolize_bucket` (.NET suite 123 → 126).
+
 - **Consumer-facing CI integration** (P2 of the 2026-07-04 review). A composite
   **GitHub Action** at the repo root (`action.yml`, "Setup asm-test": POSIX-sh
   steps; inputs `version`/`prefix`/`optional-tiers`/`test-command`; exports

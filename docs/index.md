@@ -85,6 +85,8 @@ comparison and roadmap.
   [Using asm-test in your project](reference/integration.md), and
   [Using asm-test in your CI](guides/ci-integration.md) for the GitHub
   Action / GitLab template.
+- Teaching an assembly course? See [Teaching with asm-test](guides/classroom.md)
+  for the assignment layout and the GitHub Classroom autograding recipe.
 - Driving it from another language? See [Language bindings](bindings/index.md) for the
   shared overview, then the per-language page (Python, .NET, Go, Rust, C++, Zig,
   Node, Java, Ruby, Lua).
@@ -116,6 +118,7 @@ guides/tracing/index
 guides/disassembly
 guides/win64
 guides/ci-integration
+guides/classroom
 clean-room-testing
 ```
 
