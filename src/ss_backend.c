@@ -528,8 +528,8 @@ static double ss_dispatch_call_fp(void *fn, const double *a, int n) {
     case 3:
         return ((double (*)(double, double, double))fn)(a[0], a[1], a[2]);
     case 4:
-        return ((double (*)(double, double, double, double))fn)(a[0], a[1], a[2],
-                                                                a[3]);
+        return ((double (*)(double, double, double, double))fn)(a[0], a[1],
+                                                                a[2], a[3]);
     case 5:
         return ((double (*)(double, double, double, double, double))fn)(
             a[0], a[1], a[2], a[3], a[4]);

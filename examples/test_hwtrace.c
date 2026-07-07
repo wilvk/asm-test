@@ -958,7 +958,8 @@ static void test_call_scoped_fp(void) {
     const double fargs[2] = {1.5, 2.5};
     double dresult = -1.0;
     asmtest_hwtrace_scope_t sc;
-    int rc = asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 2, &dresult, &sc);
+    int rc =
+        asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 2, &dresult, &sc);
     CHECK(rc == ASMTEST_HW_OK, "call_scoped_fp returns OK");
     CHECK(dresult == 4.0, "call_scoped_fp returns fn's FP value (1.5+2.5)");
 
@@ -970,9 +971,10 @@ static void test_call_scoped_fp(void) {
     CHECK(seq, "call_scoped_fp records the exact FP body stream [0,4]");
     CHECK(!asmtest_emu_trace_truncated(tr),
           "call_scoped_fp trace is complete (not truncated)");
-    CHECK(asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 9, &dresult, &sc) ==
-              ASMTEST_HW_EINVAL,
-          "call_scoped_fp rejects arity > 8 (caller falls back out-of-process)");
+    CHECK(
+        asmtest_hwtrace_call_scoped_fp("csdadd", p, fargs, 9, &dresult, &sc) ==
+            ASMTEST_HW_EINVAL,
+        "call_scoped_fp rejects arity > 8 (caller falls back out-of-process)");
 
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);
@@ -1003,7 +1005,8 @@ static void test_call_scoped_ex(void) {
     const long args[2] = {20, 22};
     long r = 0;
     asmtest_hwtrace_scope_t sc;
-    int rc = asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, tr, p, args, 2, &r, &sc);
+    int rc = asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, tr, p, args, 2,
+                                            &r, &sc);
     CHECK(rc == ASMTEST_HW_OK && r == 42,
           "call_scoped_ex: registry-free call returns 42");
     static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
@@ -1021,15 +1024,15 @@ static void test_call_scoped_ex(void) {
         asmtest_trace_t *t = asmtest_trace_new(64, 64);
         long ri = 0;
         asmtest_hwtrace_scope_t sci;
-        int rci =
-            asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, t, p, args, 2, &ri, &sci);
+        int rci = asmtest_hwtrace_call_scoped_ex(p, sizeof ROUTINE, t, p, args,
+                                                 2, &ri, &sci);
         if (rci != ASMTEST_HW_OK || ri != 42 ||
             asmtest_emu_trace_insns_total(t) != 5)
             all_ok = 0;
         asmtest_trace_free(t);
     }
-    CHECK(all_ok,
-          "call_scoped_ex: 64 registry-free calls all arm (no MAX_REGIONS exhaustion)");
+    CHECK(all_ok, "call_scoped_ex: 64 registry-free calls all arm (no "
+                  "MAX_REGIONS exhaustion)");
 
     asmtest_hwtrace_shutdown();
     munmap(p, sizeof ROUTINE);
@@ -1087,15 +1090,15 @@ static void test_stitch_handles(void) {
                                             versions, 2, merged, bounds, &nb);
     CHECK(rc == ASMTEST_HW_OK && nb == 2, "stitch_handles: merged 2 slices");
     /* Seq order is A(seq0,5 insns) then B(seq1,6 insns) = 11 total, A's stream first. */
-    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11,
-                                      0x0, 0x3, 0x6, 0xc, 0xe, 0x11};
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11, 0x0,
+                                      0x3, 0x6, 0xc, 0xe, 0x11};
     int ok = (asmtest_emu_trace_insns_total(merged) == 11);
     for (size_t i = 0; ok && i < 11; i++)
         ok = (merged->insns[i] == EXPECT[i]);
     CHECK(ok, "stitch_handles: merged stream is seq-ordered (hop0 then hop1)");
-    CHECK(bounds[0].insn_off == 0 && bounds[0].seq == 0 && bounds[0].tid == 700 &&
-              bounds[1].insn_off == 5 && bounds[1].seq == 1 &&
-              bounds[1].tid == 701,
+    CHECK(bounds[0].insn_off == 0 && bounds[0].seq == 0 &&
+              bounds[0].tid == 700 && bounds[1].insn_off == 5 &&
+              bounds[1].seq == 1 && bounds[1].tid == 701,
           "stitch_handles: bounds mark each slice's start + carry (seq,tid)");
     CHECK(bounds[0].scope_id == 0x51 && bounds[0].version == 9,
           "stitch_handles: bounds carry scope_id + version through");

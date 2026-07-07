@@ -1437,7 +1437,8 @@ int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
         return ASMTEST_HW_OK;
     }
 #endif
-    (void)name; /* only read in the __x86_64__ block above (aarch64-Linux: unused) */
+    (void)
+        name; /* only read in the __x86_64__ block above (aarch64-Linux: unused) */
     (void)fn;
     (void)args;
     (void)nargs;
@@ -1463,8 +1464,9 @@ int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
  * is the scope handle for asmtest_hwtrace_render_scope, valid on the CAPTURING thread and
  * only until that thread pushes another scope. Same status codes as the named form;
  * ASMTEST_HW_EINVAL on a NULL base / zero len / NULL trace. */
-int asmtest_hwtrace_call_scoped_ex(void *base, size_t len, asmtest_trace_t *trace,
-                                   void *fn, const long *args, int nargs,
+int asmtest_hwtrace_call_scoped_ex(void *base, size_t len,
+                                   asmtest_trace_t *trace, void *fn,
+                                   const long *args, int nargs,
                                    long *result_out,
                                    asmtest_hwtrace_scope_t *out) {
     if (out != NULL) {
@@ -1812,7 +1814,8 @@ int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
         sl[i].seq = seqs != NULL ? seqs[i] : (uint32_t)i;
         sl[i].tid = tids != NULL ? tids[i] : 0;
         sl[i].version = versions != NULL ? versions[i] : 0;
-        sl[i].trace = *traces[i]; /* shallow copy: heap arrays owned by the handle */
+        sl[i].trace =
+            *traces[i]; /* shallow copy: heap arrays owned by the handle */
     }
     int rc = asmtest_hwtrace_stitch(sl, n, out, bounds, nbounds);
     free(sl);

@@ -270,8 +270,9 @@ int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
  * NULL) is the scope handle for asmtest_hwtrace_render_scope, valid on the CAPTURING
  * thread only until it pushes another scope — so render before returning to a hop that
  * may resume elsewhere. Same status codes as the named form. */
-int asmtest_hwtrace_call_scoped_ex(void *base, size_t len, asmtest_trace_t *trace,
-                                   void *fn, const long *args, int nargs,
+int asmtest_hwtrace_call_scoped_ex(void *base, size_t len,
+                                   asmtest_trace_t *trace, void *fn,
+                                   const long *args, int nargs,
                                    long *result_out,
                                    asmtest_hwtrace_scope_t *out);
 
