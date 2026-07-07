@@ -21,10 +21,20 @@ single-step cannot run.
 | [ptrace_native/](ptrace_native/) | `Ptrace.TraceCall(...)` | single-step native code running **out of process** (a forked `PTRACE_TRACEME` child) — no in-process SIGTRAP |
 | [blockstep/](blockstep/) | `Ptrace.TraceCallBlockstep(...)` | **BTF block-step** (`PTRACE_SINGLEBLOCK`) — the SAME exact trace at ~1 stop per taken branch instead of per instruction; the only exact real-CPU capture on Zen 2 |
 | [ptrace_dotnet/](ptrace_dotnet/) | `Ptrace` attach to `jit_dotnet` | **attach to a live CoreCLR** and single-step a real JIT'd method in *another* process — what in-process single-step cannot do |
+| [flatprofile/](flatprofile/) | `new AsmTrace(byMethod: true, withRundown: true)` | **`perf report` parity** — methods by self instruction count with Overhead % + cumulative % (`Methods[].Count`) |
+| [amplification/](amplification/) | `new AsmTrace(byMethod: true, withRundown: true)` | the window split **user vs BCL vs native runtime** + the WEAK-tier amplification factor (`Addresses.Length` − `LabelledInstructions`) |
+| [runtimegaps/](runtimegaps/) | `new AsmTrace(byMethod: true, withRundown: true)` | the largest **native-runtime bursts**, ranked by the method they precede (`AsmInstruction.RuntimeBefore`) |
+| [footprint/](footprint/) | `using (new AsmTrace())` | code **working-set** (distinct 4 KB pages) + a **jump-distance locality** histogram (`Addresses` arithmetic) |
+| [runtimebuckets/](runtimebuckets/) | `using (new AsmTrace())` | name the ~1M runtime lump **by module** (`HwTrace.SymbolizeBuckets` → `asmtest_hwtrace_symbolize_bucket`, page-deduped) |
+| [instructionmix/](instructionmix/) | `new AsmTrace(byMethod: true, withRundown: true)` | the **mnemonic-class histogram** + control-flow density — what *kind* of work runs (`AsmInstruction.Text` + `Disas`) |
+| [perfannotate/](perfannotate/) | `HwTrace.Region` | **`perf annotate`, instruction-exact** — per-instruction execution counts of a native region with heat bars (`InsnOffsets()`) |
+| [loops/](loops/) | `HwTrace.Region` | **per-loop trip counts** from backedges (backward transitions in the `InsnOffsets()` stream) — a nested loop shows two |
+| [descent/](descent/) | `Ptrace.TraceCallEx` + `Descent` | the **exact nested call tree** (self-vs-inclusive counts) via the call-descent shadow stack — a native A→B→C blob |
+| [descent_dotnet/](descent_dotnet/) | `Ptrace.TraceAttachedEx` + `Descent` | call descent against a **live CoreCLR** — attach to `jit_dotnet`'s `chain` mode and step INTO `Program::Leaf` as nested frames |
+| [codeimage/](codeimage/) | `CodeImage.Track` / `BytesAt` | **one address, two code bodies** over logical time — a self-patched blob the timeline keeps both versions of |
 
-See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for more proposed
-reports/examples (instruction mix, out-of-process attach/descent) and what the single-step tier
-honestly cannot do.
+See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for the full design
+pass behind these and what the single-step tier honestly cannot do.
 
 (The sibling [jit_dotnet/](jit_dotnet/) is **not** a scope demo: it is a bare CoreCLR
 workload traced *out of process* by the C `jit_trace` harness — driven by
@@ -33,8 +43,8 @@ workload traced *out of process* by the C `jit_trace` harness — driven by
 ## Run them
 
 ```sh
-make hwtrace-dotnet-example          # runs all thirteen, in a plain container / on this host
-make docker-hwtrace-dotnet-example   # runs all thirteen, in the asmtest-dotnet image
+make hwtrace-dotnet-example          # runs all of them, in a plain container / on this host
+make docker-hwtrace-dotnet-example   # runs all of them, in the asmtest-dotnet image
 
 # or one at a time:
 dotnet run --project examples/dotnet/wholewindow/wholewindow.csproj
@@ -50,6 +60,17 @@ dotnet run --project examples/dotnet/callgraph/callgraph.csproj
 dotnet run --project examples/dotnet/ptrace_native/ptrace_native.csproj
 dotnet run --project examples/dotnet/blockstep/blockstep.csproj
 dotnet run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
+dotnet run --project examples/dotnet/flatprofile/flatprofile.csproj
+dotnet run --project examples/dotnet/amplification/amplification.csproj
+dotnet run --project examples/dotnet/runtimegaps/runtimegaps.csproj
+dotnet run --project examples/dotnet/footprint/footprint.csproj
+dotnet run --project examples/dotnet/runtimebuckets/runtimebuckets.csproj
+dotnet run --project examples/dotnet/instructionmix/instructionmix.csproj
+dotnet run --project examples/dotnet/perfannotate/perfannotate.csproj
+dotnet run --project examples/dotnet/loops/loops.csproj
+dotnet run --project examples/dotnet/descent/descent.csproj
+dotnet run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
+dotnet run --project examples/dotnet/codeimage/codeimage.csproj
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -368,6 +389,208 @@ The child is launched with libc `posix_spawn` and reaped with raw `waitpid`, **n
 watchdog, so a moved/re-tiered address self-skips rather than hangs. Self-skips (exit 0) where
 ptrace is denied or the SDK/method is absent.
 
+## More reports & examples (dotnet-examples-roadmap)
+
+These extend the same substrate — one project per report, `Program.cs` (setup + scope) +
+`Report.cs` (presentation) — landing the roadmap's remaining reports and example projects.
+
+### flatprofile — `perf report` parity (observed output)
+
+`Methods` is already sorted by self count; re-cut as the classic profiler table with an Overhead %
+and a running cumulative %:
+
+```
+rundown enabled: True; 1418 labelled instructions across 41 methods.
+
+      self   overhead     cumul  method
+       235     16.57%     16.6%  System.String::JoinCore(...)
+       130      9.17%     25.7%  System.Buffer.Memmove
+       105      7.40%     33.1%  System.IO.StreamWriter::WriteLine(string)
+       ...
+        44      3.10%     64.0%  Program.Work
+```
+
+Counts only — the single-step WEAK tier has no timestamps, so there is deliberately no "time" column.
+
+### amplification — user vs BCL vs native runtime (observed output)
+
+A one-line `Work()` single-steps ~1M runtime instructions. This measures that: the whole window
+(`Addresses.Length`) vs the managed slice (`LabelledInstructions`) vs the native-runtime remainder,
+then splits the managed slice by `AsmMethod.Assembly`:
+
+```
+rundown enabled: True; captured 966497 instructions in the window (truncated) for ONE managed Work() call.
+
+  bucket                           insns    share
+  user code (Program.*)              133    0.01%
+  BCL (System.*, labelled)          1177    0.12%
+  native runtime (unlabelled)      965187   99.86%
+  total window                    966497  100.00%
+
+amplification factor: 738x — 966497 captured instructions per 1310 labelled managed one
+```
+
+This is *why* the managed single-step tier is the WEAK tier; the clean managed path is STRONG
+whole-window PT (forward-look).
+
+### runtimegaps — the largest native-runtime bursts (observed output)
+
+The runtime instructions between labelled runs are elided, but their count rides on the next
+labelled instruction as `RuntimeBefore`. Ranked, and aggregated by the method each burst precedes:
+
+```
+1310 labelled instructions; 678136 native-runtime instructions ran between them.
+
+largest single runtime bursts (runtime insns, then the method they precede):
+      339839  Program.Work  (push rbp)
+      143924  Asmtest.AsmTrace.set_Armed  (push rbp)
+       25571  System.String::JoinCore(...)  (push rbp)
+```
+
+The biggest bursts are JIT compilation + the runtime call machinery reaching a method's first run.
+
+### footprint — working-set + jump-distance locality (observed output)
+
+The raw `Addresses` answer two microarchitectural questions with pure arithmetic — distinct 4 KB
+code pages touched, and how far consecutive instructions jump:
+
+```
+captured 1039938 instruction executions (truncated).
+code working-set: 704 distinct 4 KB pages (2816 KB of code addresses touched).
+
+jump-distance locality (|addr[i+1] - addr[i]|):
+  straight-line (<16 B)     935878    90.0%  ############################
+  near   (<256 B)            43722     4.2%  #
+  far    (>=1 MB)            16754     1.6%  #
+backward transitions (loops / returns): 40249 of 1039937 (3.9%).
+```
+
+### runtimebuckets — the runtime lump named by module (observed output)
+
+`HwTrace.SymbolizeBuckets` (P/Invoke of `asmtest_hwtrace_symbolize_bucket`) resolves each address to
+its module. A whole window is ~1M addresses and the resolver scans `/proc/self/maps` per address, so
+the example resolves **by page** (a 4 KB page belongs to one mapping) — one representative per
+distinct page, execution-weighted:
+
+```
+symbolized 1039938 captured addresses across 704 code pages into 10 module bucket(s) (window truncated).
+
+         insns    share  module / JIT symbol
+        592451    57.0%  libcoreclr.so
+        395771    38.1%  libclrjit.so
+         42175     4.1%  libc.so.6
+           446     0.0%  memfd:doublemapper (deleted)   <- the JIT's own emitted code
+```
+
+`SymbolizeBuckets` reads `/proc/<pid>/maps` + the perf-map, not the trace, so it runs post-close on
+the retained `Addresses`.
+
+### instructionmix — the mnemonic-class histogram (observed output)
+
+What *kind* of work runs: the first token of each `AsmInstruction.Text`, classed, with control flow
+confirmed structurally via `Disas.IsCall/IsBranch/IsRet`:
+
+```
+1310 labelled instructions classified (structurally via Disas).
+
+  data-move            498    38.0%  ########################
+  stack                195    14.9%  #########
+  compare/test         161    12.3%  ########
+  branch               159    12.1%  ########
+  call/ret             100     7.6%  #####
+  arith/logic          129     9.8%  ######
+  SIMD/FP               24     1.8%  #
+
+control-flow density: 159 branches + 62 calls = 16.9 per 100 instructions.
+```
+
+### perfannotate — `perf annotate`, instruction-exact (observed output)
+
+Region-scoped single-step gives the same view as `perf annotate` but EXACT (not sampled): every
+instruction of a native routine with its true execution count. A branchy loop (add only even `i`)
+makes the counts vary WITHIN the body:
+
+```
+count_even(10) = 20 (expect 20); 70 instructions executed over the region.
+
+   count  heat              addr   instruction
+      11  ################  0x06   cmp rcx, rdi
+      10  ###############   0x0b   test rcx, 1
+       5  #######           0x14   add rax, rcx     <- guarded: runs on EVEN i only
+       1  #                 0x1c   ret
+```
+
+### loops — per-loop trip counts from backedges (observed output)
+
+A backedge is a taken branch to a lower offset. Walk the ordered `InsnOffsets()` stream; a decrease
+is the loop's back-branch firing once per iteration. A nested loop has two:
+
+```
+nested(3,4) = 12 (expect 12); 86 instructions executed.
+
+  header  backedge       trips  back-branch instruction
+  0x06    0x1f ->           3  jmp ...   <- outer loop
+  0x0e    0x1a ->          12  jmp ...   <- inner loop (3*4)
+```
+
+Exact, not sampled — a static CFG shows the loops exist, not how many times each ran.
+
+### descent — the exact nested call tree (observed output)
+
+`Ptrace.TraceCallEx` + `Descent` single-steps a forked child INTO its callees as nested frames, so
+every frame's own (self) and subtree (inclusive) counts are exact. A 3-level A→B→C blob:
+
+```
+A(100) = 107 (expect 107, = 100 + 4[C] + 2[B] + 1[A]); 3 frame(s) recorded.
+
+  frame                       self    incl
+  A @0x00                        4       9
+    B @0x0d                      3       5
+      C @0x17                    2       2
+```
+
+This is the noise-free tree the in-process `callgraph` example can only approximate.
+
+### descent_dotnet — call descent against a live CoreCLR (observed output)
+
+The out-of-process managed counterpart: attach to `jit_dotnet`'s new `chain` mode (`Program::Chain`
+calls `Program::Leaf` twice), resolve both from the perf-map, and step INTO `Leaf` as nested frames
+while it runs in *another*, GC'd, multi-threaded runtime:
+
+```
+resolved 'int32 [jit_dotnet] Program::Chain(int32,int32)[Optimized]'
+  @ 0x…1a70 (56 bytes); callee 'Program::Leaf(...)' @ 0x…1ad0 (8 bytes) in live pid 259.
+
+single-stepped the REAL JIT'd Program::Chain out of process (it returned 2763886902); 3 frame(s).
+
+  frame                     self    incl
+  Program::Chain              22      30
+    Program::Leaf              4       4
+    Program::Leaf              4       4
+```
+
+Same `posix_spawn` + raw `waitpid` + dedicated-thread watchdog discipline as `ptrace_dotnet`.
+Self-skips (exit 0) where ptrace is denied or the SDK/methods are absent.
+
+### codeimage — one address, two code bodies over logical time (observed output)
+
+The time-aware code image answers "what bytes were live here at logical time N" — the read a
+branch-trace decoder needs when a JIT reuses an address. A self-patched blob (v0: return 1 → v1:
+return 2), both bodies kept in the timeline and both really run:
+
+```
+  executed v0 (before patch): returned 1 (expect 1)
+  executed v1 (after  patch): returned 2 (expect 2)
+
+BytesAt the SAME address, read AFTER the patch, at two logical times:
+  seq 1:  b8 01 00 00 00 c3   mov eax, 1
+  seq 2:  b8 02 00 00 00 c3   mov eax, 2
+```
+
+Honest caveat: a real tier0→tier1 relocates to a *new* address, so a fixed-region code image does
+not capture managed tiering — this shows the mechanism on a controlled blob. Self-skips where the
+recorder or W^X patching is unavailable.
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -404,3 +627,15 @@ ptrace is denied or the SDK/method is absent.
 - `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
 - `JitMethodMap` — the underlying in-process address→method map (§D0.1), if you want
   it standalone; `Stop()` then `Freeze()` then `Resolve(addr)`.
+- `HwTrace.SymbolizeBuckets(ips, pid, cap)` / `HwBucket` — bucket ABSOLUTE addresses by
+  their containing module / JIT symbol (P/Invoke of `asmtest_hwtrace_symbolize_bucket`;
+  post-close safe). Used by [runtimebuckets/](runtimebuckets/).
+- `Ptrace.TraceCallEx(code, args, trace, descent, region)` /
+  `Ptrace.TraceAttachedEx(pid, base, len, trace, descent)` and `Descent`
+  (`AllowRegion` / `SetMaxDepth` / `Frames*` / `Edges`) — the call-descent shadow stack for
+  exact nested trees. Used by [descent/](descent/) and [descent_dotnet/](descent_dotnet/).
+- `CodeImage.Track` / `.Refresh` / `.Now` / `.BytesAt` — the time-aware code image: what bytes
+  were live at an address as of a logical timestamp. Used by [codeimage/](codeimage/).
+- `Disas.Available` / `.IsCall` / `.IsBranch` / `.IsRet` — structural control-flow classifiers
+  over live addresses. Used by [instructionmix/](instructionmix/), [loops/](loops/), and
+  [callgraph/](callgraph/).

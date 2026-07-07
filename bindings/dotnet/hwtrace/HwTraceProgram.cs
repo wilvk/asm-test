@@ -430,6 +430,25 @@ static class HwTraceProgram
             codeCls.Free();
             codeBlob.Free();
 
+            // --- symbolize_bucket: address→module attribution (whole-window noise) --- //
+            // HwTrace.SymbolizeBuckets classifies a list of ABSOLUTE addresses by the
+            // mapped-file / perf-map region containing each — the post-close primitive that
+            // names the ~1M-instruction runtime lump a whole-window scope captures. Feed it a
+            // known interior address (an exec_alloc'd mapping) twice plus one unmapped address
+            // (1): every address must land in SOME bucket (total count preserved), and the
+            // unmapped one falls under "[unknown]".
+            var codeSym = NativeCode.FromBytes(ROUTINE);
+            ulong known = (ulong)codeSym.Base.ToInt64();
+            var buckets = HwTrace.SymbolizeBuckets(new ulong[] { known, known, 1UL });
+            ulong bTotal = 0; bool hasUnknown = false;
+            foreach (HwBucket b in buckets) { bTotal += b.Count; if (b.Label == "[unknown]") hasUnknown = true; }
+            Check(buckets.Length >= 1 && bTotal == 3,
+                  $"symbolize_bucket: all 3 addresses bucketed ({buckets.Length} buckets, total {bTotal})");
+            Check(hasUnknown, "symbolize_bucket: the unmapped address (1) buckets under [unknown]");
+            Check(HwTrace.SymbolizeBuckets(Array.Empty<ulong>()).Length == 0,
+                  "symbolize_bucket: empty input yields no buckets");
+            codeSym.Free();
+
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns
             // only available backends in ascending-enum order with no dups;
