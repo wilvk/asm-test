@@ -581,6 +581,32 @@ void emu_guard_reg_clear(emu_t *e);
 bool emu_set_reg(emu_t *e, const char *name, uint64_t value);
 void emu_clear_regs(emu_t *e);
 
+/* ------------------------------------------------------------------ */
+/* Snapshot / restore (x86-64 guest)                                   */
+/* ------------------------------------------------------------------ */
+
+/* A point-in-time copy of the whole guest: the full register context plus the
+ * extents, permissions, and contents of every mapped region. Mapped memory and
+ * the stack deliberately persist across emu_call_* (that is how a caller
+ * preloads data) — so a fuzz or mutation sweep otherwise runs each candidate
+ * against memory dirtied by earlier candidates, making killed/survived
+ * classification depend on handle history. Bracketing the sweep with a
+ * snapshot/restore pair gives every candidate identical starting state. */
+typedef struct emu_snapshot emu_snapshot_t;
+
+/* Capture the guest as it is now. NULL on allocation/Unicorn failure. */
+emu_snapshot_t *emu_snapshot(emu_t *e);
+
+/* Restore the guest to exactly the snapshot: the mapping set (a region mapped
+ * since the snapshot is unmapped; one unmapped since is remapped), every
+ * region's bytes, and the register context. Handle-level arming — watchpoints,
+ * register guards, preloads, the fuzz corpus — is deliberately untouched: those
+ * belong to the harness, not the guest. Returns false on error (the guest may
+ * then be partially restored; restoring again is safe). */
+bool emu_restore(emu_t *e, const emu_snapshot_t *s);
+
+void emu_snapshot_free(emu_snapshot_t *s);
+
 /* Format a one-line description of a watchpoint violation into buf, including
  * the offending store's disassembly when Capstone is present (pairs with the
  * disassembly tier; in src/disasm.c). "no violation" when *w did not fire. */

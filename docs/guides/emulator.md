@@ -100,6 +100,27 @@ emu_write(E, 0x300000, &value, sizeof value);
 emu_read(E, 0x300000, &out, sizeof out);
 ```
 
+### Snapshot and restore
+
+Mapped memory and the stack persist across calls — that is how preloading
+works — so a sweep of many candidates (fuzzing, [mutation
+testing](#coverage-guided-fuzzing--mutation-testing)) otherwise runs each one
+against memory dirtied by its predecessors. Bracket the sweep with a snapshot:
+
+```c
+emu_snapshot_t *s = emu_snapshot(E);   /* registers + every mapped region */
+for (…each candidate…) {
+    emu_restore(E, s);                 /* pristine, identical starting state */
+    emu_call(E, …);
+}
+emu_snapshot_free(s);
+```
+
+`emu_restore` reinstates the register context, every region's bytes, **and the
+mapping set itself** (a region mapped after the snapshot is unmapped again).
+Handle-level arming — watchpoints, register guards, preloads, the fuzz
+corpus — belongs to the harness, not the guest, and survives a restore.
+
 ### Faults
 
 An invalid access sets `faulted`, `fault_addr`, and `fault_kind` instead of

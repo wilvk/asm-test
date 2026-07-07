@@ -41,10 +41,10 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 39 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 |
+| ✅ Fixed & verified | 40 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 |
 | ⏸ Confirmed, deferred | 2 | K1 (CI-cache PR — needs a CI run), N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
-| ⬜ Open expansions (step 5) | 6 | P1 E5 P2 P3 P4 P5 |
+| ⬜ Open expansions (step 5) | 5 | P1 P2 P3 P4 P5 |
 
 Landed across: **59adb74** (step 1), **817cc72** (step 2), **356b0ff** + **2b8e8f9**
 (step 3), **8fb7c14** (step 4), **a8f7054** (step 6). Each "fixed" row was
@@ -156,7 +156,7 @@ can't assemble — none of which any current gate catches.
 | A6 | No mixed integer+FP capture macro (`ASM_MIXCALL`) | Medium | expansion | ✅ fixed (post-review) |
 | A7 | Differential testing is integer-only (no FP reference models) | Medium | expansion | ✅ fixed (post-review) |
 | R5 | No `--fail-fast`, `--repeat=N`, or shard selection | Medium | expansion | ✅ fixed (post-review) |
-| E5 | No emulator snapshot/restore → order-dependent fuzz/mutation sweeps | Medium | expansion | verified |
+| E5 | No emulator snapshot/restore → order-dependent fuzz/mutation sweeps | Medium | expansion | ✅ fixed (post-review) |
 | E2 | `emulator.md` still claims register state is retained across calls | Medium | docs | ✅ fixed (step 2) |
 | D4 | API-reference index omits the post-1.0 surface (Win64, AVX2/512) | Medium | docs | ✅ fixed (step 4) |
 | D5 | No troubleshooting / FAQ page for the environment-sensitive tiers | Medium | docs | ✅ fixed (step 4) |

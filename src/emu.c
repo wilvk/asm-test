@@ -733,6 +733,99 @@ void emu_clear_regs(emu_t *e) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Snapshot / restore                                                  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t begin;
+    size_t size;
+    uint32_t perms;
+    uint8_t *bytes;
+} snap_region_t;
+
+struct emu_snapshot {
+    uc_context *ctx; /* full register file (uc_context_save) */
+    snap_region_t *regions;
+    size_t nregions;
+};
+
+void emu_snapshot_free(emu_snapshot_t *s) {
+    if (s == NULL)
+        return;
+    for (size_t i = 0; i < s->nregions; i++)
+        free(s->regions[i].bytes);
+    free(s->regions);
+    if (s->ctx != NULL)
+        uc_context_free(s->ctx);
+    free(s);
+}
+
+emu_snapshot_t *emu_snapshot(emu_t *e) {
+    if (e == NULL)
+        return NULL;
+    emu_snapshot_t *s = (emu_snapshot_t *)calloc(1, sizeof *s);
+    if (s == NULL)
+        return NULL;
+    uc_mem_region *cur = NULL;
+    uint32_t n = 0;
+    if (uc_context_alloc(e->uc, &s->ctx) != UC_ERR_OK ||
+        uc_context_save(e->uc, s->ctx) != UC_ERR_OK ||
+        uc_mem_regions(e->uc, &cur, &n) != UC_ERR_OK) {
+        emu_snapshot_free(s);
+        return NULL;
+    }
+    s->regions = (snap_region_t *)calloc(n > 0 ? n : 1, sizeof *s->regions);
+    if (s->regions == NULL)
+        goto fail;
+    for (uint32_t i = 0; i < n; i++) {
+        snap_region_t *r = &s->regions[s->nregions];
+        r->begin = cur[i].begin;
+        r->size = (size_t)(cur[i].end - cur[i].begin) + 1; /* end inclusive */
+        r->perms = cur[i].perms;
+        r->bytes = (uint8_t *)malloc(r->size);
+        if (r->bytes == NULL ||
+            uc_mem_read(e->uc, r->begin, r->bytes, r->size) != UC_ERR_OK) {
+            free(r->bytes);
+            goto fail;
+        }
+        s->nregions++;
+    }
+    uc_free(cur);
+    return s;
+fail:
+    uc_free(cur);
+    emu_snapshot_free(s);
+    return NULL;
+}
+
+bool emu_restore(emu_t *e, const emu_snapshot_t *s) {
+    if (e == NULL || s == NULL)
+        return false;
+    /* Make the mapping set exact: drop everything mapped now, then remap the
+     * snapshot's regions with their recorded permissions and contents. Hooks
+     * hang off the uc engine, not the mappings, so they survive. */
+    uc_mem_region *cur = NULL;
+    uint32_t n = 0;
+    if (uc_mem_regions(e->uc, &cur, &n) != UC_ERR_OK)
+        return false;
+    for (uint32_t i = 0; i < n; i++) {
+        size_t size = (size_t)(cur[i].end - cur[i].begin) + 1;
+        if (uc_mem_unmap(e->uc, cur[i].begin, size) != UC_ERR_OK) {
+            uc_free(cur);
+            return false;
+        }
+    }
+    uc_free(cur);
+    for (size_t i = 0; i < s->nregions; i++) {
+        const snap_region_t *r = &s->regions[i];
+        if (uc_mem_map(e->uc, r->begin, r->size, r->perms) != UC_ERR_OK ||
+            uc_mem_write(e->uc, r->begin, r->bytes, r->size) != UC_ERR_OK)
+            return false;
+    }
+    return uc_context_restore(e->uc, s->ctx) == UC_ERR_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* AArch64 guest                                                       */
 /* ------------------------------------------------------------------ */
 

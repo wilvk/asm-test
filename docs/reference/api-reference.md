@@ -208,7 +208,7 @@ consumer points at an older, leaner lib that lacks them.)
 | Disassembly | `emu_disas`, `emu_disas_available` | Decode the one instruction at a code offset into text (Capstone). Writes into a caller buffer — no opaque handle — and self-skips to empty when absent. Carried by the superset `libasmtest_emu` (Track C). |
 | Guard buffers | `asmtest_guarded_alloc`/`_free`, `asmtest_guarded_alloc_under`/`_free_under` | Share a pointer to a guarded buffer with the routine under test. |
 | RNG | `asmtest_rng_u64`, `asmtest_rng_long`, `asmtest_rng_range` | Deterministic splitmix64 source. |
-| Emulator | `emu_open`/`emu_close`/`emu_map`/`emu_read`/`emu_write`, `emu_call`/`_fp`/`_vec`/`_traced`, `emu_call_win64`, and the per-guest `emu_arm64_*` / `emu_riscv_*` / `emu_arm_*` families | Opaque handle + value-struct result; faults surface as data, not crashes. |
+| Emulator | `emu_open`/`emu_close`/`emu_map`/`emu_read`/`emu_write`, `emu_call`/`_fp`/`_vec`/`_traced`, `emu_call_win64`, `emu_snapshot`/`emu_restore`/`emu_snapshot_free`, and the per-guest `emu_arm64_*` / `emu_riscv_*` / `emu_arm_*` families | Opaque handle + value-struct result; faults surface as data, not crashes. Snapshot/restore captures registers + all mapped regions so sweeps run history-independent. |
 | Layout | `regs_t`, `vec128_t`, `emu_*_regs_t`, `emu_result_t` (and per-guest result structs), `emu_trace_t` | Field offsets are published in `asmtest_abi.json` and pinned by `_Static_assert` in the headers. |
 | Constants | `ASMTEST_SENTINEL_*`, the flag masks (`ASMTEST_CF`/`ZF`/…), `ASMTEST_VERSION`/`_NUM` | Real `#define`s; the manifest also emits the sentinel and flag values so a generator needn't re-read the header for them. |
 

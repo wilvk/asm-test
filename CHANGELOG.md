@@ -8,6 +8,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Emulator snapshot/restore — `emu_snapshot` / `emu_restore` / `emu_snapshot_free`**
+  (E5 of the 2026-07-04 review). Captures the full register context
+  (`uc_context_save`) plus the extents, permissions, and contents of every mapped
+  region; restore reinstates the bytes **and the mapping set itself** (a region
+  mapped after the snapshot is unmapped again). Mapped memory deliberately persists
+  across `emu_call_*` — so fuzz/mutation sweeps previously ran each candidate
+  against memory dirtied by its predecessors; bracketing the sweep with
+  snapshot/restore makes killed/survived classification independent of handle
+  history. Handle-level arming (watchpoints, register guards, preloads, the fuzz
+  corpus) survives a restore by design. Emu suite 50 → 52.
+
 - **`ASM_MIXCALL` — mixed integer + FP argument capture** (A6 of the 2026-07-04
   review). The canonical ptr+len+scalar shape gets a first-class macro:
   `ASM_MIXCALL(&r, fn, (buf, n), (0.5))` marshals each parenthesized group into its

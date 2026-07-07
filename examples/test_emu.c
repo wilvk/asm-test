@@ -659,6 +659,69 @@ TEST(emu, mutation_strong_suite_kills_more) {
     ASSERT_TRUE(ss.killed > ws.killed);
 }
 
+/* ---- Snapshot / restore (E5) ---------------------------------------------
+ * Mapped memory and the stack persist across calls by design (that is how a
+ * caller preloads data), so a fuzz/mutation sweep otherwise runs against
+ * memory dirtied by earlier candidates. A snapshot/restore pair brackets the
+ * sweep. TWO_WRITES is hand-assembled, so these run on any host. */
+
+TEST(emu, snapshot_restores_dirtied_memory_and_mappings) {
+    ASSERT_TRUE(emu_map(E, WATCH_BASE, 0x1000));
+    uint64_t before = 0x1122334455667788ULL;
+    ASSERT_TRUE(emu_write(E, WATCH_BASE, &before, sizeof before));
+
+    emu_snapshot_t *s = emu_snapshot(E);
+    ASSERT_TRUE(s != NULL);
+
+    /* Dirty the snapshotted region (registers zero per call, so TWO_WRITES
+     * stores 0 over the pattern)... */
+    emu_result_t r;
+    long args[] = {(long)WATCH_BASE};
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    ASSERT_NO_FAULT(&r);
+    uint64_t after = ~0ULL;
+    ASSERT_TRUE(emu_read(E, WATCH_BASE, &after, sizeof after));
+    ASSERT_UNE(after, before);
+
+    /* ...and grow the mapping set past what the snapshot knows. */
+    ASSERT_TRUE(emu_map(E, WATCH_BASE + 0x100000, 0x1000));
+
+    /* Restore: the bytes come back and the extra mapping is gone. */
+    ASSERT_TRUE(emu_restore(E, s));
+    uint64_t restored = 0;
+    ASSERT_TRUE(emu_read(E, WATCH_BASE, &restored, sizeof restored));
+    ASSERT_UEQ(restored, before);
+    ASSERT_FALSE(emu_write(E, WATCH_BASE + 0x100000, &before, sizeof before));
+    emu_snapshot_free(s);
+}
+
+TEST(emu, snapshot_makes_sweeps_history_independent) {
+    /* The same candidate re-run from the same snapshot sees byte-identical
+     * state, no matter what ran in between — the property that makes
+     * killed/survived classification independent of handle history. */
+    ASSERT_TRUE(emu_map(E, WATCH_BASE, 0x1000));
+    uint64_t pattern = 0xA5A5A5A5A5A5A5A5ULL;
+    ASSERT_TRUE(emu_write(E, WATCH_BASE + 0x800, &pattern, sizeof pattern));
+
+    emu_snapshot_t *s = emu_snapshot(E);
+    ASSERT_TRUE(s != NULL);
+
+    emu_result_t r;
+    long args[] = {(long)WATCH_BASE};
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    uint64_t first = 0;
+    ASSERT_TRUE(emu_read(E, WATCH_BASE + 0x800, &first, sizeof first));
+
+    /* Dirty further, restore, re-run: same observation as the first run. */
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    ASSERT_TRUE(emu_restore(E, s));
+    emu_call(E, TWO_WRITES, sizeof TWO_WRITES, args, 1, 0, &r);
+    uint64_t second = ~0ULL;
+    ASSERT_TRUE(emu_read(E, WATCH_BASE + 0x800, &second, sizeof second));
+    ASSERT_UEQ(second, first);
+    emu_snapshot_free(s);
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:
