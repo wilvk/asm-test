@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Managed single-step is now safe by construction — `AsmTrace.Method()` lazy-arms
+  only the method body.** New `asmtest_hwtrace_call_scoped(name, fn, args, nargs,
+  result, out)` (`src/ss_backend.c` / `src/hwtrace.c`) arms the single-step window,
+  calls the target through the SysV integer ABI, and disarms — all in native code —
+  so the region filter keeps only the body's offsets and NONE of the caller's or a
+  managed runtime's machinery is ever under `EFLAGS.TF`. The .NET `Invoke` no longer
+  steps `DynamicInvoke` in-process (the crash surface where an in-window
+  `pthread_create` that blocks `SIGTRAP` force-killed the process on slow hosts): it
+  marshals through a `(long…)->long` shim table and, for signatures the shims can't
+  express, **auto-falls back to the out-of-process stepper with a loud `SkipReason`**
+  — never a silent miss. `HwTrace.DegradationNote()` gains the honest managed-window
+  warning. Host-tested (`test_call_scoped`, byte-for-byte parity with begin/end) and
+  validated on the .NET lane; see
+  [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
+
 - **Example suites are now auto-discovered.** Every `examples/test_foo.c` +
   `examples/foo.s` pair (`foo.asm` under `ASM_SYNTAX=nasm`) links through a
   `test_%` pattern rule — drop the two files in and `make test` picks the suite

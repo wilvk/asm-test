@@ -249,6 +249,14 @@ namespace Asmtest
         public static extern int asmtest_hwtrace_begin_scope([MarshalAs(UnmanagedType.LPStr)] string name, ref HwScope @out);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_scope(HwScope handle, byte[] buf, UIntPtr buflen);
 
+        // B (lazy-arm): register-region + arm + call fn(args…) + disarm as ONE native
+        // step — the managed-SAFE replacement for begin_scope + DynamicInvoke + end. Only
+        // fn's in-[base,len) body is stepped; nothing the caller runs is under TF.
+        [DllImport(HWTRACE, CharSet = CharSet.Ansi)]
+        public static extern int asmtest_hwtrace_call_scoped(
+            [MarshalAs(UnmanagedType.LPStr)] string name, IntPtr fn, long[] args, int nargs,
+            out long result, ref HwScope @out);
+
         // §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface.
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_begin_window(IntPtr trace, ref HwScope @out);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_end_window(HwScope handle, IntPtr trace);
@@ -635,6 +643,16 @@ namespace Asmtest
                 parts.Add(Ptrace.Available()
                     ? "out-of-process ptrace stepper available as the fallback"
                     : $"no ptrace fallback ({Ptrace.SkipReason()})");
+            // D (honesty) — managed-singlestep-lazy-arm-plan. The single-step tier's
+            // in-process EFLAGS.TF window is FATAL, not degraded, on a managed thread that
+            // spawns a thread in-window (glibc pthread_create blocks SIGTRAP → the kernel
+            // force-kills the process). AsmTrace.Method() is safe — it lazy-arms only the
+            // body (Option B) — but a whole-window `new AsmTrace()` on a runtime thread is
+            // not; say so where single-step is the tier in play.
+            if (parts.Exists(p => p.Contains("using SingleStep")))
+                parts.Add("in-process single-step over a whole managed window is fatal if "
+                        + "the runtime spawns a thread in-window — use AsmTrace.Method() "
+                        + "(lazy-arm, safe) or outOfProcess: true");
             return string.Join("; ", parts);
         }
 
@@ -1513,30 +1531,81 @@ namespace Asmtest
                 SkipReason = "trace allocation failed";
                 return;
             }
-            HwNative.asmtest_hwtrace_register_region(_name, _methodBase, _methodLen, _handle);
-            if (_oop) return; // §D3: armed lazily by Invoke (the helper steps, not TF)
-            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
-            int rc = HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope);
-            if (rc == HwNative.ASMTEST_HW_ESTATE)
+            // B (lazy-arm) — managed-singlestep-lazy-arm-plan. Ensure the portable tier is
+            // up (register_region needs it) and register the body region, but DO NOT arm
+            // here. Both the in-process (call_scoped) and out-of-process (stealth) paths
+            // arm lazily inside Invoke, so the armed EFLAGS.TF window spans ONLY the call —
+            // never the caller's setup or a managed thread-spawn that would force-kill an
+            // in-process TF window. Armed flips true when Invoke actually steps the body.
+            int initRc = AutoInitSingleStep();
+            if (initRc != HwNative.ASMTEST_HW_OK && !_oop)
             {
-                // §Z0 parity with the empty ctor: auto-init the portable tier and retry.
-                rc = AutoInitSingleStep() == HwNative.ASMTEST_HW_OK
-                    ? HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope)
-                    : rc;
+                SkipReason = $"single-step tier did not initialise (rc={initRc}) — "
+                           + HwTrace.DegradationNote();
+                return;
             }
-            Armed = _began = rc == HwNative.ASMTEST_HW_OK;
-            if (!Armed) SkipReason = $"named-method scope did not arm (rc={rc})";
+            int reg = HwNative.asmtest_hwtrace_register_region(_name, _methodBase, _methodLen, _handle);
+            if (reg != HwNative.ASMTEST_HW_OK && !_oop)
+            {
+                SkipReason = $"could not register the method-body region (rc={reg})";
+                return;
+            }
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
         }
 
+        // B (lazy-arm) shim table — the concrete (long…)->long reverse-P/Invoke delegates.
+        // A generic Func<> cannot be marshaled to a function pointer, so the arities are
+        // spelled out; Cdecl == SysV on Linux x86-64, matching the native ss_dispatch_call.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody0();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody1(long a);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody2(long a, long b);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody3(long a, long b, long c);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody4(long a, long b, long c, long d);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody5(long a, long b, long c, long d, long e);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long AsmBody6(long a, long b, long c, long d, long e, long f);
+        static readonly Type[] ShimTypes = {
+            typeof(AsmBody0), typeof(AsmBody1), typeof(AsmBody2), typeof(AsmBody3),
+            typeof(AsmBody4), typeof(AsmBody5), typeof(AsmBody6),
+        };
+        Delegate _shim; // the reverse-P/Invoke shim, kept alive across the native call
+
+        // Build the reverse-P/Invoke shim for _target's signature and marshal the args to
+        // long[]. shimmable=false when the arity is > 6, the signature is not (long…)->long
+        // (CreateDelegate throws), or an arg is not integer-convertible — the caller then
+        // routes OUT-OF-PROCESS rather than stepping DynamicInvoke in a managed window.
+        long[] MarshalIntArgs(object[] args, out bool shimmable)
+        {
+            shimmable = false;
+            int n = args?.Length ?? 0;
+            if (n > 6) return System.Array.Empty<long>();
+            try { _shim = Delegate.CreateDelegate(ShimTypes[n], _target.Target, _target.Method); }
+            catch { return System.Array.Empty<long>(); }
+            var a = new long[n];
+            try { for (int i = 0; i < n; i++) a[i] = ToLong(args[i]); }
+            catch { _shim = null; return System.Array.Empty<long>(); }
+            shimmable = true;
+            return a;
+        }
+
+        static long ToLong(object o) => o switch
+        {
+            null => 0L,
+            long l => l,
+            IntPtr p => (long)p,
+            bool b => b ? 1L : 0L,
+            _ => Convert.ToInt64(o),
+        };
+
         /// <summary>
-        /// §D0.3: invoke the named method inside this scope through the library's own
-        /// call site. In-process, this is a plain (indirect) delegate invocation — the
-        /// armed region records exactly the body's executed offsets, and the
-        /// reflection overhead around it is out-of-range noise the region filter drops.
-        /// With <c>outOfProcess: true</c> (§D3), the call runs under the stealth
-        /// stepper: a helper process reverse-attaches, steps the body out of band, and
-        /// this thread is never armed with EFLAGS.TF; on a refused attach the method
-        /// still runs (uninstrumented) and <see cref="SkipReason"/> says why.
+        /// §D0.3 / Option B: invoke the named method inside this scope. In-process, this
+        /// is the LAZY-ARM path — a native function pointer to the body is minted pre-arm
+        /// (a per-arity reverse-P/Invoke shim) and then <c>arm → call → disarm</c> happens
+        /// entirely in native code (<c>asmtest_hwtrace_call_scoped</c>), so the runtime's
+        /// machinery (and any in-window <c>pthread_create</c>) is NEVER stepped — the
+        /// window holds only the body's executed offsets. A signature the shim set cannot
+        /// express (ref/out, structs, &gt;6 args), or <c>outOfProcess: true</c>, routes
+        /// through the stealth stepper instead; on a refused attach the method still runs
+        /// (uninstrumented) and <see cref="SkipReason"/> says why — never a silent miss.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
         public object Invoke(params object[] args)
@@ -1545,8 +1614,34 @@ namespace Asmtest
                 throw new HwTraceException("Invoke is only valid on an AsmTrace.Method(...) scope");
             if (_disposed)
                 throw new HwTraceException("Invoke after Dispose");
-            if (!_oop || !HwNative.LibAvailable || _handle == IntPtr.Zero)
-                return _target.DynamicInvoke(args);
+            if (!HwNative.LibAvailable || _handle == IntPtr.Zero)
+                return _target.DynamicInvoke(args); // ctor self-skipped: never lose the call
+
+            // B (lazy-arm), in-process. Only for a signature the (long…)->long shim set
+            // covers; anything else falls through to the out-of-process path (B3) rather
+            // than stepping DynamicInvoke in a managed window (the crash surface).
+            if (!_oop)
+            {
+                long[] iargs = MarshalIntArgs(args, out bool shimmable);
+                if (shimmable)
+                {
+                    IntPtr fn = Marshal.GetFunctionPointerForDelegate(_shim);
+                    int rc = HwNative.asmtest_hwtrace_call_scoped(
+                        _name, fn, iargs, iargs.Length, out long r, ref _scope);
+                    GC.KeepAlive(_shim);
+                    if (rc == HwNative.ASMTEST_HW_OK) { Armed = true; return r; }
+                    // B3: in-process arm failed — degrade OUT-OF-PROCESS, loud reason.
+                    SkipReason = $"in-process lazy-arm did not run (rc={rc}); falling back out-of-process";
+                }
+                else
+                    // B3: signature outside the shim set — route out-of-process rather than
+                    // stepping the managed reflection machinery under EFLAGS.TF.
+                    SkipReason = "signature outside the (long…)->long shim set; routing out-of-process";
+            }
+
+            // Out-of-process (explicit outOfProcess, or the B3 auto-fallback above). The
+            // calling thread is never TF-armed; the helper steps the body out of band. On
+            // a refused attach the call still runs uninstrumented — never a silent miss.
             object ret = null;
             Exception thrown = null;
             bool ran = false;
@@ -1556,11 +1651,12 @@ namespace Asmtest
                 try { ret = _target.DynamicInvoke(args); }
                 catch (Exception e) { thrown = e; }
             };
-            int rc = HwNative.asmtest_hwtrace_stealth_trace(
+            int src = HwNative.asmtest_hwtrace_stealth_trace(
                 _methodBase, _methodLen, _handle, out long _, cb, IntPtr.Zero);
             GC.KeepAlive(cb);
-            if (rc == HwNative.ASMTEST_HW_OK) Armed = true;
-            else SkipReason = $"stealth stepper did not run (rc={rc}) — Yama ptrace_scope, "
+            if (src == HwNative.ASMTEST_HW_OK) Armed = true;
+            else SkipReason = (string.IsNullOrEmpty(SkipReason) ? "" : SkipReason + " — ")
+                            + $"stealth stepper did not run (rc={src}) — Yama ptrace_scope, "
                             + "missing asmtest-stealth-helper, or non-x86-64-Linux";
             if (!ran) ret = _target.DynamicInvoke(args); // never lose the call itself
             if (thrown != null) throw thrown;

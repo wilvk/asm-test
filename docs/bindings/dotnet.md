@@ -330,11 +330,16 @@ re-tiers or moves *after* the window still renders the bytes that ran; only untr
 native-runtime addresses fall back to live memory. Runnable demos of every report live
 under [examples/dotnet/](https://github.com/wilvk/asm-test/tree/main/examples/dotnet).
 
-**Named-method form (§D0.3)** — `AsmTrace.Method(delegate)` traces one managed method's
-own JIT'd body: reliable, exact offsets, where the whole-window form is best-effort. It
-resolves the standalone body (forcing the JIT via `PrepareMethod`, reading the address
-from the listener, or the jitdump rundown for a warm/R2R body), registers it as a region,
-and self-skips (never throws) if resolution or arming fails.
+**Named-method form (§D0.3, Option B lazy-arm)** — `AsmTrace.Method(delegate)` traces one
+managed method's own JIT'd body: reliable, exact offsets, where the whole-window form is
+best-effort. It resolves the standalone body (forcing the JIT via `PrepareMethod`, reading
+the address from the listener, or the jitdump rundown for a warm/R2R body), registers it as
+a region, and self-skips (never throws) if resolution or arming fails. `Invoke` is
+**managed-safe by construction**: it mints a native pointer to the body and does
+`arm → call → disarm` entirely in native code (`asmtest_hwtrace_call_scoped`), so neither
+`DynamicInvoke` nor any runtime machinery runs under `EFLAGS.TF` — an in-window
+`pthread_create` cannot fault the process (the whole-window form has no such guarantee). See
+[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
 
 ```csharp
 using var t = AsmTrace.Method((Func<long,long,long>)HotPath, emit: false);
@@ -342,11 +347,13 @@ var r = (long)t.Invoke(20L, 22L);   // Invoke is the library's own NoInlining ca
 // t.Path is exactly HotPath's executed body; t.Armed / t.SkipReason are the honesty bits
 ```
 
-Pass `outOfProcess: true` to run `Invoke` under the §D3 concealed ptrace-stealth stepper
-— a bundled helper reverse-attaches and single-steps the body out of band, so the calling
-thread is **never** armed with `EFLAGS.TF` (the safe way to trace managed code; self-skips
-where Yama refuses the attach). This is the only managed form that does not perturb the
-traced thread's own signal state.
+`Invoke` marshals through a `(long…)->long` shim table (arities 0–6); a signature it cannot
+express (ref/out, structs, >6 args) **auto-falls back** to the out-of-process stepper rather
+than stepping the reflection machinery in-process. Pass `outOfProcess: true` to force that
+route explicitly — a bundled helper reverse-attaches and single-steps the body out of band,
+so the calling thread is **never** armed with `EFLAGS.TF` (self-skips, with a `SkipReason`,
+where Yama refuses the attach — never a silent miss). The call always runs; only its capture
+degrades.
 
 **Structural classifiers** — `Disas.IsCall/IsBranch/IsRet(addr)` and
 `Disas.TryCallTarget(addr, out target)` classify a live instruction address (Capstone-gated),

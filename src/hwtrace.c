@@ -126,6 +126,12 @@ int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
 /* §Z1: region-free whole-window push (records absolute RIPs; no [base,len)). */
 int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
                             uint32_t *out_gen);
+/* B (lazy-arm): arm [base,len), dispatch fn(args…) natively, disarm — nothing the
+ * caller runs between arm and disarm is stepped (see managed-singlestep-lazy-arm). */
+int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
+                           void *fn, const long *args, int nargs,
+                           long *result_out, uint32_t *out_idx,
+                           uint32_t *out_gen);
 int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
                             size_t *len, asmtest_trace_t **trace);
 void asmtest_ss_end(void);
@@ -1328,6 +1334,62 @@ int asmtest_hwtrace_begin_scope(const char *name,
     return asmtest_hwtrace_try_begin(name);
 #else
     (void)name;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* B (lazy-arm) — managed-singlestep-lazy-arm-plan §B1. Register-region + arm + call
+ * fn(args…) + disarm as ONE native step, so the armed window holds only fn's body (the
+ * region filter drops the native dispatcher and any reverse-P/Invoke thunk). This is
+ * the managed-safe replacement for "begin_scope; DynamicInvoke; end": no caller or
+ * runtime code is stepped, so an in-window pthread_create (which blocks SIGTRAP) cannot
+ * force-kill the process. Only the single-step backend has that crash surface; PT / AMD
+ * / CoreSight observe out-of-band and return ASMTEST_HW_EUNAVAIL here (the caller uses
+ * begin/end there). fn takes nargs (0-6) integer/pointer args; *result_out (may be
+ * NULL) gets its return value; *out is the scope handle for asmtest_hwtrace_render_scope. */
+int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
+                                int nargs, long *result_out,
+                                asmtest_hwtrace_scope_t *out) {
+    if (out != NULL) {
+        out->idx = 0xffffffffu;
+        out->gen = 0;
+    }
+#if defined(HWTRACE_LIFECYCLE)
+    if (!g_inited)
+        return ASMTEST_HW_ESTATE;
+#if defined(__x86_64__)
+    if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        hw_region_t *r = find_region(name);
+        if (r == NULL)
+            return ASMTEST_HW_EINVAL;
+        int tid = hw_current_tid();
+        r->arm_tid = tid;
+        g_arm_tid = tid;
+        uint32_t idx = 0, gen = 0;
+        int rc = asmtest_ss_call_scoped(r->base, r->len, r->trace, fn, args,
+                                        nargs, result_out, &idx, &gen);
+        if (rc != ASMTEST_HW_OK)
+            return rc;
+        if (out != NULL) {
+            out->idx = idx;
+            out->gen = gen;
+        }
+        return ASMTEST_HW_OK;
+    }
+#endif
+    /* Out-of-band backends have no in-process TF crash surface, so the lazy-arm
+     * restructure is single-step-only; signal that and let the caller use begin/end. */
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
+    return ASMTEST_HW_EUNAVAIL;
+#else
+    (void)name;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
     return ASMTEST_HW_ENOSYS;
 #endif
 }

@@ -5,9 +5,15 @@ The one design decision the 2026-07-06 review of the
 evidence: **what contract should in-process EFLAGS.TF single-step offer against
 a managed runtime's threads?**
 
-> Status legend: **proposed** — a decision document, not a committed plan. No
-> phase below is scheduled until the maintainer picks a posture. Options are
-> ordered by increasing invasiveness; the recommendation is at the end.
+> Status legend: **decided (2026-07-07) — B + C-fallback + D approved and
+> implemented.** This document stays as the rationale + options analysis; the
+> approved posture (lazy-arm the body in-process, out-of-process fallback for the
+> signatures the shim set can't cover, the honesty note, and the pinned-worker
+> mitigation retained) is built and validated in
+> [managed-singlestep-lazy-arm-plan.md](managed-singlestep-lazy-arm-plan.md) — with
+> one item still open there: slow-host (throttled-CI) confirmation of the
+> crash-avoidance property. Options are ordered by increasing invasiveness; the
+> recommendation is at the end.
 
 ## The forcing evidence (2026-07-07, `4c26de6`)
 

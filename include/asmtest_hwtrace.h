@@ -233,6 +233,23 @@ typedef struct {
  * block of SIGTRAP) outside the scope. */
 int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out);
 
+/* B (lazy-arm) — the managed-SAFE named-call scope. `name` must already be a registered
+ * region (asmtest_hwtrace_register_region). Arms the single-step window, calls
+ * `fn(args…)` through the SysV integer ABI, and disarms — all in native code — so the
+ * armed window contains ONLY fn's in-[base,len) body and NONE of the caller's or a
+ * managed runtime's machinery is ever stepped. This is the crash-free replacement for
+ * "begin_scope; <managed call>; end" on the single-step backend: it dissolves the HARD
+ * CONSTRAINT above by construction (nothing that could pthread_create / block SIGTRAP
+ * runs under TF). `fn` takes 0-6 integer/pointer args; *result_out (may be NULL) gets
+ * fn's return value; *out is the handle for asmtest_hwtrace_render_scope. Returns
+ * ASMTEST_HW_OK; ASMTEST_HW_EINVAL on a name miss / NULL fn / nargs outside 0-6 (fall
+ * back to the out-of-process stepper for wider signatures); ASMTEST_HW_EUNAVAIL on the
+ * PT/AMD/CoreSight backends (out-of-band capture has no TF crash surface — use
+ * begin/end there). */
+int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
+                                int nargs, long *result_out,
+                                asmtest_hwtrace_scope_t *out);
+
 /* Handle-keyed render — the calling thread's slice for `handle`, version-blind (live
  * bytes at [base, len)). snprintf-style size-then-allocate; negative ASMTEST_HW_* on
  * a stale/unknown handle or unavailable decoder. */

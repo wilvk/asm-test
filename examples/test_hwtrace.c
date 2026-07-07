@@ -864,6 +864,71 @@ static void *ss_map_exec(const unsigned char *bytes, size_t len) {
     return p;
 }
 
+/* B (lazy-arm) — managed-singlestep-lazy-arm-plan §B1. The managed-SAFE call scope:
+ * asmtest_hwtrace_call_scoped arms, calls the region fn, and disarms in ONE native step
+ * (nothing the caller runs straddles the window). Over a native leaf — no managed
+ * runtime needed — it must (a) return fn's value and (b) record the SAME body offsets
+ * as the plain begin/end path BYTE-FOR-BYTE: the stream-parity invariant the .NET
+ * Invoke rewire must preserve. Also asserts the guardrails that make the caller fall
+ * back rather than mis-dispatch (unknown region, arity > 6). */
+static void test_call_scoped(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP call_scoped: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP call_scoped: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "call_scoped init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    CHECK(asmtest_hwtrace_register_region("csadd2", p, sizeof ROUTINE, tr) ==
+              ASMTEST_HW_OK,
+          "call_scoped register region");
+
+    /* Arm + call add2(20,22) + disarm, all in native code. */
+    const long args[2] = {20, 22};
+    long result = -1;
+    asmtest_hwtrace_scope_t sc;
+    int rc = asmtest_hwtrace_call_scoped("csadd2", p, args, 2, &result, &sc);
+    CHECK(rc == ASMTEST_HW_OK, "call_scoped returns OK");
+    CHECK(result == 42, "call_scoped returns fn's value (20+22)");
+
+    /* Byte-for-byte parity with test_singlestep_live's begin/end trace. */
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+    for (size_t i = 0; seq && i < 5; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq, "call_scoped records the exact body stream [0,3,6,c,11] "
+               "(byte-for-byte parity with begin/end)");
+    CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
+          "call_scoped records exactly two blocks");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "call_scoped trace is complete (not truncated)");
+
+    /* The handle renders the closed slice (the render-on-close path bindings use). */
+    CHECK(asmtest_hwtrace_render_scope(sc, NULL, 0) > 0,
+          "call_scoped handle renders the closed slice");
+
+    /* Guardrails: unknown region + unsupported arity both reject cleanly so the caller
+     * falls back to the out-of-process stepper rather than mis-dispatching. */
+    CHECK(asmtest_hwtrace_call_scoped("nope", p, args, 2, &result, &sc) ==
+              ASMTEST_HW_EINVAL,
+          "call_scoped rejects an unregistered region");
+    CHECK(asmtest_hwtrace_call_scoped("csadd2", p, args, 7, &result, &sc) ==
+              ASMTEST_HW_EINVAL,
+          "call_scoped rejects arity > 6 (caller falls back out-of-process)");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    munmap(p, sizeof ROUTINE);
+}
+
 /* §0.1/§1 — try_begin returns EINVAL on an unregistered name; under §1 a second
  * same-thread begin COMPOSES (per-thread range stack), so the refusal moves from
  * ESTATE-on-busy to EFULL when this thread's range stack is full. */
@@ -4307,6 +4372,9 @@ int main(void) {
     /* Live, on this very host: the single-step backend (no PMU/perf/privilege). */
     test_singlestep_live();
     test_singlestep_loop();
+
+    /* B (lazy-arm): the managed-safe arm→call→disarm scope, over a native leaf. */
+    test_call_scoped();
 
     /* Scoped-tracing shared-core §0: try_begin signal, arm-thread assert,
      * render-on-close, and idempotent-by-name register (all single-step). */

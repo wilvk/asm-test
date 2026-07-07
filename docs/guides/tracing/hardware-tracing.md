@@ -405,11 +405,17 @@ synchronous signal delivered while blocked, which the kernel force-resets to
 a long-stepped window over runtime machinery hits this deterministically: CoreCLR's
 tiered-compilation background worker idle-exits after ~4 s and is **respawned via
 `pthread_create` on whichever thread next enqueues JIT work** — the armed thread,
-if the window is still open. The .NET self-test lanes pin the worker resident
-(`DOTNET_TC_BackgroundWorkerTimeoutMs`, see `hwtrace_dotnet_env` in
-`mk/native-trace.mk`); the same mitigation applies to any app arming in-process
-managed windows, and the §D3 out-of-process form is immune (the thread is never
-TF-armed).
+if the window is still open. **`AsmTrace.Method()` removes this by construction** —
+Option B, the *lazy-arm* path: it mints a native pointer to the method body and does
+`arm → call → disarm` entirely in native code (`asmtest_hwtrace_call_scoped`), so the
+runtime's machinery is never under TF and cannot spawn a thread in-window. The residual
+exposure is the **whole-window** form (`new AsmTrace()`) on a runtime thread, where
+arbitrary code runs in-window by definition: there the .NET self-test lanes pin the
+worker resident (`DOTNET_TC_BackgroundWorkerTimeoutMs`, see `hwtrace_dotnet_env` in
+`mk/native-trace.mk`), the same mitigation applies to any app arming an in-process
+whole managed window, and the §D3 out-of-process form is immune (the thread is never
+TF-armed). See
+[managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
 
 **The whole-scope vs one-method fork.** Hardware trace captures everything cheaply
 and filters at decode; a stepper must decide per instruction what to step into. So
@@ -421,9 +427,12 @@ the scope's promise degrades differently by shape:
   leaf overflow the window). Honest by design: the raw `Addresses` are exposed, and
   `byMethod`/`withRundown` labelling attributes them to managed methods.
 - **One JIT'd method** (`AsmTrace.Method(HotPath)`) — "trace this method's body."
-  A region + step-over: reliable, exact offsets. It costs the extra knowledge the
-  empty scope avoids — resolve the body's address (via the `MethodLoadVerbose`
-  listener, or the jitdump rundown for a warm/R2R method) and keep it un-inlined.
+  A region + **lazy-arm** call: reliable, exact offsets, and **managed-safe by
+  construction** (only the body runs under TF — see the footgun note above). It costs
+  the extra knowledge the empty scope avoids — resolve the body's address (via the
+  `MethodLoadVerbose` listener, or the jitdump rundown for a warm/R2R method) and keep
+  it un-inlined. A signature the `(long…)->long` shim set cannot express, or
+  `outOfProcess: true`, routes through the out-of-process stepper instead.
 
 **Temporal bytes.** Because a tiering method is re-emitted at a possibly-reused
 address, the managed labelling decodes each captured address against the code-image
@@ -441,12 +450,13 @@ opt-in layer not covered here.
 
 - **Single active region, single thread** in the MVP — capture state is one
   process-global slot; bracket one routine per begin/end pair.
-- **Live managed code needs PT/LBR or the ptrace stepper, never in-process
+- **Whole-window managed capture needs PT/LBR or the ptrace stepper, never in-process
   single-step** (above) — the whole-window single-step form works but self-truncates
-  on a runtime and perturbs the stepped thread's timing; the clean PT path is
-  hardware-gated. And an in-process TF window over code that blocks `SIGTRAP`
-  (`pthread_create`, any `sigprocmask` block) is **fatal by kernel design** — see
-  the footgun note above for the CoreCLR tiering-worker case and its mitigation.
+  on a runtime and perturbs the stepped thread's timing, and an in-process TF window
+  over code that blocks `SIGTRAP` (`pthread_create`, any `sigprocmask` block) is
+  **fatal by kernel design**. `AsmTrace.Method()` is **not** subject to this — it
+  lazy-arms only the body (Option B, the footgun note above). The clean whole-window
+  PT path is hardware-gated.
 - **Bare-metal capture needs perf privilege.** Intel PT needs a bare-metal Intel
   host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its

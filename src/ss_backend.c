@@ -461,6 +461,58 @@ void asmtest_ss_end(void) {
     pthread_mutex_unlock(&g_ss_lock);
 }
 
+/* Call fn(args[0..n)) through the SysV integer/pointer ABI. Register-resident arities
+ * only (0-6): the args map 1:1 onto rdi,rsi,rdx,rcx,r8,r9, so no stack spill is
+ * needed. This runs BETWEEN arm and disarm but OUTSIDE the frame's [base,len), so the
+ * handler filters every instruction here (and any reverse-P/Invoke thunk fn jumps
+ * through) out of the trace — only fn's in-region body is recorded. */
+static long ss_dispatch_call(void *fn, const long *a, int n) {
+    switch (n) {
+    case 0:
+        return ((long (*)(void))fn)();
+    case 1:
+        return ((long (*)(long))fn)(a[0]);
+    case 2:
+        return ((long (*)(long, long))fn)(a[0], a[1]);
+    case 3:
+        return ((long (*)(long, long, long))fn)(a[0], a[1], a[2]);
+    case 4:
+        return ((long (*)(long, long, long, long))fn)(a[0], a[1], a[2], a[3]);
+    case 5:
+        return ((long (*)(long, long, long, long, long))fn)(a[0], a[1], a[2],
+                                                            a[3], a[4]);
+    default:
+        return ((long (*)(long, long, long, long, long, long))fn)(
+            a[0], a[1], a[2], a[3], a[4], a[5]);
+    }
+}
+
+/* B (managed-safe lazy-arm) — managed-singlestep-lazy-arm-plan §B1. Push a [base,len)
+ * region frame (arms this thread's TF), dispatch fn(args…) in native code, then
+ * pop+normalize (disarms). Because the handler filters to [base,len), ONLY fn's body
+ * is recorded and NOTHING the caller runs between arm and disarm is stepped — the whole
+ * point for a managed caller, where stepping the runtime's machinery (a pthread_create
+ * that blocks SIGTRAP inside the window) is fatal, not degraded. Integer/pointer args
+ * only, 0-6 (register-resident); nargs<0/>6 or a NULL fn return EINVAL so the caller
+ * can fall back to the out-of-process stepper. *result_out (may be NULL) gets fn's
+ * return value; the frame handle rides out_idx/out_gen (either may be NULL) so a
+ * render-on-close (asmtest_ss_frame_lookup) can read the normalized trace. */
+int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
+                           void *fn, const long *args, int nargs,
+                           long *result_out, uint32_t *out_idx,
+                           uint32_t *out_gen) {
+    if (fn == NULL || nargs < 0 || nargs > 6 || (nargs > 0 && args == NULL))
+        return ASMTEST_HW_EINVAL;
+    int rc = ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+    if (rc != ASMTEST_HW_OK)
+        return rc;
+    long r = ss_dispatch_call(fn, args, nargs);
+    asmtest_ss_end();
+    if (result_out != NULL)
+        *result_out = r;
+    return ASMTEST_HW_OK;
+}
+
 /* Resolve a frame handle (idx+gen) on the CALLING thread to its region + trace. The
  * frame data survives a pop (only stream is freed), so a render-on-close can read the
  * normalized trace. Returns 1 + fills the out params on a live match, 0 on a
@@ -503,6 +555,21 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
 int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
                             uint32_t *out_gen) {
     (void)trace;
+    (void)out_idx;
+    (void)out_gen;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
+                           void *fn, const long *args, int nargs,
+                           long *result_out, uint32_t *out_idx,
+                           uint32_t *out_gen) {
+    (void)base;
+    (void)len;
+    (void)trace;
+    (void)fn;
+    (void)args;
+    (void)nargs;
+    (void)result_out;
     (void)out_idx;
     (void)out_gen;
     return ASMTEST_HW_ENOSYS;

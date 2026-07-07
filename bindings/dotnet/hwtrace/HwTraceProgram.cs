@@ -271,8 +271,18 @@ static class HwTraceProgram
             if (nm.Armed)
             {
                 Check(!nm.Truncated, "AsmTrace.Method: body capture not truncated");
-                if (nm.Path.Length > 0)
-                    Check(nm.Path.Contains("ret"), "AsmTrace.Method: rendered body ends in ret");
+                // B (lazy-arm) parity: the in-process arm→call→disarm must CAPTURE the
+                // body, not silently miss it. With Capstone present the rendered Path is
+                // non-empty and ends in ret — proof the reverse-P/Invoke pointer landed in
+                // the resolved [base,len). A silent empty trace (the call still returns 42)
+                // is the failure mode this asserts against, so it is a hard Check, not a skip.
+                if (HwNative.asmtest_disas_available())
+                {
+                    Check(nm.Path.Length > 0,
+                          $"AsmTrace.Method: lazy-arm captured a non-empty body ({nm.Path.Length} chars)");
+                    Check(nm.Path.Contains("ret"),
+                          "AsmTrace.Method: lazy-arm body renders (ends in ret) — landed in the resolved body");
+                }
                 else
                     Console.WriteLine("# SKIP Method render assert: build without Capstone");
             }
