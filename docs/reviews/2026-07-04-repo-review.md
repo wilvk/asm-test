@@ -41,8 +41,7 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 44 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 P5 (in-repo scope) N4 |
-| 🟡 Fixed, CI-run validation pending | 1 | K1 (cache config landed 2026-07-07; the gha cache only exercises on a real Actions run) |
+| ✅ Fixed & verified | 45 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 P5 (in-repo scope) N4 · K1 |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
 | ⬜ Open expansions (step 5) | 2 | P1 (sequenced behind the first real tag), P3 (large: RISC-V native host tier) |
 
@@ -141,7 +140,7 @@ can't assemble — none of which any current gate catches.
 | D3 | Stale `1.0.0` version strings (README, `conf.py`, SECURITY, …) | Medium | defect | ✅ fixed (step 2) |
 | A5 | `asmtest_capture_vec_f32` exported but not declared in the header | Low | defect | ✅ fixed (step 2) |
 | N7 | `vec_add8d` missing from the corpus name table | Low | defect | ✅ fixed (step 2) |
-| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | 🟡 fixed (2026-07-07 — actions/cache on the host builds + a gha-scoped buildx layer cache on the docker bindings-base; designed non-fatal on a cold/unavailable cache; CI-run validation pending) |
+| K1 | Keystone/Capstone source builds re-compiled ~20× per push (no cache) | High | improvement | ✅ fixed (2026-07-07 — actions/cache on the host builds + a gha-scoped buildx layer cache on the docker bindings-base; designed non-fatal on a cold/unavailable cache; validated on run 28841416537: "Cache restored successfully" for tp-keystone, buildx layers CACHED) |
 | K2 | `hwtrace-bindings-test` / `codeimage-test` exist but run in no CI job | High | expansion | ✅ fixed (step 3) |
 | K3 | clang-tidy & gcov cover only 1 of 20 C translation units | High | improvement | ✅ fixed (step 3) |
 | E3 | "preload arbitrary registers" advertised but no API exists | High | defect/expansion | ✅ fixed (step 4) |
