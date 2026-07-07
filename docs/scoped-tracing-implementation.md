@@ -12,7 +12,7 @@ This document records what was **built and tested** for the scoped-tracing plan 
 ([scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-inprocess-tracing-plan.md) and its
 three slices — [core](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-core-plan.md),
 [bindings](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-bindings-plan.md),
-[managed](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-managed-plan.md)), and what remains **forward-look**
+[managed](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-managed-plan.md)), and what remains **forward-look**
 (gated on hardware / managed runtimes the CI host lacks — this dev box is AMD, with no
 Intel PT and no bare-metal perf privilege in containers).
 
@@ -123,7 +123,7 @@ Linux, no hardware.
 
 The aspirational `using (new AsmTrace())` — no `NativeCode`, no `[base,len)` — now works
 end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
-[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md).
+[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md).
 
 - **§Z0 region-free arm surface (DONE).** New C entry points
   `asmtest_hwtrace_begin_window` / `_end_window` / `_render_window`

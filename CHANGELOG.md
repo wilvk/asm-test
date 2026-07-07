@@ -346,7 +346,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Linux (`test_wholewindow_singlestep`, `make docker-hwtrace` → 201/0; `.NET`
     `make docker-hwtrace-dotnet` → 33/0). The STRONG whole-window PT / AMD LBR tiers,
     arbitrary-managed-method capture, and the other nine binding shims remain forward-look.
-    See [docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md).
+    See [docs/internal/plans/scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md).
   - **§D3 concealed ptrace-stealth stepper — now a bundled standalone binary.** The
     hardware-free scope path (Zen 2 / Docker-on-Mac) reverse-attaches a helper to the
     caller (`PR_SET_PTRACER` + `PTRACE_SEIZE`) and single-steps the region out of band.

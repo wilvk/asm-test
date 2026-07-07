@@ -11,7 +11,7 @@ the guaranteed-cleanup scope construct and the arm hook, per binding.
 **Scope of this slice:** the scope *construct* for **C++, Rust, Zig, Python, Ruby,
 Lua, Go**, plus **.NET as the reference shim shape**. The **managed-code**
 capability (tracing the runtime's own live JIT output, async-hop stitching) for
-**Node, JVM, .NET** is the separate [managed slice](scoped-tracing-managed-plan.md);
+**Node, JVM, .NET** is the separate [managed slice](../../plans/scoped-tracing-managed-plan.md);
 this slice targets the use every binding already supports — a scope around an
 asm-test-generated / P/Invoked **native region**, captured by single-step (any
 x86-64 Linux) or available hardware trace.
@@ -152,7 +152,7 @@ in the binding today (verified). New work:
   so concurrent same-named scopes don't clobber.
 
 The `AsmTrace.Method(HotPath)` named-method form and its `MethodLoadVerbose`
-address resolution are the [managed slice](scoped-tracing-managed-plan.md)'s
+address resolution are the [managed slice](../../plans/scoped-tracing-managed-plan.md)'s
 concern — they need the runtime-event plumbing this slice deliberately avoids.
 
 ---
@@ -177,7 +177,7 @@ the auto-name mechanism.
 *(Node and Java `region()` helpers exist —
 [hwtrace.js:439](../../../../bindings/node/hwtrace.js#L439),
 [HwTrace.java:779](../../../../bindings/java/HwTrace.java#L779) — but their scope
-constructs ship in the [managed slice](scoped-tracing-managed-plan.md) alongside
+constructs ship in the [managed slice](../../plans/scoped-tracing-managed-plan.md) alongside
 the managed-code capability, since the analysis rates them "medium" in the same
 JIT-managed tier as .NET.)*
 

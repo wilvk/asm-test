@@ -6,7 +6,7 @@ Make the whole-window managed-method breakdown
 the whole `System.Console.WriteLine` write path), not only the **cold** methods JIT'd
 inside it — **without a NuGet dependency and without a launch knob**. This is the
 "Option B, hand-rolled" realisation of the managed plan's
-[§D0.2 pre-arm rundown](scoped-tracing-managed-plan.md); the shipped `JitMethodMap`
+[§D0.2 pre-arm rundown](../../plans/scoped-tracing-managed-plan.md); the shipped `JitMethodMap`
 (an in-proc `MethodLoadVerbose` `EventListener`) sees only methods JIT'd *after* it is
 enabled, so warm and R2R methods land in the unlabelled `[native runtime]` remainder.
 
@@ -132,8 +132,8 @@ the build, not assumed.
 
 ## Relationship
 
-- Realises [scoped-tracing-managed-plan §D0.2](scoped-tracing-managed-plan.md) without
-  the NuGet dependency; the cold-only path is [§D0.1](scoped-tracing-managed-plan.md)
+- Realises [scoped-tracing-managed-plan §D0.2](../../plans/scoped-tracing-managed-plan.md) without
+  the NuGet dependency; the cold-only path is [§D0.1](../../plans/scoped-tracing-managed-plan.md)
   (the shipped `JitMethodMap`). Both converge on the same C perf-map/attribution back end
   ([asmtest_hwtrace_symbolize_bucket](../../../../include/asmtest_hwtrace.h)) conceptually,
   though this reads the perf-map in-managed for O(log n) resolution over a large window.

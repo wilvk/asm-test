@@ -1,7 +1,7 @@
 # asm-test — Managed single-step posture: design proposal (the open decision)
 
 The one design decision the 2026-07-06 review of the
-[managed tier](../archive/plans/scoped-tracing-managed-plan.md) left open, now forced by hard
+[managed tier](scoped-tracing-managed-plan.md) left open, now forced by hard
 evidence: **what contract should in-process EFLAGS.TF single-step offer against
 a managed runtime's threads?**
 
