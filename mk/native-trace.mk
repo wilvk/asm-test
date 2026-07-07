@@ -170,7 +170,10 @@ endif
 # check, no link) and only then build amd_backend.c -DASMTEST_HAVE_PERF_BR_SPEC.
 # Without the define the wrong-path filter compiles out — a no-op, exactly as on
 # Zen 3 BRS / non-Linux where there are no spec bits. Mirrors the LIBIPT_DEF probe.
-PERF_BR_SPEC_DEF := $(shell printf '#include <linux/perf_event.h>\nint f(struct perf_branch_entry *e){return (int)e->spec;}\n' | $(CC) -fsyntax-only -xc - >/dev/null 2>&1 && echo -DASMTEST_HAVE_PERF_BR_SPEC)
+# The header is injected with -include rather than a literal `#include` line: an
+# unescaped `#` inside $(shell ...) is a comment to GNU make < 4.3 (macOS ships
+# 3.81), truncating the line, while `\#` breaks make >= 4.3 the other way.
+PERF_BR_SPEC_DEF := $(shell printf 'int f(struct perf_branch_entry *e){return (int)e->spec;}\n' | $(CC) -fsyntax-only -include linux/perf_event.h -xc - >/dev/null 2>&1 && echo -DASMTEST_HAVE_PERF_BR_SPEC)
 
 # Optional eBPF JIT code-emission detector (libbpf CO-RE) — the sideband accelerator for
 # the code-image recorder (src/codeimage.c): it detects mprotect/mmap PROT_EXEC +

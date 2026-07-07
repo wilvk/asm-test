@@ -299,6 +299,7 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <sys/ptrace.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -1377,47 +1378,63 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 #define PTRACE_SINGLEBLOCK 33 /* <sys/ptrace.h> omits it though the kernel wires it */
 #endif
 
-/* Hang-proof one-shot probe: does PTRACE_SINGLEBLOCK actually advance a child here?
- * It is unwired under some sandboxes/emulators (returns EIO), so probe rather than
- * assume. Mirrors probe_singlestep's WNOHANG-with-deadline shape so it can never hang
- * CI, and caches. */
-static int probe_singleblock(void) {
-    pid_t pid = fork();
-    if (pid < 0)
-        return 0;
-    if (pid == 0) {
-        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-        raise(SIGSTOP);
-        _exit(0);
-    }
-    int st, got = 0, stepped = 0;
+/* Hang-proof one-shot FUNCTIONAL probe: PTRACE_SINGLEBLOCK must run a straight-line
+ * block to its terminating branch in ONE step, not merely advance the child. Some
+ * hypervisors mask DEBUGCTL.BTF (GitHub-hosted runners do), silently degrading
+ * SINGLEBLOCK to per-instruction TF stepping — the child moves, so a did-it-advance
+ * check passes, but reconstruction then sees a stop after every insn and emits
+ * overlapping walks. It is also unwired outright under some sandboxes/emulators
+ * (returns EIO). So: the child int3-traps at the head of an mmap'd nop run + ret;
+ * from that stop (RIP = blob+1) one SINGLEBLOCK must leave the blob entirely (BTF
+ * stops at the ret's TARGET, back in the caller). Stopping inside the nop run is
+ * the degraded single-step signature -> unavailable. Mirrors probe_singlestep's
+ * WNOHANG-with-deadline shape so it can never hang CI, and caches. */
+static int wait_stop_sigtrap(pid_t pid) {
+    int st;
     for (int i = 0; i < 200; i++) {
         pid_t w = waitpid(pid, &st, WNOHANG);
-        if (w == pid && WIFSTOPPED(st)) {
-            got = 1;
-            break;
-        }
+        if (w == pid)
+            return WIFSTOPPED(st) && WSTOPSIG(st) == SIGTRAP;
         if (w < 0)
-            break;
+            return 0;
         struct timespec ts = {0, 1000000};
         nanosleep(&ts, NULL);
     }
-    if (got && ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) == 0) {
-        for (int i = 0; i < 200; i++) {
-            pid_t w = waitpid(pid, &st, WNOHANG);
-            if (w == pid) {
-                stepped = WIFSTOPPED(st) && WSTOPSIG(st) == SIGTRAP;
-                break;
-            }
-            if (w < 0)
-                break;
-            struct timespec ts = {0, 1000000};
-            nanosleep(&ts, NULL);
-        }
+    return 0;
+}
+
+static int probe_singleblock(void) {
+    static const uint8_t blob[] = {0xCC, 0x90, 0x90, 0x90,
+                                   0x90, 0x90, 0xC3}; /* int3; 5x nop; ret */
+    void *p = mmap(NULL, sizeof blob, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return 0;
+    memcpy(p, blob, sizeof blob);
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(p, sizeof blob);
+        return 0;
     }
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        ((void (*)(void))p)(); /* int3: SIGTRAP stop with RIP = blob+1 */
+        _exit(0);
+    }
+    int functional = 0;
+    uint64_t pc = 0;
+    if (wait_stop_sigtrap(pid) &&
+        read_pc_ret(pid, &pc, NULL, NULL, NULL) == 0 &&
+        pc == (uint64_t)(uintptr_t)p + 1 &&
+        ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) == 0 &&
+        wait_stop_sigtrap(pid) && read_pc_ret(pid, &pc, NULL, NULL, NULL) == 0)
+        functional = pc < (uint64_t)(uintptr_t)p ||
+                     pc >= (uint64_t)(uintptr_t)p + sizeof blob;
+    int st;
     kill(pid, SIGKILL);
     waitpid(pid, &st, 0);
-    return stepped;
+    munmap(p, sizeof blob);
+    return functional;
 }
 
 int asmtest_ptrace_blockstep_available(void) {
