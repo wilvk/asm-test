@@ -44,8 +44,8 @@ int asmtest_amd_snapshot_available(void);
 #include "branchsnap.skel.h"
 #include "branchsnap_event.h"
 
-static long bsnap_perf_open(struct perf_event_attr *a, pid_t pid, int cpu, int grp,
-                            unsigned long flags) {
+static long bsnap_perf_open(struct perf_event_attr *a, pid_t pid, int cpu,
+                            int grp, unsigned long flags) {
     return syscall(SYS_perf_event_open, a, pid, cpu, grp, flags);
 }
 
@@ -70,7 +70,8 @@ static int bsnap_on_event(void *ctx, void *data, size_t sz) {
     size_t inregion = 0;
     for (unsigned long long i = 0; i < nr; i++) {
         const uint64_t *w = (const uint64_t *)(ev->raw + i * BSNAP_ENTRY_SZ);
-        if ((w[0] >= base_ip && w[0] < end_ip) || (w[1] >= base_ip && w[1] < end_ip))
+        if ((w[0] >= base_ip && w[0] < end_ip) ||
+            (w[1] >= base_ip && w[1] < end_ip))
             inregion++;
     }
     if (inregion > d->best_inregion) {

@@ -46,8 +46,8 @@ int asmtest_amd_freeze_available(void);
 int asmtest_amd_snapshot_available(void);
 int asmtest_amd_lbr_depth(void);
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
-                          const size_t *nrs, size_t n_samples,
-                          const void *base, uint64_t base_ip, size_t len,
+                          const size_t *nrs, size_t n_samples, const void *base,
+                          uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap);
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
@@ -119,19 +119,24 @@ static void test_amd_freeze_probe(void) {
     int b = asmtest_amd_freeze_available();
     CHECK(a == 0 || a == 1, "AMD freeze probe returns a definite 0/1");
     CHECK(a == b, "AMD freeze probe is stable (cached across calls)");
-    printf("# AMD LBR freeze-on-PMI (CPUID 0x80000022 EAX[2]) on this host: %s\n",
-           a ? "PRESENT (single-window Tier-A trusted)"
-             : "ABSENT (Tier-A window trusted only if it captured the region exit)");
+    printf(
+        "# AMD LBR freeze-on-PMI (CPUID 0x80000022 EAX[2]) on this host: %s\n",
+        a ? "PRESENT (single-window Tier-A trusted)"
+          : "ABSENT (Tier-A window trusted only if it captured the region "
+            "exit)");
 
     /* The deterministic software-event LBR-snapshot substrate (P0 #2 gate): AMD
      * LbrExtV2 + perfmon v2 + Linux >= 6.10. Unprivileged (flags + uname), so it
      * reports the hardware+kernel floor even where the capture would need CAP_BPF. */
     int s1 = asmtest_amd_snapshot_available();
     int s2 = asmtest_amd_snapshot_available();
-    CHECK(s1 == 0 || s1 == 1, "AMD snapshot-substrate probe returns a definite 0/1");
+    CHECK(s1 == 0 || s1 == 1,
+          "AMD snapshot-substrate probe returns a definite 0/1");
     CHECK(s1 == s2, "AMD snapshot-substrate probe is stable (cached)");
-    printf("# AMD deterministic LBR-snapshot substrate (LbrExtV2+perfmon_v2+kernel>=6.10): %s\n",
-           s1 ? "PRESENT (boundary bpf_get_branch_snapshot buildable; run needs CAP_BPF)"
+    printf("# AMD deterministic LBR-snapshot substrate "
+           "(LbrExtV2+perfmon_v2+kernel>=6.10): %s\n",
+           s1 ? "PRESENT (boundary bpf_get_branch_snapshot buildable; run "
+                "needs CAP_BPF)"
               : "ABSENT (falls back to sample_period=1 windows)");
 
     /* AMD Phase 0 — runtime branch-stack depth (CPUID 0x80000022 EBX), replacing the
@@ -141,7 +146,8 @@ static void test_amd_freeze_probe(void) {
     int d2 = asmtest_amd_lbr_depth();
     CHECK(d1 >= 1 && d1 <= 64, "AMD LBR depth is a sane positive value");
     CHECK(d1 == d2, "AMD LBR depth is stable (cached)");
-    printf("# AMD LBR branch-stack depth on this host: %d (16 on every shipping Zen)\n",
+    printf("# AMD LBR branch-stack depth on this host: %d (16 on every "
+           "shipping Zen)\n",
            d1);
 #else
     printf("# SKIP AMD freeze probe: x86-64 Linux only\n");
@@ -207,7 +213,8 @@ static void test_amd_reconstruction(void) {
  * otherwise — on such builds the filter is a compile-out no-op (Zen 3 BRS is
  * retired-only and has no spec bits either). */
 static void test_amd_spec_filter(void) {
-#if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_PERF_BR_SPEC)
+#if defined(__linux__) && defined(__x86_64__) &&                               \
+    defined(ASMTEST_HAVE_PERF_BR_SPEC)
     if (!asmtest_amd_decoder_present()) {
         printf("# SKIP AMD spec filter: built without Capstone\n");
         return;
@@ -218,9 +225,12 @@ static void test_amd_spec_filter(void) {
      * spurious block at 0x6. jle(0xc->0x11) then ret(0x11->out) are the real edges. */
     struct perf_branch_entry br[3];
     memset(br, 0, sizeof br);
-    br[0].from = b + 0x3;  /* phantom source (in-region, arbitrary)              */
-    br[0].to = b + 0x6;    /* phantom target — a spurious block 0x6 if unfiltered */
-    br[0].spec = PERF_BR_SPEC_WRONG_PATH; /* header enum: exists with the field  */
+    br[0].from =
+        b + 0x3; /* phantom source (in-region, arbitrary)              */
+    br[0].to =
+        b + 0x6; /* phantom target — a spurious block 0x6 if unfiltered */
+    br[0].spec =
+        PERF_BR_SPEC_WRONG_PATH; /* header enum: exists with the field  */
     br[1].from = b + 0x11;
     br[1].to = b + sizeof ROUTINE; /* ret -> outside */
     br[2].from = b + 0xc;
@@ -228,23 +238,27 @@ static void test_amd_spec_filter(void) {
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     int rc = asmtest_amd_decode(br, 3, ROUTINE, sizeof ROUTINE, tr);
-    CHECK(rc == 0, "AMD decode succeeds with a wrong-path phantom in the stack");
+    CHECK(rc == 0,
+          "AMD decode succeeds with a wrong-path phantom in the stack");
     static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
     int seq = (asmtest_emu_trace_insns_total(tr) == 5);
     for (size_t i = 0; seq && i < 5; i++)
         seq = (tr->insns[i] == EXPECT[i]);
-    CHECK(seq, "AMD wrong-path filter: instruction stream matches the clean case");
+    CHECK(seq,
+          "AMD wrong-path filter: instruction stream matches the clean case");
     CHECK(asmtest_trace_covered(tr, 0) && asmtest_trace_covered(tr, 0x11),
           "AMD wrong-path filter: block partition stays {0, 0x11}");
     CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
           "AMD wrong-path filter: no spurious block from the phantom target");
-    CHECK(!asmtest_trace_covered(tr, 0x6),
-          "AMD wrong-path filter: the phantom target (0x6) is NOT a block start");
+    CHECK(
+        !asmtest_trace_covered(tr, 0x6),
+        "AMD wrong-path filter: the phantom target (0x6) is NOT a block start");
     CHECK(!asmtest_emu_trace_truncated(tr),
           "AMD wrong-path filter: dropping a phantom does NOT truncate");
     asmtest_trace_free(tr);
 #else
-    printf("# SKIP AMD spec filter: needs x86-64 Linux with the perf spec bitfield\n");
+    printf("# SKIP AMD spec filter: needs x86-64 Linux with the perf spec "
+           "bitfield\n");
 #endif
 }
 
@@ -392,8 +406,8 @@ static void test_amd_live(void) {
         CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
               "AMD LBR live snapshot-opt-in init");
         asmtest_trace_t *st = asmtest_trace_new(64, 64);
-        CHECK(asmtest_hwtrace_register_region("amdsnap", p, sizeof ROUTINE, st) ==
-                  ASMTEST_HW_OK,
+        CHECK(asmtest_hwtrace_register_region("amdsnap", p, sizeof ROUTINE,
+                                              st) == ASMTEST_HW_OK,
               "AMD LBR live snapshot-opt-in register");
         asmtest_hwtrace_begin("amdsnap");
         long r2 = fn(20, 22);
@@ -485,8 +499,8 @@ static void test_amd_stitch(void) {
     struct perf_branch_entry stitched[64];
     int gap = 0;
     size_t n = asmtest_amd_stitch(samples, nrs, K, AMD_LOOP,
-                                  (uint64_t)(uintptr_t)AMD_LOOP, sizeof AMD_LOOP,
-                                  stitched, 64, &gap);
+                                  (uint64_t)(uintptr_t)AMD_LOOP,
+                                  sizeof AMD_LOOP, stitched, 64, &gap);
     CHECK(n == K && gap == 0,
           "AMD stitch recovers all 18 branches past the 16-deep window");
 
@@ -547,7 +561,8 @@ static void test_amd_stitch(void) {
 static void test_amd_stitch_decodable(void) {
 #if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_amd_decoder_present()) {
-        printf("# SKIP AMD stitch decodable-distance: built without Capstone\n");
+        printf(
+            "# SKIP AMD stitch decodable-distance: built without Capstone\n");
         return;
     }
     const uint64_t b = (uint64_t)(uintptr_t)AMD_LOOP;
@@ -578,7 +593,8 @@ static void test_amd_stitch_decodable(void) {
     {
         struct perf_branch_entry B;
         memset(&B, 0, sizeof B);
-        B.from = b + 0x3; /* before A.to (0x7): a backwards, indecodable splice */
+        B.from =
+            b + 0x3; /* before A.to (0x7): a backwards, indecodable splice */
         B.to = b + 0x9;
         struct perf_branch_entry w0[1] = {A};
         struct perf_branch_entry w1[2] = {B, A}; /* newest-first: [B, A] */
@@ -590,8 +606,9 @@ static void test_amd_stitch_decodable(void) {
                                       out, 8, &gap);
         CHECK(gap == 1,
               "AMD stitch guard: an indecodable splice yields an honest gap");
-        CHECK(n == 1,
-              "AMD stitch guard: the rejected corrupt window is not spliced in");
+        CHECK(
+            n == 1,
+            "AMD stitch guard: the rejected corrupt window is not spliced in");
     }
 #else
     printf("# SKIP AMD stitch decodable-distance: not Linux x86-64\n");
@@ -618,7 +635,8 @@ static void test_amd_drain_reconstruction(void) {
         full[i].from = b + 0xd;
         full[i].to = b + 0x7;
     }
-    static struct perf_branch_entry windows[K][16]; /* static: keep off the stack */
+    static struct perf_branch_entry
+        windows[K][16]; /* static: keep off the stack */
     const struct perf_branch_entry *samples[K];
     size_t nrs[K];
     for (int j = 0; j < K; j++) {
@@ -631,13 +649,13 @@ static void test_amd_drain_reconstruction(void) {
     struct perf_branch_entry stitched[K + 16];
     int gap = 0;
     size_t n = asmtest_amd_stitch(samples, nrs, K, AMD_LOOP,
-                                  (uint64_t)(uintptr_t)AMD_LOOP, sizeof AMD_LOOP,
-                                  stitched, K + 16, &gap);
+                                  (uint64_t)(uintptr_t)AMD_LOOP,
+                                  sizeof AMD_LOOP, stitched, K + 16, &gap);
     CHECK(n == K && gap == 0,
           "AMD drain: stitches a stream far larger than one window, gaplessly");
     asmtest_trace_t *tb = asmtest_trace_new(512, 64);
-    int rc =
-        asmtest_amd_decode_stitched(stitched, n, AMD_LOOP, sizeof AMD_LOOP, tb, gap);
+    int rc = asmtest_amd_decode_stitched(stitched, n, AMD_LOOP, sizeof AMD_LOOP,
+                                         tb, gap);
     CHECK(rc == ASMTEST_HW_OK && !asmtest_emu_trace_truncated(tb),
           "AMD drain: the drained long sequence decodes complete (no ceiling)");
     CHECK(asmtest_emu_trace_insns_total(tb) == (uint64_t)(4 + (K - 1) * 3),
@@ -836,8 +854,8 @@ static void test_singlestep_loop(void) {
 
 /* Map ROUTINE-like bytes W^X-correctly for a single-step region; NULL on failure. */
 static void *ss_map_exec(const unsigned char *bytes, size_t len) {
-    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
-                   -1, 0);
+    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED)
         return NULL;
     memcpy(p, bytes, len);
@@ -851,7 +869,8 @@ static void *ss_map_exec(const unsigned char *bytes, size_t len) {
  * ESTATE-on-busy to EFULL when this thread's range stack is full. */
 static void test_try_begin_busy(void) {
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
-        printf("# SKIP try_begin nesting/unregistered: single-step unavailable\n");
+        printf(
+            "# SKIP try_begin nesting/unregistered: single-step unavailable\n");
         return;
     }
     void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
@@ -899,7 +918,8 @@ static void test_try_begin_busy(void) {
 }
 
 #if defined(__linux__) && defined(__x86_64__)
-static volatile int g_amt_go; /* main -> closing thread: main has armed, proceed */
+static volatile int
+    g_amt_go; /* main -> closing thread: main has armed, proceed */
 
 /* Close "add2" on THIS spawned thread once main has armed (on main). The close runs
  * on the wrong thread, so the region's arming-tid backstop flags the trace
@@ -944,15 +964,17 @@ static void test_arm_tid_mismatch(void) {
     asmtest_hwtrace_scope_t sc;
     int b = asmtest_hwtrace_begin_scope("add2", &sc); /* arm on MAIN */
     int armtid = asmtest_hwtrace_arm_tid();
-    g_amt_go = 1;           /* release the spawned thread to close cross-thread */
+    g_amt_go = 1; /* release the spawned thread to close cross-thread */
     pthread_join(th, NULL); /* spawned thread closed on the wrong thread */
-    asmtest_hwtrace_end("add2"); /* main closes its own frame (disarms TF, cleanup) */
+    asmtest_hwtrace_end(
+        "add2"); /* main closes its own frame (disarms TF, cleanup) */
 
     CHECK(b == ASMTEST_HW_OK, "begin_scope arms on the main thread");
     CHECK(armtid == (int)syscall(SYS_gettid),
           "arm_tid reports the arming (main) thread id");
     CHECK(asmtest_emu_trace_truncated(tr),
-          "cross-thread close flags the trace truncated (never partial-as-complete)");
+          "cross-thread close flags the trace truncated (never "
+          "partial-as-complete)");
 
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);
@@ -1006,7 +1028,8 @@ static void test_render_singlestep(void) {
           "rendered text contains the ground-truth disassembly of insn 0");
 
     /* Error convention: a name miss is a NEGATIVE code, distinct from any length. */
-    CHECK(asmtest_hwtrace_render("no-such-region", NULL, 0) == ASMTEST_HW_EINVAL,
+    CHECK(asmtest_hwtrace_render("no-such-region", NULL, 0) ==
+              ASMTEST_HW_EINVAL,
           "render of an unregistered name returns EINVAL");
 
     /* A short buffer truncates but stays NUL-terminated, and still reports the full
@@ -1028,7 +1051,8 @@ static void test_render_singlestep(void) {
  * ceiling then counts DISTINCT names, and overflowing it returns EFULL. */
 static void test_register_idempotent(void) {
     if (!asmtest_disas_available()) {
-        printf("# SKIP register-idempotent: needs Capstone (single-step floor)\n");
+        printf(
+            "# SKIP register-idempotent: needs Capstone (single-step floor)\n");
         return;
     }
     void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
@@ -1055,10 +1079,11 @@ static void test_register_idempotent(void) {
     asmtest_hwtrace_begin("add2");
     (void)fn(20, 22);
     asmtest_hwtrace_end("add2");
-    CHECK(asmtest_emu_trace_insns_total(tr2) == 5 &&
-              asmtest_emu_trace_insns_total(tr1) == 0,
-          "idempotent register refreshes the SAME slot in place (tr2 fills, tr1 "
-          "does not)");
+    CHECK(
+        asmtest_emu_trace_insns_total(tr2) == 5 &&
+            asmtest_emu_trace_insns_total(tr1) == 0,
+        "idempotent register refreshes the SAME slot in place (tr2 fills, tr1 "
+        "does not)");
     asmtest_hwtrace_shutdown();
 
     /* Part 2: the ceiling counts DISTINCT names. Register one name five times
@@ -1154,7 +1179,7 @@ struct ss_cc_arg {
     long a0, a1;           /* args to add2 */
     long expect_ret;       /* expected return */
     uint64_t expect_total; /* expected in-region insns */
-    int use_handle;        /* samename: tid-disambiguate + render via the handle */
+    int use_handle; /* samename: tid-disambiguate + render via the handle */
     int ok;
 };
 
@@ -1257,8 +1282,10 @@ static void test_concurrent_samename(void) {
     pthread_create(&tb, NULL, ss_cc_worker, &b);
     pthread_join(ta, NULL);
     pthread_join(tb, NULL);
-    CHECK(a.ok, "same-site: thread A's handle render returns its own 5-insn slice");
-    CHECK(b.ok, "same-site: thread B's handle render returns its own 6-insn slice");
+    CHECK(a.ok,
+          "same-site: thread A's handle render returns its own 5-insn slice");
+    CHECK(b.ok,
+          "same-site: thread B's handle render returns its own 6-insn slice");
     asmtest_hwtrace_shutdown();
 #else
     printf("# SKIP concurrent same-site: needs Linux x86-64\n");
@@ -1279,9 +1306,9 @@ static void test_render_versioned(void) {
     static const unsigned char CIB[] = {0x48, 0x89, 0xf8, 0x48,
                                         0x29, 0xf0, 0xc3}; /* sub */
     long ps = sysconf(_SC_PAGESIZE);
-    unsigned char *p = (unsigned char *)mmap(NULL, (size_t)ps,
-                                             PROT_READ | PROT_WRITE,
-                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP render-versioned: mmap failed\n");
         return;
@@ -1357,12 +1384,14 @@ static void test_stitch_slices(void) {
     for (size_t i = 0; seq_ok && i < 6; i++)
         seq_ok = (out->insns[i] == EXP[i]);
     CHECK(seq_ok, "stitch concatenates slices in seq order (A then B)");
-    CHECK(bounds[0].seq == 0 && bounds[0].insn_off == 0 && bounds[0].tid == 111 &&
-              bounds[0].version == 5,
-          "stitch bounds[0] attributes the seq-0 run (tid 111, ver 5) at offset 0");
-    CHECK(bounds[1].seq == 1 && bounds[1].insn_off == 3 && bounds[1].tid == 222 &&
-              bounds[1].version == 9,
-          "stitch bounds[1] attributes the seq-1 run (tid 222, ver 9) at offset 3");
+    CHECK(bounds[0].seq == 0 && bounds[0].insn_off == 0 &&
+              bounds[0].tid == 111 && bounds[0].version == 5,
+          "stitch bounds[0] attributes the seq-0 run (tid 111, ver 5) at "
+          "offset 0");
+    CHECK(bounds[1].seq == 1 && bounds[1].insn_off == 3 &&
+              bounds[1].tid == 222 && bounds[1].version == 9,
+          "stitch bounds[1] attributes the seq-1 run (tid 222, ver 9) at "
+          "offset 3");
 
     /* Degenerate single-slice case: identical output to a plain trace. */
     asmtest_trace_t *out1 = asmtest_trace_new(16, 16);
@@ -1398,9 +1427,9 @@ static void test_pt_image_from_codeimage(void) {
     static const unsigned char CIB[] = {0x48, 0x89, 0xf8, 0x48,
                                         0x29, 0xf0, 0xc3};
     long ps = sysconf(_SC_PAGESIZE);
-    unsigned char *p = (unsigned char *)mmap(NULL, (size_t)ps,
-                                             PROT_READ | PROT_WRITE,
-                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP pt image-from-codeimage: mmap failed\n");
         return;
@@ -1431,9 +1460,11 @@ static void test_pt_image_from_codeimage(void) {
     CHECK(da[0] != '\0' && strcmp(da, ga) == 0,
           "asmtest_disas of adapter bytes matches ground truth (t0)");
     CHECK(db[0] != '\0' && strcmp(da, db) != 0,
-          "t0 (add) and t1 (sub) disassemble differently — decode is version-correct");
+          "t0 (add) and t1 (sub) disassemble differently — decode is "
+          "version-correct");
 
-    CHECK(asmtest_pt_read_codeimage(img, 0, ip + (uint64_t)ps, b0, sizeof b0) < 0,
+    CHECK(asmtest_pt_read_codeimage(img, 0, ip + (uint64_t)ps, b0, sizeof b0) <
+              0,
           "pt adapter miss on an untracked address returns negative");
 
     asmtest_codeimage_free(img);
@@ -1467,9 +1498,10 @@ static void test_symbolize_bucket(void) {
         unlink(mappath);
         return;
     }
-    uint64_t ip_self = (uint64_t)(uintptr_t)&test_symbolize_bucket; /* binary text */
-    uint64_t ip_anon = (uint64_t)(uintptr_t)anon + 16;             /* "[anon]"     */
-    uint64_t ip_jit = 0x40000500ULL;                              /* MyJitMethod  */
+    uint64_t ip_self =
+        (uint64_t)(uintptr_t)&test_symbolize_bucket;   /* binary text */
+    uint64_t ip_anon = (uint64_t)(uintptr_t)anon + 16; /* "[anon]"     */
+    uint64_t ip_jit = 0x40000500ULL;                   /* MyJitMethod  */
     uint64_t ips[] = {ip_self, ip_self, ip_self, ip_anon, ip_jit, ip_jit};
 
     asmtest_hwtrace_bucket_t buckets[8];
@@ -1489,19 +1521,23 @@ static void test_symbolize_bucket(void) {
         if (buckets[i].count == 3)
             self_count = 3;
     }
-    CHECK(nb == 3, "symbolize bucket: three distinct regions (binary, anon, JIT)");
+    CHECK(nb == 3,
+          "symbolize bucket: three distinct regions (binary, anon, JIT)");
     CHECK(total == 6, "symbolize bucket: every IP is attributed");
-    CHECK(jit_labeled && jit_count == 2,
-          "symbolize bucket: perf-map JIT symbol resolved + counted (MyJitMethod "
-          "x2)");
+    CHECK(
+        jit_labeled && jit_count == 2,
+        "symbolize bucket: perf-map JIT symbol resolved + counted (MyJitMethod "
+        "x2)");
     CHECK(self_count == 3 && !unknown,
           "symbolize bucket: self-code IPs bucket together, none [unknown]");
 
     char name[128];
     uint64_t s = 0, e = 0;
-    int got = asmtest_hwtrace_region_name(0, ip_self, name, sizeof name, &s, &e);
+    int got =
+        asmtest_hwtrace_region_name(0, ip_self, name, sizeof name, &s, &e);
     CHECK(got && name[0] != '\0' && s <= ip_self && ip_self < e,
-          "region_name keeps the maps pathname + extent for the self-code address");
+          "region_name keeps the maps pathname + extent for the self-code "
+          "address");
 
     munmap(anon, 4096);
     unlink(mappath);
@@ -1788,8 +1824,9 @@ static void test_ptrace_oop(void) {
 static void test_ptrace_blockstep(void) {
 #if defined(__x86_64__)
     if (!asmtest_ptrace_blockstep_available()) {
-        printf("# SKIP ptrace block-step: PTRACE_SINGLEBLOCK/Capstone unavailable "
-               "here\n");
+        printf(
+            "# SKIP ptrace block-step: PTRACE_SINGLEBLOCK/Capstone unavailable "
+            "here\n");
         return;
     }
 
@@ -1808,16 +1845,19 @@ static void test_ptrace_blockstep(void) {
 
     asmtest_trace_t *bs = asmtest_trace_new(64, 64);
     long args[2] = {20, 22}, bres = 0;
-    int rc = asmtest_ptrace_trace_call_blockstep(p, sizeof ROUTINE, args, 2, &bres, bs);
+    int rc = asmtest_ptrace_trace_call_blockstep(p, sizeof ROUTINE, args, 2,
+                                                 &bres, bs);
     CHECK(rc == ASMTEST_PTRACE_OK, "block-step trace_call succeeds");
     CHECK(bres == 42, "block-step traced call returns 20+22");
     int seq = (asmtest_emu_trace_insns_total(bs) == R_NEXP);
     for (size_t i = 0; seq && i < R_NEXP; i++)
         seq = (bs->insns[i] == R_EXPECT[i]);
-    CHECK(seq, "block-step reconstructs the exact single-step stream (ROUTINE)");
+    CHECK(seq,
+          "block-step reconstructs the exact single-step stream (ROUTINE)");
     CHECK(asmtest_emu_trace_blocks_len(bs) == 2,
           "block-step yields the same 2-block partition (ROUTINE)");
-    CHECK(!asmtest_emu_trace_truncated(bs), "block-step ROUTINE trace is complete");
+    CHECK(!asmtest_emu_trace_truncated(bs),
+          "block-step ROUTINE trace is complete");
     asmtest_trace_free(bs);
     munmap(p, sizeof ROUTINE);
 
@@ -1840,24 +1880,28 @@ static void test_ptrace_blockstep(void) {
 
     asmtest_trace_t *lb = asmtest_trace_new(256, 64);
     long lres = 0;
-    asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2, &lres, lb);
-    CHECK(lres == 20 && sres == 20, "block-step loop returns 20 (sum of 1, 20x)");
+    asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2, &lres,
+                                        lb);
+    CHECK(lres == 20 && sres == 20,
+          "block-step loop returns 20 (sum of 1, 20x)");
 
     unsigned long long sn = asmtest_emu_trace_insns_total(ss);
     unsigned long long bn = asmtest_emu_trace_insns_total(lb);
     int loop_seq = (bn == sn && bn == 62); /* 1 + 20*3 + ret */
     for (unsigned long long i = 0; loop_seq && i < bn; i++)
         loop_seq = (lb->insns[i] == ss->insns[i]);
-    CHECK(loop_seq,
-          "block-step reconstructs single-step across the loop back-edge (62 insns)");
+    CHECK(loop_seq, "block-step reconstructs single-step across the loop "
+                    "back-edge (62 insns)");
     CHECK(asmtest_emu_trace_blocks_len(lb) == asmtest_emu_trace_blocks_len(ss),
           "block-step loop yields the same block partition as single-step");
-    CHECK(!asmtest_emu_trace_truncated(lb), "block-step loop trace is complete");
+    CHECK(!asmtest_emu_trace_truncated(lb),
+          "block-step loop trace is complete");
     asmtest_trace_free(ss);
     asmtest_trace_free(lb);
     munmap(q, sizeof LOOP_X86);
 #else
-    printf("# SKIP ptrace block-step: x86-64 only (no AArch64 PTRACE_SINGLEBLOCK)\n");
+    printf("# SKIP ptrace block-step: x86-64 only (no AArch64 "
+           "PTRACE_SINGLEBLOCK)\n");
 #endif
 }
 
@@ -1881,10 +1925,12 @@ static void test_ptrace_windowed(void) {
     }
 
     /* Two "JIT'd methods": pure-register leaves at separate executable mappings. */
-    static const unsigned char M1[] = {0x48, 0x89, 0xf8, 0x48,
-                                       0x01, 0xf0, 0xc3}; /* mov rax,rdi; add rax,rsi; ret */
-    static const unsigned char M2[] = {0x48, 0x89, 0xf8, 0x48,
-                                       0x29, 0xf0, 0xc3}; /* mov rax,rdi; sub rax,rsi; ret */
+    static const unsigned char M1[] = {
+        0x48, 0x89, 0xf8, 0x48,
+        0x01, 0xf0, 0xc3}; /* mov rax,rdi; add rax,rsi; ret */
+    static const unsigned char M2[] = {
+        0x48, 0x89, 0xf8, 0x48,
+        0x29, 0xf0, 0xc3}; /* mov rax,rdi; sub rax,rsi; ret */
     void *m1 = mmap(NULL, sizeof M1, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     void *m2 = mmap(NULL, sizeof M2, PROT_READ | PROT_WRITE,
@@ -1902,8 +1948,9 @@ static void test_ptrace_windowed(void) {
     uint64_t a1 = (uint64_t)(uintptr_t)m1, a2 = (uint64_t)(uintptr_t)m2;
 
     /* Driver: movabs rax,m1; call rax; movabs rax,m2; call rax; ret. */
-    unsigned char DRV[25] = {0x48, 0xB8, 0, 0, 0, 0, 0,    0, 0, 0, 0xFF, 0xD0, 0x48,
-                             0xB8, 0,    0, 0, 0, 0, 0,    0, 0, 0xFF, 0xD0, 0xC3};
+    unsigned char DRV[25] = {0x48, 0xB8, 0,    0,    0,    0,    0,   0, 0,
+                             0,    0xFF, 0xD0, 0x48, 0xB8, 0,    0,   0, 0,
+                             0,    0,    0,    0,    0xFF, 0xD0, 0xC3};
     memcpy(DRV + 2, &a1, 8);
     memcpy(DRV + 14, &a2, 8);
     void *drv = mmap(NULL, sizeof DRV, PROT_READ | PROT_WRITE,
@@ -1948,8 +1995,8 @@ static void test_ptrace_windowed(void) {
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
         asmtest_ptrace_run_to(pid, drv) == ASMTEST_PTRACE_OK)
-        rc = asmtest_ptrace_trace_attached_windowed(pid, drv, sizeof DRV, chan, &res,
-                                                    tr);
+        rc = asmtest_ptrace_trace_attached_windowed(pid, drv, sizeof DRV, chan,
+                                                    &res, tr);
     kill(pid, SIGKILL);
     waitpid(pid, &st, 0);
 
@@ -1973,8 +2020,8 @@ static void test_ptrace_windowed(void) {
                 first_m2 = (long)i;
         }
     }
-    CHECK(hit_drv && hit_m1 && hit_m2,
-          "windowed capture records the driver AND both channel-published methods");
+    CHECK(hit_drv && hit_m1 && hit_m2, "windowed capture records the driver "
+                                       "AND both channel-published methods");
     CHECK(first_m1 >= 0 && first_m2 > first_m1,
           "windowed capture follows the calls in order (m1 before m2)");
     CHECK(!asmtest_emu_trace_truncated(tr), "windowed capture is complete");
@@ -1991,16 +2038,17 @@ static void test_ptrace_windowed(void) {
     int only_drv = 1;
     if (waitpid(pid2, &st, 0) >= 0 && WIFSTOPPED(st) &&
         asmtest_ptrace_run_to(pid2, drv) == ASMTEST_PTRACE_OK &&
-        asmtest_ptrace_trace_attached_windowed(pid2, drv, sizeof DRV, NULL, &res,
-                                               tr2) == ASMTEST_PTRACE_OK) {
+        asmtest_ptrace_trace_attached_windowed(
+            pid2, drv, sizeof DRV, NULL, &res, tr2) == ASMTEST_PTRACE_OK) {
         unsigned long long n2 = asmtest_emu_trace_insns_len(tr2);
         for (unsigned long long i = 0; i < n2; i++) {
             uint64_t at = tr2->insns[i];
             if (!(at >= dv && at < dv + sizeof DRV))
-                only_drv = 0; /* nothing outside the window frame (m1/m2 not published) */
+                only_drv =
+                    0; /* nothing outside the window frame (m1/m2 not published) */
         }
-        CHECK(only_drv,
-              "windowed with chan==NULL records only the window frame, not the methods");
+        CHECK(only_drv, "windowed with chan==NULL records only the window "
+                        "frame, not the methods");
     } else {
         printf("# SKIP windowed chan==NULL leg: setup failed\n");
     }
@@ -3296,15 +3344,14 @@ static void test_descent_fork(void) {
             void *poll_addr = dlsym(RTLD_DEFAULT, "poll");
             if (poll_addr != NULL) {
                 unsigned char R3[] = {
-                    0x31, 0xff,             /* xor edi,edi          */
-                    0x31, 0xf6,             /* xor esi,esi          */
-                    0x31, 0xd2,             /* xor edx,edx          */
-                    0x49, 0xbb, 0,    0, 0,
-                    0,    0,    0,    0, 0, /* movabs r11, <poll>   */
-                    0x41, 0xff, 0xd3,       /* 0x10 call r11        */
-                    0xb8, 0x2a, 0x00, 0x00,
-                    0x00,                   /* mov eax,42           */
-                    0xc3};                  /* ret                  */
+                    0x31, 0xff, /* xor edi,edi          */
+                    0x31, 0xf6, /* xor esi,esi          */
+                    0x31, 0xd2, /* xor edx,edx          */
+                    0x49, 0xbb, 0,    0,    0,
+                    0,    0,    0,    0,    0,    /* movabs r11, <poll>   */
+                    0x41, 0xff, 0xd3,             /* 0x10 call r11        */
+                    0xb8, 0x2a, 0x00, 0x00, 0x00, /* mov eax,42           */
+                    0xc3};                        /* ret                  */
                 memcpy(&R3[8], &poll_addr, sizeof poll_addr);
                 void *b3 = map_exec(R3, sizeof R3);
                 if (b3 != NULL) {
@@ -3670,7 +3717,8 @@ static void test_wholewindow_singlestep(void) {
     if (rc_begin != ASMTEST_HW_OK) {
         /* Whole-window is Linux/x86-64 today; on other single-step platforms (macOS
          * x86-64, where available(SINGLESTEP) is true) begin_window self-skips. */
-        printf("# SKIP whole-window capture: begin_window unavailable here (rc=%d)\n",
+        printf("# SKIP whole-window capture: begin_window unavailable here "
+               "(rc=%d)\n",
                rc_begin);
         asmtest_hwtrace_shutdown();
         asmtest_trace_free(tr);
@@ -3728,7 +3776,8 @@ static void test_wholewindow_singlestep(void) {
     asmtest_hwtrace_scope_t phantom = {5, 999};
     asmtest_hwtrace_end_window(phantom, tr2);
     CHECK(asmtest_emu_trace_truncated(tr2) != 0,
-          "whole-window: a cross-thread (unresolvable-handle) close flags truncated");
+          "whole-window: a cross-thread (unresolvable-handle) close flags "
+          "truncated");
 
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);
@@ -3751,7 +3800,8 @@ static void test_wholewindow_buckets(void) {
         return;
     }
     void *a = ss_map_exec(ROUTINE, sizeof ROUTINE); /* leaf A */
-    void *b = ss_map_exec(ROUTINE, sizeof ROUTINE); /* leaf B (distinct mapping) */
+    void *b =
+        ss_map_exec(ROUTINE, sizeof ROUTINE); /* leaf B (distinct mapping) */
     if (a == NULL || b == NULL) {
         printf("# SKIP whole-window buckets: mmap failed\n");
         return;
@@ -3759,7 +3809,8 @@ static void test_wholewindow_buckets(void) {
     asmtest_hwtrace_options_t opts;
     memset(&opts, 0, sizeof opts);
     opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
-    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "whole-window buckets init");
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "whole-window buckets init");
 
     asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
     asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
@@ -3767,7 +3818,8 @@ static void test_wholewindow_buckets(void) {
     /* Bracket ONLY the two calls — both leaves run inside one empty scope. */
     int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
     if (rc_begin != ASMTEST_HW_OK) {
-        printf("# SKIP whole-window buckets: begin_window unavailable here (rc=%d)\n",
+        printf("# SKIP whole-window buckets: begin_window unavailable here "
+               "(rc=%d)\n",
                rc_begin);
         asmtest_hwtrace_shutdown();
         asmtest_trace_free(tr);
@@ -3781,7 +3833,8 @@ static void test_wholewindow_buckets(void) {
 
     CHECK(rc_begin == ASMTEST_HW_OK && rc_end == ASMTEST_HW_OK,
           "whole-window buckets: scope opened and closed");
-    CHECK(ra == 42 && rb == 42, "whole-window buckets: both leaves returned 42");
+    CHECK(ra == 42 && rb == 42,
+          "whole-window buckets: both leaves returned 42");
 
     asmtest_hwtrace_named_region_t regions[2];
     memset(regions, 0, sizeof regions);
@@ -3795,7 +3848,8 @@ static void test_wholewindow_buckets(void) {
     asmtest_hwtrace_bucket_t buckets[8];
     memset(buckets, 0, sizeof buckets);
     size_t nb = 0;
-    int rc = asmtest_hwtrace_attribute_window(scope, regions, 2, buckets, 8, &nb);
+    int rc =
+        asmtest_hwtrace_attribute_window(scope, regions, 2, buckets, 8, &nb);
     CHECK(rc == ASMTEST_HW_OK, "whole-window buckets: attribute_window ok");
 
     /* add2(_, _) executes 5 in-region instructions (mov,add,cmp,jle,ret), so each
@@ -3803,13 +3857,19 @@ static void test_wholewindow_buckets(void) {
     uint64_t ca = 0, cb = 0;
     int seen_a = 0, seen_b = 0;
     for (size_t i = 0; i < nb; i++) {
-        if (strcmp(buckets[i].label, "leafA") == 0) { ca = buckets[i].count; seen_a = 1; }
-        if (strcmp(buckets[i].label, "leafB") == 0) { cb = buckets[i].count; seen_b = 1; }
+        if (strcmp(buckets[i].label, "leafA") == 0) {
+            ca = buckets[i].count;
+            seen_a = 1;
+        }
+        if (strcmp(buckets[i].label, "leafB") == 0) {
+            cb = buckets[i].count;
+            seen_b = 1;
+        }
     }
     CHECK(seen_a && seen_b && nb >= 2,
           "whole-window buckets: two leaves are SEPARATE named buckets");
-    CHECK(ca == 5 && cb == 5,
-          "whole-window buckets: each leaf attributed exactly its 5 instructions");
+    CHECK(ca == 5 && cb == 5, "whole-window buckets: each leaf attributed "
+                              "exactly its 5 instructions");
 
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);
@@ -3872,7 +3932,8 @@ static void test_zeroctor_scope_hygiene(void) {
         munmap(p, sizeof ROUTINE);
         return;
     }
-    int rc_in = asmtest_hwtrace_try_begin("hyg_inner"); /* nested region frame */
+    int rc_in =
+        asmtest_hwtrace_try_begin("hyg_inner"); /* nested region frame */
     add2_fn fn = (add2_fn)p;
     long r = (rc_in == ASMTEST_HW_OK) ? fn(20, 22) : -1;
     if (rc_in == ASMTEST_HW_OK)
@@ -3886,9 +3947,10 @@ static void test_zeroctor_scope_hygiene(void) {
 
     CHECK(rc_win == ASMTEST_HW_OK && rc_in == ASMTEST_HW_OK,
           "hygiene: region-free window + nested region scope both open OK");
-    CHECK(rc_endwin == ASMTEST_HW_OK && r == 42,
-          "hygiene: both scopes close in LIFO order and the traced call returns "
-          "42");
+    CHECK(
+        rc_endwin == ASMTEST_HW_OK && r == 42,
+        "hygiene: both scopes close in LIFO order and the traced call returns "
+        "42");
     static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
     int exact = (asmtest_emu_trace_insns_total(tr_in) == 5);
     for (size_t i = 0; exact && i < 5; i++)
@@ -3907,9 +3969,10 @@ static void test_zeroctor_scope_hygiene(void) {
     CHECK(found_all,
           "hygiene: the outer window captured the routine's absolute addresses "
           "too");
-    CHECK(sa_mid.sa_sigaction != sa_before.sa_sigaction,
-          "hygiene: SIGTRAP disposition installed while armed; the nested close "
-          "did not prematurely restore it");
+    CHECK(
+        sa_mid.sa_sigaction != sa_before.sa_sigaction,
+        "hygiene: SIGTRAP disposition installed while armed; the nested close "
+        "did not prematurely restore it");
 
     /* (b) Churn: 300 construct/dispose cycles on this one thread. Every rc must
      * be OK — an EFULL here would mean the frame stack or generation state leaks
@@ -3937,7 +4000,8 @@ static void test_zeroctor_scope_hygiene(void) {
     long r_f = (rb_f == ASMTEST_HW_OK) ? fn(20, 22) : -1;
     int re_f = (rb_f == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(fsc, tr_f)
                                        : ASMTEST_HW_EINVAL;
-    int final_ok = (rb_f == ASMTEST_HW_OK && re_f == ASMTEST_HW_OK && r_f == 42);
+    int final_ok =
+        (rb_f == ASMTEST_HW_OK && re_f == ASMTEST_HW_OK && r_f == 42);
     for (size_t k = 0; final_ok && k < 5; k++) {
         int hit = 0;
         for (size_t i = 0; i < tr_f->insns_len && !hit; i++)
@@ -3990,7 +4054,8 @@ static void test_wholewindow_banner(void) {
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
           "whole-window banner init");
 
-    asmtest_trace_t *tr = asmtest_trace_new(8, 0); /* tiny cap: force overflow */
+    asmtest_trace_t *tr =
+        asmtest_trace_new(8, 0); /* tiny cap: force overflow */
     asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
     long (*fn)(long, long) = (long (*)(long, long))p;
     int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
@@ -4003,14 +4068,16 @@ static void test_wholewindow_banner(void) {
         munmap(p, sizeof AMD_LOOP);
         return;
     }
-    long r = fn(1, 40); /* 40 trips: 122 in-region insns alone, far past cap 8 */
+    long r =
+        fn(1, 40); /* 40 trips: 122 in-region insns alone, far past cap 8 */
     int rc_end = asmtest_hwtrace_end_window(scope, tr);
     CHECK(rc_begin == ASMTEST_HW_OK && rc_end == ASMTEST_HW_OK && r == 40,
           "banner: the overflowing whole window opens, runs, and closes OK");
-    CHECK(tr->insns_len == 8 && tr->insns_total > tr->insns_len &&
-              asmtest_emu_trace_truncated(tr),
-          "banner: the tiny cap yields an honest truncated prefix (8 kept, more "
-          "ran)");
+    CHECK(
+        tr->insns_len == 8 && tr->insns_total > tr->insns_len &&
+            asmtest_emu_trace_truncated(tr),
+        "banner: the tiny cap yields an honest truncated prefix (8 kept, more "
+        "ran)");
 
     int need = asmtest_hwtrace_render_window(scope, NULL, 0);
     if (need == ASMTEST_HW_ENOSYS) {
@@ -4024,9 +4091,9 @@ static void test_wholewindow_banner(void) {
     }
     char *buf = (char *)malloc(need > 0 ? (size_t)need + 1 : 1);
     buf[0] = '\0';
-    int wrote = (need > 0)
-                    ? asmtest_hwtrace_render_window(scope, buf, (size_t)need + 1)
-                    : need;
+    int wrote =
+        (need > 0) ? asmtest_hwtrace_render_window(scope, buf, (size_t)need + 1)
+                   : need;
     CHECK(need > 0 && wrote == need,
           "banner: render sizes and fills consistently (snprintf semantics)");
 
@@ -4070,8 +4137,9 @@ static void test_wholewindow_banner(void) {
         rows++;
         line = nl + 1;
     }
-    CHECK(well && rows == 8,
-          "banner: the 8 shown prefix lines are well-formed \"<hex>:\\t<text>\"");
+    CHECK(
+        well && rows == 8,
+        "banner: the 8 shown prefix lines are well-formed \"<hex>:\\t<text>\"");
 
     free(buf);
     asmtest_hwtrace_shutdown();
@@ -4108,15 +4176,16 @@ static void test_zeroctor_managed_compose(void) {
     memcpy(v1, ROUTINE, sizeof ROUTINE);
     v1[4] = 0x29;
     long ps = sysconf(_SC_PAGESIZE);
-    unsigned char *p = (unsigned char *)mmap(NULL, (size_t)ps,
-                                             PROT_READ | PROT_WRITE,
-                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP zeroctor managed compose: mmap failed\n");
         return;
     }
     memcpy(p, ROUTINE, sizeof ROUTINE);
-    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC); /* the JIT publishes X bytes */
+    mprotect(p, (size_t)ps,
+             PROT_READ | PROT_EXEC); /* the JIT publishes X bytes */
 
     /* The synthetic MethodLoad event — what the §D0.1 listener would deliver for
      * a method JIT'd inside the window; its (addr,size) feeds track(). */
@@ -4164,7 +4233,8 @@ static void test_zeroctor_managed_compose(void) {
     CHECK(n0 > 0 && g_add[0] != '\0' && strstr(b0, g_add) != NULL,
           "managed compose: when0 renders the FIRST routine's distinctive add");
     CHECK(n1 > 0 && g_sub[0] != '\0' && strstr(b1, g_sub) != NULL,
-          "managed compose: when1 renders the re-JIT'd sub at the same addresses");
+          "managed compose: when1 renders the re-JIT'd sub at the same "
+          "addresses");
     /* Live memory holds ONLY v1 at render time, so when0's text showing no `sub`
      * (and differing from when1's) proves decode-at-version, not live bytes. */
     CHECK(strstr(b0, "sub") == NULL && strcmp(b0, b1) != 0,
@@ -4175,7 +4245,8 @@ static void test_zeroctor_managed_compose(void) {
     asmtest_codeimage_free(img);
     munmap(p, (size_t)ps);
 #else
-    printf("# SKIP zeroctor managed compose: x86-64 Linux only (x86 fixture)\n");
+    printf(
+        "# SKIP zeroctor managed compose: x86-64 Linux only (x86 fixture)\n");
 #endif
 }
 

@@ -141,8 +141,8 @@ void asmtest_capture_mix(regs_t *out, void *fn, const long *iargs, int ni,
  * visible integer args follow the ABI. A binding allocates `result` as a plain
  * byte buffer and unpacks the fields itself — no struct layout crosses the FFI.
  * nargs is clamped to >= 0. */
-void asmtest_capture_sret(regs_t *out, void *fn, void *result,
-                          const long *args, int nargs) {
+void asmtest_capture_sret(regs_t *out, void *fn, void *result, const long *args,
+                          int nargs) {
     if (nargs < 0)
         nargs = 0;
     asm_call_capture_sret(out, fn, result, args, nargs);

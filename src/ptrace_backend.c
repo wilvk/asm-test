@@ -1375,7 +1375,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 #if defined(__x86_64__)
 
 #ifndef PTRACE_SINGLEBLOCK
-#define PTRACE_SINGLEBLOCK 33 /* <sys/ptrace.h> omits it though the kernel wires it */
+#define PTRACE_SINGLEBLOCK                                                     \
+    33 /* <sys/ptrace.h> omits it though the kernel wires it */
 #endif
 
 /* Hang-proof one-shot FUNCTIONAL probe: PTRACE_SINGLEBLOCK must run a straight-line
@@ -1453,9 +1454,10 @@ int asmtest_ptrace_blockstep_available(void) {
  * NOT taken (BTF does not fire on it) so we fall through and keep walking. Returns 1 on
  * a clean terminator (with *last_off = its offset), 0 on overflow/undecodable/no
  * region terminator (caller marks truncated). */
-static int blockstep_reconstruct(const uint8_t *code, size_t len, uint64_t base_ip,
-                                 uint64_t from_off, uint64_t next_pc,
-                                 uint64_t *stream, uint32_t *pn, uint64_t *last_off) {
+static int blockstep_reconstruct(const uint8_t *code, size_t len,
+                                 uint64_t base_ip, uint64_t from_off,
+                                 uint64_t next_pc, uint64_t *stream,
+                                 uint32_t *pn, uint64_t *last_off) {
     uint64_t walk = from_off;
     /* Bounded by the region instruction count: a block cannot revisit an offset, so
      * more than `len` steps means the walk is not converging. */
@@ -1483,14 +1485,15 @@ static int blockstep_reconstruct(const uint8_t *code, size_t len, uint64_t base_
             return 1; /* indirect jmp/call: unconditionally taken, terminator */
         if (target == next_pc)
             return 1; /* direct branch TAKEN to the observed next stop: terminator */
-        walk += l;    /* direct conditional NOT taken: fall through, keep walking */
+        walk +=
+            l; /* direct conditional NOT taken: fall through, keep walking */
     }
     return 0;
 }
 
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
-                                        const long *args, int nargs, long *result,
-                                        asmtest_trace_t *trace) {
+                                        const long *args, int nargs,
+                                        long *result, asmtest_trace_t *trace) {
     if (code == NULL || len == 0 || nargs < 0 || nargs > 6 ||
         (nargs > 0 && args == NULL))
         return ASMTEST_PTRACE_EINVAL;
@@ -1522,7 +1525,8 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
 
     const uint64_t base_ip = (uint64_t)(uintptr_t)code;
     const uint64_t SENTINEL = ~(uint64_t)0;
-    uint64_t prev_off = SENTINEL; /* start of the open (not-yet-terminated) block */
+    uint64_t prev_off =
+        SENTINEL; /* start of the open (not-yet-terminated) block */
     uint32_t n = 0;
     int overflow = 0, returned = 0, rc = ASMTEST_PTRACE_OK, status = 0;
     int pending_sig = 0;
@@ -1585,14 +1589,15 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
         /* We have an open block starting at prev_off; the current stop `pc` is the
          * target its terminating taken branch reached. Reconstruct that block. */
         uint64_t last_off = 0;
-        if (!blockstep_reconstruct((const uint8_t *)code, len, base_ip, prev_off,
-                                   pc, stream, &n, &last_off)) {
+        if (!blockstep_reconstruct((const uint8_t *)code, len, base_ip,
+                                   prev_off, pc, stream, &n, &last_off)) {
             overflow = 1;
             break;
         }
 
         if (in_region) {
-            prev_off = pc - base_ip; /* the block's target opens the next block */
+            prev_off =
+                pc - base_ip; /* the block's target opens the next block */
             continue;
         }
 
@@ -1604,7 +1609,8 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
         exit_kind_t k = classify_region_exit(pid, (const uint8_t *)code, len,
                                              base_ip, last_off, &resume_off);
         if (k == EXIT_CALLOUT_RESUMED) {
-            prev_off = resume_off; /* resume block-stepping from the call's return */
+            prev_off =
+                resume_off; /* resume block-stepping from the call's return */
             continue;
         }
         if (k == EXIT_CALLOUT_LOST) {
@@ -1672,7 +1678,8 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
 
     const uint64_t base_ip = (uint64_t)(uintptr_t)base;
     const uint64_t SENTINEL = ~(uint64_t)0;
-    uint64_t prev_off = SENTINEL; /* start of the open (not-yet-terminated) block */
+    uint64_t prev_off =
+        SENTINEL; /* start of the open (not-yet-terminated) block */
     uint32_t n = 0;
     int overflow = 0, rc = ASMTEST_PTRACE_OK, status = 0;
 
@@ -1721,7 +1728,8 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
 
         if (prev_off == SENTINEL) {
             if (in_region)
-                prev_off = pc - base_ip; /* region entry opens the first block */
+                prev_off =
+                    pc - base_ip; /* region entry opens the first block */
             continue;
         }
 
@@ -1735,15 +1743,16 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
         }
 
         if (in_region) {
-            prev_off = pc - base_ip; /* the block's target opens the next block */
+            prev_off =
+                pc - base_ip; /* the block's target opens the next block */
             continue;
         }
 
         /* Left the region: a call-out to a helper (step over at native speed and
          * resume), or the routine's return (leave the target stopped there). */
         uint64_t resume_off = 0;
-        exit_kind_t k =
-            classify_region_exit(pid, code, len, base_ip, last_off, &resume_off);
+        exit_kind_t k = classify_region_exit(pid, code, len, base_ip, last_off,
+                                             &resume_off);
         if (k == EXIT_CALLOUT_RESUMED) {
             prev_off = resume_off;
             continue;
@@ -1764,11 +1773,11 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
     return rc;
 }
 
-#else /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent */
+#else  /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent */
 int asmtest_ptrace_blockstep_available(void) { return 0; }
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
-                                        const long *args, int nargs, long *result,
-                                        asmtest_trace_t *trace) {
+                                        const long *args, int nargs,
+                                        long *result, asmtest_trace_t *trace) {
     (void)code;
     (void)len;
     (void)args;
@@ -1801,7 +1810,8 @@ static int in_region_set(uint64_t pc, uint64_t win_base, uint64_t win_len,
     if (pc >= win_base && pc < win_base + win_len)
         return 1;
     for (uint32_t i = 0; i < nreg; i++)
-        if (regs[i].len && pc >= regs[i].base && pc < regs[i].base + regs[i].len)
+        if (regs[i].len && pc >= regs[i].base &&
+            pc < regs[i].base + regs[i].len)
             return 1;
     return 0;
 }
@@ -1822,7 +1832,8 @@ static size_t foreign_insn_len(pid_t pid, uint64_t at) {
 int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
                                            size_t win_len,
                                            asmtest_addr_channel_t *chan,
-                                           long *result, asmtest_trace_t *trace) {
+                                           long *result,
+                                           asmtest_trace_t *trace) {
     if (win_base_p == NULL || win_len == 0 || trace == NULL)
         return ASMTEST_PTRACE_EINVAL;
     const uint64_t win_base = (uint64_t)(uintptr_t)win_base_p;
@@ -1842,7 +1853,8 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
             return ASMTEST_PTRACE_ETRACE;
     }
 #else
-    read_pc_ret(pid, NULL, NULL, NULL, &win_ret); /* AArch64: LR holds the return */
+    read_pc_ret(pid, NULL, NULL, NULL,
+                &win_ret); /* AArch64: LR holds the return */
 #endif
 
     /* Accumulated published regions (window frame + every JIT method the parent
@@ -1860,7 +1872,8 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
     int overflow = 0, rc = ASMTEST_PTRACE_OK, status = 0;
     long retval_final = 0;
 
-    if (in_region_set(pc0, win_base, win_len, regs, nreg) && n < PTRACE_STREAM_CAP)
+    if (in_region_set(pc0, win_base, win_len, regs, nreg) &&
+        n < PTRACE_STREAM_CAP)
         stream[n++] = pc0; /* record the window entry */
 
     for (;;) {
@@ -1897,7 +1910,8 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         }
         if (in_region_set(pc, win_base, win_len, regs, nreg)) {
             if (n < PTRACE_STREAM_CAP)
-                stream[n++] = pc; /* record ABSOLUTE — the caller classifies by region */
+                stream[n++] =
+                    pc; /* record ABSOLUTE — the caller classifies by region */
             else {
                 overflow = 1;
                 break;
@@ -2128,19 +2142,43 @@ static void descend_set_deadline(dctx_t *c, const asmtest_descent_t *d) {
  * Failure here is deliberately soft: no /proc or no dlsym just leaves fewer
  * default regions — budget + watchdog remain the hard backstops. */
 static const char *const descend_deny_modules[] = {
-    "ld-linux", "ld-musl",  "/ld.so",  "[vdso]", "[vsyscall]",
+    "ld-linux",   "ld-musl",   "/ld.so",   "[vdso]",      "[vsyscall]",
     "libcoreclr", "libclrjit", "libclrgc", "libmonosgen", "libmono-",
-    "libjvm", "libart", "libv8", "libgc.",
+    "libjvm",     "libart",    "libv8",    "libgc.",
 };
 static const char *const descend_deny_syms[] = {
-    "poll", "ppoll", "select", "pselect", "epoll_wait", "epoll_pwait",
-    "nanosleep", "clock_nanosleep", "sleep", "usleep", "pause",
-    "sigwait", "sigwaitinfo", "sigtimedwait",
-    "wait", "waitpid", "wait4", "waitid",
-    "accept", "accept4", "connect", "recv", "recvfrom", "recvmsg",
-    "sem_wait", "sem_timedwait", "pthread_cond_wait",
-    "pthread_cond_timedwait", "pthread_join", "pthread_mutex_lock",
-    "read", "write",
+    "poll",
+    "ppoll",
+    "select",
+    "pselect",
+    "epoll_wait",
+    "epoll_pwait",
+    "nanosleep",
+    "clock_nanosleep",
+    "sleep",
+    "usleep",
+    "pause",
+    "sigwait",
+    "sigwaitinfo",
+    "sigtimedwait",
+    "wait",
+    "waitpid",
+    "wait4",
+    "waitid",
+    "accept",
+    "accept4",
+    "connect",
+    "recv",
+    "recvfrom",
+    "recvmsg",
+    "sem_wait",
+    "sem_timedwait",
+    "pthread_cond_wait",
+    "pthread_cond_timedwait",
+    "pthread_join",
+    "pthread_mutex_lock",
+    "read",
+    "write",
 };
 
 static void descend_apply_default_denylist(asmtest_descent_t *d, pid_t pid,
@@ -2362,8 +2400,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 int asmtest_ptrace_blockstep_available(void) { return 0; }
 
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
-                                        const long *args, int nargs, long *result,
-                                        asmtest_trace_t *trace) {
+                                        const long *args, int nargs,
+                                        long *result, asmtest_trace_t *trace) {
     (void)code;
     (void)len;
     (void)args;
@@ -2376,7 +2414,8 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
 int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
                                            size_t win_len,
                                            asmtest_addr_channel_t *chan,
-                                           long *result, asmtest_trace_t *trace) {
+                                           long *result,
+                                           asmtest_trace_t *trace) {
     (void)pid;
     (void)win_base_p;
     (void)win_len;

@@ -59,7 +59,8 @@ int asmtest_amd_freeze_available(void) {
         return cached;
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
     /* The extended leaf must exist before it can report the bit. */
-    if (__get_cpuid(0x80000000u, &eax, &ebx, &ecx, &edx) == 0 || eax < 0x80000022u) {
+    if (__get_cpuid(0x80000000u, &eax, &ebx, &ecx, &edx) == 0 ||
+        eax < 0x80000022u) {
         cached = 0;
         return cached;
     }
@@ -280,8 +281,8 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
     uint64_t o = from_ip - base_ip;
     const uint64_t fo = to_ip - base_ip;
     while (o < fo) {
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
-                                 base_ip, o, NULL, 0);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                 len, base_ip, o, NULL, 0);
         if (l == 0 || o + l > fo)
             return 0; /* undecodable byte, or the walk overshoots the source */
         o += l;
@@ -311,8 +312,8 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
  * indecodable splice — a dropped-sample artifact the from+to overlap alone cannot see —
  * is rejected in favor of a larger shift, and an honest gap if none decodes. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
-                          const size_t *nrs, size_t n_samples,
-                          const void *base, uint64_t base_ip, size_t len,
+                          const size_t *nrs, size_t n_samples, const void *base,
+                          uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap) {
     if (gap != NULL)
@@ -357,9 +358,8 @@ size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
              * tail's newest target (out[n-1].to) must straight-line-decode to the
              * first edge this shift would append (s[d-1].from). No-op on consistent
              * hardware windows; catches a dropped-sample mis-stitch -> larger shift/gap. */
-            if (match &&
-                amd_span_decodable(base, base_ip, len, out[n - 1].to,
-                                   s[d - 1].from)) {
+            if (match && amd_span_decodable(base, base_ip, len, out[n - 1].to,
+                                            s[d - 1].from)) {
                 best_d = d;
                 break;
             }

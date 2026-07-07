@@ -92,7 +92,7 @@
 #define SS_SET_TF(uc) ((uc)->uc_mcontext->__ss.__rflags |= SS_TF)
 /* §Z4: the OS thread id that armed a frame (region-free close assert). Linux uses the
  * gettid syscall; Darwin uses the 64-bit pthread thread id, narrowed to int. */
-#define SS_ARM_TID()  ss_darwin_tid()
+#define SS_ARM_TID() ss_darwin_tid()
 #else
 #define SS_RIP(uc)    ((uint64_t)(uc)->uc_mcontext.gregs[REG_RIP])
 #define SS_SET_TF(uc) ((uc)->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_TF)
@@ -115,7 +115,8 @@ static inline int ss_darwin_tid(void) {
  * small-routine envelope; a routine that executes more in-region instructions than
  * this overflows and is honestly flagged truncated (never emit partial as complete). */
 #ifndef SS_STREAM_CAP
-#define SS_STREAM_CAP (1u << 16) /* 65536 offsets = 512 KiB (region frames: malloc'd) */
+#define SS_STREAM_CAP                                                          \
+    (1u << 16) /* 65536 offsets = 512 KiB (region frames: malloc'd) */
 #endif
 
 /* WHOLE-WINDOW capacity (§Z1). A region frame captures a small leaf, but a region-free
@@ -153,13 +154,15 @@ typedef struct {
     uint64_t base_ip;
     size_t len;
     asmtest_trace_t *trace;
-    uint64_t *stream; /* ordered RIPs (offsets, or absolute if whole); malloc or mmap */
-    size_t cap;       /* stream capacity in entries (SS_STREAM_CAP or SS_WINDOW_CAP)  */
+    uint64_t *
+        stream; /* ordered RIPs (offsets, or absolute if whole); malloc or mmap */
+    size_t
+        cap; /* stream capacity in entries (SS_STREAM_CAP or SS_WINDOW_CAP)  */
     volatile uint32_t stream_len;
     volatile sig_atomic_t overflow;
     uint32_t gen;
     int whole_window; /* §Z1: 1 => record absolute RIPs, no [base,len) filter; mmap'd */
-    int arm_tid;      /* §Z4: OS tid that armed this frame (region-free close assert) */
+    int arm_tid; /* §Z4: OS tid that armed this frame (region-free close assert) */
 } ss_frame_t;
 
 /* Per-thread range stack + depth + generation counter. INITIAL-EXEC: the handler
@@ -204,7 +207,7 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
     (void)sig;
     (void)si;
     if (!g_armed)
-        return; /* process-global belt: no thread stepping */
+        return;        /* process-global belt: no thread stepping */
     int d = tls_depth; /* initial-exec TLS read: async-signal-safe */
     if (d <= 0)
         return; /* this thread isn't stepping (e.g. mid-disarm after depth->0) */
@@ -252,7 +255,8 @@ static void ss_free_stream(ss_frame_t *f) {
  * / allocation / sigaction failure. `whole_window` selects the region-free §Z1 mode
  * (base/len must be NULL/0); the region mode requires a non-NULL base + nonzero len. */
 static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
-                         int whole_window, uint32_t *out_idx, uint32_t *out_gen) {
+                         int whole_window, uint32_t *out_idx,
+                         uint32_t *out_gen) {
     if (whole_window) {
         if (base != NULL || len != 0)
             return ASMTEST_HW_EINVAL; /* region-free frame carries no [base,len) */
@@ -369,7 +373,8 @@ static void ss_normalize(ss_frame_t *fr) {
             have_prev = 1;
         }
         if (fr->overflow)
-            t->truncated = true; /* whole-window run exceeded the capture buffer */
+            t->truncated =
+                true; /* whole-window run exceeded the capture buffer */
         return;
     }
 
@@ -440,7 +445,8 @@ void asmtest_ss_end(void) {
         tls_depth = d - 1; /* nested pop: outer frames keep stepping */
     }
     ss_normalize(fr);
-    ss_free_stream(fr); /* munmap (whole-window) or free (region); keeps base/len/gen */
+    ss_free_stream(
+        fr); /* munmap (whole-window) or free (region); keeps base/len/gen */
 
     pthread_mutex_lock(&g_ss_lock);
     if (g_arm_refcount > 0)

@@ -106,8 +106,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * asmtest_ptrace_blockstep_available). Complete at moderate overhead, NOT cheap: each
  * block still costs a full ptrace round-trip and perturbs timing heavily. */
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
-                                        const long *args, int nargs, long *result,
-                                        asmtest_trace_t *trace);
+                                        const long *args, int nargs,
+                                        long *result, asmtest_trace_t *trace);
 
 /* 1 if PTRACE_SINGLEBLOCK block-step can run here (x86-64 Linux with a functional
  * PTRACE_SINGLEBLOCK and Capstone for the reconstruction), else 0 — a hang-proof,
@@ -122,8 +122,9 @@ int asmtest_ptrace_blockstep_available(void);
  * target is never killed, and on a region return it is left stopped past the region.
  * The rootless managed-runtime completeness fallback at a fraction of the stops.
  * Probe with asmtest_ptrace_blockstep_available; ENOSYS where block-step cannot run. */
-int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base, size_t len,
-                                            long *result, asmtest_trace_t *trace);
+int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
+                                            size_t len, long *result,
+                                            asmtest_trace_t *trace);
 
 /* §D3 whole-window multi-region capture: single-step an attached tracee across a
  * WINDOW frame (run_to `win_base` first; the window ends when control returns to the
@@ -140,7 +141,8 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base, size_t 
  * ENOSYS off x86-64/AArch64 Linux. */
 int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base,
                                            size_t win_len,
-                                           asmtest_addr_channel_t *chan, long *result,
+                                           asmtest_addr_channel_t *chan,
+                                           long *result,
                                            asmtest_trace_t *trace);
 
 /* Trace a region in a SEPARATE, already-running process you have attached to — the

@@ -93,8 +93,9 @@ typedef struct {
  * executed address (temporal-correct as of `when`), so the decoder no longer stops
  * at the first out-of-region IP the way read_region does. Distinct from read_region
  * — selected by mode — so the shipped region-scoped decode stays byte-identical. */
-static int read_recorder(uint8_t *buffer, size_t size, const struct pt_asid *asid,
-                         uint64_t ip, void *context) {
+static int read_recorder(uint8_t *buffer, size_t size,
+                         const struct pt_asid *asid, uint64_t ip,
+                         void *context) {
     (void)asid;
     pt_recorder_ctx_t *c = (pt_recorder_ctx_t *)context;
     int n = asmtest_pt_read_codeimage(c->img, c->when, ip, buffer, size);

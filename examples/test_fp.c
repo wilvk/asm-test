@@ -71,8 +71,13 @@ static int gen_fpair(asmtest_rng_t *rng, double *f, int cap) {
 /* Cycle the values where FP bugs hide: signed zeros, infinities, NaN, and the
  * extremes of the finite range. The engine treats NaN-vs-NaN as a match. */
 static int gen_fspecials(asmtest_rng_t *rng, double *f, int cap) {
-    static const double specials[] = {0.0,     -0.0,    1.0,     -1.0,
-                                      INFINITY, -INFINITY, NAN,
+    static const double specials[] = {0.0,
+                                      -0.0,
+                                      1.0,
+                                      -1.0,
+                                      INFINITY,
+                                      -INFINITY,
+                                      NAN,
                                       2.2250738585072014e-308 /* DBL_MIN */,
                                       1.7976931348623157e+308 /* DBL_MAX */};
     const int k = (int)(sizeof specials / sizeof specials[0]);

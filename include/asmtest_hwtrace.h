@@ -68,12 +68,13 @@ typedef struct {
     asmtest_trace_backend_t backend;
     size_t
         aux_size; /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
-    size_t data_size; /* base perf ring bytes, rounded up to 2^n pages. 0 selects a
+    size_t
+        data_size; /* base perf ring bytes, rounded up to 2^n pages. 0 selects a
                          backend default: 8KB for Intel PT (control flows through AUX),
                          256KB for the AMD backend (where this ring holds the
                          sample_period=1 windows and so bounds the Tier-B stitched run
                          before the kernel drops the newest samples) */
-    int snapshot; /* nonzero: Intel PT maps a circular snapshot ring (0: linear
+    int snapshot;  /* nonzero: Intel PT maps a circular snapshot ring (0: linear
                      drain). On the AMD backend it opts the begin/end markers into
                      the DETERMINISTIC boundary LBR snapshot (bpf_get_branch_snapshot
                      at a region-exit hardware breakpoint) instead of the
@@ -326,7 +327,8 @@ typedef struct {
  * decode — so the synchronous single-slice case is byte-identical to a plain trace. */
 int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
                            asmtest_trace_t *out,
-                           asmtest_hwtrace_slice_bound_t *bounds, size_t *nbounds);
+                           asmtest_hwtrace_slice_bound_t *bounds,
+                           size_t *nbounds);
 
 /* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
@@ -385,15 +387,16 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
 /* name REVERSE resolver. Host-testable: the bucketer takes an IP list,   */
 /* not a live PT capture. */
 typedef struct {
-    char label[128]; /* region pathname / JIT symbol (or "[anon]"/"[unknown]") */
-    uint64_t count;  /* IPs bucketed to this label                             */
+    char
+        label[128]; /* region pathname / JIT symbol (or "[anon]"/"[unknown]") */
+    uint64_t count; /* IPs bucketed to this label                             */
 } asmtest_hwtrace_bucket_t;
 
 /* Resolve the mapped-file pathname (or a "[...]" pseudo-name) + extent containing
  * `addr` in process `pid` (0 = self), keeping the maps pathname field. Returns 1 on
  * a hit (fills name/start/end; name always NUL-terminated), 0 on a miss. */
-int asmtest_hwtrace_region_name(int pid, uint64_t addr, char *name, size_t namelen,
-                                uint64_t *start, uint64_t *end);
+int asmtest_hwtrace_region_name(int pid, uint64_t addr, char *name,
+                                size_t namelen, uint64_t *start, uint64_t *end);
 
 /* Bucket ips[0..n) by containing perf-map JIT symbol (preferred) or mapped-file
  * region into buckets[0..cap), returning the number of distinct buckets written
@@ -423,11 +426,10 @@ typedef struct {
  * relative offsets, not the absolute addresses this needs), or bad args;
  * ASMTEST_HW_ENOSYS where the whole-window path is unavailable (it is Linux/x86-64 —
  * a subset of the single-step tier, which also covers macOS x86-64). Host-testable. */
-int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t handle,
-                                     const asmtest_hwtrace_named_region_t *regions,
-                                     size_t nregions,
-                                     asmtest_hwtrace_bucket_t *buckets, size_t cap,
-                                     size_t *nbuckets);
+int asmtest_hwtrace_attribute_window(
+    asmtest_hwtrace_scope_t handle,
+    const asmtest_hwtrace_named_region_t *regions, size_t nregions,
+    asmtest_hwtrace_bucket_t *buckets, size_t cap, size_t *nbuckets);
 
 #ifdef __cplusplus
 }

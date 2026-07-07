@@ -577,8 +577,8 @@ void asmtest_capture_mix(regs_t *out, void *fn, const long *iargs, int ni,
  * memory-class struct is written into `result` (a caller-allocated byte
  * buffer); the `nargs` visible integer args follow the ABI. nargs is clamped
  * to >= 0. */
-void asmtest_capture_sret(regs_t *out, void *fn, void *result,
-                          const long *args, int nargs);
+void asmtest_capture_sret(regs_t *out, void *fn, void *result, const long *args,
+                          int nargs);
 void asmtest_assert_double_eq(const char *file, int line, double actual,
                               double expected);
 void asmtest_assert_double_near(const char *file, int line, double actual,
@@ -681,16 +681,16 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * so without a per-arg cast a pointer — the common case at exactly the >6-arg
  * boundary these macros exist for — is a -Wint-conversion warning on gcc 13 and
  * a hard error on gcc 14+/clang. Args beyond the cap won't compile (raise it). */
-#define ASMTEST_ARG_CAP 16
-#define ASMTEST_MC_1(t, a) (t)(a)
-#define ASMTEST_MC_2(t, a, ...) (t)(a), ASMTEST_MC_1(t, __VA_ARGS__)
-#define ASMTEST_MC_3(t, a, ...) (t)(a), ASMTEST_MC_2(t, __VA_ARGS__)
-#define ASMTEST_MC_4(t, a, ...) (t)(a), ASMTEST_MC_3(t, __VA_ARGS__)
-#define ASMTEST_MC_5(t, a, ...) (t)(a), ASMTEST_MC_4(t, __VA_ARGS__)
-#define ASMTEST_MC_6(t, a, ...) (t)(a), ASMTEST_MC_5(t, __VA_ARGS__)
-#define ASMTEST_MC_7(t, a, ...) (t)(a), ASMTEST_MC_6(t, __VA_ARGS__)
-#define ASMTEST_MC_8(t, a, ...) (t)(a), ASMTEST_MC_7(t, __VA_ARGS__)
-#define ASMTEST_MC_9(t, a, ...) (t)(a), ASMTEST_MC_8(t, __VA_ARGS__)
+#define ASMTEST_ARG_CAP          16
+#define ASMTEST_MC_1(t, a)       (t)(a)
+#define ASMTEST_MC_2(t, a, ...)  (t)(a), ASMTEST_MC_1(t, __VA_ARGS__)
+#define ASMTEST_MC_3(t, a, ...)  (t)(a), ASMTEST_MC_2(t, __VA_ARGS__)
+#define ASMTEST_MC_4(t, a, ...)  (t)(a), ASMTEST_MC_3(t, __VA_ARGS__)
+#define ASMTEST_MC_5(t, a, ...)  (t)(a), ASMTEST_MC_4(t, __VA_ARGS__)
+#define ASMTEST_MC_6(t, a, ...)  (t)(a), ASMTEST_MC_5(t, __VA_ARGS__)
+#define ASMTEST_MC_7(t, a, ...)  (t)(a), ASMTEST_MC_6(t, __VA_ARGS__)
+#define ASMTEST_MC_8(t, a, ...)  (t)(a), ASMTEST_MC_7(t, __VA_ARGS__)
+#define ASMTEST_MC_9(t, a, ...)  (t)(a), ASMTEST_MC_8(t, __VA_ARGS__)
 #define ASMTEST_MC_10(t, a, ...) (t)(a), ASMTEST_MC_9(t, __VA_ARGS__)
 #define ASMTEST_MC_11(t, a, ...) (t)(a), ASMTEST_MC_10(t, __VA_ARGS__)
 #define ASMTEST_MC_12(t, a, ...) (t)(a), ASMTEST_MC_11(t, __VA_ARGS__)
@@ -698,15 +698,15 @@ void asmtest_guarded_free_under(void *p, size_t n);
 #define ASMTEST_MC_14(t, a, ...) (t)(a), ASMTEST_MC_13(t, __VA_ARGS__)
 #define ASMTEST_MC_15(t, a, ...) (t)(a), ASMTEST_MC_14(t, __VA_ARGS__)
 #define ASMTEST_MC_16(t, a, ...) (t)(a), ASMTEST_MC_15(t, __VA_ARGS__)
-#define ASMTEST_MC_PICK(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, \
-                        _14, _15, _16, NAME, ...)                              \
+#define ASMTEST_MC_PICK(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12,     \
+                        _13, _14, _15, _16, NAME, ...)                         \
     NAME
 #define ASMTEST_MAP_CAST(t, ...)                                               \
     ASMTEST_MC_PICK(__VA_ARGS__, ASMTEST_MC_16, ASMTEST_MC_15, ASMTEST_MC_14,  \
-                    ASMTEST_MC_13, ASMTEST_MC_12, ASMTEST_MC_11, ASMTEST_MC_10,\
-                    ASMTEST_MC_9, ASMTEST_MC_8, ASMTEST_MC_7, ASMTEST_MC_6,    \
-                    ASMTEST_MC_5, ASMTEST_MC_4, ASMTEST_MC_3, ASMTEST_MC_2,    \
-                    ASMTEST_MC_1)                                              \
+                    ASMTEST_MC_13, ASMTEST_MC_12, ASMTEST_MC_11,               \
+                    ASMTEST_MC_10, ASMTEST_MC_9, ASMTEST_MC_8, ASMTEST_MC_7,   \
+                    ASMTEST_MC_6, ASMTEST_MC_5, ASMTEST_MC_4, ASMTEST_MC_3,    \
+                    ASMTEST_MC_2, ASMTEST_MC_1)                                \
     (t, __VA_ARGS__)
 
 #define ASM_CALL0(out, fn)                                                     \
@@ -731,20 +731,20 @@ void asmtest_guarded_free_under(void *p, size_t n);
     } while (0)
 #define ASM_CALL4(out, fn, a, b, c, d)                                         \
     do {                                                                       \
-        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d), 0,  \
-                               0};                                             \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c),                \
+                               (long)(d), 0,         0};                       \
         asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
     } while (0)
 #define ASM_CALL5(out, fn, a, b, c, d, e)                                      \
     do {                                                                       \
-        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d),     \
-                               (long)(e), 0};                                  \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c),                \
+                               (long)(d), (long)(e), 0};                       \
         asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
     } while (0)
 #define ASM_CALL6(out, fn, a, b, c, d, e, f)                                   \
     do {                                                                       \
-        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c), (long)(d),     \
-                               (long)(e), (long)(f)};                          \
+        long asmtest_ia_[6] = {(long)(a), (long)(b), (long)(c),                \
+                               (long)(d), (long)(e), (long)(f)};               \
         asm_call_capture((out), (void *)(fn), asmtest_ia_);                    \
     } while (0)
 
@@ -772,20 +772,24 @@ void asmtest_guarded_free_under(void *p, size_t n);
     } while (0)
 #define ASM_CALL_WIN64_2(out, fn, a, b)                                        \
     do {                                                                       \
-        long long asmtest_wa_[6] = {(long long)(a), (long long)(b), 0, 0, 0,   \
-                                    0};                                        \
+        long long asmtest_wa_[6] = {                                           \
+            (long long)(a), (long long)(b), 0, 0, 0, 0};                       \
         asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
     } while (0)
 #define ASM_CALL_WIN64_3(out, fn, a, b, c)                                     \
     do {                                                                       \
-        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
-                                    (long long)(c), 0, 0, 0};                  \
+        long long asmtest_wa_[6] = {                                           \
+            (long long)(a), (long long)(b), (long long)(c), 0, 0, 0};          \
         asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
     } while (0)
 #define ASM_CALL_WIN64_4(out, fn, a, b, c, d)                                  \
     do {                                                                       \
-        long long asmtest_wa_[6] = {(long long)(a), (long long)(b),            \
-                                    (long long)(c), (long long)(d), 0, 0};     \
+        long long asmtest_wa_[6] = {(long long)(a),                            \
+                                    (long long)(b),                            \
+                                    (long long)(c),                            \
+                                    (long long)(d),                            \
+                                    0,                                         \
+                                    0};                                        \
         asm_call_capture_win64((out), (void *)(fn), asmtest_wa_);              \
     } while (0)
 #define ASM_CALL_WIN64_5(out, fn, a, b, c, d, e)                               \
@@ -839,8 +843,8 @@ void asmtest_guarded_free_under(void *p, size_t n);
 #define ASM_FCALL3(out, fn, x, y, z)                                           \
     do {                                                                       \
         long asmtest_ia_[6] = {0};                                             \
-        double asmtest_fa_[8] = {(double)(x), (double)(y), (double)(z),        \
-                                 0, 0, 0, 0, 0};                               \
+        double asmtest_fa_[8] = {(double)(x), (double)(y), (double)(z), 0,     \
+                                 0,           0,           0,           0};    \
         asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \
     } while (0)
 
@@ -854,8 +858,7 @@ void asmtest_guarded_free_under(void *p, size_t n);
 #define ASMTEST_UNPAREN(...) __VA_ARGS__
 #define ASM_MIXCALL(out, fn, iargs, fargs)                                     \
     do {                                                                       \
-        long asmtest_ia_[6] = {                                                \
-            ASMTEST_MAP_CAST(long, ASMTEST_UNPAREN iargs)};                    \
+        long asmtest_ia_[6] = {ASMTEST_MAP_CAST(long, ASMTEST_UNPAREN iargs)}; \
         double asmtest_fa_[8] = {                                              \
             ASMTEST_MAP_CAST(double, ASMTEST_UNPAREN fargs)};                  \
         asm_call_capture_fp((out), (void *)(fn), asmtest_ia_, asmtest_fa_);    \

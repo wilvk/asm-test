@@ -44,9 +44,12 @@ typedef struct {
 #endif
 
 typedef struct {
-    volatile uint32_t head; /* producer publishes; next slot index (monotonic)   */
-    volatile uint32_t tail; /* consumer drains; next slot to read (monotonic)     */
-    volatile uint32_t overrun; /* set once if the producer ever lapped the ring   */
+    volatile uint32_t
+        head; /* producer publishes; next slot index (monotonic)   */
+    volatile uint32_t
+        tail; /* consumer drains; next slot to read (monotonic)     */
+    volatile uint32_t
+        overrun; /* set once if the producer ever lapped the ring   */
     uint32_t _pad;
     asmtest_addr_rec_t recs[ASMTEST_ADDR_CHAN_CAP];
 } asmtest_addr_channel_t;
@@ -92,7 +95,8 @@ static inline uint32_t asmtest_addr_channel_drain(asmtest_addr_channel_t *c,
     uint32_t h = __atomic_load_n(&c->head, __ATOMIC_ACQUIRE);
     uint32_t t = c->tail;
     if (h - t > ASMTEST_ADDR_CHAN_CAP) {
-        t = h - ASMTEST_ADDR_CHAN_CAP; /* producer lapped us: jump to oldest live */
+        t = h -
+            ASMTEST_ADDR_CHAN_CAP; /* producer lapped us: jump to oldest live */
         c->overrun = 1;
     }
     uint32_t n = 0;
@@ -106,7 +110,8 @@ static inline uint32_t asmtest_addr_channel_drain(asmtest_addr_channel_t *c,
 
 /* Total records published so far (monotonic). Lets a consumer tell "nothing yet" from
  * "drained everything" without draining. */
-static inline uint32_t asmtest_addr_channel_published(const asmtest_addr_channel_t *c) {
+static inline uint32_t
+asmtest_addr_channel_published(const asmtest_addr_channel_t *c) {
     return c != NULL ? __atomic_load_n(&c->head, __ATOMIC_ACQUIRE) : 0;
 }
 

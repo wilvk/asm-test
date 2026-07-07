@@ -235,8 +235,8 @@ int asmtest_disas_call_target(asmtest_arch_t arch, const uint8_t *code,
  * PTRACE_SINGLEBLOCK block-step reconstructor uses it to distinguish a TAKEN direct
  * branch (target == the observed next block start) from a NOT-TAKEN conditional. */
 int asmtest_disas_branch_target(asmtest_arch_t arch, const uint8_t *code,
-                                size_t code_len, uint64_t base_addr, uint64_t off,
-                                uint64_t *target);
+                                size_t code_len, uint64_t base_addr,
+                                uint64_t off, uint64_t *target);
 
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,

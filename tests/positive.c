@@ -202,6 +202,6 @@ TEARDOWN(lifecycle) { g_teardowns++; }
  * SETUP+TEARDOWN both ran — so setups is exactly one ahead of teardowns. */
 TEST(lifecycle, first) { ASSERT_EQ(g_setups - g_teardowns, 1); }
 TEST(lifecycle, observes_prior_teardown) {
-    if (g_setups > 1)                         /* --no-fork: `first` already ran */
+    if (g_setups > 1) /* --no-fork: `first` already ran */
         ASSERT_EQ(g_teardowns, g_setups - 1); /* ...and its TEARDOWN executed */
 }

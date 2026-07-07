@@ -21,7 +21,8 @@ extern double mix_scale(long, double); /* mixed int+FP args (capture_mix) */
 extern long sum3(long, long, long);
 extern long sum8(long, long, long, long, long, long, long, long);
 extern long sum10(long, long, long, long, long, long, long, long, long, long);
-extern void make_big(void);  /* struct big(24B) via hidden sret ptr; address only */
+extern void
+make_big(void); /* struct big(24B) via hidden sret ptr; address only */
 extern void make_pair(void); /* struct pair(16B) in registers; address only */
 #if defined(__x86_64__)
 extern void vec_add4d(void); /* AVX2 256-bit (Track D); x86-64 only */

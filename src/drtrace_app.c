@@ -187,10 +187,11 @@ static int dr_probe(char *why, size_t wn) {
                   "found under it");
         return 0;
     }
-    dr_reason(why, wn,
-              "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, "
-              "or bundle it (a bare libdynamorio.so on the loader path is still "
-              "tried at init)");
+    dr_reason(
+        why, wn,
+        "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, "
+        "or bundle it (a bare libdynamorio.so on the loader path is still "
+        "tried at init)");
     return 0;
 }
 

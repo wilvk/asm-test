@@ -35,7 +35,8 @@
 
 /* Publish a leaf routine into a fresh executable mapping; return its base. */
 static void *map_code(const unsigned char *bytes, size_t n) {
-    void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                   -1, 0);
     if (p == MAP_FAILED)
         return NULL;
     memcpy(p, bytes, n);
@@ -51,13 +52,16 @@ int main(void) {
         printf("# SKIP windowed_trace: %s\n", why);
         return 0;
     }
-    printf("== §D3 out-of-process whole-window capture over the JIT-address channel ==\n\n");
+    printf("== §D3 out-of-process whole-window capture over the JIT-address "
+           "channel ==\n\n");
 
     /* Two "JIT'd methods": pure-register leaves at their own mappings. */
-    static const unsigned char M1[] = {0x48, 0x89, 0xf8, 0x48,
-                                       0x01, 0xf0, 0xc3}; /* mov rax,rdi; add rax,rsi; ret */
-    static const unsigned char M2[] = {0x48, 0x89, 0xf8, 0x48,
-                                       0x29, 0xf0, 0xc3}; /* mov rax,rdi; sub rax,rsi; ret */
+    static const unsigned char M1[] = {
+        0x48, 0x89, 0xf8, 0x48,
+        0x01, 0xf0, 0xc3}; /* mov rax,rdi; add rax,rsi; ret */
+    static const unsigned char M2[] = {
+        0x48, 0x89, 0xf8, 0x48,
+        0x29, 0xf0, 0xc3}; /* mov rax,rdi; sub rax,rsi; ret */
     void *m1 = map_code(M1, sizeof M1), *m2 = map_code(M2, sizeof M2);
     if (m1 == NULL || m2 == NULL) {
         printf("# SKIP windowed_trace: mmap failed\n");
@@ -66,8 +70,9 @@ int main(void) {
     uint64_t a1 = (uint64_t)(uintptr_t)m1, a2 = (uint64_t)(uintptr_t)m2;
 
     /* Driver: movabs rax,m1; call rax; movabs rax,m2; call rax; ret. */
-    unsigned char drv_bytes[25] = {0x48, 0xB8, 0, 0, 0, 0,    0, 0, 0, 0, 0xFF, 0xD0, 0x48,
-                                   0xB8, 0,    0, 0, 0, 0,    0, 0, 0, 0xFF, 0xD0, 0xC3};
+    unsigned char drv_bytes[25] = {0x48, 0xB8, 0,    0,    0,   0, 0, 0, 0, 0,
+                                   0xFF, 0xD0, 0x48, 0xB8, 0,   0, 0, 0, 0, 0,
+                                   0,    0,    0xFF, 0xD0, 0xC3};
     memcpy(drv_bytes + 2, &a1, 8);
     memcpy(drv_bytes + 14, &a2, 8);
     void *drv = map_code(drv_bytes, sizeof drv_bytes);
@@ -78,8 +83,9 @@ int main(void) {
     uint64_t dv = (uint64_t)(uintptr_t)drv;
 
     /* The cross-process channel lives in shared memory the forked child inherits. */
-    asmtest_addr_channel_t *chan = mmap(NULL, sizeof *chan, PROT_READ | PROT_WRITE,
-                                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    asmtest_addr_channel_t *chan =
+        mmap(NULL, sizeof *chan, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (chan == MAP_FAILED) {
         printf("# SKIP windowed_trace: channel mmap failed\n");
         return 0;
@@ -109,42 +115,59 @@ int main(void) {
     asmtest_trace_t *tr = asmtest_trace_new(128, 64);
     if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
         asmtest_ptrace_run_to(pid, drv) == ASMTEST_PTRACE_OK)
-        rc = asmtest_ptrace_trace_attached_windowed(pid, drv, sizeof drv_bytes, chan,
-                                                    &res, tr);
+        rc = asmtest_ptrace_trace_attached_windowed(pid, drv, sizeof drv_bytes,
+                                                    chan, &res, tr);
     kill(pid, SIGKILL);
     waitpid(pid, &st, 0);
 
     if (rc != ASMTEST_PTRACE_OK) {
-        printf("# SKIP windowed_trace: capture did not complete (rc=%d) — ptrace denied?\n",
+        printf("# SKIP windowed_trace: capture did not complete (rc=%d) — "
+               "ptrace denied?\n",
                rc);
         return 0;
     }
 
     /* Attribute the recorded ABSOLUTE addresses back to their regions, in order. */
-    printf("the runtime published 2 JIT'd methods to the channel AFTER the stepper forked:\n");
-    printf("    method#1  0x%llx (+%zu bytes)\n", (unsigned long long)a1, sizeof M1);
-    printf("    method#2  0x%llx (+%zu bytes)\n\n", (unsigned long long)a2, sizeof M2);
+    printf("the runtime published 2 JIT'd methods to the channel AFTER the "
+           "stepper forked:\n");
+    printf("    method#1  0x%llx (+%zu bytes)\n", (unsigned long long)a1,
+           sizeof M1);
+    printf("    method#2  0x%llx (+%zu bytes)\n\n", (unsigned long long)a2,
+           sizeof M2);
 
     size_t n = tr->insns_len, in_drv = 0, in_m1 = 0, in_m2 = 0;
-    printf("the out-of-process windowed capture recorded %zu instructions, in execution order:\n",
+    printf("the out-of-process windowed capture recorded %zu instructions, in "
+           "execution order:\n",
            n);
     const char *prev = "";
     for (size_t i = 0; i < n; i++) {
         uint64_t at = tr->insns[i];
         const char *where = "?";
-        if (at >= dv && at < dv + sizeof drv_bytes) { where = "driver"; in_drv++; }
-        else if (at >= a1 && at < a1 + sizeof M1) { where = "method#1 (channel)"; in_m1++; }
-        else if (at >= a2 && at < a2 + sizeof M2) { where = "method#2 (channel)"; in_m2++; }
-        if (strcmp(where, prev) != 0) { /* print one line per region transition */
+        if (at >= dv && at < dv + sizeof drv_bytes) {
+            where = "driver";
+            in_drv++;
+        } else if (at >= a1 && at < a1 + sizeof M1) {
+            where = "method#1 (channel)";
+            in_m1++;
+        } else if (at >= a2 && at < a2 + sizeof M2) {
+            where = "method#2 (channel)";
+            in_m2++;
+        }
+        if (strcmp(where, prev) !=
+            0) { /* print one line per region transition */
             printf("    -> %s\n", where);
             prev = where;
         }
     }
-    printf("\ncaptured: driver %zu, method#1 %zu, method#2 %zu instructions%s.\n", in_drv,
-           in_m1, in_m2, tr->truncated ? " (truncated)" : "");
-    printf("-> the stepper is a SEPARATE process; it recorded both methods purely from the\n");
-    printf("   addresses the runtime streamed over the shared channel — the §D3 handoff that\n");
-    printf("   lets the concealed ptrace stepper trace a live JIT it cannot see into.\n");
+    printf(
+        "\ncaptured: driver %zu, method#1 %zu, method#2 %zu instructions%s.\n",
+        in_drv, in_m1, in_m2, tr->truncated ? " (truncated)" : "");
+    printf("-> the stepper is a SEPARATE process; it recorded both methods "
+           "purely from the\n");
+    printf("   addresses the runtime streamed over the shared channel — the "
+           "§D3 handoff that\n");
+    printf("   lets the concealed ptrace stepper trace a live JIT it cannot "
+           "see into.\n");
 
     asmtest_trace_free(tr);
     return 0;

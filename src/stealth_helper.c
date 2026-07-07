@@ -104,7 +104,8 @@ int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
         return sc->rc;
     }
     long res = 0;
-    int tr = asmtest_ptrace_trace_attached(parent, base, len, &res, &sc->shadow);
+    int tr =
+        asmtest_ptrace_trace_attached(parent, base, len, &res, &sc->shadow);
     ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
     sc->result = res;
     sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;

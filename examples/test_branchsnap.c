@@ -38,7 +38,8 @@ static void run_routine(void *arg) {
 int main(void) {
     printf("== branchsnap-test (AMD deterministic LBR snapshot) ==\n");
     if (!asmtest_amd_snapshot_available()) {
-        printf("# SKIP branchsnap: substrate absent (needs AMD LbrExtV2 + perfmon_v2 + "
+        printf("# SKIP branchsnap: substrate absent (needs AMD LbrExtV2 + "
+               "perfmon_v2 + "
                "kernel >= 6.10)\n");
         return 0;
     }
@@ -54,26 +55,32 @@ int main(void) {
     __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
-    int rc = asmtest_amd_snapshot_trace(p, sizeof ROUTINE, RET_OFF, run_routine, p, tr);
+    int rc = asmtest_amd_snapshot_trace(p, sizeof ROUTINE, RET_OFF, run_routine,
+                                        p, tr);
 
     if (rc == ASMTEST_HW_ENOSYS) {
         printf("# SKIP branchsnap: built without the BPF toolchain\n");
     } else if (rc == ASMTEST_HW_EUNAVAIL) {
-        printf("# SKIP branchsnap: capture unavailable (need CAP_BPF + CAP_PERFMON)\n");
+        printf("# SKIP branchsnap: capture unavailable (need CAP_BPF + "
+               "CAP_PERFMON)\n");
     } else if (rc != ASMTEST_HW_OK) {
         printf("not ok - branchsnap: asmtest_amd_snapshot_trace rc=%d\n", rc);
         return 1;
     } else {
         int covered0 = asmtest_trace_covered(tr, 0);
         unsigned long long ni = asmtest_emu_trace_insns_total(tr);
-        printf("branchsnap: add2(20,22)=%ld; deterministic snapshot decoded %llu in-region "
+        printf("branchsnap: add2(20,22)=%ld; deterministic snapshot decoded "
+               "%llu in-region "
                "instructions, entry-block covered=%d, truncated=%d\n",
                (long)g_result, ni, covered0, asmtest_emu_trace_truncated(tr));
         if (covered0 && ni > 0)
-            printf("ok - branchsnap: the boundary snapshot captured the tiny single-shot "
-                   "routine (entry block reconstructed) where sampling truncates\n");
+            printf("ok - branchsnap: the boundary snapshot captured the tiny "
+                   "single-shot "
+                   "routine (entry block reconstructed) where sampling "
+                   "truncates\n");
         else
-            printf("not ok - branchsnap: snapshot decoded no in-region entry block\n");
+            printf("not ok - branchsnap: snapshot decoded no in-region entry "
+                   "block\n");
         if (!(covered0 && ni > 0)) {
             asmtest_trace_free(tr);
             munmap(p, sizeof ROUTINE);
@@ -97,8 +104,8 @@ int main(void) {
             printf("# SKIP branchsnap markers: AMD LBR tier unavailable\n");
         } else {
             asmtest_trace_t *mt = asmtest_trace_new(64, 64);
-            if (asmtest_hwtrace_register_region("bsnap", p, sizeof ROUTINE, mt) !=
-                ASMTEST_HW_OK) {
+            if (asmtest_hwtrace_register_region("bsnap", p, sizeof ROUTINE,
+                                                mt) != ASMTEST_HW_OK) {
                 printf("not ok - branchsnap markers: register_region failed\n");
                 asmtest_hwtrace_shutdown();
                 asmtest_trace_free(mt);
@@ -111,15 +118,18 @@ int main(void) {
             asmtest_hwtrace_end("bsnap");
             int covered0 = asmtest_trace_covered(mt, 0);
             unsigned long long ni = asmtest_emu_trace_insns_total(mt);
-            printf("branchsnap markers: add2(20,22)=%ld; begin/end snapshot decoded "
+            printf("branchsnap markers: add2(20,22)=%ld; begin/end snapshot "
+                   "decoded "
                    "%llu insns, entry-block covered=%d, truncated=%d\n",
                    (long)r, ni, covered0, asmtest_emu_trace_truncated(mt));
             int okm = (r == 42) && covered0 && ni > 0;
             if (okm)
-                printf("ok - branchsnap markers: opts.snapshot routes begin/end to "
+                printf("ok - branchsnap markers: opts.snapshot routes "
+                       "begin/end to "
                        "the deterministic boundary capture\n");
             else
-                printf("not ok - branchsnap markers: begin/end snapshot missed the "
+                printf("not ok - branchsnap markers: begin/end snapshot missed "
+                       "the "
                        "single-shot routine\n");
             asmtest_hwtrace_shutdown();
             asmtest_trace_free(mt);

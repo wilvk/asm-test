@@ -42,7 +42,7 @@
 #endif
 
 #if defined(__APPLE__)
-#include <pthread.h>  /* g_reg_lock, the g_arm_tid __thread, pthread_threadid_np */
+#include <pthread.h> /* g_reg_lock, the g_arm_tid __thread, pthread_threadid_np */
 #include <sys/mman.h> /* asmtest_hwtrace_exec_alloc W^X mmap/mprotect (x86-64 Darwin) */
 #endif
 
@@ -93,8 +93,8 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
  * gapless sequence (asmtest_amd_stitch), then decode it without the 16-entry ceiling
  * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
-                          const size_t *nrs, size_t n_samples,
-                          const void *base, uint64_t base_ip, size_t len,
+                          const size_t *nrs, size_t n_samples, const void *base,
+                          uint64_t base_ip, size_t len,
                           struct perf_branch_entry *out, size_t out_cap,
                           int *gap);
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
@@ -336,7 +336,8 @@ void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
                 ? "not a GenuineIntel x86-64 host"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
             : (backend == ASMTEST_HWTRACE_SINGLESTEP)
-                ? "single-step backend is x86-64 Linux/macOS only (Windows/AArch64 "
+                ? "single-step backend is x86-64 Linux/macOS only "
+                  "(Windows/AArch64 "
                   "planned)"
                 : "not an AuthenticAMD x86-64 host";
     else if (backend == ASMTEST_HWTRACE_SINGLESTEP)
@@ -431,8 +432,9 @@ static int g_inited = 0;
 static pthread_mutex_t g_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
-static hw_region_t *find_region(const char *name);          /* locked; below */
-static hw_region_t *find_region_unlocked(const char *name); /* caller holds lock */
+static hw_region_t *find_region(const char *name); /* locked; below */
+static hw_region_t *
+find_region_unlocked(const char *name); /* caller holds lock */
 
 /* §1: per-thread active-capture state for the PT / AMD LBR / CoreSight backends.
  * These are `__thread` so concurrent scopes on different threads each own their perf
@@ -499,7 +501,7 @@ int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
         return ASMTEST_HW_ESTATE;
     if (name == NULL || base == NULL || len == 0 || trace == NULL)
         return ASMTEST_HW_EINVAL;
-    /* §0.4: idempotent by name. A self-naming scope object registers on EVERY
+        /* §0.4: idempotent by name. A self-naming scope object registers on EVERY
      * construction under a call-site-constant auto-name, so a `using`/RAII scope in
      * a loop — or more than MAX_REGIONS scope sites over process lifetime — would
      * otherwise exhaust the fixed table or alias a stale earlier duplicate. On a
@@ -583,12 +585,12 @@ static size_t amd_last_ret_off(const void *base, size_t len) {
         return (size_t)-1;
     size_t o = 0, last_ret = (size_t)-1;
     while (o < len) {
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
-                                 (uint64_t)(uintptr_t)base, o, NULL, 0);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                 len, (uint64_t)(uintptr_t)base, o, NULL, 0);
         if (l == 0)
             break;
-        if (asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
-                                 o))
+        if (asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                 len, o))
             last_ret = o;
         o += l;
     }
@@ -664,7 +666,8 @@ static void hwtrace_end_amd(void) {
             if (sr->trace->insns_total == 0)
                 sr->trace->truncated = true;
         } else {
-            asmtest_amd_snapshot_end(NULL); /* no trace: just release the slot */
+            asmtest_amd_snapshot_end(
+                NULL); /* no trace: just release the slot */
         }
         g_amd_snap = 0;
         g_active = NULL;
@@ -810,8 +813,8 @@ static void hwtrace_end_amd(void) {
      * >16-branch trace where a single window cannot. */
     int done = 0;
     if (best != NULL && best_nr > 0 && best_inregion > 0) {
-        if (best_nr >= (uint64_t)amd_depth && n_samples > 1 && samples != NULL &&
-            nrs != NULL) {
+        if (best_nr >= (uint64_t)amd_depth && n_samples > 1 &&
+            samples != NULL && nrs != NULL) {
             size_t out_cap = n_samples + (size_t)amd_depth;
             struct perf_branch_entry *out =
                 (struct perf_branch_entry *)malloc(out_cap * sizeof *out);
@@ -904,8 +907,8 @@ int asmtest_hwtrace_try_begin(const char *name) {
         if (r == NULL)
             return ASMTEST_HW_EINVAL;
         int tid = hw_current_tid();
-        r->arm_tid = tid;  /* per-region cross-thread backstop */
-        g_arm_tid = tid;   /* best-effort most-recent-arming-tid accessor */
+        r->arm_tid = tid; /* per-region cross-thread backstop */
+        g_arm_tid = tid;  /* best-effort most-recent-arming-tid accessor */
         return asmtest_ss_begin(r->base, r->len,
                                 r->trace); /* OK / EFULL / EINVAL */
     }
@@ -982,7 +985,7 @@ int asmtest_hwtrace_try_begin(const char *name) {
     ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
     ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0);
     return ASMTEST_HW_OK;
-#else  /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step is the only backend,
+#else /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step is the only backend,
         * handled above; a non-single-step backend never passes init()'s available() */
     (void)name;
     return ASMTEST_HW_EUNAVAIL;
@@ -1132,7 +1135,7 @@ void asmtest_hwtrace_end(const char *name) {
     g_fd = -1;
     g_active = NULL;
     g_arm_tid = -1;
-#else  /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step returned above */
+#else /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step returned above */
     (void)name;
 #endif
 #else
@@ -1237,7 +1240,7 @@ static int render_trace_into(const asmtest_trace_t *t, const void *base,
         return ASMTEST_HW_EINVAL;
     if (!asmtest_disas_available())
         return ASMTEST_HW_ENOSYS; /* no Capstone: cannot render text */
-    /* The traced region is host-native machine code, so decode it for the host
+        /* The traced region is host-native machine code, so decode it for the host
      * ISA (x86-64 for PT/AMD/single-step; AArch64 for CoreSight). */
 #if defined(__aarch64__)
     const asmtest_arch_t host_arch = ASMTEST_ARCH_ARM64;
@@ -1252,11 +1255,11 @@ static int render_trace_into(const asmtest_trace_t *t, const void *base,
     for (size_t i = 0; i < t->insns_len; i++) {
         uint64_t off = t->insns[i];
         char txt[128];
-        asmtest_disas(host_arch, (const uint8_t *)base, len, base_addr, off, txt,
-                      sizeof txt);
-        int n = snprintf(line, sizeof line, "%8llx:\t%s\n",
-                         (unsigned long long)off,
-                         txt[0] != '\0' ? txt : "(undecodable)");
+        asmtest_disas(host_arch, (const uint8_t *)base, len, base_addr, off,
+                      txt, sizeof txt);
+        int n =
+            snprintf(line, sizeof line, "%8llx:\t%s\n", (unsigned long long)off,
+                     txt[0] != '\0' ? txt : "(undecodable)");
         if (n < 0)
             continue;
         render_emit(buf, buflen, total, line, (size_t)n);
@@ -1264,10 +1267,11 @@ static int render_trace_into(const asmtest_trace_t *t, const void *base,
     }
     /* Never present a capped / truncated stream as complete — label the prefix. */
     if (t->truncated || t->insns_total > t->insns_len) {
-        int n = snprintf(line, sizeof line,
-                         "; trace truncated — %llu of %llu instructions shown\n",
-                         (unsigned long long)t->insns_len,
-                         (unsigned long long)t->insns_total);
+        int n =
+            snprintf(line, sizeof line,
+                     "; trace truncated — %llu of %llu instructions shown\n",
+                     (unsigned long long)t->insns_len,
+                     (unsigned long long)t->insns_total);
         if (n > 0) {
             render_emit(buf, buflen, total, line, (size_t)n);
             total += (size_t)n;
@@ -1291,7 +1295,8 @@ int asmtest_hwtrace_render(const char *name, char *buf, size_t buflen) {
 /* the single-owner path the bindings slice ships against.              */
 /* ------------------------------------------------------------------ */
 
-int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out) {
+int asmtest_hwtrace_begin_scope(const char *name,
+                                asmtest_hwtrace_scope_t *out) {
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
@@ -1381,10 +1386,11 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
         total += (size_t)n;
     }
     if (trace->truncated || trace->insns_total > trace->insns_len) {
-        int n = snprintf(line, sizeof line,
-                         "; trace truncated — %llu of %llu instructions shown\n",
-                         (unsigned long long)trace->insns_len,
-                         (unsigned long long)trace->insns_total);
+        int n =
+            snprintf(line, sizeof line,
+                     "; trace truncated — %llu of %llu instructions shown\n",
+                     (unsigned long long)trace->insns_len,
+                     (unsigned long long)trace->insns_total);
         if (n > 0) {
             render_emit(buf, buflen, total, line, (size_t)n);
             total += (size_t)n;
@@ -1423,7 +1429,8 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
 #if defined(__x86_64__)
     if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
         uint32_t idx = 0, gen = 0;
-        g_arm_tid = (int)syscall(SYS_gettid); /* §Z4: best-effort arming-tid accessor */
+        g_arm_tid =
+            (int)syscall(SYS_gettid); /* §Z4: best-effort arming-tid accessor */
         int rc = asmtest_ss_begin_window(trace, &idx, &gen);
         if (rc != ASMTEST_HW_OK) {
             g_arm_tid = -1;
@@ -1505,10 +1512,11 @@ int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
         total += (size_t)n;
     }
     if (trace->truncated || trace->insns_total > trace->insns_len) {
-        int n = snprintf(lineb, sizeof lineb,
-                         "; trace truncated — %llu of %llu instructions shown\n",
-                         (unsigned long long)trace->insns_len,
-                         (unsigned long long)trace->insns_total);
+        int n =
+            snprintf(lineb, sizeof lineb,
+                     "; trace truncated — %llu of %llu instructions shown\n",
+                     (unsigned long long)trace->insns_len,
+                     (unsigned long long)trace->insns_total);
         if (n > 0) {
             render_emit(buf, buflen, total, lineb, (size_t)n);
             total += (size_t)n;
@@ -1592,8 +1600,9 @@ int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
 /* §3.1(c) — whole-window noise attribution: reverse resolver + bucketer */
 /* ------------------------------------------------------------------ */
 
-int asmtest_hwtrace_region_name(int pid, uint64_t addr, char *name, size_t namelen,
-                                uint64_t *start, uint64_t *end) {
+int asmtest_hwtrace_region_name(int pid, uint64_t addr, char *name,
+                                size_t namelen, uint64_t *start,
+                                uint64_t *end) {
     if (name != NULL && namelen > 0)
         name[0] = '\0';
 #if defined(__linux__)
@@ -1699,8 +1708,8 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
 #endif
         {
             uint64_t s = 0, e = 0;
-            if (!asmtest_hwtrace_region_name(pid, ips[i], label, sizeof label, &s,
-                                             &e))
+            if (!asmtest_hwtrace_region_name(pid, ips[i], label, sizeof label,
+                                             &s, &e))
                 snprintf(label, sizeof label, "[unknown]");
         }
         size_t j;
@@ -1727,11 +1736,10 @@ size_t asmtest_hwtrace_symbolize_bucket(int pid, const uint64_t *ips, size_t n,
  * the perf-map JIT symbol / mapped-file region for the runtime remainder. Buckets
  * accumulate by label; *nbuckets gets the distinct count; surplus labels past `cap`
  * are dropped (size `cap` to the expected label count for exact totals). */
-int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t handle,
-                                     const asmtest_hwtrace_named_region_t *regions,
-                                     size_t nregions,
-                                     asmtest_hwtrace_bucket_t *buckets, size_t cap,
-                                     size_t *nbuckets) {
+int asmtest_hwtrace_attribute_window(
+    asmtest_hwtrace_scope_t handle,
+    const asmtest_hwtrace_named_region_t *regions, size_t nregions,
+    asmtest_hwtrace_bucket_t *buckets, size_t cap, size_t *nbuckets) {
     if (nbuckets != NULL)
         *nbuckets = 0;
     if (buckets == NULL || cap == 0)
@@ -1764,8 +1772,8 @@ int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t handle,
             /* Runtime remainder: prefer a JIT perf-map symbol, else the mapped file. */
             if (!perfmap_symbol_at(0, addr, label, sizeof label)) {
                 uint64_t s = 0, e = 0;
-                if (!asmtest_hwtrace_region_name(0, addr, label, sizeof label, &s,
-                                                 &e))
+                if (!asmtest_hwtrace_region_name(0, addr, label, sizeof label,
+                                                 &s, &e))
                     snprintf(label, sizeof label, "[unknown]");
             }
         }
@@ -1821,7 +1829,8 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
      * otherwise. The bundled path needs a memfd — a file the exec'd image can re-map
      * by fd — since an anonymous MAP_SHARED mapping survives fork but not exec. */
     char helperbuf[4096];
-    const char *helper_path = asmtest_stealth_helper_path(helperbuf, sizeof helperbuf);
+    const char *helper_path =
+        asmtest_stealth_helper_path(helperbuf, sizeof helperbuf);
     int use_exec = 0;
     int shm_fd = -1;
 #ifdef __NR_memfd_create
@@ -1846,7 +1855,8 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
         return ASMTEST_HW_EUNAVAIL;
     }
     memset(sc, 0, total);
-    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(asmtest_stealth_scratch_t));
+    uint64_t *ibuf =
+        (uint64_t *)((char *)sc + sizeof(asmtest_stealth_scratch_t));
     uint64_t *bbuf = ibuf + icap;
     sc->icap = icap; /* the stepping side recomputes its own buffer pointers */
     sc->bcap = bcap;
@@ -1914,7 +1924,8 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
         return ASMTEST_HW_EUNAVAIL;
     }
 
-    run_region(arg); /* invoke the region; the helper single-steps it out of band */
+    run_region(
+        arg); /* invoke the region; the helper single-steps it out of band */
 
     int st = 0;
     waitpid(helper, &st, 0);

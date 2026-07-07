@@ -120,7 +120,8 @@ static void test_codeimage_temporal(void) {
         asmtest_disas(ASMTEST_ARCH_X86_64, ba, la, ip, 3, da, sizeof da);
         asmtest_disas(ASMTEST_ARCH_X86_64, bb, lb, ip, 3, db, sizeof db);
         CHECK(da[0] != '\0' && db[0] != '\0' && strcmp(da, db) != 0,
-              "codeimage: t0 (add) and t1 (sub) decode differently at one address");
+              "codeimage: t0 (add) and t1 (sub) decode differently at one "
+              "address");
     }
 
     asmtest_codeimage_free(img);

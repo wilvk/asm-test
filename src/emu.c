@@ -54,8 +54,9 @@ struct emu {
     reg_guard_ctx_t reg; /* mid-execution register invariant (emu_guard_*) */
     emu_preload_t preload[EMU_MAX_PRELOAD];
     int npreload;
-    long *fuzz_corpus;      /* last emu_fuzz_cover1's kept inputs, handle-owned */
-    size_t fuzz_corpus_len; /* entries in fuzz_corpus                          */
+    long *fuzz_corpus; /* last emu_fuzz_cover1's kept inputs, handle-owned */
+    size_t
+        fuzz_corpus_len; /* entries in fuzz_corpus                          */
 };
 
 typedef struct {
@@ -204,7 +205,7 @@ static bool load_code(uc_engine *uc, const void *code, size_t code_len) {
                 break;
         }
     }
-        /* Drop any cached translation for the code region so a reused handle
+    /* Drop any cached translation for the code region so a reused handle
      * re-decodes the freshly written bytes. uc_ctl_flush_tb is newer
      * (Unicorn >= 2.1); fall back to uc_ctl_remove_cache (since 2.0.0) so we
      * build against the older libunicorn shipped by some distros. */

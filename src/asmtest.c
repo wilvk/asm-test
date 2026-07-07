@@ -716,8 +716,8 @@ static void match_ref_shrink(void *fn, asmtest_anyfn_t ref, int arity,
 static void fmt_tuple(char *buf, size_t cap, const long *a, int arity) {
     size_t off = (size_t)snprintf(buf, cap, "[");
     for (int i = 0; i < arity; i++)
-        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0,
-                                "%s%ld", i ? ", " : "", a[i]);
+        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0, "%s%ld",
+                                i ? ", " : "", a[i]);
     snprintf(buf + off, off < cap ? cap - off : 0, "]");
 }
 
@@ -761,22 +761,19 @@ static void match_ref_run(const char *file, int line, const char *fnexpr,
 void asmtest_match_ref1(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref1_fn ref, asmtest_gen_fn gen,
                         int trials) {
-    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                  1);
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 1);
 }
 
 void asmtest_match_ref2(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref2_fn ref, asmtest_gen_fn gen,
                         int trials) {
-    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                  2);
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 2);
 }
 
 void asmtest_match_ref3(const char *file, int line, const char *fnexpr,
                         void *fn, asmtest_ref3_fn ref, asmtest_gen_fn gen,
                         int trials) {
-    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                  3);
+    match_ref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 3);
 }
 
 /* --- FP differential engine (ASSERT_MATCHES_FREF{1,2,3}) --- */
@@ -815,8 +812,8 @@ static int match_fref_diverges(void *fn, asmtest_anyfn_t ref, int arity,
 static void fmt_ftuple(char *buf, size_t cap, const double *f, int arity) {
     size_t off = (size_t)snprintf(buf, cap, "[");
     for (int i = 0; i < arity; i++)
-        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0,
-                                "%s%.17g", i ? ", " : "", f[i]);
+        off += (size_t)snprintf(buf + off, off < cap ? cap - off : 0, "%s%.17g",
+                                i ? ", " : "", f[i]);
     snprintf(buf + off, off < cap ? cap - off : 0, "]");
 }
 
@@ -842,31 +839,30 @@ static void match_fref_run(const char *file, int line, const char *fnexpr,
         asmtest_fail(file, line,
                      "ASSERT_MATCHES_FREF%d(%s): trial %d input %s: got %.17g,"
                      " reference %.17g (%llu ulps, max %lu) [seed=0x%llx]",
-                     arity, fnexpr, t, tup, got, want,
-                     (unsigned long long)dist, max_ulps,
-                     (unsigned long long)asmtest_seed());
+                     arity, fnexpr, t, tup, got, want, (unsigned long long)dist,
+                     max_ulps, (unsigned long long)asmtest_seed());
     }
 }
 
 void asmtest_match_fref1(const char *file, int line, const char *fnexpr,
                          void *fn, asmtest_fref1_fn ref, asmtest_fgen_fn gen,
                          int trials, unsigned long max_ulps) {
-    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                   1, max_ulps);
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 1,
+                   max_ulps);
 }
 
 void asmtest_match_fref2(const char *file, int line, const char *fnexpr,
                          void *fn, asmtest_fref2_fn ref, asmtest_fgen_fn gen,
                          int trials, unsigned long max_ulps) {
-    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                   2, max_ulps);
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 2,
+                   max_ulps);
 }
 
 void asmtest_match_fref3(const char *file, int line, const char *fnexpr,
                          void *fn, asmtest_fref3_fn ref, asmtest_fgen_fn gen,
                          int trials, unsigned long max_ulps) {
-    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials,
-                   3, max_ulps);
+    match_fref_run(file, line, fnexpr, fn, (asmtest_anyfn_t)ref, gen, trials, 3,
+                   max_ulps);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1617,12 +1613,15 @@ static void usage(const char *prog) {
         "  -jN, --jobs=N        run up to N tests concurrently (implies fork;\n"
         "                       default 1 = serial). Output stays in order.\n"
         "  --format=tap|junit   output format (default tap)\n"
-        "  --color=auto|always|never  colorize (default auto; honors NO_COLOR)\n"
+        "  --color=auto|always|never  colorize (default auto; honors "
+        "NO_COLOR)\n"
         "  --fail-if-no-tests   exit nonzero if the selection is empty (e.g. a "
         "typo'd --filter)\n"
-        "  --fail-fast          stop at the first failing test (forces serial;\n"
+        "  --fail-fast          stop at the first failing test (forces "
+        "serial;\n"
         "                       TAP plan moves to the end of the stream)\n"
-        "  --repeat=N           run the selection N times (flake hunting; pairs\n"
+        "  --repeat=N           run the selection N times (flake hunting; "
+        "pairs\n"
         "                       with --shuffle/--seed)\n"
         "  --shard=K/N          run the K-th of N round-robin slices of the\n"
         "                       selection (1-based; split a suite across CI "
@@ -2000,7 +1999,8 @@ static int run_benchmarks(asmtest_bench_t **sel, int n, long forced_reps,
 #endif
         asmtest_in_test = 0;
 
-        double cv = st.mean != 0.0 ? st.stddev / st.mean : 0.0; /* rel. spread */
+        double cv =
+            st.mean != 0.0 ? st.stddev / st.mean : 0.0; /* rel. spread */
         if (json) {
             printf("%s\n    {\"name\": ", emitted++ ? "," : "");
             json_print_string(id);
@@ -2377,8 +2377,7 @@ int main(int argc, char **argv) {
      * after the run so output stays deterministic regardless of finish order. */
     /* --fail-fast wants to stop dispatching at the first failure, so it forces
      * the serial path (a parallel batch would keep running past it). */
-    int parallel =
-        opt.fork_tests && opt.jobs > 1 && n > 1 && !opt.fail_fast;
+    int parallel = opt.fork_tests && opt.jobs > 1 && n > 1 && !opt.fail_fast;
     if (parallel) {
         for (int i = 0; i < n; i++)
             memset(&results[i], 0, sizeof results[i]);

@@ -27,11 +27,13 @@
  * fields (ready, rc, result and shadow's len/total/truncated counts) are read
  * across the process boundary; the buffer contents are the same shared pages. */
 typedef struct {
-    volatile int ready; /* stepper -> caller: seized + about to plant the run_to bp */
-    volatile int rc;    /* stepper's outcome (ASMTEST_HW_*)                          */
-    long result;        /* the region's return value                                */
-    size_t icap;        /* insns buffer capacity (to recompute the pointer)         */
-    size_t bcap;        /* blocks buffer capacity                                   */
+    volatile int
+        ready; /* stepper -> caller: seized + about to plant the run_to bp */
+    volatile int
+        rc;      /* stepper's outcome (ASMTEST_HW_*)                          */
+    long result; /* the region's return value                                */
+    size_t icap; /* insns buffer capacity (to recompute the pointer)         */
+    size_t bcap; /* blocks buffer capacity                                   */
     asmtest_trace_t shadow;
     /* uint64_t insns[icap]; uint64_t blocks[bcap]; follow here */
 } asmtest_stealth_scratch_t;
