@@ -190,6 +190,26 @@ begin
 
   loop_trace.free
   loop_code.free
+
+  # ---- call_scoped: arm + call + disarm entirely in native code — registry-free ----
+  # Mirrors test_call_scoped_traces_a_native_call: one call returns the result AND the
+  # executed body disassembly, and a 40-iteration loop proves it consumes no MAX_REGIONS
+  # slot (the fixed 32-slot region table would overflow if it registered per call).
+  cs_code = NativeCode.from_bytes(ROUTINE)
+  cs = HwTrace.call_scoped(cs_code, 20, 22) # 42 <= 100 -> jle taken, dec skipped
+  ok(cs.result == 42, "call_scoped(20,22).result == 42 (got #{cs.result.inspect})")
+  ok(!cs.truncated, "call_scoped not truncated")
+  if !cs.path.empty? # non-empty only when Capstone is present
+    ok(cs.path.downcase.include?("ret"), "call_scoped path includes the ret")
+    ok(cs.path.count("\n") == 5,
+       "call_scoped 5 rendered instruction lines (got #{cs.path.count("\n")})")
+  else
+    puts "# note: call_scoped path empty (no Capstone) — skipping disassembly asserts"
+  end
+  # Registry-free: 40 distinct one-shot captures must NOT exhaust the region table.
+  registry_free = (0...40).all? { |i| HwTrace.call_scoped(cs_code, i, 1).result == i + 1 }
+  ok(registry_free, "call_scoped 40x is registry-free (no MAX_REGIONS exhaustion)")
+  cs_code.free
 ensure
   HwTrace.shutdown
 end

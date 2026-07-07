@@ -108,6 +108,7 @@ public final class HwTraceTest {
         try {
             singlestepLiveTrace();
             singlestepLoopNoDepthCeiling();
+            callScopedTracesANativeCall();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -158,6 +159,35 @@ public final class HwTraceTest {
         ok(scope.name().startsWith("HwTraceTest.java:"),
             "AsmTrace: auto-name is basename:line (got " + scope.name() + ")");
         scode.free();
+    }
+
+    // Mirrors test_call_scoped_traces_a_native_call: arm + call + disarm entirely in
+    // native code (asmtest_hwtrace_call_scoped_ex) — REGISTRY-FREE, returning the call
+    // result and the executed body's disassembly in one step. For a native leaf fn == base.
+    private static void callScopedTracesANativeCall() {
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        try {
+            HwTrace.CallScopedResult res = HwTrace.callScoped(code, 20, 22); // 42 <= 100 -> jle taken
+            ok(res.result() == 42, "callScoped(20,22): result == 42 (got " + res.result() + ")");
+            ok(res.rc() == HwTrace.ASMTEST_HW_OK, "callScoped rc == OK (got " + res.rc() + ")");
+            ok(!res.truncated(), "callScoped !truncated");
+            if (res.path() != null && !res.path().isEmpty()) { // non-empty when Capstone is present
+                ok(res.path().toLowerCase().contains("ret"),
+                    "callScoped rendered listing includes the ret");
+                long nl = res.path().chars().filter(c -> c == '\n').count();
+                ok(nl == 5, "callScoped: 5 rendered instruction lines (got " + nl + ")");
+            }
+            // Registry-free: many one-shot captures must NOT exhaust the fixed region table.
+            boolean allOk = true;
+            long bad = -1;
+            for (int i = 0; i < 40; i++) {
+                long r = HwTrace.callScoped(code, i, 1).result();
+                if (r != i + 1) { allOk = false; bad = i; }
+            }
+            ok(allOk, "callScoped registry-free: 40 calls each return i+1 (first bad i=" + bad + ")");
+        } finally {
+            code.free();
+        }
     }
 
     // Mirrors test_singlestep_loop_no_depth_ceiling.

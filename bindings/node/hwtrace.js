@@ -145,6 +145,17 @@ const CodeImageEvent = koffi.struct('asmtest_codeimage_event_t', {
   fd: 'int32',
 });
 
+// koffi struct layout mirroring asmtest_hwtrace_scope_t (8 bytes): an opaque
+// per-scope capture handle — a TLS range-stack index tagged with a generation
+// counter. asmtest_hwtrace_call_scoped_ex fills one through an _Out_ pointer;
+// asmtest_hwtrace_render_scope takes it BY VALUE (a two-uint32 8-byte struct is a
+// single INTEGER-class eightbyte on SysV x86-64, passed in one register, which koffi
+// marshals straight from the koffi.struct — no manual packing needed).
+const HwScope = koffi.struct('asmtest_hwtrace_scope_t', {
+  idx: 'uint32',
+  gen: 'uint32',
+});
+
 // The generated code is invoked through this function-pointer prototype: each
 // argument is passed as a C long and the result read as a long (the SysV integer
 // ABI), matching the Python wrapper's default call().
@@ -199,6 +210,13 @@ let _loadError = null;
     // Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
     tryBegin: lib.func('int asmtest_hwtrace_try_begin(const char*)'),
     render: lib.func('int asmtest_hwtrace_render(const char*, _Out_ char*, size_t)'),
+    // Registry-free lazy-arm call + handle-keyed render (call_scoped_ex path). The
+    // region is given DIRECTLY as [base,len) with a caller-owned trace, so NO named
+    // region is registered and NO MAX_REGIONS slot is consumed — safe in a tight loop.
+    // args is an in-array of C longs (Buffer, like the ptrace path); result_out and the
+    // 8-byte scope handle are _Out_. render_scope takes that scope handle BY VALUE.
+    callScopedEx: lib.func('int asmtest_hwtrace_call_scoped_ex(void*, size_t, void*, void*, const long*, int, _Out_ long*, _Out_ asmtest_hwtrace_scope_t*)'),
+    renderScope: lib.func('int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t, _Out_ char*, size_t)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -421,6 +439,41 @@ class HwTrace {
   }
 
   static shutdown() { _fn.shutdown(); }
+
+  /** Trace ONE native call the managed-safe way: arm the single-step window, call
+   *  `code(...args)` through the SysV integer ABI, and disarm — all in native code
+   *  (asmtest_hwtrace_call_scoped_ex) — so nothing the binding runs between arm and
+   *  disarm is stepped, a tighter window than scope()'s (where code.call's FFI dispatch
+   *  runs out-of-region but stepped). REGISTRY-FREE: it takes the region as [base,len)
+   *  with its own caller-owned trace, consuming no MAX_REGIONS slot, so it is safe in a
+   *  tight loop. For a native leaf `fn == base`. Args pass as C longs (0-6). Requires an
+   *  initialized single-step tier (HwTrace.init). Returns `{ result, path, truncated }`:
+   *  `result` the call's return (a JS number, BigInt out of safe range), `path` the
+   *  executed body's disassembly ('' when the decoder is absent), `truncated` the
+   *  honesty bit. On a non-single-step backend (rc != OK) returns result null. */
+  static callScoped(code, ...args) {
+    // Own trace handle (Python parity: instructions=256, blocks=64); freed in finally.
+    const handle = _fn.traceNew(256, 64);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    try {
+      const n = args.length;
+      // long*: pack each arg as a 64-bit little-endian signed integer (ptrace path).
+      const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+      for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+      const resultBuf = Buffer.alloc(8);
+      const scope = {}; // _Out_ asmtest_hwtrace_scope_t — koffi fills idx/gen
+      const rc = _fn.callScopedEx(code.base, code.length, handle, code.base,
+        argBuf, n, resultBuf, scope);
+      if (rc !== ASMTEST_HW_OK) return { result: null, path: '', truncated: false };
+      // Render the body from the just-captured (thread-local) scope handle, then read
+      // the honesty bit off the trace before freeing it.
+      const path = _renderScope(scope);
+      const truncated = _fn.truncated(handle) !== 0;
+      return { result: Number(resultBuf.readBigInt64LE(0)), path, truncated };
+    } finally {
+      _fn.traceFree(handle);
+    }
+  }
 
   // ---- per-trace ----
 
@@ -991,6 +1044,15 @@ function _scopeName(stack) {
 function _renderRegion(name) {
   const buf = Buffer.alloc(16384);
   const n = _fn.render(name, buf, buf.length);
+  if (n <= 0) return '';
+  return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
+}
+
+// Render a call_scoped_ex capture (keyed by its BY-VALUE scope handle) to assembly
+// text; '' if the decoder is unavailable. Same snprintf semantics as _renderRegion.
+function _renderScope(scope) {
+  const buf = Buffer.alloc(16384);
+  const n = _fn.renderScope(scope, buf, buf.length);
   if (n <= 0) return '';
   return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
 }

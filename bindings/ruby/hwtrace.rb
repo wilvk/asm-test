@@ -194,6 +194,14 @@ module Asmtest
         # scoped-tracing shared core (§0/§1): error-returning begin + render-on-close
         try_begin:    func(LIB, "asmtest_hwtrace_try_begin", [VOIDP], INT),
         render:       func(LIB, "asmtest_hwtrace_render", [VOIDP, VOIDP, SZ], INT),
+        # registry-free lazy-arm call + handle-keyed render (the call_scoped path). The
+        # 8-byte asmtest_hwtrace_scope_t out-param comes back through a plain void* buffer;
+        # render_scope takes that handle BY VALUE — on x86-64 the two-u32 struct rides in one
+        # integer register identical to a uint64, so it is declared LONG_LONG and the handle
+        # is packed idx|(gen<<32) (little-endian), the ABI-correct bridge Fiddle can pass.
+        call_scoped_ex: func(LIB, "asmtest_hwtrace_call_scoped_ex",
+                             [VOIDP, SZ, VOIDP, VOIDP, VOIDP, INT, VOIDP, VOIDP], INT),
+        render_scope:   func(LIB, "asmtest_hwtrace_render_scope", [LL, VOIDP, SZ], INT),
         # ---- host-native executable code ----
         exec_alloc:   func(LIB, "asmtest_hwtrace_exec_alloc", [VOIDP, SZ, VOIDP, VOIDP], INT),
         exec_free:    func(LIB, "asmtest_hwtrace_exec_free", [VOIDP, SZ], VOID),
@@ -361,6 +369,10 @@ module Asmtest
     class HwTrace
       attr_reader :handle
 
+      # Lazy-arm state (mirrors hwtrace.py's HwTrace._scope_armed): false until the tier
+      # is inited, so call_scoped can bring it up on first use and no-op thereafter.
+      @scope_armed = false
+
       def initialize(handle)
         @handle = handle
       end
@@ -454,11 +466,31 @@ module Asmtest
         opts = Asmtest::HwTrace.build_options(backend)
         rc = Asmtest::HwTrace::FN[:init].call(opts)
         raise "asmtest_hwtrace_init failed: #{rc}" if rc != OK
+        @scope_armed = true
       end
 
       # Tear the tier down, returning to the uninitialized state.
       def self.shutdown
         Asmtest::HwTrace::FN[:shutdown].call
+        @scope_armed = false
+      end
+
+      # Lazy first-use arm for call_scoped: bring the tier up if the caller has not already
+      # .init'd it, auto-selecting the most-faithful available backend (single-step on any
+      # x86-64 Linux). Mirrors hwtrace.py's HwTrace._lazy_arm — a no-op once armed, and a
+      # clean self-skip (leaves the tier down, so call_scoped_ex returns non-OK) off a host
+      # where no backend resolves.
+      def self.__lazy_arm
+        return if @scope_armed
+        b = auto
+        if b >= 0
+          begin
+            init(b)
+          rescue RuntimeError
+            # tier unavailable / raced up under us — mark armed and let the call self-skip.
+          end
+        end
+        @scope_armed = true
       end
 
       # ---- out-of-process / foreign-process tracing (asmtest_ptrace.h) ----
@@ -812,6 +844,65 @@ module Asmtest
         buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
         buf[0, need + 1] = "\x00".b * (need + 1)
         Asmtest::HwTrace::FN[:render].call(name, buf, need + 1)
+        s = buf.to_s(need)
+        Fiddle.free(buf.to_i)
+        s
+      end
+
+      # The outcome of .call_scoped: the traced call's return value (+result+, nil on a
+      # self-skip), the executed body's disassembly (+path+, "" without a decoder), and the
+      # thread-scope honesty bit (+truncated+). Mirrors hwtrace.py's CallScopedResult.
+      CallScopedResult = Struct.new(:result, :path, :truncated)
+
+      # Trace ONE native call the managed-safe way: arm the single-step window, call
+      # +code+(*args) through the SysV integer ABI, and disarm — all in native code
+      # (asmtest_hwtrace_call_scoped_ex) — so nothing the binding runs between arm and disarm
+      # is stepped (a tighter window than #scope, where the FFI dispatch of code.call runs).
+      # REGISTRY-FREE: it consumes no MAX_REGIONS slot, so it is safe in a tight loop that
+      # captures many distinct one-shot bodies. Up to six integer +args+ pass as C longs; for
+      # a native leaf the call target is the region base itself (fn == base). Arms the tier
+      # lazily on first use. Returns a CallScopedResult; self-skips (+result+ nil) where no
+      # single-step backend is available.
+      def self.call_scoped(code, *args, blocks: 64, instructions: 256)
+        __lazy_arm
+        handle = Asmtest::HwTrace::FN[:trace_new].call(instructions, blocks)
+        raise "asmtest_trace_new failed" if handle.null?
+        n = args.length
+        sz = 8 * [n, 1].max
+        argbuf = Fiddle::Pointer.new(Fiddle.malloc(sz), sz)
+        argbuf[0, sz] = "\x00".b * sz
+        argbuf[0, 8 * n] = args.pack("q*") if n > 0
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # long result_out
+        res[0, 8] = "\x00".b * 8
+        scope = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # asmtest_hwtrace_scope_t {u32 idx; u32 gen}
+        scope[0, 8] = "\x00".b * 8
+        begin
+          rc = Asmtest::HwTrace::FN[:call_scoped_ex].call(
+            code.base, code.length, handle, code.base,
+            n > 0 ? argbuf : Fiddle::NULL, n, res, scope)
+          return CallScopedResult.new(nil, "", false) if rc != OK
+          # idx@0|gen@4 little-endian is exactly the uint64 render_scope wants BY VALUE.
+          path = __render_scope(scope[0, 8].unpack1("Q"))
+          result = res[0, 8].unpack1("q")
+          trunc = Asmtest::HwTrace::FN[:truncated].call(handle) != 0
+          CallScopedResult.new(result, path, trunc)
+        ensure
+          Fiddle.free(argbuf.to_i)
+          Fiddle.free(res.to_i)
+          Fiddle.free(scope.to_i)
+          Asmtest::HwTrace::FN[:trace_free].call(handle)
+        end
+      end
+
+      # Render a just-captured scope handle's body to assembly text (size-then-allocate).
+      # +handle_u64+ is the packed idx|(gen<<32) passed BY VALUE (see the FFI decl note);
+      # "" if the decoder is unavailable or the handle is stale.
+      def self.__render_scope(handle_u64)
+        need = Asmtest::HwTrace::FN[:render_scope].call(handle_u64, Fiddle::NULL, 0)
+        return "" if need <= 0
+        buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
+        buf[0, need + 1] = "\x00".b * (need + 1)
+        Asmtest::HwTrace::FN[:render_scope].call(handle_u64, buf, need + 1)
         s = buf.to_s(need)
         Fiddle.free(buf.to_i)
         s

@@ -8,6 +8,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`call_scoped` — a registry-free traced native call — in the Python, Ruby, Node, and
+  Java bindings.** Each wraps the new `asmtest_hwtrace_call_scoped_ex`: arm, call the native
+  leaf, and disarm entirely in native code — a tighter window than the `scope` form (whose
+  FFI dispatch of `code.call` is stepped, though region-filtered) — returning the call's
+  result, the executed body's disassembly, and the truncation bit in one step. Registry-free,
+  so it is safe in a tight loop (no `MAX_REGIONS` exhaustion). `HwTrace.call_scoped(code,
+  *args)` (Python/Ruby), `HwTrace.callScoped(code, …args)` (Node), `HwTrace.callScoped(code,
+  long…)` (Java); each returns `{result, path, truncated}` and each is validated in its
+  Docker lane (result 42, body renders to `ret`, a 40-call loop with no exhaustion).
+
 - **§D0.4 async-hop stitching now has a LIVE producer — `AsmStitchedTrace` (.NET).** The
   shipped `asmtest_hwtrace_stitch` merge core previously had no live producer (only
   synthetic-slice host tests). New `asmtest_hwtrace_stitch_handles(traces[], scope_ids,

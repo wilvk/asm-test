@@ -143,11 +143,22 @@ public final class HwTrace {
     public record JitMethod(long codeAddr, long codeSize, long timestamp,
                             long codeIndex, byte[] code) {}
 
+    /** The outcome of {@link #callScoped}: the call's {@code result} (the SysV integer
+     *  return), the executed body's rendered disassembly ({@code path}), the thread-scope
+     *  {@code truncated} honesty bit, and the raw {@code rc}. On a clean self-skip (no
+     *  single-step backend) {@code rc} is negative, {@code result} 0 and {@code path} empty;
+     *  {@link #ok()} distinguishes it. Mirrors the Python {@code CallScopedResult}. */
+    public record CallScopedResult(long result, String path, boolean truncated, int rc) {
+        /** True when the traced call actually ran (rc == ASMTEST_HW_OK). */
+        public boolean ok() { return rc == ASMTEST_HW_OK; }
+    }
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
-        REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER, EXEC_ALLOC, EXEC_FREE,
+        REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
+        CALL_SCOPED_EX, RENDER_SCOPE, EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
@@ -284,6 +295,7 @@ public final class HwTrace {
             traceResolve = null, traceAuto = null,
             hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
+            callScopedEx = null, renderScope = null,
             execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
@@ -355,6 +367,16 @@ public final class HwTrace {
             hwTryBegin = h(lib, "asmtest_hwtrace_try_begin", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             hwRender = h(lib, "asmtest_hwtrace_render",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+            // Registry-free lazy-arm call + handle-keyed render (call_scoped path).
+            // call_scoped_ex(base, len, trace, fn, args, nargs, result_out, scope_out).
+            callScopedEx = h(lib, "asmtest_hwtrace_call_scoped_ex",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS,
+                    ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
+            // The by-value 8-byte asmtest_hwtrace_scope_t {u32 idx, u32 gen} passes in one
+            // integer register on SysV x86-64 — ABI-identical to a JAVA_LONG, so declare it
+            // as a packed long (idx | gen<<32) and avoid a by-value struct descriptor.
+            renderScope = h(lib, "asmtest_hwtrace_render_scope",
+                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             execFree = h(lib, "asmtest_hwtrace_exec_free",
@@ -535,6 +557,7 @@ public final class HwTrace {
         HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto; HW_INIT = hwInit;
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
+        CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
         EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
@@ -728,6 +751,59 @@ public final class HwTrace {
             MemorySegment h = (MemorySegment) TRACE_NEW.invoke((long) instructions, (long) blocks);
             if (MemorySegment.NULL.equals(h)) throw new RuntimeException("asmtest_trace_new failed");
             return new NativeTrace(h);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Trace ONE native call the managed-safe way (asmtest_hwtrace_call_scoped_ex): arm the
+     *  single-step window, call {@code code(args…)} through the SysV integer ABI, and disarm
+     *  entirely in native code, so nothing the binding runs between arm and disarm is stepped
+     *  — a tighter window than {@link AsmTrace}, where the FFI-dispatch of {@code code.call}
+     *  runs. REGISTRY-FREE — consumes no MAX_REGIONS slot — so it is safe in a tight loop.
+     *  {@code args} pass as C longs (0..6). Returns a {@link CallScopedResult}: {@code result}
+     *  the call's return, {@code path} the executed body's disassembly, {@code truncated} the
+     *  thread-scope honesty bit. Self-skips ({@code rc} negative, {@code result} 0) where no
+     *  single-step backend is available. Mirrors the Python {@code HwTrace.call_scoped}. */
+    public static CallScopedResult callScoped(NativeCode code, long... args) {
+        if (CALL_SCOPED_EX == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            // asmtest_trace_new(insns_cap, blocks_cap) — insns FIRST. Caller-owned trace.
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke(256L, 64L);
+            if (MemorySegment.NULL.equals(handle))
+                throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                int n = args.length;
+                // Per-call scratch: the args[] (size to element COUNT via a sequence layout,
+                // NOT allocate(JAVA_LONG, n) which sizes to one element on this JDK), a long*
+                // result cell, and the 8-byte {u32 idx, u32 gen} scope out-param.
+                MemorySegment argSeg = a.allocate(
+                    MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+                for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+                MemorySegment result = a.allocate(JAVA_LONG);
+                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                // For a native leaf fn == base (offset 0 = entry).
+                MemorySegment base = MemorySegment.ofAddress(code.base());
+                int rc = (int) CALL_SCOPED_EX.invoke(base, code.length(), handle, base,
+                    argSeg, n, result, scopeOut);
+                if (rc != ASMTEST_HW_OK) return new CallScopedResult(0L, "", false, rc);
+                // Render the body from the just-captured (thread-local) scope handle. The
+                // by-value 8-byte scope struct is passed as a packed long (idx | gen<<32),
+                // ABI-identical to the struct in one integer register on SysV x86-64.
+                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
+                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
+                long packed = (idx & 0xffffffffL) | ((long) gen << 32);
+                String path = "";
+                int need = (int) RENDER_SCOPE.invoke(packed, MemorySegment.NULL, 0L);
+                if (need > 0) {
+                    MemorySegment buf = a.allocate(need + 1L);
+                    RENDER_SCOPE.invoke(packed, buf, (long) (need + 1));
+                    path = buf.getString(0);
+                }
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                return new CallScopedResult(result.get(JAVA_LONG, 0), path, trunc, rc);
+            } finally {
+                TRACE_FREE.invoke(handle);
+            }
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
     }

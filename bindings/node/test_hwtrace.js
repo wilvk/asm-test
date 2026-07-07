@@ -189,6 +189,28 @@ function main() {
       code.free();
       tr.free();
     }
+
+    // --- callScoped: arm + call + disarm entirely in native code — registry-free,
+    //     returning the call result and the executed body disassembly in one step.
+    //     Mirrors test_hwtrace.py::test_call_scoped_traces_a_native_call. ---
+    {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const res = HwTrace.callScoped(code, 20, 22); // 42 <= 100 -> jle taken, dec skipped
+      ok(res.result === 42, 'callScoped: add2(20,22).result == 42');
+      ok(!res.truncated, 'callScoped: not truncated');
+      if (res.path) { // non-empty when Capstone is present
+        ok(res.path.includes('ret'), 'callScoped: rendered listing includes the ret');
+        ok((res.path.match(/\n/g) || []).length === 5,
+          'callScoped: 5 rendered instruction lines (taken path)');
+      }
+      // Registry-free: 40 calls must NOT exhaust the fixed MAX_REGIONS region table.
+      let regFree = true;
+      for (let i = 0; i < 40; i++) {
+        if (HwTrace.callScoped(code, i, 1).result !== i + 1) regFree = false;
+      }
+      ok(regFree, 'callScoped: 40 registry-free calls each return i+1');
+      code.free();
+    }
   } finally {
     HwTrace.shutdown();
   }
