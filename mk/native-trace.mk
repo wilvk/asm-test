@@ -715,6 +715,17 @@ hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
+# Slow-host crash-avoidance stress (managed-singlestep-lazy-arm-plan "Sharpening 1"):
+# the ONE lane that must run with the tiering worker UNPINNED — no $(hwtrace_dotnet_env)
+# — so CoreCLR's worker idle-exits and is respawned via pthread_create adjacent to the
+# lazy-arm windows. Under the old stepped-DynamicInvoke Invoke this died (exit 133) on
+# loaded runners; under lazy-arm the process must survive with every capture intact.
+# Meaningful on a slow/loaded host (CI); on a fast dev box it simply passes quickly.
+.PHONY: hwtrace-dotnet-stress
+hwtrace-dotnet-stress: shared-hwtrace
+	@echo "== hwtrace-dotnet-stress (tiering worker UNPINNED) =="
+	$(hwtrace_env) ASMTEST_METHOD_STRESS=60 $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
+
 # Forward-runtime drift check: the same self-test on .NET 9. The images carry only
 # dotnet-sdk-8.0, so install net9 user-local via the official dotnet-install script
 # into a scratch dir, flip the TFM in a scratch COPY of the project (the tree is

@@ -59,7 +59,17 @@ Phase 3 (app API + runner test) ✅ · Phase 4 (host-native W^X exec code) ✅ �
 Phase 5 (instruction mode) ✅ · Phase 6 (language wrappers — all bindings) ✅ ·
 Phase 7 (symbol mode) ✅ (`asmtest_dr_register_symbol`; always-on range recording).
 Phase 0a fork safety: a `pthread_atfork` child handler disables the tier in forked
-children. Remaining: drsyms-based internal-symbol mode (Phase 7 stretch).
+children. Remaining: drsyms-based internal-symbol mode (Phase 7 stretch) — **now
+blocked-by-decision, not merely unstarted** (assessed 2026-07-07): drsyms is a DR
+*extension*, and the client deliberately restricts itself to the BSD core API
+because the prebuilt release extensions fail to load under DR's private loader on
+modern glibc (the drmgr/drwrap decision recorded in
+[src/drtrace_client.c](../../../src/drtrace_client.c)'s header). Wiring drsyms in
+means either solving that ext-loading problem or static-linking
+`libdrsyms_drstatic.a` + its elftoolchain deps into the client — a build/licensing
+investigation of its own, not a contained fallback-lookup patch. Exported-symbol
+resolution (`dr_get_proc_address` across the module list) remains the shipped
+surface; internal symbols stay out until the loader constraint is solved.
 
 ---
 

@@ -23,6 +23,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validated on the .NET lane; see
   [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/managed-singlestep-lazy-arm-plan.md).
 
+- **Slow-host crash-avoidance stress lane** (`make hwtrace-dotnet-stress`, CI:
+  `docker-hwtrace-dotnet-stress` in the `hwtrace-bindings` job) — the lazy-arm plan's
+  "Sharpening 1". The ONE lane that runs with CoreCLR's tiering worker **unpinned**
+  (no `DOTNET_TC_BackgroundWorkerTimeoutMs`): it parks past the worker's idle-exit,
+  churns tier-up enqueues on the invoking thread (fresh `DynamicMethod`s driven past
+  the call-count threshold), and interleaves lazy-arm `Invoke`s — recreating on the
+  loaded CI runner the exact environment where the old stepped-`DynamicInvoke` path
+  died with exit 133. Surviving with every capture intact is the pass signal.
+
+- **The zig toolchain tarball is now integrity-pinned** — the one third-party fetch
+  P2's supply-chain pass left unverified. `DOCKER_SETUP_zig` verifies a per-arch
+  sha256 (`ZIG_SHA256_x86_64`/`_aarch64` in `mk/docker.mk`) before extracting, the
+  anchors are recorded in `scripts/third-party-digests.txt`, and
+  `check-thirdparty-versions.sh` now asserts both anchors exist for the declared
+  `ZIG_VERSION` — so a version bump that forgets the digests fails loudly.
+
 - **Example suites are now auto-discovered.** Every `examples/test_foo.c` +
   `examples/foo.s` pair (`foo.asm` under `ASM_SYNTAX=nasm`) links through a
   `test_%` pattern rule — drop the two files in and `make test` picks the suite
@@ -216,6 +232,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   §3.1(c) `attribute_window`, §D3 `trace_attached_windowed`, and the AMD boundary
   snapshot) carry reasoned allow-list exemptions following the file's existing
   conventions (the .NET tier keeps its real window-trio wraps).
+
+- **`test_descent_stale_alarm_flag` no longer flakes on loaded CI runners.** The test
+  spams the tracer with a 200 µs `SIGALRM` storm to prove a stale L3 watchdog flag +
+  EINTRs cannot abort a healthy L2 descent — but it left the descent's real-time
+  deadline at the 2 s default, which a loaded 2-core runner can legitimately exceed
+  under 5000 interrupts/sec (a *correct* truncation, misread as the regression). The
+  descent under test now carries an explicit 60 s deadline, so only the stale-flag
+  bug it guards can fail it; the EINTR pressure is unchanged. (`asmtest_hwtrace_call_scoped`
+  also joins the parity allow-list under the same dotnet-only posture as the
+  window trio, restoring the gate the lazy-arm commit tripped.)
 
 ### Added
 

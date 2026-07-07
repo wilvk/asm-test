@@ -24,8 +24,13 @@ changing how it reads coverage.
   backend shipping today (Linux x86-64, every Intel + every Zen).
 - **Hardware trace splits strictly by vendor/uarch:** Intel → Intel PT; AMD
   Zen 3 / Zen 4 / Zen 5 → AMD LBR (Tier-A 16-branch window + Tier-B stitching;
-  live-verified on a Zen 5 Ryzen 9 9950X); AMD Zen 2 → nothing yet (its branch-stack
-  `perf_event_open` returns `EOPNOTSUPP`).
+  live-verified on a Zen 5 Ryzen 9 9950X, plus the Part III software layer — spec/
+  wrong-path filtering, stitch decodable-distance guard, CPUID `0x80000022` runtime
+  depth, freeze probe, and the eBPF boundary LBR snapshot). AMD Zen 2 has **no
+  branch-record facility** (`perf_event_open` returns `EOPNOTSUPP`), but is no
+  longer uncovered: the single-step tier, the out-of-process ptrace stepper, and
+  the `PTRACE_SINGLEBLOCK` block-step tier (AMD plan P3-2, one `#DB` per taken
+  branch on bare metal) all run there.
 - The **emulator (Unicorn)** tier is the universal floor for every OS, architecture,
   and language the native tiers do not reach (Windows-x64, macOS, AArch64, and the
   managed runtimes in-process DynamoRIO cannot take over).
@@ -78,9 +83,9 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Emulator** | Unicorn virtual CPU (isolated guest) | Capstone (annotate) | (Unicorn) | n/a (interpreted) | exact, unbounded | **implemented** |
 | **DynamoRIO** | software DBI, native code cache | none | DR core BSD | low (cached) | exact, unbounded | **implemented** |
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
-| **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Ph0–5; live capture + Tier-B stitching verified on Zen 5** (Ryzen 9 9950X, `amd_lbr_v2`) |
+| **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Part I Ph0–5 + Part III P3-0…P3-5** (spec filter, stitch guard, runtime depth, freeze probe, blockstep tiers, eBPF boundary snapshot); live capture + Tier-B verified on Zen 5 (Ryzen 9 9950X, `amd_lbr_v2`); forward-look: MSR-direct, BRS (Zen 3), IBS (Zen 2) |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **reconstruction core host-validated**; live OpenCSD decode awaits a board (self-skips) |
-| **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4, Linux x86-64; cross-OS Ph5 planned) |
+| **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4 Linux x86-64 + Ph5 fronts: macOS-Intel in-proc, Windows x86-64 VEH `win64-ss-test`, out-of-proc ptrace W2 x86-64/AArch64; AArch64 *live stream* awaits real hardware — qemu-user self-skips) |
 
 DynamoRIO core is BSD (the tier deliberately avoids `drwrap`'s LGPL-2.1); libipt and
 OpenCSD are BSD. Licensing for the optional emulator dependencies (Unicorn,

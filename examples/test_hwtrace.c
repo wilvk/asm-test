@@ -3546,7 +3546,12 @@ static void test_descent_stale_alarm_flag(void) {
     it.it_interval.tv_usec = 200;
     setitimer(ITIMER_REAL, &it, &old_it);
 
-    /* (3) A healthy L2 descent must complete despite the stale flag + the EINTRs. */
+    /* (3) A healthy L2 descent must complete despite the stale flag + the EINTRs.
+     * The descent's real-time deadline is raised well past the default 2 s: the 200us
+     * signal storm can stretch the few-step descent past 2 s on a loaded CI runner,
+     * and a deadline trip is a LEGITIMATE truncation — not the stale-flag regression
+     * this test guards. With the deadline out of reach, only the stale-flag bug (the
+     * L1/L2 gate on the L3-owned alarm flag) can fail the assertion. */
     static const unsigned char BLOB1[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00,
                                           0x00, 0x00, 0x48, 0x01, 0xf0, 0xc3,
                                           0x48, 0xff, 0xc0, 0xc3};
@@ -3556,6 +3561,7 @@ static void test_descent_stale_alarm_flag(void) {
         uint64_t base = (uint64_t)(uintptr_t)b;
         asmtest_descent_t *d =
             asmtest_descent_new(ASMTEST_DESCENT_DESCEND_KNOWN);
+        asmtest_descent_set_watchdog_ms(d, 60000);
         asmtest_descent_allow_region(d, (void *)(uintptr_t)(base + 0xc), 4);
         long r = 0;
         const long a[2] = {20, 22};

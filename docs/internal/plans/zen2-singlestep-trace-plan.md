@@ -457,10 +457,15 @@ Linux/x86-64 backend.
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
   feedable into [amd_backend.c](../../../src/amd_backend.c)'s replay loop as `(from,to)`
-  pairs. Blocked on x86 in portable form: `PTRACE_SINGLEBLOCK` is wired only on
-  PowerPC/s390, and `DEBUGCTL` is a ring-0 MSR — so this needs a small kernel helper
-  module or a uapi patch. Self-hosted-runner / research only, same bucket as the AMD
-  plan's "MSR-direct snapshot."
+  pairs. **The out-of-process form SHIPPED** (AMD plan P3-2): `PTRACE_SINGLEBLOCK`
+  *is* wired on x86 (this plan's earlier "PowerPC/s390 only" claim was wrong —
+  corrected by [src/ptrace_backend.c](../../../src/ptrace_backend.c)'s
+  `asmtest_ptrace_trace_call_blockstep` / `_attached_blockstep`), behind a hang-proof
+  functional probe because some hypervisors (GitHub-hosted runners included) mask
+  `DEBUGCTL.BTF` and silently degrade SINGLEBLOCK to per-instruction stepping —
+  `blockstep_available()` self-skips there. Still forward-look: only the *in-process*
+  BTF variant (no ptrace child), which needs the ring-0 `DEBUGCTL` MSR directly — a
+  kernel helper / uapi patch, same bucket as the AMD plan's "MSR-direct snapshot."
 
 ---
 
@@ -488,8 +493,9 @@ Linux/x86-64 backend.
 - Per-instruction overhead ≈2.3 µs on Linux (Jack Whitham, "x86 single step mode —
   how slow is it?", ~435k insn/s); ~13.8 µs on Windows.
 - AMD `DEBUGCTL.BTF` branch single-step (Phase 5 W3): AMD APM Vol 2 bit 1 of
-  `DebugCtlMSR`; Linux `user_enable_block_step()` exists but `PTRACE_SINGLEBLOCK` is
-  unwired on x86 (PowerPC `0x100` / s390 only).
+  `DebugCtlMSR`; Linux wires `PTRACE_SINGLEBLOCK` on x86 via
+  `user_enable_block_step()` (the shipped blockstep tier uses it; a functional
+  probe catches hypervisors that mask `DEBUGCTL.BTF` and silently degrade it).
 - Unlike PT/AMD, capture **runs on this Zen 2 host** and on standard CI — the first
   hardware-tier backend with full automated regression protection.
 

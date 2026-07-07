@@ -123,8 +123,20 @@ DOCKER_APT_go     := golang-go
 
 ZIG_VERSION ?= 0.13.0
 DOCKER_SETUP_node := npm install -g koffi
+# Integrity pin (B5 residual): the zig tarball was the one third-party fetch with no
+# digest check. Pinned per-arch; anchors recorded in scripts/third-party-digests.txt
+# (gated by scripts/check-thirdparty-versions.sh). Bumping ZIG_VERSION without
+# updating these digests fails the image build loudly — never ships unpinned.
+ZIG_SHA256_x86_64  := d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
+ZIG_SHA256_aarch64 := 041ac42323837eb5624068acd8b00cd5777dac4cf91179e8dad7a7e90dd0c556
 DOCKER_SETUP_zig  := arch="$$(uname -m)"; \
+  case "$$arch" in \
+    x86_64)  zig_sha256=$(ZIG_SHA256_x86_64) ;; \
+    aarch64) zig_sha256=$(ZIG_SHA256_aarch64) ;; \
+    *) echo "no pinned zig digest for arch $$arch" >&2; exit 1 ;; \
+  esac; \
   curl -fsSL "https://ziglang.org/download/$(ZIG_VERSION)/zig-linux-$$arch-$(ZIG_VERSION).tar.xz" -o /tmp/zig.tar.xz; \
+  echo "$$zig_sha256  /tmp/zig.tar.xz" | sha256sum -c -; \
   mkdir -p /opt/zig; tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
   rm /tmp/zig.tar.xz; ln -s /opt/zig/zig /usr/local/bin/zig; zig version
 
@@ -354,6 +366,16 @@ docker-hwtrace-bindings: $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 docker-hwtrace-dotnet9: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
 	  make hwtrace-dotnet9-test
+
+# Slow-host crash-avoidance stress: the tiering worker UNPINNED (no
+# hwtrace_dotnet_env), lazy-arm Invokes adjacent to worker respawns. The container
+# shares the host's (CI runner's) scheduling noise — the environment that killed the
+# old stepped-DynamicInvoke path — so running it on a loaded runner is the real
+# validation; on a fast dev box it just passes quickly.
+.PHONY: docker-hwtrace-dotnet-stress
+docker-hwtrace-dotnet-stress: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
+	  make hwtrace-dotnet-stress
 
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND

@@ -75,6 +75,10 @@ check_manifest() { # <name> <version>
 check_manifest dynamorio "$(extract mk/bindings.mk 'DR_VERSION \?= ([0-9][0-9.]*)')"
 check_manifest keystone  "$(extract scripts/build-keystone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
 check_manifest capstone  "$(extract scripts/build-capstone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
+# The zig toolchain tarball (docker zig lane) is pinned per-arch: both digests must
+# anchor the single ZIG_VERSION declared in mk/docker.mk.
+check_manifest zig-linux-x86_64  "$(extract mk/docker.mk 'ZIG_VERSION \?= ([0-9][0-9.]*)')"
+check_manifest zig-linux-aarch64 "$(extract mk/docker.mk 'ZIG_VERSION \?= ([0-9][0-9.]*)')"
 
 if [ "$fail" -ne 0 ]; then
     echo "third-party version drift detected — reconcile the versions above." >&2

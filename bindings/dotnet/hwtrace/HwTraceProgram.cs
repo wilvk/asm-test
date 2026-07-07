@@ -78,6 +78,17 @@ static class HwTraceProgram
             return 0;
         }
 
+        // Slow-host crash-avoidance stress (managed-singlestep-lazy-arm-plan,
+        // "Sharpening 1"): ASMTEST_METHOD_STRESS=<N> runs ONLY the unpinned
+        // tiering-worker stress and exits — see MethodStress below.
+        string stress = Environment.GetEnvironmentVariable("ASMTEST_METHOD_STRESS");
+        if (!string.IsNullOrEmpty(stress))
+        {
+            MethodStress(int.TryParse(stress, out int sn) && sn > 0 ? sn : 60);
+            Console.WriteLine($"1..{_n}");
+            return _failed ? 1 : 0;
+        }
+
         // --- §Z0 auto-init: a whole-window scope needs no explicit HwTrace.Init --- //
         // BEFORE any Init below: the empty-ctor whole-window ctor must lazily bring up the
         // single-step tier itself, so `using (new AsmTrace())` works with zero setup.
@@ -683,6 +694,61 @@ static class HwTraceProgram
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     static long NamedColdOop(long a, long b) => a * b;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long NamedStress(long a, long b) => a + b;
+
+    // Slow-host crash-avoidance stress (managed-singlestep-lazy-arm-plan "Sharpening 1").
+    // The original defect: a TF-armed thread that runs code which blocks SIGTRAP is
+    // force-killed (exit 133) — CoreCLR's tiering worker idle-exits (~4 s default) and is
+    // respawned via pthread_create ON WHICHEVER THREAD next enqueues tier-up work. This
+    // stress recreates that environment with the worker UNPINNED (the suites' usual
+    // DOTNET_TC_BackgroundWorkerTimeoutMs pin must NOT be set): sleep past the worker's
+    // idle-exit, churn tier-up enqueues on THIS thread (fresh DynamicMethods driven past
+    // the call-count threshold), and interleave lazy-arm Invoke()s. Under the old
+    // stepped-DynamicInvoke Invoke this died deterministically on loaded CI runners;
+    // under lazy-arm the armed window holds only the body, so the process must survive
+    // with every capture intact. Surviving to the summary line IS the pass signal.
+    static void MethodStress(int n)
+    {
+        string pin = Environment.GetEnvironmentVariable("DOTNET_TC_BackgroundWorkerTimeoutMs");
+        Check(string.IsNullOrEmpty(pin),
+              "stress precondition: tiering worker is UNPINNED (no DOTNET_TC_BackgroundWorkerTimeoutMs)");
+
+        using var t = AsmTrace.Method((Func<long, long, long>)NamedStress, emit: false);
+        Check(t.SkipReason.Length == 0,
+              $"stress: named-method scope resolved ({t.SkipReason})");
+
+        long bad = 0, invoked = 0;
+        for (int i = 0; i < n; i++)
+        {
+            // Twice per run, park past the worker's idle-exit so the NEXT tier-up
+            // enqueue must respawn it (the pthread_create the old code stepped over).
+            if (i == 0 || i == n / 2)
+                Thread.Sleep(5500);
+
+            // Fresh tier-0 JIT + enough calls to trip the tier-up counter: enqueues
+            // background recompilation from THIS thread, adjacent to the armed windows.
+            var dm = new System.Reflection.Emit.DynamicMethod(
+                $"stress{i}", typeof(long), new[] { typeof(long), typeof(long) });
+            var il = dm.GetILGenerator();
+            il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+            il.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+            il.Emit(System.Reflection.Emit.OpCodes.Add);
+            il.Emit(System.Reflection.Emit.OpCodes.Ret);
+            var churn = (Func<long, long, long>)dm.CreateDelegate(typeof(Func<long, long, long>));
+            long acc = 0;
+            for (int c = 0; c < 100; c++) acc += churn(c, 1);
+
+            long r = (long)t.Invoke((long)i, acc % 7);
+            invoked++;
+            if (r != i + acc % 7) bad++;
+        }
+        Check(bad == 0, $"stress: all {invoked} lazy-arm Invokes returned correct values ({bad} bad)");
+        Check(t.Armed, $"stress: lazy-arm armed and captured in-process ({t.SkipReason})");
+        Console.WriteLine("# stress: survived the unpinned tiering-worker respawn windows — "
+                        + "the armed TF window never contained runtime machinery");
+    }
 
     // Tier-up fixture: hot enough that default tiered compilation re-JITs it.
     [MethodImpl(MethodImplOptions.NoInlining)]

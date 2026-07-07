@@ -346,6 +346,12 @@ jobs:
         run: make docker-hwtrace-bindings
       - name: Forward-runtime drift check (.NET 9 — diagnostics IPC / MethodLoadVerbose)
         run: make docker-hwtrace-dotnet9
+      # Sharpening 1 (managed-singlestep-lazy-arm-plan): the tiering worker UNPINNED on
+      # the loaded runner — the exact environment where the old stepped-DynamicInvoke
+      # Invoke died (exit 133, SIGTRAP force-killed inside pthread_create). Lazy-arm
+      # must survive worker respawns adjacent to its armed windows, captures intact.
+      - name: Slow-host crash-avoidance stress (tiering worker unpinned)
+        run: make docker-hwtrace-dotnet-stress
 
   # K2: the eBPF code-image (JIT emission) detector — build the CO-RE program +
   # host harness and run it in a container with the BPF / PERFMON / SYS_PTRACE

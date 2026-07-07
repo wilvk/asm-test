@@ -64,6 +64,7 @@ ALL asmtest_hwtrace_begin_window      # §Z1 region-free whole-window trio: the 
 ALL asmtest_hwtrace_end_window        #   (dotnet wraps it); the other bindings ship the name-keyed try_begin path and
 ALL asmtest_hwtrace_render_window     #   gain the trio when they grow a scope construct — same posture as §1 above
 ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: same family as region_name/symbolize_bucket
+ALL asmtest_hwtrace_call_scoped       # Option B lazy-arm named-call scope (managed-singlestep-lazy-arm-plan): dotnet wraps it (AsmTrace.Method's Invoke); the other nine keep the name-keyed try_begin path around a native leaf and gain it when their scope construct grows a managed-safe call form — same posture as begin_window above
 ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 
