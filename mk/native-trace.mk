@@ -655,6 +655,17 @@ HWTRACE_BINDING_LANGS := cpp rust go node java dotnet ruby lua zig
 hwtrace_env = ASMTEST_HWTRACE_LIB=$(abspath $(call shlib_dev,libasmtest_hwtrace)) \
               LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH"
 
+# .NET lanes only: pin CoreCLR's tiered-compilation background worker resident
+# (0x36EE80 ms = 1 h; DOTNET_* DWORDs parse as hex). The suites arm in-process
+# EFLAGS.TF windows on managed threads; if the worker idle-exits (default ~4 s)
+# and is respawned INSIDE such a window, glibc's pthread_create blocks all
+# signals around clone() and the very next #DB is a SIGTRAP delivered while
+# blocked — the kernel force-resets it to SIG_DFL and kills the process (exit
+# 133). A fast host never steps a window long enough to hit it; GitHub-hosted
+# runners died deterministically (dmesg: RIP inside pthread_create, EFLAGS.TF
+# set). See docs/guides/tracing/hardware-tracing.md ("per-thread footgun").
+hwtrace_dotnet_env = DOTNET_TC_BackgroundWorkerTimeoutMs=36EE80
+
 .PHONY: hwtrace-python-test hwtrace-bindings-test \
         $(addprefix hwtrace-,$(addsuffix -test,$(HWTRACE_BINDING_LANGS)))
 
@@ -702,7 +713,7 @@ hwtrace-java-test: shared-hwtrace
 
 hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="
-	$(hwtrace_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
 # Forward-runtime drift check: the same self-test on .NET 9. The images carry only
 # dotnet-sdk-8.0, so install net9 user-local via the official dotnet-install script
@@ -722,7 +733,8 @@ hwtrace-dotnet9-test: shared-hwtrace
 	cp -r bindings/dotnet $$d9/dn && rm -rf $$d9/dn/*/obj $$d9/dn/*/bin; \
 	sed -i 's#<TargetFramework>net8.0</TargetFramework>#<TargetFramework>net9.0</TargetFramework>#' \
 	  $$d9/dn/hwtrace/hwtrace.csproj; \
-	cd $$d9/dn/hwtrace && $(hwtrace_env) DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	cd $$d9/dn/hwtrace && $(hwtrace_env) $(hwtrace_dotnet_env) \
+	  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  $$d9/dotnet/dotnet run
 
 # Runnable demos of the scoped-trace facility (§Z0/§Z1) on the single-step WEAK tier:
@@ -730,51 +742,51 @@ hwtrace-dotnet9-test: shared-hwtrace
 .PHONY: hwtrace-dotnet-example
 hwtrace-dotnet-example: shared-hwtrace
 	@echo "== hwtrace-dotnet-example (wholewindow) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/wholewindow/wholewindow.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/wholewindow/wholewindow.csproj
 	@echo "== hwtrace-dotnet-example (region) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/region/region.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/region/region.csproj
 	@echo "== hwtrace-dotnet-example (methods) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/methods/methods.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/methods/methods.csproj
 	@echo "== hwtrace-dotnet-example (rundown) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/rundown/rundown.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/rundown/rundown.csproj
 	@echo "== hwtrace-dotnet-example (assemblies) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/assemblies/assemblies.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/assemblies/assemblies.csproj
 	@echo "== hwtrace-dotnet-example (annotated) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/annotated/annotated.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/annotated/annotated.csproj
 	@echo "== hwtrace-dotnet-example (tiers) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/tiers/tiers.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/tiers/tiers.csproj
 	@echo "== hwtrace-dotnet-example (hotspots) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/hotspots/hotspots.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/hotspots/hotspots.csproj
 	@echo "== hwtrace-dotnet-example (coverage) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/coverage/coverage.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/coverage/coverage.csproj
 	@echo "== hwtrace-dotnet-example (callgraph) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/callgraph/callgraph.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/callgraph/callgraph.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_native) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_native/ptrace_native.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/ptrace_native/ptrace_native.csproj
 	@echo "== hwtrace-dotnet-example (blockstep) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/blockstep/blockstep.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/blockstep/blockstep.csproj
 	@echo "== hwtrace-dotnet-example (ptrace_dotnet) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/ptrace_dotnet/ptrace_dotnet.csproj
 	@echo "== hwtrace-dotnet-example (flatprofile) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/flatprofile/flatprofile.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/flatprofile/flatprofile.csproj
 	@echo "== hwtrace-dotnet-example (amplification) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/amplification/amplification.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amplification/amplification.csproj
 	@echo "== hwtrace-dotnet-example (runtimegaps) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/runtimegaps/runtimegaps.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/runtimegaps/runtimegaps.csproj
 	@echo "== hwtrace-dotnet-example (footprint) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/footprint/footprint.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/footprint/footprint.csproj
 	@echo "== hwtrace-dotnet-example (runtimebuckets) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/runtimebuckets/runtimebuckets.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/runtimebuckets/runtimebuckets.csproj
 	@echo "== hwtrace-dotnet-example (instructionmix) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/instructionmix/instructionmix.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/instructionmix/instructionmix.csproj
 	@echo "== hwtrace-dotnet-example (perfannotate) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/perfannotate/perfannotate.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/perfannotate/perfannotate.csproj
 	@echo "== hwtrace-dotnet-example (loops) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/loops/loops.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/loops/loops.csproj
 	@echo "== hwtrace-dotnet-example (descent) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/descent/descent.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/descent/descent.csproj
 	@echo "== hwtrace-dotnet-example (descent_dotnet) =="
-	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
 	@echo "== hwtrace-dotnet-example (codeimage) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/codeimage/codeimage.csproj
 

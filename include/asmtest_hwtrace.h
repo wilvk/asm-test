@@ -222,7 +222,14 @@ typedef struct {
  * range-stack frame on the calling thread, and return its handle in *out. Same
  * negative ASMTEST_HW_* returns as try_begin, plus ASMTEST_HW_EFULL when this
  * thread's range stack is full. On a non-single-step backend it falls back to the
- * name-keyed try_begin and leaves *out a sentinel. */
+ * name-keyed try_begin and leaves *out a sentinel.
+ *
+ * HARD CONSTRAINT (single-step backend): between begin and end the armed thread
+ * must not execute code that blocks SIGTRAP — glibc's pthread_create blocks all
+ * signals around clone(), and the #DB the next instruction raises is then a
+ * blocked synchronous signal, which the kernel force-resets to SIG_DFL and kills
+ * the process with. No handler can intervene; keep spawning (and any sigprocmask
+ * block of SIGTRAP) outside the scope. */
 int asmtest_hwtrace_begin_scope(const char *name, asmtest_hwtrace_scope_t *out);
 
 /* Handle-keyed render — the calling thread's slice for `handle`, version-blind (live

@@ -397,6 +397,20 @@ hardware trace** (Intel PT / AMD LBR + the code-image recorder) or the **§D3
 concealed out-of-process ptrace stepper**, never in-process single-step against the
 runtime's threads.
 
+One collision is *fatal by kernel design*, not merely noisy: **a TF-armed thread
+must not execute code that blocks `SIGTRAP`** — glibc's `pthread_create` blocks all
+signals around `clone()`, and the `#DB` the very next instruction raises is then a
+synchronous signal delivered while blocked, which the kernel force-resets to
+`SIG_DFL` and kills the process with (exit 133; no handler can run). On a slow host
+a long-stepped window over runtime machinery hits this deterministically: CoreCLR's
+tiered-compilation background worker idle-exits after ~4 s and is **respawned via
+`pthread_create` on whichever thread next enqueues JIT work** — the armed thread,
+if the window is still open. The .NET self-test lanes pin the worker resident
+(`DOTNET_TC_BackgroundWorkerTimeoutMs`, see `hwtrace_dotnet_env` in
+`mk/native-trace.mk`); the same mitigation applies to any app arming in-process
+managed windows, and the §D3 out-of-process form is immune (the thread is never
+TF-armed).
+
 **The whole-scope vs one-method fork.** Hardware trace captures everything cheaply
 and filters at decode; a stepper must decide per instruction what to step into. So
 the scope's promise degrades differently by shape:
@@ -430,7 +444,9 @@ opt-in layer not covered here.
 - **Live managed code needs PT/LBR or the ptrace stepper, never in-process
   single-step** (above) — the whole-window single-step form works but self-truncates
   on a runtime and perturbs the stepped thread's timing; the clean PT path is
-  hardware-gated.
+  hardware-gated. And an in-process TF window over code that blocks `SIGTRAP`
+  (`pthread_create`, any `sigprocmask` block) is **fatal by kernel design** — see
+  the footgun note above for the CoreCLR tiering-worker case and its mitigation.
 - **Bare-metal capture needs perf privilege.** Intel PT needs a bare-metal Intel
   host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its
