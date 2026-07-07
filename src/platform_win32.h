@@ -91,6 +91,23 @@ void asmtest_win32_test_disarm(void);
 void asmtest_win32_test_rearm(void);
 void asmtest_win32_test_end(void);
 
+/* --- VEH single-step front-end (single-step plan Phase 5; src/ss_win64.c) ---
+ * Trace ONE call of `code` — a leaf-oriented Win64-ABI routine occupying
+ * [code, code+len) — with up to 4 integer args (RCX/RDX/R8/R9). EFLAGS.TF is
+ * armed around a library-owned call; each EXCEPTION_SINGLE_STEP whose RIP falls
+ * inside the region appends its offset to offs[0..cap) in execution order
+ * (out-of-region steps around the call are filtered, not recorded). *result
+ * (if non-NULL) gets RAX at return; *n_out the recorded count; *truncated (if
+ * non-NULL) 1 when the stream overflowed cap (the call still completes).
+ * Returns 0 on success, -1 on bad args, -2 when a stepper is already active
+ * (single-active contract, same as the Linux tier's MVP), -3 when the VEH
+ * cannot be installed. Arm and call happen on the calling thread; x86-64 only.
+ */
+int asmtest_win64_ss_trace_call(const void *code, size_t len,
+                                const long long *args, int nargs,
+                                long long *result, unsigned long long *offs,
+                                unsigned cap, unsigned *n_out, int *truncated);
+
 #endif /* _WIN32 */
 
 #endif /* ASMTEST_PLATFORM_WIN32_H */

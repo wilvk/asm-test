@@ -110,6 +110,18 @@ win64-seh-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_seh_win64.exe
 	$(WINE) $(WIN64_BUILD)/test_seh_win64.exe
 
+# Phase 5 slice (single-step plan): the VEH single-step front-end — EFLAGS.TF
+# armed around a library-owned call, EXCEPTION_SINGLE_STEP to a vectored
+# handler, the exact in-region instruction stream recorded (the Windows twin of
+# the Linux in-process stepper; same expected offset streams). PE/Wine only
+# (<windows.h>); self-skips where single-step exceptions are not delivered.
+.PHONY: win64-ss-test
+win64-ss-test: | $(WIN64_BUILD)
+	$(WIN64_CC) -O2 -Wall -Iinclude -Isrc -DASMTEST_ABI_WIN64 \
+	  src/ss_win64.c tests/win64/test_ss_win64.c \
+	  -o $(WIN64_BUILD)/test_ss_win64.exe
+	$(WINE) $(WIN64_BUILD)/test_ss_win64.exe
+
 # Phase 4 capstone + Track B: the framework runner (src/asmtest.c) built for
 # Win64 and run under Wine across ALL execution modes — per-test re-exec
 # isolation (the default, Track B), the -jN pool, in-process --no-fork, and
@@ -171,7 +183,8 @@ win64-runner-test: | $(WIN64_BUILD)
 # integrated runner itself.
 .PHONY: win64-check
 win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
-             win64-pool-test win64-filter-test win64-seh-test win64-runner-test
+             win64-pool-test win64-filter-test win64-seh-test win64-ss-test \
+             win64-runner-test
 
 # Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.

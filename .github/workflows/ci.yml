@@ -518,6 +518,8 @@ jobs:
           install: make nasm coreutils mingw-w64-x86_64-gcc
       - name: Build + run the Win64 runner suite natively (no Wine)
         run: make win64-runner-test WIN64_CC=gcc WINE=
+      - name: VEH single-step front-end on real Windows (no Wine)
+        run: make win64-ss-test WIN64_CC=gcc WINE=
 
   # Quality: AddressSanitizer + UndefinedBehaviorSanitizer over the suites and
   # the framework self-tests (full ASan + UBSan + LeakSanitizer on Linux).
