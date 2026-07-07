@@ -2,7 +2,9 @@
 
 asm-test is tested by a GitHub Actions matrix, and the Linux half of that matrix
 can be reproduced locally in a container so you can debug a CI failure on your own
-machine.
+machine. (Looking to run **your own** asm-test suites in CI instead? See
+[Using asm-test in your CI](../guides/ci-integration.md) — a GitHub Action, a
+GitLab template, and the raw recipe.)
 
 ## What CI covers
 
@@ -16,7 +18,7 @@ jobs cover the rest of the surface:
   (hardware-trace decode + self-skip gating), `hwtrace-bindings` (every language
   wrapper's single-step tracer), and `codeimage` (the eBPF emission detector).
 - **Language bindings** — the 10-language `bindings` matrix, plus `clean-room`
-  (fresh-install resolution) and `bindings-parity`.
+  ([fresh-install resolution](../clean-room-testing.md)) and `bindings-parity`.
 - **Windows** — `win64` (mingw cross-compile + Wine) and `windows` (native).
 - **Quality** — `valgrind`, `sanitize` (ASan + UBSan), `analyze` (clang-tidy),
   `format` (clang-format drift), and `coverage` (gcov).

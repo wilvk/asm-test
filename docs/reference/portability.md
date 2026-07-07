@@ -12,7 +12,10 @@ how to choose a backend.
 | **AArch64** | ✓ | ✓ (Apple Silicon) |
 
 CI runs the suites on all four combinations (`ubuntu-latest`,
-`ubuntu-24.04-arm`, `macos-latest`, `macos-13`).
+`ubuntu-24.04-arm`, `macos-latest`, `macos-13`). The packaged bindings'
+install-tests are additionally **clean-room** hardened — no leaked dev tree,
+Homebrew copy, or loader override can satisfy a load — see
+[Clean-room testing](../clean-room-testing.md).
 
 One source set reaches every target two ways: a **native** build for the host
 architecture (through either assembler backend), and the **emulator** guests,

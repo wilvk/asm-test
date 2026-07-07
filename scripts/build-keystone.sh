@@ -62,6 +62,16 @@ for f in COPYING COPYING.LIB LICENSE.TXT EXCEPTIONS-CLIENT; do
     [ -f "$work/keystone/$f" ] && $SUDO cp "$work/keystone/$f" "$licdir/"
 done
 
+# K1 (CI cache): record the exact installed file set — cmake's install manifest
+# plus the license dir — so scripts/thirdparty-cache.sh can tar precisely these
+# files into a CI cache and restore them next run. No-op unless the caller sets
+# ASMTEST_TP_MANIFEST_DIR (CI does; local builds don't need it).
+if [ -n "${ASMTEST_TP_MANIFEST_DIR:-}" ]; then
+    mkdir -p "$ASMTEST_TP_MANIFEST_DIR"
+    { cat install_manifest.txt; echo; find "$licdir" -type f 2>/dev/null; } \
+        | sed '/^[[:space:]]*$/d' > "$ASMTEST_TP_MANIFEST_DIR/keystone-$VERSION.list"
+fi
+
 # Refresh the loader cache so the freshly installed lib is found (Linux).
 command -v ldconfig >/dev/null 2>&1 && $SUDO ldconfig || true
 

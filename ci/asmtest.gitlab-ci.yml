@@ -1,0 +1,49 @@
+# asmtest.gitlab-ci.yml — includable GitLab CI template for consuming asm-test
+# (P2 from the 2026-07-04 repo review; the GitLab counterpart of the repo-root
+# GitHub Action). Include it remotely and `extends:` the hidden job:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/wilvk/asm-test/main/ci/asmtest.gitlab-ci.yml'
+#
+#   test:
+#     image: gcc:13                 # any Debian/Ubuntu-based image with apt-get
+#     extends: .asmtest-install
+#     script:
+#       # PKG_CONFIG_PATH is already exported by the template's before_script:
+#       - cc $(pkg-config --cflags asmtest) -c my_tests.c -o my_tests.o
+#       - cc $(pkg-config --cflags asmtest) -x assembler-with-cpp -c my_routine.s -o my_routine.o
+#       - cc my_tests.o my_routine.o $(pkg-config --libs asmtest) -o my_tests
+#       - ./my_tests --format=junit > report.xml || { cat report.xml; exit 1; }
+#     artifacts:
+#       when: always
+#       reports:
+#         junit: report.xml
+#
+# Override the pin per project (Settings -> CI/CD -> Variables, or in the job):
+#   variables:
+#     ASMTEST_VERSION: "v1.1.0"     # pin a tag/SHA — "main" only for kicking tires
+#
+# The template only prepends a before_script; your own before_script (if any)
+# replaces it, so either extend without one or inline these lines into yours.
+# See docs/guides/ci-integration.md for the full guide (including the GitHub
+# Actions and raw-`make install` paths).
+
+.asmtest-install:
+  variables:
+    # Git ref of asm-test to install. Pin a tag or SHA for reproducible CI;
+    # "main" tracks the development head.
+    ASMTEST_VERSION: "main"
+    # Where asm-test installs. A project-local prefix needs no root and is
+    # cacheable via GitLab's `cache:` if you want to skip the rebuild.
+    ASMTEST_PREFIX: "$CI_PROJECT_DIR/.asmtest"
+  before_script:
+    # Toolchain: the core framework needs only make + a C compiler (which also
+    # assembles the GAS sources) + pkg-config for consumption. Debian/Ubuntu
+    # images: install if missing (no-op where the image already carries them).
+    - command -v cc >/dev/null && command -v make >/dev/null && command -v pkg-config >/dev/null && command -v git >/dev/null
+      || { apt-get update && apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates; }
+    - git clone https://github.com/wilvk/asm-test /tmp/asm-test
+    - git -C /tmp/asm-test checkout --detach "$ASMTEST_VERSION"
+    - make -C /tmp/asm-test install PREFIX="$ASMTEST_PREFIX"
+    - export PKG_CONFIG_PATH="$ASMTEST_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    - pkg-config --modversion asmtest

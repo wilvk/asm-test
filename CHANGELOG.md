@@ -8,6 +8,36 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Consumer-facing CI integration** (P2 of the 2026-07-04 review). A composite
+  **GitHub Action** at the repo root (`action.yml`, "Setup asm-test": POSIX-sh
+  steps; inputs `version`/`prefix`/`optional-tiers`/`test-command`; exports
+  `PKG_CONFIG_PATH` and library paths), an includable **GitLab CI template**
+  (`ci/asmtest.gitlab-ci.yml`, `.asmtest-install` + a documented consumer job with
+  JUnit wiring), and a [CI integration guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/ci-integration.md)
+  covering both plus the raw `make install` fallback. The wrapped install recipe is
+  proven end-to-end locally; the Action's `uses:` path needs a real Actions run.
+
+- **macOS clean-room plan — Track E finished, Tracks C/D written.** `release.yml`'s
+  seven smoke blocks now `source scripts/clean-env.sh` instead of ad-hoc
+  `cd /tmp && env -u` scrubbing (behavior-preserving; interpreters resolved to
+  absolute paths before the PATH scrub), and the methodology is documented in
+  [docs/clean-room-testing.md](https://github.com/wilvk/asm-test/blob/main/docs/clean-room-testing.md).
+  Tracks C (`scripts/osx-vm.sh` + `make osx-vm-test`, tart VM) and D
+  (`scripts/docker-osx-bindings.sh` + `make docker-osx-bindings`, Docker-OSX/KVM)
+  are written per the plan's spec and clearly banner-marked UNVALIDATED — they need
+  Apple-Silicon-tart / bare-metal-KVM hosts this environment lacks.
+
+### Changed
+
+- **CI: the pinned Keystone/Capstone source builds are now cached** (K1 of the
+  2026-07-04 review — the ~20-identical-multi-minute-LLVM-compiles-per-push item).
+  Host builds cache via `actions/cache` + a new `scripts/thirdparty-cache.sh`
+  (exact cmake-installed file set, keyed on OS/arch + the pinned versions); docker
+  builds of `asmtest-bindings-base` cache via buildx `type=gha` behind a new
+  overridable `DOCKER_BASE_BUILD` in `mk/docker.mk`. ci.yml only — `release.yml`
+  deliberately stays cache-free. Non-fatal by design on any cache miss or backend
+  outage; the warm-cache path still needs a real Actions run to confirm.
+
 - **Docs: ["asm-test vs. alternatives"](https://github.com/wilvk/asm-test/blob/main/docs/reference/comparison.md)**
   (P4 of the 2026-07-04 review). A maintained comparison against the four workflows
   people actually use instead — a C unit framework with `.s` files linked in

@@ -89,6 +89,14 @@ docker-clean:
 #        -ruby / -lua / -go    just that language
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
+# K1 (repo-review 2026-07-04): how the shared bindings-base image is built. Its
+# Keystone (trimmed LLVM) + Capstone source-build layer is the expensive part of
+# every docker lane, so CI overrides this with a buildx invocation carrying
+# `--cache-from/--cache-to type=gha` (see the ci.yml docker jobs) to reuse that
+# layer across jobs and pushes. The default stays a plain `docker build`, so
+# local behavior is unchanged; a cold cache is a no-op and the CI cache-to uses
+# ignore-error=true, so an unavailable cache backend can never fail the build.
+DOCKER_BASE_BUILD ?= $(DOCKER) build
 BINDING_LANGS := python cpp rust zig node java dotnet ruby lua go
 # Bindings that ship a DynamoRIO native-trace wrapper test (Python has its own
 # drtrace-python-test lane). Defined here so both the docker-drtrace-<lang> rules
@@ -130,7 +138,7 @@ DOCKER_RUNENV_dotnet := -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1
         $(addprefix docker-clean-,$(BINDING_LANGS))
 
 docker-bindings-base:
-	$(DOCKER) build $(_docker_plat) -f Dockerfile.bindings-base \
+	$(DOCKER_BASE_BUILD) $(_docker_plat) -f Dockerfile.bindings-base \
 	  --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_BINDINGS_BASE) .
 
 # Generate, per language: `docker-build-<lang>` (build the image on the base),
@@ -350,6 +358,24 @@ docker-hwtrace-dotnet9: docker-dotnet
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND
 # disassembler path under `make <lang>-test` — there is no separate asm image.
+
+# --- Track D: Docker-OSX x86 macOS clean room (macOS clean-room plan) --------
+# On-demand x86-64 macOS clean room on a bare-metal Linux host with KVM — the
+# vanilla-Intel-userland counterpart of the tart lane (Track C / osx-vm-test).
+# Boots sickcodes/Docker-OSX headless (QEMU + OpenCore + a macOS recovery
+# image), SSHes in on localhost:50922, and runs the same Track-A clean-room
+# install test (scripts/docker-osx-bindings.sh). Hard-errors without /dev/kvm —
+# hosted CI runners and most laptops don't have it, by design.
+# WRITTEN PER docs/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
+# without a KVM-capable bare-metal host; see docs/clean-room-testing.md.
+DOCKER_OSX_IMAGE ?= sickcodes/docker-osx:ventura
+.PHONY: docker-osx-bindings
+docker-osx-bindings:
+	@[ -e /dev/kvm ] || { \
+	  echo "docker-osx-bindings: /dev/kvm absent — needs a bare-metal Linux host with KVM (hosted CI/laptops: unsupported by design; see docs/clean-room-testing.md)"; \
+	  exit 1; }
+	DOCKER_OSX_IMAGE="$(DOCKER_OSX_IMAGE)" ASMTEST_REPO_ROOT="$(CURDIR)" \
+	  sh scripts/docker-osx-bindings.sh
 
 docker-bindings-clean:
 	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \

@@ -108,8 +108,16 @@ jobs:
       # guard both the C parity suite AND the per-binding reachability — the W^X
       # exec-memory helper (asmtest_hwtrace_exec_alloc) whose mmap/mprotect path is
       # x86-64-Darwin-enabled; without it every binding's live trace fails at alloc.
+      # K1: the pinned build's exact installed file set is cached; a cold cache
+      # (or unavailable backend) just builds from source as before.
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
       - name: Build + install Capstone from source (single-step block normalization)
-        run: ./scripts/build-capstone.sh   # pinned source build; no brew/distro package
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; no brew/distro package; restores from the cache when warm
 
       - name: Native-trace single-step tier — C parity suite (live capture on Darwin)
         run: make hwtrace-test
@@ -197,8 +205,17 @@ jobs:
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
 
+      # K1: cache the exact file set the pinned source build installs, keyed on
+      # the pinned inputs. Cold cache / unavailable backend: builds from source
+      # exactly as before (the wrapper's cache mechanics are non-fatal).
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
       - name: Build and install Capstone from source (disassembler tier)
-        run: ./scripts/build-capstone.sh   # pinned source build; no distro package used
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; no distro package used; restores from the cache when warm
 
       - name: Build and run emulator suite
         run: make emu-test
@@ -222,8 +239,17 @@ jobs:
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
 
+      # K1: Keystone is a trimmed LLVM — the single most expensive source build
+      # in the matrix — so cache its exact installed file set, keyed on the
+      # pinned inputs. Cold cache / unavailable backend: builds as before.
+      - name: Cache the pinned Keystone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/keystone
+          key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
       - name: Build and install Keystone from source
-        run: ./scripts/build-keystone.sh   # no distro package; pinned source build
+        run: sh scripts/thirdparty-cache.sh cached-build keystone   # no distro package; pinned source build; restores from the cache when warm
 
       - name: Build and run in-line assembler suite
         run: make asm-test
@@ -296,8 +322,26 @@ jobs:
     name: hwtrace-bindings (all wrappers)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # K1: route the shared bindings-base image (whose Keystone+Capstone
+      # source-build layer is the expensive part) through buildx with a
+      # GitHub-Actions layer cache, scoped to that one image. Cold cache:
+      # cache-from is a no-op; unavailable backend: ignore-error=true — the
+      # caching can never fail the lane. See DOCKER_BASE_BUILD in mk/docker.mk.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base
+        --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
       - name: Trace every language wrapper (single-step; self-skips off x86-64 Linux)
         run: make docker-hwtrace-bindings
       - name: Forward-runtime drift check (.NET 9 — diagnostics IPC / MethodLoadVerbose)
@@ -311,8 +355,22 @@ jobs:
     name: codeimage (eBPF emission detector)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # K1: cached bindings-base build — see the hwtrace-bindings job's note.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base
+        --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
       - name: Build + run the eBPF code-image detector
         run: make docker-hwtrace-codeimage
 
@@ -334,8 +392,23 @@ jobs:
       fail-fast: false
       matrix:
         lang: [python, cpp, rust, zig, node, java, dotnet, ruby, lua, go]
+    env:
+      # K1: cached bindings-base build — see the hwtrace-bindings job's note.
+      # One scope for the one shared image, reused by all ten matrix legs.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base
+        --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
@@ -358,8 +431,22 @@ jobs:
       fail-fast: false
       matrix:
         lang: [ruby, node, java, dotnet, lua]
+    env:
+      # K1: cached bindings-base build — see the hwtrace-bindings job's note.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base
+        --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
       - name: Clean-room install-test the ${{ matrix.lang }} binding
         run: make docker-clean-${{ matrix.lang }}
 
@@ -552,8 +639,22 @@ jobs:
             if [ "$(uname -m)" = "x86_64" ]; then sudo apt-get install -y libipt-dev; fi
           fi
 
+      # K1: cache both pinned source builds' exact installed file sets. Cold
+      # cache / unavailable backend: builds from source exactly as before.
+      - name: Cache the pinned Keystone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/keystone
+          key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
       - name: Build Keystone + Capstone from source (pinned optional tiers)
-        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+        run: sh scripts/thirdparty-cache.sh cached-build keystone capstone   # restores from the cache when warm
 
       - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
         run: make package-libs
@@ -580,8 +681,21 @@ jobs:
           make deps DEPS_ARGS=--asm
           [ "$RUNNER_OS" = "Linux" ] && sudo apt-get install -y patchelf || true
 
+      # K1: same pinned-build caches as the main package-libs matrix above.
+      - name: Cache the pinned Keystone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/keystone
+          key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
       - name: Build Keystone + Capstone from source (pinned optional tiers)
-        run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
+        run: sh scripts/thirdparty-cache.sh cached-build keystone capstone   # restores from the cache when warm
 
       - name: Stage the host's native payload (superset + vendored deps + licenses)
         run: make package-libs

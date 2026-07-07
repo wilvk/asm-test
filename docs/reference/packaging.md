@@ -202,6 +202,9 @@ The scaffolding stops short of a credentialed, multi-platform release:
    lib resolves with `ASMTEST_LIB` unset (so an installed package works
    out of the box), and dry-run publishes (`twine check`, `npm publish --dry-run`,
    `cargo publish --dry-run`). It runs end to end on a fork with no credentials.
+   The smokes run under the shared [clean-room](../clean-room-testing.md) scrub
+   (`scripts/clean-env.sh`), so no `ASMTEST_*`/`DYLD_*`/`LD_*` override, leaked
+   `build/` tree, or Homebrew copy can satisfy the load instead of the package.
    Coverage:
    - **dlopen bindings** (Python, Node, Ruby, Lua, Java, .NET) install-test on a
      `[ubuntu, macos]` matrix, so the bundled-native resolution is exercised on

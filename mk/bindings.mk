@@ -567,3 +567,14 @@ macos-clean-test:
 	  echo "macos-clean-test: darwin-only (host is $(UNAME_S)) — use 'make clean-room-test'"; exit 0 ;; esac; \
 	$(MAKE) --no-print-directory clean-room-test
 
+# osx-vm-test — Track C of the macOS clean-room plan: the same Track-A install
+# test inside a tart-cloned VANILLA arm64 macOS VM (no Xcode, no Homebrew) — a
+# clean room a hosted runner structurally cannot be. Apple-Silicon-only (the
+# script guards and explains); stage `make packages package-libs` first, since
+# the vanilla guest is toolchain-free on purpose.
+# WRITTEN PER THE PLAN, NOT YET VALIDATED — authored without an Apple-Silicon
+# host available; see docs/clean-room-testing.md + the plan's Track C status.
+.PHONY: osx-vm-test
+osx-vm-test:
+	sh scripts/osx-vm.sh
+

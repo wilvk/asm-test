@@ -33,6 +33,11 @@ WORK="$(mktemp -d 2>/dev/null || mktemp -d -t asmtest-cleanroom)"
 trap 'rm -rf "$WORK"' EXIT
 
 ONLY=${ASMTEST_CLEANROOM_ONLY:-}   # single-binding mode (set by docker-clean-<lang>)
+# Tracks C/D (osx-vm.sh / docker-osx-bindings.sh): the guest VM is deliberately
+# toolchain-free, so the packages are staged by the HOST and copied in. With
+# ASMTEST_CLEANROOM_PREBUILT set, skip the `make <lang>-package` steps and use
+# the artifacts already under build/dist/ — install + smoke + assert only.
+PREBUILT=${ASMTEST_CLEANROOM_PREBUILT:-}
 fail=0
 summary=""
 record()  { summary="${summary}  ${1}\t${2}\t${3}\n"; eval "verdict_${1}=\$2"; }
@@ -57,7 +62,7 @@ echo
 ruby_clean_test() {
     RUBY="$(command -v ruby 2>/dev/null)" || { skip_b ruby "no ruby toolchain"; return; }
     command -v gem >/dev/null 2>&1        || { skip_b ruby "no gem"; return; }
-    ( cd "$REPO" && make -s ruby-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s ruby-package ) >/dev/null 2>&1 \
         || { fail_b ruby "make ruby-package failed"; return; }
     gem_file="$(ls "$REPO"/build/dist/ruby/asmtest-*.gem 2>/dev/null | head -1)"
     [ -n "$gem_file" ] || { fail_b ruby "no gem built"; return; }
@@ -78,7 +83,7 @@ python_clean_test() {
     if "$PY" -c "import delocate" 2>/dev/null; then repair=delocate
     elif "$PY" -c "import auditwheel" 2>/dev/null; then repair=auditwheel
     else skip_b python "no delocate/auditwheel to self-contain the wheel; release.yml covers python"; return; fi
-    ( cd "$REPO" && make -s python-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s python-package ) >/dev/null 2>&1 \
         || { fail_b python "make python-package failed"; return; }
     raw="$(ls "$REPO"/build/dist/python/*.whl 2>/dev/null | head -1)"
     [ -n "$raw" ] || { fail_b python "no wheel built"; return; }
@@ -106,7 +111,7 @@ python_clean_test() {
 node_clean_test() {
     NODE="$(command -v node 2>/dev/null)" || { skip_b node "no node toolchain"; return; }
     command -v npm >/dev/null 2>&1        || { skip_b node "no npm"; return; }
-    ( cd "$REPO" && make -s node-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s node-package ) >/dev/null 2>&1 \
         || { fail_b node "make node-package failed"; return; }
     tgz="$(ls "$REPO"/build/dist/node/asmtest-*.tgz 2>/dev/null | head -1)"
     [ -n "$tgz" ] || { fail_b node "no tarball built"; return; }
@@ -123,7 +128,7 @@ node_clean_test() {
 # ---- lua ------------------------------------------------------------------
 lua_clean_test() {
     LUAJIT="$(command -v luajit 2>/dev/null)" || { skip_b lua "no luajit toolchain"; return; }
-    ( cd "$REPO" && make -s lua-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s lua-package ) >/dev/null 2>&1 \
         || { fail_b lua "make lua-package failed"; return; }
     dest="$WORK/lua"; mkdir -p "$dest"
     cp "$REPO/bindings/lua/asmtest.lua" "$dest/" 2>/dev/null || { fail_b lua "no asmtest.lua"; return; }
@@ -140,7 +145,7 @@ java_clean_test() {
     JAVA="$(command -v java 2>/dev/null)"; JAVAC="$(command -v javac 2>/dev/null)"
     { [ -n "$JAVA" ] && [ -n "$JAVAC" ]; } || { skip_b java "no java/javac toolchain"; return; }
     "$JAVA" -version >/dev/null 2>&1 || { skip_b java "no JRE (macOS java stub only — install a JDK 22+)"; return; }
-    ( cd "$REPO" && make -s java-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s java-package ) >/dev/null 2>&1 \
         || { fail_b java "make java-package failed"; return; }
     jar="$(ls "$REPO"/build/dist/java/asmtest-*.jar 2>/dev/null | head -1)"
     [ -n "$jar" ] || { fail_b java "no jar built"; return; }
@@ -164,11 +169,13 @@ java_clean_test() {
 # leak-only (empty prefix): not the dev build/, not Homebrew, not /usr/local.
 dotnet_clean_test() {
     DOTNET="$(command -v dotnet 2>/dev/null)" || { skip_b dotnet "no dotnet toolchain"; return; }
-    ( cd "$REPO" && make -s dotnet-package ) >/dev/null 2>&1 \
+    [ -n "$PREBUILT" ] || ( cd "$REPO" && make -s dotnet-package ) >/dev/null 2>&1 \
         || { fail_b dotnet "make dotnet-package failed"; return; }
     src="$REPO/build/dist/dotnet"
     ls "$src"/*.nupkg >/dev/null 2>&1 || { fail_b dotnet "no nupkg built"; return; }
     ver="$(cd "$REPO" && make -s print-version 2>/dev/null)"
+    # A prebuilt (toolchain-free) guest has no make; VERSION is the same source.
+    [ -n "$ver" ] || ver="$(cat "$REPO/VERSION" 2>/dev/null)"
     app="$WORK/dotnet"; mkdir -p "$app"
     export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
     if ! ( cd "$app" && "$DOTNET" new console -o app >/dev/null 2>&1 \
