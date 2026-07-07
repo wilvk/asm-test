@@ -349,6 +349,7 @@ const Api = struct {
     descent_set_max_depth: FnDescentSetMaxDepth,
     descent_set_insn_budget: FnDescentSetInsnBudget,
     descent_set_watchdog_ms: FnDescentSetWatchdogMs,
+    descent_use_default_denylist: FnDescentFree,
     descent_allow_region: FnDescentAllowRegion,
     descent_deny_region: FnDescentDenyRegion,
     descent_edges_len: FnDescentEdgesLen,
@@ -483,6 +484,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .descent_set_max_depth = lib.lookup(FnDescentSetMaxDepth, "asmtest_descent_set_max_depth") orelse return null,
         .descent_set_insn_budget = lib.lookup(FnDescentSetInsnBudget, "asmtest_descent_set_insn_budget") orelse return null,
         .descent_set_watchdog_ms = lib.lookup(FnDescentSetWatchdogMs, "asmtest_descent_set_watchdog_ms") orelse return null,
+        .descent_use_default_denylist = lib.lookup(FnDescentFree, "asmtest_descent_use_default_denylist") orelse return null,
         .descent_allow_region = lib.lookup(FnDescentAllowRegion, "asmtest_descent_allow_region") orelse return null,
         .descent_deny_region = lib.lookup(FnDescentDenyRegion, "asmtest_descent_deny_region") orelse return null,
         .descent_edges_len = lib.lookup(FnDescentEdgesLen, "asmtest_descent_edges_len") orelse return null,
@@ -1319,6 +1321,13 @@ pub const Descent = struct {
     pub fn setWatchdogMs(self: *Descent, ms: u32) void {
         const api = load() orelse return;
         api.descent_set_watchdog_ms(self.handle, ms);
+    }
+
+    /// Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+    /// modules; plus blocking-libc entry points on the fork path).
+    pub fn useDefaultDenylist(self: Descent) void {
+        const api = load() orelse return;
+        api.descent_use_default_denylist(self.handle);
     }
 
     /// Add `[base, base+len)` to the level-2 allow-set (descend into calls landing

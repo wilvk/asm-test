@@ -242,6 +242,7 @@ let _loadError = null;
     descentSetMaxDepth: lib.func('void asmtest_descent_set_max_depth(void*, uint32_t)'),
     descentSetInsnBudget: lib.func('void asmtest_descent_set_insn_budget(void*, uint64_t)'),
     descentSetWatchdogMs: lib.func('void asmtest_descent_set_watchdog_ms(void*, uint32_t)'),
+    descentUseDefaultDenylist: lib.func('void asmtest_descent_use_default_denylist(void*)'),
     descentAllowRegion: lib.func('int asmtest_descent_allow_region(void*, const void*, size_t)'),
     descentDenyRegion: lib.func('int asmtest_descent_deny_region(void*, const void*, size_t)'),
     descentSetResolver: lib.func('void asmtest_descent_set_resolver(void*, asmtest_descent_resolver_fn*, void*)'),
@@ -752,6 +753,10 @@ class Descent {
 
   /** Real-time watchdog (ms) for a descended run (L3 blocked-syscall escape); 0 = default. */
   setWatchdogMs(ms) { _fn.descentSetWatchdogMs(this._handle, ms); return this; }
+
+  /** Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT modules;
+   *  plus blocking-libc entry points on the fork path). */
+  useDefaultDenylist() { _fn.descentUseDefaultDenylist(this._handle); return this; }
 
   /** Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).
    *  `base` may be a NativeCode external pointer or a numeric/BigInt address. Returns

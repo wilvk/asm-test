@@ -127,6 +127,14 @@ void asmtest_descent_set_denylist(asmtest_descent_t *d,
     }
 }
 
+void asmtest_descent_use_default_denylist(asmtest_descent_t *d) {
+    /* Just arms the flag: the regions can only be resolved once the tracee is
+     * known, so the ptrace entry points populate the deny pool at trace start
+     * (see descend_apply_default_denylist in src/ptrace_backend.c). */
+    if (d != NULL)
+        d->use_default_denylist = 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Mutators driven by the step loop (asmtest_descent_internal.h)       */
 /* ------------------------------------------------------------------ */

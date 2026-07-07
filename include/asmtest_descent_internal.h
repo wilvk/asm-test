@@ -65,6 +65,11 @@ struct asmtest_descent {
     size_t frames_len, frames_cap;
     int truncated;
     int depth_capped;
+    /* asmtest_descent_use_default_denylist: populate `deny` at trace start with
+     * the built-in GC/JIT/PLT-resolver/blocking-libc set. `applied` keeps a
+     * reused handle from appending the same regions on every trace. */
+    int use_default_denylist;
+    int default_denylist_applied;
 };
 
 /* Conservative defaults (used when a setter is passed 0, and at allocation). L3's budget

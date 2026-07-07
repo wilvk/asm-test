@@ -166,6 +166,7 @@ public final class HwTrace {
     // three descending trace entry points (_ex). Read via the opaque-handle accessors.
     private static final MethodHandle DESCENT_NEW, DESCENT_FREE, DESCENT_SET_MAX_DEPTH,
         DESCENT_SET_INSN_BUDGET, DESCENT_SET_WATCHDOG_MS, DESCENT_ALLOW_REGION,
+        DESCENT_USE_DEFAULT_DENYLIST,
         DESCENT_DENY_REGION, DESCENT_SET_RESOLVER, DESCENT_SET_DENYLIST,
         DESCENT_EDGES_LEN, DESCENT_EDGE_SITE, DESCENT_EDGE_TARGET, DESCENT_EDGE_DEPTH,
         DESCENT_FRAMES_LEN, DESCENT_FRAME_BASE, DESCENT_FRAME_LEN, DESCENT_FRAME_DEPTH,
@@ -299,6 +300,7 @@ public final class HwTrace {
             ciPollBpf = null, ciNext = null,
             descentNew = null, descentFree = null, descentSetMaxDepth = null,
             descentSetInsnBudget = null, descentSetWatchdogMs = null, descentAllowRegion = null,
+            descentUseDefaultDenylist = null,
             descentDenyRegion = null, descentSetResolver = null, descentSetDenylist = null,
             descentEdgesLen = null, descentEdgeSite = null, descentEdgeTarget = null,
             descentEdgeDepth = null, descentFramesLen = null, descentFrameBase = null,
@@ -465,6 +467,8 @@ public final class HwTrace {
                 FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
             descentSetWatchdogMs = h(lib, "asmtest_descent_set_watchdog_ms",
                 FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT));
+            descentUseDefaultDenylist = h(lib, "asmtest_descent_use_default_denylist",
+                FunctionDescriptor.ofVoid(ADDRESS));
             // allow/deny_region(d, base, len) -> int. base is a const void* (ADDRESS).
             descentAllowRegion = h(lib, "asmtest_descent_allow_region",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
@@ -551,6 +555,7 @@ public final class HwTrace {
         DESCENT_NEW = descentNew; DESCENT_FREE = descentFree;
         DESCENT_SET_MAX_DEPTH = descentSetMaxDepth; DESCENT_SET_INSN_BUDGET = descentSetInsnBudget;
         DESCENT_SET_WATCHDOG_MS = descentSetWatchdogMs; DESCENT_ALLOW_REGION = descentAllowRegion;
+        DESCENT_USE_DEFAULT_DENYLIST = descentUseDefaultDenylist;
         DESCENT_DENY_REGION = descentDenyRegion; DESCENT_SET_RESOLVER = descentSetResolver;
         DESCENT_SET_DENYLIST = descentSetDenylist; DESCENT_EDGES_LEN = descentEdgesLen;
         DESCENT_EDGE_SITE = descentEdgeSite; DESCENT_EDGE_TARGET = descentEdgeTarget;
@@ -1343,6 +1348,13 @@ public final class HwTrace {
         /** Real-time watchdog in milliseconds for a descended run; 0 = default. */
         public void setWatchdogMs(int ms) {
             try { DESCENT_SET_WATCHDOG_MS.invoke(handle, ms); }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+         *  modules; plus blocking-libc entry points on the fork path). */
+        public void useDefaultDenylist() {
+            try { DESCENT_USE_DEFAULT_DENYLIST.invoke(handle); }
             catch (Throwable t) { throw rethrow(t); }
         }
 

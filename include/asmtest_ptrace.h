@@ -268,6 +268,21 @@ void asmtest_descent_set_resolver(asmtest_descent_t *d,
 /* Install the optional level-3 denylist callback (see asmtest_descent_denylist_fn). */
 void asmtest_descent_set_denylist(asmtest_descent_t *d,
                                   asmtest_descent_denylist_fn fn, void *user);
+/* Arm the BUILT-IN level-3 default denylist (the call-descent plan's Phase 5
+ * safety set). Populated from the tracee at trace start, in addition to any
+ * caller-supplied deny regions/callback:
+ *   - the dynamic linker's executable mappings (ld-linux/ld-musl/ld.so — the
+ *     lazy-binding PLT resolver) and [vdso]/[vsyscall];
+ *   - managed-runtime GC/JIT modules by mapping name (libcoreclr/libclrjit/
+ *     libclrgc, libmono*, libjvm, libart, libv8, libgc);
+ *   - on the FORK path only (tracee shares this process's layout), the entry
+ *     points of the classic blocking libc/pthread calls (poll/select/epoll,
+ *     sleep family, wait family, accept/connect/recv, sem_/pthread_ blocking
+ *     ops, read/write) — an attached foreign process gets the mapping-based
+ *     set only, since local symbol addresses would not be valid there.
+ * Denied callees are stepped over and recorded as edges, exactly like a
+ * caller-supplied deny region. */
+void asmtest_descent_use_default_denylist(asmtest_descent_t *d);
 
 /* Read accessors — one scalar per call, the opaque-handle idiom every binding speaks.
  * All are NULL-safe (return 0) and bounds-checked (out-of-range index returns 0). */

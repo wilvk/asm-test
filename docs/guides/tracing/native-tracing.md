@@ -685,6 +685,19 @@ call would still be stepped over. `make docker-hwtrace-jit-dotnet-bcl-descend-al
 trips a guard — it proves the guards fire, not that L3 is transparent (see the L3 hazards in
 [hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)).
 
+L3's safety rests on four gates: it is **default off**, budget- and watchdog-bounded, and its
+denylist has a **built-in default set** — arm it with `asmtest_descent_use_default_denylist(d)`.
+At trace start the backend populates the handle's deny pool from the tracee: the dynamic
+linker's executable mappings (the lazy-binding PLT resolver) and `[vdso]`/`[vsyscall]`,
+managed-runtime GC/JIT modules by mapping name (`libcoreclr`/`libclrjit`/`libclrgc`,
+`libmono*`, `libjvm`, `libart`, `libv8`, BoehmGC), and — on the **fork path only**, where the
+tracee shares the tracer's address layout — the entry points of the classic blocking
+libc/pthread calls (`poll`/`select`/`epoll`, the sleep and wait families,
+`accept`/`connect`/`recv*`, `sem_`/`pthread_` blocking ops, `read`/`write`). A denied callee is
+stepped over and recorded as an edge, exactly like a caller-supplied deny region; an attached
+foreign process gets the mapping-based set only (local symbol addresses would not be valid
+there). Caller-supplied deny regions and the denylist callback compose with the default set.
+
 Two honesty limits are load-bearing, not caveats-in-passing. **L2 still single-steps the full
 body of each descended method**, so the allow-set / resolver must be *method-exact*, never a
 broad module range that re-admits runtime glue. And a known method reachable only **through** a

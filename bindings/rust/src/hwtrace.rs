@@ -412,6 +412,7 @@ struct HwFns {
     descent_set_max_depth: Option<DescentSetU32Fn>,
     descent_set_insn_budget: Option<DescentSetU64Fn>,
     descent_set_watchdog_ms: Option<DescentSetU32Fn>,
+    descent_use_default_denylist: Option<DescentFreeFn>,
     descent_allow_region: Option<DescentRegionFn>,
     descent_deny_region: Option<DescentRegionFn>,
     descent_edges_len: Option<DescentLenFn>,
@@ -521,6 +522,7 @@ fn hw_fns() -> &'static HwFns {
                 descent_new: None, descent_free: None,
                 descent_set_max_depth: None, descent_set_insn_budget: None,
                 descent_set_watchdog_ms: None, descent_allow_region: None,
+                descent_use_default_denylist: None,
                 descent_deny_region: None, descent_edges_len: None,
                 descent_edge_site: None, descent_edge_target: None,
                 descent_edge_depth: None, descent_frames_len: None,
@@ -602,6 +604,7 @@ fn hw_fns() -> &'static HwFns {
             descent_set_max_depth: load!("asmtest_descent_set_max_depth", DescentSetU32Fn),
             descent_set_insn_budget: load!("asmtest_descent_set_insn_budget", DescentSetU64Fn),
             descent_set_watchdog_ms: load!("asmtest_descent_set_watchdog_ms", DescentSetU32Fn),
+            descent_use_default_denylist: load!("asmtest_descent_use_default_denylist", DescentFreeFn),
             descent_allow_region: load!("asmtest_descent_allow_region", DescentRegionFn),
             descent_deny_region: load!("asmtest_descent_deny_region", DescentRegionFn),
             descent_edges_len: load!("asmtest_descent_edges_len", DescentLenFn),
@@ -1660,6 +1663,14 @@ impl Descent {
     pub fn set_watchdog_ms(&self, ms: u32) {
         if let Some(f) = hw_fns().descent_set_watchdog_ms {
             unsafe { f(self.handle, ms) };
+        }
+    }
+
+    /// Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+    /// modules; plus blocking-libc entry points on the fork path).
+    pub fn use_default_denylist(&self) {
+        if let Some(f) = hw_fns().descent_use_default_denylist {
+            unsafe { f(self.handle) };
         }
     }
 

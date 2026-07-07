@@ -305,6 +305,7 @@ def _declare(lib):
     lib.asmtest_descent_set_max_depth.argtypes = [v, u32]
     lib.asmtest_descent_set_insn_budget.argtypes = [v, u64]
     lib.asmtest_descent_set_watchdog_ms.argtypes = [v, u32]
+    lib.asmtest_descent_use_default_denylist.argtypes = [v]
     lib.asmtest_descent_allow_region.argtypes = [v, v, sz]
     lib.asmtest_descent_allow_region.restype = ci
     lib.asmtest_descent_deny_region.argtypes = [v, v, sz]
@@ -927,6 +928,11 @@ class Descent:
 
     def set_watchdog_ms(self, ms: int):
         self._lib.asmtest_descent_set_watchdog_ms(self._handle, ms)
+
+    def use_default_denylist(self):
+        """Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+        modules; plus blocking-libc entry points on the fork path)."""
+        self._lib.asmtest_descent_use_default_denylist(self._handle)
 
     def allow_region(self, base: int, length: int) -> int:
         return int(self._lib.asmtest_descent_allow_region(

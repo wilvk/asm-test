@@ -366,6 +366,7 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern void asmtest_descent_set_max_depth(IntPtr d, uint maxDepth);
         [DllImport(HWTRACE)] public static extern void asmtest_descent_set_insn_budget(IntPtr d, ulong budget);
         [DllImport(HWTRACE)] public static extern void asmtest_descent_set_watchdog_ms(IntPtr d, uint ms);
+        [DllImport(HWTRACE)] public static extern void asmtest_descent_use_default_denylist(IntPtr d);
         [DllImport(HWTRACE)] public static extern int asmtest_descent_allow_region(IntPtr d, IntPtr @base, UIntPtr len);
         [DllImport(HWTRACE)] public static extern int asmtest_descent_deny_region(IntPtr d, IntPtr @base, UIntPtr len);
         [DllImport(HWTRACE)] public static extern void asmtest_descent_set_resolver(IntPtr d, DescentResolverFn fn, IntPtr user);
@@ -2244,6 +2245,10 @@ namespace Asmtest
 
         /// <summary>Real-time watchdog in milliseconds for a descended run; 0 = default.</summary>
         public void SetWatchdogMs(uint ms) => HwNative.asmtest_descent_set_watchdog_ms(_handle, ms);
+
+        /// <summary>Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+        /// modules; plus blocking-libc entry points on the fork path).</summary>
+        public void UseDefaultDenylist() => HwNative.asmtest_descent_use_default_denylist(_handle);
 
         /// <summary>Add <c>[base, base+len)</c> to the level-2 allow-set. Returns 0 on success, negative on OOM.</summary>
         public int AllowRegion(IntPtr @base, nuint len) =>

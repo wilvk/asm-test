@@ -218,6 +218,7 @@ static desc_free_fn           p_desc_free;
 static desc_set_u32_fn        p_desc_set_max_depth;
 static desc_set_u64_fn        p_desc_set_insn_budget;
 static desc_set_u32_fn        p_desc_set_watchdog_ms;
+static desc_free_fn           p_desc_use_default_denylist;
 static desc_region_fn         p_desc_allow_region;
 static desc_region_fn         p_desc_deny_region;
 static desc_set_resolver_fn   p_desc_set_resolver;
@@ -317,6 +318,7 @@ static void asmtest_hw_resolve(void) {
     p_desc_set_max_depth   = (desc_set_u32_fn)dlsym(h, "asmtest_descent_set_max_depth");
     p_desc_set_insn_budget = (desc_set_u64_fn)dlsym(h, "asmtest_descent_set_insn_budget");
     p_desc_set_watchdog_ms = (desc_set_u32_fn)dlsym(h, "asmtest_descent_set_watchdog_ms");
+    p_desc_use_default_denylist = (desc_free_fn)dlsym(h, "asmtest_descent_use_default_denylist");
     p_desc_allow_region    = (desc_region_fn)dlsym(h, "asmtest_descent_allow_region");
     p_desc_deny_region     = (desc_region_fn)dlsym(h, "asmtest_descent_deny_region");
     p_desc_set_resolver    = (desc_set_resolver_fn)dlsym(h, "asmtest_descent_set_resolver");
@@ -358,6 +360,7 @@ static void asmtest_hw_resolve(void) {
                   p_ci_poll_bpf && p_ci_next &&
                   p_desc_new && p_desc_free && p_desc_set_max_depth &&
                   p_desc_set_insn_budget && p_desc_set_watchdog_ms &&
+                  p_desc_use_default_denylist &&
                   p_desc_allow_region && p_desc_deny_region &&
                   p_desc_set_resolver && p_desc_set_denylist &&
                   p_desc_edges_len && p_desc_edge_site && p_desc_edge_target &&
@@ -552,6 +555,7 @@ static void asmtest_go_desc_free(void *d) { if (p_desc_free) p_desc_free(d); }
 static void asmtest_go_desc_set_max_depth(void *d, uint32_t v) { if (p_desc_set_max_depth) p_desc_set_max_depth(d, v); }
 static void asmtest_go_desc_set_insn_budget(void *d, uint64_t v) { if (p_desc_set_insn_budget) p_desc_set_insn_budget(d, v); }
 static void asmtest_go_desc_set_watchdog_ms(void *d, uint32_t v) { if (p_desc_set_watchdog_ms) p_desc_set_watchdog_ms(d, v); }
+static void asmtest_go_desc_use_default_denylist(void *d) { if (p_desc_use_default_denylist) p_desc_use_default_denylist(d); }
 static int asmtest_go_desc_allow_region(void *d, const void *b, size_t n) { return p_desc_allow_region ? p_desc_allow_region(d, b, n) : -1; }
 static int asmtest_go_desc_deny_region(void *d, const void *b, size_t n) { return p_desc_deny_region ? p_desc_deny_region(d, b, n) : -1; }
 static void asmtest_go_desc_set_resolver(void *d, void *user) { if (p_desc_set_resolver) p_desc_set_resolver(d, goDescentResolverTramp, user); }
@@ -1508,6 +1512,12 @@ func (d *Descent) SetInsnBudget(budget uint64) {
 // restores the default.
 func (d *Descent) SetWatchdogMs(ms uint32) {
 	C.asmtest_go_desc_set_watchdog_ms(d.h, C.uint32_t(ms))
+}
+
+// UseDefaultDenylist arms the built-in L3 default denylist (PLT resolver /
+// vdso / GC-JIT modules; plus blocking-libc entry points on the fork path).
+func (d *Descent) UseDefaultDenylist() {
+	C.asmtest_go_desc_use_default_denylist(d.h)
 }
 
 // AllowRegion adds [base, base+length) to the level-2 allow-set (descend into calls

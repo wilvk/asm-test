@@ -294,7 +294,8 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 /* ================================================================= */
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 
-#include <elf.h> /* NT_PRSTATUS */
+#include <dlfcn.h> /* RTLD_DEFAULT: the built-in descent denylist symbols */
+#include <elf.h>   /* NT_PRSTATUS */
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -2094,6 +2095,82 @@ static void descend_set_deadline(dctx_t *c, const asmtest_descent_t *d) {
     c->have_deadline = 1;
 }
 
+/* The built-in L3 default denylist (call-descent plan Phase 5): populate the
+ * handle's deny pool from the tracee once its pid is known. Two sources:
+ *
+ * 1. /proc/<pid>/maps — executable mappings whose name marks code L3 must not
+ *    single-step into: the dynamic linker (the lazy-binding PLT resolver
+ *    mutates the GOT under the tracer), [vdso]/[vsyscall], and managed-runtime
+ *    GC/JIT modules (a stepped GC entry can move the very code being traced).
+ * 2. When the tracee shares this process's address layout (the fork path),
+ *    dlsym entry points of the classic blocking libc/pthread calls — one-byte
+ *    deny regions, so only a call landing exactly on the entry is refused.
+ *    The watchdog would eventually break a blocked descended syscall anyway;
+ *    denying descent keeps the trace honest (an edge) instead of truncated.
+ *
+ * Failure here is deliberately soft: no /proc or no dlsym just leaves fewer
+ * default regions — budget + watchdog remain the hard backstops. */
+static const char *const descend_deny_modules[] = {
+    "ld-linux", "ld-musl",  "/ld.so",  "[vdso]", "[vsyscall]",
+    "libcoreclr", "libclrjit", "libclrgc", "libmonosgen", "libmono-",
+    "libjvm", "libart", "libv8", "libgc.",
+};
+static const char *const descend_deny_syms[] = {
+    "poll", "ppoll", "select", "pselect", "epoll_wait", "epoll_pwait",
+    "nanosleep", "clock_nanosleep", "sleep", "usleep", "pause",
+    "sigwait", "sigwaitinfo", "sigtimedwait",
+    "wait", "waitpid", "wait4", "waitid",
+    "accept", "accept4", "connect", "recv", "recvfrom", "recvmsg",
+    "sem_wait", "sem_timedwait", "pthread_cond_wait",
+    "pthread_cond_timedwait", "pthread_join", "pthread_mutex_lock",
+    "read", "write",
+};
+
+static void descend_apply_default_denylist(asmtest_descent_t *d, pid_t pid,
+                                           int same_layout) {
+    if (d == NULL || !d->use_default_denylist || d->default_denylist_applied ||
+        d->level < ASMTEST_DESCENT_DESCEND_ALL)
+        return;
+    d->default_denylist_applied = 1;
+
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (f != NULL) {
+        char *line = NULL;
+        size_t cap = 0;
+        while (getline(&line, &cap, f) != -1) {
+            unsigned long start, end;
+            char perms[8];
+            int noff = 0;
+            if (sscanf(line, "%lx-%lx %7s %*s %*s %*s %n", &start, &end, perms,
+                       &noff) < 3 ||
+                perms[2] != 'x' || noff == 0)
+                continue;
+            const char *name = line + noff;
+            for (size_t i = 0;
+                 i < sizeof descend_deny_modules / sizeof *descend_deny_modules;
+                 i++)
+                if (strstr(name, descend_deny_modules[i]) != NULL) {
+                    asmtest_descent_deny_region(d, (void *)(uintptr_t)start,
+                                                (size_t)(end - start));
+                    break;
+                }
+        }
+        free(line);
+        fclose(f);
+    }
+
+    if (same_layout) {
+        for (size_t i = 0;
+             i < sizeof descend_deny_syms / sizeof *descend_deny_syms; i++) {
+            void *sym = dlsym(RTLD_DEFAULT, descend_deny_syms[i]);
+            if (sym != NULL)
+                asmtest_descent_deny_region(d, sym, 1);
+        }
+    }
+}
+
 /* Fork path: fork a tracee that calls `code`, single-step-descend it, reap it. */
 static int trace_call_descend(const void *code, size_t len, const long *args,
                               int nargs, long *result, asmtest_trace_t *trace,
@@ -2134,6 +2211,8 @@ static int trace_call_descend(const void *code, size_t len, const long *args,
     c.forward_faults =
         0; /* controlled single-threaded callee: a fault is terminal */
     descend_set_deadline(&c, descent);
+    /* Forked tracee: same address layout, so the symbol-based defaults apply. */
+    descend_apply_default_denylist(descent, pid, 1);
 
     int rc = descend_core(&c);
     /* We own this tracee; reap it — UNLESS descend_core's own waitpid already consumed the
@@ -2188,6 +2267,9 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
     c.forward_faults =
         1; /* live managed runtime: forward its safepoint/GC signals */
     descend_set_deadline(&c, descent);
+    /* Foreign tracee: mapping-based defaults only (local symbol addresses
+     * would not be valid in its address space). */
+    descend_apply_default_denylist(descent, pid, 0);
 
     int rc = descend_core(&c);
     free(owned);

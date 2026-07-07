@@ -244,6 +244,7 @@ struct HwApi {
     void (*descent_set_max_depth)(void *, uint32_t) = nullptr;
     void (*descent_set_insn_budget)(void *, uint64_t) = nullptr;
     void (*descent_set_watchdog_ms)(void *, uint32_t) = nullptr;
+    void (*descent_use_default_denylist)(void *) = nullptr;
     int (*descent_allow_region)(void *, const void *, size_t) = nullptr;
     int (*descent_deny_region)(void *, const void *, size_t) = nullptr;
     size_t (*descent_edges_len)(void *) = nullptr;
@@ -381,6 +382,8 @@ inline HwApi &api() {
                          t.descent_set_insn_budget);
         ok &= dlsym_into(h, "asmtest_descent_set_watchdog_ms",
                          t.descent_set_watchdog_ms);
+        ok &= dlsym_into(h, "asmtest_descent_use_default_denylist",
+                         t.descent_use_default_denylist);
         ok &= dlsym_into(h, "asmtest_descent_allow_region",
                          t.descent_allow_region);
         ok &= dlsym_into(h, "asmtest_descent_deny_region",
@@ -935,6 +938,11 @@ class Descent {
     /// Real-time watchdog (ms) for a descended run; 0 = default.
     void set_watchdog_ms(std::uint32_t ms) {
         detail::api().descent_set_watchdog_ms(handle_, ms);
+    }
+    /// Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+    /// modules; plus blocking-libc entry points on the fork path).
+    void use_default_denylist() {
+        detail::api().descent_use_default_denylist(handle_);
     }
     /// Add [base, base+len) to the level-2 allow-set (descend into calls landing
     /// inside). Returns 0 on success, negative on OOM.

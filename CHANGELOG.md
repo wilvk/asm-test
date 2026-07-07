@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Call-descent built-in default denylist — `asmtest_descent_use_default_denylist`**
+  (the one unshipped Phase-5 deliverable of the
+  [call-descent plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/call-descent-plan.md)).
+  Arms the L3 `DESCEND_ALL` safety set the plan promised: at trace start the backend
+  populates the handle's deny pool from the tracee — the dynamic linker's executable
+  mappings (the lazy-binding PLT resolver) and `[vdso]`/`[vsyscall]`, managed-runtime
+  GC/JIT modules by mapping name (CoreCLR/Mono/HotSpot/ART/V8/BoehmGC), and, on the
+  fork path (tracee shares the tracer's layout), dlsym-resolved entry points of the
+  classic blocking libc/pthread calls as one-byte deny regions. Denied callees are
+  stepped over and recorded as edges; caller-supplied deny regions/callbacks compose.
+  Wrapped in all ten bindings (parity gate green, 99 symbols × 10); a new fork-path
+  fixture asserts a call landing exactly on `poll` becomes an edge, not a frame
+  (hwtrace suite 259 → 260).
+
 - **Emulator snapshot/restore — `emu_snapshot` / `emu_restore` / `emu_snapshot_free`**
   (E5 of the 2026-07-04 review). Captures the full register context
   (`uc_context_save`) plus the extents, permissions, and contents of every mapped

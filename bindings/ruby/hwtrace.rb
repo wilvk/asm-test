@@ -236,6 +236,7 @@ module Asmtest
         descent_set_max_depth:   func(LIB, "asmtest_descent_set_max_depth", [VOIDP, INT], VOID),
         descent_set_insn_budget: func(LIB, "asmtest_descent_set_insn_budget", [VOIDP, LL], VOID),
         descent_set_watchdog_ms: func(LIB, "asmtest_descent_set_watchdog_ms", [VOIDP, INT], VOID),
+        descent_use_default_denylist: func(LIB, "asmtest_descent_use_default_denylist", [VOIDP], VOID),
         descent_allow_region:    func(LIB, "asmtest_descent_allow_region", [VOIDP, VOIDP, SZ], INT),
         descent_deny_region:     func(LIB, "asmtest_descent_deny_region", [VOIDP, VOIDP, SZ], INT),
         descent_edges_len:       func(LIB, "asmtest_descent_edges_len", [VOIDP], SZ),
@@ -910,6 +911,12 @@ module Asmtest
       # (level 3 best-effort); 0 = conservative default (set a large value to relax it).
       def set_watchdog_ms(ms)
         Asmtest::HwTrace::FN[:descent_set_watchdog_ms].call(@handle, ms)
+      end
+
+      # Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT
+      # modules; plus blocking-libc entry points on the fork path).
+      def use_default_denylist
+        Asmtest::HwTrace::FN[:descent_use_default_denylist].call(@handle)
       end
 
       # Add [+base+, +base+ + +len+) to the allow-set: a DESCEND_KNOWN call whose target

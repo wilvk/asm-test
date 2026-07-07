@@ -72,6 +72,7 @@ void  asmtest_descent_free(void* d);
 void  asmtest_descent_set_max_depth(void* d, uint32_t max_depth);
 void  asmtest_descent_set_insn_budget(void* d, uint64_t budget);
 void  asmtest_descent_set_watchdog_ms(void* d, uint32_t ms);
+void  asmtest_descent_use_default_denylist(void* d);
 int   asmtest_descent_allow_region(void* d, const void* base, size_t len);
 int   asmtest_descent_deny_region(void* d, const void* base, size_t len);
 void  asmtest_descent_set_resolver(void* d, asmtest_descent_resolver_fn fn, void* user);
@@ -728,6 +729,12 @@ function Descent:set_insn_budget(b)
 end
 function Descent:set_watchdog_ms(ms)
   L.asmtest_descent_set_watchdog_ms(self.h, ms); return self
+end
+
+--- Arm the built-in L3 default denylist (PLT resolver / vdso / GC-JIT modules;
+--- plus blocking-libc entry points on the fork path).
+function Descent:use_default_denylist()
+  L.asmtest_descent_use_default_denylist(self.h); return self
 end
 
 -- Add [base, base+len) to the level-2 allow-set (descend into calls landing inside).

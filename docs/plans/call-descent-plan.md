@@ -312,7 +312,19 @@ green with the NULL-descent wrappers. **Effort:** 2 days C + folded into Phase 7
 
 ### Phase 3 — Level 1 `RECORD_EDGES` — ✅ **DONE (2026-07-03)**
 ### Phase 4 — Level 2 `DESCEND_KNOWN` — ✅ **DONE (2026-07-03)**
-### Phase 5 — Level 3 `DESCEND_ALL` + guards — ✅ **DONE (2026-07-03)**
+### Phase 5 — Level 3 `DESCEND_ALL` + guards — ✅ **DONE (2026-07-03; default denylist 2026-07-07)**
+
+> **2026-07-07 follow-up:** the one Phase-5 deliverable that had not shipped — the
+> **built-in default denylist** (GC-entry / JIT-compile / PLT-`ld.so`-resolver /
+> known-blocking libc) — is now `asmtest_descent_use_default_denylist()`: populated
+> from the tracee at trace start (`/proc/<pid>/maps` module matching for
+> ld-linux/ld-musl/ld.so, `[vdso]`/`[vsyscall]`, and the CoreCLR/Mono/HotSpot/ART/
+> V8/BoehmGC runtime modules; dlsym-resolved blocking libc/pthread entry points on
+> the fork path, where the tracee shares the tracer's layout — an attached foreign
+> process gets the mapping-based set only). Wrapped in all ten bindings; the
+> fork-path fixture asserts a call landing exactly on `poll` is stepped over as an
+> edge, not descended. L3 safety now rests on default-off + budget + watchdog +
+> the built-in denylist, as this phase originally promised.
 
 Implemented as one shadow-stack descending loop (`descend_core` in
 [src/ptrace_backend.c](../../src/ptrace_backend.c)) shared by the fork and attached `_ex`

@@ -22,6 +22,9 @@
 /* POSIX + ptrace headers: needed by the out-of-process stepper tests (x86-64 AND
  * AArch64) and the any-Linux /proc + jitdump reader tests (getpid, etc.). */
 #if defined(__linux__)
+
+#include <dlfcn.h> /* the default-denylist test resolves poll the same way the
+                      backend does */
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -3284,6 +3287,45 @@ static void test_descent_fork(void) {
             CHECK(deny_ok, "descent L3 denylist: a denied callee is stepped "
                            "over, not descended");
             asmtest_descent_free(d);
+
+            /* L3 built-in default denylist (plan Phase 5): a call landing exactly on a
+             * blocking libc entry point (poll, resolved with dlsym just as the backend
+             * resolves it) is stepped over as an edge, not descended — with NO caller-
+             * supplied deny region. poll(0,0,0) returns immediately, so the step-over
+             * completes fast; rax is then set to 42 for a deterministic result. */
+            void *poll_addr = dlsym(RTLD_DEFAULT, "poll");
+            if (poll_addr != NULL) {
+                unsigned char R3[] = {
+                    0x31, 0xff,             /* xor edi,edi          */
+                    0x31, 0xf6,             /* xor esi,esi          */
+                    0x31, 0xd2,             /* xor edx,edx          */
+                    0x49, 0xbb, 0,    0, 0,
+                    0,    0,    0,    0, 0, /* movabs r11, <poll>   */
+                    0x41, 0xff, 0xd3,       /* 0x10 call r11        */
+                    0xb8, 0x2a, 0x00, 0x00,
+                    0x00,                   /* mov eax,42           */
+                    0xc3};                  /* ret                  */
+                memcpy(&R3[8], &poll_addr, sizeof poll_addr);
+                void *b3 = map_exec(R3, sizeof R3);
+                if (b3 != NULL) {
+                    d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+                    asmtest_descent_use_default_denylist(d);
+                    r = 0;
+                    rc = asmtest_ptrace_trace_call_ex(b3, sizeof R3, NULL, 0,
+                                                      &r, NULL, d);
+                    int def_ok = (rc == ASMTEST_PTRACE_OK && r == 42 &&
+                                  asmtest_descent_frames_len(d) == 1 &&
+                                  asmtest_descent_edges_len(d) == 1 &&
+                                  asmtest_descent_edge_site(d, 0) == 0x10 &&
+                                  asmtest_descent_edge_target(d, 0) ==
+                                      (uint64_t)(uintptr_t)poll_addr);
+                    CHECK(def_ok,
+                          "descent L3 default denylist: a blocking libc entry "
+                          "(poll) is stepped over, not descended");
+                    asmtest_descent_free(d);
+                    munmap(b3, sizeof R3);
+                }
+            }
 
             /* Budget guard: a tiny instruction budget declines descent (depth_capped). */
             d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
