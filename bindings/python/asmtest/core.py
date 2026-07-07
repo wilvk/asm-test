@@ -132,8 +132,42 @@ def capture(fn, *args):
     return Regs(buf)
 
 
+def capture_args(fn, *args):
+    """Call `fn` with an arbitrary number of integer args (wide arity): the
+    first 6 go in registers, the rest spill onto the stack per the ABI."""
+    c = load()
+    buf = C.create_string_buffer(c.size("regs_t"))
+    n = len(args)
+    c.lib.asm_call_capture_args(
+        C.cast(buf, C.c_void_p), C.c_void_p(_addr(fn)),
+        C.cast(_longs(list(args), max(n, 1)), C.c_void_p), n,
+    )
+    return Regs(buf)
+
+
+def capture_sret(fn, result_size, *args):
+    """Call `fn` returning a large (memory-class) struct via the hidden result
+    pointer. Returns ``(Regs, bytes)`` — the register snapshot plus the
+    ``result_size`` struct bytes, to unpack with :mod:`struct` per the fixture's
+    layout (no C struct is mirrored)."""
+    c = load()
+    buf = C.create_string_buffer(c.size("regs_t"))
+    result = C.create_string_buffer(result_size)
+    n = len(args)
+    c.lib.asm_call_capture_sret(
+        C.cast(buf, C.c_void_p), C.c_void_p(_addr(fn)),
+        C.cast(result, C.c_void_p),
+        C.cast(_longs(list(args), max(n, 1)), C.c_void_p), n,
+    )
+    return Regs(buf), result.raw[:result_size]
+
+
 def capture_fp(fn, iargs=(), fargs=()):
-    """Call `fn` marshalling up to 8 doubles into the FP arg registers."""
+    """Call `fn` marshalling up to 8 doubles into the FP arg registers.
+
+    `iargs` fills the integer registers in the same call, so a mixed
+    integer+FP signature (e.g. ``double mix_scale(long, double)``) is reachable
+    with ``capture_fp(fn, iargs=[n], fargs=[x])``."""
     c = load()
     buf = C.create_string_buffer(c.size("regs_t"))
     fa = (C.c_double * 8)()

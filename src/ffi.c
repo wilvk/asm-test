@@ -99,6 +99,55 @@ void asmtest_capture_vec_f32(regs_t *out, void *fn, const float *lanes,
     asm_call_capture_vec(out, fn, iargs, vargs);
 }
 
+/* Wide-arity capture: all `nargs` integer args in one flat array — the first 6
+ * go in the argument registers, the rest spill onto the stack per the ABI (see
+ * asm_call_capture_args) — so a binding reaches past the register file with the
+ * same scalar-array marshalling it already does for capture_vec_f32. nargs is
+ * clamped to >= 0. */
+void asmtest_capture_args(regs_t *out, void *fn, const long *args, int nargs) {
+    if (nargs < 0)
+        nargs = 0;
+    asm_call_capture_args(out, fn, args, nargs);
+}
+
+/* Mixed-file capture: marshal `ni` integer args (rdi.. / x0..) AND `nf` double
+ * args (xmm0-7 / d0-7) in one call via asm_call_capture_fp — the canonical
+ * ptr+len+scalar signature, which neither capture6 (integer-only) nor
+ * capture_fp2 (FP-only) can reach. ni is clamped to [0, 6] and nf to [0, 8]
+ * (the argument register files); the unused slots are zero-filled. The integer
+ * return lands in out->ret, the FP return in out->fret. */
+void asmtest_capture_mix(regs_t *out, void *fn, const long *iargs, int ni,
+                         const double *fargs, int nf) {
+    long ia[6] = {0, 0, 0, 0, 0, 0};
+    double fa[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    if (ni < 0)
+        ni = 0;
+    if (ni > 6)
+        ni = 6;
+    if (nf < 0)
+        nf = 0;
+    if (nf > 8)
+        nf = 8;
+    for (int i = 0; i < ni; i++)
+        ia[i] = iargs[i];
+    for (int i = 0; i < nf; i++)
+        fa[i] = fargs[i];
+    asm_call_capture_fp(out, fn, ia, fa);
+}
+
+/* Struct-return capture: call fn returning a large (memory-class) struct via
+ * the hidden result pointer (SysV rdi / AAPCS64 x8, see asm_call_capture_sret);
+ * the struct is written into the caller's `result` buffer and the `nargs`
+ * visible integer args follow the ABI. A binding allocates `result` as a plain
+ * byte buffer and unpacks the fields itself — no struct layout crosses the FFI.
+ * nargs is clamped to >= 0. */
+void asmtest_capture_sret(regs_t *out, void *fn, void *result,
+                          const long *args, int nargs) {
+    if (nargs < 0)
+        nargs = 0;
+    asm_call_capture_sret(out, fn, result, args, nargs);
+}
+
 /* ---- emu_result_t opaque handle + accessors (no Unicorn dependency) ---- */
 emu_result_t *asmtest_emu_result_new(void) {
     return (emu_result_t *)calloc(1, sizeof(emu_result_t));

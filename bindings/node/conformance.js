@@ -67,6 +67,23 @@ withRegs((r) => {
   const v = r.vecF32(0);
   check('vec_add4f.basic', v[0] === 11 && v[1] === 22 && v[2] === 33 && v[3] === 44);
 });
+withRegs((r) => {
+  // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+  r.captureArgs(routine('sum8'), [1, 2, 3, 4, 5, 6, 7, 8]);
+  check('sum8.wide_arity', r.ret() === 36 && r.abiPreserved());
+});
+withRegs((r) => {
+  // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+  r.captureMix(routine('mix_scale'), [3], [2.5]);
+  check('mix_scale.mixed_int_fp', r.fret() === 7.5);
+});
+withRegs((r) => {
+  // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+  const big = r.captureSret(routine('make_big'), 24, [7, 8, 9]);
+  check('make_big.struct_return_sret',
+    big.readBigInt64LE(0) === 7n && big.readBigInt64LE(8) === 8n
+    && big.readBigInt64LE(16) === 9n && r.ret() !== 0);
+});
 
 // --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
 {

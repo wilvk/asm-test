@@ -66,6 +66,22 @@ with_regs do |r|
   r.capture_vec_f32(routine("vec_add4f"), [[1, 2, 3, 4], [10, 20, 30, 40]])
   check("vec_add4f.basic", r.vec_f32(0) == [11, 22, 33, 44])
 end
+with_regs do |r|
+  # 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+  r.capture_args(routine("sum8"), [1, 2, 3, 4, 5, 6, 7, 8])
+  check("sum8.wide_arity", r.ret == 36 && r.abi_preserved?)
+end
+with_regs do |r|
+  # mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+  r.capture_mix(routine("mix_scale"), [3], [2.5])
+  check("mix_scale.mixed_int_fp", r.fret == 7.5)
+end
+with_regs do |r|
+  # make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+  big = r.capture_sret(routine("make_big"), 24, [7, 8, 9])
+  check("make_big.struct_return_sret",
+        big.unpack("q3") == [7, 8, 9] && r.ret != 0)
+end
 
 # --- Tier 1: corpus replay (emulator, x86-64 guest) ------------------------
 e = Asmtest::Emu.new

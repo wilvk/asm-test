@@ -42,6 +42,9 @@ extern void  asmtest_regs_free(void *r);
 extern void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
 extern void  asmtest_capture_fp2(void *out, void *fn, double f0, double f1);
 extern void  asmtest_capture_vec_f32(void *out, void *fn, float *lanes, int nvec);
+extern void  asmtest_capture_args(void *out, void *fn, long *args, int nargs);
+extern void  asmtest_capture_mix(void *out, void *fn, long *iargs, int ni, double *fargs, int nf);
+extern void  asmtest_capture_sret(void *out, void *fn, void *result, long *args, int nargs);
 extern unsigned long asmtest_regs_ret(void *r);
 extern double asmtest_regs_fret(void *r);
 extern float asmtest_regs_vec_f32(void *r, int index, int lane);
@@ -219,6 +222,45 @@ func (r *Regs) Capture6(fn Routine, args ...int64) {
 // CaptureFP2 calls fn with two double args, capturing the FP return.
 func (r *Regs) CaptureFP2(fn Routine, f0, f1 float64) {
 	C.asmtest_capture_fp2(r.h, fn, C.double(f0), C.double(f1))
+}
+
+// clongs packs int64 args into a C long array with at least one slot, so the
+// data pointer stays valid when args is empty.
+func clongs(args []int64) []C.long {
+	out := make([]C.long, len(args)+1)
+	for i, v := range args {
+		out[i] = C.long(v)
+	}
+	return out
+}
+
+// CaptureArgs calls fn with any number of integer args (wide arity): the first
+// 6 go in registers, the rest spill onto the stack per the ABI.
+func (r *Regs) CaptureArgs(fn Routine, args ...int64) {
+	a := clongs(args)
+	C.asmtest_capture_args(r.h, fn, &a[0], C.int(len(args)))
+}
+
+// CaptureMix calls fn with integer AND double args in one call (mixed register
+// files); the FP return is FRet, the integer one Ret.
+func (r *Regs) CaptureMix(fn Routine, iargs []int64, fargs []float64) {
+	ia := clongs(iargs)
+	fa := make([]C.double, len(fargs)+1)
+	for i, v := range fargs {
+		fa[i] = C.double(v)
+	}
+	C.asmtest_capture_mix(r.h, fn, &ia[0], C.int(len(iargs)), &fa[0], C.int(len(fargs)))
+}
+
+// CaptureSret calls fn returning a large (memory-class) struct via the hidden
+// result pointer. It returns the struct as resultSize raw bytes, to be
+// unpacked per the fixture's layout (no C struct layout is mirrored).
+func (r *Regs) CaptureSret(fn Routine, resultSize int, args ...int64) []byte {
+	a := clongs(args)
+	result := make([]byte, resultSize+1) // +1 keeps &result[0] valid for size 0
+	C.asmtest_capture_sret(r.h, fn, unsafe.Pointer(&result[0]),
+		&a[0], C.int(len(args)))
+	return result[:resultSize]
 }
 
 // CaptureVecF32 calls fn with up to eight 128-bit vector args (each four float32

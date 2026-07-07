@@ -128,7 +128,10 @@ page, linked above).
 |---|---|---|---|
 | Resolve a built-in corpus routine | load your own lib (`ctypes.CDLL`) | `Corpus.Routine("name")` | `asmtest.CorpusRoutine("name")` |
 | Integer capture (≤6 args) | `capture(fn, *args)` | `r.Capture6(fn, …)` | `r.Capture6(fn, …)` |
+| Wide-arity capture (stack args) | `capture_args(fn, *args)` | `r.CaptureArgs(fn, …)` | `r.CaptureArgs(fn, …)` |
 | Float/double capture | `capture_fp(fn, fargs=…)` | `r.CaptureFp2(fn, a, b)` | `r.CaptureFP2(fn, a, b)` |
+| Mixed integer+FP capture | `capture_fp(fn, iargs=…, fargs=…)` | `r.CaptureMix(fn, iargs, fargs)` | `r.CaptureMix(fn, iargs, fargs)` |
+| Struct return (hidden pointer) | `capture_sret(fn, size, *args)` | `r.CaptureSret(fn, size, …)` | `r.CaptureSret(fn, size, …)` |
 | Vector / SIMD capture | `capture_vec(fn, vargs=…)` | `r.CaptureVecF32(fn, vecs)` | `r.CaptureVecF32(fn, vecs)` |
 | Integer return value | `r.ret` | `r.Ret` | `r.Ret()` |
 | FP return value | `r.fret` | `r.FRet` | `r.FRet()` |

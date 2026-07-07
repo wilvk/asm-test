@@ -65,6 +65,21 @@ public class Conformance {
             r.captureVecF32(routine("vec_add4f"), new float[][] {{1, 2, 3, 4}, {10, 20, 30, 40}});
             float[] v = r.vecF32(0);
             check("vec_add4f.basic", v[0] == 11 && v[1] == 22 && v[2] == 33 && v[3] == 44);
+
+            // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+            r.captureArgs(routine("sum8"), 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L);
+            check("sum8.wide_arity", r.ret() == 36 && r.abiPreserved());
+
+            // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+            r.captureMix(routine("mix_scale"), new long[] {3L}, new double[] {2.5});
+            check("mix_scale.mixed_int_fp", r.fret() == 7.5);
+
+            // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+            byte[] big = r.captureSret(routine("make_big"), 24, 7L, 8L, 9L);
+            java.nio.ByteBuffer bb =
+                java.nio.ByteBuffer.wrap(big).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            check("make_big.struct_return_sret", bb.getLong(0) == 7
+                && bb.getLong(8) == 8 && bb.getLong(16) == 9 && r.ret() != 0);
         }
 
         // --- Tier 1: corpus replay (emulator, x86-64 guest) --------------- //

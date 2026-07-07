@@ -19,6 +19,9 @@ void  asmtest_regs_free(void *r);
 void  asmtest_capture6(void *out, void *fn, long a0, long a1, long a2, long a3, long a4, long a5);
 void  asmtest_capture_fp2(void *out, void *fn, double f0, double f1);
 void  asmtest_capture_vec_f32(void *out, void *fn, float *lanes, int nvec);
+void  asmtest_capture_args(void *out, void *fn, const long *args, int nargs);
+void  asmtest_capture_mix(void *out, void *fn, const long *iargs, int ni, const double *fargs, int nf);
+void  asmtest_capture_sret(void *out, void *fn, void *result, const long *args, int nargs);
 unsigned long asmtest_regs_ret(void *r);
 double asmtest_regs_fret(void *r);
 float asmtest_regs_vec_f32(void *r, int index, int lane);
@@ -175,6 +178,39 @@ function Regs:capture6(fn, a0, a1, a2, a3, a4, a5)
 end
 -- Call fn with two double args, capturing the FP return.
 function Regs:capture_fp2(fn, f0, f1) L.asmtest_capture_fp2(self.h, fn, f0, f1) end
+-- Pack a Lua table of integers into a long[?] cdata (at least one slot so the
+-- pointer stays valid when the table is empty).
+local function pack_longs(args)
+  local n = #args
+  local a = ffi.new("long[?]", n == 0 and 1 or n)
+  for i = 1, n do a[i - 1] = args[i] end
+  return a, n
+end
+-- Call fn with any number of integer args (wide arity): the first 6 go in
+-- registers, the rest spill onto the stack per the ABI.
+function Regs:capture_args(fn, args)
+  local a, n = pack_longs(args)
+  L.asmtest_capture_args(self.h, fn, a, n)
+end
+-- Call fn with integer AND double args in one call (mixed register files); the
+-- FP return is :fret(), the integer one :ret().
+function Regs:capture_mix(fn, iargs, fargs)
+  local ia, ni = pack_longs(iargs)
+  local nf = #fargs
+  local fa = ffi.new("double[?]", nf == 0 and 1 or nf)
+  for i = 1, nf do fa[i - 1] = fargs[i] end
+  L.asmtest_capture_mix(self.h, fn, ia, ni, fa, nf)
+end
+-- Call fn returning a large (memory-class) struct via the hidden result
+-- pointer. Returns the struct as a uint8_t[?] cdata of result_size bytes —
+-- read it back with M.read_longs (or ffi.cast to the fixture's layout; no C
+-- struct layout is mirrored here).
+function Regs:capture_sret(fn, result_size, args)
+  local a, n = pack_longs(args)
+  local out = ffi.new("uint8_t[?]", result_size)
+  L.asmtest_capture_sret(self.h, fn, out, a, n)
+  return out
+end
 -- Call fn with up to eight 128-bit vector args, capturing the vector register
 -- file. `vectors` is a table of four-float32-lane tables; the vector return is
 -- read back with :vec_f32(0).
@@ -198,6 +234,15 @@ end
 function Regs:flag_set(name) return L.asmtest_regs_flag_set(self.h, name) == 1 end
 function Regs:abi_preserved() return L.asmtest_check_abi(self.h, nil, 0) == 0 end
 function Regs:free() if self.h then L.asmtest_regs_free(self.h); self.h = nil end end
+
+-- Read n longs from a capture_sret result buffer (module-side ffi, so a
+-- consumer never touches ffi itself). Returns a 1-based Lua table.
+function M.read_longs(buf, n)
+  local p = ffi.cast("const long *", buf)
+  local out = {}
+  for i = 1, n do out[i] = u64(p[i - 1]) end
+  return out
+end
 
 -- An emulator run's outcome — faults surfaced as data, not a crash.
 local EmuResult = {}

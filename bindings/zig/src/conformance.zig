@@ -33,6 +33,9 @@ extern fn read_fault(?*const c_long) c_long; // loads *p; faults if p is unmappe
 extern fn int_to_double(c_long) f64; // (double)n into xmm0 from an integer arg
 extern fn vec_add4d() void; // AVX2 256-bit (Track D); x86-64 only
 extern fn vec_add8d() void; // AVX-512 512-bit (Track D); x86-64 only
+extern fn sum8(c_long, c_long, c_long, c_long, c_long, c_long, c_long, c_long) c_long; // wide arity
+extern fn mix_scale(c_long, f64) f64; // mixed int+FP argument files
+extern fn make_big() void; // struct big(24B) via hidden sret pointer; address only
 
 /// Address of a routine as the opaque pointer the trampoline expects.
 fn fnPtr(p: anytype) ?*anyopaque {
@@ -79,6 +82,37 @@ test "fp_add.basic" {
     var fargs = [_]f64{ 1.5, 2.25, 0, 0, 0, 0, 0, 0 };
     c.asm_call_capture_fp(&r, fnPtr(&fp_add), &iargs, &fargs);
     try std.testing.expectEqual(@as(f64, 3.75), r.fret);
+}
+
+test "sum8.wide_arity" {
+    // 8 integer args: the first 6 in registers, args 7-8 on the stack (x86-64).
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var args = [_]c_long{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    c.asm_call_capture_args(&r, fnPtr(&sum8), &args, args.len);
+    try std.testing.expectEqual(@as(c_ulong, 36), r.ret);
+    try std.testing.expect(c.asmtest_check_abi(&r, null, 0) == 0);
+}
+
+test "mix_scale.mixed_int_fp" {
+    // mix_scale(n, x) = (double)n * x reads BOTH argument register files.
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var iargs = [_]c_long{ 3, 0, 0, 0, 0, 0 };
+    var fargs = [_]f64{ 2.5, 0, 0, 0, 0, 0, 0, 0 };
+    c.asm_call_capture_fp(&r, fnPtr(&mix_scale), &iargs, &fargs);
+    try std.testing.expectEqual(@as(f64, 7.5), r.fret);
+}
+
+test "make_big.struct_return_sret" {
+    // make_big returns a 24-byte struct{long a,b,c} via the hidden pointer.
+    var r: c.regs_t = std.mem.zeroes(c.regs_t);
+    var result = [_]c_long{ 0, 0, 0 };
+    var args = [_]c_long{ 7, 8, 9 };
+    c.asm_call_capture_sret(&r, fnPtr(&make_big), &result, &args, args.len);
+    try std.testing.expectEqual(@as(c_long, 7), result[0]);
+    try std.testing.expectEqual(@as(c_long, 8), result[1]);
+    try std.testing.expectEqual(@as(c_long, 9), result[2]);
+    // make_big also returns the result pointer (rax / x0).
+    try std.testing.expectEqual(@as(c_ulong, @intFromPtr(&result)), r.ret);
 }
 
 test "vec_add4f.basic" {

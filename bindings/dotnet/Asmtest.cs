@@ -80,6 +80,12 @@ namespace Asmtest
             IntPtr o, IntPtr fn, double f0, double f1);
         [DllImport(EMU)] public static extern void asmtest_capture_vec_f32(
             IntPtr o, IntPtr fn, float[] lanes, int nvec);
+        [DllImport(EMU)] public static extern void asmtest_capture_args(
+            IntPtr o, IntPtr fn, long[] args, int nargs);
+        [DllImport(EMU)] public static extern void asmtest_capture_mix(
+            IntPtr o, IntPtr fn, long[] iargs, int ni, double[] fargs, int nf);
+        [DllImport(EMU)] public static extern void asmtest_capture_sret(
+            IntPtr o, IntPtr fn, [Out] byte[] result, long[] args, int nargs);
         [DllImport(EMU)] public static extern ulong asmtest_regs_ret(IntPtr r);
         [DllImport(EMU)] public static extern double asmtest_regs_fret(IntPtr r);
         [DllImport(EMU)] public static extern float asmtest_regs_vec_f32(IntPtr r, int index, int lane);
@@ -320,6 +326,34 @@ namespace Asmtest
         /// <summary>Call <paramref name="fn"/> with two double args, capturing the FP return.</summary>
         public void CaptureFp2(IntPtr fn, double f0, double f1)
             => Native.asmtest_capture_fp2(_h, fn, f0, f1);
+
+        /// <summary>
+        /// Call <paramref name="fn"/> with any number of integer args (wide arity):
+        /// the first 6 go in registers, the rest spill onto the stack per the ABI.
+        /// </summary>
+        public void CaptureArgs(IntPtr fn, params long[] args)
+            => Native.asmtest_capture_args(_h, fn, args, args.Length);
+
+        /// <summary>
+        /// Call <paramref name="fn"/> with integer AND double args in one call
+        /// (mixed register files); the FP return is <see cref="FRet"/>, the integer
+        /// one <see cref="Ret"/>.
+        /// </summary>
+        public void CaptureMix(IntPtr fn, long[] iargs, double[] fargs)
+            => Native.asmtest_capture_mix(_h, fn, iargs, iargs.Length, fargs, fargs.Length);
+
+        /// <summary>
+        /// Call <paramref name="fn"/> returning a large (memory-class) struct via
+        /// the hidden result pointer. Returns the struct as a byte[] of
+        /// <paramref name="resultSize"/>, to be unpacked per the fixture's layout
+        /// (no C struct layout is mirrored).
+        /// </summary>
+        public byte[] CaptureSret(IntPtr fn, int resultSize, params long[] args)
+        {
+            var result = new byte[resultSize];
+            Native.asmtest_capture_sret(_h, fn, result, args, args.Length);
+            return result;
+        }
 
         /// <summary>
         /// Call <paramref name="fn"/> with up to eight 128-bit vector args (each four

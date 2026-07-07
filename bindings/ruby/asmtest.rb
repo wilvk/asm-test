@@ -75,6 +75,9 @@ module Asmtest
     capture6:       func(L, "asmtest_capture6", [VOIDP, VOIDP, LONG, LONG, LONG, LONG, LONG, LONG], VOID),
     capture_fp2:    func(L, "asmtest_capture_fp2", [VOIDP, VOIDP, DBL, DBL], VOID),
     capture_vec_f32: func(L, "asmtest_capture_vec_f32", [VOIDP, VOIDP, VOIDP, INT], VOID),
+    capture_args:   func(L, "asmtest_capture_args", [VOIDP, VOIDP, VOIDP, INT], VOID),
+    capture_mix:    func(L, "asmtest_capture_mix", [VOIDP, VOIDP, VOIDP, INT, VOIDP, INT], VOID),
+    capture_sret:   func(L, "asmtest_capture_sret", [VOIDP, VOIDP, VOIDP, VOIDP, INT], VOID),
     regs_ret:       func(L, "asmtest_regs_ret", [VOIDP], LONG),
     regs_fret:      func(L, "asmtest_regs_fret", [VOIDP], DBL),
     regs_vec_f32:   func(L, "asmtest_regs_vec_f32", [VOIDP, INT, INT], FLT),
@@ -252,6 +255,28 @@ module Asmtest
     # Call fn with two double args, capturing the FP return.
     def capture_fp2(fn, f0, f1)
       FN[:capture_fp2].call(@h, fn, f0, f1)
+    end
+
+    # Call fn with any number of integer args (wide arity): the first 6 go in
+    # registers, the rest spill onto the stack per the ABI.
+    def capture_args(fn, args)
+      FN[:capture_args].call(@h, fn, Asmtest.pack_longs(args), args.length)
+    end
+
+    # Call fn with integer AND double args in one call (mixed register files);
+    # the FP return is #fret, the integer one #ret.
+    def capture_mix(fn, iargs, fargs)
+      FN[:capture_mix].call(@h, fn, Asmtest.pack_longs(iargs), iargs.length,
+                            fargs.empty? ? nil : fargs.pack("d*"), fargs.length)
+    end
+
+    # Call fn returning a large (memory-class) struct via the hidden result
+    # pointer. Returns the struct as a binary String of +result_size+ bytes, to
+    # unpack per the fixture's layout (no C struct layout is mirrored).
+    def capture_sret(fn, result_size, args)
+      out = ("\x00".b * result_size)
+      FN[:capture_sret].call(@h, fn, out, Asmtest.pack_longs(args), args.length)
+      out
     end
 
     # Call fn with up to eight 128-bit vector args, capturing the vector register
