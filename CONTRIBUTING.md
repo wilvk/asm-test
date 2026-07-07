@@ -84,7 +84,7 @@ Record a deliberate omission in [scripts/bindings-parity-allow.txt](scripts/bind
 with a reason (stale exemptions fail the gate, so the list stays honest).
 
 See [docs/bindings/index.md](docs/bindings/index.md) for the shared model and the per-language
-pages, and [docs/plans/binding-parity-plan.md](docs/plans/binding-parity-plan.md)
+pages, and [docs/archive/plans/binding-parity-plan.md](docs/archive/plans/binding-parity-plan.md)
 for the parity checklist a new binding is held to. Keep the public surface and the
 conformance coverage at parity with the existing bindings.
 

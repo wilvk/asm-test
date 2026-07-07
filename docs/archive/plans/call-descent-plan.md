@@ -5,8 +5,8 @@ Give the out-of-process single-step tracer (`asmtest_ptrace.h`, `src/ptrace_back
 speed. Today a traced region's calls to helpers/callees outside `[base, base+len)` —
 runtime helpers, GC barriers, PLT stubs, other JIT methods, libc — are run at native
 speed to their return and **recorded nowhere** (`classify_region_exit`,
-[src/ptrace_backend.c:615](../../src/ptrace_backend.c#L615); the trace loop at
-[src/ptrace_backend.c:855-890](../../src/ptrace_backend.c#L855-L890)). This plan adds
+[src/ptrace_backend.c:615](../../../src/ptrace_backend.c#L615); the trace loop at
+[src/ptrace_backend.c:855-890](../../../src/ptrace_backend.c#L855-L890)). This plan adds
 four levels, each a strict opt-in over the last:
 
 | Level | Name | Behaviour |
@@ -18,7 +18,7 @@ four levels, each a strict opt-in over the last:
 
 The motivating case is the `.NET` BCL lane: `System.Console::WriteLine`'s body is two
 stepped-over call-outs (`get_Out` @ `0xb`, virtual `TextWriter.WriteLine` @ `0x1e` —
-[docs/native-tracing.md:578-604](../guides/tracing/native-tracing.md)). Levels 1–3 let a caller record
+[docs/native-tracing.md:578-604](../../guides/tracing/native-tracing.md)). Levels 1–3 let a caller record
 those edges, descend into `get_Out`, or descend the whole tree.
 
 > Status legend: **planned** unless noted. This plan was pressure-tested by an
@@ -26,12 +26,19 @@ those edges, descend into `get_Out`, or descend the whole tree.
 > [§Correctness core](#correctness-core-the-shadow-stack) and the honesty constraints in
 > [§Level 3 safety](#level-3-safety-and-honesty) are **load-bearing**, not optional
 > polish. Update this file as phases land, the way
-> [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) tracks its own.
+> [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) tracks its own.
+>
+> **Status: complete (2026-07-07).** All phases (0–9) are ✅ DONE — the levels,
+> conformance/manifest/parity, all-ten binding wrappers, fixtures, and docs landed
+> 2026-07-03; the last gap, Phase 5's built-in default denylist
+> (`asmtest_descent_use_default_denylist`), landed 2026-07-07. All six open
+> decisions are ratified below. The two remaining limitations (signal-frame SP-pop
+> suspension, tail-call keep-open) are documented deferrals, not pending work.
 
 This plan is a **sibling** of the
-[zen2-singlestep-trace-plan](zen2-singlestep-trace-plan.md) (which shipped the W2
+[zen2-singlestep-trace-plan](../../plans/zen2-singlestep-trace-plan.md) (which shipped the W2
 out-of-process stepper this extends) and the
-[hardware-trace-plan](hardware-trace-plan.md) (the foreign-JIT resolution toolkit
+[hardware-trace-plan](../../plans/hardware-trace-plan.md) (the foreign-JIT resolution toolkit
 descent consumes). Descent is **Linux x86-64 + AArch64 only** — the two arches the
 ptrace tracer supports; RISCV64/ARM32 are disasm-only and never ptrace targets.
 
@@ -42,7 +49,7 @@ ptrace tracer supports; RISCV64/ARM32 are disasm-only and never ptrace targets.
 Three decisions carry the whole design:
 
 1. **`asmtest_trace_t` stays byte-for-byte ABI-frozen.** The canonical trace model
-   ([include/asmtest_trace.h:44](../../include/asmtest_trace.h#L44)) records offsets from
+   ([include/asmtest_trace.h:44](../../../include/asmtest_trace.h#L44)) records offsets from
    **one** region base — it structurally cannot represent nested callee frames. All ten
    bindings consume it through the opaque handle + `asmtest_emu_trace_*` accessors (none
    mirror the struct layout), and a machine-readable manifest (`asmtest_abi.json`) pins
@@ -161,7 +168,7 @@ and the adversarial review found the naïve version wrong in several realistic w
 mitigations are requirements, not nice-to-haves.
 
 - **`read_pc_ret` must read SP (and AArch64 x30).** Today it fetches only PC + `rax`/`x0`
-  ([src/ptrace_backend.c:322-339](../../src/ptrace_backend.c#L322-L339)). The pop
+  ([src/ptrace_backend.c:322-339](../../../src/ptrace_backend.c#L322-L339)). The pop
   predicate is unimplementable without SP (`regs.rsp` / `regs.sp`) and, on AArch64, the
   callee-entry link register (`regs.regs[30]`). **Prerequisite for all of L2/L3.**
 
@@ -181,7 +188,7 @@ mitigations are requirements, not nice-to-haves.
 - **Same-region recursion is a distinct frame — and fixes a latent level-0 bug.** A
   recursive region *R* calling *R* keeps PC inside `[base, base+len)`, so the exit
   dispatcher never runs, offsets fold into frame 0 duplicated, and `normalize`
-  ([src/ptrace_backend.c:452](../../src/ptrace_backend.c#L452)) emits a spurious block
+  ([src/ptrace_backend.c:452](../../../src/ptrace_backend.c#L452)) emits a spurious block
   boundary at the re-entered offset — wrong **even at level 0 today**. Detect a call whose
   target lands within the current frame's own range (via `is_call` on the last in-frame
   insn) and push a new frame with the same base and a deeper `sp_at_call`. Add a
@@ -189,12 +196,12 @@ mitigations are requirements, not nice-to-haves.
   set a `recursion-collapsed` truncation bit when hit.
 
 - **Forward benign signals; never abort on them.** The fork loop currently **kills** the
-  tracee on any non-SIGTRAP ([src/ptrace_backend.c:696-706](../../src/ptrace_backend.c#L696-L706));
-  the attached loop sets overflow and breaks ([:849-853](../../src/ptrace_backend.c#L849-L853)).
+  tracee on any non-SIGTRAP ([src/ptrace_backend.c:696-706](../../../src/ptrace_backend.c#L696-L706));
+  the attached loop sets overflow and breaks ([:849-853](../../../src/ptrace_backend.c#L849-L853)).
   During descent this is both a correctness bug and unsafe: managed runtimes use
   `SIGSEGV` (GC/null-check safepoints), `SIGURG` (preemption), `SIGPROF` (sampling) as
   routine control signals. Re-inject the signal via the `PTRACE_SINGLESTEP` data arg
-  exactly as `run_until` already does ([:548](../../src/ptrace_backend.c#L548)), and
+  exactly as `run_until` already does ([:548](../../../src/ptrace_backend.c#L548)), and
   suspend SP-pop evaluation while PC is inside the kernel-built signal frame (below all
   `sp_at_call`).
 
@@ -213,7 +220,7 @@ mitigations are requirements, not nice-to-haves.
   genuine return cannot match the wrong frame.
 
 > **Deferred in the first cut (2026-07-03) — known limitations, both on the branch-D
-> catch-all pop.** The [2026-07-03 call-descent review](../analysis/2026-07-03-call-descent-review.md)
+> catch-all pop.** The [2026-07-03 call-descent review](../../analysis/2026-07-03-call-descent-review.md)
 > surfaced that two of the mitigations above are only *partially* realized:
 > - **Signal-frame SP-pop suspension is NOT implemented.** On the live/attached path
 >   (`forward_faults=1`) an async managed-runtime signal (a `SIGSEGV` null-check safepoint,
@@ -249,9 +256,9 @@ are answered. **Effort:** 0.5 day.
 
 ### Phase 1 — Arch/read prerequisites — ✅ **DONE (2026-07-03)**
 
-Landed: `read_pc_ret` now also returns SP + AArch64 x30 ([src/ptrace_backend.c](../../src/ptrace_backend.c));
-`asmtest_disas_is_ret` + `asmtest_disas_call_target` in [src/disasm.c](../../src/disasm.c),
-declared in the non-parity-gated [asmtest_trace.h](../../include/asmtest_trace.h); the AArch64
+Landed: `read_pc_ret` now also returns SP + AArch64 x30 ([src/ptrace_backend.c](../../../src/ptrace_backend.c));
+`asmtest_disas_is_ret` + `asmtest_disas_call_target` in [src/disasm.c](../../../src/disasm.c),
+declared in the non-parity-gated [asmtest_trace.h](../../../include/asmtest_trace.h); the AArch64
 `NT_ARM_HW_BREAK` `set_hw_bp`/`clear_hw_bp` wired into `run_until` as the W^X fallback
 (x86-64 debug-register path unchanged). Unit tests `test_disas_queries` cover both arches
 cross-arch (11 checks, green on x86-64 live and aarch64-under-qemu). AArch64 object
@@ -259,10 +266,10 @@ cross-compiles clean; the live hardware-breakpoint trap awaits a real arm64 host
 exposes no debug-register slots, so `set_hw_bp` fails and the caller self-skips to edges-only).
 
 **Goal.** Land the primitives descent's loop needs. **Deliverables:**
-- Extend `read_pc_ret` ([src/ptrace_backend.c:322](../../src/ptrace_backend.c#L322)) to
+- Extend `read_pc_ret` ([src/ptrace_backend.c:322](../../../src/ptrace_backend.c#L322)) to
   also return SP (x86 `regs.rsp` / AArch64 `regs.sp`) and AArch64 entry-LR (`regs.regs[30]`).
 - `asmtest_disas_is_ret(arch, code, len, off)` — Capstone `CS_GRP_RET` (x86 `ret`/`retf`,
-  AArch64 `ret`), mirroring `asmtest_disas_is_call` ([src/disasm.c:128](../../src/disasm.c#L128)).
+  AArch64 `ret`), mirroring `asmtest_disas_is_call` ([src/disasm.c:128](../../../src/disasm.c#L128)).
 - `asmtest_disas_call_target(arch, code, len, base, off, *target)` — direct-call target
   (x86 `E8` rel32 via `X86_OP_IMM`; AArch64 `bl` imm26); returns "indirect" for
   `call r/m`/`blr` so the loop uses the live post-step PC instead.
@@ -270,7 +277,7 @@ exposes no debug-register slots, so `set_hw_bp` fails and the caller self-skips 
 - **AArch64 hardware-breakpoint path (`NT_ARM_HW_BREAK`)** — *in scope, per decision.* Add
   an AArch64 `set_hw_bp`/`clear_hw_bp` via `PTRACE_SETREGSET`/`NT_ARM_HW_BREAK` (debug
   breakpoint control + value registers `DBGBCR`/`DBGBVR`), so `run_until`/`run_to` gets the
-  same W^X fallback x86-64 already has ([src/ptrace_backend.c:485](../../src/ptrace_backend.c#L485)).
+  same W^X fallback x86-64 already has ([src/ptrace_backend.c:485](../../../src/ptrace_backend.c#L485)).
   This closes the parity gap: L2/L3 descent works on a W^X JIT heap on AArch64 instead of
   degrading to edges-only. Gate on a runtime probe (`ptrace(PTRACE_GETREGSET, …,
   NT_ARM_HW_BREAK)` reporting ≥1 breakpoint slot) and self-skip where the kernel/host has none.
@@ -286,12 +293,12 @@ consumes them. **Effort:** 3 days (was 1; +2 for the AArch64 `NT_ARM_HW_BREAK` p
 
 ### Phase 2 — Handle + accessors, no loop changes yet — ✅ **DONE (2026-07-03)**
 
-Landed: [src/descent.c](../../src/descent.c) (growable edge/frame pools + the ~20 scalar
-accessors + the internal mutators the loop drives), [include/asmtest_descent_internal.h](../../include/asmtest_descent_internal.h)
+Landed: [src/descent.c](../../../src/descent.c) (growable edge/frame pools + the ~20 scalar
+accessors + the internal mutators the loop drives), [include/asmtest_descent_internal.h](../../../include/asmtest_descent_internal.h)
 (private handle layout, not a tier header), the frozen public surface in
-[asmtest_ptrace.h](../../include/asmtest_ptrace.h), and the three `_ex` entry points as
+[asmtest_ptrace.h](../../../include/asmtest_ptrace.h), and the three `_ex` entry points as
 level-0-only wrappers (descent handle reads back empty). Wired into `HWTRACE_OBJS` + the
-`pic`/shared-lib lists in [mk/native-trace.mk](../../mk/native-trace.mk). (`scripts/amalgamate.sh`
+`pic`/shared-lib lists in [mk/native-trace.mk](../../../mk/native-trace.mk). (`scripts/amalgamate.sh`
 covers only the core `asmtest.c` surface, not the hwtrace tier — ptrace_backend.c is already
 excluded — so descent.c is correctly *not* added there.) `test_descent_handle` green (8
 checks); compiles clean on x86-64 and aarch64. The 10-way binding decls + parity land with
@@ -301,7 +308,7 @@ Phase 7 (header intentionally ahead of bindings until then, in one change).
 exist as `descent==NULL` wrappers so parity/manifest/tests stay green while the loop is
 still level-0-only. **Deliverables:** `src/descent.c` (alloc/free/append/dedup + edge &
 frame pools + the ~20 read accessors, reusing `trace_append_insn/block` discipline from
-[src/trace.c](../../src/trace.c)); declarations in `include/asmtest_ptrace.h`; wire
+[src/trace.c](../../../src/trace.c)); declarations in `include/asmtest_ptrace.h`; wire
 `src/descent.c` into `HWTRACE_OBJS` (Makefile) **and** `scripts/amalgamate.sh`'s source
 list. **Critical:** the parity gate (`scripts/check-bindings-parity.sh`, which greps
 `asmtest_ptrace.h`) turns every new symbol into a required declaration in **all 10
@@ -327,7 +334,7 @@ green with the NULL-descent wrappers. **Effort:** 2 days C + folded into Phase 7
 > the built-in denylist, as this phase originally promised.
 
 Implemented as one shadow-stack descending loop (`descend_core` in
-[src/ptrace_backend.c](../../src/ptrace_backend.c)) shared by the fork and attached `_ex`
+[src/ptrace_backend.c](../../../src/ptrace_backend.c)) shared by the fork and attached `_ex`
 entry points, covering all levels at once. Load-bearing correctness pieces landed: the
 pop-phase-first ordering (so a same-region recursion's return — whose address lies inside
 the frame — is popped before the in-frame check), the exact `PC==ret_addr && SP==sp_ret &&
@@ -346,7 +353,7 @@ step-over path land with Phase 8; the conformance corpus fixture with Phase 6.
 ### Phase 3 — Level 1 `RECORD_EDGES` (detail)
 
 **Goal.** Stop discarding the out-of-region PC at
-[src/ptrace_backend.c:856](../../src/ptrace_backend.c#L856); append edges in the exit
+[src/ptrace_backend.c:856](../../../src/ptrace_backend.c#L856); append edges in the exit
 dispatcher on both fork and attached paths, still using `run_until` step-over.
 **Deliverables:** edge append (`call_site = stream[n-1]`, `callee = out-of-region PC` or
 `call_target` for direct calls); `truncated` on edge-pool overflow. **Acceptance:** new C
@@ -387,7 +394,7 @@ discipline).
 ### Phase 6 — Conformance + manifest + parity — ✅ **DONE (2026-07-03)**
 
 Added a `ptrace_descent` tier to `run_corpus()` + `emit_corpus()` in
-[conformance.c](../../bindings/conformance/conformance.c) (a `calls_leaf` in-blob
+[conformance.c](../../../bindings/conformance/conformance.c) (a `calls_leaf` in-blob
 R→sibling-S fixture, x86-64 + AArch64 bytes; self-skips off a single-step host / arch
 mismatch), linking the ptrace backend + descent + Capstone into `$(BUILD)/conformance`. The
 generated `corpus.json` carries two cases (L1 edges, L2 descend) with a per-case `arch` gate.
@@ -399,10 +406,10 @@ bindings in sync**. L3 kept out of the corpus. All 10 bindings replay L1/L2 or S
 
 **Goal.** Pin descent behaviour cross-language. **Deliverables:** a new `ptrace_descent`
 tier added to `run_corpus()` **and** `emit_corpus()` in
-[bindings/conformance/conformance.c](../../bindings/conformance/conformance.c) (the
+[bindings/conformance/conformance.c](../../../bindings/conformance/conformance.c) (the
 generated `corpus.json` is rebuilt by `make conformance` — **never hand-edit it**), plus a
 `calls_leaf` two-routine fixture in
-[bindings/conformance/corpus_routines.c](../../bindings/conformance/corpus_routines.c) whose
+[bindings/conformance/corpus_routines.c](../../../bindings/conformance/corpus_routines.c) whose
 call target is an **in-blob sibling** (a rel32 call cannot reach libc from an `mmap`'d
 page — keeps emitted bytes host-portable on both arches). A **per-binding ptrace self-skip
 gate** mirroring `test_ptrace_callout`'s `asmtest_ptrace_available()` so qemu-user / yama /
@@ -423,7 +430,7 @@ mask, .NET `GCHandle`/Java `upcallStub`-Arena/Node `koffi.register`/Lua `ffi.cas
 `runtime.Pinner`/Python `CFUNCTYPE` upcall pinning). The resolver ships to the six upcall-safe
 FFIs (Python/Go/Node/Java/.NET/Lua) with a resolver smoke test each; Rust/Ruby/C++/Zig are
 allow-set-only and exempt `set_resolver`/`set_denylist` in
-[bindings-parity-allow.txt](../../scripts/bindings-parity-allow.txt). Parity green. Validated
+[bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt). Parity green. Validated
 live per binding (descent smoke + conformance replay). **Also corrected a pre-existing
 cross-binding drift** surfaced here: commit `10bd4ed` switched the single-step block model to
 ends-at-branch (the loop is 3 blocks `{0,0x7,0xf}`, matching the C reference) but the binding
@@ -484,7 +491,7 @@ the aarch64 `calls_leaf` fixture is carried in the conformance corpus + compiles
 
 **Goal.** Deterministic C coverage + live proof. **Deliverables:**
 - New `examples/test_hwtrace.c` fork-path tests beside `test_ptrace_callout`
-  ([~line 1232](../../examples/test_hwtrace.c)): a two-routine `descent_blob` — region *R*
+  ([~line 1232](../../../examples/test_hwtrace.c)): a two-routine `descent_blob` — region *R*
   calling a known sibling *S*, region *M* calling libc `memcpy` — asserting **level 0**
   (top body only), **level 1** (edge recorded, callee not stepped), **level 2** (descends
   into *S* as a nested frame; the libc call still stepped over), **level 3** (descends the
@@ -508,33 +515,33 @@ self-skips. **Effort:** 3 days.
 
 ### Phase 9 — Docs — ✅ **DONE (2026-07-03)**
 
-Landed: [native-tracing.md](../guides/tracing/native-tracing.md) "Call descent levels" subsection (4-level
+Landed: [native-tracing.md](../../guides/tracing/native-tracing.md) "Call descent levels" subsection (4-level
 table + edge/frame model + the honesty limits + the `dotnet-bcl-descend` worked-output
-pointer); the L3-hazard treatment in [hardware-tracing.md](../guides/tracing/hardware-tracing.md) and
-[analysis/jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md); the ~27 new symbols in
-[api-reference.md](../reference/api-reference.md); five [glossary.md](../project/glossary.md) terms (call
+pointer); the L3-hazard treatment in [hardware-tracing.md](../../guides/tracing/hardware-tracing.md) and
+[analysis/jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md); the ~27 new symbols in
+[api-reference.md](../../reference/api-reference.md); five [glossary.md](../../project/glossary.md) terms (call
 descent, call edge, descent level, frame 0, nested frame, shadow stack, step-over vs
-step-into); the single-region-invariant reconciliation in [traces.md](../guides/tracing/traces.md);
-per-binding paragraphs ([python.md](../bindings/python.md), [dotnet.md](../bindings/dotnet.md));
-the [CHANGELOG.md](../../CHANGELOG.md) entry; and the version bump via
-[scripts/sync-version.sh](../../scripts/sync-version.sh).
+step-into); the single-region-invariant reconciliation in [traces.md](../../guides/tracing/traces.md);
+per-binding paragraphs ([python.md](../../bindings/python.md), [dotnet.md](../../bindings/dotnet.md));
+the [CHANGELOG.md](../../../CHANGELOG.md) entry; and the version bump via
+[scripts/sync-version.sh](../../../scripts/sync-version.sh).
 
 ### Phase 9 — Docs (detail)
 
 **Goal.** Every doc reflects descent, honestly. **Deliverables** (one section each):
-- [docs/native-tracing.md](../guides/tracing/native-tracing.md) §558-604 — extend the step-over passage
+- [docs/native-tracing.md](../../guides/tracing/native-tracing.md) §558-604 — extend the step-over passage
   into a **"Call descent levels"** subsection with the 4-level table, the edge/frame model,
   and a **worked `dotnet-bcl-descend` output** captured from the Phase 8 make target (so it
   lands *last*).
-- [docs/hardware-tracing.md](../guides/tracing/hardware-tracing.md) — managed-runtime descent note + the L3 caveat.
-- [docs/api-reference.md](../reference/api-reference.md) — the ~20 new symbols.
-- [docs/glossary.md](../project/glossary.md) — *descent level*, *call edge*, *nested frame*,
+- [docs/hardware-tracing.md](../../guides/tracing/hardware-tracing.md) — managed-runtime descent note + the L3 caveat.
+- [docs/api-reference.md](../../reference/api-reference.md) — the ~20 new symbols.
+- [docs/glossary.md](../../project/glossary.md) — *descent level*, *call edge*, *nested frame*,
   *shadow stack*, *step-over vs step-into*.
-- [docs/traces.md](../guides/tracing/traces.md) — reconcile the "single-region `asmtest_trace_t` invariant"
+- [docs/traces.md](../../guides/tracing/traces.md) — reconcile the "single-region `asmtest_trace_t` invariant"
   text with nested frames (frame 0 remains the single-region view; descent frames live in
   the separate handle).
-- [docs/bindings/*.md](../bindings/) — one paragraph each (esp. `dotnet.md`, `python.md`).
-- [docs/analysis/jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md) — **why L3 is
+- [docs/bindings/*.md](../../bindings/) — one paragraph each (esp. `dotnet.md`, `python.md`).
+- [docs/analysis/jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) — **why L3 is
   hazardous on a live runtime and when to use it**.
 - `CHANGELOG.md`, README/DESIGN cross-links; `scripts/sync-version.sh` version bump.
 
@@ -548,7 +555,7 @@ The review was blunt: **L3 on a live managed runtime is not "expensive/noisy" �
 perturb or deadlock the target**, and the plan must default to that truth.
 
 - **Cross-thread lock inversion is a real, not-fully-mitigable deadlock vector.** Attach is
-  single-tid ([examples/jit_trace.c:301](../../examples/jit_trace.c#L301)) — sibling
+  single-tid ([examples/jit_trace.c:301](../../../examples/jit_trace.c#L301)) — sibling
   CoreCLR/JVM threads run free. Single-stepping (~1000× slower) a helper that holds a lock
   a sibling needs (GC alloc slow-path, JIT-compile helper, `_dl_runtime_resolve` under the
   loader lock, malloc arena) stalls the sibling; a per-thread watchdog cannot break a lock
@@ -578,7 +585,7 @@ internals" — with the residual, documented caveat that L2 still single-steps t
 of each known method (including its calls up to the step-over point), so the allow-set /
 resolver must be **method-exact**, never broad module ranges that re-admit runtime glue.
 
-**AArch64:** today `run_to` is software-`brk`-only ([src/ptrace_backend.c:517](../../src/ptrace_backend.c#L517)),
+**AArch64:** today `run_to` is software-`brk`-only ([src/ptrace_backend.c:517](../../../src/ptrace_backend.c#L517)),
 so on a W^X JIT heap a callee's return breakpoint cannot be planted. Per the scope decision,
 **Phase 1 adds the `NT_ARM_HW_BREAK` hardware-breakpoint path**, giving AArch64 the same W^X
 fallback as x86-64 — so L2/L3 descent works on a W^X JIT heap on AArch64. The edges-only

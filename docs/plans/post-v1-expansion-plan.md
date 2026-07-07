@@ -2,7 +2,7 @@
 
 A roadmap for what comes *after* the v1.0.0 feature set. The five prior plans —
 [DESIGN.md](../../DESIGN.md) (phases 0–11), [expansion-plan.md](expansion-plan.md)
-(tracks A–E), [multi-language-bindings-plan.md](multi-language-bindings-plan.md)
+(tracks A–E), [multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md)
 (Track 0 + ten languages), [binding-parity-plan.md](../archive/plans/binding-parity-plan.md), and the
 [Native Win64 tier plan](../archive/plans/win64-native-tier-plan.md) — are all **landed**. They
 widened *what can be tested*, *how the runner behaves*, and *who can call it*. This

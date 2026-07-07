@@ -3,7 +3,7 @@
 The **shared** half of the [scoped in-process tracing
 plan](scoped-inprocess-tracing-plan.md) — the C-layer work that is built **once**
 and reused by all ten language shims, so each per-language track (owned by the
-[bindings slice](scoped-tracing-bindings-plan.md) and the [managed
+[bindings slice](../archive/plans/scoped-tracing-bindings-plan.md) and the [managed
 slice](scoped-tracing-managed-plan.md)) stays thin and mechanical.
 
 It covers new-item **3, 4, 5, 6** from the umbrella's

@@ -40,7 +40,7 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 - [shared-core §2](scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c)
   (libipt decode-against-self-code-image glue) — the *clean* in-process path for
   live JIT code is PT/LBR + recorder bytes; this slice is its first consumer.
-- [bindings slice](scoped-tracing-bindings-plan.md) — the `.NET AsmTrace` reference
+- [bindings slice](../archive/plans/scoped-tracing-bindings-plan.md) — the `.NET AsmTrace` reference
   construct; this slice adds `.NET`'s managed-code capability on top and builds the
   **Node** and **Java** scope constructs (rated "medium," same tier as .NET).
 
@@ -85,7 +85,7 @@ the scope's promise degrades differently by backend:
   decoder already region-filters, [src/pt_backend.c:108](../../src/pt_backend.c#L108));
   under a stepper it is descent-**L3** (`DESCEND_ALL`) — default-off,
   denylist/budget/watchdog-guarded, **expected to self-truncate** on a live runtime
-  ([call-descent-plan.md](call-descent-plan.md)). Best-effort by design.
+  ([call-descent-plan.md](../archive/plans/call-descent-plan.md)). Best-effort by design.
 - **One JIT'd method ("trace this method's full body").** A region + step-over
   (descent OFF / `DESCEND_KNOWN`) — reliable, and already shipping via the W2
   attached path. It costs the extra knowledge the empty scope avoids: keep the
@@ -110,7 +110,7 @@ per-language analogues).
 > decision, see the zero-config plan's §Z1 routing note). **§D0.2 landed**
 > dependency-free: `DiagnosticsIpc` hand-rolls the `DOTNET_IPC_V1`
 > `EnablePerfMap(JitDump)` wire command instead of taking a `DiagnosticsClient`
-> dependency (see [dotnet-perfmap-rundown-plan.md](dotnet-perfmap-rundown-plan.md)).
+> dependency (see [dotnet-perfmap-rundown-plan.md](../archive/plans/dotnet-perfmap-rundown-plan.md)).
 > **§D0.3 named-method form LANDED (2026-07):** `AsmTrace.Method(Delegate)` resolves a
 > method's own JIT'd body (PrepareMethod + the `MethodLoadVerbose` listener, jitdump
 > rundown for a warm/R2R body), registers it as a region, and traces it with step-over

@@ -33,7 +33,7 @@ single-step cannot run.
 | [descent_dotnet/](descent_dotnet/) | `Ptrace.TraceAttachedEx` + `Descent` | call descent against a **live CoreCLR** — attach to `jit_dotnet`'s `chain` mode and step INTO `Program::Leaf` as nested frames |
 | [codeimage/](codeimage/) | `CodeImage.Track` / `BytesAt` | **one address, two code bodies** over logical time — a self-patched blob the timeline keeps both versions of |
 
-See the [dotnet examples roadmap](../../docs/plans/dotnet-examples-roadmap.md) for the full design
+See the [dotnet examples roadmap](../../docs/archive/plans/dotnet-examples-roadmap.md) for the full design
 pass behind these and what the single-step tier honestly cannot do.
 
 (The sibling [jit_dotnet/](jit_dotnet/) is **not** a scope demo: it is a bare CoreCLR
@@ -181,7 +181,7 @@ rundown enabled: True; captured 973328 instructions (truncated); 38 methods labe
 tiers. (`Console::WriteLine(string)` itself is an inlined forwarder, so its *work* shows up
 as these R2R callees.) Self-skips to the cold-only result where diagnostics are off
 (`DOTNET_EnableDiagnostics=0` → `rundown enabled: False`). See
-[dotnet-perfmap-rundown-plan.md](../../docs/plans/dotnet-perfmap-rundown-plan.md).
+[dotnet-perfmap-rundown-plan.md](../../docs/archive/plans/dotnet-perfmap-rundown-plan.md).
 
 ## assemblies — grouping the window by declaring assembly (observed output)
 

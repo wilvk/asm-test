@@ -3,7 +3,7 @@
 Run, **capture**, **emulate**, and **assemble** assembly routines through the
 [asm-test](https://github.com/wilvk/asm-test) framework from Python, and let
 `pytest` validate the results. This is the reference binding for the
-[multi-language bindings plan](../../docs/plans/multi-language-bindings-plan.md)
+[multi-language bindings plan](../../docs/archive/plans/multi-language-bindings-plan.md)
 (Track P).
 
 It is **pure ctypes** — no compile step, no `cffi`/`numpy` dependency. Struct

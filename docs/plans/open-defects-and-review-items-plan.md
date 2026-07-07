@@ -7,7 +7,7 @@ defect sweep landed. It covers two sources:
    (captured in project memory) plus the deliberate, documented limitations grep
    surfaces in the headers.
 2. **Still-open review items** — the four findings from the
-   [2026-07-02 repo review](../reviews/2026-07-02-repo-review.md) that the summaries
+   [2026-07-02 repo review](../archive/reviews/2026-07-02-repo-review.md) that the summaries
    list as not-yet-closed (S1, B2, B5, B7).
 
 Everything else from the plans and reviews is either landed (see

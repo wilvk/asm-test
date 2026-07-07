@@ -49,7 +49,7 @@ own.
 > Status legend: **planned** unless noted. Update this file (and the slice files)
 > as slices land, the way
 > [hardware-trace-plan.md](hardware-trace-plan.md) and
-> [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
+> [multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md) track theirs.
 
 ---
 
@@ -163,7 +163,7 @@ slice, dependency-ordered:
 | Slice | Plan | Owns | New-item coverage |
 |---|---|---|---|
 | **Core** | [scoped-tracing-core-plan.md](scoped-tracing-core-plan.md) | The two cheap C-layer fixes, per-thread hwtrace state, the shared render-on-close path, the arming-thread assert, the libipt decode-against-self-code-image glue, and whole-window completeness (Q2 noise attribution + Q3 snapshot drain) | 3, 4, 5, 6 |
-| **Bindings** | [scoped-tracing-bindings-plan.md](scoped-tracing-bindings-plan.md) | The scope construct + auto-name + arm hook + thread-id assert across the **native / interpreter / Go** tiers (C++, Rust, Zig, Python, Ruby, Lua, Go), with **.NET as the reference shim shape** | 1, 2 |
+| **Bindings** | [scoped-tracing-bindings-plan.md](../archive/plans/scoped-tracing-bindings-plan.md) | The scope construct + auto-name + arm hook + thread-id assert across the **native / interpreter / Go** tiers (C++, Rust, Zig, Python, Ruby, Lua, Go), with **.NET as the reference shim shape** | 1, 2 |
 | **Managed** | [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) | The **managed JIT tier** — Node → JVM → .NET — on the PT/ptrace clean path: `MethodLoadVerbose` address resolution, the shared `AsyncLocal`/`AsyncLocalStorage`/JVMTI piece-D async-hop stitching model, and the concealed ptrace stepper scope | 7 |
 | **Zero-config** (capstone) | [scoped-tracing-zeroconfig-plan.md](scoped-tracing-zeroconfig-plan.md) | The **aspirational empty-ctor form** — `using (new AsmTrace())` with no region argument. Adds **no** new primitive; repackages the three slices into a region-free arm surface + whole-window capture mode + honest self-skip UX, honestly qualified to the narrow host envelope where it is reachable | (consumes 1–7) |
 
@@ -306,10 +306,10 @@ local specifics.
 - **[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md)** — the W2
   out-of-process ptrace stepper the Managed slice conceals behind the scope façade
   for Zen 2 / Docker-on-Mac.
-- **[multi-language-bindings-plan.md](multi-language-bindings-plan.md)** — the
+- **[multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md)** — the
   shared-substrate + per-language-shim pattern this plan reuses; the ten `region()`
   helpers it produced are the Bindings slice's starting point.
-- **[call-descent-plan.md](call-descent-plan.md)** — the L3 `DESCEND_ALL`
+- **[call-descent-plan.md](../archive/plans/call-descent-plan.md)** — the L3 `DESCEND_ALL`
   denylist/budget/watchdog machinery the whole-scope stepper rides (best-effort).
 
 ## Sources

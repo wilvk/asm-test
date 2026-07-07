@@ -1,7 +1,7 @@
 # asm-test — call-descent code review (2026-07-03)
 
 *Status: review / findings, remediated. A focused code-level review of the
-[call-descent feature](../plans/call-descent-plan.md) (the `asmtest_descent_t`
+[call-descent feature](../archive/plans/call-descent-plan.md) (the `asmtest_descent_t`
 out-of-process descending tracer + its ten language bindings), run immediately after
 the feature landed and before it was committed. Scope is the descent diff only —
 `src/descent.c`, the descent additions in `src/ptrace_backend.c`, the two new
@@ -29,7 +29,7 @@ re-validated (C suite 133/133, ASan-clean; conformance 20/20; bindings-parity in
 representative bindings green; AArch64 compile clean). Two findings (D1, D2) are real but
 reachable only on the live/attached managed-runtime path — already documented
 best-effort/expected-to-perturb — and are recorded as honest limitations in the plan's
-[Correctness core](../plans/call-descent-plan.md) section rather than papered over. A new
+[Correctness core](../archive/plans/call-descent-plan.md) section rather than papered over. A new
 regression test (`test_descent_stale_alarm_flag`) was added for the highest-severity fix
 and confirmed to fail on the pre-fix code.
 

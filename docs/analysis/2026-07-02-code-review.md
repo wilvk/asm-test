@@ -1,11 +1,11 @@
 # asm-test — code-level review (2026-07-02)
 
 *Status: review / findings. This is the code-level pass the
-[2026-07-02 repo review](../reviews/2026-07-02-repo-review.md) could not run
+[2026-07-02 repo review](../archive/reviews/2026-07-02-repo-review.md) could not run
 (its "incomplete code re-scan" caveat): core runtime, language bindings, and
 the trace/emu tiers, extended to the Win64 port, test-suite quality, build/CI,
 the eBPF surface, and doc accuracy. It should be read alongside that review and
-the [2026-07-01 review](../reviews/2026-07-01-repo-review.md); their findings
+the [2026-07-01 review](../archive/reviews/2026-07-01-repo-review.md); their findings
 (1–15, B1–B7, S1–S3) were excluded from this pass and are not repeated here.*
 
 **Method:** twelve parallel single-dimension reviewers read their slice of the
@@ -879,5 +879,5 @@ on them.
 - The two prior reviews' still-open items (notably in-process crash
   containment, the Lua arg-dropping, emulator state reset, and Node `Number()`
   read-backs) remain open and are tracked in
-  [the 2026-07-02 repo review](../reviews/2026-07-02-repo-review.md), not here.
+  [the 2026-07-02 repo review](../archive/reviews/2026-07-02-repo-review.md), not here.
 

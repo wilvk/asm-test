@@ -221,4 +221,4 @@ is the contract's correctness anchor. The matching `_Static_assert`s in
 stores, and the manifest from drifting apart.
 
 The full rollout across languages is tracked in the multi-language bindings
-plan (`docs/plans/multi-language-bindings-plan.md`).
+plan (`docs/archive/plans/multi-language-bindings-plan.md`).

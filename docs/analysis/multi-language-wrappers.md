@@ -2,7 +2,7 @@
 
 *Status: analysis / findings. This document records a feasibility investigation,
 not shipped behaviour. The corresponding implementation roadmap is
-[Multi-language bindings plan](../plans/multi-language-bindings-plan.md).*
+[Multi-language bindings plan](../archive/plans/multi-language-bindings-plan.md).*
 
 ## Question
 
@@ -257,6 +257,6 @@ moving-GC languages either pin carefully or lean on the emulator's disjoint memo
 Multi-language wrappers are feasible and low-risk, for both running and testing
 assembly, in one call or two, with intervening host code, against pre-existing host
 state. The C core stays untouched; the work is a shared-library build target plus
-per-language bindings. See the [Multi-language bindings plan](../plans/multi-language-bindings-plan.md)
+per-language bindings. See the [Multi-language bindings plan](../archive/plans/multi-language-bindings-plan.md)
 for the full roadmap covering both the trampoline and the emulator across every
 language above.

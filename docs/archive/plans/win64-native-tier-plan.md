@@ -13,7 +13,7 @@ trampoline is the easy part; the runner is POSIX and that is the cost** — and 
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
 > [expansion-plan.md](../../plans/expansion-plan.md) and
-> [multi-language-bindings-plan.md](../../plans/multi-language-bindings-plan.md) track theirs.
+> [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
 >
 > **Status: complete (2026-07-04).** All phases landed, including Phase 4 (Win32
 > runner port, past the gate by request) and Phase 5 (CI + docs): the `win64`

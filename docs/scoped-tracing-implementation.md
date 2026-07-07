@@ -11,7 +11,7 @@ orphan: true
 This document records what was **built and tested** for the scoped-tracing plan set
 ([scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-inprocess-tracing-plan.md) and its
 three slices — [core](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-core-plan.md),
-[bindings](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-bindings-plan.md),
+[bindings](https://github.com/wilvk/asm-test/blob/main/docs/archive/plans/scoped-tracing-bindings-plan.md),
 [managed](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-managed-plan.md)), and what remains **forward-look**
 (gated on hardware / managed runtimes the CI host lacks — this dev box is AMD, with no
 Intel PT and no bare-metal perf privilege in containers).

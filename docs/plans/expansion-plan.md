@@ -493,5 +493,5 @@ isolation port is worth doing can be decided from there.
 - Rewriting in another language; the C + asm core is the point. (Note: *wrapping*
   the C core with bindings for other languages — distinct from rewriting it — is a
   separate, planned effort; see the
-  [Multi-language bindings plan](multi-language-bindings-plan.md) and its
+  [Multi-language bindings plan](../archive/plans/multi-language-bindings-plan.md) and its
   [feasibility analysis](../analysis/multi-language-wrappers.md).)

@@ -6,13 +6,18 @@ the native **capture trampoline** and the **Unicorn emulator** — without copyi
 sources or writing C glue by hand.
 
 This plan implements the conclusions of
-[Analysis: multi-language wrappers](../analysis/multi-language-wrappers.md). Read
+[Analysis: multi-language wrappers](../../analysis/multi-language-wrappers.md). Read
 that first for *why* it works and the correctness rules; this document is the
 *how* and *in what order*.
 
 > Status legend: **planned** unless noted. Update this file as tracks land, the
-> way [DESIGN.md](../../DESIGN.md) and [expansion-plan.md](expansion-plan.md) track
+> way [DESIGN.md](../../../DESIGN.md) and [expansion-plan.md](../../plans/expansion-plan.md) track
 > their phases.
+>
+> **Status: complete (2026-07-07).** Track 0 (shared substrate) and all ten
+> language tracks are **done**, and Tier 2 (idiomatic assertion layers) has landed
+> for all ten bindings. Tier 3 (porting the runner into another language) remains
+> out of scope by design.
 
 ---
 
@@ -90,7 +95,7 @@ per-language job, first instantiated for Python). Verified on x86-64 macOS:
   `asmtest_check_flag` *return* a verdict + reason instead of `longjmp`-ing into
   the runner, so a binding can validate a capture across the FFI boundary with no
   C runner present (the jumping `asmtest_assert_*` now delegate to them). The
-  contract symbol set is designated in the [API reference](../reference/api-reference.md)
+  contract symbol set is designated in the [API reference](../../reference/api-reference.md)
   (Binding ABI section) — every call path already has a non-variadic array form,
   so a generator needn't emulate cpp expansion. `ASMTEST_NO_MAIN` lets the
   runtime link without its `main()` for embedding/driver use.
@@ -191,14 +196,14 @@ Each track delivers, unless noted, the same five things:
 
 ### Track P — Python *(first; proves the substrate) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/python/`](../../bindings/python/).
+**Status: Tier 1 binding landed** in [`bindings/python/`](../../../bindings/python/).
 A **pure-ctypes** package (no `cffi`/compile step) loads the shared library and
 the `asmtest_abi.json` manifest, then exposes `capture()` / `capture_fp()` /
 `capture_vec()` returning a `Regs` snapshot (`ret`, `flags`, `fret`, vector
 lanes, `abi_preserved` via the native verdict shim, `flag_set` via the manifest
 masks) and an `Emulator` context manager whose `EmuResult` surfaces faults as
 data. `make python-test` builds the shared libs + manifest + corpus + a routine
-fixture lib and runs pytest; [`tests/test_conformance.py`](../../bindings/python/tests/test_conformance.py)
+fixture lib and runs pytest; [`tests/test_conformance.py`](../../../bindings/python/tests/test_conformance.py)
 replays the same `corpus.json` the C reference emits and reproduces all 8 cases
 (10/10 green on x86-64 macOS), proving the substrate end to end from another
 language. The CI runs it (see the `bindings` matrix). A `pyproject.toml` packages it. **Tier 2
@@ -226,7 +231,7 @@ binding other tracks copy.
 
 ### Track R — Rust *(second; proves no-GC + auto-generation) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/rust/`](../../bindings/rust/). A
+**Status: Tier 1 binding landed** in [`bindings/rust/`](../../../bindings/rust/). A
 no-crates-io crate: `#[repr(C)]` mirrors of `regs_t` / the emulator structs
 (arch-selected via `cfg`) plus `extern "C"` declarations of the binding-ABI entry
 points, linked against the prebuilt shared libs by `build.rs`. `#[repr(C)]` makes
@@ -235,7 +240,7 @@ pointer-sharing trivial and lifetime-checked. Exposes `capture` / `capture_fp` /
 `capture_vec` → `Regs`, `abi_preserved` (native verdict shim), and an `Emulator`
 whose `EmuResult` carries faults as data. `make rust-test` builds the libs + the
 routine fixture and runs `cargo test`;
-[`tests/conformance.rs`](../../bindings/rust/tests/conformance.rs) replays the
+[`tests/conformance.rs`](../../../bindings/rust/tests/conformance.rs) replays the
 corpus (8/8, verified in the isolated `asmtest-rust` Docker image). **Tier 2
 landed**: assertion methods on `Regs` / `EmuResult` (`assert_ret`,
 `assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_no_fault`,
@@ -257,7 +262,7 @@ is the hand-written FFI above.
 
 ### Track G — Go *(situational; highest native friction) — Tier 1 + Tier 2 done*
 
-**Status: binding landed** in [`bindings/go/`](../../bindings/go/), via `cgo`.
+**Status: binding landed** in [`bindings/go/`](../../../bindings/go/), via `cgo`.
 The opaque-handle FFI layer (built for the N/J/D/C bindings) sidesteps the native
 friction this track originally anticipated: Go binds the scalar/pointer entry
 points and links the prebuilt shared libs, mirroring **no** struct layout, so the
@@ -265,7 +270,7 @@ moving-stack / cgo-pointer-rule hazards never arise (every handle is
 C-allocated). Exposes `Regs` (capture / ABI / flags / FP), `Emu` + `EmuResult`
 (faults as data), and Tier-2 `Assert*` helpers over a small `TB` interface that
 `*testing.T` satisfies. `make go-test` runs `go test`;
-[`conformance_test.go`](../../bindings/go/conformance_test.go) replays the corpus
+[`conformance_test.go`](../../../bindings/go/conformance_test.go) replays the corpus
 (verified in the isolated `asmtest-go` image; `make go-test` / `docker-go`). The
 emulator case uses the x86-64 guest, so it runs on the x86-64 `bindings` CI job.
 Deferred: a published Go module bundling the native libs per platform.
@@ -290,13 +295,13 @@ layer described in the status note.
 
 ### Track Z — Zig *(situational; lowest-ceremony native) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/zig/`](../../bindings/zig/). The
+**Status: Tier 1 binding landed** in [`bindings/zig/`](../../../bindings/zig/). The
 lowest-ceremony binding, exactly as planned: `@cImport` translates the C headers
 directly — no separate binding layer, no generated code — yielding the structs,
 the binding-ABI functions, and the flag-mask constants;
-[`src/conformance.zig`](../../bindings/zig/src/conformance.zig) replays the
+[`src/conformance.zig`](../../../bindings/zig/src/conformance.zig) replays the
 corpus through them (8/8, verified in the `asmtest-bindings` Docker image).
-[`build.zig`](../../bindings/zig/build.zig) (Zig 0.13.x) links the shared libs
+[`build.zig`](../../../bindings/zig/build.zig) (Zig 0.13.x) links the shared libs
 and takes `-Dincdir=` / `-Dlibdir=`. Deferred: a `build.zig.zon` package export
 and a Tier-2 assertion layer.
 
@@ -315,10 +320,10 @@ and a Tier-2 assertion layer.
 
 **Status: done.** The C headers now carry `extern "C"` guards (and a portable
 `ASMTEST_STATIC_ASSERT`), so a C++ TU both compiles and **links** against the
-framework. [`bindings/cpp/asmtest.hpp`](../../bindings/cpp/asmtest.hpp) adds an
+framework. [`bindings/cpp/asmtest.hpp`](../../../bindings/cpp/asmtest.hpp) adds an
 RAII `Emu`, initializer-list `capture` / `capture_fp` / `capture_vec`, vector-lane
 helpers, and `abi_preserved` / `flag_set` predicates;
-[`test_cpp.cpp`](../../bindings/cpp/test_cpp.cpp) drives the framework from C++
+[`test_cpp.cpp`](../../../bindings/cpp/test_cpp.cpp) drives the framework from C++
 (`make cpp-test`, 6/6; also run in the Docker bindings image). Consumption is via
 the existing `pkg-config` (and CMake's `pkg_check_modules`). Tier-2 GoogleTest/
 Catch2 example suites are an optional follow-on.
@@ -337,11 +342,11 @@ examples + a CMake consumption path, not a binding.
 
 ### Track N — Node / TypeScript *(demand-driven) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/node/`](../../bindings/node/),
+**Status: Tier 1 binding landed** in [`bindings/node/`](../../../bindings/node/),
 via [`koffi`](https://koffi.dev). It calls the opaque-handle FFI layer
 (`asmtest_corpus_routine` + `asmtest_capture6`/`_fp2` + `asmtest_regs_*` +
 `asmtest_emu_call2`), so no struct layout is mirrored in JS.
-[`conformance.js`](../../bindings/node/conformance.js) replays the corpus (7/7,
+[`conformance.js`](../../../bindings/node/conformance.js) replays the corpus (7/7,
 verified in the isolated `asmtest-node` image; `make node-test` / `docker-node`).
 Deferred: an npm package + a `vitest` Tier-2 layer.
 
@@ -356,10 +361,10 @@ Deferred: an npm package + a `vitest` Tier-2 layer.
 
 ### Track J — Java / Kotlin *(demand-driven) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/java/`](../../bindings/java/),
+**Status: Tier 1 binding landed** in [`bindings/java/`](../../../bindings/java/),
 via the Foreign Function & Memory API (Project Panama). Downcall handles target
 the opaque-handle FFI layer — no struct layout mirrored.
-[`Conformance.java`](../../bindings/java/Conformance.java) replays the corpus
+[`Conformance.java`](../../../bindings/java/Conformance.java) replays the corpus
 (7/7, verified in the isolated `asmtest-java` image; `make java-test` /
 `docker-java`). FFM is preview in JDK 21 (`--enable-preview`), stable in 22+.
 Deferred: a Maven/Gradle artifact, `jextract`, and a JUnit Tier-2 layer.
@@ -375,9 +380,9 @@ Deferred: a Maven/Gradle artifact, `jextract`, and a JUnit Tier-2 layer.
 
 ### Track D — C# / .NET *(demand-driven) — Tier 1 done*
 
-**Status: Tier 1 binding landed** in [`bindings/dotnet/`](../../bindings/dotnet/),
+**Status: Tier 1 binding landed** in [`bindings/dotnet/`](../../../bindings/dotnet/),
 via P/Invoke (`DllImport`) over the opaque-handle FFI layer — no struct layout
-mirrored. [`Program.cs`](../../bindings/dotnet/Program.cs) replays the corpus
+mirrored. [`Program.cs`](../../../bindings/dotnet/Program.cs) replays the corpus
 (7/7, verified in the isolated `asmtest-dotnet` image; `make dotnet-test` /
 `docker-dotnet`). Deferred: a NuGet package with `runtimes/<rid>/native/`
 payloads and an xUnit Tier-2 layer.
@@ -393,8 +398,8 @@ payloads and an xUnit Tier-2 layer.
 
 ### Track C — Ruby & Lua/LuaJIT *(community tier) — Tier 1 done*
 
-**Status: Tier 1 bindings landed** in [`bindings/ruby/`](../../bindings/ruby/)
-(stdlib `Fiddle`, no gem) and [`bindings/lua/`](../../bindings/lua/) (LuaJIT
+**Status: Tier 1 bindings landed** in [`bindings/ruby/`](../../../bindings/ruby/)
+(stdlib `Fiddle`, no gem) and [`bindings/lua/`](../../../bindings/lua/) (LuaJIT
 `ffi`), both over the opaque-handle FFI layer — no struct layout mirrored. Each
 replays the corpus (7/7, verified in the isolated `asmtest-ruby` / `asmtest-lua`
 images; `make ruby-test` / `lua-test` / `docker-ruby` / `docker-lua`). Deferred:
@@ -425,7 +430,7 @@ consume the binding-ABI header almost verbatim, making it cheap if wanted.
   host subprocess), so the docs give one consistent crash-safety story.
 - **Pinning matrix.** Maintain a short per-language table of the correct
   buffer-pinning idiom (from Finding 4), referenced from each track.
-- **Packaging.** *Scaffolded — see [docs/packaging.md](../reference/packaging.md).* Each
+- **Packaging.** *Scaffolded — see [docs/packaging.md](../../reference/packaging.md).* Each
   ecosystem ships the prebuilt shared libs per platform (PyPI wheels, crates.io +
   build script, npm prebuilds, Maven classifiers, NuGet rids, gems, rocks); a
   binding must not require the end user to `make` the C core. Every binding now
@@ -467,7 +472,7 @@ Node, Java, .NET, Ruby, Lua, Go) — assertion helpers with legible failure mess
 panicking, or error-union), each verified on both the pass paths and the failure
 paths (the assertion actually fails when it should). Packaging each binding for
 its registry is now **scaffolded** (manifests + `make <lang>-package` +
-[docs/packaging.md](../reference/packaging.md)); the remaining deferred work is a
+[docs/packaging.md](../../reference/packaging.md)); the remaining deferred work is a
 credentialed, multi-platform publish.
 
 ---
@@ -501,6 +506,6 @@ credentialed, multi-platform publish.
 
 - Tier 3 (porting the runner/discovery into another language).
 - New guest architectures beyond the existing four (deferred in
-  [expansion-plan.md](expansion-plan.md)).
+  [expansion-plan.md](../../plans/expansion-plan.md)).
 - A native Win64 trampoline (Win64 stays emulator-only; see Track E.1 in
-  [expansion-plan.md](expansion-plan.md)).
+  [expansion-plan.md](../../plans/expansion-plan.md)).

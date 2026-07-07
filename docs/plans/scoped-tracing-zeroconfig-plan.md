@@ -10,7 +10,7 @@ degraded honestly behind it.
 
 This is a **sibling** of the three scoped-tracing slice plans
 ([scoped-tracing-core-plan.md](scoped-tracing-core-plan.md),
-[scoped-tracing-bindings-plan.md](scoped-tracing-bindings-plan.md),
+[scoped-tracing-bindings-plan.md](../archive/plans/scoped-tracing-bindings-plan.md),
 [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md)) and of
 [hardware-trace-plan.md](hardware-trace-plan.md). Like the umbrella
 [scoped-inprocess-tracing-plan.md](scoped-inprocess-tracing-plan.md), it **adds no new
@@ -261,8 +261,8 @@ capture tier exists.
 
 **Depends on:** Core §0.1–§0.4 + §1
 ([scoped-tracing-core-plan.md](scoped-tracing-core-plan.md#0--the-two-cheap-c-layer-fixes--shared-render-on-close-done));
-the [bindings shim shape](scoped-tracing-bindings-plan.md#the-shim-shape-one-pattern-ten-realisations);
-[multi-language-bindings-plan.md](multi-language-bindings-plan.md); the substrate
+the [bindings shim shape](../archive/plans/scoped-tracing-bindings-plan.md#the-shim-shape-one-pattern-ten-realisations);
+[multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md); the substrate
 `available()`/`skip_reason()` self-probe.
 
 **Gate.** The region-free arm ABI, lazy-arm-claims-no-slot, auto-name,
@@ -368,7 +368,7 @@ handle:
   prerequisites of the "first end-to-end value" claim, not deferred to §Z3** — §Z3 then owns
   only the *managed* method-discovery + tiered-version case, not the render mechanism.
 - **`DESCEND_ALL` semantics.** With no range to step *over*, "capture whatever runs here"
-  **is** descent level **L3** — riding [call-descent-plan.md](call-descent-plan.md)'s §L3
+  **is** descent level **L3** — riding [call-descent-plan.md](../archive/plans/call-descent-plan.md)'s §L3
   denylist + instruction-budget + `ITIMER_REAL`/`SIGALRM` watchdog, expected to self-truncate.
   Tests assert the guards fire, never that L3 is transparent.
 - **Native-leaf / ptrace-only routing + gate.** Single-step is **forbidden against live
@@ -946,7 +946,7 @@ region-free arm **surface** (§Z0) and the arm-time **integration** (§Z1–§Z5
 - **[scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md)** — the managed-JIT
   capability: §D0.1/§D0.2 the `name→(addr,size,version)` producer §Z3 composes; §D3 the
   hardware-free managed degradation §Z1/§Z3 route to; §D0.4 + §D4 the stitch upstream §Z4 fills.
-- **[scoped-tracing-bindings-plan.md](scoped-tracing-bindings-plan.md)** — the **scope
+- **[scoped-tracing-bindings-plan.md](../archive/plans/scoped-tracing-bindings-plan.md)** — the **scope
   construct** + lazy arm + auto-name + closing-tid assert; §Z0 removes the required `NativeCode`
   argument across the reference shim and its nine mirrors.
 - **[hardware-trace-plan.md](hardware-trace-plan.md)** — its **Phase 2** is the same libipt glue
@@ -956,8 +956,8 @@ region-free arm **surface** (§Z0) and the arm-time **integration** (§Z1–§Z5
   **Phase 2 BTF block-step** (the cheap complete-flow form of the §D3/W2 stepper — every Zen
   incl. Zen 2, rootless) and **Phase 3 eBPF boundary snapshot** (deterministic LBR window at
   scope entry/exit, Zen 4/5); **[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md)** — its **W2** ptrace
-  stepper is the CI-runnable fallback §Z1/§Z3 conceal; **[call-descent-plan.md](call-descent-plan.md)**
-  — the **L3 `DESCEND_ALL`** guards the stepper rides; **[multi-language-bindings-plan.md](multi-language-bindings-plan.md)**
+  stepper is the CI-runnable fallback §Z1/§Z3 conceal; **[call-descent-plan.md](../archive/plans/call-descent-plan.md)**
+  — the **L3 `DESCEND_ALL`** guards the stepper rides; **[multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md)**
   — the shared-substrate + thin-shim pattern.
 
 ---

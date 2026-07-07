@@ -1,17 +1,17 @@
 # asm-test — Scoped-tracing per-language shims (native / interpreter / Go tiers): implementation plan
 
 The **thin-shim** half of the [scoped in-process tracing
-plan](scoped-inprocess-tracing-plan.md) for the tiers with **no managed-JIT
+plan](../../plans/scoped-inprocess-tracing-plan.md) for the tiers with **no managed-JIT
 hazard** — the eight bindings where the developer-visible surface can become
 *import + scope* over a *known native leaf* with existing machinery. It delivers
 new-item **1 and 2** from the umbrella's
-[what-is-new list](scoped-inprocess-tracing-plan.md#what-already-ships-vs-what-is-new):
+[what-is-new list](../../plans/scoped-inprocess-tracing-plan.md#what-already-ships-vs-what-is-new):
 the guaranteed-cleanup scope construct and the arm hook, per binding.
 
 **Scope of this slice:** the scope *construct* for **C++, Rust, Zig, Python, Ruby,
 Lua, Go**, plus **.NET as the reference shim shape**. The **managed-code**
 capability (tracing the runtime's own live JIT output, async-hop stitching) for
-**Node, JVM, .NET** is the separate [managed slice](scoped-tracing-managed-plan.md);
+**Node, JVM, .NET** is the separate [managed slice](../../plans/scoped-tracing-managed-plan.md);
 this slice targets the use every binding already supports — a scope around an
 asm-test-generated / P/Invoked **native region**, captured by single-step (any
 x86-64 Linux) or available hardware trace.
@@ -24,14 +24,14 @@ x86-64 Linux) or available hardware trace.
 > the .NET reference `AsmTrace : IDisposable` (`[CallerMemberName]`/`[CallerLineNumber]`).
 > Each per-binding `hwtrace-<lang>-test` lane's scope case passes green (see the
 > implementation summary at
-> [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md)).
+> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)).
 >
 > Status legend: **planned** unless noted. .NET's `Region(Action)` and the other
 > nine `region(name, fn)` helpers already ship (see anchors below); this slice adds
 > the *scope object*, *auto-name*, *arm hook*, *thread-id assert*, and *emit-on-close*
 > on top of them.
 
-**Hard dependency:** the [shared-core slice §0](scoped-tracing-core-plan.md#0--the-two-cheap-c-layer-fixes--shared-render-on-close-planned-lands-first)
+**Hard dependency:** the [shared-core slice §0](../../plans/scoped-tracing-core-plan.md#0--the-two-cheap-c-layer-fixes--shared-render-on-close-planned-lands-first)
 — `asmtest_hwtrace_try_begin` (nesting signal), the arming-thread assert, and the
 `asmtest_hwtrace_render` render-on-close path — must land first. This slice
 consumes those three symbols in every shim.
@@ -55,8 +55,8 @@ tier and is therefore out of scope here:
 cross-language pass):
 
 1. **Register-then-begin under the same generated name.** `begin` keys on the
-   region name via `find_region` ([src/hwtrace.c:413](../../src/hwtrace.c#L413),
-   [:659](../../src/hwtrace.c#L659)) and silently no-ops on a miss, so an auto-named
+   region name via `find_region` ([src/hwtrace.c:413](../../../src/hwtrace.c#L413),
+   [:659](../../../src/hwtrace.c#L659)) and silently no-ops on a miss, so an auto-named
    scope must `asmtest_hwtrace_register_region` under its generated name *before*
    `begin`. Because the scope object registers on **every** construction, this is only
    safe once **Core §0.4** makes `register_region` idempotent-by-name (repeated names
@@ -65,7 +65,7 @@ cross-language pass):
    self-skip**, never a hard failure.
 2. **Lazy first-scope arm.** Mere import must not claim the (per-thread, after core
    §1) capture slot or install the single-step SIGTRAP sigaction
-   ([src/ss_backend.c:129](../../src/ss_backend.c#L129)). "Arm on import" is
+   ([src/ss_backend.c:129](../../../src/ss_backend.c#L129)). "Arm on import" is
    delivered as an *effect* (arm on first scope entry), which is also strictly
    better for the three languages with no module-init hook.
 
@@ -76,23 +76,23 @@ cross-language pass):
 .NET is the analysis's worked example and the shape every other shim mirrors.
 Today the binding has **only** the callback form —
 `HwTrace.Region(string name, Action body)` at
-[bindings/dotnet/hwtrace/HwTrace.cs:602](../../bindings/dotnet/hwtrace/HwTrace.cs#L602)
+[bindings/dotnet/hwtrace/HwTrace.cs:602](../../../bindings/dotnet/hwtrace/HwTrace.cs#L602)
 (begin → `try` → `finally` end) — and **no** `IDisposable` over begin/end (the
 existing `IDisposable`/`AutoCloseable` types wrap native *handles*, not the
 begin/end pair). `[ModuleInitializer]`/`[CallerMemberName]` are **not used anywhere**
 in the binding today (verified). New work:
 
 - **`sealed class AsmTrace : IDisposable`** (new type in
-  [bindings/dotnet/hwtrace/HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)).
+  [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs)).
   Ctor: `public AsmTrace(<region>, bool emit = true, [CallerMemberName] string name =
   null, [CallerLineNumber] int line = 0)` (unannotated `string`, not `string?` — the
   .NET projects set `<Nullable>disable</Nullable>`, so a `?` annotation emits CS8632).
   It (a) lazily arms (below), (b) generates the region name from `name`/`line`,
   (c) registers the traced code range under that name — see the **Region source** note
   below — then `asmtest_hwtrace_try_begin` (new shared-core §0.1 P/Invoke — add next to
-  `asmtest_hwtrace_begin` at [:201](../../bindings/dotnet/hwtrace/HwTrace.cs#L201)),
+  `asmtest_hwtrace_begin` at [:201](../../../bindings/dotnet/hwtrace/HwTrace.cs#L201)),
   capturing `Environment.CurrentManagedThreadId`.
-  `Dispose()`: `asmtest_hwtrace_end` ([:203](../../bindings/dotnet/hwtrace/HwTrace.cs#L203)),
+  `Dispose()`: `asmtest_hwtrace_end` ([:203](../../../bindings/dotnet/hwtrace/HwTrace.cs#L203)),
   assert the closing thread matches the ctor's (flag `truncated` on mismatch — the
   **authoritative** check is the native OS-tid §0.2 assert; the ctor's
   `Environment.CurrentManagedThreadId` is a **complementary** managed-level guard, a
@@ -106,7 +106,7 @@ in the binding today (verified). New work:
   written to the default sink**, not whether `Path` is produced.
 - **Region source (required — the ctor must have a range to register).**
   `asmtest_hwtrace_register_region`
-  ([HwTrace.cs:198](../../bindings/dotnet/hwtrace/HwTrace.cs#L198)) binds the auto-name to
+  ([HwTrace.cs:198](../../../bindings/dotnet/hwtrace/HwTrace.cs#L198)) binds the auto-name to
   a concrete `[base, len)` code range recorded into an `asmtest_trace_t` handle and
   returns `ASMTEST_HW_EINVAL` on a null argument — so an **empty** ctor has nothing to
   register, and a `begin` under an unregistered name silently no-ops (constraint #1). The
@@ -119,10 +119,10 @@ in the binding today (verified). New work:
   the *thing being traced*, supplied once, not per-entry config.
 - **`[ModuleInitializer] static void Arm()`** — the *ergonomic* arm-on-import: it
   probes availability (`HwTrace.Available`/`Auto`,
-  [:470](../../bindings/dotnet/hwtrace/HwTrace.cs#L470)/[:517](../../bindings/dotnet/hwtrace/HwTrace.cs#L517))
+  [:470](../../../bindings/dotnet/hwtrace/HwTrace.cs#L470)/[:517](../../../bindings/dotnet/hwtrace/HwTrace.cs#L517))
   and self-skips cleanly; **actual** slot/SIGTRAP arming stays lazy at first
   `AsmTrace` per the lazy-first-scope rule. (The existing eager `LibHandle` load at
-  [:100](../../bindings/dotnet/hwtrace/HwTrace.cs#L100) already handles library
+  [:100](../../../bindings/dotnet/hwtrace/HwTrace.cs#L100) already handles library
   resolution; `[ModuleInitializer]` only front-loads the availability probe.)
   **Packaging:** a `[ModuleInitializer]` fires for consumers only if its compiland ships
   in the packable library. ~~Today `HwTrace.cs` compiles into the hwtrace **smoke-test exe**
@@ -152,7 +152,7 @@ in the binding today (verified). New work:
   so concurrent same-named scopes don't clobber.
 
 The `AsmTrace.Method(HotPath)` named-method form and its `MethodLoadVerbose`
-address resolution are the [managed slice](scoped-tracing-managed-plan.md)'s
+address resolution are the [managed slice](../../plans/scoped-tracing-managed-plan.md)'s
 concern — they need the runtime-event plumbing this slice deliberately avoids.
 
 ---
@@ -160,24 +160,24 @@ concern — they need the runtime-event plumbing this slice deliberately avoids.
 ## Per-binding rollout
 
 Ordered per the analysis's phasing —
-[(A) zero-hazard first, (B) the Go migration mitigation](../analysis/scoped-inprocess-tracing.md#impact-on-the-plan).
+[(A) zero-hazard first, (B) the Go migration mitigation](../../analysis/scoped-inprocess-tracing.md#impact-on-the-plan).
 Each row: the shipped `region()` anchor, the construct to add, the arm hook, and
 the auto-name mechanism.
 
 | # | Binding | Shipped region helper | Construct to add | Arm hook | Auto-name |
 |---|---|---|---|---|---|
-| A1 | **Python** | [hwtrace.py:528](../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe(N)` walk at a **pinned depth** (CPython-only; on other impls `inspect.currentframe()` returns `None` — degrade to a synthetic collision-resistant `file:line`/counter label, not a portability path) |
-| A2 | **C++** | [asmtest_hwtrace.hpp:677](../../bindings/cpp/asmtest_hwtrace.hpp#L677) `region()` → RAII `RegionScope` ([:501](../../bindings/cpp/asmtest_hwtrace.hpp#L501)) | **extend** `RegionScope` (**`noexcept`** dtor emit + tid assert) | no module-init → Meyers static `api()` ([:289](../../bindings/cpp/asmtest_hwtrace.hpp#L289)) | `__builtin_FUNCTION`+`__builtin_LINE`+`__builtin_FILE` → `file:line` name (**C++17 floor**); `std::source_location` only `#if __cplusplus >= 202002L` |
-| A3 | **Zig** | [hwtrace.zig:743](../../bindings/zig/src/hwtrace.zig#L743) `region(name, args, body)` (begin/`defer` end) | add `Scope` returning a `deinit`-able value (**not RAII** — needs explicit `defer scope.deinit()`) or keep callback + emit | lazy `load()` latch ([:511](../../bindings/zig/src/hwtrace.zig#L511)) | `@src()` **passed at the call site** (Zig has no default-arg / caller-location propagation) |
-| A4 | **Ruby** | [hwtrace.rb:705](../../bindings/ruby/hwtrace.rb#L705) `region(name)` block + `ensure` | block form + emit; auto-name from `caller_locations` | real `require`; recommend lazy | `caller_locations(1,1)` |
-| A5 | **Lua** | [hwtrace.lua:389](../../bindings/lua/hwtrace.lua#L389) `region(name, fn)` + `pcall` | callback + emit (no `<close>` under LuaJIT 5.1) | real `require`; defensive `pcall(ffi.load)` ([:186](../../bindings/lua/hwtrace.lua#L186)) | `debug.getinfo(2)` |
-| A6 | **Rust** | [hwtrace.rs:937](../../bindings/rust/src/hwtrace.rs#L937) `region()` → `Drop` guard `Region` ([:712](../../bindings/rust/src/hwtrace.rs#L712)) | **extend** `Region::drop` (emit + tid assert) | lazy `OnceLock` `hw_fns()` ([:490](../../bindings/rust/src/hwtrace.rs#L490)) | `#[track_caller]` + `Location::caller()` |
-| B1 | **Go** | [hwtrace.go:826](../../bindings/go/hwtrace.go#L826) `Region(name, fn)`; `Begin`/`End` ([:798](../../bindings/go/hwtrace.go#L798)/[:816](../../bindings/go/hwtrace.go#L816)) | closure + `defer`; emit; **keep** `LockOSThread` ([:808](../../bindings/go/hwtrace.go#L808)) | `func init()` ([:608](../../bindings/go/hwtrace.go#L608)) | `runtime.Caller(1)` → `file:line` (function name needs `runtime.FuncForPC(pc).Name()`) |
+| A1 | **Python** | [hwtrace.py:528](../../../bindings/python/asmtest/hwtrace.py#L528) `region()` → `_Region` ctx-mgr ([:419](../../../bindings/python/asmtest/hwtrace.py#L419)) | **extend** `_Region` to auto-name + emit-on-`__exit__` | real `import`; recommend lazy `_get()` ([:351](../../../bindings/python/asmtest/hwtrace.py#L351)) | `sys._getframe(N)` walk at a **pinned depth** (CPython-only; on other impls `inspect.currentframe()` returns `None` — degrade to a synthetic collision-resistant `file:line`/counter label, not a portability path) |
+| A2 | **C++** | [asmtest_hwtrace.hpp:677](../../../bindings/cpp/asmtest_hwtrace.hpp#L677) `region()` → RAII `RegionScope` ([:501](../../../bindings/cpp/asmtest_hwtrace.hpp#L501)) | **extend** `RegionScope` (**`noexcept`** dtor emit + tid assert) | no module-init → Meyers static `api()` ([:289](../../../bindings/cpp/asmtest_hwtrace.hpp#L289)) | `__builtin_FUNCTION`+`__builtin_LINE`+`__builtin_FILE` → `file:line` name (**C++17 floor**); `std::source_location` only `#if __cplusplus >= 202002L` |
+| A3 | **Zig** | [hwtrace.zig:743](../../../bindings/zig/src/hwtrace.zig#L743) `region(name, args, body)` (begin/`defer` end) | add `Scope` returning a `deinit`-able value (**not RAII** — needs explicit `defer scope.deinit()`) or keep callback + emit | lazy `load()` latch ([:511](../../../bindings/zig/src/hwtrace.zig#L511)) | `@src()` **passed at the call site** (Zig has no default-arg / caller-location propagation) |
+| A4 | **Ruby** | [hwtrace.rb:705](../../../bindings/ruby/hwtrace.rb#L705) `region(name)` block + `ensure` | block form + emit; auto-name from `caller_locations` | real `require`; recommend lazy | `caller_locations(1,1)` |
+| A5 | **Lua** | [hwtrace.lua:389](../../../bindings/lua/hwtrace.lua#L389) `region(name, fn)` + `pcall` | callback + emit (no `<close>` under LuaJIT 5.1) | real `require`; defensive `pcall(ffi.load)` ([:186](../../../bindings/lua/hwtrace.lua#L186)) | `debug.getinfo(2)` |
+| A6 | **Rust** | [hwtrace.rs:937](../../../bindings/rust/src/hwtrace.rs#L937) `region()` → `Drop` guard `Region` ([:712](../../../bindings/rust/src/hwtrace.rs#L712)) | **extend** `Region::drop` (emit + tid assert) | lazy `OnceLock` `hw_fns()` ([:490](../../../bindings/rust/src/hwtrace.rs#L490)) | `#[track_caller]` + `Location::caller()` |
+| B1 | **Go** | [hwtrace.go:826](../../../bindings/go/hwtrace.go#L826) `Region(name, fn)`; `Begin`/`End` ([:798](../../../bindings/go/hwtrace.go#L798)/[:816](../../../bindings/go/hwtrace.go#L816)) | closure + `defer`; emit; **keep** `LockOSThread` ([:808](../../../bindings/go/hwtrace.go#L808)) | `func init()` ([:608](../../../bindings/go/hwtrace.go#L608)) | `runtime.Caller(1)` → `file:line` (function name needs `runtime.FuncForPC(pc).Name()`) |
 
 *(Node and Java `region()` helpers exist —
-[hwtrace.js:439](../../bindings/node/hwtrace.js#L439),
-[HwTrace.java:779](../../bindings/java/HwTrace.java#L779) — but their scope
-constructs ship in the [managed slice](scoped-tracing-managed-plan.md) alongside
+[hwtrace.js:439](../../../bindings/node/hwtrace.js#L439),
+[HwTrace.java:779](../../../bindings/java/HwTrace.java#L779) — but their scope
+constructs ship in the [managed slice](../../plans/scoped-tracing-managed-plan.md) alongside
 the managed-code capability, since the analysis rates them "medium" in the same
 JIT-managed tier as .NET.)*
 
@@ -216,7 +216,7 @@ JIT-managed tier as .NET.)*
   the "not emitted" abnormal-exit case. Still *safer than Ruby*.
 - **Non-moving GC + M:N scheduler (Go) — the instructive middle.** Already solved by
   *pinning* the OS thread (`runtime.LockOSThread`,
-  [hwtrace.go:808](../../bindings/go/hwtrace.go#L808)) — the fix for the project's
+  [hwtrace.go:808](../../../bindings/go/hwtrace.go#L808)) — the fix for the project's
   own resolved **go-full-test flaky-crash** finding (single-step TF is per-thread).
   Go converts .NET's "follow the migration" into "forbid the migration for the
   region." **`go func()` fan-out inside the scope is *silently untraced*** —
@@ -231,10 +231,10 @@ JIT-managed tier as .NET.)*
 ## Tests
 
 Every binding already has a `hwtrace-<lang>-test` lane
-([mk/native-trace.mk:547-612](../../mk/native-trace.mk#L547), aggregated by the
-`hwtrace-bindings-test` rule at [:556](../../mk/native-trace.mk#L556)) run under
+([mk/native-trace.mk:547-612](../../../mk/native-trace.mk#L547), aggregated by the
+`hwtrace-bindings-test` rule at [:556](../../../mk/native-trace.mk#L556)) run under
 `hwtrace_env` and wired into CI (`hwtrace-bindings` job,
-[.github/workflows/ci.yml:268](../../.github/workflows/ci.yml)). Extend each with a
+[.github/workflows/ci.yml:268](../../../.github/workflows/ci.yml)). Extend each with a
 scoped-trace case:
 
 - **Per-binding scope test.** Open the new scope over a known native leaf (the same
@@ -249,7 +249,7 @@ scoped-trace case:
   flagged `truncated`, never emitted as complete — the shared-core §0.2 assert
   surfaced through the shim.
 - **Conformance.** No new corpus entries needed — the scope traces the same
-  `corpus.json` routines ([bindings/conformance/corpus.json](../../bindings/conformance/corpus.json));
+  `corpus.json` routines ([bindings/conformance/corpus.json](../../../bindings/conformance/corpus.json));
   add a scoped-form replay to each per-language conformance consumer
   (`bindings/python/tests/test_conformance.py`, `bindings/rust/tests/conformance.rs`,
   `bindings/go/conformance_test.go`, …) so the scope object is corpus-validated.
@@ -259,21 +259,21 @@ scoped-trace case:
 ## Docs
 
 - **Per-language binding pages** — add a "Scoped tracing" section to each of
-  [docs/bindings/python.md](../bindings/python.md),
-  [cpp.md](../bindings/cpp.md), [zig.md](../bindings/zig.md),
-  [ruby.md](../bindings/ruby.md), [lua.md](../bindings/lua.md),
-  [rust.md](../bindings/rust.md), [go.md](../bindings/go.md),
-  [dotnet.md](../bindings/dotnet.md) showing the *import + scope* form and the
+  [docs/bindings/python.md](../../bindings/python.md),
+  [cpp.md](../../bindings/cpp.md), [zig.md](../../bindings/zig.md),
+  [ruby.md](../../bindings/ruby.md), [lua.md](../../bindings/lua.md),
+  [rust.md](../../bindings/rust.md), [go.md](../../bindings/go.md),
+  [dotnet.md](../../bindings/dotnet.md) showing the *import + scope* form and the
   emit-on-close default, with the per-language auto-name and the thread-hop caveat.
 - **Shared guide** — add a "Scoped in-process tracing" section to
-  [docs/guides/tracing/native-tracing.md](../guides/tracing/native-tracing.md) (or a
+  [docs/guides/tracing/native-tracing.md](../../guides/tracing/native-tracing.md) (or a
   new `docs/guides/tracing/scoped-tracing.md` added to the tracing `toctree` in
-  [docs/guides/tracing/index.md](../guides/tracing/index.md)) covering the model,
+  [docs/guides/tracing/index.md](../../guides/tracing/index.md)) covering the model,
   the thread-scope caveat, the "you get the runtime too" noise warning, the
   register-then-begin and lazy-arm rules, and the Linux-only degradation.
 - **Reference** — note the new per-binding surface in
-  [docs/reference/features.md](../reference/features.md) (support matrix row) and the
-  self-skip semantics in [docs/reference/portability.md](../reference/portability.md).
+  [docs/reference/features.md](../../reference/features.md) (support matrix row) and the
+  self-skip semantics in [docs/reference/portability.md](../../reference/portability.md).
 
 ---
 
@@ -281,14 +281,14 @@ scoped-trace case:
 
 - No new Make objects or shared libs — the shims are source-only additions to the
   existing per-binding trees, consuming the shared-core symbols via
-  `libasmtest_hwtrace` ([shared-hwtrace](../../mk/native-trace.mk#L653)).
+  `libasmtest_hwtrace` ([shared-hwtrace](../../../mk/native-trace.mk#L653)).
 - The per-language scope tests run in the existing `hwtrace-<lang>-test` recipes
-  ([mk/native-trace.mk:559-612](../../mk/native-trace.mk#L559)) and the
+  ([mk/native-trace.mk:559-612](../../../mk/native-trace.mk#L559)) and the
   `hwtrace-bindings` / `bindings` CI jobs — no new CI job **for the docker-matrix
   languages**. Docker fan-out lanes (`docker-hwtrace-<lang>`,
-  [mk/docker.mk:306-313](../../mk/docker.mk#L306)) pick them up unchanged. **Exception —
+  [mk/docker.mk:306-313](../../../mk/docker.mk#L306)) pick them up unchanged. **Exception —
   Python:** Python is deliberately excluded from `HWTRACE_DOCKER_LANGS`
-  ([mk/docker.mk:220](../../mk/docker.mk#L220)), so its scope test is **not** exercised by
+  ([mk/docker.mk:220](../../../mk/docker.mk#L220)), so its scope test is **not** exercised by
   the `hwtrace-bindings` job (in the `bindings` job the hwtrace tests self-skip, since no
   `shared-hwtrace` lib is on the path). The A1 Python scope test therefore needs explicit
   CI wiring — add `python` to the hwtrace docker matrix, or run `make hwtrace-python-test`
@@ -335,8 +335,8 @@ managed clean path respectively, and the shims inherit them for free once landed
   (repeated names reuse one slot) plus a tid/counter qualifier where the same site can
   run on multiple threads at once (Core §1 render selection) — not by inventing a
   unique name per entry. **Watch the 64-char name ceiling:** `hw_region_t.name` is
-  `char[64]` ([src/hwtrace.c:339](../../src/hwtrace.c#L339)) and `register_region`
-  `snprintf`s into it ([:405](../../src/hwtrace.c#L405)), so a long absolute-path
+  `char[64]` ([src/hwtrace.c:339](../../../src/hwtrace.c#L339)) and `register_region`
+  `snprintf`s into it ([:405](../../../src/hwtrace.c#L405)), so a long absolute-path
   `file:line` auto-name **truncates** and two sites sharing a 64-char prefix would alias
   under §0.4's by-name dedup — derive the auto-name from the **basename** (+ line, + a
   short hash of the full path if needed), not the full path.
@@ -353,6 +353,6 @@ managed clean path respectively, and the shims inherit them for free once landed
 ## Sources
 
 Per-binding feasibility matrix, the four ergonomic pieces, and the tiering:
-[the scoped `using` analysis — cross-language section](../analysis/scoped-inprocess-tracing.md#beyond-net--extending-the-scoped-model-to-the-other-nine-bindings).
+[the scoped `using` analysis — cross-language section](../../analysis/scoped-inprocess-tracing.md#beyond-net--extending-the-scoped-model-to-the-other-nine-bindings).
 The Go migration hazard and its resolved fix:
-[go-full-test flaky-crash finding](../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-honestly).
+[go-full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-honestly).

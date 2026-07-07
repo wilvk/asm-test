@@ -1,6 +1,6 @@
 # asm-test — dotnet examples roadmap: more reportable info + new examples
 
-The six in-process [examples/dotnet](../../examples/dotnet/) demos each report an **aggregate**
+The six in-process [examples/dotnet](../../../examples/dotnet/) demos each report an **aggregate**
 (per-method, per-assembly) or the **raw stream**. But `AsmTrace.Addresses` is a full **dynamic**
 trace (execution order, *with repeats*), and several binding capabilities have **no example at
 all**. This roadmap is the deduped, feasibility-checked output of a design pass over the binding
@@ -64,10 +64,10 @@ by `make hwtrace-dotnet-example` and self-skipping cleanly where a capability is
 **Out-of-process (what in-process single-step structurally cannot do):**
 - **ptrace_native** ✅ — `Ptrace.TraceCall` forks a child that runs a native leaf while the parent
   single-steps it — no in-process SIGTRAP perturbation. The foundation.
-- **ptrace_dotnet** ✅ — attach to the live [jit_dotnet](../../examples/dotnet/jit_dotnet/) target and
+- **ptrace_dotnet** ✅ — attach to the live [jit_dotnet](../../../examples/dotnet/jit_dotnet/) target and
   trace a real JIT'd method in *another* GC'd, multi-threaded runtime — the scenario in-process
   tracing is forbidden to do. `RunTo`/`TraceAttached`/`ProcPerfmapSymbol` are all bound; the
-  example owns attach/detach. Flow proven in C by [examples/jit_trace.c](../../examples/jit_trace.c).
+  example owns attach/detach. Flow proven in C by [examples/jit_trace.c](../../../examples/jit_trace.c).
 - **descent** ✅ / **descent_dotnet** ✅ — exact nested call tree with self-vs-inclusive counts via
   the `Descent` call-descent shadow stack (`Ptrace.TraceCallEx` / `TraceAttachedEx`), native
   (a 3-level A→B→C blob) then out-of-process managed (attach to `jit_dotnet`'s new `chain` mode,
@@ -78,9 +78,11 @@ by `make hwtrace-dotnet-example` and self-skipping cleanly where a capability is
   code-image does not capture managed tiering).
 
 **Needs a small helper:**
-- **classify** — bind `asmtest_disas_is_call/is_branch/is_ret/probe/call_target` (exported next to
+- **classify** ✅ — bind `asmtest_disas_is_call/is_branch/is_ret/probe/call_target` (exported next to
   the already-bound `asmtest_disas`) so `callgraph`/`instructionmix` stop string-parsing `Text` and
-  can draw a static CFG + direct-call-target map over a region.
+  can draw a static CFG + direct-call-target map over a region. Landed as the `Disas` static
+  classifiers (`IsCall`/`IsBranch`/`IsRet`/`TryCallTarget`); `callgraph` and `instructionmix`
+  now use them.
 
 ## Honestly NOT feasible (for calibration)
 

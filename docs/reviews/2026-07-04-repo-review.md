@@ -3,8 +3,8 @@
 **Scope:** whole-repo improvement/expansion review across nine dimensions —
 core API, runner & reporting, tracing tiers, emulator & tooling, language
 bindings, build/CI, documentation, the framework's own self-tests, and
-strategic product direction. Unlike the [2026-07-01](2026-07-01-repo-review.md)
-and [2026-07-02](2026-07-02-repo-review.md) reviews (which tracked crashes and
+strategic product direction. Unlike the [2026-07-01](../archive/reviews/2026-07-01-repo-review.md)
+and [2026-07-02](../archive/reviews/2026-07-02-repo-review.md) reviews (which tracked crashes and
 release/packaging process), this pass looks for **small correctness defects on
 real user paths** plus **high-leverage DX and expansion opportunities** that are
 *not* already tracked.
