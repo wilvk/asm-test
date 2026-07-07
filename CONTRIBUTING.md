@@ -58,6 +58,39 @@ native build/test rules. Large self-contained target groups are split into
 
 Edit a target where it lives; edit knobs/shared variables in the parent Makefile.
 
+## Adding an example suite
+
+A suite is the pair `examples/foo.s` (the routine under test) + `examples/test_foo.c`
+(the `TEST(...)` cases), and the Makefile **auto-discovers** it: every
+`examples/test_*.c` links against the same-named routine object through a pattern
+rule, so dropping the two files in and running `make test` is the whole job.
+Two escape hatches when the convention doesn't fit:
+
+- **Mismatched names** (routines for `test_foo.c` living in `bar.s`): add one
+  explicit link rule next to the legacy ones in the Makefile (`test_arith` →
+  `add.o` shows the shape).
+- **Not part of `make test`** (needs an optional tier, is a demo that fails by
+  design, or belongs to `make bench`/`make usecases`): add the suite name to
+  `SUITE_EXCLUDES` in the Makefile and wire it to its own target.
+
+Keep portability in mind: the GAS `.s` source carries both an x86-64 and an
+AArch64 body, and x86-64 example routines get an Intel-syntax `foo.asm`
+counterpart for the NASM lane (see the checklist under
+[Before you open a PR](#before-you-open-a-pr)).
+
+## Building the docs
+
+The user-facing docs under [docs/](docs/) are Sphinx (MyST Markdown), published
+on Read the Docs, and the RTD build **fails on any warning** — a broken
+cross-reference or toctree entry that builds "fine" locally without `-W` will
+fail CI. The Make targets default to `-W` to mirror that:
+
+```sh
+make docs           # build HTML into docs/_build/html (needs: pip install -r docs/requirements.txt)
+make docs-serve     # build + serve on localhost:8000
+make docker-docs    # same build inside a container — no host Sphinx needed
+```
+
 ## Adding or changing a language binding
 
 Every binding drives the C library through the same FFI entry points and must
@@ -84,7 +117,7 @@ Record a deliberate omission in [scripts/bindings-parity-allow.txt](scripts/bind
 with a reason (stale exemptions fail the gate, so the list stays honest).
 
 See [docs/bindings/index.md](docs/bindings/index.md) for the shared model and the per-language
-pages, and [docs/archive/plans/binding-parity-plan.md](docs/archive/plans/binding-parity-plan.md)
+pages, and [docs/internal/archive/plans/binding-parity-plan.md](docs/internal/archive/plans/binding-parity-plan.md)
 for the parity checklist a new binding is held to. Keep the public surface and the
 conformance coverage at parity with the existing bindings.
 
@@ -95,7 +128,9 @@ conformance coverage at parity with the existing bindings.
 - **Run the relevant tier(s)** for what you touched — the emulator suite
   (`make emu-test`), a binding (`make <lang>-test`), etc.
 - **Update the docs** under [docs/](docs/) and the [CHANGELOG.md](CHANGELOG.md)
-  `[Unreleased]` section when you change behavior or the public API.
+  `[Unreleased]` section when you change behavior or the public API — and check
+  they build warning-free (`make docs` or `make docker-docs`; see
+  [Building the docs](#building-the-docs)).
 - **Keep portability:** the framework targets x86-64 and AArch64, Linux and
   macOS. New assembly routines carry both an x86-64 and an AArch64 body (see the
   `ASM_FUNC` macros in [include/asm.h](include/asm.h)); add the NASM

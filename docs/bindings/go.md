@@ -383,3 +383,11 @@ run it on an x86-64 target (e.g. `make docker-go DOCKER_PLATFORM=linux/amd64`).
 A published Go module (with the native libs bundled per platform) is future work;
 this is the Tier-1 + Tier-2 binding that proves the `cgo` path. See
 [Packaging the bindings](../reference/packaging.md).
+
+:::{note}
+The Track D/E/F surface — `WatchWrites`, `GuardReg`, `FuzzCover`, `MutationTest`,
+and `CaptureVec256` — ships in `asmtest.go` and is mapped in the
+[shared capability table](index.md); the semantics of each are documented in full
+on the [Python reference page](python.md), which this binding mirrors
+name-for-name.
+:::

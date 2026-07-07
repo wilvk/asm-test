@@ -637,7 +637,7 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * drops the newest samples (a PERF_RECORD_LOST -> honest truncation). 256KB (vs
      * Intel PT's 8KB base ring) buys more gapless stitch reach; raise data_size, and
      * kernel.perf_event_max_sample_rate / kernel.perf_cpu_time_max_percent=0 on the
-     * runner, to extend it further (see docs/plans/amd-tracing-plan.md Phase 5). */
+     * runner, to extend it further (see docs/internal/plans/amd-tracing-plan.md Phase 5). */
     g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 256 * 1024);
     g_base_map =
         mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);

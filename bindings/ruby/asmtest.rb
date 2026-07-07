@@ -39,7 +39,7 @@ module Asmtest
   # Absolute path of the native library actually loaded — for clean-room install
   # tests to assert it came from the bundled gem payload, not a leaked build/
   # tree, a Homebrew dylib, or an ASMTEST_LIB override (see
-  # docs/plans/macos-clean-test-plan.md, Track A).
+  # docs/internal/plans/macos-clean-test-plan.md, Track A).
   LIBRARY_PATH = (File.realpath(emu_path) rescue File.expand_path(emu_path))
   def self.library_path
     LIBRARY_PATH

@@ -1,6 +1,6 @@
 /*
  * ss_backend.c — single-step (EFLAGS.TF / #DB -> SIGTRAP) native-trace backend.
- * See docs/plans/zen2-singlestep-trace-plan.md, asmtest_hwtrace.h,
+ * See docs/internal/plans/zen2-singlestep-trace-plan.md, asmtest_hwtrace.h,
  * docs/native-tracing.md.
  *
  * Where the Intel PT / AMD LBR backends reconstruct the instruction stream from a

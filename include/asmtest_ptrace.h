@@ -4,7 +4,7 @@
  * The single-step backend in src/ss_backend.c (asmtest_hwtrace.h's
  * ASMTEST_HWTRACE_SINGLESTEP) drives EFLAGS.TF in-process: the traced routine and
  * the SIGTRAP collector share one process. This is the *out-of-process* sibling
- * (the "W2" front of docs/plans/zen2-singlestep-trace-plan.md Phase 5): a tracer
+ * (the "W2" front of docs/internal/plans/zen2-singlestep-trace-plan.md Phase 5): a tracer
  * PARENT PTRACE_SINGLESTEPs a forked tracee and reads RIP per stop. It yields the
  * SAME exact, complete asmtest_trace_t offsets — ordered in-region instruction
  * offsets matching Unicorn / DynamoRIO / Intel PT / the in-process stepper, and
@@ -206,7 +206,7 @@ int asmtest_ptrace_run_to(pid_t pid, const void *addr);
 
 /* ================================================================== */
 /* Call descent (optional) — descend into the call-outs the tracer    */
-/* steps over, at four opt-in levels. See docs/plans/call-descent-plan */
+/* steps over, at four opt-in levels. See docs/internal/archive/plans/call-descent-plan */
 /* .md. The flat asmtest_trace_t stays the single-region view (frame   */
 /* 0); descent records into a SEPARATE opaque handle read through the  */
 /* scalar accessors below, so asmtest_trace_t is unchanged and every   */

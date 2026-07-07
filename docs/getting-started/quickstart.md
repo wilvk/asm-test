@@ -55,19 +55,12 @@ TEST(square, is_nonnegative) {
 }
 ```
 
-By convention a suite is the pair `foo.s` + `test_foo.c`. Suites are **not**
-auto-discovered: the Makefile builds a hardcoded `SUITES` list, so you must
-register your new pair by hand. Add `$(BUILD)/test_square` to the `SUITES`
-variable near the top of the Makefile and add a matching link rule alongside the
-existing ones:
-
-```makefile
-SUITES := ... $(BUILD)/test_square       # add your binary to the list
-
-$(BUILD)/test_square: $(FRAMEWORK_OBJS) $(BUILD)/square.o $(BUILD)/test_square.o
-```
-
-Once it is registered, `make test` picks up your new pair.
+By convention a suite is the pair `foo.s` + `test_foo.c`, and the Makefile
+**auto-discovers** it: every `examples/test_*.c` is linked against the
+same-named routine object through a pattern rule, so dropping the two files in
+is all it takes — no Makefile edit. (If your routine file's name doesn't match
+the test's — say `test_square.c` driving routines in `mathutils.s` — add one
+explicit link rule alongside the existing legacy ones in the Makefile.)
 
 ## 4. Run it
 

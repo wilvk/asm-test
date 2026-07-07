@@ -8,7 +8,7 @@
  * (the fallback when no bundled binary is discoverable) or as an exec'd separate
  * binary mapping the same memfd (the bundled path). Both drive the caller through
  * the reverse-attach protocol (PR_SET_PTRACER + PTRACE_SEIZE) and single-step the
- * region out of band. See docs/plans/scoped-tracing-managed-plan.md §D3.
+ * region out of band. See docs/internal/archive/plans/scoped-tracing-managed-plan.md §D3.
  */
 #ifndef ASMTEST_STEALTH_HELPER_H
 #define ASMTEST_STEALTH_HELPER_H

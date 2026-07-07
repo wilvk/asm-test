@@ -17,20 +17,40 @@ make DESTDIR=/tmp/stage install   # staged install (for packaging)
 ```
 
 The headers install under `…/include/asmtest/`. A consumer then builds against
-the library through pkg-config:
+the library through pkg-config — including the routine under test, which is
+assembled with the same `#include "asm.h"` shim (also installed). The `.s`
+source is preprocessed (that's what makes the shim portable), so the assemble
+step needs `-x assembler-with-cpp`:
 
 ```sh
+cc $(pkg-config --cflags asmtest) -x assembler-with-cpp -c my_routine.s -o my_routine.o
 cc $(pkg-config --cflags asmtest) -c my_tests.c -o my_tests.o
 cc my_tests.o my_routine.o $(pkg-config --libs asmtest) -o my_tests
 ```
 
-where `my_routine.o` is your assembly routine under test, assembled with the same
-`#include "asm.h"` shim (also installed). `make uninstall` reverses the install.
+`make uninstall` reverses the install.
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `PREFIX` | Install prefix | `/usr/local` |
 | `DESTDIR` | Staging root prepended to `PREFIX` (packaging) | empty |
+
+### The emulator tier via pkg-config
+
+The core `asmtest` module covers capture + runner. If your suites also use the
+[emulator tier](../guides/emulator.md), install the shared superset and consume
+the second module, `asmtest-emu`:
+
+```sh
+make install-shared-emu PREFIX=$HOME/.local   # libasmtest_emu + asmtest-emu.pc
+cc $(pkg-config --cflags asmtest-emu) -c my_emu_tests.c -o my_emu_tests.o
+cc my_emu_tests.o my_routine.o $(pkg-config --libs asmtest-emu) -o my_emu_tests
+```
+
+(Plain `make install` installs the static core only — `asmtest-emu.pc` is
+written by `make install-shared-emu`, whose lib is the full superset and so
+needs libunicorn + libkeystone + libcapstone at build time; see
+[Installation](../getting-started/installation.md).)
 
 ## 2. Single-header amalgamation
 

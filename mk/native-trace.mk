@@ -416,7 +416,7 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	./$(BUILD)/jit_trace java $(BUILD)/jit_java
 
-# --- Call-descent demo lanes (Phase 8 of docs/plans/call-descent-plan.md) ---------------
+# --- Call-descent demo lanes (Phase 8 of docs/internal/archive/plans/call-descent-plan.md) ---------------
 # `<lane>-descend` runs the same live trace at descent level 2 (DESCEND_KNOWN): the tracer
 # descends INTO the runtime's own sibling JIT methods the traced method calls (the .NET
 # `dotnet-bcl-descend` lane descends Console.WriteLine's `get_Out`) while still stepping OVER

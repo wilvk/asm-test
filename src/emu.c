@@ -1324,7 +1324,7 @@ bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
  * register interface to marshal vector args into or capture them from. Vector
  * marshalling is therefore implemented for the x86-64 (xmm), AArch64 (NEON v),
  * and ARM32 (NEON q) guests only; RISC-V stays scalar-FP (emu_riscv_call_fp).
- * See docs/emulator.md and docs/plans/expansion-plan.md (Track C). */
+ * See docs/emulator.md and docs/internal/plans/expansion-plan.md (Track C). */
 
 /* ------------------------------------------------------------------ */
 /* Coverage reporting & source-line mapping (Track C)                  */

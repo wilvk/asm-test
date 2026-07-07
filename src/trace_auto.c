@@ -6,7 +6,7 @@
  * ships in the same libasmtest_hwtrace) and dlopen-probes libasmtest_drapp for the
  * DynamoRIO tier, so it hard-links neither the DynamoRIO nor the emulator library.
  *
- * The order is fixed by docs/analysis/trace-parity-matrix.md, Matrix 8:
+ * The order is fixed by docs/internal/analysis/trace-parity-matrix.md, Matrix 8:
  *
  *   Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight -> emulator
  *

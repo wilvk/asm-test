@@ -15,13 +15,14 @@ Wine, or drives the trampoline directly via a compiler ABI attribute.
 > now underway — all five primitives are ported and verified under
 > Wine, with the runner's execution model being wired through a platform seam
 > (see [The runner port](#the-runner-port) below). See the
-> [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/archive/plans/win64-native-tier-plan.md)
+> [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/win64-native-tier-plan.md)
 > for the full breakdown.
 
 ## What it captures
 
-The trampoline (`src/capture_win64.asm`) mirrors all eight System V
-`asm_call_capture*` variants for the Microsoft x64 convention:
+The trampoline (`src/capture_win64.asm`) mirrors every System V
+`asm_call_capture*` variant for the Microsoft x64 convention, all declared in
+`asmtest.h` under `-DASMTEST_ABI_WIN64`:
 
 | Entry point | Captures |
 |---|---|
@@ -31,7 +32,8 @@ The trampoline (`src/capture_win64.asm`) mirrors all eight System V
 | `asm_call_capture_fp_n_win64` | arbitrary FP arity |
 | `asm_call_capture_vec_win64` | full vector file (xmm0–15) + `xmm6–15` preservation |
 | `asm_call_capture_vec_n_win64` | arbitrary vector arity |
-| `asm_call_capture_vec256_win64` | AVX2 256-bit: `ymm0–3` args, full `ymm0–15` capture (low 128 of `xmm6–15` preserved); self-skips off-AVX2 |
+| `asm_call_capture_vec256_win64` | AVX2 256-bit: `ymm0–3` args, full `ymm0–15` capture (low 128 of `xmm6–15` preserved); gate on `asmtest_cpu_has_avx2()` |
+| `asm_call_capture_vec512_win64` | AVX-512 512-bit: `zmm0–3` args, full `zmm0–31` capture (into a `vec512_t[32]`); gate on `asmtest_cpu_has_avx512f()` |
 | `asm_call_capture_sret_win64` | struct return via the hidden pointer |
 | `asm_call_capture_bigstruct_win64` | large struct args (by reference) |
 

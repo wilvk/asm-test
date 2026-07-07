@@ -488,7 +488,7 @@ recorded native code bytes** — which the text perf-map cannot give. Because ea
 `JIT_CODE_LOAD` record is timestamped, a method re-emitted at a reused address (tiered
 or OSR recompilation) resolves to the **latest** body — the temporal
 same-address-different-bytes problem the
-[JIT runtime tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)
+[JIT runtime tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/jit-runtime-tracing.md)
 centres on. The bytes
 matter because a hardware/branch trace records only control flow; the decoder must be
 handed the exact bytes that were live, and jitdump carries them.
@@ -683,7 +683,7 @@ as the allow-set, so the tracer descends `get_Out` as a nested frame instead of 
 call would still be stepped over. `make docker-hwtrace-jit-dotnet-bcl-descend-all` runs **level
 3** with the conservative budget + watchdog and is expected to *self-skip* (truncate) when it
 trips a guard — it proves the guards fire, not that L3 is transparent (see the L3 hazards in
-[hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)).
+[hardware-tracing.md](hardware-tracing.md) and [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/jit-runtime-tracing.md)).
 
 L3's safety rests on four gates: it is **default off**, budget- and watchdog-bounded, and its
 denylist has a **built-in default set** — arm it with `asmtest_descent_use_default_denylist(d)`.
@@ -966,7 +966,7 @@ code-cache consistency, and pre-existing threads at takeover.
   JITed code, sidestepping all three collisions.
 
 The full root-cause analysis and per-runtime fix matrix live in the
-[DynamoRIO native-trace plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/dynamorio-native-trace-plan.md#language-runtime-support).
+[DynamoRIO native-trace plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/dynamorio-native-trace-plan.md#language-runtime-support).
 
 ---
 

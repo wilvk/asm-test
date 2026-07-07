@@ -413,6 +413,19 @@ ASMTEST_WIN64ABI void
 asm_call_capture_bigstruct_win64(regs_t *out, void *fn, const long long *iargs,
                                  int niargs, const void *sptr,
                                  unsigned long long ssize);
+/* Wide-vector captures, the Win64 analogs of asm_call_capture_vec256/vec512:
+ * 4 integer args + 4 vector args (ymm0-3 / zmm0-3), capturing the whole wide
+ * vector file — ymm0..15 into vec[0..15] (a vec256_t[16]) for _vec256, and
+ * zmm0..31 into vec[0..31] (a vec512_t[32]; AVX-512 doubles the register
+ * count) for _vec512 — with vec[0] = the return. Vector-file-only — the
+ * 128-bit path above covers GP/flags. Gate calls on asmtest_cpu_has_avx2() /
+ * asmtest_cpu_has_avx512f(); a non-AVX host must not reach the VEX/EVEX body. */
+ASMTEST_WIN64ABI void asm_call_capture_vec256_win64(vec256_t *vec, void *fn,
+                                                    const long long *iargs,
+                                                    const vec256_t *vargs);
+ASMTEST_WIN64ABI void asm_call_capture_vec512_win64(vec512_t *vec, void *fn,
+                                                    const long long *iargs,
+                                                    const vec512_t *vargs);
 #endif
 
 /* ------------------------------------------------------------------ */

@@ -143,8 +143,13 @@ address.
 
 ```c
 ASSERT_EMU_FP_EQ(&r, 3.75);          // r.regs.xmm[0].f64[0]
-ASSERT_EMU_VEC_EQ(&r, 0, &want);     // a full 128-bit lane
+ASSERT_EMU_VEC_EQ(&r, 0, &want);     // a full 128-bit lane (x86 XMM by index)
 ```
+
+`ASSERT_EMU_VEC_EQ(&r, idx, …)` is the x86 convenience over the general
+`ASSERT_EMU_VEC128_EQ(vec_ptr, expect_ptr)`, which bytewise-compares any
+captured `emu_vec128_t` — including a cross-arch guest's vector register
+(e.g. `&r64.regs.v[0]` for AArch64 NEON).
 
 ## Other guests
 

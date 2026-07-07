@@ -10,14 +10,17 @@ few illustrative patterns too; those are marked.)
 Each suite is the pair `examples/foo.s` (the routine under test, with an Intel
 `foo.asm` alongside it) and `examples/test_foo.c` (the `TEST(...)` cases). The
 Makefile discovers `examples/test_*.c` and builds one binary per suite under
-`build/`, so a `make test` picks them all up. See [Writing tests](writing-tests.md)
-for the discovery rules.
+`build/`, so a `make test` picks them all up — except the suites owned by other
+targets (`make bench`, `make usecases`, the emulator/trace tiers, and the
+intentional-failure demos). See [Writing tests](writing-tests.md) for the
+discovery rules.
 
 | Use case | Suite | Run it |
 | --- | --- | --- |
 | [Correctness, registers & ABI](#correctness-registers-and-abi) | `test_capture.c` + `flags.s` | `./build/test_capture` |
 | [Differential / property testing](#differential-property-testing) | `test_refmatch.c` + `refmatch.s` | `./build/test_refmatch` |
 | [Verifying branchless bit hacks](#verifying-branchless-bit-hacks) | `test_bittricks.c` + `bittricks.s` | `./build/test_bittricks` |
+| [Routines that call back into C](#routines-that-call-back-into-c) | `test_callback.c` + `callback.s` | `./build/test_callback` |
 | [Micro-benchmarking](#micro-benchmarking) | `test_bench.c` + `bench.s` | `./build/test_bench --bench` |
 | [Robustness: hangs & crashes](#robustness-hangs-and-crashes) | `test_robust.c` + `robust.s` | `make demo-robust` |
 
@@ -184,6 +187,55 @@ TEST(bittricks, reverse_byte_is_its_own_inverse) {
         ASSERT_EQ(reverse_byte(reverse_byte(b)), b);
 }
 ```
+
+---
+
+## Routines that call back into C
+
+**Best for:** higher-order routines — a qsort-style comparator, a map/filter
+over an array — where the assembly takes a **function pointer and calls back
+into C** per element. This is a distinct ABI discipline worth testing on its
+own: across each callback invocation the routine must keep its live state
+(pointer, counter, callback, accumulator) in **callee-saved registers** and keep
+the stack **16-byte aligned at every call site**.
+
+`callback.s` ships `sum_map(arr, n, fn)` and `count_if(arr, n, pred)`; the test
+just passes ordinary C function pointers and asserts on the result:
+
+```c
+#include "asmtest.h"
+
+extern long sum_map(const long *arr, long n, long (*fn)(long));
+extern long count_if(const long *arr, long n, long (*pred)(long));
+
+static long dbl(long x) { return x * 2; }
+static long is_even(long x) { return (x % 2) == 0; }
+
+TEST(callback, sum_map_doubles) {
+    long a[] = {1, 2, 3, 4, 5};
+    ASSERT_EQ(sum_map(a, 5, dbl), 30); /* 2*(1+2+3+4+5) */
+}
+
+TEST(callback, count_if_even) {
+    long a[] = {1, 2, 3, 4, 5, 6};
+    ASSERT_EQ(count_if(a, 6, is_even), 3);
+}
+
+/* A callback that itself recurses back into another asm-callback routine — a
+ * stress for stack alignment and callee-saved preservation across the boundary. */
+static const long g_vals[] = {2, 4, 6, 8};
+static long count_even_inner(long x) {
+    return count_if(g_vals, 4, is_even) + (x & 1); /* 4 + (x&1) */
+}
+
+TEST(callback, nested_callback_preserves_abi) {
+    long a[] = {1, 2}; /* sum of (4+1) + (4+0) = 9 */
+    ASSERT_EQ(sum_map(a, 2, count_even_inner), 9);
+}
+```
+
+Ships as [`examples/callback.s`](https://github.com/wilvk/asm-test/blob/main/examples/callback.s)
++ `test_callback.c`; run `./build/test_callback`.
 
 ---
 

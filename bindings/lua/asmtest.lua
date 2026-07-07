@@ -153,7 +153,7 @@ end
 -- Absolute-ish path of the native library actually loaded — for clean-room
 -- install tests to assert it came from the bundled rock payload, not a leaked
 -- build/ tree, a Homebrew dylib, or an ASMTEST_LIB override (the macos-clean-test
--- asserter normalizes it). See docs/plans/macos-clean-test-plan.md, Track A.
+-- asserter normalizes it). See docs/internal/plans/macos-clean-test-plan.md, Track A.
 function M.library_path() return emu_path end
 
 -- Resolve a canonical corpus routine (e.g. "add_signed") to its address. Some

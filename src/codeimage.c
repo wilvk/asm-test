@@ -1,6 +1,6 @@
 /*
  * codeimage.c — time-aware code-image recorder (a userspace PERF_RECORD_TEXT_POKE).
- * See asmtest_codeimage.h and docs/analysis/jit-runtime-tracing.md ("approach #2").
+ * See asmtest_codeimage.h and docs/internal/analysis/jit-runtime-tracing.md ("approach #2").
  *
  * Records a TIMESTAMPED timeline of a process's code regions so a later query can ask
  * "what bytes were live at address X at trace-position T" — the correct answer for a JIT

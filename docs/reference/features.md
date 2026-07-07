@@ -97,7 +97,7 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](../guid
   is exposed through every language binding (`disas`/`disas_available`), via
   `libasmtest_emu` (the full superset lib carries it). ([Disassembly](../guides/disassembly.md))
 
-### Native runtime trace tiers (optional, Linux)
+### Native runtime trace tiers (optional, Linux; single-step also on macOS)
 
 Trace code as it runs **natively, in-process** — a third family of execution tiers
 alongside native capture and the emulator. Every backend fills the same
@@ -115,9 +115,9 @@ hardware is absent. All are exposed through **all ten language wrappers**
   LbrExtV2, 16-deep stack with Tier-B window stitching past it, live-verified on
   Zen 5) on bare metal; an **ARM CoreSight**
   (OpenCSD) scaffold; and **single-step** (`EFLAGS.TF` → `SIGTRAP`) — the universal
-  backend recording the same exact offsets on **any x86-64 Linux** host (CI,
-  containers, VMs) with no PMU / perf / privilege / decoder. Branch-boundary block
-  normalization keeps the partition identical across backends.
+  backend recording the same exact offsets on **any x86-64 Linux or macOS** host
+  (CI, containers, VMs) with no PMU / perf / privilege / decoder. Branch-boundary
+  block normalization keeps the partition identical across backends.
 - **Out-of-process single-step (W2, `ptrace`)**: a tracer parent single-steps a
   tracee, so it touches none of the target's signals or code cache — the path for
   **managed runtimes** (JVM/.NET/Node) and the only single-step form on **AArch64**.

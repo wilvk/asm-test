@@ -1,7 +1,7 @@
 /*
  * tests/positive.c — the framework's own self-tests (success paths).
  *
- * Track A of docs/plans/expansion-plan.md. These cases exercise the *passing*
+ * Track A of docs/internal/plans/expansion-plan.md. These cases exercise the *passing*
  * behavior of every assertion family plus SKIP and SETUP/TEARDOWN. Run directly
  * (the binary must exit 0); tests/expect.sh also drives this binary to check
  * runner behavior (--list, --filter, --shuffle, --format=junit).

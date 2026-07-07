@@ -51,6 +51,7 @@ See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guide
 | Macro | Checks |
 |---|---|
 | `ASSERT_ABI_PRESERVED(&r)` | callee-saved registers restored |
+| `ASSERT_ABI_PRESERVED_VEC(&r)` | callee-saved **vector** registers restored after a `_vec`/`_vec_n` capture — `xmm6–15` on Win64, `d8–d15` on AArch64 (compiled in only under `-DASMTEST_ABI_WIN64` or on AArch64) |
 | `ASSERT_FLAG_SET(&r, FLG)` / `ASSERT_FLAG_CLEAR(&r, FLG)` | a flag bit (`CF`/`PF`/`ZF`/`SF`/`OF`) |
 | `ASSERT_REG_EQ(&r, field, val)` | a named `regs_t` field (unsigned) |
 
@@ -197,7 +198,7 @@ consumer points at an older, leaner lib that lacks them.)
 | Group | Symbols | Notes |
 |---|---|---|
 | Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_vec256` (AVX2), `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. `_vec256` captures the ymm file; gate on `asmtest_cpu_has_avx2`. |
-| Verdict shims | `asmtest_check_abi`, `asmtest_check_flag` | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. |
+| Verdict shims | `asmtest_check_abi`, `asmtest_check_flag`, `asmtest_check_abi_vec` (Win64 / AArch64 builds) | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. `_abi_vec` is the vector complement (`xmm6–15` / `d8–d15`) after a `_vec`/`_vec_n` capture. |
 | Opaque-handle accessors | `asmtest_regs_new`/`_free`, `asmtest_regs_ret`/`_flags`/`_fret`/`_vec_f32`/`_flag_set`, `asmtest_capture6`/`asmtest_capture_fp2`/`asmtest_capture_vec_f32`, `asmtest_capture_args` (wide arity: register + stack args), `asmtest_capture_mix` (integer + FP argument files in one call), `asmtest_capture_sret` (struct return via the hidden pointer, into a caller byte buffer); emulator: `asmtest_emu_result_new`/`_free`/`_ok`/`_faulted`/`_fault_addr`/`_fault_kind`, `asmtest_emu_x86_reg` (GP + `rip`/`rflags`), `asmtest_emu_x86_xmm_f64`/`_f32` | For dynamic-FFI bindings (Node, Ruby, Lua, …) that can't mirror `regs_t` offsets: allocate a handle, call with scalar args, read fields by accessor — the universal FFI subset. |
 | Scalar-arg emu wrappers | `asmtest_emu_call2`, `asmtest_emu_call6` (≤6 int args), `asmtest_emu_call_fp2`, `asmtest_emu_call_vec_f32`, `asmtest_emu_call_win64_6`, `asmtest_emu_call6_traced` | Drive the emulator over a 64-byte code window with scalar args — FP, vector, Win64, and traced runs — without marshalling C argument arrays. |
 | Cross-arch emu accessors | `asmtest_emu_{arm64,riscv,arm}_result_new`/`_free`, `asmtest_emu_{arm64,riscv,arm}_reg` (register by name), `asmtest_emu_arm64_vec_f64`/`_f32`, `asmtest_emu_riscv_f_f64`, `asmtest_emu_arm_q_f64`/`_f32` | Read a non-x86 guest's per-arch result struct without mirroring its layout; the shared `asmtest_emu_result_*` fault/ok accessors apply to every guest result. |
@@ -221,4 +222,4 @@ is the contract's correctness anchor. The matching `_Static_assert`s in
 stores, and the manifest from drifting apart.
 
 The full rollout across languages is tracked in the multi-language bindings
-plan (`docs/archive/plans/multi-language-bindings-plan.md`).
+plan (`docs/internal/archive/plans/multi-language-bindings-plan.md`).

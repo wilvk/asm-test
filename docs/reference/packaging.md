@@ -75,7 +75,7 @@ package ships:
   exact version vendored (captured by the build scripts into
   `$PREFIX/share/licenses/<dep>-<ver>/`) plus a `NOTICE` recording versions. Before
   a real publish, complete the GPL compliance checklist in
-  [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/archive/plans/fully-featured-packages-plan.md):
+  [the implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/fully-featured-packages-plan.md):
   confirm
   GPL-2.0-only vs -or-later, archive the corresponding source, and surface the
   written offer.

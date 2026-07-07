@@ -188,7 +188,7 @@ jobs:
         run: |
           python -m venv /tmp/venv && . /tmp/venv/bin/activate
           pip install wheelhouse/*.whl
-          # Track E (docs/plans/macos-clean-test-plan.md): the shared clean-room
+          # Track E (docs/internal/plans/macos-clean-test-plan.md): the shared clean-room
           # scrub replaces the old ad-hoc `cd /tmp` — every ASMTEST_*/DYLD_*/LD_*
           # override is cleared and the cwd moves outside the checkout. The venv's
           # bin dir stays first on PATH (the scrub only drops brew//usr/local).
@@ -252,7 +252,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, macos-13]
         # Each smoke installs/builds with the FULL env first (package managers and
         # builds need it), then sources scripts/clean-env.sh — the shared clean-room
-        # scrub (Track E, docs/plans/macos-clean-test-plan.md): every ASMTEST_*/
+        # scrub (Track E, docs/internal/plans/macos-clean-test-plan.md): every ASMTEST_*/
         # DYLD_*/LD_* override cleared, brew//usr/local dropped from PATH, cwd moved
         # outside the checkout — and only then runs the load. Interpreters are
         # resolved to absolute paths BEFORE sourcing (the PATH scrub may drop their

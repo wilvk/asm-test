@@ -1,5 +1,5 @@
 /* platform_win32.c — Win32 implementations of the POSIX primitives the runner
- * relies on, for the native Win64 tier (see docs/plans/win64-native-tier-plan.md,
+ * relies on, for the native Win64 tier (see docs/internal/archive/plans/win64-native-tier-plan.md,
  * Phase 4). Kept separate from src/asmtest.c (which stays POSIX-only) so the
  * working {x86-64, AArch64} x {Linux, macOS} build is untouched; this file is
  * compiled only for the Win64 target and provides the same exported symbols.

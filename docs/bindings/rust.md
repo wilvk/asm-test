@@ -294,6 +294,7 @@ replays the conformance corpus and reproduces every case.
 ## Maturity
 
 The published-crate story (a `bindgen`-generated `-sys` crate, `cibuildwheel`-style
-prebuilt libs, crates.io) and a Tier-2 idiomatic assertion layer are future work;
-this is the Tier-1 binding that proves the no-GC native path. See
-[Packaging the bindings](../reference/packaging.md).
+prebuilt libs, crates.io) is future work. The Tier-2 idiomatic assertion layer
+ships today (`assert_ret`, `assert_abi_preserved`, `assert_no_fault`, and friends
+— see the section above); this is the binding that proves the no-GC native path.
+See [Packaging the bindings](../reference/packaging.md).

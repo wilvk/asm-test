@@ -1,6 +1,6 @@
 /*
  * ptrace_backend.c — out-of-process single-step native-trace backend (W2).
- * See asmtest_ptrace.h and docs/plans/zen2-singlestep-trace-plan.md (Phase 5, W2).
+ * See asmtest_ptrace.h and docs/internal/plans/zen2-singlestep-trace-plan.md (Phase 5, W2).
  *
  * A tracer PARENT PTRACE_SINGLESTEPs a forked tracee that calls the registered code,
  * reading the program counter from the child's register file at each stop. It produces
@@ -720,7 +720,7 @@ static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code,
 /* instruction/block stream is recorded relative to the callee base. */
 /* Frame 0 is the root region and, when `flat` is non-NULL, is        */
 /* mirrored into the flat asmtest_trace_t byte-for-byte as before.    */
-/* See docs/plans/call-descent-plan.md (Correctness core).           */
+/* See docs/internal/archive/plans/call-descent-plan.md (Correctness core).           */
 /* ================================================================= */
 
 /* One OPEN frame on the shadow stack (a slice of descent->frames plus the live pop
@@ -1370,7 +1370,7 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
 /* x86-64 only (SINGLEBLOCK is x86/ppc/s390; AArch64 has no equivalent  */
 /* and the whole file's tracer is x86/arm64). Rootless, works under any  */
 /* perf_event_paranoid — it is just ptrace of one's own child. See       */
-/* docs/plans/amd-tracing-plan.md "BTF block-step is available on x86". */
+/* docs/internal/plans/amd-tracing-plan.md "BTF block-step is available on x86". */
 /* ------------------------------------------------------------------ */
 #if defined(__x86_64__)
 

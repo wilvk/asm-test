@@ -124,7 +124,13 @@ timeouts.
 | `examples/foo.asm` | Same routines in Intel syntax (NASM backend, optional) |
 | `examples/test_foo.c` | The `TEST(...)` cases that call them |
 
-The Makefile globs `examples/test_*.c`, links each against the matching routine
-object, and produces `build/test_foo`. Drop in a new pair and `make test` builds
-and runs it — no Makefile edit required. To consume the framework from a
-separate project instead, see [Integration](../reference/integration.md).
+The Makefile globs `examples/test_*.c`, links each `test_foo.c` against the
+same-named routine object (`foo.s` / `foo.asm`), and produces `build/test_foo`.
+Drop in a new pair that follows the naming convention and `make test` builds and
+runs it — no Makefile edit required. Two escape hatches: a suite whose routine
+file doesn't match its test name gets one explicit link rule in the Makefile
+(the shipped `test_arith` → `add.o` pairs show the shape), and suites that
+belong to another target group — the benchmark demo, the emulator/trace tiers,
+the intentional-failure demos — are listed in the Makefile's `SUITE_EXCLUDES`
+so `make test` skips them. To consume the framework from a separate project
+instead, see [Integration](../reference/integration.md).

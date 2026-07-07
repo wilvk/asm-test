@@ -10,7 +10,7 @@
  *   asmtest-stealth-helper <parent-pid> <memfd> <region-base> <region-len>
  * The memfd (inherited across execv, sized by the parent) carries the shared
  * asmtest_stealth_scratch_t; region-base is an address in the PARENT's space.
- * See src/stealth_helper.h and docs/plans/scoped-tracing-managed-plan.md §D3.
+ * See src/stealth_helper.h and docs/internal/archive/plans/scoped-tracing-managed-plan.md §D3.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE

@@ -35,6 +35,8 @@ robustness model.
 | `--shard=K/N` | Run the `K`-th of `N` round-robin slices (1-based) — split one suite across CI jobs with no test lost or duplicated |
 | `--fail-if-no-tests` | Exit nonzero when the selection is empty (e.g. a typo'd `--filter`) |
 | `--bench` | Run `BENCH` cases instead of tests — see [Benchmarks](benchmarks.md) |
+| `--bench-format=text\|json` | Benchmark output: human text (default) or machine-readable JSON — see [Benchmarks](benchmarks.md) |
+| `--help`, `-h` | Print the usage summary and exit |
 
 ## Isolation and robustness
 

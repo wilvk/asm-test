@@ -5,7 +5,7 @@
  * with a SINGLE process_vm_readv snapshot. For a live JIT that is wrong the moment the
  * code is patched, freed, or has its address reused mid-trace: a late snapshot returns
  * the bytes that happen to be there at read time, not the bytes that were live when the
- * trace ran (docs/analysis/jit-runtime-tracing.md, "The one hard problem — and it is
+ * trace ran (docs/internal/analysis/jit-runtime-tracing.md, "The one hard problem — and it is
  * temporal"). The kernel solves this for its OWN self-modifying code with
  * PERF_RECORD_TEXT_POKE — old+new bytes, time-stamped — but there is no userspace
  * equivalent. This is that equivalent: a TIMESTAMPED CODE-IMAGE TIMELINE.

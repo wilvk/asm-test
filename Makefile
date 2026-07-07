@@ -50,14 +50,20 @@ endif
 
 # Framework runtime: C runner + the asm capture trampoline.
 FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
-# Suites are NOT auto-discovered: to add a new examples/test_*.c pair, append its
-# binary here AND add a matching link rule below (see $(BUILD)/test_arith).
-SUITES         := $(BUILD)/test_arith $(BUILD)/test_mem $(BUILD)/test_capture \
-                  $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_args \
-                  $(BUILD)/test_struct $(BUILD)/test_structparam \
-                  $(BUILD)/test_fpover $(BUILD)/test_refmatch \
-                  $(BUILD)/test_callback $(BUILD)/test_qmul \
-                  $(BUILD)/test_checked $(BUILD)/test_qadd
+# Suites ARE auto-discovered: every examples/test_foo.c + examples/foo.s pair
+# (foo.asm under ASM_SYNTAX=nasm) links through the test_% pattern rule below —
+# drop a new pair in and `make test` picks it up. Suites whose routine object
+# does not match the test name (test_arith -> add.o) keep an explicit link rule,
+# which overrides the pattern. SUITE_EXCLUDES lists the test_*.c files that are
+# NOT part of `make test`: demos that fail by design, and suites owned by other
+# target groups (bench, usecases, the optional emulator / trace tiers).
+SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
+                  test_bittricks test_vm \
+                  test_emu test_emu_usecases test_asm \
+                  test_drtrace test_hwtrace test_codeimage test_branchsnap
+SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
+                  $(patsubst examples/%.c,$(BUILD)/%, \
+                  $(sort $(wildcard examples/test_*.c))))
 
 .PHONY: all help test check check-header-portability demo-fail clean
 .PHONY: lib install uninstall amalgamate pc
@@ -266,54 +272,25 @@ $(BUILD)/%.o: examples/%.s include/asm.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(ASFLAGS) -c $< -o $@
 endif
 
-# One test binary per suite: framework + routine(s) + test cases.
-$(BUILD)/test_arith: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/test_arith.o
+# One test binary per suite: framework + routine(s) + test cases. The pattern
+# rule links any examples/test_foo.c against the same-named routine object
+# (examples/foo.s / foo.asm) — the convention new suites follow. The explicit
+# rules below it cover the legacy pairs whose routine file predates the
+# convention (test_arith -> add.o, test_capture -> flags.o,
+# test_struct -> structs.o); an explicit rule always beats the pattern.
+# .SECONDARY keeps the chain's .o files on disk (make would otherwise delete
+# pattern-rule intermediates after linking).
+.SECONDARY:
+$(BUILD)/test_%: $(FRAMEWORK_OBJS) $(BUILD)/%.o $(BUILD)/test_%.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/test_mem: $(FRAMEWORK_OBJS) $(BUILD)/mem.o $(BUILD)/test_mem.o
+$(BUILD)/test_arith: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/test_arith.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(BUILD)/test_capture: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/test_capture.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/test_fp: $(FRAMEWORK_OBJS) $(BUILD)/fp.o $(BUILD)/test_fp.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_simd: $(FRAMEWORK_OBJS) $(BUILD)/simd.o $(BUILD)/test_simd.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_args: $(FRAMEWORK_OBJS) $(BUILD)/args.o $(BUILD)/test_args.o
-	$(CC) $(CFLAGS) $^ -o $@
-
 $(BUILD)/test_struct: $(FRAMEWORK_OBJS) $(BUILD)/structs.o $(BUILD)/test_struct.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_structparam: $(FRAMEWORK_OBJS) $(BUILD)/structparam.o \
-                           $(BUILD)/test_structparam.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_fpover: $(FRAMEWORK_OBJS) $(BUILD)/fpover.o $(BUILD)/test_fpover.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_refmatch: $(FRAMEWORK_OBJS) $(BUILD)/refmatch.o \
-                        $(BUILD)/test_refmatch.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_callback: $(FRAMEWORK_OBJS) $(BUILD)/callback.o \
-                        $(BUILD)/test_callback.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-# Real-world kernels for the by-audience examples (see docs/examples.md):
-# a DSP Q15 multiply, a runtime checked-add (overflow flag), and a codec
-# per-byte saturating add. Portable GAS sources with AArch64 bodies, plus NASM
-# counterparts for the x86-64 Intel-syntax lane.
-$(BUILD)/test_qmul: $(FRAMEWORK_OBJS) $(BUILD)/qmul.o $(BUILD)/test_qmul.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_checked: $(FRAMEWORK_OBJS) $(BUILD)/checked.o $(BUILD)/test_checked.o
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(BUILD)/test_qadd: $(FRAMEWORK_OBJS) $(BUILD)/qadd.o $(BUILD)/test_qadd.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 test: $(SUITES)
@@ -362,11 +339,11 @@ check-header-portability:
 	    tests/portability/consumer_cpp.cpp
 	@if grep -rn 'ASM_FUNC(\|ASM_ENDFUNC(' README.md docs examples \
 	      --include='*.md' --include='*.rst' --include='*.s' 2>/dev/null \
-	      | grep -v 'docs/reviews/\|docs/plans/\|docs/summaries/' | grep -q .; then \
+	      | grep -v 'docs/internal/' | grep -q .; then \
 	    echo "ERROR: parenthesized ASM_FUNC(...) in docs — GAS macros are invoked paren-free (ASM_FUNC name)"; \
 	    grep -rn 'ASM_FUNC(\|ASM_ENDFUNC(' README.md docs examples \
 	      --include='*.md' --include='*.rst' --include='*.s' 2>/dev/null \
-	      | grep -v 'docs/reviews/\|docs/plans/\|docs/summaries/'; \
+	      | grep -v 'docs/internal/'; \
 	    exit 1; \
 	fi
 	@echo "check-header-portability: OK (c11 include + c++ macro expansion + docs)"

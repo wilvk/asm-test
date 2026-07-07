@@ -16,7 +16,7 @@
  * asmtest_hwtrace_resolve() stops at the hardware tier's library boundary. This
  * header is the front-end OVER all three: it walks the full descending-fidelity
  * cascade — Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
- * emulator (the order of docs/analysis/trace-parity-matrix.md, Matrix 8: DynamoRIO
+ * emulator (the order of docs/internal/analysis/trace-parity-matrix.md, Matrix 8: DynamoRIO
  * ranks ABOVE single-step because its code cache runs at native speed while
  * single-step pays a kernel round-trip per instruction) — and returns the
  * available options for the caller to bracket with that tier's own begin/end.

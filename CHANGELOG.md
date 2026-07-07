@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Example suites are now auto-discovered.** Every `examples/test_foo.c` +
+  `examples/foo.s` pair (`foo.asm` under `ASM_SYNTAX=nasm`) links through a
+  `test_%` pattern rule — drop the two files in and `make test` picks the suite
+  up, with no Makefile edit. Legacy pairs whose routine object doesn't match the
+  test name (`test_arith` → `add.o`, `test_capture` → `flags.o`, `test_struct` →
+  `structs.o`) keep explicit link rules, and `SUITE_EXCLUDES` lists the
+  `test_*.c` files owned by other targets (bench, usecases, demos, the
+  emulator/trace tiers). This makes the long-standing docs claim in
+  writing-tests.md true instead of correcting it downward.
+
+- **`asm_call_capture_vec256_win64` and `asm_call_capture_vec512_win64` are now
+  declared in `asmtest.h`** (under `-DASMTEST_ABI_WIN64`), completing the Win64
+  mirror of the System V capture surface. Both existed in
+  `src/capture_win64.asm` and were exercised by the Win64 suite, but a consumer
+  following the win64 guide had to hand-declare the prototypes; the guide's
+  entry-point table now lists `_vec512_win64` too.
+
 - **Wide-arity, mixed-FP, and struct-return capture reachable from all ten
   bindings** (N4 of the 2026-07-04 review — previously the array-form C entry
   points existed but no binding referenced them). Three FFI-friendly shims join
@@ -32,7 +49,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   assignment repository remains a maintainer action.
 
 - **.NET examples roadmap — the full remaining tail** (11 items from
-  [dotnet-examples-roadmap.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/dotnet-examples-roadmap.md),
+  [dotnet-examples-roadmap.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/dotnet-examples-roadmap.md),
   all instruction-count-honest, all green in the docker lane). Five new reports:
   `flatprofile` (perf-report parity: self / Overhead % / cumulative %),
   `amplification` (user vs BCL vs native-runtime split + the WEAK-tier factor),
@@ -69,6 +86,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Internal working docs moved under `docs/internal/`** — `docs/plans/`,
+  `docs/analysis/`, `docs/reviews/`, and `docs/archive/` are now
+  `docs/internal/{plans,analysis,reviews,archive}`, with one archive rule
+  (done plan / fully-actioned review → `archive/`; see
+  `docs/internal/README.md`). The four completed scoped-tracing plans and the
+  fully-actioned 2026-07-04 review moved to `archive/` accordingly, every
+  in-repo reference (docs, comments, workflows, this changelog) was repointed —
+  including a dozen references left stale by the earlier archiving commit — and
+  the Sphinx `exclude_patterns`/docs-gate now exclude `internal/**` wholesale.
+
+- **Docs/README accuracy pass from a full docs-vs-code review.** The
+  entry-point pages no longer claim the language packages are published
+  (nothing is on a public registry yet — the release pipeline is ready but
+  uncredentialed); the README slimmed to pitch + highlights + links (the
+  capability list's single source is now `docs/reference/features.md`) and its
+  DynamoRIO link points at the tracing guide; `--bench-format=text|json` and
+  `--help` joined the runner/benchmark flag tables; `installation.md` gained
+  Keystone/Capstone rows and the real `--emu` dependency set;
+  `integration.md` shows the `-x assembler-with-cpp` assemble step and the
+  `asmtest-emu` pkg-config module; `api-reference.md` gained
+  `ASSERT_ABI_PRESERVED_VEC`/`asmtest_check_abi_vec`; java.md's JDK
+  requirement, rust.md's shipped Tier-2 asserts, Zig's raw-`@cImport` status,
+  and the single-step tier's macOS support are stated consistently; and
+  CONTRIBUTING gained "Adding an example suite" and "Building the docs"
+  sections plus a per-language lib-setup cheatsheet in the bindings overview.
+
 - **CI: the pinned Keystone/Capstone source builds are now cached** (K1 of the
   2026-07-04 review — the ~20-identical-multi-minute-LLVM-compiles-per-push item).
   Host builds cache via `actions/cache` + a new `scripts/thirdparty-cache.sh`
@@ -89,7 +132,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Call-descent built-in default denylist — `asmtest_descent_use_default_denylist`**
   (the one unshipped Phase-5 deliverable of the
-  [call-descent plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/call-descent-plan.md)).
+  [call-descent plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/call-descent-plan.md)).
   Arms the L3 `DESCEND_ALL` safety set the plan promised: at trace start the backend
   populates the handle's deny pool from the tracee — the dynamic linker's executable
   mappings (the lazy-binding PLT resolver) and `[vdso]`/`[vsyscall]`, managed-runtime
@@ -136,7 +179,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mismatch now asserts the exact shrunk tuple).
 
 - **Runner flow control — `--fail-fast`, `--repeat=N`, `--shard=K/N`** (R5 of the
-  [2026-07-04 review](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-04-repo-review.md)).
+  [2026-07-04 review](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/reviews/2026-07-04-repo-review.md)).
   `--fail-fast` stops dispatching at the first failing test (forces the serial path;
   the TAP plan moves to the end of the stream so it covers exactly what ran).
   `--repeat=N` block-replicates the selection N times — with `--shuffle`/`--seed`,
@@ -178,7 +221,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `sample_period=1` sampled path when the BPF toolchain/caps/LbrExtV2 substrate is absent.
 
 - **AMD hardware-trace improvements — Phases 0, 4, 5 of the
-  [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/amd-tracing-plan.md).**
+  [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-tracing-plan.md).**
   Completes the P0/P1 near-term work on the AMD LBR backend, all validated live on the
   Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`) via `make docker-hwtrace-amd`:
   - **Phase 4 — LbrExtV2 speculation-bit filtering.** `amd_replay` now drops a
@@ -207,9 +250,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Review-driven defect sweep (2026-07-02).** Resolved the full backlog from the
-  [code-level review](https://github.com/wilvk/asm-test/blob/main/docs/analysis/2026-07-02-code-review.md) (54 findings) and the
-  still-open [2026-07-01](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-01-repo-review.md) /
-  [2026-07-02](https://github.com/wilvk/asm-test/blob/main/docs/reviews/2026-07-02-repo-review.md) repo-review items, with a
+  [code-level review](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-02-code-review.md) (54 findings) and the
+  still-open [2026-07-01](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/reviews/2026-07-01-repo-review.md) /
+  [2026-07-02](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/reviews/2026-07-02-repo-review.md) repo-review items, with a
   per-batch implementation note under [`docs/summaries/`](https://github.com/wilvk/asm-test/tree/main/docs/summaries/). Highlights:
   AArch64 callee-saved `d8`–`d15` ABI checking + a corrected `vm.s`/`structparam.s`;
   `SKIP()` in SETUP/TEARDOWN reported as skip; JUnit XML made well-formed and no longer
@@ -292,7 +335,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   image adapter, symbolize-and-bucket, and the `asmtest_hwtrace_stitch` async-hop merge
   core). Linux-only; self-skips to a recorded no-op where no faithful backend is
   available. See [docs/scoped-tracing-implementation.md](https://github.com/wilvk/asm-test/blob/main/docs/scoped-tracing-implementation.md)
-  and [docs/plans/scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-inprocess-tracing-plan.md).
+  and [docs/internal/archive/plans/scoped-inprocess-tracing-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-inprocess-tracing-plan.md).
   - **§Z0/§Z1 the aspirational empty-ctor form — `using (new AsmTrace())`.** A region-free
     whole-window scope with **no `NativeCode` and no `[base,len)`**: new C entry points
     `asmtest_hwtrace_begin_window`/`_end_window`/`_render_window` over a whole-window frame
@@ -303,7 +346,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Linux (`test_wholewindow_singlestep`, `make docker-hwtrace` → 201/0; `.NET`
     `make docker-hwtrace-dotnet` → 33/0). The STRONG whole-window PT / AMD LBR tiers,
     arbitrary-managed-method capture, and the other nine binding shims remain forward-look.
-    See [docs/plans/scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/scoped-tracing-zeroconfig-plan.md).
+    See [docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md).
   - **§D3 concealed ptrace-stealth stepper — now a bundled standalone binary.** The
     hardware-free scope path (Zen 2 / Docker-on-Mac) reverse-attaches a helper to the
     caller (`PR_SET_PTRACER` + `PTRACE_SEIZE`) and single-steps the region out of band.
@@ -343,14 +386,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     rather than hanging. AArch64 gained a `NT_ARM_HW_BREAK` hardware-breakpoint step-over path
     (the W^X JIT-heap fallback x86-64 already had). L3 is documented as **best-effort /
     expected-to-perturb** on a live managed runtime (the cross-thread lock-inversion deadlock
-    vector is not fully mitigable) — see [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md).
+    vector is not fully mitigable) — see [analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/jit-runtime-tracing.md).
   - Surfaced in **all ten language bindings** (a `Descent` wrapper + descending `trace_call_ex`,
     with idempotent free and the per-FFI address/upcall hazards handled), pinned by a new
     `ptrace_descent` conformance-corpus tier and the header-grep parity gate; the resolver
     callback ships to the six upcall-safe FFIs (Python/Go/Node/Java/.NET/Lua) and Rust/Ruby/
     C++/Zig expose the allow-set only. New `jit_trace *-descend` / `*-descend-all` demo lanes
     (`make docker-hwtrace-jit-dotnet-bcl-descend`, …). See [docs/native-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/native-tracing.md)
-    ("Call descent levels") and [docs/plans/call-descent-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/call-descent-plan.md).
+    ("Call descent levels") and [docs/internal/archive/plans/call-descent-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/call-descent-plan.md).
 
 - **Clean-room install test — every bundled binding, on Linux and macOS, in CI.**
   `make clean-room-test` (any host) / `make macos-clean-test` (darwin alias) packages
@@ -387,7 +430,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     [`scripts/clean-room-test.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/clean-room-test.sh) — the cross-platform
     per-binding orchestrator (the first reusable *local* one; the release.yml smokes can
     call it next, per the plan's Track E).
-    ([macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/macos-clean-test-plan.md), Track A)
+    ([macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/macos-clean-test-plan.md), Track A)
 - **The native-trace tiers now ship *inside* the packages.** Both optional tiers —
   DynamoRIO (`libasmtest_drapp` + `libasmtest_drclient` + the pinned `libdynamorio`)
   and hardware trace (`libasmtest_hwtrace`) — are staged into the Linux payload slots
@@ -414,7 +457,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Unicorn/Keystone GPL-2.0. The four **source-distributed** bindings (Rust/Zig/C++/Go)
     ship no binary payload, so their consumers build `shared-drtrace`/`shared-hwtrace`
     themselves (documented, not bundled). ([bundle-native-trace-tiers
-    plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/bundle-native-trace-tiers-plan.md))
+    plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/bundle-native-trace-tiers-plan.md))
 - **Native runtime tracing (two optional tiers).** A third execution tier that
   traces code running *natively, in-process*, complementing the Unicorn emulator
   trace. Both fill the same engine-neutral `asmtest_trace_t` shape (now extracted
@@ -489,7 +532,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Go/Lua/Ruby `resolve_tiers`/`auto_tier`, camelCase `resolveTiers`/`autoTier` for
     C++/Node/Java/.NET/Zig, `ResolveTiers`/`AutoTier` for Go), each with a per-binding
     self-test of the cross-tier invariants. This is the cross-tier front-end the
-    [trace parity matrix](https://github.com/wilvk/asm-test/blob/main/docs/analysis/trace-parity-matrix.md)
+    [trace parity matrix](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/trace-parity-matrix.md)
     flagged as the remaining gap.
   - **Out-of-process single-step backend (W2).** `asmtest_ptrace_trace_call(code,
     len, args, nargs, &result, trace)`
@@ -514,7 +557,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `libasmtest_hwtrace`; `make hwtrace-test` exercises it live — including in a
     **plain unprivileged container** — asserting byte-for-byte parity with the
     in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
-    Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/zen2-singlestep-trace-plan.md)
+    Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/zen2-singlestep-trace-plan.md)
     Phase 5 (W2). `asmtest_ptrace_trace_attached(pid, base, len, &result, trace)`
     extends it to the **foreign-process** case — the building block for tracing a
     managed runtime: it traces a region in a **separate, already-running process you
@@ -638,7 +681,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     were live at trace-position `when` — the correct answer for a JIT whose code is
     patched, freed, or has its address reused mid-trace, where a single late
     `process_vm_readv` snapshot returns the **wrong** bytes (the temporal problem the
-    [JIT-runtime-tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md)
+    [JIT-runtime-tracing analysis](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/jit-runtime-tracing.md)
     calls "the innovative, buildable core", approach #2). Change detection is **soft-dirty**
     (`/proc/<pid>/clear_refs` to arm + the soft-dirty PTE bit to detect, read via the
     `PAGEMAP_SCAN` ioctl where available, else by parsing `/proc/<pid>/pagemap`), which
@@ -717,7 +760,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off-AVX2 via a local CPUID/XCR0 probe. Verified on **both** Win64 lanes — the
   native `ms_abi` lane and the PE/Wine lane (Wine runs PE instructions on the host
   CPU, so it is real AVX2). Track D of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md)
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md)
   (the "Win64 wide path" follow-on); AArch64 SVE remains staged, hardware-gated on a
   runner that can execute it.
 
@@ -738,7 +781,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nor 256-bit path can see. Exposed across **all ten** language bindings (Python, C++,
   Rust, Go, Node, Java, .NET, Ruby, Lua, Zig) as `capture_vec512`/`cpu_has_avx512f`
   analogs with per-binding parity tests. Closes the AVX-512 half of gap #4 in the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md)
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md)
   (its "no AVX-512 silicon" caveat is now lifted on this host); AArch64 SVE remains the
   staged remainder.
 
@@ -767,7 +810,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pip install` pulls no system libs. Every package + fresh-install + bundled-load
   smoke was verified in the per-language Docker images (the manylinux wheel checked
   to load with system libunicorn removed). Track A of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md);
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md);
   see [docs/packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/packaging.md).
 
 - **Binding parity, round 2: the new emulator/capture capabilities reach all ten
@@ -809,7 +852,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `install-deps --asm` gained Capstone. Each binding's conformance decodes known
   x86-64 bytes (`xor rax, rax` / `ret` / `nop`), verified on the host
   (Python/C++/Ruby) and the Docker matrix (the other seven). Track C of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md).
 
 - **Win64 runner parity — per-test isolation, `-jN`, and benchmarks.** The Win64
   tier ran every test in one process (`--no-fork`); the POSIX runner's fork-based
@@ -827,7 +870,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exercises **all four modes** (isolation, `-jN`, `--no-fork`, `--bench`) under
   Wine; an optional `windows-latest` CI job signs the same suite off on a genuine
   Windows host with no Wine. Track B of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md).
   See [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md#the-runner-port).
 
 - **Wide-vector capture — AVX2 256-bit (`ymm`).** Vector capture was strictly
@@ -845,7 +888,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the manifest and by a `_Static_assert`, and an `vec_add4d` AVX2 example +
   `test_simd` case assert the full 256-bit result (including the upper-128 lane)
   on both backends. Track D of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md);
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md);
   AVX-512 (`zmm`), AArch64 SVE, a Win64 wide path, and binding parity are staged
   follow-ons — and the emulator wide path self-skips because its bundled Unicorn
   exposes YMM/ZMM but does not execute AVX (`UC_ERR_INSN_INVALID`). See
@@ -869,7 +912,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     equivalent mutants — a stronger input set demonstrably kills more.
   Reuses the framework's seedable splitmix64 RNG (`asmtest.h`) and the
   emulator's coverage trace; no new dependency. Track E of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md).
   See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#coverage-guided-fuzzing--mutation-testing).
 
 - **Mid-execution guards in the emulator (watchpoints + register invariants).**
@@ -892,7 +935,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   arming functions, and assertions in
   [`include/asmtest_emu.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_emu.h).
   Track F of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md).
   See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#mid-execution-guards).
 
 - **Disassembly in emulator diagnostics (Capstone).** The emulator records
@@ -916,7 +959,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now installs `libcapstone-dev`, so the CI `emu` job exercises the annotated
   diagnostics on every matrix OS. RISC-V disassembly needs Capstone ≥ 5 and
   self-skips on older builds. This is Track C of the
-  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/post-v1-expansion-plan.md).
+  [post-v1.0 expansion plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/post-v1-expansion-plan.md).
   See [docs/emulator.md](https://github.com/wilvk/asm-test/blob/main/docs/emulator.md#disassembly-in-diagnostics-capstone).
 
 - **CI builds the cross-platform native payloads for the bindings.** `make
@@ -944,7 +987,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   command is present (and `<= MACOS_MIN_FLOOR` when that var is set). It self-skips where the
   llvm tools are absent (a dev host), so `package-libs-verify` stays green everywhere; the
   `package-libs-collect` CI job installs `llvm` so it runs there for real. This is Track B of
-  the [macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/macos-clean-test-plan.md)
+  the [macOS clean-test plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/macos-clean-test-plan.md)
   — the independent cross-check that `scripts/package-native.sh`'s macOS-side install-name
   rewrites actually produced correct Mach-O.
 
@@ -968,7 +1011,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into `corpus.json` and executed by a new `make conformance-asm` build. The C++
   binding also gains the previously missing `sum_via_rbx` / `clear_carry` cases.
   See the
-  [binding-parity plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/binding-parity-plan.md).
+  [binding-parity plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/binding-parity-plan.md).
 
 - **In-line assembler tier (Keystone).** Pass a routine as an *assembly string*
   and run it, instead of only as pre-assembled object code. `asmtest_assemble()`
@@ -987,7 +1030,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `scripts/build-keystone.sh` (a pinned source build the CI job and Docker image
   use). RISC-V in-line assembly self-skips until a Keystone release ships a
   RISC-V backend (none does yet). See the
-  [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/inline-asm-keystone-plan.md).
+  [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/inline-asm-keystone-plan.md).
 
 - **In-line assembler reaches every binding, with a widened shim.** All **ten**
   bindings now expose the assembler — the original five (.NET, Ruby, Lua, Node,
@@ -1027,7 +1070,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conformance check. This is the capture tier (suite runs `--no-fork`); the Win32
   runner port is now underway (see below). See
   [docs/win64.md](https://github.com/wilvk/asm-test/blob/main/docs/win64.md)
-  and the [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/win64-native-tier-plan.md).
+  and the [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/win64-native-tier-plan.md).
 
 - **Native Win64 tier — runner port.** The framework's process-level
   guarantees now have Win32 equivalents for the Win64 tier, each in
@@ -1164,7 +1207,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `asmtest_emu.h` pin `regs_t` and the emulator register structs to `offsetof`,
   preventing the headers, the trampoline's stores, and the manifest from drifting
   apart. `make install` (static + headers) is unchanged. See
-  [docs/plans/multi-language-bindings-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/plans/multi-language-bindings-plan.md).
+  [docs/internal/archive/plans/multi-language-bindings-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/multi-language-bindings-plan.md).
 - **Binding ABI + conformance corpus (Track 0).** Non-jumping verdict shims
   `asmtest_check_abi` / `asmtest_check_flag` *return* a verdict + reason instead
   of `longjmp`-ing into the runner, so an FFI binding can validate a capture with
@@ -1220,12 +1263,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Consolidated the AMD native-tracing docs (design-doc curation).** The AMD tracing
   story was split across four overlapping files; the three genuinely-AMD ones — the AMD
   LBR snapshot backend plan, the improvement analysis, and the improvement
-  implementation plan — are merged into a single [`docs/plans/amd-tracing-plan.md`](https://github.com/wilvk/asm-test/blob/main/docs/plans/amd-tracing-plan.md)
+  implementation plan — are merged into a single [`docs/internal/plans/amd-tracing-plan.md`](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-tracing-plan.md)
   with three parts (shipped LBR backend / improvement analysis / improvement roadmap),
   collapsing two duplicated "governing constraint" + "implementation status" preambles
   into one. All ~9 references (the `src/amd_backend.c` header comment and the sibling
   plans / parity matrix) repoint to the merged file; the vendor-neutral single-step
-  ("Zen 2") plan stays separate. The `docs/analysis/trace-parity-matrix.md` overlap the
+  ("Zen 2") plan stays separate. The `docs/internal/analysis/trace-parity-matrix.md` overlap the
   review also flagged was assessed and **left intact**: its matrices are
   trace-specialized (not restatements of `docs/features.md`) and its "Matrix N"
   numbering is cited from `src/trace_auto.c` / `include/asmtest_trace_auto.h`, so

@@ -551,7 +551,7 @@ package-libs-verify-macho:
 	exit $$rc
 
 # clean-room-test — Track A of the macOS clean-room plan
-# (docs/plans/macos-clean-test-plan.md). Package each binding, install it FRESH
+# (docs/internal/plans/macos-clean-test-plan.md). Package each binding, install it FRESH
 # into a throwaway prefix, load it with every ASMTEST_*/DYLD_*/LD_* override
 # scrubbed and the cwd outside the checkout (scripts/clean-env.sh), then ASSERT the
 # native lib it resolved lives under that install — never a leaked dev build/ tree,

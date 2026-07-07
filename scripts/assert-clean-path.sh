@@ -14,7 +14,7 @@
 # loading. Used by scripts/clean-room-test.sh and directly as the guard's own
 # sanity-check (feed it a build/ path and confirm it is rejected).
 #
-# See docs/plans/macos-clean-test-plan.md (Track A).
+# See docs/internal/plans/macos-clean-test-plan.md (Track A).
 
 # set -u so an unset variable is a hard error, not a silent empty string — an
 # unset $TMPDIR must NOT let the temp-path escape hatch below degrade to the glob

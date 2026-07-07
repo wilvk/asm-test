@@ -15,6 +15,8 @@ targets) pull in extra tools you can install on demand.
 | `nasm` | The NASM backend (`ASM_SYNTAX=nasm`) | x86-64 only, opt-in |
 | `pkg-config` | Installing/consuming `asmtest.pc` | See [Integration](../reference/integration.md) |
 | `libunicorn` | The [emulator tier](../guides/emulator.md) (`make emu-test`) | Optional |
+| `libkeystone` | The [in-line assembler tier](../reference/features.md#in-line-assembler-optional-keystone) (`make asm-test`) | Optional; no distro package — pinned source build via `scripts/build-keystone.sh` (`make deps DEPS_ARGS=--asm` walks you through it; Homebrew on macOS) |
+| `libcapstone` | [Disassembly in diagnostics](../guides/disassembly.md) (`disas_available()`) | Optional; pinned source build via `scripts/build-capstone.sh` — deliberately never installed from a distro/brew package (the `--emu`/`--asm` deps flows point you at the script) |
 | `clang-tidy`, `valgrind` | The analysis targets | Optional |
 
 ## Get the source
@@ -42,7 +44,8 @@ package manager with a single target:
 
 ```sh
 make deps                       # full dev setup (nasm, pkg-config, unicorn, …)
-make deps DEPS_ARGS=--emu       # only what `make emu-test` needs (libunicorn)
+make deps DEPS_ARGS=--emu       # what `make emu-test` needs (unicorn + capstone + pkg-config)
+make deps DEPS_ARGS=--asm       # adds the in-line assembler tier (keystone, source-built)
 make deps DEPS_ARGS=--dry-run   # print the commands without running them
 ```
 

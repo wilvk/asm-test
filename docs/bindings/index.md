@@ -82,10 +82,12 @@ make manifest      # asmtest_abi.json — required by the Python binding only
 The in-line assembler (Keystone) and the disassembler (Capstone) are folded into
 `libasmtest_emu` itself, which is the **full superset** (emulator + Keystone +
 Capstone). `make shared-emu` builds it with all three tiers, so every binding gets
-them with no extra flag. **The published packages bundle them out of the box** —
-`make <lang>-package` stages this lib and vendors the native deps, so a fresh `pip
-install` / `gem install` / `npm install` has both tiers working with no system
-libs (see [Packaging the bindings](../reference/packaging.md)).
+them with no extra flag. The language packages built by `make <lang>-package`
+bundle this lib and vendor the native deps, so a package install has both tiers
+working with no system libs — but note the packages are **not on public
+registries yet** (see [Maturity](#maturity)): today you consume the bindings
+from a checkout as shown below and on each language's page (see
+[Packaging the bindings](../reference/packaging.md) for the package pipeline).
 
 `libasmtest_emu` is the **one lib carrying both optional tiers** (and what the
 packages ship): load it and you get the assembler *and* the disassembler from a
@@ -100,9 +102,21 @@ one:
 cc -shared -fPIC -Iinclude -o libmyroutines.so myroutines.s
 ```
 
-At run time the dynamic loader must find `libasmtest_emu` — point it at the
-build directory with `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS), or
-set `ASMTEST_LIB` for Python. The emulator tier additionally needs **libunicorn**,
+At run time each binding must find `libasmtest_emu`. The mechanism differs per
+language — this is the complete setup cheatsheet (each language page repeats its
+own row with context):
+
+| Language | Point it at the built libs |
+|---|---|
+| Python | auto-discovers `build/` from a checkout; override with `ASMTEST_LIB` (+ `ASMTEST_MANIFEST`); needs `make manifest` once |
+| Node / Ruby / Lua | `ASMTEST_LIB` (+ `ASMTEST_CORPUS_LIB` for the corpus fixture) |
+| Java | `ASMTEST_LIB` (+ `ASMTEST_CORPUS_LIB`) |
+| .NET / Go | `LD_LIBRARY_PATH=$PWD/build` (Linux) / `DYLD_LIBRARY_PATH` (macOS) |
+| Rust | `build.rs` links against `build/` automatically; override with `ASMTEST_LIB_DIR` |
+| C++ | compile/link directly: `-Iinclude -Lbuild -lasmtest_emu` (or pkg-config) |
+| Zig | `zig build -Dincdir=… -Dlibdir=…` |
+
+The emulator tier additionally needs **libunicorn**,
 and the assembler/disassembler tiers need **libkeystone** + **libcapstone** (see
 [Emulator tier](../guides/emulator.md)).
 
@@ -160,23 +174,27 @@ page, linked above).
 | Disassembler present? | `asmtest.disas_available()` | `Emu.DisasAvailable` | `asmtest.DisasAvailable()` |
 | Disassemble bytes → text (Track C) | `asmtest.disas(code, off)` | `Emu.Disas(code, off)` | `asmtest.Disas(code, off, ArchX8664, base)` |
 
-Every binding also ships **Tier-2 assertions** over these results — `assert_ret`,
-`assert_abi_preserved`, `assert_flag`, `assert_fp`, `assert_vec_f32`,
-`assert_no_fault`, `assert_fault`, `assert_reg`, and friends (`Asm.Assert.*` in
-.NET, `asmtest.Assert*` in Go). Each language's page works the core tiers
+Nine of the ten bindings also ship **Tier-2 assertions** over these results —
+`assert_ret`, `assert_abi_preserved`, `assert_flag`, `assert_fp`,
+`assert_vec_f32`, `assert_no_fault`, `assert_fault`, `assert_reg`, and friends
+(`Asm.Assert.*` in .NET, `asmtest.Assert*` in Go). Zig is the exception: it
+consumes the C headers directly and a consumable assertion layer is still future
+work (see [its page](zig.md)). Each language's page works the core tiers
 end-to-end — capture, the emulator, cross-arch guests, and the in-line assembler.
 The newer additions above (AVX2 256-bit capture, mid-execution guards,
 coverage-guided fuzzing / mutation testing, and the disassembler) are mapped in
 this table and catalogued in the [API reference](../reference/api-reference.md); the
 [Python reference page](python.md) documents each in full.
 
-## Every binding has a reusable module
+## Almost every binding has a reusable module
 
-All ten bindings expose a **reusable library module** that keeps the FFI inside
-and presents an idiomatic surface — capture/emulator handles, the optional in-line
-assembler, plus Tier-2 assertions — with a thin conformance runner consuming it
-(the same corpus, in each language). So none of them require FFI declarations in
-your own test code:
+Nine of the ten bindings expose a **reusable library module** that keeps the FFI
+inside and presents an idiomatic surface — capture/emulator handles, the optional
+in-line assembler, plus Tier-2 assertions — with a thin conformance runner
+consuming it (the same corpus, in each language), so they require no FFI
+declarations in your own test code. Zig is the exception: core usage is raw
+`@cImport` of the C headers (only its native-trace tier wrappers ship as `src/`
+modules), so expect C-shaped calls there:
 
 | Language | Module | FFI mechanism | Consumer |
 |---|---|---|---|
@@ -184,7 +202,7 @@ your own test code:
 | Go | `asmtest.go` | `cgo` | `conformance_test.go` |
 | Rust | `src/` crate | `extern` + build script | `tests/` |
 | C++ | `asmtest.hpp` | direct `#include` | `test_cpp.cpp` |
-| Zig | `src/` module | `@cImport` | build step |
+| Zig | raw `@cImport` (+ `src/` trace-tier wrappers) | `@cImport` | build step |
 | Node | `asmtest.js` | `koffi` | `conformance.js` |
 | Ruby | `asmtest.rb` | `Fiddle` | `conformance.rb` |
 | Lua | `asmtest.lua` | LuaJIT `ffi` | `conformance.lua` |

@@ -4,7 +4,7 @@
  * asmtest_hwtrace_stealth_trace can run it as an in-process forked child when no
  * bundled binary is present) AND into the standalone asmtest-stealth-helper binary
  * (src/stealth_helper_main.c). Linux x86-64/AArch64 only; see stealth_helper.h and
- * docs/plans/scoped-tracing-managed-plan.md §D3.
+ * docs/internal/archive/plans/scoped-tracing-managed-plan.md §D3.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* dladdr / Dl_info */

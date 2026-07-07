@@ -52,7 +52,7 @@ namespace Asmtest
         // an ASMTEST_LIB override. Forces the load (a cheap EMU call), then reports
         // the override path if we resolved it, else finds the module in the
         // process's loaded-module list (works no matter how the runtime resolved
-        // the bundled name). See docs/plans/macos-clean-test-plan.md, Track A.
+        // the bundled name). See docs/internal/plans/macos-clean-test-plan.md, Track A.
         internal static string EmuLibraryPath()
         {
             try { var r = asmtest_regs_new(); if (r != IntPtr.Zero) asmtest_regs_free(r); }
@@ -509,7 +509,7 @@ namespace Asmtest
         /// <summary>Absolute path of the native library actually loaded — for clean-room
         /// install tests to assert it came from the bundled package payload
         /// (runtimes/&lt;rid&gt;/native/), not a leaked build/ tree, a Homebrew dylib, or an
-        /// ASMTEST_LIB override. See docs/plans/macos-clean-test-plan.md, Track A.</summary>
+        /// ASMTEST_LIB override. See docs/internal/plans/macos-clean-test-plan.md, Track A.</summary>
         public static string LibraryPath => Native.EmuLibraryPath();
 
         /// <summary>

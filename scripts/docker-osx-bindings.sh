@@ -1,5 +1,5 @@
 #!/bin/sh
-# docker-osx-bindings.sh — Track D of docs/plans/macos-clean-test-plan.md: an
+# docker-osx-bindings.sh — Track D of docs/internal/plans/macos-clean-test-plan.md: an
 # on-demand x86-64 macOS clean room on a bare-metal Linux host, without waiting
 # on the scarce nightly macos-13 runner. Driven by Docker-OSX
 # (https://github.com/sickcodes/Docker-OSX — QEMU + OpenCore + OVMF + a macOS

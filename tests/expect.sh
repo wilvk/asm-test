@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # tests/expect.sh — meta-test harness for the asm-test framework (Track A of
-# docs/plans/expansion-plan.md).
+# docs/internal/plans/expansion-plan.md).
 #
 # Treats the framework as a black box through its real main(): builds (via the
 # Makefile) and runs the positive/negative suite binaries, then asserts on exit

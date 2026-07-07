@@ -1,5 +1,5 @@
 #!/bin/sh
-# osx-vm.sh — Track C of docs/plans/macos-clean-test-plan.md: the highest-
+# osx-vm.sh — Track C of docs/internal/plans/macos-clean-test-plan.md: the highest-
 # fidelity arm64 macOS clean room. Clone a VANILLA macOS VM image (no Xcode, no
 # Homebrew) with tart (Apple's Virtualization.framework, near-bare-metal), boot
 # it headless, copy the working tree — with the HOST-staged packages — into the

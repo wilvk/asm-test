@@ -26,4 +26,4 @@ the dep was source-built). asm-test's own license is MIT — see the top-level
 [LICENSE](../LICENSE). Because the packages convey the GPL-2.0 engines, each package
 as distributed is effectively GPL-2.0; see
 [docs/packaging.md](../docs/reference/packaging.md) and the
-[fully-featured-packages plan](../docs/archive/plans/fully-featured-packages-plan.md).
+[fully-featured-packages plan](../docs/internal/archive/plans/fully-featured-packages-plan.md).

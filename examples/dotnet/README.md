@@ -1,7 +1,7 @@
 # examples/dotnet — scoped in-process tracing, live
 
 Runnable .NET demos of the scoped-trace facility from the
-[zero-config plan](../../docs/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
+[zero-config plan](../../docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
 one project per report. All run live on this dev box — an AMD Zen 5 with no
 Intel PT — via the single-step **WEAK** tier, and self-skip cleanly (exit 0) where
 single-step cannot run.
@@ -33,7 +33,7 @@ single-step cannot run.
 | [descent_dotnet/](descent_dotnet/) | `Ptrace.TraceAttachedEx` + `Descent` | call descent against a **live CoreCLR** — attach to `jit_dotnet`'s `chain` mode and step INTO `Program::Leaf` as nested frames |
 | [codeimage/](codeimage/) | `CodeImage.Track` / `BytesAt` | **one address, two code bodies** over logical time — a self-patched blob the timeline keeps both versions of |
 
-See the [dotnet examples roadmap](../../docs/archive/plans/dotnet-examples-roadmap.md) for the full design
+See the [dotnet examples roadmap](../../docs/internal/archive/plans/dotnet-examples-roadmap.md) for the full design
 pass behind these and what the single-step tier honestly cannot do.
 
 (The sibling [jit_dotnet/](jit_dotnet/) is **not** a scope demo: it is a bare CoreCLR
@@ -153,7 +153,7 @@ Honest limits: this is the single-step WEAK tier, so it also single-steps the JI
 compiling the cold method (the ~977k "native runtime" instructions) — intrusive and
 slow. It needs no launch knob and no Intel PT, but the non-intrusive, clean path is
 the **STRONG** whole-window PT tier (forward-look here). See
-[docs/plans/scoped-tracing-zeroconfig-plan.md](../../docs/plans/scoped-tracing-zeroconfig-plan.md)
+[docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md](../../docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md)
 §Z3 and the managed plan's §D0.1.
 
 ## rundown — naming WARM + R2R BCL methods too (§D0.2, observed output)
@@ -181,7 +181,7 @@ rundown enabled: True; captured 973328 instructions (truncated); 38 methods labe
 tiers. (`Console::WriteLine(string)` itself is an inlined forwarder, so its *work* shows up
 as these R2R callees.) Self-skips to the cold-only result where diagnostics are off
 (`DOTNET_EnableDiagnostics=0` → `rundown enabled: False`). See
-[dotnet-perfmap-rundown-plan.md](../../docs/archive/plans/dotnet-perfmap-rundown-plan.md).
+[dotnet-perfmap-rundown-plan.md](../../docs/internal/archive/plans/dotnet-perfmap-rundown-plan.md).
 
 ## assemblies — grouping the window by declaring assembly (observed output)
 

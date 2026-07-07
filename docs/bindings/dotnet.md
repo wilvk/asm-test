@@ -419,3 +419,11 @@ A published NuGet package with `runtimes/<rid>/native/` payloads, a
 `LibraryImport` source generator, and xUnit/NUnit integration of the `Assert`
 helpers are future work; the reusable library module with Tier-2 assertions ships
 today. See [Packaging the bindings](../reference/packaging.md) for the staging plan.
+
+:::{note}
+The Track D/E/F surface — `Emu.WatchWrites`, `Emu.GuardReg`, `Emu.FuzzCover`,
+`Emu.MutationTest`, and `Avx.CaptureVec256` — ships in `Asmtest.cs` and is mapped
+in the [shared capability table](index.md); the semantics of each are documented
+in full on the [Python reference page](python.md), which this binding mirrors
+name-for-name.
+:::

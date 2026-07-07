@@ -1,7 +1,7 @@
 /* platform.h — thin platform seam for the runner (src/asmtest.c).
  *
  * POSIX is the native build of the framework. The Win32 side backs the native
- * Win64 tier (see docs/plans/win64-native-tier-plan.md, Phase 4): the runner's
+ * Win64 tier (see docs/internal/archive/plans/win64-native-tier-plan.md, Phase 4): the runner's
  * platform primitives (guard-page allocator, --filter glob, isolated execution,
  * in-process crash-to-failure) are provided by src/platform_win32.c +
  * src/glob_match.c rather than the POSIX fork/signal/mmap/fnmatch call sites.

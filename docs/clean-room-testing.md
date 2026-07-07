@@ -9,8 +9,8 @@ no override" mean what it says — the bundled library is asserted to be the
 **only** thing that could have satisfied the load.
 
 This page is the operator's guide to the lanes; the design history lives in the
-[macOS clean-room & portability plan](https://github.com/wilvk/asm-test/blob/main/docs/plans/macos-clean-test-plan.md)
-(`docs/plans/macos-clean-test-plan.md` — the plans tree is not part of the
+[macOS clean-room & portability plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/macos-clean-test-plan.md)
+(`docs/internal/plans/macos-clean-test-plan.md` — the plans tree is not part of the
 built docs site).
 
 ## What leaks it catches

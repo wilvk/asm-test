@@ -39,7 +39,7 @@ public final class Asmtest {
      *  leaked build/ tree, a Homebrew dylib, or an ASMTEST_LIB override. The jar
      *  extracts its bundled payload to a fresh temp dir, so this is that temp
      *  path (macos-clean-test asserts it is not a dev-build or Homebrew path).
-     *  See docs/plans/macos-clean-test-plan.md, Track A. */
+     *  See docs/internal/plans/macos-clean-test-plan.md, Track A. */
     public static String libraryPath() { return EMU_PATH; }
 
     /** Thrown by the assert* helpers on a failed check. */

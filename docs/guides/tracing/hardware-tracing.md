@@ -214,7 +214,7 @@ regions (level 2) is a sound default; **level 3 — descend into everything — 
 best-effort on a live managed runtime**: single-stepping a helper that holds a GC / JIT /
 loader lock can perturb or **deadlock** sibling runtime threads, which no watchdog fully
 prevents. Reserve L3 for the fork path or a frozen/post-mortem target — see the L3 hazards in
-[analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/analysis/jit-runtime-tracing.md).
+[analysis/jit-runtime-tracing.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/jit-runtime-tracing.md).
 
 ---
 

@@ -5,8 +5,8 @@ resolved (the core capture/emulator lib, plus the optional DynamoRIO and
 hardware-trace tiers). A clean-room install test asserts these land **under the
 installed package** — not a leaked ``build/`` checkout, a Homebrew dylib, or a
 ``$ASMTEST_*_LIB`` override — so "install fresh, no override" means what it says.
-See docs/plans/macos-clean-test-plan.md (Track A) and
-docs/plans/bundle-native-trace-tiers-plan.md.
+See docs/internal/plans/macos-clean-test-plan.md (Track A) and
+docs/internal/archive/plans/bundle-native-trace-tiers-plan.md.
 """
 import sys
 

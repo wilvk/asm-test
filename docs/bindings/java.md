@@ -285,7 +285,7 @@ Asmtest.assertCovered(t, 0x0);             // basic block entered
 ## Run the tests
 
 ```sh
-make java-test        # from the repo root (needs the shared libs + JDK 21)
+make java-test        # from the repo root (needs the shared libs + JDK 22+)
 make docker-java      # or in an isolated container
 ```
 

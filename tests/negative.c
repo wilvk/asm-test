@@ -1,7 +1,7 @@
 /*
  * tests/negative.c — the framework's own self-tests (failure paths).
  *
- * Track A of docs/plans/expansion-plan.md. Every case here is DESIGNED TO FAIL
+ * Track A of docs/internal/plans/expansion-plan.md. Every case here is DESIGNED TO FAIL
  * (or crash/hang). tests/expect.sh runs each one filtered, asserting that the
  * binary exits nonzero and prints the expected diagnostic — i.e. that the
  * framework's assertions, crash handling, timeout, and fork-status synthesis

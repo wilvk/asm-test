@@ -4,7 +4,7 @@
  * accessors every language binding consumes, while the descending step loop in
  * src/ptrace_backend.c fills them through the mutators in asmtest_descent_internal.h.
  *
- * The design keeps asmtest_trace_t byte-for-byte frozen (see docs/plans/call-descent-
+ * The design keeps asmtest_trace_t byte-for-byte frozen (see docs/internal/archive/plans/call-descent-
  * plan.md): descent is a SEPARATE opaque handle, so bindings add accessor calls rather
  * than mirroring a new struct layout, and frame 0 remains a superset of the flat trace.
  *

@@ -37,7 +37,16 @@ The counter is `rdtsc` on x86-64 and `cntvct_el0` on AArch64, read by the inline
 |---|---|
 | `--bench` | Run benchmarks instead of tests |
 | `--bench-reps=N` | Pin the inner repeat count (otherwise auto-calibrated) |
+| `--bench-format=text\|json` | Output format — `text` (default) or machine-readable JSON |
 | `--filter`, `--list` | Honored in bench mode too |
+
+For CI ingestion, `--bench-format=json` emits one JSON object for the run —
+`unit`, `rounds`, and a `benchmarks` array with `min` / `median` / `mean` /
+`stddev` / `cv` / `reps` per case:
+
+```sh
+./build/test_bench --bench --bench-format=json > bench.json
+```
 
 ## How calibration works
 

@@ -366,7 +366,7 @@ docker-hwtrace-dotnet9: docker-dotnet
 # image), SSHes in on localhost:50922, and runs the same Track-A clean-room
 # install test (scripts/docker-osx-bindings.sh). Hard-errors without /dev/kvm —
 # hosted CI runners and most laptops don't have it, by design.
-# WRITTEN PER docs/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
+# WRITTEN PER docs/internal/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
 # without a KVM-capable bare-metal host; see docs/clean-room-testing.md.
 DOCKER_OSX_IMAGE ?= sickcodes/docker-osx:ventura
 .PHONY: docker-osx-bindings

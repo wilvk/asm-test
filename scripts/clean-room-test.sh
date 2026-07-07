@@ -12,7 +12,7 @@
 #
 # Driven by `make clean-room-test` (any host) and `make macos-clean-test` (darwin),
 # and by the Docker per-language lanes (each image runs it and self-skips to its own
-# binding). See docs/plans/macos-clean-test-plan.md.
+# binding). See docs/internal/plans/macos-clean-test-plan.md.
 set -u
 
 REPO=${ASMTEST_REPO_ROOT:-$(pwd)}

@@ -2,7 +2,7 @@
 #
 # scripts/amalgamate.sh — generate the single-header amalgamation
 # asmtest_single.h from the public header and the C runtime. Track B of
-# docs/plans/expansion-plan.md. Writes to stdout.
+# docs/internal/plans/expansion-plan.md. Writes to stdout.
 #
 # The capture trampoline is assembly (src/capture.s) and cannot be inlined into
 # a C header, so the amalgamation covers only the C surface; capture.s (or

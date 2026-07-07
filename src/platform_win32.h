@@ -1,5 +1,5 @@
 /* platform_win32.h — internal Win32 primitives for the native Win64 runner port
- * (see docs/plans/win64-native-tier-plan.md, Phase 4). Not part of the public
+ * (see docs/internal/archive/plans/win64-native-tier-plan.md, Phase 4). Not part of the public
  * binding ABI; shared between src/platform_win32.c and its tests.
  */
 #ifndef ASMTEST_PLATFORM_WIN32_H

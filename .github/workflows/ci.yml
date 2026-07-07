@@ -258,7 +258,7 @@ jobs:
   # pinned DynamoRIO release and runs the standalone C smoke harness + the Python
   # language-wrapper suite. DynamoRIO is a software DBI engine (runs on the CI VM's
   # CPU); the tier self-skips cleanly if the install step is removed. See
-  # docs/plans/dynamorio-native-trace-plan.md (Phase 8).
+  # docs/internal/plans/dynamorio-native-trace-plan.md (Phase 8).
   drtrace:
     name: drtrace (DynamoRIO native trace)
     runs-on: ubuntu-latest
@@ -412,7 +412,7 @@ jobs:
       - name: Test the ${{ matrix.lang }} binding in its isolated image
         run: make docker-${{ matrix.lang }}
 
-  # Clean-room install test (docs/plans/macos-clean-test-plan.md, Track A). For each
+  # Clean-room install test (docs/internal/plans/macos-clean-test-plan.md, Track A). For each
   # binding that BUNDLES a native payload, package it, install it FRESH into a
   # throwaway prefix, and — with every ASMTEST_*/DYLD_*/LD_* override scrubbed and the
   # cwd outside the checkout — assert the native lib it resolved came from that install,
@@ -472,7 +472,7 @@ jobs:
       - name: Check every binding wraps every native-trace tier symbol
         run: make check-bindings-parity
 
-  # Native Win64 tier (see docs/plans/win64-native-tier-plan.md). The Microsoft
+  # Native Win64 tier (see docs/internal/archive/plans/win64-native-tier-plan.md). The Microsoft
   # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:
   # the fast native lane via __attribute__((ms_abi)) on the runner itself, then a
   # real Win64 PE (mingw-w64 + `nasm -f win64`) run under Wine in an isolated

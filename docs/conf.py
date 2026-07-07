@@ -39,13 +39,13 @@ source_suffix = {
 master_doc = "index"
 language = "en"
 
-# Working documents kept in-tree but out of the published site: the plan set,
-# analysis, reviews, batch summaries, and the archive/ of completed plans. They
-# are referenced from the published pages via GitHub blob URLs (never doc
-# cross-references), so excluding them here is what keeps `-W` (fail_on_warning)
-# green — an included-but-untoctreed file, or a doc-xref into one, would warn.
-# archive/** is recursive: the archived plans live under archive/plans/.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "plans/*", "analysis/*", "reviews/*", "summaries/*", "archive/**"]
+# Working documents kept in-tree but out of the published site — everything
+# under internal/ (plans, analysis, reviews, and the archive/ of completed
+# ones; see internal/README.md). They are referenced from the published pages
+# via GitHub blob URLs (never doc cross-references), so excluding them here is
+# what keeps `-W` (fail_on_warning) green — an included-but-untoctreed file, or
+# a doc-xref into one, would warn.
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "internal/**"]
 
 # -- MyST (Markdown) configuration -------------------------------------------
 

@@ -9,7 +9,7 @@
 #
 # Used by `make clean-room-test` (scripts/clean-room-test.sh) and intended for
 # the release.yml per-binding smokes. Portable across macOS and Linux; POSIX sh.
-# See docs/plans/macos-clean-test-plan.md (Track A).
+# See docs/internal/plans/macos-clean-test-plan.md (Track A).
 
 # 1. Native-library / manifest overrides: none may pre-satisfy the load.
 unset ASMTEST_LIB ASMTEST_MANIFEST ASMTEST_CORPUS_LIB \
