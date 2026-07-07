@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Wide-arity, mixed-FP, and struct-return capture reachable from all ten
+  bindings** (N4 of the 2026-07-04 review — previously the array-form C entry
+  points existed but no binding referenced them). Three FFI-friendly shims join
+  `asmtest_capture6`/`_fp2`/`_vec_f32` in the opaque-handle layer:
+  `asmtest_capture_args` (stack-spilling wide arity), `asmtest_capture_mix`
+  (integer + FP register files together), and `asmtest_capture_sret`
+  (hidden-pointer struct return). The struct-layout bindings (C++/Rust/Zig/Python)
+  call the array forms directly per their existing idiom; the opaque-handle
+  bindings (Node/Java/.NET/Ruby/Lua/Go) wrap the shims. Every binding gained
+  wide-arity (`sum8`), mixed (`mix_scale`), and struct-return (`make_big`)
+  conformance tests — all ten docker lanes green; fixtures registered in the
+  corpus name table (no repeat of N7); NASM counterpart included.
+
 - **Docs: [Teaching with asm-test](https://github.com/wilvk/asm-test/blob/main/docs/guides/classroom.md)**
   (the in-repo scope of P5 from the 2026-07-04 review). The instructor recipe the
   primitives always supported but nothing documented: a three-file assignment
@@ -104,8 +117,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ASM_MIXCALL(&r, fn, (buf, n), (0.5))` marshals each parenthesized group into its
   register file via the existing `asm_call_capture_fp` — no more hand-built compound
   literals (the repo's own `test_structparam.c` hand-roll is converted). Covered by a
-  new `scale_long` example routine (x86-64 + AArch64) and the strict-c11/C++
-  header-portability gate.
+  new `mix_scale` example routine (x86-64 + AArch64 + NASM bodies; shared with the
+  bindings' mixed-capture fixtures) and the strict-c11/C++ header-portability gate.
 
 - **FP reference models — `ASSERT_MATCHES_FREF{1,2,3}`** (A7). Differential testing
   now covers the FP surface where rounding/NaN/lane bugs live: double tuples from an

@@ -41,9 +41,8 @@ of the ~50 findings now has an explicit disposition in the `Status` column below
 
 | Disposition | Count | Items |
 |---|---|---|
-| ✅ Fixed & verified | 43 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 P5 (in-repo scope) |
+| ✅ Fixed & verified | 44 | A1 A2 D1 N1 N2 · A3 A4 R1 R2 R3 T1 E1 D3 A5 N7 E2 · K5 K2 K3 K4 · E3 D2 R4 R6 K6 K7 E4 E6 D4 D5 R7 · X1 X2 X3 X4 · R5 A6 A7 E7 E5 P4 P2 P5 (in-repo scope) N4 |
 | 🟡 Fixed, CI-run validation pending | 1 | K1 (cache config landed 2026-07-07; the gha cache only exercises on a real Actions run) |
-| ⏸ Confirmed, deferred | 1 | N4 (multi-binding expansion) |
 | ⚪ Not actionable as written | 3 | N3 (scaffolding by design), N5 (docs defer it), N6 (heterogeneous by design) |
 | ⬜ Open expansions (step 5) | 2 | P1 (sequenced behind the first real tag), P3 (large: RISC-V native host tier) |
 
@@ -169,7 +168,7 @@ can't assemble — none of which any current gate catches.
 | P5 | Teaching audience recognized but no classroom kit / autograder recipe | Medium | expansion | ✅ fixed in-repo (instructor guide + Classroom autograding recipe; the separate template repo stays a maintainer action) |
 | R7 | Color is `isatty`-only; `NO_COLOR`/`--color` unsupported | Low | improvement | ✅ fixed (step 4) |
 | N3 | Lua rock & Java jar not actually publishable as documented | Medium | defect | ⚪ not a defect — packaging is scaffolding by design (packaging.md); only nit is an unused `LUAROCKS` var |
-| N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | ⏸ confirmed; deferred (genuine multi-binding expansion — C entry points exist + are FFI-friendly, just unwrapped) |
+| N4 | Wide-arity / struct-return / mixed-FP capture unreachable from bindings | Medium | improvement | ✅ fixed (post-review: `asmtest_capture_args`/`_mix`/`_sret` shims + all ten bindings wrapped and tested) |
 | N5 | Zig package exports no importable module | Medium | improvement | ⚪ not real — the zig README's "## Deferred" lists the module export as future work; finder missed it |
 | N6 | No tripwire stops a new corpus case silently skipping 9/10 bindings | Medium | improvement | ⚪ impractical as proposed — corpus mirroring is heterogeneous by design (Python data-replays, Go names differently, tiers per-binding); a flat parity rule is all-noise |
 | X1 | Nothing anywhere asserts `TEARDOWN` actually runs | Medium | improvement | ✅ fixed (step 6) |
