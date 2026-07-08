@@ -140,6 +140,91 @@ int main(void) {
         }
     }
 
+    /* #2B live reduced-filter follow (deterministic). A routine with a DIRECT
+     * UNCONDITIONAL jmp on the executed path plus a kept conditional anchor: with
+     * opts.branch_filter=1 the reduced HW filter DROPS the jmp, so a reconstruction that
+     * covers the jmp's TARGET block (0x08) proves amd_replay FOLLOWED the dropped jmp
+     * from the region bytes on live LbrExtV2 — deterministic (one frozen snapshot), not
+     * timing-sampled. (If perf rejects the type-filter combo the capture falls back to
+     * the full filter and the jmp edge is recorded instead — the reconstruction is
+     * identical either way, so the assertion is robust.) */
+    {
+        /* mov rax,rdi; jmp L; int3*3 (dead); L: add rax,rsi; cmp rax,100; jle DONE;
+         * dec rax; DONE: ret. add2(20,22)=42 takes the jmp (skipping the dead bytes)
+         * then the jle (skipping dec). jmp@0x03 -> 0x08 is the dropped direct uncond
+         * branch; jle@0x11 (kept conditional) is the anchor; single ret @0x16. */
+        static const unsigned char JMP_ROUTINE[] = {
+            0x48, 0x89, 0xf8,                   /* 0x00 mov rax, rdi    */
+            0xeb, 0x03,                         /* 0x03 jmp 0x08 (L)    */
+            0xcc, 0xcc, 0xcc,                   /* 0x05 int3*3 (dead)   */
+            0x48, 0x01, 0xf0,                   /* 0x08 L: add rax,rsi  */
+            0x48, 0x3d, 0x64, 0x00, 0x00, 0x00, /* 0x0b cmp rax, 100    */
+            0x7e, 0x03,                         /* 0x11 jle 0x16 (DONE) */
+            0x48, 0xff, 0xc8,                   /* 0x13 dec rax         */
+            0xc3};                              /* 0x16 DONE: ret       */
+        void *jp = mmap(NULL, sizeof JMP_ROUTINE, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (jp == MAP_FAILED) {
+            printf("# SKIP branchsnap #2B: mmap failed\n");
+        } else {
+            memcpy(jp, JMP_ROUTINE, sizeof JMP_ROUTINE);
+            mprotect(jp, sizeof JMP_ROUTINE, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)jp,
+                                    (char *)jp + sizeof JMP_ROUTINE);
+            asmtest_hwtrace_options_t opts;
+            memset(&opts, 0, sizeof opts);
+            opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+            opts.snapshot = 1;
+            opts.branch_filter =
+                1; /* reduced filter: drop the direct uncond jmp */
+            if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+                printf("# SKIP branchsnap #2B: AMD LBR tier unavailable\n");
+            } else {
+                asmtest_trace_t *jt = asmtest_trace_new(64, 64);
+                if (asmtest_hwtrace_register_region("bsnap2b", jp,
+                                                    sizeof JMP_ROUTINE,
+                                                    jt) != ASMTEST_HW_OK) {
+                    printf("not ok - branchsnap #2B: register_region failed\n");
+                    asmtest_hwtrace_shutdown();
+                    asmtest_trace_free(jt);
+                    munmap(jp, sizeof JMP_ROUTINE);
+                    munmap(p, sizeof ROUTINE);
+                    return 1;
+                }
+                add2_fn fn = (add2_fn)jp;
+                asmtest_hwtrace_begin("bsnap2b");
+                long r = fn(20, 22);
+                asmtest_hwtrace_end("bsnap2b");
+                int cov0 = asmtest_trace_covered(jt, 0);
+                int covL =
+                    asmtest_trace_covered(jt, 0x08); /* jmp TARGET block */
+                unsigned long long ni = asmtest_emu_trace_insns_total(jt);
+                printf(
+                    "branchsnap #2B: add2(20,22)=%ld; reduced-filter snapshot "
+                    "decoded %llu insns, entry=%d, jmp-target(0x08)=%d, "
+                    "truncated=%d\n",
+                    (long)r, ni, cov0, covL, asmtest_emu_trace_truncated(jt));
+                int ok2b = (r == 42) && cov0 && covL && ni > 0;
+                if (ok2b)
+                    printf(
+                        "ok - branchsnap #2B: reduced-filter snapshot follows "
+                        "the dropped jmp to its target block 0x08 on live "
+                        "LbrExtV2\n");
+                else
+                    printf("not ok - branchsnap #2B: reduced-filter snapshot "
+                           "missed the jmp-target block\n");
+                asmtest_hwtrace_shutdown();
+                asmtest_trace_free(jt);
+                if (!ok2b) {
+                    munmap(jp, sizeof JMP_ROUTINE);
+                    munmap(p, sizeof ROUTINE);
+                    return 1;
+                }
+            }
+            munmap(jp, sizeof JMP_ROUTINE);
+        }
+    }
+
     munmap(p, sizeof ROUTINE);
     return 0;
 }

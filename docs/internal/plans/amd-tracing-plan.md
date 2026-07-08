@@ -597,7 +597,14 @@ AMD hardware ceiling** — but remove its sharpest edges.
   dropped-back-edge cycles terminate (step bound), region-exit-leaving jmps truncate, and
   chained jmps follow through. Two independent adversarial reviews confirmed the classify/
   follow logic exhaustive over every x86-64 CTI and the default path byte-identical.
-  **Live reach-gain measurement pending the same perf-permitted Zen host as #2A.**
+  **Live-validated on Zen 5** (Ryzen 9 9950X, `docker-hwtrace-codeimage`): `test_branchsnap`'s
+  `branchsnap #2B` case captures a routine with a direct uncond jmp (target 0x08) plus a kept
+  conditional anchor through the DETERMINISTIC snapshot with `branch_filter=1`, and the
+  reconstruction covers the jmp's target block 0x08 — i.e. `amd_replay` followed the dropped
+  jmp from the region bytes on real LbrExtV2 (robust either way: if perf rejects the
+  type-filter combo the fallback records the jmp and the trace is identical). The remaining
+  open item is purely the *reach-gain quantification* (how many more instructions a reduced
+  window spans in a sampled run) — a measurement; the correctness is now proven live.
 - **#3 deterministic-snapshot default (single-exit) — LANDED.**
   The Phase-3 boundary snapshot (Part II #2) was previously opt-in only (`opts.snapshot`).
   `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) now also selects it **by
