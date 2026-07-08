@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The async/thread-hop stitch: AsmStitchedTrace follows ONE logical operation across an
+       `await Task.Run(...)` thread-pool hop and stitches each hop's managed-safe lazy-arm capture
+       (call_scoped — only the resolved body is stepped) into a single seq-ordered trace via the
+       shipped asmtest_hwtrace_stitch merge core. This is the first LIVE producer of that core.
+       The only managed example that spans a thread boundary; every other scopes one body on one
+       thread. Dependency-free: compiles the binding source (HwTrace.cs) directly and P/Invokes
+       libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips (exit 0) when no
+       hop can be captured in-process (single-step unavailable / unsupported signature).
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>async-stitch</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

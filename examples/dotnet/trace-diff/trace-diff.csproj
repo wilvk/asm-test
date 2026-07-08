@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The EXACT trace DELTA between two runs: which basic blocks / instructions a change
+       turned ON or OFF. Two HwTrace recorders over ONE native routine, set-diffed in managed.
+       Distinct from `coverage` (which UNIONs inputs into one covered set) and `codeimage`
+       (two bodies at one address): this diffs trace A against trace B. A dependency-free
+       console app that compiles the binding source (HwTrace.cs) directly and P/Invokes
+       libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
+       `make hwtrace-dotnet-example`; self-skips (exit 0) where single-step can't run.
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>trace-diff</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

@@ -3,10 +3,14 @@
 Runnable .NET demos of the scoped-trace facility from the
 [zero-config plan](../../docs/internal/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
 one project per report. Most run on the portable **in-process single-step** WEAK tier (any
-x86-64 Linux, no privilege); the newer ones use the **out-of-process** ptrace stepper
-(`localscope_oop*`, crash-proof, needs ptrace) and the **AMD LBR** hardware tier
-(`amdhot`/`amdlbr`, needs Zen 3+ + `CAP_PERFMON`). Every example **self-skips cleanly (exit 0)**
-where its tier is unavailable, so the whole set runs anywhere.
+x86-64 Linux, no privilege); others use the **out-of-process** ptrace stepper
+(`localscope_oop*`, `crashproof-showdown`, crash-proof, needs ptrace) and the **AMD LBR**
+hardware tier (`amdhot`/`amdlbr`/`amd-period-sweep`, needs Zen 3+ + `CAP_PERFMON`;
+`amd-snapshot` also needs `CAP_BPF`). Beyond whole-window captures, the set now also covers the
+**scoped** forms (`single-method`, `async-stitch`), tracing **workflows** (`perf-triage-drill`,
+`trace-diff`, `coverage-guided-fuzz`, `trace-cost-overhead`), and the family's **shape**
+(`tier-ladder`, `crashproof-showdown`, `crashproof-survey`). Every example
+**self-skips cleanly (exit 0)** where its tier is unavailable, so the whole set runs anywhere.
 
 | Project | Scope form | Shows |
 |---|---|---|
@@ -39,6 +43,19 @@ where its tier is unavailable, so the whole set runs anywhere.
 | [descent/](descent/) | `Ptrace.TraceCallEx` + `Descent` | the **exact nested call tree** (self-vs-inclusive counts) via the call-descent shadow stack — a native A→B→C blob |
 | [descent_dotnet/](descent_dotnet/) | `Ptrace.TraceAttachedEx` + `Descent` | call descent against a **live CoreCLR** — attach to `jit_dotnet`'s `chain` mode and step INTO `Program::Leaf` as nested frames |
 | [codeimage/](codeimage/) | `CodeImage.Track` / `BytesAt` | **one address, two code bodies** over logical time — a self-patched blob the timeline keeps both versions of |
+| [single-method/](single-method/) | `AsmTrace.Method(del).Invoke` | trace **exactly one managed method body** — lazy-arms `EFLAGS.TF` *inside* the call, so only that JIT'd body is stepped (zero whole-window runtime amplification); the managed counterpart to [region/](region/), and the SAFE single-step posture (+ its crash-proof `outOfProcess: true` variant) |
+| [perf-triage-drill/](perf-triage-drill/) | survey → `AsmTrace.Method` | the two-phase profiler workflow — a whole-window **by-method survey** finds the hottest managed method, then **drills** into exactly that body. The motivated framing of `single-method` |
+| [concurrent-isolation/](concurrent-isolation/) | two threads × `AsmTrace.Method` | **two overlapping single-step windows at once** — each thread keeps its own non-empty slice, neither truncates the other (the per-thread range stack; the affirmative proof behind the cross-thread `Truncated` guard) |
+| [async-stitch/](async-stitch/) | `AsmStitchedTrace.Step` | follow **one logical operation across an `await`/`Task.Run` hop** and stitch each hop's capture into one seq-ordered trace — the first LIVE producer of the shipped stitch-merge core (a pool-thread hop merges by `Seq`) |
+| [trace-diff/](trace-diff/) | two `HwTrace` regions + set-diff | an **exact coverage DELTA between two runs** — which basic blocks a change turned ON/OFF + per-instruction count deltas. Distinct from `coverage` (a union) and `codeimage` (two bodies at one address) |
+| [coverage-guided-fuzz/](coverage-guided-fuzz/) | region single-step per input | the **per-input marginal coverage delta** driving an AFL keep/discard decision — watch the corpus grow until the input that reaches the rare guarded block is flagged |
+| [trace-cost-overhead/](trace-cost-overhead/) | Stopwatch × every tier | the **honest cost of each tier** — the same native loop untraced vs single-step vs block-step vs OOP ptrace vs AMD LBR, as a slowdown-multiplier + stop-count table |
+| [descend-all/](descend-all/) | `Descent(DescendAll)` + guardrails | **auto-descend into UNKNOWN callees**, bounded by `SetMaxDepth`/`SetInsnBudget`/`SetWatchdogMs`/denylist, reporting honest `DepthCapped()`/`Truncated()` — the inverse of [descent/](descent/)'s curated allow-set |
+| [crashproof-showdown/](crashproof-showdown/) | in-proc child vs `AsmTrace.Window` | the FATAL boundary **as an observed fact** — the same thread-spawning block force-kills an in-process single-step child (exit 133 = SIGTRAP) yet is captured clean out of band |
+| [crashproof-survey/](crashproof-survey/) | Method / Window / WindowHot | one workload through all three crash-proof-capable forms side by side — a **fidelity / cost / safety table** (exact-body vs exact-window vs sampled-AMD) |
+| [tier-ladder/](tier-ladder/) | `HwTrace.ResolveTiers` / `AutoTier` | this host's **honest degradation ladder** with a reason per rung, from the public cascade API — and how `CeilingFree`/`NativeOnly` policies drop rungs. Pure enumeration, no tracing |
+| [amd-period-sweep/](amd-period-sweep/) | `AsmTrace.WindowHot(period:)` | the AMD-LBR statistical survey **swept across sample periods** — finer (more PMIs/throttle) vs coarser (cheaper) on the same hot block. Needs Zen 3+/LBR + `CAP_PERFMON` |
+| [amd-snapshot/](amd-snapshot/) | `AmdSnapshot.Trace` | the **deterministic boundary LBR snapshot** — EXACT capture of a tiny single-shot routine that the sampled survey truncates, via a HW breakpoint at the region exit + `bpf_get_branch_snapshot`. Needs `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build → self-skips otherwise |
 
 See the [dotnet examples roadmap](../../docs/internal/archive/plans/dotnet-examples-roadmap.md) for the full design
 pass behind these and what the single-step tier honestly cannot do.
@@ -83,6 +100,19 @@ dotnet run --project examples/dotnet/localscope_oop/localscope_oop.csproj
 dotnet run --project examples/dotnet/localscope_oop_managed/localscope_oop_managed.csproj
 dotnet run --project examples/dotnet/amdhot/amdhot.csproj          # AMD LBR: needs Zen 3+ + CAP_PERFMON
 dotnet run --project examples/dotnet/amdlbr/amdlbr.csproj          # AMD LBR: needs Zen 3+ + CAP_PERFMON
+dotnet run --project examples/dotnet/single-method/single-method.csproj
+dotnet run --project examples/dotnet/perf-triage-drill/perf-triage-drill.csproj
+dotnet run --project examples/dotnet/concurrent-isolation/concurrent-isolation.csproj
+dotnet run --project examples/dotnet/async-stitch/async-stitch.csproj
+dotnet run --project examples/dotnet/trace-diff/trace-diff.csproj
+dotnet run --project examples/dotnet/coverage-guided-fuzz/coverage-guided-fuzz.csproj
+dotnet run --project examples/dotnet/trace-cost-overhead/trace-cost-overhead.csproj
+dotnet run --project examples/dotnet/descend-all/descend-all.csproj
+dotnet run --project examples/dotnet/crashproof-showdown/crashproof-showdown.csproj
+dotnet run --project examples/dotnet/crashproof-survey/crashproof-survey.csproj
+dotnet run --project examples/dotnet/tier-ladder/tier-ladder.csproj
+dotnet run --project examples/dotnet/amd-period-sweep/amd-period-sweep.csproj    # AMD LBR: needs Zen 3+ + CAP_PERFMON
+dotnet run --project examples/dotnet/amd-snapshot/amd-snapshot.csproj            # AMD snapshot: needs CAP_BPF + CAP_PERFMON
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -603,6 +633,56 @@ Honest caveat: a real tier0→tier1 relocates to a *new* address, so a fixed-reg
 not capture managed tiering — this shows the mechanism on a controlled blob. Self-skips where the
 recorder or W^X patching is unavailable.
 
+## New capability & workflow examples
+
+These land the [example-ideation follow-through](../../docs/internal/plans/dotnet-example-ideation-plan.md):
+the tracing capabilities the table above didn't yet demonstrate, plus the real-world workflows a
+developer reaches for tracing to do.
+
+**Scoped forms** — `single-method` steps exactly one JIT'd body (the managed peer of `region`), with
+none of the ~1M-instruction whole-window runtime amplification:
+
+```
+armed 'Main:53', Work(21,8) = 80.
+rendered listing — the body's executed instructions:
+    0:  push rbp   /  ...  /  a5: dec edi  /  ad: cmp ...,0  /  b1: jg ...   (246 insns, none of the runtime)
+-- out-of-process (outOfProcess: true — crash-proof, no TF on this thread) -- Work(21,8) = 80
+```
+
+`async-stitch` follows one operation across an `await Task.Run(...)` hop and merges by `Seq`
+(`hop 1 ran on tid 6 — a pool thread — yet stitched into the same operation`); `concurrent-isolation`
+runs two overlapping `EFLAGS.TF` windows and proves neither truncates the other (A=21630 insns, B=32433,
+both `Truncated=False`).
+
+**Workflows** — `perf-triage-drill` surveys, then drills (`Hot` wins the by-method histogram at 10589
+insns, then its exact body is rendered); `trace-diff` diffs two runs:
+
+```
+run A: add2(20,22)=42 (jle TAKEN, dec skipped)   run B: add2(60,60)=119 (falls through, dec runs)
+block 0x0e  dec rax  + ON in B   <- the block the change turned on ;  per-insn delta 0x0e B-A=+1
+```
+
+`coverage-guided-fuzz` flags the input that first reaches a rare guarded block (`validate(4919)=57005 KEEP
++1 block 0x20 <== deep bug block reached`); `trace-cost-overhead` prints the honest tier cost:
+
+```
+untraced          1.19 us   1.0x        block-step (OOP fork)   29.69 ms   2 blocks     24,976x
+single-step      160.31 ms  134,857x    OOP single-step (fork)  37.65 ms   9,002 insns  31,674x
+AMD LBR region     5.83 us  4.9x
+```
+
+**Family shape** — `crashproof-showdown` runs the fatal boundary as an observed fact
+(`in-process child exit code = 133 (128+SIGTRAP) — force-killed as predicted` … `out-of-process leg:
+SURVIVED, captured 10 methods`);
+`crashproof-survey` tables Method vs Window vs WindowHot; `tier-ladder` prints this host's cascade
+with a reason per rung and shows `CeilingFree` drop the AMD LBR rung + `NativeOnly` drop the emulator
+floor. `descend-all` auto-descends unknown callees and trips its guardrail honestly
+(`SetMaxDepth(1) → DepthCapped=true, C folded into B`).
+
+**AMD** — `amd-period-sweep` sweeps the survey period (smaller = more samples/throttle, larger =
+coarser); `amd-snapshot` is the deterministic boundary snapshot that captures a tiny routine the
+sampler truncates (self-skips `built without the BPF toolchain` where `CAP_BPF`/libbpf is absent).
+
 ## API used
 
 - `new AsmTrace()` / `new AsmTrace(code)` / `new AsmTrace(byMethod: true)` /
@@ -651,3 +731,20 @@ recorder or W^X patching is unavailable.
 - `Disas.Available` / `.IsCall` / `.IsBranch` / `.IsRet` — structural control-flow classifiers
   over live addresses. Used by [instructionmix/](instructionmix/), [loops/](loops/), and
   [callgraph/](callgraph/).
+- `AsmTrace.Method(del, emit, outOfProcess)` + `.Invoke(args)` / `.Path` / `.Truncated` — lazy-arm
+  and step exactly one managed method body (in-process, or crash-proof out of band). Used by
+  [single-method/](single-method/), [perf-triage-drill/](perf-triage-drill/),
+  [concurrent-isolation/](concurrent-isolation/), [crashproof-survey/](crashproof-survey/).
+- `AsmStitchedTrace` (`.Step(del, args)` / `.Complete()` / `.Hops` / `StitchHop` / `.Path`) — stitch
+  one logical operation's hops across threads into a seq-ordered trace. Used by [async-stitch/](async-stitch/).
+- `AsmTrace.Window(Action)` / `AsmTrace.WindowHot(Action, period)` — the crash-proof out-of-process
+  (exact) and AMD-LBR (sampled, `IsStatistical`) whole-window forms. Used by
+  [crashproof-showdown/](crashproof-showdown/), [crashproof-survey/](crashproof-survey/), [amd-period-sweep/](amd-period-sweep/).
+- `HwTrace.ResolveTiers(policy)` / `.AutoTier(policy)` / `.Resolve` / `.Auto` / `.DegradationNote()` /
+  `.LibraryPath()` and `TierChoice` / `TracePolicy` — the host's cross-tier degradation cascade.
+  Used by [tier-ladder/](tier-ladder/).
+- `Descent(DescentLevel.DescendAll)` + `SetMaxDepth` / `SetInsnBudget` / `SetWatchdogMs` /
+  `UseDefaultDenylist` / `DepthCapped()` — auto-descend unknown callees under guardrails. Used by
+  [descend-all/](descend-all/).
+- `AmdSnapshot.Available()` / `.Trace(code, exitOff, run, trace)` — the deterministic boundary LBR
+  snapshot (`asmtest_amd_snapshot_trace`). Used by [amd-snapshot/](amd-snapshot/).

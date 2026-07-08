@@ -808,6 +808,32 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/descent/descent.csproj
 	@echo "== hwtrace-dotnet-example (descent_dotnet) =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
+	@echo "== hwtrace-dotnet-example (single-method) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/single-method/single-method.csproj
+	@echo "== hwtrace-dotnet-example (perf-triage-drill) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/perf-triage-drill/perf-triage-drill.csproj
+	@echo "== hwtrace-dotnet-example (concurrent-isolation) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/concurrent-isolation/concurrent-isolation.csproj
+	@echo "== hwtrace-dotnet-example (async-stitch) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/async-stitch/async-stitch.csproj
+	@echo "== hwtrace-dotnet-example (trace-diff) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/trace-diff/trace-diff.csproj
+	@echo "== hwtrace-dotnet-example (coverage-guided-fuzz) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/coverage-guided-fuzz/coverage-guided-fuzz.csproj
+	@echo "== hwtrace-dotnet-example (trace-cost-overhead) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/trace-cost-overhead/trace-cost-overhead.csproj
+	@echo "== hwtrace-dotnet-example (descend-all) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/descend-all/descend-all.csproj
+	@echo "== hwtrace-dotnet-example (crashproof-showdown) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/crashproof-showdown/crashproof-showdown.csproj
+	@echo "== hwtrace-dotnet-example (crashproof-survey) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/crashproof-survey/crashproof-survey.csproj
+	@echo "== hwtrace-dotnet-example (tier-ladder) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/tier-ladder/tier-ladder.csproj
+	@echo "== hwtrace-dotnet-example (amd-period-sweep) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-period-sweep/amd-period-sweep.csproj
+	@echo "== hwtrace-dotnet-example (amd-snapshot) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-snapshot/amd-snapshot.csproj
 	@echo "== hwtrace-dotnet-example (codeimage) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/codeimage/codeimage.csproj
 

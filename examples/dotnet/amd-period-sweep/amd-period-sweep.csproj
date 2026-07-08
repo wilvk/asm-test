@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- AMD-LBR statistical survey SWEPT across sample periods: the SAME hot managed block run
+       through AsmTrace.WindowHot at periods {4,16,64,256} so the cost/resolution tradeoff shows
+       in the numbers — smaller period = more endpoint samples (finer, more PMIs / throttling),
+       larger = coarser but cheaper. Uses only the period knob WindowHot already exposes (no new
+       binding). Dependency-free: compiles the binding source (HwTrace.cs) directly and P/Invokes
+       libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips (exit 0) off
+       Zen 3+/LBR or without CAP_PERFMON (the plain example lane) — the docker-hwtrace-amd-style
+       permissioned lane runs it live.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one binding source
+       (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>amd-period-sweep</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

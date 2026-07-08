@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The side-by-side crash-proof survey: ONE workload (Work) through all three
+       crash-proof-capable forms — AsmTrace.Method (exact one body), AsmTrace.Window (exact
+       whole block, out-of-process), AsmTrace.WindowHot (sampled AMD-LBR) — printed as a
+       fidelity/cost/safety table. Where single-method / localscope_oop_managed / amdhot each
+       show ONE form, this shows the CHOICE between them. Dependency-free: compiles the binding
+       source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run`
+       works offline. Run by `make hwtrace-dotnet-example`; the Method + Window legs run live
+       (single-step / ptrace), the AMD leg self-skips (exit 0) off Zen 3+/LBR or without
+       CAP_PERFMON — the docker-hwtrace-amd-style permissioned lane runs that leg live.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>crashproof-survey</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

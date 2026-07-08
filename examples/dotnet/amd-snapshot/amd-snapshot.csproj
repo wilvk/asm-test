@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The DETERMINISTIC AMD boundary LBR snapshot: AmdSnapshot.Trace plants a HW breakpoint at
+       a native region's exit, runs it once, and snapshots the frozen branch stack via
+       bpf_get_branch_snapshot() — an EXACT in-region capture of the same tiny single-shot
+       routine the sampled survey (amdhot / amdlbr) honestly truncates. The AMD counterpart to
+       `region` (single-step) and the exact sibling of the WindowHot sampled survey. A
+       dependency-free console app that compiles the binding source (HwTrace.cs) directly and
+       P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips
+       (exit 0) without CAP_BPF + CAP_PERFMON + AMD LbrExtV2 + a BPF-toolchain build.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>amd-snapshot</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

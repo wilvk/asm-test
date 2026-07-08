@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The one-managed-method scope: AsmTrace.Method(delegate).Invoke lazy-arms EFLAGS.TF
+       INSIDE the native call, so exactly one JIT'd body is single-stepped — the managed
+       counterpart to `region` (one native routine), with none of the whole-window runtime
+       amplification. Also the SAFE single-step posture, and its crash-proof outOfProcess
+       variant. Dependency-free: compiles the binding source (HwTrace.cs) directly and
+       P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Run by
+       `make hwtrace-dotnet-example`; self-skips (exit 0) where single-step can't run.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>single-method</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

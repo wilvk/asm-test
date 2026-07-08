@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The real profiler workflow in two phases: a whole-window by-method SURVEY
+       (new AsmTrace(byMethod, withRundown)) finds the hottest managed method, then
+       AsmTrace.Method(del).Invoke DRILLS into exactly that one JIT'd body — the motivated
+       framing of examples/dotnet/single-method (which shows the drill in isolation). The
+       survey single-steps the whole window (JIT/GC/BCL too) to attribute by method; the drill
+       lazy-arms EFLAGS.TF inside the native call so only the picked body is stepped, with zero
+       runtime amplification. Dependency-free: compiles the binding source (HwTrace.cs) directly
+       and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips
+       (exit 0) where single-step can't run.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>perf-triage-drill</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

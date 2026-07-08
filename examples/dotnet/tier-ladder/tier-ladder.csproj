@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The trace-tier degradation LADDER, read from the public cascade API — NOT a trace.
+       Where every other .NET example arms a scope and self-skips PRIVATELY when its tier is
+       gone, tier-ladder interrogates the SAME resolver those scopes consult and prints the
+       whole ladder: per-backend availability + reason, the backend-only and cross-tier
+       cascades (Resolve/ResolveTiers + Auto/AutoTier), and how the CeilingFree / NativeOnly
+       policies drop rungs. Pure enumeration — no AsmTrace, no NativeCode, no EFLAGS.TF/PMU —
+       so it cannot crash and never needs a hardware gate. Dependency-free: compiles the
+       binding source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no NuGet, so
+       `dotnet run` works offline.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>tier-ladder</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

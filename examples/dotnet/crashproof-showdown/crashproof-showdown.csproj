@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The FATAL single-step boundary as an OBSERVED fact: the SAME thread-spawning managed block
+       run two ways, live. The in-process EFLAGS.TF whole-window leg (new AsmTrace()) is force-
+       killed (exit 133 = 128+SIGTRAP) — so it runs in a re-exec'd child whose death is reaped as
+       an exit code — while the out-of-process AsmTrace.Window leg single-steps the identical
+       block out of band and SURVIVES. localscope_oop_managed shows only the surviving half; this
+       runs the failing half live and reads its exit code. Dependency-free: compiles the binding
+       source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run`
+       works offline. Self-skips (exit 0) where single-step or ptrace is unavailable.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>crashproof-showdown</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

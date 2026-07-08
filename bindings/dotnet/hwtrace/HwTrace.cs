@@ -443,6 +443,18 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_end_amd(
             IntPtr ctx, ulong[] ips, UIntPtr cap, out UIntPtr nips, out int truncated);
 
+        // AMD-P0 deterministic boundary LBR snapshot (src/branchsnap.c). Unlike the sampled
+        // survey above, this is EXACT for a tiny single-shot region the sampler is too coarse
+        // to catch: enable the LBR, plant a HW execution breakpoint at base+exitOff, run
+        // run(arg), and read the frozen 16-entry branch stack via bpf_get_branch_snapshot().
+        // Fills `trace` (the same asmtest_trace_t the recorder/coverage APIs read). run is a
+        // Cdecl void(void*) upcall (reuse StealthRunFn). _available reports the static+runtime
+        // floor (returns 0 without libbpf / AMD LbrExtV2 / kernel >= 6.10) so callers self-skip;
+        // _trace returns ASMTEST_HW_EUNAVAIL (needs CAP_BPF+CAP_PERFMON) or ENOSYS (no BPF build).
+        [DllImport(HWTRACE)] public static extern int asmtest_amd_snapshot_available();
+        [DllImport(HWTRACE)] public static extern int asmtest_amd_snapshot_trace(
+            IntPtr @base, UIntPtr len, UIntPtr exitOff, StealthRunFn run, IntPtr arg, IntPtr trace);
+
         // ---- call descent (asmtest_descent_t) — edges + nested frames ----
         // A SEPARATE opaque handle threaded through the three _ex trace entry points
         // (below); the flat asmtest_trace_t stays the single-region frame-0 view. Every
@@ -946,6 +958,62 @@ namespace Asmtest
         // The opaque trace handle, for the out-of-process tracer (which records into a
         // trace it does not own the lifecycle of — the caller still Free()s it).
         internal IntPtr Handle => _handle;
+    }
+
+    /// <summary>
+    /// AMD-P0 — the DETERMINISTIC boundary LBR snapshot (src/branchsnap.c). Where
+    /// <see cref="AsmTrace.WindowHot"/> statistically SAMPLES the branch stack (and honestly
+    /// truncates a routine too small/fast to be caught in-region), this captures the frozen
+    /// 16-entry branch stack EXACTLY at a region boundary: enable the LBR, plant a hardware
+    /// execution breakpoint at <c>base+exitOff</c>, run the region once, and read the stack
+    /// via <c>bpf_get_branch_snapshot()</c> when the boundary is hit. The decoded, in-region
+    /// stream fills a <see cref="HwTrace"/> the coverage/offset APIs then read. Needs the far
+    /// heavier substrate the sampled path does not — <c>CAP_BPF</c> + <c>CAP_PERFMON</c> + AMD
+    /// LbrExtV2 + a BPF-toolchain build + Linux &gt;= 6.10 — so it <see cref="Available"/>-gates
+    /// and self-skips where any is missing. Linux x86-64 only.
+    /// </summary>
+    public static class AmdSnapshot
+    {
+        /// <summary>
+        /// True if the deterministic snapshot substrate is present (BPF build + AMD LbrExtV2 +
+        /// kernel floor). Never throws — returns false (self-skip) where the lib or substrate
+        /// is missing.
+        /// </summary>
+        public static bool Available() =>
+            HwNative.LibAvailable && HwNative.asmtest_amd_snapshot_available() != 0;
+
+        /// <summary>One honest sentence for a self-skip: why <see cref="Available"/> is false.</summary>
+        public static string SkipReason()
+        {
+            if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
+            return Available()
+                ? "available"
+                : "deterministic LBR snapshot unavailable — needs CAP_BPF + CAP_PERFMON + AMD "
+                + "LbrExtV2 + a BPF-toolchain build + Linux >= 6.10";
+        }
+
+        /// <summary>
+        /// Deterministically capture <paramref name="code"/> by snapshotting the frozen LBR at
+        /// <paramref name="exitOff"/> (the offset of the region's exit instruction — its final
+        /// <c>ret</c> / tail branch), running <paramref name="run"/> once to drive execution to
+        /// that boundary. Fills <paramref name="trace"/> (allocate with
+        /// <see cref="HwTrace.Create"/>); read the reconstructed stream back with
+        /// <see cref="HwTrace.InsnOffsets"/> / <see cref="HwTrace.Covered"/>. Returns
+        /// <c>ASMTEST_HW_OK</c> (0), <c>ASMTEST_HW_EUNAVAIL</c> (-3, substrate/privilege absent),
+        /// or <c>ASMTEST_HW_ENOSYS</c> (-5, built without the BPF toolchain). Returns -3 without
+        /// throwing when the lib is missing.
+        /// </summary>
+        public static int Trace(NativeCode code, nuint exitOff, Action run, HwTrace trace)
+        {
+            if (code == null) throw new ArgumentNullException(nameof(code));
+            if (trace == null) throw new ArgumentNullException(nameof(trace));
+            if (!HwNative.LibAvailable) return HwNative.ASMTEST_HW_EUNAVAIL;
+            HwNative.StealthRunFn cb = _ => { try { run?.Invoke(); } catch { } };
+            int rc = HwNative.asmtest_amd_snapshot_trace(
+                code.Base, (UIntPtr)(nuint)code.Length, (UIntPtr)exitOff, cb, IntPtr.Zero, trace.Handle);
+            GC.KeepAlive(cb);
+            return rc;
+        }
     }
 
     /// <summary>

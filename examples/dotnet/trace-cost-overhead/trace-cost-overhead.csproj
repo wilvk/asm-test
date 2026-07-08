@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The cost demo: runs ONE native routine untraced and under each tracing tier
+       (in-process single-step, out-of-process block-step, out-of-process single-step,
+       and AMD LBR region) and prints a slowdown-multiplier + stop-count table — the
+       honest price of fidelity, where every other example shows only a tier's capture.
+       A dependency-free console app that compiles the binding source (HwTrace.cs)
+       directly and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works
+       offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0) off the
+       x86-64 single-step substrate, and prints n/a for any individual tier absent here.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>trace-cost-overhead</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The coverage-guided-fuzz demo: the AFL keep/discard decision, per input, driven by MARGINAL
+       basic-block coverage. Feeds a corpus into a hand-assembled staged validator, giving each
+       input a FRESH HwTrace + UNIQUE region name, and keeps an input iff it unlocks a block no
+       kept input did — until the rare magic input reaches a deep guarded block (the planted bug).
+       Distinct from `coverage/`, which reports only the FINAL union. A dependency-free console app
+       that compiles the binding source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace —
+       no NuGet, so `dotnet run` works offline. Self-skips (exit 0) where single-step can't run.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>coverage-guided-fuzz</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>
