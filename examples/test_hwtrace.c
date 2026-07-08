@@ -489,6 +489,30 @@ static uint64_t amd_capture_loop(void *p, long trips, int *cov7, int *trunc) {
     return n;
 }
 
+/* Live AMD_LOOP capture at a given lbr_period (#2A): period 0/1 keeps the exact
+ * sample_period=1 path; >1 spaces the PMIs so consecutive 16-deep windows overlap by
+ * (depth - period) and the Tier-B stitch splices them at ~period-times fewer interrupts.
+ * Returns the reconstructed insns_total (the stitched reach). */
+static uint64_t amd_capture_loop_period(void *p, long trips, int period,
+                                        int *trunc) {
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    opts.lbr_period = period;
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 64);
+    asmtest_hwtrace_register_region("amdper", p, sizeof AMD_LOOP, tr);
+    long (*fn)(long, long) = (long (*)(long, long))p;
+    asmtest_hwtrace_begin("amdper");
+    fn(1, trips);
+    asmtest_hwtrace_end("amdper");
+    uint64_t n = asmtest_emu_trace_insns_total(tr);
+    *trunc = asmtest_emu_trace_truncated(tr);
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    return n;
+}
+
 /* AMD LBR LIVE capture: on a Zen 3+ / Zen 4 / Zen 5 host with perf branch-stack
  * permitted, this exercises the REAL perf_event_open branch-record capture + decode
  * path (hwtrace_begin_amd/_end_amd -> asmtest_amd_decode), not the synthetic
@@ -607,6 +631,53 @@ static void test_amd_live(void) {
               "AMD LBR live loop: the over-ring run stays honestly truncated");
         munmap(q, sizeof AMD_LOOP);
     }
+}
+
+/* #2A live reach DIAGNOSTIC — period-spaced Tier-B on real hardware. Measures the
+ * stitched reach of AMD_LOOP at lbr_period=1 (exact) vs lbr_period=4 (spaced). HONEST
+ * finding, not a "gain": a loop is edge-SELF-SIMILAR (its branch offsets — hence from/to
+ * edges — repeat every iteration), so the smallest-overlap stitch cannot tell 1 iteration
+ * from P and period=4 UNDERCOUNTS it (each window contributes one edge, as
+ * test_amd_stitch_period_spaced asserts host-independently). So period-spacing's reach
+ * benefit is confined to DISTINCT-edge straight-line paths (inherently short), NOT loops —
+ * this prints the live numbers that confirm it. Loose assertion (both reconstruct
+ * something); sampling is statistical, so retry and keep the best. */
+static void test_amd_reach_period(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+        printf("# SKIP AMD #2A reach: AMD LBR live capture unavailable\n");
+        return;
+    }
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED)
+        return;
+    memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+    mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+    uint64_t best1 = 0, best4 = 0;
+    int tr1 = 0, tr4 = 0, t = 0;
+    for (int attempt = 0; attempt < 12; attempt++) {
+        uint64_t n1 = amd_capture_loop_period(q, 20000, 1, &t);
+        if (n1 >= best1) {
+            best1 = n1;
+            tr1 = t;
+        }
+        uint64_t n4 = amd_capture_loop_period(q, 20000, 4, &t);
+        if (n4 >= best4) {
+            best4 = n4;
+            tr4 = t;
+        }
+    }
+    printf("# AMD #2A reach (self-similar loop): period=1 best_insns=%llu "
+           "(truncated=%d), period=4 best_insns=%llu (truncated=%d)\n",
+           (unsigned long long)best1, tr1, (unsigned long long)best4, tr4);
+    printf(
+        "# AMD #2A note: a loop is edge-self-similar, so period=4 UNDERCOUNTS "
+        "(smallest-overlap stitch picks one edge/window) — period-spacing's "
+        "reach gain is confined to distinct-edge paths, not loops\n");
+    CHECK(best1 > 0 && best4 > 0,
+          "AMD #2A: both period=1 and period=4 reconstruct from the live LBR");
+    munmap(q, sizeof AMD_LOOP);
 }
 
 /* AMD Tier-B STITCHING (host-validated, no hardware — like test_amd_reconstruction):
@@ -5088,6 +5159,7 @@ int main(void) {
     /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
     test_amd_live();
+    test_amd_reach_period();
 
     /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */
     test_concurrent_amd();

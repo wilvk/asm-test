@@ -570,9 +570,16 @@ AMD hardware ceiling** — but remove its sharpest edges.
   *self-similar* loop whose every taken edge is identical gives the heuristic no way to tell
   1 iteration from P, so `period>1` silently **undercounts** it (the test asserts this to
   make the limitation concrete). `period=1` is the only universally-exact value; `>1` is a
-  coverage/throttle trade the caller opts into for distinct-edge hot paths. **Live
-  reach-gain measurement remains pending a perf-permitted Zen host** (`docker-hwtrace-amd`
-  needs a self-hosted AMD runner with `CAP_PERFMON`). The tested default path is untouched.
+  coverage/throttle trade the caller opts into for distinct-edge hot paths. **Live-measured
+  on Zen 5** (`test_amd_reach_period`, `docker-hwtrace-amd` with `CAP_PERFMON`): on the
+  self-similar `AMD_LOOP`, `period=4` reconstructs **fewer** instructions than `period=1`
+  (231 vs 297) — the undercount, confirmed on real hardware, **not a reach gain**. This
+  sharpens the caveat into a *finding*: **every loop is edge-self-similar** (its branch
+  offsets, hence from/to edges, repeat each iteration), so period-spacing never helps a loop
+  — its reach benefit is confined to **distinct-edge straight-line paths, which are
+  inherently short**. So `lbr_period>1` is a narrow lever (default stays 0); the throughput
+  win it targets is better served on Zen 4/5 by the #2B reduced filter, which *does* extend
+  a loop's per-window reach (measured 1.86× below). The tested default path is untouched.
 - **#2B slot-efficient branch filtering — LANDED (opt-in), SCOPE-SAFE + unified decoder; live reach-gain pending.**
   Shipped as the SCOPE-SAFE form: the reduced HW filter drops **only direct unconditional
   `jmp`** (`ASMTEST_AMD_REDUCED_FILTER = COND | IND_JUMP | ANY_CALL | ANY_RETURN`,
@@ -602,9 +609,14 @@ AMD hardware ceiling** — but remove its sharpest edges.
   conditional anchor through the DETERMINISTIC snapshot with `branch_filter=1`, and the
   reconstruction covers the jmp's target block 0x08 — i.e. `amd_replay` followed the dropped
   jmp from the region bytes on real LbrExtV2 (robust either way: if perf rejects the
-  type-filter combo the fallback records the jmp and the trace is identical). The remaining
-  open item is purely the *reach-gain quantification* (how many more instructions a reduced
-  window spans in a sampled run) — a measurement; the correctness is now proven live.
+  type-filter combo the fallback records the jmp and the trace is identical). **Reach-gain
+  measured on Zen 5** (`test_branchsnap`'s `branchsnap #2B reach`): a loop whose body has a
+  direct uncond jmp plus a conditional back-edge reconstructs **1.86× more executed
+  instructions per 16-deep window** under the reduced filter (65 vs 35) — because it records
+  one taken branch per iteration (the kept jnz) instead of two (jnz + the dropped jmp), so a
+  single frozen snapshot window spans ~2× the iterations. Deterministic (no sampling
+  variance), `reduced >= full` always (fallback ties). This is the AMD Zen 4/5 window-stretch
+  lever that #2A cannot provide for loops (see above).
 - **#3 deterministic-snapshot default (single-exit) — LANDED.**
   The Phase-3 boundary snapshot (Part II #2) was previously opt-in only (`opts.snapshot`).
   `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) now also selects it **by

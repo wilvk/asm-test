@@ -35,6 +35,46 @@ static void run_routine(void *arg) {
     g_result = fn(20, 22);
 }
 
+/* Capture the REACH (reconstructed insns_total) of `code(a,b)` via the deterministic
+ * snapshot marker path with the given branch_filter (0 = full, 1 = reduced). Returns 0
+ * if the tier is unavailable; writes the call result to *result. Used to MEASURE the
+ * #2B reduced-filter window stretch: the snapshot is one frozen 16-deep window, so its
+ * reach is stable (no sampling variance) and the full-vs-reduced ratio is meaningful. */
+static unsigned long long snap_reach(const unsigned char *code, size_t nbytes,
+                                     int branch_filter, long a, long b,
+                                     long *result) {
+    void *cp = mmap(NULL, nbytes, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (cp == MAP_FAILED)
+        return 0;
+    memcpy(cp, code, nbytes);
+    mprotect(cp, nbytes, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)cp, (char *)cp + nbytes);
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    opts.snapshot = 1;
+    opts.branch_filter = branch_filter;
+    unsigned long long ni = 0;
+    if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
+        asmtest_trace_t *t = asmtest_trace_new(512, 128);
+        if (asmtest_hwtrace_register_region("reach", cp, nbytes, t) ==
+            ASMTEST_HW_OK) {
+            long (*fn)(long, long) = (long (*)(long, long))cp;
+            asmtest_hwtrace_begin("reach");
+            long r = fn(a, b);
+            asmtest_hwtrace_end("reach");
+            if (result != NULL)
+                *result = r;
+            ni = asmtest_emu_trace_insns_total(t);
+        }
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(t);
+    }
+    munmap(cp, nbytes);
+    return ni;
+}
+
 int main(void) {
     printf("== branchsnap-test (AMD deterministic LBR snapshot) ==\n");
     if (!asmtest_amd_snapshot_available()) {
@@ -222,6 +262,48 @@ int main(void) {
                 }
             }
             munmap(jp, sizeof JMP_ROUTINE);
+        }
+    }
+
+    /* #2B reach-gain MEASUREMENT (deterministic). A loop whose body has a direct uncond
+     * jmp AND a conditional back-edge: mov rax,0; L: add rax,rdi; jmp M; int3*3; M: dec
+     * rsi; jnz L; ret. Per iteration the FULL filter records two taken branches (the jmp
+     * + the jnz), the REDUCED filter records ONE (only the kept jnz; the dropped jmp is
+     * followed from the bytes) — so a single 16-deep snapshot window spans ~2x more
+     * executed instructions under the reduced filter. The snapshot is one frozen window,
+     * so this ratio is stable (no sampling variance). reduced >= full always (if perf
+     * rejects the type-filter combo the fallback ties); the printed ratio is the gain. */
+    {
+        static const unsigned char JMP_JNZ_LOOP[] = {
+            0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, /* 0x00 mov rax, 0     */
+            0x48, 0x01, 0xf8,                         /* 0x07 L: add rax,rdi */
+            0xeb, 0x03,                               /* 0x0a jmp 0x0f (M)   */
+            0xcc, 0xcc, 0xcc,                         /* 0x0c int3*3 (dead)  */
+            0x48, 0xff, 0xce,                         /* 0x0f M: dec rsi     */
+            0x75, 0xf3,                               /* 0x12 jnz 0x07 (L)   */
+            0xc3};                                    /* 0x14 ret            */
+        long rf = 0, rr = 0;
+        unsigned long long full =
+            snap_reach(JMP_JNZ_LOOP, sizeof JMP_JNZ_LOOP, 0, 1, 50, &rf);
+        unsigned long long reduced =
+            snap_reach(JMP_JNZ_LOOP, sizeof JMP_JNZ_LOOP, 1, 1, 50, &rr);
+        printf("branchsnap #2B reach: full-filter=%llu reduced-filter=%llu "
+               "insns/window (reduced/full = %.2fx), results %ld/%ld\n",
+               full, reduced, full ? (double)reduced / (double)full : 0.0, rf,
+               rr);
+        int okr = (full > 0) && (reduced >= full) && (rf == 50) && (rr == 50);
+        if (okr)
+            printf(
+                "ok - branchsnap #2B reach: reduced filter reconstructs >= "
+                "the full filter per 16-deep window (measured %.2fx stretch)\n",
+                (double)reduced / (double)full);
+        else
+            printf("not ok - branchsnap #2B reach: full=%llu reduced=%llu "
+                   "rf=%ld rr=%ld\n",
+                   full, reduced, rf, rr);
+        if (!okr) {
+            munmap(p, sizeof ROUTINE);
+            return 1;
         }
     }
 

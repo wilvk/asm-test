@@ -29,12 +29,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Host-independently validated (`test_amd_reduced_filter` F1–F5: dropped-jmp equivalence,
     back-edge-cycle termination, region-exit truncation, chained follow); two independent
     adversarial reviews confirmed the classify/follow logic exhaustive over every x86-64 CTI.
+    **Live-validated + reach-measured on Zen 5** (Ryzen 9 9950X, `test_branchsnap`): the
+    deterministic snapshot with `branch_filter=1` follows a dropped jmp to its target block on
+    real LbrExtV2, and reconstructs **1.86× more executed instructions per 16-deep window**
+    (65 vs 35) on a loop whose body has a direct jmp plus a conditional back-edge.
   - **#2A period-spaced Tier-B stitching — host-independent validation + documented caveat.**
     `test_amd_stitch_period_spaced` proves the landed `lbr_period` path stitches
     period-spaced (P=4) windows of a **distinct-edge** path back to the exact sequence, and
     asserts the flip side: a **self-similar loop silently undercounts** under `period>1` (the
     smallest-overlap heuristic can't tell 1 iteration from P) — which is why the default stays
-    `lbr_period=0` (period=1, universally exact).
+    `lbr_period=0` (period=1, universally exact). **Live-measured on Zen 5**
+    (`test_amd_reach_period`): confirms the finding on real hardware — `period=4` reconstructs
+    *fewer* instructions than `period=1` (231 vs 297) on a loop, since **every loop is
+    edge-self-similar**, so period-spacing's reach benefit is confined to (inherently short)
+    distinct-edge paths, not loops.
   - **#3 deterministic snapshot by default for single-exit regions.** `hwtrace_begin_amd`
     now selects the Phase-3 boundary snapshot by **default** on the supporting substrate
     (`amd_lbr_v2` + `perfmon_v2` + Linux ≥ 6.10), but **only when the region has a lone ret**
