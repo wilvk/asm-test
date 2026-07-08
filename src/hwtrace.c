@@ -915,6 +915,158 @@ static void hwtrace_end_amd(void) {
 #endif /* __linux__ && __x86_64__ */
 
 /* ------------------------------------------------------------------ */
+/* §D3 statistical AMD-LBR whole-window survey (region-FREE)           */
+/* ------------------------------------------------------------------ */
+/* Exact whole-window is a hardware dead end on AMD (16-deep stack + non-overwrite ring +
+ * throttle truncate a period=1 capture at ~10^2 branches). This is the HONEST AMD whole-
+ * window shape: a STATISTICAL branch-stack SURVEY. Arm PERF_SAMPLE_BRANCH_STACK at
+ * sample_period=`period` (>1 — the OPPOSITE of the exact region path's default 1, so the
+ * event stays under kernel.perf_event_max_sample_rate / perf_cpu_time_max_percent), run
+ * run_fn(arg) on the CALLING thread, and collect the ABSOLUTE branch-target endpoints of
+ * every drained sample into ips[cap]. No [base,len), no disassembly, no amd_replay — the
+ * caller buckets the endpoint PCs by method to get a sample-weighted HOT-METHOD histogram
+ * (the AutoFDO/BOLT shape), NOT an exact instruction trace. Crash-proof + out-of-band: no
+ * EFLAGS.TF and no SIGTRAP, so it survives managed code the in-process single-step tier is
+ * forbidden to step. *nips = endpoint count; *truncated set on a dropped/throttled sample
+ * (a coverage signal, not an error). Returns ASMTEST_HW_OK, EINVAL on bad args, EUNAVAIL
+ * when the branch-stack event cannot open (no Zen 3+ / no CAP_PERFMON), ENOSYS off
+ * x86-64 Linux. */
+#if defined(__linux__) && defined(__x86_64__)
+int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
+                                      int period, uint64_t *ips, size_t cap,
+                                      size_t *nips, int *truncated) {
+    if (run_fn == NULL || ips == NULL || cap == 0)
+        return ASMTEST_HW_EINVAL;
+    if (nips != NULL)
+        *nips = 0;
+    if (truncated != NULL)
+        *truncated = 0;
+    if (period < 2)
+        period = 2; /* period>1 keeps the event under the sample-rate throttle */
+
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a;
+    a.type = PERF_TYPE_HARDWARE;
+    a.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+    a.sample_period = (unsigned)period;
+    a.sample_type = PERF_SAMPLE_BRANCH_STACK;
+    a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    a.exclude_kernel = 1;
+    a.exclude_hv = 1;
+    a.disabled = 1;
+    long fd = perf_open(&a, 0, -1, -1, 0); /* pid=0: the calling thread */
+    if (fd < 0)
+        return ASMTEST_HW_EUNAVAIL;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    size_t base_sz = (size_t)pg + round_pages(0, 256 * 1024);
+    void *base_map =
+        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (base_map == MAP_FAILED) {
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0);
+
+    run_fn(arg); /* the window body (a managed delegate thunk) runs at native speed */
+
+    ioctl((int)fd, PERF_EVENT_IOC_DISABLE, 0);
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
+    uint8_t *data = (uint8_t *)base_map + (size_t)pg;
+    size_t dsz = base_sz - (size_t)pg;
+    uint64_t head = mp->data_head;
+    __sync_synchronize(); /* read data_head before the records (smp_rmb) */
+    uint64_t tail = mp->data_tail;
+    size_t span = (size_t)(head - tail);
+    size_t n = 0;
+    int lost = 0;
+    /* Near-full ring = loss. The ring is non-overwrite and data_tail advances only at the
+     * end, so a ring that FILLED during run_fn drops the NEWEST samples (the window's tail)
+     * and emits NO PERF_RECORD_LOST (the kernel never gets the next reservation). Treat less
+     * than one max-size sample of headroom as loss, so a long window that overran the ring is
+     * honestly a prefix, not reported complete (mirrors hwtrace_end_amd). */
+    {
+        int depth = asmtest_amd_lbr_depth();
+        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
+                            (size_t)depth * sizeof(struct perf_branch_entry);
+        if (dsz > 0 && span + max_sample > dsz)
+            lost = 1;
+    }
+    if (span > 0 && span <= dsz) {
+        uint8_t *buf = (uint8_t *)malloc(span);
+        if (buf != NULL) {
+            for (size_t i = 0; i < span; i++)
+                buf[i] = data[(tail + i) % dsz];
+            for (size_t off = 0;
+                 off + sizeof(struct perf_event_header) <= span;) {
+                struct perf_event_header *h =
+                    (struct perf_event_header *)(buf + off);
+                if (h->size == 0 || off + h->size > span)
+                    break;
+                if (h->type == PERF_RECORD_LOST ||
+                    h->type == PERF_RECORD_THROTTLE) {
+                    lost = 1;
+                } else if (h->type == PERF_RECORD_SAMPLE) {
+                    /* body = {u64 nr; perf_branch_entry[nr]} (only BRANCH_STACK set). */
+                    uint8_t *body = buf + off + sizeof *h;
+                    uint64_t nr = *(uint64_t *)body;
+                    /* Bound nr BEFORE the multiply so a corrupt/huge nr cannot wrap the
+                     * size check into a pass and drive an out-of-bounds read (the branch
+                     * stack is <=32 deep on any part; 64 is a safe ceiling). */
+                    if (nr > 0 && nr <= 64 &&
+                        sizeof *h + sizeof(uint64_t) +
+                                nr * sizeof(struct perf_branch_entry) <=
+                            h->size) {
+                        struct perf_branch_entry *e =
+                            (struct perf_branch_entry *)(body +
+                                                         sizeof(uint64_t));
+                        for (uint64_t i = 0; i < nr && n < cap; i++) {
+                            if (e[i].abort)
+                                continue; /* transactional abort: not executed */
+                            /* Record the branch TARGET (block head / method entry) —
+                             * the label the caller buckets by method for hotness. */
+                            ips[n++] = e[i].to;
+                        }
+                        if (n >= cap)
+                            lost = 1; /* endpoint buffer full: survey is a prefix */
+                    }
+                }
+                off += h->size;
+            }
+            free(buf);
+        }
+    }
+    __sync_synchronize();   /* publish the reads before advancing data_tail (smp_mb) */
+    mp->data_tail = head;   /* consume */
+    munmap(base_map, base_sz);
+    close((int)fd);
+    if (nips != NULL)
+        *nips = n;
+    /* Honest: loss (ring/throttle/near-full/buffer-full) OR an empty survey (nothing
+     * sampled — too short a window, or the whole run dropped) is a prefix, not complete. */
+    if (truncated != NULL)
+        *truncated = (lost || n == 0) ? 1 : 0;
+    return ASMTEST_HW_OK;
+}
+#else
+int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
+                                      int period, uint64_t *ips, size_t cap,
+                                      size_t *nips, int *truncated) {
+    (void)run_fn;
+    (void)arg;
+    (void)period;
+    (void)ips;
+    (void)cap;
+    (void)nips;
+    (void)truncated;
+    return ASMTEST_HW_ENOSYS;
+}
+#endif /* __linux__ && __x86_64__ */
+
+/* ------------------------------------------------------------------ */
 /* Capture lifecycle (Intel PT via perf AUX; CoreSight is analogous)   */
 /* ------------------------------------------------------------------ */
 

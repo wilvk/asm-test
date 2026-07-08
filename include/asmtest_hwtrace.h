@@ -444,6 +444,22 @@ int asmtest_hwtrace_stealth_trace_windowed(
     asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
     void *arg);
 
+/* §D3 STATISTICAL AMD-LBR whole-window survey (region-FREE, in-process, crash-proof). The
+ * honest AMD whole-window shape: exact whole-window is a hardware dead end (16-deep stack +
+ * throttle), so this SAMPLES the branch stack at sample_period=`period` (>1, clamped, to
+ * stay under the sample-rate throttle) while `run_fn(arg)` runs on the CALLING thread, and
+ * fills `ips[cap]` with the ABSOLUTE branch-TARGET endpoints of every drained sample — the
+ * caller buckets them by managed method to get a sample-weighted HOT-METHOD histogram
+ * (AutoFDO/BOLT shape), NOT an exact instruction trace. Uses no EFLAGS.TF and no SIGTRAP, so
+ * it survives managed code the in-process single-step tier is forbidden to step. *nips gets
+ * the endpoint count; *truncated is set on a dropped/throttled/full-buffer sample (a coverage
+ * signal, not an error). Returns ASMTEST_HW_OK, EINVAL on bad args, EUNAVAIL when the
+ * branch-stack event cannot open (no Zen 3+/BRS or LbrExtV2, or no CAP_PERFMON / paranoid),
+ * ENOSYS off x86-64 Linux. */
+int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
+                                      int period, uint64_t *ips, size_t cap,
+                                      size_t *nips, int *truncated);
+
 /* ------------------------------------------------------------------ */
 /* AMD-P0 — deterministic software-event LBR snapshot (src/branchsnap.c) */
 /* ------------------------------------------------------------------ */

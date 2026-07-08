@@ -2537,6 +2537,77 @@ static void test_stealth_windowed(void) {
 #endif
 }
 
+#if defined(__x86_64__)
+/* run_fn for test_amd_sample_window: invoke the hot-loop blob with its trip count. */
+static void *g_asw_fn;
+static long g_asw_arg;
+static void asw_run(void *arg) {
+    (void)arg;
+    ((long (*)(long))g_asw_fn)(g_asw_arg);
+}
+#endif
+
+/* §D3 statistical AMD-LBR whole-window survey (asmtest_hwtrace_sample_window_amd): a
+ * region-free branch-stack SAMPLE of a hot loop, collecting absolute branch-target
+ * endpoints. Not an exact trace — a sampled hot-address histogram. Needs Zen 3+/LBR +
+ * CAP_PERFMON, so it self-skips off that hardware/permission (the docker-hwtrace-amd lane
+ * runs it live). x86-64 only. */
+static void test_amd_sample_window(void) {
+#if defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+        char why[160];
+        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, why, sizeof why);
+        printf("# SKIP AMD sample window: %s\n", why);
+        return;
+    }
+    /* A hot loop: sum(n) via a decrement loop — one taken back-edge per iteration, so
+     * the branch TARGET (loop top, offset 0x3) dominates the sampled endpoints. */
+    static const unsigned char LOOP[] = {
+        0x48, 0x31, 0xC0,       /* 0x0: xor rax, rax        */
+        0x48, 0x01, 0xF8,       /* 0x3: L: add rax, rdi     */
+        0x48, 0xFF, 0xCF,       /* 0x6: dec rdi             */
+        0x75, 0xF8,             /* 0x9: jnz L (-> 0x3)      */
+        0xC3,                   /* 0xb: ret                 */
+    };
+    void *fn = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fn == MAP_FAILED) {
+        printf("# SKIP AMD sample window: mmap failed\n");
+        return;
+    }
+    memcpy(fn, LOOP, sizeof LOOP);
+    mprotect(fn, sizeof LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)fn, (char *)fn + sizeof LOOP);
+    g_asw_fn = fn;
+    g_asw_arg = 500000; /* 500k taken branches — long enough to accumulate PMU samples */
+    uint64_t base = (uint64_t)(uintptr_t)fn, end = base + sizeof LOOP;
+
+    size_t cap = 65536;
+    uint64_t *ips = (uint64_t *)malloc(cap * sizeof(uint64_t));
+    size_t nips = 0;
+    int trunc = 0;
+    int rc = asmtest_hwtrace_sample_window_amd(asw_run, NULL, 16, ips, cap,
+                                               &nips, &trunc);
+    CHECK(rc == ASMTEST_HW_OK, "AMD sample_window returns OK");
+    CHECK(nips > 0, "AMD sample_window collected branch-target endpoints");
+    size_t inregion = 0;
+    for (size_t i = 0; i < nips; i++)
+        if (ips[i] >= base && ips[i] < end)
+            inregion++;
+    /* The hot loop's back-edge target dominates: the vast majority of sampled endpoints
+     * land in the tiny [base,end) blob. Statistical, so assert a strong majority. */
+    CHECK(inregion * 2 > nips,
+          "AMD sample_window: most sampled endpoints land in the hot loop");
+    printf("# AMD sample_window: nips=%zu in-loop=%zu truncated=%d\n", nips,
+           inregion, trunc);
+
+    free(ips);
+    munmap(fn, sizeof LOOP);
+#else
+    printf("# SKIP AMD sample window: x86-64 only\n");
+#endif
+}
+
 /* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
  * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
  * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
@@ -4830,6 +4901,7 @@ int main(void) {
     test_ptrace_windowed();
     test_ptrace_window_call();
     test_stealth_windowed();
+    test_amd_sample_window();
 
     /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
     test_ptrace_faulting_no_leak();

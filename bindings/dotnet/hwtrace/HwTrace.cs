@@ -102,9 +102,10 @@ namespace Asmtest
         }
 
         // asmtest_hwtrace_options_t: backend + two ring sizes + snapshot flag + an
-        // optional object-file hint. object_hint is marshalled by hand
-        // (Marshal.StringToHGlobalAnsi) into the IntPtr field so a null hint maps to
-        // NULL — the single-step backend ignores it entirely.
+        // optional object-file hint + the AMD LBR period. object_hint is marshalled by
+        // hand (Marshal.StringToHGlobalAnsi) into the IntPtr field so a null hint maps to
+        // NULL — the single-step backend ignores it entirely. This layout MUST match the C
+        // asmtest_hwtrace_options_t field-for-field (include/asmtest_hwtrace.h).
         [StructLayout(LayoutKind.Sequential)]
         public struct Options
         {
@@ -113,6 +114,7 @@ namespace Asmtest
             public UIntPtr DataSize;  // size_t: base perf ring bytes (0 = default)
             public int Snapshot;      // nonzero: circular snapshot ring
             public IntPtr ObjectHint; // const char*: optional object-file path
+            public int LbrPeriod;     // AMD LBR opt-in branch-retired sample period (0 = default 1)
         }
 
         // asmtest_hwtrace_bucket_t: an inline char[128] label + a uint64_t count. On
@@ -424,6 +426,15 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_trace_windowed(
             IntPtr winBase, UIntPtr winLen, IntPtr chan,
             IntPtr trace, out long result, IntPtr runRegion, IntPtr arg);
+
+        // §D3 statistical AMD-LBR whole-window survey (asmtest_hwtrace.h): sample the branch
+        // stack at `period` while runFn(arg) runs on the calling thread, filling ips[cap] with
+        // absolute branch-target endpoints (a sample-weighted hot-method histogram, NOT an
+        // exact trace). Crash-proof / out-of-band (no TF, no SIGTRAP). runFn is a native
+        // function pointer (a marshaled managed callback).
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_window_amd(
+            IntPtr runFn, IntPtr arg, int period, ulong[] ips, UIntPtr cap,
+            out UIntPtr nips, out int truncated);
 
         // ---- call descent (asmtest_descent_t) — edges + nested frames ----
         // A SEPARATE opaque handle threaded through the three _ex trace entry points
@@ -1411,6 +1422,18 @@ namespace Asmtest
         /// runtime — so <see cref="Methods"/> also names WARM methods (JIT'd before the scope).
         /// False (a clean self-skip to the cold-only result) where diagnostics are off.</summary>
         public bool RundownEnabled { get; private set; }
+        /// <summary>§D3: true for an <see cref="WindowHot"/> AMD-LBR scope — the result is a
+        /// SAMPLED, STATISTICAL survey, not an exact trace. When true the instruction-framed
+        /// members change meaning: <see cref="Methods"/><c>.Count</c> and
+        /// <see cref="InstructionsIn"/> are a sample-weighted HOT-METHOD weight (branch-target
+        /// endpoint hits), NOT an instruction count; <see cref="LabelledInstructions"/> is the
+        /// resolved-sample count; <see cref="Addresses"/> are sampled branch-target PCs (not an
+        /// ordered execution stream); and <see cref="Disassembly"/> is EMPTY (there is no
+        /// ordered stream to render, and its per-instruction "elided native gap" has no meaning
+        /// for sampled endpoints). <see cref="Truncated"/> then means "the survey is a prefix"
+        /// (dropped/throttled samples), a coverage signal — not a hard error. False (an exact
+        /// scope) leaves all of these with their exact-trace meaning.</summary>
+        public bool IsStatistical { get; private set; }
         /// <summary>§Z1: the LABELLED executed instructions of a <c>byMethod</c> whole-window
         /// scope, in execution order — each captured instruction that resolved to a managed
         /// method, disassembled from live memory and paired with its method name (and the
@@ -1617,7 +1640,14 @@ namespace Asmtest
                 _map.LoadJitDump(dump);
             }
             _map.Freeze();
-            bool disasOk = HwNative.asmtest_disas_available();
+            // A STATISTICAL scope (WindowHot) has no ordered execution stream — its addresses
+            // are non-consecutive SAMPLED branch-target endpoints. Building Disassembly there
+            // would fabricate an ordered listing and, worse, an AsmInstruction.RuntimeBefore
+            // ("elided native-runtime gap") from the count of unresolved SAMPLES — a number
+            // with no executed-instruction meaning. So skip the ordered stream for statistical
+            // scopes: Disassembly stays empty; Methods (sample weights) + LabelledInstructions
+            // (resolved-sample count) are still built.
+            bool disasOk = HwNative.asmtest_disas_available() && !IsStatistical;
             DisassemblyAvailable = disasOk;
             byte[] dbuf = disasOk ? new byte[128] : null;
             var by = new Dictionary<string, long>();
@@ -1667,6 +1697,85 @@ namespace Asmtest
             var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
             ww.RunWindowOutOfProcess(body ?? (() => { }));
             return ww;
+        }
+
+        /// <summary>
+        /// §D3 — the STATISTICAL AMD-LBR whole-window survey. Runs <paramref name="body"/> at
+        /// NATIVE speed while AMD LBR SAMPLES the branch stack out of band, then buckets the
+        /// sampled branch-target endpoints by managed method into a HOT-METHOD histogram.
+        /// Crash-proof and cheap: no <c>EFLAGS.TF</c>, no SIGTRAP (survives code the in-process
+        /// whole-window form is forbidden to step), a handful of PMIs (near-native), unlike the
+        /// exact-but-slow out-of-process <see cref="Window"/>. This is a SAMPLED survey, NOT an
+        /// exact trace — <see cref="IsStatistical"/> is true, <see cref="Methods"/>.Count is a
+        /// sample-weighted hot weight (endpoint hits, not instructions), and
+        /// <see cref="Addresses"/> are sampled branch-target PCs (not an ordered stream). Exact
+        /// whole-window is a hardware dead end on AMD, so this is the honest AMD whole-window
+        /// shape (the AutoFDO/BOLT model). Self-skips (runs <paramref name="body"/>
+        /// uninstrumented, records <see cref="SkipReason"/>) off Zen 3+/LBR or without
+        /// <c>CAP_PERFMON</c> / lowered <c>perf_event_paranoid</c>. Returns an already-closed
+        /// scope. Linux x86-64 only.
+        /// </summary>
+        /// <param name="period">Branch-retired sample period (clamped &gt;=2). Larger = fewer
+        /// PMIs / less throttling but coarser; ~16 is a good survey default.</param>
+        public static AsmTrace WindowHot(Action body, int period = 16, bool withRundown = true,
+                                         int rundownSettleMs = 300,
+                                         [CallerMemberName] string member = null,
+                                         [CallerLineNumber] int line = 0)
+        {
+            var ww = new AsmTrace(ScopeName(member, line), byMethod: true, withRundown, rundownSettleMs);
+            ww.RunWindowHotAmd(body ?? (() => { }), period);
+            return ww;
+        }
+
+        void RunWindowHotAmd(Action body, int period)
+        {
+            _disposed = true;       // this factory already closed the scope
+            IsStatistical = true;   // the result is a sampled survey, always
+            if (!HwNative.LibAvailable) { SafeRun(body); return; }
+            if (!HwTrace.Available(HwBackend.AmdLbr))
+            {
+                SkipReason = "AMD LBR unavailable: " + HwTrace.SkipReason(HwBackend.AmdLbr);
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                SafeRun(body);
+                return;
+            }
+            // The body as a native callback; AMD LBR samples the calling thread while it runs
+            // at native speed (no stepping, so the JIT listener catches mid-window JITs normally).
+            var cb = new RunRegionFn(_ => { try { body(); } catch { } });
+            IntPtr fn = Marshal.GetFunctionPointerForDelegate(cb);
+            ulong[] ips = new ulong[65536];
+            int rc;
+            UIntPtr nips;
+            int trunc;
+            Thread.BeginThreadAffinity(); // the sampled event is on this OS thread
+            try
+            {
+                rc = HwNative.asmtest_hwtrace_sample_window_amd(
+                    fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc);
+            }
+            finally { Thread.EndThreadAffinity(); GC.KeepAlive(cb); }
+
+            if (_map != null) _map.Stop();
+            Armed = rc == HwNative.ASMTEST_HW_OK;
+            if (!Armed)
+            {
+                SkipReason = $"AMD LBR survey did not arm (rc={rc})";
+                if (_map != null) _map.Dispose();
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                return;
+            }
+            ulong n = (ulong)nips;
+            var addrs = new ulong[n];
+            Array.Copy(ips, addrs, (long)n);
+            Addresses = addrs;                 // sampled branch-target PCs (not ordered)
+            Truncated = trunc != 0;            // a prefix (dropped/throttled samples)
+            // Pin the code-image version AFTER Stop() (mirrors the in-process Dispose order),
+            // so a method JIT'd mid-window disassembles against the version that actually ran.
+            IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+            ulong when = _map != null ? _map.ImageNow : 0;
+            AttributeAddresses(img, when);     // reuse: endpoint PCs -> methods; Count = weight
+            if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
         }
 
         // Private ctor for the §D3 out-of-process window (AsmTrace.Window). Sets up the method
