@@ -12,8 +12,9 @@
 
 #include "stealth_helper.h"
 
-#include "asmtest_hwtrace.h" /* ASMTEST_HW_* */
-#include "asmtest_ptrace.h"  /* run_to + trace_attached, ASMTEST_PTRACE_OK */
+#include "asmtest_addr_channel.h" /* §D3 windowed multi-region channel */
+#include "asmtest_hwtrace.h"      /* ASMTEST_HW_* */
+#include "asmtest_ptrace.h" /* run_to + trace_attached[_windowed], ASMTEST_PTRACE_OK */
 
 #include <stdio.h>
 #include <string.h>
@@ -111,6 +112,55 @@ int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
     sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
     return sc->rc;
 }
+
+int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
+                                        pid_t parent, const void *win_base,
+                                        size_t win_len) {
+    if (sc == NULL)
+        return ASMTEST_HW_EINVAL;
+    /* Recompute the shadow buffer pointers AND the channel in THIS address space. */
+    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(*sc));
+    uint64_t *bbuf = ibuf + sc->icap;
+    sc->shadow.insns = ibuf;
+    sc->shadow.insns_cap = sc->icap;
+    sc->shadow.insns_len = 0;
+    sc->shadow.insns_total = 0;
+    sc->shadow.blocks = bbuf;
+    sc->shadow.blocks_cap = sc->bcap;
+    sc->shadow.blocks_len = 0;
+    sc->shadow.blocks_total = 0;
+    sc->shadow.truncated = 0;
+    /* The SHARED channel pointer is fork-valid (identical address space), so use it
+     * directly — the runtime publishes into it live while we drain. */
+    asmtest_addr_channel_t *chan = (asmtest_addr_channel_t *)sc->win_chan;
+
+    alarm(15);
+    if (ptrace(PTRACE_SEIZE, parent, (void *)0, (void *)0) != 0 ||
+        ptrace(PTRACE_INTERRUPT, parent, (void *)0, (void *)0) != 0) {
+        sc->rc = ASMTEST_HW_EUNAVAIL;
+        sc->ready = 1;
+        return sc->rc;
+    }
+    int st = 0;
+    if (waitpid(parent, &st, 0) < 0 || !WIFSTOPPED(st)) {
+        sc->rc = ASMTEST_HW_EUNAVAIL;
+        sc->ready = 1;
+        return sc->rc;
+    }
+    sc->ready = 1;
+    if (asmtest_ptrace_run_to(parent, win_base) != ASMTEST_PTRACE_OK) {
+        ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
+        sc->rc = ASMTEST_HW_EUNAVAIL;
+        return sc->rc;
+    }
+    long res = 0;
+    int tr = asmtest_ptrace_trace_attached_windowed(parent, win_base, win_len,
+                                                    chan, &res, &sc->shadow);
+    ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
+    sc->result = res;
+    sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
+    return sc->rc;
+}
 #else
 int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
                                const void *base, size_t len) {
@@ -118,6 +168,15 @@ int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
     (void)parent;
     (void)base;
     (void)len;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
+                                        pid_t parent, const void *win_base,
+                                        size_t win_len) {
+    (void)sc;
+    (void)parent;
+    (void)win_base;
+    (void)win_len;
     return ASMTEST_HW_ENOSYS;
 }
 #endif

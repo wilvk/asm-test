@@ -126,6 +126,13 @@ void asmtest_addr_channel_publish_rec(asmtest_addr_channel_t *c, uint64_t base,
                                       uint64_t len, uint64_t version);
 void asmtest_addr_channel_free(asmtest_addr_channel_t *c);
 
+/* SHARED-memory channel (MAP_SHARED) for the §D3 whole-window stepper: the runtime's JIT
+ * listener publishes into it WHILE the forked helper drains it live, so methods JIT'd
+ * mid-window are captured. The fork preserves the address, so the same pointer is valid in
+ * both processes. Free with asmtest_addr_channel_free_shared (munmap). */
+asmtest_addr_channel_t *asmtest_addr_channel_new_shared(void);
+void asmtest_addr_channel_free_shared(asmtest_addr_channel_t *c);
+
 #ifdef __cplusplus
 }
 #endif

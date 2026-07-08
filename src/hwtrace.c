@@ -16,6 +16,7 @@
  * gating and decode-dispatch logic here is exercised on every host; the live
  * capture is exercised only on capable hardware.
  */
+#include "asmtest_addr_channel.h" /* §D3 windowed multi-region channel */
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
@@ -2196,12 +2197,131 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
         close(shm_fd);
     return rc;
 }
+
+/* §D3 WHOLE-WINDOW reverse-attach stepper — the out-of-process analog of the in-process
+ * whole-window scope. Like asmtest_hwtrace_stealth_trace, a forked helper reverse-attaches
+ * and single-steps the caller out of band, but it captures the WHOLE window
+ * [win_base, win_base+win_len) PLUS every region the caller pre-published in `regions`
+ * (the JIT/BCL code the window calls into), via asmtest_ptrace_trace_attached_windowed —
+ * recording absolute addresses (classify by region). `run_region(arg)` invokes the window
+ * body (a delegate whose call frame delimits the window: it ends when the body returns).
+ * Two differences from the region variant: (1) it targets the CALLING THREAD's tid
+ * (SYS_gettid), not getpid() — a managed worker is not the process leader; (2) it uses the
+ * in-process fork path only (channel + scratch in an inherited MAP_SHARED mapping; no
+ * exec'd bundled binary, so no memfd re-map). Crash-proof by construction: a ptrace-stop is
+ * not gated by the tracee's signal mask, so the body survives code the in-process
+ * single-step tier is forbidden to step. Linux x86-64/AArch64. */
+int asmtest_hwtrace_stealth_trace_windowed(
+    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
+    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
+    void *arg) {
+    if (win_base == NULL || win_len == 0 || trace == NULL || run_region == NULL)
+        return ASMTEST_HW_EINVAL;
+    size_t icap = trace->insns_cap ? trace->insns_cap : 256;
+    size_t bcap = trace->blocks_cap ? trace->blocks_cap : 64;
+    if (icap > 65536)
+        icap = 65536;
+    if (bcap > 4096)
+        bcap = 4096;
+    size_t total =
+        sizeof(asmtest_stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
+
+    asmtest_stealth_scratch_t *sc = (asmtest_stealth_scratch_t *)mmap(
+        NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (sc == MAP_FAILED)
+        return ASMTEST_HW_EUNAVAIL;
+    memset(sc, 0, total);
+    sc->icap = icap;
+    sc->bcap = bcap;
+    sc->win = 1;
+    /* The channel is a SHARED mapping the CALLER owns and pre-published coarse ranges
+     * into (and the JIT listener publishes new methods into LIVE during the window). The
+     * fork preserves its address, so the helper uses the same pointer directly. */
+    sc->win_chan = chan;
+    sc->rc = ASMTEST_HW_EDECODE;
+
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    pid_t parent = (pid_t)syscall(SYS_gettid); /* the CALLING thread, not getpid() */
+    pid_t helper = fork();
+    if (helper < 0) {
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    if (helper == 0) {
+        asmtest_stealth_helper_run_windowed(sc, parent, win_base, win_len);
+        _exit(0);
+    }
+
+    /* Busy-wait until the helper has seized us and is ready (INTERRUPT-stopped until its
+     * run_to CONTs us with the entry breakpoint planted, so the window cannot run
+     * untraced); break if the helper dies before publishing ready. */
+    int helper_gone = 0;
+    while (!sc->ready) {
+        int ws = 0;
+        if (waitpid(helper, &ws, WNOHANG) == helper) {
+            helper_gone = 1;
+            break;
+        }
+    }
+    if (helper_gone || sc->rc == ASMTEST_HW_EUNAVAIL) {
+        int st = 0;
+        waitpid(helper, &st, 0);
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+
+    run_region(arg); /* the window body; the helper single-steps it out of band */
+
+    int st = 0;
+    waitpid(helper, &st, 0);
+
+    int rc = sc->rc;
+    if (rc == ASMTEST_HW_OK) {
+        uint64_t *ibuf =
+            (uint64_t *)((char *)sc + sizeof(asmtest_stealth_scratch_t));
+        uint64_t *bbuf = ibuf + icap;
+        size_t ni = sc->shadow.insns_len;
+        if (ni > trace->insns_cap)
+            ni = trace->insns_cap;
+        if (trace->insns != NULL)
+            for (size_t i = 0; i < ni; i++)
+                trace->insns[i] = ibuf[i];
+        trace->insns_len = ni;
+        trace->insns_total = sc->shadow.insns_total;
+        size_t nb = sc->shadow.blocks_len;
+        if (nb > trace->blocks_cap)
+            nb = trace->blocks_cap;
+        if (trace->blocks != NULL)
+            for (size_t i = 0; i < nb; i++)
+                trace->blocks[i] = bbuf[i];
+        trace->blocks_len = nb;
+        trace->blocks_total = sc->shadow.blocks_total;
+        trace->truncated = sc->shadow.truncated;
+        if (result_out != NULL)
+            *result_out = sc->result;
+    }
+    munmap(sc, total);
+    return rc;
+}
 #else
 int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
                                   asmtest_trace_t *trace, long *result_out,
                                   void (*run_region)(void *), void *arg) {
     (void)base;
     (void)len;
+    (void)trace;
+    (void)result_out;
+    (void)run_region;
+    (void)arg;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_stealth_trace_windowed(
+    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
+    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
+    void *arg) {
+    (void)win_base;
+    (void)win_len;
+    (void)chan;
     (void)trace;
     (void)result_out;
     (void)run_region;

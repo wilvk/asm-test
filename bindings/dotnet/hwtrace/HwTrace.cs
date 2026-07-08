@@ -410,6 +410,20 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern void asmtest_addr_channel_publish_rec(
             IntPtr c, ulong @base, ulong len, ulong version);
         [DllImport(HWTRACE)] public static extern void asmtest_addr_channel_free(IntPtr c);
+        // SHARED-memory channel: the JIT listener publishes into it live while the forked
+        // helper drains it — so methods JIT'd mid-window are captured.
+        [DllImport(HWTRACE)] public static extern IntPtr asmtest_addr_channel_new_shared();
+        [DllImport(HWTRACE)] public static extern void asmtest_addr_channel_free_shared(IntPtr c);
+
+        // §D3 whole-window reverse-attach stealth stepper (asmtest_hwtrace.h): a helper child
+        // single-steps the caller out of band while runRegion(arg) runs the window body,
+        // capturing [winBase,winLen) + every region published on the SHARED `chan` (coarse
+        // ranges + methods the JIT listener publishes live) into `trace`. Crash-proof (a
+        // ptrace-stop is not gated by the tracee's signal mask). runRegion is a native
+        // function pointer (a marshaled managed callback).
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_trace_windowed(
+            IntPtr winBase, UIntPtr winLen, IntPtr chan,
+            IntPtr trace, out long result, IntPtr runRegion, IntPtr arg);
 
         // ---- call descent (asmtest_descent_t) — edges + nested frames ----
         // A SEPARATE opaque handle threaded through the three _ex trace entry points
@@ -1237,6 +1251,18 @@ namespace Asmtest
         }
     }
 
+    /// <summary>One published code region for the §D3 windowed stepper — matches the native
+    /// <c>asmtest_addr_rec_t</c> ({base, len, version}); the stepper records instructions
+    /// whose absolute address falls in any published region.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AddrRec
+    {
+        public ulong Base;
+        public ulong Len;
+        public ulong Version;
+        public AddrRec(ulong @base, ulong len, ulong version = 0) { Base = @base; Len = len; Version = version; }
+    }
+
     /// <summary>
     /// §D3 cross-process JIT-address channel (asmtest_addr_channel.h): the set of code
     /// regions the tracer should record inside a <see cref="Ptrace.TraceWindowCall"/> window,
@@ -1345,6 +1371,7 @@ namespace Asmtest
         readonly IntPtr _handle;
         readonly bool _emit;
         readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
+        readonly bool _oopWindow;   // §D3: out-of-process whole-window (AsmTrace.Window)
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
         readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
         readonly int _rundownSettleMs;   // §D0.2: opt-in bound to let the async R2R jitdump flush before Dispose reads it
@@ -1572,6 +1599,228 @@ namespace Asmtest
                 SkipReason = brc == HwNative.ASMTEST_HW_ESTATE
                     ? "hwtrace tier not up — call HwTrace.Init (the region scope does not auto-init)"
                     : $"region scope did not arm (rc={brc})";
+        }
+
+        // §D0.1/§D0.2 attribution, shared by the in-process Dispose and the §D3
+        // out-of-process window: fold the jitdump rundown (opt-in settle first), then resolve
+        // each captured ABSOLUTE address to a managed method, building Methods /
+        // LabelledInstructions / Disassembly. DATA only. `img`/`when` pin the code-image
+        // version for versioned-first disassembly (both IntPtr.Zero/0 = live-memory decode).
+        void AttributeAddresses(IntPtr img, ulong when)
+        {
+            if (_map == null) return;
+            if (_rundownRequested)
+            {
+                string dump = DiagnosticsIpc.JitDumpPath();
+                if (_rundownSettleMs > 0)
+                    DiagnosticsIpc.WaitJitDumpSettled(dump, _rundownSettleMs);
+                _map.LoadJitDump(dump);
+            }
+            _map.Freeze();
+            bool disasOk = HwNative.asmtest_disas_available();
+            DisassemblyAvailable = disasOk;
+            byte[] dbuf = disasOk ? new byte[128] : null;
+            var by = new Dictionary<string, long>();
+            var insns = new List<AsmInstruction>();
+            long labelled = 0;
+            int runtimeRun = 0; // native-runtime insns since the last labelled one
+            foreach (ulong ip in Addresses)
+            {
+                string m = _map.Resolve(ip);
+                if (m == null) { runtimeRun++; continue; }
+                labelled++;
+                by.TryGetValue(m, out long c);
+                by[m] = c + 1;
+                if (disasOk)
+                    insns.Add(new AsmInstruction(ip, DisasAt(img, when, ip, dbuf), m, runtimeRun));
+                runtimeRun = 0;
+            }
+            LabelledInstructions = labelled;
+            Disassembly = insns;
+            var list = new List<AsmMethod>(by.Count);
+            foreach (var kv in by) list.Add(new AsmMethod(kv.Key, kv.Value));
+            list.Sort((x, y) => y.Count.CompareTo(x.Count));
+            Methods = list;
+            _map.Dispose();
+        }
+
+        /// <summary>
+        /// §D3 — the OUT-OF-PROCESS whole-window scope: trace a whole block of managed C# the
+        /// way the in-process <see cref="AsmTrace()"/> whole-window form does, but CRASH-PROOF.
+        /// A reverse-attached helper child single-steps THIS thread out of band, so it is never
+        /// armed with EFLAGS.TF and survives code the in-process form is forbidden to step (a
+        /// thrown/caught exception, <c>pthread_create</c>-adjacent tiering). The block is a
+        /// delegate whose call frame delimits the window:
+        /// <c>var ww = AsmTrace.Window(() =&gt; { …block… }); Report.Print(ww);</c>. Managed code
+        /// the block reaches (its own JIT'd body + R2R BCL) is captured via coarse code ranges
+        /// published to the stepper, then named at close through the same §D0.1/§D0.2
+        /// attribution as the in-process form (see <see cref="Methods"/> / <see cref="Addresses"/>).
+        /// Self-skips (runs the block uninstrumented, records <see cref="SkipReason"/>) where
+        /// ptrace is denied (Yama). Returns an already-closed scope — do not wrap in <c>using</c>
+        /// (the block already ran); read its properties directly. Linux x86-64/AArch64.
+        /// </summary>
+        public static AsmTrace Window(Action body, bool byMethod = true, bool withRundown = true,
+                                      int rundownSettleMs = 300,
+                                      [CallerMemberName] string member = null,
+                                      [CallerLineNumber] int line = 0)
+        {
+            var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
+            ww.RunWindowOutOfProcess(body ?? (() => { }));
+            return ww;
+        }
+
+        // Private ctor for the §D3 out-of-process window (AsmTrace.Window). Sets up the method
+        // map + rundown BEFORE the window (same as the in-process whole-window ctor), but arms
+        // nothing in-process — RunWindowOutOfProcess drives the reverse-attach capture.
+        AsmTrace(string name, bool byMethod, bool withRundown, int rundownSettleMs)
+        {
+            _name = name;
+            _emit = false;
+            _wholeWindow = true;
+            _oopWindow = true;
+            _rundownSettleMs = rundownSettleMs;
+            _armTid = Environment.CurrentManagedThreadId;
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+            _rundownRequested = withRundown;
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+        }
+
+        // The window body, invoked from native as a reverse-P/Invoke callback (win_base ==
+        // this delegate's entry). Kept alive across the native call via GC.KeepAlive.
+        delegate void RunRegionFn(IntPtr arg);
+
+        void RunWindowOutOfProcess(Action body)
+        {
+            _disposed = true; // this factory already closed the scope; no Dispose teardown
+            if (!HwNative.LibAvailable) { SafeRun(body); return; }
+            if (!Ptrace.Available())
+            {
+                SkipReason = "out-of-process stepper unavailable: " + Ptrace.SkipReason();
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                SafeRun(body);
+                return;
+            }
+
+            // Pre-JIT the body so its own code exists before the (single-stepped) window —
+            // the window then steps the compiled body, not the JIT compiling it.
+            try { System.Runtime.CompilerServices.RuntimeHelpers.PrepareDelegate(body); } catch { }
+
+            // §D3 capture channel: a SHARED ring the forked stepper drains. Seed it with the
+            // coarse managed code ranges (JIT heap + R2R BCL .dll images) so all currently-
+            // mapped managed code is captured; then the JIT listener publishes methods JIT'd
+            // MID-WINDOW (first-call generic instantiations, local functions) into it LIVE —
+            // the pieces a pre-window range scan cannot see. Native runtime (*.so) stays
+            // unpublished and is stepped over (the elided noise).
+            IntPtr chan = HwNative.asmtest_addr_channel_new_shared();
+            if (chan == IntPtr.Zero)
+            {
+                SkipReason = "out-of-process window: shared channel alloc failed";
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                SafeRun(body);
+                return;
+            }
+            foreach (AddrRec r in EnumerateManagedCodeRanges())
+                HwNative.asmtest_addr_channel_publish_rec(chan, r.Base, r.Len, r.Version);
+            // NOTE: live per-method publish via the JIT listener (SetPublishChannel) is
+            // DELIBERATELY OFF — firing the managed EventPipe callback on the thread being
+            // single-stepped re-enters the runtime under step and aborts it (SIGABRT). The
+            // coarse ranges above capture the block's own JIT'd code + mapped R2R BCL; methods
+            // JIT'd fresh mid-window (a first-call generic instantiation, a local function)
+            // land outside the pre-window ranges and are elided. See the plan for the
+            // safe-live-publish follow-up (publish from a SIBLING thread, not the stepped one).
+
+            IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+            ulong when = _map != null ? _map.ImageNow : 0;
+
+            var cb = new RunRegionFn(_ => { try { body(); } catch { } });
+            IntPtr fn = Marshal.GetFunctionPointerForDelegate(cb);
+            var tr = HwTrace.Create(blocks: 4096, instructions: 65536);
+            long result = 0;
+            int rc;
+            Thread.BeginThreadAffinity(); // pin the OS thread the stepper targets for the window
+            try
+            {
+                rc = HwNative.asmtest_hwtrace_stealth_trace_windowed(
+                    fn, (UIntPtr)4096, chan, tr.Handle, out result, fn, IntPtr.Zero);
+            }
+            finally
+            {
+                Thread.EndThreadAffinity();
+                GC.KeepAlive(cb);
+                if (_map != null) _map.SetPublishChannel(IntPtr.Zero);
+                HwNative.asmtest_addr_channel_free_shared(chan);
+            }
+
+            if (_map != null) _map.Stop();
+            Armed = rc == HwNative.ASMTEST_HW_OK;
+            if (!Armed)
+            {
+                SkipReason = rc == HwNative.ASMTEST_HW_EUNAVAIL
+                    ? "reverse-attach refused (Yama ptrace_scope / no ptrace) — block ran uninstrumented"
+                    : $"out-of-process window did not arm (rc={rc})";
+                if (_map != null) _map.Dispose();
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                tr.Free();
+                return;
+            }
+
+            // Read the captured ABSOLUTE addresses and attribute them (reuses the seam).
+            ulong n = HwNative.asmtest_emu_trace_insns_len(tr.Handle);
+            var addrs = new ulong[n];
+            for (ulong i = 0; i < n; i++)
+                addrs[i] = HwNative.asmtest_emu_trace_insn_at(tr.Handle, (UIntPtr)i);
+            Addresses = addrs;
+            Truncated = tr.Truncated();
+            AttributeAddresses(img, when);
+            if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+            tr.Free();
+        }
+
+        static void SafeRun(Action a) { try { a(); } catch { } }
+
+        // §D3 coarse code-range enumeration: the managed code segments from /proc/self/maps —
+        // executable file-backed *.dll images (R2R/PreJIT BCL) plus anonymous executable
+        // mappings (the JIT code heap). A few dozen big (base,len) records that fit the 256-slot
+        // channel and admit ALL managed code the window reaches, while leaving native runtime
+        // (*.so) unpublished so it is stepped over. Best-effort; returns an empty array on any
+        // read error (the window then records only its own frame).
+        static AddrRec[] EnumerateManagedCodeRanges()
+        {
+            var ranges = new List<AddrRec>();
+            try
+            {
+                foreach (string line in File.ReadLines("/proc/self/maps"))
+                {
+                    int dash = line.IndexOf('-');
+                    int sp = line.IndexOf(' ');
+                    if (dash <= 0 || sp <= dash) continue;
+                    string perms = sp + 5 <= line.Length ? line.Substring(sp + 1, 4) : "";
+                    if (perms.Length < 3 || perms[2] != 'x') continue; // executable only
+                    // path is the tail after the 5th field. Managed code = a .dll image (R2R
+                    // BCL) OR an anonymous / named-anon executable mapping (the JIT code heap,
+                    // which Linux .NET may label e.g. [anon:...]). EXCLUDE native runtime — any
+                    // *.so and the [vdso]/[vsyscall]/[vvar] specials — so it stays unpublished
+                    // and is stepped over (the runtime noise the capture elides).
+                    int lastSp = line.LastIndexOf(' ');
+                    string path = lastSp >= 0 && lastSp + 1 < line.Length ? line.Substring(lastSp + 1).Trim() : "";
+                    bool native = path.Contains(".so") || path.StartsWith("[vdso") ||
+                                  path.StartsWith("[vsyscall") || path.StartsWith("[vvar");
+                    if (native) continue;
+                    ulong start = Convert.ToUInt64(line.Substring(0, dash), 16);
+                    ulong end = Convert.ToUInt64(line.Substring(dash + 1, sp - dash - 1), 16);
+                    if (end > start) ranges.Add(new AddrRec(start, end - start));
+                    if (ranges.Count >= 250) break; // channel holds 256
+                }
+            }
+            catch { }
+            return ranges.ToArray();
         }
 
         /// <summary>
@@ -1876,7 +2125,9 @@ namespace Asmtest
 
         public void Dispose()
         {
-            if (_disposed) return;
+            // §D3: an out-of-process window (AsmTrace.Window) is already closed by its factory
+            // (nothing armed in-process); a stray using() on it is a no-op.
+            if (_oopWindow || _disposed) return;
             _disposed = true;
             // With no native lib the ctor self-skipped and allocated no native resources; skip
             // the (P/Invoking) teardown so Dispose also honors "never throws".
@@ -1917,55 +2168,9 @@ namespace Asmtest
                         addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
                     Addresses = addrs;
                 }
-                // §D0.1: attribute the captured addresses to managed methods — DATA only;
-                // the caller decides how to present Methods / LabelledInstructions.
-                if (_map != null)
-                {
-                    // §D0.2: fold in the jitdump rundown (WARM + R2R methods too). Keyed on
-                    // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
-                    // while its OK response read times out (RundownEnabled reported false), yet
-                    // the runtime still wrote the file; LoadJitDump is a safe no-op when the
-                    // file is absent, so always attempt it. rundownSettleMs (opt-in) first
-                    // waits for the ASYNC R2R rundown to finish flushing, so short scopes name
-                    // the R2R BCL bodies instead of dropping them to "native runtime".
-                    if (_rundownRequested)
-                    {
-                        string dump = DiagnosticsIpc.JitDumpPath();
-                        if (_rundownSettleMs > 0)
-                            DiagnosticsIpc.WaitJitDumpSettled(dump, _rundownSettleMs);
-                        _map.LoadJitDump(dump);
-                    }
-                    _map.Freeze();
-                    bool disasOk = HwNative.asmtest_disas_available();
-                    DisassemblyAvailable = disasOk;
-                    byte[] dbuf = disasOk ? new byte[128] : null;
-                    var by = new Dictionary<string, long>();
-                    var insns = new List<AsmInstruction>();
-                    long labelled = 0;
-                    int runtimeRun = 0; // native-runtime insns since the last labelled one
-                    foreach (ulong ip in Addresses)
-                    {
-                        string m = _map.Resolve(ip);
-                        if (m == null) { runtimeRun++; continue; }
-                        labelled++;
-                        by.TryGetValue(m, out long c);
-                        by[m] = c + 1;
-                        // Disassemble the labelled instruction — §Z3 versioned-first (the
-                        // code-image bytes as of the window close), falling back to LIVE
-                        // memory where the address has no tracked version (still mapped;
-                        // closing the scope does not unload managed methods).
-                        if (disasOk)
-                            insns.Add(new AsmInstruction(ip, DisasAt(img, when, ip, dbuf), m, runtimeRun));
-                        runtimeRun = 0;
-                    }
-                    LabelledInstructions = labelled;
-                    Disassembly = insns;
-                    var list = new List<AsmMethod>(by.Count);
-                    foreach (var kv in by) list.Add(new AsmMethod(kv.Key, kv.Value));
-                    list.Sort((x, y) => y.Count.CompareTo(x.Count));
-                    Methods = list;
-                    _map.Dispose();
-                }
+                // §D0.1/§D0.2: attribute the captured addresses to managed methods (shared
+                // with the §D3 out-of-process window path). DATA only; the caller presents it.
+                AttributeAddresses(img, when);
                 // §D0.2: turn perf-map generation back off so it is not left on
                 // process-wide (unbounded jitdump growth / per-JIT overhead). Keyed on
                 // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
@@ -2229,8 +2434,13 @@ namespace Asmtest
         IntPtr _img; // §Z3: optional self code-image tracking JIT'd bytes (zeroed on Dispose)
         Entry[] _frozen; // sorted-by-start snapshot for binary search
         volatile bool _stopped; // stop ingesting once the traced scope has closed
+        IntPtr _publishChannel; // §D3: shared channel to publish JIT'd methods into (live OOP window)
 
         struct Entry { public ulong Start, End; public string Name; }
+
+        /// <summary>§D3: while set, each JIT'd method is also published to this shared address
+        /// channel so the out-of-process window's stepper records it live. IntPtr.Zero = off.</summary>
+        public void SetPublishChannel(IntPtr chan) { _publishChannel = chan; }
 
         public JitMethodMap() : this(false) { }
 
@@ -2329,6 +2539,13 @@ namespace Asmtest
                 // no managed allocation — safe for the reentrancy-light contract above).
                 if (_img != IntPtr.Zero)
                     HwNative.asmtest_codeimage_track(_img, new IntPtr(unchecked((long)start)), (UIntPtr)size);
+                // §D3: publish the freshly JIT'd method to the out-of-process window's SHARED
+                // channel so the reverse-attach stepper starts recording it LIVE — this is how
+                // methods JIT'd MID-WINDOW (a first-call generic instantiation, a local
+                // function) get captured, which a pre-window code-range scan cannot see.
+                IntPtr chan = _publishChannel;
+                if (chan != IntPtr.Zero)
+                    HwNative.asmtest_addr_channel_publish_rec(chan, start, size, 0);
             }
             catch
             {

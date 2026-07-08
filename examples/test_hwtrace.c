@@ -2417,6 +2417,126 @@ static void test_ptrace_window_call(void) {
 #endif
 }
 
+#if defined(__x86_64__)
+/* The window body for test_stealth_windowed — invoked as run_region; it calls the native
+ * driver blob, whose entry is the window frame (win_base). File-scope because a C
+ * run_region callback cannot be a nested function. */
+static void *g_sw_drv;
+static void sw_run_window(void *arg) {
+    (void)arg;
+    ((void (*)(void))g_sw_drv)();
+}
+#endif
+
+/* Reverse-attach WHOLE-WINDOW capture (asmtest_hwtrace_stealth_trace_windowed): the
+ * out-of-process, crash-proof analog of the in-process whole-window scope. A helper child
+ * reverse-attaches to THIS process (PR_SET_PTRACER + PTRACE_SEIZE) and single-steps the
+ * window body out of band — the body calls a native driver (the window frame) that calls
+ * two PRE-PUBLISHED leaf "methods". The capture must record the driver AND both leaves in
+ * order, across the process boundary, with NO caller-side fork/attach/run_to. x86-64 only. */
+static void test_stealth_windowed(void) {
+#if defined(__x86_64__)
+    static const unsigned char M1[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x01, 0xf0, 0xc3}; /* rax=rdi+rsi */
+    static const unsigned char M2[] = {0x48, 0x89, 0xf8, 0x48,
+                                       0x29, 0xf0, 0xc3}; /* rax=rdi-rsi */
+    void *m1 = mmap(NULL, sizeof M1, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *m2 = mmap(NULL, sizeof M2, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m1 == MAP_FAILED || m2 == MAP_FAILED) {
+        printf("# SKIP stealth windowed: mmap failed\n");
+        return;
+    }
+    memcpy(m1, M1, sizeof M1);
+    memcpy(m2, M2, sizeof M2);
+    mprotect(m1, sizeof M1, PROT_READ | PROT_EXEC);
+    mprotect(m2, sizeof M2, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)m1, (char *)m1 + sizeof M1);
+    __builtin___clear_cache((char *)m2, (char *)m2 + sizeof M2);
+    uint64_t a1 = (uint64_t)(uintptr_t)m1, a2 = (uint64_t)(uintptr_t)m2;
+
+    /* Driver (the window frame): mov edi,7; mov esi,3; movabs rax,m1; call rax;
+     * movabs rax,m2; call rax; ret. Self-contained args → m1(7,3)=10, m2(7,3)=4. */
+    unsigned char DRV[35] = {
+        0xBF, 7,    0,    0,    0,    0xBE, 3,    0,    0,
+        0,    0x48, 0xB8, 0,    0,    0,    0,    0,    0,
+        0,    0,    0xFF, 0xD0, 0x48, 0xB8, 0,    0,    0,
+        0,    0,    0,    0,    0,    0xFF, 0xD0, 0xC3};
+    memcpy(DRV + 12, &a1, 8);
+    memcpy(DRV + 24, &a2, 8);
+    void *drv = mmap(NULL, sizeof DRV, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (drv == MAP_FAILED) {
+        printf("# SKIP stealth windowed: mmap failed\n");
+        return;
+    }
+    memcpy(drv, DRV, sizeof DRV);
+    mprotect(drv, sizeof DRV, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)drv, (char *)drv + sizeof DRV);
+    g_sw_drv = drv;
+
+    asmtest_addr_channel_t *chan = asmtest_addr_channel_new_shared();
+    if (chan == NULL) {
+        printf("# SKIP stealth windowed: shared channel alloc failed\n");
+        return;
+    }
+    asmtest_addr_channel_publish(chan, a1, sizeof M1, 0);
+    asmtest_addr_channel_publish(chan, a2, sizeof M2, 0);
+    long res = 0;
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    int rc = asmtest_hwtrace_stealth_trace_windowed(drv, sizeof DRV, chan, tr,
+                                                    &res, sw_run_window, NULL);
+    if (rc == ASMTEST_HW_EUNAVAIL) {
+        printf("# SKIP stealth windowed: reverse-attach not permitted (Yama / "
+               "no ptrace)\n");
+        asmtest_addr_channel_free_shared(chan);
+        asmtest_trace_free(tr);
+        munmap(drv, sizeof DRV);
+        munmap(m1, sizeof M1);
+        munmap(m2, sizeof M2);
+        return;
+    }
+    CHECK(rc == ASMTEST_HW_OK,
+          "stealth windowed reverse-attach whole-window trace succeeds");
+    CHECK(res == 4, "stealth windowed frame returns m2(7,3)=4");
+
+    uint64_t dv = (uint64_t)(uintptr_t)drv;
+    int hit_drv = 0, hit_m1 = 0, hit_m2 = 0;
+    long first_m1 = -1, first_m2 = -1;
+    unsigned long long ni = asmtest_emu_trace_insns_len(tr);
+    for (unsigned long long i = 0; i < ni; i++) {
+        uint64_t at = tr->insns[i];
+        if (at >= dv && at < dv + sizeof DRV)
+            hit_drv = 1;
+        if (at >= a1 && at < a1 + sizeof M1) {
+            hit_m1 = 1;
+            if (first_m1 < 0)
+                first_m1 = (long)i;
+        }
+        if (at >= a2 && at < a2 + sizeof M2) {
+            hit_m2 = 1;
+            if (first_m2 < 0)
+                first_m2 = (long)i;
+        }
+    }
+    CHECK(hit_drv && hit_m1 && hit_m2,
+          "stealth windowed records the driver frame AND both pre-published "
+          "leaves");
+    CHECK(first_m1 >= 0 && first_m2 > first_m1,
+          "stealth windowed follows the calls in order (m1 before m2)");
+    CHECK(!asmtest_emu_trace_truncated(tr), "stealth windowed capture complete");
+
+    asmtest_addr_channel_free_shared(chan);
+    asmtest_trace_free(tr);
+    munmap(drv, sizeof DRV);
+    munmap(m1, sizeof M1);
+    munmap(m2, sizeof M2);
+#else
+    printf("# SKIP stealth windowed: x86-64 only\n");
+#endif
+}
+
 /* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
  * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
  * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
@@ -4709,6 +4829,7 @@ int main(void) {
     test_ptrace_blockstep();
     test_ptrace_windowed();
     test_ptrace_window_call();
+    test_stealth_windowed();
 
     /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
     test_ptrace_faulting_no_leak();

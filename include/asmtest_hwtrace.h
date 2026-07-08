@@ -36,6 +36,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "asmtest_addr_channel.h" /* asmtest_addr_rec_t for the windowed stealth stepper */
 #include "asmtest_trace.h"
 
 #ifdef __cplusplus
@@ -425,6 +426,23 @@ int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
 int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
                                   asmtest_trace_t *trace, long *result_out,
                                   void (*run_region)(void *), void *arg);
+
+/* §D3 WHOLE-WINDOW reverse-attach stepper — the out-of-process, crash-proof analog of the
+ * in-process whole-window scope. Like asmtest_hwtrace_stealth_trace, a reverse-attached
+ * helper child single-steps the caller out of band while `run_region(arg)` runs the window
+ * body; but it captures the WHOLE window [win_base, win_base+win_len) PLUS every code region
+ * the caller pre-published in `regions[nregions]` (the JIT/BCL bodies the window calls into),
+ * recording ABSOLUTE addresses (classify by region) via the multi-region windowed tracer.
+ * The window body should be a callable frame (a delegate/local function) whose RETURN
+ * delimits the window. Targets the CALLING THREAD (SYS_gettid), not the process leader, so a
+ * managed worker thread is stepped correctly. Crash-proof: a ptrace-stop is not gated by the
+ * tracee's signal mask, so the body survives exceptions / pthread_create that would kill the
+ * in-process single-step tier. Returns ASMTEST_HW_OK, EINVAL on a bad arg, or EUNAVAIL when
+ * the reverse-attach is refused (Yama / no ptrace) — a clean self-skip. Linux x86-64/AArch64. */
+int asmtest_hwtrace_stealth_trace_windowed(
+    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
+    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
+    void *arg);
 
 /* ------------------------------------------------------------------ */
 /* AMD-P0 — deterministic software-event LBR snapshot (src/branchsnap.c) */

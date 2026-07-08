@@ -34,8 +34,12 @@ typedef struct {
     long result; /* the region's return value                                */
     size_t icap; /* insns buffer capacity (to recompute the pointer)         */
     size_t bcap; /* blocks buffer capacity                                   */
+    int win;     /* 1 = windowed (multi-region) whole-window capture         */
+    size_t chan_off; /* byte offset from sc to the addr channel (windowed)   */
+    void *win_chan;  /* windowed: the SHARED addr channel pointer (fork-valid,
+                        the runtime publishes into it live; the helper drains) */
     asmtest_trace_t shadow;
-    /* uint64_t insns[icap]; uint64_t blocks[bcap]; follow here */
+    /* uint64_t insns[icap]; uint64_t blocks[bcap]; [asmtest_addr_channel_t] follow here */
 } asmtest_stealth_scratch_t;
 
 /* The stepping body, shared by the in-process fallback and the standalone binary.
@@ -45,6 +49,15 @@ typedef struct {
  * the ASMTEST_HW_* status. An alarm() watchdog inside guarantees it never hangs. */
 int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
                                const void *base, size_t len);
+
+/* §D3 WHOLE-WINDOW stepping body: like asmtest_stealth_helper_run, but after run_to
+ * `win_base` it single-steps the WHOLE window via asmtest_ptrace_trace_attached_windowed
+ * — recording the absolute address of every instruction in [win_base, win_base+win_len)
+ * OR any region the caller pre-published on the channel at sc->chan_off (recomputed in
+ * this address space). The out-of-band analog of the in-process whole-window scope. */
+int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
+                                        pid_t parent, const void *win_base,
+                                        size_t win_len);
 
 /* Locate the bundled `asmtest-stealth-helper` binary: the ASMTEST_STEALTH_HELPER
  * env override first (an explicit path), else a dladdr-sibling lookup next to the

@@ -314,6 +314,15 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #define PTRACE_STREAM_CAP (1u << 16) /* 65536 offsets */
 #endif
 
+/* Hard step backstop for the WHOLE-WINDOW capture: PTRACE_STREAM_CAP bounds the RECORDED
+ * (in-region) instructions, but a window single-steps unbounded runtime/glue BETWEEN the
+ * published regions with no recorded-insn increment, so the recorded cap alone never trips
+ * on glue. This bounds total steps (mirrors the descent path's DESCEND_HARD_STEP_CAP) so a
+ * runaway managed window self-truncates in bounded wall time rather than stepping forever. */
+#ifndef PTRACE_WINDOW_STEP_CAP
+#define PTRACE_WINDOW_STEP_CAP (1u << 22) /* ~4.2M steps */
+#endif
+
 /* Exported (non-inline) address-channel shims so language bindings that cannot call
  * the header-only inline API (asmtest_addr_channel.h) can still create, publish into,
  * and free a channel for the windowed capture. Defined unconditionally (the channel is
@@ -333,6 +342,31 @@ void asmtest_addr_channel_publish_rec(asmtest_addr_channel_t *c, uint64_t base,
     asmtest_addr_channel_publish(c, base, len, version);
 }
 void asmtest_addr_channel_free(asmtest_addr_channel_t *c) { free(c); }
+
+/* SHARED-memory channel for the §D3 whole-window stepper: the producer (the runtime's
+ * JIT listener) publishes into it WHILE a forked helper drains it live. MAP_SHARED so the
+ * fork sees the producer's writes; the fork preserves the address, so the same pointer is
+ * valid in both. Free with asmtest_addr_channel_free_shared (munmap, not free). */
+asmtest_addr_channel_t *asmtest_addr_channel_new_shared(void) {
+#if defined(__linux__)
+    void *m = mmap(NULL, sizeof(asmtest_addr_channel_t), PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (m == MAP_FAILED)
+        return NULL;
+    asmtest_addr_channel_init((asmtest_addr_channel_t *)m);
+    return (asmtest_addr_channel_t *)m;
+#else
+    return NULL;
+#endif
+}
+void asmtest_addr_channel_free_shared(asmtest_addr_channel_t *c) {
+#if defined(__linux__)
+    if (c != NULL)
+        munmap(c, sizeof(asmtest_addr_channel_t));
+#else
+    (void)c;
+#endif
+}
 
 /* Capstone arch for the in-region instruction-length decode used by block
  * normalization. (Instruction offsets are exact regardless; only block boundaries
@@ -1896,11 +1930,15 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         n < PTRACE_STREAM_CAP)
         stream[n++] = pc0; /* record the window entry */
 
+    uint64_t steps = 0;
+    int pending_sig = 0; /* a non-fault signal to re-inject on the next step */
     for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
+                   (void *)(uintptr_t)pending_sig) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
+        pending_sig = 0;
         if (waitpid(pid, &status, 0) < 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
@@ -1910,6 +1948,22 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
+            /* FORWARD every non-SIGTRAP signal and keep stepping. Unlike a native leaf
+             * (where a SIGSEGV is a crash), a managed runtime RAISES AND HANDLES faults as
+             * normal operation — SIGSEGV for GC write-barriers / null-checks / stack
+             * probes, plus the GC-suspend hijack and process-group signals. Its own
+             * sigaction handler fixes up and resumes, so treating these as terminal would
+             * truncate the window on the runtime's very first internal fault (observed: a
+             * managed window truncated at ~21 insns on an early SIGSEGV). A genuinely fatal
+             * fault kills the tracee — WIFSIGNALED/WIFEXITED above ends the loop — and the
+             * step backstop bounds a pathological fault loop. This is what lets the window
+             * step a live GC'd runtime thread through a whole managed block. */
+            pending_sig = WSTOPSIG(status);
+            continue;
+        }
+        /* Hard step backstop: bound the runtime glue single-stepped between published
+         * regions (the recorded-insn cap never trips on unrecorded glue). */
+        if (++steps > PTRACE_WINDOW_STEP_CAP) {
             overflow = 1;
             break;
         }
@@ -1946,7 +2000,12 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
 
     /* Materialize the ABSOLUTE-address stream: a new block starts at a discontinuity
      * (this address is not the fall-through of the previous recorded one), matching
-     * the block partition of every other backend. Lengths come from foreign reads. */
+     * the block partition of every other backend. Lengths come from foreign reads.
+     * An UNDECODABLE address (foreign_insn_len==0 — common for a managed runtime's
+     * execute-only / W^X JIT pages process_vm_readv cannot read) does NOT discard the
+     * rest of the window: KEEP the absolute address (the caller attributes by address,
+     * decoding from its OWN memory), just break the fall-through chain and flag the
+     * partition imprecise. Only a native-leaf window (fully readable) stays exact. */
     if (rc == ASMTEST_PTRACE_OK) {
         int have_prev = 0;
         uint64_t expected_next = 0;
@@ -1957,8 +2016,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
             trace_append_insn(trace, at);
             size_t l = foreign_insn_len(pid, at);
             if (l == 0) {
-                trace->truncated = true;
-                break;
+                trace->truncated = true; /* partition imprecise past here */
+                have_prev = 0; /* next address opens a fresh block */
+                continue;      /* keep the address; do NOT drop the tail */
             }
             expected_next = at + l;
             have_prev = 1;

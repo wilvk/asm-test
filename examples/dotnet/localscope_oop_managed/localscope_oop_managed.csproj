@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §D3 crash-proof OUT-OF-PROCESS MANAGED whole-window demo: AsmTrace.Window(() => {…})
+       traces a whole block of C# via a reverse-attached helper child that single-steps this
+       thread out of band (never EFLAGS.TF-armed), so the block survives an in-scope exception
+       the in-process localscope must omit. Dependency-free: compiles the binding source
+       (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace, no NuGet, so `dotnet run` works
+       offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0) where ptrace is
+       unavailable.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>localscope_oop_managed</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

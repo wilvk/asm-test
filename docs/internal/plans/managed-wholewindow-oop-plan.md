@@ -26,8 +26,35 @@ already-shipping out-of-process stepper from a **region** primitive into a
 > `MethodLoadVerbose` listener publishing to the channel) — the native fixture proves the
 > mechanism; wiring a managed runtime's live JIT addresses in is the remaining integration.
 >
+> **Status update (2026-07-08b): the MANAGED whole-window path LANDED (partial).**
+> `asmtest_hwtrace_stealth_trace_windowed` (a reverse-attach helper child single-steps the
+> CALLING thread — SYS_gettid, not the process leader — out of band, capturing the whole
+> window + a SHARED address channel), the fork-valid shared channel
+> (`asmtest_addr_channel_new_shared`), the windowed loop's step backstop + **forward-all-
+> signals** hardening (a managed runtime RAISES AND HANDLES SIGSEGV as normal operation, so
+> treating faults as terminal truncated the window on the runtime's first internal fault),
+> and the managed `AsmTrace.Window(() => { …block… })` + a `test_stealth_windowed` C test
+> (green in `make hwtrace-test`, 296 checks) all ship. The
+> [examples/dotnet/localscope_oop_managed](../../../examples/dotnet/localscope_oop_managed/)
+> demo runs a whole block of managed C# out-of-process, **crash-proof** — it survives an
+> in-scope thrown/caught exception the in-process `localscope` must omit (validated: exit 0,
+> deterministic, the block's own JIT'd code named).
+>
+> **The one remaining gap — deep mid-window JIT attribution.** Coarse `/proc/self/maps`
+> ranges (JIT heap + R2R BCL `.dll` images) are pre-published, so the block's OWN code + the
+> already-mapped BCL are captured; but a method JIT'd FRESH mid-window (a first-call generic
+> instantiation like `Enumerable.Where<int>`, a local function) lands OUTSIDE the pre-window
+> ranges and is elided. The fix is the LIVE per-method publish (the `MethodLoadVerbose`
+> listener → shared channel). It is BUILT (`JitMethodMap.SetPublishChannel` +
+> `asmtest_addr_channel_publish_rec` in `OnEventWritten`) but **left OFF**: firing the managed
+> EventPipe callback ON the thread being single-stepped re-enters the runtime under step and
+> ABORTS it (SIGABRT, observed). The safe form is to publish from a SIBLING thread (drain the
+> runtime's `MethodLoad` events off a second thread that is not stepped, and publish those to
+> the channel) — the documented follow-up. Until then the OOP managed window is honest-partial:
+> crash-proof + own-code, not full deep-BCL parity with the in-process form.
+>
 > This document is the design + phasing; the sections below are the original proposal,
-> now partly landed per the update above.
+> now largely landed per the updates above.
 > Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
