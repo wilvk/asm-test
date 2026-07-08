@@ -153,12 +153,22 @@ public final class HwTrace {
         public boolean ok() { return rc == ASMTEST_HW_OK; }
     }
 
+    /** Outcome of {@link #window}: the rendered ABSOLUTE-address disassembly ({@code path},
+     *  honest-but-noisy — the FFI dispatch + JVM harness are included), the §Z4 thread-scope
+     *  {@code truncated} bit (also set when the managed window overflows its buffer), the
+     *  captured ABSOLUTE instruction addresses ({@code insns}), and the raw {@code rc}.
+     *  Self-skip (no single-step backend) =&gt; rc negative, path empty, insns empty. */
+    public record WindowResult(String path, boolean truncated, long[] insns, int rc) {
+        /** True when begin_window armed (rc == ASMTEST_HW_OK). */
+        public boolean armed() { return rc == ASMTEST_HW_OK; }
+    }
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
-        CALL_SCOPED_EX, RENDER_SCOPE, EXEC_ALLOC, EXEC_FREE,
+        CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
@@ -296,6 +306,7 @@ public final class HwTrace {
             hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
+            beginWindow = null, endWindow = null, renderWindow = null,
             execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
@@ -376,6 +387,14 @@ public final class HwTrace {
             // integer register on SysV x86-64 — ABI-identical to a JAVA_LONG, so declare it
             // as a packed long (idx | gen<<32) and avoid a by-value struct descriptor.
             renderScope = h(lib, "asmtest_hwtrace_render_scope",
+                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
+            // §Z0/§Z1 region-free whole-window: begin(trace*, scope* out); end(scope BY
+            // VALUE as packed long, trace*); render(scope BY VALUE, buf, buflen).
+            beginWindow = h(lib, "asmtest_hwtrace_begin_window",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+            endWindow = h(lib, "asmtest_hwtrace_end_window",
+                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+            renderWindow = h(lib, "asmtest_hwtrace_render_window",
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
@@ -558,6 +577,7 @@ public final class HwTrace {
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
+        BEGIN_WINDOW = beginWindow; END_WINDOW = endWindow; RENDER_WINDOW = renderWindow;
         EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
@@ -801,6 +821,68 @@ public final class HwTrace {
                 }
                 boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
                 return new CallScopedResult(result.get(JAVA_LONG, 0), path, trunc, rc);
+            } finally {
+                TRACE_FREE.invoke(handle);
+            }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Region-free WHOLE-WINDOW capture (§Z0/§Z1 — the Java mirror of dotnet's
+     *  {@code using (new AsmTrace()) { work(); }}): arm a single-step window on THIS thread
+     *  with NO registered region, run {@code body}, disarm, and render. {@code insns[]} hold
+     *  ABSOLUTE addresses. Keep {@code body} TIGHT — every instruction between begin and end is
+     *  stepped, and single-stepping a managed runtime records a LOT (a single call runs ~100k
+     *  instructions), so the routine's own addresses appear as a SUBSET amid the JVM/FFI noise.
+     *  Self-skips ({@code rc} negative) off a single-step backend / when the tier is not up.
+     *
+     *  <p>SAFETY: this arms EFLAGS.TF single-step on the CALLING thread, so {@code body} must be
+     *  a TIGHT native leaf (an FFM downcall), not an arbitrary managed block. A body that blocks
+     *  SIGTRAP or spawns threads ({@code pthread_create} masks SIGTRAP around clone) turns the
+     *  #DB into a fatal blocked signal and KILLS the JVM. To trace a whole block of arbitrary
+     *  managed code, use the crash-proof out-of-process path (see
+     *  docs/internal/plans/managed-wholewindow-oop-plan.md), never this in-process form. */
+    public static WindowResult window(Runnable body) {
+        return window(body, 1 << 20);
+    }
+
+    /** {@link #window(Runnable)} with an explicit capture-buffer size (insns). If the managed
+     *  window overflows {@code insnsCap}, {@code truncated} is set (an honest best-effort
+     *  outcome) and the stored {@code insns} are a labelled PREFIX. */
+    public static WindowResult window(Runnable body, int insnsCap) {
+        if (BEGIN_WINDOW == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            // whole-window is insns-only: insns_cap FIRST, blocks_cap=0 SECOND.
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke((long) insnsCap, 0L);
+            if (MemorySegment.NULL.equals(handle))
+                throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                int rc = (int) BEGIN_WINDOW.invoke(handle, scopeOut);
+                if (rc != ASMTEST_HW_OK) { // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
+                    body.run();
+                    return new WindowResult("", false, new long[0], rc);
+                }
+                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
+                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
+                long packed = (idx & 0xffffffffL) | ((long) gen << 32); // scope BY VALUE
+                try {
+                    body.run(); // TIGHT window: EFLAGS.TF single-step is armed across this
+                } finally {
+                    END_WINDOW.invoke(packed, handle); // disarm even on a body throw
+                }
+                String path = "";
+                int need = (int) RENDER_WINDOW.invoke(packed, MemorySegment.NULL, 0L);
+                if (need > 0) {
+                    MemorySegment buf = a.allocate(need + 1L);
+                    RENDER_WINDOW.invoke(packed, buf, (long) (need + 1));
+                    path = buf.getString(0);
+                }
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                int n = (int) (long) TRACE_INSNS_LEN.invoke(handle);
+                long[] insns = new long[n];
+                for (int i = 0; i < n; i++) insns[i] = (long) TRACE_INSN_AT.invoke(handle, (long) i);
+                return new WindowResult(path, trunc, insns, rc);
             } finally {
                 TRACE_FREE.invoke(handle);
             }

@@ -109,6 +109,7 @@ public final class HwTraceTest {
             singlestepLiveTrace();
             singlestepLoopNoDepthCeiling();
             callScopedTracesANativeCall();
+            windowTracesAWholeScope();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -185,6 +186,46 @@ public final class HwTraceTest {
                 if (r != i + 1) { allOk = false; bad = i; }
             }
             ok(allOk, "callScoped registry-free: 40 calls each return i+1 (first bad i=" + bad + ")");
+        } finally {
+            code.free();
+        }
+    }
+
+    // Region-free WHOLE-WINDOW capture (§Z1 — the empty-ctor `using (new AsmTrace())`).
+    // HONEST-BUT-NOISY: single-stepping the JVM captures the FFI dispatch + harness too, so the
+    // routine's absolute addresses are a SUBSET. Mirrors the C whole-window test.
+    private static void windowTracesAWholeScope() {
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        try {
+            long[] r = { 0 };
+            // The JVM whole-window is very noisy — HotSpot + FFM linkage run >1M insns per
+            // call, exceeding the single-step whole-window's internal SS_WINDOW_CAP (1<<20),
+            // so `truncated` is set no matter how big the caller buffer is. The test handles
+            // that honestly below (skips the exact-subset assert on a truncated capture).
+            HwTrace.WindowResult res = HwTrace.window(() -> r[0] = code.call(20, 22)); // 42
+            System.out.println("# window: armed=" + res.armed() + " truncated=" + res.truncated()
+                + " insns=" + res.insns().length);
+            ok(r[0] == 42, "window: the traced call still returns 42 (execution intact under TF)");
+            if (res.armed()) {
+                ok(res.insns().length >= 5, "window: captured instructions (routine + harness noise)");
+                ok(!res.path().isEmpty(), "window: render_window produced disassembly text");
+                // insns[] hold ABSOLUTE addresses. On a clean (non-truncated) capture the routine's
+                // own addresses [base+0,+3,+6,+0xc,+0x11] must all be present amid the noise.
+                if (!res.truncated()) {
+                    long base = code.base();
+                    long[] want = { base, base + 0x3, base + 0x6, base + 0xC, base + 0x11 };
+                    java.util.Set<Long> got = new java.util.HashSet<>();
+                    for (long addr : res.insns()) got.add(addr);
+                    boolean subset = true;
+                    for (long w : want) if (!got.contains(w)) subset = false;
+                    ok(subset, "window: the routine's absolute addresses are all captured (subset)");
+                } else {
+                    System.out.println("# note: window truncated (managed capture overflowed) "
+                        + "— skipping the exact-subset assert (honest best-effort)");
+                }
+            } else {
+                System.out.println("# note: window self-skipped (begin_window unavailable)");
+            }
         } finally {
             code.free();
         }

@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Whole-window scope (`begin_window`/`end_window`/`render_window`) in the Node and Java
+  bindings** — the region-free, empty-ctor `using (new AsmTrace())` §Z1 substrate (Phase 2,
+  increment 1 of the dotnet-parity roadmap). `HwTrace.window(fn)` (Node) /
+  `HwTrace.window(Runnable)` (Java) arm a single-step capture on the calling thread with NO
+  registered region, run the body, disarm, and render the executed **absolute** addresses
+  from live memory — returning `{path, truncated, insns[]}`. It is HONEST-BUT-NOISY by design:
+  single-stepping the managed runtime records everything between begin and end (the FFI
+  dispatch + runtime), so the traced routine's own addresses appear as a *subset*. A single
+  V8-dispatched call runs ~100k instructions (captured cleanly, subset verified); a HotSpot +
+  FFM call exceeds the single-step whole-window's internal `SS_WINDOW_CAP` (1<<20), so the
+  Java capture honestly reports `truncated` (best-effort). Validated in `docker-hwtrace-node`
+  / `-java`. The `begin_window`/`end_window`/`render_window` `ALL` exemptions stay in
+  `scripts/bindings-parity-allow.txt`, now consumed by the seven bindings that don't wrap them.
+
 - **`call_scoped` — a registry-free traced native call — now in ALL TEN bindings.** The
   Python/Ruby/Node/Java bindings shipped it first; the remaining five (C++, Rust, Zig, Lua,
   Go) now wrap it too. Each wraps `asmtest_hwtrace_call_scoped_ex` +

@@ -217,6 +217,12 @@ let _loadError = null;
     // 8-byte scope handle are _Out_. render_scope takes that scope handle BY VALUE.
     callScopedEx: lib.func('int asmtest_hwtrace_call_scoped_ex(void*, size_t, void*, void*, const long*, int, _Out_ long*, _Out_ asmtest_hwtrace_scope_t*)'),
     renderScope: lib.func('int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t, _Out_ char*, size_t)'),
+    // §Z0/§Z1 region-free whole-window scope (the empty-ctor `using (new AsmTrace())`).
+    // begin_window arms with NO registered region; insns[] then hold ABSOLUTE addresses.
+    // end_window/render_window take the 8-byte scope handle BY VALUE (render_scope-style).
+    beginWindow: lib.func('int asmtest_hwtrace_begin_window(void*, _Out_ asmtest_hwtrace_scope_t*)'),
+    endWindow: lib.func('int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t, void*)'),
+    renderWindow: lib.func('int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t, _Out_ char*, size_t)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -470,6 +476,55 @@ class HwTrace {
       const path = _renderScope(scope);
       const truncated = _fn.truncated(handle) !== 0;
       return { result: Number(resultBuf.readBigInt64LE(0)), path, truncated };
+    } finally {
+      _fn.traceFree(handle);
+    }
+  }
+
+  /** Trace an ARBITRARY block of native work the region-free (empty-ctor) way — the
+   *  §Z1 whole-window scope, the callback form of dotnet's `using (new AsmTrace())`.
+   *  Arms a REGION-FREE single-step capture on THIS thread (no NativeCode, no
+   *  [base,len)), runs `fn`, disarms, and renders. Unlike `callScoped`'s clean 5-insn
+   *  body this is HONEST-BUT-NOISY: it records EVERYTHING between begin and end (the
+   *  FFI dispatch + harness too), so the traced routine's own ABSOLUTE addresses appear
+   *  as a SUBSET of `insns` (surfaced as BigInt). Keep the window TIGHT — single-step
+   *  steps every instruction. Returns `{ path, truncated, insns, armed }`; on a
+   *  non-single-step backend (rc != OK) it self-skips: `fn` still runs, `armed` is
+   *  false, `insns` is empty. Requires the tier to be up (`HwTrace.init`).
+   *
+   *  SAFETY: this arms EFLAGS.TF single-step on the CALLING (V8) thread, so `fn` must be a
+   *  TIGHT native leaf (an FFI call), not an arbitrary managed block. A body that blocks
+   *  SIGTRAP or spawns threads (`pthread_create` — glibc masks SIGTRAP around clone) turns
+   *  the #DB into a fatal blocked signal and KILLS the process. To trace a whole block of
+   *  arbitrary managed code, use the crash-proof out-of-process path (see
+   *  docs/internal/plans/managed-wholewindow-oop-plan.md), never this in-process form.
+   *
+   *  `insnsCap` sizes the capture buffer. Single-stepping a managed runtime records a
+   *  LOT — a single V8-dispatched call runs ~100k instructions — so the default is
+   *  generous (~1M insns); if the window overflows it, `truncated` is set (an honest
+   *  best-effort outcome) and the stored `insns` are a labelled PREFIX. */
+  static window(fn, insnsCap = 1 << 20) {
+    // whole-window is insns-only: insns_cap FIRST, blocks_cap=0 SECOND.
+    const handle = _fn.traceNew(insnsCap, 0);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    try {
+      const scope = {}; // _Out_ asmtest_hwtrace_scope_t — koffi fills idx/gen
+      const rc = _fn.beginWindow(handle, scope);
+      if (rc !== ASMTEST_HW_OK) { // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
+        fn();
+        return { path: '', truncated: false, insns: [], armed: false };
+      }
+      try {
+        fn(); // keep TIGHT: EFLAGS.TF single-step is armed across this
+      } finally {
+        _fn.endWindow(scope, handle); // scope BY VALUE, then trace*
+      }
+      const path = _renderWindow(scope);
+      const truncated = _fn.truncated(handle) !== 0;
+      const n = Number(_fn.insnsLen(handle));
+      const insns = new Array(n);
+      for (let i = 0; i < n; i++) insns[i] = BigInt(_fn.insnAt(handle, i)); // ABSOLUTE addrs
+      return { path, truncated, insns, armed: true };
     } finally {
       _fn.traceFree(handle);
     }
@@ -1053,6 +1108,16 @@ function _renderRegion(name) {
 function _renderScope(scope) {
   const buf = Buffer.alloc(16384);
   const n = _fn.renderScope(scope, buf, buf.length);
+  if (n <= 0) return '';
+  return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
+}
+
+// Render a begin_window whole-window capture (BY-VALUE scope handle) to assembly text
+// by decoding the recorded ABSOLUTE addresses from live self-memory; '' if the decoder
+// is unavailable. Same snprintf semantics as _renderScope.
+function _renderWindow(scope) {
+  const buf = Buffer.alloc(16384);
+  const n = _fn.renderWindow(scope, buf, buf.length);
   if (n <= 0) return '';
   return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
 }

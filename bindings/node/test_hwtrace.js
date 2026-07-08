@@ -211,6 +211,40 @@ function main() {
       ok(regFree, 'callScoped: 40 registry-free calls each return i+1');
       code.free();
     }
+
+    // --- window: region-free WHOLE-WINDOW capture (§Z1 — the empty-ctor
+    //     `using (new AsmTrace())`). HONEST-BUT-NOISY: captures the FFI dispatch too,
+    //     so the routine's absolute addresses are a SUBSET. Mirrors the C whole-window
+    //     test (examples/test_hwtrace.c). ---
+    {
+      const code = NativeCode.fromBytes(ROUTINE);
+      let r;
+      // A generous cap so the noisy managed window (V8 + FFI dispatch) fits un-truncated.
+      const res = HwTrace.window(() => { r = code.call(20, 22); }, 1 << 20); // 42 -> jle taken
+      console.log(`# window: armed=${res.armed} truncated=${res.truncated} insns=${res.insns.length}`);
+      ok(r === 42, 'window: the traced call still returns 42 (execution intact under TF)');
+      if (res.armed) {
+        ok(res.insns.length >= 5, 'window: captured instructions (routine + harness noise)');
+        ok(res.path.length > 0, 'window: render_window produced disassembly text');
+        // insns[] hold ABSOLUTE addresses. When the capture did NOT overflow, the
+        // routine's own addresses [base+0,+3,+6,+0xc,+0x11] must all be present (a
+        // SUBSET amid the noise). If it truncated, the routine may be past the prefix —
+        // an honest best-effort outcome, so we only assert the subset on a clean capture.
+        if (!res.truncated) {
+          const base = BigInt(koffi.address(code.base));
+          const want = [0, 3, 6, 0xc, 0x11].map((o) => base + BigInt(o));
+          const got = new Set(res.insns.map((x) => x.toString()));
+          ok(want.every((w) => got.has(w.toString())),
+            "window: the routine's absolute addresses are all captured (subset)");
+        } else {
+          console.log('# note: window truncated (managed capture overflowed the buffer) '
+            + '— skipping the exact-subset assert (honest best-effort)');
+        }
+      } else {
+        console.log('# note: window self-skipped (begin_window unavailable)');
+      }
+      code.free();
+    }
   } finally {
     HwTrace.shutdown();
   }
