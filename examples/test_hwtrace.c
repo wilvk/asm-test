@@ -321,16 +321,18 @@ static void test_amd_reduced_filter(void) {
     int rok = (asmtest_emu_trace_insns_total(tr) == 3);
     for (size_t i = 0; rok && i < 3; i++)
         rok = (tr->insns[i] == EXPECT_J[i]);
-    CHECK(rok, "AMD reduced filter: reduced stack follows the dropped jmp -> [0,2,6] "
-               "(dead bytes not decoded)");
+    CHECK(
+        rok,
+        "AMD reduced filter: reduced stack follows the dropped jmp -> [0,2,6] "
+        "(dead bytes not decoded)");
 
     /* F4 — mask-agnostic equivalence: reduced == full, byte for byte. */
-    int par = (asmtest_emu_trace_insns_total(tr) ==
-               asmtest_emu_trace_insns_total(tf)) &&
-              (asmtest_emu_trace_blocks_len(tr) ==
-               asmtest_emu_trace_blocks_len(tf)) &&
-              (asmtest_emu_trace_truncated(tr) ==
-               asmtest_emu_trace_truncated(tf));
+    int par =
+        (asmtest_emu_trace_insns_total(tr) ==
+         asmtest_emu_trace_insns_total(tf)) &&
+        (asmtest_emu_trace_blocks_len(tr) ==
+         asmtest_emu_trace_blocks_len(tf)) &&
+        (asmtest_emu_trace_truncated(tr) == asmtest_emu_trace_truncated(tf));
     for (size_t i = 0; par && i < asmtest_emu_trace_insns_total(tf); i++)
         par = (tr->insns[i] == tf->insns[i]);
     CHECK(par, "AMD reduced filter: reduced stack matches the full stack "
@@ -356,9 +358,11 @@ static void test_amd_reduced_filter(void) {
     cyc[0].from = bc + 0x08; /* ret, unreachable through the 0<->6 jmp cycle */
     cyc[0].to = bc + sizeof CYCLE9;
     asmtest_trace_t *tc = asmtest_trace_new(64, 64);
-    asmtest_amd_decode(cyc, 1, CYCLE9, sizeof CYCLE9, tc); /* must return, no hang */
+    asmtest_amd_decode(cyc, 1, CYCLE9, sizeof CYCLE9,
+                       tc); /* must return, no hang */
     CHECK(asmtest_emu_trace_truncated(tc),
-          "AMD reduced filter: a dropped back-edge cycle truncates (bounded, no hang)");
+          "AMD reduced filter: a dropped back-edge cycle truncates (bounded, "
+          "no hang)");
     asmtest_trace_free(tc);
 
     /* F3 — a dropped jmp leaving the region honestly truncates: the in-region source
@@ -367,7 +371,8 @@ static void test_amd_reduced_filter(void) {
     const uint64_t be = (uint64_t)(uintptr_t)EXIT4;
     struct perf_branch_entry ext[1];
     memset(ext, 0, sizeof ext);
-    ext[0].from = be + 0x03; /* an in-region source the out-of-region jmp strands */
+    ext[0].from =
+        be + 0x03; /* an in-region source the out-of-region jmp strands */
     ext[0].to = be + sizeof EXIT4;
     asmtest_trace_t *te = asmtest_trace_new(64, 64);
     asmtest_amd_decode(ext, 1, EXIT4, sizeof EXIT4, te);
@@ -390,7 +395,8 @@ static void test_amd_reduced_filter(void) {
     int hok = (asmtest_emu_trace_insns_total(th) == 4);
     for (size_t i = 0; hok && i < 4; i++)
         hok = (th->insns[i] == EXPECT_C[i]);
-    CHECK(hok, "AMD reduced filter: chained dropped jmps reconstruct [0,2,6,a]");
+    CHECK(hok,
+          "AMD reduced filter: chained dropped jmps reconstruct [0,2,6,a]");
     CHECK(asmtest_trace_covered(th, 0x00) && asmtest_trace_covered(th, 0x06) &&
               asmtest_trace_covered(th, 0x0a) &&
               asmtest_emu_trace_blocks_len(th) == 3,
@@ -777,7 +783,7 @@ static void test_amd_stitch_period_spaced(void) {
         return;
     }
     const uint64_t b = (uint64_t)(uintptr_t)AMD_LOOP;
-    enum { K = 18, P = 4 }; /* 18 distinct edges, sampled every P=4 */
+    enum { K = 18, P = 4 };          /* 18 distinct edges, sampled every P=4 */
     struct perf_branch_entry seq[K]; /* execution order, all edges DISTINCT */
     memset(seq, 0, sizeof seq);
     for (int i = 0; i < K; i++) {
@@ -807,10 +813,11 @@ static void test_amd_stitch_period_spaced(void) {
 
     struct perf_branch_entry out[64];
     int gap = 0;
-    size_t n = asmtest_amd_stitch(samples, nrs, (size_t)ns, NULL, 0, 0, out, 64,
-                                  &gap);
-    CHECK(n == K && gap == 0,
-          "AMD period-spaced (P=4) distinct-edge windows stitch to all 18 edges");
+    size_t n =
+        asmtest_amd_stitch(samples, nrs, (size_t)ns, NULL, 0, 0, out, 64, &gap);
+    CHECK(
+        n == K && gap == 0,
+        "AMD period-spaced (P=4) distinct-edge windows stitch to all 18 edges");
     /* Output is newest-first: out[0] == seq[K-1] ... out[K-1] == seq[0]. */
     int order = (n == K);
     for (size_t i = 0; order && i < (size_t)K; i++)
@@ -826,7 +833,8 @@ static void test_amd_stitch_period_spaced(void) {
     struct perf_branch_entry same[K];
     memset(same, 0, sizeof same);
     for (int i = 0; i < K; i++) {
-        same[i].from = b + 0xd; /* AMD_LOOP back-edge, identical every iteration */
+        same[i].from =
+            b + 0xd; /* AMD_LOOP back-edge, identical every iteration */
         same[i].to = b + 0x7;
     }
     struct perf_branch_entry hwin[8][16];
@@ -2695,11 +2703,10 @@ static void test_stealth_windowed(void) {
 
     /* Driver (the window frame): mov edi,7; mov esi,3; movabs rax,m1; call rax;
      * movabs rax,m2; call rax; ret. Self-contained args → m1(7,3)=10, m2(7,3)=4. */
-    unsigned char DRV[35] = {
-        0xBF, 7,    0,    0,    0,    0xBE, 3,    0,    0,
-        0,    0x48, 0xB8, 0,    0,    0,    0,    0,    0,
-        0,    0,    0xFF, 0xD0, 0x48, 0xB8, 0,    0,    0,
-        0,    0,    0,    0,    0,    0xFF, 0xD0, 0xC3};
+    unsigned char DRV[35] = {0xBF, 7,    0,    0,    0,    0xBE, 3,    0,   0,
+                             0,    0x48, 0xB8, 0,    0,    0,    0,    0,   0,
+                             0,    0,    0xFF, 0xD0, 0x48, 0xB8, 0,    0,   0,
+                             0,    0,    0,    0,    0,    0xFF, 0xD0, 0xC3};
     memcpy(DRV + 12, &a1, 8);
     memcpy(DRV + 24, &a2, 8);
     void *drv = mmap(NULL, sizeof DRV, PROT_READ | PROT_WRITE,
@@ -2762,7 +2769,8 @@ static void test_stealth_windowed(void) {
           "leaves");
     CHECK(first_m1 >= 0 && first_m2 > first_m1,
           "stealth windowed follows the calls in order (m1 before m2)");
-    CHECK(!asmtest_emu_trace_truncated(tr), "stealth windowed capture complete");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "stealth windowed capture complete");
 
     asmtest_addr_channel_free_shared(chan);
     asmtest_trace_free(tr);
@@ -2800,11 +2808,11 @@ static void test_amd_sample_window(void) {
     /* A hot loop: sum(n) via a decrement loop — one taken back-edge per iteration, so
      * the branch TARGET (loop top, offset 0x3) dominates the sampled endpoints. */
     static const unsigned char LOOP[] = {
-        0x48, 0x31, 0xC0,       /* 0x0: xor rax, rax        */
-        0x48, 0x01, 0xF8,       /* 0x3: L: add rax, rdi     */
-        0x48, 0xFF, 0xCF,       /* 0x6: dec rdi             */
-        0x75, 0xF8,             /* 0x9: jnz L (-> 0x3)      */
-        0xC3,                   /* 0xb: ret                 */
+        0x48, 0x31, 0xC0, /* 0x0: xor rax, rax        */
+        0x48, 0x01, 0xF8, /* 0x3: L: add rax, rdi     */
+        0x48, 0xFF, 0xCF, /* 0x6: dec rdi             */
+        0x75, 0xF8,       /* 0x9: jnz L (-> 0x3)      */
+        0xC3,             /* 0xb: ret                 */
     };
     void *fn = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -2816,7 +2824,8 @@ static void test_amd_sample_window(void) {
     mprotect(fn, sizeof LOOP, PROT_READ | PROT_EXEC);
     __builtin___clear_cache((char *)fn, (char *)fn + sizeof LOOP);
     g_asw_fn = fn;
-    g_asw_arg = 500000; /* 500k taken branches — long enough to accumulate PMU samples */
+    g_asw_arg =
+        500000; /* 500k taken branches — long enough to accumulate PMU samples */
     uint64_t base = (uint64_t)(uintptr_t)fn, end = base + sizeof LOOP;
 
     size_t cap = 65536;

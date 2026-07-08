@@ -2017,8 +2017,8 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
             size_t l = foreign_insn_len(pid, at);
             if (l == 0) {
                 trace->truncated = true; /* partition imprecise past here */
-                have_prev = 0; /* next address opens a fresh block */
-                continue;      /* keep the address; do NOT drop the tail */
+                have_prev = 0;           /* next address opens a fresh block */
+                continue; /* keep the address; do NOT drop the tail */
             }
             expected_next = at + l;
             have_prev = 1;
@@ -2181,9 +2181,9 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
             if (!have_prev || at != expected_next)
                 trace_append_block(trace, at);
             trace_append_insn(trace, at);
-            size_t l = asmtest_disas(PTRACE_TRACE_ARCH,
-                                     (const uint8_t *)(uintptr_t)at, 16, 0, 0,
-                                     NULL, 0);
+            size_t l =
+                asmtest_disas(PTRACE_TRACE_ARCH, (const uint8_t *)(uintptr_t)at,
+                              16, 0, 0, NULL, 0);
             if (l == 0) {
                 trace->truncated = true;
                 break;

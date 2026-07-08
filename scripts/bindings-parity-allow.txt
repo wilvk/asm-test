@@ -69,6 +69,15 @@ ALL asmtest_hwtrace_stitch_handles    # §D0.4 live-producer bridge for asmtest_
 ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 
+# Whole-window / statistical-survey C-surface — dotnet is the lead binding (its managed
+# AsmTrace tier drives these); the other nine gain them when they grow a whole-window scope
+# construct, the same posture as begin_window/end_window/render_window above. Host-tested in C.
+ALL asmtest_hwtrace_stealth_trace_windowed  # §D3 multi-region windowed ptrace-stealth stepper: dotnet wraps it (managed whole-window tier); sibling of asmtest_hwtrace_stealth_trace / asmtest_ptrace_trace_attached_windowed above — C-internal to the scope façade
+ALL asmtest_ptrace_trace_window_call        # §D3 fork-internal whole-window capture (owns its tracee): dotnet wraps it (the managed binding that cannot fork safely); the other nine use the in-process scope / attached-windowed paths
+ALL asmtest_hwtrace_sample_window_amd       # §D3 statistical AMD-LBR WindowHot survey (hot-method histogram, NOT an exact trace): dotnet wraps it (WindowHot); the other nine gain it when they grow an AMD survey lane
+ALL asmtest_hwtrace_sample_begin_amd        # begin/end split of the AMD-LBR survey for the `using (new AsmTrace(HwBackend.AmdLbr)) { block }` inline shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end)
+ALL asmtest_hwtrace_sample_end_amd          #   (paired with sample_begin_amd above; dotnet-only until a binding grows the inline AMD-survey shape)
+
 # DR-tier self-skip diagnostic (817cc72), the counterpart of asmtest_hwtrace_skip_reason.
 # Every binding gates the DynamoRIO tier on asmtest_dr_available()'s bool; none surfaces
 # the human-readable DR skip string yet — same posture as asmtest_dr_under_dynamorio above.

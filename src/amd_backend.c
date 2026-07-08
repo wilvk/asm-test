@@ -204,7 +204,8 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
              * divergent follow — bail truncated (mirrors ptrace_backend.c's
              * block-step bound). */
             for (size_t guard = 0;; guard++) {
-                if (guard > len) { /* divergent follow (dropped back-edge cycle) */
+                if (guard >
+                    len) { /* divergent follow (dropped back-edge cycle) */
                     trace->truncated = true;
                     return;
                 }
@@ -239,8 +240,8 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                 if (was_branch) {
                     uint64_t tgt = 0;
                     int direct = asmtest_disas_branch_target(
-                        ASMTEST_ARCH_X86_64, (const uint8_t *)base, len, base_ip,
-                        o, &tgt);
+                        ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
+                        base_ip, o, &tgt);
                     /* A recorded class (ret / indirect transfer / direct call) can
                      * only legally appear AT from_off; mid-run it is a desync. */
                     if (!direct || is_call) {
@@ -258,11 +259,13 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                             return;
                         }
                         uint64_t no = tgt - base_ip;
-                        if (no > from_off) { /* jumped past the recorded source */
+                        if (no >
+                            from_off) { /* jumped past the recorded source */
                             trace->truncated = true;
                             return;
                         }
-                        trace_append_block(trace, no); /* taken-target block, once */
+                        trace_append_block(trace,
+                                           no); /* taken-target block, once */
                         o = no; /* follow: no fall-through insn/block for the jmp */
                         continue;
                     }
@@ -361,7 +364,7 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
                     return 0; /* followed jmp overshoots the splice target: the
                                * source fo is not reached — reject (honest gap),
                                * matching the straight-line overshoot below. */
-                continue; /* loop re-checks o < fo */
+                continue;     /* loop re-checks o < fo */
             }
             /* indirect jmp: its bytes still decode; fall through to the straight-
              * line advance (if this is the recorded IND_JUMP source it lands fo). */

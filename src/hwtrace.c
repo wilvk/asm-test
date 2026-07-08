@@ -594,7 +594,7 @@ static hw_region_t *find_region(const char *name) {
  * branchsnap.c; see docs/internal/plans/amd-tracing-plan.md (#2B). */
 #define ASMTEST_AMD_REDUCED_FILTER                                             \
     (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
-     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |              \
+     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |               \
      PERF_SAMPLE_BRANCH_ANY_RETURN)
 
 /* Nonzero while the active AMD region is captured by the deterministic boundary
@@ -651,7 +651,8 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * path unchanged. */
     int amd_nret = 0;
     size_t exit_off = amd_last_ret_off(r->base, r->len, &amd_nret);
-    if ((g_opts.snapshot || (asmtest_amd_snapshot_available() && amd_nret == 1)) &&
+    if ((g_opts.snapshot ||
+         (asmtest_amd_snapshot_available() && amd_nret == 1)) &&
         exit_off != (size_t)-1) {
         if (asmtest_amd_snapshot_begin(r->base, r->len, exit_off,
                                        g_opts.branch_filter) == ASMTEST_HW_OK) {
@@ -693,7 +694,8 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     a.exclude_hv = 1;
     a.disabled = 1;
     long fd = perf_open(&a, 0, -1, -1, 0);
-    if (fd < 0 && g_opts.branch_filter) { /* type-filter rejected: fall back to full */
+    if (fd < 0 &&
+        g_opts.branch_filter) { /* type-filter rejected: fall back to full */
         a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
         fd = perf_open(&a, 0, -1, -1, 0);
     }
@@ -988,7 +990,8 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     if (truncated != NULL)
         *truncated = 0;
     if (period < 2)
-        period = 2; /* period>1 keeps the event under the sample-rate throttle */
+        period =
+            2; /* period>1 keeps the event under the sample-rate throttle */
 
     struct perf_event_attr a;
     memset(&a, 0, sizeof a);
@@ -1017,7 +1020,8 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
     ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0);
 
-    run_fn(arg); /* the window body (a managed delegate thunk) runs at native speed */
+    run_fn(
+        arg); /* the window body (a managed delegate thunk) runs at native speed */
 
     ioctl((int)fd, PERF_EVENT_IOC_DISABLE, 0);
     struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
@@ -1036,7 +1040,8 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
      * honestly a prefix, not reported complete (mirrors hwtrace_end_amd). */
     {
         int depth = asmtest_amd_lbr_depth();
-        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
+        size_t max_sample = sizeof(struct perf_event_header) +
+                            sizeof(uint64_t) +
                             (size_t)depth * sizeof(struct perf_branch_entry);
         if (dsz > 0 && span + max_sample > dsz)
             lost = 1;
@@ -1077,7 +1082,8 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                             ips[n++] = e[i].to;
                         }
                         if (n >= cap)
-                            lost = 1; /* endpoint buffer full: survey is a prefix */
+                            lost =
+                                1; /* endpoint buffer full: survey is a prefix */
                     }
                 }
                 off += h->size;
@@ -1085,8 +1091,8 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
             free(buf);
         }
     }
-    __sync_synchronize();   /* publish the reads before advancing data_tail (smp_mb) */
-    mp->data_tail = head;   /* consume */
+    __sync_synchronize(); /* publish the reads before advancing data_tail (smp_mb) */
+    mp->data_tail = head; /* consume */
     munmap(base_map, base_sz);
     close((int)fd);
     if (nips != NULL)
@@ -1167,7 +1173,8 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
-    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)c->base_map;
+    struct perf_event_mmap_page *mp =
+        (struct perf_event_mmap_page *)c->base_map;
     uint8_t *data = (uint8_t *)c->base_map + (size_t)pg;
     size_t dsz = c->base_sz - (size_t)pg;
     uint64_t head = mp->data_head;
@@ -1178,7 +1185,8 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
     int lost = 0;
     {
         int depth = asmtest_amd_lbr_depth();
-        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
+        size_t max_sample = sizeof(struct perf_event_header) +
+                            sizeof(uint64_t) +
                             (size_t)depth * sizeof(struct perf_branch_entry);
         if (dsz > 0 && span + max_sample > dsz)
             lost = 1;
@@ -2558,10 +2566,12 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
  * exec'd bundled binary, so no memfd re-map). Crash-proof by construction: a ptrace-stop is
  * not gated by the tracee's signal mask, so the body survives code the in-process
  * single-step tier is forbidden to step. Linux x86-64/AArch64. */
-int asmtest_hwtrace_stealth_trace_windowed(
-    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
-    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
-    void *arg) {
+int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           asmtest_trace_t *trace,
+                                           long *result_out,
+                                           void (*run_region)(void *),
+                                           void *arg) {
     if (win_base == NULL || win_len == 0 || trace == NULL || run_region == NULL)
         return ASMTEST_HW_EINVAL;
     size_t icap = trace->insns_cap ? trace->insns_cap : 256;
@@ -2588,7 +2598,8 @@ int asmtest_hwtrace_stealth_trace_windowed(
     sc->rc = ASMTEST_HW_EDECODE;
 
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
-    pid_t parent = (pid_t)syscall(SYS_gettid); /* the CALLING thread, not getpid() */
+    pid_t parent =
+        (pid_t)syscall(SYS_gettid); /* the CALLING thread, not getpid() */
     pid_t helper = fork();
     if (helper < 0) {
         munmap(sc, total);
@@ -2617,7 +2628,8 @@ int asmtest_hwtrace_stealth_trace_windowed(
         return ASMTEST_HW_EUNAVAIL;
     }
 
-    run_region(arg); /* the window body; the helper single-steps it out of band */
+    run_region(
+        arg); /* the window body; the helper single-steps it out of band */
 
     int st = 0;
     waitpid(helper, &st, 0);
@@ -2662,10 +2674,12 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
     (void)arg;
     return ASMTEST_HW_ENOSYS;
 }
-int asmtest_hwtrace_stealth_trace_windowed(
-    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
-    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
-    void *arg) {
+int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           asmtest_trace_t *trace,
+                                           long *result_out,
+                                           void (*run_region)(void *),
+                                           void *arg) {
     (void)win_base;
     (void)win_len;
     (void)chan;

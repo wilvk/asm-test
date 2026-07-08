@@ -51,7 +51,7 @@ int asmtest_amd_snapshot_available(void);
  * one frozen window spans more of the routine. See amd-tracing-plan.md (#2B). */
 #define ASMTEST_AMD_REDUCED_FILTER                                             \
     (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
-     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |              \
+     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |               \
      PERF_SAMPLE_BRANCH_ANY_RETURN)
 
 static long bsnap_perf_open(struct perf_event_attr *a, pid_t pid, int cpu,
@@ -158,8 +158,10 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
     la.exclude_hv = 1;
     la.disabled = 1;
     long lfd = bsnap_perf_open(&la, 0, -1, -1, 0);
-    if (lfd < 0 && branch_filter) { /* type-filter rejected: fall back to full */
-        la.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    if (lfd < 0 &&
+        branch_filter) { /* type-filter rejected: fall back to full */
+        la.branch_sample_type =
+            PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
         lfd = bsnap_perf_open(&la, 0, -1, -1, 0);
     }
     if (lfd < 0)

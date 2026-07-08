@@ -83,7 +83,7 @@ typedef struct {
                      toolchain/caps/LbrExtV2 substrate is absent */
     const char
         *object_hint; /* optional object-file path for hw address filters  */
-    int lbr_period; /* AMD LBR only, opt-in (0 = default sample_period=1). The
+    int lbr_period;   /* AMD LBR only, opt-in (0 = default sample_period=1). The
                        branch-retired sample period for the Tier-B stitched capture:
                        a PMI every `lbr_period` branches instead of every one, so
                        consecutive 16-deep windows overlap by (depth - lbr_period)
@@ -454,10 +454,12 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
  * tracee's signal mask, so the body survives exceptions / pthread_create that would kill the
  * in-process single-step tier. Returns ASMTEST_HW_OK, EINVAL on a bad arg, or EUNAVAIL when
  * the reverse-attach is refused (Yama / no ptrace) — a clean self-skip. Linux x86-64/AArch64. */
-int asmtest_hwtrace_stealth_trace_windowed(
-    const void *win_base, size_t win_len, asmtest_addr_channel_t *chan,
-    asmtest_trace_t *trace, long *result_out, void (*run_region)(void *),
-    void *arg);
+int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           asmtest_trace_t *trace,
+                                           long *result_out,
+                                           void (*run_region)(void *),
+                                           void *arg);
 
 /* §D3 STATISTICAL AMD-LBR whole-window survey (region-FREE, in-process, crash-proof). The
  * honest AMD whole-window shape: exact whole-window is a hardware dead end (16-deep stack +
