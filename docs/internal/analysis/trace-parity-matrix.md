@@ -4,7 +4,9 @@
 reference for which of asm-test's trace backends work on which hardware, operating
 system, CPU microarchitecture, and language binding. It is derived from the source
 of record — [src/hwtrace.c](../../../src/hwtrace.c)'s gating chain,
-[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), and
+[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), the out-of-process
+ptrace tier ([include/asmtest_ptrace.h](../../../include/asmtest_ptrace.h),
+[src/ptrace_backend.c](../../../src/ptrace_backend.c)), and
 [mk/native-trace.mk](../../../mk/native-trace.mk) — and the shipped/planned status of
 each tier. Narrative docs: [native runtime tracing](../../guides/tracing/native-tracing.md),
 [emulator traces](../../guides/tracing/traces.md), [portability](../../reference/portability.md). Roadmaps:
@@ -88,11 +90,16 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
 | **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Part I Ph0–5 + Part III P3-0…P3-5** (spec filter, stitch guard, runtime depth, freeze probe, blockstep tiers, eBPF boundary snapshot); live capture + Tier-B verified on Zen 5 (Ryzen 9 9950X, `amd_lbr_v2`); forward-look: MSR-direct, BRS (Zen 3), IBS (Zen 2) |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **reconstruction core host-validated**; live OpenCSD decode awaits a board (self-skips) |
-| **Single-step** | `EFLAGS.TF` → `#DB`/`SIGTRAP` | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4 Linux x86-64 + Ph5 fronts: macOS-Intel in-proc, Windows x86-64 VEH `win64-ss-test`, out-of-proc ptrace W2 x86-64/AArch64; AArch64 *live stream* awaits real hardware — qemu-user self-skips) |
+| **Single-step (in-proc TF)** | `EFLAGS.TF` → `#DB`/`SIGTRAP`, in-process | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4 Linux x86-64 + Ph5 fronts: macOS-Intel in-proc, Windows x86-64 VEH `win64-ss-test`; **x86-64 only** — TF is an x86 flag) |
+| **ptrace (out-of-proc step)** | out-of-process tracer: `PTRACE_SINGLESTEP` (per-insn) or `PTRACE_SINGLEBLOCK` block-step (per taken branch) over a forked/attached tracee | Capstone (block mode) | n/a | per-insn kernel round-trip; block-step ≈ one `#DB` per taken branch (cheaper) | exact, unbounded | **implemented** (Linux x86-64; AArch64 code-complete, *live stream* HW-pending — qemu-user can't emulate ptrace, self-skips). Adds the managed-runtime path + code-image `versioned` / whole-`window` capture |
 
 DynamoRIO core is BSD (the tier deliberately avoids `drwrap`'s LGPL-2.1); libipt and
 OpenCSD are BSD. Licensing for the optional emulator dependencies (Unicorn,
-Keystone) is not asserted here.
+Keystone) is not asserted here. The **ptrace** tier — like DynamoRIO and the emulator —
+is a *separate library* (`asmtest_ptrace_*`, its own `available()`/`skip_reason()`), **not**
+a member of the hwtrace `asmtest_trace_backend_t` enum `{INTEL_PT, CORESIGHT, AMD_LBR,
+SINGLESTEP}`; it is the out-of-process analog of the in-process single-step backend and the
+only backend whose observer lives in a different process from the code under trace.
 
 ---
 
@@ -105,7 +112,8 @@ Keystone) is not asserted here.
 | Intel PT | ✓ bare-metal | ✗ | ✗ | — | — |
 | AMD LBR | ✓ (Zen 3+) | ✗ | ✗ | — | — |
 | CoreSight | — | — | — | scaffold (board) | ✗ |
-| Single-step | ✓ **shipped** | ✓ **shipped** (Ph5, macOS-Intel) | ✓ Ph5 (VEH, ~6×) | ptrace W2 ✓ (stream HW-pending) | ptrace-only (W2) |
+| Single-step (in-proc TF) | ✓ **shipped** | ✓ **shipped** (Ph5, macOS-Intel) | ✓ Ph5 (VEH, ~6×) | ✗ (TF is x86-64 only) | ✗ |
+| ptrace (out-of-proc step) | ✓ **shipped** | ✗ (Linux ptrace only) | ✗ | ✓ code; stream HW-pending | ✗ |
 
 Windows-x64 and macOS are served **only by the emulator tier** today
 (`emu_call_win64_traced` for the Win64 ABI). On AArch64 Linux the out-of-process W2
@@ -199,7 +207,9 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 |---|---|---|---|
 | Emulator | per emulator handle / call | n/a | not a shared collector; one trace per worker |
 | DynamoRIO | **per-thread** | multiple (non-overlapping); register before start | trace bound to one thread's activation |
-| Hardware (PT / AMD) | **process-global single slot** | **one at a time** (begin while active is ignored) | per-thread `TF` for single-step only |
+| Hardware (PT / AMD) | **process-global single slot** | **one at a time** (begin while active is ignored) | n/a (no per-thread state) |
+| Single-step (in-proc) | per-thread (`EFLAGS.TF`) | process-global SIGTRAP arm-refcount | per-thread TF, but runs **serially** — concurrent stepping collides on SIGTRAP |
+| ptrace (out-of-proc) | **separate tracer process** over a forked/attached tracee | one tracee per tracer | no in-process signal collision — the observer lives *outside* the traced process (the managed-runtime path) |
 
 ---
 
