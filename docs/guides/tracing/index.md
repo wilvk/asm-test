@@ -26,6 +26,8 @@ toolchain is present, and degrade to a clear "skipped" message otherwise.
 
 > **Diagram:** [Trace and coverage backends](../../reference/diagrams.md#trace-and-coverage-backends)
 
+> **Analysis (internal):** [Tracing decision matrix](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/tracing-decision-matrix.md) — which backend to choose for a given host (arch × OS), language binding, and capture goal, with tradeoffs and the preferred option per combination.
+
 ```{toctree}
 :maxdepth: 1
 :hidden:
