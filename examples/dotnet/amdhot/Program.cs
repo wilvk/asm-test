@@ -1,6 +1,8 @@
-// examples/dotnet/amdhot — the STATISTICAL AMD-LBR whole-window survey (AsmTrace.WindowHot).
+// examples/dotnet/amdhot — the STATISTICAL AMD-LBR whole-window survey, as an INLINE `using`
+// scope (the unified inline-using form; AsmTrace.WindowHot(Action) is the delegate sibling).
 //
-//     var ww = AsmTrace.WindowHot(() => { ...managed block... });
+//     using (ww = new AsmTrace(HwBackend.AmdLbr))   // ctor arms the sampler
+//         { ...managed block... }                    // runs inline at native speed; Dispose drains
 //     foreach (var m in ww.Methods) Console.WriteLine($"{m.Count}  {m.ShortName}");  // hot weights
 //
 // AMD LBR (Zen 3+/LbrExtV2) SAMPLES the branch stack out of band while the block runs at
@@ -40,13 +42,14 @@ internal static class Program
                           + "speed — crash-proof (no EFLAGS.TF/SIGTRAP), a handful of PMIs. SAMPLED, not exact.\n");
 
         long total = 0;
-        var ww = AsmTrace.WindowHot(() =>
+        AsmTrace ww;
+        using (ww = new AsmTrace(HwBackend.AmdLbr))   // ctor arms the branch-stack sampler
         {
             for (int k = 0; k < 40000; k++)     // the hot path: HotSum dominates the survey
                 total += HotSum(60);
             total += Enumerable.Range(0, 2000)  // some LINQ, so it shows lower in the histogram
                                .Where(x => x % 3 == 0).Select(x => x * x).Sum();
-        });
+        }                                             // Dispose drains + attributes
 
         if (!ww.Armed)
         {

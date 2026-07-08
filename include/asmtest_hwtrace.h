@@ -460,6 +460,17 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated);
 
+/* BEGIN/END split of the AMD-LBR survey above, so a caller can ARM the sampler, run a block
+ * INLINE, and DRAIN later — the `using (new AsmTrace(HwBackend.AmdLbr)) { block }` shape
+ * (ctor calls _begin, Dispose calls _end; no run_fn callback). _begin opens+ENABLEs the
+ * branch-stack event on the CALLING thread and returns a heap ctx handle in *ctx_out; _end
+ * DISABLEs, drains the sampled branch-target endpoints into ips[cap], and frees the ctx.
+ * Same returns/semantics as the monolith. Call _end on the SAME thread that called _begin
+ * (the event is per-thread). ENOSYS off x86-64 Linux. */
+int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out);
+int asmtest_hwtrace_sample_end_amd(void *ctx, uint64_t *ips, size_t cap,
+                                   size_t *nips, int *truncated);
+
 /* ------------------------------------------------------------------ */
 /* AMD-P0 — deterministic software-event LBR snapshot (src/branchsnap.c) */
 /* ------------------------------------------------------------------ */

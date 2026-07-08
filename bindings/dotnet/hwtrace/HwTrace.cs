@@ -435,6 +435,13 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_window_amd(
             IntPtr runFn, IntPtr arg, int period, ulong[] ips, UIntPtr cap,
             out UIntPtr nips, out int truncated);
+        // Begin/end split of the AMD-LBR survey: arm in a ctor, drain in Dispose, so the block
+        // runs INLINE between them (`using (new AsmTrace(HwBackend.AmdLbr)) { block }`). _end's
+        // ips may be null (a drain-less release of a leaked scope's fd+mapping).
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_begin_amd(
+            int period, out IntPtr ctx);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_end_amd(
+            IntPtr ctx, ulong[] ips, UIntPtr cap, out UIntPtr nips, out int truncated);
 
         // ---- call descent (asmtest_descent_t) — edges + nested frames ----
         // A SEPARATE opaque handle threaded through the three _ex trace entry points
@@ -1376,6 +1383,38 @@ namespace Asmtest
     /// optimisation on top (the real slot/SIGTRAP arming stays lazy at first scope,
     /// which is also why CA2255 is safe to suppress for a library ship).
     /// </summary>
+    /// <summary>§D3: a finalizable holder for the native AMD-LBR sampler ctx, so ONLY the
+    /// inline AMD scopes carry finalization overhead (not every AsmTrace). Dispose drains via
+    /// <see cref="End"/>; a leaked (undisposed) scope has its perf event + mapping released by
+    /// the finalizer (drain-less), so the fd is never leaked.</summary>
+    internal sealed class AmdSampler
+    {
+        IntPtr _ctx;
+        public AmdSampler(IntPtr ctx) { _ctx = ctx; }
+
+        /// <summary>Drain + release: DISABLE + drain endpoints into <paramref name="ips"/> +
+        /// free the ctx. Idempotent (a second call is a no-op).</summary>
+        public int End(ulong[] ips, out UIntPtr nips, out int truncated)
+        {
+            nips = UIntPtr.Zero; truncated = 0;
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero) return 0;
+            _ctx = IntPtr.Zero;
+            GC.SuppressFinalize(this);
+            return HwNative.asmtest_hwtrace_sample_end_amd(
+                c, ips, (UIntPtr)(ips != null ? ips.Length : 0), out nips, out truncated);
+        }
+
+        ~AmdSampler()
+        {
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero || !HwNative.LibAvailable) return;
+            _ctx = IntPtr.Zero;
+            // Drain-less release of a leaked scope's fd + mapping (data is irrelevant here).
+            try { HwNative.asmtest_hwtrace_sample_end_amd(c, null, UIntPtr.Zero, out _, out _); } catch { }
+        }
+    }
+
     public sealed class AsmTrace : IDisposable
     {
         readonly string _name;
@@ -1383,6 +1422,9 @@ namespace Asmtest
         readonly bool _emit;
         readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
         readonly bool _oopWindow;   // §D3: out-of-process whole-window (AsmTrace.Window)
+        readonly bool _amdWindow;   // §D3: AMD-LBR statistical inline whole-window (new AsmTrace(HwBackend.AmdLbr))
+        AmdSampler _amdSampler;     // the armed AMD sampler (finalizable; null until armed)
+        ulong[] _amdIps;            // the endpoint buffer drained in Dispose
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
         readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
         readonly int _rundownSettleMs;   // §D0.2: opt-in bound to let the async R2R jitdump flush before Dispose reads it
@@ -1697,6 +1739,68 @@ namespace Asmtest
             var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
             ww.RunWindowOutOfProcess(body ?? (() => { }));
             return ww;
+        }
+
+        /// <summary>
+        /// §D3 — the INLINE-`using` AMD-LBR statistical whole-window: the same crash-proof,
+        /// out-of-band, near-native sampled survey as <see cref="WindowHot"/>, but as a bare
+        /// scope — <c>using (var ww = new AsmTrace(HwBackend.AmdLbr)) { …managed block… }</c>.
+        /// The ctor ARMS the branch-stack sampler; the block runs INLINE on the calling thread
+        /// at native speed; <see cref="Dispose"/> DRAINS + attributes. No delegate, no
+        /// marshaled callback. <see cref="IsStatistical"/> is true (see it for how
+        /// <see cref="Methods"/>/<see cref="Addresses"/> change meaning). Self-skips
+        /// (<see cref="Armed"/> false, <see cref="SkipReason"/> set) off Zen 3+/LBR or without
+        /// <c>CAP_PERFMON</c>. Today only <see cref="HwBackend.AmdLbr"/> has an inline
+        /// start/stop whole-window: <see cref="HwBackend.SingleStep"/> is the empty-ctor
+        /// <c>new AsmTrace()</c> form, and <see cref="HwBackend.IntelPt"/> is forward-look — this
+        /// ctor self-skips on those. NOTE: the sampled perf event is per-OS-thread, so the block
+        /// must run SYNCHRONOUSLY on the calling thread (an <c>await</c>/thread hop would sample
+        /// the wrong thread). MUST be disposed (a leaked scope's event is released by a
+        /// finalizer). Linux x86-64 only.
+        /// </summary>
+        /// <param name="period">Branch-retired sample period (clamped &gt;=2); ~16 surveys well.</param>
+        public AsmTrace(HwBackend backend, int period = 16, bool byMethod = true,
+                        bool withRundown = true, int rundownSettleMs = 300,
+                        [CallerMemberName] string member = null,
+                        [CallerLineNumber] int line = 0)
+        {
+            _name = ScopeName(member, line);
+            _emit = false;
+            _amdWindow = true;
+            _rundownSettleMs = rundownSettleMs;
+            _armTid = Environment.CurrentManagedThreadId;
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
+            if (backend != HwBackend.AmdLbr)
+            {
+                SkipReason = backend == HwBackend.SingleStep
+                    ? "single-step whole-window is the empty ctor `new AsmTrace()` — this ctor is the AMD-LBR statistical survey"
+                    : $"{backend} inline whole-window is forward-look (not wired) — use `new AsmTrace()` (single-step) or AsmTrace.Window (out-of-process)";
+                return;
+            }
+            IsStatistical = true;
+            if (!HwTrace.Available(HwBackend.AmdLbr))
+            {
+                SkipReason = "AMD LBR unavailable: " + HwTrace.SkipReason(HwBackend.AmdLbr);
+                return;
+            }
+            // §D0.1/§D0.2: method map + rundown BEFORE arming (same as the empty ctor).
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+            _rundownRequested = withRundown;
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+            // Arm the branch-stack sampler on the calling thread; the block runs inline next.
+            int rc = HwNative.asmtest_hwtrace_sample_begin_amd(period, out IntPtr ctx);
+            if (rc != HwNative.ASMTEST_HW_OK || ctx == IntPtr.Zero)
+            {
+                SkipReason = $"AMD LBR survey did not arm (rc={rc})";
+                return; // Dispose's AMD branch tears down _map + DisablePerfMap
+            }
+            _amdSampler = new AmdSampler(ctx);
+            _amdIps = new ulong[65536];
+            Armed = true;
         }
 
         /// <summary>
@@ -2241,6 +2345,30 @@ namespace Asmtest
             // With no native lib the ctor self-skipped and allocated no native resources; skip
             // the (P/Invoking) teardown so Dispose also honors "never throws".
             if (!HwNative.LibAvailable) { Path = ""; return; }
+            // §D3: the INLINE AMD-LBR statistical window (new AsmTrace(HwBackend.AmdLbr)). The
+            // block just ran inline, sampled out of band — DRAIN the sampler, attribute the
+            // endpoints (reused seam; Count = weight), release. Handle a self-skipped (unarmed)
+            // scope too: no sampler, just tear down the map + rundown.
+            if (_amdWindow)
+            {
+                if (_amdSampler != null)
+                {
+                    _amdSampler.End(_amdIps, out UIntPtr nips, out int trunc);
+                    _amdSampler = null;
+                    ulong n = (ulong)nips;
+                    var addrs = new ulong[n];
+                    if (n > 0) Array.Copy(_amdIps, addrs, (long)n);
+                    Addresses = addrs;
+                    Truncated = trunc != 0;
+                    if (_map != null) _map.Stop();
+                    IntPtr aimg = _map != null ? _map.ImageHandle : IntPtr.Zero;
+                    ulong awhen = _map != null ? _map.ImageNow : 0;
+                    AttributeAddresses(aimg, awhen); // disposes _map
+                }
+                else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                return;
+            }
             // Always render (size-then-allocate) to populate Path — emit gates only the
             // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
             // and renders the recorded ABSOLUTE addresses from live self memory; the

@@ -1051,6 +1051,141 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
         *truncated = (lost || n == 0) ? 1 : 0;
     return ASMTEST_HW_OK;
 }
+
+/* BEGIN/END split of the survey above — lets a caller ARM the sampler, run a block INLINE,
+ * and DRAIN later (the .NET `using (new AsmTrace(HwBackend.AmdLbr)) { block }` shape, where
+ * the ctor calls _begin and Dispose calls _end, no run_fn callback). The ctx handle carries
+ * the perf fd + ring; _end DISABLEs, drains the same way as the monolith, and frees it. */
+struct asmtest_amd_sample_ctx {
+    int fd;
+    void *base_map;
+    size_t base_sz;
+};
+
+int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
+    if (ctx_out == NULL)
+        return ASMTEST_HW_EINVAL;
+    *ctx_out = NULL;
+    if (period < 2)
+        period = 2;
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a;
+    a.type = PERF_TYPE_HARDWARE;
+    a.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+    a.sample_period = (unsigned)period;
+    a.sample_type = PERF_SAMPLE_BRANCH_STACK;
+    a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    a.exclude_kernel = 1;
+    a.exclude_hv = 1;
+    a.disabled = 1;
+    long fd = perf_open(&a, 0, -1, -1, 0); /* pid=0: the calling thread */
+    if (fd < 0)
+        return ASMTEST_HW_EUNAVAIL;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    size_t base_sz = (size_t)pg + round_pages(0, 256 * 1024);
+    void *base_map =
+        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (base_map == MAP_FAILED) {
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    struct asmtest_amd_sample_ctx *c =
+        (struct asmtest_amd_sample_ctx *)malloc(sizeof *c);
+    if (c == NULL) {
+        munmap(base_map, base_sz);
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    c->fd = (int)fd;
+    c->base_map = base_map;
+    c->base_sz = base_sz;
+    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0);
+    *ctx_out = c;
+    return ASMTEST_HW_OK;
+}
+
+int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
+                                   size_t *nips, int *truncated) {
+    if (ctxp == NULL)
+        return ASMTEST_HW_EINVAL;
+    struct asmtest_amd_sample_ctx *c = (struct asmtest_amd_sample_ctx *)ctxp;
+    if (nips != NULL)
+        *nips = 0;
+    if (truncated != NULL)
+        *truncated = 0;
+    ioctl(c->fd, PERF_EVENT_IOC_DISABLE, 0);
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)c->base_map;
+    uint8_t *data = (uint8_t *)c->base_map + (size_t)pg;
+    size_t dsz = c->base_sz - (size_t)pg;
+    uint64_t head = mp->data_head;
+    __sync_synchronize();
+    uint64_t tail = mp->data_tail;
+    size_t span = (size_t)(head - tail);
+    size_t n = 0;
+    int lost = 0;
+    {
+        int depth = asmtest_amd_lbr_depth();
+        size_t max_sample = sizeof(struct perf_event_header) + sizeof(uint64_t) +
+                            (size_t)depth * sizeof(struct perf_branch_entry);
+        if (dsz > 0 && span + max_sample > dsz)
+            lost = 1;
+    }
+    if (ips != NULL && cap > 0 && span > 0 && span <= dsz) {
+        uint8_t *buf = (uint8_t *)malloc(span);
+        if (buf != NULL) {
+            for (size_t i = 0; i < span; i++)
+                buf[i] = data[(tail + i) % dsz];
+            for (size_t off = 0;
+                 off + sizeof(struct perf_event_header) <= span;) {
+                struct perf_event_header *h =
+                    (struct perf_event_header *)(buf + off);
+                if (h->size == 0 || off + h->size > span)
+                    break;
+                if (h->type == PERF_RECORD_LOST ||
+                    h->type == PERF_RECORD_THROTTLE) {
+                    lost = 1;
+                } else if (h->type == PERF_RECORD_SAMPLE) {
+                    uint8_t *body = buf + off + sizeof *h;
+                    uint64_t nr = *(uint64_t *)body;
+                    if (nr > 0 && nr <= 64 &&
+                        sizeof *h + sizeof(uint64_t) +
+                                nr * sizeof(struct perf_branch_entry) <=
+                            h->size) {
+                        struct perf_branch_entry *e =
+                            (struct perf_branch_entry *)(body +
+                                                         sizeof(uint64_t));
+                        for (uint64_t i = 0; i < nr && n < cap; i++) {
+                            if (e[i].abort)
+                                continue;
+                            ips[n++] = e[i].to;
+                        }
+                        if (n >= cap)
+                            lost = 1;
+                    }
+                }
+                off += h->size;
+            }
+            free(buf);
+        }
+    }
+    __sync_synchronize();
+    mp->data_tail = head;
+    munmap(c->base_map, c->base_sz);
+    close(c->fd);
+    free(c);
+    if (nips != NULL)
+        *nips = n;
+    if (truncated != NULL)
+        *truncated = (lost || n == 0) ? 1 : 0;
+    return ASMTEST_HW_OK;
+}
 #else
 int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
@@ -1058,6 +1193,20 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     (void)run_fn;
     (void)arg;
     (void)period;
+    (void)ips;
+    (void)cap;
+    (void)nips;
+    (void)truncated;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
+    (void)period;
+    (void)ctx_out;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_sample_end_amd(void *ctx, uint64_t *ips, size_t cap,
+                                   size_t *nips, int *truncated) {
+    (void)ctx;
     (void)ips;
     (void)cap;
     (void)nips;
