@@ -630,7 +630,20 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     a.size = sizeof a;
     a.type = PERF_TYPE_HARDWARE;
     a.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
-    a.sample_period = 1;
+    /* sample_period: default 1 (a PMI per branch — the exact, small-window Tier-A/B
+     * path, unchanged). opts.lbr_period (opt-in) spaces the PMIs out to extend the
+     * stitched window before throttling/ring-overflow truncates it: a period of P
+     * leaves the consecutive 16-deep windows overlapping by (depth - P), so the
+     * Tier-B stitcher still splices them gaplessly at ~P-times fewer interrupts.
+     * Clamp to [1, depth-1] so an overlap always remains — a bad value degrades to a
+     * stitch gap (honest truncation), never a silent mis-stitch. */
+    unsigned period = 1;
+    if (g_opts.lbr_period > 1) {
+        int depth = asmtest_amd_lbr_depth();
+        int hi = depth > 1 ? depth - 1 : 1;
+        period = (unsigned)(g_opts.lbr_period < hi ? g_opts.lbr_period : hi);
+    }
+    a.sample_period = period;
     a.sample_type = PERF_SAMPLE_BRANCH_STACK;
     a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
     a.exclude_kernel = 1;

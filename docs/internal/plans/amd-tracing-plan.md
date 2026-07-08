@@ -549,6 +549,38 @@ AMD hardware ceiling** — but remove its sharpest edges.
 | **`spec`/`valid` filtering** (Zen 4/5) | `perf_branch_entry.spec` carries `PERF_BR_SPEC_WRONG_PATH`; the LbrExtV2 driver passes wrong-path entries through to userspace | Drops speculative/wrong-path phantom edges before `amd_replay`, which today filters only `abort` and *explicitly notes* (amd_backend.c comment) that it ignores every other flag | Wrong-path entries are relatively uncommon, so this is a precision refinement, not a step-change. LbrExtV2/Linux ≥6.1 only — a no-op on Zen 3 BRS (retired-only, no spec bits) |
 | **Throttle/ring hardening** | Larger `data_size` ring; `sysctl kernel.perf_event_max_sample_rate` up, `kernel.perf_cpu_time_max_percent=0` on the self-hosted runner | The Tier-B live path is bounded by ring size + throttling (a 20 000-trip loop already truncates); more headroom = longer gapless stitch before honest truncation | Operational, self-hosted-runner only; extends reach, does not remove the ceiling |
 | **Decodable-distance stitch check** | For each stitched boundary, assert reconstructed instruction count between consecutive branch targets == statically-decoded byte distance; reject a wrong minimal-shift match, else emit an honest gap | AMD sets `hw_idx ≡ 0` (register renaming keeps From[0]=TOS), so Intel's exact index-based overlap count **cannot** be ported — the current smallest-overlap heuristic can silently mis-stitch a self-overlapping loop (an open question in amd_backend.c). This is the AMD-available substitute check | Improves correctness for the common looping case; does not extend depth |
+| **Period-spaced Tier-B stitching** (Zen 4/5) — *#2A* | Set `sample_period = depth − overlap` (e.g. 16−4=12) instead of `1`, so consecutive 16-deep LbrExtV2 windows overlap by `overlap` and still stitch gaplessly at ~P× fewer PMIs | The `sample_period=1` PMI-per-branch flood is the dominant Tier-B throttle/ring truncation cause; spacing the PMIs cuts throttling exposure ~P× → **extends the exact window ~P×** before the run stops fitting. Generalizes the Zen 3 BRS period-adjust lever to LbrExtV2 *multi-window* stitching | LbrExtV2 (Zen 4/5). An over-large period simply yields a stitch gap → honest truncation, never silent corruption. Not for tiny single-shot routines (a spaced PMI may never fire in-region — keep `lbr_period=0` there) |
+| **Slot-efficient branch filtering** (Zen 4/5) — *#2B* | Request a reduced HW branch filter (`cond \| ind_call \| ind_jmp \| any_ret`) so the 16 LBR slots are not spent on statically-decodable direct transfers; each window then spans more instructions | A direct unconditional jmp/call has a static target the decoder can follow, so recording it wastes a slot; filtering to only the non-statically-decidable taken branches stretches each window with **no** exactness loss — a reach multiplier orthogonal to #2A | **Needs a decoder change** (see below): `amd_replay` today assumes *every* taken branch is recorded, so a naive reduced filter is silent corruption, not merely coarser. Forward-look until that lands + Zen validation |
+
+### Window-size levers — status (2026-07-08)
+
+- **#2A period-spaced Tier-B stitching — LANDED (opt-in), live-validation pending.**
+  New `asmtest_hwtrace_options_t.lbr_period` ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)):
+  `0` keeps the exact `sample_period=1` Tier-A/B path (default, unchanged);
+  `>1` sets the branch-retired period, clamped to `[1, depth-1]` in
+  `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) so an overlap always
+  remains. The whole extension leans on the *existing, validated* stitch + gap/`lost`
+  detection (`asmtest_amd_stitch` / `asmtest_amd_decode_stitched`): insufficient overlap
+  becomes a stitch gap → `truncated`, so a bad `lbr_period` degrades honestly rather than
+  corrupting. Compile-clean; **live reach-gain measurement is pending a perf-permitted
+  Zen host** (this dev box reports `perf branch-stack not permitted` without
+  `CAP_PERFMON`; the `docker-hwtrace-amd` lane needs a self-hosted AMD runner with the
+  caps — the same gate the P0 snapshot lane carries). Honors "no untested hardware code":
+  the tested default path is untouched; the opt-in extension self-truncates on any
+  overlap shortfall.
+- **#2B slot-efficient branch filtering — SPECIFIED (forward-look), NOT shipped.**
+  Deliberately not implemented as a bare filter flag: `amd_replay`
+  ([src/amd_backend.c](../../../src/amd_backend.c)) reconstructs the path assuming every
+  *taken* branch is in the record set (it infers not-taken conditionals from the
+  fall-through gaps), so dropping direct transfers from the HW filter without teaching the
+  decoder to **follow static direct jmp/call targets** would silently mis-decode — exactly
+  the "never emit corrupt as complete" line this project holds. The exact-preserving form
+  requires (a) a `branch_filter` option threading `PERF_SAMPLE_BRANCH_*` into
+  `hwtrace_begin_amd`, and (b) an `amd_replay` pass that decodes+follows unrecorded direct
+  unconditional jmp / direct call targets between recorded branches. Both are testable on
+  the same perf-permitted Zen host as #2A; landing them without that hardware would violate
+  the plan's no-untested-hardware-code rule, so #2B stays specified here until a validating
+  host is available.
 
 ## Matrix 3 — Confirmed dead ends (do not invest)
 

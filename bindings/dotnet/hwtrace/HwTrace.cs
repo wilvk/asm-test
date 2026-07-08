@@ -1260,6 +1260,7 @@ namespace Asmtest
         readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
         readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
+        readonly int _rundownSettleMs;   // §D0.2: opt-in bound to let the async R2R jitdump flush before Dispose reads it
         readonly JitMethodMap _map; // §D0.1: managed-method labelling (byMethod only)
         readonly Delegate _target;  // §D0.3: the named method (Method(...) scopes only)
         readonly IntPtr _methodBase; // §D0.3: resolved JIT'd body base
@@ -1357,8 +1358,17 @@ namespace Asmtest
         /// often the raw million-instruction runtime stream; the data-only default exposes
         /// <see cref="Addresses"/> / <see cref="Disassembly"/> instead. Needs Capstone
         /// (<see cref="Path"/> stays empty without it).</param>
+        /// <param name="rundownSettleMs">§D0.2 (opt-in): with <paramref name="withRundown"/>,
+        /// the runtime writes <c>/tmp/jit-&lt;pid&gt;.dump</c> ASYNCHRONOUSLY and forward, but
+        /// <see cref="Dispose"/> folds it in at close — so for a short scope the R2R BCL
+        /// records (LINQ <c>Enumerable</c>, <c>Dictionary</c>, <c>List</c>, string formatting)
+        /// may not be flushed yet and those methods go unnamed. A positive value bounds a
+        /// close-time wait for the jitdump to stop growing (quiescence) before it is read,
+        /// so those methods are named. Default 0 keeps the current no-wait close latency
+        /// (the load is still attempted, just without waiting). Ignored without
+        /// <paramref name="withRundown"/>.</param>
         public AsmTrace(bool emit = true, bool byMethod = false, bool withRundown = false,
-                        bool renderPath = false,
+                        bool renderPath = false, int rundownSettleMs = 0,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
@@ -1366,6 +1376,7 @@ namespace Asmtest
             _emit = emit;
             _wholeWindow = true;
             _renderPath = renderPath;
+            _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             // Honor the "never throws" contract: with no native lib loaded, the first P/Invoke
             // (asmtest_trace_new) would throw DllNotFoundException. Self-skip cleanly (Armed
@@ -1823,10 +1834,20 @@ namespace Asmtest
                 // the caller decides how to present Methods / LabelledInstructions.
                 if (_map != null)
                 {
-                    // §D0.2: fold in the jitdump rundown (WARM + R2R methods too) if it was
-                    // enabled; a missing/partial file just leaves the cold-only entries.
-                    if (RundownEnabled)
-                        _map.LoadJitDump(DiagnosticsIpc.JitDumpPath());
+                    // §D0.2: fold in the jitdump rundown (WARM + R2R methods too). Keyed on
+                    // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
+                    // while its OK response read times out (RundownEnabled reported false), yet
+                    // the runtime still wrote the file; LoadJitDump is a safe no-op when the
+                    // file is absent, so always attempt it. rundownSettleMs (opt-in) first
+                    // waits for the ASYNC R2R rundown to finish flushing, so short scopes name
+                    // the R2R BCL bodies instead of dropping them to "native runtime".
+                    if (_rundownRequested)
+                    {
+                        string dump = DiagnosticsIpc.JitDumpPath();
+                        if (_rundownSettleMs > 0)
+                            DiagnosticsIpc.WaitJitDumpSettled(dump, _rundownSettleMs);
+                        _map.LoadJitDump(dump);
+                    }
                     _map.Freeze();
                     bool disasOk = HwNative.asmtest_disas_available();
                     DisassemblyAvailable = disasOk;
@@ -2423,6 +2444,39 @@ namespace Asmtest
         /// <summary>The jitdump path the runtime writes for this process.</summary>
         public static string JitDumpPath()
             => Path.Combine(TempDir(), $"jit-{Environment.ProcessId}.dump");
+
+        /// <summary>§D0.2: the runtime writes the jitdump ASYNCHRONOUSLY after an
+        /// <see cref="EnablePerfMap"/> ACK, so a close that reads it immediately misses the
+        /// R2R rundown still being flushed. Poll the file length until it stops growing across
+        /// two short intervals (quiescence) or <paramref name="budgetMs"/> is exhausted — a
+        /// bounded, best-effort settle so the reader sees a complete dump. Returns the final
+        /// observed length. Never throws (a missing/locked file just returns quickly).</summary>
+        public static long WaitJitDumpSettled(string path, int budgetMs)
+        {
+            const int stepMs = 15; // poll cadence: short enough to add little latency
+            long last = -1;
+            int stableHits = 0;
+            for (int waited = 0; waited < budgetMs; waited += stepMs)
+            {
+                long len;
+                try { len = File.Exists(path) ? new FileInfo(path).Length : 0; }
+                catch { return last < 0 ? 0 : last; }
+                // Settled = a non-empty file whose size held steady across two polls. The
+                // runtime writes the header + records forward; a steady length means the
+                // rundown has drained (no new JIT_CODE_LOAD records arriving this window).
+                if (len > 0 && len == last)
+                {
+                    if (++stableHits >= 2) return len;
+                }
+                else
+                {
+                    stableHits = 0;
+                }
+                last = len;
+                try { System.Threading.Thread.Sleep(stepMs); } catch { }
+            }
+            return last < 0 ? 0 : last;
+        }
 
         static string TempDir()
         {

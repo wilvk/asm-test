@@ -146,6 +146,10 @@ Suggested phasing if B is approved:
 - Intercepting `pthread_create` (LD_PRELOAD) or unblocking `SIGTRAP` from the
   handler: fighting the kernel's `force_sig` contract is not a posture, it's a
   time bomb.
-- Making whole-window managed capture crash-proof: impossible in-process by the
-  §Z1 form's own definition; PT (§Z2) is the strong tier for that, hardware
-  permitting.
+- Making whole-window managed capture crash-proof *in-process*: impossible by the
+  §Z1 form's own definition. PT (§Z2) is the strong hardware tier for that (Intel,
+  hardware permitting); on AMD the crash-proof route is **out-of-process** — the §D3
+  whole-window channel, now specified in
+  [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md) (the tracee's
+  signal mask is irrelevant to a ptrace-stop, so `pthread_create`/exception dispatch
+  cannot force-kill it).

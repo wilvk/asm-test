@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- localscope demo: a whole-window byMethod + withRundown scope wrapped around a BODY
+       of inline C# (LINQ, closures, tuples, pattern matching, local functions, generics,
+       StringBuilder, ...) with NO Work() method — the report names the block's own compiled
+       code, proving the inline block is the traced unit. Dependency-free: compiles the source
+       (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace, no NuGet, so `dotnet run`
+       works offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0) where
+       single-step / diagnostics are unavailable.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>localscope</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

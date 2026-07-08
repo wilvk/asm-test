@@ -82,6 +82,18 @@ typedef struct {
                      toolchain/caps/LbrExtV2 substrate is absent */
     const char
         *object_hint; /* optional object-file path for hw address filters  */
+    int lbr_period; /* AMD LBR only, opt-in (0 = default sample_period=1). The
+                       branch-retired sample period for the Tier-B stitched capture:
+                       a PMI every `lbr_period` branches instead of every one, so
+                       consecutive 16-deep windows overlap by (depth - lbr_period)
+                       and still stitch gaplessly, at ~lbr_period-times fewer
+                       interrupts — cutting sample-rate throttling / ring-overflow
+                       truncation and so EXTENDING the exact window before the run
+                       stops fitting. Must be < the LBR depth (16) to keep an overlap;
+                       an over-large value simply yields a stitch gap -> honest
+                       truncation (never silent corruption). Ignored by every non-AMD
+                       backend and by the deterministic snapshot mode. See
+                       docs/internal/plans/amd-tracing-plan.md (window-size levers). */
 } asmtest_hwtrace_options_t;
 
 /* The full gating chain, as a single detect-and-skip predicate: returns 1 only

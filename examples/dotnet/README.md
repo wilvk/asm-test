@@ -12,6 +12,7 @@ single-step cannot run.
 | [region/](region/) | `using (new AsmTrace(code))` | the same scope shape, scoped to one routine → exactly its assembly |
 | [methods/](methods/) | `using (new AsmTrace())` | labelling the captured window by **managed method** (§D0.1) — names an arbitrary **cold** method |
 | [rundown/](rundown/) | `new AsmTrace(withRundown: true)` | also names **warm + ReadyToRun (R2R) BCL** methods (§D0.2) via an in-process jitdump rundown — dependency-free, no launch knob |
+| [localscope/](localscope/) | `new AsmTrace(byMethod: true, withRundown: true)` | a whole block of **inline C# with no `Work()` method** (LINQ, closures, tuples, pattern matching, generics, local functions) — names the block's **own** compiled code (`Program::Main`, the lambda display class), proving the inline block itself is the traced unit |
 | [assemblies/](assemblies/) | `new AsmTrace(byMethod: true, withRundown: true)` | groups the labelled window **by declaring assembly**, listing the methods called in each (`AsmMethod.Assembly` / `.ShortName`) |
 | [annotated/](annotated/) | `new AsmTrace(byMethod: true, withRundown: true)` | an **annotated execution trace** — each executed instruction next to the method it ran in (`AsmTrace.Disassembly` / `AsmInstruction`) |
 | [tiers/](tiers/) | `new AsmTrace(byMethod: true, withRundown: true)` | executed instructions grouped **by JIT tier** — R2R vs cold/hot JIT (`AsmMethod.Tier`) |
