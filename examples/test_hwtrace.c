@@ -2068,7 +2068,7 @@ static void test_ptrace_oop(void) {
  * conditional taken 19x then falling through — the reconstruction across a loop
  * back-edge, and the not-taken tail). x86-64 only (SINGLEBLOCK has no AArch64 form). */
 static void test_ptrace_blockstep(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_ptrace_blockstep_available()) {
         printf(
             "# SKIP ptrace block-step: PTRACE_SINGLEBLOCK/Capstone unavailable "
@@ -2146,7 +2146,7 @@ static void test_ptrace_blockstep(void) {
     asmtest_trace_free(lb);
     munmap(q, sizeof LOOP_X86);
 #else
-    printf("# SKIP ptrace block-step: x86-64 only (no AArch64 "
+    printf("# SKIP ptrace block-step: Linux x86-64 only (no AArch64 "
            "PTRACE_SINGLEBLOCK)\n");
 #endif
 }
@@ -2162,7 +2162,7 @@ static void test_ptrace_blockstep(void) {
  * the indirect calls into them), in execution order, proving the cross-process address
  * handoff + multi-region record/follow. x86-64 only. */
 static void test_ptrace_windowed(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
@@ -2308,7 +2308,7 @@ static void test_ptrace_windowed(void) {
     munmap(m1, sizeof M1);
     munmap(m2, sizeof M2);
 #else
-    printf("# SKIP ptrace windowed: x86-64 only\n");
+    printf("# SKIP ptrace windowed: Linux x86-64 only\n");
 #endif
 }
 
@@ -2319,7 +2319,7 @@ static void test_ptrace_windowed(void) {
  * forks, run_to's the frame, and captures driver + both leaves. This is the entry a
  * managed binding uses (it cannot fork safely). */
 static void test_ptrace_window_call(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_ptrace_available()) {
         char why[160];
         asmtest_ptrace_skip_reason(why, sizeof why);
@@ -2413,11 +2413,11 @@ static void test_ptrace_window_call(void) {
     munmap(m1, sizeof M1);
     munmap(m2, sizeof M2);
 #else
-    printf("# SKIP ptrace window_call: x86-64 only\n");
+    printf("# SKIP ptrace window_call: Linux x86-64 only\n");
 #endif
 }
 
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
 /* The window body for test_stealth_windowed — invoked as run_region; it calls the native
  * driver blob, whose entry is the window frame (win_base). File-scope because a C
  * run_region callback cannot be a nested function. */
@@ -2435,7 +2435,7 @@ static void sw_run_window(void *arg) {
  * two PRE-PUBLISHED leaf "methods". The capture must record the driver AND both leaves in
  * order, across the process boundary, with NO caller-side fork/attach/run_to. x86-64 only. */
 static void test_stealth_windowed(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     static const unsigned char M1[] = {0x48, 0x89, 0xf8, 0x48,
                                        0x01, 0xf0, 0xc3}; /* rax=rdi+rsi */
     static const unsigned char M2[] = {0x48, 0x89, 0xf8, 0x48,
@@ -2533,11 +2533,11 @@ static void test_stealth_windowed(void) {
     munmap(m1, sizeof M1);
     munmap(m2, sizeof M2);
 #else
-    printf("# SKIP stealth windowed: x86-64 only\n");
+    printf("# SKIP stealth windowed: Linux x86-64 only\n");
 #endif
 }
 
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
 /* run_fn for test_amd_sample_window: invoke the hot-loop blob with its trip count. */
 static void *g_asw_fn;
 static long g_asw_arg;
@@ -2553,7 +2553,7 @@ static void asw_run(void *arg) {
  * CAP_PERFMON, so it self-skips off that hardware/permission (the docker-hwtrace-amd lane
  * runs it live). x86-64 only. */
 static void test_amd_sample_window(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
         char why[160];
         asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, why, sizeof why);
@@ -2604,7 +2604,7 @@ static void test_amd_sample_window(void) {
     free(ips);
     munmap(fn, sizeof LOOP);
 #else
-    printf("# SKIP AMD sample window: x86-64 only\n");
+    printf("# SKIP AMD sample window: Linux x86-64 only\n");
 #endif
 }
 
@@ -4236,7 +4236,7 @@ static void test_descent_attach(void) {
  * render_window decodes those absolute addresses from live self memory. Any x86-64
  * Linux; no PMU/perf/privilege. */
 static void test_wholewindow_singlestep(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
         printf("# SKIP whole-window scope: single-step unavailable\n");
         return;
@@ -4342,7 +4342,7 @@ static void test_wholewindow_singlestep(void) {
  * on the caller's named ranges first — proving the leaves are told apart. Also
  * exercises the sparse whole-window buffer (no fixed 64k cap). */
 static void test_wholewindow_buckets(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
         printf("# SKIP whole-window buckets: single-step unavailable\n");
         return;
@@ -4586,7 +4586,7 @@ static void test_zeroctor_scope_hygiene(void) {
  * render_window must then END its output with the "; trace truncated — N of M
  * instructions shown" banner over well-formed "<hex>:\t<text>" prefix lines. */
 static void test_wholewindow_banner(void) {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
         printf("# SKIP whole-window banner: single-step unavailable\n");
         return;

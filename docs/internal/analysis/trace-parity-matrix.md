@@ -56,9 +56,11 @@ Two facts worth stating up front because they are easy to get wrong:
   so the stream is **pending real hardware** while the rest is code-implemented and
   build/self-skip-validated; its `/proc`+jitdump readers run on any Linux arch and are
   validated live on AArch64.
-  Only the *cross-OS* fronts (Windows VEH, macOS-Intel) remain Phase-5 *(planned)* — so
-  single-step rows below read *implemented* for Linux x86-64/AArch64 and carry
-  *(planned)* only where they name one of those fronts. See the
+  The Phase-5 *cross-OS* fronts have since landed — macOS-Intel in-proc (live-verified:
+  `make hwtrace-test` single-steps all 62 insns of a 20-trip loop on an x86-64 macOS host)
+  and the Windows x86-64 VEH front (`win64-ss-test`) — so single-step rows below read
+  *implemented* on Linux x86-64/AArch64, macOS-Intel, and Windows x86-64; only the AArch64
+  *live stream* remains hardware-pending. See the
   [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
 - **Time-aware code-image recorder (`asmtest_codeimage`).** The byte-source half of
   foreign-JIT tracing: a userspace `PERF_RECORD_TEXT_POKE` that time-versions a process's
@@ -102,7 +104,7 @@ Keystone) is not asserted here.
 | Intel PT | ✓ bare-metal | ✗ | ✗ | — | — |
 | AMD LBR | ✓ (Zen 3+) | ✗ | ✗ | — | — |
 | CoreSight | — | — | — | scaffold (board) | ✗ |
-| Single-step | ✓ **shipped** | macOS-Intel (Ph5) | ✗ → Ph5 (VEH, ~6×) | ptrace W2 ✓ (stream HW-pending) | ptrace-only (W2) |
+| Single-step | ✓ **shipped** | ✓ **shipped** (Ph5, macOS-Intel) | ✓ Ph5 (VEH, ~6×) | ptrace W2 ✓ (stream HW-pending) | ptrace-only (W2) |
 
 Windows-x64 and macOS are served **only by the emulator tier** today
 (`emu_call_win64_traced` for the Win64 ABI). On AArch64 Linux the out-of-process W2
@@ -287,13 +289,15 @@ transparent, while a native→emulator fallback crosses a semantic line and shou
 |---|---|
 | Linux x86-64 | *(full native cascade — see Matrix 8)* → emulator |
 | Linux AArch64 | CoreSight *(scaffold → self-skips)* → out-of-proc ptrace single-step (W2; code-implemented, stream HW-pending) → emulator |
-| macOS Intel | single-step (macOS-Intel, *planned* Ph5) → emulator |
+| macOS Intel | single-step (macOS-Intel Ph5 — **shipped**, live-verified via `make hwtrace-test`) → emulator |
 | macOS Apple Silicon | **emulator only** |
-| Windows x64 | single-step (VEH, *planned* Ph5) → emulator |
+| Windows x64 | single-step (VEH Ph5 — **shipped**, `win64-ss-test`) → emulator |
 
-Today every non-Linux-x86-64 row collapses to the **emulator** in practice, because
-the native tiers above it are either follow-ups or scaffolds. The Win64 ABI is traced
-by the emulator via `emu_call_win64_traced`.
+The macOS-Intel and Windows-x64 rows now resolve to their **single-step** front before
+the emulator floor (Phase-5, shipped). The remaining non-Linux-x86-64 rows (macOS Apple
+Silicon, the AArch64 live stream, CoreSight) still collapse to the **emulator** in
+practice, because the native tiers above them are either hardware-pending or scaffolds.
+The Win64 ABI is also traced by the emulator via `emu_call_win64_traced`.
 
 ### Matrix 10 — Language-runtime fallback chain (within a host that has native tiers)
 
