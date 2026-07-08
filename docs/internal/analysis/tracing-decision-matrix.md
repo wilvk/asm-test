@@ -49,10 +49,14 @@ Intel PT; *managed JIT method* → lazy-arm (named) or out-of-process stealth (w
 
 ## Matrix 1 — Tier availability by (arch, OS)
 
-Legend: ✅ live-capturable · ⚙️ compiled but self-skips here (needs bare-metal PMU / caps /
-perf, or the host isn't the right vendor) · ❌ not applicable (wrong arch/OS, hard stub).
-Columns: **x64/L** x86-64 Linux · **x64/mac** x86-64 macOS · **x64/win** x86-64 Windows ·
-**a64/L** aarch64 Linux · **a64/mac** aarch64 macOS · **rv/arm** riscv64 / arm32 (guests only).
+Legend: ✅ live-capturable on a correctly-provisioned real host of this arch/OS (a runtime
+functional probe may still self-skip under emulation / a quirked VM — noted inline) · ⚙️
+**compiled and always linked, but live capture self-skips on a *generic* host of this arch/OS**
+because it needs specialized silicon (a specific vendor's PMU, or a CoreSight board) plus perf/
+BPF/MSR privilege — see the **"Why ⚙️"** subsection right after this table for the per-item
+reason · ❌ not applicable (wrong arch/OS, hard stub). Columns: **x64/L** x86-64 Linux · **x64/mac**
+x86-64 macOS · **x64/win** x86-64 Windows · **a64/L** aarch64 Linux · **a64/mac** aarch64 macOS ·
+**rv/arm** riscv64 / arm32 (guests only).
 
 | Tier | x64/L | x64/mac | x64/win | a64/L | a64/mac | rv/arm | Fidelity |
 |---|---|---|---|---|---|---|---|
@@ -64,16 +68,47 @@ Columns: **x64/L** x86-64 Linux · **x64/mac** x86-64 macOS · **x64/win** x86-6
 | **ARM CoreSight** | ❌ | ❌ | ❌ | ⚙️ `cs_etm` PMU (a board) | ❌ | ❌ | exact, complete, real CPU |
 | **DynamoRIO** (in-proc DBI) | ✅ (dlopen `libasmtest_drapp`) | ❌ | ❌ | ❌ | ❌ | ❌ | exact, complete, native-speed cache |
 | **BTF block-step** (`PTRACE_SINGLEBLOCK`) | ✅ rootless (self-skips masked-BTF VMs) | ❌ | ❌ | ❌ (no aarch64 form → falls to per-insn) | ❌ | ❌ | exact, complete, ~1 trap/branch |
-| **ptrace per-insn single-step** | ✅ rootless | ❌ | ❌ | ⚙️ (self-skips under qemu-user) | ❌ | ❌ | exact, complete, ~1 trap/insn |
+| **ptrace per-insn single-step** | ✅ rootless | ❌ | ❌ | ✅ real host (self-skips under qemu-user) | ❌ | ❌ | exact, complete, ~1 trap/insn |
 | **in-proc single-step** (EFLAGS.TF / `#DB`) | ✅ no privilege | ✅ (XNU #DB→SIGTRAP) | ❌ (use VEH) | ❌ | ❌ | ❌ | exact, complete, **unsafe on managed threads** |
 | **Win64 VEH single-step** | ❌ | ❌ | ✅ (`AddVectoredExceptionHandler`) | ❌ | ❌ | ❌ | exact, complete |
 | **Unicorn emulator** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **only tier here** | exact, complete, **virtual guest** (not the real CPU) |
 | **`asmtest_trace_call_auto`** (orchestrator) | ✅ (LBR→block-step→single-step) | ✅ (single-step) | — | ✅ (ptrace single-step) | — | — | picks the best *available* of the above |
 
-> The ⚙️ hardware rows are why the hosted `hwtrace` CI lane validates **decode only** — live
-> capture self-skips on cloud VMs (no bare-metal PMU / no `perf_event_paranoid` lowering / no
-> AMD-or-Intel-specific silicon). The AMD lanes (`docker-hwtrace-amd`, `-codeimage`, `-msr`)
-> run live only on the self-hosted Ryzen 9 9950X dev box.
+### Why ⚙️ (compiled but self-skips), per item
+
+**This is by design, and it is correct — not a packaging gap.** asm-test compiles *every*
+backend into the binary unconditionally (each is its own TU behind `#if` host guards with a
+self-skipping `#else` stub, so the symbol **always links** and the reconstruction/decode + the
+gating chain are **always host-testable** — e.g. the AMD decoder is validated with synthetic
+`perf_branch_entry[]` on any x86-64 Linux). What gates is **live capture**, at *runtime*, via
+each backend's `available()` probe — because the house rule is **"no untested hardware code": a
+tier that cannot self-validate on its target silicon returns `available() → 0` rather than
+faulting or emitting an unproven trace.** So a ⚙️ cell means "the code is here and the decode is
+proven, but *this generic host* lacks the specific silicon/privilege to record a live trace."
+Distinguish it from a ✅ cell that carries an *inline* self-skip caveat (block-step, aarch64
+ptrace): those run live on a real host and self-skip only under emulation / a quirked VM.
+
+The reason for **each ⚙️** (source of record: `asmtest_hwtrace_available` / `_skip_reason`,
+[src/hwtrace.c](../../../src/hwtrace.c)):
+
+| ⚙️ item | Runs live only when… | Self-skips because (on a generic host) |
+|---|---|---|
+| **Intel PT** (x64/L) | `GenuineIntel` **and** an `intel_pt` sysfs PMU node exists **and** a disabled `perf_event_open` is permitted (bare metal, `perf_event_paranoid` lowered) | absent on **AMD**, in **VMs / cloud CI** (no `intel_pt` PMU exposed to the guest), and without perf privilege |
+| **AMD LBR — sampled** (x64/L) | `AuthenticAMD` Zen 3+ **and** a branch-stack `perf_event_open` succeeds (`CAP_PERFMON` / paranoid lowered) | absent on **Intel**, on **Zen 2** (no branch facility → `EOPNOTSUPP`), in **VMs**, and without `CAP_PERFMON` |
+| **AMD LBR — BPF snapshot** (x64/L) | LbrExtV2 + `perfmon_v2` + kernel ≥ 6.10 **and** `CAP_BPF`+`CAP_PERFMON` at load **and** the image was built with libbpf | non-Zen4/5, old kernel, missing caps, or a build **without the BPF toolchain** (the `#else` stub self-skips) — then the marker path falls back to the sampled tier |
+| **AMD LBR — MSR-direct** (x64/L) | `amd_lbr_v2` **and** `/dev/cpu/N/msr` opens `O_RDWR` (`CAP_SYS_ADMIN` + the `msr` module) | no `amd_lbr_v2`, `msr` module not loaded, or no `CAP_SYS_ADMIN` — the higher-privilege niche vs the BPF snapshot |
+| **AMD LBR — WindowHot survey** (x64/L) | same branch-stack substrate as sampled (`CAP_PERFMON`, Zen 3+) | same as sampled — no AMD branch facility / no perf privilege |
+| **ARM CoreSight** (a64/L) | a `cs_etm` sysfs PMU node exists (a **CoreSight-capable board**) + perf permitted + OpenCSD linked | most aarch64 hosts (phones, cloud servers, Apple Silicon) **have no CoreSight PMU exposed**; VMs don't expose it |
+
+So every ⚙️ is a **bare-metal, vendor-/board-specific hardware-trace tier** that needs its PMU +
+perf/BPF/MSR privilege — exactly the tiers a generic desktop/VM/CI host cannot record on. This is
+also why the hosted `hwtrace` CI lane validates **decode only** (capture self-skips on cloud
+VMs), and the AMD lanes (`docker-hwtrace-amd`, `-codeimage`, `-msr`) run live only on the
+self-hosted Ryzen 9 9950X dev box. The two ✅-with-caveat runtime probes are the exceptions that
+prove the rule: **BTF block-step** self-skips only on a VM whose hypervisor masks the
+`DEBUGCTL.BTF` bit ([`probe_singleblock`](../../../src/ptrace_backend.c)), and **aarch64 ptrace
+single-step** self-skips only under **qemu-user** (which doesn't emulate the ptrace tracer/tracee
+relationship) — both work live on a real host of their arch, needing no special silicon.
 
 ---
 
