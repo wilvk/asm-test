@@ -19,9 +19,9 @@
 > exemptions where a binding should grow the capability, and to state plainly where it
 > should not.
 >
-> Status legend: **planned** throughout. Phase 1 is mechanical; Phase 2 is the real
-> managed-tier engineering (PT-hardware-gated for clean-path validation); Phase 3 is
-> grow-a-use, decided per binding.
+> Status legend: **Phase 1 LANDED** (2026-07-08, commit `afc6ee4`) — the mechanical
+> Cluster 1 rollout; **Phase 2/3 planned**. Phase 2 is the real managed-tier engineering
+> (PT-hardware-gated for clean-path validation); Phase 3 is grow-a-use, decided per binding.
 
 ## Why this is not "wrap 13 symbols × 9 bindings"
 
@@ -97,15 +97,24 @@ over `_ex`.
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`) | optional generics; `arm_tid` | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
 | **node** | koffi | Cluster 1, §D1 `using`-scope | **§D1 managed**: `AsyncLocalStorage` hop hook, window trio, `stealth_trace`, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
 | **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution, window trio, `stealth_trace` | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
-| **cpp** | dlopen | `arm_tid` only | **Cluster 1** (`_ex`+`render_scope`), then optional generics | ~1–3d | Struct-by-value trivial (real C decls); capturing upcall blocked |
-| **rust** | libloading | — | **Cluster 1**, then optional generics | ~1–3d | `#[repr(C)]` by value trivial; capturing upcall blocked |
-| **zig** | std.DynLib | — | **Cluster 1**, then optional generics | ~1–3d | `extern struct` by value trivial; capturing upcall blocked |
-| **lua** | LuaJIT FFI | descent upcalls | **Cluster 1**, then optional generics | ~1–3d | FFI callbacks OK; `cdef` struct by value trivial |
-| **go** | cgo | descent upcalls | **Cluster 1**, then optional generics | ~1–3d | Async-hop N/A — `go func()` fan-out untraced by `LockOSThread` design |
+| **cpp** | dlopen | Cluster 1 ✅, `arm_tid` | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
+| **rust** | libloading | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
+| **zig** | std.DynLib | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
+| **lua** | LuaJIT FFI | Cluster 1 ✅, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | FFI callbacks OK; `cdef` struct by value trivial |
+| **go** | cgo | Cluster 1 ✅, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Async-hop N/A; render pinned with `LockOSThread` (handle-keyed, capturing-thread TLS) |
 
 ## Phased sequencing
 
-### Phase 1 — finish Cluster 1 in the five that lack it (mechanical, highest ROI)
+### Phase 1 — finish Cluster 1 in the five that lack it (mechanical, highest ROI) — ✅ LANDED `afc6ee4` (2026-07-08)
+
+> **Landed 2026-07-08 (`afc6ee4`).** All five bindings (cpp, rust, zig, lua, go) now wrap
+> `call_scoped_ex` + `render_scope`, each with the canonical `add2` test + 40-call loop,
+> green in every `docker-hwtrace-<lang>` lane. The two `ALL` exemptions were removed from
+> [bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt); the gate is green
+> (103 × 10). A go `runtime.LockOSThread` pin (handle-keyed render must run on the capturing
+> thread) and a cpp RAII trace guard (free on a throwing render) were surfaced by an
+> adversarial review pass. **`call_scoped_ex` + `render_scope` are now wrapped in all ten
+> bindings.** Next: Phase 2 (Node/Java managed tier).
 
 **Bindings:** cpp, rust, zig, lua, go. **~3–5d total** (~0.5–1d each — the scope construct
 already ships in every binding via the [bindings
