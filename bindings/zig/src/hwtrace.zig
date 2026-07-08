@@ -221,6 +221,11 @@ const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
 // Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
 const FnTryBegin = *const fn ([*:0]const u8) callconv(.C) c_int;
 const FnRender = *const fn ([*:0]const u8, ?[*]u8, usize) callconv(.C) c_int;
+// §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
+// render_scope takes the 8-byte asmtest_hwtrace_scope_t handle BY VALUE — native
+// struct-by-value across callconv(.C) (no packing, unlike the Ruby/Java bindings).
+const FnCallScopedEx = *const fn (?*anyopaque, usize, ?*anyopaque, ?*anyopaque, [*c]const c_long, c_int, ?*c_long, *c.asmtest_hwtrace_scope_t) callconv(.C) c_int;
+const FnRenderScope = *const fn (c.asmtest_hwtrace_scope_t, ?[*]u8, usize) callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
 const FnExecAlloc = *const fn (?*const anyopaque, usize, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnExecFree = *const fn (?*anyopaque, usize) callconv(.C) void;
@@ -317,6 +322,8 @@ const Api = struct {
     // Optional (an older lib without them still loads; the scope falls back to begin).
     try_begin: ?FnTryBegin,
     render: ?FnRender,
+    call_scoped_ex: ?FnCallScopedEx,
+    render_scope: ?FnRenderScope,
     shutdown: FnShutdown,
     exec_alloc: FnExecAlloc,
     exec_free: FnExecFree,
@@ -453,6 +460,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .end = lib.lookup(FnMarker, "asmtest_hwtrace_end") orelse return null,
         .try_begin = lib.lookup(FnTryBegin, "asmtest_hwtrace_try_begin"),
         .render = lib.lookup(FnRender, "asmtest_hwtrace_render"),
+        .call_scoped_ex = lib.lookup(FnCallScopedEx, "asmtest_hwtrace_call_scoped_ex"),
+        .render_scope = lib.lookup(FnRenderScope, "asmtest_hwtrace_render_scope"),
         .shutdown = lib.lookup(FnShutdown, "asmtest_hwtrace_shutdown") orelse return null,
         .exec_alloc = lib.lookup(FnExecAlloc, "asmtest_hwtrace_exec_alloc") orelse return null,
         .exec_free = lib.lookup(FnExecFree, "asmtest_hwtrace_exec_free") orelse return null,
@@ -782,6 +791,23 @@ pub const Scope = struct {
     }
 };
 
+/// The outcome of `HwTrace.callScoped`: the traced call's return value (`result`,
+/// null on a self-skip), the executed body's disassembly (`path()`, empty when no
+/// decoder is present), the thread-scope honesty bit (`truncated`), and the raw
+/// `ASMTEST_HW_*` status (`rc`, 0 == OK). Mirrors the Python/Ruby `CallScopedResult`.
+pub const ScopedCall = struct {
+    result: ?c_long = null,
+    path_buf: [4096]u8 = undefined,
+    path_len: usize = 0,
+    truncated: bool = false,
+    rc: c_int = 0,
+
+    /// The rendered assembly listing (empty when the decoder is absent).
+    pub fn path(self: *const ScopedCall) []const u8 {
+        return self.path_buf[0..self.path_len];
+    }
+};
+
 /// A coverage recorder for a registered native region, via the hardware tier.
 /// Wraps the opaque `asmtest_trace_t*` handle and the per-region begin/end
 /// markers.
@@ -863,6 +889,49 @@ pub const HwTrace = struct {
             s.armed = true;
         }
         return s;
+    }
+
+    /// Trace ONE native call the managed-safe way: arm the single-step window, call
+    /// `code(args…)` through the SysV integer ABI, and disarm — all in native code
+    /// (`asmtest_hwtrace_call_scoped_ex`), a tighter window than `scope`. REGISTRY-FREE
+    /// (consumes no MAX_REGIONS slot), so it is safe in a tight loop. Owns and frees its
+    /// own trace handle; takes no `self`. Integer args (0-6). Requires the tier to be up
+    /// (`init`); self-skips (`result` null, negative `rc`) where no backend is available.
+    pub fn callScoped(code: *const NativeCode, args: []const i64) ScopedCall {
+        var out = ScopedCall{};
+        const api = load() orelse {
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        const call = api.call_scoped_ex orelse {
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        const h = api.trace_new(256, 64) orelse { // insns=256, blocks=64
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        defer api.trace_free(h);
+        // `i64` and `c_long` are the same width on x86-64 Linux (mirrors Ptrace.traceCall).
+        const argp: [*c]const c_long = if (args.len != 0) @ptrCast(args.ptr) else null;
+        var scope_h: c.asmtest_hwtrace_scope_t = undefined;
+        var result_out: c_long = 0;
+        const rc = call(code.base, code.len, h, code.base, argp, @intCast(args.len), &result_out, &scope_h);
+        out.rc = rc;
+        if (rc != OK) return out;
+        out.result = result_out;
+        if (api.render_scope) |r| {
+            const need = r(scope_h, null, 0);
+            if (need > 0) {
+                const want: usize = @intCast(need);
+                const cap = out.path_buf.len;
+                const buflen = if (want + 1 <= cap) want + 1 else cap;
+                _ = r(scope_h, @ptrCast(&out.path_buf), buflen);
+                out.path_len = if (want < cap) want else cap - 1;
+            }
+        }
+        out.truncated = api.truncated(h) != 0;
+        return out;
     }
 
     /// True if the basic block at byte offset `off` was entered.

@@ -178,6 +178,12 @@ struct HwApi {
     int (*try_begin)(const char *) = nullptr;
     int (*render)(const char *, char *, size_t) = nullptr;
     int (*arm_tid)() = nullptr;
+    /* §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
+     * render_scope takes the 8-byte asmtest_hwtrace_scope_t handle BY VALUE (native
+     * POD from the #included header — no packing, unlike the Fiddle/JNI bindings). */
+    int (*call_scoped_ex)(void *, size_t, void *, void *, const long *, int, long *,
+                          asmtest_hwtrace_scope_t *) = nullptr;
+    int (*render_scope)(asmtest_hwtrace_scope_t, char *, size_t) = nullptr;
     void (*shutdown)(void) = nullptr;
     int (*exec_alloc)(const void *, size_t, void **, size_t *) = nullptr;
     void (*exec_free)(void *, size_t) = nullptr;
@@ -324,6 +330,8 @@ inline HwApi &api() {
         dlsym_into(h, "asmtest_hwtrace_try_begin", t.try_begin);
         dlsym_into(h, "asmtest_hwtrace_render", t.render);
         dlsym_into(h, "asmtest_hwtrace_arm_tid", t.arm_tid);
+        dlsym_into(h, "asmtest_hwtrace_call_scoped_ex", t.call_scoped_ex);
+        dlsym_into(h, "asmtest_hwtrace_render_scope", t.render_scope);
         ok &= dlsym_into(h, "asmtest_hwtrace_shutdown", t.shutdown);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_alloc", t.exec_alloc);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_free", t.exec_free);
@@ -641,6 +649,18 @@ class ScopedTrace {
     bool truncated_ = false;
 };
 
+/// The outcome of `HwTrace::callScoped`: the traced call's return value, the
+/// executed body's disassembly (`path`, empty when no decoder is present), and
+/// the honesty bits. Mirrors the Python/Ruby `CallScopedResult`.
+struct CallScopedResult {
+    long result = 0;
+    std::string path;
+    bool truncated = false;
+    int rc = 0;
+    /// True when the scope armed and the call ran (rc == ASMTEST_HW_OK).
+    bool ok() const { return rc == ASMTEST_HW_OK; }
+};
+
 /// A coverage recorder for a registered native region, via the hardware tier.
 /// Process-wide lifecycle (available/init/shutdown) is static; per-trace state is
 /// the instance. Move-only; frees its handle in the destructor.
@@ -793,6 +813,49 @@ class HwTrace {
     /// A scoped begin/end marker for `name`. Use it in a tight block:
     /// `{ auto s = tr.region("add"); code.call(...); }`.
     RegionScope region(const std::string &name) { return RegionScope(name); }
+
+    /// Trace ONE native call the managed-safe way: arm the single-step window,
+    /// call `code(args...)` through the SysV integer ABI, and disarm — all in
+    /// native code (`asmtest_hwtrace_call_scoped_ex`), a tighter window than the
+    /// `region` form. REGISTRY-FREE (consumes no MAX_REGIONS slot), so it is safe
+    /// in a tight loop. Owns its own trace handle. Integer args (0-6). Self-skips
+    /// (`.rc` negative, `.result` 0) where no single-step backend is available.
+    /// The tier must already be up (`HwTrace::init(SINGLESTEP)`).
+    template <typename... Args>
+    static CallScopedResult callScoped(const NativeCode &code, Args... args) {
+        detail::HwApi &a = detail::require();
+        if (!a.call_scoped_ex || !a.render_scope)
+            return {0, "", false, ASMTEST_HW_EUNAVAIL};
+        void *handle = a.trace_new(256, 64); // insns=256, blocks=64
+        if (!handle)
+            throw std::runtime_error("asmtest_trace_new returned NULL");
+        // Free the trace on EVERY exit path — including a throwing path.resize below.
+        // This is the Python reference's try/finally (hwtrace.py) in RAII form.
+        struct FreeTrace {
+            detail::HwApi &a;
+            void *h;
+            ~FreeTrace() {
+                if (h)
+                    a.trace_free(h);
+            }
+        } freer{a, handle};
+        long arr[] = {static_cast<long>(args)..., 0L}; // +1 avoids a zero-size array
+        const int n = static_cast<int>(sizeof...(Args));
+        long result = 0;
+        asmtest_hwtrace_scope_t scope{};
+        int rc = a.call_scoped_ex(code.base(), code.length(), handle, code.base(),
+                                  (n ? arr : nullptr), n, &result, &scope);
+        if (rc != ASMTEST_HW_OK)
+            return {0, "", false, rc};
+        std::string path;
+        int need = a.render_scope(scope, nullptr, 0);
+        if (need > 0) {
+            path.resize(static_cast<std::size_t>(need));
+            a.render_scope(scope, &path[0], static_cast<std::size_t>(need) + 1);
+        }
+        bool trunc = a.trace_truncated(handle) != 0;
+        return {result, path, trunc, rc};
+    }
 
     /// True if basic-block offset `off` is in this trace's distinct block set.
     bool covered(uint64_t off) const {

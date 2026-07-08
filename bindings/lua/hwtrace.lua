@@ -49,6 +49,13 @@ uint64_t asmtest_emu_trace_insns_len(void* trace);
 int      asmtest_emu_trace_truncated(void* trace);
 uint64_t asmtest_emu_trace_block_at(void* trace, size_t i);
 uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
+/* §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
+   render_scope takes the 8-byte scope handle BY VALUE — native in LuaJIT FFI. */
+typedef struct { uint32_t idx; uint32_t gen; } asmtest_hwtrace_scope_t;
+int  asmtest_hwtrace_call_scoped_ex(void* base, size_t len, void* trace, void* fn,
+                                    const long* args, int nargs, long* result_out,
+                                    asmtest_hwtrace_scope_t* out);
+int  asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char* buf, size_t buflen);
 /* asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. */
 int  asmtest_ptrace_available(void);
 void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
@@ -440,6 +447,44 @@ function HwTrace:scope(code, fn, opts)
   if emit and #path > 0 then io.write(path) end
   if not ran_ok then error(err) end
   return { name = name, path = path, armed = armed, truncated = self:truncated() }
+end
+
+-- Trace ONE native call the managed-safe way: arm the single-step window, call
+-- code(args...) through the SysV integer ABI, and disarm — all in native code
+-- (asmtest_hwtrace_call_scoped_ex), a tighter window than :scope. REGISTRY-FREE
+-- (consumes no MAX_REGIONS slot), so it is safe in a tight loop. A STATIC method
+-- (owns its own raw trace handle). Integer args (0-6). Returns a table
+-- {result, path, truncated, rc}; result is nil / rc negative on a self-skip.
+-- The tier must already be up (HwTrace.init(SINGLESTEP)).
+function HwTrace.call_scoped(code, ...)
+  local handle = L.asmtest_trace_new(256, 64) -- insns=256, blocks=64
+  if handle == nil then error("asmtest_trace_new failed") end
+  local n = select("#", ...)
+  local args = { ... }
+  local arr = nil
+  if n > 0 then
+    arr = ffi.new("long[?]", n)
+    for i = 1, n do arr[i - 1] = args[i] end
+  end
+  local result = ffi.new("long[1]")
+  local scope = ffi.new("asmtest_hwtrace_scope_t[1]")
+  local rc = tonumber(L.asmtest_hwtrace_call_scoped_ex(
+    code.base, code.len, handle, code.base, arr, n, result, scope))
+  if rc ~= ASMTEST_HW_OK then
+    L.asmtest_trace_free(handle)
+    return { result = nil, path = "", truncated = false, rc = rc }
+  end
+  -- Render the body from the just-captured (thread-local) scope handle, by value.
+  local need = tonumber(L.asmtest_hwtrace_render_scope(scope[0], nil, 0))
+  local path = ""
+  if need > 0 then
+    local buf = ffi.new("char[?]", need + 1)
+    L.asmtest_hwtrace_render_scope(scope[0], buf, need + 1)
+    path = ffi.string(buf, need)
+  end
+  local trunc = L.asmtest_emu_trace_truncated(handle) ~= 0
+  L.asmtest_trace_free(handle)
+  return { result = tonumber(result[0]), path = path, truncated = trunc, rc = rc }
 end
 
 -- True if the basic block at byte-offset `off` (from the region entry) was entered.

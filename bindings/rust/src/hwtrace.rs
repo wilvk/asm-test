@@ -227,6 +227,28 @@ type TraceU64Fn = unsafe extern "C" fn(*mut c_void) -> u64;
 type TraceIntFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 type TraceAtFn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
 
+// §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
+// The 8-byte scope handle is passed to render_scope BY VALUE — native #[repr(C)]
+// struct-by-value (no packing, unlike the Ruby/Java bindings). `gen` is spelled
+// `generation` (a reserved keyword in edition 2024).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct HwScope {
+    idx: u32,
+    generation: u32,
+}
+type CallScopedExFn = unsafe extern "C" fn(
+    *mut c_void,   // base
+    usize,         // len
+    *mut c_void,   // trace (asmtest_trace_t*)
+    *mut c_void,   // fn
+    *const c_long, // args
+    c_int,         // nargs
+    *mut c_long,   // result_out
+    *mut HwScope,  // scope out
+) -> c_int;
+type RenderScopeFn = unsafe extern "C" fn(HwScope, *mut c_char, usize) -> c_int;
+
 // --- Out-of-process / foreign-process tracing (asmtest_ptrace.h) ---------- //
 //
 // The same `libasmtest_hwtrace` already loaded above also ships the out-of-band
@@ -380,6 +402,8 @@ struct HwFns {
     end: Option<MarkerFn>,
     try_begin: Option<TryBeginFn>,
     render: Option<RenderFn>,
+    call_scoped_ex: Option<CallScopedExFn>,
+    render_scope: Option<RenderScopeFn>,
     exec_alloc: Option<ExecAllocFn>,
     exec_free: Option<ExecFreeFn>,
     trace_new: Option<TraceNewFn>,
@@ -508,6 +532,7 @@ fn hw_fns() -> &'static HwFns {
                 init: None, shutdown: None,
                 register_region: None, begin: None, end: None,
                 try_begin: None, render: None,
+                call_scoped_ex: None, render_scope: None,
                 exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
                 blocks_len: None, insns_total: None, insns_len: None,
@@ -571,6 +596,8 @@ fn hw_fns() -> &'static HwFns {
             end: load!("asmtest_hwtrace_end", MarkerFn),
             try_begin: load!("asmtest_hwtrace_try_begin", TryBeginFn),
             render: load!("asmtest_hwtrace_render", RenderFn),
+            call_scoped_ex: load!("asmtest_hwtrace_call_scoped_ex", CallScopedExFn),
+            render_scope: load!("asmtest_hwtrace_render_scope", RenderScopeFn),
             exec_alloc: load!("asmtest_hwtrace_exec_alloc", ExecAllocFn),
             exec_free: load!("asmtest_hwtrace_exec_free", ExecFreeFn),
             trace_new: load!("asmtest_trace_new", TraceNewFn),
@@ -762,6 +789,23 @@ fn scope_name(file: &str, line: u32) -> String {
     } else {
         n
     }
+}
+
+/// The outcome of [`HwTrace::call_scoped`]: the traced call's return value
+/// (`result`, `None` on a self-skip), the executed body's disassembly (`path`,
+/// empty when no decoder is present), the thread-scope honesty bit (`truncated`),
+/// and the raw `ASMTEST_HW_*` status (`rc`, `0` == OK). Mirrors the Python/Ruby
+/// `CallScopedResult`.
+#[derive(Debug, Clone)]
+pub struct CallScopedResult {
+    /// The call's return value (SysV integer ABI), or `None` on a self-skip.
+    pub result: Option<i64>,
+    /// The executed body disassembly (empty when the decoder is absent).
+    pub path: String,
+    /// True if the capture overflowed or the scope closed on another thread.
+    pub truncated: bool,
+    /// The `ASMTEST_HW_*` status (`0` == OK).
+    pub rc: i32,
 }
 
 /// A scoped trace over the register-then-begin/end pair with the shared-core
@@ -1038,6 +1082,58 @@ impl HwTrace {
         let loc = std::panic::Location::caller();
         let name = scope_name(loc.file(), loc.line());
         ScopedTrace::with_name(&name, code, emit)
+    }
+
+    /// Trace ONE native call the managed-safe way: arm the single-step window,
+    /// call `code(args…)` through the SysV integer ABI, and disarm — all in native
+    /// code (`asmtest_hwtrace_call_scoped_ex`), a tighter window than [`scope`] (its
+    /// FFI dispatch of `code.call` is stepped, though region-filtered). REGISTRY-FREE
+    /// — consumes no `MAX_REGIONS` slot — so it is safe in a tight loop. Integer args
+    /// (0-6). Requires the tier to be up ([`init`](HwTrace::init)); self-skips
+    /// (`result` `None`, negative `rc`) where no single-step backend is available.
+    pub fn call_scoped(code: &NativeCode, args: &[i64]) -> CallScopedResult {
+        let f = hw_fns();
+        let (Some(call), Some(new), Some(free)) = (f.call_scoped_ex, f.trace_new, f.trace_free)
+        else {
+            return CallScopedResult { result: None, path: String::new(), truncated: false, rc: ASMTEST_HW_EUNAVAIL };
+        };
+        let handle = unsafe { new(256, 64) }; // insns=256, blocks=64
+        if handle.is_null() {
+            return CallScopedResult { result: None, path: String::new(), truncated: false, rc: ASMTEST_HW_EUNAVAIL };
+        }
+        // `long` on Linux x86-64 is i64; args ride through as `*const c_long`.
+        let argv: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
+        let argp = if argv.is_empty() { std::ptr::null() } else { argv.as_ptr() };
+        let mut result: c_long = 0;
+        let mut scope = HwScope { idx: 0, generation: 0 };
+        let rc = unsafe {
+            call(
+                code.base() as *mut c_void,
+                code.len(),
+                handle,
+                code.base() as *mut c_void,
+                argp,
+                argv.len() as c_int,
+                &mut result,
+                &mut scope,
+            )
+        };
+        if rc != ASMTEST_HW_OK {
+            unsafe { free(handle) };
+            return CallScopedResult { result: None, path: String::new(), truncated: false, rc: rc as i32 };
+        }
+        let mut path = String::new();
+        if let Some(render) = f.render_scope {
+            let need = unsafe { render(scope, std::ptr::null_mut(), 0) };
+            if need > 0 {
+                let mut buf = vec![0u8; need as usize + 1];
+                unsafe { render(scope, buf.as_mut_ptr() as *mut c_char, buf.len()) };
+                path = String::from_utf8_lossy(&buf[..need as usize]).into_owned();
+            }
+        }
+        let truncated = f.truncated.map(|t| unsafe { t(handle) } != 0).unwrap_or(false);
+        unsafe { free(handle) };
+        CallScopedResult { result: Some(result as i64), path, truncated, rc: rc as i32 }
     }
 
     // ---- per-trace ---- //

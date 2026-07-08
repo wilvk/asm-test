@@ -12,8 +12,8 @@
 //!       cargo test --test hwtrace -- --nocapture`
 
 use asmtest::hwtrace::{
-    Backend, CodeImage, Descent, DescentLevel, Fidelity, HwTrace, NativeCode, Policy, Ptrace,
-    Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
+    Backend, CallScopedResult, CodeImage, Descent, DescentLevel, Fidelity, HwTrace, NativeCode,
+    Policy, Ptrace, Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
 };
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
@@ -128,6 +128,48 @@ fn scoped_trace_render_and_autoname() {
 
     HwTrace::shutdown();
     eprintln!("# PASS: scoped-trace wrapper (render-on-close + auto-name)");
+}
+
+// call_scoped — arm + call + disarm entirely in native code (registry-free).
+// Mirrors test_hwtrace.py::test_call_scoped_traces_a_native_call.
+#[test]
+fn call_scoped_traces_a_native_call() {
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+    HwTrace::init(Backend::Singlestep).expect("hwtrace init (single-step)");
+
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let r: CallScopedResult = HwTrace::call_scoped(&code, &[20, 22]); // 42 <= 100 -> jle taken
+    assert_eq!(r.result, Some(42), "call_scoped(20,22).result == 42");
+    assert_eq!(r.rc, 0, "call_scoped rc == OK");
+    assert!(!r.truncated, "call_scoped not truncated");
+    if !r.path.is_empty() {
+        // decoder present
+        assert!(r.path.contains("ret"), "call_scoped listing includes the ret");
+        assert_eq!(
+            r.path.matches('\n').count(),
+            5,
+            "call_scoped: 5 rendered instruction lines (taken path)"
+        );
+    } else {
+        eprintln!("# note: call_scoped path empty (no decoder) — skipping disassembly asserts");
+    }
+    // Registry-free: 40 calls consume no MAX_REGIONS slot (each returns i+1).
+    for i in 0..40i64 {
+        assert_eq!(
+            HwTrace::call_scoped(&code, &[i, 1]).result,
+            Some(i + 1),
+            "call_scoped registry-free iteration {i}"
+        );
+    }
+
+    HwTrace::shutdown();
+    eprintln!("# PASS: call_scoped (registry-free traced native call)");
 }
 
 #[test]

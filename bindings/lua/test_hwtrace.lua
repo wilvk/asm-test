@@ -286,6 +286,28 @@ do
   code:free()
 end
 
+-- call_scoped — arm + call + disarm entirely in native code (registry-free).
+-- Mirrors test_hwtrace.py::test_call_scoped_traces_a_native_call.
+do
+  local code = NativeCode.from_bytes(ROUTINE)
+  local cs = HwTrace.call_scoped(code, 20, 22)  -- 42 <= 100 -> jle taken, dec skipped
+  eq(cs.result, 42, "call_scoped(20,22).result == 42")
+  eq(cs.rc, 0, "call_scoped rc == OK")
+  ok(not cs.truncated, "call_scoped not truncated")
+  if #cs.path > 0 then  -- decoder present
+    ok(cs.path:find("ret", 1, true) ~= nil, "call_scoped path includes the ret")
+    local lines = select(2, cs.path:gsub("\n", "\n"))
+    eq(lines, 5, "call_scoped: 5 rendered instruction lines (taken path)")
+  end
+  -- Registry-free: 40 calls consume no MAX_REGIONS slot (each returns i+1).
+  local reg_free = true
+  for i = 0, 39 do
+    if HwTrace.call_scoped(code, i, 1).result ~= i + 1 then reg_free = false end
+  end
+  ok(reg_free, "call_scoped: 40 registry-free calls each return i+1")
+  code:free()
+end
+
 HwTrace.shutdown()
 
 -- test_auto_resolve_traces_live — on any x86-64 Linux host the cascade is non-empty

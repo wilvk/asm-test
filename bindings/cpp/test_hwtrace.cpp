@@ -138,6 +138,36 @@ int main() {
         code.free();
     }
 
+    // ---- callScoped: arm + call + disarm entirely in native code — registry-free,
+    //      returning the call result and the executed body disassembly in one step.
+    //      Mirrors test_hwtrace.py::test_call_scoped_traces_a_native_call. ----
+    {
+        NativeCode code = NativeCode::from_bytes(ROUTINE);
+        auto cs = HwTrace::callScoped(code, 20, 22); // 42 <= 100 -> jle taken, dec skipped
+        ok(cs.result == 42, "callScoped(20,22): result == 42");
+        ok(cs.rc == ASMTEST_HW_OK, "callScoped rc == OK");
+        ok(!cs.truncated, "callScoped !truncated");
+        if (!cs.path.empty()) { // Capstone present
+            ok(cs.path.find("ret") != std::string::npos,
+               "callScoped rendered listing includes the ret");
+            std::size_t lines = 0;
+            for (char c : cs.path)
+                if (c == '\n')
+                    ++lines;
+            ok(lines == 5, "callScoped: 5 rendered instruction lines (taken path)");
+        } else {
+            std::printf("# note: callScoped path empty (no decoder) — skipping "
+                        "disassembly asserts\n");
+        }
+        // Registry-free: 40 calls consume no MAX_REGIONS slot (each returns i+1).
+        bool registry_free = true;
+        for (int i = 0; i < 40; ++i)
+            if (HwTrace::callScoped(code, i, 1).result != i + 1)
+                registry_free = false;
+        ok(registry_free, "callScoped: 40 registry-free calls each return i+1");
+        code.free();
+    }
+
     HwTrace::shutdown();
 
     // ---- auto-select front-end: pick the most-faithful available backend ----

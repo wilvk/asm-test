@@ -56,6 +56,13 @@ typedef struct {
     int fidelity;
 } asmtest_trace_choice_t;
 
+// asmtest_hwtrace_scope_t (include/asmtest_hwtrace.h): an 8-byte per-scope capture
+// handle. render_scope takes it BY VALUE (cgo marshals it directly — no packing).
+typedef struct {
+    uint32_t idx;
+    uint32_t gen;
+} asmtest_hwtrace_scope_t;
+
 // Entry-point typedefs (one per exported symbol in libasmtest_hwtrace).
 typedef int  (*hw_available_fn)(int);
 typedef void (*hw_skip_reason_fn)(int, char *, size_t);
@@ -81,6 +88,10 @@ typedef unsigned long long (*hw_trace_insns_len_fn)(void *);
 typedef int                (*hw_trace_truncated_fn)(void *);
 typedef unsigned long long (*hw_trace_block_at_fn)(void *, size_t);
 typedef unsigned long long (*hw_trace_insn_at_fn)(void *, size_t);
+// §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
+typedef int (*hw_call_scoped_ex_fn)(void *, size_t, void *, void *, const long *,
+                                    int, long *, asmtest_hwtrace_scope_t *);
+typedef int (*hw_render_scope_fn)(asmtest_hwtrace_scope_t, char *, size_t);
 
 // The jitdump entry struct, redefined here (mirrors asmtest_jitdump_entry_t from
 // include/asmtest_ptrace.h): exactly four uint64 fields, no padding, so it
@@ -184,6 +195,8 @@ static hw_trace_insns_len_fn  p_hw_trace_insns_len;
 static hw_trace_truncated_fn  p_hw_trace_truncated;
 static hw_trace_block_at_fn   p_hw_trace_block_at;
 static hw_trace_insn_at_fn    p_hw_trace_insn_at;
+static hw_call_scoped_ex_fn   p_hw_call_scoped_ex;
+static hw_render_scope_fn     p_hw_render_scope;
 // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
 static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
@@ -285,6 +298,8 @@ static void asmtest_hw_resolve(void) {
     p_hw_trace_truncated   = (hw_trace_truncated_fn)dlsym(h, "asmtest_emu_trace_truncated");
     p_hw_trace_block_at    = (hw_trace_block_at_fn)dlsym(h, "asmtest_emu_trace_block_at");
     p_hw_trace_insn_at     = (hw_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
+    p_hw_call_scoped_ex    = (hw_call_scoped_ex_fn)dlsym(h, "asmtest_hwtrace_call_scoped_ex");
+    p_hw_render_scope      = (hw_render_scope_fn)dlsym(h, "asmtest_hwtrace_render_scope");
     // asmtest_ptrace.h — resolved from the same already-loaded handle.
     p_pt_available         = (pt_available_fn)dlsym(h, "asmtest_ptrace_available");
     p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
@@ -348,6 +363,7 @@ static void asmtest_hw_resolve(void) {
                   p_hw_trace_free && p_hw_trace_covered && p_hw_trace_blocks_len &&
                   p_hw_trace_insns_total && p_hw_trace_insns_len &&
                   p_hw_trace_truncated && p_hw_trace_block_at && p_hw_trace_insn_at &&
+                  p_hw_call_scoped_ex && p_hw_render_scope &&
                   p_pt_available && p_pt_skip_reason && p_pt_trace_call &&
                   p_pt_blockstep_available && p_pt_trace_call_blockstep &&
                   p_pt_trace_attached_blockstep &&
@@ -452,6 +468,16 @@ static unsigned long long asmtest_hw_go_block_at(void *t, size_t i) {
 }
 static unsigned long long asmtest_hw_go_insn_at(void *t, size_t i) {
     return p_hw_trace_insn_at ? p_hw_trace_insn_at(t, i) : 0;
+}
+static int asmtest_hw_go_call_scoped_ex(void *base, size_t len, void *trace, void *fn,
+                                        const long *args, int nargs, long *result_out,
+                                        asmtest_hwtrace_scope_t *out) {
+    return p_hw_call_scoped_ex
+        ? p_hw_call_scoped_ex(base, len, trace, fn, args, nargs, result_out, out)
+        : -3; // ASMTEST_HW_EUNAVAIL (nested block comments would close the cgo preamble)
+}
+static int asmtest_hw_go_render_scope(asmtest_hwtrace_scope_t handle, char *buf, size_t buflen) {
+    return p_hw_render_scope ? p_hw_render_scope(handle, buf, buflen) : -3;
 }
 
 // Trampoline that invokes the generated host-native code through a function
@@ -950,6 +976,66 @@ func (t *HwTrace) Scope(code *HwNativeCode, emit bool, fn func()) ScopedResult {
 		fmt.Print(res.Path)
 	}
 	return res
+}
+
+// CallScopedResult carries a CallScoped outcome: the traced call's return value
+// (Result, meaningful only when OK), whether the scope armed and ran (OK == rc 0),
+// the executed body's disassembly (Path, "" when the decoder is absent), the
+// thread-scope honesty bit (Truncated), and the raw ASMTEST_HW_* status (RC).
+// Mirrors the Python/Ruby CallScopedResult.
+type CallScopedResult struct {
+	Result    int64
+	OK        bool
+	Path      string
+	Truncated bool
+	RC        int
+}
+
+// CallScoped traces ONE native call the managed-safe way: arm the single-step
+// window, call code(args...) through the SysV integer ABI, and disarm — all in
+// native code (asmtest_hwtrace_call_scoped_ex), a tighter window than Scope.
+// REGISTRY-FREE (consumes no MAX_REGIONS slot), so it is safe in a tight loop.
+// Owns and frees its own trace handle. Integer args (0-6). Requires an initialized
+// single-step tier (HwTraceInit); RC is negative on a self-skip. Mirrors python
+// HwTrace.call_scoped.
+//
+// LockOSThread pins the goroutine across BOTH cgo calls below: call_scoped_ex captures
+// the scope into the CAPTURING OS thread's TLS range stack, and the handle-keyed
+// render_scope must read it back on that SAME thread (the header pins the handle to the
+// capturing thread). Without the pin, a goroutine->M migration between the two calls —
+// which the slow single-stepped body makes likely under load — would make render_scope
+// miss the handle and silently drop Path. (Result/Truncated/RC are handle-independent.)
+func CallScoped(code *HwNativeCode, args ...int64) CallScopedResult {
+	h := C.asmtest_hw_go_trace_new(256, 64) // insns=256, blocks=64
+	if h == nil {
+		return CallScopedResult{RC: -3} // ASMTEST_HW_EUNAVAIL
+	}
+	defer C.asmtest_hw_go_trace_free(h)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// A valid pointer even for 0 args (nargs, not the slice length, bounds the read).
+	n := len(args)
+	arr := make([]C.long, n+1)
+	for i, a := range args {
+		arr[i] = C.long(a)
+	}
+	var result C.long
+	var scope C.asmtest_hwtrace_scope_t
+	rc := int(C.asmtest_hw_go_call_scoped_ex(
+		code.base, code.len, h, code.base,
+		&arr[0], C.int(n), &result, &scope))
+	if rc != hwOK {
+		return CallScopedResult{RC: rc}
+	}
+	// Render the body from the just-captured (thread-local) scope handle, by value.
+	path := ""
+	if need := int(C.asmtest_hw_go_render_scope(scope, (*C.char)(nil), 0)); need > 0 {
+		buf := make([]byte, need+1)
+		C.asmtest_hw_go_render_scope(scope, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+		path = string(buf[:need])
+	}
+	truncated := C.asmtest_hw_go_truncated(h) != 0
+	return CallScopedResult{Result: int64(result), OK: true, Path: path, Truncated: truncated, RC: rc}
 }
 
 // Covered reports whether the basic block at byte-offset off (from the region

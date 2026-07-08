@@ -160,6 +160,50 @@ func TestHwtraceScope(t *testing.T) {
 	}
 }
 
+// TestHwtraceCallScoped exercises the registry-free traced native call — arm + call +
+// disarm entirely in native code (asmtest_hwtrace_call_scoped_ex). Mirrors
+// test_hwtrace.py::test_call_scoped_traces_a_native_call.
+func TestHwtraceCallScoped(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+	if err := HwTraceInit(SingleStep); err != nil {
+		t.Skipf("hwtrace init failed: %v", err)
+	}
+	defer HwTraceShutdown()
+
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+
+	res := CallScoped(code, 20, 22) // 42 <= 100 -> jle taken, dec skipped
+	if !res.OK || res.RC != 0 {
+		t.Fatalf("CallScoped rc: got %d (OK=%v), want 0", res.RC, res.OK)
+	}
+	if res.Result != 42 {
+		t.Fatalf("CallScoped(20,22).Result: got %d, want 42", res.Result)
+	}
+	if res.Truncated {
+		t.Fatalf("CallScoped unexpectedly flagged truncated")
+	}
+	if res.Path != "" { // decoder present
+		if !strings.Contains(res.Path, "ret") {
+			t.Fatalf("CallScoped listing missing the ret: %q", res.Path)
+		}
+		if lines := strings.Count(res.Path, "\n"); lines != 5 {
+			t.Fatalf("CallScoped rendered instruction lines: got %d, want 5", lines)
+		}
+	}
+	// Registry-free: 40 calls consume no MAX_REGIONS slot (each returns i+1).
+	for i := int64(0); i < 40; i++ {
+		if got := CallScoped(code, i, 1).Result; got != i+1 {
+			t.Fatalf("CallScoped registry-free iteration %d: got %d, want %d", i, got, i+1)
+		}
+	}
+}
+
 // TestHwtraceScopeFanoutUntraced documents the Go-specific gap: work fanned out via
 // `go func()` inside a scope runs on ANOTHER OS thread and is silently untraced —
 // LockOSThread confines the trace to the arming thread, so the trace holds only the

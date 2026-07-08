@@ -549,6 +549,35 @@ pub fn main() !void {
         try check(!tr.truncated(), "not truncated");
     }
 
+    // ---- callScoped: arm + call + disarm entirely in native code — registry-free ---- //
+    // Mirrors test_hwtrace.py::test_call_scoped_traces_a_native_call.
+    {
+        var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer code.free();
+
+        const res = hwtrace.HwTrace.callScoped(&code, &[_]i64{ 20, 22 }); // 42 <= 100 -> jle taken
+        try check(res.result != null and res.result.? == 42, "callScoped: result == 42");
+        try check(res.rc == 0, "callScoped: rc == OK");
+        try check(!res.truncated, "callScoped: not truncated");
+        if (res.path().len > 0) { // decoder present
+            var nl: usize = 0;
+            for (res.path()) |ch| {
+                if (ch == '\n') nl += 1;
+            }
+            try check(nl == 5, "callScoped: 5 rendered instruction lines (taken path)");
+            try check(std.mem.indexOf(u8, res.path(), "ret") != null,
+                "callScoped: rendered listing includes the ret");
+        }
+        // Registry-free: 40 calls consume no MAX_REGIONS slot (each returns i+1).
+        var i: i64 = 0;
+        var reg_free = true;
+        while (i < 40) : (i += 1) {
+            const r = hwtrace.HwTrace.callScoped(&code, &[_]i64{ i, 1 });
+            if (r.result == null or r.result.? != i + 1) reg_free = false;
+        }
+        try check(reg_free, "callScoped: 40 registry-free calls each return i+1");
+    }
+
     // ---- Out-of-process / foreign-process toolkit (hwtrace.Ptrace) ---- //
     // Self-skip cleanly when the ptrace backend is unavailable, like Python's
     // `_skip_if_no_ptrace`; otherwise run the four foreign-process tests.
