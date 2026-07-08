@@ -160,19 +160,100 @@ no working macOS PT capture exists, for concrete reasons:
   for static binary rewriting — Intel PT is irrelevant on Apple Silicon, CoreSight is
   undocumented there, and Intel Macs are EOL, so there is no incentive to build it.
 
-Verdict: days-to-weeks of from-scratch kernel work behind a SIP-off Reduced-Security
-legacy kext on EOL hardware, with no code to fork — to reproduce what a Linux live USB
-gives in ten minutes. Not worth it.
+Verdict summary: no working macOS PT capture exists because a from-scratch kernel
+driver is required — Windows and Linux ship or have theirs; macOS ships none. But the
+barrier is *smaller* than "write a full PT driver" once scoped to asm-test's use case,
+as the CPUID evidence below shows. The structure such a driver would take, and the
+concrete paths, follow.
 
-Sources: [Trail of Bits — honeybee + Intel PT](https://blog.trailofbits.com/2021/03/19/un-bee-lievable-performance-fast-coverage-guided-fuzzing-with-honeybee-and-intel-processor-trace/) ·
-[Pishi (POC2024)](https://r00tkitsmm.github.io/fuzzing/2024/11/08/Pishi.html) ·
-[DirectHW](https://github.com/flashrom/directhw/blob/master/macosx/DirectHW/DirectHW.c) ·
-[AppleIntelInfo.kext](https://pikeralpha.wordpress.com/2016/09/14/appleintelinfo-kext-v1-7/) ·
-[msr.kext](https://github.com/relan/msr.kext) ·
-[Intel SDM Vol.3 — IA32_RTIT_CTL / ToPA](https://xem.github.io/minix86/manual/intel-x86-and-64-manual-vol3/o_fe12b1e2a880e0ce-1700.html) ·
-[Apple — kexts deprecated / Reduced Security](https://support.apple.com/guide/security/securely-extending-the-kernel-sec8e454101b/web) ·
-[Apple — System Extensions & DriverKit](https://support.apple.com/guide/deployment/system-extensions-in-macos-depa5fb8376f/web) ·
-[Intel PT virtualization (KVM) — LWN](https://lwn.net/Articles/737839/)
+---
+
+## Deep dive: the structure a macOS Intel-PT capture would take
+
+PT is two halves: **capture** (program the CPU, collect the raw packet stream) and
+**decode** (replay packets into control flow). asm-test already has the decode half,
+OS-independently — [src/pt_backend.c](../../../src/pt_backend.c) over **libipt**. Only
+the **capture** half is macOS-missing. So the question is narrow: what would a macOS
+capture driver look like, and how much of it is actually hard?
+
+### The three reference structures
+
+| Project | OS | Approach | What it teaches |
+|---|---|---|---|
+| **simple-pt** (Andi Kleen) | Linux | from-scratch minimal driver | the anatomy — a kernel module owns per-CPU trace buffers (`pt_buffer_order`, up to 511 ToPA entries), programs the RTIT MSRs, fields the buffer-full PMI, exposes config via module params; user tools `sptcmd`/`sptdump` collect, `sptdecode` reconstructs via libipt |
+| **WindowsIntelPT** (Allievi) | Windows | from-scratch driver | the closest analog to a macOS kext — a hand-rolled `WindowsPtDriver` that programs the same MSRs + ToPA + PMI on an OS with no `perf` infrastructure, per-process/per-core |
+| **winipt** (Ionescu) | Windows | *wrap the OS driver* | the easy path macOS **cannot** take: since Win10 1809 Windows **ships** `ipt.sys`, so winipt is just a user-mode IOCTL wrapper (`libipt`/`libiptnt`) + `ipttool`. macOS ships no PT driver → nothing to wrap |
+| **DirectHW.kext** (coreboot/flashrom) | macOS | privileged primitive | the only macOS building block — an IOKit user client giving userspace `rdmsr`/`wrmsr` + physical-memory mapping. Supplies the MSR/physmem access, none of the PT orchestration |
+
+The pattern is clear: **Windows is easy** because the OS ships the driver (`winipt`) or
+someone wrote one (`WindowsIntelPT`); **Linux is easy** because `perf`'s `intel_pt` PMU
+*is* the driver (simple-pt is the minimal alternative). **macOS has neither** — you must
+supply the driver, and DirectHW is the only primitive to build it on.
+
+### What *this box's* silicon makes optional (CPUID.14H, measured on the i7-8559U)
+
+```
+Intel PT present ........ yes  (CPUID.07H.EBX[25])
+Single-Range Output ..... yes  (CPUID.14H.0:ECX[2])    -> no ToPA table, no PMI
+ToPA / ToPA multi ....... yes  (ECX[0] / ECX[1])
+IP Filtering / TraceStop  yes  (EBX[2]); num ranges = 2 -> trace ONLY the routine
+CR3 filtering ........... yes  (EBX[0])
+```
+
+Two of these collapse the hardest parts of a general PT driver:
+
+- **Single-Range Output** (`IA32_RTIT_CTL.ToPA = 0`) sends packets to one **contiguous
+  physical buffer** (`IA32_RTIT_OUTPUT_BASE` + `_MASK_PTRS`) — **no ToPA table and no
+  buffer-full PMI**. For a short routine a few-MB buffer never wraps, so you poll
+  `IA32_RTIT_STATUS` / the output offset instead of servicing an interrupt. That removes
+  the PMI — the piece most likely to collide with XNU's `kpc`/`kperf` PMC subsystem
+  (which owns the perfmon LVT).
+- **IP filtering** (2 ranges) lets you set `IA32_RTIT_ADDR0_A/B` to bracket exactly the
+  routine's `[entry, end)` so packets are generated **only in-range**. That sidesteps the
+  context-switch problem entirely: even if the thread is descheduled mid-window, nothing
+  outside the routine is traced — no need to hook the scheduler to save/restore RTIT state.
+
+What genuinely remains OS-level: allocate the contiguous physical buffer (DirectHW can
+map it), arm/disarm the MSRs around the call, keep the thread on one CPU for the window,
+and read the buffer out. That is a **capture window**, not a full tracing subsystem.
+
+## Ways forward
+
+Ordered by effort. All require **SIP disabled** (and, to load a kext, **Reduced
+Security**), and target Intel Macs only (Apple Silicon has no PT).
+
+**Reuse that already exists.** The PT **decode** path
+([src/pt_backend.c](../../../src/pt_backend.c) replaying packets into an
+`asmtest_trace_t` via libipt) is OS-independent and in-tree. Anything that produces a raw
+PT buffer on macOS feeds it (or `ptxed` offline). You build the capture half only.
+
+**Path A — userspace feasibility spike (DirectHW, no custom kext).** *~Days.* Load
+DirectHW.kext; from userspace map a contiguous physical buffer and `wrmsr` the RTIT MSRs:
+`IA32_RTIT_OUTPUT_BASE` = buffer, `ToPA = 0` (single-range), `IA32_RTIT_ADDR0_A/B` = the
+routine's `[entry, end)`, then `IA32_RTIT_CTL.TraceEn = 1`; pin the caller thread, invoke
+the routine, clear `TraceEn`, read the buffer, decode with the in-tree libipt path. Skips
+ToPA, PMI, and context-switch handling (single-range + IP-filter, both confirmed on this
+CPU). Proves the silicon and decode end-to-end — a real answer to "does PT work here,"
+not a product. Risk to validate: DirectHW's per-core `wrmsr` targeting and coexistence
+with XNU's PMC use — test on an otherwise-idle core.
+
+**Path B — a real XNU capture kext (simple-pt / WindowsIntelPT-shaped).** *~Weeks.* An
+IOKit driver with a user client exposing `begin(entry, end)` / `end(&trace)` that mirrors
+[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), so the existing PT
+backend's `available()`/`begin`/`end` seam lights up on macOS exactly as on Linux.
+Per-window: `thread_bind` to a CPU + an interrupt fence, single-range output (or
+ToPA+PMI for unbounded capture — then you must claim the PMC LVT the way `kpc` does), arm
+the RTIT MSRs, run, disarm, hand the buffer to the in-tree decoder. This is "write the
+driver macOS doesn't ship," scoped down by the CPUID simplifications above.
+
+**Path C — don't build it (recommended).** This box **already** traces natively via the
+**single-step** backend — exact instruction stream, live, 87/0. PT's only edge over
+single-step is capture *overhead* (near-zero vs ~2.3 µs/insn), irrelevant for the short,
+deterministic routines asm-test targets. Under the framework's own fidelity model a
+native→native swap (single-step ↔ PT) is transparent *as data*, so single-step is the
+correct macOS-Intel answer and PT capture is a research curiosity here. Spend the effort
+on the Linux path (`perf -e intel_pt//`), where the driver already exists, and keep
+single-step as the shipped macOS-Intel tier.
 
 ---
 
@@ -191,3 +272,25 @@ two hardware backends (DynamoRIO runs, PT/AMD self-skip); **impossible** = AMD L
 (wrong vendor) and Intel PT live (the VM hides the PMU and macOS has no PT interface;
 a native macOS PT kext is real-but-uneconomical research). To see this box's PT
 silicon actually trace, boot bare-metal Linux — not a VM.
+
+## Sources
+
+**PT capture implementations (structure):**
+[simple-pt (Andi Kleen) — minimal Linux PT driver + libipt decode](https://github.com/andikleen/simple-pt) ·
+[WindowsIntelPT (Allievi) — from-scratch Windows PT driver](https://github.com/intelpt/WindowsIntelPT) ·
+[winipt (Ionescu) — user-mode wrapper over Windows' inbox ipt.sys](https://github.com/ionescu007/winipt) ·
+[DirectHW — macOS userspace rdmsr/wrmsr + physmem kext](https://github.com/flashrom/directhw/blob/master/macosx/DirectHW/DirectHW.c) ·
+[AppleIntelInfo.kext — reading IA32 MSRs on macOS](https://pikeralpha.wordpress.com/2016/09/14/appleintelinfo-kext-v1-7/) ·
+[msr.kext — OS X MSR-reading kext](https://github.com/relan/msr.kext)
+
+**Intel PT architecture:**
+[Intel SDM Vol.3 — IA32_RTIT_CTL / ToPA / single-range output](https://xem.github.io/minix86/manual/intel-x86-and-64-manual-vol3/o_fe12b1e2a880e0ce-1700.html) ·
+[Intel PT virtualization (KVM) — LWN](https://lwn.net/Articles/737839/)
+
+**Why macOS routes around PT:**
+[Pishi (POC2024) — macOS KEXT coverage fuzzing skips hardware tracing](https://r00tkitsmm.github.io/fuzzing/2024/11/08/Pishi.html) ·
+[Trail of Bits — honeybee + Intel PT (Linux ecosystem)](https://blog.trailofbits.com/2021/03/19/un-bee-lievable-performance-fast-coverage-guided-fuzzing-with-honeybee-and-intel-processor-trace/)
+
+**macOS kext / signing constraints:**
+[Apple — securely extending the kernel (kexts deprecated / Reduced Security)](https://support.apple.com/guide/security/securely-extending-the-kernel-sec8e454101b/web) ·
+[Apple — System Extensions & DriverKit (userspace replacement)](https://support.apple.com/guide/deployment/system-extensions-in-macos-depa5fb8376f/web)
