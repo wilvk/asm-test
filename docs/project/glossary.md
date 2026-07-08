@@ -164,6 +164,13 @@ conformance corpus
   language {term}`binding` must reproduce, keeping all ten bindings honest and in
   lock-step.
 
+CO-RE
+  *Compile Once, Run Everywhere* — the {term}`BPF`/{term}`eBPF` technique that lets one
+  compiled BPF object run across kernels with different internal struct layouts, by relocating
+  field offsets from {term}`BTF` type information at load time. asm-test's eBPF programs (the
+  JIT-emission detector and the AMD branch snapshot) are built CO-RE so a single skeleton works
+  on any recent kernel.
+
 CoreCLR
   The [runtime engine of .NET](https://github.com/dotnet/runtime) — a {term}`managed runtime` with a {term}`JIT`
   compiler. One of the three runtimes asm-test's foreign-JIT tracer is validated
@@ -189,6 +196,12 @@ CPU register
   A tiny, extremely fast storage slot inside the {term}`CPU` that holds a value
   being worked on. Functions pass arguments and return values through registers,
   and asm-test can read them after a call.
+
+CTI
+  *Control-Transfer Instruction* — any instruction that changes the {term}`program counter`
+  non-sequentially: a jump, a conditional branch, a call, or a return. asm-test's trace
+  backends end a {term}`basic block` after every CTI, which is the boundary the {term}`LBR`,
+  {term}`Intel PT`, {term}`DynamoRIO`, and {term}`Unicorn` partitions all agree on.
 
 cycles per call
   A speed measurement: the number of {term}`CPU` clock cycles consumed by a
@@ -332,6 +345,13 @@ HotSpot
   is an {term}`nmethod`. One of the {term}`managed runtime`s asm-test's
   foreign-JIT tracer is validated against.
 
+IBS
+  *Instruction-Based Sampling* — an AMD {term}`PMU` facility that tags one micro-op per
+  sampling period and reports rich per-op detail (including, for a retired taken branch, a
+  precise source→target edge). It is *statistical*, not an ordered complete path, so asm-test
+  treats it as coverage confirmation rather than a trace — and it is the only branch source on
+  Zen 2, which has no {term}`LBR`.
+
 in-line assembly
   Assembly code supplied directly as a string and assembled on the fly (via the
   {term}`Keystone` library) rather than from a separate `.s` file.
@@ -451,6 +471,12 @@ nmethod
   A single method compiled by {term}`HotSpot`, as it lives in the JVM's code cache
   (its own entry barrier and safepoint poll wrapped around the body). What asm-test
   recovers when it traces a JITed Java method.
+
+NMI
+  *[Non-Maskable Interrupt](https://en.wikipedia.org/wiki/Non-maskable_interrupt).* An
+  interrupt the CPU cannot defer with the normal interrupt-disable flag. AMD's {term}`IBS`
+  and the {term}`PMI` counter-overflow path deliver through NMIs, which is how they can sample
+  code that is running with ordinary interrupts masked.
 
 NZCV
   The four main condition {term}`flag`s on {term}`AArch64`: **N**egative,
@@ -682,6 +708,11 @@ System V AMD64 ABI
   the return value comes back in `rax`, and so on. asm-test implements this call
   model fully. The {term}`AAPCS64` is the {term}`AArch64` equivalent.
 
+SysV
+  Shorthand for the {term}`System V AMD64 ABI` — used e.g. in "0–6 SysV integer arguments,"
+  the register-passed argument budget (`rdi, rsi, rdx, rcx, r8, r9`) asm-test's call-owning
+  trace entries accept.
+
 TAP
   *[Test Anything Protocol](https://testanything.org/).* A simple, line-oriented text format for reporting
   test results (`ok 1`, `not ok 2`, …). asm-test prints colored TAP output by
@@ -729,6 +760,11 @@ TLS
   flag and the per-thread range stack are thread-local) — a cross-thread close
   flags the trace `truncated`. Not the network TLS (Transport Layer Security).
 
+TOS
+  *Top of stack* — for a {term}`LBR` branch stack, the newest recorded branch. On AMD
+  {term}`LBR` (LbrExtV2) internal register renaming pins entry 0 to the TOS, so the 16 entries
+  read out newest-first — the order asm-test's decoder consumes.
+
 trampoline
   See {term}`capture trampoline`.
 
@@ -746,6 +782,12 @@ V8
   Google's [JavaScript engine](https://v8.dev/) (used by Node.js and Chrome). Its optimizing
   {term}`JIT` is **TurboFan**. One of the {term}`managed runtime`s asm-test's
   foreign-JIT tracer is validated against.
+
+VEH
+  *Vectored Exception Handler* — the Windows mechanism (`AddVectoredExceptionHandler`)
+  asm-test's Win64 {term}`single-step` front-end uses to catch the `EXCEPTION_SINGLE_STEP`
+  the {term}`Trap Flag` raises after each instruction. It is the Windows analogue of the POSIX
+  {term}`SIGTRAP` path used on Linux and macOS.
 
 W2
   asm-test's shorthand for the **out-of-process** {term}`single-step` tracer — a
