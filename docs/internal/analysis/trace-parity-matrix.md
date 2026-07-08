@@ -418,6 +418,26 @@ integrator decision (consistent with the
 [AMD LBR plan, Phase 4](../plans/amd-tracing-plan.md) overflow→DynamoRIO routing
 rule) — now expressed as a policy flag rather than left to each caller to hand-roll.
 
+**The dynamic-fallback *loop* now ships as one call.** `asmtest_trace_resolve` /
+`asmtest_trace_auto` only *pick* a tier; the "arm → detect `truncated` → re-resolve
+`CEILING_FREE` → re-run under the new tier" loop was, until now, a documented idiom no
+caller implemented. `asmtest_trace_call_auto(code, len, args, nargs, policy, result,
+trace, used)`
+([asmtest_trace_auto.h](../../../include/asmtest_trace_auto.h),
+[src/trace_auto.c](../../../src/trace_auto.c)) closes it: it **owns the invocation** and
+walks a call-owning ladder — best HWTRACE backend (AMD LBR `#3`-snapshot / Intel PT /
+in-proc single-step), then **BTF block-step** (`asmtest_ptrace_trace_call_blockstep`,
+rootless, no ceiling — the key rung the static `CASCADE[]` lacks, since block-step is a
+ptrace entry not a resolve backend), then per-instruction single-step — stopping at the
+first tier that returns a non-`truncated` trace. DynamoRIO and the emulator are excluded
+(no call-owning entry / native→virtual crossing). On AMD Zen 5 this is the "exact-and-fast
+where the LBR window fits, complete-everywhere-else" default the AMD-LBR ceiling makes
+necessary: measured live, the LBR fast tier truncates a loop and `call_auto` escalates to
+block-step, returning a complete trace with `used.backend != AMD_LBR`. Because it re-runs
+the routine once per attempted tier (fast in-process, then fork-isolated), it requires
+**re-runnable / deterministic code** — the same contract `trace_call` / `call_scoped`
+already carry. See [auto-escalating-trace-plan.md](../plans/auto-escalating-trace-plan.md).
+
 ---
 
 ## Packaging & target-architecture coverage

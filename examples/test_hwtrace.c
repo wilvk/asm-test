@@ -680,6 +680,87 @@ static void test_amd_reach_period(void) {
     munmap(q, sizeof AMD_LOOP);
 }
 
+/* Auto-escalating cross-tier CALL (asmtest_trace_call_auto): run a routine under the
+ * fastest exact tier and escalate to a ceiling-free tier when the trace comes back
+ * truncated. Host-independent plumbing (any x86-64 Linux: the in-proc single-step floor
+ * completes both cases with no PMU); on a Zen 5 host the fast LBR tier truncates the loop
+ * and `used` reports the escalated (block-step) backend — printed as the live proof that
+ * escalation fired. */
+static void test_call_auto(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    /* (a) small routine — some tier captures it complete, correct result. */
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p != MAP_FAILED) {
+        memcpy(p, ROUTINE, sizeof ROUTINE);
+        mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+        asmtest_trace_t *t = asmtest_trace_new(512, 64);
+        long args[2] = {20, 22}, result = 0;
+        asmtest_trace_choice_t used;
+        memset(&used, 0, sizeof used);
+        int rc = asmtest_trace_call_auto(p, sizeof ROUTINE, args, 2,
+                                         ASMTEST_TRACE_BEST, &result, t, &used);
+        printf("# call_auto basic: rc=%d result=%ld used.backend=%d insns=%llu "
+               "truncated=%d\n",
+               rc, result, used.backend, asmtest_emu_trace_insns_total(t),
+               asmtest_emu_trace_truncated(t));
+        CHECK(rc == ASMTEST_HW_OK || rc == ASMTEST_HW_EUNAVAIL,
+              "call_auto: a small routine runs via some tier (or none "
+              "available)");
+        if (rc == ASMTEST_HW_OK) {
+            CHECK(result == 42, "call_auto: correct result (20+22)");
+            CHECK(!asmtest_emu_trace_truncated(t),
+                  "call_auto: small routine traces COMPLETE (no escalation "
+                  "needed)");
+            CHECK(asmtest_trace_covered(t, 0),
+                  "call_auto: entry block covered");
+        }
+        asmtest_trace_free(t);
+        munmap(p, sizeof ROUTINE);
+    }
+
+    /* (b) a loop past the 16-taken-branch LBR window — call_auto MUST still return a
+     * complete trace (escalating to the ceiling-free block-step / single-step tier). */
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q != MAP_FAILED) {
+        memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+        mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+        asmtest_trace_t *lt = asmtest_trace_new(512, 64);
+        long largs[2] = {1, 25},
+             lr = 0; /* 25 taken back-edges > the 16-deep window */
+        asmtest_trace_choice_t lused;
+        memset(&lused, 0, sizeof lused);
+        int rc = asmtest_trace_call_auto(q, sizeof AMD_LOOP, largs, 2,
+                                         ASMTEST_TRACE_BEST, &lr, lt, &lused);
+        printf(
+            "# call_auto escalate: rc=%d result=%ld used.backend=%d insns=%llu "
+            "truncated=%d (%s)\n",
+            rc, lr, lused.backend, asmtest_emu_trace_insns_total(lt),
+            asmtest_emu_trace_truncated(lt),
+            lused.backend == ASMTEST_HWTRACE_AMD_LBR
+                ? "LBR window sufficed"
+                : "escalated off the LBR window");
+        CHECK(rc == ASMTEST_HW_OK || rc == ASMTEST_HW_EUNAVAIL,
+              "call_auto: a loop runs via some tier (or none available)");
+        if (rc == ASMTEST_HW_OK) {
+            CHECK(lr == 25, "call_auto: loop result correct (25 trips)");
+            CHECK(!asmtest_emu_trace_truncated(lt),
+                  "call_auto: escalates past the 16-branch window to a "
+                  "COMPLETE trace");
+            CHECK(asmtest_trace_covered(lt, 0x7),
+                  "call_auto: loop-body block (0x7) covered");
+        }
+        asmtest_trace_free(lt);
+        munmap(q, sizeof AMD_LOOP);
+    }
+#else
+    printf("# SKIP call_auto: not Linux x86-64\n");
+#endif
+}
+
 /* AMD Tier-B STITCHING (host-validated, no hardware — like test_amd_reconstruction):
  * a routine that loops past the 16-deep window. With sample_period=1, perf emits one
  * branch-stack sample per taken branch, consecutive windows overlapping by 15 edges.
@@ -5160,6 +5241,7 @@ int main(void) {
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
     test_amd_live();
     test_amd_reach_period();
+    test_call_auto();
 
     /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */
     test_concurrent_amd();

@@ -1,8 +1,9 @@
 # bindings-parity-allow.txt — intentional exemptions for check-bindings-parity.
 #
 # The parity gate (scripts/check-bindings-parity.sh) requires every language
-# binding to wrap every symbol declared in the native-trace tier headers
-# (asmtest_hwtrace.h, asmtest_drtrace.h) — the surface that is uniformly mirrored
+# binding to wrap every symbol declared in the native-trace tier headers (the
+# TIER_HEADERS default: asmtest_hwtrace.h, asmtest_drtrace.h, asmtest_trace_auto.h,
+# asmtest_ptrace.h, asmtest_codeimage.h) — the surface that is uniformly mirrored
 # across all ten bindings and the one most often extended "across all bindings"
 # in a single change. List here the (binding, symbol) pairs that are deliberately
 # NOT wrapped.
@@ -77,6 +78,12 @@ ALL asmtest_ptrace_trace_window_call        # §D3 fork-internal whole-window ca
 ALL asmtest_hwtrace_sample_window_amd       # §D3 statistical AMD-LBR WindowHot survey (hot-method histogram, NOT an exact trace): dotnet wraps it (WindowHot); the other nine gain it when they grow an AMD survey lane
 ALL asmtest_hwtrace_sample_begin_amd        # begin/end split of the AMD-LBR survey for the `using (new AsmTrace(HwBackend.AmdLbr)) { block }` inline shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end)
 ALL asmtest_hwtrace_sample_end_amd          #   (paired with sample_begin_amd above; dotnet-only until a binding grows the inline AMD-survey shape)
+
+# Auto-escalating CALL-owning cross-tier trace (docs/internal/plans/auto-escalating-trace-plan.md).
+# C-level entry in the call_scoped family (owns the invocation + args), NOT the pure-query
+# trace_auto/trace_resolve family that every binding wraps; bindings gain it when they grow a
+# call-auto wrapper over their existing call_scoped shim.
+ALL asmtest_trace_call_auto
 
 # DR-tier self-skip diagnostic (817cc72), the counterpart of asmtest_hwtrace_skip_reason.
 # Every binding gates the DynamoRIO tier on asmtest_dr_available()'s bool; none surfaces

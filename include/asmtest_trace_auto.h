@@ -121,6 +121,35 @@ size_t asmtest_trace_resolve(unsigned policy, asmtest_trace_choice_t *out,
  * differs, re-run. */
 int asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t *out);
 
+/* Auto-escalating CALL-OWNING trace — the dynamic-fallback idiom above, IMPLEMENTED.
+ * Runs code(args…) under the fastest exact tier and, when the trace comes back
+ * `truncated`, escalates to a ceiling-free tier and re-runs, until the trace is complete
+ * or the tiers are exhausted. This owns the invocation, so the routine must be
+ * RE-RUNNABLE (deterministic / idempotent): it is invoked once per attempted tier — the
+ * fast HWTRACE step in THIS process, then the fork-isolated ptrace escalations.
+ *
+ * `code`/`len` is the registered routine; `args`/`nargs` are 0..6 integer args (SysV; FP
+ * or >6 args -> ASMTEST_HW_EINVAL). `policy` is the STARTING policy (ASMTEST_TRACE_BEST;
+ * ASMTEST_TRACE_CEILING_FREE skips the ceiling-bounded fast backend up front). On return
+ * *result (may be NULL) holds the routine's return value; `trace` (caller-allocated with
+ * asmtest_trace_new) is filled by the tier that produced the final trace, and
+ * `trace->truncated` reports completeness; *used (may be NULL) reports the {tier, backend}
+ * that produced it (so a caller can see whether escalation fired — e.g. used.backend !=
+ * ASMTEST_HWTRACE_AMD_LBR).
+ *
+ * Ladder: best HWTRACE backend (AMD LBR #3-snapshot / Intel PT / in-proc single-step) ->
+ * BTF block-step (asmtest_ptrace_trace_call_blockstep — rootless, no ceiling) ->
+ * per-instruction single-step (asmtest_ptrace_trace_call). DynamoRIO and the emulator are
+ * excluded (no call-owning entry / native->virtual fidelity crossing).
+ *
+ * Returns ASMTEST_HW_OK when some tier ran (read trace->truncated for completeness),
+ * ASMTEST_HW_EUNAVAIL if no call-owning tier is available, ASMTEST_HW_EINVAL on bad args.
+ * See docs/internal/plans/auto-escalating-trace-plan.md. */
+int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
+                            int nargs, unsigned policy, long *result,
+                            asmtest_trace_t *trace,
+                            asmtest_trace_choice_t *used);
+
 #ifdef __cplusplus
 }
 #endif

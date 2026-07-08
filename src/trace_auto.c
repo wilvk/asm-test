@@ -19,7 +19,11 @@
  */
 #include "asmtest_trace_auto.h"
 
+#include "asmtest_ptrace.h" /* block-step / per-insn call-owning escalation tiers */
+
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <dlfcn.h>
@@ -103,4 +107,105 @@ int asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t *out) {
     if (asmtest_trace_resolve(policy, out, 1) == 0)
         return ASMTEST_HW_EUNAVAIL;
     return ASMTEST_HW_OK;
+}
+
+/* Call code(args…) as a SysV routine with 0..6 integer args. One 6-arg dispatch covers
+ * every arity: a callee taking fewer harmlessly ignores the extra register args — the
+ * same one-call trick the hwtrace/ptrace call-owning entries use. */
+static long call_auto_invoke(const void *code, const long *args, int nargs) {
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs && i < 6; i++)
+        a[i] = args[i];
+    long (*fn)(long, long, long, long, long, long) =
+        (long (*)(long, long, long, long, long, long))(uintptr_t)code;
+    return fn(a[0], a[1], a[2], a[3], a[4], a[5]);
+}
+
+/* Clear a caller-owned trace between escalation attempts (keeps the insns/blocks
+ * buffers; zeroes the counts + the truncated bit so the winning tier stands alone). */
+static void call_auto_reset(asmtest_trace_t *t) {
+    t->insns_len = 0;
+    t->insns_total = 0;
+    t->blocks_len = 0;
+    t->blocks_total = 0;
+    t->truncated = false;
+}
+
+int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
+                            int nargs, unsigned policy, long *result,
+                            asmtest_trace_t *trace,
+                            asmtest_trace_choice_t *used) {
+    if (code == NULL || trace == NULL || len == 0 || nargs < 0 || nargs > 6 ||
+        (nargs > 0 && args == NULL))
+        return ASMTEST_HW_EINVAL;
+    if (used != NULL) {
+        used->tier = ASMTEST_TIER_HWTRACE;
+        used->backend = ASMTEST_HWTRACE_SINGLESTEP;
+        used->fidelity = ASMTEST_FIDELITY_NATIVE;
+    }
+    int ran = 0; /* did any tier produce a trace? */
+
+    /* (1) Fast exact — the best HWTRACE backend, driven through the marker path with
+     * THIS wrapper owning the in-process call. ASMTEST_TRACE_CEILING_FREE in `policy`
+     * skips the ceiling-bounded backend (AMD LBR) up front. */
+    asmtest_hwtrace_policy_t hp = (policy & ASMTEST_TRACE_CEILING_FREE)
+                                      ? ASMTEST_HWTRACE_CEILING_FREE
+                                      : ASMTEST_HWTRACE_BEST;
+    int hb = asmtest_hwtrace_auto(hp);
+    if (hb >= 0) {
+        asmtest_hwtrace_options_t opts;
+        memset(&opts, 0, sizeof opts);
+        opts.backend = (asmtest_trace_backend_t)hb;
+        if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
+            if (asmtest_hwtrace_register_region("trace_call_auto",
+                                                (void *)(uintptr_t)code, len,
+                                                trace) == ASMTEST_HW_OK) {
+                asmtest_hwtrace_begin("trace_call_auto");
+                long r = call_auto_invoke(code, args, nargs);
+                asmtest_hwtrace_end("trace_call_auto");
+                if (result != NULL)
+                    *result = r;
+                ran = 1;
+                if (used != NULL)
+                    used->backend = (asmtest_trace_backend_t)hb;
+            }
+            asmtest_hwtrace_shutdown();
+        }
+    }
+    if (ran && !trace->truncated)
+        return ASMTEST_HW_OK; /* the fast tier captured the whole path */
+
+    /* (2) Complete rootless — BTF block-step (no window ceiling), fork-isolated re-run.
+     * This is the key middle rung the static CASCADE[] lacks (block-step is a ptrace
+     * entry, not a resolve backend). */
+    if (asmtest_ptrace_blockstep_available()) {
+        call_auto_reset(trace);
+        if (asmtest_ptrace_trace_call_blockstep(code, len, args, nargs, result,
+                                                trace) == ASMTEST_PTRACE_OK) {
+            ran = 1;
+            if (used != NULL)
+                used->backend =
+                    ASMTEST_HWTRACE_SINGLESTEP; /* single-step fidelity */
+            if (!trace->truncated)
+                return ASMTEST_HW_OK;
+        } else {
+            trace->truncated =
+                true; /* a failed tier must not read empty-yet-complete */
+        }
+    }
+
+    /* (3) Complete floor — per-instruction single-step, fork-isolated re-run. */
+    if (asmtest_ptrace_available()) {
+        call_auto_reset(trace);
+        if (asmtest_ptrace_trace_call(code, len, args, nargs, result, trace) ==
+            ASMTEST_PTRACE_OK) {
+            ran = 1;
+            if (used != NULL)
+                used->backend = ASMTEST_HWTRACE_SINGLESTEP;
+        } else {
+            trace->truncated = true;
+        }
+    }
+
+    return ran ? ASMTEST_HW_OK : ASMTEST_HW_EUNAVAIL;
 }
