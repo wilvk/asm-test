@@ -239,7 +239,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-codeimage docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump \
@@ -330,6 +330,18 @@ docker-hwtrace-amd: docker-bindings-base
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
 	  --cap-add=PERFMON asmtest-hwtrace make hwtrace-test
+
+# MSR-direct AMD LBR lane (src/msr_lbr.c): the same hwtrace image, run --privileged so the
+# per-CPU MSR device nodes (/dev/cpu/N/msr — a directory --device cannot expose, and the
+# thread may be scheduled on any core) are readable and asmtest_amd_msr_trace can read the
+# LbrExtV2 FROM/TO MSRs directly for a zero-PMU-interrupt Tier-A capture. Needs the host
+# `msr` kernel module loaded and an AMD amd_lbr_v2 host; the MSR test self-skips everywhere
+# else (all other lanes lack /dev/cpu access), so this is a self-hosted AMD lane.
+docker-hwtrace-msr: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  --privileged asmtest-hwtrace make hwtrace-test
 
 # Optional eBPF code-emission detector lane. Builds an image WITH the eBPF toolchain
 # (clang + libbpf-dev + bpftool — which the plain hwtrace image omits), compiles the CO-RE

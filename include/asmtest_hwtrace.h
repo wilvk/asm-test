@@ -507,6 +507,27 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
                                asmtest_trace_t *trace);
 
 /* ------------------------------------------------------------------ */
+/* AMD MSR-direct LBR snapshot (src/msr_lbr.c)                          */
+/* ------------------------------------------------------------------ */
+/* Zero-PMU-interrupt Tier-A capture: read the AMD LbrExtV2 branch-record MSRs directly
+ * (/dev/cpu/N/msr) around [base, base+len) — enable the LBR, run run_fn(arg), freeze, read
+ * the frozen 16-entry FROM/TO stack — decoded by the SAME asmtest_amd_decode. Its niche vs
+ * the sample_period=1 flood: zero interrupts, no BPF toolchain (only CAP_SYS_ADMIN + the
+ * `msr` module). The userspace freeze is a syscall whose glue eats stack slots, so this is
+ * complete only for SMALL routines (amd_decode flags trace->truncated on window overflow —
+ * honest, never partial-as-complete); the deterministic BPF boundary snapshot
+ * (asmtest_amd_snapshot_trace) is the clean-boundary alternative where CAP_BPF is available.
+ * See docs/internal/plans/amd-msr-direct-lbr-plan.md. Returns ASMTEST_HW_OK, EUNAVAIL when
+ * the substrate/privilege is absent (see asmtest_amd_msr_available), ENOSYS off x86-64 Linux. */
+int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
+                          void *arg, asmtest_trace_t *trace);
+
+/* Whether the MSR-direct LBR substrate is present: AMD amd_lbr_v2 AND /dev/cpu/N/msr
+ * openable read-write (CAP_SYS_ADMIN + the `msr` module). Pure probe, no MSR write; returns
+ * 1 (present) or 0 (self-skip). */
+int asmtest_amd_msr_available(void);
+
+/* ------------------------------------------------------------------ */
 /* §3.1(c) — whole-window noise attribution: address→name reverse       */
 /* resolver + IP bucketer.                                              */
 /*                                                                     */

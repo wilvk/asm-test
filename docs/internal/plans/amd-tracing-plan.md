@@ -309,10 +309,16 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
     with DynamoRIO (no ceiling) the answer for whole-program reach. The *complete*,
     drop-free reconstruction is proven host-independently by `test_amd_stitch` (synthetic
     `sample_period=1` windows → the exact 55-instruction trace, not truncated).
-- **MSR-direct snapshot.** Read the LBR/BRS MSRs directly around the region to get an
-  exact Tier-A snapshot with *zero* interrupts (vs Phase 1's per-branch PMIs). Needs
-  privilege (a kernel helper / `CAP_SYS_ADMIN` or a tiny module), so it is a
-  self-hosted-runner optimization, not a portable path.
+- **MSR-direct snapshot — LANDED** (see [amd-msr-direct-lbr-plan.md](amd-msr-direct-lbr-plan.md)).
+  Read the LbrExtV2 `FROM`/`TO` MSRs directly (`/dev/cpu/N/msr`) around the region for an
+  exact Tier-A snapshot with *zero* interrupts (vs Phase 1's per-branch PMIs), decoded by the
+  shared `asmtest_amd_decode`. Needs `CAP_SYS_ADMIN` + the `msr` module (a self-hosted-runner
+  optimization, not portable). `asmtest_amd_msr_trace` / `asmtest_amd_msr_available`
+  ([src/msr_lbr.c](../../../src/msr_lbr.c)); validated live on the Zen 5 dev box
+  (`make docker-hwtrace-msr`, `--privileged`): a tiny routine reconstructs complete despite
+  the userspace freeze-syscall glue (thinned by a user-only `LBR_SELECT`), honestly
+  `truncated` beyond the surviving window. The deterministic BPF boundary snapshot (Part II
+  #2) stays the cleaner-boundary default where `CAP_BPF` is available.
 
 ---
 

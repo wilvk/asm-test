@@ -761,6 +761,57 @@ static void test_call_auto(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+static long g_msr_result;
+static void msr_run_loop(void *arg) {
+    long (*fn)(long, long) = (long (*)(long, long))arg;
+    g_msr_result = fn(1, 4); /* AMD_LOOP: 4 trips -> 3 taken jnz back-edges */
+}
+#endif
+
+/* AMD MSR-direct LBR snapshot (asmtest_amd_msr_trace): read the LbrExtV2 FROM/TO MSRs
+ * directly for a zero-PMU-interrupt Tier-A capture. Needs amd_lbr_v2 + /dev/cpu/N/msr
+ * (CAP_SYS_ADMIN + msr module) — self-skips everywhere else (all ordinary CI lanes),
+ * runs only in the privileged docker-hwtrace-msr lane on the Zen 5 dev box. Validated
+ * empirically: a tiny routine's branches survive the freeze-syscall glue. */
+static void test_amd_msr(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_msr_available()) {
+        printf("# SKIP AMD MSR-direct: substrate absent (needs amd_lbr_v2 + "
+               "/dev/cpu/N/msr + CAP_SYS_ADMIN)\n");
+        return;
+    }
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED)
+        return;
+    memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+    mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    g_msr_result = 0;
+    int rc = asmtest_amd_msr_trace(q, sizeof AMD_LOOP, msr_run_loop, q, t);
+    printf("# AMD MSR-direct: rc=%d result=%ld insns=%llu covered(0x7)=%d "
+           "truncated=%d\n",
+           rc, g_msr_result, asmtest_emu_trace_insns_total(t),
+           asmtest_trace_covered(t, 0x7), asmtest_emu_trace_truncated(t));
+    CHECK(rc == ASMTEST_HW_OK,
+          "AMD MSR-direct: zero-interrupt capture succeeds");
+    CHECK(g_msr_result == 4, "AMD MSR-direct: the region ran (fn(1,4)=4)");
+    CHECK(asmtest_emu_trace_insns_total(t) > 0 ||
+              asmtest_emu_trace_truncated(t),
+          "AMD MSR-direct: honest (in-region instructions reconstructed, or "
+          "truncated)");
+    CHECK(asmtest_trace_covered(t, 0x7) || asmtest_emu_trace_truncated(t),
+          "AMD MSR-direct: loop-body block 0x7 captured from the real LBR MSRs "
+          "(or honest truncation)");
+    asmtest_trace_free(t);
+    munmap(q, sizeof AMD_LOOP);
+#else
+    printf("# SKIP AMD MSR-direct: not Linux x86-64\n");
+#endif
+}
+
 /* AMD Tier-B STITCHING (host-validated, no hardware — like test_amd_reconstruction):
  * a routine that loops past the 16-deep window. With sample_period=1, perf emits one
  * branch-stack sample per taken branch, consecutive windows overlapping by 15 edges.
@@ -5242,6 +5293,7 @@ int main(void) {
     test_amd_live();
     test_amd_reach_period();
     test_call_auto();
+    test_amd_msr();
 
     /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */
     test_concurrent_amd();

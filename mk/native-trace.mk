@@ -234,6 +234,10 @@ $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 # path (both deliver the #DB single-step trap as an in-process SIGTRAP).
 $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# AMD MSR-direct LBR snapshot (src/msr_lbr.c): reads the LbrExtV2 FROM/TO MSRs via
+# /dev/cpu/N/msr; no external library, decodes through amd_backend.o's asmtest_amd_decode.
+$(BUILD)/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 # Cross-tier orchestrator (asmtest_trace_auto.h): no external library; calls
 # asmtest_hwtrace_available() directly and dlopen-probes libasmtest_drapp (-ldl).
 $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
@@ -279,6 +283,7 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
+                $(BUILD)/msr_lbr.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 # The test builds a synthetic wrong-path perf_branch_entry (test_amd_spec_filter), so
@@ -892,7 +897,8 @@ $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
 NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
     $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
-    $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o
+    $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
+    $(BUILD)/msr_lbr.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
