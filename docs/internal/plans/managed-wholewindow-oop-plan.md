@@ -177,8 +177,10 @@ default that changes a whole-window scope's cost/permission profile:
 3. **W-2 — .NET whole-window `outOfProcess: true`.** Wire the ctor flag through the
    stealth self-attach helper; capture a whole inline block (the localscope body) on
    the managed thread; fold absolute addresses through the existing `JitMethodMap` +
-   rundown; a companion example (`examples/dotnet/localscope_oop/`) proving the caught
-   exception + LINQ that crash the in-process form are captured cleanly.
+   rundown; a companion example (`examples/dotnet/localscope_oop_managed/`) proving the
+   caught exception that crashes the in-process form is captured cleanly (LANDED; deep
+   mid-window JITs elided — see the live-publish follow-up). `localscope_oop/` is the
+   native-fixture demo of the same primitive.
 4. **W-3 — cost controls + honesty.** An instruction/stop budget with self-truncation
    (a ~1M managed window is seconds out-of-process — bound it and flag `truncated`
    rather than hang), BTF-degrade / dropped-stop truncation parity, and the

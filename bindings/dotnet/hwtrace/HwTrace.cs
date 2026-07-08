@@ -1791,6 +1791,9 @@ namespace Asmtest
             if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
             _rundownRequested = withRundown;
             if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+            // Allocate the endpoint buffer BEFORE arming, so its 512 KB allocation (+ any GC) is
+            // not itself sampled into the survey as unattributed allocator weight.
+            _amdIps = new ulong[65536];
             // Arm the branch-stack sampler on the calling thread; the block runs inline next.
             int rc = HwNative.asmtest_hwtrace_sample_begin_amd(period, out IntPtr ctx);
             if (rc != HwNative.ASMTEST_HW_OK || ctx == IntPtr.Zero)
@@ -1799,7 +1802,10 @@ namespace Asmtest
                 return; // Dispose's AMD branch tears down _map + DisablePerfMap
             }
             _amdSampler = new AmdSampler(ctx);
-            _amdIps = new ulong[65536];
+            // Pin the OS thread for the window's life — the perf event is per-thread; a
+            // migration would sample the wrong thread. Paired with EndThreadAffinity in Dispose
+            // (which MUST run on this thread — the documented must-dispose contract).
+            Thread.BeginThreadAffinity();
             Armed = true;
         }
 
@@ -1905,6 +1911,7 @@ namespace Asmtest
 
         // The window body, invoked from native as a reverse-P/Invoke callback (win_base ==
         // this delegate's entry). Kept alive across the native call via GC.KeepAlive.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate void RunRegionFn(IntPtr arg);
 
         void RunWindowOutOfProcess(Action body)
@@ -1926,10 +1933,11 @@ namespace Asmtest
 
             // §D3 capture channel: a SHARED ring the forked stepper drains. Seed it with the
             // coarse managed code ranges (JIT heap + R2R BCL .dll images) so all currently-
-            // mapped managed code is captured; then the JIT listener publishes methods JIT'd
-            // MID-WINDOW (first-call generic instantiations, local functions) into it LIVE —
-            // the pieces a pre-window range scan cannot see. Native runtime (*.so) stays
-            // unpublished and is stepped over (the elided noise).
+            // mapped managed code is captured. Native runtime (*.so) stays unpublished and is
+            // stepped over (the elided noise). NOTE: methods JIT'd fresh MID-WINDOW (first-call
+            // generic instantiations, local functions) land outside these pre-window ranges and
+            // are elided — the live per-method publish that would catch them is DELIBERATELY OFF
+            // (see the note below the arm); the sibling-thread publish is the documented fix.
             IntPtr chan = HwNative.asmtest_addr_channel_new_shared();
             if (chan == IntPtr.Zero)
             {
@@ -2364,6 +2372,7 @@ namespace Asmtest
                     IntPtr aimg = _map != null ? _map.ImageHandle : IntPtr.Zero;
                     ulong awhen = _map != null ? _map.ImageNow : 0;
                     AttributeAddresses(aimg, awhen); // disposes _map
+                    Thread.EndThreadAffinity();       // paired with the ctor's pin (armed path)
                 }
                 else if (_map != null) { _map.Stop(); _map.Dispose(); }
                 if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();

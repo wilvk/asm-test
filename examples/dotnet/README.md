@@ -1,10 +1,12 @@
-# examples/dotnet — scoped in-process tracing, live
+# examples/dotnet — scoped tracing, live
 
 Runnable .NET demos of the scoped-trace facility from the
 [zero-config plan](../../docs/internal/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
-one project per report. All run live on this dev box — an AMD Zen 5 with no
-Intel PT — via the single-step **WEAK** tier, and self-skip cleanly (exit 0) where
-single-step cannot run.
+one project per report. Most run on the portable **in-process single-step** WEAK tier (any
+x86-64 Linux, no privilege); the newer ones use the **out-of-process** ptrace stepper
+(`localscope_oop*`, crash-proof, needs ptrace) and the **AMD LBR** hardware tier
+(`amdhot`/`amdlbr`, needs Zen 3+ + `CAP_PERFMON`). Every example **self-skips cleanly (exit 0)**
+where its tier is unavailable, so the whole set runs anywhere.
 
 | Project | Scope form | Shows |
 |---|---|---|
@@ -76,6 +78,11 @@ dotnet run --project examples/dotnet/loops/loops.csproj
 dotnet run --project examples/dotnet/descent/descent.csproj
 dotnet run --project examples/dotnet/descent_dotnet/descent_dotnet.csproj
 dotnet run --project examples/dotnet/codeimage/codeimage.csproj
+dotnet run --project examples/dotnet/localscope/localscope.csproj
+dotnet run --project examples/dotnet/localscope_oop/localscope_oop.csproj
+dotnet run --project examples/dotnet/localscope_oop_managed/localscope_oop_managed.csproj
+dotnet run --project examples/dotnet/amdhot/amdhot.csproj          # AMD LBR: needs Zen 3+ + CAP_PERFMON
+dotnet run --project examples/dotnet/amdlbr/amdlbr.csproj          # AMD LBR: needs Zen 3+ + CAP_PERFMON
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working

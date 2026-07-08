@@ -22,9 +22,15 @@ family stays coherent rather than accreting one-off flags.
 | `AsmTrace.Method(delegate)` | region lazy-arm / §D3 oop | exact | oop: **yes** | low / high | one method |
 | `AsmTrace.Window(() => {…})` | out-of-process ptrace | exact (block's own code; deep JIT elided) | **Yes** | ~100–1000×/stop | whole block |
 | `AsmTrace.WindowHot(() => {…})` | **AMD LBR statistical** | sampled hot-method histogram | **Yes** | near-native (a few PMIs) | whole block |
+| `using (new AsmTrace(HwBackend.AmdLbr)) {…}` | **AMD LBR statistical** (inline) | sampled hot-method histogram (richest managed attribution — deep BCL named) | **Yes** | near-native | whole block |
 
-The two crash-proof whole-window forms are complementary: `Window` is exact-but-slow,
-`WindowHot` is statistical-but-near-native. The extensions below close the remaining gaps.
+The three crash-proof whole-window forms are complementary: `Window` is exact-but-slow (deep
+JIT elided until the sibling-thread publish lands), the AMD forms (`WindowHot` delegate +
+`new AsmTrace(HwBackend.AmdLbr)` inline) are statistical-but-near-native and — because the
+block runs at native speed — give the RICHEST managed attribution (deep BCL named). The
+extensions below close the remaining gaps. See
+[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) for the inline-`using`
+conformance of each form.
 
 ## Extensions
 
@@ -70,6 +76,10 @@ ordering). See [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md
 
 ### E4 — inline `using (new AsmTrace(outOfProcess: true))` OOP form *(forward-look; low priority)*
 
+> **Consolidated in [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) R4** — this
+> is the same forward-look item (the async stop-flag split of the OOP stepper). The
+> inline-using plan is authoritative; this entry is a pointer.
+
 The OOP whole-window is a **delegate** today (`AsmTrace.Window(() => {})`) because a call
 frame delimits the window (`win_base`/`win_ret`). Supporting the bare inline `using` shape
 needs the ASYNC model: the ctor forks the helper and returns (the ctor/block/Dispose then run
@@ -96,14 +106,16 @@ handful of managed checkpoints (method entry/exit, throw/catch) for **exact 16-b
 on Zen 4/5 + `CAP_BPF`; and **IBS** op-sampling for statistical PC coverage to fill gaps.
 Both are optional producers into `WindowHot.Addresses`, not new APIs. Effort: ~3–4d each.
 
-### E7 — AMD-LBR **region** `using` example *(trivial; already works)*
+### E7 — AMD-LBR **region** `using` example — **LANDED**
 
-`using (new AsmTrace(code))` already traces a native `NativeCode` blob on the AMD LBR tier
-today — the region ctor respects a pre-inited backend (`begin_scope` → `try_begin` →
-`hwtrace_begin_amd`); the only requirement is `HwTrace.Init(HwBackend.AmdLbr)` first (no
-auto-init on the region form). Add `examples/dotnet/amdlbr` demonstrating it, self-skipping
-off Zen/`CAP_PERFMON`. Effort: ~0.5d. (Distinct from `amdhot`, which is the region-FREE
-statistical whole-window.)
+`using (new AsmTrace(code))` traces a native `NativeCode` blob on the AMD LBR tier — the
+region ctor respects a pre-inited backend (`begin_scope` → `try_begin` → `hwtrace_begin_amd`);
+the only requirement is `HwTrace.Init(HwBackend.AmdLbr)` first (no auto-init on the region
+form). [examples/dotnet/amdlbr](../../../examples/dotnet/amdlbr/) demonstrates it (with a retry,
+since AMD region sampling is non-deterministic per attempt), self-skipping off Zen/`CAP_PERFMON`.
+Distinct from `amdhot`, which is the region-FREE statistical whole-window (also LANDED, as the
+inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
+[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md)).
 
 ## Priority
 
