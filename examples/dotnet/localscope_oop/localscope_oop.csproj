@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §D3 crash-proof OUT-OF-PROCESS whole-window scope demo: Ptrace.TraceWindowCall +
+       AddrChannel capture a whole window (a driver frame + two published leaves) from a
+       forked tracee, so THIS thread is never EFLAGS.TF-armed. Dependency-free: compiles the
+       binding source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace, no NuGet, so
+       `dotnet run` works offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0)
+       where ptrace is unavailable.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one
+       binding source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>localscope_oop</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Report.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

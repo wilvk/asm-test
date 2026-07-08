@@ -145,6 +145,25 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base,
                                            long *result,
                                            asmtest_trace_t *trace);
 
+/* §D3 whole-window capture that OWNS its tracee — the fork-internal analog of
+ * asmtest_ptrace_trace_call. Forks a child that calls `code(args…)` (up to 6 integer
+ * args), run_to's the window frame entry, then single-steps recording the ABSOLUTE
+ * address of every instruction in the window frame [code, code+len) OR any region
+ * pre-published on `chan` (the leaves the frame calls — publish them with
+ * asmtest_addr_channel_publish_rec before the call; `chan` may be NULL to record just
+ * the frame). Runtime/glue between regions is stepped through but not recorded. The
+ * window ends when control returns to the frame's caller. Lets a caller that cannot fork
+ * safely (a managed binding) get a whole-window out-of-process trace with no attach/
+ * run_to bookkeeping — the crash-proof analog of the in-process whole-window scope (a
+ * ptrace-stop is not gated by the tracee's signal mask, so it survives code the
+ * in-process single-step tier is forbidden to step). *result gets the frame's return
+ * value; trace->insns hold absolute addresses (classify by region); over-budget sets
+ * trace->truncated. ENOSYS off x86-64/AArch64 Linux; EINVAL on bad args. */
+int asmtest_ptrace_trace_window_call(const void *code, size_t len,
+                                     const long *args, int nargs,
+                                     asmtest_addr_channel_t *chan, long *result,
+                                     asmtest_trace_t *trace);
+
 /* Trace a region in a SEPARATE, already-running process you have attached to — the
  * foreign / managed-runtime path (the building block for tracing a JVM/.NET/Node on
  * a host without Intel PT). `pid` must already be in a ptrace-stop: the caller owns

@@ -115,6 +115,17 @@ asmtest_addr_channel_published(const asmtest_addr_channel_t *c) {
     return c != NULL ? __atomic_load_n(&c->head, __ATOMIC_ACQUIRE) : 0;
 }
 
+/* Exported (non-inline) FFI shims over the inline API above — for bindings (Node/.NET/
+ * …) that cannot call static-inline functions across the FFI boundary. new() mallocs +
+ * inits a PROCESS-LOCAL channel (free with free()); publish_rec() wraps the inline
+ * publish. Enough for the fork-internal asmtest_ptrace_trace_window_call, where the
+ * caller pre-publishes regions and the forked child inherits a copy. Implemented in
+ * src/ptrace_backend.c. */
+asmtest_addr_channel_t *asmtest_addr_channel_new(void);
+void asmtest_addr_channel_publish_rec(asmtest_addr_channel_t *c, uint64_t base,
+                                      uint64_t len, uint64_t version);
+void asmtest_addr_channel_free(asmtest_addr_channel_t *c);
+
 #ifdef __cplusplus
 }
 #endif

@@ -762,6 +762,8 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/rundown/rundown.csproj
 	@echo "== hwtrace-dotnet-example (localscope) =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/localscope/localscope.csproj
+	@echo "== hwtrace-dotnet-example (localscope_oop) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/localscope_oop/localscope_oop.csproj
 	@echo "== hwtrace-dotnet-example (assemblies) =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/assemblies/assemblies.csproj
 	@echo "== hwtrace-dotnet-example (annotated) =="

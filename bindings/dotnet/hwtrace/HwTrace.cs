@@ -396,6 +396,21 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_attached_versioned(
             int pid, IntPtr @base, UIntPtr len, IntPtr img, ulong when, out long result, IntPtr trace);
 
+        // §D3 whole-window capture that OWNS its tracee (fork-internal): forks a child that
+        // calls code(args…), run_to's the window frame, and records the ABSOLUTE address of
+        // every instruction in [code,code+len) OR any region pre-published on `chan`. The
+        // crash-proof out-of-process analog of the in-process whole-window scope — a managed
+        // caller cannot fork safely, so this owns the tracee. chan may be IntPtr.Zero.
+        [DllImport(HWTRACE)] public static extern int asmtest_ptrace_trace_window_call(
+            IntPtr code, UIntPtr len, long[] args, int nargs, IntPtr chan, out long result, IntPtr trace);
+        // §D3 cross-process JIT-address channel (asmtest_addr_channel.h) — exported FFI
+        // shims over the header-only inline ring. new() allocs+inits a process-local
+        // channel; publish_rec adds a (base,len,version) region; free releases it.
+        [DllImport(HWTRACE)] public static extern IntPtr asmtest_addr_channel_new();
+        [DllImport(HWTRACE)] public static extern void asmtest_addr_channel_publish_rec(
+            IntPtr c, ulong @base, ulong len, ulong version);
+        [DllImport(HWTRACE)] public static extern void asmtest_addr_channel_free(IntPtr c);
+
         // ---- call descent (asmtest_descent_t) — edges + nested frames ----
         // A SEPARATE opaque handle threaded through the three _ex trace entry points
         // (below); the flat asmtest_trace_t stays the single-region frame-0 view. Every
@@ -1064,6 +1079,34 @@ namespace Asmtest
         }
 
         /// <summary>
+        /// §D3 whole-window capture that OWNS its tracee — the crash-proof, out-of-process
+        /// analog of the in-process <see cref="AsmTrace"/> whole-window scope. Forks a child
+        /// that calls the code at <paramref name="code"/> (<paramref name="len"/> bytes,
+        /// already executable in this process) with up to six integer <paramref name="args"/>,
+        /// runs it to the window frame, then single-steps OUT OF PROCESS recording the
+        /// ABSOLUTE address of every instruction in the window frame OR any region published
+        /// on <paramref name="channel"/> (the leaves the frame calls — publish them first with
+        /// <see cref="AddrChannel.Publish"/>; pass null to record just the frame). Because the
+        /// stepper is a separate process, a ptrace-stop is not gated by the tracee's signal
+        /// mask, so it survives code the in-process single-step tier is forbidden to step
+        /// (exceptions, <c>pthread_create</c>). Fills <paramref name="trace"/> with absolute
+        /// addresses (classify by region); returns the frame's return value.
+        /// </summary>
+        public static long TraceWindowCall(IntPtr code, nuint len, long[] args,
+                                           AddrChannel channel, IntPtr trace)
+        {
+            var arr = (args == null || args.Length == 0) ? new long[1] : args;
+            int n = args == null ? 0 : args.Length;
+            IntPtr chan = channel != null ? channel.Handle : IntPtr.Zero;
+            int rc = HwNative.asmtest_ptrace_trace_window_call(
+                code, (UIntPtr)len, arr, n, chan, out long result, trace);
+            GC.KeepAlive(channel);
+            if (rc != HwNative.ASMTEST_PTRACE_OK)
+                throw new HwTraceException($"asmtest_ptrace_trace_window_call failed: {rc}");
+            return result;
+        }
+
+        /// <summary>
         /// Descending variant of <see cref="TraceCall"/>: thread a <see cref="Descent"/>
         /// handle through the single-step loop so the call-outs the tracer would step over
         /// are recorded as edges and (at level &gt;= 2) descended as nested frames.
@@ -1191,6 +1234,50 @@ namespace Asmtest
                 code = Array.Empty<byte>();
             }
             return new JitMethod(e.CodeAddr, e.CodeSize, e.Timestamp, e.CodeIndex, code);
+        }
+    }
+
+    /// <summary>
+    /// §D3 cross-process JIT-address channel (asmtest_addr_channel.h): the set of code
+    /// regions the tracer should record inside a <see cref="Ptrace.TraceWindowCall"/> window,
+    /// beyond the window frame itself. Publish each leaf/method the window calls into (its
+    /// base + length) BEFORE the capture; the out-of-process stepper — which cannot see the
+    /// runtime's own JIT events — records those regions and steps over everything else. A
+    /// process-local ring; dispose to free it.
+    /// </summary>
+    public sealed class AddrChannel : IDisposable
+    {
+        IntPtr _handle;
+        /// <summary>The native channel handle (IntPtr.Zero after dispose / on a lib-less build).</summary>
+        public IntPtr Handle => _handle;
+
+        /// <summary>Allocate + init a process-local channel. Throws if the native lib is absent.</summary>
+        public AddrChannel()
+        {
+            if (!HwNative.LibAvailable)
+                throw new HwTraceException("libasmtest_hwtrace not loaded — cannot create an AddrChannel");
+            _handle = HwNative.asmtest_addr_channel_new();
+            if (_handle == IntPtr.Zero)
+                throw new HwTraceException("asmtest_addr_channel_new failed (out of memory)");
+        }
+
+        /// <summary>Publish one code region <c>[base, base+len)</c> the window will call into,
+        /// with an optional code-image <paramref name="version"/> (0 if untracked).</summary>
+        public void Publish(IntPtr @base, nuint len, ulong version = 0)
+        {
+            if (_handle == IntPtr.Zero) return;
+            HwNative.asmtest_addr_channel_publish_rec(_handle, (ulong)@base.ToInt64(), (ulong)len, version);
+        }
+
+        /// <summary>Publish a <see cref="NativeCode"/> region (its whole allocation).</summary>
+        public void Publish(NativeCode code) => Publish(code.Base, (nuint)code.Length);
+
+        /// <summary>Idempotent free.</summary>
+        public void Dispose()
+        {
+            if (_handle == IntPtr.Zero) return;
+            try { HwNative.asmtest_addr_channel_free(_handle); } catch { }
+            _handle = IntPtr.Zero;
         }
     }
 

@@ -6,12 +6,28 @@ work), not a single registered leaf. It is the one investment that turns the
 already-shipping out-of-process stepper from a **region** primitive into a
 **whole-window** capture the in-process single-step tier is *forbidden* to attempt.
 
-> Status legend: **planned / forward-look.** This document is the design + phasing.
-> It builds directly on primitives that already ship and are live-tested
-> (`asmtest_ptrace_*`, `asmtest_hwtrace_stealth_trace`, `asmtest_codeimage_*`,
-> `asmtest_proc_perfmap_symbol`); the net-new work is the **whole-window live-JIT
-> address channel** that lets an out-of-process stepper record *absolute* addresses
-> across an entire thread window and resolve them to managed methods afterward.
+> **Status update (2026-07-08): W-0/W-1/W-3 LANDED; W-2 LANDED for native fixtures.**
+> The native substrate this plan called "net-new" **already shipped** and is live-tested:
+> `asmtest_ptrace_trace_attached_windowed` (region-free absolute-PC capture across a window
+> frame + channel-published regions) with the `PTRACE_STREAM_CAP` budget → `truncated`
+> (W-0/W-3), and the cross-process JIT-address channel
+> ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) — both covered by
+> `test_ptrace_windowed`. **Added 2026-07-08 (this task):** the fork-internal
+> `asmtest_ptrace_trace_window_call` (the plan's W-0 "fork path" — owns its tracee, so a
+> caller that cannot fork safely gets a whole-window trace with no attach/run_to
+> bookkeeping), exported `asmtest_addr_channel_{new,publish_rec,free}` FFI shims,
+> `test_ptrace_window_call` (5 checks, green in `make hwtrace-test`), the .NET
+> `Ptrace.TraceWindowCall` + `AddrChannel` wrappers, and the
+> [examples/dotnet/localscope_oop](../../../examples/dotnet/localscope_oop/) demo
+> (validated live, captures a frame + two published leaves out-of-process). **Remaining
+> forward-look:** W-1 BTF block-step *windowed* variant (per-instruction windowed ships;
+> the `PTRACE_SINGLEBLOCK` windowed path is not yet wired), and a **live-CoreCLR** W-2
+> (`new AsmTrace(outOfProcess: true)` self-attach via the stealth helper + the runtime's
+> `MethodLoadVerbose` listener publishing to the channel) — the native fixture proves the
+> mechanism; wiring a managed runtime's live JIT addresses in is the remaining integration.
+>
+> This document is the design + phasing; the sections below are the original proposal,
+> now partly landed per the update above.
 > Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
