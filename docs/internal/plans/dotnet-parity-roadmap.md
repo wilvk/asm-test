@@ -19,9 +19,11 @@
 > exemptions where a binding should grow the capability, and to state plainly where it
 > should not.
 >
-> Status legend: **Phase 1 LANDED** (2026-07-08, commit `afc6ee4`) — the mechanical
-> Cluster 1 rollout; **Phase 2/3 planned**. Phase 2 is the real managed-tier engineering
-> (PT-hardware-gated for clean-path validation); Phase 3 is grow-a-use, decided per binding.
+> Status legend: **Phase 1 LANDED** (2026-07-08, `afc6ee4`) — the mechanical Cluster 1
+> rollout. **Phase 2 STARTED** — increment 1 (the §Z1 in-process whole-window trio in
+> Node/Java) LANDED (2026-07-08, `c2327bc`); the managed async-hop + JIT-resolution +
+> out-of-process managed whole-window remain planned/forward-look. **Phase 3 planned**
+> (grow-a-use, per binding). The clean-path validation is PT-hardware-gated (this host is AMD).
 
 ## Why this is not "wrap 13 symbols × 9 bindings"
 
@@ -95,8 +97,8 @@ over `_ex`.
 |---|---|---|---|---|---|
 | **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio` | grow-a-use: window trio, `stealth_trace`, `symbolize_bucket` | ~2–3d (mostly low-value) | Closest. **Leads .NET** on `dr_under_dynamorio`. No live JIT → not a managed target |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`) | optional generics; `arm_tid` | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
-| **node** | koffi | Cluster 1, §D1 `using`-scope | **§D1 managed**: `AsyncLocalStorage` hop hook, window trio, `stealth_trace`, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution, window trio, `stealth_trace` | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
+| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`** | **§D1 managed**: `AsyncLocalStorage` hop hook, `stealth_trace`, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`** | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution, `stealth_trace` | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
 | **cpp** | dlopen | Cluster 1 ✅, `arm_tid` | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
 | **rust** | libloading | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
 | **zig** | std.DynLib | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
@@ -135,6 +137,19 @@ matrix shows those two symbols wrapped in all ten bindings, and the two `ALL` li
 removed (stale exemptions fail the gate, so they *must* be removed).
 
 ### Phase 2 — the real dotnet-capability parity: Node §D1 + Java §D2
+
+> **Increment 1 LANDED (2026-07-08, `c2327bc`).** The §Z1 in-process whole-window trio
+> (`begin_window`/`end_window`/`render_window`) now ships in Node (`HwTrace.window(fn)`) and
+> Java (`HwTrace.window(Runnable)`) — the empty-ctor `using (new AsmTrace())` substrate,
+> validated over a native leaf in each Docker lane. It is honest-but-noisy: single-stepping
+> the runtime records the FFI dispatch + runtime, so the traced routine's addresses are a
+> *subset* (a V8 call ~100k insns, captured cleanly and subset-verified; a HotSpot+FFM call
+> exceeds the internal `SS_WINDOW_CAP` 1<<20 and honestly truncates). **This form is SAFE
+> only for a tight native-leaf body** — arming single-step on the managed thread for an
+> arbitrary managed block is the SIGTRAP footgun; the doc comments route that case to the
+> out-of-process path in [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md)
+> (the §D3 whole-window channel, `asmtest_ptrace_trace_window_call`). Remaining Phase-2 work
+> (async-hop, JIT-address resolution, stealth routing) is below.
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place
