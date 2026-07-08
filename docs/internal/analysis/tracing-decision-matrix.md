@@ -27,7 +27,10 @@ Backend choice is a product of **three independent axes**, resolved in order:
    single-step is x86-64 Linux **and** macOS; a VEH stepper covers x86-64 Windows; ptrace
    block-/single-step is Linux (x86-64, aarch64 for per-insn); DynamoRIO is Linux-x86-64; the
    **Unicorn emulator is the universal floor** (and the *only* option for RISC-V / ARM32
-   guests, which run virtually on any host).
+   guests, which run virtually on any host). **Host provisioning then gates live capture** of
+   the hardware-trace tiers — a generic VM/CI host records none of them, this repo's
+   `docker-hwtrace-*` lanes each unlock one with minimal caps, and a full-permission bare-metal
+   host (e.g. the Zen 5 dev box) records everything its silicon supports ([Matrix 1b](#matrix-1b--provisioning-generic-vs-docker-lane-vs-full-permission)).
 2. **Language class decides what is SAFE.** The in-process EFLAGS.TF / `#DB` single-step tier
    is exact and cheap but **fatal on a managed-runtime thread** (a TF-armed thread that blocks
    `SIGTRAP` — as glibc `pthread_create`, CLR exception dispatch, and GC all do — is
@@ -49,14 +52,18 @@ Intel PT; *managed JIT method* → lazy-arm (named) or out-of-process stealth (w
 
 ## Matrix 1 — Tier availability by (arch, OS)
 
-Legend: ✅ live-capturable on a correctly-provisioned real host of this arch/OS (a runtime
-functional probe may still self-skip under emulation / a quirked VM — noted inline) · ⚙️
-**compiled and always linked, but live capture self-skips on a *generic* host of this arch/OS**
-because it needs specialized silicon (a specific vendor's PMU, or a CoreSight board) plus perf/
-BPF/MSR privilege — see the **"Why ⚙️"** subsection right after this table for the per-item
-reason · ❌ not applicable (wrong arch/OS, hard stub). Columns: **x64/L** x86-64 Linux · **x64/mac**
-x86-64 macOS · **x64/win** x86-64 Windows · **a64/L** aarch64 Linux · **a64/mac** aarch64 macOS ·
-**rv/arm** riscv64 / arm32 (guests only).
+This first matrix is the **arch/OS/vendor** view — does the tier's silicon + code exist for this
+host category at all. Availability *also* depends on **host provisioning** (privilege / perf /
+device access), which [Matrix 1b](#matrix-1b--provisioning-generic-vs-docker-lane-vs-full-permission)
+breaks out — because a ⚙️ tier that self-skips on a generic VM captures fine on the same box with
+the right caps. Legend: ✅ live-capturable on a correctly-provisioned real host of this arch/OS (a
+runtime functional probe may still self-skip under emulation / a quirked VM — noted inline) · ⚙️
+**compiled and always linked, but live capture is gated on PROVISIONING** — it self-skips on a
+*generic* host (VM / CI / plain `docker run`) and comes live at the **Docker-lane** or
+**full-permission** level (Matrix 1b), because it needs specialized silicon (a specific vendor's
+PMU, or a CoreSight board) plus perf/BPF/MSR privilege · ❌ not applicable (wrong arch/OS, hard
+stub). Columns: **x64/L** x86-64 Linux · **x64/mac** x86-64 macOS · **x64/win** x86-64 Windows ·
+**a64/L** aarch64 Linux · **a64/mac** aarch64 macOS · **rv/arm** riscv64 / arm32 (guests only).
 
 | Tier | x64/L | x64/mac | x64/win | a64/L | a64/mac | rv/arm | Fidelity |
 |---|---|---|---|---|---|---|---|
@@ -73,6 +80,40 @@ x86-64 macOS · **x64/win** x86-64 Windows · **a64/L** aarch64 Linux · **a64/m
 | **Win64 VEH single-step** | ❌ | ❌ | ✅ (`AddVectoredExceptionHandler`) | ❌ | ❌ | ❌ | exact, complete |
 | **Unicorn emulator** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **only tier here** | exact, complete, **virtual guest** (not the real CPU) |
 | **`asmtest_trace_call_auto`** (orchestrator) | ✅ (LBR→block-step→single-step) | ✅ (single-step) | — | ✅ (ptrace single-step) | — | — | picks the best *available* of the above |
+
+### Matrix 1b — provisioning: generic vs docker-lane vs full-permission
+
+The ⚙️ cells above vary with **host provisioning**, not just arch/OS. Three levels, for an
+x86-64 Linux host *of the right vendor* (aarch64 CoreSight is the same story on an ARM board):
+
+- **Generic** — a cloud VM, a hosted CI runner, or a **plain `docker run`** (default seccomp, no
+  added caps): no bare-metal PMU passthrough, no perf/BPF/MSR privilege. Only the no-privilege
+  tiers capture; every hardware-trace tier self-skips.
+- **Docker lane** — this repo's `docker-hwtrace-*` targets on a bare-metal host, each granting the
+  **minimal caps its tier needs** (never blanket `--privileged` except the MSR lane, which needs
+  the device node): the specific AMD/Intel tier comes live per lane.
+- **Full-permission bare-metal** — the host **directly** (e.g. the Ryzen 9 9950X dev box): root /
+  all caps, `perf_event_paranoid` lowered, the `msr` module loaded. **Every tier the silicon
+  supports captures live — nothing self-skips for the box's own (arch, vendor).**
+
+| Tier (x86-64 Linux) | Generic (VM / CI / plain `docker run`) | Docker lane (bare-metal + minimal caps) | Full-permission bare-metal |
+|---|---|---|---|
+| **Intel PT** | ❌ no `intel_pt` PMU in the guest | ✅ on an **Intel** host + `--cap-add=PERFMON --security-opt seccomp=unconfined` | ✅ (Intel bare metal, `perf_event_paranoid` lowered) |
+| **AMD LBR — sampled / WindowHot** | ❌ no branch-stack perf | ✅ **`docker-hwtrace-amd`** (`seccomp=unconfined --cap-add=PERFMON`) | ✅ (AuthenticAMD Zen 3+) |
+| **AMD LBR — BPF snapshot** | ❌ no `CAP_BPF`, no libbpf | ✅ **`docker-hwtrace-codeimage`** (`--cap-add=BPF,PERFMON,SYS_PTRACE seccomp=unconfined`, libbpf image) | ✅ (Zen 4/5, `CAP_BPF`) |
+| **AMD LBR — MSR-direct** | ❌ no `/dev/cpu/N/msr` | ✅ **`docker-hwtrace-msr`** (`--privileged`, for the per-CPU device nodes) | ✅ (`CAP_SYS_ADMIN` + the `msr` module) |
+| **ARM CoreSight** (aarch64) | ❌ no `cs_etm` PMU in the guest | ✅ on an aarch64 **CoreSight board** + `--cap-add=PERFMON` | ✅ on the board |
+| **DynamoRIO** | ✅ if `libasmtest_drapp` is installed | ✅ **`drtrace`** lane (no special caps) | ✅ |
+| **BTF block-step** | ✅ rootless (self-skips only masked-`DEBUGCTL.BTF` VMs) | ✅ (plain `docker run`) | ✅ |
+| **ptrace / in-proc single-step** | ✅ (no privilege) | ✅ | ✅ |
+| **Unicorn emulator** | ✅ | ✅ | ✅ |
+
+> **On the full-permission Zen 5 dev box (x86-64 Linux, AuthenticAMD, all caps, `msr` module
+> loaded) NOTHING in its arch/vendor self-skips** — every AMD LBR tier (sampled, BPF snapshot,
+> MSR-direct, WindowHot) captures live, exactly as validated this cycle. The only ❌ there is
+> **Intel PT**, and that is a *silicon* absence (wrong vendor), not a provisioning one. The ⚙️
+> marks in Matrix 1 are therefore the **generic-host** reading; read the Docker-lane or
+> full-permission column for a properly-provisioned host.
 
 ### Why ⚙️ (compiled but self-skips), per item
 
