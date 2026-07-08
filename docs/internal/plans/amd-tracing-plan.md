@@ -550,11 +550,11 @@ AMD hardware ceiling** — but remove its sharpest edges.
 | **Throttle/ring hardening** | Larger `data_size` ring; `sysctl kernel.perf_event_max_sample_rate` up, `kernel.perf_cpu_time_max_percent=0` on the self-hosted runner | The Tier-B live path is bounded by ring size + throttling (a 20 000-trip loop already truncates); more headroom = longer gapless stitch before honest truncation | Operational, self-hosted-runner only; extends reach, does not remove the ceiling |
 | **Decodable-distance stitch check** | For each stitched boundary, assert reconstructed instruction count between consecutive branch targets == statically-decoded byte distance; reject a wrong minimal-shift match, else emit an honest gap | AMD sets `hw_idx ≡ 0` (register renaming keeps From[0]=TOS), so Intel's exact index-based overlap count **cannot** be ported — the current smallest-overlap heuristic can silently mis-stitch a self-overlapping loop (an open question in amd_backend.c). This is the AMD-available substitute check | Improves correctness for the common looping case; does not extend depth |
 | **Period-spaced Tier-B stitching** (Zen 4/5) — *#2A* | Set `sample_period = depth − overlap` (e.g. 16−4=12) instead of `1`, so consecutive 16-deep LbrExtV2 windows overlap by `overlap` and still stitch gaplessly at ~P× fewer PMIs | The `sample_period=1` PMI-per-branch flood is the dominant Tier-B throttle/ring truncation cause; spacing the PMIs cuts throttling exposure ~P× → **extends the exact window ~P×** before the run stops fitting. Generalizes the Zen 3 BRS period-adjust lever to LbrExtV2 *multi-window* stitching | LbrExtV2 (Zen 4/5). An over-large period simply yields a stitch gap → honest truncation, never silent corruption. Not for tiny single-shot routines (a spaced PMI may never fire in-region — keep `lbr_period=0` there) |
-| **Slot-efficient branch filtering** (Zen 4/5) — *#2B* | Request a reduced HW branch filter (`cond \| ind_call \| ind_jmp \| any_ret`) so the 16 LBR slots are not spent on statically-decodable direct transfers; each window then spans more instructions | A direct unconditional jmp/call has a static target the decoder can follow, so recording it wastes a slot; filtering to only the non-statically-decidable taken branches stretches each window with **no** exactness loss — a reach multiplier orthogonal to #2A | **Needs a decoder change** (see below): `amd_replay` today assumes *every* taken branch is recorded, so a naive reduced filter is silent corruption, not merely coarser. Forward-look until that lands + Zen validation |
+| **Slot-efficient branch filtering** (Zen 4/5) — *#2B* — **LANDED (SCOPE-SAFE)** | Reduced HW branch filter `cond \| ind_jmp \| any_call \| any_return`, dropping only the **direct unconditional jmp** (statically decodable) so the 16 LBR slots stretch further; `amd_replay` follows the dropped jmp from the region bytes for a byte-identical trace | A direct uncond jmp has a static target the decoder can follow, so recording it wastes a slot; dropping it stretches each window with **no** exactness loss — a reach multiplier orthogonal to #2A | Landed as SCOPE-SAFE: dropping direct **call** too (the original `ind_call` framing) was rejected — an out-of-region-callee return strands pre-call code, a silent-corruption risk. Opt-in `branch_filter`; the unified decoder is inert on the default filter. Live reach-gain pending a perf-permitted Zen host |
 
 ### Window-size levers — status (2026-07-08)
 
-- **#2A period-spaced Tier-B stitching — LANDED (opt-in), live-validation pending.**
+- **#2A period-spaced Tier-B stitching — LANDED (opt-in), live-validation pending; host-validated stitch + documented caveat.**
   New `asmtest_hwtrace_options_t.lbr_period` ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)):
   `0` keeps the exact `sample_period=1` Tier-A/B path (default, unchanged);
   `>1` sets the branch-retired period, clamped to `[1, depth-1]` in
@@ -562,25 +562,64 @@ AMD hardware ceiling** — but remove its sharpest edges.
   remains. The whole extension leans on the *existing, validated* stitch + gap/`lost`
   detection (`asmtest_amd_stitch` / `asmtest_amd_decode_stitched`): insufficient overlap
   becomes a stitch gap → `truncated`, so a bad `lbr_period` degrades honestly rather than
-  corrupting. Compile-clean; **live reach-gain measurement is pending a perf-permitted
-  Zen host** (this dev box reports `perf branch-stack not permitted` without
-  `CAP_PERFMON`; the `docker-hwtrace-amd` lane needs a self-hosted AMD runner with the
-  caps — the same gate the P0 snapshot lane carries). Honors "no untested hardware code":
-  the tested default path is untouched; the opt-in extension self-truncates on any
-  overlap shortfall.
-- **#2B slot-efficient branch filtering — SPECIFIED (forward-look), NOT shipped.**
-  Deliberately not implemented as a bare filter flag: `amd_replay`
-  ([src/amd_backend.c](../../../src/amd_backend.c)) reconstructs the path assuming every
-  *taken* branch is in the record set (it infers not-taken conditionals from the
-  fall-through gaps), so dropping direct transfers from the HW filter without teaching the
-  decoder to **follow static direct jmp/call targets** would silently mis-decode — exactly
-  the "never emit corrupt as complete" line this project holds. The exact-preserving form
-  requires (a) a `branch_filter` option threading `PERF_SAMPLE_BRANCH_*` into
-  `hwtrace_begin_amd`, and (b) an `amd_replay` pass that decodes+follows unrecorded direct
-  unconditional jmp / direct call targets between recorded branches. Both are testable on
-  the same perf-permitted Zen host as #2A; landing them without that hardware would violate
-  the plan's no-untested-hardware-code rule, so #2B stays specified here until a validating
-  host is available.
+  corrupting. **Host-independent validation added** (`test_amd_stitch_period_spaced`,
+  [examples/test_hwtrace.c](../../../examples/test_hwtrace.c)): synthetic period-spaced
+  (P=4) windows of a **distinct-edge** path stitch back to the exact full sequence — the
+  smallest-overlap heuristic finds the true shift because distinct edges disambiguate the
+  alignment. **Correctness caveat (why the default stays `lbr_period=0`):** a
+  *self-similar* loop whose every taken edge is identical gives the heuristic no way to tell
+  1 iteration from P, so `period>1` silently **undercounts** it (the test asserts this to
+  make the limitation concrete). `period=1` is the only universally-exact value; `>1` is a
+  coverage/throttle trade the caller opts into for distinct-edge hot paths. **Live
+  reach-gain measurement remains pending a perf-permitted Zen host** (`docker-hwtrace-amd`
+  needs a self-hosted AMD runner with `CAP_PERFMON`). The tested default path is untouched.
+- **#2B slot-efficient branch filtering — LANDED (opt-in), SCOPE-SAFE + unified decoder; live reach-gain pending.**
+  Shipped as the SCOPE-SAFE form: the reduced HW filter drops **only direct unconditional
+  `jmp`** (`ASMTEST_AMD_REDUCED_FILTER = COND | IND_JUMP | ANY_CALL | ANY_RETURN`,
+  [src/hwtrace.c](../../../src/hwtrace.c) / [src/branchsnap.c](../../../src/branchsnap.c)),
+  keeping every call recorded so the decoder's in-region `from_off` anchor is preserved.
+  SCOPE-MAX (also dropping direct call) was rejected: a dropped call to an out-of-region
+  callee strands the pre-call in-region code behind an out-of-region return edge, which is
+  not cleanly reconstructable without speculative decoding — a silent-corruption risk the
+  house rule forbids. The decoder is **unified, no flag**: `amd_replay`
+  ([src/amd_backend.c](../../../src/amd_backend.c)) follows a direct uncond `jmp`'s static
+  target (`asmtest_disas_branch_target` + new `asmtest_disas_is_uncond_jump`) only when one
+  is encountered *mid-straight-line-walk* (`o != from_off`), which under the DEFAULT full
+  filter can never happen (a taken jmp is the recorded `from`) — so the follow path is
+  provably dead code on the tested default and the trace stays byte-identical. Opt-in via
+  `asmtest_hwtrace_options_t.branch_filter` (default 0 = `BRANCH_ANY`, unchanged); the
+  capture retries with the full filter on `EOPNOTSUPP`/`EINVAL` so the tier stays available.
+  Applies to both the sampled and the deterministic-snapshot exact paths (the snapshot is
+  the biggest beneficiary — one frozen window spans more of the routine); the statistical
+  WindowHot survey keeps `BRANCH_ANY`. **Host-independent validation**
+  (`test_amd_reduced_filter` F1–F5, [examples/test_hwtrace.c](../../../examples/test_hwtrace.c)):
+  a dropped in-region jmp reconstructs byte-identically to the full stack that keeps it,
+  dropped-back-edge cycles terminate (step bound), region-exit-leaving jmps truncate, and
+  chained jmps follow through. Two independent adversarial reviews confirmed the classify/
+  follow logic exhaustive over every x86-64 CTI and the default path byte-identical.
+  **Live reach-gain measurement pending the same perf-permitted Zen host as #2A.**
+- **#3 deterministic-snapshot default (single-exit) — LANDED.**
+  The Phase-3 boundary snapshot (Part II #2) was previously opt-in only (`opts.snapshot`).
+  `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) now also selects it **by
+  default** on the substrate that supports it (`asmtest_amd_snapshot_available()`), but
+  **only for a SINGLE-exit region** (`amd_last_ret_off` now also counts rets; the gate is
+  `nret == 1`). The snapshot plants ONE breakpoint at the last ret, so a *multi*-exit
+  routine returning via an earlier ret would miss it and honestly truncate with no
+  fall-through (snapshot mode is committed) — where the sampled richest-window path could
+  still reconstruct it; gating to a lone ret keeps the boundary guaranteed-hit. An explicit
+  `opts.snapshot` is still honored for any region, and any arm failure (no BPF toolchain /
+  caps / decodable ret) falls through to the sampled path. This closes the richest-window
+  guessing for the common small single-exit routine without regressing multi-exit ones (an
+  adversarial-review finding). Validated: `branchsnap markers` (`docker-hwtrace-codeimage`)
+  routes the single-exit `add2` through the snapshot begin/end on the Zen 5 dev box.
+- **Pre-existing hygiene note (not this work):** the 7 field-by-field bindings (Python,
+  Rust, Go, Node, Ruby, Java, Lua) still mirror `asmtest_hwtrace_options_t` only through
+  `object_hint`, so `asmtest_hwtrace_init`'s by-value copy over-reads the `lbr_period` +
+  `branch_filter` tail (Zig/C++/.NET track the full struct). This 8-byte over-read predates
+  this work (it shipped with `lbr_period`); `branch_filter`'s addition does not grow it and
+  its garbage-value consequence is benign (the reduced filter is fidelity-neutral and
+  retries on rejection). Closing it fully means appending both int fields to those 7
+  layouts — a focused, individually-lane-validated follow-up.
 
 ## Matrix 3 — Confirmed dead ends (do not invest)
 

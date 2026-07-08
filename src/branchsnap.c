@@ -44,6 +44,16 @@ int asmtest_amd_snapshot_available(void);
 #include "branchsnap.skel.h"
 #include "branchsnap_event.h"
 
+/* Reduced (SCOPE-SAFE) LBR branch filter for the opt-in branch_filter path — mirror of
+ * the definition in hwtrace.c (kept in sync). Drops only direct unconditional jmp; every
+ * other taken class stays recorded, preserving amd_replay's in-region anchor. The
+ * snapshot decodes through the same amd_replay, so it reconstructs the dropped jmps and
+ * one frozen window spans more of the routine. See amd-tracing-plan.md (#2B). */
+#define ASMTEST_AMD_REDUCED_FILTER                                             \
+    (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
+     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |              \
+     PERF_SAMPLE_BRANCH_ANY_RETURN)
+
 static long bsnap_perf_open(struct perf_event_attr *a, pid_t pid, int cpu,
                             int grp, unsigned long flags) {
     return syscall(SYS_perf_event_open, a, pid, cpu, grp, flags);
@@ -113,10 +123,13 @@ static void bsnap_teardown(void) {
 
 /* ARM the deterministic boundary snapshot for [base, base+len): LBR on + a hardware
  * execution breakpoint at base+exit_off + the BPF snapshot program attached to it.
- * The region begin marker calls this when the `snapshot` option is set; on ANY
- * failure it returns nonzero having released everything, so the caller can fall
- * back to the sample_period=1 path. Single-slot: a second arm while active fails. */
-int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off) {
+ * The region begin marker calls this when snapshot mode is selected; on ANY failure it
+ * returns nonzero having released everything, so the caller can fall back to the
+ * sample_period=1 path. `branch_filter` nonzero requests the reduced LBR filter (drops
+ * direct uncond jmp; the decoder follows them) — the deterministic snapshot's
+ * window-stretch. Single-slot: a second arm while active fails. */
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
+                               int branch_filter) {
     if (base == NULL || len == 0 || exit_off >= len)
         return ASMTEST_HW_EINVAL;
     if (g_bsnap.active)
@@ -130,18 +143,25 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off) {
     g_bsnap.drain.len = len;
 
     /* (1) Enable LBR recording on this thread (a branch-stack event; we never read its
-     * ring — it just turns the hardware on so the snapshot has data). */
+     * ring — it just turns the hardware on so the snapshot has data). With branch_filter
+     * set, use the reduced filter (window-stretch); retry full on rejection. */
     struct perf_event_attr la;
     memset(&la, 0, sizeof la);
     la.size = sizeof la;
     la.type = PERF_TYPE_HARDWARE;
     la.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
     la.sample_type = PERF_SAMPLE_BRANCH_STACK;
-    la.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    la.branch_sample_type =
+        branch_filter ? ASMTEST_AMD_REDUCED_FILTER
+                      : (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY);
     la.exclude_kernel = 1;
     la.exclude_hv = 1;
     la.disabled = 1;
     long lfd = bsnap_perf_open(&la, 0, -1, -1, 0);
+    if (lfd < 0 && branch_filter) { /* type-filter rejected: fall back to full */
+        la.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+        lfd = bsnap_perf_open(&la, 0, -1, -1, 0);
+    }
     if (lfd < 0)
         return ASMTEST_HW_EUNAVAIL;
     g_bsnap.lfd = (int)lfd;
@@ -227,7 +247,9 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
     if (base == NULL || len == 0 || exit_off >= len || run_fn == NULL ||
         trace == NULL)
         return ASMTEST_HW_EINVAL;
-    int rc = asmtest_amd_snapshot_begin(base, len, exit_off);
+    /* Public standalone entry: full branch filter (branch_filter=0), unchanged. The
+     * marker path (hwtrace_begin_amd) threads opts.branch_filter for the reduced filter. */
+    int rc = asmtest_amd_snapshot_begin(base, len, exit_off, 0);
     if (rc != ASMTEST_HW_OK)
         return rc;
     run_fn(arg);
@@ -235,10 +257,12 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
 }
 
 #else /* no BPF toolchain / not x86-64 Linux */
-int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off) {
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
+                               int branch_filter) {
     (void)base;
     (void)len;
     (void)exit_off;
+    (void)branch_filter;
     return ASMTEST_HW_ENOSYS;
 }
 

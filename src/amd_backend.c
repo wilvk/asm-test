@@ -196,10 +196,25 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
         if (ip >= base_ip && ip < end_ip && from >= ip && from < end_ip) {
             uint64_t o = ip - base_ip;
             const uint64_t from_off = from - base_ip;
-            for (;;) {
-                size_t l =
-                    asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
-                                  len, base_ip, o, NULL, 0);
+            /* Bound the walk. In the default (full-filter) path `o` only ever
+             * increases, so it always converges on from_off. Following a dropped
+             * direct jmp (reduced filter, below) can move `o` BACKWARD, so a
+             * self-referential dropped back-edge could spin; a converging walk
+             * visits each in-region offset at most once, so > len steps == a
+             * divergent follow — bail truncated (mirrors ptrace_backend.c's
+             * block-step bound). */
+            for (size_t guard = 0;; guard++) {
+                if (guard > len) { /* divergent follow (dropped back-edge cycle) */
+                    trace->truncated = true;
+                    return;
+                }
+                /* One Capstone decode yields length + is_call (used to classify an
+                 * intermediate direct call below). is_ret is unused here — a mid-run
+                 * ret is caught by the !direct branch — but the probe requires it. */
+                int is_call = 0, is_ret = 0;
+                size_t l = asmtest_disas_probe(ASMTEST_ARCH_X86_64,
+                                               (const uint8_t *)base, len, o,
+                                               &is_call, &is_ret);
                 if (l == 0) { /* undecodable: cannot trust the rest */
                     trace->truncated = true;
                     return;
@@ -207,12 +222,53 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                 trace_append_insn(trace, o);
                 if (o == from_off)
                     break; /* recorded the branch instruction itself */
-                /* An intermediate branch-class instruction in this straight-line
-                 * run is a NOT-taken conditional branch (a taken one would be the
-                 * recorded `from`); its fall-through starts a new block, matching
-                 * the PT/DR/Unicorn partition (a block ends after every CTI). */
+                /* A branch-class instruction seen mid-run (o != from_off) is NOT the
+                 * recorded taken branch. Under the default full branch filter every
+                 * taken branch is recorded, so this can only be a NOT-taken
+                 * conditional (fall through) — the follow logic below is then dead
+                 * code and the trace is byte-identical to before. Under the opt-in
+                 * REDUCED filter (asmtest_hwtrace_options_t.branch_filter), a taken
+                 * DIRECT UNCONDITIONAL jmp is deliberately unrecorded to save an LBR
+                 * slot; recognize it and FOLLOW its static target (decodable from the
+                 * region bytes). Every OTHER class (ret, indirect jmp/call, direct
+                 * call) stays recorded under the reduced filter too, so seeing one
+                 * here is a decode desync. This block ends after every CTI, matching
+                 * the PT/DR/Unicorn partition. */
                 int was_branch = asmtest_disas_is_branch(
                     ASMTEST_ARCH_X86_64, (const uint8_t *)base, len, o);
+                if (was_branch) {
+                    uint64_t tgt = 0;
+                    int direct = asmtest_disas_branch_target(
+                        ASMTEST_ARCH_X86_64, (const uint8_t *)base, len, base_ip,
+                        o, &tgt);
+                    /* A recorded class (ret / indirect transfer / direct call) can
+                     * only legally appear AT from_off; mid-run it is a desync. */
+                    if (!direct || is_call) {
+                        trace->truncated = true;
+                        return;
+                    }
+                    if (asmtest_disas_is_uncond_jump(ASMTEST_ARCH_X86_64,
+                                                     (const uint8_t *)base, len,
+                                                     o)) {
+                        /* Dropped direct unconditional jmp: follow its target. */
+                        if (tgt < base_ip || tgt >= end_ip) {
+                            /* Leaves the region: the in-region from_off this run was
+                             * decoding toward is now unreachable straight-line. */
+                            trace->truncated = true;
+                            return;
+                        }
+                        uint64_t no = tgt - base_ip;
+                        if (no > from_off) { /* jumped past the recorded source */
+                            trace->truncated = true;
+                            return;
+                        }
+                        trace_append_block(trace, no); /* taken-target block, once */
+                        o = no; /* follow: no fall-through insn/block for the jmp */
+                        continue;
+                    }
+                    /* else: a direct conditional jcc, NOT taken (a taken jcc would
+                     * be the recorded from) — fall through like the default path. */
+                }
                 o += l;
                 if (o > from_off) { /* walked past the branch: decode desync */
                     trace->truncated = true;
@@ -267,7 +323,10 @@ static int amd_edge_eq(const struct perf_branch_entry *a,
  * edges — where an honest gap beats a silently-wrong stitch. Accepts (cannot disprove)
  * when either endpoint is outside [base_ip, base_ip+len) (the span is inside a callee
  * whose bytes we do not hold) or when Capstone is unavailable; rejects a backwards span,
- * an overshoot, or an undecodable byte. */
+ * an overshoot, or an undecodable byte. Follows a dropped direct unconditional jmp across
+ * the span (the reduced-filter analogue of amd_replay's follow) so a legitimate
+ * reduced-filter splice is not rejected as a spurious gap; inert on full-filter windows
+ * (no dropped jmps to follow). */
 static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
                               uint64_t from_ip, uint64_t to_ip) {
     const uint64_t end_ip = base_ip + len;
@@ -280,11 +339,35 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
         return 0; /* branch source before its block start: not real code */
     uint64_t o = from_ip - base_ip;
     const uint64_t fo = to_ip - base_ip;
-    while (o < fo) {
+    for (size_t guard = 0; o < fo; guard++) {
+        if (guard > len)
+            return 1; /* divergent follow (dropped back-edge): cannot disprove */
         size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
                                  len, base_ip, o, NULL, 0);
-        if (l == 0 || o + l > fo)
-            return 0; /* undecodable byte, or the walk overshoots the source */
+        if (l == 0)
+            return 0; /* undecodable byte */
+        if (asmtest_disas_is_uncond_jump(ASMTEST_ARCH_X86_64,
+                                         (const uint8_t *)base, len, o)) {
+            uint64_t tgt = 0;
+            if (asmtest_disas_branch_target(ASMTEST_ARCH_X86_64,
+                                            (const uint8_t *)base, len, base_ip,
+                                            o, &tgt)) {
+                /* Dropped direct unconditional jmp: follow its static target
+                 * across the splice (the reduced-filter window omits its edge). */
+                if (tgt < base_ip || tgt >= end_ip)
+                    return 1; /* leaves the region: cannot disprove */
+                o = tgt - base_ip;
+                if (o > fo)
+                    return 0; /* followed jmp overshoots the splice target: the
+                               * source fo is not reached — reject (honest gap),
+                               * matching the straight-line overshoot below. */
+                continue; /* loop re-checks o < fo */
+            }
+            /* indirect jmp: its bytes still decode; fall through to the straight-
+             * line advance (if this is the recorded IND_JUMP source it lands fo). */
+        }
+        if (o + l > fo)
+            return 0; /* the walk overshoots the source */
         o += l;
     }
     return 1; /* o == fo: a clean, whole-instruction forward decode */

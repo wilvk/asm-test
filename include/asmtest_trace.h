@@ -238,6 +238,17 @@ int asmtest_disas_branch_target(asmtest_arch_t arch, const uint8_t *code,
                                 size_t code_len, uint64_t base_addr,
                                 uint64_t off, uint64_t *target);
 
+/* 1 iff the instruction at `code+off` is an UNCONDITIONAL jump — x86 `X86_INS_JMP`
+ * within CS_GRP_JUMP (direct `jmp rel` E9/EB or indirect `jmp r/m`), distinguished
+ * from a conditional `jcc`/`LOOP`/`JrCXZ` (different ids, same JUMP group) and from
+ * `ret`/`iret` (not in the JUMP group). Returns 1 for `jmp r/m` too, so a DIRECT
+ * unconditional jump is isolated by ALSO requiring asmtest_disas_branch_target()==1.
+ * The AMD reduced-filter replay (src/amd_backend.c) uses it to recognize a dropped
+ * direct unconditional jmp mid-walk and follow its static target. 0 otherwise, on a
+ * non-x86 arch (no in-tree caller needs it there), or always without Capstone. */
+int asmtest_disas_is_uncond_jump(asmtest_arch_t arch, const uint8_t *code,
+                                 size_t code_len, uint64_t off);
+
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
                           const uint8_t *code, size_t code_len,

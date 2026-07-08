@@ -95,6 +95,21 @@ typedef struct {
                        truncation (never silent corruption). Ignored by every non-AMD
                        backend and by the deterministic snapshot mode. See
                        docs/internal/plans/amd-tracing-plan.md (window-size levers). */
+    int branch_filter; /* AMD LBR only, opt-in (0 = default, record every taken
+                          branch = PERF_SAMPLE_BRANCH_ANY, unchanged). Nonzero requests
+                          a REDUCED hardware branch filter that drops direct
+                          unconditional jmp edges (COND | IND_JUMP | ANY_CALL |
+                          ANY_RETURN): their targets are statically decodable from the
+                          region bytes, so they need not consume a scarce 16-deep LBR
+                          slot, and the reconstructor follows them itself
+                          (asmtest_disas_branch_target) for a BYTE-IDENTICAL trace. Each
+                          window then spans more instructions — a Zen 4/5 coverage win
+                          for the sampled + deterministic-snapshot exact paths (not the
+                          statistical WindowHot survey). If perf rejects the type-filter
+                          combo the capture retries with PERF_SAMPLE_BRANCH_ANY, so the
+                          tier stays available (merely forgoing the stretch). The
+                          decoder handles either mask, so this knob affects capture
+                          efficiency, never fidelity. See amd-tracing-plan.md (#2B). */
 } asmtest_hwtrace_options_t;
 
 /* The full gating chain, as a single detect-and-skip predicate: returns 1 only

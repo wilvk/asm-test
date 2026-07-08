@@ -8,6 +8,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AMD LBR Zen 4/5 coverage: slot-efficient branch filtering (#2B), period-spaced stitch
+  validation (#2A), and single-exit snapshot-by-default (#3).** Three improvements that
+  stretch how much of a routine each 16-deep AMD branch-record window reconstructs, all
+  respecting the silicon ceiling and the "never emit corrupt as complete" rule.
+  - **#2B slot-efficient branch filtering (opt-in, SCOPE-SAFE).** New
+    `asmtest_hwtrace_options_t.branch_filter` (default 0 = `PERF_SAMPLE_BRANCH_ANY`,
+    unchanged). Nonzero requests a reduced HW filter (`COND | IND_JUMP | ANY_CALL |
+    ANY_RETURN`) that drops only the **direct unconditional `jmp`** — its target is
+    statically decodable, so it need not consume a scarce LBR slot — and the reconstructor
+    follows it from the region bytes for a **byte-identical** trace over a longer window.
+    Dropping direct *call* too was deliberately rejected (an out-of-region-callee return
+    strands the pre-call in-region code — a silent-corruption risk). The decoder is
+    **unified/no-flag**: `amd_replay` follows a dropped jmp only when one appears
+    mid-straight-line-walk, which under the default full filter can never happen (a taken jmp
+    is the recorded `from`), so the follow path is provably dead code on the tested default.
+    New primitive `asmtest_disas_is_uncond_jump`; the capture retries the full filter on
+    `EOPNOTSUPP`/`EINVAL` so the tier stays available. Applies to both the sampled and the
+    deterministic-snapshot paths (the statistical WindowHot survey keeps `BRANCH_ANY`).
+    Host-independently validated (`test_amd_reduced_filter` F1–F5: dropped-jmp equivalence,
+    back-edge-cycle termination, region-exit truncation, chained follow); two independent
+    adversarial reviews confirmed the classify/follow logic exhaustive over every x86-64 CTI.
+  - **#2A period-spaced Tier-B stitching — host-independent validation + documented caveat.**
+    `test_amd_stitch_period_spaced` proves the landed `lbr_period` path stitches
+    period-spaced (P=4) windows of a **distinct-edge** path back to the exact sequence, and
+    asserts the flip side: a **self-similar loop silently undercounts** under `period>1` (the
+    smallest-overlap heuristic can't tell 1 iteration from P) — which is why the default stays
+    `lbr_period=0` (period=1, universally exact).
+  - **#3 deterministic snapshot by default for single-exit regions.** `hwtrace_begin_amd`
+    now selects the Phase-3 boundary snapshot by **default** on the supporting substrate
+    (`amd_lbr_v2` + `perfmon_v2` + Linux ≥ 6.10), but **only when the region has a lone ret**
+    (`amd_last_ret_off` now counts rets) — the one exit breakpoint is then guaranteed hit, so
+    the common small routine gets deterministic capture with no richest-window guessing.
+    Multi-exit routines (which an earlier ret could make the breakpoint miss) keep the sampled
+    path; explicit `opts.snapshot` is honored for any region and every arm failure falls
+    through to sampling. Validated: `docker-hwtrace-amd` (328 decoder checks green) and
+    `docker-hwtrace-codeimage` (branchsnap marker path green on the Ryzen 9 9950X). Only
+    `bindings/dotnet` mirrors the new `branch_filter` field (matching the shipped `lbr_period`
+    posture); the field is an ABI-safe tail append (struct stays 48 bytes).
+
 - **Whole-window scope (`begin_window`/`end_window`/`render_window`) in the Node and Java
   bindings** — the region-free, empty-ctor `using (new AsmTrace())` §Z1 substrate (Phase 2,
   increment 1 of the dotnet-parity roadmap). `HwTrace.window(fn)` (Node) /

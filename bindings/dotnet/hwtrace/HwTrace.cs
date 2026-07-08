@@ -115,6 +115,7 @@ namespace Asmtest
             public int Snapshot;      // nonzero: circular snapshot ring
             public IntPtr ObjectHint; // const char*: optional object-file path
             public int LbrPeriod;     // AMD LBR opt-in branch-retired sample period (0 = default 1)
+            public int BranchFilter;  // AMD LBR opt-in reduced branch filter (0 = default BRANCH_ANY)
         }
 
         // asmtest_hwtrace_bucket_t: an inline char[128] label + a uint64_t count. On

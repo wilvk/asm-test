@@ -107,11 +107,14 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_lbr_depth(void);
 /* Deterministic boundary LBR snapshot (src/branchsnap.c): arm an LBR-on event + a HW
  * execution breakpoint at base+exit_off + the bpf_get_branch_snapshot program, drain
- * and decode at end. The `snapshot` option routes the AMD begin/end markers here;
- * ANY nonzero from _begin (no BPF toolchain, no caps, no LbrExtV2 substrate) makes
- * the marker path fall back to the sample_period=1 capture below. Internal plumbing,
- * deliberately not part of the public tier surface. */
-int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off);
+ * and decode at end. Routed here by the `snapshot` option or by default on the
+ * substrate that supports it (see hwtrace_begin_amd); ANY nonzero from _begin (no BPF
+ * toolchain, no caps, no LbrExtV2 substrate) makes the marker path fall back to the
+ * sample_period=1 capture below. `branch_filter` mirrors opts.branch_filter (nonzero =
+ * reduced LBR filter for the LBR-on event, same window-stretch as the sampled path).
+ * Internal plumbing, deliberately not part of the public tier surface. */
+int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
+                               int branch_filter);
 int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
 #endif
 
@@ -581,6 +584,19 @@ static hw_region_t *find_region(const char *name) {
 /* at the region's last branch holds the complete <=16-entry history.  */
 /* ------------------------------------------------------------------ */
 #if defined(__linux__) && defined(__x86_64__)
+/* Reduced (SCOPE-SAFE) LBR branch filter for the opt-in branch_filter path: keep every
+ * taken class EXCEPT direct unconditional jmp (COND<-jcc, ANY_CALL<-direct+indirect
+ * call, IND_JUMP<-indirect jmp, ANY_RETURN<-ret). A direct uncond jmp has a statically
+ * decodable target, so dropping it frees a 16-deep slot while amd_replay reconstructs it
+ * from the region bytes — a byte-identical trace over a longer window. Keeping ALL calls
+ * recorded preserves the decoder's in-region from_off anchor (dropping a call would strand
+ * the pre-call in-region code behind an out-of-region return edge). Mirrored in
+ * branchsnap.c; see docs/internal/plans/amd-tracing-plan.md (#2B). */
+#define ASMTEST_AMD_REDUCED_FILTER                                             \
+    (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
+     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |              \
+     PERF_SAMPLE_BRANCH_ANY_RETURN)
+
 /* Nonzero while the active AMD region is captured by the deterministic boundary
  * snapshot (branchsnap.c) instead of the sampled data ring below. Single-slot,
  * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active. */
@@ -591,8 +607,13 @@ static int g_amd_snap = 0;
  * Capstone length-decoder; returns (size_t)-1 when no ret is found before the walk
  * ends or a byte fails to decode (multi-exit tails past undecodable padding simply
  * fall back to the sampled path; a breakpoint on a wrong "ret" is harmless — the
- * boundary is never hit and end() reports an honest truncated). */
-static size_t amd_last_ret_off(const void *base, size_t len) {
+ * boundary is never hit and end() reports an honest truncated). When `nret` is
+ * non-NULL it receives the total number of ret-class instructions decoded — the
+ * caller uses `*nret == 1` to detect a SINGLE-exit region, where the one breakpoint
+ * is guaranteed to be hit on any normal completion. */
+static size_t amd_last_ret_off(const void *base, size_t len, int *nret) {
+    if (nret != NULL)
+        *nret = 0;
     if (!asmtest_disas_available())
         return (size_t)-1;
     size_t o = 0, last_ret = (size_t)-1;
@@ -602,25 +623,38 @@ static size_t amd_last_ret_off(const void *base, size_t len) {
         if (l == 0)
             break;
         if (asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
-                                 len, o))
+                                 len, o)) {
             last_ret = o;
+            if (nret != NULL)
+                (*nret)++;
+        }
         o += l;
     }
     return last_ret;
 }
 
 static int hwtrace_begin_amd(hw_region_t *r) {
-    /* Deterministic boundary snapshot opt-in (AMD plan Phase 3 follow-up): with
-     * opts.snapshot set, read the frozen 16-entry stack at the region's exit
-     * breakpoint instead of flooding sample_period=1 PMIs and guessing the richest
-     * window — the tiny single-shot routine the sampled path honestly truncates
-     * reconstructs completely here. Any arm failure (no BPF toolchain/caps, no
-     * LbrExtV2, no decodable ret) falls through to the sampled path unchanged. */
-    if (g_opts.snapshot) {
-        size_t exit_off = amd_last_ret_off(r->base, r->len);
-        if (exit_off != (size_t)-1 &&
-            asmtest_amd_snapshot_begin(r->base, r->len, exit_off) ==
-                ASMTEST_HW_OK) {
+    /* Deterministic boundary snapshot (AMD plan Phase 3): read the frozen 16-entry
+     * stack at the region's exit breakpoint instead of flooding sample_period=1 PMIs
+     * and guessing the richest window — the tiny single-shot routine the sampled path
+     * honestly truncates reconstructs completely here, with no post-glue window
+     * contamination. Taken when explicitly requested (opts.snapshot) OR, on the Zen 4/5
+     * substrate that supports it (amd_lbr_v2 + perfmon_v2 + Linux >= 6.10, via
+     * asmtest_amd_snapshot_available), by DEFAULT for a SINGLE-exit region only. The
+     * snapshot plants ONE breakpoint at the region's last ret; a MULTI-exit routine that
+     * returns via an EARLIER ret would miss it and honestly truncate — with no
+     * fall-through, since snapshot mode is committed — whereas the sampled richest-window
+     * path can still reconstruct such a run. So the default-on is gated to a lone ret,
+     * where the boundary is guaranteed to be hit; an explicit opts.snapshot is the
+     * caller's choice and is honored for any region. Any arm failure — no BPF toolchain,
+     * missing CAP_BPF/CAP_PERFMON at load, no decodable ret — falls through to the sampled
+     * path unchanged. */
+    int amd_nret = 0;
+    size_t exit_off = amd_last_ret_off(r->base, r->len, &amd_nret);
+    if ((g_opts.snapshot || (asmtest_amd_snapshot_available() && amd_nret == 1)) &&
+        exit_off != (size_t)-1) {
+        if (asmtest_amd_snapshot_begin(r->base, r->len, exit_off,
+                                       g_opts.branch_filter) == ASMTEST_HW_OK) {
             g_amd_snap = 1;
             g_active = r; /* g_fd stays -1: no sampled ring in snapshot mode */
             return 0;
@@ -646,11 +680,23 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     }
     a.sample_period = period;
     a.sample_type = PERF_SAMPLE_BRANCH_STACK;
-    a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+    /* Default: record every taken branch. opts.branch_filter (opt-in) requests the
+     * reduced filter that drops statically-decodable direct uncond jmp edges so each
+     * 16-deep window spans more instructions; amd_replay follows those jmps for a
+     * byte-identical trace. On EOPNOTSUPP/EINVAL retry with the full filter so the tier
+     * stays available (forgoing the stretch). See amd-tracing-plan.md (#2B). */
+    a.branch_sample_type =
+        g_opts.branch_filter
+            ? ASMTEST_AMD_REDUCED_FILTER
+            : (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY);
     a.exclude_kernel = 1;
     a.exclude_hv = 1;
     a.disabled = 1;
     long fd = perf_open(&a, 0, -1, -1, 0);
+    if (fd < 0 && g_opts.branch_filter) { /* type-filter rejected: fall back to full */
+        a.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY;
+        fd = perf_open(&a, 0, -1, -1, 0);
+    }
     if (fd < 0)
         return -1;
     g_fd = (int)fd;

@@ -294,6 +294,50 @@ int asmtest_disas_is_ret(asmtest_arch_t arch, const uint8_t *code,
 #endif
 }
 
+/* 1 if the instruction at `code+off` is an UNCONDITIONAL jump (x86 `jmp`, id
+ * X86_INS_JMP within CS_GRP_JUMP — direct rel or indirect r/m; NOT a conditional jcc,
+ * which shares the JUMP group under a different id, and NOT ret/iret). 0 otherwise,
+ * on a non-x86 arch (no in-tree caller needs unconditional-jump detection there — the
+ * AMD reduced-filter replay is x86-only), or without Capstone. Mirrors
+ * asmtest_disas_is_ret; the AMD replay pairs it with asmtest_disas_branch_target() to
+ * isolate a DIRECT unconditional jmp (target immediate present) it must follow. */
+int asmtest_disas_is_uncond_jump(asmtest_arch_t arch, const uint8_t *code,
+                                 size_t code_len, uint64_t off) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    if (a != CS_ARCH_X86)
+        return 0; /* only the x86 unconditional-jmp id is consulted below */
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    int is_uncond = 0;
+    if (count > 0) {
+        is_uncond = (cs_insn_group(h, &insn[0], CS_GRP_JUMP) &&
+                     insn[0].id == X86_INS_JMP)
+                        ? 1
+                        : 0;
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return is_uncond;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return 0;
+#endif
+}
+
 /* Resolve the DIRECT-call target at `code+off` into *target (absolute = base_addr +
  * displacement). x86 `E8` rel32 and AArch64 `bl` imm26 are direct; Capstone exposes the
  * resolved absolute target as an immediate operand (CS_OP_IMM). Returns 1 (direct call,

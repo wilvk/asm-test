@@ -262,6 +262,147 @@ static void test_amd_spec_filter(void) {
 #endif
 }
 
+/* AMD #2B — reduced-filter follow-static reconstruction. The opt-in reduced LBR filter
+ * (asmtest_hwtrace_options_t.branch_filter) drops direct UNCONDITIONAL jmp edges from the
+ * recorded stack — their targets are statically decodable, so they need not consume a
+ * 16-deep slot — and amd_replay FOLLOWS them from the region bytes. Host-independent
+ * (synthetic perf_branch_entry arrays, no Zen hardware), exactly like
+ * test_amd_reconstruction. Covers the residual-risk fixtures the design flagged: a
+ * dropped in-region jmp reconstructs byte-identically to the full-filter stack that keeps
+ * it (F1/F4, the load-bearing equivalence — the only way this could silently corrupt is a
+ * misclassification that appends the dead post-jmp bytes or drops/doubles the target
+ * block); a dropped back-edge cycle terminates via the step bound instead of hanging
+ * (F2); a dropped jmp leaving the region honestly truncates (F3); and a chain of dropped
+ * jmps follows through (F5). */
+static void test_amd_reduced_filter(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD reduced filter: built without Capstone\n");
+        return;
+    }
+
+    /* F1/F4 — xor eax,eax ; jmp 0x06 ; int3 ; int3 ; ret. The direct uncond jmp at
+     * 0x02 (target 0x06) skips the two dead int3 bytes. Executed stream {0x00, 0x02,
+     * 0x06}, blocks {0x00, 0x06}. */
+    static const unsigned char JMP7[] = {0x31, 0xc0, 0xeb, 0x02,
+                                         0xcc, 0xcc, 0xc3};
+    const uint64_t bj = (uint64_t)(uintptr_t)JMP7;
+
+    /* FULL BRANCH_ANY stack, newest-first: [ret, jmp]. */
+    struct perf_branch_entry full[2];
+    memset(full, 0, sizeof full);
+    full[0].from = bj + 0x06;
+    full[0].to = bj + sizeof JMP7; /* ret -> outside */
+    full[1].from = bj + 0x02;
+    full[1].to = bj + 0x06; /* jmp -> 0x06 */
+
+    /* REDUCED stack: the direct uncond jmp edge is DROPPED. newest-first: [ret]. */
+    struct perf_branch_entry reduced[1];
+    memset(reduced, 0, sizeof reduced);
+    reduced[0].from = bj + 0x06;
+    reduced[0].to = bj + sizeof JMP7;
+
+    asmtest_trace_t *tf = asmtest_trace_new(64, 64);
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    /* Assign the decode rc to a local BEFORE CHECK — the CHECK macro evaluates its
+     * condition twice, so calling asmtest_amd_decode inside it would decode twice. */
+    int rcf = asmtest_amd_decode(full, 2, JMP7, sizeof JMP7, tf);
+    int rcr = asmtest_amd_decode(reduced, 1, JMP7, sizeof JMP7, tr);
+    CHECK(rcf == 0, "AMD reduced filter: full BRANCH_ANY stack decodes");
+    CHECK(rcr == 0, "AMD reduced filter: reduced (jmp-dropped) stack decodes");
+
+    static const uint64_t EXPECT_J[] = {0x00, 0x02, 0x06};
+    int fok = (asmtest_emu_trace_insns_total(tf) == 3);
+    for (size_t i = 0; fok && i < 3; i++)
+        fok = (tf->insns[i] == EXPECT_J[i]);
+    CHECK(fok, "AMD reduced filter: full array yields [0,2,6] (jmp taken)");
+
+    /* F1 — the reduced reconstruction must NOT append the dead 0x04/0x05 bytes. */
+    int rok = (asmtest_emu_trace_insns_total(tr) == 3);
+    for (size_t i = 0; rok && i < 3; i++)
+        rok = (tr->insns[i] == EXPECT_J[i]);
+    CHECK(rok, "AMD reduced filter: reduced stack follows the dropped jmp -> [0,2,6] "
+               "(dead bytes not decoded)");
+
+    /* F4 — mask-agnostic equivalence: reduced == full, byte for byte. */
+    int par = (asmtest_emu_trace_insns_total(tr) ==
+               asmtest_emu_trace_insns_total(tf)) &&
+              (asmtest_emu_trace_blocks_len(tr) ==
+               asmtest_emu_trace_blocks_len(tf)) &&
+              (asmtest_emu_trace_truncated(tr) ==
+               asmtest_emu_trace_truncated(tf));
+    for (size_t i = 0; par && i < asmtest_emu_trace_insns_total(tf); i++)
+        par = (tr->insns[i] == tf->insns[i]);
+    CHECK(par, "AMD reduced filter: reduced stack matches the full stack "
+               "byte-for-byte (correct under either mask)");
+    CHECK(asmtest_trace_covered(tr, 0x00) && asmtest_trace_covered(tr, 0x06) &&
+              asmtest_emu_trace_blocks_len(tr) == 2,
+          "AMD reduced filter: reduced stack keeps the {0, 0x06} partition");
+    CHECK(!asmtest_trace_covered(tr, 0x04),
+          "AMD reduced filter: the skipped byte 0x04 is NOT a block/insn");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "AMD reduced filter: reduced reconstruction is complete");
+    asmtest_trace_free(tf);
+    asmtest_trace_free(tr);
+
+    /* F2 — dropped back-edge cycle must terminate (step bound), not hang.
+     * jmp 0x06 ; int3*4 ; jmp 0x00 ; ret — both jmps dropped, so following 0->6->0
+     * never reaches the recorded ret source; the >len step bound bails truncated. */
+    static const unsigned char CYCLE9[] = {0xeb, 0x04, 0xcc, 0xcc, 0xcc,
+                                           0xcc, 0xeb, 0xf8, 0xc3};
+    const uint64_t bc = (uint64_t)(uintptr_t)CYCLE9;
+    struct perf_branch_entry cyc[1];
+    memset(cyc, 0, sizeof cyc);
+    cyc[0].from = bc + 0x08; /* ret, unreachable through the 0<->6 jmp cycle */
+    cyc[0].to = bc + sizeof CYCLE9;
+    asmtest_trace_t *tc = asmtest_trace_new(64, 64);
+    asmtest_amd_decode(cyc, 1, CYCLE9, sizeof CYCLE9, tc); /* must return, no hang */
+    CHECK(asmtest_emu_trace_truncated(tc),
+          "AMD reduced filter: a dropped back-edge cycle truncates (bounded, no hang)");
+    asmtest_trace_free(tc);
+
+    /* F3 — a dropped jmp leaving the region honestly truncates: the in-region source
+     * it was decoding toward becomes unreachable. xor ; jmp 0x24 (out of [b,b+4)). */
+    static const unsigned char EXIT4[] = {0x31, 0xc0, 0xeb, 0x20};
+    const uint64_t be = (uint64_t)(uintptr_t)EXIT4;
+    struct perf_branch_entry ext[1];
+    memset(ext, 0, sizeof ext);
+    ext[0].from = be + 0x03; /* an in-region source the out-of-region jmp strands */
+    ext[0].to = be + sizeof EXIT4;
+    asmtest_trace_t *te = asmtest_trace_new(64, 64);
+    asmtest_amd_decode(ext, 1, EXIT4, sizeof EXIT4, te);
+    CHECK(asmtest_emu_trace_truncated(te),
+          "AMD reduced filter: a dropped jmp leaving the region truncates");
+    asmtest_trace_free(te);
+
+    /* F5 — chained dropped jmps follow through: xor ; jmp A ; A: jmp B ; B: ret,
+     * each dead pair skipped. Executed {0x00, 0x02, 0x06, 0x0a}, blocks {0,6,0xa}. */
+    static const unsigned char CHAIN11[] = {0x31, 0xc0, 0xeb, 0x02, 0xcc, 0xcc,
+                                            0xeb, 0x02, 0xcc, 0xcc, 0xc3};
+    const uint64_t bh = (uint64_t)(uintptr_t)CHAIN11;
+    struct perf_branch_entry chn[1];
+    memset(chn, 0, sizeof chn);
+    chn[0].from = bh + 0x0a; /* ret; both jmps dropped */
+    chn[0].to = bh + sizeof CHAIN11;
+    asmtest_trace_t *th = asmtest_trace_new(64, 64);
+    asmtest_amd_decode(chn, 1, CHAIN11, sizeof CHAIN11, th);
+    static const uint64_t EXPECT_C[] = {0x00, 0x02, 0x06, 0x0a};
+    int hok = (asmtest_emu_trace_insns_total(th) == 4);
+    for (size_t i = 0; hok && i < 4; i++)
+        hok = (th->insns[i] == EXPECT_C[i]);
+    CHECK(hok, "AMD reduced filter: chained dropped jmps reconstruct [0,2,6,a]");
+    CHECK(asmtest_trace_covered(th, 0x00) && asmtest_trace_covered(th, 0x06) &&
+              asmtest_trace_covered(th, 0x0a) &&
+              asmtest_emu_trace_blocks_len(th) == 3,
+          "AMD reduced filter: chained follow yields blocks {0, 6, 0xa}");
+    CHECK(!asmtest_emu_trace_truncated(th),
+          "AMD reduced filter: chained follow is complete");
+    asmtest_trace_free(th);
+#else
+    printf("# SKIP AMD reduced filter: not Linux x86-64\n");
+#endif
+}
+
 /* CoreSight reconstruction is validated WITHOUT a CoreSight board (exactly as the
  * AMD reconstruction is validated without Zen hardware): feed asmtest_cs_reconstruct
  * the instruction RANGES an ETM/ETE would emit for a known path and assert it
@@ -612,6 +753,102 @@ static void test_amd_stitch_decodable(void) {
     }
 #else
     printf("# SKIP AMD stitch decodable-distance: not Linux x86-64\n");
+#endif
+}
+
+/* AMD #2A — period-spaced Tier-B stitching (validates the opt-in lbr_period path). With
+ * lbr_period=P the live capture fires a PMI every P taken branches instead of every one,
+ * so consecutive 16-deep windows overlap by (depth - P) instead of (depth - 1) — ~P x
+ * fewer interrupts before throttling/ring-overflow truncates the run. The SAME
+ * asmtest_amd_stitch splices them: for a path of DISTINCT edges the smallest-overlap
+ * heuristic finds the true shift P (the distinct edges disambiguate the alignment), so
+ * all edges are recovered gaplessly. Host-independent (synthetic period-spaced windows,
+ * base=NULL so the decodable-distance guard is inert on the abstract edges).
+ *
+ * CAVEAT (why the default stays lbr_period=0 / period=1): a SELF-SIMILAR loop whose
+ * every taken edge is identical gives the smallest-overlap heuristic no way to tell 1
+ * iteration from P, so under period>1 it silently UNDERCOUNTS (picks shift d=1). period=1
+ * is the only universally exact value; lbr_period>1 is a coverage/throttle trade the
+ * caller opts into for distinct-edge hot paths, verified for reach on a live Zen host. */
+static void test_amd_stitch_period_spaced(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD period-spaced stitch: built without Capstone\n");
+        return;
+    }
+    const uint64_t b = (uint64_t)(uintptr_t)AMD_LOOP;
+    enum { K = 18, P = 4 }; /* 18 distinct edges, sampled every P=4 */
+    struct perf_branch_entry seq[K]; /* execution order, all edges DISTINCT */
+    memset(seq, 0, sizeof seq);
+    for (int i = 0; i < K; i++) {
+        seq[i].from = b + 0x100 + (uint64_t)i;
+        seq[i].to = b + 0x300 + (uint64_t)i;
+    }
+    /* sample_period=P: a sample fires at global edge index g = P-1, 2P-1, ... plus a
+     * final flush at the last edge (K-1). Each window holds the last min(16, g+1)
+     * edges, newest-first — consecutive windows overlap by (depth - P). */
+    int gpos[8];
+    int ns = 0;
+    for (int g = P - 1; g < K; g += P)
+        gpos[ns++] = g;
+    if (ns == 0 || gpos[ns - 1] != K - 1)
+        gpos[ns++] = K - 1; /* final exit sample reaches the newest edge */
+    struct perf_branch_entry win[8][16];
+    const struct perf_branch_entry *samples[8];
+    size_t nrs[8];
+    for (int s = 0; s < ns; s++) {
+        int g = gpos[s];
+        int depth = (g + 1 < 16) ? (g + 1) : 16;
+        for (int e = 0; e < depth; e++)
+            win[s][e] = seq[g - e]; /* newest-first */
+        samples[s] = win[s];
+        nrs[s] = (size_t)depth;
+    }
+
+    struct perf_branch_entry out[64];
+    int gap = 0;
+    size_t n = asmtest_amd_stitch(samples, nrs, (size_t)ns, NULL, 0, 0, out, 64,
+                                  &gap);
+    CHECK(n == K && gap == 0,
+          "AMD period-spaced (P=4) distinct-edge windows stitch to all 18 edges");
+    /* Output is newest-first: out[0] == seq[K-1] ... out[K-1] == seq[0]. */
+    int order = (n == K);
+    for (size_t i = 0; order && i < (size_t)K; i++)
+        order = (out[i].from == seq[K - 1 - i].from &&
+                 out[i].to == seq[K - 1 - i].to);
+    CHECK(order,
+          "AMD period-spaced stitch recovers the exact edge sequence (distinct "
+          "edges disambiguate each window's shift)");
+
+    /* Caveat, made concrete: the SAME period-spacing over a homogeneous loop (every
+     * edge identical) undercounts — the smallest-overlap heuristic cannot recover P.
+     * This is why the default is lbr_period=0 (period=1, universally exact). */
+    struct perf_branch_entry same[K];
+    memset(same, 0, sizeof same);
+    for (int i = 0; i < K; i++) {
+        same[i].from = b + 0xd; /* AMD_LOOP back-edge, identical every iteration */
+        same[i].to = b + 0x7;
+    }
+    struct perf_branch_entry hwin[8][16];
+    const struct perf_branch_entry *hsamples[8];
+    size_t hnrs[8];
+    for (int s = 0; s < ns; s++) {
+        int g = gpos[s];
+        int depth = (g + 1 < 16) ? (g + 1) : 16;
+        for (int e = 0; e < depth; e++)
+            hwin[s][e] = same[g - e];
+        hsamples[s] = hwin[s];
+        hnrs[s] = (size_t)depth;
+    }
+    struct perf_branch_entry hout[64];
+    int hgap = 0;
+    size_t hn = asmtest_amd_stitch(hsamples, hnrs, (size_t)ns, AMD_LOOP, b,
+                                   sizeof AMD_LOOP, hout, 64, &hgap);
+    CHECK(hn < K,
+          "AMD period-spaced stitch UNDERCOUNTS a self-similar loop (documents "
+          "why default period=1)");
+#else
+    printf("# SKIP AMD period-spaced stitch: not Linux x86-64\n");
 #endif
 }
 
@@ -4805,6 +5042,7 @@ int main(void) {
     test_amd_freeze_probe();
     test_amd_reconstruction();
     test_amd_spec_filter();
+    test_amd_reduced_filter();
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */
     test_stitch_slices();
@@ -4848,6 +5086,7 @@ int main(void) {
     /* AMD Tier-B stitching past the 16-deep window (host-validated, synthetic). */
     test_amd_stitch();
     test_amd_stitch_decodable();
+    test_amd_stitch_period_spaced();
 
     /* §3.2 AMD data_tail drain reconstruction (host-testable half; live needs Zen 3+). */
     test_amd_drain_reconstruction();
