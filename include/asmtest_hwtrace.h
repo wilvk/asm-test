@@ -461,6 +461,16 @@ int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
                                            void (*run_region)(void *),
                                            void *arg);
 
+/* §D3 out-of-process inline whole-window: BEGIN/STOP/END split of stealth_trace_windowed,
+ * for the `using (new AsmTrace(outOfProcess:true)) { block }` shape (no delegate frame).
+ * _begin forks the reverse-attach helper, which SEIZEs the CALLING thread and single-steps
+ * it out of band from this point on; it returns a live ctx handle in *ctx_out with the
+ * window ARMED. _end raises the async stop flag, joins the helper, and copies the recorded
+ * ABSOLUTE-address stream into *trace. Records only regions pre-published on `chan`.
+ * Call _end on the SAME thread that called _begin. Returns OK / EINVAL / EUNAVAIL. Linux x86-64/AArch64. */
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out);
+int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace);
+
 /* §D3 STATISTICAL AMD-LBR whole-window survey (region-FREE, in-process, crash-proof). The
  * honest AMD whole-window shape: exact whole-window is a hardware dead end (16-deep stack +
  * throttle), so this SAMPLES the branch stack at sample_period=`period` (>1, clamped, to

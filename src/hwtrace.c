@@ -2667,6 +2667,130 @@ int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
     munmap(sc, total);
     return rc;
 }
+
+typedef struct {
+    pid_t helper_pid;
+    asmtest_stealth_scratch_t *sc;
+    size_t total_size;
+    size_t icap;
+    size_t bcap;
+} stealth_window_ctx_t;
+
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out) {
+    if (ctx_out == NULL)
+        return ASMTEST_HW_EINVAL;
+
+    size_t icap = 65536;
+    size_t bcap = 4096;
+    size_t total = sizeof(asmtest_stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
+
+    asmtest_stealth_scratch_t *sc = (asmtest_stealth_scratch_t *)mmap(
+        NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (sc == MAP_FAILED)
+        return ASMTEST_HW_EUNAVAIL;
+    memset(sc, 0, total);
+    sc->icap = icap;
+    sc->bcap = bcap;
+    sc->win = 1;
+    sc->win_chan = chan;
+    sc->rc = ASMTEST_HW_EDECODE;
+    sc->stop = 0;
+    sc->done = 0;
+
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    pid_t parent = (pid_t)syscall(SYS_gettid);
+    pid_t helper = fork();
+    if (helper < 0) {
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    if (helper == 0) {
+        asmtest_stealth_helper_run_window_async(sc, parent);
+        _exit(0);
+    }
+
+    int helper_gone = 0;
+    while (!sc->ready) {
+        int ws = 0;
+        if (waitpid(helper, &ws, WNOHANG) == helper) {
+            helper_gone = 1;
+            break;
+        }
+    }
+    if (helper_gone || sc->rc == ASMTEST_HW_EUNAVAIL) {
+        int st = 0;
+        waitpid(helper, &st, 0);
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+
+    stealth_window_ctx_t *ctx = (stealth_window_ctx_t *)malloc(sizeof(stealth_window_ctx_t));
+    if (ctx == NULL) {
+        kill(helper, SIGKILL);
+        int st = 0;
+        waitpid(helper, &st, 0);
+        munmap(sc, total);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    ctx->helper_pid = helper;
+    ctx->sc = sc;
+    ctx->total_size = total;
+    ctx->icap = icap;
+    ctx->bcap = bcap;
+
+    *ctx_out = ctx;
+    return ASMTEST_HW_OK;
+}
+
+int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace) {
+    if (ctx == NULL)
+        return ASMTEST_HW_EINVAL;
+    stealth_window_ctx_t *c = (stealth_window_ctx_t *)ctx;
+
+    c->sc->stop = 1;
+
+    while (!c->sc->done) {
+        int ws = 0;
+        if (waitpid(c->helper_pid, &ws, WNOHANG) == c->helper_pid) {
+            break;
+        }
+        usleep(100);
+    }
+
+    int st = 0;
+    waitpid(c->helper_pid, &st, 0);
+
+    int rc = c->sc->rc;
+    if (rc == ASMTEST_HW_OK && trace != NULL) {
+        uint64_t *ibuf = (uint64_t *)((char *)c->sc + sizeof(asmtest_stealth_scratch_t));
+        uint64_t *bbuf = ibuf + c->icap;
+
+        size_t ni = c->sc->shadow.insns_len;
+        if (ni > trace->insns_cap)
+            ni = trace->insns_cap;
+        if (trace->insns != NULL) {
+            for (size_t i = 0; i < ni; i++)
+                trace->insns[i] = ibuf[i];
+        }
+        trace->insns_len = ni;
+        trace->insns_total = c->sc->shadow.insns_total;
+
+        size_t nb = c->sc->shadow.blocks_len;
+        if (nb > trace->blocks_cap)
+            nb = trace->blocks_cap;
+        if (trace->blocks != NULL) {
+            for (size_t i = 0; i < nb; i++)
+                trace->blocks[i] = bbuf[i];
+        }
+        trace->blocks_len = nb;
+        trace->blocks_total = c->sc->shadow.blocks_total;
+        trace->truncated = c->sc->shadow.truncated;
+    }
+
+    munmap(c->sc, c->total_size);
+    free(c);
+    return rc;
+}
 #else
 int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
                                   asmtest_trace_t *trace, long *result_out,
@@ -2692,6 +2816,16 @@ int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
     (void)result_out;
     (void)run_region;
     (void)arg;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out) {
+    (void)chan;
+    (void)ctx_out;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace) {
+    (void)ctx;
+    (void)trace;
     return ASMTEST_HW_ENOSYS;
 }
 #endif

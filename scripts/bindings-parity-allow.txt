@@ -80,6 +80,9 @@ ALL asmtest_ptrace_trace_window_call        # §D3 fork-internal whole-window ca
 ALL asmtest_hwtrace_sample_window_amd       # §D3 statistical AMD-LBR WindowHot survey (hot-method histogram, NOT an exact trace): dotnet wraps it (WindowHot); the other nine gain it when they grow an AMD survey lane
 ALL asmtest_hwtrace_sample_begin_amd        # begin/end split of the AMD-LBR survey for the `using (new AsmTrace(HwBackend.AmdLbr)) { block }` inline shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end)
 ALL asmtest_hwtrace_sample_end_amd          #   (paired with sample_begin_amd above; dotnet-only until a binding grows the inline AMD-survey shape)
+ALL asmtest_hwtrace_stealth_window_begin    # begin/end split of the windowed stealth stepper for the inline `using (new AsmTrace(outOfProcess:true))` shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end); other nine gain it if they grow an inline OOP scope
+ALL asmtest_hwtrace_stealth_window_end      #   (paired with stealth_window_begin above)
+ALL asmtest_ptrace_trace_attached_window_stop # ptrace-stop stepper used internally by the stealth helper
 
 # Auto-escalating CALL-owning cross-tier trace (docs/internal/plans/auto-escalating-trace-plan.md).
 # C-level entry in the call_scoped family (owns the invocation + args), NOT the pure-query

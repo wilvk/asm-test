@@ -161,6 +161,48 @@ int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
     sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
     return sc->rc;
 }
+
+int asmtest_stealth_helper_run_window_async(asmtest_stealth_scratch_t *sc,
+                                            pid_t parent) {
+    if (sc == NULL)
+        return ASMTEST_HW_EINVAL;
+    /* Recompute the shadow buffer pointers AND the channel in THIS address space. */
+    uint64_t *ibuf = (uint64_t *)((char *)sc + sizeof(*sc));
+    uint64_t *bbuf = ibuf + sc->icap;
+    sc->shadow.insns = ibuf;
+    sc->shadow.insns_cap = sc->icap;
+    sc->shadow.insns_len = 0;
+    sc->shadow.insns_total = 0;
+    sc->shadow.blocks = bbuf;
+    sc->shadow.blocks_cap = sc->bcap;
+    sc->shadow.blocks_len = 0;
+    sc->shadow.blocks_total = 0;
+    sc->shadow.truncated = 0;
+
+    asmtest_addr_channel_t *chan = (asmtest_addr_channel_t *)sc->win_chan;
+
+    alarm(15);
+    if (ptrace(PTRACE_SEIZE, parent, (void *)0, (void *)0) != 0 ||
+        ptrace(PTRACE_INTERRUPT, parent, (void *)0, (void *)0) != 0) {
+        sc->rc = ASMTEST_HW_EUNAVAIL;
+        sc->ready = 1;
+        return sc->rc;
+    }
+    int st = 0;
+    if (waitpid(parent, &st, 0) < 0 || !WIFSTOPPED(st)) {
+        sc->rc = ASMTEST_HW_EUNAVAIL;
+        sc->ready = 1;
+        return sc->rc;
+    }
+    sc->ready = 1;
+
+    int tr = asmtest_ptrace_trace_attached_window_stop(parent, chan, &sc->stop, &sc->shadow);
+
+    ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
+    sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;
+    sc->done = 1;
+    return sc->rc;
+}
 #else
 int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
                                const void *base, size_t len) {
@@ -177,6 +219,12 @@ int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
     (void)parent;
     (void)win_base;
     (void)win_len;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_stealth_helper_run_window_async(asmtest_stealth_scratch_t *sc,
+                                            pid_t parent) {
+    (void)sc;
+    (void)parent;
     return ASMTEST_HW_ENOSYS;
 }
 #endif

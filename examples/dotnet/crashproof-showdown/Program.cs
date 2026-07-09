@@ -72,6 +72,22 @@ internal static class Program
         // ---- SAFE leg: the IDENTICAL block, in THIS process, stepped out of band. Cannot crash. ----
         AsmTrace w = AsmTrace.Window(() => SpawnThreadInWindow());  // already-closed; do NOT `using`
 
+        // ---- INLINE OOP leg: the IDENTICAL block, using the new inline out-of-process using scope. Cannot crash. ----
+        Console.WriteLine("\nINLINE OOP leg: using (new AsmTrace(outOfProcess: true)) (expected to survive)");
+        using (var t = new AsmTrace(outOfProcess: true))
+        {
+            if (t.Armed)
+            {
+                SpawnThreadInWindow();
+                Console.WriteLine($"   inline OOP scope: SURVIVED, captured {t.Addresses.Length} instructions"
+                                + (t.Truncated ? " (truncated)" : "") + ".");
+            }
+            else
+            {
+                Console.WriteLine($"   inline OOP scope self-skipped: {t.SkipReason}");
+            }
+        }
+
         return Report.Print(childCode, w);
     }
 

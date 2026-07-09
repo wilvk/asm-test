@@ -443,6 +443,10 @@ namespace Asmtest
             int period, out IntPtr ctx);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_end_amd(
             IntPtr ctx, ulong[] ips, UIntPtr cap, out UIntPtr nips, out int truncated);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_window_begin(
+            IntPtr chan, out IntPtr ctx);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_window_end(
+            IntPtr ctx, IntPtr trace);
 
         // AMD-P0 deterministic boundary LBR snapshot (src/branchsnap.c). Unlike the sampled
         // survey above, this is EXACT for a tiny single-shot region the sampler is too coarse
@@ -1484,6 +1488,33 @@ namespace Asmtest
         }
     }
 
+    /// <summary>§D3: a finalizable holder for the native out-of-process inline stepper context,
+    /// so only the inline OOP window scopes carry finalization overhead. Dispose drains via
+    /// <see cref="End"/>; a leaked (undisposed) scope has its helper process joined + freed by
+    /// the finalizer.</summary>
+    internal sealed class OopWindowCtx
+    {
+        IntPtr _ctx;
+        public OopWindowCtx(IntPtr ctx) { _ctx = ctx; }
+
+        public int End(IntPtr traceHandle)
+        {
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero) return 0;
+            _ctx = IntPtr.Zero;
+            GC.SuppressFinalize(this);
+            return HwNative.asmtest_hwtrace_stealth_window_end(c, traceHandle);
+        }
+
+        ~OopWindowCtx()
+        {
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero || !HwNative.LibAvailable) return;
+            _ctx = IntPtr.Zero;
+            try { HwNative.asmtest_hwtrace_stealth_window_end(c, IntPtr.Zero); } catch { }
+        }
+    }
+
     public sealed class AsmTrace : IDisposable
     {
         readonly string _name;
@@ -1493,6 +1524,9 @@ namespace Asmtest
         readonly bool _oopWindow;   // §D3: out-of-process whole-window (AsmTrace.Window)
         readonly bool _amdWindow;   // §D3: AMD-LBR statistical inline whole-window (new AsmTrace(HwBackend.AmdLbr))
         AmdSampler _amdSampler;     // the armed AMD sampler (finalizable; null until armed)
+        readonly bool _oopInlineWindow; // §D3: out-of-process inline whole-window (new AsmTrace(outOfProcess: true))
+        OopWindowCtx _oopWinCtx;    // the armed async OOP stepper context (finalizable; null until armed)
+        IntPtr _oopWinChan;         // the shared address channel for JIT regions
         ulong[] _amdIps;            // the endpoint buffer drained in Dispose
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
         readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
@@ -1876,6 +1910,72 @@ namespace Asmtest
             // (which MUST run on this thread — the documented must-dispose contract).
             Thread.BeginThreadAffinity();
             Armed = true;
+        }
+
+        /// <summary>
+        /// §D3 — the out-of-process inline-`using` whole-window: the same crash-proof,
+        /// out-of-band single-step survey as <see cref="Window"/>, but as a bare
+        /// scope — <c>using (var ww = new AsmTrace(outOfProcess: true)) { …managed block… }</c>.
+        /// The ctor forks the helper process and arms tracing; the block runs inline on the calling thread
+        /// single-stepped out of band; <see cref="Dispose"/> joins the helper and attributes.
+        /// Self-skips (<see cref="Armed"/> false, <see cref="SkipReason"/> set) where ptrace is refused (Yama).
+        /// </summary>
+        public AsmTrace(bool outOfProcess, bool byMethod = true, bool withRundown = true,
+                        int rundownSettleMs = 300,
+                        [CallerMemberName] string member = null,
+                        [CallerLineNumber] int line = 0)
+        {
+            _name = ScopeName(member, line);
+            _emit = false;
+            _oopInlineWindow = true;
+            _rundownSettleMs = rundownSettleMs;
+            _armTid = Environment.CurrentManagedThreadId;
+            if (outOfProcess == false)
+            {
+                SkipReason = "outOfProcess must be true; for in-process single-step whole-window use the empty constructor `new AsmTrace()`";
+                return;
+            }
+            if (!HwNative.LibAvailable)
+            {
+                SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
+                return;
+            }
+            if (!Ptrace.Available())
+            {
+                SkipReason = "out-of-process stepper unavailable: " + Ptrace.SkipReason();
+                return;
+            }
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+            _rundownRequested = withRundown;
+
+            _oopWinChan = HwNative.asmtest_addr_channel_new_shared();
+            if (_oopWinChan == IntPtr.Zero)
+            {
+                SkipReason = "out-of-process window: shared channel alloc failed";
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                return;
+            }
+            foreach (AddrRec r in EnumerateManagedCodeRanges())
+                HwNative.asmtest_addr_channel_publish_rec(_oopWinChan, r.Base, r.Len, r.Version);
+
+            Thread.BeginThreadAffinity();
+            int rc = HwNative.asmtest_hwtrace_stealth_window_begin(_oopWinChan, out IntPtr ctx);
+            if (rc == HwNative.ASMTEST_HW_OK)
+            {
+                _oopWinCtx = new OopWindowCtx(ctx);
+                Armed = true;
+            }
+            else
+            {
+                Thread.EndThreadAffinity();
+                SkipReason = $"stealth_window_begin failed: rc={rc}";
+                HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
+                _oopWinChan = IntPtr.Zero;
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+            }
         }
 
         /// <summary>
@@ -2444,6 +2544,42 @@ namespace Asmtest
                     Thread.EndThreadAffinity();       // paired with the ctor's pin (armed path)
                 }
                 else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                return;
+            }
+            if (_oopInlineWindow)
+            {
+                if (_oopWinCtx != null)
+                {
+                    var tr = HwTrace.Create(blocks: 4096, instructions: 65536);
+                    int rc = _oopWinCtx.End(tr.Handle);
+                    _oopWinCtx = null;
+                    Thread.EndThreadAffinity();
+                    if (rc == HwNative.ASMTEST_HW_OK)
+                    {
+                        if (_map != null)
+                        {
+                            _map.Stop();
+                            MethodsObserved = _map.Count;
+                        }
+                        ulong n = HwNative.asmtest_emu_trace_insns_len(tr.Handle);
+                        var addrs = new ulong[n];
+                        for (ulong i = 0; i < n; i++)
+                            addrs[i] = HwNative.asmtest_emu_trace_insn_at(tr.Handle, (UIntPtr)i);
+                        Addresses = addrs;
+                        Truncated = HwNative.asmtest_emu_trace_truncated(tr.Handle) != 0;
+                        IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+                        ulong when = _map != null ? _map.ImageNow : 0;
+                        AttributeAddresses(img, when);
+                    }
+                    tr.Free();
+                }
+                else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_oopWinChan != IntPtr.Zero)
+                {
+                    HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
+                    _oopWinChan = IntPtr.Zero;
+                }
                 if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
                 return;
             }

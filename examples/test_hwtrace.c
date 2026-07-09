@@ -761,6 +761,59 @@ static void test_call_auto(void) {
 #endif
 }
 
+static void test_stealth_window_inline(void) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP stealth_window_inline: ptrace unavailable\n");
+        return;
+    }
+
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP stealth_window_inline: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_addr_channel_t *chan = asmtest_addr_channel_new_shared();
+    CHECK(chan != NULL, "stealth_window_inline: alloc channel");
+    asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p, sizeof ROUTINE, 0);
+
+    void *ctx = NULL;
+    int rc = asmtest_hwtrace_stealth_window_begin(chan, &ctx);
+    CHECK(rc == ASMTEST_HW_OK || rc == ASMTEST_HW_EUNAVAIL,
+          "stealth_window_inline: begin split (or Yama skip)");
+    if (rc == ASMTEST_HW_OK) {
+        CHECK(ctx != NULL, "stealth_window_inline: valid context returned");
+
+        long (*fn)(long, long) = (long (*)(long, long))p;
+        long res = fn(10, 32);
+        CHECK(res == 42, "stealth_window_inline: correct result (10+32)");
+
+        asmtest_trace_t *tr = asmtest_trace_new(512, 64);
+        int end_rc = asmtest_hwtrace_stealth_window_end(ctx, tr);
+        CHECK(end_rc == ASMTEST_HW_OK, "stealth_window_inline: end split succeeded");
+
+        printf("# stealth_window_inline: insns=%llu blocks=%llu truncated=%d\n",
+               (unsigned long long)asmtest_emu_trace_insns_total(tr),
+               (unsigned long long)asmtest_emu_trace_blocks_total(tr),
+               asmtest_emu_trace_truncated(tr));
+
+        CHECK(asmtest_emu_trace_insns_total(tr) > 0,
+              "stealth_window_inline: captured instructions in window");
+
+        asmtest_trace_free(tr);
+    }
+    asmtest_addr_channel_free_shared(chan);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP stealth_window_inline: not Linux x86-64/AArch64\n");
+#endif
+}
+
 #if defined(__linux__) && defined(__x86_64__)
 static long g_msr_result;
 static void msr_run_loop(void *arg) {
@@ -5293,6 +5346,7 @@ int main(void) {
     test_amd_live();
     test_amd_reach_period();
     test_call_auto();
+    test_stealth_window_inline();
     test_amd_msr();
 
     /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */

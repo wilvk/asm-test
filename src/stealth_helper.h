@@ -31,6 +31,10 @@ typedef struct {
         ready; /* stepper -> caller: seized + about to plant the run_to bp */
     volatile int
         rc;      /* stepper's outcome (ASMTEST_HW_*)                          */
+    volatile int
+        stop;    /* caller -> helper: end the async window at the next step   */
+    volatile int
+        done;    /* helper -> caller: detached + shadow lens final            */
     long result; /* the region's return value                                */
     size_t icap; /* insns buffer capacity (to recompute the pointer)         */
     size_t bcap; /* blocks buffer capacity                                   */
@@ -58,6 +62,8 @@ int asmtest_stealth_helper_run(asmtest_stealth_scratch_t *sc, pid_t parent,
 int asmtest_stealth_helper_run_windowed(asmtest_stealth_scratch_t *sc,
                                         pid_t parent, const void *win_base,
                                         size_t win_len);
+int asmtest_stealth_helper_run_window_async(asmtest_stealth_scratch_t *sc,
+                                            pid_t parent);
 
 /* Locate the bundled `asmtest-stealth-helper` binary: the ASMTEST_STEALTH_HELPER
  * env override first (an explicit path), else a dladdr-sibling lookup next to the

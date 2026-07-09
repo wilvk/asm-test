@@ -1883,56 +1883,31 @@ static size_t foreign_insn_len(pid_t pid, uint64_t at) {
     return asmtest_disas(PTRACE_TRACE_ARCH, buf, (size_t)got, 0, 0, NULL, 0);
 }
 
-int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
-                                           size_t win_len,
-                                           asmtest_addr_channel_t *chan,
-                                           long *result,
-                                           asmtest_trace_t *trace) {
-    if (win_base_p == NULL || win_len == 0 || trace == NULL)
-        return ASMTEST_PTRACE_EINVAL;
-    const uint64_t win_base = (uint64_t)(uintptr_t)win_base_p;
-
-    /* The caller has run_to'd win_base (the window frame's entry). Capture the frame's
-     * RETURN address so we can end the window when control returns to it — the
-     * region-agnostic window boundary (the alternative, "pc left the region," has no
-     * meaning across a set of regions the JIT keeps growing). */
-    uint64_t pc0 = 0, sp0 = 0, win_ret = 0;
-    if (read_pc_ret(pid, &pc0, NULL, &sp0, NULL) != 0)
-        return ASMTEST_PTRACE_ETRACE;
-#if defined(__x86_64__)
-    { /* just after `call`, [rsp] holds the return address */
-        struct iovec l = {&win_ret, sizeof win_ret};
-        struct iovec r = {(void *)(uintptr_t)sp0, sizeof win_ret};
-        if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof win_ret)
-            return ASMTEST_PTRACE_ETRACE;
-    }
-#else
-    read_pc_ret(pid, NULL, NULL, NULL,
-                &win_ret); /* AArch64: LR holds the return */
-#endif
-
-    /* Accumulated published regions (window frame + every JIT method the parent
-     * streams). Drained from the channel at entry and after every step. */
-    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
-    uint32_t nreg = 0;
-    if (chan != NULL)
-        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
-
-    uint64_t *stream =
-        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
-    if (stream == NULL)
-        return ASMTEST_PTRACE_ETRACE;
-    uint32_t n = 0;
-    int overflow = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+/* Shared inner loop for trace_attached_windowed and trace_attached_window_stop */
+static int trace_attached_window_loop(pid_t pid,
+                                      uint64_t win_base, size_t win_len,
+                                      uint64_t win_ret,
+                                      asmtest_addr_channel_t *chan,
+                                      asmtest_addr_rec_t *regs,
+                                      uint32_t *nreg_io,
+                                      volatile int *stop,
+                                      long *result,
+                                      uint64_t *stream,
+                                      uint32_t *stream_len,
+                                      int *overflow_out) {
+    uint32_t n = *stream_len;
+    int overflow = 0;
+    int rc = ASMTEST_PTRACE_OK;
+    int status = 0;
     long retval_final = 0;
-
-    if (in_region_set(pc0, win_base, win_len, regs, nreg) &&
-        n < PTRACE_STREAM_CAP)
-        stream[n++] = pc0; /* record the window entry */
-
     uint64_t steps = 0;
-    int pending_sig = 0; /* a non-fault signal to re-inject on the next step */
+    int pending_sig = 0;
+    uint32_t nreg = *nreg_io;
+
     for (;;) {
+        if (stop != NULL && *stop != 0) {
+            break;
+        }
         if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
                    (void *)(uintptr_t)pending_sig) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
@@ -1948,21 +1923,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
-            /* FORWARD every non-SIGTRAP signal and keep stepping. Unlike a native leaf
-             * (where a SIGSEGV is a crash), a managed runtime RAISES AND HANDLES faults as
-             * normal operation — SIGSEGV for GC write-barriers / null-checks / stack
-             * probes, plus the GC-suspend hijack and process-group signals. Its own
-             * sigaction handler fixes up and resumes, so treating these as terminal would
-             * truncate the window on the runtime's very first internal fault (observed: a
-             * managed window truncated at ~21 insns on an early SIGSEGV). A genuinely fatal
-             * fault kills the tracee — WIFSIGNALED/WIFEXITED above ends the loop — and the
-             * step backstop bounds a pathological fault loop. This is what lets the window
-             * step a live GC'd runtime thread through a whole managed block. */
             pending_sig = WSTOPSIG(status);
             continue;
         }
-        /* Hard step backstop: bound the runtime glue single-stepped between published
-         * regions (the recorded-insn cap never trips on unrecorded glue). */
         if (++steps > PTRACE_WINDOW_STEP_CAP) {
             overflow = 1;
             break;
@@ -1972,59 +1935,135 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
-        /* Pick up regions the parent published since the last step (a method JIT'd
-         * mid-window) — this is the cross-process address channel doing its job. */
         if (chan != NULL && nreg < ASMTEST_ADDR_CHAN_CAP)
             nreg += asmtest_addr_channel_drain(chan, regs + nreg,
                                                ASMTEST_ADDR_CHAN_CAP - nreg);
 
-        if (pc == win_ret) { /* control returned to the window's caller: done */
+        if (stop == NULL && pc == win_ret) {
             retval_final = (long)rax;
             break;
         }
         if (in_region_set(pc, win_base, win_len, regs, nreg)) {
             if (n < PTRACE_STREAM_CAP)
-                stream[n++] =
-                    pc; /* record ABSOLUTE — the caller classifies by region */
+                stream[n++] = pc;
             else {
                 overflow = 1;
                 break;
             }
         }
-        /* pc outside every published region: runtime/glue between managed methods.
-         * Not recorded (the noise the managed capture elides); single-stepping still
-         * carries us through it back to the next published region. */
     }
+    *nreg_io = nreg;
+    *stream_len = n;
+    *overflow_out = overflow;
     if (result != NULL)
         *result = retval_final;
+    return rc;
+}
 
-    /* Materialize the ABSOLUTE-address stream: a new block starts at a discontinuity
-     * (this address is not the fall-through of the previous recorded one), matching
-     * the block partition of every other backend. Lengths come from foreign reads.
-     * An UNDECODABLE address (foreign_insn_len==0 — common for a managed runtime's
-     * execute-only / W^X JIT pages process_vm_readv cannot read) does NOT discard the
-     * rest of the window: KEEP the absolute address (the caller attributes by address,
-     * decoding from its OWN memory), just break the fall-through chain and flag the
-     * partition imprecise. Only a native-leaf window (fully readable) stays exact. */
-    if (rc == ASMTEST_PTRACE_OK) {
-        int have_prev = 0;
-        uint64_t expected_next = 0;
-        for (uint32_t i = 0; i < n; i++) {
-            uint64_t at = stream[i];
-            if (!have_prev || at != expected_next)
-                trace_append_block(trace, at);
-            trace_append_insn(trace, at);
-            size_t l = foreign_insn_len(pid, at);
-            if (l == 0) {
-                trace->truncated = true; /* partition imprecise past here */
-                have_prev = 0;           /* next address opens a fresh block */
-                continue; /* keep the address; do NOT drop the tail */
-            }
-            expected_next = at + l;
-            have_prev = 1;
+static void materialize_stream_to_trace(pid_t pid, const uint64_t *stream,
+                                        uint32_t n, int overflow,
+                                        asmtest_trace_t *trace) {
+    int have_prev = 0;
+    uint64_t expected_next = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t at = stream[i];
+        if (!have_prev || at != expected_next)
+            trace_append_block(trace, at);
+        trace_append_insn(trace, at);
+        size_t l = foreign_insn_len(pid, at);
+        if (l == 0) {
+            trace->truncated = true; /* partition imprecise past here */
+            have_prev = 0;           /* next address opens a fresh block */
+            continue; /* keep the address; do NOT drop the tail */
         }
-        if (overflow)
-            trace->truncated = true;
+        expected_next = at + l;
+        have_prev = 1;
+    }
+    if (overflow)
+        trace->truncated = true;
+}
+
+int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
+                                           size_t win_len,
+                                           asmtest_addr_channel_t *chan,
+                                           long *result,
+                                           asmtest_trace_t *trace) {
+    if (win_base_p == NULL || win_len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    const uint64_t win_base = (uint64_t)(uintptr_t)win_base_p;
+
+    uint64_t pc0 = 0, sp0 = 0, win_ret = 0;
+    if (read_pc_ret(pid, &pc0, NULL, &sp0, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+#if defined(__x86_64__)
+    {
+        struct iovec l = {&win_ret, sizeof win_ret};
+        struct iovec r = {(void *)(uintptr_t)sp0, sizeof win_ret};
+        if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof win_ret)
+            return ASMTEST_PTRACE_ETRACE;
+    }
+#else
+    read_pc_ret(pid, NULL, NULL, NULL, &win_ret);
+#endif
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    uint32_t n = 0;
+
+    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
+    uint32_t nreg = 0;
+    if (chan != NULL)
+        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
+
+    if (in_region_set(pc0, win_base, win_len, regs, nreg) &&
+        n < PTRACE_STREAM_CAP)
+        stream[n++] = pc0;
+
+    int overflow = 0;
+    int rc = trace_attached_window_loop(pid, win_base, win_len, win_ret,
+                                        chan, regs, &nreg, NULL, result, stream, &n, &overflow);
+
+    if (rc == ASMTEST_PTRACE_OK) {
+        materialize_stream_to_trace(pid, stream, n, overflow, trace);
+    }
+    free(stream);
+    return rc;
+}
+
+int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
+                                             asmtest_addr_channel_t *chan,
+                                             volatile int *stop,
+                                             asmtest_trace_t *trace) {
+    if (trace == NULL || stop == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+
+    uint64_t pc0 = 0;
+    if (read_pc_ret(pid, &pc0, NULL, NULL, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    uint32_t n = 0;
+
+    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
+    uint32_t nreg = 0;
+    if (chan != NULL)
+        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
+
+    if (in_region_set(pc0, 0, 0, regs, nreg) &&
+        n < PTRACE_STREAM_CAP)
+        stream[n++] = pc0;
+
+    int overflow = 0;
+    int rc = trace_attached_window_loop(pid, 0, 0, 0,
+                                        chan, regs, &nreg, stop, NULL, stream, &n, &overflow);
+
+    if (rc == ASMTEST_PTRACE_OK) {
+        materialize_stream_to_trace(pid, stream, n, overflow, trace);
     }
     free(stream);
     return rc;
@@ -2669,6 +2708,17 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
     (void)win_len;
     (void)chan;
     (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
+                                             asmtest_addr_channel_t *chan,
+                                             volatile int *stop,
+                                             asmtest_trace_t *trace) {
+    (void)pid;
+    (void)chan;
+    (void)stop;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;
 }

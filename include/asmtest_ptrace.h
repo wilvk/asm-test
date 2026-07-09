@@ -144,6 +144,10 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base,
                                            asmtest_addr_channel_t *chan,
                                            long *result,
                                            asmtest_trace_t *trace);
+int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
+                                             asmtest_addr_channel_t *chan,
+                                             volatile int *stop,
+                                             asmtest_trace_t *trace);
 
 /* §D3 whole-window capture that OWNS its tracee — the fork-internal analog of
  * asmtest_ptrace_trace_call. Forks a child that calls `code(args…)` (up to 6 integer
