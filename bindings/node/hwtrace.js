@@ -151,6 +151,8 @@ const Options = koffi.struct('asmtest_hwtrace_options_t', {
   data_size: 'size_t',
   snapshot: 'int',
   object_hint: 'str',
+  lbr_period: 'int',    // AMD LBR opt-in (0 = default sample_period=1)
+  branch_filter: 'int', // AMD LBR opt-in (0 = default PERF_SAMPLE_BRANCH_ANY)
 });
 
 // koffi struct layout mirroring asmtest_codeimage_event_t (40 bytes): three
@@ -553,7 +555,8 @@ class HwTrace {
   /** Select a backend and initialize the tier. SINGLESTEP is the portable default
    *  that runs on any x86-64 Linux. Throws on a nonzero rc. */
   static init(backend = SINGLESTEP) {
-    const opts = { backend, aux_size: 0, data_size: 0, snapshot: 0, object_hint: null };
+    const opts = { backend, aux_size: 0, data_size: 0, snapshot: 0, object_hint: null,
+      lbr_period: 0, branch_filter: 0 };
     const rc = _fn.init(opts);
     if (rc !== ASMTEST_HW_OK) throw new Error(`asmtest_hwtrace_init failed: ${rc}`);
   }

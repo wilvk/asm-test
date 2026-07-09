@@ -112,9 +112,13 @@ public final class HwTrace {
     private static final Arena ARENA = Arena.ofShared();
 
     // asmtest_hwtrace_options_t {int backend; size_t aux_size; size_t data_size;
-    //   int snapshot; const char* object_hint;}. backend (JAVA_INT, 4) needs 4 bytes
-    // of pad before the size_t fields; snapshot (JAVA_INT, 4) needs 4 bytes of pad
-    // before the pointer — total 40, 8-byte aligned.
+    //   int snapshot; const char* object_hint; int lbr_period; int branch_filter;}.
+    // backend (JAVA_INT, 4) needs 4 bytes of pad before the size_t fields; snapshot
+    // (JAVA_INT, 4) needs 4 bytes of pad before the pointer; the two trailing AMD-LBR
+    // ints pack after object_hint — total 48, 8-byte aligned. (Omitting the trailing
+    // ints under-allocates 40 B, and asmtest_hwtrace_init's `g_opts = *opts` 48-B copy
+    // then reads 8 bytes OOB — harmless for SINGLESTEP, garbage lbr_period/branch_filter
+    // for AMD_LBR.)
     private static final MemoryLayout OPTIONS_LAYOUT = MemoryLayout.structLayout(
         JAVA_INT.withName("backend"),
         MemoryLayout.paddingLayout(4),
@@ -122,7 +126,9 @@ public final class HwTrace {
         JAVA_LONG.withName("data_size"),
         JAVA_INT.withName("snapshot"),
         MemoryLayout.paddingLayout(4),
-        ADDRESS.withName("object_hint"));
+        ADDRESS.withName("object_hint"),
+        JAVA_INT.withName("lbr_period"),    // AMD LBR opt-in (0 = default sample_period=1)
+        JAVA_INT.withName("branch_filter")); // AMD LBR opt-in (0 = default BRANCH_ANY)
 
     // asmtest_hwtrace_bucket_t {char label[128]; uint64_t count;} — 136 B, no padding.
     private static final long BUCKET_SIZE = 136, BUCKET_LABEL_LEN = 128;
