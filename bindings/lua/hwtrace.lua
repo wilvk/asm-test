@@ -23,7 +23,7 @@
 local ffi = require("ffi")
 
 ffi.cdef([[
-typedef struct { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; } asmtest_hwtrace_options_t;
+typedef struct { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; int lbr_period; int branch_filter; } asmtest_hwtrace_options_t;
 int  asmtest_hwtrace_available(int backend);
 void asmtest_hwtrace_skip_reason(int backend, char* buf, size_t buflen);
 size_t asmtest_hwtrace_resolve(int policy, int* out, size_t cap);

@@ -382,16 +382,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Node + Java: the hwtrace options struct under-allocated the AMD-LBR fields (8-byte OOB read
-  in `asmtest_hwtrace_init`).** When `lbr_period`/`branch_filter` were appended to
-  `asmtest_hwtrace_options_t` (Zen 4/5 LBR work), only the .NET binding's struct was updated; the
-  Node `koffi.struct` and Java `OPTIONS_LAYOUT` still described the old 40-byte struct. `HwTrace.init`
-  passed a 40-byte buffer, and `asmtest_hwtrace_init`'s `g_opts = *opts` copies the full 48 bytes —
-  reading 8 bytes past the buffer on every init. Harmless for the SINGLESTEP backend (it ignores
-  those fields), but for an `AMD_LBR` init through these bindings the garbage read could seed a
-  spurious sample period / reduced branch filter, silently altering capture. Both structs now mirror
-  the 48-byte C layout (verified: `koffi.sizeof == 48`). Surfaced by the adversarial review of the
-  whole-window attribution work.
+- **The hwtrace options struct under-allocated the AMD-LBR fields in all seven FFI-mirroring
+  bindings (8-byte OOB read in `asmtest_hwtrace_init`).** When `lbr_period`/`branch_filter` were
+  appended to `asmtest_hwtrace_options_t` (Zen 4/5 LBR work), only the .NET binding's struct was
+  updated; every other binding that hand-mirrors the struct still described the old 40-byte layout —
+  Node `koffi.struct`, Java `OPTIONS_LAYOUT`, Python `ctypes.Structure`, Rust `#[repr(C)]`, Ruby's
+  Fiddle packer, Go's cgo typedef, and Lua's `ffi.cdef`. `HwTrace.init` passed a 40-byte buffer, and
+  `asmtest_hwtrace_init`'s `g_opts = *opts` copies the full 48 bytes — reading 8 bytes past the
+  buffer on every init. Harmless for the SINGLESTEP backend (it ignores those fields), but for an
+  `AMD_LBR` init the garbage read could seed a spurious sample period / reduced branch filter,
+  silently altering capture. All seven now mirror the 48-byte C layout (verified: `koffi.sizeof ==
+  48`, `ctypes.sizeof == 48`; the rust/ruby/go/lua `docker-hwtrace-<lang>` lanes green). C++
+  (`#include "asmtest_hwtrace.h"`) and Zig (`@cImport`) use the real header and were never affected.
+  Surfaced by the adversarial review of the whole-window attribution work.
 
 - **Node binding: 64-bit trace-call results above 2^53 were silently rounded.** Every
   fork/attach/stealth trace entry in the Node binding read the routine's return (its RAX at the

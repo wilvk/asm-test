@@ -175,6 +175,8 @@ struct Options {
     data_size: usize,
     snapshot: c_int,
     object_hint: *const c_char,
+    lbr_period: c_int,    // AMD LBR opt-in (0 = default sample_period=1)
+    branch_filter: c_int, // AMD LBR opt-in (0 = default BRANCH_ANY)
 }
 
 /// Mirrors `asmtest_trace_choice_t` (three int-sized enum fields, no padding).
@@ -1051,6 +1053,8 @@ impl HwTrace {
             data_size: 0,
             snapshot: 0,
             object_hint: std::ptr::null(),
+            lbr_period: 0,
+            branch_filter: 0,
         };
         let rc = unsafe { f(&opts) };
         if rc != ASMTEST_HW_OK {

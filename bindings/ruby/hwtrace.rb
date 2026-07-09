@@ -291,16 +291,18 @@ module Asmtest
     end
 
     # Build the asmtest_hwtrace_options_t the C side reads:
-    #   { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; }
-    # On x86-64 the layout is backend@0 (int, padded to 8), aux_size@8, data_size@16,
-    # snapshot@24 (int, padded to 8), object_hint@32 (ptr) = 40 bytes. Zeroed first so
-    # aux_size/data_size take their C defaults and object_hint is NULL. The struct
-    # buffer is returned as a Fiddle::Pointer kept alive by the caller's scope.
+    #   { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint;
+    #     int lbr_period; int branch_filter; }
+    # On x86-64: backend@0 (int, padded to 8), aux_size@8, data_size@16, snapshot@24 (int, padded
+    # to 8), object_hint@32 (ptr), lbr_period@40, branch_filter@44 = 48 bytes. Zeroed first so the
+    # ring sizes/snapshot/hint + the AMD-LBR fields take their C defaults. (A 40-byte buffer would
+    # be read 8 bytes OOB by asmtest_hwtrace_init's g_opts = *opts 48-byte copy.) The struct buffer
+    # is returned as a Fiddle::Pointer kept alive by the caller's scope.
     def self.build_options(backend)
-      opts = Fiddle::Pointer.new(Fiddle.malloc(40), 40)
-      opts[0, 40] = "\x00".b * 40
+      opts = Fiddle::Pointer.new(Fiddle.malloc(48), 48)
+      opts[0, 48] = "\x00".b * 48
       opts[0, 4]  = [backend].pack("l") # asmtest_trace_backend_t backend (int)
-      opts                              # aux_size/data_size/snapshot=0, object_hint=NULL
+      opts                              # everything else 0 / NULL
     end
 
     # Host-native machine code in real executable (W^X) memory. The single-step

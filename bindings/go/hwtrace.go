@@ -45,6 +45,8 @@ typedef struct {
     size_t data_size;
     int snapshot;
     const char *object_hint;
+    int lbr_period;    // AMD LBR opt-in (0 = default sample_period=1)
+    int branch_filter; // AMD LBR opt-in (0 = default BRANCH_ANY)
 } asmtest_hwtrace_options_t;
 
 // The cross-tier orchestrator's resolved-choice struct, redefined here (mirrors

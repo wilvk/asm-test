@@ -107,6 +107,8 @@ class _Options(C.Structure):
         ("data_size", C.c_size_t),
         ("snapshot", C.c_int),
         ("object_hint", C.c_char_p),
+        ("lbr_period", C.c_int),  # AMD LBR opt-in (0 = default sample_period=1)
+        ("branch_filter", C.c_int),  # AMD LBR opt-in (0 = default BRANCH_ANY)
     ]
 
 
