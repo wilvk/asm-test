@@ -558,7 +558,7 @@ class HwTrace {
       // the honesty bit off the trace before freeing it.
       const path = _renderScope(scope);
       const truncated = _fn.truncated(handle) !== 0;
-      return { result: Number(resultBuf.readBigInt64LE(0)), path, truncated };
+      return { result: _safeInt(resultBuf.readBigInt64LE(0)), path, truncated };
     } finally {
       _fn.traceFree(handle);
     }
@@ -654,7 +654,7 @@ class HwTrace {
       const offsets = new Array(n);
       for (let i = 0; i < n; i++) offsets[i] = Number(_fn.insnAt(handle, i)); // region-RELATIVE
       return {
-        result: Number(resultBuf.readBigInt64LE(0)),
+        result: _safeInt(resultBuf.readBigInt64LE(0)),
         offsets,
         blocks: Number(_fn.blocksLen(handle)),
         truncated: _fn.truncated(handle) !== 0,
@@ -829,7 +829,8 @@ class Ptrace {
 
   /** Fork a tracee that calls `code` (a NativeCode) with up to six integer `args`,
    *  single-step it out of process, and fill `trace` (a HwTrace). Returns the
-   *  routine's return value (the child's RAX at the ret) as a JS number. */
+   *  routine's return value (the child's RAX at the ret) as a JS number (BigInt
+   *  out of safe range). */
   static traceCall(code, codeLen, args, trace) {
     const n = args.length;
     // long*: pack each arg as a 64-bit little-endian signed integer.
@@ -838,7 +839,7 @@ class Ptrace {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceCall(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** True if the BTF block-step variant (PTRACE_SINGLEBLOCK — one #DB per TAKEN
@@ -862,7 +863,7 @@ class Ptrace {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceCallBlockstep(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call_blockstep failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** WHOLE-WINDOW capture that OWNS its tracee: fork a child that runs `driver` (a NativeCode —
@@ -912,7 +913,7 @@ class Ptrace {
     const dh = descent ? descent._handle : null;
     const rc = _fn.ptraceTraceCallEx(code.base, len, argBuf, n, resultBuf, th, dh);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call_ex failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Descending variant of traceAttached for an externally-attached process: threads
@@ -924,7 +925,7 @@ class Ptrace {
     const dh = descent ? descent._handle : null;
     const rc = _fn.ptraceTraceAttachedEx(pid, _addr(base), len, resultBuf, th, dh);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached_ex failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Descending variant of traceAttachedVersioned: decodes the region against the
@@ -939,17 +940,17 @@ class Ptrace {
     if (rc !== ASMTEST_PTRACE_OK) {
       throw new Error(`asmtest_ptrace_trace_attached_versioned_ex failed: ${rc}`);
     }
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Trace a region in a SEPARATE, already-ptrace-stopped process (the caller owns
    *  PTRACE_ATTACH/DETACH). Reads the target's bytes via process_vm_readv. Returns
-   *  the target's RAX at the ret as a JS number. */
+   *  the target's RAX at the ret as a JS number (BigInt out of safe range). */
   static traceAttached(pid, base, len, trace) {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceAttached(pid, _addr(base), len, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Block-step variant of traceAttached: one #DB per TAKEN branch (intra-block
@@ -960,7 +961,7 @@ class Ptrace {
     const resultBuf = Buffer.alloc(8);
     const rc = _fn.ptraceTraceAttachedBlockstep(pid, _addr(base), len, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_attached_blockstep failed: ${rc}`);
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Like traceAttached, but reconstruct the region's bytes from a CodeImage
@@ -974,7 +975,7 @@ class Ptrace {
     if (rc !== ASMTEST_PTRACE_OK) {
       throw new Error(`asmtest_ptrace_trace_attached_versioned failed: ${rc}`);
     }
-    return Number(resultBuf.readBigInt64LE(0));
+    return _safeInt(resultBuf.readBigInt64LE(0));
   }
 
   /** Run an already-attached, ptrace-stopped target forward until it reaches `addr`

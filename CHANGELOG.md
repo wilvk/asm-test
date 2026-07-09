@@ -356,6 +356,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Node binding: 64-bit trace-call results above 2^53 were silently rounded.** Every
+  fork/attach/stealth trace entry in the Node binding read the routine's return (its RAX at the
+  `ret`) as `Number(readBigInt64LE(...))`, which rounds any value past `Number.MAX_SAFE_INTEGER`
+  through the double mantissa — so a routine returning a full 64-bit hash/id/pointer came back
+  wrong, contradicting the documented "BigInt out of safe range" contract and the OOP capture
+  forms' exact-result guarantee. Added a `_safeInt` helper (Number when it fits the safe-integer
+  range, else the exact BigInt) and applied it to all twelve result reads (`callScoped`,
+  `stealthTrace`, `windowCall`, `stealthWindow`, `traceCall`/`traceCallBlockstep`/`traceCallEx`,
+  and the `traceAttached*` family). Surfaced by the adversarial review of the whole-window work;
+  regression-tested with a leaf returning `0x0102030405060708`.
+
 - **Stealth stepper seized the wrong thread on a managed runtime (`getpid` → `SYS_gettid`).**
   `asmtest_hwtrace_stealth_trace` reverse-attached the helper to `getpid()` (the process leader),
   but on HotSpot the thread invoking the region is a JVM-created thread whose tid ≠ pid — so the

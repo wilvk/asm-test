@@ -333,6 +333,21 @@ function main() {
       tr.free();
     }
 
+    // Exact-result guarantee: a routine returning a full 64-bit value ABOVE 2^53 must come back
+    // as an exact BigInt, not a Number rounded through the double mantissa (the _safeInt path).
+    {
+      const BIG = 0x0102030405060708n; // 72623859790382856 > Number.MAX_SAFE_INTEGER
+      // movabs rax, 0x0102030405060708 ; ret
+      const bigLeaf = NativeCode.fromBytes(
+        Buffer.from([0x48, 0xB8, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0xC3]));
+      const tr = HwTrace.create({ blocks: 8, instructions: 8 });
+      const r = Ptrace.traceCall(bigLeaf, bigLeaf.length, [], tr);
+      ok(typeof r === 'bigint' && r === BIG,
+        'traceCall: a 64-bit result > 2^53 returns an EXACT BigInt (not a rounded Number)');
+      bigLeaf.free();
+      tr.free();
+    }
+
     // BTF block-step tier: one #DB per TAKEN branch, intra-block instructions
     // reconstructed with Capstone — the stream is byte-identical to the
     // per-instruction path above. Self-skips where PTRACE_SINGLEBLOCK / Capstone
