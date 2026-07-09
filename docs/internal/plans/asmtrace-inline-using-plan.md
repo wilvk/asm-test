@@ -85,7 +85,8 @@ context + stop→waitpid→read-back, a different teardown). It is crash-proof (
 (harness-frame attribution pollution), demands thread-affinity across an arbitrary block
 (fragile under `await`), and buys *only* the `using` syntax for **zero capture-quality gain**
 (same channel, same deep-BCL limit). Build only if bare-`using` OOP is an explicit requirement;
-otherwise keep the factory.
+otherwise keep the factory. **Full spec:**
+[oop-inline-using-window-plan.md](oop-inline-using-window-plan.md).
 
 ## What should NOT conform
 
