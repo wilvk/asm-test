@@ -385,8 +385,11 @@ gating/capture chain, [include/asmtest_hwtrace.h](../../../include/asmtest_hwtra
 [src/ptrace_backend.c](../../../src/ptrace_backend.c)) cross-referenced against external
 primary sources (AMD APM Vol 2 / PPR, the Linux `arch/x86/events/amd/` and
 `arch/x86/kernel/step.c` sources, LWN, and the perf man pages). Companion docs:
-[trace-parity-matrix](../analysis/trace-parity-matrix.md) (what works where today) and
-[jit-runtime-tracing](../analysis/jit-runtime-tracing.md) (the foreign-JIT forward-look).
+[trace-parity-matrix](../analysis/trace-parity-matrix.md) (what works where today),
+[jit-runtime-tracing](../analysis/jit-runtime-tracing.md) (the foreign-JIT forward-look), and
+[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) (the follow-up
+review pass over the landed Phases 0–5 whose verified findings feed the
+[Newly surfaced](#newly-surfaced-2026-07-09-review) subsection and Part III Phases 8–9).
 Where a claim was adversarially verified against a primary source the verdict is stated
 inline.*
 
@@ -474,6 +477,7 @@ CPU do the block-stepping.
 | **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
 | **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (precise-IP source→target via `MSR_AMD64_IBSBRTARGET`, gated on `IBS_CAPS_BRNTRGT`); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered — **forward-look (needs Zen 2)** | Medium |
 | **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
+| **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | real (composition gap, MSR-only) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
 
 ### The three to build first
 
@@ -543,6 +547,97 @@ a definite/stable answer and prints this host's support (the dev Zen 5 / Ryzen 9
 reports freeze **PRESENT**, so the gate is a no-op there — confirming the concern is
 Zen-4-specific, not universal). Preferring the software-event snapshot (path #2) where
 freeze is absent remains folded into that item.
+
+### Newly surfaced (2026-07-09 review)
+
+A follow-up pass over the now-landed Phases 0–5 —
+[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) — surfaced one
+composition win (MSR) and a correctness/hygiene cluster. Unlike Phases 6–7, **none of it is
+hardware-blocked**: all of it is buildable and self-validating on the dev Zen 5 (Ryzen 9
+9950X) now. It becomes Part III **Phases 8 (MSR-rung cascade composition) and 9 (correctness &
+hygiene)**.
+
+**Cascade composition — the near-term win [real, MSR-scoped].**
+`asmtest_trace_call_auto` ([trace_auto.c:134](../../../src/trace_auto.c)) escalates fast
+sampled hwtrace → BTF block-step → per-instruction single-step. When the fast AMD_LBR tier
+returns a truncated window, its completion gate falls through
+([trace_auto.c:175](../../../src/trace_auto.c)) straight into the ~1000× block-step round-trip
+([trace_auto.c:181](../../../src/trace_auto.c)). One exact, low-interrupt AMD path is skipped
+there: the MSR-direct read `asmtest_amd_msr_trace` ([msr_lbr.c:110](../../../src/msr_lbr.c)),
+which is in neither the marker path nor the cascade. It is strictly better-targeted than
+AMD_LBR's `sample_period=1` richest-window guess for exactly the too-fast-to-sample case that
+truncates — and, reading the frozen stack around ANY region rather than at one planted
+breakpoint, it also completes a *multi*-exit tiny routine, which the boundary snapshot cannot
+(see below). The frozen boundary snapshot `asmtest_amd_snapshot_trace`
+([branchsnap.c:246](../../../src/branchsnap.c)) is **not** the gap: `hwtrace_begin_amd` already
+runs it BY DEFAULT for single-exit regions ([hwtrace.c:655](../../../src/hwtrace.c), Matrix 2
+#3 — landed), and the fast tier reaches it through the marker path, so on the single-exit case
+the snapshot already ran in the fast tier. A re-run rung gated on the same `amd_nret == 1`
+would be redundant — if that snapshot completed there is no truncation to escalate, and if it
+overflowed the 16-deep stack, re-running cannot help. The snapshot's genuine improvement is
+WIDENING that default to the tail-call exit (the Phase-9 item below), not a cascade rung. An
+MSR rung inserted at the fast-tier fall-through
+([trace_auto.c:177](../../../src/trace_auto.c)) completes the too-fast case without paying the
+block-step tier. The qualification is real: the entry does not fork — it runs `run_fn`
+in-process ([msr_lbr.c:159](../../../src/msr_lbr.c)) — so the rung is a **second in-process
+re-run**: non-idempotent side effects double and a crashing routine takes down the tracer, a
+genuine semantic gap versus the fork-sandboxed steppers below it. It must therefore gate on
+`asmtest_amd_msr_available()`, and skip the whole rung under `CEILING_FREE`
+([trace_auto.c:74](../../../src/trace_auto.c)) since the MSR read shares AMD_LBR's 16-deep
+ceiling.
+
+**The correctness & hygiene cluster.** One real bug and four divergence risks, all in the AMD
+TUs:
+
+- **MSR speculative-entry leak — real trace bug [confirmed].** In `asmtest_amd_msr_trace` the
+  validity test `int valid = ((t >> 63) & 1) || ((t >> 62) & 1)`
+  ([msr_lbr.c:175](../../../src/msr_lbr.c)) admits a spec-only wrong-path entry (TO[63]=0,
+  TO[62]=1) whose `.spec` field stays zero from the earlier `memset`, so `amd_replay`'s
+  `PERF_BR_SPEC_WRONG_PATH` filter ([amd_backend.c:186](../../../src/amd_backend.c)) never
+  fires and a phantom edge enters the reconstruction. On Zen 4/5 LbrExtV2 the hardware really
+  does record wrong-path branches, so this is data-dependent, not theoretical. Dropping the
+  `|| spec` term skips the entry at source — strictly better than setting `.spec`, since that
+  filter is `#ifdef ASMTEST_HAVE_PERF_BR_SPEC`-gated and may be compiled out. Narrow trigger
+  (`asmtest_amd_msr_trace` needs `CAP_SYS_ADMIN` + the `msr` module) but a genuine
+  wrong-trace, not hygiene.
+- **Duplicated reduced-filter macro** (pure hygiene). `ASMTEST_AMD_REDUCED_FILTER` is
+  hand-copied byte-identically in [hwtrace.c:595](../../../src/hwtrace.c) and
+  [branchsnap.c:52](../../../src/branchsnap.c) (carrying a "kept in sync" note) — future-drift
+  risk; fold into one shared header.
+- **Forward-decl fragility** (latent UB). The `amd_*` prototypes are forward-declared inline in
+  [hwtrace.c:91](../../../src/hwtrace.c) (and re-copied into branchsnap.c/msr_lbr.c) with no
+  shared header, so a future signature change in amd_backend.c would compile and link cleanly
+  yet be UB at the call boundary. A shared `src/amd_backend.h` (mirroring the existing
+  `stealth_helper.h` internal-header pattern) turns that into a compile error.
+- **Local error-code redefs** (pure hygiene). [amd_backend.c:32](../../../src/amd_backend.c)
+  and [ss_backend.c:67](../../../src/ss_backend.c) locally re-`#define` `ASMTEST_HW_*` codes
+  that duplicate `include/asmtest_hwtrace.h`; values match today, divergence risk only.
+- **Unchecked `PERF_EVENT_IOC_ENABLE`** (robustness). The arm ioctl is fire-and-forget at
+  every site ([hwtrace.c:727](../../../src/hwtrace.c),
+  [branchsnap.c:211](../../../src/branchsnap.c)); a failed enable yields an empty ring, but the
+  AMD sampled and survey paths already convert that to an honest `truncated`, so on the AMD
+  tiers this is robustness, not a correctness fix.
+
+**Tail-call snapshot widening.** The default-on boundary snapshot is gated to single-exit
+regions (`amd_nret == 1`, [hwtrace.c:655](../../../src/hwtrace.c)), and its exit deriver
+recognizes only `ret`-class instructions — so a genuinely single-exit routine that leaves via
+a tail-call `jmp` never gets the deterministic default. Extending the exit predicate to a
+region-LEAVING direct uncond `jmp` widens the default with no new risk (a missed boundary
+already truncates rather than corrupts). This — not a cascade re-run rung — is the snapshot's
+genuine composition improvement (the MSR rung above covers the multi-exit tiny case in the
+meantime).
+
+**Correction to the review's §1.2 [real, qualified].** The review flagged the perf-ring
+pointer casts — `uint64_t nr = *(uint64_t *)body` and the sibling header/entry casts in the
+three drain loops ([hwtrace.c:828](../../../src/hwtrace.c)) — as a misalignment hazard. That
+over-states it: both drain TUs compile `#if defined(__linux__) && defined(__x86_64__)`-only,
+`buf` is malloc-aligned, and perf records are 8-byte-multiple sized, so nothing misaligns on
+x86-64. The only real issue is `-fstrict-aliasing` / UBSan-lane UB, fixed with the
+`memcpy`-into-a-local pattern — it matters for the sanitize build, not the shipped one.
+
+These land as Part III **Phase 8** (MSR-rung cascade composition, `src/trace_auto.c`) and
+**Phase 9** (correctness & hygiene, `src/hwtrace.c` + `src/branchsnap.c` + `src/msr_lbr.c` +
+new `src/amd_backend.h`), both *(planned)* and buildable on the dev Zen 5 today.
 
 ## Matrix 2 — Squeezing the existing window (P1 detail)
 
@@ -698,7 +793,11 @@ rootless — and it corrects the repo's own plan), **capture the 16-entry LBR
 deterministically at the region boundary via a software-event/eBPF snapshot** (fixing the
 two documented live Zen-5 failure modes), and **probe freeze-on-PMI availability before
 trusting a window** — then tune BRS period, `spec`-bit filtering, ring/throttle config,
-and the stitcher's overlap check to sharpen the tier asm-test already ships.
+and the stitcher's overlap check to sharpen the tier asm-test already ships. With all
+three landed, the remaining near-term work is **composition, not capture**: wire the
+shipped MSR-direct read into the auto cascade before block-step and close the
+correctness/hygiene cluster the 2026-07-09 review surfaced (see
+[Newly surfaced](#newly-surfaced-2026-07-09-review)).
 
 ---
 
@@ -718,11 +817,20 @@ shipped LBR backend.
 
 ## Implementation status
 
-**Phases 0–5 landed; Phases 6–7 remain forward-look (hardware-blocked).** Build order
-followed the Part II priorities: Phase 0 (gating) → Phase 1 (freeze correctness) →
-Phase 2 (BTF block-step) → Phase 3 (software-event snapshot) were the P0/near-term work;
-Phases 4–5 are the P1 refinements. As of **2026-07-06** all of them ship and are
-validated on the Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`):
+**Phases 0–5 landed; Phases 6–7 remain forward-look (hardware-blocked); Phases 8–9 are
+near-term planned work.** The
+[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) surfaced two
+further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and are
+buildable on this Zen 5 dev box now: **Phase 8** composes the fidelity cascade so a
+truncated sampled window escalates to the shipped MSR-direct exact path *before* the ~1000×
+block-step slowdown (the boundary snapshot already runs default-on in the fast tier, so it
+is deliberately *not* a rung — see Part II [Newly surfaced](#newly-surfaced-2026-07-09-review)),
+and **Phase 9** is a correctness & hygiene cluster (including the real MSR speculative-edge
+leak that today lets phantom wrong-path edges through). Build order followed the Part II
+priorities: Phase 0 (gating) → Phase 1 (freeze correctness) → Phase 2 (BTF block-step) →
+Phase 3 (software-event snapshot) were the P0/near-term work; Phases 4–5 are the P1
+refinements. As of **2026-07-06** all of them ship and are validated on the Zen 5 dev box
+(Ryzen 9 9950X, `amd_lbr_v2`):
 
 - **Phase 0 (runtime depth).** `asmtest_amd_lbr_depth()`
   ([src/amd_backend.c](../../../src/amd_backend.c)) reads CPUID `0x80000022` EBX[9:4]
@@ -787,7 +895,13 @@ every new lane self-skips cleanly instead of misbehaving on the wrong silicon.
 `amd_lbr_v2` (freeze present, depth 16). No behavior change yet — this phase only adds
 detection the later phases consume.
 
-## Improvement Phase 1 — Freeze-on-PMI window-trust gate (`src/hwtrace.c`) *(planned)*
+## Improvement Phase 1 — Freeze-on-PMI window-trust gate (`src/hwtrace.c`) *(landed 2026-07-06)*
+
+> **Status (2026-07-06): LANDED** — see Part II #3 for the as-shipped shape
+> (`asmtest_amd_freeze_available` + the exit-branch trust gate in `hwtrace_end_amd`). The
+> freeze-**absent** branch remains covered by the synthetic fixture only, **pending real
+> freeze-absent Zen 4 hardware** (this Zen 5 box reports freeze PRESENT), per the house
+> "no untested hardware code" rule — as the Acceptance below records.
 
 **Goal.** Stop trusting a 16-entry window the hardware never froze. Freeze-on-PMI is
 **not** universal on Zen 4 (gated on the Phase-0 CPUID `0x80000022` EAX[2] bit); when
@@ -1109,6 +1223,252 @@ and the branch target is capability-gated and valid only for retired taken branc
 mark a subset of region basic blocks as covered and reduce the number of blocks the
 block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_PERFMON`.
 
+## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(planned)*
+
+**Goal.** Insert an **MSR-direct escalation rung** into `asmtest_trace_call_auto` between the
+fast sampled-hwtrace tier and the BTF block-step tier. When the fast tier returns a
+**truncated** AMD LBR capture — `ran == 1` but `trace->truncated == true`, so the completion
+gate at [trace_auto.c:175](../../../src/trace_auto.c) falls through — the region was too fast
+to be sampled in-region yet its retired path may still fit one 16-deep MSR read. Try the
+standalone deterministic entry `asmtest_amd_msr_trace`
+([msr_lbr.c:110](../../../src/msr_lbr.c)) *before* dropping to the block-step tier, so the
+too-fast tiny routine is reconstructed complete with **zero PMU interrupts** instead of paying
+block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
+[Newly surfaced](#newly-surfaced-2026-07-09-review) composition gap, deliberately
+**MSR-scoped** (below).
+
+**Work.**
+- **Insert the rung at exactly one point** — after the fast-tier completion gate
+  `if (ran && !trace->truncated) return ASMTEST_HW_OK;`
+  ([trace_auto.c:175](../../../src/trace_auto.c)) and before the `(2) … BTF block-step` block
+  ([trace_auto.c:181](../../../src/trace_auto.c)). It therefore runs **only** when the fast
+  tier came back truncated or absent, and its own truncation/failure must **fall through into
+  block-step** — never `return` early on its own miss.
+- **Why the boundary snapshot is NOT a rung (deliberate scope).** The fast tier drives the
+  marker path, and `hwtrace_begin_amd` already selects the Phase-3 boundary snapshot **by
+  default** for a single-exit region on the supporting substrate
+  ([hwtrace.c:655](../../../src/hwtrace.c), Matrix 2 #3 — landed) — so on the single-exit case
+  the snapshot already ran *inside the fast tier*. A cascade re-run gated on the same
+  `amd_nret == 1` substrate is provably redundant: if that snapshot completed there is no
+  truncation to escalate, and if it overflowed the 16-deep stack, re-running cannot help. The
+  snapshot's genuine improvement is *widening the default-on gate to tail-call exits* — the
+  Phase 9 item — not a rung here. The MSR read is different in kind: it is in **neither** the
+  marker path nor the cascade today, needs no exit breakpoint (it freezes via `wrmsr` after
+  the routine returns), and so also covers the **multi-exit** tiny routine the snapshot's
+  single planted breakpoint cannot.
+- **`run_fn(void *)` trampoline.** `asmtest_amd_msr_trace` takes an out-of-line
+  `void (*run_fn)(void *)` that *it* invokes ([msr_lbr.c:159](../../../src/msr_lbr.c)) — it
+  does **not** take `(base, len, args)`, and `run_fn` returns `void`. So the rung needs a
+  small closure `struct { const void *code; const long *args; int nargs; long result; }` plus
+  a `static void` trampoline that calls the existing `call_auto_invoke(code, args, nargs)`
+  ([trace_auto.c:115](../../../src/trace_auto.c)) and stores its `long` into the closure —
+  the only way to recover the routine's result across the void callback. This inherits the
+  fast tier's integer-SysV-only limitation (`long a[6]`); FP/xmm-argument routines remain
+  unsupported, same as today.
+- **Re-run semantics + honesty rule.** The fast tier already executed `code(args)` once
+  in-process (`ran = 1` even when truncated), and `asmtest_amd_msr_trace` invokes `run_fn`
+  **in-process** — not fork-isolated like the block-step/single-step tiers that follow. An
+  MSR attempt is therefore a **second real execution in the tracer's own address space**:
+  non-idempotent side effects happen again and a `SIGSEGV` in the routine crashes the whole
+  tracer — a semantic gap versus the fork-sandboxed tiers below it, but *no worse than* the
+  fast begin/end tier the rung sits beside. Mirror the ptrace pattern exactly: call
+  `call_auto_reset(trace)` ([trace_auto.c:126](../../../src/trace_auto.c)) **before** the
+  attempt so the truncated fast-tier trace's leftover `insns[]`/`blocks[]`/`truncated` bit
+  cannot contaminate the MSR result, and on a failed or truncated attempt set
+  `trace->truncated = true` and continue — a failed tier must never be read as
+  empty-yet-complete. Set `used->backend` only on a *complete* win.
+- **`ASMTEST_TRACE_CEILING_FREE` skips the rung.** The MSR read is the same 16-deep LbrExtV2
+  Tier-A family with the same window-completeness ceiling as `AMD_LBR`, which `CEILING_FREE`
+  already drops from the fast pick (the `hp` mapping,
+  [trace_auto.c:151](../../../src/trace_auto.c)) and from the static cascade
+  ([trace_auto.c:74](../../../src/trace_auto.c)). Wrap the rung in
+  `if (!(policy & ASMTEST_TRACE_CEILING_FREE)) { … }` so the ceiling-free contract excludes
+  it in lock-step with `AMD_LBR`.
+- **Gate on the genuine privilege probe; stay honest about reach.**
+  `asmtest_amd_msr_available` ([msr_lbr.c:93](../../../src/msr_lbr.c)) opens `/dev/cpu/N/msr`
+  `O_RDWR`, so it is a true privilege/device gate (root / `CAP_SYS_ADMIN` + the `msr`
+  module) — when it returns 1 the path is genuinely present; it returns 0 off x86-64 Linux,
+  so the rung self-skips cleanly on every other lane. Reach caveat: the user-space glue
+  branches between `run_fn` returning and the freezing `wrmsr`
+  ([msr_lbr.c:12-18](../../../src/msr_lbr.c)) occupy the newest slots of the same 16-deep
+  window, so the read completes only **very small** routines — and the existing
+  nothing-in-region check already converts a miss to an honest `truncated`
+  ([msr_lbr.c:190-193](../../../src/msr_lbr.c)), which then falls through to block-step.
+
+**Why this is worth a rung.** For the too-fast-to-sample tiny routine — including the
+**multi-exit** one that the default-on snapshot must skip — this rung reconstructs the trace
+complete with zero PMU interrupts instead of falling straight to fork-isolated block-step,
+avoiding its roughly three-orders-of-magnitude stop-count cost on hosts with `msr` access
+(the dev box, self-hosted runners). The scope is honest: it is a narrow, privilege-gated
+rung, not a new tier — but the entry point already ships, so the composition is cheap.
+
+**Acceptance.** A multi-exit tiny fixture routine that the sampled fast tier marks
+`truncated` is reconstructed **complete** by `asmtest_trace_call_auto` via the MSR rung
+**without** invoking block-step (assert `used->backend` and that the block-step/single-step
+tiers were not reached); the rung self-skips cleanly to block-step where `/dev/cpu/msr` is
+absent (unprivileged lanes, non-Zen-4+/non-x86 hosts) and is skipped entirely under
+`ASMTEST_TRACE_CEILING_FREE`; and every existing `trace_call_auto` lane — including the
+truncated-then-block-step and pure single-step floors — is **unchanged**. Validated in the
+privileged AMD lane on the Zen 5 dev box (the `docker-hwtrace-amd` shape plus the `msr`
+device), self-skipping in hosted CI.
+
+## Improvement Phase 9 — Correctness & hygiene cluster (2026-07-09 review) (`src/amd_backend.h`, `src/hwtrace.c`, `src/msr_lbr.c`) *(planned)*
+
+**Goal.** Close the two correctness gaps the 2026-07-09 AMD review surfaced — the MSR-direct path
+admitting speculative wrong-path LBR entries that `amd_replay`'s `PERF_BR_SPEC_WRONG_PATH` filter
+can never see, and the deterministic-snapshot default-on gate skipping a genuinely single-exit
+*tail-call* routine — and consolidate the surrounding hygiene (a byte-duplicated branch-filter
+macro, inline `amd_*` forward declarations with no shared header, locally re-`#define`d error codes,
+unchecked `PERF_EVENT_IOC_ENABLE`, and strict-aliasing perf-ring casts) behind one new internal
+header so a future signature or constant drift becomes a **compile error** rather than silent UB.
+Every item is value-preserving on the shipped build except the two `[correctness]` fixes; the
+refactors are a no-op the test output must confirm.
+
+**Work.**
+- **[correctness] Drop speculative wrong-path entries at the MSR source.** In the MSR-direct capture
+  ([msr_lbr.c:175](../../../src/msr_lbr.c)) the validity test is
+  `int valid = ((t >> 63) & 1) || ((t >> 62) & 1); /* valid || spec */` — `TO[63]` is retired-valid
+  and `TO[62]` is speculative (wrong-path), so the `|| spec` term **admits** a spec-only slot
+  (`TO[63]==0, TO[62]==1`). Lines 179-184 then store its `from`/`to` but never set `br[n].spec`,
+  which `memset(br, 0, sizeof br)` ([msr_lbr.c:165](../../../src/msr_lbr.c)) already zeroed — so
+  the downstream drop in `amd_replay` (`if (e->spec == ASMTEST_PERF_BR_SPEC_WRONG_PATH) continue;`,
+  [amd_backend.c:186](../../../src/amd_backend.c)) can never fire and the phantom edge leaks
+  into the reconstruction. On Zen 4/5 LbrExtV2 (which records wrong-path branches) this is a genuine
+  wrong-trace bug, reachable via `asmtest_amd_msr_trace` (`CAP_SYS_ADMIN` + the `msr` module) and
+  data-dependent on a spec-only slot landing in the window. Fix at the source: drop the
+  `|| ((t >> 62) & 1)` so line 175 reads `int valid = (t >> 63) & 1;` — a spec-only entry then fails
+  `if (!valid) continue;` (176-177) and is skipped where it is read. **Prefer this over setting
+  `br[n].spec`**: the downstream filter and the `ASMTEST_PERF_BR_SPEC_WRONG_PATH` constant live
+  entirely inside `#ifdef ASMTEST_HAVE_PERF_BR_SPEC`
+  ([amd_backend.c:162-164, 185-190](../../../src/amd_backend.c)), so on a pre-6.1-header build
+  `perf_branch_entry` has no `.spec` member — a set-spec fix would both fail to help and fail to
+  compile there, while the skip is correct under every build config.
+- **[correctness] Extend the single-exit snapshot default to region-leaving tail-call jmps.** The
+  deterministic-snapshot default-on gate
+  (`if ((g_opts.snapshot || (asmtest_amd_snapshot_available() && amd_nret == 1)) && exit_off != (size_t)-1)`,
+  [hwtrace.c:654-656](../../../src/hwtrace.c)) fires by default only when the region has exactly
+  one exit and a valid exit offset, both derived from `amd_last_ret_off`
+  ([hwtrace.c:614](../../../src/hwtrace.c)), whose sole exit predicate is `asmtest_disas_is_ret`
+  ([hwtrace.c:625](../../../src/hwtrace.c)). A routine that exits via a tail-call `jmp target`
+  (target *outside* `[base, base+len)`) has **zero** ret-class instructions, so it returns
+  `(size_t)-1` with `*nret==0` — both halves of the gate fail and a genuinely single-exit routine is
+  forced onto the sampled richest-window path, the exact "too-fast tiny routine honestly truncated"
+  case the snapshot exists to fix ([branchsnap.c:1-12](../../../src/branchsnap.c)). Extend
+  `amd_last_ret_off` in place (its only caller is `hwtrace_begin_amd`,
+  [hwtrace.c:653](../../../src/hwtrace.c); renaming it `amd_last_exit_off` / `amd_nret`→
+  `amd_nexit` and updating the [hwtrace.c:636-651](../../../src/hwtrace.c) comment block to say
+  "last region-exit (ret or region-leaving direct jmp)" makes the broadened semantics honest):
+  alongside the `is_ret` check, count offset `o` as an exit when
+  `asmtest_disas_is_uncond_jump(...)==1` **AND** `asmtest_disas_branch_target(...)==1` **AND** the
+  decoded target leaves the region (`tgt < base_ip || tgt >= base_ip + len`, the same predicate
+  already at [amd_backend.c:255](../../../src/amd_backend.c) /
+  [:360](../../../src/amd_backend.c)). Both guards are load-bearing:
+  `asmtest_disas_is_uncond_jump` also returns 1 for an *indirect* `jmp r/m`
+  ([disasm.c:304](../../../src/disasm.c)), and `asmtest_disas_branch_target` returns 1 only for
+  a decodable-immediate *direct* branch ([disasm.c:419](../../../src/disasm.c)) — an
+  indirect/jump-table tail call is unprovable and correctly stays on the sampled fallback (no
+  regression: it gets `nret==0` today). An *in-region* direct uncond jmp (target inside the region)
+  is an ordinary loop/forward branch and must **not** count, or a loopy single-ret region would be
+  misclassified multi-exit. Both exit kinds bump the *same* counter, so the caller's `== 1` still
+  means single-exit; a region with one `ret` **and** one tail-`jmp` is correctly two exits and
+  default-on is withheld. **Timing subtlety (flag, don't guess):** the planted `HW_BREAKPOINT_X` at
+  `base+exit_off` ([branchsnap.c:131](../../../src/branchsnap.c),
+  [:176-179](../../../src/branchsnap.c)) is a `#DB` that fires when execution *reaches* the exit
+  CTI, before it transfers, so the frozen stack read by `bpf_get_branch_snapshot`
+  ([branchsnap.bpf.c:35](../../../bpf/branchsnap.bpf.c)) never contains the exit CTI's own edge —
+  identical for a `ret` and a tail-`jmp`, and `amd_replay` never needs that edge (it stops at the
+  last recorded branch's target, [amd_backend.c:289-291](../../../src/amd_backend.c)). The Zen-5
+  non-eviction property (a `#DB` not evicting in-region branches before the snapshot read,
+  [branchsnap.c:14-15](../../../src/branchsnap.c)) is validated for a `ret` exit and *expected*
+  to hold for a tail-`jmp` by the identical mechanism, but the plan carries it as an assumption to
+  re-confirm on the target substrate.
+- **[hygiene / latent-UB] Introduce a shared `src/amd_backend.h` internal header.** The `amd_*`
+  prototypes are forward-declared inline — in `hwtrace.c` a `perf_branch_entry`-typed block under
+  `#if defined(__linux__) && defined(__x86_64__)` ([hwtrace.c:90-119](../../../src/hwtrace.c):
+  `asmtest_amd_decode` 91, `_stitch` 96, `_decode_stitched` 101, `_snapshot_begin` 116, `_snapshot_end`
+  118) plus the unconditional `_decoder_present`/`_freeze_available`/`_snapshot_available` at
+  [hwtrace.c:152-159](../../../src/hwtrace.c), and the same decls hand-copied into
+  [branchsnap.c:29-32](../../../src/branchsnap.c) and
+  [msr_lbr.c:28-31](../../../src/msr_lbr.c). A signature change in `amd_backend.c` would compile
+  and link cleanly yet be UB at the call boundary. Create `src/amd_backend.h` mirroring the
+  `#ifndef`-guarded, ships-nothing-in-`include/`, no-ABI-promise pattern of
+  [src/stealth_helper.h](../../../src/stealth_helper.h), reproducing `amd_backend.c`'s **exact**
+  platform split: the `perf_branch_entry`-typed prototypes under the `__linux__ && __x86_64__` guard
+  (matching the definitions at [amd_backend.c:294](../../../src/amd_backend.c) /
+  [400](../../../src/amd_backend.c) / [483](../../../src/amd_backend.c)) with the
+  `void*`-typed stubs in the `#else` (matching [amd_backend.c:506](../../../src/amd_backend.c) /
+  [516](../../../src/amd_backend.c) / [532](../../../src/amd_backend.c)) — exactly why
+  `hwtrace.c` guards them today — and the stable-signature `_lbr_depth` / `_decoder_present` /
+  `_freeze_available` / `_snapshot_available` / `_snapshot_begin` / `_snapshot_end` unconditional.
+  Have it `#include "asmtest_hwtrace.h"` so it re-exports the `ASMTEST_HW_*` codes, then include it
+  from `hwtrace.c`, `amd_backend.c`, `branchsnap.c`, and `msr_lbr.c`, deleting all four inline decl
+  blocks; a definition/decl mismatch then becomes a compile error.
+- **[hygiene] Fold the duplicated `ASMTEST_AMD_REDUCED_FILTER` into the new header.** The reduced
+  branch-filter macro is defined byte-identically twice —
+  [hwtrace.c:595-598](../../../src/hwtrace.c) (used at
+  [hwtrace.c:691](../../../src/hwtrace.c)) and
+  [branchsnap.c:52-55](../../../src/branchsnap.c) (used at
+  [branchsnap.c:155](../../../src/branchsnap.c)), carrying the explicit "kept in sync" hand-note
+  ([hwtrace.c:593](../../../src/hwtrace.c), [branchsnap.c:47-51](../../../src/branchsnap.c)).
+  No live defect — the copies are identical today — but the risk is silent future drift. Define it
+  once in `src/amd_backend.h` under `#if defined(__linux__) && defined(__x86_64__)` with
+  `#include <linux/perf_event.h>` inside that guard so the `PERF_SAMPLE_BRANCH_*` tokens resolve, and
+  delete both textual copies.
+- **[hygiene] Reuse `asmtest_hwtrace.h`'s error codes instead of local `#define`s.** `amd_backend.c`
+  re-`#define`s three codes ([amd_backend.c:32-34](../../../src/amd_backend.c):
+  `ASMTEST_HW_OK`/`ENOSYS`/`EDECODE`) and `ss_backend.c` four
+  ([ss_backend.c:67-70](../../../src/ss_backend.c): `OK`/`EINVAL`/`EFULL`/`ENOSYS`), both
+  duplicating [asmtest_hwtrace.h:51-57](../../../include/asmtest_hwtrace.h); the two are the
+  outliers because each includes only `asmtest_trace.h`
+  ([amd_backend.c:27](../../../src/amd_backend.c),
+  [ss_backend.c:62](../../../src/ss_backend.c)) whereas `branchsnap.c`/`msr_lbr.c` already pull
+  `asmtest_hwtrace.h` and do not redefine. Values match exactly today (divergence risk only). For
+  `amd_backend.c` the new `src/amd_backend.h` re-exports them (finding above); `ss_backend.c` is not
+  an AMD TU, so give it a direct `#include "asmtest_hwtrace.h"` purely for the shared `ASMTEST_HW_*`
+  codes (its `asmtest_ss_*` prototypes are declared inline in `hwtrace.c` and stay there —
+  `asmtest_hwtrace.h` does not declare them). Delete both local blocks.
+- **[hygiene / robustness] Check the `PERF_EVENT_IOC_ENABLE` return at every arm site.** The enable
+  ioctl is fire-and-forget at [hwtrace.c:727](../../../src/hwtrace.c) (AMD sampled ring),
+  [hwtrace.c:1021](../../../src/hwtrace.c) (sample-window survey),
+  [hwtrace.c:1158](../../../src/hwtrace.c) (sample_begin),
+  [hwtrace.c:1366](../../../src/hwtrace.c) (Intel PT / CoreSight AUX), and
+  [branchsnap.c:211](../../../src/branchsnap.c) /
+  [213](../../../src/branchsnap.c) (LBR-on + exit-breakpoint) — a failed `ENABLE` on an
+  already-mapped ring yields an empty capture. Gate each:
+  `if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) != 0) { <existing teardown>; return <EUNAVAIL/-1>; }`
+  (branchsnap must fail both, running `bsnap_teardown()`). Mostly robustness: the AMD sampled and
+  both survey paths already convert an empty ring to an **honest** `truncated`
+  (`best==NULL` / `insns_total==0` / `n==0`), so the one exposed edge is the PT/CoreSight site
+  ([hwtrace.c:1366](../../../src/hwtrace.c)), which has no empty→truncated backstop and relies
+  on decode-non-OK or the overflow flag. The paired `RESET`/`DISABLE` ioctls stay unchecked (benign).
+- **[hygiene] Replace the perf-ring pointer casts with `memcpy` — a strict-aliasing / sanitize-lane
+  concern, NOT a misalignment crash.** Each of the three drain functions reads
+  `struct perf_event_header *h = (…)(buf+off)`, `uint64_t nr = *(uint64_t *)body`, and
+  `struct perf_branch_entry *e = (…)(body+sizeof(uint64_t))`: `hwtrace_end_amd`
+  ([hwtrace.c:828, 834](../../../src/hwtrace.c); it has two such loops, 798 and 820),
+  `sample_window_amd`, and the begin/end `sample_end_amd` split. All are
+  `#if defined(__linux__) && defined(__x86_64__)`-only, `buf` is `malloc`'d (16-byte aligned) and
+  perf records are 8-byte-multiple sized, so on x86-64 nothing misaligns — this **corrects the
+  review's §1.2 severity**: the only real issue is `-fstrict-aliasing` / UBSan-lane UB, invisible on
+  the shipped build. Mirror the local-struct byte-copy already used in `aux_data_ring_truncated`
+  ([hwtrace.c:1412-1414](../../../src/hwtrace.c)) — but since these linear `malloc`'d buffers
+  never wrap, a plain `memcpy` suffices:
+  `struct perf_event_header h; memcpy(&h, buf+off, sizeof h);` and
+  `uint64_t nr; memcpy(&nr, body, sizeof nr);`.
+
+**Acceptance.** The existing `make docker-hwtrace-amd` / `docker-hwtrace-codeimage` lanes stay
+**byte-identical** green (the shared header, folded macro, reused error codes, and `memcpy` reads are
+a no-op refactor whose values and signatures match today, confirmed by unchanged test output); a new
+host-independent unit fixture drives the MSR spec filter and asserts a spec-only
+(`TO[62]=1, TO[63]=0`) slot is dropped so no phantom edge enters the reconstruction; and a
+snapshot-default fixture over a single-exit tail-call routine (one region-leaving direct `jmp`, no
+`ret`) takes the deterministic snapshot and reconstructs complete where the sampled path truncates,
+while a two-exit (`ret` + tail-`jmp`) and an indirect-tail-`jmp` region both correctly stay on the
+sampled fallback. Correctness-only; no behavior change for `ret`-exit or explicit `opts.snapshot`
+regions. The MSR fix ships behind the existing `asmtest_amd_msr_trace` self-skip, and the tail-`jmp`
+non-eviction assumption is re-confirmed on a Zen 4/5 host per the house "no untested hardware code"
+rule (see Risks).
+
 ## Deliverables (Improvement Phases 0–5)
 
 *As shipped (2026-07-06). Two small design deltas from the original decomposition, both
@@ -1206,3 +1566,16 @@ next to the other CPUID probes) rather than `hwtrace.c`.*
   (Phase 6) and freeze-absent Zen 4 (Phase 1) paths are code-implemented and
   self-skip-validated but remain **pending real hardware**, per the house "no untested
   hardware code" rule.
+- **MSR-rung re-run semantics (Phase 8).** The MSR rung re-executes the routine **in-process**
+  (not fork-isolated like the block-step/single-step tiers below it): non-idempotent side
+  effects run again and a faulting routine crashes the tracer — acceptable only because it
+  matches the fast begin/end tier the rung sits beside, and `asmtest_trace_call_auto` already
+  re-runs the routine per tier. The honesty pattern (`call_auto_reset` before the attempt;
+  `truncated` on any miss; fall through, never early-return) is the guard — get it wrong and a
+  failed MSR attempt reads as an empty-yet-complete trace.
+- **Tail-`jmp` boundary non-eviction (Phase 9).** The Zen-5-validated property that a planted
+  `#DB` breakpoint does not evict the region's in-region branches before the BPF helper reads
+  the frozen stack was established with a `ret`-exit fixture; the tail-call widening *expects*
+  it to hold identically for a region-leaving `jmp` (same mechanism, the breakpoint fires when
+  execution reaches the CTI, before it transfers) but carries it as an **assumption to
+  re-confirm live** on the target substrate before the widened default ships enabled.
