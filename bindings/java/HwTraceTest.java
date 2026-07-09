@@ -84,6 +84,7 @@ public final class HwTraceTest {
         try {
             ptraceTraceCall();
             ptraceTraceCallBlockstep();
+            ptraceStealthTrace();
             ptraceRunTo();
             procRegionByAddr();
             procPerfmapSymbol();
@@ -436,6 +437,40 @@ public final class HwTraceTest {
         ok(!trace.truncated(), "ptrace block-step !truncated");
 
         trace.free();
+        code.free();
+    }
+
+    // §D3 stealth stepper (HwTrace.stealthTrace): a reverse-attached helper child single-steps
+    // the region while THIS thread runs the leaf — so NO EFLAGS.TF is armed on the caller. This
+    // is the CRASH-PROOF managed-capture route (a ptrace-stop is not gated by the tracee's signal
+    // mask), the Java analog of dotnet's AsmTrace.Method(..., outOfProcess: true). Needs no
+    // HwTrace.init. Self-skips when the reverse-attach is refused (Yama ptrace_scope); otherwise
+    // reconstructs the identical [0,3,6,c,11] ground-truth stream as the fork/single-step paths.
+    private static void ptraceStealthTrace() {
+        if (ptraceUnavailable()) return;
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        HwTrace.StealthResult res = HwTrace.stealthTrace(code, 20, 22); // 42 <= 100 -> jle taken
+        System.out.println("# stealth: armed=" + res.armed() + " truncated=" + res.truncated()
+            + " offsets=" + res.offsets().length);
+        if (!res.armed()) {
+            System.out.println("# SKIP ptrace stealth: reverse-attach not permitted (Yama ptrace_scope)");
+            code.free();
+            return;
+        }
+        // HARD guarantee: the out-of-band stepper reads the true return from the caller's RAX,
+        // EXACT even when the stream is best-effort — and TF is never armed on the calling thread.
+        ok(res.result() == 42, "stealthTrace(20,22): result == 42 out of band (got " + res.result() + ")");
+        // Stream: EXACT when the reverse-attach single-step ran to completion; over a LIVE runtime
+        // it may truncate (async signals interrupt the per-insn step) — honest best-effort, like
+        // dotnet's outOfProcess AsmTrace.Method and window(). Assert exactness only when complete.
+        if (!res.truncated()) {
+            long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
+            ok(Arrays.equals(res.offsets(), wantInsns) && res.blocks() == 2,
+                "stealthTrace: exact offsets [0,3,6,12,17] over two blocks (got "
+                    + Arrays.toString(res.offsets()) + ")");
+        } else {
+            ok(true, "stealthTrace: stream truncated over the live runtime (honest best-effort; result exact)");
+        }
         code.free();
     }
 

@@ -317,6 +317,40 @@ function main() {
       tr.free();
     }
 
+    // §D3 stealth stepper (HwTrace.stealthTrace): a reverse-attached helper child
+    // single-steps the region while THIS (V8) thread runs the leaf — so NO EFLAGS.TF is
+    // armed on the caller. This is the CRASH-PROOF managed-capture route (a ptrace-stop
+    // is not gated by the tracee's signal mask), the Node analog of dotnet's
+    // AsmTrace.Method(..., outOfProcess: true). Needs no HwTrace.init. Self-skips when the
+    // reverse-attach is refused (Yama ptrace_scope); otherwise reconstructs the identical
+    // [0,3,6,c,11] ground-truth stream as the fork/single-step paths above.
+    {
+      const code = NativeCode.fromBytes(ROUTINE);
+      const res = HwTrace.stealthTrace(code, 20, 22); // 42 <= 100 -> jle taken, dec skipped
+      console.log(`# stealth: armed=${res.armed} truncated=${res.truncated} offsets=${res.offsets.length}`);
+      if (!res.armed) {
+        console.log('# SKIP ptrace stealth: reverse-attach not permitted (Yama ptrace_scope)');
+      } else {
+        // HARD guarantee: the out-of-band stepper reads the true return from the caller's RAX,
+        // EXACT even when the instruction stream is best-effort — and TF is never armed on the
+        // V8 thread (the crash-proof property). result + armed are the invariants.
+        ok(res.result === 42, 'stealthTrace: add2(20,22).result == 42 (out of band, from caller RAX)');
+        // Stream: EXACT when the reverse-attach single-step ran to completion. Over a LIVE
+        // runtime it may truncate (the runtime's async signals interrupt the per-insn step) —
+        // honest best-effort, mirroring dotnet's outOfProcess AsmTrace.Method and window(). Assert
+        // the exact [0,3,6,c,11] stream only when it did NOT truncate.
+        if (!res.truncated) {
+          assert.deepStrictEqual(res.offsets, [0x0, 0x3, 0x6, 0xC, 0x11]);
+          ok(res.blocks === 2,
+            'stealthTrace: exact offsets [0,3,6,12,17] over two blocks (complete out-of-band capture)');
+        } else {
+          ok(true,
+            'stealthTrace: stream truncated over the live runtime (honest best-effort; result still exact)');
+        }
+      }
+      code.free();
+    }
+
     // run_to drives an attached target to a resolved method (software breakpoint). A
     // live foreign attach is covered by the C suite; exercise the FFI round-trip safely
     // — a NULL target address is rejected (EINVAL, non-zero) before any ptrace call.

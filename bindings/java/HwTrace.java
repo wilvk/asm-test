@@ -163,12 +163,22 @@ public final class HwTrace {
         public boolean armed() { return rc == ASMTEST_HW_OK; }
     }
 
+    /** Outcome of {@link #stealthTrace}: the leaf's {@code result} (read from the caller's
+     *  RAX at the {@code ret}), the executed body's region-RELATIVE instruction {@code offsets},
+     *  the basic-block {@code count}, the {@code truncated} honesty bit, and the native {@code rc}
+     *  ({@link #ASMTEST_HW_OK} when the reverse-attach armed; negative on a clean self-skip). */
+    public record StealthResult(long result, long[] offsets, int blocks, boolean truncated, int rc) {
+        /** True when the reverse-attached helper stepped the region (rc == ASMTEST_HW_OK). */
+        public boolean armed() { return rc == ASMTEST_HW_OK; }
+    }
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
-        CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, EXEC_ALLOC, EXEC_FREE,
+        CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
+        EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
@@ -306,7 +316,7 @@ public final class HwTrace {
             hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
-            beginWindow = null, endWindow = null, renderWindow = null,
+            beginWindow = null, endWindow = null, renderWindow = null, stealthTrace = null,
             execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
@@ -396,6 +406,11 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
             renderWindow = h(lib, "asmtest_hwtrace_render_window",
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
+            // §D3 concealed out-of-process ptrace-stealth stepper: stealth_trace(base, len,
+            // trace*, result_out*, run_region fnptr, arg). The helper child steps the region
+            // out of band while run_region runs it — no TF on the calling thread.
+            stealthTrace = h(lib, "asmtest_hwtrace_stealth_trace",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             execFree = h(lib, "asmtest_hwtrace_exec_free",
@@ -578,6 +593,7 @@ public final class HwTrace {
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
         BEGIN_WINDOW = beginWindow; END_WINDOW = endWindow; RENDER_WINDOW = renderWindow;
+        STEALTH_TRACE = stealthTrace;
         EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
@@ -883,6 +899,103 @@ public final class HwTrace {
                 long[] insns = new long[n];
                 for (int i = 0; i < n; i++) insns[i] = (long) TRACE_INSN_AT.invoke(handle, (long) i);
                 return new WindowResult(path, trunc, insns, rc);
+            } finally {
+                TRACE_FREE.invoke(handle);
+            }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    // §D3 stealth stepper run_region upcall target: invoked out-of-band by the (helper-
+    // stepped) calling thread to run the leaf so control enters [base,len). The `ran` flag +
+    // leaf base + args are bound per call via MethodHandles.insertArguments; the trailing
+    // MemorySegment is the C `void *arg` (unused — everything rides in the closure, like
+    // dotnet's callback). `ran` records that the region actually executed, so the self-skip
+    // path re-runs it exactly ONCE (never lose the call, never double-run a side effect) —
+    // stealth_trace may run run_region untraced AND still return EUNAVAIL in one attach race.
+    private static final MethodHandle RUN_LEAF_MH;
+    static {
+        try {
+            RUN_LEAF_MH = MethodHandles.lookup().findStatic(HwTrace.class, "runLeaf",
+                MethodType.methodType(void.class, boolean[].class, long.class, long[].class,
+                    MemorySegment.class));
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static void runLeaf(boolean[] ran, long base, long[] args, MemorySegment ignoredArg) {
+        ran[0] = true;
+        invokeLeaf(base, args);
+    }
+
+    private static void invokeLeaf(long base, long[] args) {
+        // The helper single-steps the region as this runs. Swallow any FFM error: the helper's
+        // RAX read (result_out) is authoritative and the out-of-band stepper must never crash.
+        try {
+            MemoryLayout[] al = new MemoryLayout[args.length];
+            for (int i = 0; i < args.length; i++) al[i] = JAVA_LONG;
+            MethodHandle fn = LINKER.downcallHandle(MemorySegment.ofAddress(base),
+                FunctionDescriptor.of(JAVA_LONG, al));
+            Object[] boxed = new Object[args.length];
+            for (int i = 0; i < args.length; i++) boxed[i] = args[i];
+            fn.invokeWithArguments(boxed);
+        } catch (Throwable ignored) { /* result_out is authoritative */ }
+    }
+
+    /** Trace ONE native leaf the CRASH-PROOF out-of-process way: a helper child reverse-attaches
+     *  to this process and single-steps the region {@code [base,len)} while THIS thread runs the
+     *  leaf — so NO EFLAGS.TF is ever armed on the calling thread
+     *  ({@code asmtest_hwtrace_stealth_trace}). This is the safe counterpart to
+     *  {@link #callScoped}/{@link #window} for a host with no PT/LBR (Zen 2, Docker-on-Mac): the
+     *  in-process single-step tier is FORBIDDEN against a managed runtime (a body that blocks
+     *  SIGTRAP or spawns a thread — {@code pthread_create} masks SIGTRAP around {@code clone} —
+     *  turns the {@code #DB} into a fatal blocked signal and KILLS the JVM), whereas a
+     *  ptrace-stop is not gated by the tracee's signal mask, so the body survives. Mirrors
+     *  dotnet's {@code AsmTrace.Method(..., outOfProcess: true)}.
+     *
+     *  <p>The {@code result} is EXACT (the helper reads the caller's RAX at the {@code ret}), but
+     *  the instruction STREAM is best-effort over a live runtime: single-stepping the runtime's own
+     *  thread can be interrupted by its async signals, so {@code truncated} may be set with a
+     *  partial {@code offsets} — the same honest-degradation posture as {@link #window} and dotnet's
+     *  out-of-process {@code AsmTrace.Method}.
+     *
+     *  <p>{@code args} pass as C longs (0..6). Returns a {@link StealthResult}: {@code result}
+     *  the leaf's return (from the helper's RAX read), {@code offsets} the executed body's
+     *  region-RELATIVE instruction offsets, {@code blocks} the basic-block count,
+     *  {@code truncated} the honesty bit. On a refused reverse-attach (Yama {@code ptrace_scope},
+     *  no ptrace, or off-x86-64-Linux) it self-skips ({@code rc} negative, {@code armed()} false,
+     *  {@code offsets} empty) — but the call STILL RUNS (never a silent miss), like dotnet's
+     *  stealth path. Needs no {@link #init} (the stealth stepper is ptrace-based, independent of
+     *  the single-step tier). */
+    public static StealthResult stealthTrace(NativeCode code, long... args) {
+        if (STEALTH_TRACE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            // asmtest_trace_new(insns_cap, blocks_cap) — insns FIRST. Caller-owned trace.
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke(256L, 64L);
+            if (MemorySegment.NULL.equals(handle))
+                throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                MemorySegment resultOut = a.allocate(JAVA_LONG);
+                long base = code.base();
+                boolean[] ran = {false};
+                // Bind ran + leaf base + args into the run_region upcall (void(void*)); the stub
+                // lives in this confined arena, which outlives the synchronous stealth call.
+                MethodHandle bound = MethodHandles.insertArguments(RUN_LEAF_MH, 0, ran, base, args);
+                MemorySegment stub = LINKER.upcallStub(bound, FunctionDescriptor.ofVoid(ADDRESS), a);
+                int rc = (int) STEALTH_TRACE.invoke(MemorySegment.ofAddress(base), code.length(),
+                    handle, resultOut, stub, MemorySegment.NULL);
+                if (rc != ASMTEST_HW_OK) { // EUNAVAIL/EINVAL/ENOSYS -> clean self-skip
+                    if (!ran[0]) invokeLeaf(base, args); // run exactly once — never a silent miss
+                    return new StealthResult(0L, new long[0], 0, false, rc);
+                }
+                long result = resultOut.get(JAVA_LONG, 0);
+                int n = (int) (long) TRACE_INSNS_LEN.invoke(handle);
+                long[] offsets = new long[n];
+                for (int i = 0; i < n; i++) offsets[i] = (long) TRACE_INSN_AT.invoke(handle, (long) i);
+                int blocks = (int) (long) TRACE_BLOCKS_LEN.invoke(handle);
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                return new StealthResult(result, offsets, blocks, trunc, rc);
             } finally {
                 TRACE_FREE.invoke(handle);
             }

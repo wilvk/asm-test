@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Crash-proof out-of-process stealth capture (`stealthTrace`) in the Node and Java bindings**
+  — dotnet-parity Phase 2, increment 2. `HwTrace.stealthTrace(code, a, b)` (Node) /
+  `HwTrace.stealthTrace(NativeCode, long...)` (Java) wrap `asmtest_hwtrace_stealth_trace`: a
+  helper child reverse-attaches (`PR_SET_PTRACER` + `PTRACE_SEIZE`) and single-steps the native
+  leaf **out of band**, so **no `EFLAGS.TF` is ever armed on the runtime's own (V8 / JVM)
+  thread** — the crash-proof counterpart to the in-process `callScoped`/`window` forms, mirroring
+  dotnet's `AsmTrace.Method(..., outOfProcess: true)`. The `result` is exact (the helper reads
+  the caller's RAX at the `ret`); the instruction stream is best-effort over a live runtime (its
+  async signals can truncate the per-instruction walk — honestly reported via `truncated`), so
+  the tests assert the exact `[0,3,6,c,11]` stream only when not truncated. Validated in the
+  `docker-hwtrace-node` / `-java` lanes; self-skips cleanly where a Yama `ptrace_scope` refuses
+  the reverse-attach.
+
 - **AMD LBR Zen 4/5 coverage: slot-efficient branch filtering (#2B), period-spaced stitch
   validation (#2A), and single-exit snapshot-by-default (#3).** Three improvements that
   stretch how much of a routine each 16-deep AMD branch-record window reconstructs, all
@@ -325,6 +338,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **Stealth stepper seized the wrong thread on a managed runtime (`getpid` → `SYS_gettid`).**
+  `asmtest_hwtrace_stealth_trace` reverse-attached the helper to `getpid()` (the process leader),
+  but on HotSpot the thread invoking the region is a JVM-created thread whose tid ≠ pid — so the
+  helper single-stepped the wrong (idle primordial) thread and the `run_to` breakpoint fired on
+  the **untraced** calling thread, killing the JVM with a fatal SIGTRAP (exit 133). Node and
+  CoreCLR were unaffected only because their calling thread happens to be the leader (tid == pid).
+  Fixed to seize `(pid_t)syscall(SYS_gettid)` — the calling thread — matching what the windowed
+  variant `asmtest_hwtrace_stealth_trace_windowed` already did. Surfaced while adding the Java
+  `stealthTrace` wrapper; after the fix Java captures a complete, exact stealth trace.
 
 - **bindings-parity gate restored to green.** The block-step / whole-window / snapshot
   commits added eight tier symbols wrapped only in the .NET binding, leaving the

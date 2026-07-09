@@ -2461,7 +2461,12 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
      * helper's reverse attach; harmless when Yama is off. */
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 
-    pid_t parent = getpid();
+    /* The CALLING THREAD, not the process leader: on a managed runtime (e.g. HotSpot)
+     * the thread invoking run_region is a JVM-created thread whose tid != getpid(), so
+     * seizing getpid() would step the wrong (idle primordial) thread and the run_to
+     * breakpoint would fire on the UNTRACED calling thread — a fatal SIGTRAP. Target the
+     * caller's own tid, matching asmtest_hwtrace_stealth_trace_windowed. */
+    pid_t parent = (pid_t)syscall(SYS_gettid);
     pid_t helper = fork();
     if (helper < 0) {
         munmap(sc, total);

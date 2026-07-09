@@ -57,7 +57,7 @@ ruby asmtest_descent_set_denylist   # allow-set only: Fiddle hosts no GC-safe ca
 ALL asmtest_hwtrace_begin_scope       # §1 handle-keyed begin: additive over the name-keyed try_begin path the shims use (its render sibling, asmtest_hwtrace_render_scope, is now wrapped in all ten via call_scoped)
 ALL asmtest_hwtrace_render_versioned  # §1/§D4 version-aware render: needs a code-image handle no shim carries
 ALL asmtest_hwtrace_stitch            # §D4 async-hop merge core: pure C concatenation, host-tested (test_stitch_slices)
-ALL asmtest_hwtrace_stealth_trace     # §D3 out-of-process ptrace-stealth stepper: C-internal to the scope façade
+ALL asmtest_hwtrace_stealth_trace     # §D3 out-of-process ptrace-stealth stepper: dotnet (AsmTrace.Method outOfProcess), node + java (HwTrace.stealthTrace) wrap it as the crash-proof managed-capture route; the other seven reach it C-internally / gain it when they grow a stealth scope
 ALL asmtest_hwtrace_region_name       # §3.1(c) address→name reverse resolver: whole-window noise attribution, C-level
 ALL asmtest_hwtrace_symbolize_bucket  # §3.1(c) IP bucketer: whole-window noise attribution (dotnet wraps it as HwTrace.SymbolizeBuckets for its runtimebuckets example; the other nine gain it when they grow a whole-window scope), host-tested
 ALL asmtest_hwtrace_begin_window      # §Z1 region-free whole-window trio: the .NET managed tier's AsmTrace substrate

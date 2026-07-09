@@ -173,6 +173,12 @@ const ResolverFn = koffi.proto(
 const DenylistFn = koffi.proto(
   'int asmtest_descent_denylist_fn(uint64_t callee, void *user)');
 
+// §D3 stealth stepper upcall (asmtest_hwtrace_stealth_trace): the caller-supplied
+// `run_region(arg)` the helper child drives to invoke the leaf while it single-steps
+// it out of band. Non-capturing at the C level (a plain void(void*)); the JS closure
+// carries the code + args and is bound via koffi.register like the descent upcalls.
+const RunRegionFn = koffi.proto('void asmtest_run_region(void *arg)');
+
 // Load the lib and declare every native entry point, all kept private here. On
 // failure (no hwtrace build present) we keep `_lib` null so available() returns
 // false instead of throwing — the tier self-skips.
@@ -223,6 +229,12 @@ let _loadError = null;
     beginWindow: lib.func('int asmtest_hwtrace_begin_window(void*, _Out_ asmtest_hwtrace_scope_t*)'),
     endWindow: lib.func('int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t, void*)'),
     renderWindow: lib.func('int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t, _Out_ char*, size_t)'),
+    // §D3 concealed out-of-process ptrace-stealth stepper. A helper CHILD reverse-attaches
+    // to THIS process and single-steps the region [base,len) while `run_region(arg)` runs it
+    // — so NO EFLAGS.TF is armed on the calling (V8) thread. The crash-proof capture path on a
+    // no-PT host (Zen 2, Docker-on-Mac). Fills the caller-owned trace* (region-RELATIVE
+    // offsets) + result_out (the region's return, read from the caller's RAX at the ret).
+    stealthTrace: lib.func('int asmtest_hwtrace_stealth_trace(const void*, size_t, void*, _Out_ long*, asmtest_run_region*, void*)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -526,6 +538,59 @@ class HwTrace {
       for (let i = 0; i < n; i++) insns[i] = BigInt(_fn.insnAt(handle, i)); // ABSOLUTE addrs
       return { path, truncated, insns, armed: true };
     } finally {
+      _fn.traceFree(handle);
+    }
+  }
+
+  /** Trace ONE native leaf the CRASH-PROOF out-of-process way: a helper child
+   *  reverse-attaches to this process and single-steps the region [base,len) while we
+   *  run `code.call(a, b)` — so NO EFLAGS.TF is ever armed on the calling (V8) thread
+   *  (asmtest_hwtrace_stealth_trace). This is the safe counterpart to `callScoped`/`window`
+   *  for a host with no PT/LBR (Zen 2, Docker-on-Mac): the in-process single-step tier is
+   *  forbidden against a managed runtime (a body that blocks SIGTRAP or spawns a thread
+   *  KILLS the process), whereas a ptrace-stop is not gated by the tracee's signal mask, so
+   *  the body survives. Mirrors dotnet's `AsmTrace.Method(..., outOfProcess: true)`.
+   *
+   *  The `result` is EXACT (the helper reads the caller's RAX at the ret), but the instruction
+   *  STREAM is best-effort over a live runtime: single-stepping the runtime's own thread can be
+   *  interrupted by its async signals, so `truncated` may be set with a partial `offsets` — the
+   *  same honest-degradation posture as `window()` and dotnet's out-of-process `AsmTrace.Method`.
+   *
+   *  Args pass as C longs, up to two (the `NativeCode.call` ceiling). Returns
+   *  `{ result, offsets, blocks, truncated, armed }`: `result` the leaf's return (from the
+   *  helper's RAX read, a JS number / BigInt out of safe range), `offsets` the executed
+   *  body's region-RELATIVE instruction offsets, `blocks` the basic-block count, `truncated`
+   *  the honesty bit. On a refused reverse-attach (Yama `ptrace_scope`, no ptrace, or
+   *  off-x86-64-Linux) it self-skips: `armed` is false, `offsets` empty — but the call STILL
+   *  RUNS (never a silent miss), exactly like dotnet's stealth path. Needs no `HwTrace.init`
+   *  (the stealth stepper is ptrace-based, independent of the single-step tier). */
+  static stealthTrace(code, a = 0, b = 0) {
+    const handle = _fn.traceNew(256, 64);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    // Persistent trampoline (koffi.register, not a transient callback) so the helper can
+    // call back into JS mid-step; the closure invokes the leaf so control enters [base,len).
+    let ran = false;
+    const thunk = () => { ran = true; try { code.call(a, b); } catch (_e) { /* result_out is authoritative */ } };
+    const cb = koffi.register(thunk, koffi.pointer(RunRegionFn));
+    try {
+      const resultBuf = Buffer.alloc(8);
+      const rc = _fn.stealthTrace(code.base, code.length, handle, resultBuf, cb, null);
+      if (rc !== ASMTEST_HW_OK) { // EUNAVAIL/EINVAL/ENOSYS -> clean self-skip
+        if (!ran) { try { code.call(a, b); } catch (_e) { /* never lose the call itself */ } }
+        return { result: null, offsets: [], blocks: 0, truncated: false, armed: false };
+      }
+      const n = Number(_fn.insnsLen(handle));
+      const offsets = new Array(n);
+      for (let i = 0; i < n; i++) offsets[i] = Number(_fn.insnAt(handle, i)); // region-RELATIVE
+      return {
+        result: Number(resultBuf.readBigInt64LE(0)),
+        offsets,
+        blocks: Number(_fn.blocksLen(handle)),
+        truncated: _fn.truncated(handle) !== 0,
+        armed: true,
+      };
+    } finally {
+      koffi.unregister(cb);
       _fn.traceFree(handle);
     }
   }

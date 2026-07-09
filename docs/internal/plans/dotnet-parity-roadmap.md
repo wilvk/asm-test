@@ -97,8 +97,8 @@ over `_ex`.
 |---|---|---|---|---|---|
 | **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio` | grow-a-use: window trio, `stealth_trace`, `symbolize_bucket` | ~2–3d (mostly low-value) | Closest. **Leads .NET** on `dr_under_dynamorio`. No live JIT → not a managed target |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`) | optional generics; `arm_tid` | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
-| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`** | **§D1 managed**: `AsyncLocalStorage` hop hook, `stealth_trace`, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`** | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution, `stealth_trace` | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
+| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)** | **§D1 managed**: `AsyncLocalStorage` hop hook, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)** | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
 | **cpp** | dlopen | Cluster 1 ✅, `arm_tid` | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
 | **rust** | libloading | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
 | **zig** | std.DynLib | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
@@ -149,7 +149,35 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > arbitrary managed block is the SIGTRAP footgun; the doc comments route that case to the
 > out-of-process path in [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md)
 > (the §D3 whole-window channel, `asmtest_ptrace_trace_window_call`). Remaining Phase-2 work
-> (async-hop, JIT-address resolution, stealth routing) is below.
+> (async-hop, JIT-address resolution) is below.
+>
+> **Increment 2 LANDED (2026-07-09).** The §D3 out-of-process stealth stepper
+> (`asmtest_hwtrace_stealth_trace`) now ships in Node (`HwTrace.stealthTrace(code, a, b)`) and
+> Java (`HwTrace.stealthTrace(NativeCode, long...)`) — the **crash-proof** counterpart to
+> `callScoped`/`window`, mirroring dotnet's `AsmTrace.Method(..., outOfProcess: true)`. A helper
+> child reverse-attaches and single-steps the leaf out of band, so **no `EFLAGS.TF` is armed on
+> the runtime's own thread** (the in-process single-step footgun the §Z1 `window()` form warns
+> about). The `result` is EXACT (read from the caller's RAX at the `ret`); the instruction STREAM
+> is **best-effort over a live runtime** — single-stepping the runtime thread can be interrupted
+> by its async signals, so the wrapper honestly reports `truncated` with a partial `offsets` (the
+> same posture dotnet takes: its `outOfProcess` test asserts result + armed, not stream
+> completeness). Live-validated on the host (yama `ptrace_scope=1` + `PR_SET_PTRACER`) and in the
+> `docker-hwtrace-node` / `-java` lanes; self-skips cleanly where the reverse-attach is refused.
+> The `ALL asmtest_hwtrace_stealth_trace` allow-list line **stays** (seven bindings still don't
+> wrap it, so it is not stale).
+>
+> **C-backend bug fixed en route (`getpid` → `SYS_gettid`).** Wiring Java's wrapper surfaced a
+> real latent defect: `asmtest_hwtrace_stealth_trace` seized `getpid()` (the process leader), but
+> HotSpot runs Java `main()` on a JVM thread whose tid ≠ pid — so the helper stepped the wrong
+> (idle) thread and the `run_to` breakpoint fired on the **untraced** calling thread → fatal
+> SIGTRAP (exit 133). Node and CoreCLR were unaffected only because their calling thread *is* the
+> leader (tid == pid). One-line fix in [src/hwtrace.c](../../../src/hwtrace.c): seize
+> `(pid_t)syscall(SYS_gettid)` (the calling thread), matching what
+> `asmtest_hwtrace_stealth_trace_windowed` already did. After the fix Java stealth returns a
+> **complete, exact** trace (`[0,3,6,c,11]`, not truncated) on both the forked-child and the
+> bundled exec'd-helper paths. (The stream is still best-effort in general — Node's exec'd helper
+> can truncate at insn 1 when V8's async signals hit the non-SIGTRAP break; the result stays
+> exact.) Remaining Phase-2 work (async-hop, JIT-address resolution) is below.
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place
