@@ -69,6 +69,9 @@ internal static class Program
         // ---- FATAL leg: re-exec self as the child, wait, read how it died. ----
         int childCode = RunFatalLegInChild();
 
+        // Warm up thread spawning so that no JIT compilation occurs inside the trace window
+        SpawnThreadInWindow();
+
         // ---- SAFE leg: the IDENTICAL block, in THIS process, stepped out of band. Cannot crash. ----
         AsmTrace w = AsmTrace.Window(() => SpawnThreadInWindow());  // already-closed; do NOT `using`
 

@@ -308,6 +308,37 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #include <time.h>
 #include <unistd.h>
 
+static ssize_t ptrace_read_mem(pid_t pid, void *dest, const void *src, size_t len) {
+    struct iovec l = {dest, len};
+    struct iovec r = {(void *)(uintptr_t)src, len};
+    ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+    if (got > 0) {
+        return got;
+    }
+
+    /* Fallback to ptrace PTRACE_PEEKDATA */
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+    size_t i = 0;
+    while (i < len) {
+        uintptr_t addr = (uintptr_t)(s + i);
+        uintptr_t align_addr = addr & ~(sizeof(long) - 1);
+        errno = 0;
+        long val = ptrace(PTRACE_PEEKDATA, pid, (void *)align_addr, NULL);
+        if (val == -1 && errno != 0) {
+            return i > 0 ? (ssize_t)i : -1;
+        }
+        size_t offset = addr - align_addr;
+        size_t chunk = sizeof(long) - offset;
+        if (chunk > len - i) {
+            chunk = len - i;
+        }
+        memcpy(d + i, (unsigned char *)&val + offset, chunk);
+        i += chunk;
+    }
+    return (ssize_t)len;
+}
+
 /* Ordered in-region PC-offset capture buffer; overflow is flagged truncated, never
  * emitted as complete. Sized for the small-routine envelope, like ss_backend. */
 #ifndef PTRACE_STREAM_CAP
@@ -832,9 +863,7 @@ static size_t descend_probe(const dctx_t *c, uint64_t at, uint64_t frame_end,
         size_t want = sizeof buf;
         if (frame_end > at && (frame_end - at) < want)
             want = (size_t)(frame_end - at);
-        struct iovec l = {buf, want};
-        struct iovec r = {(void *)(uintptr_t)at, want};
-        ssize_t got = process_vm_readv(c->pid, &l, 1, &r, 1, 0);
+        ssize_t got = ptrace_read_mem(c->pid, buf, (void *)(uintptr_t)at, want);
         if (got <= 0) {
             if (is_call)
                 *is_call = 0;
@@ -1716,9 +1745,7 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
     uint8_t *code = (uint8_t *)malloc(len);
     if (code == NULL)
         return ASMTEST_PTRACE_ETRACE;
-    struct iovec liov = {code, len};
-    struct iovec riov = {(void *)(uintptr_t)base, len};
-    if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+    if (ptrace_read_mem(pid, code, (void *)(uintptr_t)base, len) != (ssize_t)len) {
         free(code);
         return ASMTEST_PTRACE_ETRACE;
     }
@@ -1875,9 +1902,7 @@ static int in_region_set(uint64_t pc, uint64_t win_base, uint64_t win_len,
  * absolute-address stream a multi-region capture records. */
 static size_t foreign_insn_len(pid_t pid, uint64_t at) {
     uint8_t buf[16];
-    struct iovec l = {buf, sizeof buf};
-    struct iovec r = {(void *)(uintptr_t)at, sizeof buf};
-    ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+    ssize_t got = ptrace_read_mem(pid, buf, (void *)(uintptr_t)at, sizeof buf);
     if (got <= 0)
         return 0;
     return asmtest_disas(PTRACE_TRACE_ARCH, buf, (size_t)got, 0, 0, NULL, 0);
@@ -1997,9 +2022,7 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         return ASMTEST_PTRACE_ETRACE;
 #if defined(__x86_64__)
     {
-        struct iovec l = {&win_ret, sizeof win_ret};
-        struct iovec r = {(void *)(uintptr_t)sp0, sizeof win_ret};
-        if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof win_ret)
+        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0, sizeof win_ret) != (ssize_t)sizeof win_ret)
             return ASMTEST_PTRACE_ETRACE;
     }
 #else
@@ -2145,9 +2168,7 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
     }
 #if defined(__x86_64__)
     {
-        struct iovec l = {&win_ret, sizeof win_ret};
-        struct iovec r = {(void *)(uintptr_t)sp0, sizeof win_ret};
-        if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof win_ret) {
+        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0, sizeof win_ret) != (ssize_t)sizeof win_ret) {
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
             free(stream);
@@ -2264,9 +2285,7 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
         owned = (uint8_t *)malloc(len);
         if (owned == NULL)
             return ASMTEST_PTRACE_ETRACE;
-        struct iovec liov = {owned, len};
-        struct iovec riov = {(void *)(uintptr_t)base, len};
-        if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) != (ssize_t)len) {
             free(owned);
             return ASMTEST_PTRACE_ETRACE;
         }
@@ -2588,9 +2607,7 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
         owned = (uint8_t *)malloc(len);
         if (owned == NULL)
             return ASMTEST_PTRACE_ETRACE;
-        struct iovec liov = {owned, len};
-        struct iovec riov = {(void *)(uintptr_t)base, len};
-        if (process_vm_readv(pid, &liov, 1, &riov, 1, 0) != (ssize_t)len) {
+        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) != (ssize_t)len) {
             free(owned);
             return ASMTEST_PTRACE_ETRACE;
         }
