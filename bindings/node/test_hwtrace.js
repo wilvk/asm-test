@@ -279,8 +279,92 @@ function main() {
       }
       code.free();
     }
+
+    // --- attributeWindow: whole-window capture + attribute the absolute addresses to caller-
+    //     named regions. Two IDENTICAL-byte leaves A,B in distinct mappings — the named-region
+    //     path (exact address range) splits them into SEPARATE buckets, which symbol/disasm-based
+    //     attribution cannot. Mirrors the C oracle test_wholewindow_buckets. ---
+    {
+      const A = NativeCode.fromBytes(ROUTINE);
+      const B = NativeCode.fromBytes(ROUTINE); // identical bytes, distinct mapping
+      const aBase = BigInt(koffi.address(A.base));
+      const bBase = BigInt(koffi.address(B.base));
+      let ra, rb;
+      const res = HwTrace.attributeWindow(
+        () => { ra = A.call(20, 22); rb = B.call(30, 12); },
+        [{ name: 'leafA', base: aBase, len: A.length }, { name: 'leafB', base: bBase, len: B.length }]);
+      console.log(`# attributeWindow: armed=${res.armed} buckets=${res.buckets.length}`);
+      ok(ra === 42 && rb === 42, 'attributeWindow: both traced leaves still return their results');
+      if (!res.armed) {
+        console.log('# SKIP attributeWindow: single-step tier unavailable (begin_window)');
+      } else {
+        const byName = new Map(res.buckets.map((b) => [b.label, b]));
+        const la = byName.get('leafA');
+        const lb = byName.get('leafB');
+        ok(la && lb, 'attributeWindow: identical-byte leaves split into SEPARATE named buckets leafA/leafB');
+        if (la && lb) {
+          ok(la.count === 5n && lb.count === 5n,
+            'attributeWindow: each named leaf bucket counts its 5 executed instructions');
+        }
+      }
+      A.free();
+      B.free();
+    }
   } finally {
     HwTrace.shutdown();
+  }
+
+  // --- stitchHandles: the §D0.4 async-hop merge. HOST-INDEPENDENT (pure merge — no single-step,
+  //     no Capstone, no PT): script two "hops" OUT of seq order and prove they merge back BY seq.
+  //     Mirrors the C oracle test_stitch_slices. ---
+  {
+    const trA = HwTrace.create({ blocks: 16, instructions: 16 });
+    const trB = HwTrace.create({ blocks: 16, instructions: 16 });
+    trA.appendInsn(0).appendInsn(3).appendInsn(6); // hop A: seq 0
+    trB.appendInsn(0).appendInsn(4).appendInsn(8); // hop B: seq 1
+    // Pass the hops OUT of seq order (B then A); stitch must re-order by seq.
+    const st = HwTrace.stitchHandles([trB, trA],
+      { scopeIds: [7, 7], seqs: [1, 0], tids: [222, 111], versions: [9, 5] });
+    assert.deepStrictEqual(st.insns, [0, 3, 6, 0, 4, 8]);
+    ok(true, 'stitchHandles: merges hops BY seq (A[0,3,6] before B[0,4,8]) despite input order');
+    ok(st.bounds.length === 2, 'stitchHandles: one slice bound per hop');
+    ok(st.bounds[0].seq === 0 && st.bounds[0].insnOff === 0 && st.bounds[0].tid === 111
+      && st.bounds[0].version === 5n, 'stitchHandles: bound[0] is hop A (seq 0, off 0, tid 111, v5)');
+    ok(st.bounds[1].seq === 1 && st.bounds[1].insnOff === 3 && st.bounds[1].tid === 222
+      && st.bounds[1].version === 9n, 'stitchHandles: bound[1] is hop B (seq 1, off 3, tid 222, v9)');
+    trA.free();
+    trB.free(); // free the hops only AFTER reading the merged result (shallow-copy lifetime)
+  }
+
+  // --- symbolizeBuckets + regionName: whole-window noise attribution. HOST-INDEPENDENT-ish
+  //     (Linux /proc + a synthetic /tmp perf-map; no single-step/Capstone/PT/privilege). Mirrors
+  //     the C oracle test_symbolize_bucket. ---
+  if (process.platform !== 'linux') {
+    console.log('# SKIP symbolize_bucket/region_name: Linux /proc + perf-map only');
+  } else {
+    const code = NativeCode.fromBytes(ROUTINE);
+    const base = BigInt(koffi.address(code.base));
+    const perfMap = `/tmp/perf-${process.pid}.map`;
+    fs.writeFileSync(perfMap, '40000000 1000 MyJitMethod\n');
+    try {
+      // ips: base x3 (the self mapping), a JIT IP x2 (resolves to MyJitMethod via the perf-map),
+      // and address 1 (unmapped -> [unknown]).
+      const jit = 0x40000500n;
+      const buckets = HwTrace.symbolizeBuckets([base, base, base, jit, jit, 1n]);
+      const total = buckets.reduce((s, b) => s + Number(b.count), 0);
+      ok(total === 6, 'symbolizeBuckets: every IP is bucketed (total count == 6)');
+      const jitB = buckets.find((b) => b.label.includes('MyJitMethod'));
+      ok(jitB && jitB.count === 2n, 'symbolizeBuckets: the 2 JIT IPs bucket under MyJitMethod (perf-map)');
+      ok(buckets.some((b) => b.label.includes('unknown')), 'symbolizeBuckets: the unmapped IP buckets under [unknown]');
+      ok(HwTrace.symbolizeBuckets([]).length === 0, 'symbolizeBuckets: empty input -> empty');
+      // regionName reverse-resolves the self mapping's extent.
+      const rn = HwTrace.regionName(base);
+      ok(rn !== null && rn.start <= base && base < rn.end && rn.name.length > 0,
+        'regionName: resolves the containing mapping name + extent');
+    } finally {
+      try { fs.unlinkSync(perfMap); } catch (_e) { /* ignore */ }
+      code.free();
+    }
   }
 
   // --- auto-select orchestrator: live trace through whatever auto picked. On any
@@ -662,6 +746,42 @@ function main() {
       } finally {
         img.free();
         code.free();
+      }
+    }
+
+    // render_versioned: version-AWARE disassembly. Track a WRITABLE region as 'add', then
+    // rewrite it to 'sub' and refresh (a 2nd version). Rendering a trace of the same ABSOLUTE
+    // address at the OLD version shows 'add', at the NEW version shows 'sub' — proving the render
+    // decodes the timeline SNAPSHOT, not live memory (which would show only 'sub'). Mirrors the C
+    // oracle test_render_versioned. Self-skips without a 2nd version or without Capstone.
+    {
+      const CIA = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3]); // mov rax,rdi; add rax,rsi; ret
+      const region = Buffer.alloc(4096); // writable + address-stable (off-heap ArrayBuffer backing)
+      CIA.copy(region, 0);
+      const addr = koffi.address(region); // BigInt data address
+      const img = new CodeImage(0);
+      const tr = HwTrace.create({ blocks: 4, instructions: 4 });
+      try {
+        img.track(addr, CIA.length);
+        const t0 = img.now();
+        region.writeUInt8(0x29, 4); // add (0x01) -> sub (0x29) in place
+        img.refresh();
+        const t1 = img.now();
+        tr.appendInsn(addr + 3n); // ABSOLUTE address of the add/sub instruction (offset 3)
+        const b0 = img.renderVersioned(t0, tr);
+        const b1 = img.renderVersioned(t1, tr);
+        if (t1 <= t0) {
+          console.log('# SKIP render_versioned: recorder saw no page change (no 2nd version)');
+        } else if (!b0 || !b1) {
+          console.log('# SKIP render_versioned: Capstone decoder absent (render returned empty)');
+        } else {
+          ok(b0.includes('add'), 'render_versioned at t0 shows add (version A bytes)');
+          ok(b1.includes('sub'), 'render_versioned at t1 shows sub (version B bytes)');
+          ok(b0 !== b1, 'render_versioned is version-aware (t0 text != t1 text)');
+        }
+      } finally {
+        tr.free();
+        img.free();
       }
     }
 

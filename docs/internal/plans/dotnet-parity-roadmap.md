@@ -190,7 +190,24 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > against the C oracle's 35-byte driver frame calling two 7-byte leaves (result `m2(7,3)==4`;
 > driver + both leaves in call order; complete). The two `ALL` windowed allow-list lines stay
 > (seven bindings still don't wrap them); the addr_channel shims are in a non-tier header
-> (ungated). Remaining Phase-2 work (async-hop stitching, JIT-address resolution) is below.
+> (ungated).
+>
+> **Increment 4 LANDED (2026-07-09).** The remaining CI-runnable Phase-2 clusters now ship in Node
+> and Java (six .NET-lead symbols): version-aware render (`CodeImage.renderVersioned` +
+> `NativeTrace.appendInsn`); whole-window noise attribution (`HwTrace.regionName` /
+> `symbolizeBuckets` / `attributeWindow` — the named-region path splits identical-byte leaves that
+> symbol/disasm attribution cannot); and the §D0.4 **async-hop merge** (`HwTrace.stitchHandles` —
+> order N captured hop traces by `seq`, host-independent pure merge, validated with a fake-hook
+> harness scripting the hops out of seq order). Struct marshalling pinned to the exact SysV layouts
+> (`bucket_t` 136, `slice_bound_t` 32, `named_region_t` 80), cross-checked vs the dotnet
+> `[StructLayout]`s. Validated in `docker-hwtrace-node` / `-java` against the C oracles
+> (`test_render_versioned` / `test_symbolize_bucket` / `test_wholewindow_buckets` /
+> `test_stitch_slices`). All six `ALL` allow-list lines stay (7-8 bindings still don't wrap them).
+> **What remains is genuinely forward-look**: the LIVE async-hop *producer* (Node
+> `AsyncLocalStorage` / Java JVMTI hop hooks) and runtime JIT-address resolution (V8 jitdump /
+> `libperf-jvmti`) — runtime-specific, no CI coverage today; the merge/attribution *substrate* they
+> feed is now wrapped and host-tested. The remaining ALL-exempt symbols are hardware-gated (AMD
+> LBR/MSR survey) or superseded (registry `call_scoped`, `begin_scope`).
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place

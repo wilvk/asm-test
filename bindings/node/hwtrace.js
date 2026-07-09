@@ -99,6 +99,19 @@ function _safeInt(bi) {
   return (bi >= -(2n ** 53n) && bi <= 2n ** 53n) ? Number(bi) : bi;
 }
 
+// Decode `n` asmtest_hwtrace_bucket_t records (136 B each: char[128] label + u64 count) from a
+// raw Buffer backing into [{ label, count:BigInt }]. The label runs to the first NUL within 128.
+function _readBuckets(raw, n) {
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const off = i * 136;
+    let nul = raw.indexOf(0, off);
+    if (nul < 0 || nul > off + 128) nul = off + 128;
+    out[i] = { label: raw.toString('latin1', off, nul), count: raw.readBigUInt64LE(off + 128) };
+  }
+  return out;
+}
+
 // The native-payload slot the published npm package ships (mirrors asmtest.js's
 // core loader): native/<os>-<arch>/lib<name>.<ext> next to this module.
 function bundledSlot(name) {
@@ -258,6 +271,18 @@ let _loadError = null;
     // Both record the frame [base,len) + every channel-published region as ABSOLUTE addresses.
     windowCall: lib.func('int asmtest_ptrace_trace_window_call(const void*, size_t, const long*, int, void*, _Out_ long*, void*)'),
     stealthWindowed: lib.func('int asmtest_hwtrace_stealth_trace_windowed(const void*, size_t, void*, void*, _Out_ long*, asmtest_run_region*, void*)'),
+    // §3.1(c) whole-window noise attribution. region_name: 1=hit/0=miss, fills name + start/end
+    // extent. symbolize_bucket: buckets ips[0..n) into a raw asmtest_hwtrace_bucket_t[cap] byte
+    // backing (136 B each: char[128] label + u64 count), returns the distinct-label count.
+    // attribute_window: same bucket backing, keyed to a whole-window SCOPE handle (BY VALUE) plus a
+    // caller IN-array of asmtest_hwtrace_named_region_t (80 B: char[64] name + u64 base + u64 len).
+    regionName: lib.func('int asmtest_hwtrace_region_name(int, uint64_t, _Out_ char*, size_t, _Out_ uint64_t*, _Out_ uint64_t*)'),
+    symbolizeBucket: lib.func('size_t asmtest_hwtrace_symbolize_bucket(int, const uint64_t*, size_t, _Out_ void*, size_t)'),
+    attributeWindow: lib.func('int asmtest_hwtrace_attribute_window(asmtest_hwtrace_scope_t, const void*, size_t, _Out_ void*, size_t, _Out_ size_t*)'),
+    // §D0.4 async-hop merge bridge: order N captured trace handles by seq and concatenate. traces
+    // is a JS array of the koffi trace pointers; the scalar arrays are raw Buffers; bounds is the
+    // byte backing of asmtest_hwtrace_slice_bound_t[n] (32 B: insn_off@0, scope_id@8, seq@16, tid@20, version@24).
+    stitchHandles: lib.func('int asmtest_hwtrace_stitch_handles(void**, const uint64_t*, const uint32_t*, const int*, const uint64_t*, size_t, void*, _Out_ void*, _Out_ size_t*)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -339,6 +364,12 @@ let _loadError = null;
     codeimageRefresh: lib.func('int asmtest_codeimage_refresh(void*)'),
     codeimageNow: lib.func('uint64_t asmtest_codeimage_now(void*)'),
     codeimageBytesAt: lib.func('int asmtest_codeimage_bytes_at(void*, const void*, uint64_t, _Out_ void**, _Out_ size_t*)'),
+    // §1/§D4 version-aware render: decode a trace's recorded ABSOLUTE addresses against a
+    // code-image timeline AS OF capture sequence `when` (not a late live-memory snapshot).
+    // trace_append_insn builds such an absolute-address trace (asmtest_trace.h; not a tier
+    // symbol, so ungated by the parity check — wrapped here to feed render_versioned).
+    traceAppendInsn: lib.func('void trace_append_insn(void*, uint64_t)'),
+    renderVersioned: lib.func('int asmtest_hwtrace_render_versioned(void*, uint64_t, void*, _Out_ char*, size_t)'),
     codeimageBpfAvailable: lib.func('int asmtest_codeimage_bpf_available()'),
     codeimageBpfSkipReason: lib.func('void asmtest_codeimage_bpf_skip_reason(_Out_ char*, size_t)'),
     codeimageWatchBpf: lib.func('int asmtest_codeimage_watch_bpf(void*)'),
@@ -710,6 +741,117 @@ class HwTrace {
     }
   }
 
+  /** Reverse-resolve an ABSOLUTE address to the name + extent of the region containing it —
+   *  a /proc/<pid>/maps pathname or a `[...]` pseudo-name (pid 0 => this process).
+   *  (asmtest_hwtrace_region_name.) Returns `{ name, start, end }` (start/end as BigInt) on a
+   *  hit, or null when the address is in no mapped region. */
+  static regionName(addr, pid = 0) {
+    const name = Buffer.alloc(256);
+    const start = Buffer.alloc(8);
+    const end = Buffer.alloc(8);
+    const rc = _fn.regionName(pid, BigInt(addr), name, name.length, start, end);
+    if (rc !== 1) return null;
+    let nul = name.indexOf(0);
+    if (nul < 0) nul = name.length;
+    return { name: name.toString('latin1', 0, nul), start: start.readBigUInt64LE(0), end: end.readBigUInt64LE(0) };
+  }
+
+  /** Bucket a list of ABSOLUTE instruction pointers by the JIT symbol (perf-map) or mapped
+   *  region that contains each — whole-window noise attribution (pid 0 => this process).
+   *  (asmtest_hwtrace_symbolize_bucket.) `ips` are numbers/BigInts; returns up to `cap`
+   *  `{ label, count }` entries (count as BigInt); unresolved IPs bucket under `[unknown]`. */
+  static symbolizeBuckets(ips, pid = 0, cap = 64) {
+    if (!_lib || ips.length === 0 || cap <= 0) return [];
+    const ipsBuf = Buffer.alloc(8 * ips.length);
+    for (let i = 0; i < ips.length; i++) ipsBuf.writeBigUInt64LE(BigInt(ips[i]), i * 8);
+    const raw = Buffer.alloc(cap * 136); // asmtest_hwtrace_bucket_t[cap]
+    let n = Number(_fn.symbolizeBucket(pid, ipsBuf, ips.length, raw, cap));
+    if (n > cap) n = cap; // the C return is the DISTINCT-label count, which may exceed cap
+    return _readBuckets(raw, n);
+  }
+
+  /** Trace an arbitrary whole window (region-free single-step, like `window()`) and attribute
+   *  its captured ABSOLUTE addresses to caller-named regions first (exact — how identical-byte
+   *  leaves separate), then to perf-map / maps. (asmtest_hwtrace_attribute_window.) `regions` is
+   *  `[{ name, base, len }]` (base a numeric/BigInt absolute address). Returns
+   *  `{ buckets, armed, truncated }`; self-skips (armed:false, empty buckets) off the single-step
+   *  tier — but `fn` still runs. SAFETY: same in-process single-step footgun as `window()` — keep
+   *  `fn` a TIGHT native leaf. */
+  static attributeWindow(fn, regions, cap = 64, insnsCap = 1 << 20) {
+    const handle = _fn.traceNew(insnsCap, 0);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    try {
+      const scope = {};
+      const rc = _fn.beginWindow(handle, scope);
+      if (rc !== ASMTEST_HW_OK) { fn(); return { buckets: [], armed: false, truncated: false }; }
+      try { fn(); } finally { _fn.endWindow(scope, handle); }
+      const nreg = regions.length;
+      const regBuf = Buffer.alloc(80 * Math.max(nreg, 1)); // asmtest_hwtrace_named_region_t[nreg]
+      for (let i = 0; i < nreg; i++) {
+        const off = i * 80;
+        Buffer.from(String(regions[i].name).slice(0, 63), 'latin1').copy(regBuf, off); // name[64], NUL-padded
+        regBuf.writeBigUInt64LE(BigInt(regions[i].base), off + 64);
+        regBuf.writeBigUInt64LE(BigInt(regions[i].len), off + 72);
+      }
+      const raw = Buffer.alloc(cap * 136);
+      const nb = Buffer.alloc(8);
+      const arc = _fn.attributeWindow(scope, regBuf, nreg, raw, cap, nb);
+      if (arc !== ASMTEST_HW_OK) return { buckets: [], armed: true, truncated: _fn.truncated(handle) !== 0 };
+      let n = Number(nb.readBigUInt64LE(0));
+      if (n > cap) n = cap;
+      return { buckets: _readBuckets(raw, n), armed: true, truncated: _fn.truncated(handle) !== 0 };
+    } finally {
+      _fn.traceFree(handle);
+    }
+  }
+
+  /** Merge N already-captured hop traces (one per async hop) into one logical trace, ordered by
+   *  `seq` — the binding-facing §D0.4 async-hop merge. (asmtest_hwtrace_stitch_handles.)
+   *  `hopTraces` are HwTrace instances (they MUST outlive this call — their arrays are
+   *  shallow-copied, not duplicated; this method does NOT free them). The optional parallel
+   *  `{ scopeIds, seqs, tids, versions }` arrays default per-hop (seq => index, rest => 0).
+   *  Returns `{ insns, bounds, truncated }`: `insns` the merged offsets (in seq order), `bounds`
+   *  one `{ insnOff, scopeId, seq, tid, version }` per hop. The merged output trace is freed
+   *  internally. */
+  static stitchHandles(hopTraces, { scopeIds, seqs, tids, versions } = {}) {
+    const n = hopTraces.length;
+    const traces = hopTraces.map((t) => t._handle); // JS array of trace pointers -> void**
+    const scopeBuf = Buffer.alloc(8 * Math.max(n, 1));
+    const seqBuf = Buffer.alloc(4 * Math.max(n, 1));
+    const tidBuf = Buffer.alloc(4 * Math.max(n, 1));
+    const verBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) {
+      scopeBuf.writeBigUInt64LE(BigInt(scopeIds ? scopeIds[i] : 0), i * 8);
+      seqBuf.writeUInt32LE((seqs ? seqs[i] : i) >>> 0, i * 4);
+      tidBuf.writeInt32LE((tids ? tids[i] : 0) | 0, i * 4);
+      verBuf.writeBigUInt64LE(BigInt(versions ? versions[i] : 0), i * 8);
+    }
+    const out = _fn.traceNew(1 << 16, 1 << 16);
+    if (!out) throw new Error('asmtest_trace_new failed');
+    const bounds = Buffer.alloc(32 * Math.max(n, 1)); // asmtest_hwtrace_slice_bound_t[n]
+    const nbounds = Buffer.alloc(8);
+    const rc = _fn.stitchHandles(traces, scopeBuf, seqBuf, tidBuf, verBuf, n, out, bounds, nbounds);
+    if (rc !== ASMTEST_HW_OK) { _fn.traceFree(out); throw new Error(`asmtest_hwtrace_stitch_handles failed: ${rc}`); }
+    const nb = Number(nbounds.readBigUInt64LE(0));
+    const boundsOut = new Array(nb);
+    for (let i = 0; i < nb; i++) {
+      const off = i * 32;
+      boundsOut[i] = {
+        insnOff: Number(bounds.readBigUInt64LE(off)),
+        scopeId: bounds.readBigUInt64LE(off + 8),
+        seq: bounds.readUInt32LE(off + 16),
+        tid: bounds.readInt32LE(off + 20),
+        version: bounds.readBigUInt64LE(off + 24),
+      };
+    }
+    const ni = Number(_fn.insnsLen(out));
+    const insns = new Array(ni);
+    for (let i = 0; i < ni; i++) insns[i] = Number(_fn.insnAt(out, i));
+    const truncated = _fn.truncated(out) !== 0;
+    _fn.traceFree(out);
+    return { insns, bounds: boundsOut, truncated };
+  }
+
   // ---- per-trace ----
 
   /** Allocate a trace handle. Block recording when `blocks` > 0, instruction
@@ -766,6 +908,10 @@ class HwTrace {
 
   /** True if the basic block at byte-offset `off` was entered. */
   covered(off) { return _fn.traceCovered(this._handle, off) !== 0; }
+
+  /** Append one recorded instruction address `off` in order (a raw ABSOLUTE address for a
+   *  whole-window/synthetic trace, or a region offset). Feeds `CodeImage.renderVersioned`. */
+  appendInsn(off) { _fn.traceAppendInsn(this._handle, BigInt(off)); return this; }
 
   /** Number of distinct basic blocks recorded. */
   blocksLen() { return Number(_fn.blocksLen(this._handle)); }
@@ -1253,6 +1399,20 @@ class CodeImage {
     // Decode n bytes out of it and copy into an owned Buffer.
     const view = koffi.decode(outPtr[0], 'uint8_t', n);
     return Buffer.from(view);
+  }
+
+  /** Disassemble `trace`'s recorded ABSOLUTE addresses against this image's timeline AS OF
+   *  capture sequence `when` (pass a concrete `now()` value; 0 => latest). This is the
+   *  version-AWARE render — unlike `HwTrace.window`'s `render`, which decodes LIVE self-memory
+   *  and so sees only the bytes present now. Returns the disassembly listing ('' when the
+   *  Capstone decoder is absent or the version/address is unknown). `trace` is a HwTrace whose
+   *  insns hold absolute addresses (see `HwTrace.appendInsn`).
+   *  (asmtest_hwtrace_render_versioned.) */
+  renderVersioned(when, trace) {
+    const buf = Buffer.alloc(16384);
+    const n = _fn.renderVersioned(this._handle, BigInt(when), trace._handle, buf, buf.length);
+    if (n <= 0) return '';
+    return buf.toString('latin1', 0, Math.min(n, buf.length - 1));
   }
 
   /** Load and attach the eBPF emission detector, filtered to this image's pid.

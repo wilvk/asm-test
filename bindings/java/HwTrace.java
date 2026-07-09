@@ -124,6 +124,17 @@ public final class HwTrace {
         MemoryLayout.paddingLayout(4),
         ADDRESS.withName("object_hint"));
 
+    // asmtest_hwtrace_bucket_t {char label[128]; uint64_t count;} — 136 B, no padding.
+    private static final long BUCKET_SIZE = 136, BUCKET_LABEL_LEN = 128;
+    // asmtest_hwtrace_slice_bound_t {size_t insn_off; u64 scope_id; u32 seq; int tid; u64 version;}
+    // — 32 B; seq@16 + tid@20 pack into one eightbyte, version 8-aligned @24 (read by offset).
+    private static final long SLICE_BOUND_SIZE = 32;
+    // asmtest_hwtrace_named_region_t {char name[64]; u64 base; u64 len;} — 80 B.
+    private static final MemoryLayout NAMED_REGION_LAYOUT = MemoryLayout.structLayout(
+        MemoryLayout.sequenceLayout(64, JAVA_BYTE).withName("name"),
+        JAVA_LONG.withName("base"), JAVA_LONG.withName("len"));
+    private static final long NAMED_REGION_SIZE = 80;
+
     // asmtest_trace_choice_t {int tier; int backend; int fidelity;} — three int-sized
     // enum fields, no padding (pinned by a static_assert in the header), so a choice
     // marshals as three consecutive ints (12 bytes).
@@ -181,6 +192,29 @@ public final class HwTrace {
         public boolean armed() { return rc == ASMTEST_HW_OK; }
     }
 
+    /** One whole-window attribution bucket: a JIT-symbol / region {@code label} and the {@code count}
+     *  of captured IPs that fell in it (from {@link #symbolizeBuckets} / {@link #attributeWindow}). */
+    public record Bucket(String label, long count) {}
+
+    /** The name + extent of the mapped region containing an address (from {@link #regionName}). */
+    public record RegionName(String name, long start, long end) {}
+
+    /** One §D0.4 stitch slice: where a hop's insns start in the merged trace ({@code insnOff}) and its
+     *  {@code scopeId}/{@code seq}/{@code tid}/{@code version} (from {@link #stitchHandles}). */
+    public record StitchBound(long insnOff, long scopeId, int seq, int tid, long version) {}
+
+    /** Outcome of {@link #attributeWindow}: the attribution {@code buckets}, whether the single-step
+     *  window {@code armed}, and its {@code truncated} bit. */
+    public record AttributeResult(Bucket[] buckets, boolean armed, boolean truncated) {}
+
+    /** A caller-named code region for {@link #attributeWindow}: {@code [base, base+len)} labeled
+     *  {@code name} (matched exactly, so identical-byte leaves in distinct mappings separate). */
+    public record NamedRegion(String name, long base, long len) {}
+
+    /** Outcome of {@link #stitchHandles}: the merged trace {@code insns} (in seq order), one
+     *  {@code bounds} entry per hop, and the {@code truncated} bit. */
+    public record StitchResult(long[] insns, StitchBound[] bounds, boolean truncated) {}
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
@@ -188,10 +222,11 @@ public final class HwTrace {
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
         CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
         WINDOW_CALL, STEALTH_WINDOWED,
+        REGION_NAME, SYMBOLIZE_BUCKET, ATTRIBUTE_WINDOW, STITCH_HANDLES,
         ADDR_CHAN_NEW, ADDR_CHAN_NEW_SHARED, ADDR_CHAN_PUBLISH, ADDR_CHAN_FREE, ADDR_CHAN_FREE_SHARED,
         EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
-        TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
+        TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT, TRACE_APPEND_INSN,
         // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
         PTRACE_AVAILABLE, PTRACE_SKIP_REASON, PTRACE_TRACE_CALL, PTRACE_TRACE_ATTACHED,
         PTRACE_BLOCKSTEP_AVAILABLE, PTRACE_TRACE_CALL_BLOCKSTEP,
@@ -200,7 +235,7 @@ public final class HwTrace {
         PROC_REGION_BY_ADDR, PROC_PERFMAP_SYMBOL, JITDUMP_FIND,
         // asmtest_codeimage.h — time-aware code-image recorder (a userspace TEXT_POKE).
         CI_AVAILABLE, CI_SKIP_REASON, CI_NEW, CI_FREE, CI_TRACK, CI_REFRESH, CI_NOW,
-        CI_BYTES_AT, CI_BPF_AVAILABLE, CI_BPF_SKIP_REASON, CI_WATCH_BPF, CI_POLL_BPF,
+        CI_BYTES_AT, CI_RENDER_VERSIONED, CI_BPF_AVAILABLE, CI_BPF_SKIP_REASON, CI_WATCH_BPF, CI_POLL_BPF,
         CI_NEXT;
 
     // asmtest_ptrace.h — call descent (asmtest_descent_t): the (call-site -> callee)
@@ -329,12 +364,13 @@ public final class HwTrace {
             callScopedEx = null, renderScope = null,
             beginWindow = null, endWindow = null, renderWindow = null, stealthTrace = null,
             windowCall = null, stealthWindowed = null,
+            regionName = null, symbolizeBucket = null, attributeWindow = null, stitchHandles = null,
             addrChanNew = null, addrChanNewShared = null, addrChanPublish = null,
             addrChanFree = null, addrChanFreeShared = null,
             execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
-            traceBlockAt = null, traceInsnAt = null,
+            traceBlockAt = null, traceInsnAt = null, traceAppendInsn = null,
             ptraceAvailable = null, ptraceSkipReason = null, ptraceTraceCall = null,
             ptraceBlockstepAvailable = null, ptraceTraceCallBlockstep = null,
             ptraceTraceAttachedBlockstep = null,
@@ -342,7 +378,7 @@ public final class HwTrace {
             procRegionByAddr = null, procPerfmapSymbol = null,
             jitdumpFind = null,
             ciAvailable = null, ciSkipReason = null, ciNew = null, ciFree = null,
-            ciTrack = null, ciRefresh = null, ciNow = null, ciBytesAt = null,
+            ciTrack = null, ciRefresh = null, ciNow = null, ciBytesAt = null, ciRenderVersioned = null,
             ciBpfAvailable = null, ciBpfSkipReason = null, ciWatchBpf = null,
             ciPollBpf = null, ciNext = null,
             descentNew = null, descentFree = null, descentSetMaxDepth = null,
@@ -440,6 +476,16 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             stealthWindowed = h(lib, "asmtest_hwtrace_stealth_trace_windowed",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+            // §3.1(c) whole-window noise attribution + §D0.4 async-hop merge.
+            regionName = h(lib, "asmtest_hwtrace_region_name",
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
+            symbolizeBucket = h(lib, "asmtest_hwtrace_symbolize_bucket",
+                FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
+            // attribute_window: scope BY VALUE as a packed long (idx | gen<<32), like render_window.
+            attributeWindow = h(lib, "asmtest_hwtrace_attribute_window",
+                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+            stitchHandles = h(lib, "asmtest_hwtrace_stitch_handles",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             execFree = h(lib, "asmtest_hwtrace_exec_free",
@@ -462,6 +508,10 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
             traceInsnAt = h(lib, "asmtest_emu_trace_insn_at",
                 FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG));
+            // trace_append_insn (asmtest_trace.h; not a tier symbol, so ungated) records one
+            // ABSOLUTE address in order — used to build a trace to feed render_versioned.
+            traceAppendInsn = h(lib, "trace_append_insn",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
             // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. pid is
             // a C int (JAVA_INT); the long* args/result are ADDRESS to scratch segments.
             ptraceAvailable = h(lib, "asmtest_ptrace_available",
@@ -527,6 +577,9 @@ public final class HwTrace {
             ciBytesAt = h(lib, "asmtest_codeimage_bytes_at",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS,
                     ADDRESS));
+            // §1/§D4 version-aware render: (img, when u64, trace, char* buf, size_t buflen).
+            ciRenderVersioned = h(lib, "asmtest_hwtrace_render_versioned",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
             // Optional eBPF emission detector (Phase C).
             ciBpfAvailable = h(lib, "asmtest_codeimage_bpf_available",
                 FunctionDescriptor.of(JAVA_INT));
@@ -624,6 +677,8 @@ public final class HwTrace {
         BEGIN_WINDOW = beginWindow; END_WINDOW = endWindow; RENDER_WINDOW = renderWindow;
         STEALTH_TRACE = stealthTrace;
         WINDOW_CALL = windowCall; STEALTH_WINDOWED = stealthWindowed;
+        REGION_NAME = regionName; SYMBOLIZE_BUCKET = symbolizeBucket;
+        ATTRIBUTE_WINDOW = attributeWindow; STITCH_HANDLES = stitchHandles;
         ADDR_CHAN_NEW = addrChanNew; ADDR_CHAN_NEW_SHARED = addrChanNewShared;
         ADDR_CHAN_PUBLISH = addrChanPublish; ADDR_CHAN_FREE = addrChanFree;
         ADDR_CHAN_FREE_SHARED = addrChanFreeShared;
@@ -631,6 +686,7 @@ public final class HwTrace {
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
         TRACE_TRUNCATED = traceTruncated; TRACE_BLOCK_AT = traceBlockAt; TRACE_INSN_AT = traceInsnAt;
+        TRACE_APPEND_INSN = traceAppendInsn;
         PTRACE_AVAILABLE = ptraceAvailable; PTRACE_SKIP_REASON = ptraceSkipReason;
         PTRACE_TRACE_CALL = ptraceTraceCall; PTRACE_TRACE_ATTACHED = ptraceTraceAttached;
         PTRACE_BLOCKSTEP_AVAILABLE = ptraceBlockstepAvailable;
@@ -641,7 +697,7 @@ public final class HwTrace {
         JITDUMP_FIND = jitdumpFind;
         CI_AVAILABLE = ciAvailable; CI_SKIP_REASON = ciSkipReason; CI_NEW = ciNew;
         CI_FREE = ciFree; CI_TRACK = ciTrack; CI_REFRESH = ciRefresh; CI_NOW = ciNow;
-        CI_BYTES_AT = ciBytesAt; CI_BPF_AVAILABLE = ciBpfAvailable;
+        CI_BYTES_AT = ciBytesAt; CI_RENDER_VERSIONED = ciRenderVersioned; CI_BPF_AVAILABLE = ciBpfAvailable;
         CI_BPF_SKIP_REASON = ciBpfSkipReason; CI_WATCH_BPF = ciWatchBpf;
         CI_POLL_BPF = ciPollBpf; CI_NEXT = ciNext;
         DESCENT_NEW = descentNew; DESCENT_FREE = descentFree;
@@ -1158,6 +1214,139 @@ public final class HwTrace {
         catch (Throwable t) { throw rethrow(t); }
     }
 
+    private static Bucket[] readBuckets(MemorySegment buckets, int n) {
+        Bucket[] out = new Bucket[n];
+        for (int i = 0; i < n; i++) {
+            long off = i * BUCKET_SIZE;
+            out[i] = new Bucket(buckets.getString(off), buckets.get(JAVA_LONG, off + BUCKET_LABEL_LEN));
+        }
+        return out;
+    }
+
+    /** Reverse-resolve an ABSOLUTE {@code addr} to the name + extent of the mapped region containing
+     *  it — a {@code /proc/<pid>/maps} pathname or a {@code [...]} pseudo-name ({@code pid == 0} =>
+     *  this process). (asmtest_hwtrace_region_name.) Returns a {@link RegionName} on a hit, or
+     *  {@code null} when the address is in no mapped region. */
+    public static RegionName regionName(long addr, int pid) {
+        if (REGION_NAME == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment name = a.allocate(256);
+            MemorySegment start = a.allocate(JAVA_LONG);
+            MemorySegment end = a.allocate(JAVA_LONG);
+            int rc = (int) REGION_NAME.invoke(pid, addr, name, 256L, start, end);
+            if (rc != 1) return null;
+            return new RegionName(name.getString(0), start.get(JAVA_LONG, 0), end.get(JAVA_LONG, 0));
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Bucket a list of ABSOLUTE instruction pointers by the JIT symbol (perf-map) or mapped region
+     *  containing each — whole-window noise attribution ({@code pid == 0} => this process).
+     *  (asmtest_hwtrace_symbolize_bucket.) Returns up to {@code cap} {@link Bucket}s; unresolved IPs
+     *  bucket under {@code [unknown]}. */
+    public static Bucket[] symbolizeBuckets(long[] ips, int pid, int cap) {
+        if (SYMBOLIZE_BUCKET == null || ips.length == 0 || cap <= 0) return new Bucket[0];
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment ipsSeg = a.allocate(MemoryLayout.sequenceLayout(ips.length, JAVA_LONG));
+            for (int i = 0; i < ips.length; i++) ipsSeg.setAtIndex(JAVA_LONG, i, ips[i]);
+            MemorySegment buckets = a.allocate(cap * BUCKET_SIZE);
+            long n = (long) SYMBOLIZE_BUCKET.invoke(pid, ipsSeg, (long) ips.length, buckets, (long) cap);
+            return readBuckets(buckets, Math.min((int) n, cap)); // the C return may exceed cap
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Trace an arbitrary whole window (region-free single-step, like {@link #window}) and attribute
+     *  its captured ABSOLUTE addresses to caller-named {@code regions} first (exact — how
+     *  identical-byte leaves separate), then to perf-map / maps. (asmtest_hwtrace_attribute_window.)
+     *  Returns an {@link AttributeResult}; self-skips ({@code armed()} false, empty buckets) off the
+     *  single-step tier — but {@code body} still runs. SAFETY: same in-process single-step footgun as
+     *  {@link #window} — keep {@code body} a TIGHT native leaf. */
+    public static AttributeResult attributeWindow(Runnable body, NamedRegion[] regions, int cap, int insnsCap) {
+        if (ATTRIBUTE_WINDOW == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke((long) insnsCap, 0L);
+            if (MemorySegment.NULL.equals(handle)) throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                int rc = (int) BEGIN_WINDOW.invoke(handle, scopeOut);
+                if (rc != ASMTEST_HW_OK) { body.run(); return new AttributeResult(new Bucket[0], false, false); }
+                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
+                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
+                long packed = (idx & 0xffffffffL) | ((long) gen << 32); // scope BY VALUE
+                try { body.run(); } finally { END_WINDOW.invoke(packed, handle); }
+                int nreg = regions.length;
+                MemorySegment regSeg = a.allocate(NAMED_REGION_SIZE * Math.max(nreg, 1)); // zero-filled => NUL-padded names
+                for (int i = 0; i < nreg; i++) {
+                    long off = i * NAMED_REGION_SIZE;
+                    byte[] nm = regions[i].name().getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+                    MemorySegment.copy(nm, 0, regSeg, JAVA_BYTE, off, Math.min(nm.length, 63));
+                    regSeg.set(JAVA_LONG, off + 64, regions[i].base());
+                    regSeg.set(JAVA_LONG, off + 72, regions[i].len());
+                }
+                MemorySegment buckets = a.allocate(cap * BUCKET_SIZE);
+                MemorySegment nb = a.allocate(JAVA_LONG);
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                int arc = (int) ATTRIBUTE_WINDOW.invoke(packed, regSeg, (long) nreg, buckets, (long) cap, nb);
+                if (arc != ASMTEST_HW_OK) return new AttributeResult(new Bucket[0], true, trunc);
+                int n = Math.min((int) nb.get(JAVA_LONG, 0), cap);
+                return new AttributeResult(readBuckets(buckets, n), true, trunc);
+            } finally { TRACE_FREE.invoke(handle); }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Merge N already-captured hop traces (one per async hop) into one logical trace, ordered by
+     *  {@code seq} — the binding-facing §D0.4 async-hop merge. (asmtest_hwtrace_stitch_handles.)
+     *  The {@code hops} MUST outlive this call (their arrays are shallow-copied, not duplicated; this
+     *  method does NOT free them). The optional parallel {@code scopeIds}/{@code seqs}/{@code tids}/
+     *  {@code versions} default per-hop (seq => index, rest => 0). Returns a {@link StitchResult}: the
+     *  merged {@code insns} (in seq order) and one {@code bounds} entry per hop. The merged output
+     *  trace is freed internally. */
+    public static StitchResult stitchHandles(NativeTrace[] hops, long[] scopeIds, int[] seqs,
+                                             int[] tids, long[] versions) {
+        if (STITCH_HANDLES == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        int n = hops.length;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment tracesSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), ADDRESS));
+            MemorySegment scopeSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+            MemorySegment seqSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_INT));
+            MemorySegment tidSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_INT));
+            MemorySegment verSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+            for (int i = 0; i < n; i++) {
+                tracesSeg.setAtIndex(ADDRESS, i, hops[i].handle());
+                scopeSeg.setAtIndex(JAVA_LONG, i, scopeIds != null ? scopeIds[i] : 0);
+                seqSeg.setAtIndex(JAVA_INT, i, seqs != null ? seqs[i] : i);
+                tidSeg.setAtIndex(JAVA_INT, i, tids != null ? tids[i] : 0);
+                verSeg.setAtIndex(JAVA_LONG, i, versions != null ? versions[i] : 0);
+            }
+            MemorySegment out = (MemorySegment) TRACE_NEW.invoke((long) (1 << 16), (long) (1 << 16));
+            if (MemorySegment.NULL.equals(out)) throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                MemorySegment bounds = a.allocate(SLICE_BOUND_SIZE * Math.max(n, 1));
+                MemorySegment nbounds = a.allocate(JAVA_LONG);
+                int rc = (int) STITCH_HANDLES.invoke(tracesSeg, scopeSeg, seqSeg, tidSeg, verSeg,
+                    (long) n, out, bounds, nbounds);
+                if (rc != ASMTEST_HW_OK) throw new RuntimeException("asmtest_hwtrace_stitch_handles failed: " + rc);
+                int nbn = (int) nbounds.get(JAVA_LONG, 0);
+                StitchBound[] boundsOut = new StitchBound[nbn];
+                for (int i = 0; i < nbn; i++) {
+                    long off = i * SLICE_BOUND_SIZE;
+                    boundsOut[i] = new StitchBound(
+                        bounds.get(JAVA_LONG, off), bounds.get(JAVA_LONG, off + 8),
+                        bounds.get(JAVA_INT, off + 16), bounds.get(JAVA_INT, off + 20),
+                        bounds.get(JAVA_LONG, off + 24));
+                }
+                int ni = (int) (long) TRACE_INSNS_LEN.invoke(out);
+                long[] insns = new long[ni];
+                for (int i = 0; i < ni; i++) insns[i] = (long) TRACE_INSN_AT.invoke(out, (long) i);
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(out)) != 0;
+                return new StitchResult(insns, boundsOut, trunc);
+            } finally { TRACE_FREE.invoke(out); }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
     /** Host-native machine code in real executable (W^X) memory. */
     public static final class NativeCode implements AutoCloseable {
         private long base;
@@ -1296,6 +1485,14 @@ public final class HwTrace {
         /** The underlying {@code asmtest_trace_t*} handle — the recording target the
          *  ptrace-tier calls fill (mirrors the Python wrapper's {@code trace._handle}). */
         public MemorySegment handle() { return handle; }
+
+        /** Append one recorded instruction address {@code off} in order (a raw ABSOLUTE address
+         *  for a whole-window/synthetic trace, or a region offset). Feeds
+         *  {@link CodeImage#renderVersioned}. Returns {@code this} for chaining. */
+        public NativeTrace appendInsn(long off) {
+            try { TRACE_APPEND_INSN.invoke(handle, off); return this; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
 
         public void free() {
             if (handle == null || TRACE_FREE == null) return;
@@ -2057,6 +2254,24 @@ public final class HwTrace {
                 byte[] bytes = new byte[(int) n];
                 MemorySegment.copy(src, JAVA_BYTE, 0, bytes, 0, (int) n);
                 return bytes;
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Disassemble {@code trace}'s recorded ABSOLUTE addresses against this image's timeline
+         *  AS OF capture sequence {@code when} (pass a concrete {@link #now()} value; 0 => latest).
+         *  This is the version-AWARE render — unlike {@link HwTrace#window}'s render, which decodes
+         *  LIVE self-memory and so sees only the bytes present now. Returns the disassembly listing
+         *  ({@code ""} when the Capstone decoder is absent or the version/address is unknown).
+         *  {@code trace} is a {@link NativeTrace} whose insns hold absolute addresses (see
+         *  {@link NativeTrace#appendInsn}). (asmtest_hwtrace_render_versioned.) */
+        public String renderVersioned(long when, NativeTrace trace) {
+            if (CI_RENDER_VERSIONED == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            try (Arena a = Arena.ofConfined()) {
+                int need = (int) CI_RENDER_VERSIONED.invoke(handle, when, trace.handle(), MemorySegment.NULL, 0L);
+                if (need <= 0) return "";
+                MemorySegment buf = a.allocate(need + 1L);
+                CI_RENDER_VERSIONED.invoke(handle, when, trace.handle(), buf, (long) (need + 1));
+                return buf.getString(0);
             } catch (Throwable t) { throw rethrow(t); }
         }
 

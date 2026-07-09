@@ -15,7 +15,9 @@
  * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -131,7 +133,10 @@ public final class HwTraceTest {
             ptraceDescentEdgesAndFrames();
             ptraceDescentResolverUpcall();
             codeImageRoundTrip();
+            codeImageRenderVersioned();
             codeImageBpfProbe();
+            stitchHandlesMergesBySeq();
+            symbolizeBucketsAndRegionName();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -150,6 +155,7 @@ public final class HwTraceTest {
             singlestepLoopNoDepthCeiling();
             callScopedTracesANativeCall();
             windowTracesAWholeScope();
+            attributeWindowSplitsNamedLeaves();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -794,6 +800,137 @@ public final class HwTraceTest {
         } finally {
             code.free();
         }
+    }
+
+    // render_versioned: version-AWARE disassembly (mirrors C test_render_versioned). Track a
+    // WRITABLE region as 'add', rewrite it to 'sub' + refresh (a 2nd version), then render a trace
+    // of the same ABSOLUTE address at the OLD version (add) and the NEW version (sub) — proving the
+    // render decodes the timeline SNAPSHOT, not live memory (which would show only 'sub'). Self-skips
+    // without a 2nd version or without Capstone.
+    private static void codeImageRenderVersioned() {
+        if (!HwTrace.CodeImage.available()) {
+            System.out.println("# SKIP render_versioned: " + HwTrace.CodeImage.skipReason());
+            return;
+        }
+        try (Arena a = Arena.ofConfined();
+             HwTrace.CodeImage img = new HwTrace.CodeImage(0);
+             HwTrace.NativeTrace tr = HwTrace.create(4, 4)) {
+            MemorySegment region = a.allocate(4096); // writable, stable native address
+            MemorySegment.copy(ADD2, 0, region, JAVA_BYTE, 0, ADD2.length); // version A: add
+            long addr = region.address();
+            img.track(addr, ADD2.length);
+            long t0 = img.now();
+            region.set(JAVA_BYTE, 4, (byte) 0x29); // add (0x01) -> sub (0x29) in place
+            img.refresh();
+            long t1 = img.now();
+            tr.appendInsn(addr + 3); // ABSOLUTE address of the add/sub instruction (offset 3)
+            String b0 = img.renderVersioned(t0, tr);
+            String b1 = img.renderVersioned(t1, tr);
+            if (t1 <= t0) {
+                System.out.println("# SKIP render_versioned: recorder saw no page change (no 2nd version)");
+            } else if (b0.isEmpty() || b1.isEmpty()) {
+                System.out.println("# SKIP render_versioned: Capstone decoder absent (render returned empty)");
+            } else {
+                ok(b0.contains("add"), "render_versioned at t0 shows add (version A bytes)");
+                ok(b1.contains("sub"), "render_versioned at t1 shows sub (version B bytes)");
+                ok(!b0.equals(b1), "render_versioned is version-aware (t0 text != t1 text)");
+            }
+        }
+    }
+
+    // stitchHandles: the §D0.4 async-hop merge. HOST-INDEPENDENT (pure merge — no single-step,
+    // Capstone, or PT): script two "hops" OUT of seq order and prove they merge back BY seq.
+    // Mirrors the C oracle test_stitch_slices.
+    private static void stitchHandlesMergesBySeq() {
+        try (HwTrace.NativeTrace trA = HwTrace.create(16, 16);
+             HwTrace.NativeTrace trB = HwTrace.create(16, 16)) {
+            trA.appendInsn(0).appendInsn(3).appendInsn(6); // hop A: seq 0
+            trB.appendInsn(0).appendInsn(4).appendInsn(8); // hop B: seq 1
+            // Pass the hops OUT of seq order (B then A); stitch must re-order by seq.
+            HwTrace.StitchResult st = HwTrace.stitchHandles(
+                new HwTrace.NativeTrace[] { trB, trA },
+                new long[] { 7, 7 }, new int[] { 1, 0 }, new int[] { 222, 111 }, new long[] { 9, 5 });
+            ok(Arrays.equals(st.insns(), new long[] { 0, 3, 6, 0, 4, 8 }),
+                "stitchHandles: merges hops BY seq (A[0,3,6] before B[0,4,8]) despite input order (got "
+                    + Arrays.toString(st.insns()) + ")");
+            ok(st.bounds().length == 2, "stitchHandles: one slice bound per hop");
+            HwTrace.StitchBound b0 = st.bounds()[0], b1 = st.bounds()[1];
+            ok(b0.seq() == 0 && b0.insnOff() == 0 && b0.tid() == 111 && b0.version() == 5,
+                "stitchHandles: bound[0] is hop A (seq 0, off 0, tid 111, v5)");
+            ok(b1.seq() == 1 && b1.insnOff() == 3 && b1.tid() == 222 && b1.version() == 9,
+                "stitchHandles: bound[1] is hop B (seq 1, off 3, tid 222, v9)");
+        } // hops freed only AFTER stitch reads them (shallow-copy lifetime)
+    }
+
+    // symbolizeBuckets + regionName: whole-window noise attribution. Linux /proc + a synthetic /tmp
+    // perf-map (no single-step/Capstone/PT/privilege). Mirrors the C oracle test_symbolize_bucket.
+    private static void symbolizeBucketsAndRegionName() throws IOException {
+        if (!System.getProperty("os.name", "").toLowerCase().contains("linux")) {
+            System.out.println("# SKIP symbolize_bucket/region_name: Linux /proc + perf-map only");
+            return;
+        }
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        long base = code.base();
+        Path perfMap = Path.of("/tmp/perf-" + ProcessHandle.current().pid() + ".map");
+        Files.writeString(perfMap, "40000000 1000 MyJitMethod\n");
+        try {
+            long jit = 0x40000500L;
+            HwTrace.Bucket[] buckets = HwTrace.symbolizeBuckets(
+                new long[] { base, base, base, jit, jit, 1L }, 0, 64);
+            long total = 0;
+            for (HwTrace.Bucket b : buckets) total += b.count();
+            ok(total == 6, "symbolizeBuckets: every IP is bucketed (total count == 6, got " + total + ")");
+            boolean jitOk = false, unk = false;
+            for (HwTrace.Bucket b : buckets) {
+                if (b.label().contains("MyJitMethod") && b.count() == 2) jitOk = true;
+                if (b.label().contains("unknown")) unk = true;
+            }
+            ok(jitOk, "symbolizeBuckets: the 2 JIT IPs bucket under MyJitMethod (perf-map)");
+            ok(unk, "symbolizeBuckets: the unmapped IP buckets under [unknown]");
+            ok(HwTrace.symbolizeBuckets(new long[0], 0, 64).length == 0, "symbolizeBuckets: empty input -> empty");
+            HwTrace.RegionName rn = HwTrace.regionName(base, 0);
+            ok(rn != null && Long.compareUnsigned(rn.start(), base) <= 0
+                && Long.compareUnsigned(base, rn.end()) < 0 && !rn.name().isEmpty(),
+                "regionName: resolves the containing mapping name + extent");
+        } finally {
+            Files.deleteIfExists(perfMap);
+            code.free();
+        }
+    }
+
+    // attributeWindow: whole-window capture + attribute absolute addresses to caller-named regions.
+    // Two IDENTICAL-byte leaves A,B in distinct mappings — the named-region path (exact range) splits
+    // them into SEPARATE buckets, which symbol/disasm attribution cannot. Mirrors the C oracle
+    // test_wholewindow_buckets. Self-skips off the single-step tier.
+    private static void attributeWindowSplitsNamedLeaves() {
+        HwTrace.NativeCode A = HwTrace.NativeCode.fromBytes(ROUTINE);
+        HwTrace.NativeCode B = HwTrace.NativeCode.fromBytes(ROUTINE); // identical bytes, distinct mapping
+        long[] r = new long[2];
+        HwTrace.AttributeResult res = HwTrace.attributeWindow(
+            () -> { r[0] = A.call(20, 22); r[1] = B.call(30, 12); },
+            new HwTrace.NamedRegion[] {
+                new HwTrace.NamedRegion("leafA", A.base(), A.length()),
+                new HwTrace.NamedRegion("leafB", B.base(), B.length()) },
+            64, 1 << 20);
+        System.out.println("# attributeWindow: armed=" + res.armed() + " buckets=" + res.buckets().length);
+        ok(r[0] == 42 && r[1] == 42, "attributeWindow: both traced leaves still return their results");
+        if (!res.armed()) {
+            System.out.println("# SKIP attributeWindow: single-step tier unavailable (begin_window)");
+        } else {
+            HwTrace.Bucket la = null, lb = null;
+            for (HwTrace.Bucket b : res.buckets()) {
+                if (b.label().equals("leafA")) la = b;
+                if (b.label().equals("leafB")) lb = b;
+            }
+            ok(la != null && lb != null,
+                "attributeWindow: identical-byte leaves split into SEPARATE named buckets leafA/leafB");
+            if (la != null && lb != null) {
+                ok(la.count() == 5 && lb.count() == 5,
+                    "attributeWindow: each named leaf bucket counts its 5 executed instructions");
+            }
+        }
+        A.free();
+        B.free();
     }
 
     // Probe the optional eBPF emission detector. Skips without libbpf / CAP_BPF / BTF;

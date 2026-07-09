@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Whole-window attribution, version-aware render, and async-hop merge in the Node and Java
+  bindings** — dotnet-parity Phase 2, the remaining CI-runnable clusters. Wraps six .NET-lead
+  C symbols across both bindings:
+  - **`CodeImage.renderVersioned(when, trace)`** (`asmtest_hwtrace_render_versioned`) — disassemble
+    a trace's absolute addresses against a code-image timeline AS OF a capture sequence, not live
+    memory. Version-*aware* (unlike `render_window`): tracking a region as `add` then rewriting it to
+    `sub` renders `add` at the old sequence and `sub` at the new. Plus `NativeTrace.appendInsn`
+    (wraps `trace_append_insn`, a non-tier symbol) to build such an absolute-address trace.
+  - **`HwTrace.regionName` / `symbolizeBuckets` / `attributeWindow`** (`asmtest_hwtrace_region_name`
+    / `_symbolize_bucket` / `_attribute_window`) — whole-window noise attribution: reverse-resolve an
+    address to its mapped-region name, bucket a list of IPs by JIT symbol (perf-map) or region, and
+    attribute a live whole-window capture's absolute addresses to caller-named regions first
+    (so two identical-byte leaves in distinct mappings split into separate buckets — what
+    symbol/disasm attribution cannot do). `AddrChannel`-free; range classification, no Capstone.
+  - **`HwTrace.stitchHandles(hops, …)`** (`asmtest_hwtrace_stitch_handles`) — the §D0.4 async-hop
+    merge: order N already-captured hop traces by `seq` and concatenate into one logical trace with
+    per-hop slice bounds. Host-independent (pure merge — runs on every lane, arm64 included); the
+    hops must outlive the call (shallow-copy, not duplicated). `asmtest_hwtrace_stitch` (the C core)
+    stays binding-internal.
+  - Struct marshalling is pinned to the exact SysV layouts (`bucket_t` 136 B, `slice_bound_t` 32 B,
+    `named_region_t` 80 B) and cross-checked against the dotnet `[StructLayout]`s. Validated in the
+    `docker-hwtrace-node` / `-java` lanes against the C oracles (`test_render_versioned`,
+    `test_symbolize_bucket`, `test_wholewindow_buckets`, `test_stitch_slices`). All six `ALL`
+    allow-list lines stay (seven-eight bindings still don't wrap them); `trace_append_insn` is a
+    non-tier symbol (ungated).
+
 - **Crash-proof WHOLE-WINDOW out-of-process capture in the Node and Java bindings** —
   dotnet-parity Phase 2, increment 3, the out-of-process analog of the in-process `window()`
   form (which single-steps the calling thread and is fatal for arbitrary managed code). Wraps

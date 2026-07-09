@@ -55,18 +55,18 @@ ruby asmtest_descent_set_denylist   # allow-set only: Fiddle hosts no GC-safe ca
 # bindings deliberately do NOT wrap; they carry no per-binding caller today. Wire one in
 # (and drop its line) when a binding grows a use for it.
 ALL asmtest_hwtrace_begin_scope       # §1 handle-keyed begin: additive over the name-keyed try_begin path the shims use (its render sibling, asmtest_hwtrace_render_scope, is now wrapped in all ten via call_scoped)
-ALL asmtest_hwtrace_render_versioned  # §1/§D4 version-aware render: needs a code-image handle no shim carries
+ALL asmtest_hwtrace_render_versioned  # §1/§D4 version-aware render: dotnet (P/Invoke), node + java (CodeImage.renderVersioned) wrap it against a self code-image; the other seven gain it when they grow a codeimage-backed render path
 ALL asmtest_hwtrace_stitch            # §D4 async-hop merge core: pure C concatenation, host-tested (test_stitch_slices)
 ALL asmtest_hwtrace_stealth_trace     # §D3 out-of-process ptrace-stealth stepper: dotnet (AsmTrace.Method outOfProcess), node + java (HwTrace.stealthTrace) wrap it as the crash-proof managed-capture route; the other seven reach it C-internally / gain it when they grow a stealth scope
-ALL asmtest_hwtrace_region_name       # §3.1(c) address→name reverse resolver: whole-window noise attribution, C-level
-ALL asmtest_hwtrace_symbolize_bucket  # §3.1(c) IP bucketer: whole-window noise attribution (dotnet wraps it as HwTrace.SymbolizeBuckets for its runtimebuckets example; the other nine gain it when they grow a whole-window scope), host-tested
+ALL asmtest_hwtrace_region_name       # §3.1(c) address→name reverse resolver (whole-window noise attribution): node + java (HwTrace.regionName) wrap it as the maps/perf-map reverse lookup; the other eight gain it with a whole-window scope, host-tested (test_symbolize_bucket)
+ALL asmtest_hwtrace_symbolize_bucket  # §3.1(c) IP bucketer (whole-window noise attribution): dotnet (HwTrace.SymbolizeBuckets, its runtimebuckets example), node + java (HwTrace.symbolizeBuckets) wrap it; the other seven gain it with a whole-window scope, host-tested (test_symbolize_bucket)
 ALL asmtest_hwtrace_begin_window      # §Z1 region-free whole-window trio: the .NET managed tier's AsmTrace substrate
 ALL asmtest_hwtrace_end_window        #   (dotnet wraps it); the other bindings ship the name-keyed try_begin path and
 ALL asmtest_hwtrace_render_window     #   gain the trio when they grow a scope construct — same posture as §1 above
-ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: same family as region_name/symbolize_bucket
+ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: node + java (HwTrace.attributeWindow) wrap it against a live whole-window scope (named-region + perf-map fallback); the other eight gain it with a whole-window scope
 ALL asmtest_hwtrace_call_scoped       # Option B lazy-arm NAMED-call scope (managed-singlestep-lazy-arm-plan): dotnet wraps it (AsmTrace.Method's Invoke); the other nine ship the registry-FREE call_scoped_ex form instead (no fixed-table slot), so none bind the registry-keyed call_scoped
 ALL asmtest_hwtrace_call_scoped_fp    # FP (double…)->double sibling of call_scoped: dotnet wraps it (AsmTrace.Method's Invoke FP path); the integer call_scoped_ex now ships in all ten, but the FP sibling stays dotnet-only until a binding traces a double->double leaf
-ALL asmtest_hwtrace_stitch_handles    # §D0.4 live-producer bridge for asmtest_hwtrace_stitch: dotnet wraps it (AsmStitchedTrace, the async-hop producer); the other nine consume the shipped stitch core when they grow a stitched-scope form — same posture as asmtest_hwtrace_stitch above, host-tested (test_stitch_handles)
+ALL asmtest_hwtrace_stitch_handles    # §D0.4 async-hop merge bridge for asmtest_hwtrace_stitch: dotnet (AsmStitchedTrace, the async-hop producer), node + java (HwTrace.stitchHandles) wrap it; the other seven consume the shipped stitch core when they grow a stitched-scope form, host-tested (test_stitch_handles)
 ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 ALL asmtest_amd_msr_trace             # AMD MSR-direct LBR snapshot (src/msr_lbr.c): C-level callback capture reading /dev/cpu/N/msr, self-hosted CAP_SYS_ADMIN lane only — same posture as asmtest_amd_snapshot_trace
