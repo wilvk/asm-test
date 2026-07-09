@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Crash-proof WHOLE-WINDOW out-of-process capture in the Node and Java bindings** —
+  dotnet-parity Phase 2, increment 3, the out-of-process analog of the in-process `window()`
+  form (which single-steps the calling thread and is fatal for arbitrary managed code). Wraps
+  `asmtest_ptrace_trace_window_call` (`Ptrace.windowCall` / `HwTrace.ptraceTraceWindowCall` —
+  fork-internal: a forked child runs the window frame and is stepped, so it asserts
+  unconditionally on any ptrace lane) and `asmtest_hwtrace_stealth_trace_windowed`
+  (`HwTrace.stealthWindow` — a helper child reverse-attaches and steps the calling thread's
+  window body out of band, mirroring dotnet's `AsmTrace.Window`; self-skips on a refused
+  reverse-attach), plus the five `asmtest_addr_channel_*` FFI shims behind a new `AddrChannel`
+  class. Pre-publish the code regions the window frame calls into (its leaves/methods) on the
+  channel; the capture records the frame **plus** every published region as ABSOLUTE addresses
+  (classify by range — no Capstone), stepping over everything else. Validated in the
+  `docker-hwtrace-node` / `-java` lanes against the C oracle's driver-blob ceremony (a 35-byte
+  frame calling two 7-byte leaves): result `m2(7,3)==4`, driver + both leaves recorded in call
+  order, complete. The `ALL` allow-list lines for both windowed symbols stay (seven bindings
+  still don't wrap them); the addr_channel shims live in a non-tier header (ungated).
+
 - **Crash-proof out-of-process stealth capture (`stealthTrace`) in the Node and Java bindings**
   — dotnet-parity Phase 2, increment 2. `HwTrace.stealthTrace(code, a, b)` (Node) /
   `HwTrace.stealthTrace(NativeCode, long...)` (Java) wrap `asmtest_hwtrace_stealth_trace`: a

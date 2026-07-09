@@ -177,7 +177,20 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > **complete, exact** trace (`[0,3,6,c,11]`, not truncated) on both the forked-child and the
 > bundled exec'd-helper paths. (The stream is still best-effort in general — Node's exec'd helper
 > can truncate at insn 1 when V8's async signals hit the non-SIGTRAP break; the result stays
-> exact.) Remaining Phase-2 work (async-hop, JIT-address resolution) is below.
+> exact.)
+>
+> **Increment 3 LANDED (2026-07-09).** The §D3 WHOLE-WINDOW OOP capture now ships in Node and
+> Java — the out-of-process analog of the in-process `window()` (the SIGTRAP footgun). Wraps
+> `asmtest_ptrace_trace_window_call` (`Ptrace.windowCall` / `HwTrace.ptraceTraceWindowCall` —
+> fork-internal, asserts unconditionally) and `asmtest_hwtrace_stealth_trace_windowed`
+> (`HwTrace.stealthWindow` — reverse-attach, mirroring dotnet's `AsmTrace.Window`; self-skips on
+> a refused attach), plus the five `asmtest_addr_channel_*` shims behind a new `AddrChannel` class
+> (pre-publish the leaves the window frame calls into; the capture records the frame + published
+> regions as ABSOLUTE addresses, classify by range). Validated in `docker-hwtrace-node` / `-java`
+> against the C oracle's 35-byte driver frame calling two 7-byte leaves (result `m2(7,3)==4`;
+> driver + both leaves in call order; complete). The two `ALL` windowed allow-list lines stay
+> (seven bindings still don't wrap them); the addr_channel shims are in a non-tier header
+> (ungated). Remaining Phase-2 work (async-hop stitching, JIT-address resolution) is below.
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place

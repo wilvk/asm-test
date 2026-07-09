@@ -172,12 +172,23 @@ public final class HwTrace {
         public boolean armed() { return rc == ASMTEST_HW_OK; }
     }
 
+    /** Outcome of a WHOLE-WINDOW OOP capture ({@link #ptraceTraceWindowCall} / {@link #stealthWindow}):
+     *  the window frame's {@code result} (its return value), the captured ABSOLUTE instruction
+     *  addresses {@code insns} (the frame + every channel-published region, classify by range),
+     *  the {@code truncated} honesty bit, and the native {@code rc}. */
+    public record WindowTraceResult(long result, long[] insns, boolean truncated, int rc) {
+        /** True when the capture armed (rc == ASMTEST_HW_OK / ASMTEST_PTRACE_OK == 0). */
+        public boolean armed() { return rc == ASMTEST_HW_OK; }
+    }
+
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO,
         HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
         CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
+        WINDOW_CALL, STEALTH_WINDOWED,
+        ADDR_CHAN_NEW, ADDR_CHAN_NEW_SHARED, ADDR_CHAN_PUBLISH, ADDR_CHAN_FREE, ADDR_CHAN_FREE_SHARED,
         EXEC_ALLOC, EXEC_FREE,
         TRACE_NEW, TRACE_FREE, TRACE_COVERED, TRACE_BLOCKS_LEN, TRACE_INSNS_TOTAL,
         TRACE_INSNS_LEN, TRACE_TRUNCATED, TRACE_BLOCK_AT, TRACE_INSN_AT,
@@ -317,6 +328,9 @@ public final class HwTrace {
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
             beginWindow = null, endWindow = null, renderWindow = null, stealthTrace = null,
+            windowCall = null, stealthWindowed = null,
+            addrChanNew = null, addrChanNewShared = null, addrChanPublish = null,
+            addrChanFree = null, addrChanFreeShared = null,
             execAlloc = null, execFree = null,
             traceNew = null, traceFree = null, traceCovered = null, traceBlocksLen = null,
             traceInsnsTotal = null, traceInsnsLen = null, traceTruncated = null,
@@ -411,6 +425,21 @@ public final class HwTrace {
             // out of band while run_region runs it — no TF on the calling thread.
             stealthTrace = h(lib, "asmtest_hwtrace_stealth_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+            // §D3 WHOLE-WINDOW OOP capture (asmtest_addr_channel.h / _ptrace.h / _hwtrace.h). The
+            // addr_channel is an opaque void* (never crosses FFI by value): new()/new_shared() +
+            // publish_rec(chan, base, len, version) + free()/free_shared(). window_call FORKS a
+            // child that runs code(args...) as the window frame; stealth_windowed REVERSE-ATTACHES
+            // (run_region invokes the frame). Both record the frame + published regions as ABSOLUTE.
+            addrChanNew = h(lib, "asmtest_addr_channel_new", FunctionDescriptor.of(ADDRESS));
+            addrChanNewShared = h(lib, "asmtest_addr_channel_new_shared", FunctionDescriptor.of(ADDRESS));
+            addrChanPublish = h(lib, "asmtest_addr_channel_publish_rec",
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG));
+            addrChanFree = h(lib, "asmtest_addr_channel_free", FunctionDescriptor.ofVoid(ADDRESS));
+            addrChanFreeShared = h(lib, "asmtest_addr_channel_free_shared", FunctionDescriptor.ofVoid(ADDRESS));
+            windowCall = h(lib, "asmtest_ptrace_trace_window_call",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            stealthWindowed = h(lib, "asmtest_hwtrace_stealth_trace_windowed",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             execFree = h(lib, "asmtest_hwtrace_exec_free",
@@ -594,6 +623,10 @@ public final class HwTrace {
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
         BEGIN_WINDOW = beginWindow; END_WINDOW = endWindow; RENDER_WINDOW = renderWindow;
         STEALTH_TRACE = stealthTrace;
+        WINDOW_CALL = windowCall; STEALTH_WINDOWED = stealthWindowed;
+        ADDR_CHAN_NEW = addrChanNew; ADDR_CHAN_NEW_SHARED = addrChanNewShared;
+        ADDR_CHAN_PUBLISH = addrChanPublish; ADDR_CHAN_FREE = addrChanFree;
+        ADDR_CHAN_FREE_SHARED = addrChanFreeShared;
         EXEC_ALLOC = execAlloc; EXEC_FREE = execFree; TRACE_NEW = traceNew;
         TRACE_FREE = traceFree; TRACE_COVERED = traceCovered; TRACE_BLOCKS_LEN = traceBlocksLen;
         TRACE_INSNS_TOTAL = traceInsnsTotal; TRACE_INSNS_LEN = traceInsnsLen;
@@ -999,6 +1032,128 @@ public final class HwTrace {
             } finally {
                 TRACE_FREE.invoke(handle);
             }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The §D3 cross-process JIT-address channel (asmtest_addr_channel.h). Pre-publish the code
+     *  regions a whole-window OOP capture ({@link #ptraceTraceWindowCall} / {@link #stealthWindow})
+     *  will call INTO — the leaves/methods beyond the window frame itself, which the out-of-process
+     *  stepper cannot otherwise discover (it does not see a runtime's own JIT events). Everything
+     *  else the frame steps through is elided. {@code newLocal()} is a process-local ring for the
+     *  fork-internal {@code ptraceTraceWindowCall}; {@code newShared()} is a MAP_SHARED ring for the
+     *  reverse-attach {@code stealthWindow} (the forked stepper drains it live). Mirrors dotnet's
+     *  {@code HwTrace.AddrChannel}. */
+    public static final class AddrChannel implements AutoCloseable {
+        private MemorySegment handle;
+        private final boolean shared;
+        private AddrChannel(MemorySegment handle, boolean shared) { this.handle = handle; this.shared = shared; }
+
+        /** A process-local channel (for {@link #ptraceTraceWindowCall}). */
+        public static AddrChannel newLocal() { return make(ADDR_CHAN_NEW, false); }
+        /** A MAP_SHARED channel (for {@link #stealthWindow}). */
+        public static AddrChannel newShared() { return make(ADDR_CHAN_NEW_SHARED, true); }
+        private static AddrChannel make(MethodHandle ctor, boolean shared) {
+            if (ctor == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+            try {
+                MemorySegment h = (MemorySegment) ctor.invoke();
+                if (MemorySegment.NULL.equals(h)) throw new RuntimeException("asmtest_addr_channel_new failed");
+                return new AddrChannel(h, shared);
+            } catch (RuntimeException re) { throw re; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+        MemorySegment handle() { return handle; }
+
+        /** Publish a {@link NativeCode} region (its whole allocation) the window calls into. */
+        public AddrChannel publish(NativeCode code) { return publish(code.base(), code.length(), 0L); }
+        /** Publish an explicit {@code [base, base+len)} region with an optional code-image
+         *  {@code version} (0 = untracked). Returns {@code this} for chaining. */
+        public AddrChannel publish(long base, long len, long version) {
+            try { ADDR_CHAN_PUBLISH.invoke(handle, base, len, version); return this; }
+            catch (Throwable t) { throw rethrow(t); }
+        }
+
+        /** Free the channel (routes to the process-local vs shared native free). Idempotent. */
+        @Override public void close() {
+            if (handle == null || MemorySegment.NULL.equals(handle)) return;
+            try { (shared ? ADDR_CHAN_FREE_SHARED : ADDR_CHAN_FREE).invoke(handle); }
+            catch (Throwable t) { throw rethrow(t); }
+            finally { handle = null; }
+        }
+    }
+
+    private static long[] windowInsns(MemorySegment handle) throws Throwable {
+        int n = (int) (long) TRACE_INSNS_LEN.invoke(handle);
+        long[] insns = new long[n];
+        for (int i = 0; i < n; i++) insns[i] = (long) TRACE_INSN_AT.invoke(handle, (long) i); // ABSOLUTE
+        return insns;
+    }
+
+    /** WHOLE-WINDOW capture that OWNS its tracee: fork a child that runs {@code driver} (a
+     *  {@link NativeCode} — the WINDOW FRAME) with up to six integer {@code args}, single-step it
+     *  out of process across the whole window, and record the ABSOLUTE address of every instruction
+     *  in the frame OR any region pre-published on {@code channel} (an {@link AddrChannel} via
+     *  {@code newLocal()}; runtime/glue between them is stepped over, not recorded). The window ends
+     *  when the frame returns. (asmtest_ptrace_trace_window_call.) Fork-internal — needs no
+     *  reverse-attach permission, runs on any ptrace-capable x86-64 Linux. Returns a
+     *  {@link WindowTraceResult}; throws on a non-OK rc (gate with {@link #ptraceAvailable()}). The
+     *  deterministic side-effecting {@code driver} runs in the forked child, so it must be re-runnable. */
+    public static WindowTraceResult ptraceTraceWindowCall(NativeCode driver, long[] args, AddrChannel channel) {
+        if (WINDOW_CALL == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke((long) (1 << 16), 4096L);
+            if (MemorySegment.NULL.equals(handle)) throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                int n = args.length;
+                MemorySegment argSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+                for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+                MemorySegment result = a.allocate(JAVA_LONG);
+                int rc = (int) WINDOW_CALL.invoke(MemorySegment.ofAddress(driver.base()), driver.length(),
+                    argSeg, n, channel.handle(), result, handle);
+                if (rc != ASMTEST_PTRACE_OK)
+                    throw new RuntimeException("asmtest_ptrace_trace_window_call failed: " + rc);
+                long[] insns = windowInsns(handle);
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                return new WindowTraceResult(result.get(JAVA_LONG, 0), insns, trunc, rc);
+            } finally { TRACE_FREE.invoke(handle); }
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** CRASH-PROOF whole-window OOP capture — the reverse-attach analog of {@link #window},
+     *  mirroring dotnet's {@code AsmTrace.Window}. A helper child reverse-attaches and single-steps
+     *  the window body out of band while THIS thread runs it, so NO EFLAGS.TF is armed on the JVM
+     *  thread (unlike in-process {@link #window}, which steps the calling thread and is fatal for
+     *  arbitrary managed code that blocks SIGTRAP / spawns a thread). {@code driver} is the WINDOW
+     *  FRAME whose RETURN delimits the window; {@code channel} (use {@code newShared()}) is
+     *  pre-published with the leaves the frame calls into. Records the frame [base,len) PLUS every
+     *  published region as ABSOLUTE addresses. (asmtest_hwtrace_stealth_trace_windowed.) Returns a
+     *  {@link WindowTraceResult}; self-skips ({@code armed()} false, rc negative) where the
+     *  reverse-attach is refused (Yama) — but the body STILL RUNS (never a silent miss). No {@link #init}. */
+    public static WindowTraceResult stealthWindow(NativeCode driver, AddrChannel channel) {
+        if (STEALTH_WINDOWED == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment handle = (MemorySegment) TRACE_NEW.invoke((long) (1 << 16), 4096L);
+            if (MemorySegment.NULL.equals(handle)) throw new RuntimeException("asmtest_trace_new returned NULL");
+            try {
+                MemorySegment resultOut = a.allocate(JAVA_LONG);
+                long base = driver.base();
+                boolean[] ran = {false};
+                // run_region invokes the driver frame (self-contained — no args) so the helper's
+                // single-step of [win_base,win_len) begins at the frame entry. Reuse the RUN_LEAF_MH
+                // upcall bound over an empty arg list.
+                MethodHandle bound = MethodHandles.insertArguments(RUN_LEAF_MH, 0, ran, base, new long[0]);
+                MemorySegment stub = LINKER.upcallStub(bound, FunctionDescriptor.ofVoid(ADDRESS), a);
+                int rc = (int) STEALTH_WINDOWED.invoke(MemorySegment.ofAddress(base), driver.length(),
+                    channel.handle(), handle, resultOut, stub, MemorySegment.NULL);
+                if (rc != ASMTEST_HW_OK) { // EUNAVAIL/EINVAL/ENOSYS -> clean self-skip
+                    if (!ran[0]) invokeLeaf(base, new long[0]); // run exactly once — never a silent miss
+                    return new WindowTraceResult(0L, new long[0], false, rc);
+                }
+                long[] insns = windowInsns(handle);
+                boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
+                return new WindowTraceResult(resultOut.get(JAVA_LONG, 0), insns, trunc, rc);
+            } finally { TRACE_FREE.invoke(handle); }
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
     }

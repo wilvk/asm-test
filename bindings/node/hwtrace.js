@@ -92,6 +92,13 @@ function _addr(v) {
   return typeof v === 'number' ? BigInt(v) : v;
 }
 
+// Read a captured 64-bit return value exactly: a JS number when it fits the safe-integer
+// range, else the BigInt (a full 64-bit hash/id/pointer in RAX above 2^53 would silently
+// round through Number()). Preserves the "exact result" guarantee of the OOP capture forms.
+function _safeInt(bi) {
+  return (bi >= -(2n ** 53n) && bi <= 2n ** 53n) ? Number(bi) : bi;
+}
+
 // The native-payload slot the published npm package ships (mirrors asmtest.js's
 // core loader): native/<os>-<arch>/lib<name>.<ext> next to this module.
 function bundledSlot(name) {
@@ -235,6 +242,22 @@ let _loadError = null;
     // no-PT host (Zen 2, Docker-on-Mac). Fills the caller-owned trace* (region-RELATIVE
     // offsets) + result_out (the region's return, read from the caller's RAX at the ret).
     stealthTrace: lib.func('int asmtest_hwtrace_stealth_trace(const void*, size_t, void*, _Out_ long*, asmtest_run_region*, void*)'),
+    // §D3 WHOLE-WINDOW OOP capture. The addr_channel (asmtest_addr_channel.h) is an opaque
+    // handle — the caller pre-publishes the code regions the window frame calls INTO (the
+    // leaves/JIT methods beyond the frame itself), so the out-of-process stepper — which cannot
+    // see a runtime's own JIT events — records them and steps over everything else. new() is a
+    // process-local ring (for the fork-internal window_call); new_shared() is MAP_SHARED (for
+    // the reverse-attach stepper, whose forked child drains it live).
+    addrChannelNew: lib.func('void* asmtest_addr_channel_new()'),
+    addrChannelNewShared: lib.func('void* asmtest_addr_channel_new_shared()'),
+    addrChannelPublishRec: lib.func('void asmtest_addr_channel_publish_rec(void*, uint64_t, uint64_t, uint64_t)'),
+    addrChannelFree: lib.func('void asmtest_addr_channel_free(void*)'),
+    addrChannelFreeShared: lib.func('void asmtest_addr_channel_free_shared(void*)'),
+    // window_call FORKS a child that runs code(args...) as the window frame; stealth_windowed
+    // REVERSE-ATTACHES and steps the calling thread's window body (run_region invokes the frame).
+    // Both record the frame [base,len) + every channel-published region as ABSOLUTE addresses.
+    windowCall: lib.func('int asmtest_ptrace_trace_window_call(const void*, size_t, const long*, int, void*, _Out_ long*, void*)'),
+    stealthWindowed: lib.func('int asmtest_hwtrace_stealth_trace_windowed(const void*, size_t, void*, void*, _Out_ long*, asmtest_run_region*, void*)'),
     shutdown: lib.func('void asmtest_hwtrace_shutdown()'),
     execAlloc: lib.func('int asmtest_hwtrace_exec_alloc(const void*, size_t, _Out_ void**, _Out_ size_t*)'),
     execFree: lib.func('void asmtest_hwtrace_exec_free(void*, size_t)'),
@@ -363,6 +386,54 @@ class NativeCode {
     if (!this._freed) {
       _fn.execFree(this._base, this._len);
       this._freed = true;
+    }
+  }
+}
+
+/** The §D3 cross-process JIT-address channel (asmtest_addr_channel.h). A whole-window
+ *  out-of-process capture (`Ptrace.windowCall` / `HwTrace.stealthWindow`) records the window
+ *  FRAME plus every region you PRE-PUBLISH here — the leaves/methods the frame calls into,
+ *  which the out-of-process stepper cannot otherwise discover (it does not see the runtime's
+ *  own JIT events). Everything else the frame steps through (runtime glue) is elided.
+ *  `newLocal()` is a process-local ring for the fork-internal `windowCall`; `newShared()` is a
+ *  MAP_SHARED ring for the reverse-attach `stealthWindow` (the forked stepper drains it live).
+ *  Mirrors dotnet's `HwTrace.AddrChannel`. */
+class AddrChannel {
+  constructor(handle, shared) { this._handle = handle; this._shared = shared; }
+
+  /** A process-local channel (for the fork-internal `Ptrace.windowCall`). */
+  static newLocal() {
+    const h = _fn.addrChannelNew();
+    if (!h) throw new Error('asmtest_addr_channel_new failed');
+    return new AddrChannel(h, false);
+  }
+
+  /** A MAP_SHARED channel (for the reverse-attach `HwTrace.stealthWindow`). */
+  static newShared() {
+    const h = _fn.addrChannelNewShared();
+    if (!h) throw new Error('asmtest_addr_channel_new_shared failed');
+    return new AddrChannel(h, true);
+  }
+
+  /** Publish one code region the window calls into: either a `NativeCode` (its whole
+   *  allocation) or an explicit `(base, len)`, with an optional code-image `version`
+   *  (0 = untracked). Returns `this` for chaining. */
+  publish(codeOrBase, len, version = 0) {
+    let base = codeOrBase, l = len;
+    if (codeOrBase && typeof codeOrBase === 'object' && codeOrBase._base !== undefined) {
+      base = koffi.address(codeOrBase.base); // a NativeCode
+      l = codeOrBase.length;
+    }
+    _fn.addrChannelPublishRec(this._handle, BigInt(base), BigInt(l), BigInt(version));
+    return this;
+  }
+
+  /** Free the channel (routes to the process-local vs shared native free). */
+  free() {
+    if (this._handle) {
+      if (this._shared) _fn.addrChannelFreeShared(this._handle);
+      else _fn.addrChannelFree(this._handle);
+      this._handle = null;
     }
   }
 }
@@ -595,6 +666,50 @@ class HwTrace {
     }
   }
 
+  /** Trace an ARBITRARY WHOLE WINDOW of native work the CRASH-PROOF out-of-process way — the
+   *  reverse-attach analog of `window()`, mirroring dotnet's `AsmTrace.Window`. A helper child
+   *  reverse-attaches and single-steps the window body out of band while THIS thread runs it,
+   *  so NO EFLAGS.TF is armed on the V8 thread (unlike in-process `window()`, which steps the
+   *  calling thread and is fatal for arbitrary managed code that blocks SIGTRAP / spawns a
+   *  thread). `driver` is a NativeCode — the WINDOW FRAME whose RETURN delimits the window;
+   *  `channel` is an AddrChannel (use `newShared()`) pre-published with the leaves the frame
+   *  calls into. Records the frame [base,len) PLUS every published region as ABSOLUTE addresses;
+   *  runtime/glue between them is stepped over, not recorded. (asmtest_hwtrace_stealth_trace_windowed.)
+   *  Returns `{ result, insns, truncated, armed }`: `result` the frame's return (from the
+   *  helper's RAX read — a JS number, BigInt out of safe range), `insns` the captured ABSOLUTE
+   *  addresses (BigInt), `truncated` the honesty bit. Self-skips (armed:false, empty insns)
+   *  where the reverse-attach is refused
+   *  (Yama ptrace_scope) — but the body STILL RUNS (never a silent miss). Needs no HwTrace.init. */
+  static stealthWindow(driver, channel) {
+    const handle = _fn.traceNew(1 << 16, 4096); // whole-window: generous insns cap
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    // Persistent trampoline: run_region invokes the driver (the window frame) so the helper's
+    // single-step of [win_base,win_len) begins at the frame entry.
+    let ran = false;
+    const thunk = () => { ran = true; try { driver.call(0, 0); } catch (_e) { /* result_out is authoritative */ } };
+    const cb = koffi.register(thunk, koffi.pointer(RunRegionFn));
+    try {
+      const resultBuf = Buffer.alloc(8);
+      const rc = _fn.stealthWindowed(driver.base, driver.length, channel._handle, handle, resultBuf, cb, null);
+      if (rc !== ASMTEST_HW_OK) { // EUNAVAIL/EINVAL/ENOSYS -> clean self-skip
+        if (!ran) { try { driver.call(0, 0); } catch (_e) { /* never lose the call itself */ } }
+        return { result: null, insns: [], truncated: false, armed: false };
+      }
+      const n = Number(_fn.insnsLen(handle));
+      const insns = new Array(n);
+      for (let i = 0; i < n; i++) insns[i] = BigInt(_fn.insnAt(handle, i)); // ABSOLUTE addrs
+      return {
+        result: _safeInt(resultBuf.readBigInt64LE(0)),
+        insns,
+        truncated: _fn.truncated(handle) !== 0,
+        armed: true,
+      };
+    } finally {
+      koffi.unregister(cb);
+      _fn.traceFree(handle);
+    }
+  }
+
   // ---- per-trace ----
 
   /** Allocate a trace handle. Block recording when `blocks` > 0, instruction
@@ -748,6 +863,36 @@ class Ptrace {
     const rc = _fn.ptraceTraceCallBlockstep(code.base, codeLen, argBuf, n, resultBuf, trace._handle);
     if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_call_blockstep failed: ${rc}`);
     return Number(resultBuf.readBigInt64LE(0));
+  }
+
+  /** WHOLE-WINDOW capture that OWNS its tracee: fork a child that runs `driver` (a NativeCode —
+   *  the WINDOW FRAME) with up to six integer `args`, single-step it out of process across the
+   *  whole window, and record the ABSOLUTE address of every instruction in the frame [base,len)
+   *  OR any region pre-published on `channel` (an AddrChannel via `newLocal()` — the leaves the
+   *  frame calls into; runtime/glue between them is stepped over, not recorded). The window ends
+   *  when the frame returns. (asmtest_ptrace_trace_window_call.) Fork-internal — needs no
+   *  reverse-attach permission, runs on any ptrace-capable x86-64 Linux. Returns
+   *  `{ result, insns, truncated }`: `result` the frame's return (BigInt out of safe range),
+   *  `insns` the captured ABSOLUTE addresses (BigInt), `truncated` the honesty bit. Throws on a
+   *  non-OK rc; gate with `Ptrace.available()` (the deterministic side-effecting `driver` runs
+   *  in the forked child, so it must be re-runnable). */
+  static windowCall(driver, args, channel) {
+    const n = args.length;
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const handle = _fn.traceNew(1 << 16, 4096);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    try {
+      const rc = _fn.windowCall(driver.base, driver.length, argBuf, n, channel._handle, resultBuf, handle);
+      if (rc !== ASMTEST_PTRACE_OK) throw new Error(`asmtest_ptrace_trace_window_call failed: ${rc}`);
+      const nn = Number(_fn.insnsLen(handle));
+      const insns = new Array(nn);
+      for (let i = 0; i < nn; i++) insns[i] = BigInt(_fn.insnAt(handle, i)); // ABSOLUTE addrs
+      return { result: _safeInt(resultBuf.readBigInt64LE(0)), insns, truncated: _fn.truncated(handle) !== 0 };
+    } finally {
+      _fn.traceFree(handle);
+    }
   }
 
   /** Like traceCall, but thread a Descent handle through the loop so call-outs are
@@ -1188,7 +1333,7 @@ function _renderWindow(scope) {
 }
 
 module.exports = {
-  HwTrace, NativeCode, Ptrace, Descent, CodeImage,
+  HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
   TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,

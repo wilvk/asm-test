@@ -38,6 +38,43 @@ public final class HwTraceTest {
         0x48, 0x01, (byte) 0xF8, 0x48, (byte) 0xFF, (byte) 0xCE, 0x75, (byte) 0xF8, (byte) 0xC3
     };
 
+    // Whole-window OOP test leaves: two 7-byte native "methods" the driver frame calls into.
+    private static final byte[] M1 = { 0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x01, (byte) 0xF0, (byte) 0xC3 }; // rax=rdi+rsi
+    private static final byte[] M2 = { 0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x29, (byte) 0xF0, (byte) 0xC3 }; // rax=rdi-rsi
+
+    // Build the self-contained 35-byte driver blob (the window frame), mirroring the C oracle
+    // test_stealth_windowed: mov edi,7; mov esi,3; movabs rax,a1; call rax; movabs rax,a2; call
+    // rax; ret. a1/a2 = runtime addresses of M1/M2; m2(7,3)=4 is the frame return.
+    private static byte[] buildWindowDriver(long a1, long a2) {
+        byte[] drv = {
+            (byte) 0xBF, 7, 0, 0, 0,       // mov edi, 7
+            (byte) 0xBE, 3, 0, 0, 0,       // mov esi, 3
+            0x48, (byte) 0xB8, 0,0,0,0,0,0,0,0,  // movabs rax, a1  (imm at offset 12)
+            (byte) 0xFF, (byte) 0xD0,      // call rax
+            0x48, (byte) 0xB8, 0,0,0,0,0,0,0,0,  // movabs rax, a2  (imm at offset 24)
+            (byte) 0xFF, (byte) 0xD0,      // call rax
+            (byte) 0xC3                    // ret
+        };
+        ByteBuffer bb = ByteBuffer.wrap(drv).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putLong(12, a1);
+        bb.putLong(24, a2);
+        return drv;
+    }
+
+    // Classify a captured absolute-address trace by range containment (no Capstone): which of the
+    // driver frame / leaf m1 / leaf m2 it hit, and the index each was first seen. Returns
+    // {hitDrv?1:0, hitM1?1:0, hitM2?1:0, firstM1, firstM2}.
+    private static long[] windowContainment(long[] insns, long dv, long dl, long a1, long a2) {
+        boolean hitDrv = false, hitM1 = false, hitM2 = false; long firstM1 = -1, firstM2 = -1;
+        for (int i = 0; i < insns.length; i++) {
+            long at = insns[i];
+            if (Long.compareUnsigned(at, dv) >= 0 && Long.compareUnsigned(at, dv + dl) < 0) hitDrv = true;
+            if (Long.compareUnsigned(at, a1) >= 0 && Long.compareUnsigned(at, a1 + M1.length) < 0) { hitM1 = true; if (firstM1 < 0) firstM1 = i; }
+            if (Long.compareUnsigned(at, a2) >= 0 && Long.compareUnsigned(at, a2 + M2.length) < 0) { hitM2 = true; if (firstM2 < 0) firstM2 = i; }
+        }
+        return new long[] { hitDrv ? 1 : 0, hitM1 ? 1 : 0, hitM2 ? 1 : 0, firstM1, firstM2 };
+    }
+
     // Call-descent fixture (x86-64): a caller region R@0 that calls a sibling leaf S@0xc.
     //   R@0:  mov rax,rdi; call S(+4); add rax,rsi; ret     (region = 0xc bytes)
     //   S@0xc: inc rax; ret
@@ -85,6 +122,8 @@ public final class HwTraceTest {
             ptraceTraceCall();
             ptraceTraceCallBlockstep();
             ptraceStealthTrace();
+            ptraceWindowCall();
+            stealthWindow();
             ptraceRunTo();
             procRegionByAddr();
             procPerfmapSymbol();
@@ -472,6 +511,62 @@ public final class HwTraceTest {
             ok(true, "stealthTrace: stream truncated over the live runtime (honest best-effort; result exact)");
         }
         code.free();
+    }
+
+    // §D3 WHOLE-WINDOW fork-internal capture (HwTrace.ptraceTraceWindowCall): fork a child that
+    // runs the driver frame; record the driver AND both channel-published leaves as ABSOLUTE
+    // addresses, in call order. Fork-internal (steps a child, not this thread), so it asserts
+    // unconditionally on any ptrace lane. Mirrors the C oracle test_ptrace_window_call.
+    private static void ptraceWindowCall() {
+        if (ptraceUnavailable()) return;
+        HwTrace.NativeCode m1 = HwTrace.NativeCode.fromBytes(M1);
+        HwTrace.NativeCode m2 = HwTrace.NativeCode.fromBytes(M2);
+        long a1 = m1.base(), a2 = m2.base();
+        HwTrace.NativeCode drv = HwTrace.NativeCode.fromBytes(buildWindowDriver(a1, a2));
+        try (HwTrace.AddrChannel chan = HwTrace.AddrChannel.newLocal()) {
+            chan.publish(m1).publish(m2); // pre-publish the leaves the frame calls into
+            HwTrace.WindowTraceResult res = HwTrace.ptraceTraceWindowCall(drv, new long[] {7, 3}, chan);
+            ok(res.result() == 4, "windowCall: driver frame returns m2(7,3) == 4 (got " + res.result() + ")");
+            long[] c = windowContainment(res.insns(), drv.base(), drv.length(), a1, a2);
+            ok(c[0] == 1 && c[1] == 1 && c[2] == 1,
+                "windowCall: records the driver frame AND both channel-published leaves");
+            ok(c[3] >= 0 && c[4] > c[3], "windowCall: follows the calls in order (m1 before m2)");
+            ok(!res.truncated(), "windowCall: capture complete");
+        }
+        drv.free(); m1.free(); m2.free();
+    }
+
+    // §D3 CRASH-PROOF whole-window OOP capture (HwTrace.stealthWindow): a reverse-attached helper
+    // steps the window body out of band while THIS thread runs it — the OOP analog of the
+    // in-process window() footgun, mirroring dotnet's AsmTrace.Window. Self-skips on a refused
+    // reverse-attach; else records driver + both leaves in order (best-effort stream over a live
+    // runtime, exact result). Mirrors the C oracle test_stealth_windowed.
+    private static void stealthWindow() {
+        if (ptraceUnavailable()) return;
+        HwTrace.NativeCode m1 = HwTrace.NativeCode.fromBytes(M1);
+        HwTrace.NativeCode m2 = HwTrace.NativeCode.fromBytes(M2);
+        long a1 = m1.base(), a2 = m2.base();
+        HwTrace.NativeCode drv = HwTrace.NativeCode.fromBytes(buildWindowDriver(a1, a2));
+        try (HwTrace.AddrChannel chan = HwTrace.AddrChannel.newShared()) {
+            chan.publish(m1).publish(m2);
+            HwTrace.WindowTraceResult res = HwTrace.stealthWindow(drv, chan);
+            System.out.println("# stealthWindow: armed=" + res.armed() + " truncated=" + res.truncated()
+                + " insns=" + res.insns().length);
+            if (!res.armed()) {
+                System.out.println("# SKIP stealth windowed: reverse-attach not permitted (Yama ptrace_scope)");
+            } else {
+                ok(res.result() == 4, "stealthWindow: frame returns m2(7,3) == 4 out of band (got " + res.result() + ")");
+                if (!res.truncated()) {
+                    long[] c = windowContainment(res.insns(), drv.base(), drv.length(), a1, a2);
+                    ok(c[0] == 1 && c[1] == 1 && c[2] == 1,
+                        "stealthWindow: records the driver frame AND both pre-published leaves");
+                    ok(c[3] >= 0 && c[4] > c[3], "stealthWindow: follows the calls in order (m1 before m2)");
+                } else {
+                    ok(true, "stealthWindow: stream truncated over the live runtime (honest best-effort; result exact)");
+                }
+            }
+        }
+        drv.free(); m1.free(); m2.free();
     }
 
     // run_to drives an attached target to a resolved method (software breakpoint). A

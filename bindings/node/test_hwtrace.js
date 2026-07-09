@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 const koffi = require('koffi');
 const {
-  HwTrace, NativeCode, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
+  HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
   BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
@@ -32,6 +32,40 @@ const ROUTINE = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
 const LOOP = Buffer.from([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
   0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3]);
+
+// Whole-window OOP test leaves: two 7-byte native "methods" the driver frame calls into.
+const M1 = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0xC3]); // rax = rdi + rsi
+const M2 = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x29, 0xF0, 0xC3]); // rax = rdi - rsi
+
+// Build the self-contained 35-byte driver blob (the window frame), mirroring the C oracle
+// test_stealth_windowed: mov edi,7; mov esi,3; movabs rax,a1; call rax; movabs rax,a2; call
+// rax; ret. a1/a2 are the runtime addresses of M1/M2 (BigInt). m2(7,3)=4 is the frame return.
+function buildWindowDriver(a1, a2) {
+  const drv = Buffer.from([
+    0xBF, 7, 0, 0, 0, // mov edi, 7
+    0xBE, 3, 0, 0, 0, // mov esi, 3
+    0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // movabs rax, a1  (imm at offset 12)
+    0xFF, 0xD0, // call rax
+    0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // movabs rax, a2  (imm at offset 24)
+    0xFF, 0xD0, // call rax
+    0xC3, // ret
+  ]);
+  drv.writeBigUInt64LE(BigInt(a1), 12);
+  drv.writeBigUInt64LE(BigInt(a2), 24);
+  return drv;
+}
+
+// Classify a captured absolute-address trace by range containment (no Capstone needed):
+// which of the driver frame / leaf m1 / leaf m2 it hit, and the index each was first seen.
+function windowContainment(insns, dvBase, dvLen, a1, a2) {
+  let hitDrv = false, hitM1 = false, hitM2 = false, firstM1 = -1, firstM2 = -1;
+  insns.forEach((at, i) => {
+    if (at >= dvBase && at < dvBase + BigInt(dvLen)) hitDrv = true;
+    if (at >= a1 && at < a1 + BigInt(M1.length)) { hitM1 = true; if (firstM1 < 0) firstM1 = i; }
+    if (at >= a2 && at < a2 + BigInt(M2.length)) { hitM2 = true; if (firstM2 < 0) firstM2 = i; }
+  });
+  return { hitDrv, hitM1, hitM2, firstM1, firstM2 };
+}
 
 let _n = 0;
 let _failed = false;
@@ -349,6 +383,58 @@ function main() {
         }
       }
       code.free();
+    }
+
+    // §D3 WHOLE-WINDOW fork-internal capture (Ptrace.windowCall): fork a child that runs the
+    // driver frame; record the driver AND both channel-published leaves as ABSOLUTE addresses,
+    // in call order. Fork-internal (steps a child, not this thread), so it asserts
+    // unconditionally on any ptrace lane. Mirrors the C oracle test_ptrace_window_call.
+    {
+      const m1 = NativeCode.fromBytes(M1);
+      const m2 = NativeCode.fromBytes(M2);
+      const a1 = BigInt(koffi.address(m1.base)), a2 = BigInt(koffi.address(m2.base));
+      const drv = NativeCode.fromBytes(buildWindowDriver(a1, a2));
+      const chan = AddrChannel.newLocal();
+      chan.publish(m1).publish(m2); // pre-publish the leaves the frame calls into
+      const res = Ptrace.windowCall(drv, [7, 3], chan);
+      ok(res.result === 4, 'windowCall: driver frame returns m2(7,3) == 4');
+      const c = windowContainment(res.insns, BigInt(koffi.address(drv.base)), drv.length, a1, a2);
+      ok(c.hitDrv && c.hitM1 && c.hitM2,
+        'windowCall: records the driver frame AND both channel-published leaves');
+      ok(c.firstM1 >= 0 && c.firstM2 > c.firstM1, 'windowCall: follows the calls in order (m1 before m2)');
+      ok(!res.truncated, 'windowCall: capture complete');
+      chan.free(); drv.free(); m1.free(); m2.free();
+    }
+
+    // §D3 CRASH-PROOF whole-window OOP capture (HwTrace.stealthWindow): a reverse-attached
+    // helper steps the window body out of band while THIS thread runs it — the OOP analog of
+    // the in-process window() footgun, mirroring dotnet's AsmTrace.Window. Self-skips on a
+    // refused reverse-attach; else records driver + both leaves in order (best-effort stream
+    // over a live runtime, exact result). Mirrors the C oracle test_stealth_windowed.
+    {
+      const m1 = NativeCode.fromBytes(M1);
+      const m2 = NativeCode.fromBytes(M2);
+      const a1 = BigInt(koffi.address(m1.base)), a2 = BigInt(koffi.address(m2.base));
+      const drv = NativeCode.fromBytes(buildWindowDriver(a1, a2));
+      const chan = AddrChannel.newShared(); // reverse-attach: the forked stepper drains it live
+      chan.publish(m1).publish(m2);
+      const res = HwTrace.stealthWindow(drv, chan);
+      console.log(`# stealthWindow: armed=${res.armed} truncated=${res.truncated} insns=${res.insns.length}`);
+      if (!res.armed) {
+        console.log('# SKIP stealth windowed: reverse-attach not permitted (Yama ptrace_scope)');
+      } else {
+        ok(res.result === 4, 'stealthWindow: frame returns m2(7,3) == 4 (out of band)');
+        if (!res.truncated) {
+          const c = windowContainment(res.insns, BigInt(koffi.address(drv.base)), drv.length, a1, a2);
+          ok(c.hitDrv && c.hitM1 && c.hitM2,
+            'stealthWindow: records the driver frame AND both pre-published leaves');
+          ok(c.firstM1 >= 0 && c.firstM2 > c.firstM1,
+            'stealthWindow: follows the calls in order (m1 before m2)');
+        } else {
+          ok(true, 'stealthWindow: stream truncated over the live runtime (honest best-effort; result exact)');
+        }
+      }
+      chan.free(); drv.free(); m1.free(); m2.free();
     }
 
     // run_to drives an attached target to a resolved method (software breakpoint). A

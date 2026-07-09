@@ -75,8 +75,8 @@ ALL asmtest_amd_msr_available         #   substrate probe for the above (amd_lbr
 # Whole-window / statistical-survey C-surface — dotnet is the lead binding (its managed
 # AsmTrace tier drives these); the other nine gain them when they grow a whole-window scope
 # construct, the same posture as begin_window/end_window/render_window above. Host-tested in C.
-ALL asmtest_hwtrace_stealth_trace_windowed  # §D3 multi-region windowed ptrace-stealth stepper: dotnet wraps it (managed whole-window tier); sibling of asmtest_hwtrace_stealth_trace / asmtest_ptrace_trace_attached_windowed above — C-internal to the scope façade
-ALL asmtest_ptrace_trace_window_call        # §D3 fork-internal whole-window capture (owns its tracee): dotnet wraps it (the managed binding that cannot fork safely); the other nine use the in-process scope / attached-windowed paths
+ALL asmtest_hwtrace_stealth_trace_windowed  # §D3 multi-region windowed ptrace-stealth stepper (crash-proof whole-window OOP): dotnet (AsmTrace.Window), node + java (HwTrace.stealthWindow) wrap it; the other seven gain it when they grow a whole-window stealth scope
+ALL asmtest_ptrace_trace_window_call        # §D3 fork-internal whole-window capture (owns its tracee): dotnet (Ptrace.TraceWindowCall), node (Ptrace.windowCall) + java (HwTrace.ptraceTraceWindowCall) wrap it; the other seven use the in-process scope / attached-windowed paths
 ALL asmtest_hwtrace_sample_window_amd       # §D3 statistical AMD-LBR WindowHot survey (hot-method histogram, NOT an exact trace): dotnet wraps it (WindowHot); the other nine gain it when they grow an AMD survey lane
 ALL asmtest_hwtrace_sample_begin_amd        # begin/end split of the AMD-LBR survey for the `using (new AsmTrace(HwBackend.AmdLbr)) { block }` inline shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end)
 ALL asmtest_hwtrace_sample_end_amd          #   (paired with sample_begin_amd above; dotnet-only until a binding grows the inline AMD-survey shape)
