@@ -314,6 +314,25 @@ jobs:
       - name: Python wrapper (single-step + scoped tracing)
         run: make hwtrace-python-test
 
+  # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
+  # headless smoke drives every non-interactive subcommand (--list/--syms/
+  # --trace/--stream/--log) against the example victims; the TUI shares the
+  # same engine, so this is the whole CLI surface CI can exercise. The victims
+  # opt in via PR_SET_PTRACER_ANY, so ptrace attach works under the runner's
+  # default yama scope. Same dependency set as the hwtrace job, plus ncurses.
+  cli:
+    name: cli (asmspy headless smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Capstone (disassembly) + libipt/OpenCSD (hwtrace tier) + ncurses (TUI)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev libncurses-dev pkg-config
+
+      - name: Build asmspy + victims, run the headless smoke
+        run: make cli-smoke
+
   # K2: the cross-language hardware-trace wrappers — each binding's in-process
   # single-step tracer, in the same isolated per-language images the `bindings`
   # job builds. Run as ONE job so the shared bindings base (and its Keystone /
