@@ -74,6 +74,7 @@ SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
 .PHONY: sanitize coverage tidy fmt fmt-check
 .PHONY: deps usecases usecases-emu
 .PHONY: drtrace-test drtrace-client shared-drtrace hwtrace-test shared-hwtrace
+.PHONY: preload-logger
 all: test
 
 # Self-documenting target list. `make` / `make all` still runs the test suites;
@@ -131,6 +132,9 @@ help:
 	@echo '  fmt             reformat the C sources with clang-format (in place)'
 	@echo '  fmt-check       report clang-format drift (informational; no gate)'
 	@echo '  valgrind        memcheck the routines under test (Linux/x86-64)'
+	@echo ''
+	@echo 'Instrumentation prototypes (analysis; Linux):'
+	@echo '  preload-logger  LD_PRELOAD value-trace logger -> build/preload-logger.so (JSONL args/returns)'
 	@echo ''
 	@echo 'Language bindings (per-language; need libunicorn):'
 	@echo '  python-test cpp-test rust-test zig-test node-test'
@@ -485,6 +489,21 @@ asmtest.pc: asmtest.pc.in
 amalgamate: asmtest_single.h
 asmtest_single.h: scripts/amalgamate.sh include/asmtest.h src/asmtest.c
 	sh scripts/amalgamate.sh > $@
+
+# Instrumentation prototype (analysis): the LD_PRELOAD value-trace logger from
+# docs/internal/analysis/capture-args-returns.md. Interposes a small default set
+# of libc I/O calls and writes entry/exit args + bounded buffers as JSON-lines.
+# Linux only (process_vm_readv); on other hosts the target is a friendly no-op.
+#   make preload-logger
+#   LD_PRELOAD=$$PWD/build/preload-logger.so ./your_program
+preload-logger: $(BUILD)/preload-logger.so
+ifeq ($(UNAME_S),Linux)
+$(BUILD)/preload-logger.so: tools/instrument/preload-logger.c | $(BUILD)
+	$(CC) $(CFLAGS) -fPIC -shared -fvisibility=hidden $< -o $@ -ldl -lpthread
+else
+$(BUILD)/preload-logger.so: tools/instrument/preload-logger.c | $(BUILD)
+	@echo "preload-logger: LD_PRELOAD value-trace prototype is Linux-only; skipping on $(UNAME_S)"
+endif
 
 # Install headers, the static lib, and a pkg-config file. The .pc is generated
 # here (not via the asmtest.pc target) so it always reflects the PREFIX in use.
