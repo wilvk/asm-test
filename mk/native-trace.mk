@@ -355,6 +355,45 @@ $(BUILD)/windowed_trace: $(HWTRACE_OBJS) $(BUILD)/windowed_trace.o
 windowed-trace: $(BUILD)/windowed_trace
 	./$(BUILD)/windowed_trace
 
+# "Trace a process asm-test did NOT start": attach_victim runs as a wholly SEPARATE
+# process; attach_trace attaches to it BY PID, resolves the hot function from its
+# symbol table, run_to's the entry, and single-steps one call — the foreign-attach
+# path (resolve -> PTRACE_ATTACH -> run_to -> trace_attached -> DETACH), no managed
+# runtime needed. The tracer links the hwtrace tier (Capstone gives the disassembly);
+# the victim is a plain standalone binary. Runs on any ptrace-capable x86-64/AArch64
+# Linux; the victim opts in with PR_SET_PTRACER_ANY so it works under a plain
+# container even at Yama ptrace_scope=1. `make docker-hwtrace-attach-demo` runs it in
+# the plain (unprivileged) hwtrace container.
+$(BUILD)/attach_trace: $(HWTRACE_OBJS) $(BUILD)/attach_trace.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
+
+$(BUILD)/attach_victim: $(BUILD)/attach_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+.PHONY: hwtrace-attach-demo
+hwtrace-attach-demo: $(BUILD)/attach_trace $(BUILD)/attach_victim
+	@echo "== hwtrace-attach-demo (trace a separate, already-running process) =="
+	BUILD=$(BUILD) sh examples/attach_demo.sh
+
+# DATA-logging sibling of the attach demo: syscall_log attaches to a SEPARATE
+# process BY PID and logs its syscalls WITH the data crossing the kernel boundary
+# (write/read buffers, openat paths) via PTRACE_SYSCALL + process_vm_readv — a
+# minimal strace on the same attach seam as attach_trace, but linking only libc
+# (data logging needs the ptrace seam, not asm-test's decoder). syscall_victim does
+# real file I/O so there is data to capture. Both are plain standalone binaries.
+# x86-64 Linux; the victim opts in with PR_SET_PTRACER_ANY so it runs under a plain
+# container at Yama ptrace_scope=1. `make docker-hwtrace-syscall-log` runs it there.
+$(BUILD)/syscall_log: $(BUILD)/syscall_log.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/syscall_victim: $(BUILD)/syscall_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+.PHONY: hwtrace-syscall-log
+hwtrace-syscall-log: $(BUILD)/syscall_log $(BUILD)/syscall_victim
+	@echo "== hwtrace-syscall-log (log a separate process's syscalls + data) =="
+	BUILD=$(BUILD) sh examples/syscall_demo.sh
+
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
         hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump \
         hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl

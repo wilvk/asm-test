@@ -236,6 +236,8 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace            C smoke + Python wrapper, in a plain container
 #   make docker-hwtrace-bindings   every language wrapper, in a plain container
 #   make docker-hwtrace-<lang>     just one (e.g. docker-hwtrace-rust)
+#   make docker-hwtrace-attach-demo trace a SEPARATE process asm-test did not start (by PID)
+#   make docker-hwtrace-syscall-log log a SEPARATE process's syscalls + data (a minimal strace)
 #   make docker-hwtrace-jit        trace a live Node.js V8 JIT method out of band
 #   make docker-hwtrace-jit-dotnet trace a live .NET CoreCLR JIT method out of band
 #   make docker-hwtrace-jit-java   trace a live OpenJDK HotSpot JIT method out of band
@@ -246,7 +248,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-codeimage docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump \
@@ -257,6 +259,24 @@ docker-hwtrace: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace
+
+# "Trace a process asm-test did NOT start", end to end in a PLAIN container (no
+# privilege, no --cap-add): attach_trace attaches to a SEPARATE attach_victim
+# process BY PID and single-steps one call of its hot function out of band. The
+# victim opts in via PR_SET_PTRACER_ANY, so it works under a default `docker run`
+# even though Yama ptrace_scope (a non-namespaced host setting) is commonly 1.
+docker-hwtrace-attach-demo: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace make hwtrace-attach-demo
+
+# The DATA-logging sibling: attach to a SEPARATE process and log its syscalls WITH
+# the buffers/paths crossing the kernel boundary (a minimal strace on the ptrace
+# seam). Plain container; the victim opts in via PR_SET_PTRACER_ANY.
+docker-hwtrace-syscall-log: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace make hwtrace-syscall-log
 
 # Real managed-runtime trace: trace a live JIT method out of band. Each reuses a
 # per-language image (runtime + Capstone + source) and runs the argv-driven `jit_trace`
