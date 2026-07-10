@@ -327,7 +327,7 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
 /* ================================================================== */
 
 #define LOG_CAP 2048
-#define LINE_MAX 256
+#define LINE_MAX 320 /* holds a ~200-char decoded string in the log/strings pane */
 
 typedef struct {
     char lines[LOG_CAP][LINE_MAX];
@@ -686,61 +686,81 @@ static int screen_mode(const asmspy_proc_t *p) {
     }
 }
 
-/* symbol picker; returns 0 and fills the region on selection, -1 on back */
+/* symbol picker; returns 0 and fills the region on selection, -1 on back.
+ * 'r' reloads the target's function symbols in place (so `t` stays current for
+ * the caller, which passes it on to the live view for callee naming). */
 static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
-                       const asmspy_symtab_t *t) {
-    if (t->n == 0)
-        return -1;
-    char **items = malloc(t->n * sizeof *items);
-    if (!items)
-        return -1;
-    for (size_t i = 0; i < t->n; i++) {
-        char b[256];
-        snprintf(b, sizeof b, "%-40s %6llu  0x%llx  [%s]", t->v[i].name,
-                 (unsigned long long)t->v[i].size,
-                 (unsigned long long)t->v[i].addr, t->v[i].module);
-        items[i] = strdup(b);
-    }
-    List L;
-    if (list_init(&L, items, (int)t->n) != 0) {
+                       asmspy_symtab_t *t) {
+    for (;;) { /* (re-)build loop — 'r' reloads t and re-enters */
+        if (t->n == 0)
+            return -1;
+        char **items = malloc(t->n * sizeof *items);
+        if (!items)
+            return -1;
+        for (size_t i = 0; i < t->n; i++) {
+            char b[256];
+            snprintf(b, sizeof b, "%-40s %6llu  0x%llx  [%s]", t->v[i].name,
+                     (unsigned long long)t->v[i].size,
+                     (unsigned long long)t->v[i].addr, t->v[i].module);
+            items[i] = strdup(b);
+        }
+        List L;
+        if (list_init(&L, items, (int)t->n) != 0) {
+            for (size_t i = 0; i < t->n; i++)
+                free(items[i]);
+            free(items);
+            return -1;
+        }
+
+        int outcome = 0; /* 1 pick, 2 back, 3 reload */
+        int selidx = -1;
+        while (outcome == 0) {
+            int rows, cols;
+            getmaxyx(stdscr, rows, cols);
+            erase();
+            attron(A_BOLD);
+            mvprintw(0, 0, "asmspy — pick a function to trace (pid %d)",
+                     (int)pid);
+            attroff(A_BOLD);
+            list_render(&L, 1, rows - 3, cols);
+            mvprintw(rows - 1, 0,
+                     "type: filter   Enter: trace   r: reload   ESC: back   "
+                     "(%d/%zu)",
+                     L.nmatch, t->n);
+            clrtoeol();
+            refresh();
+            int ch = getch();
+            if (ch == 27)
+                outcome = 2;
+            else if (ch == 'r' && L.flen == 0)
+                outcome = 3;
+            else {
+                int sel = list_key(&L, ch, rows - 3);
+                if (sel >= 0 && t->v[sel].size > 0) { /* need a sized region */
+                    selidx = sel;
+                    outcome = 1;
+                }
+            }
+        }
+
+        if (outcome == 1) {
+            *base = t->v[selidx].addr;
+            *len = t->v[selidx].size;
+        }
+        list_done(&L);
         for (size_t i = 0; i < t->n; i++)
             free(items[i]);
         free(items);
-        return -1;
-    }
 
-    int result = -1;
-    for (;;) {
-        int rows, cols;
-        getmaxyx(stdscr, rows, cols);
-        erase();
-        attron(A_BOLD);
-        mvprintw(0, 0, "asmspy — pick a function to trace (pid %d)", (int)pid);
-        attroff(A_BOLD);
-        list_render(&L, 1, rows - 3, cols);
-        mvprintw(rows - 1, 0,
-                 "type: filter   Enter: trace   ESC: back   (%d/%zu)", L.nmatch,
-                 t->n);
-        clrtoeol();
-        refresh();
-        int ch = getch();
-        if (ch == 27)
-            break;
-        int sel = list_key(&L, ch, rows - 3);
-        if (sel >= 0) {
-            if (t->v[sel].size == 0)
-                continue; /* need a sized region */
-            *base = t->v[sel].addr;
-            *len = t->v[sel].size;
-            result = 0;
-            break;
-        }
+        if (outcome == 1)
+            return 0;
+        if (outcome == 2)
+            return -1;
+        /* outcome == 3: reload the target's symbols in place, then rebuild */
+        asmspy_symtab_free(t);
+        if (asmspy_symtab_load(pid, t) < 0)
+            return -1;
     }
-    list_done(&L);
-    for (size_t i = 0; i < t->n; i++)
-        free(items[i]);
-    free(items);
-    return result;
 }
 
 /* process picker with a live sort toggle; returns 0 and fills *picked on
@@ -779,7 +799,7 @@ static int screen_procs(asmspy_proc_t *picked) {
             return -1;
         }
 
-        int outcome = 0; /* 1 pick, 2 quit, 3 toggle */
+        int outcome = 0; /* 1 pick, 2 quit, 3 toggle, 4 refresh */
         int selidx = -1;
         while (outcome == 0) {
             int rows, cols;
@@ -795,7 +815,8 @@ static int screen_procs(asmspy_proc_t *picked) {
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
             mvprintw(rows - 1, 0,
-                     "type: filter   Enter: select   Tab: sort by %s   q: quit",
+                     "type: filter   Enter: select   Tab: sort by %s   r: "
+                     "refresh   q: quit",
                      sort == ASMSPY_SORT_ACTIVE ? "pid" : "activity");
             clrtoeol();
             refresh();
@@ -804,6 +825,8 @@ static int screen_procs(asmspy_proc_t *picked) {
                 outcome = 2;
             else if (ch == '\t')
                 outcome = 3;
+            else if (ch == 'r' && L.flen == 0)
+                outcome = 4; /* re-scan (re-samples CPU in activity sort) */
             else {
                 int sel = list_key(&L, ch, rows - 3);
                 if (sel >= 0) {
@@ -829,9 +852,10 @@ static int screen_procs(asmspy_proc_t *picked) {
         }
         if (outcome == 2)
             return -1;
-        /* outcome == 3: flip sort and re-scan */
-        sort = (sort == ASMSPY_SORT_ACTIVE) ? ASMSPY_SORT_PID
-                                            : ASMSPY_SORT_ACTIVE;
+        if (outcome == 3) /* flip sort; outcome 4 (refresh) keeps it */
+            sort = (sort == ASMSPY_SORT_ACTIVE) ? ASMSPY_SORT_PID
+                                                : ASMSPY_SORT_ACTIVE;
+        /* outcome 3 or 4: fall through -> outer loop re-scans */
     }
 }
 

@@ -89,13 +89,15 @@ Run `asmspy` with no arguments. It walks four screens:
 1. **Process picker** — every process, filterable as you type; arrow keys /
    `PgUp`/`PgDn` to move, `Enter` to select, `q` to quit. `Tab` toggles the
    order between **PID** and **most recently active** (a short per-process CPU
-   sample). Processes you cannot `ptrace` are marked with `!`.
+   sample); `r` re-scans the list (re-sampling activity). Processes you cannot
+   `ptrace` are marked with `!`. (`Tab`/`r` act when the filter is empty.)
 2. **Mode select** — `1` for the syscall log, `2` for assembly & functions.
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
-   filterable; `Enter` picks the function to trace.
+   filterable; `Enter` picks the function to trace, `r` reloads the symbols
+   (picking up newly-mapped libraries or fresh JIT code).
 4. **Live view** — for the syscall log, a **split** feed: the syscall stream on
-   the left, and the strings it carried (paths and read/write buffers) decoded
-   on the right. For assembly, two panes — the disassembly, **each instruction
+   the left, and the strings it carried (paths and read/write buffers, decoded
+   up to 200 bytes) on the right. For assembly, two panes — the disassembly, **each instruction
    prefixed with its execution count** (so a hot loop body stands out), and the
    functions called, **ranked most-called first** — refreshing each time the
    function runs. Press `b` to go back to this process's options, or `q`/`ESC`
@@ -116,8 +118,9 @@ asmspy --log   <pid> [n]           # stream n syscalls with decoded data (defaul
 asmspy --trace <pid> <sym> [n]     # n live samples of a function (default 3)
 ```
 
-**Syscall log** — decodes `openat` paths, `write`/`read` buffers, `close`, and
-names common calls (the rest print as `syscall#<nr>(args)`):
+**Syscall log** — decodes `openat` paths, `write`/`read` buffers (up to 200
+bytes each), `close`, and names common calls (the rest print as
+`syscall#<nr>(args)`):
 
 ```text
 $ asmspy --log 1234 6

@@ -29,7 +29,7 @@
 
 #include "asmspy.h"
 
-#define DUMP_CAP 48 /* bytes of a buffer/path shown per syscall */
+#define DUMP_CAP 200 /* bytes of a buffer/path decoded per syscall */
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -278,7 +278,7 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                 entry_regs = regs;
                 at_entry = 0;
             } else {
-                char line[512], sdata[160];
+                char line[1024], sdata[512];
                 format_syscall(line, sizeof line, sdata, sizeof sdata, pid,
                                ent_nr, &entry_regs, (long)regs.rax);
                 if (sink)
