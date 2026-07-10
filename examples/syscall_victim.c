@@ -1,7 +1,8 @@
 /* syscall_victim.c — a separate process (asm-test does NOT start it) that does
  * real filesystem + stdout I/O in a loop, so the out-of-band syscall logger
  * (examples/syscall_log.c) has actual DATA to capture: openat paths, write
- * buffers, and read buffers crossing the kernel boundary.
+ * buffers, and read buffers crossing the kernel boundary — plus a bare path
+ * probe (access) whose only interesting argument IS the path.
  *
  * Opts into tracing by any same-uid process via PR_SET_PTRACER_ANY, so the demo
  * runs under a plain `docker run` even at Yama ptrace_scope=1 (see
@@ -30,6 +31,8 @@ int main(void) {
         char msg[64];
         int len = snprintf(msg, sizeof msg, "tick %d from pid %d\n", n,
                            (int)getpid());
+
+        access(path, F_OK); /* path-only syscall; glibc may route it via *at */
 
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) {

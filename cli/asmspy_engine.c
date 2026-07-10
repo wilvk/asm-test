@@ -162,23 +162,93 @@ static void decode_cstr(pid_t pid, uint64_t addr, char *out, size_t cap) {
     snprintf(out, cap, "%s", tmp);
 }
 
+/* Every syscall name the compiling host's headers know, indexed by number. The
+ * SC() list is generated from <sys/syscall.h> (cli/gen-syscall-names.sh), and
+ * the NUMBER comes from the same headers via __NR_ — so this cannot drift out
+ * of step with the kernel the way a hand-written table would. Sparse: numbers
+ * with no entry stay NULL and fall back to the numeric form. */
+static const char *const sc_names[] = {
+#define SC(n) [__NR_##n] = #n,
+#include "asmspy_syscall_names.inc"
+#undef SC
+};
+
 static const char *scname(long nr) {
+    if (nr < 0 || (size_t)nr >= sizeof sc_names / sizeof sc_names[0])
+        return NULL;
+    return sc_names[nr];
+}
+
+/* Where a syscall keeps its primary PATH argument — decoding it is what turns
+ * an opaque "syscall#262(0x7f.., 0x7f.., ..)" into a line worth reading.
+ * execve/execveat are deliberately absent: we format at syscall EXIT, by which
+ * point a successful exec has replaced the address space the path lived in. */
+typedef enum { PATH_NONE = 0, PATH_RDI, PATH_AT_RSI } path_kind_t;
+
+static path_kind_t path_kind(long nr) {
     switch (nr) {
-    case SYS_getpid: return "getpid";
-    case SYS_nanosleep: return "nanosleep";
-    case SYS_clock_nanosleep: return "clock_nanosleep";
-    case SYS_restart_syscall: return "restart_syscall";
-    case SYS_lseek: return "lseek";
-    case SYS_fstat: return "fstat";
-    case SYS_mmap: return "mmap";
-    case SYS_futex: return "futex";
-    case SYS_ioctl: return "ioctl";
-    case SYS_writev: return "writev";
-    case SYS_readv: return "readv";
-    case SYS_poll: return "poll";
-    case SYS_ppoll: return "ppoll";
-    default: return NULL;
+    /* path is the first argument */
+    case SYS_open:
+    case SYS_stat:
+    case SYS_lstat:
+    case SYS_access:
+    case SYS_unlink:
+    case SYS_rmdir:
+    case SYS_chdir:
+    case SYS_readlink:
+    case SYS_statfs:
+    case SYS_truncate:
+    case SYS_chmod:
+    case SYS_chown:
+    case SYS_lchown:
+    case SYS_mkdir:
+    case SYS_rename:
+    case SYS_link:
+    case SYS_symlink:  /* (target, linkpath) — target is the datum */
+    case SYS_symlinkat:/* (target, newdirfd, linkpath) — likewise */
+    case SYS_creat:
+    case SYS_mknod:
+    case SYS_utimes:
+    case SYS_chroot:
+    case SYS_acct:
+    case SYS_mount:    /* (source, target, ...) */
+    case SYS_umount2:
+    case SYS_swapon:
+    case SYS_swapoff: return PATH_RDI;
+    /* (dirfd, path, ...) — openat has its own case, with flag formatting */
+    case SYS_newfstatat:
+    case SYS_unlinkat:
+    case SYS_faccessat:
+    case SYS_readlinkat:
+    case SYS_mkdirat:
+    case SYS_mknodat:
+    case SYS_fchownat:
+    case SYS_fchmodat:
+    case SYS_renameat:
+    case SYS_futimesat:
+    case SYS_linkat:
+#ifdef SYS_renameat2
+    case SYS_renameat2:
+#endif
+#ifdef SYS_statx
+    case SYS_statx:
+#endif
+#ifdef SYS_openat2
+    case SYS_openat2:
+#endif
+#ifdef SYS_faccessat2
+    case SYS_faccessat2:
+#endif
+        return PATH_AT_RSI;
+    default: return PATH_NONE;
     }
+}
+
+/* A dirfd prints as AT_FDCWD far more often than as a number. */
+static size_t ap_dirfd(char *b, size_t cap, size_t o, long long raw) {
+    if ((int)raw == AT_FDCWD) /* -100, and it arrives zero-extended */
+        return apf(b, cap, o, "AT_FDCWD");
+    return apf(b, cap, o, "%d", (int)raw);
 }
 
 static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
@@ -206,10 +276,7 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         break;
     case SYS_openat:
         o = apf(b, cap, o, "openat(");
-        if ((int)e->rdi == AT_FDCWD)
-            o = apf(b, cap, o, "AT_FDCWD");
-        else
-            o = apf(b, cap, o, "%d", (int)e->rdi);
+        o = ap_dirfd(b, cap, o, (long long)e->rdi);
         o = apf(b, cap, o, ", ");
         o = ap_cstr(b, cap, o, pid, e->rsi);
         o = apf(b, cap, o, ", 0x%llx) = %ld", (unsigned long long)e->rdx, ret);
@@ -221,13 +288,29 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         break;
     default: {
         const char *nm = scname(nr);
+        path_kind_t pk = nm ? path_kind(nr) : PATH_NONE;
         if (nm)
             o = apf(b, cap, o, "%s(", nm);
         else
             o = apf(b, cap, o, "syscall#%ld(", nr);
-        o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx) = %ld",
-                (unsigned long long)e->rdi, (unsigned long long)e->rsi,
-                (unsigned long long)e->rdx, ret);
+
+        if (pk == PATH_RDI) {
+            o = ap_cstr(b, cap, o, pid, e->rdi);
+            o = apf(b, cap, o, ", 0x%llx, 0x%llx) = %ld",
+                    (unsigned long long)e->rsi, (unsigned long long)e->rdx, ret);
+            decode_cstr(pid, e->rdi, sout, scap);
+        } else if (pk == PATH_AT_RSI) {
+            o = ap_dirfd(b, cap, o, (long long)e->rdi);
+            o = apf(b, cap, o, ", ");
+            o = ap_cstr(b, cap, o, pid, e->rsi);
+            o = apf(b, cap, o, ", 0x%llx) = %ld", (unsigned long long)e->rdx,
+                    ret);
+            decode_cstr(pid, e->rsi, sout, scap);
+        } else {
+            o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx) = %ld",
+                    (unsigned long long)e->rdi, (unsigned long long)e->rsi,
+                    (unsigned long long)e->rdx, ret);
+        }
         break;
     }
     }

@@ -21,11 +21,20 @@ ifneq ($(shell pkg-config --exists capstone 2>/dev/null && echo ok),ok)
 CLI_MISSING += Capstone
 endif
 
+# The syscall-name table asmspy decodes against is generated from the COMPILING
+# host's own <sys/syscall.h> (names only; the numbers come from __NR_ at compile
+# time), so it tracks whatever kernel headers are installed instead of drifting.
+# asmspy_engine.c #includes it, hence the -I$(BUILD) below.
+$(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
+	CC='$(CC)' sh $< >$@
+
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
-	$(CC) $(CFLAGS) -pthread -c $< -o $@
+	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
+
+$(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 
 ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o
 

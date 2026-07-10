@@ -72,9 +72,15 @@ kill "$WVPID" 2>/dev/null || true
 SVPID=$!
 sleep 1
 
-echo "--- asmspy --log $SVPID 12 ---"
-out=$("$ASM" --log "$SVPID" 12 2>&1) || true
+echo "--- asmspy --log $SVPID 20 ---"
+out=$("$ASM" --log "$SVPID" 20 2>&1) || true
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'write(' || fail "no write() syscall captured"
+# The victim's access() is named from the generated syscall table (it is not one
+# of the hand-decoded four) and its path is decoded. glibc routes access() to
+# either SYS_access or SYS_faccessat2 depending on version, so accept both --
+# both prove naming + path decoding, which is the point.
+printf '%s\n' "$out" | grep -qE '(access|faccessat2?)\(.*"/tmp/asmtest_syscall_demo.txt"' \
+    || fail "access() not named+path-decoded (syscall table / path decode regressed)"
 
 echo "cli-smoke: PASS"
