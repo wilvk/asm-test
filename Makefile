@@ -130,7 +130,7 @@ help:
 	@echo '  coverage        gcov of the runner'
 	@echo '  tidy            clang-tidy static analysis'
 	@echo '  fmt             reformat the C sources with clang-format (in place)'
-	@echo '  fmt-check       report clang-format drift (informational; no gate)'
+	@echo '  fmt-check       report clang-format drift (CI gate; fix with make fmt)'
 	@echo '  valgrind        memcheck the routines under test (Linux/x86-64)'
 	@echo ''
 	@echo 'Instrumentation prototypes (analysis; Linux):'
@@ -684,10 +684,11 @@ tidy:
 	 else echo "== tidy: SKIP coresight backend (no opencsd) =="; fi
 
 # Formatting with clang-format (style in .clang-format). `fmt` rewrites in place;
-# `fmt-check` reports drift and exits nonzero (so it CAN gate) but the CI job runs
-# it informationally for now — the hand-tuned tree is not bulk-reformatted (see
-# .clang-format). Scope: the C translation units + headers (the asm and C++/binding
-# sources keep their own conventions and are left out). Run `make fmt` on new code.
+# `fmt-check` reports drift and exits nonzero — and the CI `format` job GATES on it
+# (.github/workflows/ci.yml runs `make fmt-check`; new drift fails the run). Fix
+# drift with `make fmt`. Scope: the C translation units + headers (the asm and
+# C++/binding sources keep their own conventions and are left out). Run `make fmt`
+# on new code.
 CLANG_FORMAT ?= clang-format
 # include/asm.h is a dual C/assembler header (GNU-as .macro/.endm directives that
 # clang-format would mangle into an unassemblable single line), so it is filtered

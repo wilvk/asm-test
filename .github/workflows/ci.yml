@@ -10,10 +10,14 @@ on:
     - cron: '0 7 * * *'   # 07:00 UTC daily
   workflow_dispatch:
 
-# Cancel an in-progress run for the same ref when a new commit is pushed,
-# so queued runs (e.g. a slow Intel macOS job) don't pile up.
+# Cancel an in-progress run for the same ref when a new commit is pushed, so
+# queued push/PR runs don't pile up. Scheduled + manual runs get a UNIQUE group
+# (keyed on run_id) so the scarce nightly Intel-macOS lane (test-macos-x86, gated
+# on `schedule`/`workflow_dispatch`) is never cancelled by a daytime push to main:
+# both share the `main` ref, and cancel-in-progress would otherwise kill the ~1h
+# nightly mid-flight.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
