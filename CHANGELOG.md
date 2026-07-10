@@ -11,7 +11,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`asmspy` — an interactive process tracer (new `cli/` subsystem, Linux x86-64)** — a small
   ncurses front-end over the out-of-process (`ptrace`) tracer: attach to any running process
   and watch it live and out of band. Three live views: **syscalls with data** (a mini `strace`;
-  decoded strings split into their own pane), a chosen **function's assembly** with
+  every syscall named from a table generated against the host's own `<sys/syscall.h>`, `read`/
+  `write` buffers and path arguments decoded, decoded strings split into their own pane), a
+  chosen **function's assembly** with
   per-instruction execution **heat counts** plus its callees **ranked by call count**
   (resampled each time the target calls it), and a **whole-process live instruction stream**
   (every instruction as it executes, resolved to its function). The process picker filters

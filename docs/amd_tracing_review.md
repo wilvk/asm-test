@@ -1,3 +1,11 @@
+---
+# A standalone audit page: nothing in the toctree links it, and the plan it
+# reviews lives under docs/internal/plans/ (excluded from the site). `orphan`
+# tells Sphinx that is intentional — no toc.not_included warning under -W,
+# matching docs/scoped-tracing-implementation.md.
+orphan: true
+---
+
 # AMD Tracing – Review & Recommendations
 
 _Revision 2026-07-09. This revision is a full independent re-verification of the

@@ -132,6 +132,10 @@ asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
 asmspy --stream <pid> [n]          # stream n instructions live: function + disassembly (default 20)
 ```
 
+A **negative `n`** streams until the target exits or you interrupt. Malformed
+arguments (a non-numeric or non-positive pid, an unknown `--list` sort) are
+rejected with exit status 2 rather than coerced.
+
 **Live stream** — every instruction as it runs, resolved to its function and
 disassembled (`function+offset [module]  <disasm>`):
 
@@ -145,12 +149,16 @@ hotfn+0x22          [attach_victim]          mov rax, qword ptr [rbp - 8]
 hotfn+0x26          [attach_victim]          and eax, 1
 ```
 
-**Syscall log** — decodes `openat` paths, `write`/`read` buffers (up to 200
-bytes each), `close`, and names common calls (the rest print as
-`syscall#<nr>(args)`):
+**Syscall log** — **every** syscall is named (the table is generated from the
+host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
+buffers are decoded up to 200 bytes, and path arguments are decoded for both the
+`open`/`stat`/`access`-style calls and the `openat`/`newfstatat`-style
+`(dirfd, path)` family. Calls whose arguments asmspy does not model print their
+name with raw hex arguments:
 
 ```text
-$ asmspy --log 1234 6
+$ asmspy --log 1234 7
+access("/tmp/notes.txt", 0x0, 0x0) = 0
 openat(AT_FDCWD, "/tmp/notes.txt", 0x241) = 3
 write(fd=3, "hello from pid 1234\n", 20) = 20
 close(fd=3) = 0
@@ -225,8 +233,10 @@ non-attachable targets with `!`). In a default container, add
   and surfaced as call-graph edges (see the
   [trace_attached contract](native-tracing.md#out-of-process-variant-w2--ptrace)
   for the re-entrancy caveat).
-- **Syscall decoding is a subset.** `openat`/`write`/`read`/`close` are decoded
-  with data; other calls print number + raw args. For exhaustive syscall
-  tracing use `strace`; for kernel-side IPC/file payloads use `bpftrace`. asmspy
-  is the *in-tree, asm-focused* view, not a general strace replacement.
+- **Argument decoding is a subset.** Every syscall is *named*, and paths plus
+  `write`/`read` buffers are decoded — but other argument types (flags, structs,
+  vectors, signal sets) print as raw hex, and a syscall taking no arguments
+  still shows three hex slots. For exhaustive syscall tracing use `strace`; for
+  kernel-side IPC/file payloads use `bpftrace`. asmspy is the *in-tree,
+  asm-focused* view, not a general strace replacement.
 ```
