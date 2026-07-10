@@ -51,8 +51,12 @@ make cli            # -> build/asmspy   (self-contained binary; no LD_LIBRARY_PA
 ```
 
 If the loader can't find `libcapstone.so.5`, prefix once with
-`LD_LIBRARY_PATH=/usr/local/lib`. `make deps` also works but additionally builds
-Keystone + Unicorn, which asmspy does not use.
+`LD_LIBRARY_PATH=/usr/local/lib`.
+
+> **`make deps` does not build Capstone on Debian/Ubuntu.** Capstone is a pinned
+> *source* build, so on apt hosts `make deps` only prints a one-line pointer to
+> `scripts/build-capstone.sh` (to stderr — easy to miss) rather than installing
+> it. Run `scripts/build-capstone.sh` directly, as in step 2 above.
 
 **Verify the build** — the smoke target runs natively too; it builds the demo
 victims and drives every subcommand end to end:
