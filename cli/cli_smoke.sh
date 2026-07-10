@@ -54,8 +54,11 @@ trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} 2>/dev/null || true' E
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
-"$ASM" --syms "$AVPID" hotfn || fail "--syms"
-"$ASM" --syms "$AVPID" hotfn | grep -q hotfn || fail "hotfn not resolved"
+symline=$("$ASM" --syms "$AVPID" hotfn 2>/dev/null | grep -m1 hotfn) \
+    || fail "hotfn not resolved"
+printf '%s\n' "$symline"
+HOTADDR=$(printf '%s' "$symline" | awk '{print $1}') # 0x... runtime address
+HOTSIZE=$(printf '%s' "$symline" | awk '{print $2}') # decimal byte size
 
 echo "--- asmspy --trace $AVPID hotfn 2 ---"
 out=$("$ASM" --trace "$AVPID" hotfn 2 2>&1) || true
@@ -64,6 +67,16 @@ printf '%s\n' "$out" | grep -q 'ret=57' || fail "expected ret=57 from hotfn(6,7)
 printf '%s\n' "$out" | grep -q 'assembly:' || fail "no assembly section"
 # each disassembled line is prefixed with its execution count (loop body runs >1x)
 printf '%s\n' "$out" | grep -qE '^ *[0-9]+.*[+]0x' || fail "no per-instruction count"
+
+# Same region by EXPLICIT 0xADDR:LEN — reaches code no symbol need cover. Must
+# resolve and trace identically (same base/len reaches the engine either way).
+echo "--- asmspy --trace $AVPID $HOTADDR:$HOTSIZE 2 (explicit range) ---"
+out=$("$ASM" --trace "$AVPID" "$HOTADDR:$HOTSIZE" 2 2>&1) || true
+printf '%s\n' "$out" | grep -q 'ret=57' \
+    || fail "explicit 0xADDR:LEN trace did not match by-name trace"
+# a bare address no sized symbol covers, and a zero length, must be rejected
+"$ASM" --trace "$AVPID" 0x1 1 >/dev/null 2>&1 && fail "--trace accepted an uncovered bare address"
+"$ASM" --trace "$AVPID" "$HOTADDR:0" 1 >/dev/null 2>&1 && fail "--trace accepted a zero-length range"
 
 echo "--- asmspy --stream $AVPID 30 (live instruction stream) ---"
 out=$("$ASM" --stream "$AVPID" 30 2>&1) || true

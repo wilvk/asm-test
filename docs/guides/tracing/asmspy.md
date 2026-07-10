@@ -188,6 +188,17 @@ sample #1   ret=35   54 insns (54 executed), 3 blocks
        5×  +0x29    ->  helper  [spy_victim]
 ```
 
+The region argument is a **function name**, an **address a sized symbol covers**
+(`0x5598...51e3` — the symbol's extent is used), or an **explicit range**
+`0xADDR:LEN` / `0xADDR+LEN` (`LEN` bytes from `ADDR`, base-0). The explicit form
+needs no symbol, so it reaches stripped code, a PLT stub, or a JIT region — feed
+it an address from `--syms`, a `/proc/<pid>/maps` dump, or a disassembler:
+
+```text
+$ asmspy --trace 1234 0x5598000051e3:71     # same region, resolved by address
+$ asmspy --trace 1234 0x7f00c0de00:0x40     # 64 bytes of code no symbol covers
+```
+
 ## How it works
 
 asmspy is glue over primitives documented elsewhere; the interesting parts:

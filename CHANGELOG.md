@@ -20,7 +20,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as you type and sorts by **pid, recent CPU activity, or string-scan density** (`Tab`
   cycles, `r` rescans, `b` navigates back). Every view is also a headless subcommand for
   scripts and CI: `--list [active|scan]`, `--syms <pid> [filter]`, `--log <pid> [n]`,
-  `--trace <pid> <sym> [n]`, `--stream <pid> [n]`. Built by `make cli` (needs libncurses +
+  `--trace <pid> <sym|0xADDR[:LEN]> [n]` (an explicit `0xADDR:LEN` range reaches stripped
+  code or a JIT region no symbol covers), `--stream <pid> [n]`; a negative `n` runs until the
+  target exits, and malformed arguments are rejected up front. Built by `make cli` (needs libncurses +
   Capstone; self-skips with guidance) or containerized via `make docker-cli`
   (`Dockerfile.cli`); carries its own `/proc` lister and ELF `.symtab`/`.dynsym` function
   resolver. End-to-end headless smoke (`cli/cli_smoke.sh`, `make cli-smoke`) drives all five

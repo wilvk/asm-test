@@ -305,11 +305,33 @@ static void region_print_sink(void *ctx, unsigned sample_no, long result,
     svec_free(&fn);
 }
 
-/* Resolve a "<symbol>" or "0x<addr>" argument to a (base,len) region. */
+/* Resolve a region argument to (base,len). Four forms:
+ *     <name>           a sized function symbol, looked up by name
+ *     0x<addr>         an address a sized symbol covers — uses that symbol's extent
+ *     0x<addr>:<len>   an EXPLICIT range: len bytes from addr
+ *     0x<addr>+<len>   the same, alternate separator
+ * The explicit-length forms need no symbol at all, so they reach stripped code,
+ * a PLT stub, or a JIT region no STT_FUNC covers — the address can come from
+ * `--syms`, a map, or a disassembler. len is parsed base-0 (so 0x.. or decimal).
+ * The engine rejects len==0 and len over its cap, so we needn't re-check here. */
 static int resolve_region(const asmspy_symtab_t *t, const char *arg,
                           uint64_t *base, size_t *len) {
     if (arg[0] == '0' && (arg[1] == 'x' || arg[1] == 'X')) {
-        uint64_t a = strtoull(arg, NULL, 16);
+        char *end = NULL;
+        uint64_t a = strtoull(arg, &end, 16);
+        if (end == arg + 2) /* "0x" with no digits */
+            return -1;
+        if (*end == ':' || *end == '+') {
+            char *lend = NULL;
+            unsigned long long l = strtoull(end + 1, &lend, 0);
+            if (lend == end + 1 || *lend != '\0' || l == 0)
+                return -1;
+            *base = a;
+            *len = (size_t)l;
+            return 0;
+        }
+        if (*end != '\0') /* trailing garbage after the address */
+            return -1;
         const asmspy_sym_t *s = asmspy_symtab_at(t, a);
         if (s && s->size) {
             *base = s->addr;
@@ -335,8 +357,11 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
     uint64_t base = 0;
     size_t len = 0;
     if (resolve_region(&t, sym, &base, &len) != 0) {
-        fprintf(stderr, "no sized function symbol '%s' in pid %d\n", sym,
-                (int)pid);
+        fprintf(stderr,
+                "cannot resolve '%s' to a region in pid %d\n"
+                "  want a sized function name, 0xADDR inside one, "
+                "or an explicit 0xADDR:LEN\n",
+                sym, (int)pid);
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -1029,7 +1054,7 @@ static int usage(const char *argv0) {
             "  %s --list [active|scan]    list processes (active=recent CPU; scan=string-rich memory)\n"
             "  %s --syms   <pid> [filter] list resolved function symbols\n"
             "  %s --log    <pid> [n]      stream n syscalls with data\n"
-            "  %s --trace  <pid> <sym> [n] n live samples of a function\n"
+            "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n",
             argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
