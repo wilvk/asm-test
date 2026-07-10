@@ -27,6 +27,24 @@ outs=$("$ASM" --list scan) || fail "--list scan"
 printf '%s\n' "$outs" | head -4
 printf '%s\n' "$outs" | grep -qi 'STR' || fail "--list scan: no STR column"
 
+# Bad arguments must be REJECTED UP FRONT, not silently coerced (atoi("nginx")
+# is 0). Insist on rc=2, the bad-usage code: a bad pid that slips through to an
+# attach also exits nonzero (rc=1), so "not zero" would not catch a regression.
+echo "--- asmspy argument validation ---"
+expect_badarg() {
+    set +e
+    "$@" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "expected rc=2 (bad argument) from '$*', got rc=$rc"
+}
+expect_badarg "$ASM" --list bogus   # unknown sort (used to sort by pid, rc=0)
+expect_badarg "$ASM" --syms nginx   # non-numeric pid
+expect_badarg "$ASM" --log 0        # pid 0
+expect_badarg "$ASM" --stream -3    # negative pid
+expect_badarg "$ASM" --log 1 abc    # non-numeric count
+echo "bad arguments rejected"
+
 # region trace: attach to attach_victim (has a hot leaf function 'hotfn')
 "$BUILD/attach_victim" 2>/dev/null &
 AVPID=$!

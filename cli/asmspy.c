@@ -6,13 +6,18 @@
  *
  * Interactive:   asmspy
  * Headless (scriptable / CI smoke), sharing the same engine:
- *   asmspy --list                     list attachable processes
- *   asmspy --syms  <pid> [filter]     list resolved function symbols
- *   asmspy --log   <pid> [n]          stream n syscalls with data (a mini strace)
- *   asmspy --trace <pid> <sym> [n]    n live samples: disassembly + functions called
+ *   asmspy --list [active|scan]       list attachable processes
+ *   asmspy --syms   <pid> [filter]    list resolved function symbols
+ *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
+ *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
+ *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
+ *
+ * A negative n streams until the target exits or you interrupt.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <locale.h>
 #include <ncurses.h>
 #include <pthread.h>
@@ -987,6 +992,36 @@ int asmspy_tui(void) {
 /* main                                                                */
 /* ================================================================== */
 
+/* atoi("nginx") is 0 and atoi("-5") is -5, either of which would sail past
+ * argument handling and surface as a confusing failure from deep inside an
+ * attach. Parse strictly, and say which argument was wrong. */
+static int parse_pid(const char *s, pid_t *out) {
+    errno = 0;
+    char *end;
+    long v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || v <= 0 || v > INT_MAX)
+        return -1;
+    *out = (pid_t)v;
+    return 0;
+}
+
+/* A sample/instruction count. Negative means "until the target exits", which
+ * the engines already implement as max < 0. */
+static int parse_count(const char *s, long *out) {
+    errno = 0;
+    char *end;
+    long v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0')
+        return -1;
+    *out = v;
+    return 0;
+}
+
+static int bad_arg(const char *what, const char *got) {
+    fprintf(stderr, "asmspy: '%s' is not a valid %s\n", got, what);
+    return 2;
+}
+
 static int usage(const char *argv0) {
     fprintf(stderr,
             "asmspy — watch a running process out of band\n\n"
@@ -1007,20 +1042,47 @@ int main(int argc, char **argv) {
         return usage(argv[0]);
     if (strcmp(argv[1], "--list") == 0) {
         asmspy_sort_t s = ASMSPY_SORT_PID;
-        if (argc >= 3 && strcmp(argv[2], "active") == 0)
-            s = ASMSPY_SORT_ACTIVE;
-        else if (argc >= 3 && strcmp(argv[2], "scan") == 0)
-            s = ASMSPY_SORT_SCAN;
+        if (argc >= 3) {
+            if (strcmp(argv[2], "active") == 0)
+                s = ASMSPY_SORT_ACTIVE;
+            else if (strcmp(argv[2], "scan") == 0)
+                s = ASMSPY_SORT_SCAN;
+            else /* silently sorting by pid instead would just look broken */
+                return bad_arg("sort (want 'active' or 'scan')", argv[2]);
+        }
         return cmd_list(s);
     }
-    if (strcmp(argv[1], "--syms") == 0 && argc >= 3)
-        return cmd_syms((pid_t)atoi(argv[2]), argc >= 4 ? argv[3] : NULL);
-    if (strcmp(argv[1], "--log") == 0 && argc >= 3)
-        return cmd_log((pid_t)atoi(argv[2]), argc >= 4 ? atol(argv[3]) : 20);
-    if (strcmp(argv[1], "--trace") == 0 && argc >= 4)
-        return cmd_trace((pid_t)atoi(argv[2]), argv[3],
-                         argc >= 5 ? atol(argv[4]) : 3);
-    if (strcmp(argv[1], "--stream") == 0 && argc >= 3)
-        return cmd_stream((pid_t)atoi(argv[2]), argc >= 4 ? atol(argv[3]) : 20);
+
+    pid_t pid = 0;
+    long n = 0;
+    if (strcmp(argv[1], "--syms") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        return cmd_syms(pid, argc >= 4 ? argv[3] : NULL);
+    }
+    if (strcmp(argv[1], "--log") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 20;
+        if (argc >= 4 && parse_count(argv[3], &n) != 0)
+            return bad_arg("count", argv[3]);
+        return cmd_log(pid, n);
+    }
+    if (strcmp(argv[1], "--trace") == 0 && argc >= 4) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 3;
+        if (argc >= 5 && parse_count(argv[4], &n) != 0)
+            return bad_arg("count", argv[4]);
+        return cmd_trace(pid, argv[3], n);
+    }
+    if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 20;
+        if (argc >= 4 && parse_count(argv[3], &n) != 0)
+            return bad_arg("count", argv[3]);
+        return cmd_stream(pid, n);
+    }
     return usage(argv[0]);
 }
