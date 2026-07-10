@@ -197,7 +197,13 @@ static int cmd_list(asmspy_sort_t sort) {
         fprintf(stderr, "cannot read /proc\n");
         return 1;
     }
-    if (sort == ASMSPY_SORT_ACTIVE) {
+    if (sort == ASMSPY_SORT_SCAN) {
+        printf("%-8s %-5s %-8s %-12s %-4s %s\n", "PID", "STR", "CPU", "USER",
+               "ATT", "COMMAND");
+        for (size_t i = 0; i < n; i++)
+            printf("%-8d %-5u %-8llu %-12.12s %-4s %.64s\n", v[i].pid, v[i].scan,
+                   v[i].cpu, v[i].user, v[i].attachable ? "yes" : "-", v[i].cmd);
+    } else if (sort == ASMSPY_SORT_ACTIVE) {
         printf("%-8s %-8s %-12s %-4s %s\n", "PID", "CPU", "USER", "ATT",
                "COMMAND");
         for (size_t i = 0; i < n; i++)
@@ -243,6 +249,26 @@ static void log_print_sink(void *ctx, const char *line, const char *str) {
 
 static int cmd_log(pid_t pid, long n) {
     int rc = asmspy_engine_syscalls(pid, n, NULL, log_print_sink, NULL);
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "attach failed: %s\n", e);
+        return 1;
+    }
+    return 0;
+}
+
+static void stream_print_sink(void *ctx, const char *line) {
+    (void)ctx;
+    printf("%s\n", line);
+    fflush(stdout);
+}
+
+static int cmd_stream(pid_t pid, long n) {
+    asmspy_symtab_t t;
+    asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
+    int rc = asmspy_engine_stream(pid, n, NULL, &t, stream_print_sink, NULL);
+    asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -486,7 +512,7 @@ typedef struct {
     pid_t pid;
     uint64_t base;
     size_t len;
-    int mode; /* 0 = syscalls, 1 = region */
+    int mode; /* 0 = syscalls, 1 = region, 2 = live instruction stream */
 } live_t;
 
 static void live_syscall_sink(void *ctx, const char *line, const char *str) {
@@ -511,11 +537,21 @@ static void live_region_sink(void *ctx, unsigned sample_no, long result,
     pthread_mutex_unlock(&L->mu);
 }
 
+static void live_stream_sink(void *ctx, const char *line) {
+    live_t *L = ctx;
+    pthread_mutex_lock(&L->mu);
+    log_push(&L->log, line);
+    pthread_mutex_unlock(&L->mu);
+}
+
 static void *tracer_thread(void *arg) {
     live_t *L = arg;
     int rc;
     if (L->mode == 0)
         rc = asmspy_engine_syscalls(L->pid, -1, &L->stop, live_syscall_sink, L);
+    else if (L->mode == 2)
+        rc = asmspy_engine_stream(L->pid, -1, &L->stop, L->syms,
+                                  live_stream_sink, L);
     else
         rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
                                   live_region_sink, L);
@@ -588,6 +624,12 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 mvaddch(r, midx, ACS_VLINE);
             draw_log(&L.log, 2, 0, h, lw);
             draw_log(&L.strlog, 2, rx, h, rw);
+        } else if (mode == 2) {
+            /* single-pane live instruction stream (function + assembly) */
+            attron(A_BOLD);
+            mvprintw(1, 0, "LIVE STREAM  (function+off [module]   disassembly)");
+            attroff(A_BOLD);
+            draw_log(&L.log, 2, 0, rows - 3, cols);
         } else {
             mvprintw(1, 0, "%.*s", cols, L.asm_header);
             int split = (rows - 3) * 3 / 5;
@@ -659,7 +701,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     return back;
 }
 
-/* mode-select screen; returns 0 syscalls, 1 region, -1 back */
+/* mode-select screen; returns 0 syscalls, 1 region, 2 stream, -1 back */
 static int screen_mode(const asmspy_proc_t *p) {
     for (;;) {
         int rows, cols;
@@ -674,13 +716,16 @@ static int screen_mode(const asmspy_proc_t *p) {
                            "(needs CAP_SYS_PTRACE / ptrace_scope=0)");
         mvprintw(3, 2, "1)  Syscall log        — live syscalls with data (a strace)");
         mvprintw(4, 2, "2)  Assembly & funcs   — live disassembly + call-graph of a function");
-        mvprintw(rows - 1, 0, "1/2: choose   b/ESC: back");
+        mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
+        mvprintw(rows - 1, 0, "1/2/3: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
             return 0;
         if (ch == '2')
             return 1;
+        if (ch == '3')
+            return 2;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -779,7 +824,12 @@ static int screen_procs(asmspy_proc_t *picked) {
         }
         for (size_t i = 0; i < np; i++) {
             char b[256];
-            if (sort == ASMSPY_SORT_ACTIVE)
+            if (sort == ASMSPY_SORT_SCAN)
+                snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %.150s",
+                         procs[i].pid, procs[i].scan, procs[i].cpu,
+                         procs[i].attachable ? ' ' : '!', procs[i].user,
+                         procs[i].cmd);
+            else if (sort == ASMSPY_SORT_ACTIVE)
                 snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %.170s",
                          procs[i].pid, procs[i].cpu,
                          procs[i].attachable ? ' ' : '!', procs[i].user,
@@ -806,18 +856,20 @@ static int screen_procs(asmspy_proc_t *picked) {
             getmaxyx(stdscr, rows, cols);
             erase();
             attron(A_BOLD);
+            const char *sortname =
+                sort == ASMSPY_SORT_SCAN
+                    ? "string-scan (alnum density, then recent)  [PID STR CPU]"
+                    : sort == ASMSPY_SORT_ACTIVE
+                          ? "recent activity (CPU jiffies)  [PID CPU]"
+                          : "pid";
             mvprintw(0, 0,
                      "asmspy — select a process   [sort: %s]   (%zu; '!' = not "
                      "yours)",
-                     sort == ASMSPY_SORT_ACTIVE ? "recent activity (CPU jiffies)"
-                                                : "pid",
-                     np);
+                     sortname, np);
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
-            mvprintw(rows - 1, 0,
-                     "type: filter   Enter: select   Tab: sort by %s   r: "
-                     "refresh   q: quit",
-                     sort == ASMSPY_SORT_ACTIVE ? "pid" : "activity");
+            mvprintw(rows - 1, 0, "type: filter   Enter: select   Tab: cycle "
+                                  "sort   r: refresh   q: quit");
             clrtoeol();
             refresh();
             int ch = getch();
@@ -852,9 +904,8 @@ static int screen_procs(asmspy_proc_t *picked) {
         }
         if (outcome == 2)
             return -1;
-        if (outcome == 3) /* flip sort; outcome 4 (refresh) keeps it */
-            sort = (sort == ASMSPY_SORT_ACTIVE) ? ASMSPY_SORT_PID
-                                                : ASMSPY_SORT_ACTIVE;
+        if (outcome == 3) /* cycle pid -> active -> scan; outcome 4 keeps it */
+            sort = (asmspy_sort_t)((sort + 1) % 3);
         /* outcome 3 or 4: fall through -> outer loop re-scans */
     }
 }
@@ -884,6 +935,16 @@ int asmspy_tui(void) {
                          "asmspy — syscalls of pid %d (%.*s)", picked.pid, 40,
                          picked.cmd);
                 nav = run_live_view(picked.pid, 0, 0, 0, title, NULL);
+            } else if (mode == 2) {
+                /* live stream: symbols are best-effort (raw addrs if absent) */
+                asmspy_symtab_t t;
+                asmspy_symtab_load(picked.pid, &t);
+                char title[128];
+                snprintf(title, sizeof title,
+                         "asmspy — live stream of pid %d (%.*s)", picked.pid, 40,
+                         picked.cmd);
+                nav = run_live_view(picked.pid, 2, 0, 0, title, &t);
+                asmspy_symtab_free(&t);
             } else {
                 asmspy_symtab_t t;
                 if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
@@ -930,11 +991,12 @@ static int usage(const char *argv0) {
     fprintf(stderr,
             "asmspy — watch a running process out of band\n\n"
             "  %s                         interactive TUI\n"
-            "  %s --list [active]         list processes (active = by recent CPU)\n"
-            "  %s --syms  <pid> [filter]  list resolved function symbols\n"
-            "  %s --log   <pid> [n]       stream n syscalls with data\n"
-            "  %s --trace <pid> <sym> [n] n live samples of a function\n",
-            argv0, argv0, argv0, argv0, argv0);
+            "  %s --list [active|scan]    list processes (active=recent CPU; scan=string-rich memory)\n"
+            "  %s --syms   <pid> [filter] list resolved function symbols\n"
+            "  %s --log    <pid> [n]      stream n syscalls with data\n"
+            "  %s --trace  <pid> <sym> [n] n live samples of a function\n"
+            "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n",
+            argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -943,10 +1005,14 @@ int main(int argc, char **argv) {
         return asmspy_tui();
     if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)
         return usage(argv[0]);
-    if (strcmp(argv[1], "--list") == 0)
-        return cmd_list((argc >= 3 && strcmp(argv[2], "active") == 0)
-                            ? ASMSPY_SORT_ACTIVE
-                            : ASMSPY_SORT_PID);
+    if (strcmp(argv[1], "--list") == 0) {
+        asmspy_sort_t s = ASMSPY_SORT_PID;
+        if (argc >= 3 && strcmp(argv[2], "active") == 0)
+            s = ASMSPY_SORT_ACTIVE;
+        else if (argc >= 3 && strcmp(argv[2], "scan") == 0)
+            s = ASMSPY_SORT_SCAN;
+        return cmd_list(s);
+    }
     if (strcmp(argv[1], "--syms") == 0 && argc >= 3)
         return cmd_syms((pid_t)atoi(argv[2]), argc >= 4 ? argv[3] : NULL);
     if (strcmp(argv[1], "--log") == 0 && argc >= 3)
@@ -954,5 +1020,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "--trace") == 0 && argc >= 4)
         return cmd_trace((pid_t)atoi(argv[2]), argv[3],
                          argc >= 5 ? atol(argv[4]) : 3);
+    if (strcmp(argv[1], "--stream") == 0 && argc >= 3)
+        return cmd_stream((pid_t)atoi(argv[2]), argc >= 4 ? atol(argv[3]) : 20);
     return usage(argv[0]);
 }

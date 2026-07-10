@@ -4,10 +4,12 @@
 Point it at any running process and watch, live and out of band:
 
 - its **syscalls with data** — the buffers and paths crossing the kernel
-  boundary (a mini `strace`), or
+  boundary (a mini `strace`);
 - a chosen function's **assembly + call-graph** — the disassembled instructions
   that executed and the functions it called, resampled each time the target
-  calls it.
+  calls it; or
+- a **whole-process live instruction stream** — every instruction as it runs,
+  resolved to its function and disassembled.
 
 It is the interactive companion to the C tracer demos
 ([`examples/attach_trace.c`](https://github.com/wilvk/asm-test/blob/main/examples/attach_trace.c),
@@ -87,35 +89,60 @@ docker run --rm -it --cap-add=SYS_PTRACE asmtest-cli bash   # then, inside:
 Run `asmspy` with no arguments. It walks four screens:
 
 1. **Process picker** — every process, filterable as you type; arrow keys /
-   `PgUp`/`PgDn` to move, `Enter` to select, `q` to quit. `Tab` toggles the
-   order between **PID** and **most recently active** (a short per-process CPU
-   sample); `r` re-scans the list (re-sampling activity). Processes you cannot
-   `ptrace` are marked with `!`. (`Tab`/`r` act when the filter is empty.)
-2. **Mode select** — `1` for the syscall log, `2` for assembly & functions.
+   `PgUp`/`PgDn` to move, `Enter` to select, `q` to quit. `Tab` cycles the sort:
+   **PID**, **most recently active** (a short per-process CPU sample), and a
+   **quick string-scan** — samples each process's readable memory and ranks the
+   most string-rich (highest alphanumeric density, the `STR` column) first, then
+   by recency. `r` re-scans (re-sampling). Processes you cannot `ptrace` are
+   marked with `!`. (`Tab`/`r` act when the filter is empty.)
+2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
+   `3` the whole-process live instruction stream.
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace, `r` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
-4. **Live view** — for the syscall log, a **split** feed: the syscall stream on
-   the left, and the strings it carried (paths and read/write buffers, decoded
-   up to 200 bytes) on the right. For assembly, two panes — the disassembly, **each instruction
-   prefixed with its execution count** (so a hot loop body stands out), and the
-   functions called, **ranked most-called first** — refreshing each time the
-   function runs. Press `b` to go back to this process's options, or `q`/`ESC`
-   for the process list.
+4. **Live view** — depends on the mode:
+   - *Syscall log* — a **split** feed: the syscall stream on the left, and the
+     strings it carried (paths and read/write buffers, decoded up to 200 bytes)
+     on the right.
+   - *Assembly & functions* — two panes: the disassembly, **each instruction
+     prefixed with its execution count** (so a hot loop body stands out), and the
+     functions called, **ranked most-called first**, refreshing each time the
+     function runs.
+   - *Live stream* — a single scrolling feed of **every instruction as it
+     executes**: its `function+offset [module]` and disassembly. Whole-process
+     single-stepping is slow, so the target crawls while streamed (and resumes
+     full speed on detach).
+
+   Press `b` to go back to this process's options, or `q`/`ESC` for the process
+   list.
 
 The tracing runs on a dedicated thread so the UI stays responsive; quitting
 detaches cleanly and leaves the target running untouched.
 
 ## Headless subcommands
 
-The same engine drives four non-interactive subcommands — for scripts, CI, or
+The same engine drives five non-interactive subcommands — for scripts, CI, or
 when you already know the pid. This is what `make cli-smoke` exercises.
 
 ```bash
-asmspy --list [active]             # list processes (active = order by recent CPU, adds a CPU column)
-asmspy --syms  <pid> [filter]      # resolved function symbols (addr, size, name, module)
-asmspy --log   <pid> [n]           # stream n syscalls with decoded data (default 20)
-asmspy --trace <pid> <sym> [n]     # n live samples of a function (default 3)
+asmspy --list [active|scan]        # list processes; active=recent CPU, scan=string-rich memory first
+asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name, module)
+asmspy --log    <pid> [n]          # stream n syscalls with decoded data (default 20)
+asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
+asmspy --stream <pid> [n]          # stream n instructions live: function + disassembly (default 20)
+```
+
+**Live stream** — every instruction as it runs, resolved to its function and
+disassembled (`function+offset [module]  <disasm>`):
+
+```text
+$ asmspy --stream 1234 6
+clock_nanosleep+0x5a [libc.so.6]             mov rbx, rax
+clock_nanosleep+0x5d [libc.so.6]             mov eax, ebx
+clock_nanosleep+0x5f [libc.so.6]             cmp ebx, -0x16
+clock_nanosleep+0x62 [libc.so.6]             jne 0x787c95b15a89
+hotfn+0x22          [attach_victim]          mov rax, qword ptr [rbp - 8]
+hotfn+0x26          [attach_victim]          and eax, 1
 ```
 
 **Syscall log** — decodes `openat` paths, `write`/`read` buffers (up to 200

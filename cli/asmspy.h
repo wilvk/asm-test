@@ -36,13 +36,17 @@ typedef struct {
     char cmd[192];    /* cmdline (argv joined), or [comm] for a kthread */
     int attachable;   /* 1 if same euid as us (ptrace_scope=1 friendly) */
     unsigned long long cpu; /* CPU jiffies used during the sample window
-                             * (ASMSPY_SORT_ACTIVE only; 0 otherwise)   */
+                             * (ASMSPY_SORT_ACTIVE / _SCAN; 0 otherwise) */
+    unsigned scan; /* per-mille alphanumeric density of a memory sample
+                    * (ASMSPY_SORT_SCAN only; 0 otherwise)              */
 } asmspy_proc_t;
 
 /* Process list ordering. */
 typedef enum {
     ASMSPY_SORT_PID = 0,    /* ascending pid (cheap, no sampling)          */
     ASMSPY_SORT_ACTIVE = 1, /* most recently active first (a ~150ms CPU sample) */
+    ASMSPY_SORT_SCAN = 2,   /* quick scan: string-rich memory first, then recency
+                             * (samples each process's readable memory)        */
 } asmspy_sort_t;
 
 /* Scan /proc into a malloc'd array ordered per `sort`. Returns count (>=0) into
@@ -116,6 +120,19 @@ typedef void (*asmspy_region_sink)(void *ctx, unsigned sample_no, long result,
  * negative on an attach/availability failure. */
 int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
                          atomic_bool *stop, asmspy_region_sink sink, void *ctx);
+
+/* One executed instruction, formatted "<function+off [module]>  <disasm>". */
+typedef void (*asmspy_stream_sink)(void *ctx, const char *line);
+
+/* Attach to `pid` and single-step it, streaming EVERY executed instruction
+ * (disassembled, plus the function it lands in, resolved via `syms`) through
+ * `sink`, until `max` instructions, `stop`, or the target exits; detach. This is
+ * a whole-process live stream — single-stepping is slow, so the target crawls
+ * while streamed (and resumes full speed on detach). Returns 0 on clean detach,
+ * negative on an attach/availability failure. `syms` may be NULL (raw addrs). */
+int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
+                         const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                         void *ctx);
 
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);

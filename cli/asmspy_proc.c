@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -124,6 +125,56 @@ static int proc_cpu_cmp(const void *a, const void *b) {
     return x->pid < y->pid ? -1 : x->pid > y->pid ? 1 : 0;
 }
 
+/* Quick "string-likelihood" scan: sample a few readable, non-code mappings and
+ * return the per-mille fraction of alphanumeric bytes. Higher => the process's
+ * memory looks more string-rich (interesting to inspect). Bounded to ~64 KB so
+ * it stays quick even across many processes. Requires ptrace-read access, so a
+ * non-attachable process scores 0 (process_vm_readv would EPERM anyway). */
+static unsigned proc_string_score(pid_t pid) {
+    char mp[64];
+    snprintf(mp, sizeof mp, "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(mp, "r");
+    if (!f)
+        return 0;
+    const size_t CHUNK = 4096;
+    const unsigned long long CAP = 64 * 1024; /* max bytes sampled per process */
+    unsigned char buf[4096];
+    char line[512];
+    unsigned long long alnum = 0, total = 0;
+    while (total < CAP && fgets(line, sizeof line, f)) {
+        uint64_t start = 0, end = 0;
+        char perms[8] = "";
+        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s", &start, &end, perms) < 3)
+            continue;
+        if (perms[0] != 'r' || perms[2] == 'x') /* readable, non-code data */
+            continue;
+        uint64_t sz = end - start;
+        if (sz < CHUNK)
+            continue;
+        uint64_t off = start + sz / 2; /* sample the middle, past any header */
+        struct iovec l = {buf, CHUNK};
+        struct iovec r = {(void *)(uintptr_t)off, CHUNK};
+        ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+        if (got <= 0)
+            continue;
+        for (ssize_t i = 0; i < got; i++)
+            if (isalnum(buf[i]))
+                alnum++;
+        total += (unsigned long long)got;
+    }
+    fclose(f);
+    return total ? (unsigned)((alnum * 1000) / total) : 0;
+}
+
+static int proc_scan_cmp(const void *a, const void *b) {
+    const asmspy_proc_t *x = a, *y = b;
+    if (x->scan != y->scan)
+        return x->scan < y->scan ? 1 : -1; /* string-rich first */
+    if (x->cpu != y->cpu)
+        return x->cpu < y->cpu ? 1 : -1; /* then most recently active */
+    return x->pid < y->pid ? -1 : x->pid > y->pid ? 1 : 0;
+}
+
 int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
     DIR *d = opendir("/proc");
     if (!d)
@@ -170,13 +221,15 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
             snprintf(p->user, sizeof p->user, "%u", (unsigned)uid);
 
         p->attachable = (me == 0) || (uid == me);
-        /* first CPU snapshot (becomes a delta below when sorting by activity) */
-        p->cpu = (sort == ASMSPY_SORT_ACTIVE) ? proc_cpu(e->d_name) : 0;
+        /* first CPU snapshot (becomes a delta below for the sampled sorts) */
+        int sampled = (sort == ASMSPY_SORT_ACTIVE || sort == ASMSPY_SORT_SCAN);
+        p->cpu = sampled ? proc_cpu(e->d_name) : 0;
+        p->scan = 0;
         n++;
     }
     closedir(d);
 
-    if (sort == ASMSPY_SORT_ACTIVE) {
+    if (sort == ASMSPY_SORT_ACTIVE || sort == ASMSPY_SORT_SCAN) {
         /* second snapshot after a short window -> per-process CPU delta */
         struct timespec ts = {0, 150L * 1000 * 1000};
         nanosleep(&ts, NULL);
@@ -185,8 +238,12 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
             snprintf(pids, sizeof pids, "%d", (int)v[i].pid);
             unsigned long long c1 = proc_cpu(pids);
             v[i].cpu = (c1 > v[i].cpu) ? c1 - v[i].cpu : 0;
+            /* the scan also samples readable memory for alphanumeric density */
+            if (sort == ASMSPY_SORT_SCAN && v[i].attachable)
+                v[i].scan = proc_string_score(v[i].pid);
         }
-        qsort(v, n, sizeof *v, proc_cpu_cmp);
+        qsort(v, n, sizeof *v,
+              sort == ASMSPY_SORT_SCAN ? proc_scan_cmp : proc_cpu_cmp);
     } else {
         /* pid-sorted for a stable list */
         for (size_t i = 1; i < n; i++) { /* small insertion sort */

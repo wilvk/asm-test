@@ -371,3 +371,81 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
     ptrace(PTRACE_DETACH, pid, NULL, NULL);
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* Whole-process live instruction stream                               */
+/* ------------------------------------------------------------------ */
+
+int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
+                         const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                         void *ctx) {
+    if (!asmtest_ptrace_available())
+        return ASMTEST_PTRACE_EUNAVAIL;
+
+    arm_quit_wake();
+
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    int deliver = 0;
+    long done = 0;
+    while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
+        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, (void *)(long)deliver) != 0)
+            break;
+        deliver = 0;
+        if (waitpid(pid, &status, 0) < 0) {
+            if (errno == EINTR && stop && atomic_load(stop))
+                break;
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
+        if (!WIFSTOPPED(status))
+            continue;
+        int sig = WSTOPSIG(status);
+        if (sig != SIGTRAP) {
+            deliver = sig; /* forward a real signal to the target */
+            continue;
+        }
+
+        struct user_regs_struct regs;
+        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
+            break;
+        uint64_t rip = regs.rip;
+
+        /* disassemble the instruction about to retire (bytes read from target) */
+        uint8_t code[16];
+        char dis[160] = "";
+        struct iovec liov = {code, sizeof code};
+        struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
+        ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+        if (got >= 1 && asmtest_disas_available())
+            asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip, 0, dis,
+                          sizeof dis);
+
+        /* resolve the function this address lands in */
+        char loc[96];
+        const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, rip) : NULL;
+        if (s)
+            snprintf(loc, sizeof loc, "%s+0x%llx [%s]", s->name,
+                     (unsigned long long)(rip - s->addr), s->module);
+        else
+            snprintf(loc, sizeof loc, "0x%llx", (unsigned long long)rip);
+
+        char line[320];
+        snprintf(line, sizeof line, "%-44.44s %s", loc, dis[0] ? dis : "(?)");
+        if (sink)
+            sink(ctx, line);
+        done++;
+    }
+
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    return 0;
+}
