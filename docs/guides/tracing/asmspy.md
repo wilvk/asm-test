@@ -31,20 +31,49 @@ container images, so the recommended path needs nothing on your host:
 make docker-cli          # build the asmtest-cli image and run the headless smoke
 ```
 
-To build natively, install the toolchain first (a bare host is usually missing
-both — `make cli` will tell you exactly what it needs and point you here):
+### Run it on your own host (native build)
+
+A bare host is usually missing both deps; `make cli` self-skips with exactly this
+guidance rather than a raw compiler error. To build natively (Debian/Ubuntu):
 
 ```bash
-sudo apt-get install -y libncurses-dev   # the TUI
-make deps                                # Capstone (+ emulator deps)
-make cli                                 # -> build/asmspy
+# 1. ncurses (the TUI) — apt is fine
+sudo apt-get install -y libncurses-dev
+
+# 2. Capstone (disassembly). The project pins and builds Capstone 5.0.1 from
+#    source — Ubuntu's apt only ships Capstone 4 — so use the repo's own script
+#    (installs to /usr/local, runs ldconfig, idempotent):
+scripts/build-capstone.sh
+
+# 3. build + run
+make cli            # -> build/asmspy   (self-contained binary; no LD_LIBRARY_PATH)
+./build/asmspy      # interactive TUI
 ```
 
-For interactive use inside the container (the TUI needs a real terminal):
+If the loader can't find `libcapstone.so.5`, prefix once with
+`LD_LIBRARY_PATH=/usr/local/lib`. `make deps` also works but additionally builds
+Keystone + Unicorn, which asmspy does not use.
+
+**Verify the build** — the smoke target runs natively too; it builds the demo
+victims and drives every subcommand end to end:
+
+```bash
+make cli-smoke      # prints "cli-smoke: PASS"
+```
+
+> **Permissions on your host.** The default Yama `ptrace_scope=1` lets you attach
+> only to processes you started (or that opted in). To watch arbitrary processes,
+> run asmspy as root (`sudo ./build/asmspy`) or lower the gate for the session:
+> `echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`. See
+> [Permissions](#permissions) below.
+
+### Interactively in a container
+
+The TUI needs a real terminal, so run the image with `-it`:
 
 ```bash
 make docker-cli                              # builds the image
-docker run --rm -it asmtest-cli bash         # then, inside the container:
+docker run --rm -it --cap-add=SYS_PTRACE asmtest-cli bash   # then, inside:
   ./build/attach_victim &                    #   a demo process to watch
   ./build/asmspy                             #   drive the TUI
 ```
