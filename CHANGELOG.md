@@ -12,7 +12,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ncurses front-end over the out-of-process (`ptrace`) tracer: attach to any running process
   and watch it live and out of band. Three live views: **syscalls with data** (a mini `strace`;
   every syscall named from a table generated against the host's own `<sys/syscall.h>`, `read`/
-  `write` buffers and path arguments decoded, decoded strings split into their own pane), a
+  `write` buffers and path arguments decoded, `read`/`write` file descriptors resolved to
+  their path/socket/pipe via `/proc/<pid>/fd` like `strace -y`, decoded strings split into
+  their own pane), a
   chosen **function's assembly** with
   per-instruction execution **heat counts** plus its callees **ranked by call count**
   (resampled each time the target calls it), and a **whole-process live instruction stream**

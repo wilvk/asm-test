@@ -106,7 +106,11 @@ sleep 1
 echo "--- asmspy --log $SVPID 20 ---"
 out=$("$ASM" --log "$SVPID" 20 2>&1) || true
 printf '%s\n' "$out"
-printf '%s\n' "$out" | grep -q 'write(' || fail "no write() syscall captured"
+# write()'s fd is resolved to the file it points at (strace -y style) — the fd is
+# still open at the syscall's exit-stop, so /proc/<pid>/fd/<n> readlinks. This
+# asserts both that write() is captured AND that fd->path resolution works.
+printf '%s\n' "$out" | grep -qE 'write\(fd=[0-9]+</tmp/asmtest_syscall_demo.txt>' \
+    || fail "write() fd not resolved to its path (strace -y decode regressed)"
 # The victim's access() is named from the generated syscall table (it is not one
 # of the hand-decoded four) and its path is decoded. glibc routes access() to
 # either SYS_access or SYS_faccessat2 depending on version, so accept both --

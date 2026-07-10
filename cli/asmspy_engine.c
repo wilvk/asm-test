@@ -251,6 +251,26 @@ static size_t ap_dirfd(char *b, size_t cap, size_t o, long long raw) {
     return apf(b, cap, o, "%d", (int)raw);
 }
 
+/* Print "fd=N", and — like `strace -y` — the thing it points at, read from the
+ * TARGET's /proc/<pid>/fd/<N>. A regular file readlinks to its path; a socket or
+ * pipe to "socket:[inode]" / "pipe:[inode]" (what strace shows too). Best-effort:
+ * an fd already gone by the time we format (close() at its exit-stop) or one we
+ * cannot readlink just prints "fd=N" with no suffix. */
+static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
+    o = apf(b, cap, o, "fd=%lld", fd);
+    if (fd < 0)
+        return o;
+    char link[64];
+    snprintf(link, sizeof link, "/proc/%d/fd/%lld", (int)pid, fd);
+    char tgt[DUMP_CAP];
+    ssize_t k = readlink(link, tgt, sizeof tgt - 1);
+    if (k > 0) {
+        tgt[k] = '\0';
+        o = apf(b, cap, o, "<%s>", tgt);
+    }
+    return o;
+}
+
 static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
                            pid_t pid, long nr,
                            const struct user_regs_struct *e, long ret) {
@@ -258,14 +278,17 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
     sout[0] = '\0';
     switch (nr) {
     case SYS_write:
-        o = apf(b, cap, o, "write(fd=%llu, ", (unsigned long long)e->rdi);
+        o = apf(b, cap, o, "write(");
+        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
+        o = apf(b, cap, o, ", ");
         o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)e->rdx);
         o = apf(b, cap, o, ", %llu) = %ld", (unsigned long long)e->rdx, ret);
         decode_data(pid, e->rsi, (uint32_t)e->rdx, sout, scap);
         break;
     case SYS_read:
-        o = apf(b, cap, o, "read(fd=%llu, %llu) = ", (unsigned long long)e->rdi,
-                (unsigned long long)e->rdx);
+        o = apf(b, cap, o, "read(");
+        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
+        o = apf(b, cap, o, ", %llu) = ", (unsigned long long)e->rdx);
         if (ret > 0) {
             o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)ret);
             o = apf(b, cap, o, " [%ld]", ret);
@@ -283,8 +306,9 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         decode_cstr(pid, e->rsi, sout, scap);
         break;
     case SYS_close:
-        o = apf(b, cap, o, "close(fd=%llu) = %ld", (unsigned long long)e->rdi,
-                ret);
+        o = apf(b, cap, o, "close(");
+        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
+        o = apf(b, cap, o, ") = %ld", ret);
         break;
     default: {
         const char *nm = scname(nr);

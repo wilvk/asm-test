@@ -153,19 +153,24 @@ hotfn+0x26          [attach_victim]          and eax, 1
 host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
 buffers are decoded up to 200 bytes, and path arguments are decoded for both the
 `open`/`stat`/`access`-style calls and the `openat`/`newfstatat`-style
-`(dirfd, path)` family. Calls whose arguments asmspy does not model print their
-name with raw hex arguments:
+`(dirfd, path)` family. A `read`/`write` file descriptor is resolved to the file
+it points at (like `strace -y`), read from `/proc/<pid>/fd` — a regular file
+shows its path, a socket or pipe its `socket:[inode]` / `pipe:[inode]`. Calls
+whose arguments asmspy does not model print their name with raw hex arguments:
 
 ```text
 $ asmspy --log 1234 7
 access("/tmp/notes.txt", 0x0, 0x0) = 0
 openat(AT_FDCWD, "/tmp/notes.txt", 0x241) = 3
-write(fd=3, "hello from pid 1234\n", 20) = 20
+write(fd=3</tmp/notes.txt>, "hello from pid 1234\n", 20) = 20
 close(fd=3) = 0
 openat(AT_FDCWD, "/tmp/notes.txt", 0x0) = 3
-read(fd=3, 64) = "hello from pid 1234\n" [20]
+read(fd=3</tmp/notes.txt>, 64) = "hello from pid 1234\n" [20]
 close(fd=3) = 0
 ```
+
+(`close`'s fd shows no path: by the time asmspy formats the exit, the descriptor
+is already gone — the honest thing to show.)
 
 **Assembly & functions** — one sample is the disassembled instructions that
 executed (distinct offsets, in address order), the return value, and the
