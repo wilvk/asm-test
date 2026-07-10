@@ -843,7 +843,8 @@ static void test_stealth_window_inline(void) {
 
     asmtest_addr_channel_t *chan = asmtest_addr_channel_new_shared();
     CHECK(chan != NULL, "stealth_window_inline: alloc channel");
-    asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p, sizeof ROUTINE, 0);
+    asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p, sizeof ROUTINE,
+                                 0);
 
     void *ctx = NULL;
     int rc = asmtest_hwtrace_stealth_window_begin(chan, &ctx);
@@ -858,7 +859,8 @@ static void test_stealth_window_inline(void) {
 
         asmtest_trace_t *tr = asmtest_trace_new(512, 64);
         int end_rc = asmtest_hwtrace_stealth_window_end(ctx, tr);
-        CHECK(end_rc == ASMTEST_HW_OK, "stealth_window_inline: end split succeeded");
+        CHECK(end_rc == ASMTEST_HW_OK,
+              "stealth_window_inline: end split succeeded");
 
         printf("# stealth_window_inline: insns=%llu blocks=%llu truncated=%d\n",
                (unsigned long long)asmtest_emu_trace_insns_total(tr),

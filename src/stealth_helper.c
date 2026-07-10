@@ -196,7 +196,8 @@ int asmtest_stealth_helper_run_window_async(asmtest_stealth_scratch_t *sc,
     }
     sc->ready = 1;
 
-    int tr = asmtest_ptrace_trace_attached_window_stop(parent, chan, &sc->stop, &sc->shadow);
+    int tr = asmtest_ptrace_trace_attached_window_stop(parent, chan, &sc->stop,
+                                                       &sc->shadow);
 
     ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
     sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;

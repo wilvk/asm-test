@@ -2694,13 +2694,15 @@ typedef struct {
     size_t bcap;
 } stealth_window_ctx_t;
 
-int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out) {
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan,
+                                         void **ctx_out) {
     if (ctx_out == NULL)
         return ASMTEST_HW_EINVAL;
 
     size_t icap = 65536;
     size_t bcap = 4096;
-    size_t total = sizeof(asmtest_stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
+    size_t total =
+        sizeof(asmtest_stealth_scratch_t) + (icap + bcap) * sizeof(uint64_t);
 
     asmtest_stealth_scratch_t *sc = (asmtest_stealth_scratch_t *)mmap(
         NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -2742,7 +2744,8 @@ int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ct
         return ASMTEST_HW_EUNAVAIL;
     }
 
-    stealth_window_ctx_t *ctx = (stealth_window_ctx_t *)malloc(sizeof(stealth_window_ctx_t));
+    stealth_window_ctx_t *ctx =
+        (stealth_window_ctx_t *)malloc(sizeof(stealth_window_ctx_t));
     if (ctx == NULL) {
         kill(helper, SIGKILL);
         int st = 0;
@@ -2780,7 +2783,8 @@ int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace) {
 
     int rc = c->sc->rc;
     if (rc == ASMTEST_HW_OK && trace != NULL) {
-        uint64_t *ibuf = (uint64_t *)((char *)c->sc + sizeof(asmtest_stealth_scratch_t));
+        uint64_t *ibuf =
+            (uint64_t *)((char *)c->sc + sizeof(asmtest_stealth_scratch_t));
         uint64_t *bbuf = ibuf + c->icap;
 
         size_t ni = c->sc->shadow.insns_len;
@@ -2836,7 +2840,8 @@ int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
     (void)arg;
     return ASMTEST_HW_ENOSYS;
 }
-int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out) {
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan,
+                                         void **ctx_out) {
     (void)chan;
     (void)ctx_out;
     return ASMTEST_HW_ENOSYS;

@@ -30,9 +30,9 @@ typedef struct {
     volatile int
         ready; /* stepper -> caller: seized + about to plant the run_to bp */
     volatile int
-        rc;      /* stepper's outcome (ASMTEST_HW_*)                          */
+        rc; /* stepper's outcome (ASMTEST_HW_*)                          */
     volatile int
-        stop;    /* caller -> helper: end the async window at the next step   */
+        stop; /* caller -> helper: end the async window at the next step   */
     volatile int
         done;    /* helper -> caller: detached + shadow lens final            */
     long result; /* the region's return value                                */

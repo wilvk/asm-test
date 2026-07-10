@@ -468,7 +468,8 @@ int asmtest_hwtrace_stealth_trace_windowed(const void *win_base, size_t win_len,
  * window ARMED. _end raises the async stop flag, joins the helper, and copies the recorded
  * ABSOLUTE-address stream into *trace. Records only regions pre-published on `chan`.
  * Call _end on the SAME thread that called _begin. Returns OK / EINVAL / EUNAVAIL. Linux x86-64/AArch64. */
-int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan, void **ctx_out);
+int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan,
+                                         void **ctx_out);
 int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace);
 
 /* §D3 STATISTICAL AMD-LBR whole-window survey (region-FREE, in-process, crash-proof). The

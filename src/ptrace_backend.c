@@ -308,7 +308,8 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
 #include <time.h>
 #include <unistd.h>
 
-static ssize_t ptrace_read_mem(pid_t pid, void *dest, const void *src, size_t len) {
+static ssize_t ptrace_read_mem(pid_t pid, void *dest, const void *src,
+                               size_t len) {
     struct iovec l = {dest, len};
     struct iovec r = {(void *)(uintptr_t)src, len};
     ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
@@ -1745,7 +1746,8 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
     uint8_t *code = (uint8_t *)malloc(len);
     if (code == NULL)
         return ASMTEST_PTRACE_ETRACE;
-    if (ptrace_read_mem(pid, code, (void *)(uintptr_t)base, len) != (ssize_t)len) {
+    if (ptrace_read_mem(pid, code, (void *)(uintptr_t)base, len) !=
+        (ssize_t)len) {
         free(code);
         return ASMTEST_PTRACE_ETRACE;
     }
@@ -1909,17 +1911,13 @@ static size_t foreign_insn_len(pid_t pid, uint64_t at) {
 }
 
 /* Shared inner loop for trace_attached_windowed and trace_attached_window_stop */
-static int trace_attached_window_loop(pid_t pid,
-                                      uint64_t win_base, size_t win_len,
-                                      uint64_t win_ret,
+static int trace_attached_window_loop(pid_t pid, uint64_t win_base,
+                                      size_t win_len, uint64_t win_ret,
                                       asmtest_addr_channel_t *chan,
                                       asmtest_addr_rec_t *regs,
-                                      uint32_t *nreg_io,
-                                      volatile int *stop,
-                                      long *result,
-                                      uint64_t *stream,
-                                      uint32_t *stream_len,
-                                      int *overflow_out) {
+                                      uint32_t *nreg_io, volatile int *stop,
+                                      long *result, uint64_t *stream,
+                                      uint32_t *stream_len, int *overflow_out) {
     uint32_t n = *stream_len;
     int overflow = 0;
     int rc = ASMTEST_PTRACE_OK;
@@ -2022,7 +2020,8 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         return ASMTEST_PTRACE_ETRACE;
 #if defined(__x86_64__)
     {
-        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0, sizeof win_ret) != (ssize_t)sizeof win_ret)
+        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0,
+                            sizeof win_ret) != (ssize_t)sizeof win_ret)
             return ASMTEST_PTRACE_ETRACE;
     }
 #else
@@ -2045,8 +2044,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         stream[n++] = pc0;
 
     int overflow = 0;
-    int rc = trace_attached_window_loop(pid, win_base, win_len, win_ret,
-                                        chan, regs, &nreg, NULL, result, stream, &n, &overflow);
+    int rc =
+        trace_attached_window_loop(pid, win_base, win_len, win_ret, chan, regs,
+                                   &nreg, NULL, result, stream, &n, &overflow);
 
     if (rc == ASMTEST_PTRACE_OK) {
         materialize_stream_to_trace(pid, stream, n, overflow, trace);
@@ -2056,9 +2056,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
 }
 
 int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
-                                             asmtest_addr_channel_t *chan,
-                                             volatile int *stop,
-                                             asmtest_trace_t *trace) {
+                                              asmtest_addr_channel_t *chan,
+                                              volatile int *stop,
+                                              asmtest_trace_t *trace) {
     if (trace == NULL || stop == NULL)
         return ASMTEST_PTRACE_EINVAL;
 
@@ -2077,13 +2077,12 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
     if (chan != NULL)
         nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
 
-    if (in_region_set(pc0, 0, 0, regs, nreg) &&
-        n < PTRACE_STREAM_CAP)
+    if (in_region_set(pc0, 0, 0, regs, nreg) && n < PTRACE_STREAM_CAP)
         stream[n++] = pc0;
 
     int overflow = 0;
-    int rc = trace_attached_window_loop(pid, 0, 0, 0,
-                                        chan, regs, &nreg, stop, NULL, stream, &n, &overflow);
+    int rc = trace_attached_window_loop(pid, 0, 0, 0, chan, regs, &nreg, stop,
+                                        NULL, stream, &n, &overflow);
 
     if (rc == ASMTEST_PTRACE_OK) {
         materialize_stream_to_trace(pid, stream, n, overflow, trace);
@@ -2168,7 +2167,8 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
     }
 #if defined(__x86_64__)
     {
-        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0, sizeof win_ret) != (ssize_t)sizeof win_ret) {
+        if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0,
+                            sizeof win_ret) != (ssize_t)sizeof win_ret) {
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
             free(stream);
@@ -2285,7 +2285,8 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
         owned = (uint8_t *)malloc(len);
         if (owned == NULL)
             return ASMTEST_PTRACE_ETRACE;
-        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) != (ssize_t)len) {
+        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) !=
+            (ssize_t)len) {
             free(owned);
             return ASMTEST_PTRACE_ETRACE;
         }
@@ -2607,7 +2608,8 @@ static int trace_attached_descend(pid_t pid, const void *base, size_t len,
         owned = (uint8_t *)malloc(len);
         if (owned == NULL)
             return ASMTEST_PTRACE_ETRACE;
-        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) != (ssize_t)len) {
+        if (ptrace_read_mem(pid, owned, (void *)(uintptr_t)base, len) !=
+            (ssize_t)len) {
             free(owned);
             return ASMTEST_PTRACE_ETRACE;
         }
@@ -2730,9 +2732,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
 }
 
 int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
-                                             asmtest_addr_channel_t *chan,
-                                             volatile int *stop,
-                                             asmtest_trace_t *trace) {
+                                              asmtest_addr_channel_t *chan,
+                                              volatile int *stop,
+                                              asmtest_trace_t *trace) {
     (void)pid;
     (void)chan;
     (void)stop;
