@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "asmspy.h"
@@ -310,9 +311,11 @@ typedef struct {
 
 static void list_refilter(List *L) {
     L->nmatch = 0;
-    for (int i = 0; i < L->n; i++)
-        if (L->flen == 0 || strcasestr(L->items[i], L->filter))
+    for (int i = 0; i < L->n; i++) {
+        const char *it = L->items[i]; /* may be NULL if a strdup OOM'd */
+        if (L->flen == 0 || (it && strcasestr(it, L->filter)))
             L->match[L->nmatch++] = i;
+    }
     if (L->sel >= L->nmatch)
         L->sel = L->nmatch ? L->nmatch - 1 : 0;
     if (L->top > L->sel)
@@ -321,11 +324,11 @@ static void list_refilter(List *L) {
 static int list_init(List *L, char **items, int n) {
     L->items = items;
     L->n = n;
+    L->nmatch = L->top = L->sel = L->flen = 0; /* init BEFORE the fallible alloc */
+    L->filter[0] = '\0';
     L->match = malloc((n ? n : 1) * sizeof(int));
     if (!L->match)
         return -1;
-    L->nmatch = L->top = L->sel = L->flen = 0;
-    L->filter[0] = '\0';
     list_refilter(L);
     return 0;
 }
@@ -343,15 +346,18 @@ static void list_render(const List *L, int y0, int h, int w) {
         if (m >= L->nmatch)
             continue;
         int cur = (m == L->sel);
+        const char *s = L->items[L->match[m]];
         if (cur)
             attron(A_REVERSE);
-        mvprintw(y0 + 1 + r, 0, "%-*.*s", w, w, L->items[L->match[m]]);
+        mvprintw(y0 + 1 + r, 0, "%-*.*s", w, w, s ? s : "");
         if (cur)
             attroff(A_REVERSE);
     }
 }
 /* returns selected real index on Enter, -2 on quit, -1 otherwise */
 static int list_key(List *L, int ch, int h) {
+    if (h < 1)
+        h = 1; /* a tiny terminal (rows<=3) must not make paging math negative */
     switch (ch) {
     case KEY_UP:
         if (L->sel > 0)
@@ -381,7 +387,9 @@ static int list_key(List *L, int ch, int h) {
         break;
     case '\n':
     case KEY_ENTER:
-        return L->nmatch ? L->match[L->sel] : -1;
+        return (L->nmatch && L->sel >= 0 && L->sel < L->nmatch)
+                   ? L->match[L->sel]
+                   : -1;
     default:
         if (ch >= 32 && ch < 127 && L->flen < (int)sizeof L->filter - 1) {
             L->filter[L->flen++] = (char)ch;
@@ -389,6 +397,11 @@ static int list_key(List *L, int ch, int h) {
             list_refilter(L);
         }
     }
+    /* clamp sel into range even after paging on a tiny/empty list */
+    if (L->sel < 0)
+        L->sel = 0;
+    if (L->sel > L->nmatch - 1)
+        L->sel = L->nmatch ? L->nmatch - 1 : 0;
     if (L->sel < L->top)
         L->top = L->sel;
     if (L->sel >= L->top + h)
@@ -476,6 +489,7 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
 
     pthread_t th;
     if (pthread_create(&th, NULL, tracer_thread, &L) != 0) {
+        pthread_sigmask(SIG_UNBLOCK, &block, NULL);
         pthread_mutex_destroy(&L.mu);
         return;
     }
@@ -541,8 +555,22 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     }
 
     atomic_store(&L.stop, true);
-    pthread_kill(th, SIGALRM); /* wake a blocked waitpid */
-    pthread_join(th, NULL);
+    /* Wake the tracer's blocked waitpid. A single edge-triggered SIGALRM can be
+     * missed if it lands between the engine's stop-check and the blocking
+     * waitpid, so re-arm every 50 ms until the join succeeds — the tracer is
+     * then parked in waitpid and the next SIGALRM is guaranteed to interrupt it. */
+    for (;;) {
+        pthread_kill(th, SIGALRM);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 50L * 1000 * 1000;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        if (pthread_timedjoin_np(th, NULL, &ts) == 0)
+            break;
+    }
     pthread_sigmask(SIG_UNBLOCK, &block, NULL);
 
     svec_free(&L.asm_dis);
@@ -652,6 +680,10 @@ int asmspy_tui(void) {
             return 1;
         }
         char **items = malloc((np ? np : 1) * sizeof *items);
+        if (!items) {
+            free(procs);
+            continue; /* transient OOM — retry the picker */
+        }
         for (size_t i = 0; i < np; i++) {
             char b[256];
             snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s", procs[i].pid,
@@ -660,7 +692,13 @@ int asmspy_tui(void) {
             items[i] = strdup(b);
         }
         List L;
-        list_init(&L, items, (int)np);
+        if (list_init(&L, items, (int)np) != 0) {
+            for (size_t i = 0; i < np; i++)
+                free(items[i]);
+            free(items);
+            free(procs);
+            continue;
+        }
 
         int chosen = -1;
         for (;;) {

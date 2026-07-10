@@ -12,7 +12,10 @@ ASM="$BUILD/asmspy"
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 
 echo "--- asmspy --list (head) ---"
-"$ASM" --list | head -6 || fail "--list"
+# capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
+# no pipefail), so a crashing/erroring --list would slip past unnoticed.
+out=$("$ASM" --list) || fail "--list"
+printf '%s\n' "$out" | head -6
 
 # region trace: attach to attach_victim (has a hot leaf function 'hotfn')
 "$BUILD/attach_victim" 2>/dev/null &

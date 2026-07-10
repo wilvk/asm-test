@@ -284,7 +284,7 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
     }
 
     unsigned sample = 0;
-    int retries = 0;
+    int idle = 0; /* consecutive rounds that produced NO sample */
     while ((max < 0 || (long)sample < max) && !(stop && atomic_load(stop))) {
         int rc = asmtest_ptrace_run_to(pid, (void *)(uintptr_t)base);
         if (rc != ASMTEST_PTRACE_OK) {
@@ -292,11 +292,10 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
                 break;
             if (rc == ASMTEST_PTRACE_ENOENT) /* target exited */
                 break;
-            if (++retries > 20)
+            if (++idle > 20)
                 break;
             continue;
         }
-        retries = 0;
 
         asmtest_trace_t *tr = asmtest_trace_new(8192, 512);
         asmtest_descent_t *dsc =
@@ -304,21 +303,25 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
         long result = 0;
         rc = asmtest_ptrace_trace_attached_ex(pid, (void *)(uintptr_t)base, len,
                                               &result, tr, dsc);
-        if (rc == ASMTEST_PTRACE_OK && tr &&
-            asmtest_emu_trace_insns_total(tr) >= 1) {
+        int produced = (rc == ASMTEST_PTRACE_OK && tr &&
+                        asmtest_emu_trace_insns_total(tr) >= 1);
+        if (produced) {
             sample++;
+            idle = 0;
             if (sink)
                 sink(ctx, sample, result, tr, dsc, code, len, base);
         }
         asmtest_trace_free(tr);
         asmtest_descent_free(dsc);
 
-        if (rc != ASMTEST_PTRACE_OK) {
+        if (!produced) {
+            /* run_to succeeded but the trace failed/was empty; count it toward
+             * the idle bailout so a bad region can't spin the loop forever. */
             if (stop && atomic_load(stop))
                 break;
             if (rc == ASMTEST_PTRACE_ENOENT)
                 break;
-            if (++retries > 20)
+            if (++idle > 20)
                 break;
         }
     }

@@ -331,7 +331,9 @@ static void load_module_syms(pid_t pid, const module_t *mod,
     if (!eh->e_shoff || eh->e_shentsize < sizeof(Elf64_Shdr))
         goto done;
     const Elf64_Shdr *sh = (const Elf64_Shdr *)(base + eh->e_shoff);
-    if (eh->e_shoff + (uint64_t)eh->e_shnum * eh->e_shentsize > flen)
+    /* overflow-safe: never add two attacker-controlled uint64 (they can wrap) */
+    if (eh->e_shoff > flen ||
+        eh->e_shnum > (flen - eh->e_shoff) / eh->e_shentsize)
         goto done;
 
     /* prefer .symtab (superset); fall back to .dynsym for stripped libs */
@@ -349,10 +351,12 @@ static void load_module_syms(pid_t pid, const module_t *mod,
             if (strh->sh_offset >= flen)
                 continue;
             const char *strtab = (const char *)(base + strh->sh_offset);
-            size_t strmax = (strh->sh_offset + strh->sh_size <= flen)
+            /* overflow-safe clamp (sh_offset < flen already checked above) */
+            size_t strmax = strh->sh_size <= flen - strh->sh_offset
                                 ? strh->sh_size
-                                : (flen - strh->sh_offset);
-            if (sh[i].sh_offset + sh[i].sh_size > flen)
+                                : flen - strh->sh_offset;
+            if (sh[i].sh_offset > flen ||
+                sh[i].sh_size > flen - sh[i].sh_offset)
                 continue;
             size_t count = sh[i].sh_size / sh[i].sh_entsize;
             for (size_t j = 0; j < count; j++) {
@@ -366,6 +370,10 @@ static void load_module_syms(pid_t pid, const module_t *mod,
                 if (sy->st_name >= strmax)
                     continue;
                 const char *nm = strtab + sy->st_name;
+                /* the name must be NUL-terminated inside the mapped strtab,
+                 * else strdup's strlen would over-read past the mmap end */
+                if (memchr(nm, '\0', strmax - sy->st_name) == NULL)
+                    continue;
                 if (sym_push(t, cap, bias + sy->st_value, sy->st_size, nm,
                              modname) != 0)
                     goto done;
