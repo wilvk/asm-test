@@ -134,11 +134,15 @@ hardware is absent. All are exposed through **all ten language wrappers**
 
 - **`asmspy`** — a small **ncurses front-end** over the out-of-process (`ptrace`)
   tracer. Attach to any running process and watch, live and out of band, its
-  **syscalls with data** (a mini `strace`) or a chosen **function's live assembly
-  + call-graph**, resampled each time the target calls it; plus headless
-  `--list` / `--syms` / `--log` / `--trace` subcommands for scripts and CI. Needs
-  **libncurses** + **Capstone**; `make cli` (or `make docker-cli`) builds it and
-  self-skips with build guidance when a dependency is absent.
+  **syscalls with data** (a mini `strace`, decoded strings split out), a chosen
+  **function's live assembly** with **per-instruction heat counts** and its
+  **call-graph ranked by call count**, resampled each time the target calls it,
+  or a **whole-process live instruction stream** (every instruction as it
+  executes, resolved to its function); plus headless `--list [active|scan]` /
+  `--syms` / `--log` / `--trace` / `--stream` subcommands for scripts and CI
+  (process list sortable by pid, recent CPU activity, or string-scan density).
+  Needs **libncurses** + **Capstone**; `make cli` (or `make docker-cli`) builds
+  it and self-skips with build guidance when a dependency is absent.
   ([asmspy](../guides/tracing/asmspy.md))
 
 ### In-line assembler (optional, Keystone)

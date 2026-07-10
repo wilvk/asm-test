@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`asmspy` — an interactive process tracer (new `cli/` subsystem, Linux x86-64)** — a small
+  ncurses front-end over the out-of-process (`ptrace`) tracer: attach to any running process
+  and watch it live and out of band. Three live views: **syscalls with data** (a mini `strace`;
+  decoded strings split into their own pane), a chosen **function's assembly** with
+  per-instruction execution **heat counts** plus its callees **ranked by call count**
+  (resampled each time the target calls it), and a **whole-process live instruction stream**
+  (every instruction as it executes, resolved to its function). The process picker filters
+  as you type and sorts by **pid, recent CPU activity, or string-scan density** (`Tab`
+  cycles, `r` rescans, `b` navigates back). Every view is also a headless subcommand for
+  scripts and CI: `--list [active|scan]`, `--syms <pid> [filter]`, `--log <pid> [n]`,
+  `--trace <pid> <sym> [n]`, `--stream <pid> [n]`. Built by `make cli` (needs libncurses +
+  Capstone; self-skips with guidance) or containerized via `make docker-cli`
+  (`Dockerfile.cli`); carries its own `/proc` lister and ELF `.symtab`/`.dynsym` function
+  resolver. End-to-end headless smoke (`cli/cli_smoke.sh`, `make cli-smoke`) drives all five
+  subcommands against the example victims and is gated in CI (`cli` job). Guide:
+  `docs/guides/tracing/asmspy.md`.
+
 - **Whole-window attribution, version-aware render, and async-hop merge in the Node and Java
   bindings** — dotnet-parity Phase 2, the remaining CI-runnable clusters. Wraps six .NET-lead
   C symbols across both bindings:

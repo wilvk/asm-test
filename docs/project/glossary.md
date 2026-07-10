@@ -165,7 +165,7 @@ conformance corpus
   lock-step.
 
 CO-RE
-  *Compile Once, Run Everywhere* — the {term}`BPF`/{term}`eBPF` technique that lets one
+  *Compile Once, Run Everywhere* — the {term}`BPF <eBPF>`/{term}`eBPF` technique that lets one
   compiled BPF object run across kernels with different internal struct layouts, by relocating
   field offsets from {term}`BTF` type information at load time. asm-test's eBPF programs (the
   JIT-emission detector and the AMD branch snapshot) are built CO-RE so a single skeleton works
@@ -786,7 +786,7 @@ V8
 VEH
   *Vectored Exception Handler* — the Windows mechanism (`AddVectoredExceptionHandler`)
   asm-test's Win64 {term}`single-step` front-end uses to catch the `EXCEPTION_SINGLE_STEP`
-  the {term}`Trap Flag` raises after each instruction. It is the Windows analogue of the POSIX
+  the {term}`Trap Flag <TF>` raises after each instruction. It is the Windows analogue of the POSIX
   {term}`SIGTRAP` path used on Linux and macOS.
 
 W2
