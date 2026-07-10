@@ -73,6 +73,19 @@ int asmtest_cs_reconstruct(asmtest_arch_t arch, const cs_range_t *ranges,
 int asmtest_pt_read_codeimage(const asmtest_codeimage_t *img, uint64_t when,
                               uint64_t ip, uint8_t *buffer, size_t size);
 
+/* §Z2 Intel PT decode path (pt_backend.c). Real bodies compile only under
+ * -DASMTEST_HAVE_LIBIPT; otherwise ENOSYS stubs. asmtest_pt_encode_fixture builds a
+ * valid synthetic PT AUX blob with libipt's own packet encoder (no PT hardware), and
+ * asmtest_pt_decode[_window] decode it — driven end-to-end by test_wholewindow_decode. */
+int asmtest_pt_decoder_present(void);
+int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
+                      size_t len, asmtest_trace_t *trace);
+int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
+                             const asmtest_codeimage_t *img, uint64_t when,
+                             asmtest_trace_t *trace);
+int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
+                              size_t *out_len);
+
 /* mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks). */
 static const unsigned char ROUTINE[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0,
                                         0x48, 0x3d, 0x64, 0x00, 0x00, 0x00,
@@ -2388,6 +2401,113 @@ static void test_pt_image_from_codeimage(void) {
     munmap(p, (size_t)ps);
 #else
     printf("# SKIP pt image-from-codeimage: not Linux\n");
+#endif
+}
+
+/* §Z2 — end-to-end synthetic Intel-PT decode (the trust-gate on the STRONG PT tier).
+ * Encode a VALID Intel PT packet stream with libipt's own packet encoder
+ * (asmtest_pt_encode_fixture — userspace, NO PT hardware, no intel_pt PMU) for the
+ * ROUTINE taken-jle walk, then drive it through the REAL libipt decode bodies
+ * (previously never executed end-to-end in CI — every host compiled the ENOSYS stub):
+ *   (A) asmtest_pt_decode        — region-scoped (read_region + in-region IP filter),
+ *   (B) asmtest_pt_decode_window — whole-window (read_recorder over a self code image,
+ *                                  NO in-region filter; the §Z2 path).
+ * Both must reconstruct the known-good walk {0x0,0x3,0x6,0xc,0x11} / blocks {0x0,0x11}
+ * — the SAME sequence the AMD / CoreSight / DynamoRIO backends produce for these bytes
+ * (test_amd_reconstruction, test_cs_reconstruction). FAILS if the decoder regresses.
+ * Self-skips cleanly where libipt is absent (ENOSYS stub); the recorder-backed half
+ * additionally needs the soft-dirty code-image recorder and self-notes if it is off. */
+static void test_wholewindow_decode(void) {
+#if defined(__linux__)
+    if (!asmtest_pt_decoder_present()) {
+        printf(
+            "# SKIP wholewindow decode: built without libipt (ENOSYS stub)\n");
+        return;
+    }
+
+    /* Map ROUTINE executable; its live address is the PT stream's enable IP + the
+     * decode's offset origin, so decoded offsets come out relative to it. */
+    long ps = sysconf(_SC_PAGESIZE);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP wholewindow decode: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    /* Synthesize the PT AUX stream for the taken-jle walk at ROUTINE's live address. */
+    uint8_t aux[256];
+    size_t aux_len = 0;
+    int enc = asmtest_pt_encode_fixture(aux, sizeof aux, (uint64_t)(uintptr_t)p,
+                                        &aux_len);
+    CHECK(enc == ASMTEST_HW_OK && aux_len > 0,
+          "wholewindow decode: libipt encoded a synthetic PT AUX stream");
+
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+
+    /* (A) Region-scoped decode: the shipped read_region path (in-region IP filter)
+     * over the raw bytes. Needs no soft-dirty, so it runs wherever libipt is built. */
+    if (enc == ASMTEST_HW_OK) {
+        asmtest_trace_t *rt = asmtest_trace_new(64, 64);
+        int rc = asmtest_pt_decode(aux, aux_len, p, sizeof ROUTINE, rt);
+        CHECK(rc == ASMTEST_HW_OK,
+              "pt_decode (region-scoped): decodes the synthetic stream (real "
+              "libipt body, no PT hardware)");
+        int seq = (asmtest_emu_trace_insns_total(rt) == 5);
+        for (size_t i = 0; seq && i < 5; i++)
+            seq = (rt->insns[i] == EXPECT[i]);
+        CHECK(seq, "pt_decode (region-scoped): instruction offsets == "
+                   "{0,3,6,c,11} (matches the AMD/CoreSight/DR walk)");
+        CHECK(asmtest_trace_covered(rt, 0x0) &&
+                  asmtest_trace_covered(rt, 0x11) &&
+                  asmtest_emu_trace_blocks_len(rt) == 2,
+              "pt_decode (region-scoped): block partition == {0, 0x11}");
+        asmtest_trace_free(rt);
+    }
+
+    /* (B) Whole-window decode: read_recorder over a self (pid==0) code-image timeline,
+     * NO in-region filter — the actual STRONG-tier §Z2 path. Needs the soft-dirty
+     * recorder; self-notes (does not fail) where it is unavailable. */
+    if (enc == ASMTEST_HW_OK && asmtest_codeimage_available()) {
+        asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+        int trk = img ? asmtest_codeimage_track(img, p, sizeof ROUTINE) : -1;
+        CHECK(trk == ASMTEST_CI_OK,
+              "wholewindow decode: ROUTINE tracked in a self code image");
+        uint64_t when = img ? asmtest_codeimage_now(img) : 0;
+        if (trk == ASMTEST_CI_OK) {
+            asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+            int rc = asmtest_pt_decode_window(aux, aux_len, img, when, tr);
+            CHECK(rc == ASMTEST_HW_OK,
+                  "pt_decode_window: decodes the synthetic stream through the "
+                  "recorder-backed image (real libipt body)");
+            int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+            for (size_t i = 0; seq && i < 5; i++)
+                seq = (tr->insns[i] == EXPECT[i]);
+            CHECK(seq, "pt_decode_window: instruction offsets == {0,3,6,c,11} "
+                       "(recorder-served bytes, offset from the first IP)");
+            CHECK(asmtest_trace_covered(tr, 0x0) &&
+                      asmtest_trace_covered(tr, 0x11) &&
+                      asmtest_emu_trace_blocks_len(tr) == 2,
+                  "pt_decode_window: block partition == {0, 0x11}");
+            CHECK(!asmtest_emu_trace_truncated(tr),
+                  "pt_decode_window: complete — no in-region filter truncated "
+                  "it");
+            asmtest_trace_free(tr);
+        }
+        asmtest_codeimage_free(img);
+    } else if (enc == ASMTEST_HW_OK) {
+        printf(
+            "# NOTE wholewindow decode: soft-dirty recorder unavailable; ran "
+            "the region-scoped half only\n");
+    }
+
+    munmap(p, (size_t)ps);
+#else
+    printf("# SKIP wholewindow decode: not Linux\n");
 #endif
 }
 
@@ -5486,6 +5606,11 @@ int main(void) {
 
     /* §2: the recorder-backed PT image adapter (host-testable, no libipt/PT hw). */
     test_pt_image_from_codeimage();
+
+    /* §Z2: end-to-end synthetic Intel-PT decode — encode a valid PT stream with
+     * libipt's encoder and drive the real asmtest_pt_decode[_window] bodies (no PT
+     * hardware). Self-skips where libipt is absent. */
+    test_wholewindow_decode();
 
     /* §3.1(c): whole-window noise attribution — reverse resolver + IP bucketer. */
     test_symbolize_bucket();
