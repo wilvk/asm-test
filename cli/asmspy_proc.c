@@ -1,0 +1,449 @@
+/*
+ * asmspy_proc.c — /proc process enumeration + an ELF function-symbol resolver.
+ *
+ * The library resolves JIT methods (perf-map / jitdump) and module extents
+ * (/proc/<pid>/maps) but has no reader for ordinary ELF .symtab/.dynsym symbols,
+ * so asmspy carries its own: for every ELF file mapped into the target it reads
+ * the STT_FUNC symbols and offsets each by that module's load bias, yielding a
+ * runtime-address function table used both to PICK a function to trace (forward,
+ * by name) and to name the callees in the call-graph view (reverse, by address).
+ */
+#define _GNU_SOURCE
+#include <ctype.h>
+#include <dirent.h>
+#include <elf.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <pwd.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "asmspy.h"
+
+/* ================================================================== */
+/* Process list                                                        */
+/* ================================================================== */
+
+static int is_all_digits(const char *s) {
+    if (!*s)
+        return 0;
+    for (; *s; s++)
+        if (!isdigit((unsigned char)*s))
+            return 0;
+    return 1;
+}
+
+static void read_first_line(const char *path, char *buf, size_t n) {
+    buf[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    if (fgets(buf, (int)n, f))
+        buf[strcspn(buf, "\n")] = '\0';
+    fclose(f);
+}
+
+static uid_t proc_uid(const char *pid) {
+    char path[300];
+    snprintf(path, sizeof path, "/proc/%s/status", pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return (uid_t)-1;
+    char line[256];
+    uid_t uid = (uid_t)-1;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "Uid:", 4) == 0) {
+            unsigned real = 0;
+            if (sscanf(line + 4, "%u", &real) == 1)
+                uid = (uid_t)real;
+            break;
+        }
+    }
+    fclose(f);
+    return uid;
+}
+
+static void proc_cmdline(const char *pid, char *out, size_t n) {
+    char path[300];
+    snprintf(path, sizeof path, "/proc/%s/cmdline", pid);
+    out[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    size_t got = fread(out, 1, n - 1, f);
+    fclose(f);
+    if (got == 0) {
+        out[0] = '\0';
+        return;
+    }
+    for (size_t i = 0; i < got; i++)
+        if (out[i] == '\0')
+            out[i] = ' ';
+    out[got] = '\0';
+    while (got && (out[got - 1] == ' '))
+        out[--got] = '\0';
+}
+
+int asmspy_proclist(asmspy_proc_t **out, size_t *count) {
+    DIR *d = opendir("/proc");
+    if (!d)
+        return -1;
+    uid_t me = geteuid();
+
+    size_t cap = 256, n = 0;
+    asmspy_proc_t *v = malloc(cap * sizeof *v);
+    if (!v) {
+        closedir(d);
+        return -1;
+    }
+
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!is_all_digits(e->d_name))
+            continue;
+        if (n == cap) {
+            size_t ncap = cap * 2;
+            asmspy_proc_t *nv = realloc(v, ncap * sizeof *v);
+            if (!nv)
+                break;
+            v = nv;
+            cap = ncap;
+        }
+        asmspy_proc_t *p = &v[n];
+        p->pid = (pid_t)atoi(e->d_name);
+
+        char path[300], comm[64];
+        snprintf(path, sizeof path, "/proc/%s/comm", e->d_name);
+        read_first_line(path, comm, sizeof comm);
+        if (!comm[0])
+            snprintf(comm, sizeof comm, "?");
+
+        proc_cmdline(e->d_name, p->cmd, sizeof p->cmd);
+        if (!p->cmd[0])
+            snprintf(p->cmd, sizeof p->cmd, "[%s]", comm);
+
+        uid_t uid = proc_uid(e->d_name);
+        struct passwd *pw = (uid != (uid_t)-1) ? getpwuid(uid) : NULL;
+        if (pw)
+            snprintf(p->user, sizeof p->user, "%s", pw->pw_name);
+        else
+            snprintf(p->user, sizeof p->user, "%u", (unsigned)uid);
+
+        p->attachable = (me == 0) || (uid == me);
+        n++;
+    }
+    closedir(d);
+
+    /* pid-sorted for a stable list */
+    for (size_t i = 1; i < n; i++) { /* small insertion sort; lists are short */
+        asmspy_proc_t key = v[i];
+        size_t j = i;
+        while (j > 0 && v[j - 1].pid > key.pid) {
+            v[j] = v[j - 1];
+            j--;
+        }
+        v[j] = key;
+    }
+
+    *out = v;
+    *count = n;
+    return (int)n;
+}
+
+/* ================================================================== */
+/* ELF function-symbol resolver                                        */
+/* ================================================================== */
+
+/* One backing ELF file mapped into the target. */
+typedef struct {
+    char path[PATH_MAX]; /* pathname from /proc/<pid>/maps               */
+    uint64_t load_start; /* start of its file-offset-0 mapping           */
+    int is_exe;          /* opened via /proc/<pid>/exe (robust) if set   */
+} module_t;
+
+/* Parse /proc/<pid>/maps into the set of distinct ELF modules (each with the
+ * base of its offset-0 mapping). Returns count, or -1. */
+static int scan_modules(pid_t pid, module_t **out, char *exe_path,
+                        size_t exe_cap) {
+    char mp[64];
+    snprintf(mp, sizeof mp, "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(mp, "r");
+    if (!f)
+        return -1;
+
+    /* the main executable's real path, so we can read it via /proc/pid/exe */
+    exe_path[0] = '\0';
+    char el[64];
+    snprintf(el, sizeof el, "/proc/%d/exe", (int)pid);
+    ssize_t r = readlink(el, exe_path, exe_cap - 1);
+    if (r > 0)
+        exe_path[r] = '\0';
+    else
+        exe_path[0] = '\0';
+
+    size_t cap = 64, n = 0;
+    module_t *mods = malloc(cap * sizeof *mods);
+    if (!mods) {
+        fclose(f);
+        return -1;
+    }
+
+    char line[PATH_MAX + 128];
+    while (fgets(line, sizeof line, f)) {
+        uint64_t start = 0, end = 0, off = 0;
+        char perms[8];
+        int pathpos = 0;
+        /* "start-end perms offset dev inode path" */
+        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s %" SCNx64 " %*x:%*x %*u %n",
+                   &start, &end, perms, &off, &pathpos) < 4)
+            continue;
+        if (pathpos <= 0)
+            continue;
+        char *path = line + pathpos;
+        path[strcspn(path, "\n")] = '\0';
+        if (path[0] != '/') /* skip [heap],[stack],[vdso],anon */
+            continue;
+        /* strip a " (deleted)" suffix */
+        char *del = strstr(path, " (deleted)");
+        if (del)
+            *del = '\0';
+        if (off != 0) /* only the ELF-header (offset 0) mapping fixes the base */
+            continue;
+
+        /* dedup by path; keep the lowest load_start */
+        size_t k;
+        for (k = 0; k < n; k++)
+            if (strcmp(mods[k].path, path) == 0)
+                break;
+        if (k < n) {
+            if (start < mods[k].load_start)
+                mods[k].load_start = start;
+            continue;
+        }
+        if (n == cap) {
+            size_t nc = cap * 2;
+            module_t *nm = realloc(mods, nc * sizeof *mods);
+            if (!nm)
+                break;
+            mods = nm;
+            cap = nc;
+        }
+        snprintf(mods[n].path, sizeof mods[n].path, "%s", path);
+        mods[n].load_start = start;
+        mods[n].is_exe = (exe_path[0] && strcmp(path, exe_path) == 0);
+        n++;
+    }
+    fclose(f);
+    *out = mods;
+    return (int)n;
+}
+
+/* Append one STT_FUNC symbol to a growing table. */
+static int sym_push(asmspy_symtab_t *t, size_t *cap, uint64_t addr,
+                    uint64_t size, const char *name, const char *module) {
+    if (!name[0])
+        return 0;
+    if (t->n == *cap) {
+        size_t nc = *cap ? *cap * 2 : 512;
+        asmspy_sym_t *nv = realloc(t->v, nc * sizeof *nv);
+        if (!nv)
+            return -1;
+        t->v = nv;
+        *cap = nc;
+    }
+    asmspy_sym_t *s = &t->v[t->n];
+    s->addr = addr;
+    s->size = size;
+    s->name = strdup(name);
+    s->module = strdup(module);
+    if (!s->name || !s->module) {
+        free(s->name);
+        free(s->module);
+        return -1;
+    }
+    t->n++;
+    return 0;
+}
+
+/* mmap a file read-only. Returns base + sets *len, or NULL. */
+static uint8_t *map_file(const char *path, size_t *len) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr)) {
+        close(fd);
+        return NULL;
+    }
+    void *m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED)
+        return NULL;
+    *len = (size_t)st.st_size;
+    return m;
+}
+
+/* Read the STT_FUNC symbols of one ELF file into the table, biased to runtime. */
+static void load_module_syms(pid_t pid, const module_t *mod,
+                             asmspy_symtab_t *t, size_t *cap) {
+    char exe[64];
+    const char *open_path = mod->path;
+    if (mod->is_exe) {
+        snprintf(exe, sizeof exe, "/proc/%d/exe", (int)pid);
+        open_path = exe;
+    }
+    size_t flen = 0;
+    uint8_t *base = map_file(open_path, &flen);
+    if (!base)
+        return;
+
+    const char *modname = strrchr(mod->path, '/');
+    modname = modname ? modname + 1 : mod->path;
+
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
+        eh->e_ident[EI_CLASS] != ELFCLASS64)
+        goto done;
+
+    /* load bias = base of the offset-0 mapping minus the lowest PT_LOAD vaddr;
+     * reduces to 0 for ET_EXEC (absolute symbols) and to load_start for ET_DYN. */
+    uint64_t min_vaddr = UINT64_MAX;
+    if (eh->e_phoff && eh->e_phentsize >= sizeof(Elf64_Phdr)) {
+        for (unsigned i = 0; i < eh->e_phnum; i++) {
+            uint64_t o = eh->e_phoff + (uint64_t)i * eh->e_phentsize;
+            if (o + sizeof(Elf64_Phdr) > flen)
+                break;
+            const Elf64_Phdr *ph = (const Elf64_Phdr *)(base + o);
+            if (ph->p_type == PT_LOAD && ph->p_vaddr < min_vaddr)
+                min_vaddr = ph->p_vaddr;
+        }
+    }
+    if (min_vaddr == UINT64_MAX)
+        min_vaddr = 0;
+    uint64_t bias = mod->load_start - min_vaddr;
+
+    if (!eh->e_shoff || eh->e_shentsize < sizeof(Elf64_Shdr))
+        goto done;
+    const Elf64_Shdr *sh = (const Elf64_Shdr *)(base + eh->e_shoff);
+    if (eh->e_shoff + (uint64_t)eh->e_shnum * eh->e_shentsize > flen)
+        goto done;
+
+    /* prefer .symtab (superset); fall back to .dynsym for stripped libs */
+    const int order[2] = {SHT_SYMTAB, SHT_DYNSYM};
+    for (int oi = 0; oi < 2; oi++) {
+        int want = order[oi];
+        int found = 0;
+        for (unsigned i = 0; i < eh->e_shnum; i++) {
+            if ((int)sh[i].sh_type != want)
+                continue;
+            found = 1;
+            if (sh[i].sh_entsize < sizeof(Elf64_Sym) || sh[i].sh_link >= eh->e_shnum)
+                continue;
+            const Elf64_Shdr *strh = &sh[sh[i].sh_link];
+            if (strh->sh_offset >= flen)
+                continue;
+            const char *strtab = (const char *)(base + strh->sh_offset);
+            size_t strmax = (strh->sh_offset + strh->sh_size <= flen)
+                                ? strh->sh_size
+                                : (flen - strh->sh_offset);
+            if (sh[i].sh_offset + sh[i].sh_size > flen)
+                continue;
+            size_t count = sh[i].sh_size / sh[i].sh_entsize;
+            for (size_t j = 0; j < count; j++) {
+                const Elf64_Sym *sy =
+                    (const Elf64_Sym *)(base + sh[i].sh_offset +
+                                        j * sh[i].sh_entsize);
+                if (ELF64_ST_TYPE(sy->st_info) != STT_FUNC)
+                    continue;
+                if (sy->st_shndx == SHN_UNDEF || sy->st_value == 0)
+                    continue;
+                if (sy->st_name >= strmax)
+                    continue;
+                const char *nm = strtab + sy->st_name;
+                if (sym_push(t, cap, bias + sy->st_value, sy->st_size, nm,
+                             modname) != 0)
+                    goto done;
+            }
+        }
+        if (found) /* symtab present -> don't also read dynsym (dupes) */
+            break;
+    }
+
+done:
+    munmap(base, flen);
+}
+
+static int sym_cmp_addr(const void *a, const void *b) {
+    const asmspy_sym_t *x = a, *y = b;
+    if (x->addr < y->addr)
+        return -1;
+    if (x->addr > y->addr)
+        return 1;
+    return 0;
+}
+
+int asmspy_symtab_load(pid_t pid, asmspy_symtab_t *out) {
+    out->v = NULL;
+    out->n = 0;
+
+    module_t *mods = NULL;
+    char exe_path[PATH_MAX];
+    int nm = scan_modules(pid, &mods, exe_path, sizeof exe_path);
+    if (nm < 0)
+        return -1;
+
+    size_t cap = 0;
+    for (int i = 0; i < nm; i++)
+        load_module_syms(pid, &mods[i], out, &cap);
+    free(mods);
+
+    if (out->n)
+        qsort(out->v, out->n, sizeof *out->v, sym_cmp_addr);
+    return 0;
+}
+
+void asmspy_symtab_free(asmspy_symtab_t *t) {
+    if (!t || !t->v)
+        return;
+    for (size_t i = 0; i < t->n; i++) {
+        free(t->v[i].name);
+        free(t->v[i].module);
+    }
+    free(t->v);
+    t->v = NULL;
+    t->n = 0;
+}
+
+const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
+                                          const char *name) {
+    for (size_t i = 0; i < t->n; i++)
+        if (strcmp(t->v[i].name, name) == 0)
+            return &t->v[i];
+    return NULL;
+}
+
+const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr) {
+    /* sorted by addr: binary-search the greatest addr <= query */
+    if (t->n == 0)
+        return NULL;
+    size_t lo = 0, hi = t->n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (t->v[mid].addr <= addr)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo == 0)
+        return NULL;
+    const asmspy_sym_t *s = &t->v[lo - 1];
+    if (s->size ? (addr < s->addr + s->size) : (addr == s->addr))
+        return s;
+    return NULL;
+}

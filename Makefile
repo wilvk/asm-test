@@ -838,6 +838,7 @@ usecases-emu: $(BUILD)/test_emu_usecases
 	./$(BUILD)/test_emu_usecases
 
 include mk/native-trace.mk  # DynamoRIO + hardware native-trace tiers
+include mk/cli.mk            # asmspy: ncurses front-end over the tracer
 include mk/bindings.mk       # conformance corpus + language bindings + packaging
 include mk/docs.mk           # Sphinx / Read the Docs
 

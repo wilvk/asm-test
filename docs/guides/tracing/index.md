@@ -17,6 +17,7 @@ native, real-CPU tiers:
 | [Native runtime tracing](native-tracing.md) | DynamoRIO (software DBI) + single-step (`EFLAGS.TF`) | native blocks + instructions, in-process | DynamoRIO: Linux x86-64; single-step: x86-64 Linux **or macOS** |
 | [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS) |
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
+| [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) | interactive TUI + headless: a running process's live syscalls-with-data, or a function's live assembly + call-graph | x86-64 Linux |
 
 Start with the [emulator trace model](traces.md) for the shared trace API,
 coverage helpers, and reporting — the concepts carry across every backend. The
@@ -36,4 +37,5 @@ traces
 native-tracing
 hardware-tracing
 scoped-tracing
+asmspy
 ```

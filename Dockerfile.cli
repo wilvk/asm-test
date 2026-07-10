@@ -1,0 +1,14 @@
+# Dockerfile.cli — the asmspy CLI (cli/): an ncurses front-end over the
+# out-of-process tracer. Built on the bindings base (C toolchain + Capstone),
+# adding libipt-dev (the hwtrace tier's PT decoder build dep, like the hwtrace
+# image) and libncurses-dev (the ncursesw dev files the TUI links). Runs the
+# headless smoke by default; interactive use is `docker run -it asmtest-cli bash`
+# then `./build/asmspy`.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libipt-dev libncurses-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+CMD sh -c 'make cli-smoke'
