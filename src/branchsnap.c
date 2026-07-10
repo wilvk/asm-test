@@ -20,16 +20,11 @@
  */
 #define _GNU_SOURCE
 
+#include "amd_backend.h" /* shared asmtest_amd_decode / _snapshot_* decls + reduced filter */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
 
 #include <stddef.h>
-
-/* Shared decode from amd_backend.c (newest-first perf_branch_entry array). */
-struct perf_branch_entry;
-int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
-                       const void *base, size_t len, asmtest_trace_t *trace);
-int asmtest_amd_snapshot_available(void);
 
 #if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_LIBBPF)
 #include <bpf/libbpf.h>
@@ -44,15 +39,7 @@ int asmtest_amd_snapshot_available(void);
 #include "branchsnap.skel.h"
 #include "branchsnap_event.h"
 
-/* Reduced (SCOPE-SAFE) LBR branch filter for the opt-in branch_filter path — mirror of
- * the definition in hwtrace.c (kept in sync). Drops only direct unconditional jmp; every
- * other taken class stays recorded, preserving amd_replay's in-region anchor. The
- * snapshot decodes through the same amd_replay, so it reconstructs the dropped jmps and
- * one frozen window spans more of the routine. See amd-tracing-plan.md (#2B). */
-#define ASMTEST_AMD_REDUCED_FILTER                                             \
-    (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
-     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |               \
-     PERF_SAMPLE_BRANCH_ANY_RETURN)
+/* ASMTEST_AMD_REDUCED_FILTER (used below) is defined once in amd_backend.h. */
 
 static long bsnap_perf_open(struct perf_event_attr *a, pid_t pid, int cpu,
                             int grp, unsigned long flags) {
@@ -206,11 +193,19 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
         return ASMTEST_HW_EUNAVAIL;
     }
 
-    /* (4) Live: the workload runs with LBR + breakpoint enabled until end(). */
+    /* (4) Live: the workload runs with LBR + breakpoint enabled until end(). A failed
+     * ENABLE yields an empty ring the boundary drain cannot tell from "boundary never
+     * hit," so fail loudly — tear down and self-skip — rather than silently truncate. */
     ioctl(g_bsnap.lfd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(g_bsnap.lfd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl(g_bsnap.lfd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        bsnap_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
     ioctl(g_bsnap.bfd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(g_bsnap.bfd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl(g_bsnap.bfd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        bsnap_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
     g_bsnap.active = 1;
     return ASMTEST_HW_OK;
 }

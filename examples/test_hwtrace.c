@@ -53,6 +53,9 @@ size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
                                 const void *base, size_t len,
                                 asmtest_trace_t *trace, int gap);
+int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
+                                 struct perf_branch_entry *out);
+size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
 #endif
 
 /* CoreSight reconstruction-core interface (decoder-independent half of
@@ -756,6 +759,66 @@ static void test_call_auto(void) {
         asmtest_trace_free(lt);
         munmap(q, sizeof AMD_LOOP);
     }
+
+    /* (c) Phase 8 MSR-direct rung — exercised only where the MSR substrate is present (the
+     * privileged docker-hwtrace-msr lane); self-skips otherwise, where (a)/(b) already prove
+     * the cascade. When the fast sampled tier truncates a too-fast tiny routine, the
+     * zero-interrupt MSR read is tried BEFORE the ~1000x block-step tier. The MSR read shares
+     * AMD_LBR's 16-deep ceiling (freeze-glue contaminated), so rather than over-asserting it
+     * WINS, this checks the robust contract — correct result + a COMPLETE trace via some tier
+     * (the rung never breaks the cascade), with the rung's outcome printed — and that
+     * CEILING_FREE EXCLUDES the AMD_LBR-family rung so a truncating capture escalates to a
+     * ceiling-free stepper instead. The existing (a)/(b) cases running in this same lane are
+     * the regression backstop for a rung crash / wrong result. */
+    if (asmtest_amd_msr_available()) {
+        void *m = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m != MAP_FAILED) {
+            memcpy(m, ROUTINE, sizeof ROUTINE);
+            mprotect(m, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)m, (char *)m + sizeof ROUTINE);
+            long margs[2] = {20, 22};
+
+            asmtest_trace_t *mt = asmtest_trace_new(512, 64);
+            long mr = 0;
+            asmtest_trace_choice_t mused;
+            memset(&mused, 0, sizeof mused);
+            int mrc =
+                asmtest_trace_call_auto(m, sizeof ROUTINE, margs, 2,
+                                        ASMTEST_TRACE_BEST, &mr, mt, &mused);
+            printf("# call_auto msr-rung: rc=%d result=%ld used.backend=%d "
+                   "truncated=%d (%s)\n",
+                   mrc, mr, mused.backend, asmtest_emu_trace_truncated(mt),
+                   mused.backend == ASMTEST_HWTRACE_AMD_LBR
+                       ? "MSR read completed the tiny routine"
+                       : "fell through to a ceiling-free floor");
+            CHECK(mrc == ASMTEST_HW_OK,
+                  "call_auto (msr lane): tiny routine traced by some tier");
+            CHECK(mr == 42, "call_auto (msr lane): correct result via the MSR "
+                            "rung / floor");
+            CHECK(!asmtest_emu_trace_truncated(mt),
+                  "call_auto (msr lane): a COMPLETE trace (MSR rung or the "
+                  "block-step floor)");
+            asmtest_trace_free(mt);
+
+            /* CEILING_FREE must EXCLUDE the MSR rung (its 16-deep AMD_LBR ceiling). */
+            asmtest_trace_t *ct = asmtest_trace_new(512, 64);
+            long cr = 0;
+            asmtest_trace_choice_t cused;
+            memset(&cused, 0, sizeof cused);
+            int crc = asmtest_trace_call_auto(m, sizeof ROUTINE, margs, 2,
+                                              ASMTEST_TRACE_CEILING_FREE, &cr,
+                                              ct, &cused);
+            CHECK(crc == ASMTEST_HW_OK && cr == 42,
+                  "call_auto CEILING_FREE (msr lane): correct result via a "
+                  "ceiling-free tier");
+            CHECK(cused.backend != ASMTEST_HWTRACE_AMD_LBR,
+                  "call_auto CEILING_FREE (msr lane): the MSR rung (AMD_LBR "
+                  "ceiling) is excluded");
+            asmtest_trace_free(ct);
+            munmap(m, sizeof ROUTINE);
+        }
+    }
 #else
     printf("# SKIP call_auto: not Linux x86-64\n");
 #endif
@@ -862,6 +925,111 @@ static void test_amd_msr(void) {
     munmap(q, sizeof AMD_LOOP);
 #else
     printf("# SKIP AMD MSR-direct: not Linux x86-64\n");
+#endif
+}
+
+/* AMD MSR-direct SPEC FILTER (host-independent, no /dev/cpu/msr): the MSR path reads raw
+ * LbrExtV2 FROM/TO MSRs, where TO[63]=valid(retired) and TO[62]=spec(wrong-path). A
+ * spec-only slot (valid=0, spec=1) must be DROPPED at the source — it cannot set
+ * perf_branch_entry.spec, so amd_replay's PERF_BR_SPEC_WRONG_PATH filter would never catch
+ * it and a phantom edge would enter the reconstruction. Drives asmtest_amd_msr_decode_entry
+ * with synthetic MSR words. Regression guard: against the pre-fix `valid || spec` test the
+ * spec-only case would wrongly be KEPT. */
+static void test_amd_msr_spec_filter(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    const uint64_t VALID = 1ULL << 63;   /* TO[63] retired      */
+    const uint64_t SPEC = 1ULL << 62;    /* TO[62] speculative  */
+    const uint64_t MISPRED = 1ULL << 63; /* FROM[63] mispredict */
+    const uint64_t IPMASK = (1ULL << 58) - 1;
+    const uint64_t FROM_IP = 0x0000401000ULL, TO_IP = 0x0000402000ULL;
+    struct perf_branch_entry e;
+
+    /* Retired (valid=1, spec=0): kept; IPs masked to [57:0] (FROM mispredict and TO
+     * valid/spec bits stripped). */
+    memset(&e, 0, sizeof e);
+    int k_ret =
+        asmtest_amd_msr_decode_entry(MISPRED | FROM_IP, VALID | TO_IP, &e);
+    CHECK(k_ret == 1, "MSR spec filter: a retired entry (valid=1) is kept");
+    CHECK(e.from == (FROM_IP & IPMASK) && e.to == (TO_IP & IPMASK),
+          "MSR spec filter: kept entry carries the IP-masked from/to");
+
+    /* Spec-only (valid=0, spec=1): the bug case — must be DROPPED at the source. */
+    int k_spec = asmtest_amd_msr_decode_entry(FROM_IP, SPEC | TO_IP, &e);
+    CHECK(k_spec == 0, "MSR spec filter: a spec-only wrong-path slot "
+                       "(valid=0,spec=1) is dropped");
+
+    /* Empty slot (valid=0, spec=0): dropped. */
+    int k_empty = asmtest_amd_msr_decode_entry(FROM_IP, TO_IP, &e);
+    CHECK(k_empty == 0,
+          "MSR spec filter: an empty slot (valid=0,spec=0) is dropped");
+
+    /* Retired AND speculative (valid=1, spec=1, correct-path): it retired -> kept. */
+    int k_both =
+        asmtest_amd_msr_decode_entry(FROM_IP, VALID | SPEC | TO_IP, &e);
+    CHECK(k_both == 1,
+          "MSR spec filter: a retired correct-path-speculative entry is kept");
+#else
+    printf("# SKIP AMD MSR spec filter: not Linux x86-64\n");
+#endif
+}
+
+/* AMD tail-call EXIT CLASSIFICATION (host-independent): asmtest_amd_last_exit_off derives
+ * the boundary-snapshot breakpoint site and counts region exits. Phase 9 widened "exit"
+ * from ret-only to ALSO a region-LEAVING direct unconditional jmp (a tail call), so a
+ * genuinely single-exit tail-call routine takes the deterministic snapshot by default
+ * instead of the truncating sampled path. Both guards must hold: an INDIRECT jmp
+ * (unprovable target) and an IN-region direct jmp (an ordinary loop/forward branch) must
+ * NOT count. Needs Capstone. */
+static void test_amd_tailcall_exit(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD tail-call exit: built without Capstone\n");
+        return;
+    }
+    /* (1) A lone region-LEAVING tail-call jmp, no ret: mov rax,rdi; jmp rel32(+0x10, past
+     * the len-8 region). One exit, at the jmp (offset 3). The pre-Phase-9 ret-only deriver
+     * would report ZERO exits here and force the sampled fallback. */
+    {
+        const unsigned char R[] = {0x48, 0x89, 0xf8, /* mov rax,rdi */
+                                   0xe9, 0x10, 0x00,
+                                   0x00, 0x00}; /* jmp +0x10 */
+        int nexit = -1;
+        size_t off = asmtest_amd_last_exit_off(R, sizeof R, &nexit);
+        CHECK(nexit == 1 && off == 3, "tail-call exit: a lone region-leaving "
+                                      "direct jmp is the single exit");
+    }
+    /* (2) ret + region-leaving tail jmp = TWO exits -> default-on withheld (not single). */
+    {
+        const unsigned char R[] = {0xc3, /* ret */
+                                   0xe9, 0x10, 0x00,
+                                   0x00, 0x00}; /* jmp +0x10 */
+        int nexit = -1;
+        size_t off = asmtest_amd_last_exit_off(R, sizeof R, &nexit);
+        CHECK(nexit == 2 && off == 1, "tail-call exit: ret + tail-jmp counts "
+                                      "as two exits (last at the jmp)");
+    }
+    /* (3) INDIRECT jmp (jmp rax): is_uncond_jump but no decodable target -> NOT an exit. */
+    {
+        const unsigned char R[] = {0xff, 0xe0}; /* jmp rax */
+        int nexit = -1;
+        size_t off = asmtest_amd_last_exit_off(R, sizeof R, &nexit);
+        CHECK(
+            nexit == 0 && off == (size_t)-1,
+            "tail-call exit: an indirect jmp is unprovable and does NOT count");
+    }
+    /* (4) IN-region direct jmp (jmp +1 -> offset 6, inside the len-7 region): an ordinary
+     * loop/forward branch, NOT an exit. */
+    {
+        const unsigned char R[] = {0xe9, 0x01, 0x00, 0x00, 0x00, /* jmp +1 */
+                                   0x90, 0x90};                  /* nops */
+        int nexit = -1;
+        size_t off = asmtest_amd_last_exit_off(R, sizeof R, &nexit);
+        CHECK(nexit == 0 && off == (size_t)-1,
+              "tail-call exit: an in-region direct jmp (loop/forward) does NOT "
+              "count");
+    }
+#else
+    printf("# SKIP AMD tail-call exit: not Linux x86-64\n");
 #endif
 }
 
@@ -5307,6 +5475,8 @@ int main(void) {
     test_amd_freeze_probe();
     test_amd_reconstruction();
     test_amd_spec_filter();
+    test_amd_msr_spec_filter();
+    test_amd_tailcall_exit();
     test_amd_reduced_filter();
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */

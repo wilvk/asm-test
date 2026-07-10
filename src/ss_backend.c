@@ -59,15 +59,11 @@
 #define _GNU_SOURCE
 #endif
 
+#include "asmtest_hwtrace.h" /* ASMTEST_HW_* status codes (shared, not re-#define'd) */
 #include "asmtest_trace.h"
 
 #include <stddef.h>
 #include <stdint.h>
-
-#define ASMTEST_HW_OK     0
-#define ASMTEST_HW_EINVAL (-1)
-#define ASMTEST_HW_EFULL  (-6)
-#define ASMTEST_HW_ENOSYS (-5)
 
 #if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
 

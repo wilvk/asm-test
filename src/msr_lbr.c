@@ -19,16 +19,11 @@
  */
 #define _GNU_SOURCE
 
+#include "amd_backend.h" /* shared asmtest_amd_decode / _lbr_depth decls + ASMTEST_HW_* */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
 
 #include <stddef.h>
-
-/* Shared decode from amd_backend.c (newest-first perf_branch_entry array). */
-struct perf_branch_entry;
-int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
-                       const void *base, size_t len, asmtest_trace_t *trace);
-int asmtest_amd_lbr_depth(void);
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <fcntl.h>
@@ -103,6 +98,25 @@ int asmtest_amd_msr_available(void) {
     return 1;
 }
 
+/* Decode one raw LbrExtV2 FROM/TO MSR pair (arch/x86/include/asm/msr-index.h layout:
+ * TO[63]=valid/retired, TO[62]=spec/wrong-path, IP in [57:0]) into a perf_branch_entry.
+ * Returns 1 (fills *out->from/to, IP-masked) for a RETIRED branch; 0 to skip — an empty
+ * slot OR a speculative WRONG-PATH entry (valid=0, spec=1). Dropping the spec-only slot at
+ * the SOURCE is the correctness point: this path never sets perf_branch_entry.spec, so
+ * amd_replay's PERF_BR_SPEC_WRONG_PATH filter could never catch such an entry and a phantom
+ * edge would leak into the reconstruction (and .spec is absent on pre-6.1 headers, where
+ * that filter compiles out entirely). A retired-AND-speculative (valid=1, spec=1,
+ * correct-path) branch retired, so it is kept. Pure — no MSR I/O — so a host-independent
+ * unit test can drive the spec filter directly. */
+int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
+                                 struct perf_branch_entry *out) {
+    if (!((to >> 63) & 1))
+        return 0; /* valid=0: empty slot or spec-only wrong-path — drop at source */
+    out->from = from & LBR_IP_MASK;
+    out->to = to & LBR_IP_MASK;
+    return 1;
+}
+
 /* MSR-direct Tier-A capture of [base, base+len): pin the calling thread to one CPU, enable
  * the LBR (user-only filter), run run_fn(arg), freeze, read the frozen 16-entry FROM/TO
  * stack, and decode it via the shared asmtest_amd_decode. Callback-thunk model like
@@ -172,14 +186,10 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
             if (msr_rd(fd, MSR_SAMP_BR_FROM + (uint32_t)(i * 2), &f) != 0 ||
                 msr_rd(fd, MSR_SAMP_BR_FROM + (uint32_t)(i * 2 + 1), &t) != 0)
                 break;
-            int valid = ((t >> 63) & 1) || ((t >> 62) & 1); /* valid || spec */
-            if (!valid)
-                continue;
-            uint64_t fip = f & LBR_IP_MASK, tip = t & LBR_IP_MASK;
-            br[n].from = fip;
-            br[n].to = tip;
-            if ((fip >= base_ip && fip < end_ip) ||
-                (tip >= base_ip && tip < end_ip))
+            if (!asmtest_amd_msr_decode_entry(f, t, &br[n]))
+                continue; /* empty slot or speculative wrong-path (see helper) */
+            if ((br[n].from >= base_ip && br[n].from < end_ip) ||
+                (br[n].to >= base_ip && br[n].to < end_ip))
                 any_in_region = 1;
             n++;
         }

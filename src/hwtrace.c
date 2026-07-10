@@ -16,6 +16,7 @@
  * gating and decode-dispatch logic here is exercised on every host; the live
  * capture is exercised only on capable hardware.
  */
+#include "amd_backend.h" /* shared AMD branch-record backend decls + reduced-filter macro */
 #include "asmtest_addr_channel.h" /* §D3 windowed multi-region channel */
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
@@ -85,38 +86,8 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
 int asmtest_cs_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
 
-/* AMD branch-record decode (amd_backend.c): takes the perf branch-stack array,
- * not an AUX byte stream. */
-#if defined(__linux__) && defined(__x86_64__)
-int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
-                       const void *base, size_t len, asmtest_trace_t *trace);
-/* Tier-B: stitch the overlapping sample_period=1 branch-stack windows into one
- * gapless sequence (asmtest_amd_stitch), then decode it without the 16-entry ceiling
- * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
-size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
-                          const size_t *nrs, size_t n_samples, const void *base,
-                          uint64_t base_ip, size_t len,
-                          struct perf_branch_entry *out, size_t out_cap,
-                          int *gap);
-int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
-                                const void *base, size_t len,
-                                asmtest_trace_t *trace, int gap);
-/* AMD branch stack depth (runtime, from CPUID 0x80000022 EBX; 16 on every shipping
- * part): a richest-window count at the ceiling means the routine overflowed one
- * snapshot, so escalate from Tier-A to Tier-B stitching. */
-int asmtest_amd_lbr_depth(void);
-/* Deterministic boundary LBR snapshot (src/branchsnap.c): arm an LBR-on event + a HW
- * execution breakpoint at base+exit_off + the bpf_get_branch_snapshot program, drain
- * and decode at end. Routed here by the `snapshot` option or by default on the
- * substrate that supports it (see hwtrace_begin_amd); ANY nonzero from _begin (no BPF
- * toolchain, no caps, no LbrExtV2 substrate) makes the marker path fall back to the
- * sample_period=1 capture below. `branch_filter` mirrors opts.branch_filter (nonzero =
- * reduced LBR filter for the LBR-on event, same window-stretch as the sampled path).
- * Internal plumbing, deliberately not part of the public tier surface. */
-int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
-                               int branch_filter);
-int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
-#endif
+/* AMD branch-record decode, Tier-B stitch, runtime depth, and boundary-snapshot
+ * begin/end decls live in the shared internal header "amd_backend.h" (included above). */
 
 /* Single-step (EFLAGS.TF / SIGTRAP) stepper (ss_backend.c). Unlike the trace
  * backends there is no post-pass decode: begin() arms TF and the SIGTRAP handler
@@ -149,14 +120,8 @@ void asmtest_ss_end(void);
 /* Whether each decoder was compiled in (queried by available()). */
 int asmtest_pt_decoder_present(void);
 int asmtest_cs_decoder_present(void);
-int asmtest_amd_decoder_present(void);
-/* AMD LBR-stack freeze-on-PMI availability (CPUID 0x80000022 EAX[2]); without it a
- * sampled window cannot be trusted to end at the region exit (see hwtrace_end_amd). */
-int asmtest_amd_freeze_available(void);
-/* Whether the deterministic software-event LBR-snapshot substrate is present (AMD
- * LbrExtV2 + perfmon v2 + Linux >= 6.10); the boundary-snapshot capture's hardware+
- * kernel floor (run-time use still needs CAP_BPF/CAP_PERFMON). */
-int asmtest_amd_snapshot_available(void);
+/* asmtest_amd_decoder_present / _freeze_available / _snapshot_available are declared in
+ * the shared "amd_backend.h". */
 
 /* ------------------------------------------------------------------ */
 /* Gating: detect-and-skip                                             */
@@ -584,53 +549,66 @@ static hw_region_t *find_region(const char *name) {
 /* at the region's last branch holds the complete <=16-entry history.  */
 /* ------------------------------------------------------------------ */
 #if defined(__linux__) && defined(__x86_64__)
-/* Reduced (SCOPE-SAFE) LBR branch filter for the opt-in branch_filter path: keep every
- * taken class EXCEPT direct unconditional jmp (COND<-jcc, ANY_CALL<-direct+indirect
- * call, IND_JUMP<-indirect jmp, ANY_RETURN<-ret). A direct uncond jmp has a statically
- * decodable target, so dropping it frees a 16-deep slot while amd_replay reconstructs it
- * from the region bytes — a byte-identical trace over a longer window. Keeping ALL calls
- * recorded preserves the decoder's in-region from_off anchor (dropping a call would strand
- * the pre-call in-region code behind an out-of-region return edge). Mirrored in
- * branchsnap.c; see docs/internal/plans/amd-tracing-plan.md (#2B). */
-#define ASMTEST_AMD_REDUCED_FILTER                                             \
-    (PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_COND |                       \
-     PERF_SAMPLE_BRANCH_IND_JUMP | PERF_SAMPLE_BRANCH_ANY_CALL |               \
-     PERF_SAMPLE_BRANCH_ANY_RETURN)
+/* ASMTEST_AMD_REDUCED_FILTER (used at branch_sample_type below) is defined once in the
+ * shared amd_backend.h — see there for the drop-direct-uncond-jmp rationale (#2B). */
 
 /* Nonzero while the active AMD region is captured by the deterministic boundary
  * snapshot (branchsnap.c) instead of the sampled data ring below. Single-slot,
  * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active. */
 static int g_amd_snap = 0;
 
-/* The offset of the region's LAST ret-class instruction — the exit the boundary
- * snapshot plants its hardware breakpoint on. Walks the registered bytes with the
- * Capstone length-decoder; returns (size_t)-1 when no ret is found before the walk
- * ends or a byte fails to decode (multi-exit tails past undecodable padding simply
- * fall back to the sampled path; a breakpoint on a wrong "ret" is harmless — the
- * boundary is never hit and end() reports an honest truncated). When `nret` is
- * non-NULL it receives the total number of ret-class instructions decoded — the
- * caller uses `*nret == 1` to detect a SINGLE-exit region, where the one breakpoint
- * is guaranteed to be hit on any normal completion. */
-static size_t amd_last_ret_off(const void *base, size_t len, int *nret) {
-    if (nret != NULL)
-        *nret = 0;
+/* The offset of the region's LAST region-EXIT instruction — the exit the boundary
+ * snapshot plants its hardware breakpoint on. An exit is a ret-class instruction OR a
+ * region-LEAVING direct unconditional jmp (a tail call: `jmp target` whose target is
+ * outside [base, base+len)). Walks the registered bytes with the Capstone length-decoder;
+ * returns (size_t)-1 when no exit is found before the walk ends or a byte fails to decode
+ * (tails past undecodable padding simply fall back to the sampled path; a breakpoint on a
+ * wrong exit is harmless — the boundary is never hit and end() reports an honest
+ * truncated). When `nexit` is non-NULL it receives the total exit count — the caller uses
+ * `*nexit == 1` to detect a SINGLE-exit region, where the one breakpoint is guaranteed to
+ * be hit on any normal completion.
+ *
+ * Both tail-call guards are load-bearing: asmtest_disas_is_uncond_jump also matches an
+ * INDIRECT `jmp r/m` (an unprovable jump-table tail call, which must stay on the sampled
+ * fallback), so a DIRECT jmp is isolated by ALSO requiring
+ * asmtest_disas_branch_target()==1; and an IN-region direct uncond jmp is an ordinary
+ * loop/forward branch, not an exit, so it must NOT count (else a loopy single-ret region
+ * misreads as multi-exit). A region with one `ret` AND one tail-`jmp` is correctly two
+ * exits, and default-on is withheld. Non-static (declared in amd_backend.h) for the
+ * host-independent tail-call exit-classification test. */
+size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit) {
+    if (nexit != NULL)
+        *nexit = 0;
     if (!asmtest_disas_available())
         return (size_t)-1;
-    size_t o = 0, last_ret = (size_t)-1;
+    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
+    const uint64_t end_ip = base_ip + len;
+    size_t o = 0, last_exit = (size_t)-1;
     while (o < len) {
         size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
-                                 len, (uint64_t)(uintptr_t)base, o, NULL, 0);
+                                 len, base_ip, o, NULL, 0);
         if (l == 0)
             break;
-        if (asmtest_disas_is_ret(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
-                                 len, o)) {
-            last_ret = o;
-            if (nret != NULL)
-                (*nret)++;
+        int is_exit = asmtest_disas_is_ret(ASMTEST_ARCH_X86_64,
+                                           (const uint8_t *)base, len, o);
+        if (!is_exit &&
+            asmtest_disas_is_uncond_jump(ASMTEST_ARCH_X86_64,
+                                         (const uint8_t *)base, len, o)) {
+            uint64_t tgt = 0;
+            if (asmtest_disas_branch_target(ASMTEST_ARCH_X86_64,
+                                            (const uint8_t *)base, len, base_ip,
+                                            o, &tgt) &&
+                (tgt < base_ip || tgt >= end_ip))
+                is_exit = 1; /* region-leaving direct jmp = tail-call exit */
+        }
+        if (is_exit) {
+            last_exit = o;
+            if (nexit != NULL)
+                (*nexit)++;
         }
         o += l;
     }
-    return last_ret;
+    return last_exit;
 }
 
 static int hwtrace_begin_amd(hw_region_t *r) {
@@ -640,19 +618,20 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * honestly truncates reconstructs completely here, with no post-glue window
      * contamination. Taken when explicitly requested (opts.snapshot) OR, on the Zen 4/5
      * substrate that supports it (amd_lbr_v2 + perfmon_v2 + Linux >= 6.10, via
-     * asmtest_amd_snapshot_available), by DEFAULT for a SINGLE-exit region only. The
-     * snapshot plants ONE breakpoint at the region's last ret; a MULTI-exit routine that
-     * returns via an EARLIER ret would miss it and honestly truncate — with no
-     * fall-through, since snapshot mode is committed — whereas the sampled richest-window
-     * path can still reconstruct such a run. So the default-on is gated to a lone ret,
-     * where the boundary is guaranteed to be hit; an explicit opts.snapshot is the
-     * caller's choice and is honored for any region. Any arm failure — no BPF toolchain,
-     * missing CAP_BPF/CAP_PERFMON at load, no decodable ret — falls through to the sampled
-     * path unchanged. */
-    int amd_nret = 0;
-    size_t exit_off = amd_last_ret_off(r->base, r->len, &amd_nret);
+     * asmtest_amd_snapshot_available), by DEFAULT for a SINGLE-exit region only. An exit
+     * is a ret OR a region-leaving tail-call jmp (asmtest_amd_last_exit_off). The snapshot
+     * plants ONE breakpoint at the region's last exit; a MULTI-exit routine that leaves via
+     * an EARLIER exit would miss it and honestly truncate — with no fall-through, since
+     * snapshot mode is committed — whereas the sampled richest-window path can still
+     * reconstruct such a run. So the default-on is gated to a lone exit, where the boundary
+     * is guaranteed to be hit; an explicit opts.snapshot is the caller's choice and is
+     * honored for any region. Any arm failure — no BPF toolchain, missing
+     * CAP_BPF/CAP_PERFMON at load, no decodable exit — falls through to the sampled path
+     * unchanged. */
+    int amd_nexit = 0;
+    size_t exit_off = asmtest_amd_last_exit_off(r->base, r->len, &amd_nexit);
     if ((g_opts.snapshot ||
-         (asmtest_amd_snapshot_available() && amd_nret == 1)) &&
+         (asmtest_amd_snapshot_available() && amd_nexit == 1)) &&
         exit_off != (size_t)-1) {
         if (asmtest_amd_snapshot_begin(r->base, r->len, exit_off,
                                        g_opts.branch_filter) == ASMTEST_HW_OK) {
@@ -724,7 +703,14 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     g_aux_sz = 0;
     g_active = r;
     ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(g_base_map, g_base_sz);
+        g_base_map = NULL;
+        g_active = NULL;
+        close(g_fd);
+        g_fd = -1;
+        return -1;
+    }
     return 0;
 }
 
@@ -795,16 +781,20 @@ static void hwtrace_end_amd(void) {
              * gaplessly yet are missing the tail). */
             for (size_t off = 0;
                  off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h =
-                    (struct perf_event_header *)(buf + off);
-                if (h->size == 0 || off + h->size > span)
+                /* memcpy the record header out of the malloc'd ring into a local: a
+                 * plain struct-pointer cast is -fstrict-aliasing UB (the buffer's
+                 * effective type is bytes). Alignment is fine (malloc'd, 8-multiple
+                 * records), so this is a sanitize-lane fix, not a misalignment guard. */
+                struct perf_event_header h;
+                memcpy(&h, buf + off, sizeof h);
+                if (h.size == 0 || off + h.size > span)
                     break;
-                if (h->type == PERF_RECORD_SAMPLE)
+                if (h.type == PERF_RECORD_SAMPLE)
                     n_samples++;
-                else if (h->type == PERF_RECORD_LOST ||
-                         h->type == PERF_RECORD_THROTTLE)
+                else if (h.type == PERF_RECORD_LOST ||
+                         h.type == PERF_RECORD_THROTTLE)
                     lost = 1;
-                off += h->size;
+                off += h.size;
             }
             if (n_samples > 0) {
                 samples = (struct perf_branch_entry **)malloc(n_samples *
@@ -817,19 +807,22 @@ static void hwtrace_end_amd(void) {
             size_t si = 0;
             for (size_t off = 0;
                  off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h =
-                    (struct perf_event_header *)(buf + off);
-                if (h->size == 0 || off + h->size > span)
+                struct perf_event_header h;
+                memcpy(&h, buf + off, sizeof h);
+                if (h.size == 0 || off + h.size > span)
                     break;
-                if (h->type == PERF_RECORD_SAMPLE) {
+                if (h.type == PERF_RECORD_SAMPLE) {
                     /* Only PERF_SAMPLE_BRANCH_STACK is set, so the body is
-                     * {u64 nr; perf_branch_entry[nr]}. */
-                    uint8_t *body = buf + off + sizeof *h;
-                    uint64_t nr = *(uint64_t *)body;
+                     * {u64 nr; perf_branch_entry[nr]}. `e` stays a typed pointer INTO
+                     * buf — samples[]/best retain it for the post-loop stitch/decode —
+                     * so only the transient nr scalar is memcpy'd out. */
+                    uint8_t *body = buf + off + sizeof h;
+                    uint64_t nr;
+                    memcpy(&nr, body, sizeof nr);
                     if (nr > 0 &&
-                        sizeof *h + sizeof(uint64_t) +
+                        sizeof h + sizeof(uint64_t) +
                                 nr * sizeof(struct perf_branch_entry) <=
-                            h->size) {
+                            h.size) {
                         struct perf_branch_entry *e =
                             (struct perf_branch_entry *)(body +
                                                          sizeof(uint64_t));
@@ -852,7 +845,7 @@ static void hwtrace_end_amd(void) {
                         }
                     }
                 }
-                off += h->size;
+                off += h.size;
             }
             n_samples = si; /* only well-formed samples retained */
         }
@@ -1018,7 +1011,11 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
         return ASMTEST_HW_EUNAVAIL;
     }
     ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(base_map, base_sz);
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
 
     run_fn(
         arg); /* the window body (a managed delegate thunk) runs at native speed */
@@ -1053,24 +1050,27 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                 buf[i] = data[(tail + i) % dsz];
             for (size_t off = 0;
                  off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h =
-                    (struct perf_event_header *)(buf + off);
-                if (h->size == 0 || off + h->size > span)
+                /* memcpy the header/nr out of the byte ring (strict-aliasing clean);
+                 * `e` stays a typed pointer into buf, read transiently in-loop. */
+                struct perf_event_header h;
+                memcpy(&h, buf + off, sizeof h);
+                if (h.size == 0 || off + h.size > span)
                     break;
-                if (h->type == PERF_RECORD_LOST ||
-                    h->type == PERF_RECORD_THROTTLE) {
+                if (h.type == PERF_RECORD_LOST ||
+                    h.type == PERF_RECORD_THROTTLE) {
                     lost = 1;
-                } else if (h->type == PERF_RECORD_SAMPLE) {
+                } else if (h.type == PERF_RECORD_SAMPLE) {
                     /* body = {u64 nr; perf_branch_entry[nr]} (only BRANCH_STACK set). */
-                    uint8_t *body = buf + off + sizeof *h;
-                    uint64_t nr = *(uint64_t *)body;
+                    uint8_t *body = buf + off + sizeof h;
+                    uint64_t nr;
+                    memcpy(&nr, body, sizeof nr);
                     /* Bound nr BEFORE the multiply so a corrupt/huge nr cannot wrap the
                      * size check into a pass and drive an out-of-bounds read (the branch
                      * stack is <=32 deep on any part; 64 is a safe ceiling). */
                     if (nr > 0 && nr <= 64 &&
-                        sizeof *h + sizeof(uint64_t) +
+                        sizeof h + sizeof(uint64_t) +
                                 nr * sizeof(struct perf_branch_entry) <=
-                            h->size) {
+                            h.size) {
                         struct perf_branch_entry *e =
                             (struct perf_branch_entry *)(body +
                                                          sizeof(uint64_t));
@@ -1086,7 +1086,7 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                 1; /* endpoint buffer full: survey is a prefix */
                     }
                 }
-                off += h->size;
+                off += h.size;
             }
             free(buf);
         }
@@ -1155,7 +1155,12 @@ int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
     c->base_map = base_map;
     c->base_sz = base_sz;
     ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        free(c);
+        munmap(base_map, base_sz);
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
     *ctx_out = c;
     return ASMTEST_HW_OK;
 }
@@ -1198,20 +1203,23 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
                 buf[i] = data[(tail + i) % dsz];
             for (size_t off = 0;
                  off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header *h =
-                    (struct perf_event_header *)(buf + off);
-                if (h->size == 0 || off + h->size > span)
+                /* memcpy the header/nr out of the byte ring (strict-aliasing clean);
+                 * `e` stays a typed pointer into buf, read transiently in-loop. */
+                struct perf_event_header h;
+                memcpy(&h, buf + off, sizeof h);
+                if (h.size == 0 || off + h.size > span)
                     break;
-                if (h->type == PERF_RECORD_LOST ||
-                    h->type == PERF_RECORD_THROTTLE) {
+                if (h.type == PERF_RECORD_LOST ||
+                    h.type == PERF_RECORD_THROTTLE) {
                     lost = 1;
-                } else if (h->type == PERF_RECORD_SAMPLE) {
-                    uint8_t *body = buf + off + sizeof *h;
-                    uint64_t nr = *(uint64_t *)body;
+                } else if (h.type == PERF_RECORD_SAMPLE) {
+                    uint8_t *body = buf + off + sizeof h;
+                    uint64_t nr;
+                    memcpy(&nr, body, sizeof nr);
                     if (nr > 0 && nr <= 64 &&
-                        sizeof *h + sizeof(uint64_t) +
+                        sizeof h + sizeof(uint64_t) +
                                 nr * sizeof(struct perf_branch_entry) <=
-                            h->size) {
+                            h.size) {
                         struct perf_branch_entry *e =
                             (struct perf_branch_entry *)(body +
                                                          sizeof(uint64_t));
@@ -1224,7 +1232,7 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
                             lost = 1;
                     }
                 }
-                off += h->size;
+                off += h.size;
             }
             free(buf);
         }
@@ -1363,7 +1371,17 @@ int asmtest_hwtrace_try_begin(const char *name) {
     }
     g_active = r;
     ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0);
+    if (ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(g_aux_map, g_aux_sz);
+        g_aux_map = NULL;
+        munmap(g_base_map, g_base_sz);
+        g_base_map = NULL;
+        g_active = NULL;
+        close(g_fd);
+        g_fd = -1;
+        g_arm_tid = -1;
+        return ASMTEST_HW_EUNAVAIL;
+    }
     return ASMTEST_HW_OK;
 #else /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step is the only backend,
         * handled above; a non-single-step backend never passes init()'s available() */

@@ -131,6 +131,20 @@ static void call_auto_reset(asmtest_trace_t *t) {
     t->truncated = false;
 }
 
+/* Phase 8 MSR-rung plumbing: asmtest_amd_msr_trace invokes an out-of-line void(void*)
+ * callback that IT calls (it owns the enable->run->freeze bracket), so the routine's long
+ * result is recovered across that void boundary via this small closure. */
+struct msr_call_closure {
+    const void *code;
+    const long *args;
+    int nargs;
+    long result;
+};
+static void msr_call_trampoline(void *p) {
+    struct msr_call_closure *c = (struct msr_call_closure *)p;
+    c->result = call_auto_invoke(c->code, c->args, c->nargs);
+}
+
 int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
                             int nargs, unsigned policy, long *result,
                             asmtest_trace_t *trace,
@@ -174,6 +188,36 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     }
     if (ran && !trace->truncated)
         return ASMTEST_HW_OK; /* the fast tier captured the whole path */
+
+    /* (1b) MSR-direct escalation rung — inserted BEFORE the ~1000x block-step tier. When
+     * the fast sampled AMD tier came back truncated (a too-fast-to-sample tiny routine —
+     * including a MULTI-exit one the default-on boundary snapshot must skip), its retired
+     * path may still fit one 16-deep MSR read, reconstructed with ZERO PMU interrupts.
+     * asmtest_amd_msr_available() is a true privilege/device gate (root / CAP_SYS_ADMIN +
+     * the `msr` module) that also returns 0 off x86-64 Linux, so this rung self-skips
+     * cleanly to block-step wherever it is absent. It shares AMD_LBR's 16-deep window
+     * ceiling, so CEILING_FREE excludes it in lock-step with the fast AMD_LBR tier.
+     * HONESTY: like the fast begin/end tier it sits beside (and UNLIKE the fork-isolated
+     * steppers below), asmtest_amd_msr_trace runs the routine IN-PROCESS — a second real
+     * execution, so non-idempotent side effects happen again and a faulting routine takes
+     * down the tracer. call_auto_reset() first so the truncated fast-tier trace cannot
+     * contaminate the read; on ANY miss/failure set truncated and fall through (never
+     * early-return on a failed tier) so a too-small-for-MSR routine still reaches block-step. */
+    if (!(policy & ASMTEST_TRACE_CEILING_FREE) && asmtest_amd_msr_available()) {
+        call_auto_reset(trace);
+        struct msr_call_closure cl = {code, args, nargs, 0};
+        if (asmtest_amd_msr_trace(code, len, msr_call_trampoline, &cl, trace) ==
+                ASMTEST_HW_OK &&
+            !trace->truncated) {
+            if (result != NULL)
+                *result = cl.result;
+            ran = 1;
+            if (used != NULL)
+                used->backend = ASMTEST_HWTRACE_AMD_LBR;
+            return ASMTEST_HW_OK;
+        }
+        trace->truncated = true; /* miss/failure: fall through to block-step */
+    }
 
     /* (2) Complete rootless — BTF block-step (no window ceiling), fork-isolated re-run.
      * This is the key middle rung the static CASCADE[] lacks (block-step is a ptrace

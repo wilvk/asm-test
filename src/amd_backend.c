@@ -24,14 +24,11 @@
  * perf_branch_entry[] inputs (test_amd_reconstruction), cross-checked against the
  * DynamoRIO/PT block+instruction partition.
  */
+#include "amd_backend.h" /* shared decls (this TU's definitions) + ASMTEST_HW_* codes */
 #include "asmtest_trace.h"
 
 #include <stddef.h>
 #include <stdint.h>
-
-#define ASMTEST_HW_OK      0
-#define ASMTEST_HW_ENOSYS  (-5)
-#define ASMTEST_HW_EDECODE (-8)
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <cpuid.h>
