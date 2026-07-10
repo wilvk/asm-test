@@ -39,7 +39,10 @@ permissions, or (for CoreSight) a live trace decoder are unavailable. See
 - Optional **in-line assembly** (Keystone: run routines from strings) and
   **disassembly in diagnostics** (Capstone).
 - **Native runtime tracing**: in-process DynamoRIO, hardware trace (Intel PT,
-  AMD LBR, single-step, an ARM CoreSight scaffold), and out-of-process `ptrace`.
+  AMD LBR, single-step, an ARM CoreSight scaffold), and out-of-process `ptrace`
+  — plus **`asmspy`**, an ncurses tool that attaches to a live process out of
+  band and shows its syscalls-with-data or a chosen function's live assembly +
+  call-graph.
 - A **native Win64 tier** (cross-compile + Wine, or the `ms_abi` lane) and
   **ten language bindings** (Python, .NET, Go, Rust, C++, Zig, Node, Java, Ruby,
   Lua).
@@ -72,9 +75,10 @@ Where to start:
   Go, Node, Python, Ruby, Lua, Java, and .NET.
 - **Tracing tiers** — [the tracing hub](docs/guides/tracing/index.md):
   [emulator traces](docs/guides/tracing/traces.md), in-process
-  [DynamoRIO](docs/guides/tracing/native-tracing.md), and the
+  [DynamoRIO](docs/guides/tracing/native-tracing.md), the
   [hardware backends](docs/guides/tracing/hardware-tracing.md) (Intel PT, AMD
-  LBR, ARM CoreSight, single-step).
+  LBR, ARM CoreSight, single-step), and
+  [`asmspy`](docs/guides/tracing/asmspy.md), the interactive process tracer.
 - **Reference** — [API reference](docs/reference/api-reference.md) ·
   [Integration](docs/reference/integration.md) ·
   [vs. alternatives](docs/reference/comparison.md) ·

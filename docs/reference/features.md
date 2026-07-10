@@ -130,6 +130,17 @@ hardware is absent. All are exposed through **all ten language wrappers**
   all three tiers (Intel PT → AMD LBR → DynamoRIO → single-step → CoreSight → emulator),
   with a `NATIVE_ONLY` policy that guards the native→emulator fidelity line.
 
+### Interactive process tracer (`asmspy` CLI, optional, Linux x86-64)
+
+- **`asmspy`** — a small **ncurses front-end** over the out-of-process (`ptrace`)
+  tracer. Attach to any running process and watch, live and out of band, its
+  **syscalls with data** (a mini `strace`) or a chosen **function's live assembly
+  + call-graph**, resampled each time the target calls it; plus headless
+  `--list` / `--syms` / `--log` / `--trace` subcommands for scripts and CI. Needs
+  **libncurses** + **Capstone**; `make cli` (or `make docker-cli`) builds it and
+  self-skips with build guidance when a dependency is absent.
+  ([asmspy](../guides/tracing/asmspy.md))
+
 ### In-line assembler (optional, Keystone)
 
 - Pass a routine as assembly **text** instead of a compiled address, then run it

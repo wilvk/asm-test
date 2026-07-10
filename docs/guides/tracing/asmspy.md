@@ -110,8 +110,8 @@ The same engine drives four non-interactive subcommands — for scripts, CI, or
 when you already know the pid. This is what `make cli-smoke` exercises.
 
 ```bash
-asmspy --list [active]             # list processes (active = order by recent CPU)
-asmspy --syms  <pid> [filter]      # resolved function symbols (name, size, addr, module)
+asmspy --list [active]             # list processes (active = order by recent CPU, adds a CPU column)
+asmspy --syms  <pid> [filter]      # resolved function symbols (addr, size, name, module)
 asmspy --log   <pid> [n]           # stream n syscalls with decoded data (default 20)
 asmspy --trace <pid> <sym> [n]     # n live samples of a function (default 3)
 ```
