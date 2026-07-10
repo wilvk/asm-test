@@ -600,7 +600,14 @@ static class HwTraceProgram
                     long r = 0;
                     tr.Region("auto", () => { r = code.Call(20, 22); });
                     Check(r == 42, $"auto: auto-selected backend traces a live call (got {r})");
-                    Check(tr.Covered(0), "auto: auto-selected backend covers block offset 0");
+                    // Mirror the C reference (examples/test_hwtrace.c test_auto_select): the pick is
+                    // single-step on a PT-/AMD-LBR-less host (block 0 covered), but AMD LBR on a Zen
+                    // 3+/4/5 host with perf HONESTLY TRUNCATES this tiny single-shot fixture (too
+                    // short to be sampled in-region — see amd_backend.c). So the honest invariant is
+                    // "covered OR truncated", not "covered". The byte-exact stream is asserted only
+                    // for the single-step pick below.
+                    Check(tr.Covered(0) || tr.Truncated(),
+                          "auto: auto-selected backend covers block offset 0 (or honestly truncates)");
                     if (ab == HwNative.SINGLESTEP)
                     {
                         var insns = tr.InsnOffsets();
