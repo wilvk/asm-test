@@ -81,8 +81,10 @@ const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 /* stop / target exit).                                                 */
 /* ------------------------------------------------------------------ */
 
-/* One decoded syscall line, already formatted (strace-ish). */
-typedef void (*asmspy_syscall_sink)(void *ctx, const char *line);
+/* One decoded syscall: `line` is the full strace-ish line; `str` is just the
+ * decoded string payload it carried (a path or a read/write buffer), or NULL. */
+typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
+                                    const char *str);
 
 /* Attach to `pid`, stream its syscalls with decoded data via `sink`, detach.
  * Returns 0 on clean detach, negative (an ASMTEST_PTRACE_* spirit code) on an

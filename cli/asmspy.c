@@ -68,6 +68,20 @@ static int u64cmp(const void *a, const void *b) {
 #define MAX_DISASM 512 /* cap displayed distinct instructions           */
 #define MAX_EDGES 256  /* cap displayed distinct call edges             */
 
+/* an aggregated call edge: a callee, a representative call-site, and how many
+ * times it was called (so the functions pane can rank most-active first) */
+typedef struct {
+    uint64_t tgt, site;
+    unsigned count;
+} edge_agg_t;
+
+static int edge_agg_cmp(const void *a, const void *b) {
+    const edge_agg_t *x = a, *y = b;
+    if (x->count != y->count)
+        return x->count < y->count ? 1 : -1; /* count descending */
+    return x->site < y->site ? -1 : x->site > y->site ? 1 : 0;
+}
+
 /* Fill `header`, `dis` (assembly), `fn` (functions called) for one sample. */
 static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
                           unsigned sample, long result,
@@ -114,37 +128,47 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
     }
     free(offs);
 
-    /* distinct call edges -> resolved callee names */
+    /* call edges aggregated by callee, ranked most-active (most calls) first */
     size_t ne = asmtest_descent_edges_len(desc);
-    uint64_t seen[MAX_EDGES];
-    size_t nseen = 0;
-    for (size_t i = 0; i < ne && nseen < MAX_EDGES; i++) {
+    edge_agg_t agg[MAX_EDGES];
+    size_t nagg = 0;
+    for (size_t i = 0; i < ne; i++) {
         uint64_t tgt = asmtest_descent_edge_target(desc, i);
         uint64_t site = asmtest_descent_edge_site(desc, i);
-        int dup = 0;
-        for (size_t k = 0; k < nseen; k++)
-            if (seen[k] == tgt) {
-                dup = 1;
+        size_t k;
+        for (k = 0; k < nagg; k++)
+            if (agg[k].tgt == tgt)
                 break;
-            }
-        if (dup)
-            continue;
-        seen[nseen++] = tgt;
-
+        if (k < nagg) {
+            agg[k].count++;
+            if (site < agg[k].site) /* keep the lowest site as representative */
+                agg[k].site = site;
+        } else if (nagg < MAX_EDGES) {
+            agg[nagg].tgt = tgt;
+            agg[nagg].site = site;
+            agg[nagg].count = 1;
+            nagg++;
+        }
+    }
+    qsort(agg, nagg, sizeof agg[0], edge_agg_cmp);
+    for (size_t i = 0; i < nagg; i++) {
         char line[220];
-        const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, tgt) : NULL;
+        const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, agg[i].tgt) : NULL;
         if (s) {
-            uint64_t delta = tgt - s->addr;
+            uint64_t delta = agg[i].tgt - s->addr;
             if (delta)
-                snprintf(line, sizeof line, "+0x%-4llx  ->  %s+0x%llx  [%s]",
-                         (unsigned long long)site, s->name,
+                snprintf(line, sizeof line,
+                         "%4u×  +0x%-4llx  ->  %s+0x%llx  [%s]", agg[i].count,
+                         (unsigned long long)agg[i].site, s->name,
                          (unsigned long long)delta, s->module);
             else
-                snprintf(line, sizeof line, "+0x%-4llx  ->  %s  [%s]",
-                         (unsigned long long)site, s->name, s->module);
+                snprintf(line, sizeof line, "%4u×  +0x%-4llx  ->  %s  [%s]",
+                         agg[i].count, (unsigned long long)agg[i].site, s->name,
+                         s->module);
         } else {
-            snprintf(line, sizeof line, "+0x%-4llx  ->  0x%llx",
-                     (unsigned long long)site, (unsigned long long)tgt);
+            snprintf(line, sizeof line, "%4u×  +0x%-4llx  ->  0x%llx",
+                     agg[i].count, (unsigned long long)agg[i].site,
+                     (unsigned long long)agg[i].tgt);
         }
         svec_push(fn, line);
     }
@@ -192,8 +216,9 @@ static int cmd_syms(pid_t pid, const char *filter) {
     return 0;
 }
 
-static void log_print_sink(void *ctx, const char *line) {
+static void log_print_sink(void *ctx, const char *line, const char *str) {
     (void)ctx;
+    (void)str; /* the full line already embeds the decoded string */
     printf("%s\n", line);
     fflush(stdout);
 }
@@ -296,6 +321,20 @@ static void log_push(logbuf *lg, const char *s) {
     lg->head = (lg->head + 1) % LOG_CAP;
     if (lg->count < LOG_CAP)
         lg->count++;
+}
+
+/* render the newest `h` lines of a ring buffer into the (y0,x0) w×h box */
+static void draw_log(const logbuf *lg, int y0, int x0, int h, int w) {
+    if (h < 1 || w < 1)
+        return;
+    int show = lg->count < h ? lg->count : h;
+    int start = lg->count - show;
+    for (int r = 0; r < show; r++) {
+        int logical = start + r;
+        int slot =
+            ((lg->head - lg->count + logical) % LOG_CAP + LOG_CAP) % LOG_CAP;
+        mvprintw(y0 + r, x0, "%-*.*s", w, w, lg->lines[slot]);
+    }
 }
 
 /* filterable scrolling list over borrowed display strings */
@@ -417,8 +456,9 @@ typedef struct {
     atomic_bool stop;
     atomic_bool finished;
     int rc; /* engine return code (set before finished) */
-    /* syscall log */
+    /* syscall log (left pane) + the decoded strings it carried (right pane) */
     logbuf log;
+    logbuf strlog;
     /* region view */
     char asm_header[256];
     svec asm_dis, asm_fn;
@@ -431,10 +471,12 @@ typedef struct {
     int mode; /* 0 = syscalls, 1 = region */
 } live_t;
 
-static void live_syscall_sink(void *ctx, const char *line) {
+static void live_syscall_sink(void *ctx, const char *line, const char *str) {
     live_t *L = ctx;
     pthread_mutex_lock(&L->mu);
     log_push(&L->log, line);
+    if (str && *str)
+        log_push(&L->strlog, str); /* the decoded-strings pane */
     pthread_mutex_unlock(&L->mu);
 }
 static void live_region_sink(void *ctx, unsigned sample_no, long result,
@@ -506,15 +548,25 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         int fin = atomic_load(&L.finished);
         int erc = L.rc;
         if (mode == 0) {
+            /* left half: the syscall stream; right half: decoded strings */
+            int midx = cols / 2;
+            int lw = midx - 1;
+            int rx = midx + 1;
+            int rw = cols - rx;
+            if (lw < 1)
+                lw = 1;
+            if (rw < 1)
+                rw = 1;
             int h = rows - 3;
-            int show = L.log.count < h ? L.log.count : h;
-            int start = L.log.count - show;
-            for (int r = 0; r < show; r++) {
-                int logical = start + r;
-                int slot = ((L.log.head - L.log.count + logical) % LOG_CAP +
-                            LOG_CAP) % LOG_CAP;
-                mvprintw(2 + r, 0, "%-*.*s", cols, cols, L.log.lines[slot]);
-            }
+            attron(A_BOLD);
+            mvprintw(1, 0, "SYSCALLS");
+            if (rx < cols)
+                mvprintw(1, rx, "STRINGS");
+            attroff(A_BOLD);
+            for (int r = 1; r < rows - 1; r++)
+                mvaddch(r, midx, ACS_VLINE);
+            draw_log(&L.log, 2, 0, h, lw);
+            draw_log(&L.strlog, 2, rx, h, rw);
         } else {
             mvprintw(1, 0, "%.*s", cols, L.asm_header);
             int split = (rows - 3) * 3 / 5;

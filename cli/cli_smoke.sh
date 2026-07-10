@@ -45,6 +45,8 @@ out=$("$ASM" --trace "$WVPID" work 2 2>&1) || true
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'functions called:' || fail "no functions section"
 printf '%s\n' "$out" | grep -q 'helper' || fail "callee 'helper' not resolved"
+# the callee line is ranked by call count — a leading "<n>x" (work calls helper 5x)
+printf '%s\n' "$out" | grep -qE '^ *[0-9]+.*->.*helper' || fail "no call-count on callee"
 kill "$WVPID" 2>/dev/null || true
 
 # syscall log: attach to syscall_victim (does file I/O each loop)

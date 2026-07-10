@@ -92,8 +92,11 @@ Run `asmspy` with no arguments. It walks four screens:
 2. **Mode select** — `1` for the syscall log, `2` for assembly & functions.
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace.
-4. **Live view** — a scrolling syscall feed, or two panes (assembly + functions
-   called) that refresh each time the function runs. `q`/`ESC` returns.
+4. **Live view** — for the syscall log, a **split** feed: the syscall stream on
+   the left, and the strings it carried (paths and read/write buffers) decoded
+   on the right. For assembly, two panes (the disassembly + the functions
+   called, **ranked most-called first**) that refresh each time the function
+   runs. `q`/`ESC` returns.
 
 The tracing runs on a dedicated thread so the UI stays responsive; quitting
 detaches cleanly and leaves the target running untouched.
@@ -125,7 +128,8 @@ close(fd=3) = 0
 
 **Assembly & functions** — one sample is the disassembled instructions that
 executed (distinct offsets, in address order), the return value, and the
-functions the region called, each resolved to a name:
+functions the region called — each resolved to a name and **ranked by call
+count** (most-active first, so a hot callee sorts to the top):
 
 ```text
 $ asmspy --trace 1234 work 1
@@ -140,7 +144,7 @@ sample #1   ret=35   54 insns (54 executed), 3 blocks
     ...
     +0x46    ret
   functions called:
-    +0x29    ->  helper  [spy_victim]
+       5×  +0x29    ->  helper  [spy_victim]     # called 5× this invocation
 ```
 
 ## How it works

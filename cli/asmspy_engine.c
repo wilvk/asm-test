@@ -126,6 +126,42 @@ static size_t ap_cstr(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr) {
     return apf(b, cap, o, "\"%.*s\"", (int)got, tmp);
 }
 
+/* Decode a syscall's primary STRING (write/read buffer, or a path) into `out`,
+ * escaped but UNquoted — for the TUI's decoded-strings pane. */
+static void decode_data(pid_t pid, uint64_t addr, uint32_t n, char *out,
+                        size_t cap) {
+    uint32_t want = n > DUMP_CAP ? DUMP_CAP : n;
+    unsigned char tmp[DUMP_CAP];
+    if (want && rd(pid, addr, tmp, want) != 0)
+        want = 0;
+    size_t o = 0;
+    for (uint32_t i = 0; i < want; i++) {
+        unsigned char c = tmp[i];
+        if (c == '\n')
+            o = apf(out, cap, o, "\\n");
+        else if (c == '\t')
+            o = apf(out, cap, o, "\\t");
+        else if (c >= 0x20 && c < 0x7f)
+            o = apf(out, cap, o, "%c", c);
+        else
+            o = apf(out, cap, o, "\\x%02x", c);
+    }
+    if (n > want)
+        o = apf(out, cap, o, "...");
+    (void)o;
+}
+
+static void decode_cstr(pid_t pid, uint64_t addr, char *out, size_t cap) {
+    char tmp[DUMP_CAP + 1];
+    struct iovec l = {tmp, DUMP_CAP};
+    struct iovec r = {(void *)(uintptr_t)addr, DUMP_CAP};
+    ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+    if (got < 0)
+        got = 0;
+    tmp[got] = '\0';
+    snprintf(out, cap, "%s", tmp);
+}
+
 static const char *scname(long nr) {
     switch (nr) {
     case SYS_getpid: return "getpid";
@@ -145,14 +181,17 @@ static const char *scname(long nr) {
     }
 }
 
-static void format_syscall(char *b, size_t cap, pid_t pid, long nr,
+static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
+                           pid_t pid, long nr,
                            const struct user_regs_struct *e, long ret) {
     size_t o = 0;
+    sout[0] = '\0';
     switch (nr) {
     case SYS_write:
         o = apf(b, cap, o, "write(fd=%llu, ", (unsigned long long)e->rdi);
         o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)e->rdx);
         o = apf(b, cap, o, ", %llu) = %ld", (unsigned long long)e->rdx, ret);
+        decode_data(pid, e->rsi, (uint32_t)e->rdx, sout, scap);
         break;
     case SYS_read:
         o = apf(b, cap, o, "read(fd=%llu, %llu) = ", (unsigned long long)e->rdi,
@@ -160,6 +199,7 @@ static void format_syscall(char *b, size_t cap, pid_t pid, long nr,
         if (ret > 0) {
             o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)ret);
             o = apf(b, cap, o, " [%ld]", ret);
+            decode_data(pid, e->rsi, (uint32_t)ret, sout, scap);
         } else {
             o = apf(b, cap, o, "%ld", ret);
         }
@@ -173,6 +213,7 @@ static void format_syscall(char *b, size_t cap, pid_t pid, long nr,
         o = apf(b, cap, o, ", ");
         o = ap_cstr(b, cap, o, pid, e->rsi);
         o = apf(b, cap, o, ", 0x%llx) = %ld", (unsigned long long)e->rdx, ret);
+        decode_cstr(pid, e->rsi, sout, scap);
         break;
     case SYS_close:
         o = apf(b, cap, o, "close(fd=%llu) = %ld", (unsigned long long)e->rdi,
@@ -237,11 +278,11 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                 entry_regs = regs;
                 at_entry = 0;
             } else {
-                char line[512];
-                format_syscall(line, sizeof line, pid, ent_nr, &entry_regs,
-                               (long)regs.rax);
+                char line[512], sdata[160];
+                format_syscall(line, sizeof line, sdata, sizeof sdata, pid,
+                               ent_nr, &entry_regs, (long)regs.rax);
                 if (sink)
-                    sink(ctx, line);
+                    sink(ctx, line, sdata[0] ? sdata : NULL);
                 at_entry = 1;
                 done++;
             }
