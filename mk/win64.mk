@@ -186,11 +186,51 @@ win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
              win64-pool-test win64-filter-test win64-seh-test win64-ss-test \
              win64-runner-test
 
+# Windows mirror of `make hwtrace-attach-demo`: attach to a SEPARATE process the
+# framework did NOT start (attach_victim_win) and single-step one call of its hot
+# function out of process, via the Win32 Debug API (DebugActiveProcess + int3 at the
+# region + EFLAGS.TF single-step). Capstone-free, so it reports ordered offsets like
+# the Linux no-Capstone path. BUILDS with mingw; runs on real Windows, best-effort
+# under Wine (cross-process debug-event delivery is a Wine feature, not guaranteed).
+.PHONY: win64-attach-demo
+win64-attach-demo: | $(WIN64_BUILD)
+	$(WIN64_CC) -O0 -g -Wall examples/win/attach_victim_win.c \
+	  -o $(WIN64_BUILD)/attach_victim_win.exe
+	$(WIN64_CC) -O2 -Wall examples/win/attach_trace_win.c \
+	  -o $(WIN64_BUILD)/attach_trace_win.exe
+	@echo "== win64-attach-demo (trace a separate, already-running Windows process) =="
+	WIN64_BUILD=$(WIN64_BUILD) WINE='$(WINE)' sh examples/win/attach_demo_win.sh
+
+# Windows mirror of `make hwtrace-syscall-log`: attach to a SEPARATE process and log
+# its ntdll calls WITH the data crossing the kernel boundary (write buffers, create
+# paths) by breakpointing the ntdll Nt* stubs — Windows has no PTRACE_SYSCALL, so the
+# stubs ARE the stable interception layer. BUILDS with mingw; runs on real Windows,
+# best-effort under Wine.
+.PHONY: win64-syscall-log
+win64-syscall-log: | $(WIN64_BUILD)
+	$(WIN64_CC) -O0 -g -Wall examples/win/syscall_victim_win.c \
+	  -o $(WIN64_BUILD)/syscall_victim_win.exe
+	$(WIN64_CC) -O2 -Wall examples/win/syscall_log_win.c \
+	  -o $(WIN64_BUILD)/syscall_log_win.exe
+	@echo "== win64-syscall-log (log a separate Windows process's ntdll calls + data) =="
+	WIN64_BUILD=$(WIN64_BUILD) WINE='$(WINE)' sh examples/win/syscall_demo_win.sh
+
 # Build the win64 image on the cached bindings base, then run its CMD.
 # x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.
-.PHONY: docker-win64
+.PHONY: docker-win64 docker-win64-attach-demo docker-win64-syscall-log
 docker-win64: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-win64
+
+# The two out-of-process Windows demos in the asmtest-win64 image (mingw + Wine).
+docker-win64-attach-demo: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-win64 make win64-attach-demo
+
+docker-win64-syscall-log: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-win64 make win64-syscall-log
 
