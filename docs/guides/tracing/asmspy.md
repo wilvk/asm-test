@@ -87,16 +87,19 @@ docker run --rm -it --cap-add=SYS_PTRACE asmtest-cli bash   # then, inside:
 Run `asmspy` with no arguments. It walks four screens:
 
 1. **Process picker** — every process, filterable as you type; arrow keys /
-   `PgUp`/`PgDn` to move, `Enter` to select, `q` to quit. Processes you cannot
-   `ptrace` are marked with `!`.
+   `PgUp`/`PgDn` to move, `Enter` to select, `q` to quit. `Tab` toggles the
+   order between **PID** and **most recently active** (a short per-process CPU
+   sample). Processes you cannot `ptrace` are marked with `!`.
 2. **Mode select** — `1` for the syscall log, `2` for assembly & functions.
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace.
 4. **Live view** — for the syscall log, a **split** feed: the syscall stream on
    the left, and the strings it carried (paths and read/write buffers) decoded
-   on the right. For assembly, two panes (the disassembly + the functions
-   called, **ranked most-called first**) that refresh each time the function
-   runs. `q`/`ESC` returns.
+   on the right. For assembly, two panes — the disassembly, **each instruction
+   prefixed with its execution count** (so a hot loop body stands out), and the
+   functions called, **ranked most-called first** — refreshing each time the
+   function runs. Press `b` to go back to this process's options, or `q`/`ESC`
+   for the process list.
 
 The tracing runs on a dedicated thread so the UI stays responsive; quitting
 detaches cleanly and leaves the target running untouched.
@@ -107,7 +110,7 @@ The same engine drives four non-interactive subcommands — for scripts, CI, or
 when you already know the pid. This is what `make cli-smoke` exercises.
 
 ```bash
-asmspy --list                      # list processes (ATT column = attachable)
+asmspy --list [active]             # list processes (active = order by recent CPU)
 asmspy --syms  <pid> [filter]      # resolved function symbols (name, size, addr, module)
 asmspy --log   <pid> [n]           # stream n syscalls with decoded data (default 20)
 asmspy --trace <pid> <sym> [n]     # n live samples of a function (default 3)
@@ -136,15 +139,15 @@ $ asmspy --trace 1234 work 1
 tracing work @ 0x5598...51e3 (71 bytes) in pid 1234
 
 sample #1   ret=35   54 insns (54 executed), 3 blocks
-  assembly:
-    +0x0     endbr64
-    +0x5     mov rbp, rsp
+  assembly:                                      # <count>× per instruction
+       1×  +0x0     endbr64
+       1×  +0x5     mov rbp, rsp
     ...
-    +0x29    call 0x5598...51c9
+       5×  +0x29    call 0x5598...51c9            # the loop body runs 5×
     ...
-    +0x46    ret
-  functions called:
-       5×  +0x29    ->  helper  [spy_victim]     # called 5× this invocation
+       1×  +0x46    ret
+  functions called:                              # ranked most-called first
+       5×  +0x29    ->  helper  [spy_victim]
 ```
 
 ## How it works

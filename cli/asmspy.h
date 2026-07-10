@@ -35,11 +35,20 @@ typedef struct {
     char user[24];    /* owner username (or numeric uid)           */
     char cmd[192];    /* cmdline (argv joined), or [comm] for a kthread */
     int attachable;   /* 1 if same euid as us (ptrace_scope=1 friendly) */
+    unsigned long long cpu; /* CPU jiffies used during the sample window
+                             * (ASMSPY_SORT_ACTIVE only; 0 otherwise)   */
 } asmspy_proc_t;
 
-/* Scan /proc into a malloc'd, pid-sorted array. Returns count (>=0) into *out
- * (caller frees with free()), or -1 on failure. */
-int asmspy_proclist(asmspy_proc_t **out, size_t *count);
+/* Process list ordering. */
+typedef enum {
+    ASMSPY_SORT_PID = 0,    /* ascending pid (cheap, no sampling)          */
+    ASMSPY_SORT_ACTIVE = 1, /* most recently active first (a ~150ms CPU sample) */
+} asmspy_sort_t;
+
+/* Scan /proc into a malloc'd array ordered per `sort`. Returns count (>=0) into
+ * *out (caller frees with free()), or -1 on failure. ASMSPY_SORT_ACTIVE samples
+ * per-process CPU time over a short window, so it briefly sleeps. */
+int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort);
 
 /* ------------------------------------------------------------------ */
 /* Function-symbol resolver (asmspy_proc.c)                            */

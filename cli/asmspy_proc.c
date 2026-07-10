@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "asmspy.h"
@@ -90,7 +91,40 @@ static void proc_cmdline(const char *pid, char *out, size_t n) {
         out[--got] = '\0';
 }
 
-int asmspy_proclist(asmspy_proc_t **out, size_t *count) {
+/* Total CPU jiffies (utime + stime) of a pid, from /proc/<pid>/stat. The comm
+ * field can contain spaces/parens, so parse everything AFTER the last ')'. */
+static unsigned long long proc_cpu(const char *pid) {
+    char path[300];
+    snprintf(path, sizeof path, "/proc/%s/stat", pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[1024];
+    unsigned long long cpu = 0;
+    if (fgets(line, sizeof line, f)) {
+        char *p = strrchr(line, ')');
+        if (p) {
+            unsigned long ut = 0, st = 0;
+            /* after ')': state ppid pgrp session tty tpgid flags minflt cminflt
+             * majflt cmajflt utime stime ... (utime=field14, stime=field15) */
+            if (sscanf(p + 1,
+                       " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu",
+                       &ut, &st) == 2)
+                cpu = (unsigned long long)ut + st;
+        }
+    }
+    fclose(f);
+    return cpu;
+}
+
+static int proc_cpu_cmp(const void *a, const void *b) {
+    const asmspy_proc_t *x = a, *y = b;
+    if (x->cpu != y->cpu)
+        return x->cpu < y->cpu ? 1 : -1; /* most-active first */
+    return x->pid < y->pid ? -1 : x->pid > y->pid ? 1 : 0;
+}
+
+int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
     DIR *d = opendir("/proc");
     if (!d)
         return -1;
@@ -136,19 +170,34 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count) {
             snprintf(p->user, sizeof p->user, "%u", (unsigned)uid);
 
         p->attachable = (me == 0) || (uid == me);
+        /* first CPU snapshot (becomes a delta below when sorting by activity) */
+        p->cpu = (sort == ASMSPY_SORT_ACTIVE) ? proc_cpu(e->d_name) : 0;
         n++;
     }
     closedir(d);
 
-    /* pid-sorted for a stable list */
-    for (size_t i = 1; i < n; i++) { /* small insertion sort; lists are short */
-        asmspy_proc_t key = v[i];
-        size_t j = i;
-        while (j > 0 && v[j - 1].pid > key.pid) {
-            v[j] = v[j - 1];
-            j--;
+    if (sort == ASMSPY_SORT_ACTIVE) {
+        /* second snapshot after a short window -> per-process CPU delta */
+        struct timespec ts = {0, 150L * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        for (size_t i = 0; i < n; i++) {
+            char pids[16];
+            snprintf(pids, sizeof pids, "%d", (int)v[i].pid);
+            unsigned long long c1 = proc_cpu(pids);
+            v[i].cpu = (c1 > v[i].cpu) ? c1 - v[i].cpu : 0;
         }
-        v[j] = key;
+        qsort(v, n, sizeof *v, proc_cpu_cmp);
+    } else {
+        /* pid-sorted for a stable list */
+        for (size_t i = 1; i < n; i++) { /* small insertion sort */
+            asmspy_proc_t key = v[i];
+            size_t j = i;
+            while (j > 0 && v[j - 1].pid > key.pid) {
+                v[j] = v[j - 1];
+                j--;
+            }
+            v[j] = key;
+        }
     }
 
     *out = v;

@@ -17,6 +17,11 @@ echo "--- asmspy --list (head) ---"
 out=$("$ASM" --list) || fail "--list"
 printf '%s\n' "$out" | head -6
 
+echo "--- asmspy --list active (head) ---"
+outa=$("$ASM" --list active) || fail "--list active"
+printf '%s\n' "$outa" | head -4
+printf '%s\n' "$outa" | grep -qi 'CPU' || fail "--list active: no CPU column"
+
 # region trace: attach to attach_victim (has a hot leaf function 'hotfn')
 "$BUILD/attach_victim" 2>/dev/null &
 AVPID=$!
@@ -34,6 +39,8 @@ out=$("$ASM" --trace "$AVPID" hotfn 2 2>&1) || true
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'ret=57' || fail "expected ret=57 from hotfn(6,7)"
 printf '%s\n' "$out" | grep -q 'assembly:' || fail "no assembly section"
+# each disassembled line is prefixed with its execution count (loop body runs >1x)
+printf '%s\n' "$out" | grep -qE '^ *[0-9]+.*[+]0x' || fail "no per-instruction count"
 
 # call-graph: attach to spy_victim (work() calls helper()) and check the callee
 # is resolved by name in the "functions called" view.

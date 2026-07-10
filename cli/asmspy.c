@@ -97,17 +97,25 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
              sample, result, recorded, total, blocks,
              asmtest_emu_trace_truncated(tr) ? "  (truncated)" : "");
 
-    /* distinct instruction offsets, ascending */
+    /* distinct instruction offsets (ascending) with per-offset execution counts,
+     * so hot instructions (a loop body runs N×) are annotated in place */
     size_t ni = (size_t)recorded;
     uint64_t *offs = ni ? malloc(ni * sizeof *offs) : NULL;
+    uint32_t *cnts = ni ? malloc(ni * sizeof *cnts) : NULL;
     size_t nd = 0;
-    if (offs) {
+    if (offs && cnts) {
         for (size_t i = 0; i < ni; i++)
             offs[i] = asmtest_emu_trace_insn_at(tr, i);
         qsort(offs, ni, sizeof *offs, u64cmp);
-        for (size_t i = 0; i < ni; i++)
-            if (i == 0 || offs[i] != offs[i - 1])
-                offs[nd++] = offs[i];
+        for (size_t i = 0; i < ni; i++) {
+            if (i == 0 || offs[i] != offs[i - 1]) {
+                offs[nd] = offs[i];
+                cnts[nd] = 1;
+                nd++;
+            } else {
+                cnts[nd - 1]++;
+            }
+        }
     }
     for (size_t i = 0; i < nd && i < MAX_DISASM; i++) {
         char line[200], dbuf[160] = "";
@@ -115,10 +123,11 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
             asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, offs[i], dbuf,
                           sizeof dbuf);
         if (dbuf[0])
-            snprintf(line, sizeof line, "+0x%-4llx  %s",
+            snprintf(line, sizeof line, "%4u×  +0x%-4llx  %s", cnts[i],
                      (unsigned long long)offs[i], dbuf);
         else
-            snprintf(line, sizeof line, "+0x%llx", (unsigned long long)offs[i]);
+            snprintf(line, sizeof line, "%4u×  +0x%llx", cnts[i],
+                     (unsigned long long)offs[i]);
         svec_push(dis, line);
     }
     if (nd > MAX_DISASM) {
@@ -127,6 +136,7 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
         svec_push(dis, more);
     }
     free(offs);
+    free(cnts);
 
     /* call edges aggregated by callee, ranked most-active (most calls) first */
     size_t ne = asmtest_descent_edges_len(desc);
@@ -180,17 +190,25 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
 /* Headless subcommands                                                */
 /* ================================================================== */
 
-static int cmd_list(void) {
+static int cmd_list(asmspy_sort_t sort) {
     asmspy_proc_t *v = NULL;
     size_t n = 0;
-    if (asmspy_proclist(&v, &n) < 0) {
+    if (asmspy_proclist(&v, &n, sort) < 0) {
         fprintf(stderr, "cannot read /proc\n");
         return 1;
     }
-    printf("%-8s %-12s %-4s %s\n", "PID", "USER", "ATT", "COMMAND");
-    for (size_t i = 0; i < n; i++)
-        printf("%-8d %-12.12s %-4s %.80s\n", v[i].pid, v[i].user,
-               v[i].attachable ? "yes" : "-", v[i].cmd);
+    if (sort == ASMSPY_SORT_ACTIVE) {
+        printf("%-8s %-8s %-12s %-4s %s\n", "PID", "CPU", "USER", "ATT",
+               "COMMAND");
+        for (size_t i = 0; i < n; i++)
+            printf("%-8d %-8llu %-12.12s %-4s %.72s\n", v[i].pid, v[i].cpu,
+                   v[i].user, v[i].attachable ? "yes" : "-", v[i].cmd);
+    } else {
+        printf("%-8s %-12s %-4s %s\n", "PID", "USER", "ATT", "COMMAND");
+        for (size_t i = 0; i < n; i++)
+            printf("%-8d %-12.12s %-4s %.80s\n", v[i].pid, v[i].user,
+                   v[i].attachable ? "yes" : "-", v[i].cmd);
+    }
     free(v);
     return 0;
 }
@@ -508,9 +526,11 @@ static void *tracer_thread(void *arg) {
     return NULL;
 }
 
-/* Run a live view (mode 0 syscalls / mode 1 region) until the user quits. */
-static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
-                          const char *title, const asmspy_symtab_t *syms) {
+/* Run a live view (mode 0 syscalls / mode 1 region) until the user leaves it.
+ * Returns 0 to go back to the process's options (the user pressed 'b'), or 1 to
+ * go back to the process list ('q'/ESC). */
+static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
+                         const char *title, const asmspy_symtab_t *syms) {
     live_t L;
     memset(&L, 0, sizeof L);
     pthread_mutex_init(&L.mu, NULL);
@@ -533,9 +553,10 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     if (pthread_create(&th, NULL, tracer_thread, &L) != 0) {
         pthread_sigmask(SIG_UNBLOCK, &block, NULL);
         pthread_mutex_destroy(&L.mu);
-        return;
+        return 1;
     }
 
+    int back = 1; /* 1 = to process list (q/ESC), 0 = to options (b) */
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
@@ -592,18 +613,25 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             char e[128];
             asmspy_strerror(erc, e, sizeof e);
             mvprintw(rows - 1, 0,
-                     "[tracer stopped: %s]  press any key to return",
+                     "[tracer stopped: %s]  b: options   q: processes",
                      erc ? e : "target exited or done");
         } else {
-            mvprintw(rows - 1, 0, "q/ESC: back   (live)");
+            mvprintw(rows - 1, 0,
+                     "b: back to options   q/ESC: processes   (live)");
         }
         clrtoeol();
         refresh();
 
         timeout(120);
         int ch = getch();
-        if (ch == 'q' || ch == 27 || (fin && ch != ERR))
+        if (ch == 'q' || ch == 27) {
+            back = 1;
             break;
+        }
+        if (ch == 'b' || (fin && ch != ERR)) {
+            back = 0;
+            break;
+        }
     }
 
     atomic_store(&L.stop, true);
@@ -628,6 +656,7 @@ static void run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     svec_free(&L.asm_dis);
     svec_free(&L.asm_fn);
     pthread_mutex_destroy(&L.mu);
+    return back;
 }
 
 /* mode-select screen; returns 0 syscalls, 1 region, -1 back */
@@ -714,33 +743,31 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
     return result;
 }
 
-int asmspy_tui(void) {
-    setlocale(LC_ALL, "");
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    curs_set(0);
-
-    for (;;) {
-        /* ---- process picker ---- */
+/* process picker with a live sort toggle; returns 0 and fills *picked on
+ * selection, -1 on quit. Tab toggles pid <-> most-recently-active order. */
+static int screen_procs(asmspy_proc_t *picked) {
+    asmspy_sort_t sort = ASMSPY_SORT_PID;
+    for (;;) { /* (re-)scan loop — Tab re-enters with the other sort */
         asmspy_proc_t *procs = NULL;
         size_t np = 0;
-        if (asmspy_proclist(&procs, &np) < 0) {
-            endwin();
-            fprintf(stderr, "cannot read /proc\n");
-            return 1;
-        }
+        if (asmspy_proclist(&procs, &np, sort) < 0)
+            return -1;
         char **items = malloc((np ? np : 1) * sizeof *items);
         if (!items) {
             free(procs);
-            continue; /* transient OOM — retry the picker */
+            return -1;
         }
         for (size_t i = 0; i < np; i++) {
             char b[256];
-            snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s", procs[i].pid,
-                     procs[i].attachable ? ' ' : '!', procs[i].user,
-                     procs[i].cmd);
+            if (sort == ASMSPY_SORT_ACTIVE)
+                snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %.170s",
+                         procs[i].pid, procs[i].cpu,
+                         procs[i].attachable ? ' ' : '!', procs[i].user,
+                         procs[i].cmd);
+            else
+                snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s", procs[i].pid,
+                         procs[i].attachable ? ' ' : '!', procs[i].user,
+                         procs[i].cmd);
             items[i] = strdup(b);
         }
         List L;
@@ -749,88 +776,121 @@ int asmspy_tui(void) {
                 free(items[i]);
             free(items);
             free(procs);
-            continue;
+            return -1;
         }
 
-        int chosen = -1;
-        for (;;) {
+        int outcome = 0; /* 1 pick, 2 quit, 3 toggle */
+        int selidx = -1;
+        while (outcome == 0) {
             int rows, cols;
             getmaxyx(stdscr, rows, cols);
             erase();
             attron(A_BOLD);
-            mvprintw(0, 0, "asmspy — select a process    (%zu; '!' = not "
-                           "owned by you)",
+            mvprintw(0, 0,
+                     "asmspy — select a process   [sort: %s]   (%zu; '!' = not "
+                     "yours)",
+                     sort == ASMSPY_SORT_ACTIVE ? "recent activity (CPU jiffies)"
+                                                : "pid",
                      np);
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
-            mvprintw(rows - 1, 0, "type: filter   Enter: select   q: quit");
+            mvprintw(rows - 1, 0,
+                     "type: filter   Enter: select   Tab: sort by %s   q: quit",
+                     sort == ASMSPY_SORT_ACTIVE ? "pid" : "activity");
             clrtoeol();
             refresh();
             int ch = getch();
-            if (ch == 'q' && L.flen == 0) {
-                chosen = -2;
-                break;
-            }
-            if (ch == 27) {
-                chosen = -2;
-                break;
-            }
-            int sel = list_key(&L, ch, rows - 3);
-            if (sel >= 0) {
-                chosen = sel;
-                break;
+            if ((ch == 'q' && L.flen == 0) || ch == 27)
+                outcome = 2;
+            else if (ch == '\t')
+                outcome = 3;
+            else {
+                int sel = list_key(&L, ch, rows - 3);
+                if (sel >= 0) {
+                    selidx = sel;
+                    outcome = 1;
+                }
             }
         }
-        list_done(&L);
 
-        asmspy_proc_t picked;
-        int have = 0;
-        if (chosen >= 0) {
-            picked = procs[chosen];
-            have = 1;
-        }
+        asmspy_proc_t chosen;
+        int have = (outcome == 1);
+        if (have)
+            chosen = procs[selidx];
+        list_done(&L);
         for (size_t i = 0; i < np; i++)
             free(items[i]);
         free(items);
         free(procs);
-        if (!have)
+
+        if (outcome == 1) {
+            *picked = chosen;
+            return 0;
+        }
+        if (outcome == 2)
+            return -1;
+        /* outcome == 3: flip sort and re-scan */
+        sort = (sort == ASMSPY_SORT_ACTIVE) ? ASMSPY_SORT_PID
+                                            : ASMSPY_SORT_ACTIVE;
+    }
+}
+
+int asmspy_tui(void) {
+    setlocale(LC_ALL, "");
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(0);
+
+    for (;;) { /* process-list loop */
+        asmspy_proc_t picked;
+        if (screen_procs(&picked) != 0)
             break; /* quit */
 
-        /* ---- mode select ---- */
-        int mode = screen_mode(&picked);
-        if (mode < 0)
-            continue; /* back to process list */
+        for (;;) { /* per-process options loop ('b' in a live view returns here) */
+            int mode = screen_mode(&picked);
+            if (mode < 0)
+                break; /* back to the process list */
 
-        if (mode == 0) {
-            char title[128];
-            snprintf(title, sizeof title, "asmspy — syscalls of pid %d (%.*s)",
-                     picked.pid, 40, picked.cmd);
-            run_live_view(picked.pid, 0, 0, 0, title, NULL);
-        } else {
-            asmspy_symtab_t t;
-            if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
-                /* brief message, then back */
-                erase();
-                mvprintw(0, 0, "no function symbols for pid %d (stripped? "
-                               "permission?) — press a key",
-                         picked.pid);
-                refresh();
-                getch();
-                asmspy_symtab_free(&t);
-                continue;
-            }
-            uint64_t base = 0;
-            size_t len = 0;
-            if (screen_syms(picked.pid, &base, &len, &t) == 0) {
-                const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
-                char title[160];
+            int nav; /* run_live_view: 0 = back to options, 1 = to process list */
+            if (mode == 0) {
+                char title[128];
                 snprintf(title, sizeof title,
-                         "asmspy — %s @ 0x%llx of pid %d",
-                         s ? s->name : "region", (unsigned long long)base,
-                         picked.pid);
-                run_live_view(picked.pid, 1, base, len, title, &t);
+                         "asmspy — syscalls of pid %d (%.*s)", picked.pid, 40,
+                         picked.cmd);
+                nav = run_live_view(picked.pid, 0, 0, 0, title, NULL);
+            } else {
+                asmspy_symtab_t t;
+                if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
+                    erase();
+                    mvprintw(0, 0,
+                             "no function symbols for pid %d (stripped? "
+                             "permission?) — press a key",
+                             picked.pid);
+                    refresh();
+                    getch();
+                    asmspy_symtab_free(&t);
+                    continue; /* back to options */
+                }
+                uint64_t base = 0;
+                size_t len = 0;
+                if (screen_syms(picked.pid, &base, &len, &t) == 0) {
+                    const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
+                    char title[160];
+                    snprintf(title, sizeof title,
+                             "asmspy — %s @ 0x%llx of pid %d",
+                             s ? s->name : "region", (unsigned long long)base,
+                             picked.pid);
+                    nav = run_live_view(picked.pid, 1, base, len, title, &t);
+                } else {
+                    nav = 0; /* symbol-picker ESC -> back to options */
+                }
+                asmspy_symtab_free(&t);
             }
-            asmspy_symtab_free(&t);
+            if (nav == 1)
+                break; /* back to the process list */
+            /* nav == 0: loop -> options again */
         }
     }
 
@@ -846,7 +906,7 @@ static int usage(const char *argv0) {
     fprintf(stderr,
             "asmspy — watch a running process out of band\n\n"
             "  %s                         interactive TUI\n"
-            "  %s --list                  list attachable processes\n"
+            "  %s --list [active]         list processes (active = by recent CPU)\n"
             "  %s --syms  <pid> [filter]  list resolved function symbols\n"
             "  %s --log   <pid> [n]       stream n syscalls with data\n"
             "  %s --trace <pid> <sym> [n] n live samples of a function\n",
@@ -860,7 +920,9 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)
         return usage(argv[0]);
     if (strcmp(argv[1], "--list") == 0)
-        return cmd_list();
+        return cmd_list((argc >= 3 && strcmp(argv[2], "active") == 0)
+                            ? ASMSPY_SORT_ACTIVE
+                            : ASMSPY_SORT_PID);
     if (strcmp(argv[1], "--syms") == 0 && argc >= 3)
         return cmd_syms((pid_t)atoi(argv[2]), argc >= 4 ? argv[3] : NULL);
     if (strcmp(argv[1], "--log") == 0 && argc >= 3)
