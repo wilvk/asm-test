@@ -128,7 +128,7 @@ default sandbox; the Intel-PT gating is unchanged (AMD still self-skips PT).
 
 ---
 
-## Phase 0 — Vendor gating & feature detection *(planned)*
+## Phase 0 — Vendor gating & feature detection *(LANDED)*
 
 **Goal.** Extend the detect-and-skip chain so `asmtest_hwtrace_available(AMD_LBR)`
 returns 1 only on an AMD host that actually exposes usable branch records.
@@ -159,7 +159,7 @@ on non-AMD hosts, each with the specific reason; returns available only on a Zen
 
 ---
 
-## Phase 1 — Branch-record capture *(planned)*
+## Phase 1 — Branch-record capture *(LANDED)*
 
 **Goal.** Capture the routine's taken-branch records into a host-side buffer around the
 begin/end markers, on the calling thread (`pid=0`).
@@ -190,7 +190,7 @@ order, ending at the region exit.
 
 ---
 
-## Phase 2 — LBR reconstruction backend (`src/amd_backend.c`) *(planned)*
+## Phase 2 — LBR reconstruction backend (`src/amd_backend.c`) *(LANDED)*
 
 **Goal.** Turn the ordered `perf_branch_entry[]` into the same offset stream the PT
 backend produces, by replaying asm-test's registered bytes between branches.
@@ -227,7 +227,7 @@ same code, and block offset 0 is recorded.
 
 ---
 
-## Phase 3 — Block-boundary parity *(planned)*
+## Phase 3 — Block-boundary parity *(LANDED)*
 
 **Goal.** Prove the normalized block partition matches the other backends.
 
@@ -243,7 +243,7 @@ fixture routines (within the Tier-A window).
 
 ---
 
-## Phase 4 — Window-overflow truncation & DynamoRIO fallback routing *(planned)*
+## Phase 4 — Window-overflow truncation & DynamoRIO fallback routing *(LANDED)*
 
 **Goal.** Make the 16-branch ceiling *safe and honest*, never silently wrong.
 

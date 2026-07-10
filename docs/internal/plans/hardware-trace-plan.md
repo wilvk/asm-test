@@ -101,7 +101,7 @@ stays the forward-look.
 
 ---
 
-## Phase 1 - Hardware-assisted trace backends (Intel PT, ARM CoreSight) *(planned)*
+## Phase 1 - Hardware-assisted trace backends (Intel PT, ARM CoreSight) *(Intel PT LANDED; ARM CoreSight forward-look)*
 
 **Goal.** Record native block and instruction coverage with near-zero *capture*
 overhead on capable hardware — Intel PT on bare-metal Intel x86-64, ARM CoreSight

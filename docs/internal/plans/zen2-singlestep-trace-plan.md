@@ -160,7 +160,7 @@ specific reason on non-x86-64 / non-Linux builds.
 
 ---
 
-## Phase 1 — The stepper (`src/ss_backend.c`) *(planned)*
+## Phase 1 — The stepper (`src/ss_backend.c`) *(LANDED)*
 
 **Goal.** Drive the registered routine under `TF` and capture the ordered in-region
 `RIP` stream into the active region's trace, in-process, on the calling thread.
@@ -198,7 +198,7 @@ Unicorn/DynamoRIO/PT/AMD result — captured live on this Zen 2 host.
 
 ---
 
-## Phase 2 — Block-boundary parity *(planned)*
+## Phase 2 — Block-boundary parity *(LANDED)*
 
 **Goal.** Produce the same normalized block partition the other backends do, from
 the single-step instruction stream.
@@ -219,7 +219,7 @@ harness; here it runs **live**, not against synthetic input).
 
 ---
 
-## Phase 3 — Robustness & honest truncation *(planned)*
+## Phase 3 — Robustness & honest truncation *(LANDED)*
 
 **Goal.** Never emit a corrupt or partial trace as if complete.
 
@@ -241,7 +241,7 @@ compute routine does not, across repeated runs (determinism).
 
 ---
 
-## Phase 4 — Build, API, and binding surface *(planned)*
+## Phase 4 — Build, API, and binding surface *(LANDED)*
 
 **Goal.** Wire the backend into the build and expose it through the existing API and
 every language wrapper with zero new surface.

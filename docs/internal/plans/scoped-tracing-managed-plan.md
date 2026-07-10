@@ -2,11 +2,11 @@
 
 > **Reconciliation note (2026-07-07):** moved back to `plans/` from `archive/` — this plan
 > is **partially landed**, not done, so it belongs with the active plans. The §D4 shared
-> merge core, version-aware render, the Node (§D1) / Java (§D2) scope constructs, and the
-> .NET §D0.1/§D0.2 rundown ship and are tested; §D0.3's named-method form, §D0.4
-> `AsyncLocal` async-hop stitching, the §D1/§D2 per-runtime async-hop hooks, and the §D3
-> live-JIT cross-process address channel remain **forward-look** (need PT hardware / a
-> second process to validate). The status block below is accurate.
+> merge core, version-aware render, the Node (§D1) / Java (§D2) scope constructs, the
+> .NET §D0.1/§D0.2 rundown, §D0.3's named-method form (`AsmTrace.Method`), and §D0.4's
+> `AsyncLocal` async-hop stitching (`AsmStitchedTrace`) ship and are tested; the §D1/§D2
+> per-runtime async-hop hooks and the §D3 live-JIT cross-process address channel remain
+> **forward-look** (need PT hardware / a second process to validate). The status block below is accurate.
 
 The **hard** half of the [scoped in-process tracing
 plan](../archive/plans/scoped-inprocess-tracing-plan.md) — extending the scope model to the three

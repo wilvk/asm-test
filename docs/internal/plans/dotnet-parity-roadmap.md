@@ -9,9 +9,9 @@
 > (which backend runs where) and consumes the same source of record: the tier headers +
 > [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh).
 
-> **Status: planned (roadmap).** No code in this document has landed beyond what the
-> matrix already shows. The formal parity gate is **green** —
-> `bindings-parity: OK — 103 tier symbols x 10 bindings in sync` — but green means only
+> **Status: partially landed (roadmap).** Phase 1 and part of Phase 2 have landed (see the
+> status legend below and CHANGELOG.md); the rest is forward-look. The formal parity gate is
+> **green** — `bindings-parity: OK — 114 tier symbols x 10 bindings in sync` — but green means only
 > that every binding either wraps each tier symbol *or carries a documented exemption* in
 > [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt). The
 > `ALL`-exemptions the gate consumes are exactly the .NET-lead surface below, so a green
@@ -20,9 +20,10 @@
 > should not.
 >
 > Status legend: **Phase 1 LANDED** (2026-07-08, `afc6ee4`) — the mechanical Cluster 1
-> rollout. **Phase 2 STARTED** — increment 1 (the §Z1 in-process whole-window trio in
-> Node/Java) LANDED (2026-07-08, `c2327bc`); the managed async-hop + JIT-resolution +
-> out-of-process managed whole-window remain planned/forward-look. **Phase 3 planned**
+> rollout. **Phase 2 STARTED** — the §Z1 in-process whole-window trio, out-of-process stealth
+> + crash-proof whole-window capture, version-aware render, and the §D0.4 async-hop merge have
+> LANDED in Node/Java (`c2327bc` ff.; see CHANGELOG.md); the .NET deep live-JIT per-method
+> resolution (E3) remains forward-look. **Phase 3 planned**
 > (grow-a-use, per binding). The clean-path validation is PT-hardware-gated (this host is AMD).
 
 ## Why this is not "wrap 13 symbols × 9 bindings"

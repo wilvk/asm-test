@@ -15,8 +15,8 @@ complete-everywhere-else" the automatic default. See
 
 > Status legend: **LANDED** — Phases 1–5 shipped (`8a830fa`; the MSR rung folded in by
 > `37118ec`). `asmtest_trace_call_auto` is live in [trace_auto.c](../../../src/trace_auto.c)
-> with the cross-tier cascade, the truncation-triggered escalation ladder, the host-gated
-> `#else` ENOSYS stub, and `test_call_auto` in the hwtrace suite. The live escalation (LBR
+> with the cross-tier cascade, the truncation-triggered escalation ladder, and
+> `test_call_auto` in the hwtrace suite. The live escalation (LBR
 > truncates → block-step completes) is validated on the Zen 5 dev box (Ryzen 9 9950X), the
 > plumbing host-independently on any x86-64 Linux. **The one remaining item is forward-look:**
 > the per-binding `call_auto` wrappers (none of the 10 bindings expose it yet — it ships
@@ -110,8 +110,8 @@ tier, honestly flagged):
 `*used` (optional) reports the `{tier, backend}` that produced the final trace, so a caller
 can see whether escalation happened (e.g. `used.backend != AMD_LBR`). Returns
 `ASMTEST_HW_OK` whenever *some* tier ran (completeness is read from `trace->truncated`),
-`ASMTEST_HW_EUNAVAIL` if no call-owning tier is available, `ASMTEST_HW_EINVAL` on bad args,
-`ASMTEST_HW_ENOSYS` off x86-64 Linux.
+`ASMTEST_HW_EUNAVAIL` if no call-owning tier is available (including off x86-64 Linux, where no
+native tier exists), `ASMTEST_HW_EINVAL` on bad args.
 
 Because the trace is caller-owned and reused across attempts, each step first **resets** it
 (clears `insns`/`blocks`/`truncated`) so the winning tier's reconstruction stands alone.
@@ -149,8 +149,8 @@ Because the trace is caller-owned and reused across attempts, each step first **
   extending the existing "dynamic-fallback idiom" note (now *implemented*, not idiom).
 - Validate args (`nargs` 0–6, non-NULL `code`/`trace`), honor `policy` (`BEST` default;
   `NATIVE_ONLY` is a no-op here since every ladder tier is native), and fill `*used`.
-- Non-x86-64 / non-Linux: `#else` stub returns `ASMTEST_HW_ENOSYS` (mirrors the other
-  backends' host gating), so the symbol always links.
+- Non-x86-64 / non-Linux: the public entry is **not** host-gated (its per-tier probes are),
+  so it always links and returns `ASMTEST_HW_EUNAVAIL` when no native tier is available.
 
 ### Phase 4 — tests *(LANDED)*
 
