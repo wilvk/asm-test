@@ -165,7 +165,10 @@ make python-package-full   # python-package already stages, so this just forward
 The dlopen `-full` aliases run `package-libs`, so they need the full native
 toolchain — **libunicorn + libkeystone + libcapstone** (headers and libs) plus
 **patchelf** (Linux) / `install_name_tool` (macOS) for dep vendoring. Bootstrap
-it with `make deps DEPS_ARGS=--asm` (and `apt-get install patchelf` on Linux).
+it with `make deps DEPS_ARGS=--asm` for the packaged pieces (unicorn, patchelf),
+then `scripts/build-keystone.sh` + `scripts/build-capstone.sh` for Keystone and
+Capstone — both are pinned source builds that `make deps` only points you to,
+never installs.
 The link/source `-full` aliases (rust/zig/cpp/go) just forward to the plain
 target — those packages bundle no native payload.
 

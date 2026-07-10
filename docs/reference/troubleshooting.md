@@ -46,16 +46,21 @@ run it on JDK 22 or newer.
 
 ## In-line assembler (Keystone) & disassembler (Capstone)
 
-**`make asm-test` / the assembler tier is unavailable.** Keystone has no distro
-package, so it is a pinned source build: run `./scripts/build-keystone.sh` (and
-`./scripts/build-capstone.sh`), or `make deps DEPS_ARGS=--asm`. The build verifies
-the pinned commit against `scripts/third-party-digests.txt`.
+**`make asm-test` / the assembler tier is unavailable.** Keystone *and* Capstone
+have no distro package, so they are pinned source builds: run
+`./scripts/build-keystone.sh` and `./scripts/build-capstone.sh`. `make deps
+DEPS_ARGS=--asm` installs the *packaged* deps (nasm, pkg-config, libunicorn,
+patchelf) and, for Keystone/Capstone, only **prints a pointer** to those two
+scripts — on every platform it does not build them itself, so run the scripts
+directly. The build verifies the pinned commit against
+`scripts/third-party-digests.txt`.
 
 ## Emulator tier (Unicorn)
 
-**`make emu-test` fails to link (`-lunicorn`).** Install libunicorn: `make deps
-DEPS_ARGS=--emu` (unicorn + capstone). The emulator tier is optional; the core
-suites don't need it.
+**`make emu-test` fails to link (`-lunicorn`).** Install libunicorn with `make
+deps DEPS_ARGS=--emu` (unicorn comes from your package manager; **Capstone is a
+pinned source build** — run `./scripts/build-capstone.sh`, which `make deps` only
+points you to). The emulator tier is optional; the core suites don't need it.
 
 ## Hardware-trace tiers (Intel PT / AMD LBR / ARM CoreSight / single-step)
 

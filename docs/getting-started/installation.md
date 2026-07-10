@@ -44,7 +44,7 @@ package manager with a single target:
 
 ```sh
 make deps                       # full dev setup (nasm, pkg-config, unicorn, …)
-make deps DEPS_ARGS=--emu       # what `make emu-test` needs (unicorn + capstone + pkg-config)
+make deps DEPS_ARGS=--emu       # what `make emu-test` needs: unicorn + pkg-config (Capstone is source-built — run scripts/build-capstone.sh)
 make deps DEPS_ARGS=--asm       # adds the in-line assembler tier (keystone, source-built)
 make deps DEPS_ARGS=--dry-run   # print the commands without running them
 ```
