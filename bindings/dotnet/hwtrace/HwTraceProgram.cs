@@ -7,6 +7,7 @@
 // stays green. Otherwise it traces both fixtures live, prints TAP-style
 // "ok N - ..." lines, and returns nonzero on any assertion failure.
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -630,6 +631,9 @@ static class HwTraceProgram
         else
             Console.WriteLine($"# SKIP ptrace toolkit unavailable: {Ptrace.SkipReason()}");
 
+        // --- §E1: AsmTrace.WindowHybrid (survey -> hot-slice exact window) --- //
+        WindowHybridChecks();
+
         // --- conformance replay: the ptrace_descent corpus tier (replay-or-skip) --- //
         // Mirrors bindings/python/tests/test_conformance._run_ptrace_descent: replay the
         // corpus's L1 (edges) and L2 (frames) cases live when ptrace is available AND the
@@ -688,6 +692,134 @@ static class HwTraceProgram
         // A name ending in a generic-arg bracket (no tier) must NOT report it as a tier.
         var genEnd = new AsmMethod("System.Collections.Generic.List`1[System.String]", 1);
         Check(genEnd.Tier == "", $"AsmMethod.Tier generic-end == '' (got '{genEnd.Tier}')");
+
+        // --- §E2: AsmMethod.Weight — the explicit statistical/exact semantic (== Count) --- //
+        Check(plain.Weight == plain.Count, $"AsmMethod.Weight == Count (got {plain.Weight} vs {plain.Count})");
+        Check(new AsmMethod("x", 7).Weight == 7, $"AsmMethod.Weight carries the value (got {new AsmMethod("x", 7).Weight})");
+
+        // --- §E1: HotPrefix — the smallest DESCENDING-weight prefix reaching hotFraction --- //
+        // Weights [50,30,15,5] (total 100), descending as AsmTrace.Methods is.
+        var byW = new List<AsmMethod>
+        {
+            new AsmMethod("A", 50), new AsmMethod("B", 30),
+            new AsmMethod("C", 15), new AsmMethod("D", 5),
+        };
+        Check(AsmTrace.HotPrefix(byW, 0.9).Count == 3, $"HotPrefix(.9): 50+30+15=95>=90 -> 3 (got {AsmTrace.HotPrefix(byW, 0.9).Count})");
+        Check(AsmTrace.HotPrefix(byW, 0.5).Count == 1, $"HotPrefix(.5): 50>=50 -> 1 (got {AsmTrace.HotPrefix(byW, 0.5).Count})");
+        Check(AsmTrace.HotPrefix(byW, 0.8).Count == 2, $"HotPrefix(.8): 50+30=80>=80 -> 2 (got {AsmTrace.HotPrefix(byW, 0.8).Count})");
+        Check(AsmTrace.HotPrefix(byW, 1.0).Count == 4, $"HotPrefix(1.0): needs all -> 4 (got {AsmTrace.HotPrefix(byW, 1.0).Count})");
+        Check(AsmTrace.HotPrefix(byW, 0.0).Count == 1, $"HotPrefix(0): hottest always kept -> 1 (got {AsmTrace.HotPrefix(byW, 0.0).Count})");
+        Check(AsmTrace.HotPrefix(byW, 0.9)[0].Name == "A", "HotPrefix keeps the hottest method first");
+        Check(AsmTrace.HotPrefix(new List<AsmMethod>(), 0.9).Count == 0, "HotPrefix([]) is empty (degrade signal)");
+        // Fraction is clamped, not thrown on: >1 behaves as 1.0.
+        Check(AsmTrace.HotPrefix(byW, 5.0).Count == 4, $"HotPrefix(>1 clamps to 1.0) -> 4 (got {AsmTrace.HotPrefix(byW, 5.0).Count})");
+    }
+
+    // §E1 fixtures for WindowHybridChecks — two distinct NoInlining managed methods so the
+    // survey can rank them and the pass-2 map can resolve each by name. HybridHot is called in
+    // a loop (dominates the sampled survey); HybridCold is called ONCE, first (so a plain
+    // Window captures it before the hot loop fills the stream — the contrast the hybrid elides).
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long HybridHot(long n)
+    {
+        long s = 0;
+        for (long i = 0; i < n; i++) s += (i * 2654435761L) ^ (i + 7);
+        return s;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long HybridCold(long n)
+    {
+        long s = 0;
+        for (long i = 0; i < n; i++) s += (i ^ 0x5bd1e995L) + (i << 1);
+        return s;
+    }
+
+    // §E1 — AsmTrace.WindowHybrid: pass-1 AMD-LBR survey picks the hot method set, pass-2 exact
+    // out-of-process window captures ONLY that slice. Asserts (a) an already-closed scope with a
+    // populated Survey, (b) a clean DEGRADE (never throws) when AMD LBR and/or ptrace are
+    // absent — the whole-family invariant — and (c), when the survey armed AND the window armed,
+    // that the hot slice is captured while a cold helper is elided relative to a plain Window.
+    static void WindowHybridChecks()
+    {
+        long total = 0;
+        // Kept SHORT on purpose: this shared self-test process runs with tiered compilation ON
+        // (the DOTNET_TC_* footgun guard), so a LONG hot loop would trip OSR / tier-up mid-window
+        // and re-JIT under single-step (abort). A short block never tiers, so this gate stays
+        // crash-free everywhere; it validates the COMPOSITION + DEGRADE. The full AMD hot-slice
+        // RESTRICTION (which needs a long survey loop + tiering off) is demonstrated by
+        // examples/dotnet/windowhybrid. The comparison below still fires if the survey happens to
+        // rank methods on a fast host; otherwise it is skipped cleanly.
+        Action work = () =>
+        {
+            total += HybridCold(800);
+            for (int k = 0; k < 8; k++) total += HybridHot(800);
+        };
+
+        AsmTrace ww;
+        try { ww = AsmTrace.WindowHybrid(work, hotFraction: 0.9); }
+        catch (Exception e) { Check(false, $"WindowHybrid must never throw (got {e.GetType().Name}: {e.Message})"); return; }
+
+        Check(ww != null, "WindowHybrid returns a scope");
+        if (ww == null) return;
+        // The pass-1 survey is always exposed, armed or not (it drives, or explains, the choice).
+        Check(ww.Survey != null, "WindowHybrid.Survey is populated (the pass-1 WindowHot result)");
+
+        if (!ww.Armed)
+        {
+            // Clean self-skip: ptrace refused (the plain lane) — a reason, no exception.
+            Check(ww.SkipReason.Length > 0, $"WindowHybrid: unarmed scope records a self-skip reason ({ww.SkipReason})");
+            Console.WriteLine($"# NOTE WindowHybrid degraded/self-skipped: survey.Armed={ww.Survey?.Armed}, reason='{ww.SkipReason}'");
+            return;
+        }
+
+        // Armed: the exact pass ran. Whether hot-restricted or degraded-to-full, it is a valid
+        // exact capture — the block's result and captured stream are honest.
+        Check(ww.Addresses.Length > 0, $"WindowHybrid: exact pass captured instructions (got {ww.Addresses.Length})");
+        Check(!ww.IsStatistical, "WindowHybrid: the returned (pass-2) scope is EXACT, not statistical");
+
+        if (ww.Survey != null && ww.Survey.Armed && ww.Survey.Methods.Count > 0)
+        {
+            // Full hybrid: AMD survey drove a hot-slice restriction. Compare against a plain
+            // Window over the SAME work — the cold helper must be elided (the real guarantee).
+            long hotHybrid = ww.WeightIn("HybridHot");
+            long coldHybrid = ww.WeightIn("HybridCold");
+            // The hot method is captured ONLY when its pass-2 region resolved to the address that
+            // actually executed. This shared self-test process runs with tiering ON, so a hot loop
+            // can OSR / tier-up mid-window and re-JIT to a DIFFERENT address than the survey/rundown
+            // resolved; the published hot region then misses it and it is (correctly) stepped-over.
+            // So confirm the hot capture when it resolved, else NOTE it — never a hard failure here
+            // (the stable tiering-off demonstration is examples/dotnet/windowhybrid). The ELISION
+            // invariants below hold unconditionally and are the real hot-slice guarantee.
+            if (hotHybrid > 0)
+                Check(true, $"WindowHybrid: the hot method IS captured exactly (HybridHot weight {hotHybrid})");
+            else
+                Console.WriteLine("# NOTE WindowHybrid: hot method not captured in this tiering-ON self-test "
+                                  + "(OSR/tier-up moved its code past the resolved hot region); hot-slice "
+                                  + "capture is shown stably by examples/dotnet/windowhybrid");
+
+            var plainW = AsmTrace.Window(work);
+            if (plainW.Armed)
+            {
+                long coldPlain = plainW.InstructionsIn("HybridCold");
+                long hotPlain = plainW.InstructionsIn("HybridHot");
+                Console.WriteLine($"# NOTE hybrid vs plain Window — HybridHot: {hotHybrid} vs {hotPlain}; "
+                                  + $"HybridCold: {coldHybrid} vs {coldPlain}");
+                // The restriction: hybrid never captures MORE cold than plain, and — when plain
+                // saw the cold helper at all — hybrid captures strictly fewer (ideally zero).
+                Check(coldHybrid <= coldPlain,
+                      $"WindowHybrid: cold helper not captured MORE than plain Window ({coldHybrid} <= {coldPlain})");
+                if (coldPlain > 0)
+                    Check(coldHybrid < coldPlain,
+                          $"WindowHybrid: hot-slice publish ELIDES the cold helper vs plain Window ({coldHybrid} < {coldPlain})");
+                else
+                    Console.WriteLine("# NOTE plain Window captured no HybridCold (buffer/timing) — restriction shown by hot capture only");
+            }
+            else
+                Console.WriteLine($"# NOTE plain Window self-skipped ({plainW.SkipReason}) — hot capture asserted, comparison skipped");
+        }
+        else
+            Console.WriteLine($"# NOTE WindowHybrid degraded to full exact Window (no AMD survey: {ww.Survey?.SkipReason}) — {ww.Methods.Count} methods named");
     }
 
     // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic

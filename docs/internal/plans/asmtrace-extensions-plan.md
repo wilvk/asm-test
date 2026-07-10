@@ -23,6 +23,7 @@ family stays coherent rather than accreting one-off flags.
 | `AsmTrace.Window(() => {…})` | out-of-process ptrace | exact (block's own code; deep JIT elided) | **Yes** | ~100–1000×/stop | whole block |
 | `AsmTrace.WindowHot(() => {…})` | **AMD LBR statistical** | sampled hot-method histogram | **Yes** | near-native (a few PMIs) | whole block |
 | `using (new AsmTrace(HwBackend.AmdLbr)) {…}` | **AMD LBR statistical** (inline) | sampled hot-method histogram (richest managed attribution — deep BCL named) | **Yes** | near-native | whole block |
+| `AsmTrace.WindowHybrid(() => {…})` | **survey (AMD LBR) → exact (ptrace) on the hot slice** | exact per-instruction on the hot methods; cold elided (`Survey` = pass-1 histogram) | **Yes** | survey near-native + exact only on the hot slice | whole block |
 
 The three crash-proof whole-window forms are complementary: `Window` is exact-but-slow (deep
 JIT elided until the sibling-thread publish lands), the AMD forms (`WindowHot` delegate +
@@ -34,7 +35,7 @@ conformance of each form.
 
 ## Extensions
 
-### E1 — `AsmTrace.WindowHybrid` *(planned; the highest-value next step)*
+### E1 — `AsmTrace.WindowHybrid` — **LANDED**
 
 Compose the two crash-proof forms: run `WindowHot` first (cheap statistical survey → the
 hot methods), take the smallest method prefix reaching a `hotFraction` of the sample weight,
@@ -44,21 +45,37 @@ set. The stepper already step-overs unpublished regions (`in_region_set`,
 [ptrace_backend.c](../../../src/ptrace_backend.c)), so this gives **exact per-instruction
 capture on the hot managed slice and cheap step-overs for the cold million instructions —
 with no new native stepper code.** Degrades to plain `Window` when LBR is unavailable.
-- API: `public static AsmTrace WindowHybrid(Action body, double hotFraction = 0.9, …)`, a
-  `Survey` property exposing the pass-1 `WindowHot` result.
-- Caveat: runs `body` **twice** (survey + exact) — document that the body must be
-  deterministic enough that pass-1's hot set applies to pass-2; non-idempotent bodies use
-  `WindowHot` (survey) or `Window` (exact, one pass).
-- Effort: ~2–3d, mostly managed glue. Reuses everything.
+- API: `public static AsmTrace WindowHybrid(Action body, double hotFraction = 0.9, bool
+  byMethod = true, bool withRundown = true, int rundownSettleMs = 300, …)`, with a `Survey`
+  property exposing the pass-1 `WindowHot` result. Implemented in
+  [HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs) as managed glue over the injectable
+  `RunWindowOutOfProcess(body, regionsOrNull)` seam (null == the byte-identical all-managed
+  `Window` publish); the hot-set prefix is the pure/testable `HotPrefix`. Pass-2 resolution
+  folds in the rundown jitdump so the survey's already-JIT'd hot methods resolve to their
+  pass-2 regions (cross-spelling name match). Demo: [examples/dotnet/windowhybrid](../../../examples/dotnet/windowhybrid/).
+- Caveat: runs `body` **twice** (survey + exact) — the body must be deterministic enough that
+  pass-1's hot set applies to pass-2; non-idempotent bodies use `WindowHot` (survey) or
+  `Window` (exact, one pass). A LONG hot loop under the exact pass must avoid mid-window
+  re-JIT/OSR (which re-enters the runtime under single-step and aborts) — the demo pins
+  `TieredCompilation=false` for that reason; a modest hot loop needs no such knob.
+- Degrade paths (all self-skip cleanly, never throw): no AMD LBR → full exact `Window` (publish
+  all managed ranges); no ptrace → `Window` self-skips; survey armed-but-empty or no hot region
+  resolves → full exact `Window`.
 
-### E2 — `AsmMethod.Weight` (make the statistical semantic explicit) *(planned; small)*
+### E2 — `AsmMethod.Weight` (make the statistical semantic explicit) — **LANDED**
 
 Today a `WindowHot` scope overloads `AsmMethod.Count` as a sample weight (documented on
-`IsStatistical`). Add an explicit `long Weight` on `AsmMethod` so the meaning is in the type,
+`IsStatistical`). Added an explicit `long Weight` on `AsmMethod` so the meaning is in the type,
 not just the docs: for a statistical scope `Weight` = endpoint-hit weight and `Count` is
-documented `== Weight`; for an exact scope `Weight == Count`. Also make `Disassembly` /
-`InstructionsIn` throw-or-empty on `IsStatistical` scopes (there is no ordered stream to
-render), and have the native `render_window` refuse a statistical trace. Effort: ~0.5–1d.
+documented `== Weight`; for an exact scope `Weight == Count`. `Disassembly` is already empty on
+`IsStatistical` scopes (verified — `AttributeAddresses` gates it on `!IsStatistical`); a scope
+`WeightIn(nameSubstring)` companion is the honest statistical analog of `InstructionsIn`
+(numerically identical, but named for the sampled-weight meaning so a caller's intent reads
+right on a survey). NB: `InstructionsIn` is intentionally NOT made throw/empty on statistical
+scopes — the shipped `amdhot`/`crashproof-survey` examples rely on it returning the weight; the
+honesty is delivered by `Weight`/`WeightIn` + tightened docs instead. The native `render_window`
+refuse-a-statistical-trace item is not needed at the managed layer (statistical scopes never
+render a `Path`).
 
 ### E3 — sibling-thread live JIT publish (close the `Window` deep-BCL gap) *(planned)*
 
@@ -119,10 +136,10 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 
 ## Priority
 
-1. **E1 `WindowHybrid`** — the exact-on-hot-slice composition; highest value, all reuse.
-2. **E2 `AsmMethod.Weight`** — cheap honesty hardening; do alongside E1.
+1. ~~**E1 `WindowHybrid`**~~ — **LANDED** (the exact-on-hot-slice composition; all reuse).
+2. ~~**E2 `AsmMethod.Weight`**~~ — **LANDED** (alongside E1).
 3. **E3 sibling-thread publish** — closes the `Window` deep-BCL gap (the one honest-partial in the family).
-4. **E7 AMD region example** — trivial, rounds out the AMD story.
+4. ~~**E7 AMD region example**~~ — **LANDED**.
 5. **E5 / E6** — additive fidelity; when a consumer needs them.
 6. **E4 inline-`using` OOP** — only if bare-`using` ergonomics become required.
 

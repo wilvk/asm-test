@@ -1540,6 +1540,7 @@ namespace Asmtest
         readonly int _armTid;       // §0.2/B5: managed thread that armed (complements the native OS-tid check)
         HwNative.HwScope _scope;    // region-free scope handle (whole-window only)
         bool _disposed;
+        AsmTrace _survey;           // §E1: the pass-1 WindowHot survey behind a WindowHybrid scope
 
         /// <summary>The rendered assembly listing (populated on close).</summary>
         public string Path { get; private set; }
@@ -1579,6 +1580,13 @@ namespace Asmtest
         /// (dropped/throttled samples), a coverage signal — not a hard error. False (an exact
         /// scope) leaves all of these with their exact-trace meaning.</summary>
         public bool IsStatistical { get; private set; }
+        /// <summary>§E1: for a <see cref="WindowHybrid"/> scope, the pass-1 <see cref="WindowHot"/>
+        /// AMD-LBR statistical survey used to pick the hot method set that this (pass-2, exact)
+        /// scope captured — inspect its <see cref="Methods"/> for the sampled hot histogram and
+        /// its <see cref="Armed"/>/<see cref="SkipReason"/> to see whether the survey drove the
+        /// hot-slice restriction or the scope degraded to a full exact <see cref="Window"/>.
+        /// Null for every non-hybrid scope.</summary>
+        public AsmTrace Survey => _survey;
         /// <summary>§Z1: the LABELLED executed instructions of a <c>byMethod</c> whole-window
         /// scope, in execution order — each captured instruction that resolved to a managed
         /// method, disassembled from live memory and paired with its method name (and the
@@ -1605,12 +1613,29 @@ namespace Asmtest
         }
 
         /// <summary>§D0.1: captured instructions in managed methods whose name contains
-        /// <paramref name="nameSubstring"/>; 0 unless this is a <c>byMethod</c> scope.</summary>
+        /// <paramref name="nameSubstring"/>; 0 unless this is a <c>byMethod</c> scope. On a
+        /// STATISTICAL scope (<see cref="IsStatistical"/>) there is no instruction stream, so
+        /// this returns the sample WEIGHT of the matching methods (== <see cref="WeightIn"/>) —
+        /// reach for <see cref="WeightIn"/> there so the caller's intent reads honestly.</summary>
         public long InstructionsIn(string nameSubstring)
         {
             long n = 0;
             foreach (var m in Methods)
                 if (m.Name.Contains(nameSubstring)) n += m.Count;
+            return n;
+        }
+
+        /// <summary>§E2: the summed <see cref="AsmMethod.Weight"/> of the methods whose name
+        /// contains <paramref name="nameSubstring"/> — the honest accessor on a STATISTICAL
+        /// scope (<see cref="IsStatistical"/>), where the value is a sampled hot weight and
+        /// "instruction count" would be a category error. Numerically identical to
+        /// <see cref="InstructionsIn"/> (weight == count); the two differ only in what they
+        /// claim to mean, so pick the one that matches the scope's fidelity.</summary>
+        public long WeightIn(string nameSubstring)
+        {
+            long n = 0;
+            foreach (var m in Methods)
+                if (m.Name.Contains(nameSubstring)) n += m.Weight;
             return n;
         }
 
@@ -1842,6 +1867,154 @@ namespace Asmtest
             var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
             ww.RunWindowOutOfProcess(body ?? (() => { }));
             return ww;
+        }
+
+        /// <summary>
+        /// §E1 — the HYBRID whole-window: compose the two crash-proof forms so the exact
+        /// per-instruction stepper is spent ONLY on the hot managed slice. Pass 1 runs the cheap
+        /// statistical <see cref="WindowHot"/> AMD-LBR survey to find the hot methods; pass 2 runs
+        /// the exact out-of-process <see cref="Window"/> but publishes ONLY the hot methods'
+        /// <c>[base,len)</c> regions to the stepper — so the cold million instructions are
+        /// step-overs (near-native) while the hot slice is captured exactly. No new native stepper
+        /// code: it is <see cref="WindowHot"/> + <see cref="Window"/> composed. The smallest
+        /// DESCENDING-weight method prefix whose running sample weight reaches
+        /// <paramref name="hotFraction"/> of the total is the hot set; each is resolved to its
+        /// pass-2 JIT'd region and published.
+        /// <para><b>DEGRADES, never throws.</b> If AMD LBR is unavailable (the survey self-skips /
+        /// <see cref="Armed"/> false / empty <see cref="Methods"/>) or no hot region resolves in
+        /// pass 2, this falls back to a plain <see cref="Window"/> — publishing EVERY managed range
+        /// (exact everywhere). If ptrace is unavailable, pass 2 self-skips like <see cref="Window"/>.
+        /// The pass-1 survey is exposed on <see cref="Survey"/>.</para>
+        /// <para><b>The body runs TWICE</b> (survey + exact), so it must be deterministic enough
+        /// that pass-1's hot set still applies in pass 2 (a non-idempotent or wildly
+        /// input-dependent body should use <see cref="WindowHot"/> for a one-pass survey or
+        /// <see cref="Window"/> for a one-pass exact trace instead). Returns an already-closed
+        /// scope — read its properties directly. Linux x86-64.</para>
+        /// </summary>
+        /// <param name="hotFraction">Fraction of the total sampled weight the hot set must reach
+        /// (clamped to <c>[0,1]</c>); the hottest method is always kept, so a positive survey
+        /// never yields an empty hot set. 0.9 captures the dominant hot slice while eliding a long
+        /// cold tail.</param>
+        /// <param name="byMethod">Label the exact pass by managed method (as <see cref="Window"/>).
+        /// Also gates the JIT map the hot-region resolution needs; with both this and
+        /// <paramref name="withRundown"/> off the scope cannot resolve the hot slice and degrades
+        /// to a full exact <see cref="Window"/>.</param>
+        /// <param name="withRundown">Resolve WARM/R2R methods via the perf-map rundown (as
+        /// <see cref="Window"/>). Recommended on: the body's hot methods are usually already JIT'd
+        /// by the survey, so the pass-2 in-proc listener alone cannot see them — the rundown
+        /// jitdump is what makes them resolvable for the hot-region publish.</param>
+        public static AsmTrace WindowHybrid(Action body, double hotFraction = 0.9, bool byMethod = true,
+                                            bool withRundown = true, int rundownSettleMs = 300,
+                                            [CallerMemberName] string member = null,
+                                            [CallerLineNumber] int line = 0)
+        {
+            Action run = body ?? (() => { });
+            // Pass 1 — the cheap, crash-proof statistical survey (the hot-method histogram).
+            AsmTrace survey = WindowHot(run, 16, withRundown, rundownSettleMs, member, line);
+
+            // Pass 2 — the exact out-of-process window (same private ctor as Window).
+            var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
+            ww._survey = survey;
+
+            // Pick the capture set: the hot slice when the survey drove it, else — the degrade —
+            // NULL (RunWindowOutOfProcess then publishes every managed range: a full exact Window).
+            // Never throws: any resolution failure falls through to the all-managed default.
+            IEnumerable<AddrRec> regions = null;
+            try
+            {
+                if (survey.Armed && survey.Methods.Count > 0 && ww._map != null)
+                {
+                    List<AsmMethod> hot = HotPrefix(survey.Methods, hotFraction);
+                    List<AddrRec> hotRegions = ww.ResolveHotRegions(run, hot);
+                    if (hotRegions != null && hotRegions.Count > 0)
+                        regions = hotRegions;
+                }
+            }
+            catch { regions = null; } // degrade to a full exact Window on any failure
+
+            ww.RunWindowOutOfProcess(run, regions);
+            return ww;
+        }
+
+        /// <summary>§E1: the smallest DESCENDING-weight method prefix whose running weight reaches
+        /// <paramref name="hotFraction"/> of the total sampled weight — the "hot set". Always keeps
+        /// at least the single hottest method when any weight exists (the hottest is added before
+        /// the threshold test), so a positive survey never yields an empty hot set. Pure/static so
+        /// the prefix rule is testable without a live AMD survey. <paramref name="methodsByWeightDesc"/>
+        /// MUST be descending by <see cref="AsmMethod.Weight"/> (as <see cref="Methods"/> is).</summary>
+        internal static List<AsmMethod> HotPrefix(IReadOnlyList<AsmMethod> methodsByWeightDesc, double hotFraction)
+        {
+            var hot = new List<AsmMethod>();
+            if (methodsByWeightDesc == null || methodsByWeightDesc.Count == 0) return hot;
+            long total = 0;
+            foreach (AsmMethod m in methodsByWeightDesc) total += m.Weight;
+            if (total <= 0) { hot.AddRange(methodsByWeightDesc); return hot; } // no weight: all hot
+            double frac = hotFraction < 0 ? 0 : (hotFraction > 1 ? 1 : hotFraction);
+            double target = frac * total;
+            long run = 0;
+            foreach (AsmMethod m in methodsByWeightDesc)
+            {
+                hot.Add(m);           // add BEFORE the test: the hottest is always kept
+                run += m.Weight;
+                if (run >= target) break;
+            }
+            return hot;
+        }
+
+        // §E1: resolve the hot-set method NAMES (from the pass-1 survey) to their pass-2 JIT'd
+        // [base,len) regions, via THIS scope's JitMethodMap. The body's hot methods are usually
+        // already JIT'd (the survey ran them), so the pass-2 in-proc listener alone cannot see
+        // them — fold in the perf-map rundown (already requested by the ctor) so warm/R2R methods
+        // resolve too, then match each hot name against the map. Best-effort: returns whatever
+        // resolved (possibly empty → the caller degrades to a full exact Window). Never throws.
+        List<AddrRec> ResolveHotRegions(Action body, IReadOnlyList<AsmMethod> hot)
+        {
+            var regions = new List<AddrRec>();
+            if (_map == null || hot == null || hot.Count == 0) return regions;
+            // Force the body's own code to exist (usually a no-op — the survey JIT'd it already),
+            // so the listener/rundown can name it; mirrors RunWindowOutOfProcess's pre-JIT.
+            try { RuntimeHelpers.PrepareDelegate(body); } catch { }
+            // Fold in the rundown jitdump so ALREADY-JIT'd hot methods (the common case) resolve —
+            // the in-proc listener only sees methods JIT'd after it started, which the survey's are
+            // not. Additive + address-deduped, so the close-time AttributeAddresses reload is fine.
+            if (_rundownRequested)
+            {
+                string dump = DiagnosticsIpc.JitDumpPath();
+                if (_rundownSettleMs > 0) DiagnosticsIpc.WaitJitDumpSettled(dump, _rundownSettleMs);
+                _map.LoadJitDump(dump);
+            }
+            var seen = new HashSet<ulong>();
+            foreach (AsmMethod m in hot)
+            {
+                if (TryResolveHotMethod(_map, m, out ulong start, out ulong size)
+                    && start != 0 && size != 0 && seen.Add(start))
+                    regions.Add(new AddrRec(start, size));
+                if (regions.Count >= 250) break; // the shared channel holds 256
+            }
+            return regions;
+        }
+
+        // §E1: resolve ONE hot method to a [base,len) via the pass-2 map, trying progressively
+        // looser keys — most specific first — so a body method the survey spelled one way (in-proc
+        // listener "Namespace.Method") still matches the pass-2 jitdump spelling
+        // ("[asm] Type::Method(sig)[tier]"). The bare-method-token fallback bridges the "::"/"."
+        // spelling gap; kept last (least specific) to prefer an exact match.
+        static bool TryResolveHotMethod(JitMethodMap map, AsmMethod m, out ulong start, out ulong size)
+        {
+            start = 0; size = 0;
+            if (!string.IsNullOrEmpty(m.Name) && map.TryResolveEntry(m.Name, out start, out size)) return true;
+            string sn = m.ShortName; // "Type::Method(sig)" (jitdump) or "Namespace.Method" (listener)
+            if (!string.IsNullOrEmpty(sn) && map.TryResolveEntry(sn, out start, out size)) return true;
+            int paren = sn.IndexOf('(');
+            string noSig = paren > 0 ? sn.Substring(0, paren) : sn; // drop the signature
+            if (noSig.Length > 0 && noSig != sn && map.TryResolveEntry(noSig, out start, out size)) return true;
+            // Bare method token after the last "::" or "." — matches across the "::"/"." gap.
+            string token = noSig;
+            int cc = token.LastIndexOf("::", System.StringComparison.Ordinal);
+            if (cc >= 0) token = token.Substring(cc + 2);
+            else { int dot = token.LastIndexOf('.'); if (dot >= 0) token = token.Substring(dot + 1); }
+            if (token.Length >= 3 && token != noSig && map.TryResolveEntry(token, out start, out size)) return true;
+            return false;
         }
 
         /// <summary>
@@ -2083,7 +2256,12 @@ namespace Asmtest
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate void RunRegionFn(IntPtr arg);
 
-        void RunWindowOutOfProcess(Action body)
+        // §E1: <paramref name="regionsOrNull"/> is the injectable capture set. NULL keeps the
+        // plain-<see cref="Window"/> behavior byte-identical — publish EVERY managed code range
+        // (EnumerateManagedCodeRanges), exact everywhere. A non-null set (from WindowHybrid)
+        // publishes ONLY those hot [base,len) regions, so the stepper captures the hot managed
+        // slice exactly and step-overs the cold remainder (in_region_set, ptrace_backend.c).
+        void RunWindowOutOfProcess(Action body, IEnumerable<AddrRec> regionsOrNull = null)
         {
             _disposed = true; // this factory already closed the scope; no Dispose teardown
             if (!HwNative.LibAvailable) { SafeRun(body); return; }
@@ -2116,7 +2294,7 @@ namespace Asmtest
                 SafeRun(body);
                 return;
             }
-            foreach (AddrRec r in EnumerateManagedCodeRanges())
+            foreach (AddrRec r in regionsOrNull ?? EnumerateManagedCodeRanges())
                 HwNative.asmtest_addr_channel_publish_rec(chan, r.Base, r.Len, r.Version);
             // NOTE: live per-method publish via the JIT listener (SetPublishChannel) is
             // DELIBERATELY OFF — firing the managed EventPipe callback on the thread being
@@ -2753,8 +2931,22 @@ namespace Asmtest
         /// <c>&lt;ret&gt; [&lt;assembly&gt;] Type::Method(sig)[tier]</c>, or the listener's dotted
         /// <c>Namespace.Method</c>).</summary>
         public string Name { get; }
-        /// <summary>Captured instructions attributed to the method.</summary>
+        /// <summary>The method's share of the capture. For an EXACT scope
+        /// (<see cref="AsmTrace.IsStatistical"/> false) this is the number of captured
+        /// instructions attributed to the method; for a STATISTICAL scope
+        /// (<see cref="AsmTrace.WindowHot"/>) it is the sample-weighted hot weight
+        /// (branch-target endpoint hits), NOT an instruction count. See <see cref="Weight"/>,
+        /// which carries the same value with that meaning made explicit in the name.</summary>
         public long Count { get; }
+        /// <summary>§E2: the method's attributed WEIGHT — the same value as <see cref="Count"/>,
+        /// with the statistical/exact meaning promoted into the type instead of living only in
+        /// the docs. For a STATISTICAL scope (<see cref="AsmTrace.IsStatistical"/>) this is the
+        /// endpoint-hit sample weight; for an EXACT scope it is the captured-instruction count.
+        /// <c>Weight == Count</c> in both cases — <see cref="Count"/> is retained for source
+        /// compatibility, and <see cref="Weight"/> is the honest name to reach for on a
+        /// statistical survey (where "instruction count" would be a category error). See
+        /// <see cref="AsmTrace.WeightIn"/> for a name-substring sum.</summary>
+        public long Weight => Count;
 
         /// <summary>The declaring assembly/module in the jitdump/perf-map spelling
         /// <c>&lt;ret&gt; [&lt;assembly&gt;] Type::Method(sig)[tier]</c> — e.g.
