@@ -13,9 +13,14 @@ stop treating LBR as the answer for loops and make "exact-and-fast where it fits
 complete-everywhere-else" the automatic default. See
 [amd-tracing-plan.md](amd-tracing-plan.md) for the AMD-specific levers this composes.
 
-> Status legend: **planned** unless a phase says otherwise. House rule holds: no untested
-> code — the live escalation (LBR truncates → block-step completes) is validated on the
-> Zen 5 dev box (Ryzen 9 9950X), the plumbing host-independently on any x86-64 Linux.
+> Status legend: **LANDED** — Phases 1–5 shipped (`8a830fa`; the MSR rung folded in by
+> `37118ec`). `asmtest_trace_call_auto` is live in [trace_auto.c](../../../src/trace_auto.c)
+> with the cross-tier cascade, the truncation-triggered escalation ladder, the host-gated
+> `#else` ENOSYS stub, and `test_call_auto` in the hwtrace suite. The live escalation (LBR
+> truncates → block-step completes) is validated on the Zen 5 dev box (Ryzen 9 9950X), the
+> plumbing host-independently on any x86-64 Linux. **The one remaining item is forward-look:**
+> the per-binding `call_auto` wrappers (none of the 10 bindings expose it yet — it ships
+> C-first with the `ALL asmtest_trace_call_auto` parity allow-list entry).
 
 ---
 
@@ -115,7 +120,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 
 ## Phases
 
-### Phase 1 — the in-process call dispatcher + fast HWTRACE step *(planned)*
+### Phase 1 — the in-process call dispatcher + fast HWTRACE step *(LANDED)*
 
 - Add a small static `invoke(const void *code, const long *args, int nargs)` in
   [trace_auto.c](../../../src/trace_auto.c): a `switch (nargs)` casting `code` to the SysV
@@ -126,7 +131,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 - Acceptance: on a non-AMD x86-64 Linux host, `call_auto(add2,{20,22})` returns 42 with a
   complete single-step trace and `used.backend == SINGLESTEP`.
 
-### Phase 2 — the escalation ladder *(planned)*
+### Phase 2 — the escalation ladder *(LANDED)*
 
 - After the fast step, if `trace->truncated`: reset the trace and try block-step, then
   per-insn single-step, per the ladder above. Reuse `asmtest_ptrace_blockstep_available()`
@@ -137,7 +142,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 - Acceptance (host-independent): a routine block-step reconstructs completely is returned
   non-truncated with `used` a ceiling-free tier when the fast tier truncates.
 
-### Phase 3 — public surface + policy/arg validation *(planned)*
+### Phase 3 — public surface + policy/arg validation *(LANDED)*
 
 - Declare `asmtest_trace_call_auto` in
   [asmtest_trace_auto.h](../../../include/asmtest_trace_auto.h) with the docstring
@@ -147,7 +152,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 - Non-x86-64 / non-Linux: `#else` stub returns `ASMTEST_HW_ENOSYS` (mirrors the other
   backends' host gating), so the symbol always links.
 
-### Phase 4 — tests *(planned)*
+### Phase 4 — tests *(LANDED)*
 
 Added to [examples/test_hwtrace.c](../../../examples/test_hwtrace.c) (`make hwtrace-test`),
 alongside `test_cross_tier_resolve`:
@@ -162,7 +167,7 @@ alongside `test_cross_tier_resolve`:
   truncates and `used` reports the escalated (block-step) tier — printed as the live proof
   that escalation fired; on non-AMD the single-step floor completes it directly.
 
-### Phase 5 — parity, docs *(planned)*
+### Phase 5 — parity, docs *(LANDED — C-side; per-binding `call_auto` wrappers forward-look)*
 
 - **Bindings parity:** `asmtest_trace_auto.h` is scanned by the gate. `call_auto` is a
   call-owning C-level entry in the `call_scoped` family (which is `ALL`-exempt, dotnet-lead)

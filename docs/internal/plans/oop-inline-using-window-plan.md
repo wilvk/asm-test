@@ -15,10 +15,13 @@ in ADDITION to the delegate factory `AsmTrace.Window(() => { … })` that ships 
 (§Roadmap, "build reluctantly, LAST") — the one trace form whose backend is COORDINATION-class
 rather than START/STOP, promoted from roadmap sketch to a concrete spec.
 
-> **Status: planned.** Nothing here has landed. `AsmTrace.Window` (the delegate factory) is the
-> shipped, recommended form ([HwTrace.cs:1803](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1803));
-> this plan adds an inline sibling that reuses its channel + attribution seam but swaps the
-> delegate call-frame boundary for an async begin/stop split.
+> **Status: LANDED** (`578caed`, 2026-07-09). The inline-`using` OOP form ships as the
+> `AsmTrace(bool outOfProcess, …)` ctor ([HwTrace.cs:1923](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1923)),
+> reusing `AsmTrace.Window`'s shared channel + attribution seam but swapping the delegate
+> call-frame boundary for an async begin/stop split (`asmtest_hwtrace_stealth_window_begin` /
+> `…_stop`). `AsmTrace.Window` (the delegate factory,
+> [HwTrace.cs:1837](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1837)) remains the recommended
+> form per the note below.
 
 > **Recommendation before building: this is strictly WORSE than the factory** — build only if a
 > bare-`using` OOP scope is an explicit requirement. It buys ONLY the `using` syntax for zero

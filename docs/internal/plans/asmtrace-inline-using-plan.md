@@ -10,7 +10,10 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 [src/hwtrace.c](../../../src/hwtrace.c). Companion to
 [asmtrace-extensions-plan.md](asmtrace-extensions-plan.md).
 
-> Status: **AMD-LBR inline LANDED**; the rest is roadmap.
+> Status: **AMD-LBR inline LANDED** and **R4 (out-of-process inline) LANDED** (`578caed`,
+> ahead of R1–R3); R1–R3 remain roadmap. Note: R4 landing out of sequence means Dispose now
+> carries four parallel `_*Window` bools, so the **R1 `_kind` refactor is now the warranted
+> next cleanup**.
 
 ## The general requirement + the two backend classes
 
@@ -76,11 +79,12 @@ AsmTrace(HwBackend.SingleStep)` forward to the existing whole-window arming (ext
 shared private method) so the backend-keyed ctor covers single-step too, instead of directing
 to `new AsmTrace()`. Cosmetic.
 
-**R4 — Out-of-process inline (build reluctantly, LAST).** Add a `volatile int stop` to the
-shared stealth scratch, split `stealth_trace_windowed` into begin/end, replace `pc == win_ret`
-with `*stop` in a new loop variant, and add a **distinct** ctor (`new AsmTrace(bool
-outOfProcess)`) — never a peer bool on the backend-keyed ctor (its lifecycle is a live helper
-context + stop→waitpid→read-back, a different teardown). It is crash-proof (ptrace-stops) but
+**R4 — Out-of-process inline (LANDED, `578caed`).** Shipped ahead of R1–R3: added a `volatile
+int stop` to the shared stealth scratch, split `stealth_trace_windowed` into begin/end, replaced
+`pc == win_ret` with `*stop` in a new loop variant, and added a **distinct** ctor (`new
+AsmTrace(bool outOfProcess)` — [HwTrace.cs:1923](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1923)),
+never a peer bool on the backend-keyed ctor (its lifecycle is a live helper context +
+stop→waitpid→read-back, a different teardown). It is crash-proof (ptrace-stops) but
 **strictly worse** than `AsmTrace.Window`: it re-exposes the ctor/Dispose to the stepper
 (harness-frame attribution pollution), demands thread-affinity across an arbitrary block
 (fragile under `await`), and buys *only* the `using` syntax for **zero capture-quality gain**
