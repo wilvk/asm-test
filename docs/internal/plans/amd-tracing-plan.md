@@ -552,10 +552,10 @@ freeze is absent remains folded into that item.
 
 A follow-up pass over the now-landed Phases 0–5 —
 [2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) — surfaced one
-composition win (MSR) and a correctness/hygiene cluster. Unlike Phases 6–7, **none of it is
-hardware-blocked**: all of it is buildable and self-validating on the dev Zen 5 (Ryzen 9
-9950X) now. It becomes Part III **Phases 8 (MSR-rung cascade composition) and 9 (correctness &
-hygiene)**.
+composition win (MSR) and a correctness/hygiene cluster. Unlike Phases 6–7, **none of it was
+hardware-blocked**: all of it was buildable and self-validating on the dev Zen 5 (Ryzen 9
+9950X), and landed 2026-07-10 as Part III **Phases 8 (MSR-rung cascade composition) and 9
+(correctness & hygiene)**.
 
 **Cascade composition — the near-term win [real, MSR-scoped].**
 `asmtest_trace_call_auto` ([trace_auto.c:134](../../../src/trace_auto.c)) escalates fast
@@ -635,9 +635,9 @@ over-states it: both drain TUs compile `#if defined(__linux__) && defined(__x86_
 x86-64. The only real issue is `-fstrict-aliasing` / UBSan-lane UB, fixed with the
 `memcpy`-into-a-local pattern — it matters for the sanitize build, not the shipped one.
 
-These land as Part III **Phase 8** (MSR-rung cascade composition, `src/trace_auto.c`) and
+These landed as Part III **Phase 8** (MSR-rung cascade composition, `src/trace_auto.c`) and
 **Phase 9** (correctness & hygiene, `src/hwtrace.c` + `src/branchsnap.c` + `src/msr_lbr.c` +
-new `src/amd_backend.h`), both *(planned)* and buildable on the dev Zen 5 today.
+new `src/amd_backend.h`), both *(landed 2026-07-10)* on the dev Zen 5.
 
 ## Matrix 2 — Squeezing the existing window (P1 detail)
 
@@ -817,11 +817,10 @@ shipped LBR backend.
 
 ## Implementation status
 
-**Phases 0–5 landed; Phases 6–7 remain forward-look (hardware-blocked); Phases 8–9 are
-near-term planned work.** The
+**Phases 0–5 and 8–9 landed; Phases 6–7 remain forward-look (hardware-blocked).** The
 [2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) surfaced two
-further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and are
-buildable on this Zen 5 dev box now: **Phase 8** composes the fidelity cascade so a
+further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and
+landed on this Zen 5 dev box (2026-07-10): **Phase 8** composes the fidelity cascade so a
 truncated sampled window escalates to the shipped MSR-direct exact path *before* the ~1000×
 block-step slowdown (the boundary snapshot already runs default-on in the fast tier, so it
 is deliberately *not* a rung — see Part II [Newly surfaced](#newly-surfaced-2026-07-09-review)),
@@ -1223,7 +1222,23 @@ and the branch target is capability-gated and valid only for retired taken branc
 mark a subset of region basic blocks as covered and reduce the number of blocks the
 block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_PERFMON`.
 
-## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(planned)*
+## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(landed 2026-07-10)*
+
+> **Status (2026-07-10): LANDED and validated on the Zen 5 dev box.** The MSR-direct rung ships
+> in `asmtest_trace_call_auto` ([src/trace_auto.c](../../../src/trace_auto.c)), inserted after the
+> fast-tier completion gate and before the BTF block-step tier. It runs only when the fast sampled
+> tier came back truncated/absent, is gated on `asmtest_amd_msr_available()` (a true `/dev/cpu/N/msr`
+> privilege probe that also self-skips off x86-64 Linux), and is excluded under
+> `ASMTEST_TRACE_CEILING_FREE` (it shares AMD_LBR's 16-deep ceiling). A small `msr_call_closure` +
+> `void(void*)` trampoline recovers the routine's `long` result across `asmtest_amd_msr_trace`'s
+> callback boundary; `call_auto_reset` runs before the attempt and any miss/failure sets `truncated`
+> and falls through to block-step (never an early return on a failed tier). The in-process re-run
+> caveat holds — a second real execution, like the fast begin/end tier it sits beside. **Validated**
+> in the privileged MSR lane (`make docker-hwtrace-msr`, `--privileged`): a tiny routine the sampled
+> tier truncates is reconstructed complete by the rung (`used->backend == AMD_LBR`, zero PMU
+> interrupts) *before* block-step, `CEILING_FREE` excludes it, and the existing `trace_call_auto`
+> cases are unchanged — `test_call_auto` case (c),
+> [examples/test_hwtrace.c](../../../examples/test_hwtrace.c); 361/361 green on the Ryzen 9 9950X.
 
 **Goal.** Insert an **MSR-direct escalation rung** into `asmtest_trace_call_auto` between the
 fast sampled-hwtrace tier and the BTF block-step tier. When the fast tier returns a
@@ -1312,7 +1327,26 @@ truncated-then-block-step and pure single-step floors — is **unchanged**. Vali
 privileged AMD lane on the Zen 5 dev box (the `docker-hwtrace-amd` shape plus the `msr`
 device), self-skipping in hosted CI.
 
-## Improvement Phase 9 — Correctness & hygiene cluster (2026-07-09 review) (`src/amd_backend.h`, `src/hwtrace.c`, `src/msr_lbr.c`) *(planned)*
+## Improvement Phase 9 — Correctness & hygiene cluster (2026-07-09 review) (`src/amd_backend.h`, `src/hwtrace.c`, `src/msr_lbr.c`) *(landed 2026-07-10)*
+
+> **Status (2026-07-10): LANDED and validated on the Zen 5 dev box.** Both `[correctness]` fixes
+> and the hygiene cluster ship. (1) **MSR spec leak fixed at the source:** the raw FROM/TO decode is
+> extracted to a pure `asmtest_amd_msr_decode_entry` ([src/msr_lbr.c](../../../src/msr_lbr.c)) that
+> keeps only retired entries (`TO[63]`), dropping the spec-only wrong-path slot (`TO[62]=1, TO[63]=0`)
+> the downstream `PERF_BR_SPEC_WRONG_PATH` filter could never catch — verified against the kernel's
+> `struct branch_entry` bit layout. (2) **Tail-call snapshot widening:** the default-on gate's exit
+> deriver `amd_last_ret_off` → `asmtest_amd_last_exit_off` ([src/hwtrace.c](../../../src/hwtrace.c))
+> now counts a region-leaving direct uncond `jmp` as an exit, guarding out indirect and in-region
+> jmps. (3) **Shared internal header:** new [src/amd_backend.h](../../../src/amd_backend.h) is the one
+> source for the `amd_*` decls, the folded `ASMTEST_AMD_REDUCED_FILTER`, and the re-exported
+> `ASMTEST_HW_*` codes — the four hand-copied inline decl blocks, the duplicated macro, and the local
+> error-code redefs (amd_backend.c, ss_backend.c) are deleted, so a signature/constant drift is now a
+> compile error. (4) `PERF_EVENT_IOC_ENABLE` is return-checked at all six arm sites and the four
+> perf-ring drain loops read the header/`nr` via `memcpy` (strict-aliasing). **Validated**
+> host-independently by `test_amd_msr_spec_filter` + `test_amd_tailcall_exit`
+> ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) and live: `make docker-hwtrace-amd`
+> 352/352, `make docker-hwtrace-codeimage` branchsnap green (the real libbpf path — reduced-filter
+> macro from the shared header, ioctl checks), bindings-parity OK (114×10).
 
 **Goal.** Close the two correctness gaps the 2026-07-09 AMD review surfaced — the MSR-direct path
 admitting speculative wrong-path LBR entries that `amd_replay`'s `PERF_BR_SPEC_WRONG_PATH` filter
