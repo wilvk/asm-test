@@ -32,7 +32,7 @@ jobs:
         #   macos-latest      aarch64 macOS  (clang, Mach-O)
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Toolchain versions
         run: |
@@ -72,7 +72,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Toolchain versions
         run: |
@@ -111,7 +111,7 @@ jobs:
       # K1: the pinned build's exact installed file set is cached; a cold cache
       # (or unavailable backend) just builds from source as before.
       - name: Cache the pinned Capstone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/capstone
           key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
@@ -142,7 +142,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Ensure Rosetta 2
         run: softwareupdate --install-rosetta --agree-to-license
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install nasm
         run: make deps DEPS_ARGS=--nasm
@@ -200,7 +200,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -209,7 +209,7 @@ jobs:
       # the pinned inputs. Cold cache / unavailable backend: builds from source
       # exactly as before (the wrapper's cache mechanics are non-fatal).
       - name: Cache the pinned Capstone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/capstone
           key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
@@ -234,7 +234,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libunicorn + pkg-config
         run: make deps DEPS_ARGS=--emu
@@ -243,7 +243,7 @@ jobs:
       # in the matrix — so cache its exact installed file set, keyed on the
       # pinned inputs. Cold cache / unavailable backend: builds as before.
       - name: Cache the pinned Keystone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/keystone
           key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
@@ -266,7 +266,7 @@ jobs:
     env:
       DR_VERSION: 11.91.20630
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (python3 + pytest for the wrapper)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake python3 python3-pytest
@@ -295,7 +295,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Capstone (AMD reconstruction) + libipt (PT decode) + OpenCSD
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config python3 python3-pytest
@@ -333,10 +333,10 @@ jobs:
         --cache-from type=gha,scope=asmtest-bindings-base
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Expose the Actions runtime to buildx (gha cache backend)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
@@ -368,10 +368,10 @@ jobs:
         --cache-from type=gha,scope=asmtest-bindings-base
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Expose the Actions runtime to buildx (gha cache backend)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
@@ -406,10 +406,10 @@ jobs:
         --cache-from type=gha,scope=asmtest-bindings-base
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Expose the Actions runtime to buildx (gha cache backend)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
@@ -444,10 +444,10 @@ jobs:
         --cache-from type=gha,scope=asmtest-bindings-base
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Expose the Actions runtime to buildx (gha cache backend)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
@@ -466,7 +466,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Check every binding manifest matches VERSION
         # Catch a VERSION bump made without `make sync-version` here, instead of
         # only when the release workflow's packaging steps explode on a real tag.
@@ -490,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Win64 capture via the native ms_abi lane
         run: |
@@ -516,7 +516,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -534,7 +534,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # libunicorn (+ capstone) so `make sanitize` also instruments the emulator
       # tier; the hwtrace single-step tier builds/runs with no extra dep, and
       # codeimage self-skips here (no bpftool). See the sanitize target (K4).
@@ -552,7 +552,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install valgrind
         run: make deps DEPS_ARGS=--valgrind
       - name: Memcheck the routines under test
@@ -565,7 +565,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # clang-tidy, plus libunicorn (+ capstone) so tidy also analyzes the
       # emulator and disassembler tiers, not just the base group (K3). The
       # keystone / libipt / OpenCSD tiers self-skip (their libs aren't installed).
@@ -582,7 +582,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install clang-format
         run: make deps DEPS_ARGS=--format
       - name: Report clang-format drift
@@ -595,7 +595,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # libunicorn (+ capstone) so coverage spans the emulator tier too, not just
       # the runner (K3).
       - name: Install the emulator tier deps
@@ -603,7 +603,7 @@ jobs:
       - name: Generate coverage
         run: make coverage
       - name: Upload coverage report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: asmtest-coverage
           path: "*.gcov"
@@ -629,7 +629,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
         run: |
@@ -648,13 +648,13 @@ jobs:
       # K1: cache both pinned source builds' exact installed file sets. Cold
       # cache / unavailable backend: builds from source exactly as before.
       - name: Cache the pinned Keystone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/keystone
           key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
 
       - name: Cache the pinned Capstone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/capstone
           key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
@@ -666,7 +666,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-payload-${{ matrix.os }}
           path: build/dist/native/
@@ -680,7 +680,7 @@ jobs:
     runs-on: macos-13
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build deps (unicorn, pkg-config) + patchelf
         run: |
@@ -689,13 +689,13 @@ jobs:
 
       # K1: same pinned-build caches as the main package-libs matrix above.
       - name: Cache the pinned Keystone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/keystone
           key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
 
       - name: Cache the pinned Capstone source build (K1)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/asmtest-thirdparty/capstone
           key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
@@ -707,7 +707,7 @@ jobs:
         run: make package-libs
 
       - name: Upload native payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-payload-macos-13
           path: build/dist/native/
@@ -726,10 +726,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download every per-OS/arch payload
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: native-payload-*
           path: build/dist/native/
@@ -744,7 +744,7 @@ jobs:
         run: make package-libs-verify
 
       - name: Upload the combined cross-platform payload
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: native-all
           path: build/dist/native/
