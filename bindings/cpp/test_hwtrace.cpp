@@ -230,6 +230,46 @@ int main() {
         }
     }
 
+    // ---- traceCallAuto: auto-escalating CALL-OWNING cross-tier trace ----
+    // trace_call_auto OWNS the invocation: run under the fastest exact tier and
+    // auto-escalate to a ceiling-free tier if the trace truncates. It SELF-MANAGES
+    // the tier lifecycle (no init here — the tier is torn down above), so it runs
+    // standalone; off x86-64 Linux it self-skips with EUNAVAIL. Mirrors
+    // test_hwtrace.py::test_trace_call_auto_owns_the_call_and_completes.
+    {
+        NativeCode code = NativeCode::from_bytes(ROUTINE);
+        auto res = HwTrace::traceCallAuto(code, 20L, 22L);  // 42 <= 100 -> jle taken
+        ok(res.rc == ASMTEST_HW_OK || res.rc == ASMTEST_HW_EUNAVAIL,
+           "traceCallAuto: rc in {OK, EUNAVAIL}");
+        if (res.rc == ASMTEST_HW_OK) {
+            ok(res.result == 42, "traceCallAuto(20,22): result == 42");
+            ok(!res.truncated, "traceCallAuto: !truncated (a tier captured it all)");
+            ok(res.trace.has_value() && res.trace->covered(0),
+               "traceCallAuto: entry block 0 covered");
+            ok(res.used.tier == TIER_HWTRACE,
+               "traceCallAuto: used.tier == TIER_HWTRACE");
+            res.trace->free();
+        }
+        code.free();
+
+        // A loop past the 16-taken-branch LBR window must STILL yield a complete
+        // trace (escalating off the ceiling-bounded backend on an AMD host; the
+        // single-step floor completes it directly elsewhere).
+        NativeCode lcode = NativeCode::from_bytes(LOOP);
+        auto lres = HwTrace::traceCallAuto(lcode, 1L, 25L);  // 25 back-edges > 16
+        ok(lres.rc == ASMTEST_HW_OK || lres.rc == ASMTEST_HW_EUNAVAIL,
+           "traceCallAuto(loop): rc in {OK, EUNAVAIL}");
+        if (lres.rc == ASMTEST_HW_OK) {
+            ok(lres.result == 25, "traceCallAuto(1,25): result == 25");
+            ok(!lres.truncated,
+               "traceCallAuto(loop): !truncated (escalated to a ceiling-free tier)");
+            ok(lres.trace.has_value() && lres.trace->covered(0x7),
+               "traceCallAuto(loop): loop-body block 0x7 covered");
+            lres.trace->free();
+        }
+        lcode.free();
+    }
+
     // ---- cross-tier orchestrator: resolve over hwtrace + DynamoRIO + emulator ----
     // Mirrors test_hwtrace.py's test_cross_tier_resolve_invariants: structural
     // invariants of the full descending-fidelity cascade.

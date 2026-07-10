@@ -339,6 +339,41 @@ do
   HwTrace.shutdown()
 end
 
+-- trace_call_auto — the auto-escalating CALL-OWNING cross-tier trace: it OWNS the
+-- invocation and SELF-MANAGES the tier lifecycle (no init fixture), so it runs
+-- standalone here (the global single-step tier above is already shut down). Mirrors
+-- test_hwtrace.py::test_trace_call_auto_owns_the_call_and_completes.
+do
+  local code = NativeCode.from_bytes(ROUTINE)
+  local res = HwTrace.trace_call_auto(code, 20, 22)  -- 42 <= 100 -> jle taken, dec skipped
+  ok(res.rc == 0 or res.rc == ASMTEST_HW_EUNAVAIL,
+     "trace_call_auto: rc in {OK, EUNAVAIL}")
+  if res.rc == 0 then
+    eq(res.result, 42, "trace_call_auto(20,22).result == 42")
+    ok(not res.truncated, "trace_call_auto: some tier captured the whole path")
+    ok(res.trace:covered(0), "trace_call_auto: entry block 0 covered")
+    ok(res.used ~= nil and res.used.tier == TIER_HWTRACE,
+       "trace_call_auto: used.tier == TIER_HWTRACE")
+    res.trace:free()
+  end
+  code:free()
+
+  -- A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+  -- (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
+  -- completes it directly elsewhere). 25 back-edges > the 16-deep window.
+  local loop = NativeCode.from_bytes(LOOP)
+  local lres = HwTrace.trace_call_auto(loop, 1, 25)
+  ok(lres.rc == 0 or lres.rc == ASMTEST_HW_EUNAVAIL,
+     "trace_call_auto (loop): rc in {OK, EUNAVAIL}")
+  if lres.rc == 0 then
+    eq(lres.result, 25, "trace_call_auto(loop,1,25).result == 25")
+    ok(not lres.truncated, "trace_call_auto (loop): escalated to a ceiling-free tier")
+    ok(lres.trace:covered(0x7), "trace_call_auto (loop): loop-body block 0x7 covered")
+    lres.trace:free()
+  end
+  loop:free()
+end
+
 -- ---- Out-of-process / foreign-process toolkit (HwTrace ptrace_* methods) ----
 --
 -- Mirrors the four tests after the "foreign-process toolkit" banner in

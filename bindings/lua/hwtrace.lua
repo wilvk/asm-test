@@ -31,6 +31,12 @@ int  asmtest_hwtrace_auto(int policy);
 typedef struct { int tier; int backend; int fidelity; } asmtest_trace_choice_t;
 size_t asmtest_trace_resolve(unsigned policy, asmtest_trace_choice_t* out, size_t cap);
 int    asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t* out);
+/* asmtest_trace_auto.h — auto-escalating CALL-OWNING cross-tier trace: owns the
+   invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+   tier when the trace truncates. Self-manages the tier lifecycle internally. */
+int    asmtest_trace_call_auto(const void* code, size_t len, const long* args,
+                               int nargs, unsigned policy, long* result,
+                               void* trace, asmtest_trace_choice_t* used);
 int  asmtest_hwtrace_init(const asmtest_hwtrace_options_t* opts);
 int  asmtest_hwtrace_register_region(const char* name, void* base, size_t len, void* trace);
 void asmtest_hwtrace_begin(const char* name);
@@ -485,6 +491,48 @@ function HwTrace.call_scoped(code, ...)
   local trunc = L.asmtest_emu_trace_truncated(handle) ~= 0
   L.asmtest_trace_free(handle)
   return { result = tonumber(result[0]), path = path, truncated = trunc, rc = rc }
+end
+
+-- Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): run
+-- code(args...) under the fastest exact tier and, when the trace comes back
+-- truncated, escalate to a ceiling-free tier and re-run — until the trace is complete
+-- or the tiers are exhausted. This OWNS the invocation, so `code` must be RE-RUNNABLE
+-- (invoked once per attempted tier: the in-process fast step, then the fork-isolated
+-- ptrace escalations). Unlike call_scoped it SELF-MANAGES the tier lifecycle (init ->
+-- begin -> invoke -> end -> shutdown) INTERNALLY, so it needs NO HwTrace.init and must
+-- NOT be pre-armed — a pre-arm here would double-init and leave the tier torn down.
+-- A STATIC method. Integer args (0-6, SysV integer ABI). Starts under TRACE_BEST.
+-- Returns a table {result, trace, used, truncated, rc}: `trace` is a queryable HwTrace
+-- that the CALLER frees via :free(); `used` the { tier=, backend=, fidelity= } choice
+-- that produced the final trace (inspect used.backend to see whether escalation fired).
+-- On a self-skip (no call-owning native tier) result/trace/used are nil and rc is
+-- negative (ASMTEST_HW_EUNAVAIL).
+function HwTrace.trace_call_auto(code, ...)
+  -- No pre-arm (see above): trace_call_auto owns the full tier lifecycle internally.
+  local trace = HwTrace.create(64, 512)  -- queryable; the CALLER frees it via :free()
+  local n = select("#", ...)
+  local args = { ... }
+  local arr = nil
+  if n > 0 then
+    arr = ffi.new("long[?]", n)
+    for i = 1, n do arr[i - 1] = args[i] end
+  end
+  local result = ffi.new("long[1]")
+  local used = ffi.new("asmtest_trace_choice_t[1]")
+  local rc = tonumber(L.asmtest_trace_call_auto(
+    code.base, code.len, arr, n, TRACE_BEST, result, trace.h, used))
+  if rc ~= ASMTEST_HW_OK then
+    trace:free()
+    return { result = nil, trace = nil, used = nil, truncated = false, rc = rc }
+  end
+  return {
+    result = tonumber(result[0]),
+    trace = trace,
+    used = { tier = used[0].tier, backend = used[0].backend,
+             fidelity = used[0].fidelity },
+    truncated = trace:truncated(),
+    rc = rc,
+  }
 end
 
 -- True if the basic block at byte-offset `off` (from the region entry) was entered.

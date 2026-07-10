@@ -169,6 +169,11 @@ struct HwApi {
     int (*hwauto)(int) = nullptr;
     size_t (*trace_resolve)(unsigned, asmtest_trace_choice_t *, size_t) = nullptr;
     int (*trace_auto)(unsigned, asmtest_trace_choice_t *) = nullptr;
+    /* Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns
+     * the invocation and self-manages the tier lifecycle internally. The trace
+     * handle is the same opaque void* as everywhere else here. */
+    int (*trace_call_auto)(const void *, size_t, const long *, int, unsigned,
+                           long *, void *, asmtest_trace_choice_t *) = nullptr;
     int (*init)(const asmtest_hwtrace_options_t *) = nullptr;
     int (*register_region)(const char *, void *, size_t, void *) = nullptr;
     void (*begin)(const char *) = nullptr;
@@ -321,6 +326,10 @@ inline HwApi &api() {
         ok &= dlsym_into(h, "asmtest_hwtrace_auto", t.hwauto);
         ok &= dlsym_into(h, "asmtest_trace_resolve", t.trace_resolve);
         ok &= dlsym_into(h, "asmtest_trace_auto", t.trace_auto);
+        /* Non-gated: a brand-new symbol; an older lib without it still loads and the
+         * public traceCallAuto() self-skips (rc EUNAVAIL) via the null check, exactly
+         * like call_scoped_ex below. */
+        dlsym_into(h, "asmtest_trace_call_auto", t.trace_call_auto);
         ok &= dlsym_into(h, "asmtest_hwtrace_init", t.init);
         ok &= dlsym_into(h, "asmtest_hwtrace_register_region",
                          t.register_region);
@@ -661,6 +670,11 @@ struct CallScopedResult {
     bool ok() const { return rc == ASMTEST_HW_OK; }
 };
 
+/// Forward declaration: HwTrace::traceCallAuto hands back a filled, queryable
+/// HwTrace by value, so TraceCallAutoResult (which owns one) is defined just after
+/// the HwTrace class, and the method bodies out-of-line after that.
+struct TraceCallAutoResult;
+
 /// A coverage recorder for a registered native region, via the hardware tier.
 /// Process-wide lifecycle (available/init/shutdown) is static; per-trace state is
 /// the instance. Move-only; frees its handle in the destructor.
@@ -857,6 +871,32 @@ class HwTrace {
         return {result, path, trunc, rc};
     }
 
+    /// Auto-escalating CALL-OWNING cross-tier trace (`asmtest_trace_call_auto`): run
+    /// `code(args...)` under the fastest exact tier and, when the trace comes back
+    /// truncated, escalate to a ceiling-free tier and re-run — until the trace is
+    /// complete or the tiers are exhausted. This OWNS the invocation, so `code` must
+    /// be RE-RUNNABLE (invoked once per attempted tier: the in-process fast step,
+    /// then the fork-isolated ptrace escalations). Unlike `callScoped`, it
+    /// SELF-MANAGES the whole tier lifecycle (init -> begin -> invoke -> end ->
+    /// shutdown) internally, so no `HwTrace::init()` is required (and pre-arming it
+    /// would double-init and tear the tier down). Integer args (0-6, SysV). `policy`
+    /// is the STARTING policy (TRACE_CEILING_FREE skips the ceiling-bounded fast
+    /// backend up front). Returns a `TraceCallAutoResult`: `.result` the call's
+    /// return, `.trace` a queryable HwTrace the CALLER owns (freed by its RAII dtor),
+    /// `.used` the `TierChoice` that produced the final trace (inspect `.backend` to
+    /// see whether escalation fired), and `.truncated`. Self-skips (`.rc` negative,
+    /// `.trace` empty) where no call-owning native tier is available.
+    template <typename... Args>
+    static TraceCallAutoResult traceCallAuto(unsigned policy,
+                                             const NativeCode &code,
+                                             Args... args);
+
+    /// `traceCallAuto` starting from TRACE_BEST (the most-faithful fast tier),
+    /// escalating to a ceiling-free tier only if the trace truncates.
+    template <typename... Args>
+    static TraceCallAutoResult traceCallAuto(const NativeCode &code,
+                                             Args... args);
+
     /// True if basic-block offset `off` is in this trace's distinct block set.
     bool covered(uint64_t off) const {
         return detail::api().trace_covered(handle_, off) != 0;
@@ -920,6 +960,59 @@ class HwTrace {
 
     void *handle_ = nullptr;
 };
+
+/// The outcome of `HwTrace::traceCallAuto`: the call's `result`, the filled `trace`
+/// (a queryable HwTrace the CALLER owns — freed by its RAII dtor, or query it via
+/// `trace->covered(...)`), the `TierChoice` that produced the final trace (`used` —
+/// inspect `used.backend` to see whether escalation fired), the `truncated` honesty
+/// bit, and the raw `rc`. On a self-skip (no call-owning native tier) `trace` is
+/// std::nullopt, `used` is zero, and `rc` is negative. Mirrors the Python
+/// `TraceCallAutoResult`.
+struct TraceCallAutoResult {
+    long result = 0;
+    std::optional<HwTrace> trace;  // caller-owned filled trace; nullopt on self-skip
+    TierChoice used{};
+    bool truncated = false;
+    int rc = 0;
+    /// True when some tier ran and produced a trace (rc == ASMTEST_HW_OK).
+    bool ok() const { return rc == ASMTEST_HW_OK; }
+};
+
+template <typename... Args>
+inline TraceCallAutoResult HwTrace::traceCallAuto(unsigned policy,
+                                                  const NativeCode &code,
+                                                  Args... args) {
+    detail::HwApi &a = detail::require();
+    // No pre-arm / init(): unlike call_scoped_ex (which needs an armed tier),
+    // asmtest_trace_call_auto OWNS the full tier lifecycle (init -> begin -> invoke
+    // -> end -> shutdown) internally, so a pre-arm here would double-init and then
+    // leave the tier torn down. A brand-new/absent symbol self-skips as EUNAVAIL.
+    if (!a.trace_call_auto)
+        return {0, std::nullopt, TierChoice{}, false, ASMTEST_HW_EUNAVAIL};
+    void *handle = a.trace_new(512, 64);  // insns=512, blocks=64 (Python defaults)
+    if (!handle)
+        throw std::runtime_error("asmtest_trace_new returned NULL");
+    long arr[] = {static_cast<long>(args)..., 0L};  // +1 avoids a zero-size array
+    const int n = static_cast<int>(sizeof...(Args));
+    long result = 0;
+    asmtest_trace_choice_t used{};  // three consecutive C ints (no padding)
+    int rc = a.trace_call_auto(code.base(), code.length(), (n ? arr : nullptr), n,
+                               policy, &result, handle, &used);
+    if (rc != ASMTEST_HW_OK) {
+        a.trace_free(handle);
+        return {0, std::nullopt, TierChoice{}, false, rc};
+    }
+    bool trunc = a.trace_truncated(handle) != 0;
+    TierChoice tc{static_cast<int>(used.tier), static_cast<int>(used.backend),
+                  static_cast<int>(used.fidelity)};
+    return {result, HwTrace(handle), tc, trunc, rc};
+}
+
+template <typename... Args>
+inline TraceCallAutoResult HwTrace::traceCallAuto(const NativeCode &code,
+                                                  Args... args) {
+    return traceCallAuto(static_cast<unsigned>(TRACE_BEST), code, args...);
+}
 
 /// Mirrors asmtest_jitdump_entry_t: four consecutive uint64, no padding. The
 /// `code` bytes are carried alongside in JitMethod, not in this layout struct.

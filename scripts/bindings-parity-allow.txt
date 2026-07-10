@@ -84,11 +84,8 @@ ALL asmtest_hwtrace_stealth_window_begin    # begin/end split of the windowed st
 ALL asmtest_hwtrace_stealth_window_end      #   (paired with stealth_window_begin above)
 ALL asmtest_ptrace_trace_attached_window_stop # ptrace-stop stepper used internally by the stealth helper
 
-# Auto-escalating CALL-owning cross-tier trace (docs/internal/plans/auto-escalating-trace-plan.md).
-# C-level entry in the call_scoped family (owns the invocation + args), NOT the pure-query
-# trace_auto/trace_resolve family that every binding wraps; bindings gain it when they grow a
-# call-auto wrapper over their existing call_scoped shim.
-ALL asmtest_trace_call_auto
+# (asmtest_trace_call_auto — the auto-escalating CALL-owning cross-tier trace — is now
+# wrapped in all ten bindings, so its former ALL exemption was removed 2026-07-10.)
 
 # DR-tier self-skip diagnostic (817cc72), the counterpart of asmtest_hwtrace_skip_reason.
 # Every binding gates the DynamoRIO tier on asmtest_dr_available()'s bool; none surfaces

@@ -211,6 +211,21 @@ type AutoFn = unsafe extern "C" fn(c_int) -> c_int;
 type TraceResolveFn =
     unsafe extern "C" fn(std::os::raw::c_uint, *mut TraceChoice, usize) -> usize;
 type TraceAutoFn = unsafe extern "C" fn(std::os::raw::c_uint, *mut TraceChoice) -> c_int;
+// Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+// invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+// tier when the trace truncates. It self-manages the tier lifecycle internally
+// (init -> begin -> invoke -> end -> shutdown), so — unlike call_scoped_ex — the
+// caller must NOT pre-arm / init the tier first.
+type TraceCallAutoFn = unsafe extern "C" fn(
+    *const c_void,        // code
+    usize,                // len
+    *const c_long,        // args
+    c_int,                // nargs
+    std::os::raw::c_uint, // policy (ASMTEST_TRACE_* bitmask)
+    *mut c_long,          // result_out (may be null)
+    *mut c_void,          // trace (asmtest_trace_t*, caller-allocated)
+    *mut TraceChoice,     // used out (may be null)
+) -> c_int;
 type InitFn = unsafe extern "C" fn(*const Options) -> c_int;
 type ShutdownFn = unsafe extern "C" fn();
 type RegisterRegionFn =
@@ -397,6 +412,7 @@ struct HwFns {
     auto: Option<AutoFn>,
     trace_resolve: Option<TraceResolveFn>,
     trace_auto: Option<TraceAutoFn>,
+    trace_call_auto: Option<TraceCallAutoFn>,
     init: Option<InitFn>,
     shutdown: Option<ShutdownFn>,
     register_region: Option<RegisterRegionFn>,
@@ -530,7 +546,7 @@ fn hw_fns() -> &'static HwFns {
             // No lib: every pointer stays None, available() returns false.
             return HwFns {
                 available: None, skip_reason: None, resolve: None, auto: None,
-                trace_resolve: None, trace_auto: None,
+                trace_resolve: None, trace_auto: None, trace_call_auto: None,
                 init: None, shutdown: None,
                 register_region: None, begin: None, end: None,
                 try_begin: None, render: None,
@@ -591,6 +607,7 @@ fn hw_fns() -> &'static HwFns {
             auto: load!("asmtest_hwtrace_auto", AutoFn),
             trace_resolve: load!("asmtest_trace_resolve", TraceResolveFn),
             trace_auto: load!("asmtest_trace_auto", TraceAutoFn),
+            trace_call_auto: load!("asmtest_trace_call_auto", TraceCallAutoFn),
             init: load!("asmtest_hwtrace_init", InitFn),
             shutdown: load!("asmtest_hwtrace_shutdown", ShutdownFn),
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
@@ -805,6 +822,28 @@ pub struct CallScopedResult {
     /// The executed body disassembly (empty when the decoder is absent).
     pub path: String,
     /// True if the capture overflowed or the scope closed on another thread.
+    pub truncated: bool,
+    /// The `ASMTEST_HW_*` status (`0` == OK).
+    pub rc: i32,
+}
+
+/// The outcome of [`HwTrace::trace_call_auto`]: the auto-escalating call-owning
+/// cross-tier trace's return value (`result`, `None` on a self-skip), the filled
+/// [`Trace`] recorder (`trace`, queryable — freed on drop like every [`Trace`], the
+/// Rust-natural ownership convention), the [`TierChoice`] that produced the final
+/// trace (`used` — inspect `used.backend` to see whether escalation fired), the
+/// completeness bit (`truncated`), and the raw `ASMTEST_HW_*` status (`rc`, `0` ==
+/// OK). On a self-skip (no call-owning native tier) `result`/`trace`/`used` are
+/// `None` and `rc` is negative. Mirrors the Python `TraceCallAutoResult`.
+#[derive(Debug)]
+pub struct TraceCallAutoResult {
+    /// The call's return value (SysV integer ABI), or `None` on a self-skip.
+    pub result: Option<i64>,
+    /// The filled, queryable trace recorder (freed on drop), or `None` on a self-skip.
+    pub trace: Option<Trace>,
+    /// The tier/backend that produced the final trace, or `None` on a self-skip.
+    pub used: Option<TierChoice>,
+    /// True if even the final (ceiling-free) tier could not capture the whole path.
     pub truncated: bool,
     /// The `ASMTEST_HW_*` status (`0` == OK).
     pub rc: i32,
@@ -1140,6 +1179,72 @@ impl HwTrace {
         CallScopedResult { result: Some(result as i64), path, truncated, rc: rc as i32 }
     }
 
+    /// Auto-escalating CALL-OWNING cross-tier trace (`asmtest_trace_call_auto`): run
+    /// `code(args…)` under the fastest exact tier and, when the trace comes back
+    /// truncated, escalate to a ceiling-free tier and re-run — until the trace is
+    /// complete or the tiers are exhausted. This OWNS the invocation, so `code` must
+    /// be RE-RUNNABLE (invoked once per attempted tier: the in-process fast step, then
+    /// the fork-isolated ptrace escalations). It self-manages the tier lifecycle
+    /// internally (init -> begin -> invoke -> end -> shutdown), so — unlike
+    /// [`call_scoped`](HwTrace::call_scoped) — the caller must NOT pre-[`init`](HwTrace::init)
+    /// / pre-arm the tier (that would double-init and leave it torn down). `policy` is
+    /// the STARTING [`TracePolicy`] ([`TracePolicy::Best`]; [`TracePolicy::CeilingFree`]
+    /// skips the ceiling-bounded fast backend up front). Integer args (0-6, SysV ABI).
+    /// Returns a [`TraceCallAutoResult`]: `.result` the call's return, `.trace` a
+    /// queryable [`Trace`] (freed on drop), `.used` the [`TierChoice`] that produced the
+    /// final trace, and `.truncated`. Self-skips (`.result`/`.trace`/`.used` `None`,
+    /// negative `.rc`) where no call-owning native tier is available.
+    pub fn trace_call_auto(
+        code: &NativeCode,
+        args: &[i64],
+        policy: TracePolicy,
+    ) -> TraceCallAutoResult {
+        let f = hw_fns();
+        // No pre-arm / init: asmtest_trace_call_auto OWNS the full tier lifecycle
+        // (init -> begin -> invoke -> end -> shutdown) internally, so pre-arming here
+        // would double-init and then leave the tier torn down.
+        let (Some(call), Some(new), Some(free)) = (f.trace_call_auto, f.trace_new, f.trace_free)
+        else {
+            return TraceCallAutoResult { result: None, trace: None, used: None, truncated: false, rc: ASMTEST_HW_EUNAVAIL };
+        };
+        let handle = unsafe { new(512, 64) }; // insns=512, blocks=64 (mirrors Python)
+        if handle.is_null() {
+            return TraceCallAutoResult { result: None, trace: None, used: None, truncated: false, rc: ASMTEST_HW_EUNAVAIL };
+        }
+        // `long` on Linux x86-64 is i64; args ride through as `*const c_long`.
+        let argv: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
+        let argp = if argv.is_empty() { std::ptr::null() } else { argv.as_ptr() };
+        let mut result: c_long = 0;
+        // `used` is three consecutive C ints (asmtest_trace_choice_t, no padding).
+        let mut used = TraceChoice { tier: 0, backend: 0, fidelity: 0 };
+        let rc = unsafe {
+            call(
+                code.base() as *const c_void,
+                code.len(),
+                argp,
+                argv.len() as c_int,
+                policy as std::os::raw::c_uint,
+                &mut result,
+                handle,
+                &mut used,
+            )
+        };
+        if rc != ASMTEST_HW_OK {
+            unsafe { free(handle) };
+            return TraceCallAutoResult { result: None, trace: None, used: None, truncated: false, rc: rc as i32 };
+        }
+        // Success: wrap the filled handle in a Trace (freed on drop) and query it.
+        let trace = Trace { handle };
+        let truncated = trace.truncated();
+        TraceCallAutoResult {
+            result: Some(result as i64),
+            trace: Some(trace),
+            used: Some(tier_choice_of(used)),
+            truncated,
+            rc: rc as i32,
+        }
+    }
+
     // ---- per-trace ---- //
 
     /// Allocate an app-owned trace handle. Records the ordered instruction stream
@@ -1162,6 +1267,7 @@ impl HwTrace {
 /// Create with [`HwTrace::new_trace`], register a [`NativeCode`] range, bracket a
 /// call in a [`region`](Trace::region), then read back coverage. Dropping the value
 /// frees the underlying trace handle.
+#[derive(Debug)]
 pub struct Trace {
     handle: *mut c_void,
 }

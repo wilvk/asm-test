@@ -73,6 +73,12 @@ typedef int  (*hw_auto_fn)(int);
 // Cross-tier orchestrator entry points (asmtest_trace_auto.h), from the SAME lib.
 typedef size_t (*hw_trace_resolve_fn)(unsigned, asmtest_trace_choice_t *, size_t);
 typedef int    (*hw_trace_auto_fn)(unsigned, asmtest_trace_choice_t *);
+// Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+// invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+// tier when the trace truncates. Self-manages the tier lifecycle internally.
+typedef int    (*hw_trace_call_auto_fn)(const void *, size_t, const long *, int,
+                                        unsigned, long *, void *,
+                                        asmtest_trace_choice_t *);
 typedef int  (*hw_init_fn)(const asmtest_hwtrace_options_t *);
 typedef int  (*hw_register_fn)(const char *, void *, size_t, void *);
 typedef void (*hw_marker_fn)(const char *);
@@ -179,6 +185,7 @@ static hw_resolve_fn          p_hw_resolve;
 static hw_auto_fn             p_hw_auto;
 static hw_trace_resolve_fn    p_trace_resolve;
 static hw_trace_auto_fn       p_trace_auto;
+static hw_trace_call_auto_fn  p_trace_call_auto;
 static hw_init_fn             p_hw_init;
 static hw_register_fn         p_hw_register;
 static hw_marker_fn           p_hw_begin;
@@ -282,6 +289,7 @@ static void asmtest_hw_resolve(void) {
     p_hw_auto            = (hw_auto_fn)dlsym(h, "asmtest_hwtrace_auto");
     p_trace_resolve      = (hw_trace_resolve_fn)dlsym(h, "asmtest_trace_resolve");
     p_trace_auto         = (hw_trace_auto_fn)dlsym(h, "asmtest_trace_auto");
+    p_trace_call_auto    = (hw_trace_call_auto_fn)dlsym(h, "asmtest_trace_call_auto");
     p_hw_init            = (hw_init_fn)dlsym(h, "asmtest_hwtrace_init");
     p_hw_register        = (hw_register_fn)dlsym(h, "asmtest_hwtrace_register_region");
     p_hw_begin           = (hw_marker_fn)dlsym(h, "asmtest_hwtrace_begin");
@@ -359,7 +367,8 @@ static void asmtest_hw_resolve(void) {
     p_pt_trace_attached_ex = (pt_trace_attached_ex_fn)dlsym(h, "asmtest_ptrace_trace_attached_ex");
     p_pt_trace_attached_versioned_ex = (pt_trace_attached_versioned_ex_fn)dlsym(h, "asmtest_ptrace_trace_attached_versioned_ex");
     g_hw_loaded = p_hw_available && p_hw_skip_reason && p_hw_resolve &&
-                  p_hw_auto && p_trace_resolve && p_trace_auto && p_hw_init &&
+                  p_hw_auto && p_trace_resolve && p_trace_auto &&
+                  p_trace_call_auto && p_hw_init &&
                   p_hw_register && p_hw_begin && p_hw_end && p_hw_shutdown &&
                   p_hw_exec_alloc && p_hw_exec_free && p_hw_trace_new &&
                   p_hw_trace_free && p_hw_trace_covered && p_hw_trace_blocks_len &&
@@ -415,6 +424,13 @@ static size_t asmtest_go_trace_resolve(unsigned policy, asmtest_trace_choice_t *
 }
 static int  asmtest_go_trace_auto(unsigned policy, asmtest_trace_choice_t *out) {
     return p_trace_auto ? p_trace_auto(policy, out) : -3; // ASMTEST_HW_EUNAVAIL
+}
+static int  asmtest_go_trace_call_auto(const void *code, size_t len, const long *args,
+                                       int nargs, unsigned policy, long *result,
+                                       void *trace, asmtest_trace_choice_t *used) {
+    return p_trace_call_auto
+        ? p_trace_call_auto(code, len, args, nargs, policy, result, trace, used)
+        : -3; // ASMTEST_HW_EUNAVAIL
 }
 static int  asmtest_hw_go_init(int backend) {
     asmtest_hwtrace_options_t o;
@@ -1038,6 +1054,72 @@ func CallScoped(code *HwNativeCode, args ...int64) CallScopedResult {
 	}
 	truncated := C.asmtest_hw_go_truncated(h) != 0
 	return CallScopedResult{Result: int64(result), OK: true, Path: path, Truncated: truncated, RC: rc}
+}
+
+// TraceCallAutoResult carries a TraceCallAuto outcome: the traced call's return
+// value (Result, meaningful only when OK), the filled Trace (a queryable *HwTrace
+// the CALLER frees via Trace.Free() — inspect it with Covered/BlockOffsets/etc.),
+// the Used TierChoice that produced the final trace (inspect Used.Backend to see
+// whether escalation fired), the completeness honesty bit (Truncated), whether
+// some tier ran (OK == rc 0), and the raw ASMTEST_HW_* status (RC). On a self-skip
+// (no call-owning native tier) Trace is nil, Used is the zero TierChoice, and RC
+// is negative. Mirrors the Python TraceCallAutoResult.
+type TraceCallAutoResult struct {
+	Result    int64
+	Trace     *HwTrace
+	Used      TierChoice
+	Truncated bool
+	OK        bool
+	RC        int
+}
+
+// TraceCallAuto is the auto-escalating CALL-OWNING cross-tier trace
+// (asmtest_trace_call_auto): run code(args...) under the fastest exact tier and,
+// when the trace comes back truncated, escalate to a ceiling-free tier and re-run —
+// until the trace is complete or the tiers are exhausted. It OWNS the invocation, so
+// code must be RE-RUNNABLE (invoked once per attempted tier: the in-process fast step,
+// then the fork-isolated ptrace escalations). Integer args (0-6, SysV integer ABI).
+// Starts under TraceBest. Returns a TraceCallAutoResult whose Trace the CALLER frees;
+// RC is negative on a self-skip where no call-owning native tier is available. Mirrors
+// python HwTrace.trace_call_auto.
+//
+// Unlike CallScoped's call_scoped_ex, asmtest_trace_call_auto SELF-MANAGES the full
+// tier lifecycle (init -> begin -> invoke -> end -> shutdown) INTERNALLY, so it needs
+// no HwTraceInit — a pre-arm here would double-init and leave the tier torn down. The
+// whole lifecycle runs inside the single cgo call, so no LockOSThread pin is needed
+// (the per-thread single-step step can never migrate mid-call).
+func TraceCallAuto(code *HwNativeCode, args ...int64) TraceCallAutoResult {
+	trace := NewHwTrace(64, 512) // blocks=64, instructions=512
+	if trace.h == nil {
+		return TraceCallAutoResult{RC: HwEUnavail}
+	}
+	// A valid pointer even for 0 args (nargs, not the slice length, bounds the read).
+	n := len(args)
+	arr := make([]C.long, n+1)
+	for i, a := range args {
+		arr[i] = C.long(a)
+	}
+	var result C.long
+	var used C.asmtest_trace_choice_t
+	rc := int(C.asmtest_go_trace_call_auto(
+		code.base, code.len, &arr[0], C.int(n), C.uint(TraceBest),
+		&result, trace.h, &used))
+	if rc != hwOK {
+		trace.Free()
+		return TraceCallAutoResult{RC: rc}
+	}
+	return TraceCallAutoResult{
+		Result: int64(result),
+		Trace:  trace,
+		Used: TierChoice{
+			Tier:     int(used.tier),
+			Backend:  int(used.backend),
+			Fidelity: int(used.fidelity),
+		},
+		Truncated: trace.Truncated(),
+		OK:        true,
+		RC:        rc,
+	}
 }
 
 // Covered reports whether the basic block at byte-offset off (from the region

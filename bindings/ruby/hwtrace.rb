@@ -185,6 +185,14 @@ module Asmtest
         # ---- the cross-tier orchestrator (asmtest_trace_auto.h) ----
         trace_resolve: func(LIB, "asmtest_trace_resolve", [INT, VOIDP, SZ], SZ),
         trace_auto:    func(LIB, "asmtest_trace_auto", [INT, VOIDP], INT),
+        # Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+        # invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+        # tier when the trace truncates. Self-manages the tier lifecycle internally, so the
+        # binding does NOT pre-arm it. args is a const long*, result an out long*, trace the
+        # caller-allocated asmtest_trace_t it fills, and used the out asmtest_trace_choice_t
+        # (three packed C ints) — all passed as plain void* buffers.
+        trace_call_auto: func(LIB, "asmtest_trace_call_auto",
+                              [VOIDP, SZ, VOIDP, INT, INT, VOIDP, VOIDP, VOIDP], INT),
         init:         func(LIB, "asmtest_hwtrace_init", [VOIDP], INT),
         shutdown:     func(LIB, "asmtest_hwtrace_shutdown", [], VOID),
         # ---- region registration + markers ----
@@ -856,6 +864,14 @@ module Asmtest
       # thread-scope honesty bit (+truncated+). Mirrors hwtrace.py's CallScopedResult.
       CallScopedResult = Struct.new(:result, :path, :truncated)
 
+      # The outcome of .trace_call_auto: the call's return value (+result+, nil on a
+      # self-skip), the filled +trace+ (a queryable HwTrace the CALLER frees via #free; nil
+      # on a self-skip), the TierChoice that produced the final trace (+used+ — inspect
+      # +used.backend+ to see whether escalation fired; nil on a self-skip), the +truncated+
+      # honesty bit, and the raw +rc+. On a self-skip (no call-owning native tier) +result+/
+      # +trace+/+used+ are nil and +rc+ is negative. Mirrors hwtrace.py's TraceCallAutoResult.
+      TraceCallAutoResult = Struct.new(:result, :trace, :used, :truncated, :rc)
+
       # Trace ONE native call the managed-safe way: arm the single-step window, call
       # +code+(*args) through the SysV integer ABI, and disarm — all in native code
       # (asmtest_hwtrace_call_scoped_ex) — so nothing the binding runs between arm and disarm
@@ -893,6 +909,52 @@ module Asmtest
           Fiddle.free(res.to_i)
           Fiddle.free(scope.to_i)
           Asmtest::HwTrace::FN[:trace_free].call(handle)
+        end
+      end
+
+      # Auto-escalating CALL-OWNING trace (asmtest_trace_call_auto): run +code+(*args)
+      # under the fastest exact tier and, when the trace comes back truncated, escalate to
+      # a ceiling-free tier and re-run — until the trace is complete or the tiers are
+      # exhausted. This OWNS the invocation, so +code+ must be RE-RUNNABLE (invoked once per
+      # attempted tier: the in-process fast step, then the fork-isolated ptrace escalations).
+      # It SELF-MANAGES the tier lifecycle (init -> begin -> invoke -> end -> shutdown)
+      # INTERNALLY, so there is deliberately NO __lazy_arm here (unlike call_scoped): a
+      # pre-arm would double-init and then leave the tier torn down. Up to six integer +args+
+      # pass as C longs (SysV integer ABI). +policy+ is the STARTING cross-tier policy
+      # (TRACE_BEST; TRACE_CEILING_FREE skips the ceiling-bounded fast backend up front).
+      # Returns a TraceCallAutoResult: +result+ the call's return, +trace+ a queryable
+      # HwTrace the CALLER frees (via #free), +used+ the TierChoice that produced the final
+      # trace, +truncated+, and the raw +rc+. Self-skips (+result+/+trace+/+used+ nil,
+      # negative +rc+) where no call-owning native tier is available.
+      def self.trace_call_auto(code, *args, policy: TRACE_BEST, blocks: 64, instructions: 512)
+        trace = create(blocks: blocks, instructions: instructions)
+        n = args.length
+        sz = 8 * [n, 1].max
+        argbuf = Fiddle::Pointer.new(Fiddle.malloc(sz), sz)
+        argbuf[0, sz] = "\x00".b * sz
+        argbuf[0, 8 * n] = args.pack("q*") if n > 0
+        res = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # long result_out
+        res[0, 8] = "\x00".b * 8
+        used = Fiddle::Pointer.new(Fiddle.malloc(12), 12) # asmtest_trace_choice_t {3 ints}
+        used[0, 12] = "\x00".b * 12
+        begin
+          rc = Asmtest::HwTrace::FN[:trace_call_auto].call(
+            code.base, code.length, n > 0 ? argbuf : Fiddle::NULL, n, policy,
+            res, trace.handle, used)
+          if rc != OK
+            trace.free
+            return TraceCallAutoResult.new(nil, nil, nil, false, rc)
+          end
+          # asmtest_trace_choice_t is three packed C ints (tier, backend, fidelity) — the
+          # same layout resolve_tiers/auto_tier unpack.
+          tier, backend, fidelity = used[0, 12].unpack("l3")
+          result = res[0, 8].unpack1("q")
+          TraceCallAutoResult.new(result, trace, TierChoice.new(tier, backend, fidelity),
+                                  trace.truncated?, rc)
+        ensure
+          Fiddle.free(argbuf.to_i)
+          Fiddle.free(res.to_i)
+          Fiddle.free(used.to_i)
         end
       end
 

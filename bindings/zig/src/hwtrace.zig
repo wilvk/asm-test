@@ -225,6 +225,12 @@ const FnRender = *const fn ([*:0]const u8, ?[*]u8, usize) callconv(.C) c_int;
 // render_scope takes the 8-byte asmtest_hwtrace_scope_t handle BY VALUE — native
 // struct-by-value across callconv(.C) (no packing, unlike the Ruby/Java bindings).
 const FnCallScopedEx = *const fn (?*anyopaque, usize, ?*anyopaque, ?*anyopaque, [*c]const c_long, c_int, ?*c_long, *c.asmtest_hwtrace_scope_t) callconv(.C) c_int;
+// Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+// invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+// tier when the trace truncates. Self-manages the tier lifecycle internally (no
+// pre-init). `policy` is the `unsigned` cross-tier bitmask; `used` marshals as the
+// 3-int `Choice` struct.
+const FnTraceCallAuto = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, c_uint, ?*c_long, ?*anyopaque, *Choice) callconv(.C) c_int;
 const FnRenderScope = *const fn (c.asmtest_hwtrace_scope_t, ?[*]u8, usize) callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
 const FnExecAlloc = *const fn (?*const anyopaque, usize, *?*anyopaque, *usize) callconv(.C) c_int;
@@ -323,6 +329,7 @@ const Api = struct {
     try_begin: ?FnTryBegin,
     render: ?FnRender,
     call_scoped_ex: ?FnCallScopedEx,
+    trace_call_auto: ?FnTraceCallAuto,
     render_scope: ?FnRenderScope,
     shutdown: FnShutdown,
     exec_alloc: FnExecAlloc,
@@ -461,6 +468,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .try_begin = lib.lookup(FnTryBegin, "asmtest_hwtrace_try_begin"),
         .render = lib.lookup(FnRender, "asmtest_hwtrace_render"),
         .call_scoped_ex = lib.lookup(FnCallScopedEx, "asmtest_hwtrace_call_scoped_ex"),
+        .trace_call_auto = lib.lookup(FnTraceCallAuto, "asmtest_trace_call_auto"),
         .render_scope = lib.lookup(FnRenderScope, "asmtest_hwtrace_render_scope"),
         .shutdown = lib.lookup(FnShutdown, "asmtest_hwtrace_shutdown") orelse return null,
         .exec_alloc = lib.lookup(FnExecAlloc, "asmtest_hwtrace_exec_alloc") orelse return null,
@@ -808,6 +816,20 @@ pub const ScopedCall = struct {
     }
 };
 
+/// The outcome of `HwTrace.traceCallAuto`: the traced call's return value
+/// (`result`, null on a self-skip), the filled `trace` (a queryable `HwTrace` — the
+/// CALLER frees it via `trace.free()`; null on a self-skip), the `Choice` that
+/// produced the final trace (`used` — inspect `used.backend` to see whether
+/// escalation fired; null on a self-skip), the `truncated` honesty bit, and the raw
+/// `ASMTEST_HW_*` status (`rc`, 0 == OK). Mirrors the Python `TraceCallAutoResult`.
+pub const TraceCallAutoResult = struct {
+    result: ?c_long = null,
+    trace: ?HwTrace = null,
+    used: ?Choice = null,
+    truncated: bool = false,
+    rc: c_int = 0,
+};
+
 /// A coverage recorder for a registered native region, via the hardware tier.
 /// Wraps the opaque `asmtest_trace_t*` handle and the per-region begin/end
 /// markers.
@@ -931,6 +953,53 @@ pub const HwTrace = struct {
             }
         }
         out.truncated = api.truncated(h) != 0;
+        return out;
+    }
+
+    /// Auto-escalating CALL-OWNING cross-tier trace (`asmtest_trace_call_auto`): run
+    /// `code(args…)` under the fastest exact tier and, when the trace comes back
+    /// truncated, escalate to a ceiling-free tier and re-run — until the trace is
+    /// complete or the tiers are exhausted. It OWNS the invocation, so `code` must be
+    /// RE-RUNNABLE (invoked once per attempted tier: the in-process fast step, then the
+    /// fork-isolated ptrace escalations). Unlike `callScoped`, it SELF-MANAGES the tier
+    /// lifecycle (init -> begin -> invoke -> end -> shutdown) INTERNALLY — so do NOT
+    /// pre-`init`/arm the tier before calling it (a pre-arm would double-init and leave
+    /// the tier torn down). `policy` is the STARTING cross-tier policy (`TRACE_BEST`).
+    /// Integer args (0-6, SysV). Returns a `TraceCallAutoResult`: `.result` the call's
+    /// return, `.trace` a queryable `HwTrace` the CALLER frees via `.free()`, `.used`
+    /// the `Choice` that produced the final trace, and `.truncated`. Self-skips
+    /// (`.result`/`.trace`/`.used` null, negative `.rc`) where no call-owning native
+    /// tier is available. Takes no `self`.
+    pub fn traceCallAuto(code: *const NativeCode, args: []const i64, policy: TracePolicy) TraceCallAutoResult {
+        var out = TraceCallAutoResult{};
+        const api = load() orelse {
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        const call_auto = api.trace_call_auto orelse {
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        // No pre-arm: asmtest_trace_call_auto OWNS the full tier lifecycle internally,
+        // so arming here would double-init and then leave the tier torn down.
+        var tr = HwTrace.create(64, 512) catch { // blocks=64, instructions=512
+            out.rc = ASMTEST_HW_EUNAVAIL;
+            return out;
+        };
+        // `i64` and `c_long` are the same width on x86-64 Linux (mirrors callScoped).
+        const argp: [*c]const c_long = if (args.len != 0) @ptrCast(args.ptr) else null;
+        var result_out: c_long = 0;
+        var used: Choice = undefined;
+        const rc = call_auto(code.base, code.len, argp, @intCast(args.len), @intCast(@intFromEnum(policy)), &result_out, tr.handle, &used);
+        out.rc = rc;
+        if (rc != OK) {
+            tr.free();
+            return out;
+        }
+        out.result = result_out;
+        out.trace = tr; // caller-owned: freed via out.trace.?.free()
+        out.used = used;
+        out.truncated = api.truncated(tr.handle) != 0;
         return out;
     }
 

@@ -239,6 +239,13 @@ def _declare(lib):
     lib.asmtest_trace_resolve.restype = sz
     lib.asmtest_trace_auto.argtypes = [C.c_uint, C.POINTER(_Choice)]
     lib.asmtest_trace_auto.restype = ci
+    # Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+    # invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+    # tier when the trace truncates. Self-manages the tier lifecycle internally.
+    lib.asmtest_trace_call_auto.argtypes = [
+        v, sz, C.POINTER(C.c_long), ci, C.c_uint, C.POINTER(C.c_long),
+        v, C.POINTER(_Choice)]
+    lib.asmtest_trace_call_auto.restype = ci
     lib.asmtest_hwtrace_init.argtypes = [C.POINTER(_Options)]
     lib.asmtest_hwtrace_init.restype = ci
     lib.asmtest_hwtrace_register_region.argtypes = [cc, v, sz, v]
@@ -413,6 +420,27 @@ class CallScopedResult:
 
     def __repr__(self):
         return (f"CallScopedResult(result={self.result}, "
+                f"truncated={self.truncated}, rc={self.rc})")
+
+
+class TraceCallAutoResult:
+    """The outcome of :meth:`HwTrace.trace_call_auto`: the call's ``result``, the filled
+    ``trace`` (a queryable :class:`HwTrace` — the CALLER frees it via ``trace.free()``),
+    the :class:`TierChoice` that produced the final trace (``used`` — inspect
+    ``used.backend`` to see whether escalation fired), the ``truncated`` honesty bit, and
+    the raw ``rc``. On a self-skip (no call-owning native tier) ``result``/``trace``/
+    ``used`` are ``None`` and ``rc`` is negative."""
+    __slots__ = ("result", "trace", "used", "truncated", "rc")
+
+    def __init__(self, result, trace, used, truncated, rc):
+        self.result = result
+        self.trace = trace
+        self.used = used
+        self.truncated = truncated
+        self.rc = rc
+
+    def __repr__(self):
+        return (f"TraceCallAutoResult(result={self.result}, used={self.used}, "
                 f"truncated={self.truncated}, rc={self.rc})")
 
 
@@ -703,6 +731,41 @@ class HwTrace:
             return CallScopedResult(int(result.value), path, trunc, rc)
         finally:
             lib.asmtest_trace_free(handle)
+
+    @classmethod
+    def trace_call_auto(cls, code: "NativeCode", *args,
+                        policy=TRACE_BEST, instructions=512,
+                        blocks=64) -> "TraceCallAutoResult":
+        """Auto-escalating CALL-OWNING trace (``asmtest_trace_call_auto``): run
+        ``code(*args)`` under the fastest exact tier and, when the trace comes back
+        truncated, escalate to a ceiling-free tier and re-run — until the trace is
+        complete or the tiers are exhausted. This OWNS the invocation, so ``code`` must
+        be RE-RUNNABLE (invoked once per attempted tier: the in-process fast step, then
+        the fork-isolated ptrace escalations). It self-manages the tier lifecycle, so no
+        :meth:`init` is required. Args pass as C longs (SysV integer ABI, 0-6). Returns a
+        :class:`TraceCallAutoResult`: ``.result`` the call's return, ``.trace`` a
+        queryable :class:`HwTrace` the CALLER frees, ``.used`` the :class:`TierChoice`
+        that produced the final trace, and ``.truncated``. Self-skips
+        (``.result``/``.trace``/``.used`` None, negative ``.rc``) where no call-owning
+        native tier is available."""
+        lib = _get()
+        # No _lazy_arm(): unlike call_scoped_ex, asmtest_trace_call_auto OWNS the full
+        # tier lifecycle (init -> begin -> invoke -> end -> shutdown) internally, so a
+        # pre-arm here would double-init and then leave the tier torn down.
+        trace = cls.new(blocks=blocks, instructions=instructions)
+        n = len(args)
+        arr = (C.c_long * n)(*args) if n else None
+        result = C.c_long(0)
+        used = _Choice()
+        rc = int(lib.asmtest_trace_call_auto(
+            code.base, code.length, arr, n, policy, C.byref(result),
+            trace._handle, C.byref(used)))
+        if rc != ASMTEST_HW_OK:
+            trace.free()
+            return TraceCallAutoResult(None, None, None, False, rc)
+        tc = TierChoice(used.tier, used.backend, used.fidelity)
+        return TraceCallAutoResult(int(result.value), trace, tc,
+                                   bool(trace.truncated()), rc)
 
     @staticmethod
     def shutdown():

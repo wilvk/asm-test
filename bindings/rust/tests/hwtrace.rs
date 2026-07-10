@@ -13,7 +13,7 @@
 
 use asmtest::hwtrace::{
     Backend, CallScopedResult, CodeImage, Descent, DescentLevel, Fidelity, HwTrace, NativeCode,
-    Policy, Ptrace, Tier, TracePolicy, ASMTEST_HW_EUNAVAIL,
+    Policy, Ptrace, Tier, TraceCallAutoResult, TracePolicy, ASMTEST_HW_EUNAVAIL,
 };
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
@@ -170,6 +170,63 @@ fn call_scoped_traces_a_native_call() {
 
     HwTrace::shutdown();
     eprintln!("# PASS: call_scoped (registry-free traced native call)");
+}
+
+// trace_call_auto — auto-escalating CALL-OWNING cross-tier trace. It OWNS the
+// invocation and self-manages the tier lifecycle (init -> begin -> invoke -> end ->
+// shutdown) internally, so there is NO init fixture / NO pre-arm here: it runs
+// standalone. Off x86-64 Linux it self-skips with EUNAVAIL. Mirrors
+// test_hwtrace.py::test_trace_call_auto_owns_the_call_and_completes.
+#[test]
+fn trace_call_auto_owns_the_call_and_completes() {
+    // NativeCode::from_bytes needs the lib loaded (exec_alloc). trace_call_auto owns
+    // its own tier lifecycle, but the exec-memory helper still requires libasmtest_hwtrace
+    // — so gate on availability and self-skip where it is absent (e.g. the `cargo test`
+    // run during the docker image build, before ASMTEST_HWTRACE_LIB is set), exactly like
+    // every other hwtrace test here. The live lane (make hwtrace-rust-test) sets the lib.
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step hardware-trace backend unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+    // ---- routine: 42 <= 100 -> jle taken, dec skipped; entry block 0 covered ----
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let r: TraceCallAutoResult = HwTrace::trace_call_auto(&code, &[20, 22], TracePolicy::Best);
+    assert!(
+        r.rc == 0 || r.rc == ASMTEST_HW_EUNAVAIL,
+        "trace_call_auto rc in {{OK, EUNAVAIL}}, got {}",
+        r.rc
+    );
+    if r.rc == 0 {
+        assert_eq!(r.result, Some(42), "trace_call_auto(20,22).result == 42");
+        assert!(!r.truncated, "some tier captured the whole path");
+        let trace = r.trace.as_ref().expect("OK -> a filled trace");
+        assert!(trace.covered(0), "entry block 0 covered");
+        let used = r.used.expect("OK -> a used TierChoice");
+        assert_eq!(used.tier, Tier::HwTrace, "trace_call_auto used the hardware tier");
+    }
+
+    // ---- loop: 25 back-edges > AMD LBR's 16-deep window ----
+    // On an AMD host the fast ceiling-bounded backend truncates and trace_call_auto
+    // escalates to a ceiling-free tier; the single-step floor completes it directly
+    // elsewhere. Either way the returned trace is complete (not truncated).
+    let lcode = NativeCode::from_bytes(&LOOP);
+    let lr: TraceCallAutoResult = HwTrace::trace_call_auto(&lcode, &[1, 25], TracePolicy::Best);
+    assert!(
+        lr.rc == 0 || lr.rc == ASMTEST_HW_EUNAVAIL,
+        "trace_call_auto(loop) rc in {{OK, EUNAVAIL}}, got {}",
+        lr.rc
+    );
+    if lr.rc == 0 {
+        assert_eq!(lr.result, Some(25), "loop accumulates 1 twenty-five times");
+        assert!(!lr.truncated, "escalated to a ceiling-free tier -> complete");
+        let trace = lr.trace.as_ref().expect("OK -> a filled trace");
+        assert!(trace.covered(0x7), "loop-body block 0x7 covered");
+    }
+
+    eprintln!("# PASS: trace_call_auto (auto-escalating call-owning cross-tier trace)");
 }
 
 #[test]

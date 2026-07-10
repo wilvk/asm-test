@@ -111,6 +111,7 @@ public final class HwTraceTest {
             crossTierResolveInvariants();
             crossTierNativeOnlyResolvesOnLinuxX86_64();
             autoResolveTracesLive();
+            traceCallAutoOwnsTheCall();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -423,6 +424,47 @@ public final class HwTraceTest {
             code.free();
         } finally {
             HwTrace.shutdown();
+        }
+    }
+
+    // Mirrors test_trace_call_auto_owns_the_call_and_completes: trace_call_auto OWNS the
+    // invocation — run under the fastest exact tier and auto-escalate to a ceiling-free tier
+    // if the trace truncates. It self-manages the tier lifecycle (no HwTrace.init fixture), so
+    // it runs standalone; off x86-64 Linux it self-skips with EUNAVAIL.
+    private static void traceCallAutoOwnsTheCall() {
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        try {
+            HwTrace.TraceCallAutoResult res = HwTrace.traceCallAuto(code, 20, 22); // 42 <= 100 -> jle taken
+            ok(res.rc() == HwTrace.ASMTEST_HW_OK || res.rc() == HwTrace.ASMTEST_HW_EUNAVAIL,
+                "traceCallAuto rc in {OK, EUNAVAIL} (got " + res.rc() + ")");
+            if (res.ok()) {
+                ok(res.result() == 42, "traceCallAuto(20,22): result == 42 (got " + res.result() + ")");
+                ok(!res.truncated(), "traceCallAuto !truncated"); // some tier captured the whole path
+                ok(res.trace().covered(0), "traceCallAuto covers entry block offset 0");
+                ok(res.used() != null && res.used().tier() == HwTrace.TIER_HWTRACE,
+                    "traceCallAuto used.tier == TIER_HWTRACE");
+                res.trace().free();
+            }
+        } finally {
+            code.free();
+        }
+
+        // A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+        // (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
+        // completes it directly elsewhere). result = rdi * rsi count = 1 * 25 = 25.
+        HwTrace.NativeCode loop = HwTrace.NativeCode.fromBytes(LOOP);
+        try {
+            HwTrace.TraceCallAutoResult res = HwTrace.traceCallAuto(loop, 1, 25); // 25 back-edges > 16-deep window
+            ok(res.rc() == HwTrace.ASMTEST_HW_OK || res.rc() == HwTrace.ASMTEST_HW_EUNAVAIL,
+                "traceCallAuto(loop) rc in {OK, EUNAVAIL} (got " + res.rc() + ")");
+            if (res.ok()) {
+                ok(res.result() == 25, "traceCallAuto(loop,1,25): result == 25 (got " + res.result() + ")");
+                ok(!res.truncated(), "traceCallAuto(loop) !truncated (escalated to a ceiling-free tier)");
+                ok(res.trace().covered(0x7), "traceCallAuto(loop) covers loop-body block offset 0x7");
+                res.trace().free();
+            }
+        } finally {
+            loop.free();
         }
     }
 

@@ -71,6 +71,38 @@ def test_call_scoped_traces_a_native_call(hwtrace):
     code.free()
 
 
+def test_trace_call_auto_owns_the_call_and_completes():
+    # trace_call_auto OWNS the invocation: run under the fastest exact tier and
+    # auto-escalate to a ceiling-free tier if the trace truncates. It self-manages the
+    # tier lifecycle (no `hwtrace` init fixture), so it runs standalone; off x86-64
+    # Linux it self-skips with EUNAVAIL. Mirrors the C reference test_call_auto.
+    code = NativeCode.from_bytes(ROUTINE)
+    res = HwTrace.trace_call_auto(code, 20, 22)  # 42 <= 100 -> jle taken, dec skipped
+    assert res.rc in (0, ASMTEST_HW_EUNAVAIL)
+    if res.rc == 0:
+        assert res.result == 42
+        assert not res.truncated  # some tier captured the whole path
+        assert res.trace.covered(0)  # entry block covered
+        assert res.used is not None and res.used.tier == TIER_HWTRACE
+        res.trace.free()
+    code.free()
+
+    # A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+    # (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
+    # completes it directly elsewhere). mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
+    loop = bytes([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
+                  0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3])
+    lcode = NativeCode.from_bytes(loop)
+    lres = HwTrace.trace_call_auto(lcode, 1, 25)  # 25 back-edges > 16-deep window
+    assert lres.rc in (0, ASMTEST_HW_EUNAVAIL)
+    if lres.rc == 0:
+        assert lres.result == 25
+        assert not lres.truncated  # escalated to a ceiling-free tier
+        assert lres.trace.covered(0x7)  # loop-body block covered
+        lres.trace.free()
+    lcode.free()
+
+
 def test_scoped_trace_matches_callback(hwtrace):
     # The scope object is a faithful wrapper of the callback region() form: it
     # produces the same offsets, renders the assembly on close, and auto-names from

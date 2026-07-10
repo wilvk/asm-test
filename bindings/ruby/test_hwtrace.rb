@@ -444,4 +444,40 @@ else
   puts "# SKIP code-image recorder (unavailable): #{CodeImage.skip_reason}"
 end
 
+# ---- trace_call_auto: auto-escalating CALL-OWNING cross-tier trace. It OWNS the
+# invocation and SELF-MANAGES the tier lifecycle (init -> begin -> invoke -> end ->
+# shutdown) internally, so — unlike the call_scoped / region tests above — there is NO
+# HwTrace.init fixture here; it runs standalone. Accept rc in {OK, EUNAVAIL}: OK on any
+# call-owning native host (single-step floor on x86-64 Linux), EUNAVAIL where none is
+# available. Mirrors the Python test_trace_call_auto_owns_the_call_and_completes. ----
+tca_code = NativeCode.from_bytes(ROUTINE)
+tca = HwTrace.trace_call_auto(tca_code, 20, 22) # 42 <= 100 -> jle taken, dec skipped
+if tca.rc == EUNAVAIL
+  puts "# note: trace_call_auto self-skip (no call-owning tier): rc=#{tca.rc}"
+else
+  ok(tca.rc == Asmtest::HwTrace::OK, "trace_call_auto rc OK (got #{tca.rc})")
+  ok(tca.result == 42, "trace_call_auto(20,22).result == 42 (got #{tca.result.inspect})")
+  ok(!tca.truncated, "trace_call_auto not truncated (some tier captured the whole path)")
+  ok(tca.trace.covered?(0), "trace_call_auto covers entry block 0")
+  ok(!tca.used.nil? && tca.used.tier == TIER_HWTRACE,
+     "trace_call_auto used.tier == TIER_HWTRACE (got #{tca.used&.tier})")
+  tca.trace.free
+end
+tca_code.free
+
+# A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+# (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
+# completes it directly elsewhere). mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
+tca_loop = NativeCode.from_bytes(LOOP)
+tcal = HwTrace.trace_call_auto(tca_loop, 1, 25) # 25 back-edges > 16-deep window
+if tcal.rc == EUNAVAIL
+  puts "# note: trace_call_auto(loop) self-skip: rc=#{tcal.rc}"
+else
+  ok(tcal.result == 25, "trace_call_auto(loop,1,25).result == 25 (got #{tcal.result.inspect})")
+  ok(!tcal.truncated, "trace_call_auto(loop) not truncated (escalated to a ceiling-free tier)")
+  ok(tcal.trace.covered?(0x7), "trace_call_auto(loop) covers loop-body block 0x7")
+  tcal.trace.free
+end
+tca_loop.free
+
 exit($failed ? 1 : 0)

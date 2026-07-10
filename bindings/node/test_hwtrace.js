@@ -159,6 +159,40 @@ function main() {
       'resolveTiers(NATIVE_ONLY) includes the single-step native floor');
   }
 
+  // --- traceCallAuto: auto-escalating CALL-OWNING cross-tier trace. It SELF-MANAGES the
+  //     tier lifecycle (init -> begin -> invoke -> end -> shutdown) internally, so it runs
+  //     STANDALONE — outside the HwTrace.init/shutdown bracket below, with NO pre-arm (a
+  //     pre-arm would double-init and tear the tier down). Off x86-64 Linux it self-skips
+  //     with EUNAVAIL. Mirrors test_hwtrace.py::test_trace_call_auto_owns_the_call_and_completes. ---
+  {
+    const code = NativeCode.fromBytes(ROUTINE);
+    const res = HwTrace.traceCallAuto(code, 20, 22); // 42 <= 100 -> jle taken, dec skipped
+    ok(res.rc === 0 || res.rc === ASMTEST_HW_EUNAVAIL, 'traceCallAuto: rc in {OK, EUNAVAIL}');
+    if (res.rc === 0) {
+      ok(res.result === 42, 'traceCallAuto: add2(20,22).result == 42');
+      ok(!res.truncated, 'traceCallAuto: not truncated (some tier captured the whole path)');
+      ok(res.trace.covered(0), 'traceCallAuto: entry block 0 covered');
+      ok(res.used !== null && res.used.tier === TIER_HWTRACE,
+        'traceCallAuto: used.tier == TIER_HWTRACE');
+      res.trace.free();
+    }
+    code.free();
+
+    // A loop past the 16-taken-branch LBR window must STILL yield a complete trace (escalating
+    // off the ceiling-bounded backend on an AMD host; the single-step floor completes it directly
+    // elsewhere). mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
+    const lcode = NativeCode.fromBytes(LOOP);
+    const lres = HwTrace.traceCallAuto(lcode, 1, 25); // 25 back-edges > 16-deep window
+    ok(lres.rc === 0 || lres.rc === ASMTEST_HW_EUNAVAIL, 'traceCallAuto(loop): rc in {OK, EUNAVAIL}');
+    if (lres.rc === 0) {
+      ok(lres.result === 25, 'traceCallAuto: loop(1,25).result == 25');
+      ok(!lres.truncated, 'traceCallAuto: loop not truncated (escalated to a ceiling-free tier)');
+      ok(lres.trace.covered(0x7), 'traceCallAuto: loop-body block 0x7 covered');
+      lres.trace.free();
+    }
+    lcode.free();
+  }
+
   HwTrace.init(SINGLESTEP);
   try {
     // --- straight-line + branch fixture: a*1 + b, two blocks ---

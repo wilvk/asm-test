@@ -475,6 +475,46 @@ pub fn main() !void {
         }
     }
 
+    // ---- traceCallAuto: auto-escalating CALL-OWNING cross-tier trace ---- //
+    // It SELF-MANAGES the tier lifecycle (init -> begin -> invoke -> end -> shutdown)
+    // internally, so it runs standalone with NO pre-`init` (a pre-arm would double-init
+    // and leave the tier torn down). Off x86-64 Linux it self-skips with EUNAVAIL.
+    // Mirrors test_hwtrace.py::test_trace_call_auto_owns_the_call_and_completes.
+    {
+        var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer code.free();
+        var res = hwtrace.HwTrace.traceCallAuto(&code, &[_]i64{ 20, 22 }, TRACE_BEST);
+        try check(res.rc == 0 or res.rc == ASMTEST_HW_EUNAVAIL,
+            "traceCallAuto: rc in {OK, EUNAVAIL}");
+        if (res.rc == 0) {
+            try check(res.result != null and res.result.? == 42, "traceCallAuto: result == 42");
+            try check(!res.truncated, "traceCallAuto: not truncated (some tier captured the whole path)");
+            try check(res.used != null and res.used.?.tier == TIER_HWTRACE,
+                "traceCallAuto: used tier is HWTRACE");
+            if (res.trace) |*tr| {
+                try check(tr.covered(0), "traceCallAuto: entry block 0 covered");
+                tr.free();
+            }
+        }
+
+        // A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+        // (escalating off the ceiling-bounded backend on an AMD host; the single-step
+        // floor completes it directly elsewhere).
+        var lcode = try hwtrace.NativeCode.fromBytes(&LOOP);
+        defer lcode.free();
+        var lres = hwtrace.HwTrace.traceCallAuto(&lcode, &[_]i64{ 1, 25 }, TRACE_BEST);
+        try check(lres.rc == 0 or lres.rc == ASMTEST_HW_EUNAVAIL,
+            "traceCallAuto(loop): rc in {OK, EUNAVAIL}");
+        if (lres.rc == 0) {
+            try check(lres.result != null and lres.result.? == 25, "traceCallAuto(loop): result == 25");
+            try check(!lres.truncated, "traceCallAuto(loop): not truncated (escalated to a ceiling-free tier)");
+            if (lres.trace) |*tr| {
+                try check(tr.covered(0x7), "traceCallAuto(loop): loop-body block 0x7 covered");
+                tr.free();
+            }
+        }
+    }
+
     hwtrace.init(SINGLESTEP) catch |e| {
         // init can fail even when "available" if the host is misconfigured;
         // treat as a skip like the Python fixture does.

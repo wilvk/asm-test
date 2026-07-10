@@ -625,6 +625,11 @@ static class HwTraceProgram
             }
         }
 
+        // --- auto-escalating CALL-OWNING cross-tier trace (HwTrace.TraceCallAuto) --- //
+        // Mirrors test_trace_call_auto_owns_the_call_and_completes: it self-manages the
+        // tier lifecycle, so it runs STANDALONE here (no HwTrace.Init bracket around it).
+        TraceCallAutoChecks();
+
         // --- out-of-process / foreign-process toolkit (Asmtest.Ptrace) --- //
         // Mirrors the four tests after the "foreign-process toolkit" banner in
         // bindings/python/tests/test_hwtrace.py. Guarded by a ptrace-available skip
@@ -1031,6 +1036,46 @@ static class HwTraceProgram
         for (int i = 0; i < b.Length; i++)
             if (a[i] != b[i]) return false;
         return true;
+    }
+
+    // asmtest_trace_call_auto: the CALL-OWNING auto-escalating cross-tier trace. It owns
+    // the invocation and self-manages the tier lifecycle, so this runs with NO Init/arm
+    // around it. Mirrors bindings/python's test_trace_call_auto_owns_the_call_and_completes
+    // AND the C reference test_call_auto: accept OK or EUNAVAIL (self-skip off a host with
+    // no call-owning native tier); assert the completed trace's shape only when OK.
+    static void TraceCallAutoChecks()
+    {
+        // fixture 1: ROUTINE — the fast tier captures the whole path (2 blocks, complete).
+        var code = NativeCode.FromBytes(ROUTINE);
+        var res = HwTrace.TraceCallAuto(code, new long[] { 20, 22 }); // 42 <= 100 -> jle taken
+        Check(res.Rc == HwNative.ASMTEST_HW_OK || res.Rc == HwNative.ASMTEST_HW_EUNAVAIL,
+              $"call_auto: rc is OK or EUNAVAIL (got {res.Rc})");
+        if (res.Rc == HwNative.ASMTEST_HW_OK)
+        {
+            Check(res.Result == 42, $"call_auto: add2(20,22) == 42 (got {res.Result})");
+            Check(!res.Truncated, "call_auto: some tier captured the whole path (not truncated)");
+            Check(res.Trace.Covered(0), "call_auto: entry block 0 covered");
+            Check(res.Used.HasValue && res.Used.Value.Tier == TraceTier.HwTrace,
+                  $"call_auto: used tier is HwTrace (got {res.Used})");
+            res.Trace.Free();
+        }
+        code.Free();
+
+        // fixture 2: LOOP — 25 back-edges exceed the 16-deep LBR window, so on a
+        // ceiling-bounded fast backend the trace escalates to a ceiling-free tier; the
+        // single-step floor completes it directly elsewhere. Either way: complete.
+        var loop = NativeCode.FromBytes(LOOP);
+        var lres = HwTrace.TraceCallAuto(loop, new long[] { 1, 25 }); // 25 back-edges > 16
+        Check(lres.Rc == HwNative.ASMTEST_HW_OK || lres.Rc == HwNative.ASMTEST_HW_EUNAVAIL,
+              $"call_auto: loop rc is OK or EUNAVAIL (got {lres.Rc})");
+        if (lres.Rc == HwNative.ASMTEST_HW_OK)
+        {
+            Check(lres.Result == 25, $"call_auto: loop(1,25) == 25 (got {lres.Result})");
+            Check(!lres.Truncated, "call_auto: escalated to a ceiling-free tier (not truncated)");
+            Check(lres.Trace.Covered(0x7), "call_auto: loop-body block 0x7 covered");
+            lres.Trace.Free();
+        }
+        loop.Free();
     }
 
     static void PtraceChecks()

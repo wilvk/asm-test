@@ -170,6 +170,19 @@ public final class HwTrace {
         public boolean ok() { return rc == ASMTEST_HW_OK; }
     }
 
+    /** The outcome of {@link #traceCallAuto}: the call's {@code result} (the SysV integer
+     *  return), the filled {@code trace} (a queryable {@link NativeTrace} the CALLER frees),
+     *  the {@link TierChoice} that produced the final trace ({@code used} — inspect
+     *  {@code used.backend()} to see whether escalation fired), the {@code truncated} honesty
+     *  bit, and the raw {@code rc}. On a self-skip (no call-owning native tier) {@code result}
+     *  is 0 and {@code trace}/{@code used} are null; {@link #ok()} distinguishes it. Mirrors
+     *  the Python {@code TraceCallAutoResult}. */
+    public record TraceCallAutoResult(long result, NativeTrace trace, TierChoice used,
+                                      boolean truncated, int rc) {
+        /** True when some call-owning tier ran (rc == ASMTEST_HW_OK). */
+        public boolean ok() { return rc == ASMTEST_HW_OK; }
+    }
+
     /** Outcome of {@link #window}: the rendered ABSOLUTE-address disassembly ({@code path},
      *  honest-but-noisy — the FFI dispatch + JVM harness are included), the §Z4 thread-scope
      *  {@code truncated} bit (also set when the managed window overflows its buffer), the
@@ -223,7 +236,7 @@ public final class HwTrace {
 
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
-        TRACE_RESOLVE, TRACE_AUTO,
+        TRACE_RESOLVE, TRACE_AUTO, TRACE_CALL_AUTO,
         HW_INIT, HW_SHUTDOWN,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
         CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
@@ -364,7 +377,7 @@ public final class HwTrace {
 
     static {
         MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
-            traceResolve = null, traceAuto = null,
+            traceResolve = null, traceAuto = null, traceCallAuto = null,
             hwInit = null, hwShutdown = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
@@ -434,6 +447,15 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
             traceAuto = h(lib, "asmtest_trace_auto",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
+            // Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+            // invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free
+            // tier when the trace truncates — self-managing the tier lifecycle internally.
+            // trace_call_auto(code, len, args, nargs, policy, result, trace, used): args/result
+            // are long* scratch, trace the caller-allocated asmtest_trace_t*, used the 3-int
+            // asmtest_trace_choice_t* out-param (may be NULL). policy is an unsigned int.
+            traceCallAuto = h(lib, "asmtest_trace_call_auto",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
+                    JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             hwInit = h(lib, "asmtest_hwtrace_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             hwShutdown = h(lib, "asmtest_hwtrace_shutdown", FunctionDescriptor.ofVoid());
             registerRegion = h(lib, "asmtest_hwtrace_register_region",
@@ -676,7 +698,8 @@ public final class HwTrace {
             loadError = t;
         }
         HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
-        HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto; HW_INIT = hwInit;
+        HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto;
+        TRACE_CALL_AUTO = traceCallAuto; HW_INIT = hwInit;
         HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
@@ -937,6 +960,57 @@ public final class HwTrace {
             }
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Auto-escalating CALL-OWNING trace (asmtest_trace_call_auto) under the default
+     *  {@link #TRACE_BEST} policy — see {@link #traceCallAuto(NativeCode, int, long[])}. */
+    public static TraceCallAutoResult traceCallAuto(NativeCode code, long... args) {
+        return traceCallAuto(code, TRACE_BEST, args);
+    }
+
+    /** Auto-escalating CALL-OWNING trace (asmtest_trace_call_auto): run {@code code(args…)}
+     *  under the fastest exact tier and, when the trace comes back truncated, escalate to a
+     *  ceiling-free tier and re-run — until the trace is complete or the tiers are exhausted.
+     *  This OWNS the invocation, so {@code code} must be RE-RUNNABLE (invoked once per attempted
+     *  tier: the in-process fast step, then the fork-isolated ptrace escalations). It
+     *  self-manages the tier lifecycle (init → begin → invoke → end → shutdown) INTERNALLY, so —
+     *  unlike {@link #callScoped} — it needs NO {@link #init} / pre-arm (pre-arming would
+     *  double-init and then leave the tier torn down). {@code args} pass as C longs (SysV integer
+     *  ABI, 0..6); {@code policy} is the starting cross-tier policy ({@link #TRACE_BEST};
+     *  {@link #TRACE_CEILING_FREE} skips the ceiling-bounded fast backend up front). Returns a
+     *  {@link TraceCallAutoResult}: {@code result} the call's return, {@code trace} a queryable
+     *  {@link NativeTrace} the CALLER frees, {@code used} the {@link TierChoice} that produced the
+     *  final trace, {@code truncated} the completeness bit. Self-skips ({@code rc} negative,
+     *  {@code result} 0, {@code trace}/{@code used} null) where no call-owning native tier is
+     *  available. Mirrors the Python {@code HwTrace.trace_call_auto}. */
+    public static TraceCallAutoResult traceCallAuto(NativeCode code, int policy, long[] args) {
+        if (TRACE_CALL_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // No init()/pre-arm: asmtest_trace_call_auto OWNS the full tier lifecycle internally.
+        // Caller-owned trace, handed off on success; freed here on skip / error.
+        NativeTrace trace = create(64, 512); // create(blocks, instructions) — insns headroom for the loop
+        boolean handOff = false;
+        try (Arena a = Arena.ofConfined()) {
+            int n = args.length;
+            // args[] as element COUNT via a sequence layout (NOT allocate(JAVA_LONG, n), which
+            // sizes to one element on this JDK); NULL when there are no args (SysV 0-arg call).
+            MemorySegment argSeg = n == 0 ? MemorySegment.NULL
+                : a.allocate(MemoryLayout.sequenceLayout(n, JAVA_LONG));
+            for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+            MemorySegment result = a.allocate(JAVA_LONG);
+            // asmtest_trace_choice_t {int tier; int backend; int fidelity;} — 3 consecutive ints.
+            MemorySegment usedOut = a.allocate(MemoryLayout.sequenceLayout(CHOICE_INTS, JAVA_INT));
+            // For a native leaf code == base (offset 0 = entry).
+            MemorySegment base = MemorySegment.ofAddress(code.base());
+            int rc = (int) TRACE_CALL_AUTO.invoke(base, code.length(), argSeg, n, policy,
+                result, trace.handle(), usedOut);
+            if (rc != ASMTEST_HW_OK) return new TraceCallAutoResult(0L, null, null, false, rc);
+            TierChoice used = new TierChoice(usedOut.getAtIndex(JAVA_INT, 0),
+                usedOut.getAtIndex(JAVA_INT, 1), usedOut.getAtIndex(JAVA_INT, 2));
+            handOff = true; // the caller now owns trace
+            return new TraceCallAutoResult(result.get(JAVA_LONG, 0), trace, used, trace.truncated(), rc);
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+        finally { if (!handOff) trace.free(); }
     }
 
     /** Region-free WHOLE-WINDOW capture (§Z0/§Z1 — the Java mirror of dotnet's

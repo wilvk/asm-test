@@ -231,6 +231,15 @@ let _loadError = null;
     // marshal a raw int array and read triples rather than declaring a struct.
     traceResolve: lib.func('size_t asmtest_trace_resolve(uint, _Out_ int*, size_t)'),
     traceAuto: lib.func('int asmtest_trace_auto(uint, _Out_ int*)'),
+    // Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): OWNS the
+    // invocation — runs code(args...) under the fastest exact tier and re-runs on a
+    // ceiling-free tier when the trace truncates. It SELF-MANAGES the tier lifecycle
+    // (init -> begin -> invoke -> end -> shutdown) internally, so — unlike call_scoped_ex —
+    // it must NOT be pre-armed. args is an in-array of C longs (Buffer, like the call_scoped
+    // path); result_out is _Out_; the region and trace are passed DIRECTLY as [base,len) and a
+    // caller-owned trace handle; `used` is the {tier,backend,fidelity} choice, marshalled as
+    // three consecutive int32s (an _Out_ int array, exactly like traceAuto/traceResolve above).
+    traceCallAuto: lib.func('int asmtest_trace_call_auto(void*, size_t, const long*, int, uint, _Out_ long*, void*, _Out_ int*)'),
     init: lib.func('int asmtest_hwtrace_init(const asmtest_hwtrace_options_t*)'),
     registerRegion: lib.func('int asmtest_hwtrace_register_region(const char*, void*, size_t, void*)'),
     begin: lib.func('void asmtest_hwtrace_begin(const char*)'),
@@ -600,6 +609,50 @@ class HwTrace {
     } finally {
       _fn.traceFree(handle);
     }
+  }
+
+  /** Auto-escalating CALL-OWNING trace (asmtest_trace_call_auto): run `code(...args)` under
+   *  the fastest exact tier and, when the trace comes back truncated, escalate to a
+   *  ceiling-free tier and re-run — until the trace is complete or the tiers are exhausted. It
+   *  OWNS the invocation, so `code` must be RE-RUNNABLE (deterministic/idempotent — it is
+   *  invoked once per attempted tier: the in-process fast HWTRACE step, then the fork-isolated
+   *  ptrace escalations). Unlike `callScoped` (asmtest_hwtrace_call_scoped_ex, which needs an
+   *  armed single-step tier), this SELF-MANAGES the whole tier lifecycle (init -> begin ->
+   *  invoke -> end -> shutdown) internally — so it needs NO prior `HwTrace.init` and must NOT be
+   *  pre-armed (a pre-arm would double-init and then leave the tier torn down). Args pass as C
+   *  longs (SysV integer ABI, 0-6). Returns `{ result, trace, used, truncated, rc }`: `result`
+   *  the call's return (a JS number, BigInt out of safe range), `trace` a queryable `HwTrace`
+   *  the CALLER frees via `trace.free()`, `used` the { tier, backend, fidelity } choice that
+   *  produced the final trace (inspect `used.backend` to see whether escalation fired),
+   *  `truncated` the honesty bit. Self-skips where no call-owning native tier is available (off
+   *  x86-64 Linux, or with no lib): `result`/`trace`/`used` are null and `rc` is negative. */
+  static traceCallAuto(code, ...args) {
+    if (!_lib) // self-skip, like autoTier(): no lib -> no call-owning tier
+      return { result: null, trace: null, used: null, truncated: false, rc: ASMTEST_HW_EUNAVAIL };
+    // Caller-owned trace (Python parity: instructions=512, blocks=64); freed by the caller
+    // (returned queryable) or here on a self-skip rc.
+    const trace = HwTrace.create({ blocks: 64, instructions: 512 });
+    const n = args.length;
+    // long*: pack each arg as a 64-bit little-endian signed integer (the call_scoped path).
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const used = Buffer.alloc(3 * 4); // one choice = three consecutive int32s (autoTier-style)
+    // NO pre-arm: asmtest_trace_call_auto owns the tier lifecycle. policy=TRACE_BEST (it escalates
+    // to ceiling-free internally when a trace truncates).
+    const rc = _fn.traceCallAuto(code.base, code.length, argBuf, n, TRACE_BEST,
+      resultBuf, trace._handle, used);
+    if (rc !== ASMTEST_HW_OK) {
+      trace.free();
+      return { result: null, trace: null, used: null, truncated: false, rc };
+    }
+    return {
+      result: _safeInt(resultBuf.readBigInt64LE(0)),
+      trace,
+      used: { tier: used.readInt32LE(0), backend: used.readInt32LE(4), fidelity: used.readInt32LE(8) },
+      truncated: trace.truncated(),
+      rc,
+    };
   }
 
   /** Trace an ARBITRARY block of native work the region-free (empty-ctor) way — the

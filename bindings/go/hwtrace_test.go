@@ -442,6 +442,68 @@ func TestHwtraceAutoLive(t *testing.T) {
 	code.Free()
 }
 
+// TestHwtraceTraceCallAuto exercises the auto-escalating CALL-OWNING cross-tier
+// trace (asmtest_trace_call_auto): it OWNS the invocation and self-manages the tier
+// lifecycle, so it runs standalone with NO HwTraceInit fixture — off x86-64 Linux it
+// self-skips with EUNAVAIL. Mirrors test_hwtrace.py::
+// test_trace_call_auto_owns_the_call_and_completes and the C reference test_call_auto.
+func TestHwtraceTraceCallAuto(t *testing.T) {
+	// The exec allocator only needs the lib loaded (not an armed tier); a failure here
+	// means libasmtest_hwtrace is absent, so self-skip exactly as the other tests do.
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Skipf("hardware-trace tier unavailable: %v", err)
+	}
+	defer code.Free()
+
+	// 42 <= 100 -> jle taken, dec skipped.
+	res := TraceCallAuto(code, 20, 22)
+	if res.RC != 0 && res.RC != HwEUnavail {
+		t.Fatalf("TraceCallAuto rc: got %d, want 0 or EUNAVAIL (%d)", res.RC, HwEUnavail)
+	}
+	if res.RC == 0 {
+		if res.Result != 42 {
+			t.Fatalf("TraceCallAuto(20,22).Result: got %d, want 42", res.Result)
+		}
+		if res.Truncated {
+			t.Fatalf("TraceCallAuto unexpectedly flagged truncated") // some tier captured the whole path
+		}
+		if !res.Trace.Covered(0) { // entry block covered
+			t.Fatalf("TraceCallAuto: expected entry block (offset 0) covered")
+		}
+		if res.Used.Tier != TierHwtrace {
+			t.Fatalf("TraceCallAuto used tier %d, want TierHwtrace (%d)", res.Used.Tier, TierHwtrace)
+		}
+		res.Trace.Free()
+	}
+
+	// A loop past the 16-taken-branch LBR window must STILL yield a complete trace
+	// (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
+	// completes it directly elsewhere).
+	loop, err := HwNativeCodeFromBytes(hwtraceLoop)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes(loop): %v", err)
+	}
+	defer loop.Free()
+
+	lres := TraceCallAuto(loop, 1, 25) // 25 back-edges > 16-deep window
+	if lres.RC != 0 && lres.RC != HwEUnavail {
+		t.Fatalf("TraceCallAuto(loop) rc: got %d, want 0 or EUNAVAIL (%d)", lres.RC, HwEUnavail)
+	}
+	if lres.RC == 0 {
+		if lres.Result != 25 {
+			t.Fatalf("TraceCallAuto(loop,1,25).Result: got %d, want 25", lres.Result)
+		}
+		if lres.Truncated {
+			t.Fatalf("TraceCallAuto(loop) truncated: escalation should have completed the trace")
+		}
+		if !lres.Trace.Covered(0x7) { // loop-body block covered
+			t.Fatalf("TraceCallAuto(loop): expected loop-body block (offset 0x7) covered")
+		}
+		lres.Trace.Free()
+	}
+}
+
 // ---- Out-of-process / foreign-process toolkit (asmtest_ptrace.h) ----
 //
 // Mirrors the four tests after the "foreign-process toolkit" banner in the Python

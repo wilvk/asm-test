@@ -228,6 +228,15 @@ namespace Asmtest
         // (0) or ASMTEST_HW_EUNAVAIL (-3) when the cascade is empty.
         [DllImport(HWTRACE)] public static extern UIntPtr asmtest_trace_resolve(uint policy, [Out] Choice[] @out, UIntPtr cap);
         [DllImport(HWTRACE)] public static extern int asmtest_trace_auto(uint policy, out Choice @out);
+        // Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
+        // invocation, runs code(args…) under the fastest exact tier, and re-runs on a
+        // ceiling-free tier when the trace truncates. It SELF-MANAGES the tier lifecycle
+        // (init -> begin -> invoke -> end -> shutdown) internally, so it must NOT be
+        // pre-armed. Fills *result (out long), the caller-allocated trace handle, and
+        // *used (the {tier, backend, fidelity} Choice that produced the final trace).
+        [DllImport(HWTRACE)] public static extern int asmtest_trace_call_auto(
+            IntPtr code, UIntPtr len, long[] args, int nargs, uint policy,
+            out long result, IntPtr trace, out Choice used);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_init(ref Options opts);
         [DllImport(HWTRACE)] public static extern void asmtest_hwtrace_shutdown();
 
@@ -598,6 +607,37 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// The outcome of <see cref="HwTrace.TraceCallAuto"/> (asmtest_trace_call_auto): the
+    /// call's <see cref="Result"/>, the filled <see cref="Trace"/> (a queryable
+    /// <see cref="HwTrace"/> the CALLER frees via <see cref="HwTrace.Free"/>), the
+    /// <see cref="TierChoice"/> that produced the final trace (<see cref="Used"/> —
+    /// inspect its <see cref="TierChoice.Backend"/> to see whether escalation fired),
+    /// the <see cref="Truncated"/> honesty bit, and the raw <see cref="Rc"/>. On a
+    /// self-skip (no call-owning native tier) <see cref="Trace"/> is null,
+    /// <see cref="Used"/> is null, and <see cref="Rc"/> is negative.
+    /// </summary>
+    public readonly struct TraceCallAutoResult
+    {
+        public long Result { get; }
+        public HwTrace Trace { get; }
+        public TierChoice? Used { get; }
+        public bool Truncated { get; }
+        public int Rc { get; }
+
+        public TraceCallAutoResult(long result, HwTrace trace, TierChoice? used, bool truncated, int rc)
+        {
+            Result = result;
+            Trace = trace;
+            Used = used;
+            Truncated = truncated;
+            Rc = rc;
+        }
+
+        public override string ToString() =>
+            $"TraceCallAutoResult(result={Result}, used={Used}, truncated={Truncated}, rc={Rc})";
+    }
+
+    /// <summary>
     /// Host-native machine code in real executable (W^X) memory. Allocate with
     /// <see cref="FromBytes"/>, invoke through a function pointer with
     /// <see cref="Call"/>, and release with <see cref="Free"/>.
@@ -811,6 +851,47 @@ namespace Asmtest
             int rc = HwNative.asmtest_trace_auto((uint)policy, out var c);
             if (rc != HwNative.ASMTEST_HW_OK) return null;
             return new TierChoice((TraceTier)c.Tier, (HwBackend)c.Backend, (TraceFidelity)c.Fidelity);
+        }
+
+        /// <summary>
+        /// Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): run
+        /// <paramref name="code"/>(<paramref name="args"/>…) under the fastest exact tier
+        /// and, when the trace comes back truncated, escalate to a ceiling-free tier and
+        /// re-run — until the trace is complete or the tiers are exhausted. It OWNS the
+        /// invocation, so <paramref name="code"/> must be RE-RUNNABLE (deterministic /
+        /// idempotent): it is invoked once per attempted tier — the in-process fast step,
+        /// then the fork-isolated ptrace escalations. Unlike
+        /// <see cref="AsmTrace"/>'s call_scoped path it SELF-MANAGES the whole tier
+        /// lifecycle (init -&gt; begin -&gt; invoke -&gt; end -&gt; shutdown) internally,
+        /// so NO <see cref="Init"/> / pre-arm is required — pre-arming here would
+        /// double-init the tier and then leave it torn down. <paramref name="args"/> pass
+        /// as C longs (SysV integer ABI, 0–6; more, or FP, is rejected as EINVAL).
+        /// Returns a <see cref="TraceCallAutoResult"/> whose
+        /// <see cref="TraceCallAutoResult.Trace"/> is a queryable <see cref="HwTrace"/> the
+        /// CALLER frees. Self-skips (Trace/Used null, negative Rc) where no call-owning
+        /// native tier is available.
+        /// </summary>
+        public static TraceCallAutoResult TraceCallAuto(
+            NativeCode code, long[] args = null, TracePolicy policy = TracePolicy.Best,
+            int blocks = 64, int instructions = 512)
+        {
+            if (!HwNative.LibAvailable)
+                return new TraceCallAutoResult(0, null, null, false, HwNative.ASMTEST_HW_EUNAVAIL);
+            // No pre-arm / Init: asmtest_trace_call_auto OWNS the full tier lifecycle
+            // internally, so a pre-arm here would double-init and leave the tier torn down.
+            var trace = Create(blocks: blocks, instructions: instructions);
+            var arr = args ?? Array.Empty<long>();
+            int rc = HwNative.asmtest_trace_call_auto(
+                code.Base, (UIntPtr)code.Length, arr.Length == 0 ? null : arr, arr.Length,
+                (uint)policy, out long result, trace.Handle, out var used);
+            if (rc != HwNative.ASMTEST_HW_OK)
+            {
+                trace.Free();
+                return new TraceCallAutoResult(0, null, null, false, rc);
+            }
+            var tc = new TierChoice(
+                (TraceTier)used.Tier, (HwBackend)used.Backend, (TraceFidelity)used.Fidelity);
+            return new TraceCallAutoResult(result, trace, tc, trace.Truncated(), rc);
         }
 
         /// <summary>
