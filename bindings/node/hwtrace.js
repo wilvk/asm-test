@@ -503,6 +503,7 @@ class HwTrace {
    *  Empty only off x86-64 Linux (single-step is the floor there). CEILING_FREE
    *  drops the ceiling-bounded backend (AMD LBR). Returns an array of backend ints. */
   static resolve(policy = BEST) {
+    if (!_lib) return []; // self-skip, like available(): no lib -> empty cascade
     const out = Buffer.alloc(4 * 4); // up to 4 int32 backend enums
     const n = Number(_fn.resolve(policy, out, 4));
     const cascade = new Array(n);
@@ -514,6 +515,7 @@ class HwTrace {
    *  >= 0, ready to init()), or ASMTEST_HW_EUNAVAIL (< 0) when no hardware-trace
    *  backend is available on this host. */
   static auto(policy = BEST) {
+    if (!_lib) return ASMTEST_HW_EUNAVAIL; // self-skip, like available()
     return _fn.auto(policy);
   }
 
@@ -524,6 +526,7 @@ class HwTrace {
    *  floor (no native->emulator fidelity crossing); TRACE_CEILING_FREE drops AMD
    *  LBR. A choice is three int32s, so we read consecutive triples. */
   static resolveTiers(policy = TRACE_BEST) {
+    if (!_lib) return []; // self-skip, like available(): no lib -> empty cascade
     const cap = 8; // up to 8 cross-tier choices (Intel PT..emulator)
     const out = Buffer.alloc(cap * 3 * 4); // each choice = 3 int32s
     const n = Number(_fn.traceResolve(policy, out, cap));
@@ -542,6 +545,7 @@ class HwTrace {
    *  { tier, backend, fidelity } object, or null on EUNAVAIL (the cascade is empty
    *  only off a native host under TRACE_NATIVE_ONLY). */
   static autoTier(policy = TRACE_BEST) {
+    if (!_lib) return null; // self-skip, like available()
     const out = Buffer.alloc(3 * 4); // one choice = 3 int32s
     const rc = _fn.traceAuto(policy, out);
     if (rc !== ASMTEST_HW_OK) return null;

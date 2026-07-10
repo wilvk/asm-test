@@ -29,7 +29,7 @@ _docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
 
 .PHONY: docker-build docker-test docker-nasm docker-emu docker-asm \
         docker-valgrind docker-sanitize docker-analyze docker-fmt-check \
-        docker-coverage docker-ci docker-shell docker-clean
+        docker-fmt docker-coverage docker-ci docker-shell docker-clean
 
 docker-build:
 	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
@@ -57,6 +57,13 @@ docker-analyze: docker-build
 
 docker-fmt-check: docker-build
 	$(_docker_run) make fmt-check
+
+# `fmt` must rewrite the HOST tree (the other lanes run on the baked-in /src
+# copy, whose edits are discarded with the container), so this one bind-mounts
+# the checkout over /src and runs as the invoking user to keep file ownership.
+docker-fmt: docker-build
+	$(DOCKER) run --rm $(_docker_plat) -v "$(CURDIR)":/src -w /src \
+	  -u $(shell id -u):$(shell id -g) $(DOCKER_IMAGE) make fmt
 
 docker-coverage: docker-build
 	$(_docker_run) make coverage

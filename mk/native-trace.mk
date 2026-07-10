@@ -887,6 +887,8 @@ $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
                                include/asmtest_hwtrace.h include/asmtest_ptrace.h \
                                include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # K5: rebuild the hardware/native-trace object tree on a build-knob flip
 # (SAN=1/COV=1/CSTD), like the core tree. drtrace_app.o already tracks its own
@@ -914,6 +916,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/stealth_helper.o \
                                        $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/branchsnap.o \
+                                       $(BUILD)/pic/msr_lbr.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
