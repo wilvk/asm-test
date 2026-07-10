@@ -80,8 +80,9 @@ int main(int argc, char **argv) {
     /* 2) ATTACH. This — not any library call — is what makes it a process you did
      *    not start: become its tracer, then wait for the stop. */
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0) {
-        perror("PTRACE_ATTACH (needs same-uid + ptrace_scope=0, CAP_SYS_PTRACE, "
-               "or the target's PR_SET_PTRACER opt-in)");
+        perror(
+            "PTRACE_ATTACH (needs same-uid + ptrace_scope=0, CAP_SYS_PTRACE, "
+            "or the target's PR_SET_PTRACER opt-in)");
         return 1;
     }
     int status = 0;
@@ -124,7 +125,8 @@ int main(int argc, char **argv) {
     printf("instructions : %llu executed, %llu recorded%s\n",
            asmtest_emu_trace_insns_total(tr), asmtest_emu_trace_insns_len(tr),
            asmtest_emu_trace_truncated(tr) ? "  (TRUNCATED)" : "");
-    printf("basic blocks : %llu distinct\n\n", asmtest_emu_trace_blocks_len(tr));
+    printf("basic blocks : %llu distinct\n\n",
+           asmtest_emu_trace_blocks_len(tr));
 
     if (have_bytes && asmtest_disas_available()) {
         printf("ordered instruction trace:\n");

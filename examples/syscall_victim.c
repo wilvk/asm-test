@@ -28,8 +28,8 @@ int main(void) {
     const char *path = "/tmp/asmtest_syscall_demo.txt";
     for (int n = 0;; n++) {
         char msg[64];
-        int len =
-            snprintf(msg, sizeof msg, "tick %d from pid %d\n", n, (int)getpid());
+        int len = snprintf(msg, sizeof msg, "tick %d from pid %d\n", n,
+                           (int)getpid());
 
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) {

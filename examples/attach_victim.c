@@ -37,7 +37,8 @@ int main(void) {
     volatile long sink = 0;
     for (;;) {
         sink += hotfn(6, 7);
-        usleep(200 * 1000); /* ~5 Hz: leaves the tracer time to attach + run_to */
+        usleep(200 *
+               1000); /* ~5 Hz: leaves the tracer time to attach + run_to */
     }
     return 0;
 }

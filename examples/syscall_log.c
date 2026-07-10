@@ -70,7 +70,8 @@ static void dump_cstr(pid_t pid, uint64_t addr) {
 }
 
 static void print_dirfd(long long raw) {
-    int dirfd = (int)raw; /* dirfd is a 32-bit int; -100 arrives zero-extended */
+    int dirfd =
+        (int)raw; /* dirfd is a 32-bit int; -100 arrives zero-extended */
     if (dirfd == AT_FDCWD)
         fputs("AT_FDCWD", stdout);
     else
@@ -149,12 +150,14 @@ int main(int argc, char **argv) {
     }
     pid_t pid = (pid_t)strtol(argv[1], NULL, 0);
     long max_syscalls = argc > 2 ? strtol(argv[2], NULL, 0) : 24;
-    setvbuf(stdout, NULL, _IOLBF, 0); /* flush each line in chronological order */
+    setvbuf(stdout, NULL, _IOLBF,
+            0); /* flush each line in chronological order */
 
     /* ATTACH — same seam as the control-flow demo. */
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0) {
-        perror("PTRACE_ATTACH (needs same-uid + ptrace_scope=0, CAP_SYS_PTRACE, "
-               "or the target's PR_SET_PTRACER opt-in)");
+        perror(
+            "PTRACE_ATTACH (needs same-uid + ptrace_scope=0, CAP_SYS_PTRACE, "
+            "or the target's PR_SET_PTRACER opt-in)");
         return 1;
     }
     int status = 0;
@@ -168,10 +171,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "logging up to %ld syscalls of pid %d (out of band)\n\n",
             max_syscalls, (int)pid);
 
-    int at_entry = 1;   /* the next syscall-stop is a syscall ENTRY */
-    long ent_nr = -1;   /* syscall number captured at entry           */
-    uint64_t rbuf = 0;  /* read()'s buffer ptr, carried entry->exit    */
-    int deliver = 0;    /* signal to re-inject on the next resume      */
+    int at_entry = 1;  /* the next syscall-stop is a syscall ENTRY */
+    long ent_nr = -1;  /* syscall number captured at entry           */
+    uint64_t rbuf = 0; /* read()'s buffer ptr, carried entry->exit    */
+    int deliver = 0;   /* signal to re-inject on the next resume      */
     long done = 0;
 
     while (done < max_syscalls) {
