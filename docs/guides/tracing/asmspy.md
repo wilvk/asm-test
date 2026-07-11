@@ -213,15 +213,16 @@ asmspy is glue over primitives documented elsewhere; the interesting parts:
   [`asmtest_ptrace_run_to`](native-tracing.md#out-of-process-variant-w2--ptrace)
   + `asmtest_ptrace_trace_attached_ex` per sample, or a `PTRACE_SYSCALL`
   entry/exit loop for the syscall stream. On quit it detaches.
-- **Whole-process thread following (syscall stream).** The syscall log
-  `PTRACE_SEIZE`s *every* thread of the target and, via `PTRACE_O_TRACECLONE`,
-  every thread it later spawns, then drives them all from one
-  `waitpid(-1, __WALL)` loop — so a multi-threaded server shows the syscalls of
-  all its workers, not just the main thread. Each line is prefixed `[tid]` once
-  more than one thread is followed. Entry-vs-exit is read from
-  `PTRACE_GET_SYSCALL_INFO` (Linux 5.3+), so seizing a thread mid-syscall does
-  not desync the pairing; on older kernels it falls back to an entry/exit toggle.
-  (The region sampler and live instruction stream still single-step one thread.)
+- **Whole-process thread following (syscall + instruction streams).** The syscall
+  log and the live instruction stream both `PTRACE_SEIZE` *every* thread of the
+  target and, via `PTRACE_O_TRACECLONE`, every thread it later spawns, then drive
+  them all from one `waitpid(-1, __WALL)` loop — so a multi-threaded server shows
+  the syscalls (or instructions) of all its workers, not just the main thread.
+  Each line is prefixed `[tid]` once more than one thread is followed. For
+  syscalls, entry-vs-exit is read from `PTRACE_GET_SYSCALL_INFO` (Linux 5.3+), so
+  seizing a thread mid-syscall does not desync the pairing; on older kernels it
+  falls back to an entry/exit toggle. (The region sampler still steps one thread —
+  it traces a single named function per invocation.)
 - **One tracer thread.** `ptrace` is per-thread — every `ptrace` call and
   `waitpid` for a tracee must come from the thread that attached it — so a single
   dedicated tracer thread owns the whole ptrace lifecycle while the ncurses UI

@@ -128,10 +128,12 @@ typedef void (*asmspy_stream_sink)(void *ctx, const char *line);
 
 /* Attach to `pid` and single-step it, streaming EVERY executed instruction
  * (disassembled, plus the function it lands in, resolved via `syms`) through
- * `sink`, until `max` instructions, `stop`, or the target exits; detach. This is
- * a whole-process live stream — single-stepping is slow, so the target crawls
- * while streamed (and resumes full speed on detach). Returns 0 on clean detach,
- * negative on an attach/availability failure. `syms` may be NULL (raw addrs). */
+ * `sink`, until `max` instructions, `stop`, or the target exits; detach. Truly
+ * whole-process: SEIZEs every thread and steps them all (following threads
+ * spawned later), tagging each line "[tid]" once more than one is followed.
+ * Single-stepping is slow, so the target crawls while streamed (and resumes full
+ * speed on detach). Returns 0 on clean detach, negative on an attach/
+ * availability failure. `syms` may be NULL (raw addrs). */
 int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
                          const asmspy_symtab_t *syms, asmspy_stream_sink sink,
                          void *ctx);

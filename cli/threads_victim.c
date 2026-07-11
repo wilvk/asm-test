@@ -21,10 +21,20 @@
 #define PR_SET_PTRACER_ANY ((unsigned long)-1)
 #endif
 
+static volatile long g_sink;
+
 static void *worker(void *arg) {
     (void)arg;
-    struct timespec nap = {0, 2 * 1000 * 1000}; /* 2 ms — syscall often */
+    /* A short nap keeps this a good CPU citizen, but the compute loop dominates
+     * so the thread is RUNNABLE most of the time — which is what lets the
+     * single-stepping instruction stream interleave all threads instead of one
+     * runnable thread monopolizing a short capture window. */
+    struct timespec nap = {0, 100 * 1000}; /* 0.1 ms */
     for (;;) {
+        long s = 0;
+        for (int i = 0; i < 4000; i++) /* user-space work to single-step */
+            s += (long)i * i;
+        g_sink += s;
         getpid(); /* a cheap, unmistakable syscall attributable to this tid */
         nanosleep(&nap, NULL);
     }

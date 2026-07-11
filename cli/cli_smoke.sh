@@ -134,6 +134,20 @@ printf '%s\n' "$out" | head -8
 ntids=$(printf '%s\n' "$out" | sed -n 's/^\[\([0-9][0-9]*\)\].*/\1/p' | sort -u | wc -l)
 echo "distinct tids seen: $ntids"
 [ "$ntids" -ge 2 ] || fail "expected syscalls from >=2 threads, saw $ntids (thread-follow regressed)"
+
+# The instruction stream follows every thread too: single-step them all and tag
+# each line "[tid]". Same victim; expect >1 distinct tid and real disassembly.
+echo "--- asmspy --stream $TVPID 150 (follow all threads) ---"
+set +e
+out=$(timeout 30 "$ASM" --stream "$TVPID" 150 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream hung on a multi-threaded target (thread-follow deadlock)"
+printf '%s\n' "$out" | head -6
+stids=$(printf '%s\n' "$out" | sed -n 's/^\[\([0-9][0-9]*\)\].*/\1/p' | sort -u | wc -l)
+echo "distinct tids in stream: $stids"
+[ "$stids" -ge 2 ] || fail "stream expected >=2 threads, saw $stids (thread-follow regressed)"
+printf '%s\n' "$out" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
+    || fail "multi-thread stream: no disassembly"
 kill "$TVPID" 2>/dev/null || true
 
 echo "cli-smoke: PASS"

@@ -563,7 +563,9 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                     ts->at_entry = 0;
                 } else if (ts->ent_nr >= 0) { /* skip an exit we saw no entry for */
                     char line[1024], sdata[512], out[1088];
-                    format_syscall(line, sizeof line, sdata, sizeof sdata, tid,
+                    /* decode via the leader `pid` (shared mm + fd table); the
+                     * per-thread label is added below, not inside the decoder */
+                    format_syscall(line, sizeof line, sdata, sizeof sdata, pid,
                                    ts->ent_nr, &ts->entry, (long)regs.rax);
                     const char *emit = line;
                     if (multi) {
@@ -687,68 +689,109 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
 
     arm_quit_wake();
 
-    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0)
-        return ASMTEST_PTRACE_ETRACE;
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    /* Same whole-process following as the syscall stream, but single-stepping:
+     * SEIZE every thread, then PTRACE_SINGLESTEP each so the live instruction
+     * stream is genuinely whole-process, interleaving all threads (not just the
+     * one we happened to attach). No TRACESYSGOOD — every stop here is a step. */
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        detach_threads(&tab);
         return ASMTEST_PTRACE_ETRACE;
     }
 
-    int deliver = 0;
+    int multi = tab.n > 1;
     long done = 0;
+
     while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL, (void *)(long)deliver) != 0)
-            break;
-        deliver = 0;
-        if (waitpid(pid, &status, 0) < 0) {
-            if (errno == EINTR && stop && atomic_load(stop))
-                break;
-            if (errno == EINTR)
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
                 continue;
-            break;
+            }
+            break; /* ECHILD — every tracee is gone */
         }
-        if (WIFEXITED(status) || WIFSIGNALED(status))
-            break;
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
         if (!WIFSTOPPED(status))
             continue;
+
         int sig = WSTOPSIG(status);
-        if (sig != SIGTRAP) {
-            deliver = sig; /* forward a real signal to the target */
+        int event = (status >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
+                thr_get(&tab, (pid_t)child);
+                multi = 1;
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
             continue;
         }
 
-        struct user_regs_struct regs;
-        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
-            break;
-        uint64_t rip = regs.rip;
+        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+                uint64_t rip = regs.rip;
 
-        /* disassemble the instruction about to retire (bytes read from target) */
-        uint8_t code[16];
-        char dis[160] = "";
-        struct iovec liov = {code, sizeof code};
-        struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
-        ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
-        if (got >= 1 && asmtest_disas_available())
-            asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip, 0, dis,
-                          sizeof dis);
+                /* disassemble the instruction about to retire */
+                uint8_t code[16];
+                char dis[160] = "";
+                struct iovec liov = {code, sizeof code};
+                struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
+                /* read via the thread-group leader `pid`: all threads share the
+                 * address space, and process_vm_readv on a non-leader tid can be
+                 * refused, which would blank the disassembly */
+                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+                if (got >= 1 && asmtest_disas_available())
+                    asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip, 0,
+                                  dis, sizeof dis);
 
-        /* resolve the function this address lands in */
-        char loc[96];
-        const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, rip) : NULL;
-        if (s)
-            snprintf(loc, sizeof loc, "%s+0x%llx [%s]", s->name,
-                     (unsigned long long)(rip - s->addr), s->module);
-        else
-            snprintf(loc, sizeof loc, "0x%llx", (unsigned long long)rip);
+                /* resolve the function this address lands in */
+                char loc[96];
+                const asmspy_sym_t *s =
+                    syms ? asmspy_symtab_at(syms, rip) : NULL;
+                if (s)
+                    snprintf(loc, sizeof loc, "%s+0x%llx [%s]", s->name,
+                             (unsigned long long)(rip - s->addr), s->module);
+                else
+                    snprintf(loc, sizeof loc, "0x%llx",
+                             (unsigned long long)rip);
 
-        char line[320];
-        snprintf(line, sizeof line, "%-44.44s %s", loc, dis[0] ? dis : "(?)");
-        if (sink)
-            sink(ctx, line);
-        done++;
+                char line[320], out[352];
+                snprintf(line, sizeof line, "%-44.44s %s", loc,
+                         dis[0] ? dis : "(?)");
+                const char *emit = line;
+                if (multi) {
+                    snprintf(out, sizeof out, "[%d] %s", (int)tid, line);
+                    emit = out;
+                }
+                if (sink)
+                    sink(ctx, emit);
+                done++;
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        /* the initial INTERRUPT stop, a clone child's first stop, an exec-stop,
+         * a group-stop, or a real signal-delivery-stop: resume stepping and
+         * forward only a genuine signal (never SIGTRAP or a group-stop). */
+        int deliver = 0;
+        if (event == 0 && sig != SIGTRAP)
+            deliver = sig;
+        thr_get(&tab, tid);
+        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
-    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    detach_threads(&tab);
     return 0;
 }
