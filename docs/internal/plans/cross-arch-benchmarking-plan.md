@@ -13,6 +13,22 @@ into buildable phases.
 > `available()`/`skip_reason()` self-skip with an absent capability treated as
 > *data* not an error, and no untested claims. Update this file as phases land.
 
+> **Status (2026-07-11): landed.** Phases 0–7 are implemented and live-verified
+> on the dev host (Zen 5, Linux x86-64): `tools/emu_bench.c` + `tools/asmfeatures.c`
+> (+ `tools/asmbench_fixtures.h`), `scripts/bench-report.sh` /
+> `scripts/bench-compare` / `scripts/bench-golden-check.py`, `mk/bench.mk`
+> (`make features` / `emu-bench` / `bench-report` / `bench-record` / `bench-check` /
+> `bench-compare` / `docker-bench`), the `benchmarks/` tree (golden + this box's
+> record), the `benchmarks` + `benchmarks-compare` CI jobs, and the docs
+> ([cross-system benchmarking guide](../../guides/cross-system-benchmarking.md)).
+> **Two deviations from the text below**, both deliberate: (1) the golden file is a
+> single host/OS-independent `benchmarks/golden/emu-insns.json` (emu-bench emits
+> every guest ISA in one run) rather than per-arch `insns-<arch>.json`; (2) the CI
+> per-push matrix is the three Linux/macOS legs — the **windows-latest / macos-13
+> legs and the nightly auto-commit of per-box records remain follow-ups** (the
+> shell runner is portable to them, but those lanes need the emu deps installed and
+> auto-commit needs `contents:write`, so they are not shipped untested).
+
 Siblings: the [analysis](../analysis/2026-07-11-cross-arch-benchmarking.md) it
 derives from, the user guide [benchmarks](../../guides/benchmarks.md), and the
 [trace parity matrix](../analysis/trace-parity-matrix.md) whose capability

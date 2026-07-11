@@ -81,3 +81,13 @@ On AArch64 the virtual timer (`cntvct_el0`) ticks coarser than a core cycle, so
 results are reported as **ticks** rather than cycles. Compare like-for-like on
 one machine; absolute cross-architecture numbers are not directly comparable.
 :::
+
+## Comparing systems & architectures
+
+The `BENCH` tier above measures **real cycles on the host** — the honest answer
+to "how fast on this machine," but not comparable across architectures (`cyc` ≠
+`ticks`) or across machines. For a **host-independent** cross-architecture
+metric — deterministic instructions/basic blocks per call for x86-64, AArch64,
+RISC-V, ARM32, and the Win64 ABI — and to run both this real-cycle tier and a
+live feature/trace-completeness sweep across systems and diff the results, see
+[Cross-system benchmarking](cross-system-benchmarking.md) (`make bench-report`).

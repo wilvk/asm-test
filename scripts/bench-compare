@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""bench-compare — aggregate per-system benchmark reports into a cross-system
+matrix (Phase 4).
+
+    scripts/bench-compare [report.json ...]
+
+With report files (e.g. the per-leg CI artifacts) it compares those; with no
+args it reads the committed benchmarks/ tree (boxes/*/features.json +
+golden/emu-insns.json). Emits Markdown to stdout:
+
+  - a systems table;
+  - the DETERMINISTIC instruction-count matrix (name x arch) — directly
+    comparable across ISAs (that is the whole point of the emulated metric);
+  - the REAL-time matrix (name x system), grouped by unit so cyc and ticks are
+    never mixed, with virtualized cells flagged;
+  - the feature & TRACE-COMPLETENESS matrix (capability x system).
+
+Reads only per-system JSON that bench-report.sh produced (schema
+asmtest-bench-report/v1) and/or the committed golden/box files; stdlib only.
+See docs/internal/plans/cross-arch-benchmarking-plan.md.
+"""
+import glob
+import json
+import os
+import sys
+
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def collect(argv):
+    """Return (systems, reports) where reports is a list of full report dicts."""
+    reports = []
+    if argv:
+        for p in argv:
+            reports.append(load(p))
+        return reports
+    # No args: reconstruct pseudo-reports from the committed tree.
+    for feat in sorted(glob.glob("benchmarks/boxes/*/features.json")):
+        d = load(feat)
+        rep = {"system": d["system"], "features": d["features"],
+               "performance": {"native": {"unit": None, "benchmarks": []},
+                               "emulated": {"benchmarks": []}}}
+        # latest perf-history line, if any
+        hist = os.path.join(os.path.dirname(feat), "perf-history.jsonl")
+        if os.path.exists(hist):
+            lines = [l for l in open(hist).read().splitlines() if l.strip()]
+            if lines:
+                last = json.loads(lines[-1])
+                rep["performance"]["native"]["unit"] = last.get("unit")
+                rep["performance"]["native"]["benchmarks"] = [
+                    {"name": b["name"], "median": b["median"]}
+                    for b in last.get("native", [])]
+        reports.append(rep)
+    if os.path.exists("benchmarks/golden/emu-insns.json"):
+        g = load("benchmarks/golden/emu-insns.json")
+        if reports:
+            reports[0]["performance"]["emulated"]["benchmarks"] = g["benchmarks"]
+        else:
+            reports.append({"system": {"box_id": "golden", "os": "-",
+                                       "arch": "-", "cpu": "golden counts"},
+                            "features": [],
+                            "performance": {"native": {"unit": None,
+                                                       "benchmarks": []},
+                                            "emulated": g}})
+    return reports
+
+
+def md_table(headers, rows):
+    out = ["| " + " | ".join(headers) + " |",
+           "|" + "|".join("---" for _ in headers) + "|"]
+    for r in rows:
+        out.append("| " + " | ".join(str(c) for c in r) + " |")
+    return "\n".join(out)
+
+
+def main():
+    reports = collect(sys.argv[1:])
+    if not reports:
+        print("bench-compare: no reports found (pass report.json files or run "
+              "`make bench-record` first)", file=sys.stderr)
+        return 1
+    systems = [r["system"] for r in reports]
+    P = []
+    P.append("# asm-test cross-system benchmark comparison\n")
+
+    # --- systems ---
+    P.append("## Systems\n")
+    P.append(md_table(
+        ["box_id", "os", "arch", "cpu", "virtualized"],
+        [[s.get("box_id", "?"), s.get("os", "?"), s.get("arch", "?"),
+          s.get("cpu", "?"), s.get("virtualized", "?")] for s in systems]))
+    P.append("")
+
+    # --- deterministic instruction counts (name x arch) ---
+    counts = {}   # (name) -> {arch: value}
+    archset = []
+    for r in reports:
+        for b in r["performance"]["emulated"].get("benchmarks", []):
+            counts.setdefault(b["name"], {})[b["arch"]] = b["value"]
+            if b["arch"] not in archset:
+                archset.append(b["arch"])
+    if counts:
+        P.append("\n## Deterministic instruction count (insns/call, "
+                 "host-independent)\n")
+        P.append("Comparable directly across ISAs — the cross-architecture "
+                 "performance metric.\n")
+        rows = [[name] + [c.get(a, "·") for a in archset]
+                for name, c in sorted(counts.items())]
+        P.append(md_table(["suite.name"] + archset, rows))
+        P.append("")
+
+    # --- real-time, grouped by unit ---
+    units = {}   # unit -> {name -> {box_id -> median}}
+    for r in reports:
+        nat = r["performance"]["native"]
+        unit = nat.get("unit")
+        if not unit:
+            continue
+        box = r["system"].get("box_id", "?")
+        virt = r["system"].get("virtualized")
+        for b in nat.get("benchmarks", []):
+            v = b["median"]
+            cell = "%.1f%s" % (v, "*" if virt else "")
+            units.setdefault(unit, {}).setdefault(b["name"], {})[box] = cell
+    for unit, names in sorted(units.items()):
+        boxes = sorted({b for n in names.values() for b in n})
+        P.append("\n## Real-time performance — unit: `%s` (per call)\n" % unit)
+        P.append("Compare within a column/host; `*` = virtualized "
+                 "(not trustworthy). Never compare across units.\n")
+        rows = [[name] + [names[name].get(b, "·") for b in boxes]
+                for name in sorted(names)]
+        P.append(md_table(["suite.name"] + boxes, rows))
+        P.append("")
+
+    # --- feature & trace-completeness matrix ---
+    caps = {}   # (tier,backend) -> {box_id -> (available, complete, reason)}
+    order = []
+    for r in reports:
+        box = r["system"].get("box_id", "?")
+        for f in r.get("features", []):
+            key = "%s/%s" % (f.get("tier"), f.get("backend"))
+            if f.get("scope", "").startswith("guest"):
+                key += ":" + f.get("arch", "")
+            if key not in order:
+                order.append(key)
+            caps.setdefault(key, {})[box] = (
+                f.get("available"), f.get("complete"), f.get("skip_reason", ""))
+    if caps:
+        boxes = sorted({b for c in caps.values() for b in c})
+        P.append("\n## Feature & trace-completeness matrix\n")
+        P.append("Cell: ✓ available · ✗ (reason) · +complete / −truncated "
+                 "when a trace was exercised.\n")
+        rows = []
+        for key in order:
+            row = [key]
+            for b in boxes:
+                cell = caps[key].get(b)
+                if cell is None:
+                    row.append("·")
+                    continue
+                avail, complete, reason = cell
+                if avail:
+                    mark = "✓"
+                    if complete is True:
+                        mark += " +complete"
+                    elif complete is False:
+                        mark += " −truncated"
+                else:
+                    mark = "✗ " + (reason or "").split(":")[0][:32]
+                row.append(mark)
+            rows.append(row)
+        P.append(md_table(["capability"] + boxes, rows))
+        P.append("")
+
+    print("\n".join(P))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

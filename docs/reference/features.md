@@ -166,6 +166,14 @@ hardware is absent. All are exposed through **all ten language wrappers**
 
 ---
 
+:::{tip}
+The matrices below are the hand-maintained reference. To see **what is available
+on a specific machine right now** — including whether each trace backend produces
+a *complete* trace there — run `make features` (or `make bench-report` for the
+full performance + feature report). See
+[Cross-system benchmarking](../guides/cross-system-benchmarking.md).
+:::
+
 ## Matrix 1 — Architecture × operating system (native build)
 
 The native tier (capture trampoline on the real CPU) supports:

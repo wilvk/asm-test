@@ -113,6 +113,7 @@ guides/floating-point-simd
 guides/property-testing
 guides/runner
 guides/benchmarks
+guides/cross-system-benchmarking
 guides/emulator
 guides/tracing/index
 guides/disassembly

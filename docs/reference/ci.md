@@ -22,6 +22,12 @@ jobs cover the rest of the surface:
 - **Windows** — `win64` (mingw cross-compile + Wine) and `windows` (native).
 - **Quality** — `valgrind`, `sanitize` (ASan + UBSan), `analyze` (clang-tidy),
   `format` (clang-format drift), and `coverage` (gcov).
+- **Benchmarks** — `benchmarks` runs the cross-system report (`make bench-report`)
+  on each per-push OS × arch leg, gates the deterministic golden emu counts
+  (`make bench-check`, host/OS-independent), and uploads a per-system JSON;
+  `benchmarks-compare` merges them into one cross-system matrix (performance +
+  the feature & trace-completeness grid). See
+  [Cross-system benchmarking](../guides/cross-system-benchmarking.md).
 - **Packaging** — `package-libs` (+ its macOS and collect legs).
 
 The framework's own [self-tests](../getting-started/writing-tests.md)

@@ -1,0 +1,163 @@
+{
+  "system": {
+    "box_id": "amd-linux-x86_64-f39fe67d",
+    "os": "linux",
+    "os_version": "Ubuntu 24.04.4 LTS / 6.17.0-35-generic",
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+    "uarch": "zen5",
+    "vendor": "AuthenticAMD",
+    "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "virtualized": false,
+    "asmtest_version": "1.1.0",
+    "commit": "0f3553e",
+    "timestamp": "2026-07-11T08:27:57Z"
+  },
+  "features": [
+    {
+      "tier": "emulator",
+      "backend": "guest",
+      "arch": "x86_64",
+      "scope": "guest",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "virtual-exact",
+      "complete": true,
+      "trace_insns": 4
+    },
+    {
+      "tier": "emulator",
+      "backend": "guest",
+      "arch": "win64",
+      "scope": "guest",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "virtual-exact",
+      "complete": true,
+      "trace_insns": 4
+    },
+    {
+      "tier": "emulator",
+      "backend": "guest",
+      "arch": "arm64",
+      "scope": "guest",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "virtual-exact",
+      "complete": true,
+      "trace_insns": 3
+    },
+    {
+      "tier": "emulator",
+      "backend": "guest",
+      "arch": "riscv64",
+      "scope": "guest",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "virtual-exact",
+      "complete": true,
+      "trace_insns": 3
+    },
+    {
+      "tier": "emulator",
+      "backend": "guest",
+      "arch": "arm32",
+      "scope": "guest",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "virtual-exact",
+      "complete": true,
+      "trace_insns": 3
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 4,
+      "note": "add3 (straight-line)"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 602,
+      "note": "sum_to_n(200) loop"
+    },
+    {
+      "tier": "hwtrace",
+      "backend": "intel_pt",
+      "arch": "host",
+      "scope": "host",
+      "available": false,
+      "skip_reason": "built without libipt",
+      "fidelity": "native",
+      "complete": null,
+      "trace_insns": null
+    },
+    {
+      "tier": "hwtrace",
+      "backend": "amd_lbr",
+      "arch": "host",
+      "scope": "host",
+      "available": false,
+      "skip_reason": "perf branch-stack not permitted (lower perf_event_paranoid or grant CAP_PERFMON)",
+      "fidelity": "native",
+      "complete": null,
+      "trace_insns": null
+    },
+    {
+      "tier": "hwtrace",
+      "backend": "single_step",
+      "arch": "host",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": null,
+      "trace_insns": null
+    },
+    {
+      "tier": "hwtrace",
+      "backend": "coresight",
+      "arch": "host",
+      "scope": "host",
+      "available": false,
+      "skip_reason": "built without OpenCSD",
+      "fidelity": "native",
+      "complete": null,
+      "trace_insns": null
+    },
+    {
+      "tier": "dynamorio",
+      "backend": "dynamorio",
+      "arch": "host",
+      "scope": "host",
+      "available": false,
+      "skip_reason": "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, or bundle it (a bare libdynamorio.so on the loader path is still tried at init)",
+      "fidelity": "native",
+      "complete": null,
+      "trace_insns": null
+    },
+    {
+      "tier": "disasm",
+      "backend": "capstone",
+      "arch": "host",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "n/a",
+      "complete": null,
+      "trace_insns": null
+    }
+  ]
+}

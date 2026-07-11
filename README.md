@@ -93,6 +93,7 @@ make test                   # build and run the example suites
 make demo-fail              # see how a failing assertion is reported
 make demo-robust            # see a hang and a crash contained & reported
 make bench                  # time the BENCH cases (cycles/call)
+make bench-report           # cross-system report: real cycles + per-ISA counts + features
 make ASM_SYNTAX=nasm test   # same suites via the NASM backend (x86-64)
 make asm-test               # run routines from in-line assembly strings (Keystone)
 ```

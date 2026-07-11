@@ -65,6 +65,72 @@ jobs:
       - name: Benchmark demo (informational; cycles/call)
         run: make bench
 
+  # Cross-system benchmarking (docs/internal/plans/cross-arch-benchmarking-plan.md).
+  # Runs the two-dimensional benchmark on each per-push OS x arch leg and uploads
+  # the normalized per-system report; the `benchmarks-compare` job below merges
+  # them into one cross-system matrix. Every leg also gates the DETERMINISTIC
+  # golden emu counts (host/OS-independent, so the committed golden must match a
+  # fresh run everywhere — the manifest/conformance golden pattern).
+  # Follow-ups (per the plan): the windows-latest + macos-13(x86) legs (the
+  # shell runner is portable but those lanes need the emu deps installed), and the
+  # nightly auto-commit of per-box records into benchmarks/ (needs contents:write).
+  benchmarks:
+    name: benchmarks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # unicorn (+ capstone) for the emulator/count producer and the feature
+      # probe; the hwtrace single-step tier needs no extra dependency.
+      - name: Install the emulator tier deps
+        run: make deps DEPS_ARGS=--emu
+
+      - name: Gate the deterministic golden emu counts (host-independent)
+        run: make bench-check
+
+      - name: Run the cross-system benchmark report
+        run: make bench-report
+
+      - name: Upload the per-system report
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-report-${{ matrix.os }}
+          path: build/bench-report-*.json
+          if-no-files-found: error
+
+  # Merge every leg's report into one cross-system comparison (performance
+  # matrices + the feature & trace-completeness grid) and publish it.
+  benchmarks-compare:
+    name: benchmarks (cross-system compare)
+    needs: [benchmarks]
+    if: ${{ !cancelled() && needs.benchmarks.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download every per-system report
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bench-report-*
+          path: reports/
+          merge-multiple: true
+      - name: Build the cross-system comparison
+        run: |
+          python3 scripts/bench-compare reports/*.json | tee comparison.md
+          echo "## Cross-system benchmark comparison" >> "$GITHUB_STEP_SUMMARY"
+          cat comparison.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the comparison
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-comparison
+          path: comparison.md
+          if-no-files-found: error
+
   # x86-64 macOS / Mach-O tier (clang). The Intel `macos-13` runners are
   # scarce and slow, so this corner of the {arch} x {OS} matrix runs nightly
   # (and on manual `workflow_dispatch`) instead of gating every push — the

@@ -1,0 +1,75 @@
+{
+  "schema": "asmtest-emu-golden/v1",
+  "benchmarks": [
+    {
+      "name": "loop.sum_to_10",
+      "arch": "x86_64",
+      "kind": "insns",
+      "value": 32,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 3
+    },
+    {
+      "name": "loop.sum_to_100",
+      "arch": "x86_64",
+      "kind": "insns",
+      "value": 302,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 3
+    },
+    {
+      "name": "math.add3",
+      "arch": "arm32",
+      "kind": "insns",
+      "value": 3,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 1
+    },
+    {
+      "name": "math.add3",
+      "arch": "arm64",
+      "kind": "insns",
+      "value": 3,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 1
+    },
+    {
+      "name": "math.add3",
+      "arch": "riscv64",
+      "kind": "insns",
+      "value": 3,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 1
+    },
+    {
+      "name": "math.add3",
+      "arch": "win64",
+      "kind": "insns",
+      "value": 4,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 1
+    },
+    {
+      "name": "math.add3",
+      "arch": "x86_64",
+      "kind": "insns",
+      "value": 4,
+      "unit": "insn",
+      "deterministic": true,
+      "complete": true,
+      "blocks": 1
+    }
+  ]
+}

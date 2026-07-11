@@ -91,6 +91,13 @@ help:
 	@echo '  demo-fail       intentional-failure demo (exits nonzero by design)'
 	@echo '  demo-robust     crash/hang containment demo'
 	@echo '  bench           run the benchmark (BENCH) cases'
+	@echo '  bench-report    one merged per-system report (native cyc + emu counts + features)'
+	@echo '  bench-record    bench-report + persist into the benchmarks/ tree (golden + history)'
+	@echo '  bench-check     gate the deterministic golden emu counts (host/OS-independent)'
+	@echo '  bench-compare   aggregate report(s) into a cross-system matrix (BENCH_REPORTS=...)'
+	@echo '  emu-bench       deterministic instruction/block counts per guest ISA'
+	@echo '  features        live capability + trace-completeness sweep of this system (JSON)'
+	@echo '  docker-bench    reproduce a CI leg report in the container (DOCKER_PLATFORM=...)'
 	@echo '  clean           remove build artifacts'
 	@echo '  fix-perms       chown root-owned build/ artifacts back to you (after a docker lane)'
 	@echo ''
@@ -697,7 +704,8 @@ CLANG_FORMAT ?= clang-format
 FMT_SOURCES  := $(filter-out include/asm.h, \
                  $(wildcard src/*.c src/*.h include/*.h tests/*.c \
                  tests/win64/*.c tests/win64/*.h bindings/conformance/*.c \
-                 examples/*.c scripts/gen-manifest.c))
+                 examples/*.c scripts/gen-manifest.c \
+                 tools/*.c tools/*.h))
 fmt:
 	$(CLANG_FORMAT) -i $(FMT_SOURCES)
 
@@ -839,6 +847,7 @@ usecases-emu: $(BUILD)/test_emu_usecases
 	./$(BUILD)/test_emu_usecases
 
 include mk/native-trace.mk  # DynamoRIO + hardware native-trace tiers
+include mk/bench.mk          # cross-system performance + feature benchmarking
 include mk/cli.mk            # asmspy: ncurses front-end over the tracer
 include mk/bindings.mk       # conformance corpus + language bindings + packaging
 include mk/docs.mk           # Sphinx / Read the Docs
