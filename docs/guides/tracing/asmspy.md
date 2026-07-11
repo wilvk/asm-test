@@ -304,6 +304,15 @@ asmspy is glue over primitives documented elsewhere; the interesting parts:
   dedicated tracer thread owns the whole ptrace lifecycle while the ncurses UI
   thread only reads shared buffers and handles input. A quit wakes a blocked
   `waitpid` via `pthread_kill(SIGALRM)`.
+- **Two-phase detach (crash-safe on JIT runtimes).** A whole-process single-step
+  view leaves every thread stopped mid-instruction. Detaching them one at a time
+  would let an already-released thread run while its siblings are still frozen
+  mid-step; a JIT / managed runtime (V8/Node, the JVM, …) can catch that transient
+  cross-thread inconsistency in an internal self-check and `IMMEDIATE_CRASH` via
+  `int3` — a **fatal SIGTRAP that kills the whole target**. So detach is two-phase:
+  interrupt and stop *every* thread first (clearing any armed single-step), then
+  release them all at once — the same all-at-once semantics the kernel uses when a
+  tracer dies (which is why a killed asmspy leaves the target unharmed).
 - **Symbol resolution.** The library resolves JIT methods (perf-map / jitdump)
   and module extents, but has no reader for ordinary ELF symbols, so asmspy
   carries its own: it parses the `.symtab`/`.dynsym` of every ELF mapped into the

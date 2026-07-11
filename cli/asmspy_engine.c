@@ -487,11 +487,42 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
     return 0;
 }
 
-/* Stop tracing: INTERRUPT each tracee, drain to its next ptrace-stop, then
- * DETACH so it runs on normally. A thread already gone is simply reaped. Frees
- * the table. */
+/* x86 EFLAGS Trap Flag: set by PTRACE_SINGLESTEP to fire a #DB after one insn. */
+#define ASMSPY_EFLAGS_TF 0x100UL
+
+/* Clear the Trap Flag on a stopped tracee before detaching. A single-step engine
+ * leaves each thread resumed with PTRACE_SINGLESTEP (TF set); if we INTERRUPT and
+ * DETACH while a thread's step is still armed, it resumes WITH TF set, executes
+ * one instruction, and takes a #DB -> SIGTRAP with no tracer to absorb it, which
+ * TERMINATES the tracee (fatal SIGTRAP). Debuggers avoid this by clearing TF
+ * before detach; the kernel's own clear on detach does not cover a detach from
+ * the INTERRUPT group-stop of a mid-step thread. NB: only clears TF the tracer
+ * forced — if the app itself was single-stepping (rare) TF stays as it was, since
+ * we never re-armed it here. */
+static void clear_trap_flag(pid_t tid) {
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+        return;
+    if (regs.eflags & ASMSPY_EFLAGS_TF) {
+        regs.eflags &= ~ASMSPY_EFLAGS_TF;
+        ptrace(PTRACE_SETREGS, tid, NULL, &regs);
+    }
+}
+
+/* Stop tracing: INTERRUPT each tracee, drain to its next ptrace-stop, clear any
+ * armed single-step (TF), then DETACH so it runs on normally. A thread already
+ * gone is simply reaped. Frees the table. */
 static void detach_threads(thr_tab_t *tab) {
-    for (size_t i = 0; i < tab->n; i++) {
+    /* TWO-PHASE detach. A whole-process single-step run leaves every thread SEIZEd
+     * and step-armed. Detaching them one-at-a-time lets an already-detached thread
+     * resume and RUN while its siblings are still stopped mid-step — in a JIT /
+     * managed runtime (V8/Node, JVM, …) that transient cross-thread inconsistency
+     * trips an internal self-check that IMMEDIATE_CRASHes via int3 -> a fatal
+     * SIGTRAP that kills the whole process. Phase 1 stops EVERY thread (clearing
+     * any armed single-step); phase 2 releases them all, so none runs until all
+     * are quiescent — mirroring the kernel's own all-at-once detach on tracer
+     * death (which is precisely why a killed tracer leaves the target alive). */
+    for (size_t i = 0; i < tab->n; i++) { /* phase 1: interrupt + drain to a stop */
         pid_t tid = tab->v[i].tid;
         ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
         for (;;) {
@@ -505,11 +536,13 @@ static void detach_threads(thr_tab_t *tab) {
             if (WIFEXITED(st) || WIFSIGNALED(st))
                 break; /* gone; nothing to detach */
             if (WIFSTOPPED(st)) {
-                ptrace(PTRACE_DETACH, tid, NULL, NULL);
-                break;
+                clear_trap_flag(tid); /* drop any armed single-step (defensive) */
+                break;                /* leave it STOPPED; release in phase 2 */
             }
         }
     }
+    for (size_t i = 0; i < tab->n; i++) /* phase 2: release all at once */
+        ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
     free(tab->v);
     tab->v = NULL;
     tab->n = tab->cap = 0;
