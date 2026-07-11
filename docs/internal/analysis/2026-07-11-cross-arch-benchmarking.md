@@ -393,6 +393,11 @@ architectures at all — which is what makes it the higher-leverage addition.
 
 ## 7. Recommended plan
 
+> Turned into buildable phases — including a cross-system runner (`make
+> bench-report`), a live feature-benchmark probe, an aggregator, CI wiring, and a
+> required documentation phase — in
+> [cross-arch-benchmarking-plan.md](../plans/cross-arch-benchmarking-plan.md).
+
 1. **The result shape first (§5.2).** Land `asmtest_bench_result_t` and one
    reporter (text + JSON, mirroring `--bench-format=json`) that renders it. This
    is the parity anchor everything else fills, and it makes the cyc-vs-ticks and
