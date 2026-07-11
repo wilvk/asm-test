@@ -117,6 +117,40 @@ from the real heap, a runtime helper, or a syscall is wrong unless that state is
 seeded/modelled. Good for a self-contained method; **not** a faithful view of a real
 run. CI-runnable, no hardware.
 
+**Relevance to *live* tracing (2026-07-12).** On its own the emulator is not a live
+tracer — it observes nothing in the running process. Its relevance is as the **value
+engine bolted onto a cheap live capture**, in a split architecture that keeps the
+expensive per-instruction value work *off* the observed process. Two forms:
+
+- **Snapshot-seeded replay (pairs with the ptrace tier).** At a scoped region's entry,
+  snapshot the live process's *real* register file (`PTRACE_GETREGS`) and the memory the
+  region touches (`process_vm_readv`) — plumbing the stepper already has — then replay the
+  region in the emulator from that real state. For a **self-contained region** the replayed
+  values match the live run, and the ~10³–10⁵× value-derivation cost lands in the emulator,
+  not on the live thread.
+  - **OS-specific calls are a hard boundary, not just a reseed case.** The emulator has
+    **no kernel underneath it** — a `syscall`/`svc` (or a kernel-mediated path: futex, vDSO
+    `clock_gettime`/`gettimeofday`, signal delivery, I/O, mmap, even some TLS/segment setup)
+    in the snapshotted region has nowhere to go in the isolated guest, so its effect is
+    absent or wrong. "Self-contained" therefore means **OS-interaction-free**, not merely
+    "no obvious `read()`". The moment a region makes an OS-specific call, the *lightweight*
+    snapshot model breaks: you must either bound the region to exclude it, or escalate to
+    **full input-capture record/replay** (capture each syscall's return + memory effects and
+    inject them on replay) — which is the heavier tier-4 composition, no longer "just seed a
+    snapshot". This is why the snapshot path is a *scoped-region* tool, not a whole-run one.
+- **Path replay (pairs with the hardware tier).** Hardware trace records the *exact real
+  control-flow path* + captured non-deterministic inputs (syscalls, RDTSC, shared loads);
+  the emulator replays that path seeded with a snapshot to *re-derive* every value. This is
+  the deterministic record/replay composition (tier 4 below).
+
+**Bonus property — the recorded path is a consistency check.** Because the live capture
+also yields ground-truth control flow, any divergence between the emulator's branch
+decisions and the recorded path *localizes a wrong value* (an un-captured input:
+shared-memory write, unmodelled syscall, RNG) at exactly the instruction it happened, so
+replay can flag or reseed there. Fidelity is only ever as good as the seed + inputs — the
+clean cases are (a) self-contained deterministic regions and (b) full input-capture
+record/replay.
+
 ### 2. Out-of-process ptrace stepper — the only **out-of-band** tier that captures data flow of the real live .NET run
 
 This is the important one for managed runtimes. It reads the tracee's actual state, so
@@ -173,6 +207,38 @@ path, which the header itself flags as unreliable for re-attach). The signal-col
 half *is* already mitigated (`DR_SIGNAL_DELIVER` for JVM/.NET null-check `SIGSEGV`). This
 remains the most credible substrate for production-grade data flow over real managed
 execution — the *target*, not current capability.
+
+**Launch vs attach — can DR data-flow an *already-running* process? (2026-07-12).** DR
+has three integration models, and this tier uses the one that is *not* attach:
+
+| Model | How | Here |
+|---|---|---|
+| Launch under DR | `drrun -c client.so -- app` | not used |
+| In-process cooperative | app calls `dr_app_setup` / `dr_app_start` | this tier |
+| External attach | `drrun -attach <pid>` / `dr_inject_*` | not used |
+
+DR *does* support late attach (`drrun -attach`; on Linux a ptrace-based takeover that
+seizes the running threads and redirects them into the code cache). So attach is
+mechanically possible — but adopting it means **abandoning the `dr_app_*` cooperative
+model** (which needs the app to link `libasmtest_drapp` and drive DR itself) for the
+external `dr_inject` injector: a real re-architecture, not a flag. And for **managed**
+targets attach is the *fragile* direction, not a free win over launch:
+
+- Attach freezes the runtime at an **arbitrary state** — threads parked in syscalls, on
+  runtime locks, mid-GC, or deep in JIT'd code — which DR must redirect; launch owns the
+  process from a clean start instead.
+- The runtime's signal-based machinery (null-check `SIGSEGV`, GC thread hijacking) is
+  already installed *before* DR arrives; the signal half is mitigable (`DR_SIGNAL_DELIVER`,
+  above) but the arbitrary-state half is not.
+- A clean managed attach really wants **safepoint coordination** — parking managed threads
+  at GC-safe points (via the runtime's diagnostics / a managed helper) before takeover —
+  which needs runtime cooperation and is research-grade.
+
+So DR-attach is credible for **native** already-running targets (keeps the 10–50× band),
+and hard for **live managed** ones. Contrast the ptrace tier (#2), which is *built* to
+attach out-of-band and works on managed and native alike — at far higher per-step cost.
+The pragmatic split: launch-under-DR (or ptrace) for managed; DR-attach for native;
+ptrace-attach + emulator replay (tier 1) when the value cost must stay off the live thread.
 
 ### 4. Hardware tier (Intel PT / AMD LBR / CoreSight) — cannot, alone
 
