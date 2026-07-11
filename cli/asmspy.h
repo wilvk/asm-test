@@ -148,6 +148,41 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
                          const asmspy_symtab_t *syms, asmspy_stream_sink sink,
                          void *ctx);
 
+/* One node of the whole-process call graph: a function seen as a caller and/or
+ * a callee. `invocations` = how many times it was CALLED; `out_calls` = how many
+ * calls it MADE; `fanout` = how many DISTINCT functions it calls. `external` is
+ * 1 for a shared/system-library function, 0 for the target's own executable. */
+typedef struct {
+    uint64_t addr;                  /* function entry address in the target  */
+    char name[128];                 /* resolved symbol name, or "0x…"         */
+    char module[64];                /* backing module basename ("?" if unknown) */
+    int external;                   /* 1 = external library, 0 = internal exe */
+    unsigned long long invocations; /* times this function was called         */
+    unsigned long long out_calls;   /* total calls this function made         */
+    unsigned fanout;                /* number of distinct functions it calls  */
+} asmspy_gnode_t;
+
+/* Snapshot sink: `nodes[0..n)` is the current whole-process call graph, owned by
+ * the engine and valid only for THIS call (copy what you keep). Invoked
+ * periodically as the graph grows and once more just before detach. */
+typedef void (*asmspy_graph_sink)(void *ctx, const asmspy_gnode_t *nodes,
+                                  size_t n);
+
+/* Attach to `pid` and ALL its threads, single-step them, and build a
+ * caller->callee call graph: each observed CALL adds/thickens an edge and bumps
+ * the callee's invocation count and the caller's out-call count / fan-out.
+ * Streams snapshots through `sink` until `max` CALLS are recorded, `stop`, or the
+ * target exits; detach. `max` counts recorded calls (<0 = until stop / exit).
+ * `syms` names the nodes and drives the internal/external split (NULL -> raw
+ * addresses, all internal). Direct calls are resolved exactly; an indirect call
+ * is attributed to wherever the next step lands, so the graph is best-effort at
+ * signal boundaries. Whole-process single-stepping is slow — the target crawls
+ * while traced. Returns 0 on clean detach, negative on an attach/availability
+ * failure. */
+int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
+                        const asmspy_symtab_t *syms, asmspy_graph_sink sink,
+                        void *ctx);
+
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);
 

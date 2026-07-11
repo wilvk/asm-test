@@ -96,7 +96,8 @@ Run `asmspy` with no arguments. It walks four screens:
    by recency. `r` re-scans (re-sampling). Processes you cannot `ptrace` are
    marked with `!`. (`Tab`/`r` act when the filter is empty.)
 2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
-   `3` the whole-process live instruction stream.
+   `3` the whole-process live instruction stream, `4` the whole-process call
+   graph (caller/callee invocation counts, sortable).
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace, `r` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
@@ -112,6 +113,12 @@ Run `asmspy` with no arguments. It walks four screens:
      executes**: its `function+offset [module]` and disassembly. Whole-process
      single-stepping is slow, so the target crawls while streamed (and resumes
      full speed on detach).
+   - *Call graph* — one row per function seen calling or being called, each with
+     its **invocation count** (times called), **calls made**, and **fan-out**
+     (distinct functions it calls), plus an `[int]`/`[EXT]` marker for the
+     target's own executable vs. a shared/system library. Press **`s`** to
+     toggle the sort between *most-invoked* and *most functions called*
+     (fan-out). Built from the same whole-process single-step, so it crawls too.
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
@@ -137,6 +144,7 @@ asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name
 asmspy --log    <pid> [n]          # stream n syscalls with decoded data (default 20)
 asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
 asmspy --stream <pid> [n]          # stream n instructions live: function + disassembly (default 20)
+asmspy --graph  <pid> [n] [--sort=invocations|fanout]  # whole-process call graph over n calls (default 200)
 ```
 
 A **negative `n`** streams until the target exits or you interrupt. Malformed
@@ -155,6 +163,31 @@ clock_nanosleep+0x62 [libc.so.6]             jne 0x787c95b15a89
 hotfn+0x22          [attach_victim]          mov rax, qword ptr [rbp - 8]
 hotfn+0x26          [attach_victim]          and eax, 1
 ```
+
+**Call graph** — a **whole-process caller→callee graph** accumulated from the
+live single-step: `--graph` watches every thread, attributes each `call` to the
+function it lands in, and tallies, per function, how many times it was **called**
+(`inv`), how many calls it **made** (`calls`), and how many **distinct functions
+it calls** (`fanout`). Each row is tagged `[int]` (the target's own executable)
+or `[EXT]` (a shared/system library). `n` bounds the number of calls recorded
+before it reports (a **negative `n`** runs until the target exits); `--sort`
+picks the ranking — `invocations` (most-called first) or `fanout` (most functions
+called first):
+
+```text
+$ asmspy --graph 1234 200 --sort=invocations
+call graph — 7 functions, sorted by invocations (pid 1234)
+[int] helper                         inv=95      calls=0       fanout=0     [spy_victim]
+[int] work                           inv=19      calls=95      fanout=1     [spy_victim]
+[EXT] usleep                         inv=19      calls=19      fanout=1     [libc.so.6]
+[int] main                           inv=0       calls=38      fanout=2     [spy_victim]
+```
+
+Direct calls are attributed exactly; an indirect call (`call rax`, a PLT
+thunk) is attributed to wherever the next step lands, so the graph is
+best-effort at signal boundaries. Whole-process single-stepping is slow, so the
+target crawls while the graph is built (and resumes full speed on detach). In
+the TUI (mode `4`) the same view refreshes live and **`s`** toggles the sort.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
 host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`

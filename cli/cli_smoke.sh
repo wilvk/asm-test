@@ -101,6 +101,29 @@ printf '%s\n' "$out" | grep -q 'functions called:' || fail "no functions section
 printf '%s\n' "$out" | grep -q 'helper' || fail "callee 'helper' not resolved"
 # the callee line is ranked by call count — a leading "<n>x" (work calls helper 5x)
 printf '%s\n' "$out" | grep -qE '^ *[0-9]+.*->.*helper' || fail "no call-count on callee"
+
+# whole-process call graph: same victim (main -> work -> helper). Build the graph
+# from a bounded number of CALLS, then assert the caller/callee counts and the
+# internal/external tag. timeout-guarded (single-stepping the whole process).
+echo "--- asmspy --graph $WVPID 60 (whole-process call graph) ---"
+set +e
+out=$(timeout 40 "$ASM" --graph "$WVPID" 60 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph hung (whole-process single-step deadlock)"
+printf '%s\n' "$out" | head -12
+printf '%s\n' "$out" | grep -q 'call graph' || fail "no call-graph header"
+# work() calls helper() -> work has fanout>=1 and helper is invoked >=1x
+printf '%s\n' "$out" | grep -qE 'work[^Z]*fanout=[1-9]' || fail "work fanout not counted"
+printf '%s\n' "$out" | grep -qE 'helper[^Z]*inv=[1-9]' || fail "helper invocations not counted"
+# internal/external tag: work/helper are the target's own exe -> [int]
+printf '%s\n' "$out" | grep -qE '\[int\][^Z]*work' || fail "internal marker missing"
+
+echo "--- asmspy --graph $WVPID 60 --sort=fanout ---"
+out=$(timeout 40 "$ASM" --graph "$WVPID" 60 --sort=fanout 2>&1) \
+    || fail "--graph --sort=fanout"
+printf '%s\n' "$out" | grep -q 'functions called' || fail "sort=fanout header missing"
+# a bad --sort value is rejected up front (rc=2), not silently coerced
+expect_badarg "$ASM" --graph "$WVPID" --sort=bogus
 kill "$WVPID" 2>/dev/null || true
 
 # syscall log: attach to syscall_victim (does file I/O each loop)

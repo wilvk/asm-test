@@ -11,6 +11,7 @@
  *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
  *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
+ *   asmspy --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph
  *
  * A negative n streams until the target exits or you interrupt.
  */
@@ -193,6 +194,67 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
 }
 
 /* ================================================================== */
+/* Shared call-graph view: sort + row format (used by headless + TUI)  */
+/* ================================================================== */
+
+/* How to rank the whole-process call graph. */
+typedef enum {
+    GSORT_INVOCATIONS = 0, /* most-called functions first                 */
+    GSORT_FANOUT = 1,      /* most distinct callees (functions called) first */
+} gsort_t;
+
+/* A retained copy of an engine snapshot (the engine's array is transient). */
+typedef struct {
+    asmspy_gnode_t *v;
+    size_t n, cap;
+} graph_snap;
+
+/* Copy `nodes[0..n)` into the snapshot, growing it as needed (replace, not
+ * append — each engine snapshot is the whole graph so far). */
+static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes,
+                            size_t n) {
+    if (n > s->cap) {
+        asmspy_gnode_t *nv = realloc(s->v, n * sizeof *nv);
+        if (!nv)
+            return; /* keep the previous snapshot on OOM */
+        s->v = nv;
+        s->cap = n;
+    }
+    if (n)
+        memcpy(s->v, nodes, n * sizeof *nodes);
+    s->n = n;
+}
+
+/* qsort comparator; the active key is set through this file-scope selector right
+ * before each qsort (both callers are single-threaded at the sort point). */
+static gsort_t graph_sort_key = GSORT_INVOCATIONS;
+static int gnode_cmp(const void *a, const void *b) {
+    const asmspy_gnode_t *x = a, *y = b;
+    unsigned long long kx = graph_sort_key == GSORT_FANOUT ? x->fanout
+                                                           : x->invocations;
+    unsigned long long ky = graph_sort_key == GSORT_FANOUT ? y->fanout
+                                                           : y->invocations;
+    if (kx != ky)
+        return kx < ky ? 1 : -1; /* descending */
+    /* tie-break on the OTHER metric, then name, so the order is stable */
+    unsigned long long tx = graph_sort_key == GSORT_FANOUT ? x->invocations
+                                                           : x->fanout;
+    unsigned long long ty = graph_sort_key == GSORT_FANOUT ? y->invocations
+                                                           : y->fanout;
+    if (tx != ty)
+        return tx < ty ? 1 : -1;
+    return strcmp(x->name, y->name);
+}
+
+/* One call-graph row: an internal/external marker, the function, its counts
+ * (times called / calls made / distinct callees), and the backing module. */
+static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
+    snprintf(buf, cap, "%-5s %-30.30s inv=%-7llu calls=%-7llu fanout=%-5u [%s]",
+             nd->external ? "[EXT]" : "[int]", nd->name, nd->invocations,
+             nd->out_calls, nd->fanout, nd->module);
+}
+
+/* ================================================================== */
 /* Headless subcommands                                                */
 /* ================================================================== */
 
@@ -281,6 +343,41 @@ static int cmd_stream(pid_t pid, long n) {
         fprintf(stderr, "attach failed: %s\n", e);
         return 1;
     }
+    return 0;
+}
+
+static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
+                               size_t n) {
+    graph_snap_copy(ctx, nodes, n); /* headless: keep only the latest snapshot */
+}
+
+static int cmd_graph(pid_t pid, long n, gsort_t sort) {
+    asmspy_symtab_t t;
+    asmspy_symtab_load(pid, &t); /* best-effort; raw addrs (all internal) if empty */
+    graph_snap snap = {0};
+    int rc = asmspy_engine_graph(pid, n, NULL, &t, graph_capture_sink, &snap);
+    asmspy_symtab_free(&t);
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "attach failed: %s\n", e);
+        free(snap.v);
+        return 1;
+    }
+    graph_sort_key = sort;
+    qsort(snap.v, snap.n, sizeof *snap.v, gnode_cmp);
+    printf("call graph — %zu functions, sorted by %s (pid %d)\n", snap.n,
+           sort == GSORT_FANOUT ? "functions called (fanout)" : "invocations",
+           (int)pid);
+    if (snap.n == 0)
+        printf("(no calls observed — target idle, or single-stepping saw no "
+               "call in the window)\n");
+    for (size_t i = 0; i < snap.n; i++) {
+        char row[256];
+        graph_format_row(row, sizeof row, &snap.v[i]);
+        printf("%s\n", row);
+    }
+    free(snap.v);
     return 0;
 }
 
@@ -559,11 +656,14 @@ typedef struct {
     svec asm_dis, asm_fn;
     unsigned asm_sample;
     const asmspy_symtab_t *syms;
+    /* call-graph view (mode 3) */
+    graph_snap graph;
+    gsort_t gsort;
     /* target */
     pid_t pid;
     uint64_t base;
     size_t len;
-    int mode; /* 0 = syscalls, 1 = region, 2 = live instruction stream */
+    int mode; /* 0 syscalls, 1 region, 2 instruction stream, 3 call graph */
 } live_t;
 
 static void live_syscall_sink(void *ctx, const char *line, const char *str) {
@@ -595,6 +695,13 @@ static void live_stream_sink(void *ctx, const char *line) {
     pthread_mutex_unlock(&L->mu);
 }
 
+static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t n) {
+    live_t *L = ctx;
+    pthread_mutex_lock(&L->mu);
+    graph_snap_copy(&L->graph, nodes, n);
+    pthread_mutex_unlock(&L->mu);
+}
+
 static void *tracer_thread(void *arg) {
     live_t *L = arg;
     int rc;
@@ -603,6 +710,9 @@ static void *tracer_thread(void *arg) {
     else if (L->mode == 2)
         rc = asmspy_engine_stream(L->pid, -1, &L->stop, L->syms,
                                   live_stream_sink, L);
+    else if (L->mode == 3)
+        rc = asmspy_engine_graph(L->pid, -1, &L->stop, L->syms, live_graph_sink,
+                                 L);
     else
         rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
                                   live_region_sink, L);
@@ -691,6 +801,25 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             attroff(A_BOLD);
             draw_log_at(&L.log, 2, 0, rows - 3, cols,
                         paused ? vbottom : lognewest);
+        } else if (mode == 3) {
+            /* whole-process call graph, sorted live; sort in place under mu */
+            graph_sort_key = L.gsort;
+            qsort(L.graph.v, L.graph.n, sizeof *L.graph.v, gnode_cmp);
+            attron(A_BOLD);
+            mvprintw(1, 0,
+                     "CALL GRAPH  (%zu functions, sort: %s)   [int]=own exe  "
+                     "[EXT]=library",
+                     L.graph.n,
+                     L.gsort == GSORT_FANOUT ? "functions called" : "invocations");
+            attroff(A_BOLD);
+            if (L.graph.n == 0)
+                mvprintw(2, 0, "(waiting for calls — whole-process "
+                               "single-stepping is slow)");
+            for (int r = 0; r < rows - 3 && r < (int)L.graph.n; r++) {
+                char row[256];
+                graph_format_row(row, sizeof row, &L.graph.v[r]);
+                mvprintw(2 + r, 0, "%-*.*s", cols, cols, row);
+            }
         } else {
             mvprintw(1, 0, "%.*s", cols, L.asm_header);
             int split = (rows - 3) * 3 / 5;
@@ -724,7 +853,11 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      "[tracer stopped: %s]  %sb: options   q: processes",
                      erc ? e : "target exited or done",
                      is_log ? "space: scroll history   " : "");
-        } else
+        } else if (mode == 3)
+            mvprintw(rows - 1, 0,
+                     "s: sort (invocations/functions-called)   b: options   "
+                     "q/ESC: processes   (live)");
+        else
             mvprintw(rows - 1, 0,
                      "%sb: back to options   q/ESC: processes   (live)",
                      is_log ? "space: pause   " : "");
@@ -741,6 +874,9 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             back = 0;
             break;
         }
+        if (mode == 3 && (ch == 's' || ch == 'S'))
+            L.gsort =
+                L.gsort == GSORT_INVOCATIONS ? GSORT_FANOUT : GSORT_INVOCATIONS;
         if (is_log) {
             int page = log_h > 1 ? log_h - 1 : 1;
             /* scrolling up while live-tailing enters pause at the current tail */
@@ -817,11 +953,12 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
 
     svec_free(&L.asm_dis);
     svec_free(&L.asm_fn);
+    free(L.graph.v);
     pthread_mutex_destroy(&L.mu);
     return back;
 }
 
-/* mode-select screen; returns 0 syscalls, 1 region, 2 stream, -1 back */
+/* mode-select screen; returns 0 syscalls, 1 region, 2 stream, 3 graph, -1 back */
 static int screen_mode(const asmspy_proc_t *p) {
     for (;;) {
         int rows, cols;
@@ -837,7 +974,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(3, 2, "1)  Syscall log        — live syscalls with data (a strace)");
         mvprintw(4, 2, "2)  Assembly & funcs   — live disassembly + call-graph of a function");
         mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
-        mvprintw(rows - 1, 0, "1/2/3: choose   b/ESC: back");
+        mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable)");
+        mvprintw(rows - 1, 0, "1/2/3/4: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -846,6 +984,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 1;
         if (ch == '3')
             return 2;
+        if (ch == '4')
+            return 3;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -1055,15 +1195,15 @@ int asmspy_tui(void) {
                          "asmspy — syscalls of pid %d (%.*s)", picked.pid, 40,
                          picked.cmd);
                 nav = run_live_view(picked.pid, 0, 0, 0, title, NULL);
-            } else if (mode == 2) {
-                /* live stream: symbols are best-effort (raw addrs if absent) */
+            } else if (mode == 2 || mode == 3) {
+                /* stream / call graph: symbols best-effort (raw addrs if absent) */
                 asmspy_symtab_t t;
                 asmspy_symtab_load(picked.pid, &t);
                 char title[128];
-                snprintf(title, sizeof title,
-                         "asmspy — live stream of pid %d (%.*s)", picked.pid, 40,
-                         picked.cmd);
-                nav = run_live_view(picked.pid, 2, 0, 0, title, &t);
+                snprintf(title, sizeof title, "asmspy — %s of pid %d (%.*s)",
+                         mode == 3 ? "call graph" : "live stream", picked.pid,
+                         40, picked.cmd);
+                nav = run_live_view(picked.pid, mode, 0, 0, title, &t);
                 asmspy_symtab_free(&t);
             } else {
                 asmspy_symtab_t t;
@@ -1145,8 +1285,9 @@ static int usage(const char *argv0) {
             "  %s --syms   <pid> [filter] list resolved function symbols\n"
             "  %s --log    <pid> [n]      stream n syscalls with data\n"
             "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
-            "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n",
-            argv0, argv0, argv0, argv0, argv0, argv0);
+            "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
+            "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n",
+            argv0, argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -1198,6 +1339,27 @@ int main(int argc, char **argv) {
         if (argc >= 4 && parse_count(argv[3], &n) != 0)
             return bad_arg("count", argv[3]);
         return cmd_stream(pid, n);
+    }
+    if (strcmp(argv[1], "--graph") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 200; /* calls to record before reporting; negative = until exit */
+        gsort_t sort = GSORT_INVOCATIONS;
+        for (int i = 3; i < argc; i++) { /* [n] and --sort= in any order */
+            if (strncmp(argv[i], "--sort=", 7) == 0) {
+                const char *v = argv[i] + 7;
+                if (strcmp(v, "invocations") == 0)
+                    sort = GSORT_INVOCATIONS;
+                else if (strcmp(v, "fanout") == 0 ||
+                         strcmp(v, "functions-called") == 0)
+                    sort = GSORT_FANOUT;
+                else
+                    return bad_arg("sort (want 'invocations' or 'fanout')", v);
+            } else if (parse_count(argv[i], &n) != 0) {
+                return bad_arg("count", argv[i]);
+            }
+        }
+        return cmd_graph(pid, n, sort);
     }
     return usage(argv[0]);
 }

@@ -393,6 +393,8 @@ typedef struct {
     int at_entry;                  /* fallback toggle: next stop is an ENTRY */
     long ent_nr;                   /* syscall nr captured at entry, -1 if none */
     struct user_regs_struct entry; /* register snapshot at that entry */
+    int pending_call;   /* graph engine: an INDIRECT call awaits its callee entry */
+    uint64_t call_site; /* graph engine: call-site addr of that pending call     */
 } thr_t;
 
 typedef struct {
@@ -425,6 +427,8 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     e->at_entry = 1;
     e->ent_nr = -1;
     memset(&e->entry, 0, sizeof e->entry);
+    e->pending_call = 0;
+    e->call_site = 0;
     return e;
 }
 
@@ -835,5 +839,225 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
     }
 
     detach_threads(&tab);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Whole-process call-graph builder                                    */
+/* ------------------------------------------------------------------ */
+
+/* An accumulated call edge: caller/callee are indices into graph_t.node. */
+typedef struct {
+    size_t caller, callee;
+    unsigned long long count;
+} gedge_t;
+
+typedef struct {
+    asmspy_gnode_t *node;
+    size_t nn, ncap;
+    gedge_t *edge;
+    size_t ne, ecap;
+} graph_t;
+
+/* Basename of the target's own executable (for the internal/external split);
+ * `out` gets "" on any failure (then every node is treated as internal). */
+static void exe_basename(pid_t pid, char *out, size_t cap) {
+    char path[64], link[512];
+    snprintf(path, sizeof path, "/proc/%d/exe", (int)pid);
+    ssize_t n = readlink(path, link, sizeof link - 1);
+    if (n <= 0) {
+        out[0] = '\0';
+        return;
+    }
+    link[n] = '\0';
+    const char *b = strrchr(link, '/');
+    snprintf(out, cap, "%s", b ? b + 1 : link);
+}
+
+/* Find (or create) the node for the function CONTAINING `addr`. Nodes dedup by
+ * the containing function's base, so every call site inside one function folds
+ * into a single caller node (and every entry of a callee into one node).
+ * Returns the node index, or -1 on OOM. */
+static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
+                      const char *exebase, uint64_t addr) {
+    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, addr) : NULL;
+    uint64_t key = s ? s->addr : addr;
+    for (size_t i = 0; i < g->nn; i++)
+        if (g->node[i].addr == key)
+            return (long)i;
+    if (g->nn == g->ncap) {
+        size_t nc = g->ncap ? g->ncap * 2 : 64;
+        asmspy_gnode_t *nv = realloc(g->node, nc * sizeof *nv);
+        if (!nv)
+            return -1;
+        g->node = nv;
+        g->ncap = nc;
+    }
+    asmspy_gnode_t *e = &g->node[g->nn];
+    memset(e, 0, sizeof *e);
+    e->addr = key;
+    if (s) {
+        snprintf(e->name, sizeof e->name, "%s", s->name);
+        snprintf(e->module, sizeof e->module, "%s", s->module);
+        /* external = a shared/system library; internal = the target's own exe */
+        e->external = (exebase && exebase[0] && strcmp(s->module, exebase) != 0);
+    } else {
+        snprintf(e->name, sizeof e->name, "0x%llx", (unsigned long long)key);
+        snprintf(e->module, sizeof e->module, "?");
+        e->external = 0; /* unresolved: can't classify — count as internal */
+    }
+    return (long)g->nn++;
+}
+
+/* Record one caller->callee call. Returns 1 if a call was counted (0 on OOM). */
+static int grecord(graph_t *g, const asmspy_symtab_t *syms, const char *exebase,
+                   uint64_t caller_addr, uint64_t callee_addr) {
+    long ci = gnode_get(g, syms, exebase, caller_addr);
+    long ki = gnode_get(g, syms, exebase, callee_addr);
+    if (ci < 0 || ki < 0)
+        return 0;
+    for (size_t i = 0; i < g->ne; i++) {
+        if (g->edge[i].caller == (size_t)ci && g->edge[i].callee == (size_t)ki) {
+            g->edge[i].count++;
+            g->node[ci].out_calls++;
+            g->node[ki].invocations++;
+            return 1;
+        }
+    }
+    if (g->ne == g->ecap) {
+        size_t nc = g->ecap ? g->ecap * 2 : 128;
+        gedge_t *nv = realloc(g->edge, nc * sizeof *nv);
+        if (!nv)
+            return 0;
+        g->edge = nv;
+        g->ecap = nc;
+    }
+    g->edge[g->ne].caller = (size_t)ci;
+    g->edge[g->ne].callee = (size_t)ki;
+    g->edge[g->ne].count = 1;
+    g->ne++;
+    g->node[ci].out_calls++;
+    g->node[ci].fanout++; /* a callee not seen from this caller before */
+    g->node[ki].invocations++;
+    return 1;
+}
+
+int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
+                        const asmspy_symtab_t *syms, asmspy_graph_sink sink,
+                        void *ctx) {
+    if (!asmtest_ptrace_available())
+        return ASMTEST_PTRACE_EUNAVAIL;
+
+    arm_quit_wake();
+
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        detach_threads(&tab);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    char exebase[64];
+    exe_basename(pid, exebase, sizeof exebase);
+
+    graph_t g = {0};
+    long recorded = 0;   /* calls counted so far */
+    long published = -1; /* recorded value at the last sink() call */
+
+    while ((max < 0 || recorded < max) && !(stop && atomic_load(stop))) {
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
+                continue;
+            }
+            break; /* ECHILD — every tracee is gone */
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        int sig = WSTOPSIG(status);
+        int event = (status >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
+                thr_get(&tab, (pid_t)child);
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+                uint64_t rip = regs.rip;
+                thr_t *ts = thr_get(&tab, tid);
+
+                /* read the bytes of the instruction about to retire */
+                uint8_t code[16];
+                struct iovec liov = {code, sizeof code};
+                struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
+                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+
+                /* consume a pending INDIRECT call: this rip is its callee entry */
+                if (ts && ts->pending_call) {
+                    recorded += grecord(&g, syms, exebase, ts->call_site, rip);
+                    ts->pending_call = 0;
+                }
+
+                if (got >= 1 && asmtest_disas_available() &&
+                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code, (size_t)got,
+                                          0)) {
+                    uint64_t tgt = 0;
+                    if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
+                                                  (size_t)got, rip, 0, &tgt)) {
+                        /* DIRECT call: target known now — record immediately */
+                        recorded += grecord(&g, syms, exebase, rip, tgt);
+                    } else if (ts) {
+                        /* INDIRECT call: resolve the callee at the next step */
+                        ts->pending_call = 1;
+                        ts->call_site = rip;
+                    }
+                }
+
+                /* throttle live snapshots (single-step is slow; 16 calls/pub) */
+                if (sink && recorded - published >= 16) {
+                    sink(ctx, g.node, g.nn);
+                    published = recorded;
+                }
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        if (event == PTRACE_EVENT_STOP &&
+            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU)) {
+            thr_get(&tab, tid);
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        int deliver = 0;
+        if (event == 0 && sig != SIGTRAP)
+            deliver = sig;
+        thr_get(&tab, tid);
+        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
+    }
+
+    detach_threads(&tab);
+    if (sink) /* always hand over a final snapshot */
+        sink(ctx, g.node, g.nn);
+    free(g.node);
+    free(g.edge);
     return 0;
 }
