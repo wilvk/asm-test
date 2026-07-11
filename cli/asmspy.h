@@ -64,7 +64,7 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort);
 typedef struct {
     uint64_t addr; /* runtime start address in the target             */
     uint64_t size; /* symbol size in bytes (0 if unknown)             */
-    char *name;    /* demangled? no — raw symbol name (owned)         */
+    char *name;    /* function name; C++-demangled if mangled (owned) */
     char *module;  /* basename of the backing file (owned)            */
 } asmspy_sym_t;
 

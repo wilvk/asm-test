@@ -42,7 +42,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 |---|---|---|
 | Resolve **JIT/perf-map** (`/tmp/perf-<pid>.map`, jitdump) in stream/graph/tree — managed frames (Node/V8 JS, **.NET**, **Java**) render as `[?]`/`0x..` today; one resolver addition names all three (they emit the same perf-map format). The library already has a perf-map reader asmspy declines to call; must refresh during the trace (a one-shot snapshot is insufficient) | **high** | L |
 | Separate-debug / `.gnu_debuglink` / build-id resolution for stripped distro binaries | med | M |
-| C++ **demangling** via `__cxa_demangle` at the single `sym_push` chokepoint (guard on `_Z`, demangle before appending `@plt`, add `-lstdc++`) — reads through picker/graph/tree/stream at once | med | **S** |
+| ~~C++ **demangling** via `__cxa_demangle` at the single `sym_push` chokepoint (guard on `_Z`, demangle before appending `@plt`, add `-lstdc++`) — reads through picker/graph/tree/stream at once~~ — **landed**: `demangle_dup()` at the `sym_push` chokepoint (peels/re-appends `@plt`), `-lstdc++` on the link line, `cpp_victim.cpp` smoke assertion | med | **S** |
 
 ### Theme B — Cross-engine asymmetries
 
@@ -65,7 +65,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| **No regression test for the crash-safe two-phase detach** — the exact bug the fix closed has zero guard, and every smoke victim is killed right after tracing, so a regression that silently kills the target looks like success. Trace a multi-threaded (ideally JIT-like `int3`) victim, then assert it **survives** detach | med | S |
+| ~~**No regression test for the crash-safe two-phase detach** — the exact bug the fix closed has zero guard, and every smoke victim is killed right after tracing, so a regression that silently kills the target looks like success. Trace a multi-threaded victim, then assert it **survives** detach~~ — **landed** as a happy-path survival tripwire (single-step via `--stream`+`--tree`, then assert alive) in `cli_smoke.sh`. Honest scope: the historical fatal SIGTRAP reproduced *reliably only on a real V8/Node JIT* (per 6aaad45's own notes — simple victims survive even the pre-fix detach), so this guards gross regressions, not that JIT crash (which needs a live JIT, an inherent limit) | med | S |
 | Graph sort comparator (`gnode_cmp`) ordering/tiebreaks unasserted — extract into a testable header + `test_graphsort.c` | med | M |
 | `asmspy_symtab_at` reverse-lookup edge cases; multi-thread `[tid]` tagging for graph/tree; attach-failure + `REGION_NEVER_RAN`; negative-`n` "until exit"; `--tree` depth > 1; post-attach clone-following; job-control group-stop; syscall-decoder breadth; region edge aggregation; a pure TUI view-model (`test_view.c`) | low | S–M each |
 
@@ -100,10 +100,13 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
    detach was built to whole-process single-step V8/Node, yet on that flagship target every
    dominant JIT'd JS frame renders `[?]`/`0x..`; the same fix names **.NET** and **Java**
    managed frames too. The marquee feature is half-blind on its motivating use cases.
-2. **Add the crash-safe two-phase-detach regression test** *(D, med, S)* — highest
-   safety-per-effort item: the riskiest, most recently-fixed path has no automated guard.
-3. **C++ symbol demangling at `sym_push`** *(A, med, S)* — one chokepoint change makes the
-   picker, graph, tree, and stream readable on any C++ target at once.
+   **Now the sole remaining top priority** — #2 and #3 below have landed.
+2. ~~**Add the crash-safe two-phase-detach regression test** *(D, med, S)*~~ — **landed**
+   (a happy-path survival tripwire across `--stream`/`--tree`; see Theme D for the honest
+   scope note on why a simple victim can't deterministically reproduce the V8 crash).
+3. ~~**C++ symbol demangling at `sym_push`** *(A, med, S)*~~ — **landed**: one chokepoint
+   change (`demangle_dup()`) makes the picker, graph, tree, and stream readable on any C++
+   target at once; guarded by the `cpp_victim` smoke assertion.
 
 ## Known issues / open investigations
 

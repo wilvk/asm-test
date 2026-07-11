@@ -350,7 +350,51 @@ static int scan_modules(pid_t pid, module_t **out, char *exe_path,
     return (int)n;
 }
 
-/* Append one STT_FUNC symbol to a growing table. */
+/* Itanium C++ ABI demangler, resolved from libstdc++ at link time (-lstdc++).
+ * Its real prototype lives in the C++-only <cxxabi.h>, so declare it here for the
+ * C build. Returns a malloc'd demangled string (caller frees) or NULL. */
+extern char *__cxa_demangle(const char *mangled, char *out, size_t *len,
+                            int *status);
+
+/* Demangle a C++ (Itanium ABI) symbol name. Returns a malloc'd demangled string,
+ * or NULL when `name` is not a mangled name (or demangling fails) — the caller
+ * then keeps the raw name. A trailing "@plt" (appended for PLT stubs, see below)
+ * is peeled off, the base demangled, and "@plt" re-appended, so an imported C++
+ * call reads "std::foo(int)@plt" rather than "_ZSt3fooi@plt". */
+static char *demangle_dup(const char *name) {
+    size_t len = strlen(name);
+    size_t base = len;
+    int is_plt = (len > 4 && memcmp(name + len - 4, "@plt", 4) == 0);
+    if (is_plt)
+        base = len - 4;
+    /* Itanium mangled names start with "_Z"; skip the call (and a malloc) for the
+     * overwhelmingly common plain-C-symbol case. */
+    if (base < 2 || name[0] != '_' || name[1] != 'Z')
+        return NULL;
+    char buf[512];
+    if (base >= sizeof buf)
+        return NULL; /* absurdly long mangling — keep it raw */
+    memcpy(buf, name, base);
+    buf[base] = '\0';
+    int status = 0;
+    char *dem = __cxa_demangle(buf, NULL, NULL, &status);
+    if (status != 0 || !dem)
+        return NULL;
+    if (!is_plt)
+        return dem;
+    /* re-append the "@plt" tag we peeled off before demangling */
+    size_t dl = strlen(dem);
+    char *out = malloc(dl + 5); /* "@plt" + NUL */
+    if (out) {
+        memcpy(out, dem, dl);
+        memcpy(out + dl, "@plt", 5);
+    }
+    free(dem);
+    return out;
+}
+
+/* Append one STT_FUNC symbol to a growing table. The stored name is C++-demangled
+ * when the raw symbol is mangled (guarded on "_Z"); otherwise it is kept verbatim. */
 static int sym_push(asmspy_symtab_t *t, size_t *cap, uint64_t addr,
                     uint64_t size, const char *name, const char *module) {
     if (!name[0])
@@ -366,7 +410,8 @@ static int sym_push(asmspy_symtab_t *t, size_t *cap, uint64_t addr,
     asmspy_sym_t *s = &t->v[t->n];
     s->addr = addr;
     s->size = size;
-    s->name = strdup(name);
+    char *dem = demangle_dup(name); /* C++ names; NULL for plain-C / on failure */
+    s->name = dem ? dem : strdup(name);
     s->module = strdup(module);
     if (!s->name || !s->module) {
         free(s->name);

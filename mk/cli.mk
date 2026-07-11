@@ -38,9 +38,11 @@ $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 
 ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o
 
+# -lstdc++ supplies __cxa_demangle (Itanium C++ ABI demangler) for the ELF symbol
+# resolver (cli/asmspy_proc.c); asmspy is otherwise pure C.
 $(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS)
 	$(CC) $(CFLAGS) -pthread $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
-	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -o $@
+	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
 
 .PHONY: cli
 ifeq ($(strip $(CLI_MISSING)),)
@@ -73,6 +75,12 @@ $(BUILD)/spy_victim: $(BUILD)/spy_victim.o
 $(BUILD)/threads_victim: $(BUILD)/threads_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# cpp_victim is C++ (its hot function demo::hot_loop(int) keeps a MANGLED ELF
+# symbol) so the smoke can prove asmspy demangles it. Built with $(CXX)/$(CXXFLAGS)
+# (from mk/bindings.mk) — a one-shot compile+link, no shared cli/ pattern rule.
+$(BUILD)/cpp_victim: cli/cpp_victim.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
 # test_logview — headless unit test for the TUI scrollback viewport math
 # (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
@@ -80,7 +88,8 @@ $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
-           $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/test_logview
+           $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
+           $(BUILD)/test_logview
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

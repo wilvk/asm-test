@@ -55,7 +55,9 @@ AVPID=$!
 SVPID=""
 WVPID=""
 TVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} 2>/dev/null || true' EXIT INT TERM
+DVPID=""
+CVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -215,5 +217,65 @@ printf '%s\n' "$out2" | grep -qE '^node [0-9]+.*inv=[0-9]' \
 # a bad --count value is rejected up front (rc=2)
 expect_badarg "$ASM" --procs "$TVPID" --count=bogus
 kill "$TVPID" 2>/dev/null || true
+
+# C++ DEMANGLING: cpp_victim's hot function demo::hot_loop(int) keeps a MANGLED
+# ELF symbol (_ZN4demo8hot_loopEi). asmspy's resolver must demangle it at the
+# sym_push chokepoint, so --syms shows the human-readable signature and the raw
+# mangled form never leaks through.
+"$BUILD/cpp_victim" 2>/dev/null &
+CVPID=$!
+sleep 1
+echo "--- asmspy --syms $CVPID hot_loop (C++ demangling) ---"
+out=$("$ASM" --syms "$CVPID" hot_loop 2>/dev/null) || fail "--syms on cpp_victim"
+printf '%s\n' "$out"
+printf '%s\n' "$out" | grep -q 'demo::hot_loop(int)' \
+    || fail "C++ symbol not demangled (expected 'demo::hot_loop(int)')"
+printf '%s\n' "$out" | grep -q '_ZN4demo' \
+    && fail "C++ symbol left mangled (_ZN4demo... leaked through the resolver)"
+kill "$CVPID" 2>/dev/null || true
+
+# TWO-PHASE DETACH: assert a traced target SURVIVES detach.
+#
+# A whole-process single-step run leaves threads SEIZEd and Trap-Flag-armed;
+# detach_threads() must interrupt + clear TF + release them all at once, or a
+# thread can resume TF-armed / mid-step-inconsistent and die by a fatal SIGTRAP
+# that tears down the whole target. Every OTHER victim in this smoke is killed
+# right after tracing, so a detach that silently kills the target would look like
+# SUCCESS — this block is the one place that asserts the target is STILL ALIVE
+# after a single-step trace + detach, across two engines (stream + tree).
+#
+# Scope (honest): the historical fatal SIGTRAP (commit 6aaad45) reproduced
+# RELIABLY only on a real JIT — V8/Node's own cross-thread self-check int3s —
+# which can't be scripted safely here; a plain compute victim exits cleanly even
+# against the pre-fix one-at-a-time detach. So this is a happy-path survival
+# TRIPWIRE for gross detach regressions, NOT a deterministic reproducer of that
+# JIT crash. The victim installs no SIGTRAP handler, so a fatal detach-SIGTRAP
+# would actually kill it (a handler would mask it). Timeout-guarded, since a
+# detach deadlock would otherwise hang the smoke.
+echo "--- asmspy two-phase detach: target survives single-step + detach ---"
+"$BUILD/threads_victim" 2>/dev/null &
+DVPID=$!
+sleep 1
+kill -0 "$DVPID" 2>/dev/null || fail "detach-survival: victim did not start"
+# --stream (instruction-stepped) and --tree (call-stepped) exercise the shared
+# two-phase detach_threads() from the two different whole-process single-step
+# engines; the small --tree budget keeps it quick on a compute-heavy victim.
+for view in --stream --tree; do
+    case $view in
+        --stream) ct=200 ;; # instruction budget — reached instantly
+        --tree)   ct=5 ;;   # call budget — small, since calls are sparse here
+    esac
+    set +e
+    timeout 40 "$ASM" "$view" "$DVPID" "$ct" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "detach-survival: $view hung on the multi-threaded victim"
+    # THE ASSERTION: the target is still alive after asmspy single-stepped every
+    # thread and detached. A regression in detach_threads() kills it here.
+    kill -0 "$DVPID" 2>/dev/null \
+        || fail "detach-survival: victim KILLED by $view detach (two-phase detach regressed)"
+    echo "  survived $view detach"
+done
+kill "$DVPID" 2>/dev/null || true
 
 echo "cli-smoke: PASS"
