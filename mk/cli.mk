@@ -87,6 +87,12 @@ $(BUILD)/cpp_victim: cli/cpp_victim.cpp | $(BUILD)
 $(BUILD)/jit_victim: $(BUILD)/jit_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# int3_victim executes its own int3 breakpoints under a SIGTRAP handler, so the
+# smoke can prove asmspy re-injects an app-delivered SIGTRAP (si_code split)
+# instead of swallowing it — and survives (CONT-, not SINGLESTEP-, re-inject).
+$(BUILD)/int3_victim: $(BUILD)/int3_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # test_logview — headless unit test for the TUI scrollback viewport math
 # (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
@@ -95,7 +101,7 @@ $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
-           $(BUILD)/jit_victim $(BUILD)/test_logview
+           $(BUILD)/jit_victim $(BUILD)/int3_victim $(BUILD)/test_logview
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

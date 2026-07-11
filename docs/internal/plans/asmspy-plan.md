@@ -56,7 +56,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| App-delivered `SIGTRAP` is swallowed **and** mis-decoded as a single-step — distinguish via `PTRACE_GETSIGINFO` `si_code` (`TRAP_TRACE` = ours; `TRAP_BRKPT`/`SI_KERNEL` = a real `int3`). See **Known issues** — related to the managed-runtime crash | med | M |
+| ~~App-delivered `SIGTRAP` is swallowed **and** mis-decoded as a single-step — distinguish via `PTRACE_GETSIGINFO` `si_code`~~ — **landed** (`sigtrap_is_app` + `deliver_app_sigtrap` in all four single-step engines; `int3_victim` smoke). Empirically corrected the plan's own hint: on x86-64 `TRAP_BRKPT` is **ours** (a step completing across a syscall), a real `int3` is `SI_KERNEL`, so the safe whitelist delivers only `SI_KERNEL`/`TRAP_HWBKPT`. Re-inject via `PTRACE_CONT`, never `SINGLESTEP` (re-arming TF fires a fatal `#DB` in the masked handler). Two follow-ups (both from an adversarial review): a batch `--count` run can't reach its budget on an int3-looping target (documented in `--help`); the region + syscall engines still swallow app SIGTRAPs (out of scope, lower impact) | med | M |
 | Indirect-call attribution slips at signal boundaries — read the CALL target from regs/mem instead of inferring from where the next step lands | low | M |
 | `--tree` depth is a best-effort shadow counter that tail-calls / `longjmp` / signals drift — lift to a real per-thread return-address stack (also enables nesting-aware aggregation) | low | M |
 | `thr_get()` OOM ignored at resume sites — an untracked clone child can escape the two-phase detach (the seize path detaches on OOM; the resume paths don't) | low | S |
@@ -118,9 +118,13 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
   `--graph`/`--stream`/`--tree`/`--procs --count=calls` every time. But a real V8 host was
   reported to still die with `SIGTRAP` — **not reproduced** with a spawned Node; more crash
   detail pending. Likely the inherent managed-runtime hazard below (V8 `IMMEDIATE_CRASH`/int3
-  under perturbation) rather than a remaining asmspy bug; the `si_code` split (Theme C) is the
-  next diagnostic lever. A detect-and-warn guard was scoped but deliberately **not** built,
-  pending that detail.
+  under perturbation) rather than a remaining asmspy bug. The `si_code` split (Theme C) — the
+  named next diagnostic lever — has **landed** and sharpens this: V8's `IMMEDIATE_CRASH` int3
+  reports `si_code == SI_KERNEL`, so asmspy now *faithfully delivers* it (via `PTRACE_CONT`)
+  instead of swallowing it. A `SIGTRAP` death on a real V8 is therefore now confirmable as V8's
+  *own* int3 delivered as it would be untraced — not an asmspy-injected signal. The split cannot
+  separate a genuine V8 self-check from a step-perturbation-induced one (identical `SI_KERNEL`
+  int3); that ambiguity is inherent (below). A detect-and-warn guard remains deliberately unbuilt.
 
 ## Managed runtimes (Node/V8, .NET, Java)
 

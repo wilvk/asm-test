@@ -58,7 +58,8 @@ TVPID=""
 DVPID=""
 CVPID=""
 JVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} 2>/dev/null || true' EXIT INT TERM
+IPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -304,5 +305,44 @@ for view in --stream --tree; do
     echo "  survived $view detach"
 done
 kill "$DVPID" 2>/dev/null || true
+
+# APP-DELIVERED SIGTRAP (si_code split): int3_victim executes its OWN int3
+# software breakpoints under a SIGTRAP handler. A single-step engine must tell an
+# app-delivered SIGTRAP (an executed int3, si_code SI_KERNEL) from its own step
+# trap (TRAP_TRACE / TRAP_BRKPT) and RE-INJECT it via PTRACE_CONT. Two ways to get
+# it wrong, both caught here: SWALLOWING the trap (the app's handler never runs, so
+# it prints SWALLOWED), or re-injecting via SINGLESTEP (a fatal #DB in the masked
+# handler KILLS the victim). Trace under --stream and --procs --count=calls (the
+# two engine shapes) and assert the victim SURVIVES and never prints SWALLOWED.
+#
+# NB: CONT-delivery ends fine-grained stepping of that thread until its next stop,
+# so on a looping-int3 victim asmspy won't reach its step budget — the runs are
+# time-bounded and their exit codes deliberately ignored; the INVARIANTS (alive +
+# no SWALLOWED) are the assertions.
+echo "--- asmspy app-int3 re-injection (si_code split) ---"
+SWLOG="$BUILD/int3_swallow.log"
+: > "$SWLOG"
+"$BUILD/int3_victim" >"$SWLOG" 2>/dev/null &
+IPID=$!
+sleep 1
+kill -0 "$IPID" 2>/dev/null || fail "int3_victim did not start"
+for view in "--stream $IPID 100000" "--procs $IPID 100000 --count=calls"; do
+    # shellcheck disable=SC2086  # deliberate word-split of "<view> <pid> <count> ..."
+    timeout 4 "$ASM" $view >/dev/null 2>&1 || true
+    kill -0 "$IPID" 2>/dev/null \
+        || fail "int3_victim KILLED tracing '$view' (SINGLESTEP re-inject / fatal-SIGTRAP regression)"
+    echo "  survived '$view'"
+done
+# A genuine swallow regression drops EVERY int3 (~140 SWALLOWED across the two
+# runs, measured). A rare tracer-kill detach-race — timeout's SIGTERM landing in
+# the GETSIGINFO->CONT window, so the kernel's auto-detach drops one in-flight
+# SIGTRAP — can contribute at most ~1 per engine. Assert a THRESHOLD so the check
+# keeps full teeth against the regression without flaking on that race.
+nsw=$(grep -c SWALLOWED "$SWLOG" 2>/dev/null || true)
+[ "${nsw:-0}" -lt 10 ] \
+    || fail "app int3 repeatedly SWALLOWED ($nsw) — si_code split regressed (trap not re-injected)"
+echo "  app int3 delivered (SWALLOWED=${nsw:-0}; <10 tolerates the tracer-kill detach-race)"
+kill "$IPID" 2>/dev/null || true
+rm -f "$SWLOG"
 
 echo "cli-smoke: PASS"

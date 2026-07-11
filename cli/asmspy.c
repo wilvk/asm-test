@@ -1902,7 +1902,13 @@ static int usage(const char *argv0) {
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
             "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n"
             "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n"
-            "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n",
+            "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n"
+            "\n"
+            "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
+            "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
+            "faithfully, which suspends fine-grained stepping of that thread until\n"
+            "its next stop — so a target that uses software breakpoints (a JIT or\n"
+            "debugger) may never reach a fixed n in batch mode; interrupt with Ctrl-C.\n",
             argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }

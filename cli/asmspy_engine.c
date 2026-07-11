@@ -550,6 +550,40 @@ static void detach_threads(thr_tab_t *tab) {
     tab->n = tab->cap = 0;
 }
 
+/* A SIGTRAP the tracee delivered to ITSELF — it executed its own int3 (a JIT or
+ * debugger software breakpoint) or hit its own hardware breakpoint — as opposed
+ * to the single-step trap WE induced. Distinguished by the stop's si_code
+ * (PTRACE_GETSIGINFO). Because we single-step, our own traps report si_code
+ * TRAP_TRACE (an ordinary step) or, on x86, TRAP_BRKPT (a step COMPLETING ACROSS
+ * a syscall — MEASURED on this host: rax holds the return value; it is NOT an app
+ * breakpoint). A genuinely executed int3 reports SI_KERNEL on x86 (the kernel's
+ * force_sig path, NOT TRAP_BRKPT), and an app hardware breakpoint reports
+ * TRAP_HWBKPT. So we deliver ONLY on that positive, unambiguous evidence and
+ * swallow everything else — TRAP_TRACE, TRAP_BRKPT, and SI_USER (which also
+ * covers the execve trap), SI_TKILL, SI_QUEUE, GETSIGINFO failure. The asymmetry
+ * is deliberate: masking a rare externally-injected SIGTRAP is recoverable, but
+ * injecting a spurious SIGTRAP into a target with no handler KILLS it (the
+ * fatal-SIGTRAP class the crash-safe two-phase detach fought). Returns 1 to
+ * deliver, 0 to swallow (treat as our step). */
+static int sigtrap_is_app(pid_t tid) {
+    siginfo_t si;
+    if (ptrace(PTRACE_GETSIGINFO, tid, NULL, &si) != 0)
+        return 0; /* can't tell — assume ours; mis-delivery is the fatal direction */
+    return si.si_code == SI_KERNEL || si.si_code == TRAP_HWBKPT;
+}
+
+/* Re-inject an app-delivered SIGTRAP so the tracee handles its own breakpoint.
+ * MUST use PTRACE_CONT, never PTRACE_SINGLESTEP+signal: re-arming the Trap Flag
+ * fires a #DB on the first instruction INSIDE the app's SIGTRAP handler, where
+ * SIGTRAP is masked (default sa_mask), which the kernel forces to SIG_DFL and
+ * KILLS the whole target (MEASURED, deterministic — the same fatal-SIGTRAP class
+ * as a step-armed detach). CONT delivers the signal without re-arming TF; the
+ * thread then runs free until its next ptrace-stop, where the engine resumes
+ * single-stepping it. */
+static void deliver_app_sigtrap(pid_t tid) {
+    ptrace(PTRACE_CONT, tid, NULL, (void *)(long)SIGTRAP);
+}
+
 int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx) {
     arm_quit_wake();
@@ -811,7 +845,11 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+                deliver_app_sigtrap(tid);
+                continue;
+            }
             struct user_regs_struct regs;
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
@@ -1049,7 +1087,11 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+                deliver_app_sigtrap(tid);
+                continue;
+            }
             struct user_regs_struct regs;
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
@@ -1200,7 +1242,11 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+                deliver_app_sigtrap(tid);
+                continue;
+            }
             struct user_regs_struct regs;
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
@@ -1468,6 +1514,11 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         }
 
         if (mode == ASMSPY_COUNT_CALLS && sig == SIGTRAP && event == 0) {
+            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it
+                                        * (CONT, not the single-stepping RESUME) */
+                deliver_app_sigtrap(tid);
+                continue;
+            }
             struct user_regs_struct regs;
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 thr_t *ts = thr_get(&tab, tid);
