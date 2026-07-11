@@ -92,15 +92,6 @@ ALL asmtest_ptrace_trace_attached_window_stop # ptrace-stop stepper used interna
 # the human-readable DR skip string yet — same posture as asmtest_dr_under_dynamorio above.
 ALL asmtest_dr_skip_reason
 
-# Thread-scope assert accessor (§0.2): the OS tid that armed the active capture. Python,
-# C++, and .NET surface it to assert "single region, single thread" in their own idiom;
-# the other seven bindings rely on the C asmtest_hwtrace_end() cross-thread `truncated`
-# backstop instead, so they have no caller for it. (try_begin/render — the shared FFI
-# symbols the doc lists — are wrapped everywhere; arm_tid is the opt-in extra.)
-go asmtest_hwtrace_arm_tid
-java asmtest_hwtrace_arm_tid
-lua asmtest_hwtrace_arm_tid
-node asmtest_hwtrace_arm_tid
-ruby asmtest_hwtrace_arm_tid
-rust asmtest_hwtrace_arm_tid
-zig asmtest_hwtrace_arm_tid
+# asmtest_hwtrace_arm_tid (§0.2 thread-scope assert accessor — the OS tid that armed the
+# active capture) is now wrapped in all ten bindings, so its per-binding exemptions were
+# removed 2026-07-11.

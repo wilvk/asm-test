@@ -62,6 +62,7 @@ int  asmtest_hwtrace_call_scoped_ex(void* base, size_t len, void* trace, void* f
                                     const long* args, int nargs, long* result_out,
                                     asmtest_hwtrace_scope_t* out);
 int  asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char* buf, size_t buflen);
+int  asmtest_hwtrace_arm_tid(void);
 /* asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. */
 int  asmtest_ptrace_available(void);
 void asmtest_ptrace_skip_reason(char* buf, size_t buflen);
@@ -376,6 +377,12 @@ end
 
 function HwTrace.shutdown()
   if L then L.asmtest_hwtrace_shutdown() end
+end
+
+-- The OS thread id that armed the active hwtrace scope, or -1 if none is armed.
+function HwTrace.arm_tid()
+  if not L then return -1 end
+  return tonumber(L.asmtest_hwtrace_arm_tid())
 end
 
 -- ---- per-trace ----

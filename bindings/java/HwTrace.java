@@ -237,7 +237,7 @@ public final class HwTrace {
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO, TRACE_CALL_AUTO,
-        HW_INIT, HW_SHUTDOWN,
+        HW_INIT, HW_SHUTDOWN, HW_ARM_TID,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
         CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
         WINDOW_CALL, STEALTH_WINDOWED,
@@ -378,7 +378,7 @@ public final class HwTrace {
     static {
         MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
             traceResolve = null, traceAuto = null, traceCallAuto = null,
-            hwInit = null, hwShutdown = null,
+            hwInit = null, hwShutdown = null, hwArmTid = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
             beginWindow = null, endWindow = null, renderWindow = null, stealthTrace = null,
@@ -458,6 +458,8 @@ public final class HwTrace {
                     JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             hwInit = h(lib, "asmtest_hwtrace_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             hwShutdown = h(lib, "asmtest_hwtrace_shutdown", FunctionDescriptor.ofVoid());
+            // asmtest_hwtrace_arm_tid(void) — the OS tid that armed the active scope (-1 = none).
+            hwArmTid = h(lib, "asmtest_hwtrace_arm_tid", FunctionDescriptor.of(JAVA_INT));
             registerRegion = h(lib, "asmtest_hwtrace_register_region",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS));
             hwBegin = h(lib, "asmtest_hwtrace_begin", FunctionDescriptor.ofVoid(ADDRESS));
@@ -700,7 +702,7 @@ public final class HwTrace {
         HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
         HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto;
         TRACE_CALL_AUTO = traceCallAuto; HW_INIT = hwInit;
-        HW_SHUTDOWN = hwShutdown; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
+        HW_SHUTDOWN = hwShutdown; HW_ARM_TID = hwArmTid; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
         BEGIN_WINDOW = beginWindow; END_WINDOW = endWindow; RENDER_WINDOW = renderWindow;
@@ -893,6 +895,15 @@ public final class HwTrace {
     public static void shutdown() {
         if (HW_SHUTDOWN == null) return;
         try { HW_SHUTDOWN.invoke(); } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** The OS thread id that armed the current hardware-trace scope, or -1 if none
+     *  is armed (asmtest_hwtrace_arm_tid) — a "single region, single thread" assert
+     *  helper. Never throws: a load failure returns -1. */
+    public static int armTid() {
+        if (HW_ARM_TID == null) return -1;
+        try { return (int) HW_ARM_TID.invoke(); }
+        catch (Throwable t) { return -1; }
     }
 
     /** Allocate a trace recording up to {@code blocks} basic blocks and

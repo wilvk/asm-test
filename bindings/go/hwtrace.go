@@ -85,6 +85,7 @@ typedef void (*hw_marker_fn)(const char *);
 typedef int  (*hw_try_begin_fn)(const char *);
 typedef int  (*hw_render_fn)(const char *, char *, size_t);
 typedef void (*hw_shutdown_fn)(void);
+typedef int  (*hw_arm_tid_fn)(void);
 typedef int  (*hw_exec_alloc_fn)(const void *, size_t, void **, size_t *);
 typedef void (*hw_exec_free_fn)(void *, size_t);
 typedef void *(*hw_trace_new_fn)(size_t, size_t);
@@ -193,6 +194,7 @@ static hw_marker_fn           p_hw_end;
 static hw_try_begin_fn        p_hw_try_begin;
 static hw_render_fn           p_hw_render;
 static hw_shutdown_fn         p_hw_shutdown;
+static hw_arm_tid_fn          p_hw_arm_tid;
 static hw_exec_alloc_fn       p_hw_exec_alloc;
 static hw_exec_free_fn        p_hw_exec_free;
 static hw_trace_new_fn        p_hw_trace_new;
@@ -297,6 +299,7 @@ static void asmtest_hw_resolve(void) {
     p_hw_try_begin       = (hw_try_begin_fn)dlsym(h, "asmtest_hwtrace_try_begin");
     p_hw_render          = (hw_render_fn)dlsym(h, "asmtest_hwtrace_render");
     p_hw_shutdown        = (hw_shutdown_fn)dlsym(h, "asmtest_hwtrace_shutdown");
+    p_hw_arm_tid         = (hw_arm_tid_fn)dlsym(h, "asmtest_hwtrace_arm_tid");
     p_hw_exec_alloc      = (hw_exec_alloc_fn)dlsym(h, "asmtest_hwtrace_exec_alloc");
     p_hw_exec_free       = (hw_exec_free_fn)dlsym(h, "asmtest_hwtrace_exec_free");
     p_hw_trace_new       = (hw_trace_new_fn)dlsym(h, "asmtest_trace_new");
@@ -457,6 +460,7 @@ static int  asmtest_hw_go_render(const char *name, char *buf, size_t buflen) {
     return p_hw_render ? p_hw_render(name, buf, buflen) : -5;
 }
 static void asmtest_hw_go_shutdown(void) { if (p_hw_shutdown) p_hw_shutdown(); }
+static int  asmtest_hw_go_arm_tid(void) { return p_hw_arm_tid ? p_hw_arm_tid() : -1; }
 static int  asmtest_hw_go_exec_alloc(const void *bytes, size_t len, void **base_out, size_t *len_out) {
     return p_hw_exec_alloc ? p_hw_exec_alloc(bytes, len, base_out, len_out) : -1;
 }
@@ -808,6 +812,10 @@ func HwTraceInit(backend int) error {
 // HwTraceShutdown tears the tier down and returns it to the uninitialized state.
 // Safe to call after a failed init.
 func HwTraceShutdown() { C.asmtest_hw_go_shutdown() }
+
+// HwTraceArmTid is the OS thread id (SYS_gettid) that armed the currently-active
+// hwtrace capture, or -1 when none is active.
+func HwTraceArmTid() int { return int(C.asmtest_hw_go_arm_tid()) }
 
 // HwNativeCode is host-native machine code in real executable (W^X) memory,
 // materialized at its runtime address so PC-relative and branch targets resolve.

@@ -228,6 +228,7 @@ type TraceCallAutoFn = unsafe extern "C" fn(
 ) -> c_int;
 type InitFn = unsafe extern "C" fn(*const Options) -> c_int;
 type ShutdownFn = unsafe extern "C" fn();
+type ArmTidFn = unsafe extern "C" fn() -> c_int;
 type RegisterRegionFn =
     unsafe extern "C" fn(*const c_char, *mut c_void, usize, *mut c_void) -> c_int;
 type MarkerFn = unsafe extern "C" fn(*const c_char);
@@ -415,6 +416,7 @@ struct HwFns {
     trace_call_auto: Option<TraceCallAutoFn>,
     init: Option<InitFn>,
     shutdown: Option<ShutdownFn>,
+    arm_tid: Option<ArmTidFn>,
     register_region: Option<RegisterRegionFn>,
     begin: Option<MarkerFn>,
     end: Option<MarkerFn>,
@@ -547,7 +549,7 @@ fn hw_fns() -> &'static HwFns {
             return HwFns {
                 available: None, skip_reason: None, resolve: None, auto: None,
                 trace_resolve: None, trace_auto: None, trace_call_auto: None,
-                init: None, shutdown: None,
+                init: None, shutdown: None, arm_tid: None,
                 register_region: None, begin: None, end: None,
                 try_begin: None, render: None,
                 call_scoped_ex: None, render_scope: None,
@@ -610,6 +612,7 @@ fn hw_fns() -> &'static HwFns {
             trace_call_auto: load!("asmtest_trace_call_auto", TraceCallAutoFn),
             init: load!("asmtest_hwtrace_init", InitFn),
             shutdown: load!("asmtest_hwtrace_shutdown", ShutdownFn),
+            arm_tid: load!("asmtest_hwtrace_arm_tid", ArmTidFn),
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
             begin: load!("asmtest_hwtrace_begin", MarkerFn),
             end: load!("asmtest_hwtrace_end", MarkerFn),
@@ -1112,6 +1115,15 @@ impl HwTrace {
     pub fn shutdown() {
         if let Some(f) = hw_fns().shutdown {
             unsafe { f() };
+        }
+    }
+
+    /// The OS thread id (SYS_gettid) that armed the currently-active capture, or
+    /// `-1` when none is active. Returns `-1` when the library is absent.
+    pub fn arm_tid() -> i32 {
+        match hw_fns().arm_tid {
+            Some(f) => unsafe { f() },
+            None => -1,
         }
     }
 

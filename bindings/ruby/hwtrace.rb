@@ -210,6 +210,8 @@ module Asmtest
         call_scoped_ex: func(LIB, "asmtest_hwtrace_call_scoped_ex",
                              [VOIDP, SZ, VOIDP, VOIDP, VOIDP, INT, VOIDP, VOIDP], INT),
         render_scope:   func(LIB, "asmtest_hwtrace_render_scope", [LL, VOIDP, SZ], INT),
+        # asmtest_hwtrace_arm_tid() — OS tid that armed the active scope, -1 if none.
+        arm_tid:        func(LIB, "asmtest_hwtrace_arm_tid", [], INT),
         # ---- host-native executable code ----
         exec_alloc:   func(LIB, "asmtest_hwtrace_exec_alloc", [VOIDP, SZ, VOIDP, VOIDP], INT),
         exec_free:    func(LIB, "asmtest_hwtrace_exec_free", [VOIDP, SZ], VOID),
@@ -483,6 +485,11 @@ module Asmtest
       def self.shutdown
         Asmtest::HwTrace::FN[:shutdown].call
         @scope_armed = false
+      end
+
+      # The OS thread id that armed the active hwtrace scope, or -1 if none is armed.
+      def self.arm_tid
+        Asmtest::HwTrace::FN[:arm_tid].call
       end
 
       # Lazy first-use arm for call_scoped: bring the tier up if the caller has not already

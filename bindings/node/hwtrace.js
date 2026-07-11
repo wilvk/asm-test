@@ -254,6 +254,8 @@ let _loadError = null;
     // 8-byte scope handle are _Out_. render_scope takes that scope handle BY VALUE.
     callScopedEx: lib.func('int asmtest_hwtrace_call_scoped_ex(void*, size_t, void*, void*, const long*, int, _Out_ long*, _Out_ asmtest_hwtrace_scope_t*)'),
     renderScope: lib.func('int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t, _Out_ char*, size_t)'),
+    // asmtest_hwtrace_arm_tid() — OS tid that armed the active scope, -1 if none.
+    armTid: lib.func('int asmtest_hwtrace_arm_tid()'),
     // §Z0/§Z1 region-free whole-window scope (the empty-ctor `using (new AsmTrace())`).
     // begin_window arms with NO registered region; insns[] then hold ABSOLUTE addresses.
     // end_window/render_window take the 8-byte scope handle BY VALUE (render_scope-style).
@@ -575,6 +577,9 @@ class HwTrace {
   }
 
   static shutdown() { _fn.shutdown(); }
+
+  // OS thread id that armed the active hwtrace scope, or -1 if none is armed.
+  static armTid() { return _fn.armTid(); }
 
   /** Trace ONE native call the managed-safe way: arm the single-step window, call
    *  `code(...args)` through the SysV integer ABI, and disarm — all in native code

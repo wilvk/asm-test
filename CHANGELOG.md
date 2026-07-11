@@ -38,6 +38,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   subcommands against the example victims and is gated in CI (`cli` job). Guide:
   `docs/guides/tracing/asmspy.md`.
 
+- **`asmtest_hwtrace_arm_tid` wrapped in the remaining seven bindings** (go, java, lua, node,
+  ruby, rust, zig) — the §0.2 thread-scope assert accessor (the OS thread id that armed the
+  active hardware-trace capture, `-1` if none) was python/cpp/dotnet-only; it is now surfaced
+  in all ten bindings with an idiomatic accessor (`HwTrace.armTid()` / `arm_tid` /
+  `HwTraceArmTid()` per language), closing its seven per-binding parity exemptions. Each
+  wrapper was built and its hwtrace test suite run green in the per-language docker lanes.
+
 - **Whole-window attribution, version-aware render, and async-hop merge in the Node and Java
   bindings** — dotnet-parity Phase 2, the remaining CI-runnable clusters. Wraps six .NET-lead
   C symbols across both bindings:

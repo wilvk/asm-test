@@ -233,6 +233,7 @@ const FnCallScopedEx = *const fn (?*anyopaque, usize, ?*anyopaque, ?*anyopaque, 
 const FnTraceCallAuto = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, c_uint, ?*c_long, ?*anyopaque, *Choice) callconv(.C) c_int;
 const FnRenderScope = *const fn (c.asmtest_hwtrace_scope_t, ?[*]u8, usize) callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
+const FnArmTid = *const fn () callconv(.C) c_int;
 const FnExecAlloc = *const fn (?*const anyopaque, usize, *?*anyopaque, *usize) callconv(.C) c_int;
 const FnExecFree = *const fn (?*anyopaque, usize) callconv(.C) void;
 const FnTraceNew = *const fn (usize, usize) callconv(.C) ?*anyopaque;
@@ -332,6 +333,7 @@ const Api = struct {
     trace_call_auto: ?FnTraceCallAuto,
     render_scope: ?FnRenderScope,
     shutdown: FnShutdown,
+    arm_tid: FnArmTid,
     exec_alloc: FnExecAlloc,
     exec_free: FnExecFree,
     trace_new: FnTraceNew,
@@ -471,6 +473,7 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .trace_call_auto = lib.lookup(FnTraceCallAuto, "asmtest_trace_call_auto"),
         .render_scope = lib.lookup(FnRenderScope, "asmtest_hwtrace_render_scope"),
         .shutdown = lib.lookup(FnShutdown, "asmtest_hwtrace_shutdown") orelse return null,
+        .arm_tid = lib.lookup(FnArmTid, "asmtest_hwtrace_arm_tid") orelse return null,
         .exec_alloc = lib.lookup(FnExecAlloc, "asmtest_hwtrace_exec_alloc") orelse return null,
         .exec_free = lib.lookup(FnExecFree, "asmtest_hwtrace_exec_free") orelse return null,
         .trace_new = lib.lookup(FnTraceNew, "asmtest_trace_new") orelse return null,
@@ -691,6 +694,13 @@ pub fn initDefault() Error!void {
 pub fn shutdown() void {
     const api = load() orelse return;
     api.shutdown();
+}
+
+/// The OS thread id (SYS_gettid) that armed the currently-active capture, or `-1`
+/// when none is active. Returns `-1` when the library can't load.
+pub fn armTid() c_int {
+    const api = load() orelse return -1;
+    return api.arm_tid();
 }
 
 /// Host-native machine code in real executable (W^X) memory. Unlike the
