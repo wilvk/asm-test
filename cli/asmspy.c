@@ -13,6 +13,7 @@
  *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph
  *   asmspy --tree   <pid> [n]         whole-process live call tree (indented by depth)
+ *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
  * A negative n streams until the target exits or you interrupt.
  */
@@ -260,6 +261,219 @@ static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
 }
 
 /* ================================================================== */
+/* Shared process/thread topology view (used by headless + TUI)        */
+/* ================================================================== */
+
+/* A retained copy of a topology snapshot (the engine's array is transient). */
+typedef struct {
+    asmspy_task_t *v;
+    size_t n, cap;
+} topo_snap;
+
+static void topo_snap_copy(topo_snap *s, const asmspy_task_t *tasks, size_t n) {
+    if (n > s->cap) {
+        asmspy_task_t *nv = realloc(s->v, n * sizeof *nv);
+        if (!nv)
+            return;
+        s->v = nv;
+        s->cap = n;
+    }
+    if (n)
+        memcpy(s->v, tasks, n * sizeof *tasks);
+    s->n = n;
+}
+
+/* One rendered topology row (a process header or a thread), with the ids it maps
+ * to so the TUI can select it and drill in. */
+typedef struct {
+    char text[176];
+    pid_t tid, tgid;
+    int is_process;
+    unsigned long long inv;
+} topo_row_t;
+
+typedef struct {
+    topo_row_t *v;
+    size_t n, cap;
+} topo_rows;
+
+static void trows_push(topo_rows *r, const topo_row_t *row) {
+    if (r->n == r->cap) {
+        size_t nc = r->cap ? r->cap * 2 : 64;
+        topo_row_t *nv = realloc(r->v, nc * sizeof *nv);
+        if (!nv)
+            return;
+        r->v = nv;
+        r->cap = nc;
+    }
+    r->v[r->n++] = *row;
+}
+
+/* Aggregate of one process (tasks sharing a tgid) for the topology forest. */
+typedef struct {
+    pid_t tgid, ppid;
+    char exe[64];
+    unsigned long long inv; /* summed over the process's tasks */
+    size_t *task;           /* indices into the task snapshot   */
+    size_t ntask, taskcap;
+    int emitted;            /* forest guard: render each process once */
+} proc_agg;
+
+/* Sort helper: process-aggregate indices by summed inv (desc), then pid. */
+static const proc_agg *g_procs_for_cmp;
+static int proc_idx_cmp(const void *a, const void *b) {
+    const proc_agg *x = &g_procs_for_cmp[*(const size_t *)a];
+    const proc_agg *y = &g_procs_for_cmp[*(const size_t *)b];
+    if (x->inv != y->inv)
+        return x->inv < y->inv ? 1 : -1;
+    return x->tgid < y->tgid ? -1 : x->tgid > y->tgid ? 1 : 0;
+}
+
+/* Task-index sort by inv (desc), leader first. Uses g_tasks_for_cmp. */
+static const asmspy_task_t *g_tasks_for_cmp;
+static int task_idx_cmp(const void *a, const void *b) {
+    const asmspy_task_t *x = &g_tasks_for_cmp[*(const size_t *)a];
+    const asmspy_task_t *y = &g_tasks_for_cmp[*(const size_t *)b];
+    if (x->is_leader != y->is_leader)
+        return x->is_leader ? -1 : 1; /* leader on top */
+    if (x->inv != y->inv)
+        return x->inv < y->inv ? 1 : -1;
+    return x->tid < y->tid ? -1 : x->tid > y->tid ? 1 : 0;
+}
+
+static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
+                           size_t k, int depth, topo_rows *out) {
+    if (P[k].emitted)
+        return; /* cycle / already-rendered guard */
+    P[k].emitted = 1;
+    int ind = depth * 2;
+    if (ind > 40)
+        ind = 40;
+    topo_row_t row;
+    memset(&row, 0, sizeof row);
+    snprintf(row.text, sizeof row.text, "%*snode %d%s%s%s  inv=%llu", ind, "",
+             (int)P[k].tgid, P[k].exe[0] ? " [" : "", P[k].exe,
+             P[k].exe[0] ? "]" : "", P[k].inv);
+    row.tgid = row.tid = P[k].tgid;
+    row.is_process = 1;
+    row.inv = P[k].inv;
+    trows_push(out, &row);
+
+    /* threads (only when the process has more than its lone leader) */
+    if (P[k].ntask > 1) {
+        size_t *ti = malloc(P[k].ntask * sizeof *ti);
+        if (ti) {
+            for (size_t j = 0; j < P[k].ntask; j++)
+                ti[j] = P[k].task[j];
+            g_tasks_for_cmp = tasks;
+            qsort(ti, P[k].ntask, sizeof *ti, task_idx_cmp);
+            for (size_t j = 0; j < P[k].ntask; j++) {
+                const asmspy_task_t *t = &tasks[ti[j]];
+                memset(&row, 0, sizeof row);
+                snprintf(row.text, sizeof row.text, "%*stid %d%s%s%s  inv=%llu",
+                         ind + 2, "", (int)t->tid, t->comm[0] ? " (" : "",
+                         t->comm, t->comm[0] ? ")" : "", t->inv);
+                row.tid = t->tid;
+                row.tgid = t->tgid;
+                row.is_process = 0;
+                row.inv = t->inv;
+                trows_push(out, &row);
+            }
+            free(ti);
+        }
+    }
+
+    /* child processes: those whose parent is this process, by inv desc */
+    size_t *ci = malloc(np * sizeof *ci);
+    size_t nc = 0;
+    if (ci) {
+        for (size_t j = 0; j < np; j++)
+            if (j != k && !P[j].emitted && P[j].ppid == P[k].tgid)
+                ci[nc++] = j;
+        g_procs_for_cmp = P;
+        qsort(ci, nc, sizeof *ci, proc_idx_cmp);
+        for (size_t j = 0; j < nc; j++)
+            topo_emit_proc(P, np, tasks, ci[j], depth + 1, out);
+        free(ci);
+    }
+}
+
+/* Turn a task snapshot into an indented process/thread forest. Roots are the
+ * processes whose parent is not itself tracked (typically just the target). */
+static void topo_build_rows(const asmspy_task_t *tasks, size_t n,
+                            topo_rows *out) {
+    proc_agg *P = NULL;
+    size_t np = 0, pcap = 0;
+    for (size_t i = 0; i < n; i++) {
+        pid_t g = tasks[i].tgid;
+        size_t k;
+        for (k = 0; k < np; k++)
+            if (P[k].tgid == g)
+                break;
+        if (k == np) {
+            if (np == pcap) {
+                size_t ncp = pcap ? pcap * 2 : 16;
+                proc_agg *nv = realloc(P, ncp * sizeof *nv);
+                if (!nv)
+                    goto done;
+                P = nv;
+                pcap = ncp;
+            }
+            memset(&P[np], 0, sizeof P[np]);
+            P[np].tgid = g;
+            P[np].ppid = tasks[i].ppid;
+            np++;
+        }
+        proc_agg *pa = &P[k == np ? np - 1 : k];
+        if (pa->ntask == pa->taskcap) {
+            size_t nct = pa->taskcap ? pa->taskcap * 2 : 8;
+            size_t *nv = realloc(pa->task, nct * sizeof *nv);
+            if (nv) {
+                pa->task = nv;
+                pa->taskcap = nct;
+            }
+        }
+        if (pa->ntask < pa->taskcap)
+            pa->task[pa->ntask++] = i;
+        pa->inv += tasks[i].inv;
+        if (tasks[i].is_leader) {
+            pa->ppid = tasks[i].ppid;
+            snprintf(pa->exe, sizeof pa->exe, "%s", tasks[i].exe);
+        }
+    }
+
+    /* emit roots (parent not tracked) first, by inv desc */
+    size_t *roots = malloc((np ? np : 1) * sizeof *roots);
+    size_t nr = 0;
+    if (roots) {
+        for (size_t k = 0; k < np; k++) {
+            int parent_tracked = 0;
+            for (size_t j = 0; j < np; j++)
+                if (P[j].tgid == P[k].ppid) {
+                    parent_tracked = 1;
+                    break;
+                }
+            if (!parent_tracked)
+                roots[nr++] = k;
+        }
+        g_procs_for_cmp = P;
+        qsort(roots, nr, sizeof *roots, proc_idx_cmp);
+        for (size_t j = 0; j < nr; j++)
+            topo_emit_proc(P, np, tasks, roots[j], 0, out);
+        /* any process not reached (orphaned parent chain) — emit at depth 0 */
+        for (size_t k = 0; k < np; k++)
+            if (!P[k].emitted)
+                topo_emit_proc(P, np, tasks, k, 0, out);
+        free(roots);
+    }
+
+done:
+    for (size_t k = 0; k < np; k++)
+        free(P[k].task);
+    free(P);
+}
+
+/* ================================================================== */
 /* Headless subcommands                                                */
 /* ================================================================== */
 
@@ -396,6 +610,33 @@ static int cmd_graph(pid_t pid, long n, gsort_t sort) {
         graph_format_row(row, sizeof row, &snap.v[i]);
         printf("%s\n", row);
     }
+    free(snap.v);
+    return 0;
+}
+
+static void topo_capture_sink(void *ctx, const asmspy_task_t *tasks, size_t n) {
+    topo_snap_copy(ctx, tasks, n); /* headless: keep only the latest snapshot */
+}
+
+static int cmd_procs(pid_t pid, long n, asmspy_count_t mode) {
+    topo_snap snap = {0};
+    int rc = asmspy_engine_procs(pid, n, NULL, mode, topo_capture_sink, &snap);
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "attach failed: %s\n", e);
+        free(snap.v);
+        return 1;
+    }
+    topo_rows rows = {0};
+    topo_build_rows(snap.v, snap.n, &rows);
+    printf("process/thread topology — %zu tasks, counting %s (pid %d)\n", snap.n,
+           mode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls", (int)pid);
+    if (snap.n == 0)
+        printf("(no tasks observed — target idle or gone)\n");
+    for (size_t i = 0; i < rows.n; i++)
+        printf("%s\n", rows.v[i].text);
+    free(rows.v);
     free(snap.v);
     return 0;
 }
@@ -1318,8 +1559,9 @@ static int usage(const char *argv0) {
             "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
             "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n"
-            "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n",
-            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+            "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n"
+            "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n",
+            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -1379,6 +1621,26 @@ int main(int argc, char **argv) {
         if (argc >= 4 && parse_count(argv[3], &n) != 0)
             return bad_arg("count", argv[3]);
         return cmd_tree(pid, n);
+    }
+    if (strcmp(argv[1], "--procs") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 200; /* invocations to count before reporting; negative = until exit */
+        asmspy_count_t mode = ASMSPY_COUNT_SYSCALLS;
+        for (int i = 3; i < argc; i++) { /* [n] and --count= in any order */
+            if (strncmp(argv[i], "--count=", 8) == 0) {
+                const char *v = argv[i] + 8;
+                if (strcmp(v, "syscalls") == 0)
+                    mode = ASMSPY_COUNT_SYSCALLS;
+                else if (strcmp(v, "calls") == 0)
+                    mode = ASMSPY_COUNT_CALLS;
+                else
+                    return bad_arg("count (want 'syscalls' or 'calls')", v);
+            } else if (parse_count(argv[i], &n) != 0) {
+                return bad_arg("count", argv[i]);
+            }
+        }
+        return cmd_procs(pid, n, mode);
     }
     if (strcmp(argv[1], "--graph") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

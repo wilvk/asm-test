@@ -396,6 +396,7 @@ typedef struct {
     int pending_call;   /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t call_site; /* graph engine: call-site addr of that pending call     */
     int depth;          /* tree engine: live call depth (push on call, pop on ret) */
+    unsigned long long inv; /* procs engine: per-task invocation count (syscalls/calls) */
 } thr_t;
 
 typedef struct {
@@ -431,6 +432,7 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     e->pending_call = 0;
     e->call_site = 0;
     e->depth = 0;
+    e->inv = 0;
     return e;
 }
 
@@ -1238,5 +1240,255 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
     }
 
     detach_threads(&tab);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Process/thread topology (whole tree: procs + threads + children)    */
+/* ------------------------------------------------------------------ */
+
+/* Read a task's process id (Tgid), parent pid (PPid) and name (comm) from
+ * /proc. Best-effort: fields keep their passed-in defaults on any failure. */
+static void read_task_meta(pid_t tid, pid_t *tgid, pid_t *ppid, char *comm,
+                           size_t cz) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/status", (int)tid);
+    FILE *f = fopen(path, "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            if (strncmp(line, "Tgid:", 5) == 0)
+                *tgid = (pid_t)strtol(line + 5, NULL, 10);
+            else if (strncmp(line, "PPid:", 5) == 0)
+                *ppid = (pid_t)strtol(line + 5, NULL, 10);
+        }
+        fclose(f);
+    }
+    if (comm && cz) {
+        comm[0] = '\0';
+        snprintf(path, sizeof path, "/proc/%d/comm", (int)tid);
+        FILE *c = fopen(path, "r");
+        if (c) {
+            if (fgets(comm, (int)cz, c)) {
+                size_t l = strlen(comm);
+                if (l && comm[l - 1] == '\n')
+                    comm[l - 1] = '\0';
+            }
+            fclose(c);
+        }
+    }
+}
+
+/* Build one topology snapshot (one asmspy_task_t per tracked task) and hand it to
+ * the sink. tgid/ppid/comm are re-read each publish so an exec/rename shows up. */
+static void topo_publish(thr_tab_t *tab, asmspy_topo_sink sink, void *ctx,
+                         asmspy_task_t **buf, size_t *bufcap) {
+    if (!sink || tab->n == 0)
+        return;
+    if (tab->n > *bufcap) {
+        asmspy_task_t *nb = realloc(*buf, tab->n * sizeof *nb);
+        if (!nb)
+            return; /* keep the last snapshot on OOM */
+        *buf = nb;
+        *bufcap = tab->n;
+    }
+    for (size_t i = 0; i < tab->n; i++) {
+        asmspy_task_t *t = &(*buf)[i];
+        memset(t, 0, sizeof *t);
+        t->tid = tab->v[i].tid;
+        t->tgid = t->tid; /* default if the /proc read fails */
+        read_task_meta(t->tid, &t->tgid, &t->ppid, t->comm, sizeof t->comm);
+        t->is_leader = (t->tid == t->tgid);
+        if (t->is_leader)
+            exe_basename(t->tgid, t->exe, sizeof t->exe);
+        t->inv = tab->v[i].inv;
+    }
+    sink(ctx, *buf, tab->n);
+}
+
+static int tgid_tracked(const pid_t *set, size_t n, pid_t g) {
+    for (size_t i = 0; i < n; i++)
+        if (set[i] == g)
+            return 1;
+    return 0;
+}
+
+/* Seize the target AND its whole EXISTING descendant tree (children, grandchildren
+ * — processes reachable by PPid), each with its threads. TRACEFORK only catches
+ * forks AFTER attach, so children that predate the attach must be discovered here:
+ * rescan /proc, seizing any process whose parent we already track, until stable.
+ * Best-effort per descendant (an un-ptraceable child is simply skipped). Returns 0
+ * once the root is seized, -1 if even the root cannot be. */
+static int seize_process_tree(pid_t pid, long opts, thr_tab_t *tab) {
+    if (seize_threads(pid, opts, tab) != 0)
+        return -1;
+    pid_t *set = malloc(64 * sizeof *set);
+    if (!set)
+        return 0; /* root is seized; degrade to single-process */
+    size_t nset = 0, setcap = 64;
+    set[nset++] = pid;
+    for (int pass = 0; pass < 64; pass++) {
+        DIR *d = opendir("/proc");
+        if (!d)
+            break;
+        int added = 0;
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9')
+                continue;
+            pid_t p = (pid_t)strtol(de->d_name, NULL, 10);
+            if (p <= 0 || tgid_tracked(set, nset, p))
+                continue;
+            pid_t tg = p, pp = 0;
+            read_task_meta(p, &tg, &pp, NULL, 0);
+            if (!tgid_tracked(set, nset, pp)) /* parent not (yet) tracked */
+                continue;
+            if (seize_threads(p, opts, tab) == 0) { /* best-effort */
+                if (nset == setcap) {
+                    size_t nc = setcap * 2;
+                    pid_t *nv = realloc(set, nc * sizeof *nv);
+                    if (!nv)
+                        break;
+                    set = nv;
+                    setcap = nc;
+                }
+                set[nset++] = p;
+                added = 1;
+            }
+        }
+        closedir(d);
+        if (!added)
+            break;
+    }
+    free(set);
+    return 0;
+}
+
+int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
+                        asmspy_count_t mode, asmspy_topo_sink sink, void *ctx) {
+    if (mode == ASMSPY_COUNT_CALLS && !asmtest_ptrace_available())
+        return ASMTEST_PTRACE_EUNAVAIL;
+
+    arm_quit_wake();
+
+    thr_tab_t tab = {0};
+    /* Follow every thread (CLONE) AND every child PROCESS (FORK/VFORK), and pick
+     * up exec so names/exe stay fresh. Syscall mode also wants TRACESYSGOOD. */
+    long opts = PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK |
+                PTRACE_O_TRACEEXEC;
+    if (mode == ASMSPY_COUNT_SYSCALLS)
+        opts |= PTRACE_O_TRACESYSGOOD;
+    if (seize_process_tree(pid, opts, &tab) != 0) {
+        detach_threads(&tab);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+/* resume a tracee the way this mode drives it: syscall-stops vs single-steps */
+#define TOPO_RESUME(t, s)                                                       \
+    ptrace(mode == ASMSPY_COUNT_SYSCALLS ? PTRACE_SYSCALL : PTRACE_SINGLESTEP,  \
+           (t), NULL, (void *)(long)(s))
+
+    asmspy_task_t *snap = NULL;
+    size_t snapcap = 0;
+    long counted = 0, published = -1;
+
+    while ((max < 0 || counted < max) && !(stop && atomic_load(stop))) {
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
+                continue;
+            }
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        int sig = WSTOPSIG(status);
+        int event = (status >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
+                thr_get(&tab, (pid_t)child); /* a new thread OR child process */
+            TOPO_RESUME(tid, 0);
+            continue;
+        }
+
+        if (mode == ASMSPY_COUNT_SYSCALLS && sig == (SIGTRAP | 0x80)) {
+            thr_t *ts = thr_get(&tab, tid);
+            if (ts) { /* count one per syscall (on the exit half of the pair) */
+                int entry = syscall_stop_is_entry(tid);
+                if (entry < 0)
+                    entry = ts->at_entry;
+                if (entry) {
+                    ts->at_entry = 0;
+                } else {
+                    ts->at_entry = 1;
+                    ts->inv++;
+                    counted++;
+                }
+            }
+            TOPO_RESUME(tid, 0);
+            if (counted - published >= 32) {
+                topo_publish(&tab, sink, ctx, &snap, &snapcap);
+                published = counted;
+            }
+            continue;
+        }
+
+        if (mode == ASMSPY_COUNT_CALLS && sig == SIGTRAP && event == 0) {
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+                thr_t *ts = thr_get(&tab, tid);
+                uint8_t code[16];
+                struct iovec liov = {code, sizeof code};
+                struct iovec riov = {(void *)(uintptr_t)regs.rip, sizeof code};
+                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+                if (ts && got >= 1 && asmtest_disas_available() &&
+                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code, (size_t)got,
+                                          0)) {
+                    ts->inv++; /* count every CALL this task executes */
+                    counted++;
+                }
+            }
+            TOPO_RESUME(tid, 0);
+            if (counted - published >= 32) {
+                topo_publish(&tab, sink, ctx, &snap, &snapcap);
+                published = counted;
+            }
+            continue;
+        }
+
+        if (event == PTRACE_EVENT_STOP &&
+            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU)) {
+            thr_get(&tab, tid);
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        int deliver = 0;
+        if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
+            deliver = sig;
+        thr_get(&tab, tid);
+        TOPO_RESUME(tid, deliver);
+    }
+
+#undef TOPO_RESUME
+    if (sink) /* final snapshot BEFORE detach frees the table */
+        topo_publish(&tab, sink, ctx, &snap, &snapcap);
+    detach_threads(&tab);
+    free(snap);
     return 0;
 }

@@ -193,6 +193,27 @@ echo "distinct tids in stream: $stids"
 [ "$stids" -ge 2 ] || fail "stream expected >=2 threads, saw $stids (thread-follow regressed)"
 printf '%s\n' "$out" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
     || fail "multi-thread stream: no disassembly"
+
+# process/thread topology: the same multi-threaded victim must render as ONE
+# process node with its threads listed underneath, each with an invocation count.
+echo "--- asmspy --procs $TVPID 120 (process/thread topology) ---"
+set +e
+out=$(timeout 30 "$ASM" --procs "$TVPID" 120 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--procs hung on a multi-threaded target"
+printf '%s\n' "$out" | head -8
+printf '%s\n' "$out" | grep -qE "^node $TVPID \[threads_victim\]  inv=[0-9]" \
+    || fail "--procs: no process node with a syscall count"
+nt=$(printf '%s\n' "$out" | grep -cE '^  tid [0-9]+.*inv=[0-9]')
+echo "thread rows: $nt"
+[ "$nt" -ge 2 ] || fail "--procs: expected >=2 thread rows, saw $nt"
+# calls mode (single-step) also produces a counted topology
+out2=$(timeout 40 "$ASM" --procs "$TVPID" 60 --count=calls 2>&1) \
+    || fail "--procs --count=calls"
+printf '%s\n' "$out2" | grep -qE '^node [0-9]+.*inv=[0-9]' \
+    || fail "--procs --count=calls: no counted node"
+# a bad --count value is rejected up front (rc=2)
+expect_badarg "$ASM" --procs "$TVPID" --count=bogus
 kill "$TVPID" 2>/dev/null || true
 
 echo "cli-smoke: PASS"

@@ -196,6 +196,40 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
                        const asmspy_symtab_t *syms, asmspy_stream_sink sink,
                        void *ctx);
 
+/* What the process/thread topology counts per task. */
+typedef enum {
+    ASMSPY_COUNT_SYSCALLS = 0, /* syscalls made (PTRACE_SYSCALL — fast, crash-safe) */
+    ASMSPY_COUNT_CALLS = 1,    /* CALL instructions (single-step — rich, slow)      */
+} asmspy_count_t;
+
+/* One task (thread) in the traced process tree, with its invocation count. A
+ * process is the set of tasks sharing `tgid`; its leader has tid == tgid. */
+typedef struct {
+    pid_t tid;              /* task (thread) id                                */
+    pid_t tgid;            /* thread-group (process) id                       */
+    pid_t ppid;            /* parent process id (for the process forest)      */
+    int is_leader;         /* 1 if tid == tgid (the process's main thread)    */
+    char comm[24];         /* task name (/proc/<tid>/comm)                    */
+    char exe[64];          /* process exe basename (leader tasks only)        */
+    unsigned long long inv; /* invocation count: syscalls or calls per `mode`  */
+} asmspy_task_t;
+
+/* Topology snapshot sink: `tasks[0..n)` is every tracked task (threads of the
+ * target and of every child process it forked), owned by the engine and valid
+ * only for THIS call. Invoked periodically and once more just before detach. */
+typedef void (*asmspy_topo_sink)(void *ctx, const asmspy_task_t *tasks, size_t n);
+
+/* Attach to `pid`, follow every thread (CLONE) and every child PROCESS
+ * (FORK/VFORK, recursively) and exec, and count per task either syscalls
+ * (`mode` == ASMSPY_COUNT_SYSCALLS, via PTRACE_SYSCALL — near full speed, safe on
+ * any target) or CALL instructions (ASMSPY_COUNT_CALLS, via single-step — richer
+ * but the whole tree crawls). Streams topology snapshots through `sink` until
+ * `max` counted events, `stop`, or the whole tree exits; detach. `max` counts
+ * invocations (<0 = until stop / exit). Returns 0 on clean detach, negative on an
+ * attach/availability failure. */
+int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
+                        asmspy_count_t mode, asmspy_topo_sink sink, void *ctx);
+
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);
 
