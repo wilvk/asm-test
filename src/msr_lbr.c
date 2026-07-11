@@ -181,11 +181,15 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
         const uint64_t base_ip = (uint64_t)(uintptr_t)base;
         const uint64_t end_ip = base_ip + len;
         int any_in_region = 0;
+        int short_read = 0; /* abnormal partial pread of the frozen stack */
         for (int i = 0; i < depth; i++) {
             uint64_t f = 0, t = 0;
             if (msr_rd(fd, MSR_SAMP_BR_FROM + (uint32_t)(i * 2), &f) != 0 ||
-                msr_rd(fd, MSR_SAMP_BR_FROM + (uint32_t)(i * 2 + 1), &t) != 0)
+                msr_rd(fd, MSR_SAMP_BR_FROM + (uint32_t)(i * 2 + 1), &t) != 0) {
+                short_read =
+                    1; /* stack read cut short: capture is incomplete */
                 break;
+            }
             if (!asmtest_amd_msr_decode_entry(f, t, &br[n]))
                 continue; /* empty slot or speculative wrong-path (see helper) */
             if ((br[n].from >= base_ip && br[n].from < end_ip) ||
@@ -196,6 +200,9 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
         /* Decode via the shared path (in-region-filtered; window overflow -> truncated). */
         if (n > 0 && any_in_region) {
             rc = asmtest_amd_decode(br, n, base, len, trace);
+            if (short_read)
+                trace->truncated =
+                    true; /* a partial stack is never a complete capture */
         } else {
             trace->truncated =
                 true; /* nothing in-region: honest, never empty-complete */

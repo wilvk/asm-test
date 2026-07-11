@@ -1905,6 +1905,8 @@ static void test_arm_tid_mismatch(void) {
     CHECK(asmtest_emu_trace_truncated(tr),
           "cross-thread close flags the trace truncated (never "
           "partial-as-complete)");
+    CHECK(asmtest_hwtrace_arm_tid() == -1,
+          "arm_tid reads idle (-1) after the single-step scope closes");
 
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);

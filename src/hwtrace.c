@@ -1464,6 +1464,8 @@ void asmtest_hwtrace_end(const char *name) {
                 r->trace->truncated = true;
         }
         asmtest_ss_end(); /* disarms TF + restores SIGTRAP; trace already filled */
+        g_arm_tid = -1; /* §0.2: capture closed — accessor must read idle (-1),
+                           * matching the PT/AMD/whole-window end paths below */
         return;
     }
 #endif

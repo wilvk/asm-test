@@ -1925,10 +1925,13 @@ static int trace_attached_window_loop(pid_t pid, uint64_t win_base,
     long retval_final = 0;
     uint64_t steps = 0;
     int pending_sig = 0;
+    int reached_end =
+        0; /* set only at a CLEAN terminator (*stop / pc==win_ret) */
     uint32_t nreg = *nreg_io;
 
     for (;;) {
         if (stop != NULL && *stop != 0) {
+            reached_end = 1; /* caller ended the window normally */
             break;
         }
         if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
@@ -1964,6 +1967,7 @@ static int trace_attached_window_loop(pid_t pid, uint64_t win_base,
 
         if (stop == NULL && pc == win_ret) {
             retval_final = (long)rax;
+            reached_end = 1; /* inline window returned to its caller */
             break;
         }
         if (in_region_set(pc, win_base, win_len, regs, nreg)) {
@@ -1975,6 +1979,13 @@ static int trace_attached_window_loop(pid_t pid, uint64_t win_base,
             }
         }
     }
+    /* The ONLY clean exits are *stop (async) and pc==win_ret (inline). Any other
+     * termination that did not already set rc/overflow — the tracee exited or was
+     * killed before the window end (WIFEXITED/WIFSIGNALED), or an unexpected wait
+     * status — cut the window short: flag it so a partial stream is never rendered
+     * as a complete capture. */
+    if (rc == ASMTEST_PTRACE_OK && !overflow && !reached_end)
+        overflow = 1;
     *nreg_io = nreg;
     *stream_len = n;
     *overflow_out = overflow;
@@ -2136,7 +2147,7 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
     }
 
     const uint64_t win_base = (uint64_t)(uintptr_t)code;
-    int status = 0, rc = ASMTEST_PTRACE_OK, overflow = 0;
+    int status = 0, rc = ASMTEST_PTRACE_OK, overflow = 0, reached_end = 0;
     uint32_t n = 0;
     long retval_final = 0;
 
@@ -2213,6 +2224,7 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
                                                ASMTEST_ADDR_CHAN_CAP - nreg);
         if (pc == win_ret) {
             retval_final = (long)rax;
+            reached_end = 1; /* window body returned to its caller */
             break;
         }
         if (in_region_set(pc, win_base, len, regs, nreg)) {
@@ -2224,6 +2236,11 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
             }
         }
     }
+    /* pc==win_ret is the only clean window end; if the body exited/died before
+     * returning (WIFEXITED/WIFSIGNALED, e.g. a call to exit()) the window was cut
+     * short — never render the partial stream as a complete capture. */
+    if (rc == ASMTEST_PTRACE_OK && !overflow && !reached_end)
+        overflow = 1;
     if (result != NULL)
         *result = retval_final;
     kill(pid, SIGKILL);
