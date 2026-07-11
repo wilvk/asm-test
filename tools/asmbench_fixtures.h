@@ -42,4 +42,16 @@ static const unsigned char FIX_A32_ADD3[] = {
 static const unsigned char FIX_X86_SUMTON[] = {
     0x31, 0xc0, 0x48, 0x01, 0xf8, 0x48, 0xff, 0xcf, 0x75, 0xf8, 0xc3};
 
+/* tri(n) = n + tri(n-1), tri(0) = 0 — the same triangular sum by RECURSION (x86-64
+ * SysV, arg n in edi), returns n(n+1)/2:
+ *   test edi,edi; jne .rec; xor eax,eax; ret;
+ *   .rec: push rdi; dec edi; call tri; pop rdi; add rax,rdi; ret
+ * Unlike sum_to_n's counted loop it nests CALL/RET n deep, so a fixed-window
+ * backend truncates on call-STACK depth (AMD LBR's 16-deep return stack) — the
+ * orthogonal capture axis the loop ladder does not touch. insns executed = 8*n+4
+ * (8 per recursive frame + 4 for the base case). Bytes verified against clang. */
+static const unsigned char FIX_X86_TRI[] = {
+    0x85, 0xff, 0x75, 0x03, 0x31, 0xc0, 0xc3, 0x57, 0xff, 0xcf,
+    0xe8, 0xf1, 0xff, 0xff, 0xff, 0x5f, 0x48, 0x01, 0xf8, 0xc3};
+
 #endif /* ASMBENCH_FIXTURES_H */

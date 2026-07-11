@@ -70,18 +70,22 @@ instructions does each box's hardware actually capture?** Trace backends have
 different ceilings, so for the same routine they capture different amounts — and
 that difference is a property of the silicon, not the software.
 
-The probe runs a **ladder** of x86-64 routines of growing length and, for each,
-compares the instructions captured to the emulator's deterministic **truth**
-(host-independent — the same `add3` / `sum_to_n` fixtures the golden uses, where
-`insns(sum_to_n) = 3n+2` and the loop executes `n` branches):
+The probe runs a **ladder** of x86-64 routines and, for each, compares the
+instructions captured to the emulator's deterministic **truth** (host-independent).
+It sweeps two orthogonal axes — loop **branch density** (`sum_to_n`, `insns =
+3n+2`, `n` branches) and **call-nesting depth** (`tri(n) = n + tri(n-1)` by
+recursion, `insns = 8n+4`, `n` nested call/ret pairs):
 
-| rung | truth insns | branches | what it exercises |
+| rung | truth insns | depth | what it exercises |
 |---|---|---|---|
-| `math.add3` | 4 | 0 | straight-line baseline — every backend captures it |
-| `loop.sum_to_4` | 14 | 4 | a loop that fits inside a 16-deep window |
-| `loop.sum_to_16` | 50 | 16 | a loop at the AMD-LBR window edge |
-| `loop.sum_to_64` | 194 | 64 | 4× past the window — a fixed-window backend truncates |
-| `loop.sum_to_200` | 602 | 200 | 12× past the window — deep truncation |
+| `math.add3` | 4 | — | straight-line baseline — every backend captures it |
+| `loop.sum_to_4` | 14 | 4 iters | a loop that fits inside a 16-deep window |
+| `loop.sum_to_16` | 50 | 16 iters | a loop at the AMD-LBR branch-window edge |
+| `loop.sum_to_64` | 194 | 64 iters | 4× past the branch window — a fixed-window backend truncates |
+| `loop.sum_to_200` | 602 | 200 iters | 12× past the branch window — deep truncation |
+| `recurse.tri_4` | 36 | 4 frames | call nesting well inside the 16-deep return stack |
+| `recurse.tri_16` | 132 | 16 frames | call nesting at the return-stack edge |
+| `recurse.tri_32` | 260 | 32 frames | 2× past the return stack — truncates on call depth |
 
 Each rung is measured through **two** tiers, emitted as two feature rows:
 
@@ -105,25 +109,29 @@ Each rung is measured through **two** tiers, emitted as two feature rows:
 | sum_to_16 (50) | 50 ✓ | 50 ✓ | 50 ✓ | 50 ✓ | n/a |
 | sum_to_64 (194) | ~50 ✗ | ~50 ✗ | 194 ✓ | 194 ✓ | n/a |
 | sum_to_200 (602) | ~50 ✗ | ~50 ✗ | 602 ✓ | 602 ✓ | n/a |
+| tri_16 (132) | 132 ✓ | 132 ✓ | 132 ✓ | 132 ✓ | n/a |
+| tri_32 (260) | ~130 ✗ | ~130 ✗ | 260 ✓ | 260 ✓ | n/a |
 
 The two AMD columns share the same 16-deep ceiling — the capture limit is an
-LBR-family property, so Zen 2 and Zen 5 truncate at the same rung (the `~50`
-plateau is reconstruction-dependent and illustrative). Intel PT and single-step
+LBR-family property, so Zen 2 and Zen 5 truncate at the same rung (the `~50` /
+`~130` plateaus are reconstruction-dependent and illustrative). Intel PT and single-step
 are unbounded; Apple Silicon has no x86-64 host backend, so it has no hardware
 capture (`n/a`) and relies on the emulator floor. **Caveat:** the LBR ceiling is
 only observed where LBR is actually *permitted* — a bare AMD box without `perf`
 branch-stack permission falls back to single-step and captures completely, so the
 truncation row appears only on a box where the fixed-window backend is live.
 
-### The orthogonal axis — call-nesting depth (designed next rung)
+### Two orthogonal axes — branch density and call-nesting depth
 
-The loop ladder sweeps *branch density*. LBR's 16-deep stack independently bounds
-*call-nesting depth*: a recursion 32 frames deep overflows the call stack even
-though no single loop does. A `recurse.tri(n)` fixture (triangular recursion,
-`tri(n) = n + tri(n-1)`) at depths {4, 16, 32} is the designed second axis — it
-isolates the call-stack ceiling from the branch-record ceiling. It is not yet
-wired in (a single-step box captures it completely, so its divergence is only
-observable on a live-LBR box); the loop ladder above is the landed metric.
+The `sum_to_n` rungs sweep *branch density*; the `recurse.tri(n)` rungs sweep
+*call-nesting depth* independently. `tri(n) = n + tri(n-1)` (triangular sum by
+recursion, `insns = 8n+4`) nests call/ret `n` deep, so it overflows AMD LBR's
+16-deep *return* stack at a depth no counted loop reaches — isolating the
+call-stack ceiling from the branch-record ceiling. A box can therefore capture a
+200-trip loop and a 32-deep recursion *differently* even though both far exceed
+16, because they exhaust different fixed windows. On an unbounded backend
+(single-step, Intel PT) both are captured whole — as measured on the Intel-mac
+reference box, where every rung reports `captured == truth` (`tri_32` = 260 = 8·32+4).
 
 ## Comparing systems
 

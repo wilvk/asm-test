@@ -293,9 +293,12 @@ int main(int argc, char **argv) {
      * bytes, so each fixture is materialized into W^X memory first. */
 #ifdef ASMFEATURES_HOST_CAPTURE
     {
-        /* insns(sum_to_n) = 3n+2, branches = n. Trip counts straddle the 16-deep
-         * AMD-LBR window: 4 within, 16 at the edge, 64 and 200 well over — so the
-         * captured count diverges from truth exactly where the hardware ceiling is. */
+        /* Two orthogonal capture axes. LOOP: insns(sum_to_n) = 3n+2, branches = n
+         * — sweeps branch density; trip counts straddle the 16-deep AMD-LBR window
+         * (4 within, 16 at the edge, 64 and 200 well over). RECURSION: insns(tri) =
+         * 8n+4, call/ret nested n deep — sweeps call-STACK depth (LBR's 16-deep
+         * return stack), which a loop never overflows. Both diverge from truth
+         * exactly where the box's hardware ceiling is, but at different limits. */
         static const struct {
             const char *workload;
             const unsigned char *bytes;
@@ -308,6 +311,9 @@ int main(int argc, char **argv) {
             {"loop.sum_to_16", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 16, 1},
             {"loop.sum_to_64", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 64, 1},
             {"loop.sum_to_200", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 200, 1},
+            {"recurse.tri_4", FIX_X86_TRI, sizeof FIX_X86_TRI, 4, 1},
+            {"recurse.tri_16", FIX_X86_TRI, sizeof FIX_X86_TRI, 16, 1},
+            {"recurse.tri_32", FIX_X86_TRI, sizeof FIX_X86_TRI, 32, 1},
         };
         long a3[3] = {2, 3, 4};
         int top_hw =
