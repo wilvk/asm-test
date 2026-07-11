@@ -116,10 +116,20 @@ typedef void (*asmspy_region_sink)(void *ctx, unsigned sample_no, long result,
                                    const uint8_t *code, size_t len,
                                    uint64_t base);
 
+/* Returned by asmspy_engine_region when it detached cleanly but NEVER observed the
+ * region execute (zero samples, not user-cancelled). Distinct positive value (the
+ * engine's failure codes are the negative ASMTEST_PTRACE_*), so callers can tell
+ * "nothing ran here" from a real attach failure — most often a multi-threaded target
+ * whose function runs on a worker thread (this engine attaches only the leader). */
+#define ASMSPY_REGION_NEVER_RAN 1
+
 /* Attach to `pid`, then repeatedly run_to(base) + trace_attached the region
  * [base, base+len), invoking `sink` per captured invocation, until `max`
  * samples, `stop`, or the target exits; detach. Returns 0 on clean detach,
- * negative on an attach/availability failure. */
+ * ASMSPY_REGION_NEVER_RAN if the region was never seen executing, or a negative
+ * ASMTEST_PTRACE_* on an attach/availability failure. NOTE: attaches only the
+ * thread-group leader — a function that runs only on a worker thread yields
+ * ASMSPY_REGION_NEVER_RAN (unlike the whole-process syscall/stream engines). */
 int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
                          atomic_bool *stop, asmspy_region_sink sink, void *ctx);
 

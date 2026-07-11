@@ -370,7 +370,15 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
             (unsigned long long)base, len, (int)pid);
     int rc = asmspy_engine_region(pid, base, len, n, NULL, region_print_sink,
                                   &t);
-    if (rc != 0) {
+    if (rc == ASMSPY_REGION_NEVER_RAN) {
+        fprintf(stderr,
+                "%s never executed while traced in pid %d\n"
+                "  --trace follows only the main thread; if the target is "
+                "multi-threaded the\n"
+                "  function may run on a worker thread (--stream follows all "
+                "threads)\n",
+                sym, (int)pid);
+    } else if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "trace failed: %s\n", e);

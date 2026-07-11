@@ -436,11 +436,16 @@ static void load_module_syms(pid_t pid, const module_t *mod,
 
     if (!eh->e_shoff || eh->e_shentsize < sizeof(Elf64_Shdr))
         goto done;
-    const Elf64_Shdr *sh = (const Elf64_Shdr *)(base + eh->e_shoff);
     /* overflow-safe: never add two attacker-controlled uint64 (they can wrap) */
     if (eh->e_shoff > flen ||
         eh->e_shnum > (flen - eh->e_shoff) / eh->e_shentsize)
         goto done;
+
+    /* Stride section headers by e_shentsize (>= sizeof(Elf64_Shdr), checked above),
+     * NOT sizeof — a non-standard ELF with a larger entsize would otherwise misalign
+     * every header past index 0. Mirrors the sh_entsize walk in the symbol loop. */
+#define ASMSPY_SHDR(idx)                                                        \
+    ((const Elf64_Shdr *)(base + eh->e_shoff + (uint64_t)(idx) * eh->e_shentsize))
 
     /* prefer .symtab (superset); fall back to .dynsym for stripped libs */
     const int order[2] = {SHT_SYMTAB, SHT_DYNSYM};
@@ -448,12 +453,13 @@ static void load_module_syms(pid_t pid, const module_t *mod,
         int want = order[oi];
         int found = 0;
         for (unsigned i = 0; i < eh->e_shnum; i++) {
-            if ((int)sh[i].sh_type != want)
+            const Elf64_Shdr *s = ASMSPY_SHDR(i);
+            if ((int)s->sh_type != want)
                 continue;
             found = 1;
-            if (sh[i].sh_entsize < sizeof(Elf64_Sym) || sh[i].sh_link >= eh->e_shnum)
+            if (s->sh_entsize < sizeof(Elf64_Sym) || s->sh_link >= eh->e_shnum)
                 continue;
-            const Elf64_Shdr *strh = &sh[sh[i].sh_link];
+            const Elf64_Shdr *strh = ASMSPY_SHDR(s->sh_link);
             if (strh->sh_offset >= flen)
                 continue;
             const char *strtab = (const char *)(base + strh->sh_offset);
@@ -461,14 +467,12 @@ static void load_module_syms(pid_t pid, const module_t *mod,
             size_t strmax = strh->sh_size <= flen - strh->sh_offset
                                 ? strh->sh_size
                                 : flen - strh->sh_offset;
-            if (sh[i].sh_offset > flen ||
-                sh[i].sh_size > flen - sh[i].sh_offset)
+            if (s->sh_offset > flen || s->sh_size > flen - s->sh_offset)
                 continue;
-            size_t count = sh[i].sh_size / sh[i].sh_entsize;
+            size_t count = s->sh_size / s->sh_entsize;
             for (size_t j = 0; j < count; j++) {
                 const Elf64_Sym *sy =
-                    (const Elf64_Sym *)(base + sh[i].sh_offset +
-                                        j * sh[i].sh_entsize);
+                    (const Elf64_Sym *)(base + s->sh_offset + j * s->sh_entsize);
                 if (ELF64_ST_TYPE(sy->st_info) != STT_FUNC)
                     continue;
                 if (sy->st_shndx == SHN_UNDEF || sy->st_value == 0)
@@ -488,6 +492,7 @@ static void load_module_syms(pid_t pid, const module_t *mod,
         if (found) /* symtab present -> don't also read dynsym (dupes) */
             break;
     }
+#undef ASMSPY_SHDR
 
 done:
     munmap(base, flen);

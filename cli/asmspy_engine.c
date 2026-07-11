@@ -61,6 +61,10 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
     const char *m;
     switch (rc) {
     case 0: m = "ok"; break;
+    case ASMSPY_REGION_NEVER_RAN:
+        m = "region never observed executing (multi-threaded target? --trace "
+            "follows only the main thread)";
+        break;
     case ASMTEST_PTRACE_EINVAL: m = "invalid argument"; break;
     case ASMTEST_PTRACE_EUNAVAIL: m = "tracer unavailable on this host"; break;
     case ASMTEST_PTRACE_ENOSYS: m = "backend not built in"; break;
@@ -440,8 +444,12 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
     if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)opts) != 0)
         return -1;
     ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
-    if (!thr_get(tab, pid))
+    if (!thr_get(tab, pid)) {
+        /* OOM tabling the leader: DETACH so the target is not left seize-stopped
+         * for asmspy's lifetime (the empty table means detach_threads can't). */
+        ptrace(PTRACE_DETACH, pid, NULL, NULL);
         return -1;
+    }
 
     char path[64];
     snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
@@ -459,8 +467,11 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
                 continue;
             if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) == 0) {
                 ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
-                thr_get(tab, tid);
-                added = 1;
+                if (thr_get(tab, tid))
+                    added = 1;
+                else
+                    /* OOM: can't track it — DETACH rather than strand it seized. */
+                    ptrace(PTRACE_DETACH, tid, NULL, NULL);
             }
         }
         closedir(d);
@@ -585,10 +596,24 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
+        /* A job-control group-stop under SEIZE (^Z / SIGSTOP / tty SIGTTIN/TTOU)
+         * arrives as PTRACE_EVENT_STOP with the stopping signal. Resuming it with
+         * PTRACE_SYSCALL would keep the target running while it should be suspended;
+         * PTRACE_LISTEN leaves it stopped (honoring ^Z) yet traced — it wakes on
+         * SIGCONT. */
+        if (event == PTRACE_EVENT_STOP &&
+            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU)) {
+            thr_get(&tab, tid);
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
         /* Otherwise: the initial INTERRUPT/EVENT_STOP, a clone child's first
-         * stop, an exec-stop, a group-stop, or a real signal-delivery-stop.
-         * Register a first-seen tid and resume; forward only a genuine signal,
-         * never re-injecting SIGTRAP or a group-stop. */
+         * stop, an exec-stop, or a real signal-delivery-stop. Register a
+         * first-seen tid and resume; forward only a genuine signal. An
+         * app-delivered SIGTRAP is intentionally not re-injected (indistinguishable
+         * here from a ptrace-synthesized one) — a documented spy limitation. */
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
@@ -674,6 +699,11 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 
     free(code);
     ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    /* Detached cleanly but never saw the region run (and the user didn't quit):
+     * report it distinctly so the caller can hint that a multi-threaded target may
+     * execute the function on a worker thread — run_to only steps the leader here. */
+    if (sample == 0 && !(stop && atomic_load(stop)))
+        return ASMSPY_REGION_NEVER_RAN;
     return 0;
 }
 
@@ -782,9 +812,21 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
-        /* the initial INTERRUPT stop, a clone child's first stop, an exec-stop,
-         * a group-stop, or a real signal-delivery-stop: resume stepping and
-         * forward only a genuine signal (never SIGTRAP or a group-stop). */
+        /* A job-control group-stop (^Z / SIGSTOP / tty) under SEIZE arrives as
+         * PTRACE_EVENT_STOP with the stopping signal: PTRACE_LISTEN so the target
+         * stays suspended (honoring ^Z) instead of being single-stepped onward. */
+        if (event == PTRACE_EVENT_STOP &&
+            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU)) {
+            thr_get(&tab, tid);
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        /* the initial INTERRUPT stop, a clone child's first stop, an exec-stop, or
+         * a real signal-delivery-stop: resume stepping and forward only a genuine
+         * signal. An app-delivered SIGTRAP is intentionally not re-injected
+         * (indistinguishable here from the single-step trap). */
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
