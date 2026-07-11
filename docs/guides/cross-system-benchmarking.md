@@ -190,7 +190,8 @@ which is exactly why both dimensions exist.
               "vendor": "...", "cc": "...", "virtualized": false,
               "asmtest_version": "...", "commit": "...", "timestamp": "..." },
   "performance": {
-    "native":   { "unit": "cyc",  "benchmarks": [ { "name": "...", "median": 7.1, ... } ] },
+    "native":   { "unit": "cyc",  "benchmarks": [ { "name": "...", "min": 6.9, "median": 7.1,
+                    "mean": 7.2, "stddev": 0.3, "cv": 0.04, "reps": 4096 } ] },
     "emulated": { "unit": "insn", "benchmarks": [ { "name": "...", "arch": "arm64",
                     "kind": "insns", "value": 3, "unit": "insn",
                     "deterministic": true, "complete": true, "blocks": 1 } ] }
