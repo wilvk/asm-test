@@ -69,9 +69,13 @@ endif
 $(BUILD)/spy_victim: $(BUILD)/spy_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# threads_victim is multi-threaded (thread-follow smoke), so it links -pthread.
+$(BUILD)/threads_victim: $(BUILD)/threads_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
-           $(BUILD)/spy_victim
+           $(BUILD)/spy_victim $(BUILD)/threads_victim
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

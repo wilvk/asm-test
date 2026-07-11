@@ -14,7 +14,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every syscall named from a table generated against the host's own `<sys/syscall.h>`, `read`/
   `write` buffers and path arguments decoded, `read`/`write` file descriptors resolved to
   their path/socket/pipe via `/proc/<pid>/fd` like `strace -y`, decoded strings split into
-  their own pane), a
+  their own pane; the syscall stream follows **every thread** of the target — `PTRACE_SEIZE`
+  of all tasks plus `PTRACE_O_TRACECLONE` for threads spawned later, each line tagged `[tid]`
+  when more than one is followed, entry/exit read from `PTRACE_GET_SYSCALL_INFO` so seizing a
+  thread mid-syscall never desyncs), a
   chosen **function's assembly** with
   per-instruction execution **heat counts** plus its callees **ranked by call count**
   (resampled each time the target calls it), and a **whole-process live instruction stream**

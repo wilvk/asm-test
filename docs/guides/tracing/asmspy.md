@@ -208,11 +208,20 @@ $ asmspy --trace 1234 0x7f00c0de00:0x40     # 64 bytes of code no symbol covers
 
 asmspy is glue over primitives documented elsewhere; the interesting parts:
 
-- **Attach seam.** It `PTRACE_ATTACH`es the pid you choose (it does *not* spawn
-  it), then drives the library's
+- **Attach seam.** It attaches to the pid you choose (it does *not* spawn it),
+  then drives the library's
   [`asmtest_ptrace_run_to`](native-tracing.md#out-of-process-variant-w2--ptrace)
   + `asmtest_ptrace_trace_attached_ex` per sample, or a `PTRACE_SYSCALL`
-  entry/exit loop for the syscall stream. On quit it `PTRACE_DETACH`es.
+  entry/exit loop for the syscall stream. On quit it detaches.
+- **Whole-process thread following (syscall stream).** The syscall log
+  `PTRACE_SEIZE`s *every* thread of the target and, via `PTRACE_O_TRACECLONE`,
+  every thread it later spawns, then drives them all from one
+  `waitpid(-1, __WALL)` loop — so a multi-threaded server shows the syscalls of
+  all its workers, not just the main thread. Each line is prefixed `[tid]` once
+  more than one thread is followed. Entry-vs-exit is read from
+  `PTRACE_GET_SYSCALL_INFO` (Linux 5.3+), so seizing a thread mid-syscall does
+  not desync the pairing; on older kernels it falls back to an entry/exit toggle.
+  (The region sampler and live instruction stream still single-step one thread.)
 - **One tracer thread.** `ptrace` is per-thread — every `ptrace` call and
   `waitpid` for a tracee must come from the thread that attached it — so a single
   dedicated tracer thread owns the whole ptrace lifecycle while the ncurses UI

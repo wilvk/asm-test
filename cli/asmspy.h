@@ -99,9 +99,11 @@ const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
                                     const char *str);
 
-/* Attach to `pid`, stream its syscalls with decoded data via `sink`, detach.
- * Returns 0 on clean detach, negative (an ASMTEST_PTRACE_* spirit code) on an
- * attach failure. */
+/* Attach to `pid` and ALL its threads (PTRACE_SEIZE every task, follow threads
+ * it later spawns via PTRACE_O_TRACECLONE), stream their syscalls with decoded
+ * data via `sink`, detach. When more than one thread is followed each `line` is
+ * prefixed "[tid] " so the interleaved streams stay distinguishable. Returns 0
+ * on clean detach, negative (an ASMTEST_PTRACE_* spirit code) on attach failure. */
 int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx);
 

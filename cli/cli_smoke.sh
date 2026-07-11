@@ -50,7 +50,8 @@ echo "bad arguments rejected"
 AVPID=$!
 SVPID=""
 WVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} 2>/dev/null || true' EXIT INT TERM
+TVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -117,5 +118,22 @@ printf '%s\n' "$out" | grep -qE 'write\(fd=[0-9]+</tmp/asmtest_syscall_demo.txt>
 # both prove naming + path decoding, which is the point.
 printf '%s\n' "$out" | grep -qE '(access|faccessat2?)\(.*"/tmp/asmtest_syscall_demo.txt"' \
     || fail "access() not named+path-decoded (syscall table / path decode regressed)"
+
+# thread following: a MULTI-threaded victim (main + 3 workers, all syscalling).
+# asmspy must SEIZE every thread and tag each line "[tid]", so we see >1 distinct
+# tid. timeout-guarded: a thread-follow deadlock would otherwise hang the smoke.
+"$BUILD/threads_victim" 2>/dev/null &
+TVPID=$!
+sleep 1
+echo "--- asmspy --log $TVPID 80 (follow all threads) ---"
+set +e
+out=$(timeout 30 "$ASM" --log "$TVPID" 80 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log hung on a multi-threaded target (thread-follow deadlock)"
+printf '%s\n' "$out" | head -8
+ntids=$(printf '%s\n' "$out" | sed -n 's/^\[\([0-9][0-9]*\)\].*/\1/p' | sort -u | wc -l)
+echo "distinct tids seen: $ntids"
+[ "$ntids" -ge 2 ] || fail "expected syscalls from >=2 threads, saw $ntids (thread-follow regressed)"
+kill "$TVPID" 2>/dev/null || true
 
 echo "cli-smoke: PASS"

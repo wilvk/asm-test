@@ -11,6 +11,7 @@
  * return EINTR, the engine sees *stop, detaches, and returns.
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -341,64 +342,259 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
     (void)o;
 }
 
+/* ================================================================== */
+/* Multi-thread ptrace following (shared by the syscall + stream loops) */
+/*                                                                      */
+/* ptrace is per-thread, so to watch a whole process we PTRACE_SEIZE     */
+/* every thread and — via PTRACE_O_TRACECLONE — every thread it later    */
+/* spawns, then drive them all from one waitpid(-1, __WALL) loop on this */
+/* thread. SEIZE (not ATTACH) lets new threads auto-attach and lets us   */
+/* set options atomically at attach.                                     */
+/* ================================================================== */
+
+#ifndef __WALL
+#define __WALL 0x40000000 /* wait for children AND threads (clone tasks) */
+#endif
+
+/* PTRACE_GET_SYSCALL_INFO (Linux 5.3+) says authoritatively whether a
+ * syscall-stop is an ENTRY or an EXIT — immune to the desync a bare entry/exit
+ * toggle suffers when we SEIZE a thread already blocked inside a syscall (its
+ * next stop is that syscall's EXIT, which a toggle would miscount as an entry). */
+#ifndef PTRACE_GET_SYSCALL_INFO
+#define PTRACE_GET_SYSCALL_INFO 0x420e
+#endif
+#ifndef PTRACE_SYSCALL_INFO_ENTRY
+#define PTRACE_SYSCALL_INFO_ENTRY 1
+#endif
+#ifndef PTRACE_SYSCALL_INFO_EXIT
+#define PTRACE_SYSCALL_INFO_EXIT 2
+#endif
+
+/* 1 = entry, 0 = exit, -1 = unknown (pre-5.3 kernel; caller uses its toggle). */
+static int syscall_stop_is_entry(pid_t tid) {
+    unsigned char info[64] = {0}; /* .op is byte 0; that is all we read */
+    long r = ptrace(PTRACE_GET_SYSCALL_INFO, tid, (void *)sizeof info, info);
+    if (r <= 0)
+        return -1;
+    if (info[0] == PTRACE_SYSCALL_INFO_ENTRY)
+        return 1;
+    if (info[0] == PTRACE_SYSCALL_INFO_EXIT)
+        return 0;
+    return -1;
+}
+
+/* Per-thread syscall entry/exit bookkeeping (the stream loop uses only .tid). */
+typedef struct {
+    pid_t tid;
+    int at_entry;                  /* fallback toggle: next stop is an ENTRY */
+    long ent_nr;                   /* syscall nr captured at entry, -1 if none */
+    struct user_regs_struct entry; /* register snapshot at that entry */
+} thr_t;
+
+typedef struct {
+    thr_t *v;
+    size_t n, cap;
+} thr_tab_t;
+
+static int thr_find(const thr_tab_t *t, pid_t tid) {
+    for (size_t i = 0; i < t->n; i++)
+        if (t->v[i].tid == tid)
+            return (int)i;
+    return -1;
+}
+
+/* Find `tid`, adding a fresh entry if absent. NULL only on allocation failure. */
+static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
+    int i = thr_find(t, tid);
+    if (i >= 0)
+        return &t->v[i];
+    if (t->n == t->cap) {
+        size_t nc = t->cap ? t->cap * 2 : 16;
+        thr_t *nv = realloc(t->v, nc * sizeof *nv);
+        if (!nv)
+            return NULL;
+        t->v = nv;
+        t->cap = nc;
+    }
+    thr_t *e = &t->v[t->n++];
+    e->tid = tid;
+    e->at_entry = 1;
+    e->ent_nr = -1;
+    memset(&e->entry, 0, sizeof e->entry);
+    return e;
+}
+
+static void thr_del(thr_tab_t *t, pid_t tid) {
+    int i = thr_find(t, tid);
+    if (i >= 0)
+        t->v[i] = t->v[--t->n]; /* order is irrelevant */
+}
+
+/* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
+ * be kicked into tracing. Re-scan /proc/<pid>/task until a full pass adds none,
+ * closing the race where a not-yet-seized thread spawns another (a thread
+ * spawned by an ALREADY-seized thread is auto-caught by PTRACE_O_TRACECLONE).
+ * Returns 0 once the MAIN thread is seized (a secondary thread that vanished
+ * meanwhile is skipped); -1 if even the main thread cannot be seized. */
+static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
+    if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)opts) != 0)
+        return -1;
+    ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
+    if (!thr_get(tab, pid))
+        return -1;
+
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
+    for (int pass = 0; pass < 16; pass++) {
+        DIR *d = opendir(path);
+        if (!d)
+            break;
+        int added = 0;
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9')
+                continue;
+            pid_t tid = (pid_t)strtol(de->d_name, NULL, 10);
+            if (tid <= 0 || thr_find(tab, tid) >= 0)
+                continue;
+            if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) == 0) {
+                ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+                thr_get(tab, tid);
+                added = 1;
+            }
+        }
+        closedir(d);
+        if (!added)
+            break; /* stable: a full pass found no new thread */
+    }
+    return 0;
+}
+
+/* Stop tracing: INTERRUPT each tracee, drain to its next ptrace-stop, then
+ * DETACH so it runs on normally. A thread already gone is simply reaped. Frees
+ * the table. */
+static void detach_threads(thr_tab_t *tab) {
+    for (size_t i = 0; i < tab->n; i++) {
+        pid_t tid = tab->v[i].tid;
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        for (;;) {
+            int st;
+            pid_t r = waitpid(tid, &st, __WALL);
+            if (r < 0) {
+                if (errno == EINTR)
+                    continue;
+                break; /* ECHILD — already gone */
+            }
+            if (WIFEXITED(st) || WIFSIGNALED(st))
+                break; /* gone; nothing to detach */
+            if (WIFSTOPPED(st)) {
+                ptrace(PTRACE_DETACH, tid, NULL, NULL);
+                break;
+            }
+        }
+    }
+    free(tab->v);
+    tab->v = NULL;
+    tab->n = tab->cap = 0;
+}
+
 int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx) {
     arm_quit_wake();
 
-    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0)
-        return ASMTEST_PTRACE_ETRACE;
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    thr_tab_t tab = {0};
+    long opts = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE;
+    if (seize_threads(pid, opts, &tab) != 0) {
+        detach_threads(&tab); /* frees the (empty) table */
         return ASMTEST_PTRACE_ETRACE;
     }
-    ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)PTRACE_O_TRACESYSGOOD);
 
-    int at_entry = 1, deliver = 0;
-    long ent_nr = -1, done = 0;
-    struct user_regs_struct entry_regs;
-    memset(&entry_regs, 0, sizeof entry_regs);
+    /* Tag each line with its tid once we follow more than one thread, so a
+     * multi-threaded target stays legible (like `strace -f`); a single-threaded
+     * target keeps the clean, unprefixed line the callers already expect. */
+    int multi = tab.n > 1;
+    long done = 0;
 
     while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
-        if (ptrace(PTRACE_SYSCALL, pid, NULL, (void *)(long)deliver) != 0)
-            break;
-        deliver = 0;
-        if (waitpid(pid, &status, 0) < 0) {
-            if (errno == EINTR && stop && atomic_load(stop))
-                break;
-            if (errno == EINTR)
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
                 continue;
-            break;
+            }
+            break; /* ECHILD — every tracee is gone */
         }
-        if (WIFEXITED(status) || WIFSIGNALED(status))
-            break;
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
         if (!WIFSTOPPED(status))
             continue;
 
         int sig = WSTOPSIG(status);
-        if (sig == (SIGTRAP | 0x80)) {
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
-                break;
-            if (at_entry) {
-                ent_nr = (long)regs.orig_rax;
-                entry_regs = regs;
-                at_entry = 0;
-            } else {
-                char line[1024], sdata[512];
-                format_syscall(line, sizeof line, sdata, sizeof sdata, pid,
-                               ent_nr, &entry_regs, (long)regs.rax);
-                if (sink)
-                    sink(ctx, line, sdata[0] ? sdata : NULL);
-                at_entry = 1;
-                done++;
+        int event = (status >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
+                thr_get(&tab, (pid_t)child); /* also fine if we saw it first */
+                multi = 1;
             }
-        } else if (sig != SIGTRAP) {
-            deliver = sig; /* forward a real signal */
+            ptrace(PTRACE_SYSCALL, tid, NULL, NULL); /* resume the parent */
+            continue;
         }
+
+        if (sig == (SIGTRAP | 0x80)) { /* syscall-stop (TRACESYSGOOD) */
+            thr_t *ts = thr_get(&tab, tid);
+            struct user_regs_struct regs;
+            if (ts && ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+                int entry = syscall_stop_is_entry(tid);
+                if (entry < 0)
+                    entry = ts->at_entry; /* pre-5.3 fallback toggle */
+                if (entry) {
+                    ts->ent_nr = (long)regs.orig_rax;
+                    ts->entry = regs;
+                    ts->at_entry = 0;
+                } else if (ts->ent_nr >= 0) { /* skip an exit we saw no entry for */
+                    char line[1024], sdata[512], out[1088];
+                    format_syscall(line, sizeof line, sdata, sizeof sdata, tid,
+                                   ts->ent_nr, &ts->entry, (long)regs.rax);
+                    const char *emit = line;
+                    if (multi) {
+                        snprintf(out, sizeof out, "[%d] %s", (int)tid, line);
+                        emit = out;
+                    }
+                    if (sink)
+                        sink(ctx, emit, sdata[0] ? sdata : NULL);
+                    ts->at_entry = 1;
+                    ts->ent_nr = -1;
+                    done++;
+                } else {
+                    ts->at_entry = 1;
+                }
+            }
+            ptrace(PTRACE_SYSCALL, tid, NULL, NULL);
+            continue;
+        }
+
+        /* Otherwise: the initial INTERRUPT/EVENT_STOP, a clone child's first
+         * stop, an exec-stop, a group-stop, or a real signal-delivery-stop.
+         * Register a first-seen tid and resume; forward only a genuine signal,
+         * never re-injecting SIGTRAP or a group-stop. */
+        int deliver = 0;
+        if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
+            deliver = sig;
+        thr_get(&tab, tid);
+        ptrace(PTRACE_SYSCALL, tid, NULL, (void *)(long)deliver);
     }
 
-    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    detach_threads(&tab);
     return 0;
 }
 
