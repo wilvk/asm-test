@@ -442,6 +442,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Four defects found by a deep multi-agent audit of the whole tree** (each survived
+  double adversarial verification; the newest subsystem — `asmspy` — and the AMD/LBR, PT,
+  single-step, orchestration and FFI-binding layers came back clean). (1) **Reused-handle
+  determinism leak in two emulator guests.** The x86 and arm64 setups zero the GP + vector
+  register file before every call so a routine that reads a register the caller did not set
+  gets a deterministic `0`; the **RISC-V** (`emu_riscv_setup`) and **ARM32** (`emu_arm_setup`)
+  setups omitted it, so a long-lived handle (how every binding holds it) leaked the previous
+  call's callee-saved / FP-lane state into the next call and returned a stale result with
+  `ok=true`. Both now zero registers (x1..x31 + f0..f31 / r0..r12 + d0..d31 + condition
+  flags) like the other two guests. (2) **In-process stealth stepper could busy-hang
+  forever.** `asmtest_hwtrace_stealth_trace`'s `while (!sc->ready)` spin only checked for
+  early helper death under `if (use_exec)`; in the in-process fork fallback (common under the
+  ptrace-restricted container/CI posture this project targets) a helper killed by
+  seccomp/OOM/watchdog before publishing `ready` left the caller spinning at 100% CPU. The
+  `waitpid(WNOHANG)` death check now runs unconditionally, matching the two windowed spins.
+  (3) **Block-step tracer leaked its owned tracee on overflow.**
+  `asmtest_ptrace_trace_call_blockstep` broke out on a `blockstep_reconstruct` failure
+  (stream full / undecodable insn / no in-region terminator) with `rc` still OK, so the
+  post-loop cleanup — which only reaps on `rc != OK` — left the forked child alive,
+  ptrace-stopped and unreaped; repeated calls could exhaust PIDs. It now `kill`+`waitpid`s on
+  that path like the other overflow breaks. (4) **DynamoRIO recording stack could pop a live
+  region on deep nesting.** The client's `on_begin` pushed only while `depth < MAX_DEPTH` but
+  `on_end` always decremented, so nesting past 16 distinctly-named regions desynced the
+  per-thread stack and silently dropped coverage with `truncated` left `0`. `on_begin` now
+  tracks the true nesting depth unconditionally (matching the app side) and flags the trace
+  `truncated` when a region falls outside the storable window — upholding the never-present-a-
+  partial-trace-as-complete invariant.
+
 - **Native-trace "honesty" gaps — three places a partial capture could escape without its
   `truncated` flag.** The framework's core invariant is that an incomplete trace is never
   presented as complete; a review found three leaks and they are now closed. (1) The

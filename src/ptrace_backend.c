@@ -1675,7 +1675,13 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
         uint64_t last_off = 0;
         if (!blockstep_reconstruct((const uint8_t *)code, len, base_ip,
                                    prev_off, pc, stream, &n, &last_off)) {
+            /* Stream full / undecodable / no in-region terminator: the child is
+             * still ptrace-stopped and owned here, and rc stays OK so the
+             * post-loop cleanup will not reap it — kill+reap now, as the other
+             * overflow breaks do (PTRACE_O_EXITKILL only fires on tracer exit). */
             overflow = 1;
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
             break;
         }
 

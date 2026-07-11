@@ -1070,6 +1070,19 @@ static void read_all_regs_riscv(uc_engine *uc, emu_riscv_regs_t *r) {
         uc_reg_read(uc, UC_RISCV_REG_F0 + i, &r->f[i].u64[0]);
 }
 
+/* RISC-V analog of emu_x86_zero_regs: clear x1..x31 and the whole f0..f31 file
+ * before a call so a routine reading a register/lane the caller did not set gets
+ * a deterministic 0 rather than the previous call's state on a reused handle (all
+ * bindings hold one long-lived handle across many calls). x0 is hardwired zero;
+ * sp/ra/args are set by the setup afterward. */
+static void emu_riscv_zero_regs(uc_engine *uc) {
+    uint64_t z = 0;
+    for (int i = 1; i <= 31; i++) /* x0 is hardwired zero */
+        uc_reg_write(uc, UC_RISCV_REG_X0 + i, &z);
+    for (int i = 0; i < 32; i++) /* f0..f31 (D ext, 64-bit) */
+        uc_reg_write(uc, UC_RISCV_REG_F0 + i, &z);
+}
+
 /* Shared RISC-V setup: code + flush, sentinel ra, 16-aligned sp, integer args
  * in a0..a7 (x10..x17). Returns false only on a code-write failure. */
 static bool emu_riscv_setup(uc_engine *uc, const void *code, size_t code_len,
@@ -1079,6 +1092,7 @@ static bool emu_riscv_setup(uc_engine *uc, const void *code, size_t code_len,
         UC_RISCV_REG_X14, UC_RISCV_REG_X15, UC_RISCV_REG_X16, UC_RISCV_REG_X17};
     if (!load_code(uc, code, code_len))
         return false;
+    emu_riscv_zero_regs(uc); /* deterministic start: clear stale reg state */
     uint64_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 16-aligned */
     uc_reg_write(uc, UC_RISCV_REG_SP, &sp);
     uint64_t ra = EMU_RET_MAGIC; /* `ret` is jalr x0, 0(ra) */
@@ -1220,6 +1234,25 @@ static void read_all_regs_arm(uc_engine *uc, emu_arm_regs_t *r) {
         uc_reg_read(uc, UC_ARM_REG_D0 + i, &r->q[i / 2].f64[i % 2]);
 }
 
+/* ARM32 analog of emu_x86_zero_regs: clear r0..r12, the condition flags
+ * (APSR N/Z/C/V/Q), and the whole d0..d31 NEON file before a call so a routine
+ * reading a register/lane the caller did not set gets a deterministic 0 rather
+ * than the previous call's state on a reused handle. SP/LR/args are set by the
+ * setup; the CPSR mode + Thumb (T) bits are preserved (clearing them would put
+ * the core in an invalid state). */
+static void emu_arm_zero_regs(uc_engine *uc) {
+    uint32_t z = 0;
+    for (int i = 0; i <= 12; i++) /* r0..r12 are consecutive enum values */
+        uc_reg_write(uc, UC_ARM_REG_R0 + i, &z);
+    uint64_t dz = 0;
+    for (int i = 0; i < 32; i++) /* d0..d31 */
+        uc_reg_write(uc, UC_ARM_REG_D0 + i, &dz);
+    uint32_t cpsr = 0;
+    uc_reg_read(uc, UC_ARM_REG_CPSR, &cpsr);
+    cpsr &= ~0xF8000000u; /* clear N,Z,C,V,Q; keep mode/T/IT state */
+    uc_reg_write(uc, UC_ARM_REG_CPSR, &cpsr);
+}
+
 /* Shared AAPCS setup: code + flush, sentinel lr, 8-aligned sp, integer args in
  * r0..r3 (32-bit). Returns false only on a code-write failure. */
 static bool emu_arm_setup(uc_engine *uc, const void *code, size_t code_len,
@@ -1228,6 +1261,7 @@ static bool emu_arm_setup(uc_engine *uc, const void *code, size_t code_len,
                                     UC_ARM_REG_R3};
     if (!load_code(uc, code, code_len))
         return false;
+    emu_arm_zero_regs(uc); /* deterministic start: clear stale reg state */
     uint32_t sp = EMU_STACK_BASE + EMU_STACK_SIZE - 16; /* 8-aligned (AAPCS) */
     uc_reg_write(uc, UC_ARM_REG_SP, &sp);
     uint32_t lr = EMU_RET_MAGIC; /* `bx lr` branches to lr */

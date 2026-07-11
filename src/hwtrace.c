@@ -2516,17 +2516,17 @@ int asmtest_hwtrace_stealth_trace(const void *base, size_t len,
     /* CALLER (tracee): wait (busy, no syscall) until the helper has seized us and is
      * ready; we are INTERRUPT-stopped during this spin and only resume — seeing
      * `ready` — once the helper's run_to CONTs us with the entry breakpoint planted,
-     * so the region cannot run untraced. In the bundled path also break if the
-     * exec'd helper dies before publishing `ready` (a bad binary), so we never spin
-     * forever waiting on a process that will never signal us. */
+     * so the region cannot run untraced. Break if the helper — the exec'd binary
+     * (a bad binary) OR the in-process fork (killed by seccomp/OOM/watchdog before
+     * it reaches `ready`) — dies first, so we never spin forever on a process that
+     * will never signal us. The two windowed spins do this same check
+     * unconditionally; `helper` is a valid fork pid in both paths. */
     int helper_gone = 0;
     while (!sc->ready) {
-        if (use_exec) {
-            int ws = 0;
-            if (waitpid(helper, &ws, WNOHANG) == helper) {
-                helper_gone = 1;
-                break;
-            }
+        int ws = 0;
+        if (waitpid(helper, &ws, WNOHANG) == helper) {
+            helper_gone = 1;
+            break;
         }
     }
     if (helper_gone) {

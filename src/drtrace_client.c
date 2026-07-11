@@ -87,7 +87,10 @@ static region_t *region_for_pc(app_pc pc) {
 static bool thread_recording(thread_state_t *ts, at_trace_t *tr) {
     if (ts == NULL)
         return false;
-    for (int i = 0; i < ts->depth; i++)
+    /* depth is the true nesting count and may exceed MAX_DEPTH; only the outer
+     * MAX_DEPTH frames are stored, so bound the scan to the array. */
+    int top = ts->depth < MAX_DEPTH ? ts->depth : MAX_DEPTH;
+    for (int i = 0; i < top; i++)
         if (ts->stack[i] == tr)
             return true;
     return false;
@@ -202,13 +205,20 @@ static void on_begin(app_pc name) {
             break;
         }
     dr_mutex_unlock(g_region_lock);
-    /* Push UNCONDITIONALLY (even tr == NULL for a begin naming an unregistered
-     * region) so the recording stack stays balanced with on_end, which pops on
-     * every end. A NULL entry never matches a real trace in thread_recording(),
-     * so it records nothing but preserves nesting — otherwise an unmatched begin
-     * would let a later end pop a still-active region and silently drop coverage. */
+    /* Track the true nesting depth UNCONDITIONALLY (even tr == NULL for a begin
+     * naming an unregistered region) so the recording stack stays balanced with
+     * on_end, which pops on every end. A NULL entry never matches a real trace in
+     * thread_recording(), so it records nothing but preserves nesting — otherwise
+     * an unmatched begin would let a later end pop a still-active region and
+     * silently drop coverage. Only the outer MAX_DEPTH frames fit the array
+     * (matching the app side's g_active_depth); beyond that the innermost region
+     * cannot be recorded, so flag the trace truncated rather than silently drop it
+     * and present a partial trace as complete. */
     if (ts->depth < MAX_DEPTH)
-        ts->stack[ts->depth++] = tr;
+        ts->stack[ts->depth] = tr;
+    else if (tr != NULL)
+        tr->truncated = 1;
+    ts->depth++;
 }
 
 static void on_end(app_pc name) {
