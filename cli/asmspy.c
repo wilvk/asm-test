@@ -12,6 +12,7 @@
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
  *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph
+ *   asmspy --tree   <pid> [n]         whole-process live call tree (indented by depth)
  *
  * A negative n streams until the target exits or you interrupt.
  */
@@ -340,6 +341,20 @@ static int cmd_stream(pid_t pid, long n) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
     int rc = asmspy_engine_stream(pid, n, NULL, &t, stream_print_sink, NULL);
+    asmspy_symtab_free(&t);
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "attach failed: %s\n", e);
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_tree(pid_t pid, long n) {
+    asmspy_symtab_t t;
+    asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
+    int rc = asmspy_engine_tree(pid, n, NULL, &t, stream_print_sink, NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
@@ -717,6 +732,9 @@ static void *tracer_thread(void *arg) {
     else if (L->mode == 3)
         rc = asmspy_engine_graph(L->pid, -1, &L->stop, L->syms, live_graph_sink,
                                  L);
+    else if (L->mode == 4)
+        rc = asmspy_engine_tree(L->pid, -1, &L->stop, L->syms, live_stream_sink,
+                                L);
     else
         rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
                                   live_region_sink, L);
@@ -765,7 +783,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
         int log_h = rows - 3 > 0 ? rows - 3 : 1;
-        int is_log = (mode == 0 || mode == 2); /* scrollable log views */
+        /* scrollable log views: syscalls, instruction stream, call tree */
+        int is_log = (mode == 0 || mode == 2 || mode == 4);
         erase();
         attron(A_BOLD);
         mvprintw(0, 0, "%.*s", cols, title);
@@ -798,10 +817,13 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 mvaddch(r, midx, ACS_VLINE);
             draw_log_at(&L.log, 2, 0, h, lw, paused ? vbottom : lognewest);
             draw_log_at(&L.strlog, 2, rx, h, rw, paused ? vstr : strnewest);
-        } else if (mode == 2) {
-            /* single-pane live instruction stream (function + assembly) */
+        } else if (mode == 2 || mode == 4) {
+            /* single-pane live log: instruction stream (2) or call tree (4) */
             attron(A_BOLD);
-            mvprintw(1, 0, "LIVE STREAM  (function+off [module]   disassembly)");
+            mvprintw(1, 0,
+                     mode == 4
+                         ? "CALL TREE  (-> function [module], indent = call depth)"
+                         : "LIVE STREAM  (function+off [module]   disassembly)");
             attroff(A_BOLD);
             draw_log_at(&L.log, 2, 0, rows - 3, cols,
                         paused ? vbottom : lognewest);
@@ -979,7 +1001,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(4, 2, "2)  Assembly & funcs   — live disassembly + call-graph of a function");
         mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
         mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable)");
-        mvprintw(rows - 1, 0, "1/2/3/4: choose   b/ESC: back");
+        mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
+        mvprintw(rows - 1, 0, "1/2/3/4/5: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -990,6 +1013,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 2;
         if (ch == '4')
             return 3;
+        if (ch == '5')
+            return 4;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -1199,14 +1224,16 @@ int asmspy_tui(void) {
                          "asmspy — syscalls of pid %d (%.*s)", picked.pid, 40,
                          picked.cmd);
                 nav = run_live_view(picked.pid, 0, 0, 0, title, NULL);
-            } else if (mode == 2 || mode == 3) {
-                /* stream / call graph: symbols best-effort (raw addrs if absent) */
+            } else if (mode == 2 || mode == 3 || mode == 4) {
+                /* stream / graph / tree: symbols best-effort (raw addrs if absent) */
                 asmspy_symtab_t t;
                 asmspy_symtab_load(picked.pid, &t);
+                const char *what = mode == 3   ? "call graph"
+                                   : mode == 4 ? "call tree"
+                                               : "live stream";
                 char title[128];
                 snprintf(title, sizeof title, "asmspy — %s of pid %d (%.*s)",
-                         mode == 3 ? "call graph" : "live stream", picked.pid,
-                         40, picked.cmd);
+                         what, picked.pid, 40, picked.cmd);
                 nav = run_live_view(picked.pid, mode, 0, 0, title, &t);
                 asmspy_symtab_free(&t);
             } else {
@@ -1290,8 +1317,9 @@ static int usage(const char *argv0) {
             "  %s --log    <pid> [n]      stream n syscalls with data\n"
             "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
-            "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n",
-            argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+            "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n"
+            "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n",
+            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -1343,6 +1371,14 @@ int main(int argc, char **argv) {
         if (argc >= 4 && parse_count(argv[3], &n) != 0)
             return bad_arg("count", argv[3]);
         return cmd_stream(pid, n);
+    }
+    if (strcmp(argv[1], "--tree") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        n = 40;
+        if (argc >= 4 && parse_count(argv[3], &n) != 0)
+            return bad_arg("count", argv[3]);
+        return cmd_tree(pid, n);
     }
     if (strcmp(argv[1], "--graph") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

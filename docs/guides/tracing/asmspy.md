@@ -97,7 +97,8 @@ Run `asmspy` with no arguments. It walks four screens:
    marked with `!`. (`Tab`/`r` act when the filter is empty.)
 2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
    `3` the whole-process live instruction stream, `4` the whole-process call
-   graph (caller/callee invocation counts, sortable).
+   graph (caller/callee invocation counts, sortable), `5` the whole-process live
+   call tree (indented by call depth).
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace, `r` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
@@ -119,6 +120,10 @@ Run `asmspy` with no arguments. It walks four screens:
      target's own executable vs. a shared/system library. Press **`s`** to
      toggle the sort between *most-invoked* and *most functions called*
      (fan-out). Built from the same whole-process single-step, so it crawls too.
+   - *Call tree* — a live scrolling feed of function **entries indented by call
+     depth** (`-> function [module]`): a `call` steps in and indents, a `ret`
+     steps back out. It reads as the call tree unfolding in real time. Same
+     whole-process single-step, so the target crawls while it runs.
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
@@ -145,6 +150,7 @@ asmspy --log    <pid> [n]          # stream n syscalls with decoded data (defaul
 asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
 asmspy --stream <pid> [n]          # stream n instructions live: function + disassembly (default 20)
 asmspy --graph  <pid> [n] [--sort=invocations|fanout]  # whole-process call graph over n calls (default 200)
+asmspy --tree   <pid> [n]          # whole-process live call tree, indented by depth (n call lines, default 40)
 ```
 
 A **negative `n`** streams until the target exits or you interrupt. Malformed
@@ -193,6 +199,31 @@ to wherever the next step lands, so the graph is best-effort at signal
 boundaries. Whole-process single-stepping is slow, so the target crawls while
 the graph is built (and resumes full speed on detach). In the TUI (mode `4`) the
 same view refreshes live and **`s`** toggles the sort.
+
+**Call tree** — the same whole-process single-step, rendered as the call tree
+unfolding live: one line per function **entry**, indented by the calling
+thread's current **call depth** (a `call` pushes a level, a `ret` pops one).
+Depth is a per-thread shadow counter, so a tail-call / `longjmp` / signal can
+drift the indentation but never desync fatally. `n` bounds the number of call
+lines (negative = until the target exits); each line is prefixed `[tid]` once
+more than one thread is followed:
+
+```text
+$ asmspy --tree 1234 8
+-> work [spy_victim]
+  -> helper [spy_victim]
+  -> helper [spy_victim]
+-> usleep@plt [spy_victim]
+  -> __nanosleep [libc.so.6]
+    -> clock_nanosleep [libc.so.6]
+-> work [spy_victim]
+  -> helper [spy_victim]
+```
+
+Where `--graph` *aggregates* calls into per-function counts, `--tree` preserves
+the **nesting and order** — the real-time companion to the flat graph. In the
+TUI (mode `5`) the same feed scrolls live, with **`space`** to pause and scroll
+back through history.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
 host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
@@ -308,8 +339,10 @@ non-attachable targets with `!`). In a default container, add
   caller→callee graph by single-stepping every thread — so the target crawls
   while it runs. Direct calls are exact and PLT stubs resolve to `name@plt`, but
   an indirect call (`call rax`) is attributed to wherever the next step lands, so
-  attribution can slip at a signal boundary. It counts *calls*, not a nesting
-  tree — use `--trace` for one function's own call-graph edges.
+  attribution can slip at a signal boundary. `--graph` counts *calls* (flat
+  per-function totals); `--tree` preserves the nesting/order but does not
+  aggregate — its depth is a best-effort shadow counter that a tail-call,
+  `longjmp`, or signal can drift.
 - **Argument decoding is a subset.** Every syscall is *named*, and paths plus
   `write`/`read` buffers are decoded — but other argument types (flags, structs,
   vectors, signal sets) print as raw hex, and a syscall taking no arguments

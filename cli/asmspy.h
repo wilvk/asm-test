@@ -183,6 +183,19 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx);
 
+/* Attach to `pid` and ALL its threads, single-step them, and stream a live,
+ * indented call TREE through `sink` (reusing the stream sink: one formatted line
+ * per function entry, indented by the calling thread's live call depth). Depth
+ * is a per-thread shadow counter — push on CALL, pop on RET (clamped at 0), so a
+ * tail-call/longjmp/signal can drift the indentation but never desync fatally.
+ * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
+ * single-stepping is slow, so the target crawls while traced. Each line is
+ * prefixed "[tid] " once more than one thread is followed. Returns 0 on clean
+ * detach, negative on an attach/availability failure. `syms` may be NULL. */
+int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
+                       const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                       void *ctx);
+
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);
 

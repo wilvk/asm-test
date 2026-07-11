@@ -129,6 +129,19 @@ out=$(timeout 40 "$ASM" --graph "$WVPID" 60 --sort=fanout 2>&1) \
 printf '%s\n' "$out" | grep -q 'functions called' || fail "sort=fanout header missing"
 # a bad --sort value is rejected up front (rc=2), not silently coerced
 expect_badarg "$ASM" --graph "$WVPID" --sort=bogus
+
+# live call tree: same victim (main -> work -> helper). The indentation must
+# reflect real depth — work is called from main (depth 0) and helper from work
+# (depth 1, indented two spaces). timeout-guarded (whole-process single-step).
+echo "--- asmspy --tree $WVPID 30 (live call tree) ---"
+set +e
+out=$(timeout 40 "$ASM" --tree "$WVPID" 30 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree hung (whole-process single-step deadlock)"
+printf '%s\n' "$out" | head -10
+printf '%s\n' "$out" | grep -qE '^-> work ' || fail "tree: work not at depth 0"
+printf '%s\n' "$out" | grep -qE '^  -> helper ' \
+    || fail "tree: helper not nested one level under work"
 kill "$WVPID" 2>/dev/null || true
 
 # syscall log: attach to syscall_victim (does file I/O each loop)

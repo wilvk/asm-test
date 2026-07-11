@@ -395,6 +395,7 @@ typedef struct {
     struct user_regs_struct entry; /* register snapshot at that entry */
     int pending_call;   /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t call_site; /* graph engine: call-site addr of that pending call     */
+    int depth;          /* tree engine: live call depth (push on call, pop on ret) */
 } thr_t;
 
 typedef struct {
@@ -429,6 +430,7 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     memset(&e->entry, 0, sizeof e->entry);
     e->pending_call = 0;
     e->call_site = 0;
+    e->depth = 0;
     return e;
 }
 
@@ -1064,5 +1066,144 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
         sink(ctx, g.node, g.nn);
     free(g.node);
     free(g.edge);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Whole-process live call TREE                                        */
+/* ------------------------------------------------------------------ */
+
+/* Emit one "entered a function" line, indented by the caller's live depth. */
+static void tree_emit(asmspy_stream_sink sink, void *ctx, int multi, pid_t tid,
+                      const asmspy_symtab_t *syms, uint64_t callee, int depth) {
+    if (!sink)
+        return;
+    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, callee) : NULL;
+    char name[200];
+    if (s)
+        snprintf(name, sizeof name, "%s [%s]", s->name, s->module);
+    else
+        snprintf(name, sizeof name, "0x%llx", (unsigned long long)callee);
+    int ind = depth * 2;
+    if (ind > 60) /* clamp runaway / drifted indentation to a sane width */
+        ind = 60;
+    char line[320];
+    if (multi)
+        snprintf(line, sizeof line, "[%d] %*s-> %s", (int)tid, ind, "", name);
+    else
+        snprintf(line, sizeof line, "%*s-> %s", ind, "", name);
+    sink(ctx, line);
+}
+
+int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
+                       const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                       void *ctx) {
+    if (!asmtest_ptrace_available())
+        return ASMTEST_PTRACE_EUNAVAIL;
+
+    arm_quit_wake();
+
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        detach_threads(&tab);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    int multi = tab.n > 1;
+    long emitted = 0; /* call lines produced so far */
+
+    while ((max < 0 || emitted < max) && !(stop && atomic_load(stop))) {
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
+                continue;
+            }
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        int sig = WSTOPSIG(status);
+        int event = (status >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
+                thr_get(&tab, (pid_t)child);
+                multi = 1;
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        if (sig == SIGTRAP && event == 0) { /* a single-step trap */
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+                uint64_t rip = regs.rip;
+                thr_t *ts = thr_get(&tab, tid);
+
+                uint8_t code[16];
+                struct iovec liov = {code, sizeof code};
+                struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
+                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+
+                /* a pending INDIRECT call resolves at its callee entry (= rip) */
+                if (ts && ts->pending_call) {
+                    tree_emit(sink, ctx, multi, tid, syms, rip, ts->depth);
+                    ts->depth++;
+                    ts->pending_call = 0;
+                    emitted++;
+                }
+
+                int isc = 0, isr = 0;
+                if (got >= 1 && asmtest_disas_available())
+                    asmtest_disas_probe(ASMTEST_ARCH_X86_64, code, (size_t)got, 0,
+                                        &isc, &isr);
+                if (isc && ts) {
+                    uint64_t tgt = 0;
+                    if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
+                                                  (size_t)got, rip, 0, &tgt)) {
+                        tree_emit(sink, ctx, multi, tid, syms, tgt, ts->depth);
+                        ts->depth++;
+                        emitted++;
+                    } else {
+                        ts->pending_call = 1; /* indirect: resolve next step */
+                        ts->call_site = rip;
+                    }
+                } else if (isr && ts && ts->depth > 0) {
+                    ts->depth--; /* returned: pop a level (clamped at 0) */
+                }
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        if (event == PTRACE_EVENT_STOP &&
+            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU)) {
+            thr_get(&tab, tid);
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        int deliver = 0;
+        if (event == 0 && sig != SIGTRAP)
+            deliver = sig;
+        thr_get(&tab, tid);
+        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
+    }
+
+    detach_threads(&tab);
     return 0;
 }
