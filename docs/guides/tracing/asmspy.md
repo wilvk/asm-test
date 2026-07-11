@@ -93,14 +93,14 @@ Run `asmspy` with no arguments. It walks four screens:
    **PID**, **most recently active** (a short per-process CPU sample), and a
    **quick string-scan** — samples each process's readable memory and ranks the
    most string-rich (highest alphanumeric density, the `STR` column) first, then
-   by recency. `r` re-scans (re-sampling). Processes you cannot `ptrace` are
-   marked with `!`. (`Tab`/`r` act when the filter is empty.)
+   by recency. `F3` re-scans (re-sampling). Processes you cannot `ptrace` are
+   marked with `!`. (`Tab` acts when the filter is empty.)
 2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
    `3` the whole-process live instruction stream, `4` the whole-process call
    graph (caller/callee invocation counts, sortable), `5` the whole-process live
    call tree (indented by call depth).
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
-   filterable; `Enter` picks the function to trace, `r` reloads the symbols
+   filterable; `Enter` picks the function to trace, `F3` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
 4. **Live view** — depends on the mode:
    - *Syscall log* — a **split** feed: the syscall stream on the left, and the
@@ -117,7 +117,7 @@ Run `asmspy` with no arguments. It walks four screens:
    - *Call graph* — one row per function seen calling or being called, each with
      its **invocation count** (times called), **calls made**, and **fan-out**
      (distinct functions it calls), plus an `[int]`/`[EXT]` marker for the
-     target's own executable vs. a shared/system library. Press **`s`** to
+     target's own executable vs. a shared/system library. Press **`Tab`** to
      toggle the sort between *most-invoked* and *most functions called*
      (fan-out). Built from the same whole-process single-step, so it crawls too.
    - *Call tree* — a live scrolling feed of function **entries indented by call
@@ -198,7 +198,7 @@ Direct calls are attributed exactly; an indirect call (`call rax`) is attributed
 to wherever the next step lands, so the graph is best-effort at signal
 boundaries. Whole-process single-stepping is slow, so the target crawls while
 the graph is built (and resumes full speed on detach). In the TUI (mode `4`) the
-same view refreshes live and **`s`** toggles the sort.
+same view refreshes live and **`Tab`** toggles the sort.
 
 **Call tree** — the same whole-process single-step, rendered as the call tree
 unfolding live: one line per function **entry**, indented by the calling

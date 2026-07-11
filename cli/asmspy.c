@@ -1122,7 +1122,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      is_log ? "space: scroll history   " : "");
         } else if (mode == 3)
             mvprintw(rows - 1, 0,
-                     "s: sort (invocations/functions-called)   b: options   "
+                     "Tab: sort (invocations/functions-called)   b: options   "
                      "q/ESC: processes   (live)");
         else
             mvprintw(rows - 1, 0,
@@ -1141,7 +1141,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             back = 0;
             break;
         }
-        if (mode == 3 && (ch == 's' || ch == 'S'))
+        if (mode == 3 && ch == '\t') /* Tab toggles the sort option */
             L.gsort =
                 L.gsort == GSORT_INVOCATIONS ? GSORT_FANOUT : GSORT_INVOCATIONS;
         if (is_log) {
@@ -1299,7 +1299,7 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
             mvprintw(rows - 1, 0,
-                     "type: filter   Enter: trace   r: reload   ESC: back   "
+                     "type: filter   Enter: trace   F3: reload   ESC: back   "
                      "(%d/%zu)",
                      L.nmatch, t->n);
             clrtoeol();
@@ -1307,7 +1307,7 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
             int ch = getch();
             if (ch == 27)
                 outcome = 2;
-            else if (ch == 'r' && L.flen == 0)
+            else if (ch == KEY_F(3))
                 outcome = 3;
             else {
                 int sel = list_key(&L, ch, rows - 3);
@@ -1399,7 +1399,7 @@ static int screen_procs(asmspy_proc_t *picked) {
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
             mvprintw(rows - 1, 0, "type: filter   Enter: select   Tab: cycle "
-                                  "sort   r: refresh   q: quit");
+                                  "sort   F3: refresh   q: quit");
             clrtoeol();
             refresh();
             int ch = getch();
@@ -1407,7 +1407,7 @@ static int screen_procs(asmspy_proc_t *picked) {
                 outcome = 2;
             else if (ch == '\t')
                 outcome = 3;
-            else if (ch == 'r' && L.flen == 0)
+            else if (ch == KEY_F(3))
                 outcome = 4; /* re-scan (re-samples CPU in activity sort) */
             else {
                 int sel = list_key(&L, ch, rows - 3);
