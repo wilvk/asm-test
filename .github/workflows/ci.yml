@@ -305,14 +305,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config python3 python3-pytest
 
       - name: Build + run the hardware-trace suite (decode validated; capture self-skips)
-        run: make hwtrace-test
+        run: make WERROR=1 hwtrace-test
 
       # The Python single-step wrapper (incl. the scoped-tracing `HwTrace.scope`
       # case) is excluded from the docker matrix (HWTRACE_DOCKER_LANGS), so run it
       # here against the shared lib the recipe builds — otherwise it runs only
       # locally. Self-skips off x86-64 Linux.
       - name: Python wrapper (single-step + scoped tracing)
-        run: make hwtrace-python-test
+        run: make WERROR=1 hwtrace-python-test
 
   # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
   # headless smoke drives every non-interactive subcommand (--list/--syms/
@@ -331,7 +331,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev libncurses-dev pkg-config
 
       - name: Build asmspy + victims, run the headless smoke
-        run: make cli-smoke
+        run: make WERROR=1 cli-smoke
 
   # K2: the cross-language hardware-trace wrappers — each binding's in-process
   # single-step tracer, in the same isolated per-language images the `bindings`
@@ -599,17 +599,38 @@ jobs:
 
   # Quality: clang-format drift (style in .clang-format). A GATE since the
   # one-shot `make fmt` pass (e32a12f) brought the tree clean — new drift now
-  # fails the run. Fix with `make fmt` (CI uses ubuntu-latest's clang-format).
+  # fails the run. Fix with `make fmt` / `make docker-fmt`. Pinned to
+  # clang-format-18 to match `make docker-fmt`'s ubuntu:24.04 (== 18.1.3): the
+  # canonical formatting is 18's, so an unpinned distro clang-format would flag the
+  # whole (clean) tree as drift the day GitHub bumps ubuntu-latest past 24.04.
   format:
     name: format (clang-format)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Install clang-format
-        run: make deps DEPS_ARGS=--format
+      - name: Install clang-format 18 (pinned; matches make docker-fmt)
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
       - name: Report clang-format drift
-        run: make fmt-check
+        run: make fmt-check CLANG_FORMAT=clang-format-18
+
+  # Quality: the documentation site builds warnings-as-errors (SPHINXOPTS=-W, same
+  # as Read the Docs' fail_on_warning), so a broken cross-reference / bad {term} /
+  # malformed directive fails the PR in-repo instead of only reddening RTD after
+  # merge. HTML only (mermaid-cli is a PDF-build dep); mirrors .readthedocs.yaml.
+  docs:
+    name: docs (sphinx -W)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install the docs toolchain
+        run: pip install -r docs/requirements.txt
+      - name: Build the HTML docs (warnings-as-errors)
+        run: make docs
 
   # Quality: coverage of the runner (src/asmtest.c), surfaced as an artifact.
   # Informational, not a gate.

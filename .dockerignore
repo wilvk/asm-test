@@ -28,7 +28,8 @@ bindings/dotnet/bin/
 bindings/dotnet/obj/
 
 # Dockerfiles are read via -f (not from the context) — keep them out of images.
-Dockerfile
-Dockerfile.bindings-base
-bindings/*/Dockerfile
+# Dockerfile* covers every root variant (.cli/.hwtrace/.drtrace/.win64/…); the
+# per-language image builds from bindings/Dockerfile.lang.
+Dockerfile*
+bindings/Dockerfile.lang
 .dockerignore

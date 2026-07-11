@@ -68,6 +68,15 @@ docker-fmt: docker-build
 docker-coverage: docker-build
 	$(_docker_run) make coverage
 
+# Reclaim build artifacts a previous docker/root run left owned by root:root —
+# a recurring footgun where `make clean` (plain rm) and rebuilds then fail with
+# EACCES. Chowns the whole checkout back to the invoking user via a throwaway
+# root container (no image build needed). Run this if `make clean`/`make` starts
+# failing on permission errors after using a `docker-*` lane.
+fix-perms:
+	$(DOCKER) run --rm $(_docker_plat) -v "$(CURDIR)":/src -w /src $(DOCKER_BASE) \
+	  chown -R $(shell id -u):$(shell id -g) .
+
 # Mirror the full Linux matrix in one container, cleaning between phases so the
 # GAS/NASM backends and the sanitizer build don't share stale objects.
 docker-ci: docker-build

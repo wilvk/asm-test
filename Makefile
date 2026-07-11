@@ -92,6 +92,7 @@ help:
 	@echo '  demo-robust     crash/hang containment demo'
 	@echo '  bench           run the benchmark (BENCH) cases'
 	@echo '  clean           remove build artifacts'
+	@echo '  fix-perms       chown root-owned build/ artifacts back to you (after a docker lane)'
 	@echo ''
 	@echo 'Optional tiers (need libunicorn / libkeystone):'
 	@echo '  emu-test        Unicorn-backed emulator suite'
