@@ -117,6 +117,11 @@ printf '%s\n' "$out" | grep -qE 'work[^Z]*fanout=[1-9]' || fail "work fanout not
 printf '%s\n' "$out" | grep -qE 'helper[^Z]*inv=[1-9]' || fail "helper invocations not counted"
 # internal/external tag: work/helper are the target's own exe -> [int]
 printf '%s\n' "$out" | grep -qE '\[int\][^Z]*work' || fail "internal marker missing"
+# a call into libc goes through the PLT: the stub resolves to name@plt and is
+# tagged [EXT] (spy_victim's main calls usleep/fprintf/... via the PLT). This
+# also proves the anonymous-stub node is gone.
+printf '%s\n' "$out" | grep -qE '\[EXT\][^Z]*@plt' \
+    || fail "PLT thunk not resolved to name@plt / tagged external"
 
 echo "--- asmspy --graph $WVPID 60 --sort=fanout ---"
 out=$(timeout 40 "$ASM" --graph "$WVPID" 60 --sort=fanout 2>&1) \

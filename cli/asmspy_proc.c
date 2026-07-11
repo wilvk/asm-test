@@ -492,6 +492,80 @@ static void load_module_syms(pid_t pid, const module_t *mod,
         if (found) /* symtab present -> don't also read dynsym (dupes) */
             break;
     }
+
+    /* PLT thunks: name each stub "<sym>@plt" so a call THROUGH the PLT resolves
+     * to the imported function instead of an anonymous stub. Each .rela.plt[i]
+     * (a JUMP_SLOT reloc -> a .dynsym name) maps to a stub address: .plt.sec[i]
+     * on CET builds (where the caller's `call` lands), else .plt[i+1] (slot 0 is
+     * the resolver PLT0). The loop index i also indexes the slot, so IRELATIVE
+     * (ifunc) entries with no symbol are skipped without misaligning the rest. */
+    if (eh->e_shstrndx && eh->e_shstrndx < eh->e_shnum) {
+        const Elf64_Shdr *shstr = ASMSPY_SHDR(eh->e_shstrndx);
+        if (shstr->sh_offset < flen) {
+            const char *shnames = (const char *)(base + shstr->sh_offset);
+            size_t shmax = shstr->sh_size <= flen - shstr->sh_offset
+                               ? shstr->sh_size
+                               : flen - shstr->sh_offset;
+            const Elf64_Shdr *rela = NULL, *plt = NULL, *pltsec = NULL;
+            for (unsigned i = 0; i < eh->e_shnum; i++) {
+                const Elf64_Shdr *s = ASMSPY_SHDR(i);
+                if (s->sh_name >= shmax)
+                    continue;
+                const char *nm = shnames + s->sh_name;
+                if (memchr(nm, '\0', shmax - s->sh_name) == NULL)
+                    continue;
+                if (s->sh_type == SHT_RELA && strcmp(nm, ".rela.plt") == 0)
+                    rela = s;
+                else if (strcmp(nm, ".plt") == 0)
+                    plt = s;
+                else if (strcmp(nm, ".plt.sec") == 0)
+                    pltsec = s;
+            }
+            const Elf64_Shdr *stub = pltsec ? pltsec : plt;
+            if (rela && stub && rela->sh_entsize >= sizeof(Elf64_Rela) &&
+                rela->sh_offset < flen && rela->sh_size <= flen - rela->sh_offset &&
+                rela->sh_link < eh->e_shnum) {
+                const Elf64_Shdr *dsym = ASMSPY_SHDR(rela->sh_link);
+                const Elf64_Shdr *dstr =
+                    dsym->sh_link < eh->e_shnum ? ASMSPY_SHDR(dsym->sh_link) : NULL;
+                if (dstr && dsym->sh_entsize >= sizeof(Elf64_Sym) &&
+                    dsym->sh_offset < flen &&
+                    dsym->sh_size <= flen - dsym->sh_offset &&
+                    dstr->sh_offset < flen) {
+                    const char *dyns = (const char *)(base + dstr->sh_offset);
+                    size_t dynmax = dstr->sh_size <= flen - dstr->sh_offset
+                                        ? dstr->sh_size
+                                        : flen - dstr->sh_offset;
+                    uint64_t es = stub->sh_entsize ? stub->sh_entsize : 16;
+                    uint64_t slot0 = (stub == plt) ? 1 : 0; /* skip PLT0 in .plt */
+                    size_t ndsym = dsym->sh_size / dsym->sh_entsize;
+                    size_t nrela = rela->sh_size / rela->sh_entsize;
+                    for (size_t i = 0; i < nrela; i++) {
+                        const Elf64_Rela *r = (const Elf64_Rela *)(base +
+                            rela->sh_offset + i * rela->sh_entsize);
+                        if (ELF64_R_TYPE(r->r_info) != R_X86_64_JUMP_SLOT)
+                            continue;
+                        uint64_t si = ELF64_R_SYM(r->r_info);
+                        if (si == 0 || si >= ndsym)
+                            continue;
+                        const Elf64_Sym *ds = (const Elf64_Sym *)(base +
+                            dsym->sh_offset + si * dsym->sh_entsize);
+                        if (ds->st_name >= dynmax)
+                            continue;
+                        const char *nm = dyns + ds->st_name;
+                        if (!nm[0] ||
+                            memchr(nm, '\0', dynmax - ds->st_name) == NULL)
+                            continue;
+                        char pn[160];
+                        snprintf(pn, sizeof pn, "%s@plt", nm);
+                        uint64_t a = bias + stub->sh_addr + (slot0 + i) * es;
+                        if (sym_push(t, cap, a, es, pn, modname) != 0)
+                            goto done;
+                    }
+                }
+            }
+        }
+    }
 #undef ASMSPY_SHDR
 
 done:

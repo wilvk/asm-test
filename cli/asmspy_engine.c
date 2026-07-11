@@ -899,12 +899,17 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
     if (s) {
         snprintf(e->name, sizeof e->name, "%s", s->name);
         snprintf(e->module, sizeof e->module, "%s", s->module);
-        /* external = a shared/system library; internal = the target's own exe */
-        e->external = (exebase && exebase[0] && strcmp(s->module, exebase) != 0);
+        /* external = a shared/system library, OR a PLT thunk to an imported
+         * function (the stub lives in the exe but the call leaves to a library);
+         * internal = the target's own executable code */
+        size_t nl = strlen(s->name);
+        int is_plt = nl >= 4 && strcmp(s->name + nl - 4, "@plt") == 0;
+        e->external = is_plt ||
+                      (exebase && exebase[0] && strcmp(s->module, exebase) != 0);
     } else {
         snprintf(e->name, sizeof e->name, "0x%llx", (unsigned long long)key);
-        snprintf(e->module, sizeof e->module, "?");
-        e->external = 0; /* unresolved: can't classify — count as internal */
+        snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
+        e->external = 0;
     }
     return (long)g->nn++;
 }

@@ -179,15 +179,20 @@ $ asmspy --graph 1234 200 --sort=invocations
 call graph — 7 functions, sorted by invocations (pid 1234)
 [int] helper                         inv=95      calls=0       fanout=0     [spy_victim]
 [int] work                           inv=19      calls=95      fanout=1     [spy_victim]
-[EXT] usleep                         inv=19      calls=19      fanout=1     [libc.so.6]
+[EXT] usleep@plt                     inv=19      calls=0       fanout=0     [spy_victim]
 [int] main                           inv=0       calls=38      fanout=2     [spy_victim]
 ```
 
-Direct calls are attributed exactly; an indirect call (`call rax`, a PLT
-thunk) is attributed to wherever the next step lands, so the graph is
-best-effort at signal boundaries. Whole-process single-stepping is slow, so the
-target crawls while the graph is built (and resumes full speed on detach). In
-the TUI (mode `4`) the same view refreshes live and **`s`** toggles the sort.
+A call into a shared library goes through the **PLT**, so asmspy resolves each
+stub to `name@plt` (from the module's `.rela.plt` relocations) and tags it
+`[EXT]` — the stub lives in the caller's image but the call *leaves* to a
+library. An address no symbol covers (JIT, stripped code) is shown `[?]`.
+
+Direct calls are attributed exactly; an indirect call (`call rax`) is attributed
+to wherever the next step lands, so the graph is best-effort at signal
+boundaries. Whole-process single-stepping is slow, so the target crawls while
+the graph is built (and resumes full speed on detach). In the TUI (mode `4`) the
+same view refreshes live and **`s`** toggles the sort.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
 host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
@@ -299,6 +304,12 @@ non-attachable targets with `!`). In a default container, add
   and surfaced as call-graph edges (see the
   [trace_attached contract](native-tracing.md#out-of-process-variant-w2--ptrace)
   for the re-entrancy caveat).
+- **Call-graph attribution is best-effort.** `--graph` builds a whole-process
+  caller→callee graph by single-stepping every thread — so the target crawls
+  while it runs. Direct calls are exact and PLT stubs resolve to `name@plt`, but
+  an indirect call (`call rax`) is attributed to wherever the next step lands, so
+  attribution can slip at a signal boundary. It counts *calls*, not a nesting
+  tree — use `--trace` for one function's own call-graph edges.
 - **Argument decoding is a subset.** Every syscall is *named*, and paths plus
   `write`/`read` buffers are decoded — but other argument types (flags, structs,
   vectors, signal sets) print as raw hex, and a syscall taking no arguments

@@ -247,11 +247,15 @@ static int gnode_cmp(const void *a, const void *b) {
 }
 
 /* One call-graph row: an internal/external marker, the function, its counts
- * (times called / calls made / distinct callees), and the backing module. */
+ * (times called / calls made / distinct callees), and the backing module.
+ * `[?]` marks an address no symbol resolved (JIT, stripped, anonymous). */
 static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
+    const char *tag = strcmp(nd->module, "?") == 0 ? "[?]"
+                      : nd->external               ? "[EXT]"
+                                                   : "[int]";
     snprintf(buf, cap, "%-5s %-30.30s inv=%-7llu calls=%-7llu fanout=%-5u [%s]",
-             nd->external ? "[EXT]" : "[int]", nd->name, nd->invocations,
-             nd->out_calls, nd->fanout, nd->module);
+             tag, nd->name, nd->invocations, nd->out_calls, nd->fanout,
+             nd->module);
 }
 
 /* ================================================================== */
