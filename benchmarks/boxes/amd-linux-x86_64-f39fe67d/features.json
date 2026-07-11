@@ -10,8 +10,8 @@
     "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "0f3553e",
-    "timestamp": "2026-07-11T08:27:57Z"
+    "commit": "4f0c57a",
+    "timestamp": "2026-07-11T11:20:33Z"
   },
   "features": [
     {
@@ -23,7 +23,8 @@
       "skip_reason": "",
       "fidelity": "virtual-exact",
       "complete": true,
-      "trace_insns": 4
+      "trace_insns": 4,
+      "insns_truth": null
     },
     {
       "tier": "emulator",
@@ -34,7 +35,8 @@
       "skip_reason": "",
       "fidelity": "virtual-exact",
       "complete": true,
-      "trace_insns": 4
+      "trace_insns": 4,
+      "insns_truth": null
     },
     {
       "tier": "emulator",
@@ -45,7 +47,8 @@
       "skip_reason": "",
       "fidelity": "virtual-exact",
       "complete": true,
-      "trace_insns": 3
+      "trace_insns": 3,
+      "insns_truth": null
     },
     {
       "tier": "emulator",
@@ -56,7 +59,8 @@
       "skip_reason": "",
       "fidelity": "virtual-exact",
       "complete": true,
-      "trace_insns": 3
+      "trace_insns": 3,
+      "insns_truth": null
     },
     {
       "tier": "emulator",
@@ -67,7 +71,21 @@
       "skip_reason": "",
       "fidelity": "virtual-exact",
       "complete": true,
-      "trace_insns": 3
+      "trace_insns": 3,
+      "insns_truth": null
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 4,
+      "insns_truth": 4,
+      "note": "math.add3"
     },
     {
       "tier": "native-auto",
@@ -79,7 +97,99 @@
       "fidelity": "native",
       "complete": true,
       "trace_insns": 4,
-      "note": "add3 (straight-line)"
+      "insns_truth": 4,
+      "note": "math.add3"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 14,
+      "insns_truth": 14,
+      "note": "loop.sum_to_4"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 14,
+      "insns_truth": 14,
+      "note": "loop.sum_to_4"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 50,
+      "insns_truth": 50,
+      "note": "loop.sum_to_16"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 50,
+      "insns_truth": 50,
+      "note": "loop.sum_to_16"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 194,
+      "insns_truth": 194,
+      "note": "loop.sum_to_64"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 194,
+      "insns_truth": 194,
+      "note": "loop.sum_to_64"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 602,
+      "insns_truth": 602,
+      "note": "loop.sum_to_200"
     },
     {
       "tier": "native-auto",
@@ -91,7 +201,86 @@
       "fidelity": "native",
       "complete": true,
       "trace_insns": 602,
-      "note": "sum_to_n(200) loop"
+      "insns_truth": 602,
+      "note": "loop.sum_to_200"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 36,
+      "insns_truth": 36,
+      "note": "recurse.tri_4"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 36,
+      "insns_truth": 36,
+      "note": "recurse.tri_4"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 132,
+      "insns_truth": 132,
+      "note": "recurse.tri_16"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 132,
+      "insns_truth": 132,
+      "note": "recurse.tri_16"
+    },
+    {
+      "tier": "native-hw",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 260,
+      "insns_truth": 260,
+      "note": "recurse.tri_32"
+    },
+    {
+      "tier": "native-auto",
+      "backend": "single_step",
+      "arch": "x86_64",
+      "scope": "host",
+      "available": true,
+      "skip_reason": "",
+      "fidelity": "native",
+      "complete": true,
+      "trace_insns": 260,
+      "insns_truth": 260,
+      "note": "recurse.tri_32"
     },
     {
       "tier": "hwtrace",
@@ -102,7 +291,8 @@
       "skip_reason": "built without libipt",
       "fidelity": "native",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     },
     {
       "tier": "hwtrace",
@@ -113,7 +303,8 @@
       "skip_reason": "perf branch-stack not permitted (lower perf_event_paranoid or grant CAP_PERFMON)",
       "fidelity": "native",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     },
     {
       "tier": "hwtrace",
@@ -124,7 +315,8 @@
       "skip_reason": "",
       "fidelity": "native",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     },
     {
       "tier": "hwtrace",
@@ -135,7 +327,8 @@
       "skip_reason": "built without OpenCSD",
       "fidelity": "native",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     },
     {
       "tier": "dynamorio",
@@ -146,7 +339,8 @@
       "skip_reason": "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, or bundle it (a bare libdynamorio.so on the loader path is still tried at init)",
       "fidelity": "native",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     },
     {
       "tier": "disasm",
@@ -157,7 +351,8 @@
       "skip_reason": "",
       "fidelity": "n/a",
       "complete": null,
-      "trace_insns": null
+      "trace_insns": null,
+      "insns_truth": null
     }
   ]
 }
