@@ -383,15 +383,17 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
 /* ================================================================== */
 
 #define LOG_CAP 2048
-#define LINE_MAX 320 /* holds a ~200-char decoded string in the log/strings pane */
+/* Named to avoid <limits.h>'s LINE_MAX; holds a ~200-char decoded string plus a
+ * syscall line's framing (and an out-of-process "[tid] " prefix) in the pane. */
+#define LOG_LINE_MAX 320
 
 typedef struct {
-    char lines[LOG_CAP][LINE_MAX];
+    char lines[LOG_CAP][LOG_LINE_MAX];
     int head, count;
 } logbuf;
 
 static void log_push(logbuf *lg, const char *s) {
-    snprintf(lg->lines[lg->head], LINE_MAX, "%s", s);
+    snprintf(lg->lines[lg->head], LOG_LINE_MAX, "%s", s);
     lg->head = (lg->head + 1) % LOG_CAP;
     if (lg->count < LOG_CAP)
         lg->count++;
