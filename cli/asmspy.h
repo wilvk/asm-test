@@ -183,9 +183,14 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx);
 
+/* One call-tree entry handed to the front-end: `line` is the indented
+ * "-> function [module]" text; `addr` is the callee's entry address (0 if
+ * unresolved) so a front-end can disassemble that function on demand. */
+typedef void (*asmspy_tree_sink)(void *ctx, const char *line, uint64_t addr);
+
 /* Attach to `pid` and ALL its threads, single-step them, and stream a live,
- * indented call TREE through `sink` (reusing the stream sink: one formatted line
- * per function entry, indented by the calling thread's live call depth). Depth
+ * indented call TREE through `sink` (one entry per function entry, indented by
+ * the calling thread's live call depth, with the callee address). Depth
  * is a per-thread shadow counter — push on CALL, pop on RET (clamped at 0), so a
  * tail-call/longjmp/signal can drift the indentation but never desync fatally.
  * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
@@ -193,7 +198,7 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
  * prefixed "[tid] " once more than one thread is followed. Returns 0 on clean
  * detach, negative on an attach/availability failure. `syms` may be NULL. */
 int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
                        void *ctx);
 
 /* What the process/thread topology counts per task. */

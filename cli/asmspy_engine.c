@@ -1108,8 +1108,9 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
 /* Whole-process live call TREE                                        */
 /* ------------------------------------------------------------------ */
 
-/* Emit one "entered a function" line, indented by the caller's live depth. */
-static void tree_emit(asmspy_stream_sink sink, void *ctx, int multi, pid_t tid,
+/* Emit one "entered a function" line, indented by the caller's live depth. The
+ * callee's entry address is passed through so a front-end can disassemble it. */
+static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
                       const asmspy_symtab_t *syms, uint64_t callee, int depth) {
     if (!sink)
         return;
@@ -1127,11 +1128,11 @@ static void tree_emit(asmspy_stream_sink sink, void *ctx, int multi, pid_t tid,
         snprintf(line, sizeof line, "[%d] %*s-> %s", (int)tid, ind, "", name);
     else
         snprintf(line, sizeof line, "%*s-> %s", ind, "", name);
-    sink(ctx, line);
+    sink(ctx, line, callee);
 }
 
 int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_stream_sink sink,
+                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
                        void *ctx) {
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;

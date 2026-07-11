@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <time.h>
 #include <unistd.h>
 
@@ -258,6 +259,61 @@ static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
     snprintf(buf, cap, "%-5s %-30.30s inv=%-7llu calls=%-7llu fanout=%-5u [%s]",
              tag, nd->name, nd->invocations, nd->out_calls, nd->fanout,
              nd->module);
+}
+
+/* Disassemble the function containing `addr` (extent from `syms`, else a fixed
+ * window) by reading its bytes live from the target, into `out` (header + one
+ * line per instruction). Used by the call-tree view's assembly pane. */
+static void asm_of_function(pid_t pid, const asmspy_symtab_t *syms, uint64_t addr,
+                            svec *out) {
+    svec_clear(out);
+    if (!addr)
+        return;
+    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, addr) : NULL;
+    uint64_t base = addr;
+    size_t len = 96; /* no symbol: show a small window from the entry */
+    if (s && s->size) {
+        base = s->addr;
+        len = s->size;
+    }
+    if (len > 4096)
+        len = 4096;
+    char hdr[176];
+    if (s)
+        snprintf(hdr, sizeof hdr, "%s [%s]  0x%llx", s->name, s->module,
+                 (unsigned long long)base);
+    else
+        snprintf(hdr, sizeof hdr, "0x%llx (no symbol)",
+                 (unsigned long long)base);
+    svec_push(out, hdr);
+    uint8_t *code = malloc(len);
+    if (!code) {
+        svec_push(out, "  (out of memory)");
+        return;
+    }
+    struct iovec l = {code, len};
+    struct iovec r = {(void *)(uintptr_t)base, len};
+    ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
+    if (got <= 0)
+        svec_push(out, "  (unreadable)");
+    else if (!asmtest_disas_available())
+        svec_push(out, "  (no disassembler)");
+    else {
+        uint64_t off = 0;
+        while (off < (uint64_t)got) {
+            char dis[160];
+            size_t ilen = asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got,
+                                        base, off, dis, sizeof dis);
+            if (!ilen)
+                break;
+            char line[200];
+            snprintf(line, sizeof line, "  +0x%-4llx  %s",
+                     (unsigned long long)off, dis[0] ? dis : "(?)");
+            svec_push(out, line);
+            off += ilen;
+        }
+    }
+    free(code);
 }
 
 /* ================================================================== */
@@ -565,10 +621,17 @@ static int cmd_stream(pid_t pid, long n) {
     return 0;
 }
 
+static void tree_print_sink(void *ctx, const char *line, uint64_t addr) {
+    (void)ctx;
+    (void)addr; /* headless: the address only matters to the TUI assembly pane */
+    printf("%s\n", line);
+    fflush(stdout);
+}
+
 static int cmd_tree(pid_t pid, long n) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
-    int rc = asmspy_engine_tree(pid, n, NULL, &t, stream_print_sink, NULL);
+    int rc = asmspy_engine_tree(pid, n, NULL, &t, tree_print_sink, NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
@@ -757,24 +820,35 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
 
 typedef struct {
     char lines[LOG_CAP][LOG_LINE_MAX];
+    uint64_t aux[LOG_CAP]; /* per-line datum (call-tree: the callee address) */
     int head, count;
     unsigned long total; /* lines ever pushed (monotonic); drives scrollback */
 } logbuf;
 
-static void log_push(logbuf *lg, const char *s) {
+static void log_push_aux(logbuf *lg, const char *s, uint64_t aux) {
     snprintf(lg->lines[lg->head], LOG_LINE_MAX, "%s", s);
+    lg->aux[lg->head] = aux;
     lg->head = (lg->head + 1) % LOG_CAP;
     if (lg->count < LOG_CAP)
         lg->count++;
     lg->total++;
+}
+static void log_push(logbuf *lg, const char *s) { log_push_aux(lg, s, 0); }
+
+/* The aux datum of an absolute line index (0 if out of the buffered range). */
+static uint64_t log_aux_at(const logbuf *lg, long abs) {
+    if (abs < 0)
+        return 0;
+    return lg->aux[(unsigned long)abs % LOG_CAP];
 }
 
 /* Render the ring buffer into the (y0,x0) w×h box with `bottom` (an absolute
  * line index) as the last visible line; asmspy_log_window does the clamped
  * viewport math (unit-tested in test_logview.c). A `bottom` past the newest
  * line is clamped, so log_newest() tails the live stream. */
-static void draw_log_at(const logbuf *lg, int y0, int x0, int h, int w,
-                        long bottom) {
+/* Render the ring buffer, highlighting the absolute line `cursor` (none if <0). */
+static void draw_log_cursor(const logbuf *lg, int y0, int x0, int h, int w,
+                            long bottom, long cursor) {
     if (h < 1 || w < 1)
         return;
     long top = 0;
@@ -782,8 +856,18 @@ static void draw_log_at(const logbuf *lg, int y0, int x0, int h, int w,
     for (int r = 0; r < n; r++) {
         long abs = top + r;
         int slot = (int)((unsigned long)abs % LOG_CAP);
+        int cur = (abs == cursor);
+        if (cur)
+            attron(A_REVERSE);
         mvprintw(y0 + r, x0, "%-*.*s", w, w, lg->lines[slot]);
+        if (cur)
+            attroff(A_REVERSE);
     }
+}
+
+static void draw_log_at(const logbuf *lg, int y0, int x0, int h, int w,
+                        long bottom) {
+    draw_log_cursor(lg, y0, x0, h, w, bottom, -1);
 }
 
 /* absolute index of the newest buffered line (-1 if empty) */
@@ -919,6 +1003,9 @@ typedef struct {
     /* call-graph view (mode 3) */
     graph_snap graph;
     gsort_t gsort;
+    /* call-tree view (mode 4): disassembly of the selected function (UI-thread only) */
+    svec tree_asm;
+    uint64_t tree_asm_addr;
     /* target */
     pid_t pid;
     uint64_t base;
@@ -962,6 +1049,14 @@ static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t n) {
     pthread_mutex_unlock(&L->mu);
 }
 
+/* Call-tree line + its callee address (for the assembly pane's disassembly). */
+static void live_tree_sink(void *ctx, const char *line, uint64_t addr) {
+    live_t *L = ctx;
+    pthread_mutex_lock(&L->mu);
+    log_push_aux(&L->log, line, addr);
+    pthread_mutex_unlock(&L->mu);
+}
+
 static void *tracer_thread(void *arg) {
     live_t *L = arg;
     int rc;
@@ -974,7 +1069,7 @@ static void *tracer_thread(void *arg) {
         rc = asmspy_engine_graph(L->pid, -1, &L->stop, L->syms, live_graph_sink,
                                  L);
     else if (L->mode == 4)
-        rc = asmspy_engine_tree(L->pid, -1, &L->stop, L->syms, live_stream_sink,
+        rc = asmspy_engine_tree(L->pid, -1, &L->stop, L->syms, live_tree_sink,
                                 L);
     else
         rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
@@ -1026,6 +1121,10 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         int log_h = rows - 3 > 0 ? rows - 3 : 1;
         /* scrollable log views: syscalls, instruction stream, call tree */
         int is_log = (mode == 0 || mode == 2 || mode == 4);
+        /* call-tree (mode 4) two-pane geometry + selected function, filled under
+         * the lock and used to draw the assembly pane after it is released */
+        uint64_t tree_addr = 0;
+        int tree_rx = 0, tree_rw = 0;
         erase();
         attron(A_BOLD);
         mvprintw(0, 0, "%.*s", cols, title);
@@ -1058,16 +1157,40 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 mvaddch(r, midx, ACS_VLINE);
             draw_log_at(&L.log, 2, 0, h, lw, paused ? vbottom : lognewest);
             draw_log_at(&L.strlog, 2, rx, h, rw, paused ? vstr : strnewest);
-        } else if (mode == 2 || mode == 4) {
-            /* single-pane live log: instruction stream (2) or call tree (4) */
+        } else if (mode == 2) {
+            /* single-pane live instruction stream */
             attron(A_BOLD);
             mvprintw(1, 0,
-                     mode == 4
-                         ? "CALL TREE  (-> function [module], indent = call depth)"
-                         : "LIVE STREAM  (function+off [module]   disassembly)");
+                     "LIVE STREAM  (function+off [module]   disassembly)");
             attroff(A_BOLD);
             draw_log_at(&L.log, 2, 0, rows - 3, cols,
                         paused ? vbottom : lognewest);
+        } else if (mode == 4) {
+            /* two-pane call tree: the tree feed on the left, and the assembly of
+             * the SELECTED function (the cursor line) on the right. The cursor is
+             * the tail while live, or the scrolled-to line while paused. */
+            int asmw = cols / 2;
+            if (asmw < 20)
+                asmw = 20;
+            int lw = cols - asmw - 1;
+            if (lw < 1)
+                lw = 1;
+            tree_rx = lw + 1;
+            tree_rw = cols - tree_rx;
+            long cursor = paused ? vbottom : lognewest;
+            tree_addr = log_aux_at(&L.log, cursor);
+            attron(A_BOLD);
+            mvprintw(1, 0, "CALL TREE  (-> function [module], indent = depth)");
+            if (tree_rx < cols)
+                mvprintw(1, tree_rx + 1, "ASSEMBLY (selected)");
+            attroff(A_BOLD);
+            for (int r = 1; r < rows - 1; r++)
+                mvaddch(r, lw, ACS_VLINE);
+            /* highlight the selected line only while paused (i.e. selecting); the
+             * live tail shows the newest call's assembly without a reverse bar */
+            draw_log_cursor(&L.log, 2, 0, rows - 3, lw, cursor,
+                            paused ? cursor : -1);
+            /* the assembly pane itself is drawn after the lock is released */
         } else if (mode == 3) {
             /* whole-process call graph, sorted live; sort in place under mu */
             graph_sort_key = L.gsort;
@@ -1108,9 +1231,23 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         }
         pthread_mutex_unlock(&L.mu);
 
+        /* Call-tree assembly pane (mode 4): reading the target's memory can block,
+         * so do it OUTSIDE the lock. Re-disassemble only when the selection moves. */
+        if (mode == 4 && tree_rw > 1) {
+            if (tree_addr != L.tree_asm_addr) {
+                asm_of_function(L.pid, L.syms, tree_addr, &L.tree_asm);
+                L.tree_asm_addr = tree_addr;
+            }
+            for (int r = 0; r < rows - 3; r++) {
+                const char *s = r < (int)L.tree_asm.n ? L.tree_asm.v[r] : "";
+                mvprintw(2 + r, tree_rx + 1, "%-*.*s", tree_rw - 1, tree_rw - 1,
+                         s ? s : "");
+            }
+        }
+
         if (is_log && paused)
             mvprintw(rows - 1, 0,
-                     "[PAUSED %ld/%lu]  up/down PgUp/PgDn Home/End: scroll  "
+                     "[PAUSED %ld/%lu]  up/down PgUp/PgDn Home/End: select fn  "
                      "space: live   b: options   q: processes",
                      vbottom < 0 ? 0 : vbottom + 1, logtotal);
         else if (fin) {
@@ -1220,6 +1357,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
 
     svec_free(&L.asm_dis);
     svec_free(&L.asm_fn);
+    svec_free(&L.tree_asm);
     free(L.graph.v);
     pthread_mutex_destroy(&L.mu);
     return back;

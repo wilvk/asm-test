@@ -120,10 +120,13 @@ Run `asmspy` with no arguments. It walks four screens:
      target's own executable vs. a shared/system library. Press **`Tab`** to
      toggle the sort between *most-invoked* and *most functions called*
      (fan-out). Built from the same whole-process single-step, so it crawls too.
-   - *Call tree* — a live scrolling feed of function **entries indented by call
-     depth** (`-> function [module]`): a `call` steps in and indents, a `ret`
-     steps back out. It reads as the call tree unfolding in real time. Same
-     whole-process single-step, so the target crawls while it runs.
+   - *Call tree* — a **two-pane** view: on the left, a live feed of function
+     **entries indented by call depth** (`-> function [module]`; a `call` steps
+     in and indents, a `ret` steps back out); on the right, the **disassembly of
+     the selected function**. Press **`space`** to pause the feed, then the arrow
+     / `PgUp`/`PgDn` / `Home`/`End` keys move a selection cursor through the
+     functions and the right pane disassembles whichever is highlighted (read
+     live from the target). Same whole-process single-step, so it crawls.
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
