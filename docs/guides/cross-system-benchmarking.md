@@ -18,6 +18,7 @@ so systems can be compared over time.
 | **Performance — real time** | cycles / ticks per call on the host CPU | one host only (cyc ≠ ticks) | native `BENCH` (`test_bench`) |
 | **Performance — work** | deterministic instructions / basic blocks per call, per guest ISA | **any host, any OS** | `emu-bench` |
 | **Feature** | which trace tiers/backends work here, and whether a trace is **complete** | systems (it's the point) | `asmfeatures` |
+| **Feature — capture depth** | how many instructions each box's **hardware** backend captures for a routine, vs the deterministic truth | systems (Zen vs Intel vs Apple) | `asmfeatures` (`native-hw` ladder) |
 
 The deterministic **instruction count** is the cross-architecture performance
 metric: because it is a function of the guest code alone, an AArch64 count and an
@@ -61,6 +62,68 @@ records why the tier self-skipped, exactly as the trace tiers'
 `available()`/`skip_reason()` do. See the
 [trace parity matrix](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/trace-parity-matrix.md) for the static
 version of the same information.
+
+## Instruction-capture depth — the hardware-ceiling ladder
+
+The feature probe also answers a sharper cross-box question: **how many
+instructions does each box's hardware actually capture?** Trace backends have
+different ceilings, so for the same routine they capture different amounts — and
+that difference is a property of the silicon, not the software.
+
+The probe runs a **ladder** of x86-64 routines of growing length and, for each,
+compares the instructions captured to the emulator's deterministic **truth**
+(host-independent — the same `add3` / `sum_to_n` fixtures the golden uses, where
+`insns(sum_to_n) = 3n+2` and the loop executes `n` branches):
+
+| rung | truth insns | branches | what it exercises |
+|---|---|---|---|
+| `math.add3` | 4 | 0 | straight-line baseline — every backend captures it |
+| `loop.sum_to_4` | 14 | 4 | a loop that fits inside a 16-deep window |
+| `loop.sum_to_16` | 50 | 16 | a loop at the AMD-LBR window edge |
+| `loop.sum_to_64` | 194 | 64 | 4× past the window — a fixed-window backend truncates |
+| `loop.sum_to_200` | 602 | 200 | 12× past the window — deep truncation |
+
+Each rung is measured through **two** tiers, emitted as two feature rows:
+
+- **`native-hw`** — the box's *raw top hardware backend*, no escalation. This is
+  where the ceiling is **visible**: an unbounded backend (Intel PT, single-step)
+  captures every rung whole (`trace_insns == insns_truth`), while a fixed-window
+  backend (AMD LBR's 16-deep branch stack) reconstructs only its last window, so
+  its captured count **plateaus** below truth on the deep rungs. The row carries
+  `insns_truth` so the divergence is self-describing.
+- **`native-auto`** — the same rung under `asmtest_trace_call_auto`, which
+  *escalates* past a truncating backend to a ceiling-free floor. This is where the
+  ceiling is **restored**: it reports what the box *ultimately* captures (complete
+  wherever a floor exists) and which backend won.
+
+`scripts/bench-compare` renders the `native-hw` rows as the **capture-depth matrix**
+(workload × box). The expected shape across microarchitecture classes:
+
+| workload (truth) | Zen 2 (LBR) | Zen 5 (LBR) | Intel + PT | Intel / mac (single-step) | Apple Silicon |
+|---|---|---|---|---|---|
+| add3 (4) | 4 ✓ | 4 ✓ | 4 ✓ | 4 ✓ | n/a |
+| sum_to_16 (50) | 50 ✓ | 50 ✓ | 50 ✓ | 50 ✓ | n/a |
+| sum_to_64 (194) | ~50 ✗ | ~50 ✗ | 194 ✓ | 194 ✓ | n/a |
+| sum_to_200 (602) | ~50 ✗ | ~50 ✗ | 602 ✓ | 602 ✓ | n/a |
+
+The two AMD columns share the same 16-deep ceiling — the capture limit is an
+LBR-family property, so Zen 2 and Zen 5 truncate at the same rung (the `~50`
+plateau is reconstruction-dependent and illustrative). Intel PT and single-step
+are unbounded; Apple Silicon has no x86-64 host backend, so it has no hardware
+capture (`n/a`) and relies on the emulator floor. **Caveat:** the LBR ceiling is
+only observed where LBR is actually *permitted* — a bare AMD box without `perf`
+branch-stack permission falls back to single-step and captures completely, so the
+truncation row appears only on a box where the fixed-window backend is live.
+
+### The orthogonal axis — call-nesting depth (designed next rung)
+
+The loop ladder sweeps *branch density*. LBR's 16-deep stack independently bounds
+*call-nesting depth*: a recursion 32 frames deep overflows the call stack even
+though no single loop does. A `recurse.tri(n)` fixture (triangular recursion,
+`tri(n) = n + tri(n-1)`) at depths {4, 16, 32} is the designed second axis — it
+isolates the call-stack ceiling from the branch-record ceiling. It is not yet
+wired in (a single-step box captures it completely, so its divergence is only
+observable on a live-LBR box); the loop ladder above is the landed metric.
 
 ## Comparing systems
 
@@ -124,13 +187,22 @@ which is exactly why both dimensions exist.
                     "kind": "insns", "value": 3, "unit": "insn",
                     "deterministic": true, "complete": true, "blocks": 1 } ] }
   },
-  "features": [ { "tier": "native-auto", "backend": "single_step", "arch": "x86_64",
+  "features": [ { "tier": "native-hw", "backend": "amd_lbr", "arch": "x86_64",
                   "scope": "host", "available": true, "skip_reason": "",
-                  "fidelity": "native", "complete": true, "trace_insns": 602 } ]
+                  "fidelity": "native", "complete": false, "trace_insns": 50,
+                  "insns_truth": 602, "note": "loop.sum_to_200" },
+                { "tier": "native-auto", "backend": "single_step", "arch": "x86_64",
+                  "scope": "host", "available": true, "skip_reason": "",
+                  "fidelity": "native", "complete": true, "trace_insns": 602,
+                  "insns_truth": 602, "note": "loop.sum_to_200" } ]
 }
 ```
 
-Every performance row follows the `asmtest_bench_result_t` shape — `kind`, `value`,
+A `native-hw` row carries the instructions its raw hardware backend **captured**
+(`trace_insns`) against the deterministic **truth** (`insns_truth`); `complete` is
+whether they matched. Above, an AMD-LBR box captured only 50 of 602 (`✗`), while
+its `native-auto` tier escalated to single-step and captured all 602 (`✓`). Every
+performance row follows the `asmtest_bench_result_t` shape — `kind`, `value`,
 `unit`, `deterministic`, `complete` — so a reporter groups and compares only within
 a `unit`, never across it.
 

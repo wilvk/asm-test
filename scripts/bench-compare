@@ -135,6 +135,66 @@ def main():
         P.append(md_table(["suite.name"] + boxes, rows))
         P.append("")
 
+    # --- instruction-capture depth (workload x box), raw top HW backend ---
+    # native-hw rows carry the instructions CAPTURED by the box's top hardware trace
+    # backend vs the emulator's host-independent truth. On an UNBOUNDED backend (Intel
+    # PT, single-step) captured==truth at every rung; on a FIXED-WINDOW backend (AMD
+    # LBR, 16-deep) captured plateaus below truth — that divergence is the box's
+    # hardware signature (Zen vs Intel vs Apple), which is the whole point here.
+    cap = {}          # workload -> {box -> (captured, complete)}
+    cap_truth = {}    # workload -> host-independent truth insns
+    cap_backend = {}  # box -> top backend name (uniform per box), or "—" if none
+    hw_boxes = []     # every box that has a native-hw tier at all (in report order)
+    no_capture = {}   # box -> skip_reason, for boxes whose native-hw is unavailable
+    for r in reports:
+        box = r["system"].get("box_id", "?")
+        seen_hw = False
+        for f in r.get("features", []):
+            if f.get("tier") != "native-hw":
+                continue
+            seen_hw = True
+            if not f.get("available"):
+                no_capture.setdefault(box, f.get("skip_reason", ""))
+                cap_backend.setdefault(box, "—")
+                continue
+            wl = f.get("note")
+            if not wl:
+                continue
+            cap.setdefault(wl, {})[box] = (f.get("trace_insns"), f.get("complete"))
+            if f.get("insns_truth") is not None:
+                cap_truth[wl] = f.get("insns_truth")
+            cap_backend[box] = f.get("backend", "?")
+        if seen_hw and box not in hw_boxes:
+            hw_boxes.append(box)
+    if hw_boxes:
+        boxes = sorted(hw_boxes)
+        P.append("\n## Instruction-capture depth — raw top hardware backend\n")
+        P.append("Instructions CAPTURED by each box's top hardware trace backend for "
+                 "a workload, vs the emulator's host-independent truth (in the row "
+                 "label). `✓` = whole path captured; `✗` = the fixed-window ceiling "
+                 "truncated it (e.g. AMD LBR's 16-deep stack); `n/a` = no x86-64 host "
+                 "capture on this box. This is the cross-box hardware-capture metric — "
+                 "Zen vs Intel vs Apple.\n")
+        P.append("Top backend per box: " + ", ".join(
+            "%s → `%s`" % (b, cap_backend.get(b, "?")) for b in boxes) + "\n")
+        wls = sorted(cap, key=lambda w: (cap_truth.get(w, 1 << 30), w))
+        rows = []
+        for wl in wls:
+            truth = cap_truth.get(wl)
+            label = "%s (%s)" % (wl, truth) if truth is not None else wl
+            row = [label]
+            for b in boxes:
+                cell = cap.get(wl, {}).get(b)
+                if cell is None:
+                    row.append("n/a" if b in no_capture else "·")
+                    continue
+                captured, complete = cell
+                row.append("n/a" if captured is None
+                           else "%s %s" % (captured, "✓" if complete else "✗"))
+            rows.append(row)
+        P.append(md_table(["workload (truth insns)"] + boxes, rows))
+        P.append("")
+
     # --- feature & trace-completeness matrix ---
     caps = {}   # (tier,backend) -> {box_id -> (available, complete, reason)}
     order = []

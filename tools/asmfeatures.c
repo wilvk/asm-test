@@ -15,9 +15,13 @@
  * Completeness is measured two ways:
  *   - emulator guests: run a representative routine traced, report !truncated
  *     (exact by construction — the universal floor's completeness reference);
- *   - host-native tier (x86-64 Linux): run a tiny routine AND a loop under
- *     asmtest_trace_call_auto and report the chosen backend + !truncated — the
- *     metric that actually varies (a fixed-window backend truncates a loop).
+ *   - host-native capture ladder (x86-64 Linux/macOS): run a straight-line routine
+ *     AND a sweep of counted loops of growing trip count, both under the box's raw
+ *     TOP hardware backend (`native-hw` — the fixed-window ceiling is VISIBLE) and
+ *     under the auto-escalating tier (`native-auto` — the ceiling is RESTORED),
+ *     reporting captured insns vs the emulator's deterministic truth. captured <
+ *     truth is precisely how one box's hardware (AMD LBR) truncates where another's
+ *     (Intel PT / single-step) does not — the cross-box capture metric.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -29,6 +33,14 @@
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
 #include "asmtest_trace_auto.h"
+
+/* The host-native capture ladder runs the real bytes in-process, so it needs the
+ * single-step / Intel-PT / AMD-LBR path — today x86-64 Linux OR macOS (single-step
+ * is the macOS floor; exec_alloc is W^X-portable to Darwin). Elsewhere the ladder
+ * self-skips to an explicit unavailable row (absent = data, not an invisible gap). */
+#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
+#define ASMFEATURES_HOST_CAPTURE 1
+#endif
 
 /* Print a JSON string value with the minimal escaping skip_reason needs. */
 static void json_str(const char *s) {
@@ -45,11 +57,14 @@ static void json_str(const char *s) {
     putchar('"');
 }
 
-/* One feature row. `complete`/`insns` are -1 when not measured (printed null). */
+/* One feature row. `complete`/`insns`/`insns_truth` are -1 when not measured
+ * (printed null). `insns_truth` is the host-independent deterministic instruction
+ * count (from the emulator) that a capture row's `trace_insns` is measured against
+ * — captured < truth is exactly how a fixed-window hardware backend truncates. */
 static void row(int first, const char *tier, const char *backend,
                 const char *arch, const char *scope, int available,
                 const char *skip_reason, const char *fidelity, int complete,
-                long long insns, const char *note) {
+                long long insns, long long insns_truth, const char *note) {
     printf("%s    {", first ? "" : ",\n");
     printf("\"tier\": ");
     json_str(tier);
@@ -72,6 +87,10 @@ static void row(int first, const char *tier, const char *backend,
         printf(", \"trace_insns\": null");
     else
         printf(", \"trace_insns\": %lld", insns);
+    if (insns_truth < 0)
+        printf(", \"insns_truth\": null");
+    else
+        printf(", \"insns_truth\": %lld", insns_truth);
     if (note) {
         printf(", \"note\": ");
         json_str(note);
@@ -140,7 +159,7 @@ static void emu_guest_row(int first, const char *arch, int guest) {
     }
     row(first, "emulator", "guest", arch, "guest", ok,
         ok ? "" : "emu run failed", "virtual-exact", ok ? complete : -1,
-        ok ? insns : -1, NULL);
+        ok ? insns : -1, -1, NULL);
 }
 
 static const char *hw_backend_name(asmtest_trace_backend_t b) {
@@ -169,6 +188,76 @@ static const char *tier_name(asmtest_trace_tier_t t) {
     return "native";
 }
 
+#ifdef ASMFEATURES_HOST_CAPTURE
+/* Host-independent ground truth for a host x86-64 fixture: run it under the exact
+ * emulator and return the deterministic instruction count. -1 on failure. This is
+ * the reference a native capture row's trace_insns is measured against — captured
+ * < truth is precisely how a fixed-window hardware backend (AMD LBR) truncates. */
+static long long emu_x86_insns(const unsigned char *bytes, size_t len,
+                               const long *args, int nargs) {
+    asmtest_trace_t *t = asmtest_trace_new(8192, 512);
+    if (!t)
+        return -1;
+    emu_t *e = emu_open();
+    emu_result_t r;
+    long long insns = -1;
+    if (e && emu_call_traced(e, bytes, len, args, nargs, 0, &r, t))
+        insns = (long long)asmtest_emu_trace_insns_total(t);
+    if (e)
+        emu_close(e);
+    asmtest_trace_free(t);
+    return insns;
+}
+
+/* Invoke code(args…) as a SysV routine with up to 6 int args (a shorter callee
+ * harmlessly ignores the extra register args) — the in-process call the native
+ * capture probe brackets with a trace begin/end. */
+static long native_invoke(const void *code, const long *args, int nargs) {
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs && i < 6; i++)
+        a[i] = args[i];
+    long (*fn)(long, long, long, long, long, long) =
+        (long (*)(long, long, long, long, long, long))(uintptr_t)code;
+    return fn(a[0], a[1], a[2], a[3], a[4], a[5]);
+}
+
+/* Trace one ladder rung through the box's TOP hardware backend RAW — no
+ * escalation — so a fixed-window backend's truncation is observed, not hidden.
+ * `backend` is the asmtest_hwtrace_auto() pick; returns captured insns (>=0) and
+ * sets *complete, or -1 if the backend could not trace this rung. */
+static long long native_hw_capture(int backend, const unsigned char *bytes,
+                                   size_t len, const long *args, int nargs,
+                                   int *complete) {
+    void *exec = NULL;
+    size_t exec_len = 0;
+    if (asmtest_hwtrace_exec_alloc(bytes, len, &exec, &exec_len) !=
+        ASMTEST_HW_OK)
+        return -1;
+    asmtest_trace_t *t = asmtest_trace_new(8192, 512);
+    long long insns = -1;
+    if (t) {
+        asmtest_hwtrace_options_t opts;
+        memset(&opts, 0, sizeof opts);
+        opts.backend = (asmtest_trace_backend_t)backend;
+        if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
+            if (asmtest_hwtrace_register_region("cap", exec, len, t) ==
+                ASMTEST_HW_OK) {
+                asmtest_hwtrace_begin("cap");
+                (void)native_invoke(exec, args, nargs);
+                asmtest_hwtrace_end("cap");
+                insns = (long long)asmtest_emu_trace_insns_total(t);
+                if (complete)
+                    *complete = !asmtest_emu_trace_truncated(t);
+            }
+            asmtest_hwtrace_shutdown();
+        }
+        asmtest_trace_free(t);
+    }
+    asmtest_hwtrace_exec_free(exec, exec_len);
+    return insns;
+}
+#endif /* ASMFEATURES_HOST_CAPTURE */
+
 int main(int argc, char **argv) {
     int json = 1;
     for (int i = 1; i < argc; i++)
@@ -190,31 +279,70 @@ int main(int argc, char **argv) {
         first = 0;
     }
 
-    /* 2) Host-native trace completeness (x86-64 Linux): the metric that varies.
-     * A tiny straight-line routine vs a loop, under the auto-escalating tier.
-     * The native tiers EXECUTE the real bytes in-process, so the fixture must be
-     * materialized into W^X executable memory first (asmtest_hwtrace_exec_alloc)
-     * — a plain .rodata pointer is not executable. */
-#if defined(__x86_64__) && defined(__linux__)
+    /* 2) Host-native instruction-CAPTURE depth — the hardware-feature metric that
+     * varies across boxes. A straight-line routine plus a ladder of counted loops
+     * of growing trip count, each run under the box's TOP hardware backend (raw,
+     * `native-hw`) AND under the auto-escalating tier (`native-auto`). Captured
+     * insns are compared to the emulator's deterministic truth: an UNBOUNDED backend
+     * (Intel PT, single-step) captures every rung whole, so captured==truth; a
+     * FIXED-WINDOW backend (AMD LBR, 16-deep) reconstructs only its last window, so
+     * its raw capture PLATEAUS while the truth climbs — that divergence is the box's
+     * hardware signature (Zen vs Intel vs Apple). The auto tier then ESCALATES past
+     * the ceiling to a complete floor, so `native-auto` reports what the box
+     * ultimately captures + which backend won. The native tiers EXECUTE the real
+     * bytes, so each fixture is materialized into W^X memory first. */
+#ifdef ASMFEATURES_HOST_CAPTURE
     {
-        struct {
-            const char *label;
+        /* insns(sum_to_n) = 3n+2, branches = n. Trip counts straddle the 16-deep
+         * AMD-LBR window: 4 within, 16 at the edge, 64 and 200 well over — so the
+         * captured count diverges from truth exactly where the hardware ceiling is. */
+        static const struct {
+            const char *workload;
             const unsigned char *bytes;
             size_t len;
             long arg;
             int nargs;
-        } probes[] = {
-            {"add3 (straight-line)", FIX_X86_ADD3, sizeof FIX_X86_ADD3, 0, 3},
-            {"sum_to_n(200) loop", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 200,
-             1},
+        } ladder[] = {
+            {"math.add3", FIX_X86_ADD3, sizeof FIX_X86_ADD3, 0, 3},
+            {"loop.sum_to_4", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 4, 1},
+            {"loop.sum_to_16", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 16, 1},
+            {"loop.sum_to_64", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 64, 1},
+            {"loop.sum_to_200", FIX_X86_SUMTON, sizeof FIX_X86_SUMTON, 200, 1},
         };
-        for (int p = 0; p < 2; p++) {
+        long a3[3] = {2, 3, 4};
+        int top_hw =
+            asmtest_hwtrace_auto(ASMTEST_HWTRACE_BEST); /* -1 if none */
+        for (size_t p = 0; p < sizeof ladder / sizeof ladder[0]; p++) {
+            const long *args = (ladder[p].nargs == 3) ? a3 : &ladder[p].arg;
+            long long truth = emu_x86_insns(ladder[p].bytes, ladder[p].len,
+                                            args, ladder[p].nargs);
+
+            /* (a) Raw top hardware backend — the ceiling is VISIBLE here. */
+            if (top_hw >= 0) {
+                int complete = 1;
+                long long cap =
+                    native_hw_capture(top_hw, ladder[p].bytes, ladder[p].len,
+                                      args, ladder[p].nargs, &complete);
+                if (cap >= 0)
+                    row(first, "native-hw", hw_backend_name(top_hw), "x86_64",
+                        "host", 1, "", "native", complete, cap, truth,
+                        ladder[p].workload);
+                else
+                    row(first, "native-hw", hw_backend_name(top_hw), "x86_64",
+                        "host", 0, "backend could not trace rung", "native", -1,
+                        -1, truth, ladder[p].workload);
+                first = 0;
+            }
+
+            /* (b) Auto-escalating tier — the ceiling is RESTORED here (the point of
+             * the auto tier); reports the winning backend + final completeness. */
             void *exec = NULL;
             size_t exec_len = 0;
-            if (asmtest_hwtrace_exec_alloc(probes[p].bytes, probes[p].len,
+            if (asmtest_hwtrace_exec_alloc(ladder[p].bytes, ladder[p].len,
                                            &exec, &exec_len) != ASMTEST_HW_OK) {
                 row(first, "native-auto", "native", "x86_64", "host", 0,
-                    "exec_alloc failed", "native", -1, -1, probes[p].label);
+                    "exec_alloc failed", "native", -1, -1, truth,
+                    ladder[p].workload);
                 first = 0;
                 continue;
             }
@@ -222,29 +350,39 @@ int main(int argc, char **argv) {
             asmtest_trace_choice_t used;
             memset(&used, 0, sizeof used);
             long result = 0;
-            long a3[3] = {2, 3, 4};
-            const long *args = (probes[p].nargs == 3) ? a3 : &probes[p].arg;
             int rc = asmtest_trace_call_auto(
-                exec, probes[p].len, args, probes[p].nargs, ASMTEST_TRACE_BEST,
+                exec, ladder[p].len, args, ladder[p].nargs, ASMTEST_TRACE_BEST,
                 &result, t, &used);
             if (rc == ASMTEST_HW_OK) {
                 const char *bk = (used.tier == ASMTEST_TIER_HWTRACE)
                                      ? hw_backend_name(used.backend)
                                      : tier_name(used.tier);
-                int complete = !asmtest_emu_trace_truncated(t);
                 long long insns = (long long)asmtest_emu_trace_insns_total(t);
+                int complete = !asmtest_emu_trace_truncated(t);
                 row(first, "native-auto", bk, "x86_64", "host", 1, "", "native",
-                    complete, insns, probes[p].label);
+                    complete, insns, truth, ladder[p].workload);
             } else {
                 row(first, "native-auto", "native", "x86_64", "host", 0,
                     "no call-owning native tier available", "native", -1, -1,
-                    probes[p].label);
+                    truth, ladder[p].workload);
             }
             first = 0;
             asmtest_trace_free(t);
             asmtest_hwtrace_exec_free(exec, exec_len);
         }
     }
+#else
+    /* Absent = data, not an invisible gap: emit explicit unavailable rows so the
+     * capability still appears in the cross-system matrix (matches how every other
+     * tier self-skips with a reason). */
+    row(first, "native-hw", "native", "host", "host", 0,
+        "host-native capture ladder: x86-64 Linux/macOS only", "native", -1, -1,
+        -1, NULL);
+    first = 0;
+    row(first, "native-auto", "native", "host", "host", 0,
+        "host-native capture ladder: x86-64 Linux/macOS only", "native", -1, -1,
+        -1, NULL);
+    first = 0;
 #endif
 
     /* 3) Static hardware-backend availability (no run — the static capability). */
@@ -256,7 +394,7 @@ int main(int argc, char **argv) {
         char reason[256] = "";
         asmtest_hwtrace_skip_reason(hw[i], reason, sizeof reason);
         row(first, "hwtrace", hw_backend_name(hw[i]), "host", "host", avail,
-            avail ? "" : reason, "native", -1, -1, NULL);
+            avail ? "" : reason, "native", -1, -1, -1, NULL);
         first = 0;
     }
 
@@ -266,7 +404,7 @@ int main(int argc, char **argv) {
         char reason[256] = "";
         asmtest_dr_skip_reason(reason, sizeof reason);
         row(first, "dynamorio", "dynamorio", "host", "host", avail,
-            avail ? "" : reason, "native", -1, -1, NULL);
+            avail ? "" : reason, "native", -1, -1, -1, NULL);
         first = 0;
     }
 
@@ -274,7 +412,7 @@ int main(int argc, char **argv) {
     {
         int avail = asmtest_disas_available();
         row(first, "disasm", "capstone", "host", "host", avail,
-            avail ? "" : "built without Capstone", "n/a", -1, -1, NULL);
+            avail ? "" : "built without Capstone", "n/a", -1, -1, -1, NULL);
         first = 0;
     }
 
