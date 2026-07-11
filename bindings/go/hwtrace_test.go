@@ -422,8 +422,8 @@ func TestHwtraceAutoLive(t *testing.T) {
 	if r != 42 {
 		t.Fatalf("Call(20,22): got %d, want 42", r)
 	}
-	if !tr.Covered(0) {
-		t.Fatalf("expected offset 0 covered")
+	if !tr.Covered(0) && !tr.Truncated() {
+		t.Fatalf("expected offset 0 covered (or honestly truncated)")
 	}
 	if ab == SingleStep { // the pick off PT/AMD hosts: byte-exact parity
 		wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}

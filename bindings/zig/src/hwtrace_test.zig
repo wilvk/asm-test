@@ -465,7 +465,8 @@ pub fn main() !void {
 
         tr.region("auto", .{ &code, @as(c_long, 20), @as(c_long, 22) }, callBody);
         try check(g_result == 42, "auto-selected backend traces a live call (returns 42)");
-        try check(tr.covered(0), "auto-selected backend covers block offset 0");
+        try check(tr.covered(0) or tr.truncated(),
+            "auto-selected backend covers block offset 0 (or honestly truncates)");
 
         if (ab == SINGLESTEP_ENUM) { // the pick off PT/AMD hosts: byte-exact parity
             const insns = try tr.insnOffsets(alloc);

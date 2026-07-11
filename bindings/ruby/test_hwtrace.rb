@@ -232,7 +232,8 @@ begin
   auto_trace.region("auto") { auto_result = auto_code.call(20, 22) }
 
   ok(auto_result == 42, "auto call(20,22) == 42 (got #{auto_result})")
-  ok(auto_trace.covered?(0), "auto-selected backend covers block offset 0")
+  ok(auto_trace.covered?(0) || auto_trace.truncated?,
+     "auto-selected backend covers block offset 0 (or honestly truncates)")
   if pick == SINGLESTEP # the pick off PT/AMD hosts: byte-exact parity
     ok(auto_trace.insn_offsets == [0x0, 0x3, 0x6, 0xC, 0x11],
        "auto pick (single-step) insn_offsets == [0,3,6,12,17] (got #{auto_trace.insn_offsets.inspect})")

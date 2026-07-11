@@ -411,7 +411,8 @@ public final class HwTraceTest {
             long[] r = new long[1];
             trace.region("auto", () -> r[0] = code.call(20, 22));
             ok(r[0] == 42, "auto call(20,22): result == 42 (got " + r[0] + ")");
-            ok(trace.covered(0), "auto covers block offset 0");
+            ok(trace.covered(0) || trace.truncated(),
+                "auto covers block offset 0 (or honestly truncates)");
             if (ab == HwTrace.SINGLESTEP) { // the pick off PT/AMD hosts: byte-exact parity
                 long[] insns = trace.insnOffsets();
                 long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};

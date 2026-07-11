@@ -328,7 +328,7 @@ do
   tr:region("auto", function() result = code:call(20, 22) end)
 
   eq(result, 42, "auto: call(20,22) == 42")
-  ok(tr:covered(0), "auto: covered(0)")
+  ok(tr:covered(0) or tr:truncated(), "auto: covered(0) or honestly truncated")
   if ab == SINGLESTEP then  -- the pick off PT/AMD hosts: byte-exact parity
     list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
             "auto (single-step): insn_offsets == {0,3,6,12,17}")

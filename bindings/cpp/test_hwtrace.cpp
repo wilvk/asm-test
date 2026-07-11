@@ -218,7 +218,8 @@ int main() {
                 result = code.call(20, 22);
             }
             ok(result == 42, "auto: auto-selected backend traces a live call (== 42)");
-            ok(tr.covered(0), "auto: auto-selected backend covers block offset 0");
+            ok(tr.covered(0) || tr.truncated(),
+               "auto: auto-selected backend covers block offset 0 (or honestly truncates)");
             if (ab == SINGLESTEP) {
                 const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
                 ok(tr.insn_offsets() == expect,

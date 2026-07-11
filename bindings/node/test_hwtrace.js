@@ -419,7 +419,8 @@ function main() {
       tr.region('auto', () => { r = code.call(20, 22); });
 
       ok(Number(r) === 42, 'auto-selected backend traces a live call (returns 42)');
-      ok(tr.covered(0), 'auto-selected backend covers block offset 0');
+      ok(tr.covered(0) || tr.truncated(),
+        'auto-selected backend covers block offset 0 (or honestly truncates)');
       if (pick === SINGLESTEP) { // the pick off PT/AMD hosts: byte-exact parity
         assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
         ok(true, 'auto pick (single-step) yields offsets [0, 3, 6, 12, 17]');

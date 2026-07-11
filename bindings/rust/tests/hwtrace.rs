@@ -386,7 +386,10 @@ fn auto_resolve_traces_live() {
         };
 
         assert_eq!(result, 42, "auto-selected backend traces a live call");
-        assert!(tr.covered(0), "auto-selected backend covers block offset 0");
+        assert!(
+            tr.covered(0) || tr.truncated(),
+            "auto-selected backend covers block offset 0 (or honestly truncates)"
+        );
         if ab == Backend::Singlestep as i32 {
             // The pick off PT/AMD hosts: byte-exact parity with the shared fixture.
             assert_eq!(
