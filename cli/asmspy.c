@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_logview.h"
 
 /* ================================================================== */
 /* Shared rendering: one captured region sample -> header + 2 panes    */
@@ -383,13 +384,16 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
 /* ================================================================== */
 
 #define LOG_CAP 2048
-/* Named to avoid <limits.h>'s LINE_MAX; holds a ~200-char decoded string plus a
- * syscall line's framing (and an out-of-process "[tid] " prefix) in the pane. */
-#define LOG_LINE_MAX 320
+/* Named to avoid <limits.h>'s LINE_MAX. 512 holds a full decoded syscall line
+ * (the engine formats up to ~1 KB but nothing wider than a real terminal is
+ * ever displayed) plus the "[tid] " prefix, so lines are no longer clipped
+ * short of the pane width the way the old 320 could be on a wide terminal. */
+#define LOG_LINE_MAX 512
 
 typedef struct {
     char lines[LOG_CAP][LOG_LINE_MAX];
     int head, count;
+    unsigned long total; /* lines ever pushed (monotonic); drives scrollback */
 } logbuf;
 
 static void log_push(logbuf *lg, const char *s) {
@@ -397,21 +401,28 @@ static void log_push(logbuf *lg, const char *s) {
     lg->head = (lg->head + 1) % LOG_CAP;
     if (lg->count < LOG_CAP)
         lg->count++;
+    lg->total++;
 }
 
-/* render the newest `h` lines of a ring buffer into the (y0,x0) w×h box */
-static void draw_log(const logbuf *lg, int y0, int x0, int h, int w) {
+/* Render the ring buffer into the (y0,x0) w×h box with `bottom` (an absolute
+ * line index) as the last visible line; asmspy_log_window does the clamped
+ * viewport math (unit-tested in test_logview.c). A `bottom` past the newest
+ * line is clamped, so log_newest() tails the live stream. */
+static void draw_log_at(const logbuf *lg, int y0, int x0, int h, int w,
+                        long bottom) {
     if (h < 1 || w < 1)
         return;
-    int show = lg->count < h ? lg->count : h;
-    int start = lg->count - show;
-    for (int r = 0; r < show; r++) {
-        int logical = start + r;
-        int slot =
-            ((lg->head - lg->count + logical) % LOG_CAP + LOG_CAP) % LOG_CAP;
+    long top = 0;
+    int n = asmspy_log_window(lg->total, lg->count, bottom, h, &top);
+    for (int r = 0; r < n; r++) {
+        long abs = top + r;
+        int slot = (int)((unsigned long)abs % LOG_CAP);
         mvprintw(y0 + r, x0, "%-*.*s", w, w, lg->lines[slot]);
     }
 }
+
+/* absolute index of the newest buffered line (-1 if empty) */
+static long log_newest(const logbuf *lg) { return (long)lg->total - 1; }
 
 /* filterable scrolling list over borrowed display strings */
 typedef struct {
@@ -624,10 +635,15 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         return 1;
     }
 
-    int back = 1; /* 1 = to process list (q/ESC), 0 = to options (b) */
+    int back = 1;     /* 1 = to process list (q/ESC), 0 = to options (b) */
+    int paused = 0;   /* freeze the log tail to scroll history (modes 0/2) */
+    long vbottom = 0; /* main-log bottom line while paused (absolute index) */
+    long vstr = 0;    /* strings-pane bottom while paused (mode 0) */
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
+        int log_h = rows - 3 > 0 ? rows - 3 : 1;
+        int is_log = (mode == 0 || mode == 2); /* scrollable log views */
         erase();
         attron(A_BOLD);
         mvprintw(0, 0, "%.*s", cols, title);
@@ -636,6 +652,10 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         pthread_mutex_lock(&L.mu);
         int fin = atomic_load(&L.finished);
         int erc = L.rc;
+        long lognewest = log_newest(&L.log);
+        int logcount = L.log.count;
+        unsigned long logtotal = L.log.total;
+        long strnewest = log_newest(&L.strlog);
         if (mode == 0) {
             /* left half: the syscall stream; right half: decoded strings */
             int midx = cols / 2;
@@ -654,14 +674,15 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             attroff(A_BOLD);
             for (int r = 1; r < rows - 1; r++)
                 mvaddch(r, midx, ACS_VLINE);
-            draw_log(&L.log, 2, 0, h, lw);
-            draw_log(&L.strlog, 2, rx, h, rw);
+            draw_log_at(&L.log, 2, 0, h, lw, paused ? vbottom : lognewest);
+            draw_log_at(&L.strlog, 2, rx, h, rw, paused ? vstr : strnewest);
         } else if (mode == 2) {
             /* single-pane live instruction stream (function + assembly) */
             attron(A_BOLD);
             mvprintw(1, 0, "LIVE STREAM  (function+off [module]   disassembly)");
             attroff(A_BOLD);
-            draw_log(&L.log, 2, 0, rows - 3, cols);
+            draw_log_at(&L.log, 2, 0, rows - 3, cols,
+                        paused ? vbottom : lognewest);
         } else {
             mvprintw(1, 0, "%.*s", cols, L.asm_header);
             int split = (rows - 3) * 3 / 5;
@@ -683,16 +704,22 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         }
         pthread_mutex_unlock(&L.mu);
 
-        if (fin) {
+        if (is_log && paused)
+            mvprintw(rows - 1, 0,
+                     "[PAUSED %ld/%lu]  up/down PgUp/PgDn Home/End: scroll  "
+                     "space: live   b: options   q: processes",
+                     vbottom < 0 ? 0 : vbottom + 1, logtotal);
+        else if (fin) {
             char e[128];
             asmspy_strerror(erc, e, sizeof e);
             mvprintw(rows - 1, 0,
-                     "[tracer stopped: %s]  b: options   q: processes",
-                     erc ? e : "target exited or done");
-        } else {
+                     "[tracer stopped: %s]  %sb: options   q: processes",
+                     erc ? e : "target exited or done",
+                     is_log ? "space: scroll history   " : "");
+        } else
             mvprintw(rows - 1, 0,
-                     "b: back to options   q/ESC: processes   (live)");
-        }
+                     "%sb: back to options   q/ESC: processes   (live)",
+                     is_log ? "space: pause   " : "");
         clrtoeol();
         refresh();
 
@@ -702,9 +729,62 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             back = 1;
             break;
         }
-        if (ch == 'b' || (fin && ch != ERR)) {
+        if (ch == 'b') {
             back = 0;
             break;
+        }
+        if (is_log) {
+            int page = log_h > 1 ? log_h - 1 : 1;
+            /* scrolling up while live-tailing enters pause at the current tail */
+            if ((ch == KEY_UP || ch == KEY_PPAGE || ch == KEY_HOME) && !paused) {
+                paused = 1;
+                vbottom = lognewest;
+                vstr = strnewest;
+            }
+            switch (ch) {
+            case ' ':
+            case 'p': /* toggle pause; freeze both panes at the current tail */
+                if (!paused) {
+                    paused = 1;
+                    vbottom = lognewest;
+                    vstr = strnewest;
+                } else
+                    paused = 0;
+                break;
+            case KEY_UP:
+                vbottom -= 1;
+                break;
+            case KEY_PPAGE:
+                vbottom -= page;
+                break;
+            case KEY_HOME:
+                vbottom = 0; /* clamped up to the oldest line below */
+                break;
+            case KEY_DOWN:
+                if (paused && vbottom + 1 >= lognewest)
+                    paused = 0; /* stepped off the bottom -> resume live tail */
+                else if (paused)
+                    vbottom += 1;
+                break;
+            case KEY_NPAGE:
+                if (paused)
+                    vbottom += page; /* clamped to the tail below (stays paused) */
+                break;
+            case KEY_END:
+                paused = 0; /* jump back to the live tail */
+                break;
+            default:
+                break;
+            }
+            if (paused) { /* keep the anchor within the buffered range */
+                long oldest = lognewest - logcount + 1; /* = total - count */
+                if (oldest < 0)
+                    oldest = 0;
+                if (vbottom < oldest)
+                    vbottom = oldest;
+                if (vbottom > lognewest)
+                    vbottom = lognewest;
+            }
         }
     }
 

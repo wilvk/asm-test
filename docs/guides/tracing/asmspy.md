@@ -113,6 +113,13 @@ Run `asmspy` with no arguments. It walks four screens:
      single-stepping is slow, so the target crawls while streamed (and resumes
      full speed on detach).
 
+   In the two log feeds (syscall log, live stream) press **`space`** to **pause**
+   and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
+   through the buffered lines (up to 2048); `space` again (or `End`, or scrolling
+   past the newest line) resumes the live tail. The status bar shows `[PAUSED
+   line/total]` while frozen. Scrolling still works after the target exits, so
+   you can read the final history.
+
    Press `b` to go back to this process's options, or `q`/`ESC` for the process
    list.
 

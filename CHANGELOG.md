@@ -22,7 +22,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chosen **function's assembly** with
   per-instruction execution **heat counts** plus its callees **ranked by call count**
   (resampled each time the target calls it), and a **whole-process live instruction stream**
-  (every instruction as it executes, resolved to its function). The process picker filters
+  (every instruction as it executes, resolved to its function). The two log feeds
+  (syscall log, live stream) **pause + scroll back** through their history (`space` to
+  freeze, `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` to move, `End`/`space` to resume the tail),
+  and scrollback survives target exit. The process picker filters
   as you type and sorts by **pid, recent CPU activity, or string-scan density** (`Tab`
   cycles, `r` rescans, `b` navigates back). Every view is also a headless subcommand for
   scripts and CI: `--list [active|scan]`, `--syms <pid> [filter]`, `--log <pid> [n]`,

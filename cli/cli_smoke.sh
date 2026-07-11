@@ -11,6 +11,10 @@ ASM="$BUILD/asmspy"
 
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 
+# Unit-test the TUI scrollback viewport math first (pure, no ncurses/ptrace).
+echo "--- test_logview (TUI scrollback math) ---"
+"$BUILD/test_logview" || fail "test_logview"
+
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
 # no pipefail), so a crashing/erroring --list would slip past unnoticed.

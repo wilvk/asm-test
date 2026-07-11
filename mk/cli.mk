@@ -73,9 +73,14 @@ $(BUILD)/spy_victim: $(BUILD)/spy_victim.o
 $(BUILD)/threads_victim: $(BUILD)/threads_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# test_logview — headless unit test for the TUI scrollback viewport math
+# (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
+$(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_logview.c
+
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
-           $(BUILD)/spy_victim $(BUILD)/threads_victim
+           $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/test_logview
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 
