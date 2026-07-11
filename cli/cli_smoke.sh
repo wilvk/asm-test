@@ -57,7 +57,8 @@ WVPID=""
 TVPID=""
 DVPID=""
 CVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} 2>/dev/null || true' EXIT INT TERM
+JVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -233,6 +234,32 @@ printf '%s\n' "$out" | grep -q 'demo::hot_loop(int)' \
 printf '%s\n' "$out" | grep -q '_ZN4demo' \
     && fail "C++ symbol left mangled (_ZN4demo... leaked through the resolver)"
 kill "$CVPID" 2>/dev/null || true
+
+# JIT / perf-map symbol resolution: jit_victim mmaps an ANONYMOUS executable
+# region, runs a hot loop there, and registers it in /tmp/perf-<pid>.map as
+# "jit_hot_loop" — exactly what Node/V8, .NET, and OpenJDK do for JIT-compiled
+# code. That region is invisible to the ELF symtab, so without perf-map
+# resolution asmspy renders it as a bare "0x..". Assert --stream names it
+# "[jit]" and --graph tags the method [JIT].
+"$BUILD/jit_victim" 2>/dev/null &
+JVPID=$!
+sleep 1
+echo "--- asmspy --stream $JVPID 400 (JIT/perf-map naming) ---"
+out=$("$ASM" --stream "$JVPID" 400 2>&1) || true
+printf '%s\n' "$out" | grep -m3 jit_hot_loop || true
+printf '%s\n' "$out" | grep -qE 'jit_hot_loop.*\[jit\]' \
+    || fail "JIT region not named from the perf-map (expected 'jit_hot_loop ... [jit]')"
+
+echo "--- asmspy --graph $JVPID 5 (JIT method tagged [JIT]) ---"
+set +e
+gout=$(timeout 40 "$ASM" --graph "$JVPID" 5 2>&1); grc=$?
+set -e
+[ "$grc" -eq 124 ] && fail "--graph hung on jit_victim (whole-process single-step)"
+printf '%s\n' "$gout" | grep -m3 jit_hot_loop || true
+printf '%s\n' "$gout" | grep -qE '\[JIT\][^Z]*jit_hot_loop' \
+    || fail "JIT method not tagged [JIT] in the call graph"
+kill "$JVPID" 2>/dev/null || true
+rm -f "/tmp/perf-$JVPID.map"
 
 # TWO-PHASE DETACH: assert a traced target SURVIVES detach.
 #

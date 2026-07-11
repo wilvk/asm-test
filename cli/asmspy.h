@@ -86,6 +86,46 @@ const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
 const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 
 /* ------------------------------------------------------------------ */
+/* JIT / perf-map resolver (asmspy_proc.c)                             */
+/*                                                                     */
+/* Managed runtimes emit /tmp/perf-<pid>.map — a text table of         */
+/* "<hex addr> <hex size> <name>" lines naming their JIT-compiled code */
+/* (Node/V8 with --perf-basic-prof, .NET with DOTNET_PerfMapEnabled=1, */
+/* and OpenJDK via perf-map-agent all use this one format). That code  */
+/* lives in anonymous executable mappings the ELF symtab can't see, so */
+/* without this every managed frame renders "0x..". Unlike the ELF     */
+/* symtab this table is REFRESHED during the trace, since a running    */
+/* JIT keeps compiling new methods; addresses are absolute (no bias).  */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    asmspy_sym_t *v; /* sorted by addr; `name` owned, `module` the shared "jit" */
+    size_t n, cap;
+    pid_t pid;             /* whose /tmp/perf-<pid>.map to read                 */
+    unsigned miss_budget;  /* refresh-on-miss rate limiter (see asmspy_resolve) */
+} asmspy_jitmap_t;
+
+/* Bind an (empty) JIT map to `pid`. Pairs with asmspy_jitmap_free. */
+void asmspy_jitmap_init(asmspy_jitmap_t *j, pid_t pid);
+/* Re-read /tmp/perf-<pid>.map, replacing the map (sorted by addr). Cheap next to
+ * single-stepping. Returns the method count, or -1 if the file is absent (the
+ * map is then emptied). Safe to call repeatedly during a trace. */
+int asmspy_jitmap_refresh(asmspy_jitmap_t *j);
+/* Reverse lookup: the JIT method whose [addr, addr+size) contains `addr`, else
+ * NULL. Does NOT refresh (pure) — use asmspy_resolve for refresh-on-miss. */
+const asmspy_sym_t *asmspy_jitmap_at(const asmspy_jitmap_t *j, uint64_t addr);
+void asmspy_jitmap_free(asmspy_jitmap_t *j);
+
+/* The single resolution chokepoint for the whole-process single-step engines:
+ * try the ELF symtab first, then the JIT map; on a double-miss refresh the
+ * perf-map (rate-limited via `jit->miss_budget`, so an unmapped/non-JIT target
+ * doesn't re-read the file on every unknown address) and retry the JIT tier.
+ * Returns the owning asmspy_sym_t (ELF or JIT tier) or NULL. `jit` may be NULL
+ * (ELF-only). The returned pointer is valid until the next asmspy_resolve /
+ * asmspy_jitmap_refresh on the same map. */
+const asmspy_sym_t *asmspy_resolve(const asmspy_symtab_t *syms,
+                                   asmspy_jitmap_t *jit, uint64_t addr);
+
+/* ------------------------------------------------------------------ */
 /* Tracer engines (asmspy_engine.c) — each runs entirely on its caller */
 /* thread (the ptrace-per-thread rule). `stop` may be NULL; when       */
 /* non-NULL the engine returns promptly once it becomes true (the UI    */

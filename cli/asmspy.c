@@ -249,13 +249,15 @@ static int gnode_cmp(const void *a, const void *b) {
     return strcmp(x->name, y->name);
 }
 
-/* One call-graph row: an internal/external marker, the function, its counts
+/* One call-graph row: an internal/external/JIT marker, the function, its counts
  * (times called / calls made / distinct callees), and the backing module.
- * `[?]` marks an address no symbol resolved (JIT, stripped, anonymous). */
+ * `[JIT]` marks a managed-runtime method named from the perf-map; `[?]` an
+ * address no symbol resolved at all (stripped or anonymous). */
 static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
-    const char *tag = strcmp(nd->module, "?") == 0 ? "[?]"
-                      : nd->external               ? "[EXT]"
-                                                   : "[int]";
+    const char *tag = strcmp(nd->module, "?") == 0     ? "[?]"
+                      : strcmp(nd->module, "jit") == 0 ? "[JIT]"
+                      : nd->external                   ? "[EXT]"
+                                                       : "[int]";
     snprintf(buf, cap, "%-5s %-30.30s inv=%-7llu calls=%-7llu fanout=%-5u [%s]",
              tag, nd->name, nd->invocations, nd->out_calls, nd->fanout,
              nd->module);

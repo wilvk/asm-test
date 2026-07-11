@@ -666,22 +666,146 @@ const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
     return NULL;
 }
 
-const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr) {
-    /* sorted by addr: binary-search the greatest addr <= query */
-    if (t->n == 0)
+/* Binary-search a by-address-sorted asmspy_sym_t array for the entry whose
+ * [addr, addr+size) (or exact addr when size==0) contains `query`, else NULL.
+ * Shared by the ELF symtab and the JIT map — both keep this same sorted layout. */
+static const asmspy_sym_t *sym_at(const asmspy_sym_t *v, size_t n,
+                                  uint64_t query) {
+    if (n == 0)
         return NULL;
-    size_t lo = 0, hi = t->n;
+    size_t lo = 0, hi = n; /* greatest addr <= query */
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        if (t->v[mid].addr <= addr)
+        if (v[mid].addr <= query)
             lo = mid + 1;
         else
             hi = mid;
     }
     if (lo == 0)
         return NULL;
-    const asmspy_sym_t *s = &t->v[lo - 1];
-    if (s->size ? (addr < s->addr + s->size) : (addr == s->addr))
+    const asmspy_sym_t *s = &v[lo - 1];
+    if (s->size ? (query < s->addr + s->size) : (query == s->addr))
         return s;
+    return NULL;
+}
+
+const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr) {
+    return sym_at(t->v, t->n, addr);
+}
+
+/* ================================================================== */
+/* JIT / perf-map resolver                                             */
+/* ================================================================== */
+
+/* Every JIT method shares this module tag (the perf-map names no backing file);
+ * it is a non-owned literal, so asmspy_jitmap_free frees only the `name`s. */
+static char JIT_MODULE[] = "jit";
+
+/* On a double miss (ELF + current JIT map), asmspy_resolve re-reads the perf-map
+ * at most once per this many misses — so a non-JIT target (no map file) doesn't
+ * fopen it on every unknown address, while a busy JIT (misses spike as it emits
+ * code) still gets its new methods named within a short window. */
+#define JIT_MISS_COOLDOWN 64u
+
+void asmspy_jitmap_init(asmspy_jitmap_t *j, pid_t pid) {
+    j->v = NULL;
+    j->n = j->cap = 0;
+    j->pid = pid;
+    j->miss_budget = 0; /* first double-miss refreshes immediately */
+}
+
+void asmspy_jitmap_free(asmspy_jitmap_t *j) {
+    if (!j)
+        return;
+    for (size_t i = 0; i < j->n; i++)
+        free(j->v[i].name); /* module is the shared JIT_MODULE literal */
+    free(j->v);
+    j->v = NULL;
+    j->n = j->cap = 0;
+}
+
+static int jit_push(asmspy_jitmap_t *j, uint64_t addr, uint64_t size,
+                    const char *name) {
+    if (j->n == j->cap) {
+        size_t nc = j->cap ? j->cap * 2 : 256;
+        asmspy_sym_t *nv = realloc(j->v, nc * sizeof *nv);
+        if (!nv)
+            return -1;
+        j->v = nv;
+        j->cap = nc;
+    }
+    asmspy_sym_t *s = &j->v[j->n];
+    s->addr = addr;
+    s->size = size;
+    s->name = strdup(name); /* JIT names are already human-readable — no demangle */
+    if (!s->name)
+        return -1;
+    s->module = JIT_MODULE;
+    j->n++;
+    return 0;
+}
+
+int asmspy_jitmap_refresh(asmspy_jitmap_t *j) {
+    for (size_t i = 0; i < j->n; i++) /* drop the previous snapshot */
+        free(j->v[i].name);
+    j->n = 0;
+    j->miss_budget = JIT_MISS_COOLDOWN; /* rearm the rate limiter */
+
+    char path[64];
+    snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)j->pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1; /* no JIT (or not readable): an empty map, resolves nothing */
+
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, f) != -1) {
+        unsigned long long start = 0, size = 0;
+        int off = 0;
+        /* "<hex start> <hex size> <name...>"; %n gives the name's offset. The
+         * same format V8/Node, .NET, and OpenJDK (+perf-map-agent) all write. */
+        if (sscanf(line, "%llx %llx %n", &start, &size, &off) < 2 || off == 0)
+            continue;
+        char *nm = line + off;
+        size_t l = strlen(nm);
+        while (l > 0 && (nm[l - 1] == '\n' || nm[l - 1] == '\r' ||
+                         nm[l - 1] == ' ' || nm[l - 1] == '\t'))
+            nm[--l] = '\0';
+        if (l == 0)
+            continue;
+        if (jit_push(j, start, size, nm) != 0)
+            break; /* OOM: keep what we have */
+    }
+    free(line);
+    fclose(f);
+    /* Sort by addr for the reverse search. A method recompiled at a reused
+     * address (tiered/OSR) leaves the stale line too; both share a start so the
+     * extent check still names the right method. */
+    if (j->n)
+        qsort(j->v, j->n, sizeof *j->v, sym_cmp_addr);
+    return (int)j->n;
+}
+
+const asmspy_sym_t *asmspy_jitmap_at(const asmspy_jitmap_t *j, uint64_t addr) {
+    return j ? sym_at(j->v, j->n, addr) : NULL;
+}
+
+const asmspy_sym_t *asmspy_resolve(const asmspy_symtab_t *syms,
+                                   asmspy_jitmap_t *jit, uint64_t addr) {
+    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, addr) : NULL;
+    if (s)
+        return s; /* ELF symbols win: they are static and never go stale */
+    if (!jit)
+        return NULL;
+    s = asmspy_jitmap_at(jit, addr);
+    if (s)
+        return s;
+    /* Missed both. A method compiled since the last refresh may now be in the
+     * perf-map — refresh (rate-limited) and retry the JIT tier once. */
+    if (jit->miss_budget == 0) {
+        asmspy_jitmap_refresh(jit); /* rearms miss_budget */
+        return asmspy_jitmap_at(jit, addr);
+    }
+    jit->miss_budget--;
     return NULL;
 }

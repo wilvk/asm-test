@@ -771,6 +771,9 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
     }
 
     int multi = tab.n > 1;
+    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
     long done = 0;
 
     while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
@@ -826,10 +829,9 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
                     asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip, 0,
                                   dis, sizeof dis);
 
-                /* resolve the function this address lands in */
+                /* resolve the function this address lands in (ELF, else JIT) */
                 char loc[96];
-                const asmspy_sym_t *s =
-                    syms ? asmspy_symtab_at(syms, rip) : NULL;
+                const asmspy_sym_t *s = asmspy_resolve(syms, &jit, rip);
                 if (s)
                     snprintf(loc, sizeof loc, "%s+0x%llx [%s]", s->name,
                              (unsigned long long)(rip - s->addr), s->module);
@@ -876,6 +878,7 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
     }
 
     detach_threads(&tab);
+    asmspy_jitmap_free(&jit);
     return 0;
 }
 
@@ -916,8 +919,8 @@ static void exe_basename(pid_t pid, char *out, size_t cap) {
  * into a single caller node (and every entry of a callee into one node).
  * Returns the node index, or -1 on OOM. */
 static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
-                      const char *exebase, uint64_t addr) {
-    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, addr) : NULL;
+                      asmspy_jitmap_t *jit, const char *exebase, uint64_t addr) {
+    const asmspy_sym_t *s = asmspy_resolve(syms, jit, addr);
     uint64_t key = s ? s->addr : addr;
     for (size_t i = 0; i < g->nn; i++)
         if (g->node[i].addr == key)
@@ -941,8 +944,12 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
          * internal = the target's own executable code */
         size_t nl = strlen(s->name);
         int is_plt = nl >= 4 && strcmp(s->name + nl - 4, "@plt") == 0;
-        e->external = is_plt ||
-                      (exebase && exebase[0] && strcmp(s->module, exebase) != 0);
+        /* JIT/managed code (module "jit") is the app's OWN logic, not a system
+         * library, so it counts as internal despite having no exe-backed file. */
+        int is_jit = strcmp(s->module, "jit") == 0;
+        e->external =
+            !is_jit && (is_plt || (exebase && exebase[0] &&
+                                   strcmp(s->module, exebase) != 0));
     } else {
         snprintf(e->name, sizeof e->name, "0x%llx", (unsigned long long)key);
         snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
@@ -952,10 +959,11 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
 }
 
 /* Record one caller->callee call. Returns 1 if a call was counted (0 on OOM). */
-static int grecord(graph_t *g, const asmspy_symtab_t *syms, const char *exebase,
+static int grecord(graph_t *g, const asmspy_symtab_t *syms,
+                   asmspy_jitmap_t *jit, const char *exebase,
                    uint64_t caller_addr, uint64_t callee_addr) {
-    long ci = gnode_get(g, syms, exebase, caller_addr);
-    long ki = gnode_get(g, syms, exebase, callee_addr);
+    long ci = gnode_get(g, syms, jit, exebase, caller_addr);
+    long ki = gnode_get(g, syms, jit, exebase, callee_addr);
     if (ci < 0 || ki < 0)
         return 0;
     for (size_t i = 0; i < g->ne; i++) {
@@ -1002,6 +1010,9 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
     exe_basename(pid, exebase, sizeof exebase);
 
     graph_t g = {0};
+    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
     long recorded = 0;   /* calls counted so far */
     long published = -1; /* recorded value at the last sink() call */
 
@@ -1052,7 +1063,8 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
 
                 /* consume a pending INDIRECT call: this rip is its callee entry */
                 if (ts && ts->pending_call) {
-                    recorded += grecord(&g, syms, exebase, ts->call_site, rip);
+                    recorded +=
+                        grecord(&g, syms, &jit, exebase, ts->call_site, rip);
                     ts->pending_call = 0;
                 }
 
@@ -1063,7 +1075,7 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         /* DIRECT call: target known now — record immediately */
-                        recorded += grecord(&g, syms, exebase, rip, tgt);
+                        recorded += grecord(&g, syms, &jit, exebase, rip, tgt);
                     } else if (ts) {
                         /* INDIRECT call: resolve the callee at the next step */
                         ts->pending_call = 1;
@@ -1101,6 +1113,7 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
         sink(ctx, g.node, g.nn);
     free(g.node);
     free(g.edge);
+    asmspy_jitmap_free(&jit);
     return 0;
 }
 
@@ -1111,10 +1124,11 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
 /* Emit one "entered a function" line, indented by the caller's live depth. The
  * callee's entry address is passed through so a front-end can disassemble it. */
 static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
-                      const asmspy_symtab_t *syms, uint64_t callee, int depth) {
+                      const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                      uint64_t callee, int depth) {
     if (!sink)
         return;
-    const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, callee) : NULL;
+    const asmspy_sym_t *s = asmspy_resolve(syms, jit, callee);
     char name[200];
     if (s)
         snprintf(name, sizeof name, "%s [%s]", s->name, s->module);
@@ -1146,6 +1160,9 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
     }
 
     int multi = tab.n > 1;
+    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
     long emitted = 0; /* call lines produced so far */
 
     while ((max < 0 || emitted < max) && !(stop && atomic_load(stop))) {
@@ -1196,7 +1213,7 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
 
                 /* a pending INDIRECT call resolves at its callee entry (= rip) */
                 if (ts && ts->pending_call) {
-                    tree_emit(sink, ctx, multi, tid, syms, rip, ts->depth);
+                    tree_emit(sink, ctx, multi, tid, syms, &jit, rip, ts->depth);
                     ts->depth++;
                     ts->pending_call = 0;
                     emitted++;
@@ -1210,7 +1227,8 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
-                        tree_emit(sink, ctx, multi, tid, syms, tgt, ts->depth);
+                        tree_emit(sink, ctx, multi, tid, syms, &jit, tgt,
+                                  ts->depth);
                         ts->depth++;
                         emitted++;
                     } else {
@@ -1241,6 +1259,7 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
     }
 
     detach_threads(&tab);
+    asmspy_jitmap_free(&jit);
     return 0;
 }
 

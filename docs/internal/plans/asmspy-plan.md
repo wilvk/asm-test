@@ -40,7 +40,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| Resolve **JIT/perf-map** (`/tmp/perf-<pid>.map`, jitdump) in stream/graph/tree — managed frames (Node/V8 JS, **.NET**, **Java**) render as `[?]`/`0x..` today; one resolver addition names all three (they emit the same perf-map format). The library already has a perf-map reader asmspy declines to call; must refresh during the trace (a one-shot snapshot is insufficient) | **high** | L |
+| ~~Resolve **JIT/perf-map** (`/tmp/perf-<pid>.map`, jitdump) in stream/graph/tree — managed frames (Node/V8 JS, **.NET**, **Java**) render as `[?]`/`0x..` today; one resolver addition names all three (they emit the same perf-map format)…must refresh during the trace~~ — **landed**: `asmspy_jitmap_t` + `asmspy_resolve` (ELF→JIT→rate-limited refresh-on-miss) in all three single-step engines; JIT frames render `name [jit]` (stream/tree) and `[JIT]` (graph); `jit_victim` smoke proves it. (`.NET`/Java need the runtime launched with the perf-map flag/agent — asmspy can't enable it from outside.) *jitdump (bytes-accurate, tiered-recompile-aware) not yet read — text perf-map only* | **high** | L |
 | Separate-debug / `.gnu_debuglink` / build-id resolution for stripped distro binaries | med | M |
 | ~~C++ **demangling** via `__cxa_demangle` at the single `sym_push` chokepoint (guard on `_Z`, demangle before appending `@plt`, add `-lstdc++`) — reads through picker/graph/tree/stream at once~~ — **landed**: `demangle_dup()` at the `sym_push` chokepoint (peels/re-appends `@plt`), `-lstdc++` on the link line, `cpp_victim.cpp` smoke assertion | med | **S** |
 
@@ -96,11 +96,13 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 ## Top priorities
 
-1. **Resolve JIT/perf-map symbols in stream/graph/tree** *(A, high, L)* — the crash-safe
+1. ~~**Resolve JIT/perf-map symbols in stream/graph/tree** *(A, high, L)* — the crash-safe
    detach was built to whole-process single-step V8/Node, yet on that flagship target every
    dominant JIT'd JS frame renders `[?]`/`0x..`; the same fix names **.NET** and **Java**
-   managed frames too. The marquee feature is half-blind on its motivating use cases.
-   **Now the sole remaining top priority** — #2 and #3 below have landed.
+   managed frames too.~~ — **landed**: `asmspy_resolve` layers a refreshed perf-map over the
+   ELF symtab in all three single-step engines (see Theme A). **All three original Top-3 have
+   now landed.** Next candidates: jitdump (bytes-accurate, handles tiered recompilation) and
+   the graph/tree scroll/filter items in Theme E.
 2. ~~**Add the crash-safe two-phase-detach regression test** *(D, med, S)*~~ — **landed**
    (a happy-path survival tripwire across `--stream`/`--tree`; see Theme D for the honest
    scope note on why a simple victim can't deterministically reproduce the V8 crash).
