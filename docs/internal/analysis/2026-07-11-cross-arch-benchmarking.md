@@ -394,8 +394,9 @@ architectures at all — which is what makes it the higher-leverage addition.
 ## 7. Recommended plan
 
 > Turned into buildable phases — including a cross-system runner (`make
-> bench-report`), a live feature-benchmark probe, an aggregator, CI wiring, and a
-> required documentation phase — in
+> bench-report`) spanning Linux/macOS/Windows, a live feature-benchmark probe,
+> per-box result persistence in git (gated golden counts + real-cycle history),
+> an aggregator, CI wiring, and a required documentation phase — in
 > [cross-arch-benchmarking-plan.md](../plans/cross-arch-benchmarking-plan.md).
 
 1. **The result shape first (§5.2).** Land `asmtest_bench_result_t` and one
