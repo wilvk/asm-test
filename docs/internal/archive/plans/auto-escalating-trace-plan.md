@@ -1,9 +1,14 @@
 # asm-test — auto-escalating cross-tier trace (`asmtest_trace_call_auto`)
 
+> **ARCHIVED — complete (2026-07-11).** Phases 1–5 shipped and
+> `asmtest_trace_call_auto` is now wrapped in **all ten bindings** (`e21bf02`); nothing
+> remains. Kept for the design rationale and the pre-implementation gap analysis. The
+> "gap"/"ladder" sections below are written in the present tense of the pre-work analysis.
+
 A single call-owning entry point that traces a native routine under the fastest exact
 tier and **automatically escalates to a ceiling-free tier when the trace comes back
-`truncated`** — closing the "arm → detect truncation → re-resolve → re-run" loop that is
-today only a *documented idiom*, never implemented.
+`truncated`** — closing the "arm → detect truncation → re-resolve → re-run" loop that was,
+before this work, only a *documented idiom* with no implementation.
 
 This is the concrete follow-through of the AMD-tracing determination that the AMD LBR
 window is at its safe ceiling (measured: `#2B` reduced filter buys ~1.86× per window,
@@ -11,27 +16,28 @@ window is at its safe ceiling (measured: `#2B` reduced filter buys ~1.86× per w
 tier truncates *by design*, so the way to make Zen 5 tracing **reliably complete** is to
 stop treating LBR as the answer for loops and make "exact-and-fast where it fits,
 complete-everywhere-else" the automatic default. See
-[amd-tracing-plan.md](amd-tracing-plan.md) for the AMD-specific levers this composes.
+[amd-tracing-plan.md](../../plans/amd-tracing-plan.md) for the AMD-specific levers this composes.
 
-> Status legend: **LANDED** — Phases 1–5 shipped (`8a830fa`; the MSR rung folded in by
-> `37118ec`). `asmtest_trace_call_auto` is live in [trace_auto.c](../../../src/trace_auto.c)
-> with the cross-tier cascade, the truncation-triggered escalation ladder, and
-> `test_call_auto` in the hwtrace suite. The live escalation (LBR
-> truncates → block-step completes) is validated on the Zen 5 dev box (Ryzen 9 9950X), the
-> plumbing host-independently on any x86-64 Linux. **The one remaining item is forward-look:**
-> the per-binding `call_auto` wrappers (none of the 10 bindings expose it yet — it ships
-> C-first with the `ALL asmtest_trace_call_auto` parity allow-list entry).
+> Status legend: **LANDED (complete)** — Phases 1–5 shipped (`8a830fa`; the MSR rung folded
+> in by `37118ec`). `asmtest_trace_call_auto` is live in
+> [trace_auto.c](../../../../src/trace_auto.c) with the cross-tier cascade, the
+> truncation-triggered escalation ladder, and `test_call_auto` in the hwtrace suite. The live
+> escalation (LBR truncates → block-step completes) is validated on the Zen 5 dev box (Ryzen 9
+> 9950X), the plumbing host-independently on any x86-64 Linux. **The per-binding `call_auto`
+> wrappers landed too** (`e21bf02` — all ten bindings expose it), so the former
+> `ALL asmtest_trace_call_auto` parity exemption was removed (2026-07-10) and the parity gate
+> counts it live across all ten. Nothing remains.
 
 ---
 
 ## The gap (confirmed against the source)
 
-Three facts, cross-checked against [src/trace_auto.c](../../../src/trace_auto.c),
-[include/asmtest_trace_auto.h](../../../include/asmtest_trace_auto.h), and every tier's
+Three facts, cross-checked against [src/trace_auto.c](../../../../src/trace_auto.c),
+[include/asmtest_trace_auto.h](../../../../include/asmtest_trace_auto.h), and every tier's
 entry points:
 
 1. **The resolvers only *pick*; they never *run*.** `asmtest_trace_resolve` /
-   `asmtest_trace_auto` ([trace_auto.c:84-106](../../../src/trace_auto.c)) filter a static
+   `asmtest_trace_auto` ([trace_auto.c:84-106](../../../../src/trace_auto.c)) filter a static
    `CASCADE[]` by availability + policy and return `{tier, backend, fidelity}` choices.
    Neither arms a PMU, executes a routine, reads `trace.truncated`, or re-runs anything.
 2. **There is no `choice → trace` dispatcher.** `asmtest_trace_choice_t` is only ever
@@ -39,9 +45,9 @@ entry points:
    `switch (choice.tier)` and hand-drive each tier's own separate API.
 3. **The dynamic-fallback loop is written nowhere.** "Resolve BEST → if `truncated`,
    re-resolve CEILING_FREE → re-run under the new tier" appears only as prose in three
-   places ([asmtest_trace_auto.h:117-122](../../../include/asmtest_trace_auto.h),
-   [trace-parity-matrix.md](../analysis/trace-parity-matrix.md), and
-   [native-tracing.md](../../guides/tracing/native-tracing.md), where the re-run body is a
+   places ([asmtest_trace_auto.h:117-122](../../../../include/asmtest_trace_auto.h),
+   [trace-parity-matrix.md](../../analysis/trace-parity-matrix.md), and
+   [native-tracing.md](../../../guides/tracing/native-tracing.md), where the re-run body is a
    literal `/* ... */` comment). No example, test, or binding closes the loop; the one
    arming example that touches `truncated` (`examples/dotnet/amdlbr`) retries the *same*
    backend and only *reports* the flag.
@@ -62,10 +68,10 @@ non-trivial to hand-write and dictates the design:
   `(code, len, long args[nargs], nargs) → (long result, asmtest_trace_t*, truncated)` is
   already the exact shape of three entries:
   - `asmtest_ptrace_trace_call` and `asmtest_ptrace_trace_call_blockstep`
-    ([asmtest_ptrace.h:95/108](../../../include/asmtest_ptrace.h)) — fork a tracee, call
+    ([asmtest_ptrace.h:95/108](../../../../include/asmtest_ptrace.h)) — fork a tracee, call
     `code(args…)` in the child, single-step / block-step from the parent; **re-run is
     side-effect-isolated in the child.**
-  - `asmtest_hwtrace_call_scoped_ex` ([asmtest_hwtrace.h:301](../../../include/asmtest_hwtrace.h))
+  - `asmtest_hwtrace_call_scoped_ex` ([asmtest_hwtrace.h:301](../../../../include/asmtest_hwtrace.h))
     — the in-process single-step variant, same tuple plus a scope handle.
 - **Marker-bracket** — `register_region` + `begin`/`end` around the *caller's own* call.
   The AMD-LBR tier and DynamoRIO tier are marker-only; they observe one in-line execution
@@ -123,7 +129,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 ### Phase 1 — the in-process call dispatcher + fast HWTRACE step *(LANDED)*
 
 - Add a small static `invoke(const void *code, const long *args, int nargs)` in
-  [trace_auto.c](../../../src/trace_auto.c): a `switch (nargs)` casting `code` to the SysV
+  [trace_auto.c](../../../../src/trace_auto.c): a `switch (nargs)` casting `code` to the SysV
   `long(long,…)` prototype for 0–6 integer args, returning `long`. (Mirrors the dispatch in
   `asmtest_hwtrace_call_scoped`'s impl.) `>6` or FP is rejected upstream with `EINVAL`.
 - Drive the fast tier: `asmtest_hwtrace_auto(ASMTEST_TRACE_BEST-equivalent)` → `init` with
@@ -145,7 +151,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 ### Phase 3 — public surface + policy/arg validation *(LANDED)*
 
 - Declare `asmtest_trace_call_auto` in
-  [asmtest_trace_auto.h](../../../include/asmtest_trace_auto.h) with the docstring
+  [asmtest_trace_auto.h](../../../../include/asmtest_trace_auto.h) with the docstring
   extending the existing "dynamic-fallback idiom" note (now *implemented*, not idiom).
 - Validate args (`nargs` 0–6, non-NULL `code`/`trace`), honor `policy` (`BEST` default;
   `NATIVE_ONLY` is a no-op here since every ladder tier is native), and fill `*used`.
@@ -154,7 +160,7 @@ Because the trace is caller-owned and reused across attempts, each step first **
 
 ### Phase 4 — tests *(LANDED)*
 
-Added to [examples/test_hwtrace.c](../../../examples/test_hwtrace.c) (`make hwtrace-test`),
+Added to [examples/test_hwtrace.c](../../../../examples/test_hwtrace.c) (`make hwtrace-test`),
 alongside `test_cross_tier_resolve`:
 
 - **`test_call_auto_basic` (host-independent).** `call_auto(add2,{20,22})` → result 42,
@@ -167,16 +173,17 @@ alongside `test_cross_tier_resolve`:
   truncates and `used` reports the escalated (block-step) tier — printed as the live proof
   that escalation fired; on non-AMD the single-step floor completes it directly.
 
-### Phase 5 — parity, docs *(LANDED — C-side; per-binding `call_auto` wrappers forward-look)*
+### Phase 5 — parity, docs *(LANDED — C-side **and** all ten bindings)*
 
-- **Bindings parity:** `asmtest_trace_auto.h` is scanned by the gate. `call_auto` is a
-  call-owning C-level entry in the `call_scoped` family (which is `ALL`-exempt, dotnet-lead)
-  rather than the pure-query `trace_auto`/`trace_resolve` family (wrapped everywhere), so it
-  ships C-first with an `ALL asmtest_trace_call_auto` allow-list entry (reason inline);
-  bindings gain it when they grow a call-auto wrapper. Also fix the stale two-header comment
-  in [bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt).
+- **Bindings parity:** `asmtest_trace_auto.h` is scanned by the gate. `call_auto` shipped
+  C-first with an `ALL asmtest_trace_call_auto` allow-list entry, then `e21bf02` grew a
+  `call_auto` wrapper in every binding (python/cpp/rust/zig/node/java/dotnet/ruby/lua/go), so
+  the `ALL` exemption was **removed** (2026-07-10) and the gate now counts it live across all
+  ten. The stale two-header comment in
+  [bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt) was fixed in the
+  same pass.
 - **Docs:** the cross-tier front-end section of
-  [trace-parity-matrix.md](../analysis/trace-parity-matrix.md) (Matrix 8) documents the new
+  [trace-parity-matrix.md](../../analysis/trace-parity-matrix.md) (Matrix 8) documents the new
   entry point and its escalation contract; the header docstring is the API-level doc.
 
 ---

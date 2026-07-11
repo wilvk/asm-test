@@ -15,8 +15,8 @@ Narrative guides: [tracing index](../../guides/tracing/index.md),
 [trace parity matrix](trace-parity-matrix.md) (what works where today),
 [data-flow capture](data-flow-capture.md). Roadmaps:
 [hardware-trace plan](../plans/hardware-trace-plan.md), [AMD LBR plan](../plans/amd-tracing-plan.md),
-[auto-escalating trace](../plans/auto-escalating-trace-plan.md),
-[MSR-direct LBR](../plans/amd-msr-direct-lbr-plan.md).*
+[auto-escalating trace](../archive/plans/auto-escalating-trace-plan.md),
+[MSR-direct LBR](../archive/plans/amd-msr-direct-lbr-plan.md).*
 
 ## Summary
 
@@ -39,7 +39,7 @@ Backend choice is a product of **three independent axes**, resolved in order:
 3. **Capture goal decides fast-vs-complete.** AMD's 16-entry LBR ceiling means its tiers are a
    *fast accelerator for small routines*, never a general tracer; loops and long routines need
    a **ceiling-free** tier (DynamoRIO / block-step / single-step). The
-   [`asmtest_trace_call_auto`](../plans/auto-escalating-trace-plan.md) orchestrator makes that
+   [`asmtest_trace_call_auto`](../archive/plans/auto-escalating-trace-plan.md) orchestrator makes that
    call automatically (fast where the window fits, escalate to complete on `truncated`).
 
 **Bottom line:** *native leaf on x86-64 Linux* → in-process single-step (or `call_auto` to

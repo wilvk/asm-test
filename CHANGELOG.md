@@ -38,6 +38,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   subcommands against the example victims and is gated in CI (`cli` job). Guide:
   `docs/guides/tracing/asmspy.md`.
 
+- **`asmtest_trace_call_auto` — the auto-escalating, call-owning cross-tier trace, now in
+  all ten bindings.** A single entry point that owns the invocation and traces a native
+  routine under the fastest exact tier, then **automatically escalates to a ceiling-free tier
+  when the trace comes back `truncated`** — walking the ladder *fast HWTRACE backend →
+  MSR-direct AMD-LBR rung → BTF block-step → per-instruction single-step* until the capture is
+  complete (or the tiers are exhausted, honestly flagged). This closes the "arm → detect
+  truncation → re-resolve → re-run" loop that was previously only a documented idiom. Landed
+  C-first (`src/trace_auto.c`, the MSR rung folded in later), then wrapped
+  in every binding (python/cpp/rust/zig/node/java/dotnet/ruby/lua/go), removing its former
+  `ALL` parity exemption. `*used` reports the tier that produced the final trace, so a caller
+  can see whether escalation fired. Covered by `test_call_auto*` in the hwtrace suite.
+
 - **`asmtest_hwtrace_arm_tid` wrapped in the remaining seven bindings** (go, java, lua, node,
   ruby, rust, zig) — the §0.2 thread-scope assert accessor (the OS thread id that armed the
   active hardware-trace capture, `-1` if none) was python/cpp/dotnet-only; it is now surfaced
@@ -315,6 +327,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CI / tooling hardening.** The documentation site now builds warnings-as-errors in a
+  dedicated `docs` CI job (`sphinx -W`), so a broken cross-reference fails the PR in-repo
+  instead of only reddening Read the Docs after merge. The `format` gate is pinned to
+  `clang-format-18` (matching `make docker-fmt`'s `ubuntu:24.04`), so it no longer risks
+  flagging the whole canonically-formatted tree as drift the day `ubuntu-latest` advances past
+  24.04. `-Werror` now guards the `hwtrace` and `cli` jobs (previously only the base
+  `test`/`check`), catching warnings in the newest, highest-churn code. A new `make fix-perms`
+  target reclaims root-owned `build/` artifacts a `docker-*` lane can leave behind (which
+  otherwise break `make clean`). `.dockerignore` now excludes every root `Dockerfile*` and the
+  actual `bindings/Dockerfile.lang` (the stale `bindings/*/Dockerfile` glob matched nothing).
+
 - **Internal working docs moved under `docs/internal/`** — `docs/plans/`,
   `docs/analysis/`, `docs/reviews/`, and `docs/archive/` are now
   `docs/internal/{plans,analysis,reviews,archive}`, with one archive rule
@@ -418,6 +441,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **Native-trace "honesty" gaps — three places a partial capture could escape without its
+  `truncated` flag.** The framework's core invariant is that an incomplete trace is never
+  presented as complete; a review found three leaks and they are now closed. (1) The
+  whole-window single-step loops (`asmtest_ptrace_trace_attached_windowed` and the fork-internal
+  `asmtest_ptrace_trace_window_call`) treated *any* loop exit as clean — so a window whose tracee
+  died or `exit()`ed before reaching the return address was reported complete; they now flag the
+  stream truncated unless the one clean terminator (`pc == win_ret`, or the async `*stop`) was
+  reached. (2) The AMD MSR-direct LBR path (`asmtest_amd_msr_trace`) returned a partial branch
+  stack as complete when a mid-stack MSR read failed; a short read now sets `truncated`. Both
+  err toward false-truncated over false-complete.
+
+- **`asmtest_hwtrace_arm_tid()` reported a stale thread id after a single-step scope closed.**
+  The accessor's documented contract is "the OS thread id that armed the active capture, or `-1`
+  when none is active", but the single-step `end()` path (the default, most-portable backend,
+  freshly wired into eight bindings) returned without clearing it — so it kept reading the last
+  arming tid instead of `-1`. It now resets like the PT / AMD / whole-window paths already do; a
+  regression assertion covers it.
+
+- **`asmspy --trace` silently produced nothing for a function that runs only on a worker
+  thread.** The region engine attaches only the thread-group leader (unlike the whole-process
+  syscall/stream engines, which SEIZE every thread), so a function executing on another thread
+  was never single-stepped and the command exited cleanly with zero output. It now reports the
+  region was never observed executing and points at `--stream` (which follows all threads).
+
+- **`asmspy` ptrace-lifecycle hardening.** A job-control group-stop (`^Z` / `SIGSTOP` / tty
+  stop) is now handled with `PTRACE_LISTEN` instead of being resumed, so a traced target can
+  actually be suspended while watched. On OOM while seizing threads, an already-seized thread is
+  now detached rather than left stranded seize-stopped. The ELF section-header walk in the
+  symbol resolver now strides by `e_shentsize` (not `sizeof(Elf64_Shdr)`), so a non-standard
+  object with a larger entsize resolves correctly instead of reading misaligned headers.
+
+- **Latent AMD-LBR test flake in nine bindings' auto-select hwtrace test.** Each binding
+  mirrors the C reference `test_auto_resolve_traces_live`: pick `auto(BEST)`, trace a tiny
+  five-instruction routine, assert the result. On a privileged AMD Zen 3+ host `auto` picks
+  AMD LBR, which honestly *truncates* a too-fast-to-sample single-shot routine (so `covered(0)`
+  is false) — the C reference and .NET already asserted `covered(0) || truncated`, but the fix
+  was never ported, so rust/cpp/python/lua/ruby/zig/node/java/go still asserted only
+  `covered(0)` and would fail on such a host. All nine now assert the honest invariant.
 
 - **The hwtrace options struct under-allocated the AMD-LBR fields in all seven FFI-mirroring
   bindings (8-byte OOB read in `asmtest_hwtrace_init`).** When `lbr_period`/`branch_filter` were

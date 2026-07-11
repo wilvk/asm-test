@@ -436,7 +436,7 @@ necessary: measured live, the LBR fast tier truncates a loop and `call_auto` esc
 block-step, returning a complete trace with `used.backend != AMD_LBR`. Because it re-runs
 the routine once per attempted tier (fast in-process, then fork-isolated), it requires
 **re-runnable / deterministic code** — the same contract `trace_call` / `call_scoped`
-already carry. See [auto-escalating-trace-plan.md](../plans/auto-escalating-trace-plan.md).
+already carry. See [auto-escalating-trace-plan.md](../archive/plans/auto-escalating-trace-plan.md).
 
 ---
 
