@@ -98,7 +98,8 @@ Run `asmspy` with no arguments. It walks four screens:
 2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
    `3` the whole-process live instruction stream, `4` the whole-process call
    graph (caller/callee invocation counts, sortable), `5` the whole-process live
-   call tree (indented by call depth).
+   call tree (indented by call depth), `6` the process/thread topology (the whole
+   process tree — threads and child processes — with per-task counts).
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace, `F3` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
@@ -127,6 +128,15 @@ Run `asmspy` with no arguments. It walks four screens:
      / `PgUp`/`PgDn` / `Home`/`End` keys move a selection cursor through the
      functions and the right pane disassembles whichever is highlighted (read
      live from the target). Same whole-process single-step, so it crawls.
+   - *Process tree* — the whole **process/thread topology** rooted at the target:
+     each process node (`node <pid> [exe]`), its threads (`tid <tid> (comm)`), and
+     its child processes nested underneath, each annotated with a live
+     **invocation count**. **`Tab`** toggles what `inv` counts — **syscalls**
+     (near full speed, safe on any target) or **calls** (single-step, richer but
+     the whole tree crawls). Arrow keys select a node; **`Enter`** *drills in*,
+     opening a live call graph of that node's process (the topology detaches
+     first, so the drill-in re-attaches cleanly). Pre-existing child processes are
+     discovered at attach; ones forked later are followed live.
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move

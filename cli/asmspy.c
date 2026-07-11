@@ -1006,6 +1006,9 @@ typedef struct {
     /* call-tree view (mode 4): disassembly of the selected function (UI-thread only) */
     svec tree_asm;
     uint64_t tree_asm_addr;
+    /* process/thread topology view (mode 5) */
+    topo_snap topo;
+    asmspy_count_t count_mode;
     /* target */
     pid_t pid;
     uint64_t base;
@@ -1057,6 +1060,13 @@ static void live_tree_sink(void *ctx, const char *line, uint64_t addr) {
     pthread_mutex_unlock(&L->mu);
 }
 
+static void live_topo_sink(void *ctx, const asmspy_task_t *tasks, size_t n) {
+    live_t *L = ctx;
+    pthread_mutex_lock(&L->mu);
+    topo_snap_copy(&L->topo, tasks, n);
+    pthread_mutex_unlock(&L->mu);
+}
+
 static void *tracer_thread(void *arg) {
     live_t *L = arg;
     int rc;
@@ -1071,6 +1081,9 @@ static void *tracer_thread(void *arg) {
     else if (L->mode == 4)
         rc = asmspy_engine_tree(L->pid, -1, &L->stop, L->syms, live_tree_sink,
                                 L);
+    else if (L->mode == 5)
+        rc = asmspy_engine_procs(L->pid, -1, &L->stop, L->count_mode,
+                                 live_topo_sink, L);
     else
         rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
                                   live_region_sink, L);
@@ -1363,6 +1376,159 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     return back;
 }
 
+/* run_topo_view action (out-param): what the user asked for on exit. */
+#define TOPO_ACT_NONE 0   /* left the view (b/q) — use the returned nav        */
+#define TOPO_ACT_TOGGLE 1 /* Tab: flip the count mode and re-enter             */
+#define TOPO_ACT_DRILL 2  /* Enter: drill into *out_drill's call graph          */
+
+/* Live process/thread topology view (internal mode 5). Scroll the tree, Tab to
+ * toggle the syscalls/calls count, Enter to drill into the selected node's
+ * process. Detaches its tracer before returning, so a drill-in can re-attach the
+ * (now free) subtree. Returns 0 to go to options, 1 to the process list; sets
+ * *action to one of TOPO_ACT_* and, for DRILL, *out_drill to the chosen pid. */
+static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
+                         int *action, pid_t *out_drill) {
+    live_t L;
+    memset(&L, 0, sizeof L);
+    pthread_mutex_init(&L.mu, NULL);
+    atomic_store(&L.stop, false);
+    atomic_store(&L.finished, false);
+    L.pid = pid;
+    L.mode = 5;
+    L.count_mode = cmode;
+    L.rc = 0;
+    *action = TOPO_ACT_NONE;
+
+    sigset_t block;
+    sigemptyset(&block);
+    sigaddset(&block, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+
+    pthread_t th;
+    if (pthread_create(&th, NULL, tracer_thread, &L) != 0) {
+        pthread_sigmask(SIG_UNBLOCK, &block, NULL);
+        pthread_mutex_destroy(&L.mu);
+        return 1;
+    }
+
+    int back = 1, sel = 0, top = 0;
+    for (;;) {
+        int rows, cols;
+        getmaxyx(stdscr, rows, cols);
+        int vis = rows - 3 > 0 ? rows - 3 : 1;
+        erase();
+        attron(A_BOLD);
+        mvprintw(0, 0, "%.*s", cols, title);
+
+        pthread_mutex_lock(&L.mu);
+        int fin = atomic_load(&L.finished);
+        int erc = L.rc;
+        topo_snap snap = {0};
+        topo_snap_copy(&snap, L.topo.v, L.topo.n);
+        pthread_mutex_unlock(&L.mu);
+
+        topo_rows tr = {0};
+        topo_build_rows(snap.v, snap.n, &tr);
+        mvprintw(1, 0,
+                 "PROCESS/THREAD TREE  (%zu tasks, count: %s)   inv = per task",
+                 snap.n, cmode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls");
+        attroff(A_BOLD);
+
+        int nrows = (int)tr.n;
+        if (sel >= nrows)
+            sel = nrows ? nrows - 1 : 0;
+        if (sel < 0)
+            sel = 0;
+        if (sel < top)
+            top = sel;
+        if (sel >= top + vis)
+            top = sel - vis + 1;
+        if (top < 0)
+            top = 0;
+        for (int r = 0; r < vis && top + r < nrows; r++) {
+            int idx = top + r, cur = (idx == sel);
+            if (cur)
+                attron(A_REVERSE);
+            mvprintw(2 + r, 0, "%-*.*s", cols, cols, tr.v[idx].text);
+            if (cur)
+                attroff(A_REVERSE);
+        }
+        if (nrows == 0)
+            mvprintw(2, 0, "(waiting for activity — the target may be idle)");
+        pid_t sel_tgid = (nrows && sel < nrows) ? tr.v[sel].tgid : 0;
+        int sel_is_proc = (nrows && sel < nrows) ? tr.v[sel].is_process : 0;
+        free(tr.v);
+        free(snap.v);
+
+        if (fin) {
+            char e[128];
+            asmspy_strerror(erc, e, sizeof e);
+            mvprintw(rows - 1, 0,
+                     "[tracer stopped: %s]   b: options   q: processes",
+                     erc ? e : "target exited");
+        } else {
+            mvprintw(rows - 1, 0,
+                     "up/down: select   Enter: drill into call graph   Tab: "
+                     "syscalls/calls   b: options   q/ESC: processes");
+        }
+        clrtoeol();
+        refresh();
+
+        timeout(150);
+        int ch = getch();
+        if (ch == 'q' || ch == 27) {
+            back = 1;
+            break;
+        }
+        if (ch == 'b') {
+            back = 0;
+            break;
+        }
+        if (ch == '\t') { /* Tab toggles the count option (restarts the engine) */
+            *action = TOPO_ACT_TOGGLE;
+            back = 0;
+            break;
+        }
+        if ((ch == '\n' || ch == KEY_ENTER) && sel_tgid) {
+            *action = TOPO_ACT_DRILL;
+            *out_drill = sel_tgid;
+            (void)sel_is_proc; /* a thread's tgid == its process, so either works */
+            back = 0;
+            break;
+        }
+        if (ch == KEY_UP)
+            sel--;
+        else if (ch == KEY_DOWN)
+            sel++;
+        else if (ch == KEY_PPAGE)
+            sel -= vis;
+        else if (ch == KEY_NPAGE)
+            sel += vis;
+        else if (ch == KEY_HOME)
+            sel = 0;
+        else if (ch == KEY_END)
+            sel = nrows ? nrows - 1 : 0;
+    }
+
+    atomic_store(&L.stop, true);
+    for (;;) { /* wake the tracer's blocked waitpid, then join (as run_live_view) */
+        pthread_kill(th, SIGALRM);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 50L * 1000 * 1000;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        if (pthread_timedjoin_np(th, NULL, &ts) == 0)
+            break;
+    }
+    pthread_sigmask(SIG_UNBLOCK, &block, NULL);
+    free(L.topo.v);
+    pthread_mutex_destroy(&L.mu);
+    return back;
+}
+
 /* mode-select screen; returns 0 syscalls, 1 region, 2 stream, 3 graph, -1 back */
 static int screen_mode(const asmspy_proc_t *p) {
     for (;;) {
@@ -1381,7 +1547,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
         mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable)");
         mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
-        mvprintw(rows - 1, 0, "1/2/3/4/5: choose   b/ESC: back");
+        mvprintw(8, 2, "6)  Process tree       — procs+threads+children with counts (drill into a call graph)");
+        mvprintw(rows - 1, 0, "1/2/3/4/5/6: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -1394,6 +1561,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 3;
         if (ch == '5')
             return 4;
+        if (ch == '6')
+            return 5;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -1615,6 +1784,39 @@ int asmspy_tui(void) {
                          what, picked.pid, 40, picked.cmd);
                 nav = run_live_view(picked.pid, mode, 0, 0, title, &t);
                 asmspy_symtab_free(&t);
+            } else if (mode == 5) {
+                /* process/thread topology; Tab toggles the count, Enter drills
+                 * into the selected node's call graph (topology detaches first) */
+                asmspy_count_t cmode = ASMSPY_COUNT_SYSCALLS;
+                nav = 0;
+                for (;;) {
+                    char title[160];
+                    snprintf(title, sizeof title,
+                             "asmspy — process tree of pid %d (%.*s)",
+                             picked.pid, 40, picked.cmd);
+                    int action = TOPO_ACT_NONE;
+                    pid_t drill = 0;
+                    nav = run_topo_view(picked.pid, cmode, title, &action,
+                                        &drill);
+                    if (action == TOPO_ACT_TOGGLE) {
+                        cmode = cmode == ASMSPY_COUNT_SYSCALLS
+                                    ? ASMSPY_COUNT_CALLS
+                                    : ASMSPY_COUNT_SYSCALLS;
+                        continue;
+                    }
+                    if (action == TOPO_ACT_DRILL && drill > 0) {
+                        asmspy_symtab_t t;
+                        asmspy_symtab_load(drill, &t);
+                        char dt[128];
+                        snprintf(dt, sizeof dt,
+                                 "asmspy — call graph of pid %d (drill-in)",
+                                 (int)drill);
+                        run_live_view(drill, 3, 0, 0, dt, &t);
+                        asmspy_symtab_free(&t);
+                        continue; /* back to the topology */
+                    }
+                    break; /* b / q */
+                }
             } else {
                 asmspy_symtab_t t;
                 if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
