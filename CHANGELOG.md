@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-flow tracing Phase 4 Increment 2 — GC-move canonicalization
+  (`src/dataflow_gcmove.c`).** A pure, host-independent transform (`asmtest_gcmove_t`,
+  the shape of EventPipe `GCBulkMovedObjectRanges`: `old_base`/`new_base`/`len`) that remaps
+  memory addresses across a heap compaction to a stable canonical identity, so a managed
+  value's def-use survives the move without pre/post-move false aliasing — the plan's Phase-4
+  exit criterion. Synthetic suite `test_dataflow_gcmove` (26 checks) proves the exact trap:
+  a def at the old address and a use at the new address unify into one object, while an
+  unrelated object that later reuses the freed old address does **not** alias it. The live
+  EventPipe feed is a later increment.
+
+- **IBS-Fetch front-end coverage lane (AMD IBS statistical lane Phase 7).** A second AMD IBS
+  producer beside the retired-op edge sampler: `ibs_fetch` (PMU type 10) samples *fetch*
+  addresses (front-end / i-cache / ITLB view). A pure, host-independent decoder turns one
+  `PERF_SAMPLE_RAW` fetch record into `{fetch_addr, valid, complete, icache_miss, itlb_miss,
+  latency}` (unit-tested with synthetic records on every CI host), plus an availability probe
+  and a headless fetch-coverage survey with honest throttled/lost provenance, self-skipping
+  off IBS/permission. Kept **fully internal** (`src/ibs_backend.h`) — no public
+  `asmtest_ibs_*` surface added, so no binding flag day. Verified live on Zen 5.
+
 - **Data-flow tracing Phase 4 Increment 1 — PC→method-identity+version resolver
   (`src/dataflow_method.c`).** A pure, host-independent resolver that labels each step of
   an L0 value trace with its owning method + version from a jitdump/perf-map-shaped
@@ -511,6 +530,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Apple-Silicon-tart / bare-metal-KVM hosts this environment lacks.
 
 ### Changed
+
+- **AMD-LBR reconstruction fills the entry-block prologue (fidelity fix).** On a live AMD
+  host a too-fast tiny routine's frozen branch stack can carry spurious mid-routine *landing*
+  edges, so `amd_replay` anchored at the landing offset and skipped the entry prologue
+  `[base_ip, landing)` — a complete-reported reconstruction of a small routine undercounted
+  its retired instructions (e.g. `insns=4` vs the block-step baseline `5`). `amd_entry_fill`
+  now prepends the clean straight-line prologue all-or-nothing (a branch/ret/overshoot in
+  that run honestly truncates instead), with a symmetric trailing fill; anti-fabrication
+  tests confirm no phantom instructions. New `test_amd_live_smallroutine` hard-asserts
+  complete⇒full-count on a live AMD host. Verified across 3 privileged runs + a 30-iteration
+  loop: every complete reconstruction now yields the full count, and the batch-3 case-(b)
+  escalation invariant is preserved 30/30. (The residual case-(a) advisory from the Zen 5
+  findings doc is resolved.)
 
 - **Multi-exit deterministic BPF boundary snapshot, default-on (followup Phase 5 / F13).**
   `hwtrace_begin_amd` now plants one hardware breakpoint per region exit (1–4 exits, one

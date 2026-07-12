@@ -44,6 +44,9 @@
 #include <linux/perf_event.h>
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
+int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
+                             const void *base, size_t len,
+                             asmtest_trace_t *trace, int *reached_exit);
 int asmtest_amd_decoder_present(void);
 int asmtest_amd_freeze_available(void);
 int asmtest_amd_snapshot_available(void);
@@ -279,6 +282,105 @@ static void test_amd_reconstruction(void) {
     CHECK(asmtest_emu_trace_blocks_len(tr) == 2,
           "AMD reconstruction records exactly two blocks");
     asmtest_trace_free(tr);
+
+    /* Trailing-block fill (lane4 — the sampled small-routine fidelity gap). A window
+     * sampled BEFORE the routine returned holds the taken jle (0xc->0x11) but NOT the ret,
+     * so the branch loop alone stops at the jle target and undercounts the retired set by
+     * its trailing ret. asmtest_amd_decode now fills the straight-line run from the last
+     * in-region target to the region exit, so a ret-less window still reconstructs the FULL
+     * {0,3,6,0xc,0x11} single-step set (no undercount) and asmtest_amd_decode_reach reports
+     * reached_exit — a COMPLETE window, not a truncated fragment. Host-independent (synthetic
+     * stack), so it also guards the fix off AMD hardware where the live lane self-skips. */
+    struct perf_branch_entry tail[1];
+    memset(tail, 0, sizeof tail);
+    tail[0].from = b + 0xc;
+    tail[0].to =
+        b + 0x11; /* jle -> the ret block; the ret itself is NOT recorded */
+    asmtest_trace_t *tt = asmtest_trace_new(64, 64);
+    int reached = -1;
+    int trc = asmtest_amd_decode_reach(tail, 1, ROUTINE, sizeof ROUTINE, tt,
+                                       &reached);
+    CHECK(trc == 0,
+          "AMD decode (reach) succeeds on a ret-less trailing window");
+    int tseq = (asmtest_emu_trace_insns_total(tt) == 5);
+    for (size_t i = 0; tseq && i < 5; i++)
+        tseq = (tt->insns[i] == EXPECT[i]);
+    CHECK(tseq,
+          "AMD trailing-fill reconstructs the FULL retired set "
+          "{0,3,6,0xc,0x11} from a window missing the ret (no undercount)");
+    CHECK(reached == 1,
+          "AMD trailing-fill reports reached_exit (the last block "
+          "ran straight to the ret)");
+    CHECK(!asmtest_emu_trace_truncated(tt),
+          "AMD trailing-fill window is a complete reconstruction (tail reached "
+          "the region exit)");
+    CHECK(asmtest_trace_covered(tt, 0) && asmtest_trace_covered(tt, 0x11) &&
+              asmtest_emu_trace_blocks_len(tt) == 2,
+          "AMD trailing-fill keeps the {0, 0x11} block partition");
+    asmtest_trace_free(tt);
+
+    /* Entry-block fill (lane4 — the ROOT cause the live privileged run surfaced). A too-fast
+     * tiny routine's frozen stack can carry a spurious mid-routine LANDING (from OUTSIDE the
+     * region, to an in-region offset > 0) as its oldest in-region edge: here `X->0x3` ahead
+     * of the real jle/ret. The old replay anchored decoding at 0x3 and DROPPED the entry
+     * instruction at 0x0, so a window reported COMPLETE (its recorded ret anchors the exit)
+     * undercounted the retired set to {3,6,0xc,0x11} = 4 (observed live: insns=4 truncated=0).
+     * The prologue [base, first-landing) is now decoded + prepended, so the reconstruction is
+     * the FULL {0,3,6,0xc,0x11} = 5 with the true {0, 0x11} partition (the clean straight-line
+     * prologue means 0x3 is NOT a real block boundary). This is the deterministic guard for
+     * the fix, off AMD too. */
+    struct perf_branch_entry entry[3];
+    memset(entry, 0, sizeof entry);
+    entry[0].from = b + 0x11;
+    entry[0].to = b + sizeof ROUTINE; /* ret -> outside (newest) */
+    entry[1].from = b + 0xc;
+    entry[1].to = b + 0x11; /* jle -> ret block */
+    entry[2].from = b + 0x1000;
+    entry[2].to = b + 0x3; /* spurious landing at 0x3 from outside (oldest) */
+    asmtest_trace_t *et = asmtest_trace_new(64, 64);
+    int erc = asmtest_amd_decode(entry, 3, ROUTINE, sizeof ROUTINE, et);
+    CHECK(erc == 0, "AMD decode succeeds on a spurious-entry-landing window");
+    int eseq = (asmtest_emu_trace_insns_total(et) == 5);
+    for (size_t i = 0; eseq && i < 5; i++)
+        eseq = (et->insns[i] == EXPECT[i]);
+    CHECK(eseq,
+          "AMD entry-fill prepends the dropped prologue -> the FULL retired "
+          "set {0,3,6,0xc,0x11} (no leading-block undercount)");
+    CHECK(
+        asmtest_trace_covered(et, 0) && asmtest_trace_covered(et, 0x11) &&
+            asmtest_emu_trace_blocks_len(et) == 2,
+        "AMD entry-fill keeps the true {0, 0x11} partition (the clean prologue "
+        "makes 0x3 a non-boundary, not a spurious block)");
+    CHECK(!asmtest_emu_trace_truncated(et),
+          "AMD entry-fill: a within-window reconstruction stays complete");
+    asmtest_trace_free(et);
+
+    /* Anti-over-count / anti-fabrication: a window whose last in-region target lands on a
+     * block that continues to a NON-exit conditional branch (a loop back-edge) must NOT be
+     * tail-completed — the unrecorded jnz could have been TAKEN, so completing straight-line
+     * past it would fabricate a fall-through the CPU may never have run. Feed a loop's
+     * back-edge (jnz 0xd->0x7) alone: the tail from 0x7 reaches the jnz at 0xd and STOPS,
+     * reaching no exit — reached_exit stays 0 and the ret at 0xf is NOT appended. (mov rax,0;
+     * L: add rax,rdi; dec rsi; jnz L; ret — the same shape as AMD_LOOP.) */
+    static const unsigned char LOOPR[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00,
+                                          0x00, 0x48, 0x01, 0xf8, 0x48, 0xff,
+                                          0xce, 0x75, 0xf8, 0xc3};
+    const uint64_t bl = (uint64_t)(uintptr_t)LOOPR;
+    struct perf_branch_entry bedge[1];
+    memset(bedge, 0, sizeof bedge);
+    bedge[0].from = bl + 0xd;
+    bedge[0].to = bl + 0x7; /* the taken back-edge; no ret recorded */
+    asmtest_trace_t *tb = asmtest_trace_new(64, 64);
+    int reached_b = -1;
+    asmtest_amd_decode_reach(bedge, 1, LOOPR, sizeof LOOPR, tb, &reached_b);
+    CHECK(reached_b == 0,
+          "AMD trailing-fill does NOT complete a back-edge window "
+          "(the unrecorded jnz is ambiguous — no fabricated exit)");
+    CHECK(
+        !asmtest_trace_covered(tb, 0xf),
+        "AMD trailing-fill does NOT fabricate the ret (0xf) past an unrecorded "
+        "conditional back-edge");
+    asmtest_trace_free(tb);
 
     /* Overflow: a full 16-entry stack must set truncated (window exceeded). */
     struct perf_branch_entry full[16];
@@ -722,6 +824,98 @@ static void test_amd_live(void) {
               "AMD LBR live loop: the over-ring run stays honestly truncated");
         munmap(q, sizeof AMD_LOOP);
     }
+}
+
+/* One raw single-step capture of add2(20,22) — the exact-retired baseline the AMD_LBR
+ * capture is measured against (the ceiling-free reference tier, always available on
+ * x86-64 Linux). Returns insns_total. */
+static uint64_t ss_capture_add2(void *p) {
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("ssadd2", p, sizeof ROUTINE, tr);
+    add2_fn fn = (add2_fn)p;
+    asmtest_hwtrace_begin("ssadd2");
+    (void)fn(20, 22);
+    asmtest_hwtrace_end("ssadd2");
+    uint64_t n = asmtest_emu_trace_insns_total(tr);
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    return n;
+}
+
+/* One raw live AMD-LBR capture of add2(20,22) — the sampled path, no auto-escalation
+ * (mirrors amd_capture_loop for the small routine). Returns insns_total; reports the
+ * truncation bit. */
+static uint64_t amd_capture_add2(void *p, int *trunc) {
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("amdadd2", p, sizeof ROUTINE, tr);
+    add2_fn fn = (add2_fn)p;
+    asmtest_hwtrace_begin("amdadd2");
+    (void)fn(20, 22);
+    asmtest_hwtrace_end("amdadd2");
+    uint64_t n = asmtest_emu_trace_insns_total(tr);
+    *trunc = asmtest_emu_trace_truncated(tr);
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    return n;
+}
+
+/* lane4 — the sampled small-routine completeness GUARANTEE, LIVE on AMD. A tiny routine's
+ * branches are sampled statistically, so an AMD_LBR window can be taken BEFORE the routine's
+ * ret retired (or hold only the entry `call` edge). The decoder now fills the trailing
+ * straight-line run from the last in-region target to the region exit, so a window it
+ * reports COMPLETE (truncated=0) reconstructs the FULL retired set — closing the old
+ * undercount-yet-complete gap (docs/internal/analysis/2026-07-12-zen5-privileged-lbr-
+ * findings.md). HARD invariant asserted here: EVERY complete AMD_LBR capture of add2 equals
+ * the single-step baseline; honest truncation (the cascade escalates) is the accepted
+ * alternative, so a run that never samples in-region is not a failure. Sampling is
+ * statistical, so retry and check the invariant on each attempt. Self-skips off AMD LBR. */
+static void test_amd_live_smallroutine(void) {
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+        printf(
+            "# SKIP AMD LBR small-routine completeness: AMD LBR unavailable\n");
+        return;
+    }
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return;
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    uint64_t baseline = ss_capture_add2(p);
+    CHECK(baseline == 5,
+          "AMD LBR small-routine: single-step baseline is the full "
+          "add2 retired set (5)");
+
+    int bad = 0, completes = 0;
+    uint64_t last_complete = 0;
+    for (int attempt = 0; attempt < 40; attempt++) {
+        int trunc = 0;
+        uint64_t n = amd_capture_add2(p, &trunc);
+        if (!trunc) {
+            completes++;
+            last_complete = n;
+            if (n != baseline)
+                bad =
+                    1; /* a COMPLETE capture that undercounts the retired set */
+        }
+    }
+    printf("# AMD LBR small-routine: baseline=%llu complete_captures=%d/40 "
+           "last_complete_insns=%llu (complete=>full: %s)\n",
+           (unsigned long long)baseline, completes,
+           (unsigned long long)last_complete, bad ? "VIOLATED" : "held");
+    CHECK(!bad,
+          "AMD LBR small-routine: every COMPLETE AMD_LBR capture reproduces "
+          "the FULL retired set (no undercount-yet-complete; the tail-fill "
+          "closes the gap, else honest truncation escalates)");
+    munmap(p, sizeof ROUTINE);
 }
 
 /* #2A live reach DIAGNOSTIC — period-spaced Tier-B on real hardware. Measures the
@@ -6433,6 +6627,7 @@ int main(void) {
     /* AMD LBR LIVE capture — runs on a Zen 3+/4/5 host with perf branch-stack
      * permitted (e.g. this Zen 5 dev box); self-skips elsewhere. */
     test_amd_live();
+    test_amd_live_smallroutine();
     test_amd_reach_period();
     test_call_auto();
     test_stealth_window_inline();

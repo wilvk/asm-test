@@ -194,6 +194,60 @@ int asmtest_amd_lbr_depth(void) {
 #define ASMTEST_PERF_BR_SPEC_WRONG_PATH 1
 #endif
 
+/* Entry-block fill. The region is a REGISTERED function, entered at base_ip (asm-test
+ * calls it there; the initial block(0) + the from-anchored decode already assume this),
+ * so the run [base_ip, target) is the straight-line prologue the CPU executed to reach
+ * `target` — the first in-region position the recorded branch stack establishes. When that
+ * first position is a branch TARGET at offset > 0 (a window whose oldest in-region edge is
+ * a `X->target` LANDING, not a `from`-in-region source — including the spurious mid-routine
+ * landings a too-fast tiny routine's freeze-timed / RSB-mispredicted stack carries), the
+ * main replay anchors `ip` at `target` and NEVER decodes [base_ip, target): the retired
+ * entry instructions are dropped, so a complete-reported window undercounts the retired set
+ * by its leading block (the fidelity gap of
+ * docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode + prepend that
+ * prologue here.
+ *
+ * ALL-OR-NOTHING, mirroring the trailing fill: commit ONLY if [base_ip, target) is a clean
+ * straight-line whole-instruction run with NO branch (a branch there would be a taken edge
+ * that must itself have been recorded, so its absence means the prologue is NOT
+ * straight-line and the landing is a genuine block boundary — leave it be). Returns 1 and
+ * appends the prologue instructions into the region-entry block on success (so `target` is
+ * NOT a real block start — the caller then skips the block(target) it would otherwise add);
+ * returns 0 and appends nothing otherwise. Never over-counts: every appended offset is a
+ * real retired instruction on the only straight-line path from the entry to `target`. */
+static int amd_entry_fill(const void *base, uint64_t base_ip, size_t len,
+                          uint64_t target_ip, asmtest_trace_t *trace) {
+    if (target_ip <= base_ip || target_ip > base_ip + len)
+        return 0;
+    const uint64_t target = target_ip - base_ip;
+    /* Pass 1: verify [0, target) decodes as clean, branch-free, whole instructions. */
+    for (uint64_t o = 0; o < target;) {
+        int is_call = 0, is_ret = 0;
+        size_t l =
+            asmtest_disas_probe(ASMTEST_ARCH_X86_64, (const uint8_t *)base, len,
+                                o, &is_call, &is_ret);
+        if (l == 0 || is_ret)
+            return 0; /* undecodable, or a ret before the entry target */
+        if (asmtest_disas_is_branch(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                    len, o))
+            return 0; /* a branch in the prologue -> not a straight-line entry */
+        if (o + l > target)
+            return 0; /* overshoots the landing (misaligned mid-instruction) */
+        o += l;
+    }
+    /* Pass 2: commit the prologue instructions into the region-entry block. */
+    for (uint64_t o = 0; o < target;) {
+        int ic = 0, ir = 0;
+        size_t l = asmtest_disas_probe(ASMTEST_ARCH_X86_64,
+                                       (const uint8_t *)base, len, o, &ic, &ir);
+        if (l == 0)
+            return 0; /* decoded cleanly in pass 1; defensive */
+        trace_append_insn(trace, o);
+        o += l;
+    }
+    return 1;
+}
+
 /* Replay an ordered (newest-first) taken-branch array into the trace, decoding the
  * in-region straight-line runs between branches with Capstone. Shared by Tier-A
  * (single snapshot) and Tier-B (stitched sequence): it knows nothing about window
@@ -201,9 +255,13 @@ int asmtest_amd_lbr_depth(void) {
  * only on a decode desync / undecodable byte. */
 static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, uint64_t base_ip, size_t len,
-                       asmtest_trace_t *trace) {
+                       asmtest_trace_t *trace, int *out_reached_exit) {
     const uint64_t end_ip = base_ip + len;
     uint64_t ip = base_ip;
+    int entered =
+        0; /* has any in-region position been established yet? (entry-fill) */
+    if (out_reached_exit != NULL)
+        *out_reached_exit = 0;
 
     /* Block start at the region entry (matches PT/DR normalization). */
     trace_append_block(trace, 0);
@@ -225,6 +283,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
          * including the branch instruction at `from`. Skip when IP or the branch
          * is outside the region (e.g. executing inside a callee). */
         if (ip >= base_ip && ip < end_ip && from >= ip && from < end_ip) {
+            entered =
+                1; /* an in-region source anchors decoding at base_ip (entry
+                          * naturally included); no prologue fill needed */
             uint64_t o = ip - base_ip;
             const uint64_t from_off = from - base_ip;
             /* Bound the walk. In the default (full-filter) path `o` only ever
@@ -334,27 +395,143 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
          * resumes decoding there); a target outside (call/ret leaving) just moves
          * IP — a later record whose `to` re-enters the region resumes decoding. */
         ip = to;
-        if (to >= base_ip && to < end_ip)
-            trace_append_block(trace, to - base_ip);
+        if (to >= base_ip && to < end_ip) {
+            /* First in-region activity via a branch TARGET (not a `from`-in-region
+             * source): the entry prologue [base_ip, to) was never decoded. Fill it —
+             * and if it is a clean straight-line prologue, `to` is mid-run, NOT a real
+             * block boundary, so suppress the block(to) the landing would add. If the
+             * prologue is NOT clean (it holds an unrecorded branch), the entry cannot be
+             * reconstructed safely: prefer honest truncation over a leading-block
+             * undercount, so the cascade escalates rather than report a wrong count. */
+            int filled = 0;
+            if (!entered && to > base_ip) {
+                filled = amd_entry_fill(base, base_ip, len, to, trace);
+                if (!filled) {
+                    ASMTEST_HWDBG(
+                        "truncated: entry prologue [base, %llu) is not "
+                        "a clean straight-line run (unresolvable entry)",
+                        (unsigned long long)(to - base_ip));
+                    trace->truncated = true;
+                }
+            }
+            entered = 1;
+            if (!filled)
+                trace_append_block(trace, to - base_ip);
+        }
+    }
+
+    /* Trailing straight-line fill. The branch loop only decodes the runs UP TO a
+     * recorded branch SOURCE, so the routine's LAST block — from the newest recorded
+     * branch's in-region TARGET (the final `ip`) to the region exit — is never decoded
+     * when that exit branch (the ret / tail-jmp) was NOT itself recorded: the window was
+     * sampled BEFORE the routine returned, or only the entry `call X->base` edge landed
+     * in-region. That is the fidelity gap the sampled small-routine capture hit — a
+     * complete-reported window undercounting the retired set by its trailing block (see
+     * docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode that run
+     * from the final in-region `ip` up to and INCLUDING the first region-EXIT instruction
+     * (ret, or a region-leaving direct unconditional jmp — the same exit classification as
+     * asmtest_amd_all_exits).
+     *
+     * ALL-OR-NOTHING: commit the run ONLY if it cleanly reaches an exit with NO intervening
+     * branch. A mid-run conditional / indirect / call / in-region jmp we did not record
+     * could have been TAKEN (its sample dropped) rather than fallen through, so decoding
+     * straight-line past it would fabricate a path the CPU may not have run — stop and
+     * commit nothing, leaving the honest-truncation machinery to flag the fragment. When an
+     * exit IS reached this way the routine's last block ran straight to it, so the
+     * reconstruction is complete: *out_reached_exit reports that to the live ring parser's
+     * Tier-A completeness check (asmtest_amd_ring_parse_decode), which OR-s it into the
+     * exit-anchor test so the tail-completed window is not spuriously truncated — WITHOUT
+     * weakening the batch-3 invariant (an overflowed or non-exit-reaching window still
+     * truncates). Each appended offset is a real retired instruction on the only
+     * straight-line path to the exit, so this never over-counts; a two-pass decode (probe
+     * to find the exit, then commit) keeps it all-or-nothing without a scratch buffer. Skip
+     * when the branch loop already set truncated (a desync mid-reconstruction). */
+    if (!trace->truncated && ip >= base_ip && ip < end_ip) {
+        const uint64_t start_off = ip - base_ip;
+        uint64_t exit_end =
+            0; /* offset just past the exit insn; 0 = not reached */
+        uint64_t o = start_off;
+        for (size_t guard = 0; o < len; guard++) {
+            if (guard > len)
+                break; /* bounded like the main walk (defensive; forward-only here) */
+            int is_call = 0, is_ret = 0;
+            size_t l =
+                asmtest_disas_probe(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
+                                    len, o, &is_call, &is_ret);
+            if (l == 0)
+                break; /* undecodable byte: cannot trust the tail */
+            if (is_ret) {
+                exit_end = o + l; /* region exit reached: ret */
+                break;
+            }
+            if (asmtest_disas_is_branch(ASMTEST_ARCH_X86_64,
+                                        (const uint8_t *)base, len, o)) {
+                uint64_t tgt = 0;
+                if (asmtest_disas_is_uncond_jump(
+                        ASMTEST_ARCH_X86_64, (const uint8_t *)base, len, o) &&
+                    asmtest_disas_branch_target(ASMTEST_ARCH_X86_64,
+                                                (const uint8_t *)base, len,
+                                                base_ip, o, &tgt) &&
+                    (tgt < base_ip || tgt >= end_ip))
+                    exit_end =
+                        o + l; /* region-leaving direct jmp: tail-call exit */
+                break; /* reached an exit, OR an ambiguous unrecorded branch: stop */
+            }
+            o += l;
+        }
+        if (exit_end > start_off) {
+            /* Commit: the block start (dedup no-op if the branch loop already recorded
+             * it) then every straight-line instruction through the exit. */
+            trace_append_block(trace, start_off);
+            for (uint64_t off = start_off; off < exit_end;) {
+                int ic = 0, ir = 0;
+                size_t l = asmtest_disas_probe(ASMTEST_ARCH_X86_64,
+                                               (const uint8_t *)base, len, off,
+                                               &ic, &ir);
+                if (l == 0)
+                    break; /* decoded cleanly in the probe pass; defensive */
+                trace_append_insn(trace, off);
+                off += l;
+            }
+            if (out_reached_exit != NULL)
+                *out_reached_exit = 1;
+            ASMTEST_HWDBG("tail fill: reached region exit from o=%llu "
+                          "(+%llu bytes) -> complete",
+                          (unsigned long long)start_off,
+                          (unsigned long long)(exit_end - start_off));
+        }
     }
 }
 
-int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
-                       const void *base, size_t len, asmtest_trace_t *trace) {
+int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
+                             const void *base, size_t len,
+                             asmtest_trace_t *trace, int *reached_exit) {
+    if (reached_exit != NULL)
+        *reached_exit = 0;
     if (br == NULL || nbr == 0 || base == NULL || len == 0 || trace == NULL)
         return ASMTEST_HW_EDECODE;
     if (!asmtest_disas_available())
         return ASMTEST_HW_ENOSYS;
 
-    amd_replay(br, nbr, base, (uint64_t)(uintptr_t)base, len, trace);
+    amd_replay(br, nbr, base, (uint64_t)(uintptr_t)base, len, trace,
+               reached_exit);
 
     /* Window overflow: a full stack means earlier branches were dropped, so the
      * reconstruction is incomplete — flag it (the caller falls back to the
      * DynamoRIO tier, or to Tier-B stitching, which have no depth ceiling). Never
-     * emit partial as complete. */
+     * emit partial as complete. `reached_exit` is orthogonal: it reports only that
+     * the trailing straight-line run reached a region exit; the caller still gates
+     * completeness on the overflow flag + the lost/gap signals. */
     if ((int)nbr >= asmtest_amd_lbr_depth())
         trace->truncated = true;
     return ASMTEST_HW_OK;
+}
+
+int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
+                       const void *base, size_t len, asmtest_trace_t *trace) {
+    /* Thin wrapper: the direct-decode contract does not expose the trailing-exit
+     * signal (only the live ring parser's Tier-A completeness check consumes it). */
+    return asmtest_amd_decode_reach(br, nbr, base, len, trace, NULL);
 }
 
 /* Two taken-branch records are the same edge iff they share from+to. (Speculation/
@@ -536,7 +713,7 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
     if (!asmtest_disas_available())
         return ASMTEST_HW_ENOSYS;
 
-    amd_replay(br, nbr, base, (uint64_t)(uintptr_t)base, len, trace);
+    amd_replay(br, nbr, base, (uint64_t)(uintptr_t)base, len, trace, NULL);
     if (gap)
         trace->truncated = true;
     return ASMTEST_HW_OK;

@@ -1030,7 +1030,9 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
         }
         if (!done) {
             ASMTEST_HWDBG("tier=A best_nr=%llu", (unsigned long long)best_nr);
-            asmtest_amd_decode(best, (size_t)best_nr, base, len, trace);
+            int reached_exit = 0;
+            asmtest_amd_decode_reach(best, (size_t)best_nr, base, len, trace,
+                                     &reached_exit);
             /* Tier-A completeness — a SINGLE window is trustworthy as complete only
              * if it actually CONTAINS the region-exit branch (from in-region, to
              * outside the region: the routine's ret / tail-jmp). Combined with the
@@ -1053,14 +1055,21 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
              * fixes). Freeze does NOT make a non-exit richest window complete, so the
              * exit-presence requirement now holds regardless of the freeze bit. */
             if (trace != NULL) {
-                int saw_exit = 0;
-                for (uint64_t i = 0; i < best_nr; i++) {
+                /* A window is exit-anchored (hence complete) if it RECORDED the
+                 * region-exit branch (from in-region, to outside), OR if the
+                 * reconstruction's trailing straight-line run REACHED a region exit
+                 * with no intervening unrecorded branch (reached_exit): the routine's
+                 * last block ran straight to the ret/tail-jmp, so a window sampled
+                 * before the exit branch was recorded still holds the full retired
+                 * path. The batch-3 invariant is preserved — a mid-run fragment (an
+                 * overflowed loop window, or one whose tail hits an unrecorded
+                 * conditional back-edge) sets neither, so it still truncates. */
+                int saw_exit = reached_exit;
+                for (uint64_t i = 0; !saw_exit && i < best_nr; i++) {
                     uint64_t f = best[i].from, t = best[i].to;
                     if (f >= base_ip && f < end_ip &&
-                        (t < base_ip || t >= end_ip)) {
+                        (t < base_ip || t >= end_ip))
                         saw_exit = 1;
-                        break;
-                    }
                 }
                 if (!saw_exit) {
                     ASMTEST_HWDBG("truncated: Tier-A window missed the region "

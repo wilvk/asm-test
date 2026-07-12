@@ -92,6 +92,16 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
  * stream. */
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
                        const void *base, size_t len, asmtest_trace_t *trace);
+/* Like asmtest_amd_decode, but also reports (via *reached_exit, may be NULL) whether the
+ * reconstruction's TRAILING straight-line run reached a region EXIT (ret / region-leaving
+ * direct uncond jmp) with no intervening unrecorded branch — i.e. the routine's last block
+ * ran straight to the exit, so a window sampled before the exit branch was recorded (or
+ * holding only the entry `call` edge) still reconstructs the FULL retired path. The live
+ * ring parser OR-s it into the Tier-A exit-anchor completeness check so such a window is
+ * not spuriously truncated; asmtest_amd_decode is the reached_exit==NULL thin wrapper. */
+int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
+                             const void *base, size_t len,
+                             asmtest_trace_t *trace, int *reached_exit);
 /* Tier-B: stitch the overlapping sample_period=1 branch-stack windows into one gapless
  * sequence (asmtest_amd_stitch), then decode it without the 16-entry ceiling
  * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */
