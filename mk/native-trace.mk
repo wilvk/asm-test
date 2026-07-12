@@ -956,6 +956,12 @@ $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+# ibs_backend.o must be in the shared lib too: since the Zen-2 F6 fallback,
+# hwtrace.c calls asmtest_ibs_window_begin/_end, so omitting it left
+# libasmtest_hwtrace.so with an undefined symbol at dlopen (every binding's
+# trace_call_auto/resolve_tiers path loads unconditionally, on any host).
+$(BUILD)/pic/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # K5: rebuild the hardware/native-trace object tree on a build-knob flip
 # (SAN=1/COV=1/CSTD), like the core tree. drtrace_app.o already tracks its own
@@ -967,7 +973,7 @@ NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
     $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
     $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-    $(BUILD)/msr_lbr.o
+    $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
@@ -984,6 +990,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/branchsnap.o \
                                        $(BUILD)/pic/msr_lbr.o \
+                                       $(BUILD)/pic/ibs_backend.o \
                                        $(BUILD)/pic/disasm.o \
                                        $(BUILD)/pic/trace.o
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_hwtrace) $^ \
