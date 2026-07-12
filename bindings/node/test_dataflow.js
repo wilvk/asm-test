@@ -42,5 +42,40 @@ const rj = [[0x1000, 0x40, 'Foo', 1], [0x1000, 0x40, 'Foo', 5]];
 check(df.methodResolvePc(rj, 0x1010) === 1, 'method: tiered re-JIT newest version wins');
 check(df.methodResolvePc([], 0x1000) === -1, 'method: empty map -> -1');
 
+// --- L0->L1->L2 pipeline (ValueTrace: build -> def-use -> slice) --- //
+function setEq(a, b) {
+  if (a.size !== b.size) return false;
+  for (const x of b) if (!a.has(x)) return false;
+  return true;
+}
+const REG = df.LOC_REG;
+const MEM = df.LOC_MEM_ABS;
+{
+  const vt = new df.ValueTrace();
+  vt.step(0x00, [], [[REG, 10]]); // def r10
+  vt.step(0x03, [[REG, 10]], [[REG, 11]]); // r11 <- r10
+  vt.step(0x06, [[REG, 11]], [[REG, 12]]); // r12 <- r11
+  check(setEq(vt.forwardSlice(0), new Set([0, 1, 2])), 'pipeline: reg move chain forward slice');
+  check(setEq(vt.backwardSlice(2), new Set([0, 1, 2])), 'pipeline: reg move chain backward slice');
+  check(setEq(vt.forwardSlice(2), new Set([2])), 'pipeline: nothing downstream of the tail');
+  vt.free();
+}
+{
+  const vt = new df.ValueTrace();
+  vt.step(0x00, [[REG, 8]], [[MEM, 0x7fff0000]]);
+  vt.step(0x04, [[MEM, 0x7fff0000]], [[REG, 9]]);
+  check(setEq(vt.forwardSlice(0), new Set([0, 1])), 'pipeline: load-after-store edge through memory');
+  vt.free();
+}
+{
+  const vt = new df.ValueTrace(); // independent chains must not cross-link
+  vt.step(0x00, [], [[REG, 1]]);
+  vt.step(0x02, [[REG, 1]], [[REG, 2]]);
+  vt.step(0x04, [], [[REG, 3]]);
+  vt.step(0x06, [[REG, 3]], [[REG, 4]]);
+  check(setEq(vt.forwardSlice(0), new Set([0, 1])), 'pipeline: no spurious cross-link');
+  vt.free();
+}
+
 console.log('1..' + n);
 process.exit(failed ? 1 : 0);

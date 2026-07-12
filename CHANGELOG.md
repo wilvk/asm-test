@@ -20,7 +20,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mirroring the C `test_dataflow_gcmove` / `test_dataflow_method` semantics). Each self-skips
   cleanly when the lib is not built, so none reddens a general binding job. A new `dataflow` CI
   job builds the lib and runs the Python + C++ bindings on every push (the Node binding runs in
-  the docker bindings lane). The Python and C++ bindings additionally wrap the full L0->L1->L2 pipeline
+  the docker bindings lane). All three host bindings (Python, C++, Node) additionally wrap the full L0->L1->L2 pipeline
   (`ValueTrace`: value-trace build -> def-use -> forward/backward slice), round-trip-validated
   against the C semantics (register move chains, load-after-store through memory, no spurious
   cross-links — which also validate the 13-field at_val_rec_t marshalling). The remaining seven language bindings are later increments.
