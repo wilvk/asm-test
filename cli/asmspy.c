@@ -332,6 +332,92 @@ static void graph_format_row(char *buf, size_t cap, const asmspy_gnode_t *nd) {
              nd->module);
 }
 
+/* One caller/callee peer for the node drill-in: the neighbouring function's
+ * entry address and how many calls crossed that edge. */
+typedef struct {
+    uint64_t addr;
+    unsigned long long count;
+} gpeer_t;
+
+static int gpeer_cmp(const void *a, const void *b) {
+    const gpeer_t *x = a, *y = b;
+    if (x->count != y->count)
+        return x->count < y->count ? 1 : -1; /* descending by call count */
+    return x->addr < y->addr ? -1 : x->addr > y->addr ? 1 : 0;
+}
+
+/* Find the node with entry address `addr` in the snapshot (linear — the graph is
+ * small and this runs once per drill-in). NULL if the address has no node. */
+static const asmspy_gnode_t *graph_node_at(const graph_snap *g, uint64_t addr) {
+    for (size_t i = 0; i < g->n; i++)
+        if (g->v[i].addr == addr)
+            return &g->v[i];
+    return NULL;
+}
+
+/* Format one caller/callee peer line: "  <count>x  <tag> name [module]", falling
+ * back to the raw address when the peer address has no resolved node. */
+static void gpeer_format(char *buf, size_t cap, const graph_snap *g,
+                         const gpeer_t *p) {
+    const asmspy_gnode_t *nd = graph_node_at(g, p->addr);
+    const char *tag = !nd                              ? "[?]"
+                      : strcmp(nd->module, "?") == 0   ? "[?]"
+                      : strcmp(nd->module, "jit") == 0 ? "[JIT]"
+                      : nd->external                   ? "[EXT]"
+                                                       : "[int]";
+    if (nd)
+        snprintf(buf, cap, "  %-8llu %-5s %-30.30s [%s]", p->count, tag, nd->name,
+                 nd->module);
+    else
+        snprintf(buf, cap, "  %-8llu %-5s 0x%llx", p->count, tag,
+                 (unsigned long long)p->addr);
+}
+
+/* Build the "called by" (callers) and "calls" (callees) peer lists for `sel`
+ * from the frozen edge table, most-frequent first, into `callers`/`callees`
+ * (each cleared first). Caller holds the snapshot lock, or has frozen the sink. */
+static void graph_build_detail(const graph_snap *g, const asmspy_gnode_t *sel,
+                               svec *callers, svec *callees) {
+    svec_clear(callers);
+    svec_clear(callees);
+    gpeer_t *in = NULL, *out = NULL;
+    size_t ni = 0, no = 0;
+    for (size_t i = 0; i < g->ne; i++) {
+        const asmspy_gedge_t *e = &g->e[i];
+        if (e->callee_addr == sel->addr) { /* an edge INTO sel: a caller */
+            gpeer_t *nn = realloc(in, (ni + 1) * sizeof *in);
+            if (nn) {
+                in = nn;
+                in[ni].addr = e->caller_addr;
+                in[ni].count = e->count;
+                ni++;
+            }
+        }
+        if (e->caller_addr == sel->addr) { /* an edge OUT of sel: a callee */
+            gpeer_t *nn = realloc(out, (no + 1) * sizeof *out);
+            if (nn) {
+                out = nn;
+                out[no].addr = e->callee_addr;
+                out[no].count = e->count;
+                no++;
+            }
+        }
+    }
+    qsort(in, ni, sizeof *in, gpeer_cmp);
+    qsort(out, no, sizeof *out, gpeer_cmp);
+    char line[256];
+    for (size_t i = 0; i < ni; i++) {
+        gpeer_format(line, sizeof line, g, &in[i]);
+        svec_push(callers, line);
+    }
+    for (size_t i = 0; i < no; i++) {
+        gpeer_format(line, sizeof line, g, &out[i]);
+        svec_push(callees, line);
+    }
+    free(in);
+    free(out);
+}
+
 /* Disassemble the function containing `addr` (extent from `syms`, else a fixed
  * window) by reading its bytes live from the target, into `out` (header + one
  * line per instruction). Used by the call-tree view's assembly pane. */
@@ -1406,6 +1492,96 @@ static void *tracer_thread(void *arg) {
     return NULL;
 }
 
+/* Modal drill-in for one call-graph node: the selected function's header plus
+ * its callers ("CALLED BY") and callees ("CALLS"), each with the per-edge call
+ * count and scrollable together. `callers`/`callees` are the caller's private
+ * copies (see graph_build_detail), so this reads no shared state. Returns when
+ * the user presses Enter/b/q/ESC — the graph view underneath then resumes. */
+static void run_graph_detail(const char *title, const asmspy_gnode_t *sel,
+                             const svec *callers, const svec *callees) {
+    /* compose the scrollable body once: two labelled sections */
+    svec body = {0};
+    char hdr[128];
+    snprintf(hdr, sizeof hdr, "CALLED BY  (%zu)", callers->n);
+    svec_push(&body, hdr);
+    if (callers->n == 0)
+        svec_push(&body, "  (none — a root/thread entry, or its caller was not "
+                         "sampled)");
+    for (size_t i = 0; i < callers->n; i++)
+        svec_push(&body, callers->v[i]);
+    svec_push(&body, "");
+    snprintf(hdr, sizeof hdr, "CALLS  (%zu)", callees->n);
+    svec_push(&body, hdr);
+    if (callees->n == 0)
+        svec_push(&body, "  (none — a leaf function)");
+    for (size_t i = 0; i < callees->n; i++)
+        svec_push(&body, callees->v[i]);
+
+    const char *tag = strcmp(sel->module, "?") == 0     ? "[?]"
+                      : strcmp(sel->module, "jit") == 0 ? "[JIT]"
+                      : sel->external                   ? "[EXT]"
+                                                        : "[int]";
+    int top = 0;
+    for (;;) {
+        int rows, cols;
+        getmaxyx(stdscr, rows, cols);
+        int bodytop = 4;                   /* header rows 0..3 */
+        int vis = rows - bodytop - 1;      /* keep the last row for the hint */
+        if (vis < 1)
+            vis = 1;
+        int bn = (int)body.n;
+        if (top > bn - vis)
+            top = bn - vis;
+        if (top < 0)
+            top = 0;
+        erase();
+        attron(A_BOLD);
+        mvprintw(0, 0, "%.*s", cols, title);
+        mvprintw(1, 0, "%s %-.60s  [%s]", tag, sel->name, sel->module);
+        attroff(A_BOLD);
+        mvprintw(2, 0,
+                 "called %llu times   makes %llu calls across %u functions   "
+                 "0x%llx",
+                 sel->invocations, sel->out_calls, sel->fanout,
+                 (unsigned long long)sel->addr);
+        for (int r = 0; r < vis && top + r < bn; r++)
+            mvprintw(bodytop + r, 0, "%-*.*s", cols, cols, body.v[top + r]);
+        mvprintw(rows - 1, 0,
+                 "up/down PgUp/PgDn Home/End: scroll   Enter/b/q: back to graph");
+        clrtoeol();
+        refresh();
+
+        timeout(150);
+        int ch = getch();
+        int page = vis > 1 ? vis - 1 : 1;
+        if (ch == 'q' || ch == 27 || ch == 'b' || ch == '\n' || ch == KEY_ENTER)
+            break;
+        switch (ch) {
+        case KEY_UP:
+            top -= 1;
+            break;
+        case KEY_DOWN:
+            top += 1;
+            break;
+        case KEY_PPAGE:
+            top -= page;
+            break;
+        case KEY_NPAGE:
+            top += page;
+            break;
+        case KEY_HOME:
+            top = 0;
+            break;
+        case KEY_END:
+            top = bn; /* clamped to the last page above */
+            break;
+        default:
+            break;
+        }
+    }
+    svec_free(&body);
+}
+
 /* Run a live view (mode 0 syscalls / mode 1 region) until the user leaves it.
  * Returns 0 to go back to the process's options (the user pressed 'b'), or 1 to
  * go back to the process list ('q'/ESC). */
@@ -1441,6 +1617,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     long vbottom = 0; /* main-log bottom line while paused (absolute index) */
     long vstr = 0;    /* strings-pane bottom while paused (mode 0) */
     int gtop = 0;     /* call-graph (mode 3): first visible row while scrolling */
+    int gsel = 0;     /* call-graph (mode 3): selected row (for Enter: drill-in) */
     int apane = 0;    /* region (mode 1): focused pane (0 = assembly, 1 = funcs) */
     int atop = 0, ftop = 0; /* region: per-pane first visible row while scrolling */
     for (;;) {
@@ -1529,8 +1706,20 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             qsort(L.graph.v, L.graph.n, sizeof *L.graph.v, gnode_cmp);
             int gn = (int)L.graph.n;
             int vis = rows - 3 > 0 ? rows - 3 : 1;
-            if (!gfrozen)
+            if (!gfrozen) {
                 gtop = 0; /* live view is top-anchored (highest-ranked first) */
+                gsel = 0; /* selection resets to the top-ranked node       */
+            } else {
+                /* keep the selection in range and scrolled on-screen */
+                if (gsel > gn - 1)
+                    gsel = gn - 1;
+                if (gsel < 0)
+                    gsel = 0;
+                if (gsel < gtop)
+                    gtop = gsel;
+                if (gsel >= gtop + vis)
+                    gtop = gsel - vis + 1;
+            }
             if (gtop > gn - vis)
                 gtop = gn - vis;
             if (gtop < 0)
@@ -1548,7 +1737,13 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             for (int r = 0; r < vis && gtop + r < gn; r++) {
                 char row[256];
                 graph_format_row(row, sizeof row, &L.graph.v[gtop + r]);
+                /* highlight the selected row while frozen (i.e. selecting) */
+                int cur = gfrozen && (gtop + r == gsel);
+                if (cur)
+                    attron(A_REVERSE);
                 mvprintw(2 + r, 0, "%-*.*s", cols, cols, row);
+                if (cur)
+                    attroff(A_REVERSE);
             }
         } else {
             /* region view: two stacked panes (function disassembly + its
@@ -1616,7 +1811,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      vbottom < 0 ? 0 : vbottom + 1, logtotal);
         else if (mode == 3 && paused && !fin)
             mvprintw(rows - 1, 0,
-                     "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
+                     "[PAUSED]  up/down: select   Enter: drill in   Tab: sort   "
                      "space: live   b: options   q: processes");
         else if (mode == 1 && paused && !fin)
             mvprintw(rows - 1, 0,
@@ -1629,15 +1824,14 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      "[tracer stopped: %s]  %sb: options   q: processes",
                      erc ? e : "target exited or done",
                      is_log      ? "space: scroll history   "
-                     : mode == 3 ? "up/down PgUp/PgDn Home/End: scroll   "
+                     : mode == 3 ? "up/down: select   Enter: drill in   "
                      : mode == 1 ? "up/down PgUp/PgDn Home/End: scroll   "
                                    "Tab: pane   "
                                  : "");
         } else if (mode == 3)
             mvprintw(rows - 1, 0,
-                     "Tab: sort (invocations/functions-called)   "
-                     "space: pause+scroll   b: options   q/ESC: processes   "
-                     "(live)");
+                     "up/down: select   Enter: drill in   Tab: sort   "
+                     "space: pause   b: options   q/ESC: processes   (live)");
         else if (mode == 1)
             mvprintw(rows - 1, 0,
                      "space: pause+scroll   Tab: pane   b: back to options   "
@@ -1715,11 +1909,14 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                     vbottom = lognewest;
             }
         }
-        if (mode == 3) { /* call graph: pause to freeze the snapshot, then scroll */
+        if (mode == 3) { /* call graph: freeze to select a node, Enter to drill in */
             int page = log_h > 1 ? log_h - 1 : 1;
             int gscroll = paused || fin; /* a finished graph is already frozen */
-            /* scrolling into the list freezes the live re-sort at the top */
-            if ((ch == KEY_UP || ch == KEY_PPAGE) && !gscroll) {
+            /* any navigation (or Enter) into the list freezes the live re-sort */
+            if ((ch == KEY_UP || ch == KEY_DOWN || ch == KEY_PPAGE ||
+                 ch == KEY_NPAGE || ch == KEY_HOME || ch == KEY_END ||
+                 ch == '\n' || ch == KEY_ENTER) &&
+                !gscroll) {
                 paused = 1;
                 gscroll = 1;
             }
@@ -1728,39 +1925,70 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             case 'p':
                 if (!fin) {
                     paused = !paused;
-                    if (!paused)
+                    if (!paused) {
                         gtop = 0; /* resume live -> back to the top-ranked rows */
+                        gsel = 0;
+                    }
                 }
                 break;
             case KEY_UP:
                 if (gscroll)
-                    gtop -= 1;
+                    gsel -= 1;
                 break;
             case KEY_DOWN:
                 if (gscroll)
-                    gtop += 1;
+                    gsel += 1;
                 break;
             case KEY_PPAGE:
                 if (gscroll)
-                    gtop -= page;
+                    gsel -= page;
                 break;
             case KEY_NPAGE:
                 if (gscroll)
-                    gtop += page;
+                    gsel += page;
                 break;
             case KEY_HOME:
                 if (gscroll)
-                    gtop = 0;
+                    gsel = 0;
                 break;
             case KEY_END:
                 if (gscroll)
-                    gtop = INT_MAX; /* clamped to the last page in the renderer */
+                    gsel = INT_MAX; /* clamped to the last node in the renderer */
+                break;
+            case '\n':
+            case KEY_ENTER:
+                if (gscroll) { /* drill into the selected node's callers/callees */
+                    pthread_mutex_lock(&L.mu);
+                    int gn = (int)L.graph.n;
+                    int i = gsel;
+                    if (i > gn - 1)
+                        i = gn - 1;
+                    if (i < 0)
+                        i = 0;
+                    if (gn > 0) {
+                        /* the row array is sorted in the render pass and the sink
+                         * is frozen, so v[i] is exactly the highlighted node */
+                        asmspy_gnode_t selnode = L.graph.v[i];
+                        svec callers = {0}, callees = {0};
+                        graph_build_detail(&L.graph, &selnode, &callers, &callees);
+                        pthread_mutex_unlock(&L.mu);
+                        char dt[176];
+                        snprintf(dt, sizeof dt,
+                                 "asmspy — %.40s (call-graph drill-in, pid %d)",
+                                 selnode.name, (int)pid);
+                        run_graph_detail(dt, &selnode, &callers, &callees);
+                        svec_free(&callers);
+                        svec_free(&callees);
+                    } else {
+                        pthread_mutex_unlock(&L.mu);
+                    }
+                }
                 break;
             default:
                 break;
             }
-            if (gtop < 0)
-                gtop = 0;
+            if (gsel < 0)
+                gsel = 0;
         }
         if (mode == 1) { /* region: pause to freeze the sample; Tab switches pane */
             int split = (rows - 3) * 3 / 5;
@@ -2214,7 +2442,7 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(3, 2, "1)  Syscall log        — live syscalls with data (a strace)");
         mvprintw(4, 2, "2)  Assembly & funcs   — live disassembly + call-graph of a function");
         mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
-        mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable)");
+        mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable; Enter drills into a node)");
         mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
         mvprintw(8, 2, "6)  Process tree       — procs+threads+children with counts (drill into a call graph)");
         mvprintw(9, 2, "7)  Hot edges (sample) — statistical hot edges via AMD IBS-Op, OUT OF BAND (safe on a JIT)");
