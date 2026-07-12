@@ -32,6 +32,7 @@
 /* ------------------------------------------------------------------ */
 typedef struct {
     pid_t pid;
+    pid_t ppid;       /* parent pid (for the process-tree view)         */
     char user[24];    /* owner username (or numeric uid)           */
     char cmd[192];    /* cmdline (argv joined), or [comm] for a kthread */
     int attachable;   /* 1 if same euid as us (ptrace_scope=1 friendly) */

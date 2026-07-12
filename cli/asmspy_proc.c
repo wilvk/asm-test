@@ -118,6 +118,25 @@ static unsigned long long proc_cpu(const char *pid) {
     return cpu;
 }
 
+/* Parent pid from /proc/<pid>/stat — the field right after the ')' state char
+ * (state ppid pgrp ...). Same last-')' handling as proc_cpu. 0 if unavailable. */
+static pid_t proc_ppid(const char *pid) {
+    char path[300];
+    snprintf(path, sizeof path, "/proc/%s/stat", pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[1024];
+    int ppid = 0;
+    if (fgets(line, sizeof line, f)) {
+        char *p = strrchr(line, ')');
+        if (p)
+            sscanf(p + 1, " %*c %d", &ppid);
+    }
+    fclose(f);
+    return (pid_t)ppid;
+}
+
 static int proc_cpu_cmp(const void *a, const void *b) {
     const asmspy_proc_t *x = a, *y = b;
     if (x->cpu != y->cpu)
@@ -202,6 +221,7 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
         }
         asmspy_proc_t *p = &v[n];
         p->pid = (pid_t)atoi(e->d_name);
+        p->ppid = proc_ppid(e->d_name);
 
         char path[300], comm[64];
         snprintf(path, sizeof path, "/proc/%s/comm", e->d_name);

@@ -1719,43 +1719,135 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
     }
 }
 
-/* process picker with a live sort toggle; returns 0 and fills *picked on
- * selection, -1 on quit. Tab toggles pid <-> most-recently-active order. */
+/* Sort process-array indices by pid ascending (roots/siblings in the tree). */
+static const asmspy_proc_t *g_pr_for_cmp;
+static int pr_pid_idx_cmp(const void *a, const void *b) {
+    pid_t x = g_pr_for_cmp[*(const size_t *)a].pid;
+    pid_t y = g_pr_for_cmp[*(const size_t *)b].pid;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/* Append process `k` and its descendants to items[]/order[] in tree order, drawn
+ * with the same box glyphs as the --procs forest. `emitted` guards cycles; `*ni`
+ * runs; order[row] maps a display row back to its index in `pr`. Children are the
+ * processes whose ppid is this pid, by pid asc; the last gets the └─ elbow. */
+static void picker_emit(const asmspy_proc_t *pr, size_t np, size_t k,
+                        const char *prefix, int is_last, int is_root,
+                        char **items, size_t *order, size_t *ni, char *emitted) {
+    if (emitted[k])
+        return;
+    emitted[k] = 1;
+    char row[320];
+    snprintf(row, sizeof row, "%s%s%-7d %c %-12.12s %.180s", prefix,
+             is_root ? "" : is_last ? TG_ELB : TG_TEE, (int)pr[k].pid,
+             pr[k].attachable ? ' ' : '!', pr[k].user, pr[k].cmd);
+    items[*ni] = strdup(row);
+    order[*ni] = k;
+    (*ni)++;
+
+    char cpx[224];
+    if (is_root)
+        cpx[0] = '\0';
+    else
+        snprintf(cpx, sizeof cpx, "%s%s", prefix, is_last ? TG_GAP : TG_PIPE);
+
+    size_t *ci = malloc((np ? np : 1) * sizeof *ci), nc = 0;
+    if (ci) {
+        for (size_t j = 0; j < np; j++)
+            if (j != k && !emitted[j] && pr[j].ppid == pr[k].pid)
+                ci[nc++] = j;
+        g_pr_for_cmp = pr;
+        qsort(ci, nc, sizeof *ci, pr_pid_idx_cmp);
+        for (size_t j = 0; j < nc; j++)
+            picker_emit(pr, np, ci[j], cpx, j + 1 == nc, 0, items, order, ni,
+                        emitted);
+        free(ci);
+    }
+}
+
+/* Build the tree-ordered picker rows: a root (a process whose parent is not in
+ * the list) then its descendants, repeated. Returns the row count (== np; every
+ * process appears exactly once). items[]/order[] must hold >= np entries. */
+static size_t picker_build_tree(const asmspy_proc_t *pr, size_t np, char **items,
+                                size_t *order) {
+    char *emitted = calloc(np ? np : 1, 1);
+    if (!emitted)
+        return 0;
+    size_t ni = 0, *roots = malloc((np ? np : 1) * sizeof *roots), nr = 0;
+    if (roots) {
+        for (size_t k = 0; k < np; k++) {
+            int parent_listed = 0;
+            for (size_t j = 0; j < np; j++)
+                if (pr[j].pid == pr[k].ppid) {
+                    parent_listed = 1;
+                    break;
+                }
+            if (!parent_listed)
+                roots[nr++] = k;
+        }
+        g_pr_for_cmp = pr;
+        qsort(roots, nr, sizeof *roots, pr_pid_idx_cmp);
+        for (size_t j = 0; j < nr; j++)
+            picker_emit(pr, np, roots[j], "", 0, 1, items, order, &ni, emitted);
+        for (size_t k = 0; k < np; k++) /* orphaned parent chains -> roots */
+            if (!emitted[k])
+                picker_emit(pr, np, k, "", 0, 1, items, order, &ni, emitted);
+        free(roots);
+    }
+    free(emitted);
+    return ni;
+}
+
+/* process picker; Tab cycles the (flat) sort, F2 toggles flat<->process-tree,
+ * F3 refreshes. Returns 0 and fills *picked on selection, -1 on quit. */
 static int screen_procs(asmspy_proc_t *picked) {
     asmspy_sort_t sort = ASMSPY_SORT_PID;
-    for (;;) { /* (re-)scan loop — Tab re-enters with the other sort */
+    int view = 0; /* 0 = flat sorted list, 1 = process tree */
+    for (;;) { /* (re-)scan loop — Tab re-sorts, F2 toggles tree, F3 refreshes */
         asmspy_proc_t *procs = NULL;
         size_t np = 0;
-        if (asmspy_proclist(&procs, &np, sort) < 0)
+        /* the tree re-orders by pid/ppid, so it only needs the cheap pid scan */
+        if (asmspy_proclist(&procs, &np, view ? ASMSPY_SORT_PID : sort) < 0)
             return -1;
         char **items = malloc((np ? np : 1) * sizeof *items);
-        if (!items) {
+        size_t *order = malloc((np ? np : 1) * sizeof *order);
+        if (!items || !order) {
+            free(items);
+            free(order);
             free(procs);
             return -1;
         }
-        for (size_t i = 0; i < np; i++) {
-            char b[256];
-            if (sort == ASMSPY_SORT_SCAN)
-                snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %.150s",
-                         procs[i].pid, procs[i].scan, procs[i].cpu,
-                         procs[i].attachable ? ' ' : '!', procs[i].user,
-                         procs[i].cmd);
-            else if (sort == ASMSPY_SORT_ACTIVE)
-                snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %.170s",
-                         procs[i].pid, procs[i].cpu,
-                         procs[i].attachable ? ' ' : '!', procs[i].user,
-                         procs[i].cmd);
-            else
-                snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s", procs[i].pid,
-                         procs[i].attachable ? ' ' : '!', procs[i].user,
-                         procs[i].cmd);
-            items[i] = strdup(b);
+        size_t nitems;
+        if (view) {
+            nitems = picker_build_tree(procs, np, items, order);
+        } else {
+            nitems = np;
+            for (size_t i = 0; i < np; i++) {
+                char b[256];
+                if (sort == ASMSPY_SORT_SCAN)
+                    snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %.150s",
+                             procs[i].pid, procs[i].scan, procs[i].cpu,
+                             procs[i].attachable ? ' ' : '!', procs[i].user,
+                             procs[i].cmd);
+                else if (sort == ASMSPY_SORT_ACTIVE)
+                    snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %.170s",
+                             procs[i].pid, procs[i].cpu,
+                             procs[i].attachable ? ' ' : '!', procs[i].user,
+                             procs[i].cmd);
+                else
+                    snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s",
+                             procs[i].pid, procs[i].attachable ? ' ' : '!',
+                             procs[i].user, procs[i].cmd);
+                items[i] = strdup(b);
+                order[i] = i;
+            }
         }
         List L;
-        if (list_init(&L, items, (int)np) != 0) {
-            for (size_t i = 0; i < np; i++)
+        if (list_init(&L, items, (int)nitems) != 0) {
+            for (size_t i = 0; i < nitems; i++)
                 free(items[i]);
             free(items);
+            free(order);
             free(procs);
             return -1;
         }
@@ -1773,14 +1865,22 @@ static int screen_procs(asmspy_proc_t *picked) {
                     : sort == ASMSPY_SORT_ACTIVE
                           ? "recent activity (CPU jiffies)  [PID CPU]"
                           : "pid";
-            mvprintw(0, 0,
-                     "asmspy — select a process   [sort: %s]   (%zu; '!' = not "
-                     "yours)",
-                     sortname, np);
+            if (view)
+                mvprintw(0, 0,
+                         "asmspy — select a process   [process tree]   (%zu; '!' "
+                         "= not yours)",
+                         np);
+            else
+                mvprintw(0, 0,
+                         "asmspy — select a process   [sort: %s]   (%zu; '!' = "
+                         "not yours)",
+                         sortname, np);
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
-            mvprintw(rows - 1, 0, "type: filter   Enter: select   Tab: cycle "
-                                  "sort   F3: refresh   q: quit");
+            mvprintw(rows - 1, 0,
+                     "type: filter   Enter: select   Tab: sort   F2: %s   F3: "
+                     "refresh   q: quit",
+                     view ? "flat list" : "tree");
             clrtoeol();
             refresh();
             int ch = getch();
@@ -1788,6 +1888,8 @@ static int screen_procs(asmspy_proc_t *picked) {
                 outcome = 2;
             else if (ch == '\t')
                 outcome = 3;
+            else if (ch == KEY_F(2))
+                outcome = 5; /* toggle flat list <-> process tree */
             else if (ch == KEY_F(3))
                 outcome = 4; /* re-scan (re-samples CPU in activity sort) */
             else {
@@ -1802,11 +1904,12 @@ static int screen_procs(asmspy_proc_t *picked) {
         asmspy_proc_t chosen;
         int have = (outcome == 1);
         if (have)
-            chosen = procs[selidx];
+            chosen = procs[order[selidx]]; /* row -> proc (tree reorders) */
         list_done(&L);
-        for (size_t i = 0; i < np; i++)
+        for (size_t i = 0; i < nitems; i++)
             free(items[i]);
         free(items);
+        free(order);
         free(procs);
 
         if (outcome == 1) {
@@ -1817,7 +1920,9 @@ static int screen_procs(asmspy_proc_t *picked) {
             return -1;
         if (outcome == 3) /* cycle pid -> active -> scan; outcome 4 keeps it */
             sort = (asmspy_sort_t)((sort + 1) % 3);
-        /* outcome 3 or 4: fall through -> outer loop re-scans */
+        if (outcome == 5) /* flat list <-> process tree */
+            view = !view;
+        /* outcome 3/4/5: fall through -> outer loop re-scans */
     }
 }
 
