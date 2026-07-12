@@ -60,7 +60,8 @@ CVPID=""
 JVPID=""
 IPID=""
 YPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
+MVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -204,6 +205,43 @@ printf '%s\n' "$out" | grep -qE '^-> work ' || fail "tree: work not at depth 0"
 printf '%s\n' "$out" | grep -qE '^  -> helper ' \
     || fail "tree: helper not nested one level under work"
 kill "$WVPID" 2>/dev/null || true
+
+# statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
+# BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is
+# AMD-only (and needs kernel swfilt), so on any other host / VM / non-AMD CI leg
+# asmspy prints a "# SKIP" line and exits 0 — the smoke accepts that cleanly, the
+# same self-skip discipline as `make ibs-test`.
+"$BUILD/sample_victim" 2>/dev/null &
+MVPID=$!
+sleep 1
+echo "--- asmspy --sample $MVPID 400 (IBS-Op hot edges, out of band) ---"
+set +e
+out=$(timeout 20 "$ASM" --sample "$MVPID" 400 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--sample hung"
+[ "$rc" -eq 0 ] || fail "--sample exited $rc"
+printf '%s\n' "$out" | head -8
+if printf '%s\n' "$out" | grep -q '^# SKIP --sample'; then
+    echo "(IBS-Op unavailable on this host — sampler self-skipped, OK)"
+else
+    # on an IBS host the busy hot_spin() back-edge dominates the histogram
+    printf '%s\n' "$out" | grep -q 'statistical hot edges' \
+        || fail "--sample: no header"
+    printf '%s\n' "$out" | grep -q 'hot_spin' \
+        || fail "--sample: hot function hot_spin not named in the survey"
+    # JSON export: machine-readable edges + honest provenance (pipe to jq)
+    echo "--- asmspy --sample $MVPID 300 --json ---"
+    jout=$(timeout 20 "$ASM" --sample "$MVPID" 300 --json 2>/dev/null) \
+        || fail "--sample --json"
+    printf '%s\n' "$jout" | head -4
+    printf '%s\n' "$jout" | grep -q '"mode":"ibs-op"' \
+        || fail "--sample --json: no mode field"
+    printf '%s\n' "$jout" | grep -q '"from_name":"hot_spin' \
+        || fail "--sample --json: hot_spin not resolved in edges"
+fi
+# a non-positive window is a bad argument (rc=2), not silently coerced
+expect_badarg "$ASM" --sample "$MVPID" 0
+kill "$MVPID" 2>/dev/null || true
 
 # syscall log: attach to syscall_victim (does file I/O each loop)
 "$BUILD/syscall_victim" 2>/dev/null &

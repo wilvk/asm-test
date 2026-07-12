@@ -195,7 +195,23 @@ present+future threads) filtered to the target's pids in software — gated behi
 **Acceptance.** A multi-threaded fixture: per-tid mode recovers the hot edges of every
 pre-existing worker; the race and the system-wide remedy are documented, not hidden.
 
-### Phase 3 — asmspy `--sample` view (the flagship deliverable) *(planned)*
+### Phase 3 — asmspy `--sample` view (the flagship deliverable) *(headless landed; TUI mode 7 remaining)*
+
+> **Landed 2026-07-12 — the headless `--sample` command + engine + smoke.**
+> `asmspy_engine_sample(pid, ms, stop, syms, jit, sink, ctx)` in
+> [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) drives `asmtest_ibs_survey_process`
+> **out of band** (no ptrace, no single-step) and resolves both endpoints of each hot edge
+> through `asmspy_resolve` (ELF symtab → JIT perf-map), so managed frames are named. Headless
+> `asmspy --sample <pid> [ms] [--json]` ([cli/asmspy.c](../../../cli/asmspy.c) `cmd_sample`)
+> prints the edge histogram — `count  from -> to` with `[misp N%]`/`[ret]` tags and honest
+> `branch/total samples`, `throttled` provenance — or a machine-readable JSON export; it
+> **self-skips** (`# SKIP`, exit 0) off IBS. New busy victim
+> [cli/sample_victim.c](../../../cli/sample_victim.c) (a hot `hot_spin()`) + a `--sample`
+> smoke in [cli/cli_smoke.sh](../../../cli/cli_smoke.sh) prove the hot function is named out
+> of band and that JSON resolves it; the smoke self-skips off IBS. Verified live on this
+> Zen 2: `--sample` names `hot_spin`'s back-edge without perturbing the target. **Remaining:
+> the TUI mode-7 view** (sortable hot functions/edges pane) — the interactive front-end over
+> the same engine.
 
 **Goal.** A new asmspy view that shows a live statistical hot-edge / hot-block profile of
 any target **out of band** — the safe view for JITs where stream/graph/tree single-step is

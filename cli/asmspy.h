@@ -292,6 +292,56 @@ typedef void (*asmspy_topo_sink)(void *ctx, const asmspy_task_t *tasks, size_t n
 int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
                         asmspy_count_t mode, asmspy_topo_sink sink, void *ctx);
 
+/* ------------------------------------------------------------------ */
+/* Statistical hot-edge sampler (asmspy_engine.c) — the ONLY rich view */
+/* that is SAFE ON ANY TARGET. It reads AMD IBS-Op branch samples OUT   */
+/* OF BAND (no ptrace, no single-step), so a JIT / managed runtime      */
+/* keeps running at full speed and is never at risk of the single-step  */
+/* crash the stream/graph/tree views carry. Needs an AMD IBS-Op host    */
+/* (asmtest_ibs.h); self-skips everywhere else. STATISTICAL, never       */
+/* exact: it proves an edge was SEEN, never that one was not taken.     */
+/* ------------------------------------------------------------------ */
+
+/* One statistical hot control-flow edge {from -> to}, endpoints resolved to
+ * function names (ELF symtab + JIT perf-map), aggregated over the sample window
+ * and sorted by descending sample count. */
+typedef struct {
+    uint64_t from_addr, to_addr;
+    char from[160]; /* "func+0xNN [module]", or "0x…" if unresolved */
+    char to[160];
+    unsigned long long count; /* IBS-Op samples aggregated on this edge */
+    unsigned mispred;         /* of those, how many were mispredicted   */
+    unsigned is_return;       /* of those, how many retired a return    */
+} asmspy_sample_edge_t;
+
+/* Snapshot sink: `edges[0..n)` are the current hot edges (sorted by count), plus
+ * honest provenance — total samples drained, retired-taken-branch samples, dropped
+ * samples, and whether the kernel throttled the sample rate. Owned by the engine,
+ * valid only for THIS call. Invoked after each sample window and once before
+ * return. */
+typedef void (*asmspy_sample_sink)(void *ctx, const asmspy_sample_edge_t *edges,
+                                   size_t n, uint64_t samples,
+                                   uint64_t branch_samples, uint64_t lost,
+                                   int throttled);
+
+/* Returned by asmspy_engine_sample when IBS-Op is unavailable on this host (not an
+ * AMD IBS box, or perf blocked it) — a clean skip, distinct from the negative hard-
+ * failure codes. Call asmtest_ibs_skip_reason() for the human reason. */
+#define ASMSPY_SAMPLE_UNAVAIL 2
+
+/* Attach AMD IBS-Op to EVERY thread of `pid` OUT OF BAND (no ptrace, no single-
+ * step — the target runs unperturbed), sampling retired taken branches into a
+ * statistical hot-edge histogram whose endpoints are resolved via `syms` (ELF) and
+ * `jit` (the perf-map, so managed Node/.NET/Java frames are named — the payoff of
+ * this view over single-stepping a JIT). Each `ms`-millisecond window's histogram
+ * is streamed through `sink`; when `stop` is NULL the engine runs exactly ONE
+ * window and returns (headless), otherwise it loops until `*stop`. Returns 0 on
+ * success, ASMSPY_SAMPLE_UNAVAIL if IBS is unavailable, or a negative code on a
+ * hard capture failure. `syms`/`jit` may be NULL (raw addresses). */
+int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
+                         const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                         asmspy_sample_sink sink, void *ctx);
+
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);
 

@@ -98,6 +98,12 @@ $(BUILD)/jit_victim: $(BUILD)/jit_victim.o
 $(BUILD)/int3_victim: $(BUILD)/int3_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# sample_victim spins a hot loop (hot_spin) instead of sleeping, so asmspy's
+# --sample (AMD IBS-Op, out of band) has retired taken branches to sample and the
+# smoke can assert the function is named. Self-skips off IBS like the ibs tier.
+$(BUILD)/sample_victim: $(BUILD)/sample_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # test_logview — headless unit test for the TUI scrollback viewport math
 # (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
@@ -107,7 +113,7 @@ $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/int3_victim $(BUILD)/tid_victim \
-           $(BUILD)/test_logview
+           $(BUILD)/sample_victim $(BUILD)/test_logview
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

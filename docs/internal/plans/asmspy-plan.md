@@ -27,6 +27,7 @@
 | Aggregated call graph (inv/calls/fanout, `[int]`/`[EXT]`/`[?]`, sortable) | `--graph` | mode 4 | `asmspy_engine_graph` | single-step, all threads | **no** (single-step) |
 | Live call **tree** (indented by depth; TUI two-pane w/ assembly) | `--tree` | mode 5 | `asmspy_engine_tree` | single-step, all threads | **no** (single-step) |
 | Process/thread **topology** (procs+threads+children, drill-in) | `--procs` | mode 6 | `asmspy_engine_procs` | `PTRACE_SYSCALL` **or** single-step, whole tree | **yes** in `--count=syscalls` |
+| **Statistical hot edges** (IBS-Op `from→to`, named endpoints, misp/ret tags, `--json`) | `--sample` | *mode 7 (planned)* | `asmspy_engine_sample` | **AMD IBS-Op statistical sampling, OUT OF BAND** (no ptrace/step) | **yes** — the only *rich* view safe on any target (incl. a live JIT) |
 
 Cross-cutting, landed: **PLT stub resolution** (`name@plt`, tagged `[EXT]`); the **crash-safe
 two-phase detach** (stop all threads, then release all — fixes a fatal-SIGTRAP-on-detach when

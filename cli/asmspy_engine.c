@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmtest_ibs.h" /* the out-of-band statistical sampler (asmspy_engine_sample) */
 
 #define DUMP_CAP 200 /* bytes of a buffer/path decoded per syscall */
 
@@ -1610,5 +1611,99 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         topo_publish(&tab, sink, ctx, &snap, &snapcap);
     detach_threads(&tab);
     free(snap);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Statistical hot-edge sampler (AMD IBS-Op, out of band)              */
+/*                                                                     */
+/* Unlike every other engine above, this one NEVER attaches ptrace and */
+/* never single-steps: asmtest_ibs_survey_process samples retired taken */
+/* branches through the perf ring while the target runs full speed, so */
+/* it is the safe rich view on a JIT / managed runtime. It only maps    */
+/* the sampled addresses to names — the heavy lifting is in the IBS     */
+/* backend (src/ibs_backend.c).                                         */
+/* ------------------------------------------------------------------ */
+
+/* Resolve one sampled address to "func+0xNN [module]" (ELF symtab, then JIT
+ * perf-map), or "0x…" if nothing names it. Mirrors gnode_get's naming so the
+ * sample view and the call-graph view label the same address identically. */
+static void sample_name(const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                        uint64_t addr, char *out, size_t cap) {
+    const asmspy_sym_t *s = asmspy_resolve(syms, jit, addr);
+    if (!s) {
+        snprintf(out, cap, "0x%llx", (unsigned long long)addr);
+        return;
+    }
+    uint64_t off = addr >= s->addr ? addr - s->addr : 0;
+    if (off)
+        snprintf(out, cap, "%s+0x%llx [%s]", s->name, (unsigned long long)off,
+                 s->module);
+    else
+        snprintf(out, cap, "%s [%s]", s->name, s->module);
+}
+
+int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
+                         const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                         asmspy_sample_sink sink, void *ctx) {
+    if (!asmtest_ibs_available())
+        return ASMSPY_SAMPLE_UNAVAIL;
+    if (ms == 0)
+        ms = 300;
+
+    asmspy_sample_edge_t *res = NULL; /* reused resolved-edge scratch */
+    size_t rescap = 0;
+    int hard_fail = 0, any = 0;
+
+    for (;;) {
+        if (stop && atomic_load(stop))
+            break;
+
+        asmtest_ibs_survey_t sv;
+        int rc = asmtest_ibs_survey_process(pid, ms, NULL, &sv);
+        if (rc == ASMTEST_IBS_EUNAVAIL) {
+            hard_fail = 1;
+            break;
+        }
+        if (rc != ASMTEST_IBS_OK) { /* transient (e.g. target vanished); retry/stop */
+            asmtest_ibs_survey_free(&sv);
+            if (!stop)
+                break;
+            continue;
+        }
+        any = 1;
+
+        if (sv.n > rescap) { /* grow the resolved-edge buffer to fit this window */
+            asmspy_sample_edge_t *nv = realloc(res, sv.n * sizeof *nv);
+            if (nv) {
+                res = nv;
+                rescap = sv.n;
+            }
+        }
+        size_t n = sv.n <= rescap ? sv.n : rescap; /* on OOM: as many as we can */
+        for (size_t i = 0; i < n; i++) {
+            const asmtest_ibs_edge_t *e = &sv.edges[i];
+            res[i].from_addr = e->from;
+            res[i].to_addr = e->to;
+            res[i].count = e->count;
+            res[i].mispred = e->mispred;
+            res[i].is_return = e->is_return;
+            /* resolve endpoints — copy the name out before the next resolve, whose
+             * return pointer may be invalidated by a refresh-on-miss */
+            sample_name(syms, jit, e->from, res[i].from, sizeof res[i].from);
+            sample_name(syms, jit, e->to, res[i].to, sizeof res[i].to);
+        }
+        if (sink)
+            sink(ctx, res, n, sv.samples, sv.branch_samples, sv.lost,
+                 sv.throttled);
+        asmtest_ibs_survey_free(&sv);
+
+        if (!stop) /* headless: exactly one window */
+            break;
+    }
+
+    free(res);
+    if (hard_fail && !any)
+        return ASMSPY_SAMPLE_UNAVAIL;
     return 0;
 }

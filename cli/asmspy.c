@@ -35,6 +35,7 @@
 
 #include "asmspy.h"
 #include "asmspy_logview.h"
+#include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 
 /* ================================================================== */
 /* Shared rendering: one captured region sample -> header + 2 panes    */
@@ -821,6 +822,127 @@ static int cmd_graph(pid_t pid, pid_t tid, long n, gsort_t sort, int json,
     }
     free(snap.v);
     free(snap.e);
+    return 0;
+}
+
+/* ================================================================== */
+/* Statistical hot-edge sampler view (headless; TUI shares the engine) */
+/* ================================================================== */
+
+/* A retained copy of a sample snapshot (the engine's array is transient). */
+typedef struct {
+    asmspy_sample_edge_t *v;
+    size_t n, cap;
+    uint64_t samples, branch_samples, lost;
+    int throttled;
+} sample_snap;
+
+static void sample_capture_sink(void *ctx, const asmspy_sample_edge_t *edges,
+                                size_t n, uint64_t samples,
+                                uint64_t branch_samples, uint64_t lost,
+                                int throttled) {
+    sample_snap *s = ctx;
+    if (n > s->cap) {
+        asmspy_sample_edge_t *nv = realloc(s->v, n * sizeof *nv);
+        if (!nv)
+            return; /* keep the previous snapshot on OOM */
+        s->v = nv;
+        s->cap = n;
+    }
+    if (n)
+        memcpy(s->v, edges, n * sizeof *edges);
+    s->n = n;
+    s->samples = samples;
+    s->branch_samples = branch_samples;
+    s->lost = lost;
+    s->throttled = throttled;
+}
+
+/* A short human tag for an edge's misprediction / return character. */
+static void sample_edge_tag(const asmspy_sample_edge_t *e, char *out, size_t cap) {
+    int mp = e->count ? (int)((e->mispred * 100ull) / e->count) : 0;
+    if (e->is_return && e->mispred)
+        snprintf(out, cap, " [ret misp %d%%]", mp);
+    else if (e->is_return)
+        snprintf(out, cap, " [ret]");
+    else if (e->mispred)
+        snprintf(out, cap, " [misp %d%%]", mp);
+    else
+        out[0] = '\0';
+}
+
+static int cmd_sample(pid_t pid, long ms, int json) {
+    if (!asmtest_ibs_available()) {
+        /* Clean self-skip (exit 0), like examples/ibs_probe.c — the whole lane is
+         * AMD-IBS-only, so on any other host --sample is simply unavailable. */
+        printf("# SKIP --sample: %s\n", asmtest_ibs_skip_reason());
+        return 0;
+    }
+    asmspy_symtab_t t;
+    asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
+    asmspy_jitmap_t jit;
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit); /* name methods already JIT-compiled at attach */
+    sample_snap snap = {0};
+    int rc = asmspy_engine_sample(pid, (unsigned)ms, NULL, &t, &jit,
+                                  sample_capture_sink, &snap);
+    asmspy_jitmap_free(&jit);
+    asmspy_symtab_free(&t);
+
+    if (rc == ASMSPY_SAMPLE_UNAVAIL) { /* substrate present but perf_open blocked */
+        printf("# SKIP --sample: %s\n", asmtest_ibs_skip_reason());
+        free(snap.v);
+        return 0;
+    }
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "sample failed: %s\n", e);
+        free(snap.v);
+        return 1;
+    }
+
+    if (json) { /* machine-readable: statistical edges + honest provenance */
+        printf("{\"pid\":%d,\"mode\":\"ibs-op\",\"samples\":%llu,"
+               "\"branch_samples\":%llu,\"lost\":%llu,\"throttled\":%s,"
+               "\"edges\":[",
+               (int)pid, (unsigned long long)snap.samples,
+               (unsigned long long)snap.branch_samples,
+               (unsigned long long)snap.lost, snap.throttled ? "true" : "false");
+        for (size_t i = 0; i < snap.n; i++) {
+            const asmspy_sample_edge_t *e = &snap.v[i];
+            char ef[4 * sizeof e->from], et[4 * sizeof e->to];
+            json_escape(e->from, ef, sizeof ef);
+            json_escape(e->to, et, sizeof et);
+            printf("%s\n  {\"from\":\"0x%llx\",\"from_name\":\"%s\","
+                   "\"to\":\"0x%llx\",\"to_name\":\"%s\",\"count\":%llu,"
+                   "\"mispred\":%u,\"is_return\":%u}",
+                   i ? "," : "", (unsigned long long)e->from_addr, ef,
+                   (unsigned long long)e->to_addr, et, e->count, e->mispred,
+                   e->is_return);
+        }
+        printf("%s]}\n", snap.n ? "\n" : "");
+        free(snap.v);
+        return 0;
+    }
+
+    printf("statistical hot edges (AMD IBS-Op, out of band) — %zu edges, "
+           "%llu/%llu branch/total samples%s (pid %d)\n",
+           snap.n, (unsigned long long)snap.branch_samples,
+           (unsigned long long)snap.samples,
+           snap.throttled ? ", throttled" : "", (int)pid);
+    printf("statistical, not exact: an edge here WAS taken; absence proves "
+           "nothing.\n");
+    if (snap.n == 0)
+        printf("(no taken-branch samples in the window — target idle, or the "
+               "window is too short)\n");
+    for (size_t i = 0; i < snap.n; i++) {
+        const asmspy_sample_edge_t *e = &snap.v[i];
+        char tag[32];
+        sample_edge_tag(e, tag, sizeof tag);
+        printf("%8llu  %-34.34s -> %-34.34s%s\n", e->count, e->from, e->to, tag);
+    }
+    free(snap.v);
     return 0;
 }
 
@@ -2324,13 +2446,15 @@ static int usage(const char *argv0) {
             "  %s --tree   <pid> [n] [--tid=<t>]  whole-process live call tree, indented by depth (n call lines)\n"
             "                                   (--tid=<t> traces only thread t; others run full speed)\n"
             "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n"
+            "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD IBS-Op, OUT OF BAND — safe on a JIT (no single-step); needs an AMD IBS host\n"
             "\n"
             "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
             "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
             "faithfully, which suspends fine-grained stepping of that thread until\n"
             "its next stop — so a target that uses software breakpoints (a JIT or\n"
             "debugger) may never reach a fixed n in batch mode; interrupt with Ctrl-C.\n",
-            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
+            argv0);
     return 2;
 }
 
@@ -2454,6 +2578,19 @@ int main(int argc, char **argv) {
             }
         }
         return cmd_graph(pid, tid, n, sort, json, dot);
+    }
+    if (strcmp(argv[1], "--sample") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        long ms = 300; /* sample window in milliseconds */
+        int json = 0;
+        for (int i = 3; i < argc; i++) { /* [ms] and --json in any order */
+            if (strcmp(argv[i], "--json") == 0)
+                json = 1;
+            else if (parse_count(argv[i], &ms) != 0 || ms <= 0)
+                return bad_arg("milliseconds (positive)", argv[i]);
+        }
+        return cmd_sample(pid, ms, json);
     }
     return usage(argv[0]);
 }
