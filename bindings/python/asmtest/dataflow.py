@@ -54,6 +54,24 @@ def _load():
         lib.asmtest_method_resolve_pc.argtypes = [
             _C.c_void_p, _C.c_size_t, _C.c_uint64
         ]
+        # L0 sink + L1 def-use + L2 slice (the analysis pipeline). Handles are
+        # opaque here (passed as void*); records + the slice seed marshal via _ValRec.
+        lib.asmtest_valtrace_new.restype = _C.c_void_p
+        lib.asmtest_valtrace_new.argtypes = [_C.c_size_t, _C.c_size_t, _C.c_size_t]
+        lib.asmtest_valtrace_free.argtypes = [_C.c_void_p]
+        lib.asmtest_valtrace_append.argtypes = [
+            _C.c_void_p, _C.c_uint64, _C.POINTER(_ValRec), _C.c_size_t
+        ]
+        lib.asmtest_defuse_build.restype = _C.c_void_p
+        lib.asmtest_defuse_build.argtypes = [_C.c_void_p]
+        lib.asmtest_defuse_free.argtypes = [_C.c_void_p]
+        lib.asmtest_slice_forward.restype = _C.c_void_p
+        lib.asmtest_slice_forward.argtypes = [_C.c_void_p, _ValRec]
+        lib.asmtest_slice_backward.restype = _C.c_void_p
+        lib.asmtest_slice_backward.argtypes = [_C.c_void_p, _ValRec]
+        lib.asmtest_slice_free.argtypes = [_C.c_void_p]
+        lib.asmtest_slice_contains.restype = _C.c_int
+        lib.asmtest_slice_contains.argtypes = [_C.c_void_p, _C.c_uint32]
         _lib = lib
         return _lib
     raise OSError(
@@ -123,3 +141,122 @@ def method_resolve_pc(methods, pc):
         keepalive.append(nb)
         arr[i] = _Method(addr, size, nb, version)
     return int(lib.asmtest_method_resolve_pc(arr, n, int(pc)))
+
+
+# at_loc_kind_t (include/asmtest_valtrace.h): the location space of an operand.
+LOC_REG = 0  # a register (key = Capstone reg id)
+LOC_MEM_ABS = 1  # memory at an absolute effective address (key = addr)
+LOC_MEM_OFF = 2  # memory at a routine offset
+
+
+class _ValRec(_C.Structure):
+    # Mirrors at_val_rec_t exactly (natural alignment matches the C layout; the
+    # round-trip def-use/slice test validates the marshalling end to end).
+    _fields_ = [
+        ("kind", _C.c_int),  # at_loc_kind_t
+        ("reg", _C.c_uint32),
+        ("base", _C.c_uint32),
+        ("index", _C.c_uint32),
+        ("scale", _C.c_int32),
+        ("disp", _C.c_int64),
+        ("addr", _C.c_uint64),
+        ("size", _C.c_uint16),
+        ("is_write", _C.c_bool),
+        ("value_valid", _C.c_bool),
+        ("wide", _C.c_bool),
+        ("wide_off", _C.c_uint32),
+        ("value", _C.c_uint64),
+        ("step", _C.c_uint32),
+    ]
+
+
+def _mk_rec(loc, is_write):
+    # loc is (kind, key): key is a reg id for LOC_REG, else an absolute address.
+    kind, key = loc
+    r = _ValRec()
+    r.kind = int(kind)
+    if kind == LOC_REG:
+        r.reg = int(key)
+    else:
+        r.addr = int(key)
+    r.is_write = bool(is_write)
+    return r
+
+
+class ValueTrace:
+    """A hand-built L0 value trace fed to the L1 def-use builder + L2 slicer.
+
+    Each :meth:`step` records one executed instruction as its read + write operand
+    *locations* — the last-writer def-use is built from those (values are optional and
+    not needed for slicing). A location is a ``(kind, key)`` pair: ``(LOC_REG, reg_id)``
+    or ``(LOC_MEM_ABS, address)``. :meth:`forward_slice` / :meth:`backward_slice` return
+    the set of step indices reached. Normally a producer (emulator / ptrace / DR) fills
+    the trace; this hand-built path exercises the analysis directly.
+    """
+
+    def __init__(self, steps_cap=256, recs_cap=2048):
+        self._lib = _load()
+        self._v = self._lib.asmtest_valtrace_new(steps_cap, recs_cap, 0)
+        if not self._v:
+            raise MemoryError("asmtest_valtrace_new failed")
+        self._g = None
+        self._n_steps = 0  # tracked Python-side (avoids marshalling the sink struct)
+
+    def step(self, off, reads=(), writes=()):
+        """Append one executed instruction at offset `off` reading `reads` and writing
+        `writes` (each a sequence of (kind, key) locations). Read-set before write-set."""
+        recs = [_mk_rec(loc, False) for loc in reads] + [
+            _mk_rec(loc, True) for loc in writes
+        ]
+        n = len(recs)
+        arr = (_ValRec * n)(*recs) if n else None
+        self._lib.asmtest_valtrace_append(self._v, int(off), arr, n)
+        self._n_steps += 1
+        self._g = None  # invalidate a stale def-use graph
+        return self
+
+    def _defuse(self):
+        if self._g is None:
+            self._g = self._lib.asmtest_defuse_build(self._v)
+            if not self._g:
+                raise MemoryError("asmtest_defuse_build failed")
+        return self._g
+
+    def _slice(self, origin, forward):
+        g = self._defuse()
+        seed = _ValRec()
+        seed.step = int(origin)
+        fn = self._lib.asmtest_slice_forward if forward else self._lib.asmtest_slice_backward
+        s = fn(g, seed)
+        try:
+            out = set()
+            # Probe membership for every recorded step (slice steps are a subset).
+            for i in range(self._n_steps):
+                if self._lib.asmtest_slice_contains(s, i):
+                    out.add(i)
+            return out
+        finally:
+            self._lib.asmtest_slice_free(s)
+
+    def forward_slice(self, origin):
+        """Steps influenced by the value defined at step `origin` (origin included)."""
+        return self._slice(origin, True)
+
+    def backward_slice(self, sink):
+        """Steps that produced the value used at step `sink` (sink included)."""
+        return self._slice(sink, False)
+
+    def free(self):
+        if self._g:
+            self._lib.asmtest_defuse_free(self._g)
+            self._g = None
+        if self._v:
+            self._lib.asmtest_valtrace_free(self._v)
+            self._v = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.free()
+        return False

@@ -20,8 +20,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mirroring the C `test_dataflow_gcmove` / `test_dataflow_method` semantics). Each self-skips
   cleanly when the lib is not built, so none reddens a general binding job. A new `dataflow` CI
   job builds the lib and runs the Python + C++ bindings on every push (the Node binding runs in
-  the docker bindings lane). The remaining seven language bindings + the wider L0/L1/L2 surface
-  are later increments.
+  the docker bindings lane). The Python binding additionally wraps the full L0->L1->L2 pipeline
+  (`ValueTrace`: value-trace build -> def-use -> forward/backward slice), round-trip-validated
+  against the C semantics. The remaining seven language bindings are later increments.
 
 - **Live GC-move detection feed for the data-flow tier (`GcMoveMap`, .NET).** An in-proc
   `EventListener` on the CoreCLR runtime provider that enables the GCHeapSurvivalAndMovement

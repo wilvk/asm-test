@@ -102,6 +102,46 @@ def test_method_resolve_empty_map():
     assert dataflow.method_resolve_pc([], 0x1000) == -1
 
 
+def test_pipeline_register_move_chain():
+    # A register move chain: r10 -> r11 -> r12. forward(0) reaches every step;
+    # backward(2) reaches every step. This round-trip also validates the
+    # at_val_rec_t ctypes layout end to end (a wrong layout mis-splits read/write
+    # sets or the slice seed, breaking these sets).
+    REG = dataflow.LOC_REG
+    with dataflow.ValueTrace() as vt:
+        vt.step(0x00, reads=[], writes=[(REG, 10)])            # def r10
+        vt.step(0x03, reads=[(REG, 10)], writes=[(REG, 11)])   # r11 <- r10
+        vt.step(0x06, reads=[(REG, 11)], writes=[(REG, 12)])   # r12 <- r11
+        assert vt.forward_slice(0) == {0, 1, 2}
+        assert vt.backward_slice(2) == {0, 1, 2}
+        assert vt.backward_slice(1) == {0, 1}   # stops before the consumer
+        assert vt.forward_slice(2) == {2}        # nothing downstream
+
+
+def test_pipeline_load_after_store_via_memory():
+    # A store then a load at the SAME absolute address forms a def-use edge through
+    # memory (not registers): step0 writes M[A]; step1 reads M[A] -> writes r9.
+    REG, MEM = dataflow.LOC_REG, dataflow.LOC_MEM_ABS
+    A = 0x7FFF0000
+    with dataflow.ValueTrace() as vt:
+        vt.step(0x00, reads=[(REG, 8)], writes=[(MEM, A)])     # M[A] <- r8
+        vt.step(0x04, reads=[(MEM, A)], writes=[(REG, 9)])     # r9 <- M[A]
+        assert vt.forward_slice(0) == {0, 1}   # the store's def reaches the load
+        assert vt.backward_slice(1) == {0, 1}
+
+
+def test_pipeline_no_spurious_edge():
+    # Two independent chains must not cross-link: r1->r2 and r3->r4 are disjoint.
+    REG = dataflow.LOC_REG
+    with dataflow.ValueTrace() as vt:
+        vt.step(0x00, writes=[(REG, 1)])
+        vt.step(0x02, reads=[(REG, 1)], writes=[(REG, 2)])
+        vt.step(0x04, writes=[(REG, 3)])
+        vt.step(0x06, reads=[(REG, 3)], writes=[(REG, 4)])
+        assert vt.forward_slice(0) == {0, 1}   # r1 chain only
+        assert vt.forward_slice(2) == {2, 3}   # r3 chain only, no cross-link
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     n = 0
