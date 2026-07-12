@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -646,6 +647,13 @@ static class HwTraceProgram
         // --- §E1: AsmTrace.WindowHybrid (survey -> hot-slice exact window) --- //
         WindowHybridChecks();
 
+        // --- §E3: sibling-thread live JIT publish (extensions plan E3) --- //
+        // Mechanism first (ptrace-free — validates the listener -> queue -> sibling ->
+        // channel handoff on ANY host, privileged or not), then the OOP-window
+        // integration case (self-skips where the reverse attach is denied).
+        SiblingPublisherChecks();
+        WindowLiveJitChecks();
+
         // --- conformance replay: the ptrace_descent corpus tier (replay-or-skip) --- //
         // Mirrors bindings/python/tests/test_conformance._run_ptrace_descent: replay the
         // corpus's L1 (edges) and L2 (frames) cases live when ptrace is available AND the
@@ -832,6 +840,106 @@ static class HwTraceProgram
         }
         else
             Console.WriteLine($"# NOTE WindowHybrid degraded to full exact Window (no AMD survey: {ww.Survey?.SkipReason}) — {ww.Methods.Count} methods named");
+    }
+
+    // §E3 probe — JIT'd for the FIRST time inside SiblingPublisherChecks (nothing else may
+    // call or PrepareMethod it), so its MethodLoadVerbose event flows through the live
+    // pipeline under test: listener -> lock-free queue -> sibling thread -> channel.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long SiblingPublishProbe(int n)
+    {
+        long s = 0;
+        for (int i = 0; i < n; i++) s += i;
+        return s;
+    }
+
+    // §E3 mechanism (ptrace-free): JitMethodMap.SetPublishChannel must publish a freshly
+    // JIT'd method's (base,len) into an address channel FROM THE SIBLING THREAD — validated
+    // against a process-local ring, no window/stepper needed, so it asserts (never skips) on
+    // plain unprivileged hosts where the OOP integration case below may self-skip. The stop
+    // semantics (join-before-free) are what make RunWindowOutOfProcess's teardown UAF-free.
+    static void SiblingPublisherChecks()
+    {
+        var map = new JitMethodMap();
+        IntPtr chan = HwNative.asmtest_addr_channel_new();
+        Check(chan != IntPtr.Zero, "E3: process-local addr channel allocates");
+        if (chan == IntPtr.Zero) { map.Dispose(); return; }
+
+        map.SetPublishChannel(chan); // starts the sibling publisher thread
+        // First-time JIT of the probe: MethodLoadVerbose -> enqueue -> sibling publish.
+        RuntimeHelpers.PrepareMethod(typeof(HwTraceProgram)
+            .GetMethod(nameof(SiblingPublishProbe), BindingFlags.NonPublic | BindingFlags.Static)
+            .MethodHandle);
+        // EventPipe dispatch is asynchronous — poll generously (CI can be loaded); the
+        // publish normally lands within milliseconds of the Prepare above.
+        long deadline = Environment.TickCount64 + 10000;
+        while (map.LivePublished == 0 && Environment.TickCount64 < deadline)
+            Thread.Sleep(10);
+        long published = map.LivePublished;
+        Check(published >= 1, $"E3: sibling thread published the fresh JIT to the channel (got {published})");
+        // The ring's producer cursor (`head`, the first u32 of asmtest_addr_channel_t — a
+        // layout pinned as cross-process ABI by asmtest_addr_channel.h) must show the
+        // records really landed NATIVELY, not just that the managed counter moved.
+        int head = Marshal.ReadInt32(chan, 0);
+        Check(head >= 1 && head >= (int)Math.Min(published, int.MaxValue),
+              $"E3: channel head advanced natively (head={head}, published={published})");
+
+        map.SetPublishChannel(IntPtr.Zero); // stop + JOIN: the ring is now safe to free
+        long after = map.LivePublished;
+        Thread.Sleep(50); // any straggler would show up here — the join must prevent it
+        Check(map.LivePublished == after, "E3: no publishes after SetPublishChannel(0) joined the sibling");
+        map.SetPublishChannel(IntPtr.Zero); // idempotent stop is a no-op
+        map.Dispose();                      // Dispose after stop is also a no-op stop
+        HwNative.asmtest_addr_channel_free(chan);
+    }
+
+    // §E3 fixture — JIT'd for the FIRST time INSIDE the out-of-process window (nothing else
+    // may call it), so its code lands OUTSIDE the pre-window coarse ranges: without the live
+    // sibling publish the stepper elides it (the pre-E3 honest-partial gap); with E3 it must
+    // be published mid-window and resolve by name. The loop is long enough in STEPPED time
+    // (~6 insns x 30000 iterations, each a ptrace round-trip) that the EventPipe -> sibling
+    // -> channel publish lands while the method is still executing — the plan's
+    // publish-before-execute ordering risk, budgeted for rather than assumed away.
+    // MidWindowJitLoop(30000) == 7500 * (1+2+3+4) == 75000.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long MidWindowJitLoop(int n)
+    {
+        long acc = 0;
+        for (int i = 0; i < n; i++) acc += (i & 3) + 1;
+        return acc;
+    }
+
+    // §E3 integration — the deep mid-window JIT attribution gap, closed: a method JIT'd
+    // fresh mid-window resolves in the OOP whole-window trace. Self-skips (reason asserted)
+    // where the reverse attach is denied — the mechanism itself is still covered above.
+    static void WindowLiveJitChecks()
+    {
+        long r = 0;
+        AsmTrace ww = AsmTrace.Window(() => { r = MidWindowJitLoop(30000); });
+        Check(r == 75000, $"E3 Window: mid-window-JIT'd loop returns 75000 (got {r})");
+        if (!ww.Armed)
+        {
+            Check(ww.SkipReason.Length > 0,
+                  $"E3 Window: unarmed scope records a self-skip reason ({ww.SkipReason})");
+            Console.WriteLine($"# SKIP E3 OOP-window integration: {ww.SkipReason}");
+            return;
+        }
+        // The sibling published at least the fresh method while the window was open.
+        Check(ww.LiveJitPublished >= 1,
+              $"E3 Window: sibling live-published >= 1 mid-window JIT record (got {ww.LiveJitPublished})");
+        // ... and the stepper recorded it + close-time attribution named it. The 64Ki
+        // instruction budget can honestly truncate around a late-published loop (the AMD-LBR
+        // "covered OR truncated" lesson, generalized) — but a full miss on an untruncated
+        // capture is a real E3 regression and must fail.
+        long inLoop = ww.InstructionsIn("MidWindowJitLoop");
+        Check(inLoop > 0 || ww.Truncated,
+              $"E3 Window: mid-window JIT resolves in the trace, or capture honestly truncated "
+              + $"(got {inLoop} insns, truncated={ww.Truncated}, methods={ww.Methods.Count})");
+        if (inLoop > 0)
+            Console.WriteLine($"# E3: MidWindowJitLoop captured with {inLoop} attributed instructions "
+                              + $"({ww.LiveJitPublished} live-published records)");
+        else
+            Console.WriteLine("# NOTE E3: stream truncated before the live-published loop was recorded");
     }
 
     // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic

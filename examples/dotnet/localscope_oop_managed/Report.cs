@@ -46,11 +46,12 @@ internal static class Report
         Console.WriteLine($"-> {ww.Methods.Count} managed methods named from a whole block of C# — captured\n"
                           + "   OUT OF PROCESS, and the block survived an in-scope exception that crashes the\n"
                           + "   in-process whole-window scope. This thread was never armed with EFLAGS.TF.\n");
-        Console.WriteLine("NOTE: this captures the block's OWN code + already-mapped R2R BCL. Methods JIT'd\n"
-                          + "FRESH mid-window (a first-call generic instantiation) land outside the pre-window\n"
-                          + "code ranges and are elided — publishing them live from the single-stepped thread\n"
-                          + "re-enters the runtime under step and aborts it; a sibling-thread publish is the\n"
-                          + "documented follow-up (docs/internal/plans/managed-wholewindow-oop-plan.md).");
+        Console.WriteLine("NOTE: this captures the block's OWN code + already-mapped R2R BCL, PLUS (§E3)\n"
+                          + "methods JIT'd FRESH mid-window (a first-call generic instantiation, a local\n"
+                          + "function): the JIT listener hands each one to a SIBLING thread that publishes it\n"
+                          + "to the stepper live — never from the single-stepped thread, where the publish\n"
+                          + "re-enters the runtime under step and aborts it\n"
+                          + $"(docs/internal/plans/managed-wholewindow-oop-plan.md). Live-published here: {ww.LiveJitPublished}.");
         return true;
     }
 }

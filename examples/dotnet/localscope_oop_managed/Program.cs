@@ -16,9 +16,10 @@
 // is FORBIDDEN to step. To prove it, this block deliberately includes the very thing
 // localscope had to remove — an in-scope thrown/caught OverflowException — and it runs
 // cleanly here (no exit 133). The block's managed methods (its own JIT'd code + the R2R BCL
-// it reaches) are captured via coarse code ranges and named through the same §D0.1/§D0.2
-// attribution the in-process form uses. Self-skips (runs the block uninstrumented, exit 0)
-// where ptrace is denied (Yama ptrace_scope, no privilege).
+// it reaches) are captured via coarse code ranges — plus, §E3, methods JIT'd fresh
+// MID-WINDOW, live-published to the stepper from a sibling thread — and named through the
+// same §D0.1/§D0.2 attribution the in-process form uses. Self-skips (runs the block
+// uninstrumented, exit 0) where ptrace is denied (Yama ptrace_scope, no privilege).
 
 using System;
 using System.Collections.Generic;

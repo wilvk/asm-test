@@ -18,6 +18,7 @@
 // The logical library "asmtest_hwtrace" is resolved by a DllImportResolver:
 // ASMTEST_HWTRACE_LIB -> <repo>/build/libasmtest_hwtrace.so -> NativeLibrary.Load.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.Tracing;
 using System.Globalization;
@@ -1649,6 +1650,12 @@ namespace Asmtest
         /// runtime — so <see cref="Methods"/> also names WARM methods (JIT'd before the scope).
         /// False (a clean self-skip to the cold-only result) where diagnostics are off.</summary>
         public bool RundownEnabled { get; private set; }
+        /// <summary>§E3: method records the live JIT publisher pushed to the out-of-process
+        /// <see cref="Window"/>'s stepper while the window was open — methods JIT'd fresh
+        /// MID-WINDOW that the pre-window coarse ranges could not cover. 0 for every other
+        /// scope form, for the §E1 hybrid's hot-slice pass (live publish off by design), and
+        /// when nothing was JIT'd in-window.</summary>
+        public long LiveJitPublished { get; private set; }
         /// <summary>§D3: true for an <see cref="WindowHot"/> AMD-LBR scope — the result is a
         /// SAMPLED, STATISTICAL survey, not an exact trace. When true the instruction-framed
         /// members change meaning: <see cref="Methods"/><c>.Count</c> and
@@ -1934,7 +1941,10 @@ namespace Asmtest
         /// delegate whose call frame delimits the window:
         /// <c>var ww = AsmTrace.Window(() =&gt; { …block… }); Report.Print(ww);</c>. Managed code
         /// the block reaches (its own JIT'd body + R2R BCL) is captured via coarse code ranges
-        /// published to the stepper, then named at close through the same §D0.1/§D0.2
+        /// published to the stepper, PLUS — §E3 — methods JIT'd fresh MID-WINDOW (a first-call
+        /// generic instantiation, a local function), published live from a sibling thread the
+        /// stepper drains as the window runs (<see cref="LiveJitPublished"/>); everything is
+        /// named at close through the same §D0.1/§D0.2
         /// attribution as the in-process form (see <see cref="Methods"/> / <see cref="Addresses"/>).
         /// Self-skips (runs the block uninstrumented, records <see cref="SkipReason"/>) where
         /// ptrace is denied (Yama). Returns an already-closed scope — do not wrap in <c>using</c>
@@ -2362,10 +2372,8 @@ namespace Asmtest
             // §D3 capture channel: a SHARED ring the forked stepper drains. Seed it with the
             // coarse managed code ranges (JIT heap + R2R BCL .dll images) so all currently-
             // mapped managed code is captured. Native runtime (*.so) stays unpublished and is
-            // stepped over (the elided noise). NOTE: methods JIT'd fresh MID-WINDOW (first-call
-            // generic instantiations, local functions) land outside these pre-window ranges and
-            // are elided — the live per-method publish that would catch them is DELIBERATELY OFF
-            // (see the note below the arm); the sibling-thread publish is the documented fix.
+            // stepped over (the elided noise). Methods JIT'd fresh MID-WINDOW land outside
+            // these pre-window ranges — the §E3 sibling publisher armed below catches them.
             IntPtr chan = HwNative.asmtest_addr_channel_new_shared();
             if (chan == IntPtr.Zero)
             {
@@ -2377,13 +2385,22 @@ namespace Asmtest
             }
             foreach (AddrRec r in regionsOrNull ?? EnumerateManagedCodeRanges())
                 HwNative.asmtest_addr_channel_publish_rec(chan, r.Base, r.Len, r.Version);
-            // NOTE: live per-method publish via the JIT listener (SetPublishChannel) is
-            // DELIBERATELY OFF — firing the managed EventPipe callback on the thread being
-            // single-stepped re-enters the runtime under step and aborts it (SIGABRT). The
-            // coarse ranges above capture the block's own JIT'd code + mapped R2R BCL; methods
-            // JIT'd fresh mid-window (a first-call generic instantiation, a local function)
-            // land outside the pre-window ranges and are elided. See the plan for the
-            // safe-live-publish follow-up (publish from a SIBLING thread, not the stepped one).
+            // §E3 (extensions plan) — the LIVE mid-window publish, ON for the plain full
+            // window. Arm the JIT listener's SIBLING publisher thread on the same shared
+            // channel: a method JIT'd fresh MID-WINDOW (a first-call generic instantiation,
+            // a local function) is published while the window runs, the stepper drains it
+            // live and records it — closing the deep-BCL gap that made this scope
+            // honest-partial. The publish must NOT happen inline in the EventPipe callback
+            // (it can fire on the single-stepped thread, where re-entering the runtime under
+            // step SIGABRTs — observed), hence the sibling thread, started HERE, before the
+            // window arms, and joined in the finally below before the channel is freed.
+            // The §E1 hybrid (regionsOrNull != null) keeps the live publish OFF by design:
+            // its contract is to capture ONLY the surveyed hot slice, so publishing every
+            // fresh JIT would reintroduce exactly the cold code it elides. Requires the JIT
+            // map (byMethod/withRundown — the Window defaults); with neither there is no
+            // listener to drain, and the pre-E3 coarse-ranges-only behavior remains.
+            if (_map != null && regionsOrNull == null)
+                _map.SetPublishChannel(chan);
 
             IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
             ulong when = _map != null ? _map.ImageNow : 0;
@@ -2403,7 +2420,13 @@ namespace Asmtest
             {
                 Thread.EndThreadAffinity();
                 GC.KeepAlive(cb);
-                if (_map != null) _map.SetPublishChannel(IntPtr.Zero);
+                if (_map != null)
+                {
+                    // §E3: SetPublishChannel(Zero) stops AND JOINS the sibling publisher,
+                    // so freeing the shared ring below cannot race an in-flight publish.
+                    _map.SetPublishChannel(IntPtr.Zero);
+                    LiveJitPublished = _map.LivePublished;
+                }
                 HwNative.asmtest_addr_channel_free_shared(chan);
             }
 
@@ -3158,13 +3181,101 @@ namespace Asmtest
         IntPtr _img; // §Z3: optional self code-image tracking JIT'd bytes (zeroed on Dispose)
         Entry[] _frozen; // sorted-by-start snapshot for binary search
         volatile bool _stopped; // stop ingesting once the traced scope has closed
-        IntPtr _publishChannel; // §D3: shared channel to publish JIT'd methods into (live OOP window)
+
+        // §E3 (asmtrace-extensions-plan) — the SIBLING-THREAD live-publish state. The
+        // listener callback must never P/Invoke into the shared channel itself: for the
+        // out-of-process window that callback can fire on the very thread being
+        // single-stepped, and re-entering the runtime/native boundary under step ABORTS
+        // the runtime (SIGABRT, observed — managed-wholewindow-oop-plan.md). So
+        // OnEventWritten only ENQUEUES the (base,len) onto a lock-free queue, and a
+        // dedicated, never-stepped publisher thread drains it and does the P/Invoke.
+        volatile IntPtr _publishChannel;            // §D3/§E3: shared channel (IntPtr.Zero = off)
+        ConcurrentQueue<PublishRec> _publishQueue;  // listener -> sibling handoff (lock-free enqueue)
+        SemaphoreSlim _publishWake;                 // signaled once per enqueue (+ a poll backstop)
+        Thread _publishThread;                      // the §E3 sibling publisher (background)
+        volatile bool _publishStop;                 // publisher exit flag (set by SetPublishChannel(0))
+        long _livePublished;                        // records actually pushed to the ring (Interlocked)
 
         struct Entry { public ulong Start, End; public string Name; }
+        struct PublishRec { public ulong Start, Size; }
 
-        /// <summary>§D3: while set, each JIT'd method is also published to this shared address
-        /// channel so the out-of-process window's stepper records it live. IntPtr.Zero = off.</summary>
-        public void SetPublishChannel(IntPtr chan) { _publishChannel = chan; }
+        /// <summary>§D3/§E3: while set, each JIT'd method is also published to this shared
+        /// address channel so the out-of-process window's stepper records it live — the
+        /// mid-window publish that closes the deep-BCL gap (extensions plan E3). A non-zero
+        /// channel STARTS the sibling publisher thread (the EventPipe callback itself never
+        /// touches the channel: it can fire on the single-stepped thread, where the P/Invoke
+        /// re-enters the runtime under step and aborts it). IntPtr.Zero STOPS the publisher
+        /// and JOINS its thread — on return the caller may free the channel with no
+        /// use-after-free window. Not reentrant; call from the scope-owning thread only.</summary>
+        public void SetPublishChannel(IntPtr chan)
+        {
+            if (chan != IntPtr.Zero)
+            {
+                if (_publishThread != null) { _publishChannel = chan; return; } // re-point, keep thread
+                _publishQueue = new ConcurrentQueue<PublishRec>();
+                _publishWake = new SemaphoreSlim(0);
+                _publishStop = false;
+                _publishChannel = chan;
+                // Started BEFORE the window arms, on a plain managed thread the stealth
+                // stepper never targets (it steps only the arming thread) — so the
+                // publisher's P/Invokes run at native speed while the window crawls.
+                _publishThread = new Thread(PublishLoop)
+                {
+                    IsBackground = true,
+                    Name = "asmtest-e3-jit-publish",
+                };
+                _publishThread.Start();
+                return;
+            }
+            Thread t = _publishThread;
+            if (t == null) { _publishChannel = IntPtr.Zero; return; } // never started: no-op
+            _publishStop = true;
+            try { _publishWake.Release(); } catch (SemaphoreFullException) { }
+            // The loop re-checks _publishStop at least every poll interval and publish_rec
+            // never blocks (a full ring overwrites-oldest + flags overrun), so this join is
+            // prompt — and it is what makes the caller's channel free safe.
+            t.Join();
+            _publishThread = null;
+            _publishChannel = IntPtr.Zero;
+            _publishWake.Dispose();
+            _publishWake = null;
+            _publishQueue = null;
+        }
+
+        /// <summary>§E3: how many method records the sibling publisher has actually pushed
+        /// to the shared channel (0 while the live publish is off / never armed).</summary>
+        public long LivePublished => Interlocked.Read(ref _livePublished);
+
+        // §E3 — the sibling publisher body. Once the window arms, THIS thread is the ring's
+        // only producer (the coarse-range seeding on the scope thread happens-before
+        // Thread.Start), preserving the channel's single-producer/single-consumer contract
+        // (asmtest_addr_channel.h); the helper process is the one consumer, draining between
+        // steps. Simplest thread-safe shape per the plan: semaphore-woken drain loop with a
+        // 50ms poll backstop against a lost wakeup.
+        void PublishLoop()
+        {
+            try
+            {
+                while (true)
+                {
+                    try { _publishWake.Wait(50); }
+                    catch (ObjectDisposedException) { return; } // defensive: stop disposed it
+                    while (_publishQueue.TryDequeue(out PublishRec r))
+                    {
+                        IntPtr chan = _publishChannel;
+                        if (chan == IntPtr.Zero) break; // stopping — drop stale records
+                        HwNative.asmtest_addr_channel_publish_rec(chan, r.Start, r.Size, 0);
+                        Interlocked.Increment(ref _livePublished);
+                    }
+                    if (_publishStop) return; // window closed: further publishes are useless
+                }
+            }
+            catch
+            {
+                // The publisher must never take the process down; a dead publisher only
+                // reopens the (documented, honest-partial) mid-window gap for this scope.
+            }
+        }
 
         public JitMethodMap() : this(false) { }
 
@@ -3263,13 +3374,27 @@ namespace Asmtest
                 // no managed allocation — safe for the reentrancy-light contract above).
                 if (_img != IntPtr.Zero)
                     HwNative.asmtest_codeimage_track(_img, new IntPtr(unchecked((long)start)), (UIntPtr)size);
-                // §D3: publish the freshly JIT'd method to the out-of-process window's SHARED
-                // channel so the reverse-attach stepper starts recording it LIVE — this is how
-                // methods JIT'd MID-WINDOW (a first-call generic instantiation, a local
-                // function) get captured, which a pre-window code-range scan cannot see.
-                IntPtr chan = _publishChannel;
-                if (chan != IntPtr.Zero)
-                    HwNative.asmtest_addr_channel_publish_rec(chan, start, size, 0);
+                // §D3/§E3: hand the freshly JIT'd method to the SIBLING publisher thread,
+                // which P/Invokes it into the out-of-process window's SHARED channel — the
+                // reverse-attach stepper drains that live, so a method JIT'd MID-WINDOW (a
+                // first-call generic instantiation, a local function) is recorded from the
+                // moment it is published, which a pre-window code-range scan cannot see.
+                // The enqueue is lock-free and calls no native code: THIS callback can fire
+                // on the single-stepped thread, where a channel P/Invoke re-enters the
+                // runtime under step and aborts it (SIGABRT, observed — the reason the
+                // inline publish was left OFF before E3; managed-wholewindow-oop-plan.md).
+                ConcurrentQueue<PublishRec> q = _publishQueue;
+                if (q != null && _publishChannel != IntPtr.Zero)
+                {
+                    q.Enqueue(new PublishRec { Start = start, Size = size });
+                    SemaphoreSlim wake = _publishWake; // may be torn down concurrently
+                    if (wake != null)
+                    {
+                        try { wake.Release(); }
+                        catch (ObjectDisposedException) { } // stop won the race: publisher gone
+                        catch (SemaphoreFullException) { }  // already saturated with wakeups
+                    }
+                }
             }
             catch
             {
@@ -3285,6 +3410,10 @@ namespace Asmtest
         public override void Dispose()
         {
             _stopped = true;
+            // §E3 defensive: a map disposed with the publisher still live joins it first
+            // (idempotent no-op on the normal path, where the window teardown already
+            // called SetPublishChannel(IntPtr.Zero) before freeing the channel).
+            try { SetPublishChannel(IntPtr.Zero); } catch { }
             if (_img != IntPtr.Zero) { HwNative.asmtest_codeimage_free(_img); _img = IntPtr.Zero; }
             base.Dispose();
         }
