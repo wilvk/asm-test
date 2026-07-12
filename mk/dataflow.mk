@@ -129,6 +129,14 @@ dataflow-ruby-test: shared-dataflow
 	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  $(RUBY) test_dataflow.rb
 
+# Phase 6 — the Lua data-flow binding (bindings/lua/dataflow.lua, LuaJIT FFI). Needs
+# LuaJIT (the docker bindings image); validated in ubuntu:24.04 locally.
+.PHONY: dataflow-lua-test
+dataflow-lua-test: shared-dataflow
+	cd bindings/lua && \
+	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(LUAJIT) test_dataflow.lua
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
