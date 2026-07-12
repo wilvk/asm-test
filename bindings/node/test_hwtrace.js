@@ -19,8 +19,13 @@ const path = require('path');
 const koffi = require('koffi');
 const {
   HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
-  BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+  INTEL_PT, CORESIGHT,
+  BEST, CEILING_FREE, ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+  FIDELITY_STATISTICAL,
+  MECH_NONE, MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR, MECH_BLOCKSTEP,
+  MECH_PER_INSN, MECH_STATISTICAL,
+  STAGE_OK, STAGE_PROBE,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
   DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN,
 } = require('./hwtrace');
@@ -143,9 +148,73 @@ function main() {
       'autoTier(BEST) is the head of resolveTiers(BEST)');
   }
 
+  // --- 2026-07 API flag day: F29 status surface + F22/F26/F37 mechanism ---
+  // (host-independent: invariants hold even where every backend self-skips)
+  {
+    const paranoid = HwTrace.perfEventParanoid();
+    let inv = true;
+    for (const b of [INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP]) {
+      const st = HwTrace.status(b);
+      inv = inv && (st.available === HwTrace.available(b));
+      inv = inv && ((st.code === ASMTEST_HW_OK) === st.available);
+      inv = inv && [ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM].includes(st.code);
+      inv = inv && (st.reason === HwTrace.skipReason(b));
+      inv = inv && (st.perf_event_paranoid === paranoid);
+    }
+    ok(inv, 'status(): invariants hold for all four backends (F29)');
+    // LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD
+    // probe that reached the perf open under paranoid>2 without root must say
+    // EPERM (substrate present), never missing-silicon EUNAVAIL.
+    const amd = HwTrace.status(AMD_LBR);
+    if (amd.stage === STAGE_PROBE && paranoid > 2 && process.getuid && process.getuid() !== 0) {
+      ok(amd.code === ASMTEST_HW_EPERM,
+        'status LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL');
+    } else {
+      console.log(`# SKIP status live-EPERM lane (stage=${amd.stage} paranoid=${paranoid})`);
+    }
+    // Mechanism discriminator: every resolved row is a concrete, EXACT producer.
+    const rows = HwTrace.resolveTiers(TRACE_BEST);
+    ok(rows.every((c) => c.mechanism !== MECH_NONE && c.mechanism !== MECH_STATISTICAL
+        && c.fidelity !== FIDELITY_STATISTICAL),
+      'resolveTiers(BEST): every row carries a concrete, exact mechanism (F22)');
+    ok(rows.filter((c) => c.tier === TIER_HWTRACE && c.backend === SINGLESTEP)
+        .every((c) => c.mechanism === MECH_TF_STEP),
+      'resolveTiers(BEST): the single-step row is the TF-step mechanism');
+  }
+
   if (!HwTrace.available(SINGLESTEP)) {
     console.log(`# SKIP single-step backend unavailable: ${HwTrace.skipReason(SINGLESTEP)}`);
     process.exit(0);
+  }
+
+  // --- flag day, live half: F27 struct-size negotiation + call_auto mechanism ---
+  {
+    // F27: init() self-describes via the koffi mirror's sizeof — a drifted
+    // mirror (or a library that stopped honoring struct_size) would throw here.
+    HwTrace.init(SINGLESTEP);
+    const st = HwTrace.status(SINGLESTEP);
+    ok(st.code === ASMTEST_HW_OK && st.stage === STAGE_OK,
+      'status(SINGLESTEP) is OK on this host');
+    HwTrace.shutdown();
+
+    // F22: traceCallAuto reports the winning escalation rung, never STATISTICAL.
+    const code = NativeCode.fromBytes(ROUTINE);
+    try {
+      const r = HwTrace.traceCallAuto(code, 20, 22);
+      if (r.rc === ASMTEST_HW_OK) {
+        ok([MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR, MECH_BLOCKSTEP, MECH_PER_INSN]
+            .includes(r.used.mechanism),
+          'traceCallAuto: used.mechanism is the concrete winning rung');
+        ok(r.used.mechanism !== MECH_STATISTICAL && r.used.fidelity === FIDELITY_NATIVE,
+          'traceCallAuto: the exact call-owning ladder is never STATISTICAL');
+        r.trace.free();
+      } else {
+        ok(r.rc === ASMTEST_HW_EUNAVAIL && r.used === null,
+          'traceCallAuto: EUNAVAIL self-skip leaves used null');
+      }
+    } finally {
+      code.free();
+    }
   }
 
   // --- cross-tier native-only resolves on x86-64 Linux: single-step is a native

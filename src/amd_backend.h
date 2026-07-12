@@ -50,12 +50,25 @@ int asmtest_amd_lbr_depth(void);
  * return 0 off x86-64 Linux (stubs). */
 int asmtest_amd_has_cpu_flag(const char *flag);
 int asmtest_amd_flags_have(const char *line, const char *flag);
-/* Deterministic boundary LBR snapshot (branchsnap.c): arm an LBR-on event + a HW
- * execution breakpoint at base+exit_off + the bpf_get_branch_snapshot program, drain and
- * decode at end. Routed here by the `snapshot` option or by default on the substrate that
- * supports it (see hwtrace_begin_amd); ANY nonzero from _begin (no BPF toolchain, no caps,
- * no LbrExtV2 substrate) makes the marker path fall back to the sample_period=1 capture.
- * `branch_filter` mirrors opts.branch_filter (nonzero = reduced LBR filter). */
+/* P5 — how many exits the deterministic boundary snapshot can cover at once: one HW
+ * execution breakpoint per exit, each in its own x86 debug register (HBP_NUM == 4; the
+ * LBR-on event is a PMU counter, not a DR, so all four are free). A region with more
+ * exits than this stays on the sampled path by default. */
+#define ASMTEST_AMD_MAX_EXITS 4
+/* Deterministic boundary LBR snapshot (branchsnap.c): arm an LBR-on event + one HW
+ * execution breakpoint per region exit + the bpf_get_branch_snapshot program attached to
+ * each (N bpf_links, ONE shared ringbuf), drain and decode at end. Routed here by the
+ * `snapshot` option or by default for a 1..ASMTEST_AMD_MAX_EXITS-exit region on the
+ * substrate that supports it (see hwtrace_begin_amd); ANY nonzero from _begin_multi (no
+ * BPF toolchain, no caps, no LbrExtV2 substrate, a debugger holding a needed DR) makes
+ * the marker path fall back to the sample_period=1 capture. ALL-OR-NOTHING: _begin_multi
+ * arms every listed exit or arms none — a partially-covered exit set could silently miss
+ * the taken exit. `branch_filter` mirrors opts.branch_filter (nonzero = reduced LBR
+ * filter). _begin is the single-exit thin wrapper (the legacy last-exit best-effort the
+ * explicit `snapshot` option keeps for >ASMTEST_AMD_MAX_EXITS-exit regions). */
+int asmtest_amd_snapshot_begin_multi(const void *base, size_t len,
+                                     const size_t *exit_offs, int nexit,
+                                     int branch_filter);
 int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
                                int branch_filter);
 int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
@@ -95,10 +108,19 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
  * the host-independent MSR spec-filter unit test. */
 int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
                                  struct perf_branch_entry *out);
-/* Offset of the region's LAST exit instruction — ret OR a region-leaving direct tail-call
- * jmp — the boundary snapshot's breakpoint site, or (size_t)-1 if none decodes. *nexit (may
- * be NULL) receives the exit count; the default-on snapshot gates on *nexit == 1. Defined
- * in hwtrace.c; exposed for the host-independent tail-call exit-classification test. */
+/* P5 — enumerate ALL of the region's exit instructions (ret OR region-leaving direct
+ * tail-call jmp, the same Capstone classification as asmtest_amd_last_exit_off): writes
+ * up to `cap` exit offsets into `out` (ascending, may be NULL with cap 0), stores the
+ * TOTAL exit count in *nexit (may be NULL), and returns the offset of the true LAST exit
+ * — even when it did not fit `out` — or (size_t)-1 if none decodes. The multi-exit
+ * boundary snapshot arms one breakpoint per enumerated exit; the default-on selection
+ * gates on *nexit in [1, ASMTEST_AMD_MAX_EXITS]. Defined in hwtrace.c; exposed for the
+ * host-independent exit-enumeration test. */
+size_t asmtest_amd_all_exits(const void *base, size_t len, size_t *out, int cap,
+                             int *nexit);
+/* Offset of the region's LAST exit instruction — a thin wrapper over
+ * asmtest_amd_all_exits(base, len, NULL, 0, nexit); kept for the legacy single-site
+ * callers and the host-independent tail-call exit-classification test. */
 size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
 
 /* F43 test seam (defined in hwtrace.c) — decode a LINEARIZED perf data-ring span

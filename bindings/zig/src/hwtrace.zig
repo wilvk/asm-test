@@ -59,10 +59,28 @@ pub const Tier = enum(c_int) {
 };
 
 /// asmtest_trace_fidelity_t — NATIVE runs the real bytes on the real CPU
-/// in-process; VIRTUAL runs an isolated guest on an emulated CPU.
+/// in-process; VIRTUAL runs an isolated guest on an emulated CPU; STATISTICAL is
+/// a sampled survey (IBS/LBR sampling) — real CPU but NOT exact/complete, never
+/// mistakable for an exact trace.
 pub const Fidelity = enum(c_int) {
     native = 0,
     virtual = 1,
+    statistical = 2,
+};
+
+/// asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator:
+/// the concrete capture mechanism behind a resolved choice / `traceCallAuto`'s
+/// winning rung. Every value except `statistical` is an EXACT producer.
+pub const Mechanism = enum(c_int) {
+    none = 0, // no rung produced a trace (EUNAVAIL)
+    hw_branch = 1, // in-process HW branch record (PT / AMD LBR / CoreSight)
+    tf_step = 2, // in-process EFLAGS.TF #DB single-step
+    msr_lbr = 3, // in-process MSR-direct LBR re-run (rung 1b)
+    blockstep = 4, // fork-isolated BTF block-step re-run
+    per_insn = 5, // fork-isolated per-instruction ptrace re-run
+    dbi = 6, // in-process DynamoRIO code cache
+    emulator = 7, // Unicorn virtual CPU (isolated guest)
+    statistical = 8, // sampled survey: never exact, never parity
 };
 
 /// Cross-tier policy bitmask (composable), passed across the FFI as an int.
@@ -86,12 +104,29 @@ pub const TRACE_NATIVE_ONLY: TracePolicy = .native_only;
 
 /// asmtest_trace_choice_t — a resolved cross-tier trace option: which `tier` to
 /// use, which hardware `backend` within it (meaningful only when
-/// `tier == .hwtrace`), and the `fidelity` class. Exactly three int-sized fields,
-/// no padding, so it marshals as three consecutive C ints.
+/// `tier == .hwtrace`), the `fidelity` class, and the concrete capture
+/// `mechanism` (F22/F26/F37) — for `traceCallAuto`'s `used`, the escalation rung
+/// that actually won. Exactly four int-sized fields, no padding, so it marshals
+/// as four consecutive C ints.
 pub const Choice = extern struct {
     tier: c_int,
     backend: c_int,
     fidelity: c_int,
+    mechanism: c_int,
+};
+
+/// asmtest_hwtrace_status_t — the F29 machine-readable availability verdict:
+/// `code` distinguishes ASMTEST_HW_EPERM (substrate present, perf capture
+/// permission denied) from ASMTEST_HW_EUNAVAIL (hardware/decoder/PMU absent) —
+/// the split `available()`'s bool deliberately collapses. `reason` is
+/// byte-identical to `skipReason`. Five C ints then the inline 160-byte string.
+pub const Status = extern struct {
+    available: c_int,
+    code: c_int,
+    stage: c_int,
+    perf_event_paranoid: c_int,
+    probe_errno: c_int,
+    reason: [160]u8,
 };
 
 /// asmtest_hwtrace_policy_t — backend auto-selection policy for `resolve`/`auto`.
@@ -216,6 +251,9 @@ const FnAuto = *const fn (c_int) callconv(.C) c_int;
 const FnResolveTiers = *const fn (c_uint, [*]Choice, usize) callconv(.C) usize;
 const FnAutoTier = *const fn (c_uint, *Choice) callconv(.C) c_int;
 const FnInit = *const fn (*const c.asmtest_hwtrace_options_t) callconv(.C) c_int;
+// F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+const FnStatus = *const fn (c_int, *Status) callconv(.C) c_int;
+const FnParanoid = *const fn () callconv(.C) c_int;
 const FnRegister = *const fn ([*:0]const u8, ?*anyopaque, usize, ?*anyopaque) callconv(.C) c_int;
 const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
 // Scoped-tracing shared core (§0/§1): error-returning begin + render-on-close.
@@ -323,6 +361,9 @@ const Api = struct {
     resolve_tiers: FnResolveTiers,
     auto_tier: FnAutoTier,
     init: FnInit,
+    // Optional additive diagnostics (an older lib without them still loads).
+    status: ?FnStatus,
+    perf_event_paranoid: ?FnParanoid,
     register: FnRegister,
     begin: FnMarker,
     end: FnMarker,
@@ -464,6 +505,8 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .resolve_tiers = lib.lookup(FnResolveTiers, "asmtest_trace_resolve") orelse return null,
         .auto_tier = lib.lookup(FnAutoTier, "asmtest_trace_auto") orelse return null,
         .init = lib.lookup(FnInit, "asmtest_hwtrace_init") orelse return null,
+        .status = lib.lookup(FnStatus, "asmtest_hwtrace_status"),
+        .perf_event_paranoid = lib.lookup(FnParanoid, "asmtest_hwtrace_perf_event_paranoid"),
         .register = lib.lookup(FnRegister, "asmtest_hwtrace_register_region") orelse return null,
         .begin = lib.lookup(FnMarker, "asmtest_hwtrace_begin") orelse return null,
         .end = lib.lookup(FnMarker, "asmtest_hwtrace_end") orelse return null,
@@ -681,8 +724,34 @@ pub fn autoTier(policy: TracePolicy) ?Choice {
 pub fn init(backend: Backend) Error!void {
     const api = load() orelse return Error.LibUnavailable;
     var opts: c.asmtest_hwtrace_options_t = std.mem.zeroes(c.asmtest_hwtrace_options_t);
+    opts.struct_size = @sizeOf(c.asmtest_hwtrace_options_t); // F27 size negotiation
     opts.backend = @intCast(@intFromEnum(backend));
     if (api.init(&opts) != OK) return Error.InitFailed;
+}
+
+/// The F29 machine-readable availability verdict (`asmtest_hwtrace_status`):
+/// unlike `available`'s bool, `status(backend).?.code` distinguishes
+/// ASMTEST_HW_EPERM (substrate present, perf capture permission denied — lower
+/// perf_event_paranoid or grant CAP_PERFMON) from ASMTEST_HW_EUNAVAIL
+/// (hardware/decoder/PMU absent), with the failing stage, the probe errno and
+/// the kernel paranoid level. `null` when the lib (or an older lib without the
+/// symbol) is missing / the call fails.
+pub fn status(backend: Backend) ?Status {
+    const api = load() orelse return null;
+    const f = api.status orelse return null;
+    var out: Status = undefined;
+    if (f(@intCast(@intFromEnum(backend)), &out) != OK) return null;
+    return out;
+}
+
+/// The kernel's perf_event_paranoid level, or `std.math.minInt(i32)` where the
+/// proc file is absent (non-Linux / masked /proc) or the lib is missing. Above 2
+/// blocks unprivileged perf_event_open entirely (the EPERM case without
+/// CAP_PERFMON).
+pub fn perfEventParanoid() i32 {
+    const api = load() orelse return std.math.minInt(i32);
+    const f = api.perf_event_paranoid orelse return std.math.minInt(i32);
+    return @intCast(f());
 }
 
 /// Bring the tier up with the default backend (SINGLESTEP).

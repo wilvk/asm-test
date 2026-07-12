@@ -962,3 +962,80 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// TestHwtraceFlagday covers the 2026-07 API flag day: the F27 struct-size
+// negotiated init (a drifted mirror would EINVAL), the F29 status surface
+// (EPERM vs EUNAVAIL, locked to available()/skip_reason()), and the F22/F26/F37
+// mechanism discriminator.
+func TestHwtraceFlagday(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+
+	// F27: the wrapper self-describes via struct_size; init must succeed.
+	if err := HwTraceInit(SingleStep); err != nil {
+		t.Fatalf("size-negotiated init failed: %v", err)
+	}
+	HwTraceShutdown()
+
+	// F29: status invariants across all four backends.
+	paranoid := HwTracePerfEventParanoid()
+	for _, b := range []int{IntelPT, CoreSight, AmdLBR, SingleStep} {
+		st, err := HwTraceStatus(b)
+		if err != nil {
+			t.Fatalf("HwTraceStatus(%d): %v", b, err)
+		}
+		if st.Available != HwTraceAvailable(b) {
+			t.Fatalf("status(%d).Available=%v != available()=%v", b, st.Available, HwTraceAvailable(b))
+		}
+		if (st.Code == 0) != st.Available {
+			t.Fatalf("status(%d): Code=%d vs Available=%v", b, st.Code, st.Available)
+		}
+		if st.Code != 0 && st.Code != HwEUnavail && st.Code != HwEperm {
+			t.Fatalf("status(%d).Code=%d not in {OK, EUNAVAIL, EPERM}", b, st.Code)
+		}
+		if st.Reason != HwTraceSkipReason(b) {
+			t.Fatalf("status(%d).Reason %q != skip_reason %q", b, st.Reason, HwTraceSkipReason(b))
+		}
+		if st.PerfEventParanoid != paranoid {
+			t.Fatalf("status(%d).PerfEventParanoid=%d != reader %d", b, st.PerfEventParanoid, paranoid)
+		}
+	}
+	// LIVE permission-vs-hardware lane (self-skips where not applicable).
+	amd, _ := HwTraceStatus(AmdLBR)
+	if amd.Stage == HwStageProbe && paranoid > 2 && os.Geteuid() != 0 {
+		if amd.Code != HwEperm {
+			t.Fatalf("paranoid-blocked AMD probe: Code=%d, want EPERM (%d)", amd.Code, HwEperm)
+		}
+	} else {
+		t.Logf("# SKIP flagday live-EPERM lane (stage=%d paranoid=%d)", amd.Stage, paranoid)
+	}
+
+	// F22/F26/F37: resolved rows + TraceCallAuto's Used carry the mechanism; no
+	// exact producer is ever statistical.
+	for _, c := range ResolveTiers(TraceBest) {
+		if c.Mechanism == MechNone || c.Mechanism == MechStatistical || c.Fidelity == FidelityStatistical {
+			t.Fatalf("exact cascade row has dishonest mechanism/fidelity: %+v", c)
+		}
+		if c.Tier == TierHwtrace && c.Backend == SingleStep && c.Mechanism != MechTfStep {
+			t.Fatalf("single-step row mechanism: got %d, want MechTfStep", c.Mechanism)
+		}
+	}
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Skipf("hardware-trace tier unavailable: %v", err)
+	}
+	defer code.Free()
+	res := TraceCallAuto(code, 20, 22)
+	if res.RC == 0 {
+		switch res.Used.Mechanism {
+		case MechHwBranch, MechTfStep, MechMsrLbr, MechBlockStep, MechPerInsn:
+		default:
+			t.Fatalf("TraceCallAuto winning mechanism: got %d, want a concrete exact rung", res.Used.Mechanism)
+		}
+		if res.Used.Fidelity != FidelityNative {
+			t.Fatalf("TraceCallAuto fidelity: got %d, want FidelityNative", res.Used.Fidelity)
+		}
+		res.Trace.Free()
+	}
+}

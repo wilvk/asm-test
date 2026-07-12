@@ -50,20 +50,31 @@ static int dynamorio_tier_available(void) {
 static int dynamorio_tier_available(void) { return 0; }
 #endif
 
-/* One row of the cross-tier cascade, in descending fidelity/preference order. */
+/* One row of the cross-tier cascade, in descending fidelity/preference order.
+ * `mechanism` is the F22/F26/F37 discriminator: the concrete capture mechanism
+ * this row's begin/end path drives (every row here is an EXACT producer — the
+ * STATISTICAL mechanism/fidelity is reserved for the IBS/sampling survey lane
+ * and never appears in this cascade). */
 typedef struct {
     asmtest_trace_tier_t tier;
     asmtest_trace_backend_t backend; /* only meaningful for the HWTRACE tier */
     asmtest_trace_fidelity_t fidelity;
+    asmtest_trace_mechanism_t mechanism;
 } cascade_row_t;
 
 static const cascade_row_t CASCADE[] = {
-    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_INTEL_PT, ASMTEST_FIDELITY_NATIVE},
-    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_AMD_LBR, ASMTEST_FIDELITY_NATIVE},
-    {ASMTEST_TIER_DYNAMORIO, 0, ASMTEST_FIDELITY_NATIVE},
-    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_SINGLESTEP, ASMTEST_FIDELITY_NATIVE},
-    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_CORESIGHT, ASMTEST_FIDELITY_NATIVE},
-    {ASMTEST_TIER_EMULATOR, 0, ASMTEST_FIDELITY_VIRTUAL},
+    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_INTEL_PT, ASMTEST_FIDELITY_NATIVE,
+     ASMTEST_TRACE_MECH_HW_BRANCH},
+    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_AMD_LBR, ASMTEST_FIDELITY_NATIVE,
+     ASMTEST_TRACE_MECH_HW_BRANCH},
+    {ASMTEST_TIER_DYNAMORIO, 0, ASMTEST_FIDELITY_NATIVE,
+     ASMTEST_TRACE_MECH_DBI},
+    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_SINGLESTEP, ASMTEST_FIDELITY_NATIVE,
+     ASMTEST_TRACE_MECH_TF_STEP},
+    {ASMTEST_TIER_HWTRACE, ASMTEST_HWTRACE_CORESIGHT, ASMTEST_FIDELITY_NATIVE,
+     ASMTEST_TRACE_MECH_HW_BRANCH},
+    {ASMTEST_TIER_EMULATOR, 0, ASMTEST_FIDELITY_VIRTUAL,
+     ASMTEST_TRACE_MECH_EMULATOR},
 };
 
 /* Is this cascade row available on this host, after applying the policy filters? */
@@ -96,6 +107,7 @@ size_t asmtest_trace_resolve(unsigned policy, asmtest_trace_choice_t *out,
         out[n].tier = CASCADE[i].tier;
         out[n].backend = CASCADE[i].backend;
         out[n].fidelity = CASCADE[i].fidelity;
+        out[n].mechanism = CASCADE[i].mechanism;
         n++;
     }
     return n;
@@ -162,10 +174,15 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     if (code == NULL || trace == NULL || len == 0 || nargs < 0 || nargs > 6 ||
         (nargs > 0 && args == NULL))
         return ASMTEST_HW_EINVAL;
+    /* F22/F26/F37: *used is meaningful ONLY on ASMTEST_HW_OK. Start it (and
+     * leave it, on the EUNAVAIL path) at mechanism == MECH_NONE so a caller
+     * can never read a stale rung out of a failed cascade; each rung that
+     * COMMITS a trace overwrites all four fields with its own identity. */
     if (used != NULL) {
         used->tier = ASMTEST_TIER_HWTRACE;
         used->backend = ASMTEST_HWTRACE_SINGLESTEP;
         used->fidelity = ASMTEST_FIDELITY_NATIVE;
+        used->mechanism = ASMTEST_TRACE_MECH_NONE;
     }
     int ran = 0; /* did any tier produce a trace? */
 
@@ -179,6 +196,7 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     if (hb >= 0) {
         asmtest_hwtrace_options_t opts;
         memset(&opts, 0, sizeof opts);
+        opts.struct_size = sizeof opts; /* F27 ABI size negotiation */
         opts.backend = (asmtest_trace_backend_t)hb;
         if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
             if (asmtest_hwtrace_register_region("trace_call_auto",
@@ -190,8 +208,16 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
                 if (result != NULL)
                     *result = r;
                 ran = 1;
-                if (used != NULL)
+                if (used != NULL) {
+                    used->tier = ASMTEST_TIER_HWTRACE;
                     used->backend = (asmtest_trace_backend_t)hb;
+                    used->fidelity = ASMTEST_FIDELITY_NATIVE;
+                    /* The one backend whose capture is a CPU step exception
+                     * rather than a hardware branch record. */
+                    used->mechanism = (hb == ASMTEST_HWTRACE_SINGLESTEP)
+                                          ? ASMTEST_TRACE_MECH_TF_STEP
+                                          : ASMTEST_TRACE_MECH_HW_BRANCH;
+                }
             }
             asmtest_hwtrace_shutdown();
         }
@@ -199,10 +225,25 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     if (ran && !trace->truncated)
         return ASMTEST_HW_OK; /* the fast tier captured the whole path */
 
+    /* NO explicit BPF-snapshot rung here (considered and REJECTED, P6): the deterministic
+     * boundary snapshot is already effectively rung 1 — hwtrace_begin_amd selects it by
+     * DEFAULT for every 1..4-exit region (P5 multi-exit: one HW breakpoint per exit, up
+     * to the 4 debug registers / ASMTEST_AMD_MAX_EXITS) under CAP_BPF + CAP_PERFMON,
+     * with NO extra run of the routine. A re-run rung below would only duplicate a
+     * capture rung 1 already completed, or re-attempt one it deterministically failed.
+     * Correct escalation order: snapshot inside rung 1 (CAP_BPF+PERFMON, no second run)
+     * -> MSR rung 1b (CAP_SYS_ADMIN, a SECOND in-process run). Both share the 16-branch
+     * window ceiling, so CEILING_FREE excludes both in LOCK-STEP — keep rung 1's `hp`
+     * policy pick and rung 1b's `!(policy & ASMTEST_TRACE_CEILING_FREE)` guard aligned. */
+
     /* (1b) MSR-direct escalation rung — inserted BEFORE the ~1000x block-step tier. When
-     * the fast sampled AMD tier came back truncated (a too-fast-to-sample tiny routine —
-     * including a MULTI-exit one the default-on boundary snapshot must skip), its retired
-     * path may still fit one 16-deep MSR read, reconstructed with ZERO PMU interrupts.
+     * the fast AMD tier came back truncated, its retired path may still fit one 16-deep
+     * MSR read, reconstructed with ZERO PMU interrupts. This rung is the BACKSTOP for a
+     * region with MORE exits than the 4 debug registers (> ASMTEST_AMD_MAX_EXITS, which
+     * the default-on boundary snapshot leaves on the sampled path) or ANY multi-exit
+     * region on a host without CAP_BPF; a 1..4-exit region is completed in rung 1 by the
+     * multi-exit snapshot, so a truncated result reaching here means the snapshot could
+     * not arm or the region overflows one 16-deep window.
      * asmtest_amd_msr_available() is a true privilege/device gate (root / CAP_SYS_ADMIN +
      * the `msr` module) that also returns 0 off x86-64 Linux, so this rung self-skips
      * cleanly to block-step wherever it is absent. It shares AMD_LBR's 16-deep window
@@ -224,8 +265,12 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
             if (result != NULL)
                 *result = cl.result;
             ran = 1;
-            if (used != NULL)
+            if (used != NULL) {
+                used->tier = ASMTEST_TIER_HWTRACE;
                 used->backend = ASMTEST_HWTRACE_AMD_LBR;
+                used->fidelity = ASMTEST_FIDELITY_NATIVE;
+                used->mechanism = ASMTEST_TRACE_MECH_MSR_LBR;
+            }
             return ASMTEST_HW_OK;
         }
         trace->truncated = true; /* miss/failure: fall through to block-step */
@@ -241,9 +286,13 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
         if (asmtest_ptrace_trace_call_blockstep(code, len, args, nargs, result,
                                                 trace) == ASMTEST_PTRACE_OK) {
             ran = 1;
-            if (used != NULL)
+            if (used != NULL) {
+                used->tier = ASMTEST_TIER_HWTRACE;
                 used->backend =
                     ASMTEST_HWTRACE_SINGLESTEP; /* single-step fidelity */
+                used->fidelity = ASMTEST_FIDELITY_NATIVE;
+                used->mechanism = ASMTEST_TRACE_MECH_BLOCKSTEP;
+            }
             if (!trace->truncated)
                 return ASMTEST_HW_OK;
         } else {
@@ -260,12 +309,26 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
         if (asmtest_ptrace_trace_call(code, len, args, nargs, result, trace) ==
             ASMTEST_PTRACE_OK) {
             ran = 1;
-            if (used != NULL)
+            if (used != NULL) {
+                used->tier = ASMTEST_TIER_HWTRACE;
                 used->backend = ASMTEST_HWTRACE_SINGLESTEP;
+                used->fidelity = ASMTEST_FIDELITY_NATIVE;
+                used->mechanism = ASMTEST_TRACE_MECH_PER_INSN;
+            }
         } else {
             trace->truncated = true;
         }
     }
 
+    if (!ran && used != NULL) {
+        /* F22: no rung committed — a later rung's reset may have wiped an
+         * earlier winner AFTER it stamped *used, so clear the stale identity
+         * back to the MECH_NONE default rather than returning EUNAVAIL beside
+         * a rung that did not produce this (empty) trace. */
+        used->tier = ASMTEST_TIER_HWTRACE;
+        used->backend = ASMTEST_HWTRACE_SINGLESTEP;
+        used->fidelity = ASMTEST_FIDELITY_NATIVE;
+        used->mechanism = ASMTEST_TRACE_MECH_NONE;
+    }
     return ran ? ASMTEST_HW_OK : ASMTEST_HW_EUNAVAIL;
 }

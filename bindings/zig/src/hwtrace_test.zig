@@ -516,6 +516,66 @@ pub fn main() !void {
         }
     }
 
+    // ---- 2026-07 API flag day: F27 struct-size guard + F29 status + F22 mechanism ----
+    {
+        // F29: status() is available()/skipReason() made machine-readable — one
+        // classifier — distinguishing EPERM (substrate present, permission denied)
+        // from EUNAVAIL (hardware absent).
+        const paranoid = hwtrace.perfEventParanoid();
+        var inv = true;
+        for ([_]hwtrace.Backend{ .intel_pt, .coresight, .amd_lbr, .singlestep }) |b| {
+            const st = hwtrace.status(b) orelse {
+                inv = false;
+                break;
+            };
+            var rbuf: [192]u8 = undefined;
+            const why = hwtrace.skipReason(b, &rbuf);
+            const reason = std.mem.sliceTo(&st.reason, 0);
+            inv = inv and ((st.available != 0) == hwtrace.available(b));
+            inv = inv and ((st.code == 0) == (st.available != 0));
+            inv = inv and (st.code == 0 or st.code == -3 or st.code == -9);
+            inv = inv and std.mem.eql(u8, reason, why);
+            inv = inv and (st.perf_event_paranoid == paranoid);
+        }
+        try check(inv, "flagday: status() invariants hold for all four backends (F29)");
+        // LIVE permission-vs-hardware lane (self-skips where not applicable): an
+        // AMD probe that reached the perf open under paranoid>2 must classify
+        // EPERM (CAP_PERFMON/root would make the probe SUCCEED, so this suffices).
+        if (hwtrace.status(.amd_lbr)) |amd| {
+            if (amd.stage == 4 and paranoid > 2) {
+                try check(amd.code == -9,
+                    "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL");
+            } else {
+                std.debug.print("# SKIP flagday live-EPERM lane (stage={d} paranoid={d})\n", .{ amd.stage, paranoid });
+            }
+        }
+
+        // F22/F26/F37: resolved rows and traceCallAuto's used carry the concrete
+        // mechanism; no exact producer is ever statistical.
+        var rows_ok = true;
+        const rows = hwtrace.resolveTiers(TRACE_BEST);
+        for (rows.slice()) |ch| {
+            rows_ok = rows_ok and ch.mechanism != 0 and ch.mechanism != 8 and ch.fidelity != 2;
+            if (ch.tier == TIER_HWTRACE and ch.backend == 3)
+                rows_ok = rows_ok and ch.mechanism == 2; // single-step row == TF step
+        }
+        try check(rows_ok, "flagday: resolved rows carry a concrete, exact mechanism (F22)");
+
+        var fcode = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer fcode.free();
+        var fres = hwtrace.HwTrace.traceCallAuto(&fcode, &[_]i64{ 20, 22 }, TRACE_BEST);
+        if (fres.rc == 0) {
+            const m = fres.used.?.mechanism;
+            try check(m == 1 or m == 2 or m == 3 or m == 4 or m == 5,
+                "flagday: traceCallAuto reports the winning rung");
+            try check(m != 8 and fres.used.?.fidelity == 0,
+                "flagday: the exact call-owning ladder is never statistical");
+            if (fres.trace) |*tr| tr.free();
+        }
+    }
+
+    // F27: init() below self-describes via @sizeOf of the cImported options — a
+    // library that stopped honoring struct_size (or a header drift) would fail it.
     hwtrace.init(SINGLESTEP) catch |e| {
         // init can fail even when "available" if the host is misconfigured;
         // treat as a skip like the Python fixture does.

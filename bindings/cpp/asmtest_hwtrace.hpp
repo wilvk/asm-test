@@ -41,6 +41,7 @@
 
 #include <dlfcn.h>
 
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -84,10 +85,29 @@ enum Tier {
 };
 
 /* asmtest_trace_fidelity_t values: NATIVE runs the real bytes on the real CPU
- * in-process; VIRTUAL runs an isolated guest on an emulated CPU. */
+ * in-process; VIRTUAL runs an isolated guest on an emulated CPU; STATISTICAL is
+ * a sampled survey (IBS/LBR sampling) — real CPU but NOT exact/complete, never
+ * mistakable for an exact trace. */
 enum Fidelity {
     FIDELITY_NATIVE = ASMTEST_FIDELITY_NATIVE,
     FIDELITY_VIRTUAL = ASMTEST_FIDELITY_VIRTUAL,
+    FIDELITY_STATISTICAL = ASMTEST_FIDELITY_STATISTICAL,
+};
+
+/* asmtest_trace_mechanism_t values — the F22/F26/F37 escalation-rung
+ * discriminator: the concrete capture mechanism behind a resolved choice /
+ * call_auto's winning rung. Every value except MECH_STATISTICAL is an EXACT
+ * producer. */
+enum Mechanism {
+    MECH_NONE = ASMTEST_TRACE_MECH_NONE,           // no rung produced a trace
+    MECH_HW_BRANCH = ASMTEST_TRACE_MECH_HW_BRANCH, // in-process HW branch record
+    MECH_TF_STEP = ASMTEST_TRACE_MECH_TF_STEP,     // in-process EFLAGS.TF step
+    MECH_MSR_LBR = ASMTEST_TRACE_MECH_MSR_LBR,     // in-process MSR-direct LBR
+    MECH_BLOCKSTEP = ASMTEST_TRACE_MECH_BLOCKSTEP, // fork-isolated block-step
+    MECH_PER_INSN = ASMTEST_TRACE_MECH_PER_INSN,   // fork-isolated per-insn step
+    MECH_DBI = ASMTEST_TRACE_MECH_DBI,             // in-process DynamoRIO
+    MECH_EMULATOR = ASMTEST_TRACE_MECH_EMULATOR,   // Unicorn virtual CPU
+    MECH_STATISTICAL = ASMTEST_TRACE_MECH_STATISTICAL, // sampled survey: never exact
 };
 
 /* Cross-tier policy bitmask for HwTrace::resolveTiers()/autoTier(). TRACE_BEST is
@@ -145,13 +165,28 @@ enum CodeImageKind {
 
 /// A resolved cross-tier trace option: which `tier` to use, which hardware
 /// `backend` within it (meaningful only when tier == TIER_HWTRACE; otherwise
-/// 0/ignore), and the `fidelity` class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL) so a
-/// caller can see at a glance whether a choice crosses the native->emulator line.
-/// Mirrors asmtest_trace_choice_t (three int-sized fields, no padding).
+/// 0/ignore), the `fidelity` class (FIDELITY_NATIVE / FIDELITY_VIRTUAL /
+/// FIDELITY_STATISTICAL), and the concrete capture `mechanism` (MECH_*) — for
+/// traceCallAuto's `used`, the escalation rung that actually won.
+/// Mirrors asmtest_trace_choice_t (four int-sized fields, no padding).
 struct TierChoice {
     int tier;
     int backend;
     int fidelity;
+    int mechanism;
+};
+
+/// The F29 machine-readable availability verdict for one backend (mirrors
+/// asmtest_hwtrace_status_t): `code` distinguishes ASMTEST_HW_EPERM (substrate
+/// present, perf capture permission denied) from ASMTEST_HW_EUNAVAIL
+/// (hardware/decoder/PMU absent) — the split available()'s bool collapses.
+struct HwStatus {
+    bool available = false;
+    int code = ASMTEST_HW_EUNAVAIL; // ASMTEST_HW_OK / EUNAVAIL / EPERM
+    int stage = 0;                  // ASMTEST_HW_STAGE_*
+    int perf_event_paranoid = 0;    // INT_MIN where /proc is absent
+    int probe_errno = 0;            // errno at the failing probe open
+    std::string reason;             // == skipReason()
 };
 
 namespace detail {
@@ -175,6 +210,9 @@ struct HwApi {
     int (*trace_call_auto)(const void *, size_t, const long *, int, unsigned,
                            long *, void *, asmtest_trace_choice_t *) = nullptr;
     int (*init)(const asmtest_hwtrace_options_t *) = nullptr;
+    /* F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader. */
+    int (*status)(int, asmtest_hwtrace_status_t *) = nullptr;
+    int (*perf_event_paranoid)(void) = nullptr;
     int (*register_region)(const char *, void *, size_t, void *) = nullptr;
     void (*begin)(const char *) = nullptr;
     void (*end)(const char *) = nullptr;
@@ -331,6 +369,10 @@ inline HwApi &api() {
          * like call_scoped_ex below. */
         dlsym_into(h, "asmtest_trace_call_auto", t.trace_call_auto);
         ok &= dlsym_into(h, "asmtest_hwtrace_init", t.init);
+        /* Additive diagnostics (an older lib without them still loads). */
+        dlsym_into(h, "asmtest_hwtrace_status", t.status);
+        dlsym_into(h, "asmtest_hwtrace_perf_event_paranoid",
+                   t.perf_event_paranoid);
         ok &= dlsym_into(h, "asmtest_hwtrace_register_region",
                          t.register_region);
         ok &= dlsym_into(h, "asmtest_hwtrace_begin", t.begin);
@@ -716,6 +758,42 @@ class HwTrace {
         return std::string(buf);
     }
 
+    /// The F29 machine-readable availability verdict (asmtest_hwtrace_status):
+    /// unlike available()'s bool, `status().code` distinguishes ASMTEST_HW_EPERM
+    /// (substrate present, perf capture permission denied — lower
+    /// perf_event_paranoid or grant CAP_PERFMON) from ASMTEST_HW_EUNAVAIL
+    /// (hardware/decoder/PMU absent), with the failing stage, the probe errno
+    /// and the kernel paranoid level. Returns a default (EUNAVAIL) verdict when
+    /// the library (or an older library without the symbol) is missing.
+    static HwStatus status(int backend = SINGLESTEP) {
+        detail::HwApi &a = detail::api();
+        HwStatus st;
+        if (!a.loaded() || !a.status) {
+            st.reason = "libasmtest_hwtrace (or asmtest_hwtrace_status) missing";
+            return st;
+        }
+        asmtest_hwtrace_status_t c{};
+        if (a.status(backend, &c) != ASMTEST_HW_OK)
+            return st;
+        st.available = c.available != 0;
+        st.code = c.code;
+        st.stage = c.stage;
+        st.perf_event_paranoid = c.perf_event_paranoid;
+        st.probe_errno = c.probe_errno;
+        st.reason = c.reason;
+        return st;
+    }
+
+    /// The kernel's perf_event_paranoid level (INT_MIN where absent — non-Linux
+    /// or a masked /proc). >2 blocks unprivileged perf_event_open entirely (the
+    /// EPERM case above without CAP_PERFMON).
+    static int perfEventParanoid() {
+        detail::HwApi &a = detail::api();
+        if (!a.loaded() || !a.perf_event_paranoid)
+            return INT_MIN;
+        return a.perf_event_paranoid();
+    }
+
     /// This host's hardware-trace fallback cascade: the available backends,
     /// most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
     /// `policy`. Empty only off x86-64 Linux (single-step is the floor there) or
@@ -760,7 +838,8 @@ class HwTrace {
         for (std::size_t i = 0; i < n; ++i)
             v[i] = TierChoice{static_cast<int>(out[i].tier),
                               static_cast<int>(out[i].backend),
-                              static_cast<int>(out[i].fidelity)};
+                              static_cast<int>(out[i].fidelity),
+                              static_cast<int>(out[i].mechanism)};
         return v;
     }
 
@@ -777,7 +856,8 @@ class HwTrace {
             return std::nullopt;
         return TierChoice{static_cast<int>(out.tier),
                           static_cast<int>(out.backend),
-                          static_cast<int>(out.fidelity)};
+                          static_cast<int>(out.fidelity),
+                          static_cast<int>(out.mechanism)};
     }
 
     /// Select a backend and initialize the tier. SINGLESTEP is the portable
@@ -785,6 +865,7 @@ class HwTrace {
     /// nonzero return code.
     static void init(int backend = SINGLESTEP) {
         asmtest_hwtrace_options_t opts{};
+        opts.struct_size = sizeof opts; // F27 ABI size negotiation
         opts.backend = static_cast<asmtest_trace_backend_t>(backend);
         int rc = detail::require().init(&opts);
         if (rc != ASMTEST_HW_OK)
@@ -995,7 +1076,7 @@ inline TraceCallAutoResult HwTrace::traceCallAuto(unsigned policy,
     long arr[] = {static_cast<long>(args)..., 0L};  // +1 avoids a zero-size array
     const int n = static_cast<int>(sizeof...(Args));
     long result = 0;
-    asmtest_trace_choice_t used{};  // three consecutive C ints (no padding)
+    asmtest_trace_choice_t used{};  // four consecutive C ints (no padding)
     int rc = a.trace_call_auto(code.base(), code.length(), (n ? arr : nullptr), n,
                                policy, &result, handle, &used);
     if (rc != ASMTEST_HW_OK) {
@@ -1004,7 +1085,8 @@ inline TraceCallAutoResult HwTrace::traceCallAuto(unsigned policy,
     }
     bool trunc = a.trace_truncated(handle) != 0;
     TierChoice tc{static_cast<int>(used.tier), static_cast<int>(used.backend),
-                  static_cast<int>(used.fidelity)};
+                  static_cast<int>(used.fidelity),
+                  static_cast<int>(used.mechanism)};
     return {result, HwTrace(handle), tc, trunc, rc};
 }
 

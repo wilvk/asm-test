@@ -23,12 +23,15 @@
 local ffi = require("ffi")
 
 ffi.cdef([[
-typedef struct { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; int lbr_period; int branch_filter; } asmtest_hwtrace_options_t;
+typedef struct { size_t struct_size; int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint; int lbr_period; int branch_filter; } asmtest_hwtrace_options_t;
 int  asmtest_hwtrace_available(int backend);
 void asmtest_hwtrace_skip_reason(int backend, char* buf, size_t buflen);
 size_t asmtest_hwtrace_resolve(int policy, int* out, size_t cap);
 int  asmtest_hwtrace_auto(int policy);
-typedef struct { int tier; int backend; int fidelity; } asmtest_trace_choice_t;
+typedef struct { int tier; int backend; int fidelity; int mechanism; } asmtest_trace_choice_t;
+typedef struct { int available; int code; int stage; int perf_event_paranoid; int probe_errno; char reason[160]; } asmtest_hwtrace_status_t;
+int  asmtest_hwtrace_status(int backend, asmtest_hwtrace_status_t* out);
+int  asmtest_hwtrace_perf_event_paranoid(void);
 size_t asmtest_trace_resolve(unsigned policy, asmtest_trace_choice_t* out, size_t cap);
 int    asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t* out);
 /* asmtest_trace_auto.h — auto-escalating CALL-OWNING cross-tier trace: owns the
@@ -128,6 +131,14 @@ int   asmtest_codeimage_next(void* img, struct asmtest_codeimage_event* out);
 
 local ASMTEST_HW_OK = 0
 local ASMTEST_HW_EUNAVAIL = -3  -- no hardware-trace backend available on this host
+local ASMTEST_HW_EPERM = -9     -- perf capture PERMISSION denied (substrate present)
+                                -- — reported only by HwTrace.status() (F29)
+-- asmtest_hwtrace_status_t.stage — which gate of the available() chain failed.
+local STAGE_OK = 0       -- no gate failed — backend available
+local STAGE_DECODER = 1  -- decoder library not compiled in
+local STAGE_CPU = 2      -- wrong CPU/ISA/vendor (or wrong OS)
+local STAGE_PMU = 3      -- kernel PMU sysfs node absent
+local STAGE_PROBE = 4    -- perf open probe failed (code says EPERM vs EUNAVAIL)
 
 -- asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
 local ASMTEST_PTRACE_OK = 0
@@ -165,8 +176,20 @@ local TIER_HWTRACE = 0    -- HW branch trace / single-step (real CPU)
 local TIER_DYNAMORIO = 1  -- in-process software DBI (real CPU)
 local TIER_EMULATOR = 2   -- Unicorn virtual CPU (isolated guest)
 -- asmtest_trace_fidelity_t.
-local FIDELITY_NATIVE = 0   -- runs the real bytes on the real CPU in-process
-local FIDELITY_VIRTUAL = 1  -- isolated guest on an emulated CPU
+local FIDELITY_NATIVE = 0      -- runs the real bytes on the real CPU in-process
+local FIDELITY_VIRTUAL = 1     -- isolated guest on an emulated CPU
+local FIDELITY_STATISTICAL = 2 -- sampled survey (IBS/LBR sampling): NOT exact
+-- asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator.
+-- Every value except MECH_STATISTICAL is an EXACT producer.
+local MECH_NONE = 0         -- no rung produced a trace (EUNAVAIL)
+local MECH_HW_BRANCH = 1    -- in-process HW branch record (PT / AMD LBR / CoreSight)
+local MECH_TF_STEP = 2      -- in-process EFLAGS.TF #DB single-step
+local MECH_MSR_LBR = 3      -- in-process MSR-direct LBR re-run (rung 1b)
+local MECH_BLOCKSTEP = 4    -- fork-isolated BTF block-step re-run
+local MECH_PER_INSN = 5     -- fork-isolated per-instruction ptrace re-run
+local MECH_DBI = 6          -- in-process DynamoRIO code cache
+local MECH_EMULATOR = 7     -- Unicorn virtual CPU (isolated guest)
+local MECH_STATISTICAL = 8  -- sampled survey: never exact, never parity
 -- cross-tier policy bitmask.
 local TRACE_BEST = 0x0          -- most-faithful available; emulator floor allowed
 local TRACE_CEILING_FREE = 0x1  -- drop the fixed-window backend (AMD LBR)
@@ -230,6 +253,22 @@ M.TIER_DYNAMORIO = TIER_DYNAMORIO
 M.TIER_EMULATOR = TIER_EMULATOR
 M.FIDELITY_NATIVE = FIDELITY_NATIVE
 M.FIDELITY_VIRTUAL = FIDELITY_VIRTUAL
+M.FIDELITY_STATISTICAL = FIDELITY_STATISTICAL
+M.MECH_NONE = MECH_NONE
+M.MECH_HW_BRANCH = MECH_HW_BRANCH
+M.MECH_TF_STEP = MECH_TF_STEP
+M.MECH_MSR_LBR = MECH_MSR_LBR
+M.MECH_BLOCKSTEP = MECH_BLOCKSTEP
+M.MECH_PER_INSN = MECH_PER_INSN
+M.MECH_DBI = MECH_DBI
+M.MECH_EMULATOR = MECH_EMULATOR
+M.MECH_STATISTICAL = MECH_STATISTICAL
+M.STAGE_OK = STAGE_OK
+M.STAGE_DECODER = STAGE_DECODER
+M.STAGE_CPU = STAGE_CPU
+M.STAGE_PMU = STAGE_PMU
+M.STAGE_PROBE = STAGE_PROBE
+M.ASMTEST_HW_EPERM = ASMTEST_HW_EPERM
 M.TRACE_BEST = TRACE_BEST
 M.TRACE_CEILING_FREE = TRACE_CEILING_FREE
 M.TRACE_NATIVE_ONLY = TRACE_NATIVE_ONLY
@@ -344,9 +383,41 @@ function HwTrace.resolve_tiers(policy)
   local t = {}
   for i = 0, n - 1 do
     t[i + 1] = { tier = out[i].tier, backend = out[i].backend,
-                 fidelity = out[i].fidelity }
+                 fidelity = out[i].fidelity, mechanism = out[i].mechanism }
   end
   return t
+end
+
+-- The F29 machine-readable availability verdict (asmtest_hwtrace_status): unlike
+-- available()'s boolean, status(backend).code distinguishes ASMTEST_HW_EPERM
+-- (substrate present, perf capture permission denied — lower perf_event_paranoid
+-- or grant CAP_PERFMON) from ASMTEST_HW_EUNAVAIL (hardware/decoder/PMU absent),
+-- with the failing stage (STAGE_*), the probe errno and the kernel paranoid
+-- level. `reason` is byte-identical to skip_reason(). error()s when the lib is
+-- missing.
+function HwTrace.status(backend)
+  assert(L, "libasmtest_hwtrace not loaded")
+  local out = ffi.new("asmtest_hwtrace_status_t[1]")
+  local rc = tonumber(L.asmtest_hwtrace_status(backend or SINGLESTEP, out))
+  if rc ~= ASMTEST_HW_OK then
+    error("asmtest_hwtrace_status failed: " .. rc)
+  end
+  return {
+    available = out[0].available ~= 0,
+    code = out[0].code,
+    stage = out[0].stage,
+    perf_event_paranoid = out[0].perf_event_paranoid,
+    probe_errno = out[0].probe_errno,
+    reason = ffi.string(out[0].reason),
+  }
+end
+
+-- The kernel's perf_event_paranoid level, or INT_MIN where the proc file is
+-- absent (non-Linux / masked /proc). >2 blocks unprivileged perf_event_open
+-- entirely (the EPERM case above without CAP_PERFMON).
+function HwTrace.perf_event_paranoid()
+  assert(L, "libasmtest_hwtrace not loaded")
+  return tonumber(L.asmtest_hwtrace_perf_event_paranoid())
 end
 
 -- The single most-preferred available cross-tier choice under `policy` (default
@@ -358,7 +429,7 @@ function HwTrace.auto_tier(policy)
   local rc = L.asmtest_trace_auto(policy or TRACE_BEST, out)
   if rc ~= ASMTEST_HW_OK then return nil end
   return { tier = out[0].tier, backend = out[0].backend,
-           fidelity = out[0].fidelity }
+           fidelity = out[0].fidelity, mechanism = out[0].mechanism }
 end
 
 -- Select a backend and initialize the tier. SINGLESTEP is the portable default
@@ -366,6 +437,7 @@ end
 function HwTrace.init(backend)
   assert(L, "libasmtest_hwtrace not loaded")
   local o = ffi.new("asmtest_hwtrace_options_t")
+  o.struct_size = ffi.sizeof("asmtest_hwtrace_options_t") -- F27 size negotiation
   o.backend = backend or SINGLESTEP
   -- Leave aux_size/data_size/snapshot zero and object_hint NULL so the C side
   -- uses its defaults.
@@ -536,7 +608,7 @@ function HwTrace.trace_call_auto(code, ...)
     result = tonumber(result[0]),
     trace = trace,
     used = { tier = used[0].tier, backend = used[0].backend,
-             fidelity = used[0].fidelity },
+             fidelity = used[0].fidelity, mechanism = used[0].mechanism },
     truncated = trace:truncated(),
     rc = rc,
   }

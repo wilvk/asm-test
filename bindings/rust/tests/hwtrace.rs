@@ -701,3 +701,88 @@ fn codeimage_watch_bpf_probe() {
     assert_eq!(img.watch_bpf(), 0, "watch_bpf loads + attaches the CO-RE program (OK)");
     eprintln!("# PASS: CodeImage watch_bpf (eBPF emission detector attach)");
 }
+
+// 2026-07 API flag day: F27 struct-size negotiation (init works through the
+// leading struct_size the wrapper sets), F29 status (EPERM vs EUNAVAIL, locked
+// to available()/skip_reason()), and the F22/F26/F37 mechanism discriminator.
+#[test]
+fn flagday_status_and_mechanism() {
+    use asmtest::hwtrace::{Mechanism, ASMTEST_HW_EPERM};
+
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step backend unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+
+    // F27: the wrapper's init self-describes via struct_size — a drifted mirror
+    // would EINVAL here (the library rejects a size that cannot carry backend).
+    HwTrace::init(Backend::Singlestep).expect("size-negotiated init");
+    HwTrace::shutdown();
+
+    // F29: status() invariants across all four backends.
+    let paranoid = HwTrace::perf_event_paranoid();
+    for b in [Backend::IntelPt, Backend::CoreSight, Backend::AmdLbr, Backend::Singlestep] {
+        let st = HwTrace::status(b).expect("status computes on every backend");
+        assert_eq!(st.available, HwTrace::available(b), "status.available mirrors available()");
+        assert_eq!(st.code == 0, st.available, "code==OK iff available");
+        assert!(
+            st.code == 0 || st.code == ASMTEST_HW_EUNAVAIL as i32 || st.code == ASMTEST_HW_EPERM as i32,
+            "code is OK/EUNAVAIL/EPERM"
+        );
+        assert_eq!(st.reason, HwTrace::skip_reason(b), "reason == skip_reason (one classifier)");
+        assert_eq!(st.perf_event_paranoid, paranoid, "paranoid matches the standalone reader");
+    }
+    let ss = HwTrace::status(Backend::Singlestep).unwrap();
+    assert!(ss.code == 0 && ss.stage == 0, "single-step status is OK on this host");
+
+    // LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD
+    // probe that reached the perf open under paranoid>2 without root must say
+    // EPERM (substrate present), never missing-silicon EUNAVAIL.
+    let amd = HwTrace::status(Backend::AmdLbr).unwrap();
+    let root = unsafe { libc_geteuid() } == 0;
+    if amd.stage == 4 && paranoid > 2 && !root {
+        assert_eq!(amd.code, ASMTEST_HW_EPERM as i32, "paranoid-blocked AMD probe is EPERM");
+        assert!(!amd.available, "available() still collapses EPERM to false");
+    } else {
+        eprintln!("# SKIP flagday live-EPERM lane (stage={} paranoid={})", amd.stage, paranoid);
+    }
+
+    // F22/F26/F37: resolved rows and call_auto's `used` carry the mechanism; no
+    // exact producer is ever Statistical.
+    for c in HwTrace::resolve_tiers(TracePolicy::Best) {
+        assert_ne!(c.mechanism, Mechanism::None, "resolved rows carry a concrete mechanism");
+        assert_ne!(c.mechanism, Mechanism::Statistical, "exact rows are never Statistical");
+        assert_ne!(c.fidelity, Fidelity::Statistical, "exact rows' fidelity is never Statistical");
+        if c.tier == Tier::HwTrace && c.backend == Backend::Singlestep as i32 {
+            assert_eq!(c.mechanism, Mechanism::TfStep, "single-step row is the TF-step mechanism");
+        }
+    }
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let r = HwTrace::trace_call_auto(&code, &[20, 22], TracePolicy::Best);
+    if r.rc == 0 {
+        let used = r.used.expect("used present on OK");
+        assert!(
+            matches!(
+                used.mechanism,
+                Mechanism::HwBranch
+                    | Mechanism::TfStep
+                    | Mechanism::MsrLbr
+                    | Mechanism::BlockStep
+                    | Mechanism::PerInsn
+            ),
+            "call_auto reports the winning rung"
+        );
+        assert_ne!(used.mechanism, Mechanism::Statistical);
+        assert_eq!(used.fidelity, Fidelity::Native);
+    }
+    eprintln!("# PASS: flagday status + mechanism (rust)");
+}
+
+// geteuid without a libc crate dependency (the wrapper itself links none).
+extern "C" {
+    #[link_name = "geteuid"]
+    fn libc_geteuid() -> u32;
+}

@@ -25,12 +25,13 @@
 #include "ibs_backend.h" /* §D3 Zen-2 F6: statistical IBS-Op survey fallback */
 #include "stealth_helper.h" /* §D3 shared stepping body + bundled-binary discovery */
 
+#include <errno.h> /* EACCES/EPERM — hw_classify's permission-vs-absent split (F29) */
+#include <limits.h> /* INT_MIN — asmtest_hwtrace_perf_event_paranoid absent-file sentinel */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(__linux__)
-#include <errno.h>
 #include <fcntl.h>
 #include <linux/perf_event.h>
 #include <pthread.h>
@@ -236,8 +237,11 @@ enum { AMD_OK = 0, AMD_NOHW = 1, AMD_NOPERM = 2 };
 
 /* Probe AMD branch-record support by attempting a branch-stack sampling open
  * (Zen 4 LbrExtV2 / Zen 3 BRS). EOPNOTSUPP/EINVAL => no hardware (e.g. Zen 2);
- * EACCES/EPERM => privilege. */
-static int amd_branch_probe(void) {
+ * EACCES/EPERM => privilege. When out_errno is non-NULL it receives the errno
+ * of the failing open (0 on AMD_OK) — the F29 status surface threads it out. */
+static int amd_branch_probe(int *out_errno) {
+    if (out_errno != NULL)
+        *out_errno = 0;
     struct perf_event_attr a;
     memset(&a, 0, sizeof a);
     a.size = sizeof a;
@@ -255,6 +259,8 @@ static int amd_branch_probe(void) {
         return AMD_OK;
     }
     int e = errno;
+    if (out_errno != NULL)
+        *out_errno = e;
     if (e == EACCES || e == EPERM) {
         ASMTEST_HWDBG("NOPERM (errno=%d) — lower "
                       "perf_event_paranoid or grant CAP_PERFMON",
@@ -270,8 +276,13 @@ static int amd_branch_probe(void) {
 #endif /* __linux__ */
 
 /* A real privilege probe: try to open the AUX PMU event disabled, then close it
- * (Intel PT / CoreSight). AMD uses amd_branch_probe instead. */
-static int perf_permitted(asmtest_trace_backend_t b) {
+ * (Intel PT / CoreSight). AMD uses amd_branch_probe instead. When out_errno is
+ * non-NULL it receives the errno of the failing open (0 on success / when the
+ * open was never attempted) — perf_permitted stays the thin bool it always was
+ * and the F29 status surface reads the errno through this _e clone. */
+static int perf_permitted_e(asmtest_trace_backend_t b, int *out_errno) {
+    if (out_errno != NULL)
+        *out_errno = 0;
 #if defined(__linux__)
     int type = pmu_type(b);
     if (type < 0)
@@ -284,14 +295,21 @@ static int perf_permitted(asmtest_trace_backend_t b) {
     attr.exclude_hv = 1;
     attr.disabled = 1;
     long fd = perf_open(&attr, 0, -1, -1, 0);
-    if (fd < 0)
+    if (fd < 0) {
+        if (out_errno != NULL)
+            *out_errno = errno;
         return 0; /* EACCES/EPERM/EINVAL -> not usable here */
+    }
     close((int)fd);
     return 1;
 #else
     (void)b;
     return 0;
 #endif
+}
+
+static int perf_permitted(asmtest_trace_backend_t b) {
+    return perf_permitted_e(b, NULL);
 }
 
 int asmtest_hwtrace_available(asmtest_trace_backend_t backend) {
@@ -303,7 +321,7 @@ int asmtest_hwtrace_available(asmtest_trace_backend_t backend) {
         return 1;
     if (backend == ASMTEST_HWTRACE_AMD_LBR) {
 #if defined(__linux__) && defined(__x86_64__)
-        return amd_branch_probe() == AMD_OK;
+        return amd_branch_probe(NULL) == AMD_OK;
 #else
         return 0;
 #endif
@@ -311,48 +329,120 @@ int asmtest_hwtrace_available(asmtest_trace_backend_t backend) {
     return pmu_type(backend) >= 0 && perf_permitted(backend);
 }
 
-void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
-                                 size_t buflen) {
-    if (buf == NULL || buflen == 0)
-        return;
-    const char *r = "available";
-    if (!decoder_present(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)    ? "built without libipt"
+/* One classification pass over the SAME gating chain available() walks, kept in
+ * lock-step with it, producing the machine-readable verdict {code, stage,
+ * probe_errno} plus the human reason string. Both asmtest_hwtrace_status() and
+ * asmtest_hwtrace_skip_reason() are thin views over this (the F29 dedup), so
+ * the status code and the skip string can never drift apart. All reason
+ * strings are static literals. */
+typedef struct {
+    int code;           /* ASMTEST_HW_OK / EUNAVAIL / EPERM */
+    int stage;          /* ASMTEST_HW_STAGE_* — which gate failed */
+    int probe_errno;    /* errno at the failing probe open (0 if none) */
+    const char *reason; /* == what skip_reason reports */
+} hw_gate_verdict_t;
+
+static hw_gate_verdict_t hw_classify(asmtest_trace_backend_t backend) {
+    hw_gate_verdict_t v = {ASMTEST_HW_OK, ASMTEST_HW_STAGE_OK, 0, "available"};
+    if (!decoder_present(backend)) {
+        v.code = ASMTEST_HW_EUNAVAIL;
+        v.stage = ASMTEST_HW_STAGE_DECODER;
+        v.reason =
+            (backend == ASMTEST_HWTRACE_INTEL_PT)    ? "built without libipt"
             : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "built without OpenCSD"
             : (backend == ASMTEST_HWTRACE_SINGLESTEP)
                 ? "built without Capstone (single-step block normalization)"
                 : "built without Capstone (AMD reconstruction)";
-    else if (!cpu_matches(backend))
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)
-                ? "not a GenuineIntel x86-64 host"
-            : (backend == ASMTEST_HWTRACE_CORESIGHT) ? "not an AArch64 host"
-            : (backend == ASMTEST_HWTRACE_SINGLESTEP)
-                ? "single-step backend is x86-64 Linux/macOS only "
-                  "(Windows/AArch64 "
-                  "planned)"
-                : "not an AuthenticAMD x86-64 host";
-    else if (backend == ASMTEST_HWTRACE_SINGLESTEP)
-        r = "available"; /* decoder + x86-64 satisfied: no PMU/perf/privilege gate */
-    else if (backend == ASMTEST_HWTRACE_AMD_LBR) {
+    } else if (!cpu_matches(backend)) {
+        v.code = ASMTEST_HW_EUNAVAIL;
+        v.stage = ASMTEST_HW_STAGE_CPU;
+        v.reason = (backend == ASMTEST_HWTRACE_INTEL_PT)
+                       ? "not a GenuineIntel x86-64 host"
+                   : (backend == ASMTEST_HWTRACE_CORESIGHT)
+                       ? "not an AArch64 host"
+                   : (backend == ASMTEST_HWTRACE_SINGLESTEP)
+                       ? "single-step backend is x86-64 Linux/macOS only "
+                         "(Windows/AArch64 "
+                         "planned)"
+                       : "not an AuthenticAMD x86-64 host";
+    } else if (backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        ; /* decoder + x86-64 satisfied: no PMU/perf/privilege gate -> OK */
+    } else if (backend == ASMTEST_HWTRACE_AMD_LBR) {
 #if defined(__linux__) && defined(__x86_64__)
-        int p = amd_branch_probe();
-        r = (p == AMD_NOHW)
-                ? "no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)"
-            : (p == AMD_NOPERM) ? "perf branch-stack not permitted (lower "
-                                  "perf_event_paranoid or "
-                                  "grant CAP_PERFMON)"
-                                : "available";
+        int perrno = 0;
+        int p = amd_branch_probe(&perrno);
+        if (p != AMD_OK) {
+            v.stage = ASMTEST_HW_STAGE_PROBE;
+            v.probe_errno = perrno;
+            /* EACCES/EPERM => permission (substrate present); anything else
+             * (EOPNOTSUPP/EINVAL/ENOENT…) => the hardware itself is absent. */
+            v.code = (p == AMD_NOPERM) ? ASMTEST_HW_EPERM : ASMTEST_HW_EUNAVAIL;
+            v.reason = (p == AMD_NOHW)
+                           ? "no AMD branch records (needs Zen 3 BRS / Zen 4 "
+                             "LbrExtV2)"
+                           : "perf branch-stack not permitted (lower "
+                             "perf_event_paranoid or "
+                             "grant CAP_PERFMON)";
+        }
 #else
-        r = "AMD LBR is Linux x86-64 only";
+        v.code = ASMTEST_HW_EUNAVAIL;
+        v.stage = ASMTEST_HW_STAGE_CPU;
+        v.reason = "AMD LBR is Linux x86-64 only";
 #endif
-    } else if (pmu_type(backend) < 0)
-        r = (backend == ASMTEST_HWTRACE_INTEL_PT)
+    } else if (pmu_type(backend) < 0) {
+        v.code = ASMTEST_HW_EUNAVAIL;
+        v.stage = ASMTEST_HW_STAGE_PMU;
+        v.reason =
+            (backend == ASMTEST_HWTRACE_INTEL_PT)
                 ? "no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)"
                 : "no cs_etm PMU (needs a CoreSight-capable AArch64 board)";
-    else if (!perf_permitted(backend))
-        r = "perf_event capture not permitted (lower perf_event_paranoid or "
-            "grant CAP_PERFMON)";
-    snprintf(buf, buflen, "%s", r);
+    } else {
+        int perrno = 0;
+        if (!perf_permitted_e(backend, &perrno)) {
+            v.stage = ASMTEST_HW_STAGE_PROBE;
+            v.probe_errno = perrno;
+            v.code = (perrno == EACCES || perrno == EPERM)
+                         ? ASMTEST_HW_EPERM
+                         : ASMTEST_HW_EUNAVAIL;
+            v.reason = "perf_event capture not permitted (lower "
+                       "perf_event_paranoid or "
+                       "grant CAP_PERFMON)";
+        }
+    }
+    return v;
+}
+
+void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
+                                 size_t buflen) {
+    if (buf == NULL || buflen == 0)
+        return;
+    snprintf(buf, buflen, "%s", hw_classify(backend).reason);
+}
+
+int asmtest_hwtrace_perf_event_paranoid(void) {
+    FILE *f = fopen("/proc/sys/kernel/perf_event_paranoid", "r");
+    if (f == NULL)
+        return INT_MIN; /* absent (non-Linux / masked /proc) */
+    int v = INT_MIN;
+    if (fscanf(f, "%d", &v) != 1)
+        v = INT_MIN;
+    fclose(f);
+    return v;
+}
+
+int asmtest_hwtrace_status(asmtest_trace_backend_t backend,
+                           asmtest_hwtrace_status_t *out) {
+    if (out == NULL)
+        return ASMTEST_HW_EINVAL;
+    memset(out, 0, sizeof *out);
+    hw_gate_verdict_t v = hw_classify(backend);
+    out->available = (v.code == ASMTEST_HW_OK) ? 1 : 0;
+    out->code = v.code;
+    out->stage = v.stage;
+    out->perf_event_paranoid = asmtest_hwtrace_perf_event_paranoid();
+    out->probe_errno = v.probe_errno;
+    snprintf(out->reason, sizeof out->reason, "%s", v.reason);
+    return ASMTEST_HW_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -469,9 +559,25 @@ static size_t round_pages(size_t want, size_t dflt) {
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts) {
     if (opts == NULL)
         return ASMTEST_HW_EINVAL;
-    ASMTEST_HWDBG("init: backend=%d snapshot=%d branch_filter=%d lbr_period=%d",
-                  (int)opts->backend, opts->snapshot, opts->branch_filter,
-                  opts->lbr_period);
+    /* F27/F36 — size-negotiated options copy. The caller self-describes via the
+     * leading struct_size; the copy is clamped to min(struct_size, sizeof g_opts)
+     * with a zeroed tail, so an older (smaller) caller struct is never read out
+     * of bounds and a newer (larger) caller's unknown tail is ignored. NOTE the
+     * struct_size fields must be validated BEFORE any other opts-> field is read
+     * (including debug logging): only [0, struct_size) of the caller's buffer is
+     * known to exist. */
+    size_t n = opts->struct_size;
+    /* reject-0: a caller that does not self-describe its struct size is a bug —
+     * every in-tree caller now sets struct_size (the INIT_OPTS idiom, or an
+     * explicit `opts.struct_size = sizeof opts` after a zero-fill). Rejecting 0
+     * (rather than guessing a legacy size) means a trailing AMD field the caller
+     * set is never silently dropped. */
+    if (n == 0)
+        return ASMTEST_HW_EINVAL;
+    if (n < offsetof(asmtest_hwtrace_options_t, backend) + sizeof(int))
+        return ASMTEST_HW_EINVAL; /* caller did not self-describe */
+    if (n > sizeof g_opts)
+        n = sizeof g_opts; /* newer caller: ignore the unknown tail */
 #if defined(__linux__)
     /* Refuse to re-init while a capture is live: end() dispatches teardown on the
      * CURRENT backend, so switching backend mid-capture would run the wrong end
@@ -482,7 +588,12 @@ int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts) {
 #endif
     if (!asmtest_hwtrace_available(opts->backend))
         return ASMTEST_HW_EUNAVAIL;
-    g_opts = *opts;
+    memset(&g_opts, 0, sizeof g_opts); /* zero the tail -> C defaults */
+    memcpy(&g_opts, opts, n);
+    g_opts.struct_size = sizeof g_opts; /* normalize */
+    ASMTEST_HWDBG("init: backend=%d snapshot=%d branch_filter=%d lbr_period=%d",
+                  (int)g_opts.backend, g_opts.snapshot, g_opts.branch_filter,
+                  g_opts.lbr_period);
     g_nregions = 0;
     memset(g_regions, 0, sizeof g_regions);
     g_inited = 1;
@@ -571,16 +682,16 @@ static hw_region_t *find_region(const char *name) {
  * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active. */
 static int g_amd_snap = 0;
 
-/* The offset of the region's LAST region-EXIT instruction — the exit the boundary
- * snapshot plants its hardware breakpoint on. An exit is a ret-class instruction OR a
- * region-LEAVING direct unconditional jmp (a tail call: `jmp target` whose target is
- * outside [base, base+len)). Walks the registered bytes with the Capstone length-decoder;
- * returns (size_t)-1 when no exit is found before the walk ends or a byte fails to decode
- * (tails past undecodable padding simply fall back to the sampled path; a breakpoint on a
- * wrong exit is harmless — the boundary is never hit and end() reports an honest
- * truncated). When `nexit` is non-NULL it receives the total exit count — the caller uses
- * `*nexit == 1` to detect a SINGLE-exit region, where the one breakpoint is guaranteed to
- * be hit on any normal completion.
+/* P5 — enumerate the region's EXIT instructions: the sites the boundary snapshot plants
+ * its hardware breakpoints on. An exit is a ret-class instruction OR a region-LEAVING
+ * direct unconditional jmp (a tail call: `jmp target` whose target is outside
+ * [base, base+len)). Walks the registered bytes with the Capstone length-decoder; writes
+ * up to `cap` exit offsets into `out` (ascending walk order; `out` may be NULL with cap
+ * 0), stores the TOTAL exit count in *nexit (may be NULL), and returns the offset of the
+ * true LAST exit — even when it did not fit `out` — or (size_t)-1 when no exit is found
+ * before the walk ends or a byte fails to decode (tails past undecodable padding simply
+ * fall back to the sampled path; a breakpoint on a wrong exit is harmless — the boundary
+ * is never hit and end() reports an honest truncated).
  *
  * Both tail-call guards are load-bearing: asmtest_disas_is_uncond_jump also matches an
  * INDIRECT `jmp r/m` (an unprovable jump-table tail call, which must stay on the sampled
@@ -588,9 +699,10 @@ static int g_amd_snap = 0;
  * asmtest_disas_branch_target()==1; and an IN-region direct uncond jmp is an ordinary
  * loop/forward branch, not an exit, so it must NOT count (else a loopy single-ret region
  * misreads as multi-exit). A region with one `ret` AND one tail-`jmp` is correctly two
- * exits, and default-on is withheld. Non-static (declared in amd_backend.h) for the
- * host-independent tail-call exit-classification test. */
-size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit) {
+ * exits — both get a breakpoint. Non-static (declared in amd_backend.h) for the
+ * host-independent exit-enumeration test. */
+size_t asmtest_amd_all_exits(const void *base, size_t len, size_t *out, int cap,
+                             int *nexit) {
     if (nexit != NULL)
         *nexit = 0;
     if (!asmtest_disas_available())
@@ -598,6 +710,7 @@ size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit) {
     const uint64_t base_ip = (uint64_t)(uintptr_t)base;
     const uint64_t end_ip = base_ip + len;
     size_t o = 0, last_exit = (size_t)-1;
+    int n = 0;
     while (o < len) {
         size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)base,
                                  len, base_ip, o, NULL, 0);
@@ -617,43 +730,64 @@ size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit) {
         }
         if (is_exit) {
             last_exit = o;
-            if (nexit != NULL)
-                (*nexit)++;
+            if (out != NULL && n < cap)
+                out[n] = o;
+            n++;
         }
         o += l;
     }
+    if (nexit != NULL)
+        *nexit = n;
     return last_exit;
 }
 
+/* The offset of the region's LAST region-EXIT instruction — the thin wrapper the
+ * exit-classification contract is locked against (see amd_backend.h). */
+size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit) {
+    return asmtest_amd_all_exits(base, len, NULL, 0, nexit);
+}
+
 static int hwtrace_begin_amd(hw_region_t *r) {
-    /* Deterministic boundary snapshot (AMD plan Phase 3): read the frozen 16-entry
-     * stack at the region's exit breakpoint instead of flooding sample_period=1 PMIs
-     * and guessing the richest window — the tiny single-shot routine the sampled path
-     * honestly truncates reconstructs completely here, with no post-glue window
-     * contamination. Taken when explicitly requested (opts.snapshot) OR, on the Zen 4/5
-     * substrate that supports it (amd_lbr_v2 + perfmon_v2 + Linux >= 6.10, via
-     * asmtest_amd_snapshot_available), by DEFAULT for a SINGLE-exit region only. An exit
-     * is a ret OR a region-leaving tail-call jmp (asmtest_amd_last_exit_off). The snapshot
-     * plants ONE breakpoint at the region's last exit; a MULTI-exit routine that leaves via
-     * an EARLIER exit would miss it and honestly truncate — with no fall-through, since
-     * snapshot mode is committed — whereas the sampled richest-window path can still
-     * reconstruct such a run. So the default-on is gated to a lone exit, where the boundary
-     * is guaranteed to be hit; an explicit opts.snapshot is the caller's choice and is
-     * honored for any region. Any arm failure — no BPF toolchain, missing
-     * CAP_BPF/CAP_PERFMON at load, no decodable exit — falls through to the sampled path
-     * unchanged. */
+    /* Deterministic boundary snapshot (AMD plan Phase 3, widened by follow-up P5): read
+     * the frozen 16-entry stack at a region-exit breakpoint instead of flooding
+     * sample_period=1 PMIs and guessing the richest window — the tiny single-shot routine
+     * the sampled path honestly truncates reconstructs completely here, with no post-glue
+     * window contamination. Taken when explicitly requested (opts.snapshot) OR, on the
+     * Zen 4/5 substrate that supports it (amd_lbr_v2 + perfmon_v2 + Linux >= 6.10, via
+     * asmtest_amd_snapshot_available), by DEFAULT for a region with 1..4 exits. An exit
+     * is a ret OR a region-leaving tail-call jmp (asmtest_amd_all_exits); the snapshot
+     * plants one HW breakpoint PER exit (one x86 debug register each, HBP_NUM == 4 ==
+     * ASMTEST_AMD_MAX_EXITS), so WHICHEVER exit the run leaves through hits a boundary —
+     * the P5 fix for the old single-exit gate, under which a multi-exit routine leaving
+     * via an earlier ret/tail-jmp missed the lone breakpoint and honestly truncated. A
+     * region with MORE than 4 exits stays on the sampled path by default (not enough
+     * debug registers to cover every boundary); an explicit opts.snapshot is the caller's
+     * choice and keeps the legacy LAST-exit best-effort there. Any arm failure — no BPF
+     * toolchain, missing CAP_BPF/CAP_PERFMON at load, a debugger holding a needed debug
+     * register (the arm is all-exits-or-nothing), no decodable exit — falls through to
+     * the sampled path unchanged. */
+    size_t amd_exits[ASMTEST_AMD_MAX_EXITS];
     int amd_nexit = 0;
-    size_t exit_off = asmtest_amd_last_exit_off(r->base, r->len, &amd_nexit);
-    ASMTEST_HWDBG("begin_amd: nexit=%d exit_off=%zd snapshot_opt=%d "
+    size_t last_exit = asmtest_amd_all_exits(r->base, r->len, amd_exits,
+                                             ASMTEST_AMD_MAX_EXITS, &amd_nexit);
+    ASMTEST_HWDBG("begin_amd: nexit=%d last_exit=%zd snapshot_opt=%d "
                   "snapshot_avail=%d filter=%d",
-                  amd_nexit, (ssize_t)exit_off, g_opts.snapshot,
+                  amd_nexit, (ssize_t)last_exit, g_opts.snapshot,
                   asmtest_amd_snapshot_available(), g_opts.branch_filter);
-    if ((g_opts.snapshot ||
-         (asmtest_amd_snapshot_available() && amd_nexit == 1)) &&
-        exit_off != (size_t)-1) {
-        if (asmtest_amd_snapshot_begin(r->base, r->len, exit_off,
-                                       g_opts.branch_filter) == ASMTEST_HW_OK) {
-            ASMTEST_HWDBG("begin_amd: mode=snapshot (deterministic boundary)");
+    if (amd_nexit >= 1 &&
+        (g_opts.snapshot || (asmtest_amd_snapshot_available() &&
+                             amd_nexit <= ASMTEST_AMD_MAX_EXITS))) {
+        int arm_rc;
+        if (amd_nexit <= ASMTEST_AMD_MAX_EXITS)
+            arm_rc = asmtest_amd_snapshot_begin_multi(
+                r->base, r->len, amd_exits, amd_nexit, g_opts.branch_filter);
+        else /* explicit opts.snapshot, >4 exits: legacy last-exit best-effort */
+            arm_rc = asmtest_amd_snapshot_begin(r->base, r->len, last_exit,
+                                                g_opts.branch_filter);
+        if (arm_rc == ASMTEST_HW_OK) {
+            ASMTEST_HWDBG(
+                "begin_amd: mode=snapshot nbp=%d (deterministic boundary)",
+                amd_nexit <= ASMTEST_AMD_MAX_EXITS ? amd_nexit : 1);
             g_amd_snap = 1;
             g_active = r; /* g_fd stays -1: no sampled ring in snapshot mode */
             return 0;

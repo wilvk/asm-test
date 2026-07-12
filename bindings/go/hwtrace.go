@@ -40,6 +40,7 @@ package asmtest
 // header on the cgo include path (mirrors asmtest_hwtrace_options_t from
 // include/asmtest_hwtrace.h). ASMTEST_HW_OK == 0. Default backend SINGLESTEP=3.
 typedef struct {
+    size_t struct_size; // ABI size negotiator (F27) — ALWAYS set to sizeof
     int backend;
     size_t aux_size;
     size_t data_size;
@@ -49,13 +50,26 @@ typedef struct {
     int branch_filter; // AMD LBR opt-in (0 = default BRANCH_ANY)
 } asmtest_hwtrace_options_t;
 
+// F29 machine-readable status (mirrors asmtest_hwtrace_status_t): code
+// distinguishes EPERM (substrate present, permission denied) from EUNAVAIL.
+typedef struct {
+    int available;
+    int code;
+    int stage;
+    int perf_event_paranoid;
+    int probe_errno;
+    char reason[160];
+} asmtest_hwtrace_status_t;
+
 // The cross-tier orchestrator's resolved-choice struct, redefined here (mirrors
-// asmtest_trace_choice_t from include/asmtest_trace_auto.h): exactly three
-// int-sized enum fields, no padding, so it marshals as three consecutive C ints.
+// asmtest_trace_choice_t from include/asmtest_trace_auto.h): exactly four
+// int-sized enum fields, no padding, so it marshals as four consecutive C ints
+// (tier, backend, fidelity, mechanism — the 2026-07 flag day grew it).
 typedef struct {
     int tier;
     int backend;
     int fidelity;
+    int mechanism;
 } asmtest_trace_choice_t;
 
 // asmtest_hwtrace_scope_t (include/asmtest_hwtrace.h): an 8-byte per-scope capture
@@ -68,6 +82,8 @@ typedef struct {
 // Entry-point typedefs (one per exported symbol in libasmtest_hwtrace).
 typedef int  (*hw_available_fn)(int);
 typedef void (*hw_skip_reason_fn)(int, char *, size_t);
+typedef int  (*hw_status_fn)(int, asmtest_hwtrace_status_t *);
+typedef int  (*hw_paranoid_fn)(void);
 typedef size_t (*hw_resolve_fn)(int, int *, size_t);
 typedef int  (*hw_auto_fn)(int);
 // Cross-tier orchestrator entry points (asmtest_trace_auto.h), from the SAME lib.
@@ -182,6 +198,8 @@ typedef int (*pt_trace_attached_versioned_ex_fn)(int, const void *, size_t, void
 
 static hw_available_fn        p_hw_available;
 static hw_skip_reason_fn      p_hw_skip_reason;
+static hw_status_fn           p_hw_status;
+static hw_paranoid_fn         p_hw_paranoid;
 static hw_resolve_fn          p_hw_resolve;
 static hw_auto_fn             p_hw_auto;
 static hw_trace_resolve_fn    p_trace_resolve;
@@ -287,6 +305,8 @@ static void asmtest_hw_resolve(void) {
     snprintf(g_hw_path, sizeof(g_hw_path), "%s", name);
     p_hw_available       = (hw_available_fn)dlsym(h, "asmtest_hwtrace_available");
     p_hw_skip_reason     = (hw_skip_reason_fn)dlsym(h, "asmtest_hwtrace_skip_reason");
+    p_hw_status          = (hw_status_fn)dlsym(h, "asmtest_hwtrace_status");
+    p_hw_paranoid        = (hw_paranoid_fn)dlsym(h, "asmtest_hwtrace_perf_event_paranoid");
     p_hw_resolve         = (hw_resolve_fn)dlsym(h, "asmtest_hwtrace_resolve");
     p_hw_auto            = (hw_auto_fn)dlsym(h, "asmtest_hwtrace_auto");
     p_trace_resolve      = (hw_trace_resolve_fn)dlsym(h, "asmtest_trace_resolve");
@@ -436,13 +456,20 @@ static int  asmtest_go_trace_call_auto(const void *code, size_t len, const long 
         : -3; // ASMTEST_HW_EUNAVAIL
 }
 static int  asmtest_hw_go_init(int backend) {
-    asmtest_hwtrace_options_t o;
+    // Zero-init (the old field-by-field init left lbr_period/branch_filter
+    // as stack garbage — the F27 plan's noted go bug), then self-describe.
+    asmtest_hwtrace_options_t o = {0};
+    o.struct_size = sizeof o; // F27 ABI size negotiation
     o.backend = backend;
-    o.aux_size = 0;
-    o.data_size = 0;
-    o.snapshot = 0;
-    o.object_hint = NULL;
     return p_hw_init ? p_hw_init(&o) : -1;
+}
+// F29 machine-readable status + the paranoid reader (additive diagnostics; an
+// older lib without them degrades to -3 / INT_MIN-style sentinels).
+static int  asmtest_hw_go_status(int backend, asmtest_hwtrace_status_t *out) {
+    return p_hw_status ? p_hw_status(backend, out) : -3; // ASMTEST_HW_EUNAVAIL
+}
+static int  asmtest_hw_go_paranoid(void) {
+    return p_hw_paranoid ? p_hw_paranoid() : (-2147483647 - 1); // INT_MIN
 }
 static int  asmtest_hw_go_register(const char *name, void *base, size_t len, void *trace) {
     return p_hw_register ? p_hw_register(name, base, len, trace) : -1;
@@ -682,8 +709,9 @@ const (
 
 // asmtest_trace_fidelity_t — execution fidelity of a resolved tier choice.
 const (
-	FidelityNative  = 0 // runs the real bytes on the real CPU in-process
-	FidelityVirtual = 1 // isolated guest on an emulated CPU
+	FidelityNative      = 0 // runs the real bytes on the real CPU in-process
+	FidelityVirtual     = 1 // isolated guest on an emulated CPU
+	FidelityStatistical = 2 // sampled survey (IBS/LBR sampling): NOT exact
 )
 
 // Cross-tier policy bitmask for ResolveTiers / AutoTier. TraceBest is the most-
@@ -754,14 +782,71 @@ func HwTraceAuto(policy int) int {
 }
 
 // TierChoice is one resolved cross-tier trace option: which Tier to use, which
-// hardware Backend within it (meaningful only when Tier == TierHwtrace), and the
-// Fidelity class (FidelityNative vs FidelityVirtual). Mirrors
+// hardware Backend within it (meaningful only when Tier == TierHwtrace), the
+// Fidelity class (FidelityNative / FidelityVirtual / FidelityStatistical), and
+// the concrete capture Mechanism (Mech*) — for TraceCallAuto's Used, the
+// escalation rung that actually won (F22/F26/F37). Mirrors
 // asmtest_trace_choice_t / the Python wrapper's TierChoice.
 type TierChoice struct {
-	Tier     int
-	Backend  int
-	Fidelity int
+	Tier      int
+	Backend   int
+	Fidelity  int
+	Mechanism int
 }
+
+// asmtest_trace_mechanism_t — the escalation-rung/mechanism discriminator.
+// Every value except MechStatistical is an EXACT producer.
+const (
+	MechNone        = 0 // no rung produced a trace (EUNAVAIL)
+	MechHwBranch    = 1 // in-process HW branch record (PT / AMD LBR / CoreSight)
+	MechTfStep      = 2 // in-process EFLAGS.TF #DB single-step
+	MechMsrLbr      = 3 // in-process MSR-direct LBR re-run (rung 1b)
+	MechBlockStep   = 4 // fork-isolated BTF block-step re-run
+	MechPerInsn     = 5 // fork-isolated per-instruction ptrace re-run
+	MechDbi         = 6 // in-process DynamoRIO code cache
+	MechEmulator    = 7 // Unicorn virtual CPU (isolated guest)
+	MechStatistical = 8 // sampled survey: never exact, never parity
+)
+
+// asmtest_hwtrace.h status codes / stages surfaced by HwTraceStatus (F29).
+const (
+	HwEperm      = -9 // perf capture permission denied (substrate present)
+	HwStageOk    = 0  // no gate failed
+	HwStageProbe = 4  // the perf open probe failed (EPERM vs EUNAVAIL in Code)
+)
+
+// HwStatus is the F29 machine-readable availability verdict for one backend:
+// Code distinguishes HwEperm (substrate present, perf permission denied) from
+// EUNAVAIL (hardware/decoder/PMU absent) — the split HwTraceAvailable's bool
+// deliberately collapses. Reason is byte-identical to HwTraceSkipReason.
+type HwStatus struct {
+	Available         bool
+	Code              int
+	Stage             int
+	PerfEventParanoid int
+	ProbeErrno        int
+	Reason            string
+}
+
+// HwTraceStatus fills the F29 verdict for backend (asmtest_hwtrace_status).
+func HwTraceStatus(backend int) (HwStatus, error) {
+	var raw C.asmtest_hwtrace_status_t
+	if rc := C.asmtest_hw_go_status(C.int(backend), &raw); rc != hwOK {
+		return HwStatus{}, fmt.Errorf("asmtest_hwtrace_status failed: %d", int(rc))
+	}
+	return HwStatus{
+		Available:         raw.available != 0,
+		Code:              int(raw.code),
+		Stage:             int(raw.stage),
+		PerfEventParanoid: int(raw.perf_event_paranoid),
+		ProbeErrno:        int(raw.probe_errno),
+		Reason:            C.GoString(&raw.reason[0]),
+	}, nil
+}
+
+// HwTracePerfEventParanoid is the kernel's perf_event_paranoid level, or
+// INT_MIN where the proc file is absent (non-Linux / masked /proc).
+func HwTracePerfEventParanoid() int { return int(C.asmtest_hw_go_paranoid()) }
 
 // ResolveTiers is this host's full CROSS-TIER cascade (asmtest_trace_resolve),
 // most-faithful first: Intel PT -> AMD LBR -> DynamoRIO -> single-step ->
@@ -776,9 +861,10 @@ func ResolveTiers(policy int) []TierChoice {
 	cs := make([]TierChoice, int(n))
 	for i := range cs {
 		cs[i] = TierChoice{
-			Tier:     int(out[i].tier),
-			Backend:  int(out[i].backend),
-			Fidelity: int(out[i].fidelity),
+			Tier:      int(out[i].tier),
+			Backend:   int(out[i].backend),
+			Fidelity:  int(out[i].fidelity),
+			Mechanism: int(out[i].mechanism),
 		}
 	}
 	return cs
@@ -794,9 +880,10 @@ func AutoTier(policy int) (TierChoice, bool) {
 		return TierChoice{}, false
 	}
 	return TierChoice{
-		Tier:     int(c.tier),
-		Backend:  int(c.backend),
-		Fidelity: int(c.fidelity),
+		Tier:      int(c.tier),
+		Backend:   int(c.backend),
+		Fidelity:  int(c.fidelity),
+		Mechanism: int(c.mechanism),
 	}, true
 }
 
@@ -1120,9 +1207,10 @@ func TraceCallAuto(code *HwNativeCode, args ...int64) TraceCallAutoResult {
 		Result: int64(result),
 		Trace:  trace,
 		Used: TierChoice{
-			Tier:     int(used.tier),
-			Backend:  int(used.backend),
-			Fidelity: int(used.fidelity),
+			Tier:      int(used.tier),
+			Backend:   int(used.backend),
+			Fidelity:  int(used.fidelity),
+			Mechanism: int(used.mechanism),
 		},
 		Truncated: trace.Truncated(),
 		OK:        true,

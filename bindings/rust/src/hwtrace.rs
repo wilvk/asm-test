@@ -48,6 +48,9 @@ use std::sync::OnceLock;
 
 /// `ASMTEST_HW_OK` from `asmtest_hwtrace.h`; nonzero is an error.
 const ASMTEST_HW_OK: c_int = 0;
+/// `ASMTEST_HW_EPERM` from `asmtest_hwtrace.h`: perf capture PERMISSION denied
+/// (substrate present) — reported only by [`HwTrace::status`] (F29).
+pub const ASMTEST_HW_EPERM: c_int = -9;
 /// `ASMTEST_HW_EUNAVAIL` from `asmtest_hwtrace.h`: no hardware-trace backend is
 /// available on this host (the `< 0` return of [`HwTrace::auto`]).
 pub const ASMTEST_HW_EUNAVAIL: c_int = -3;
@@ -119,6 +122,36 @@ pub enum Fidelity {
     Native = 0,
     /// Runs an isolated guest on an emulated CPU.
     Virtual = 1,
+    /// A sampled survey (IBS/LBR sampling): real CPU, but NOT an exact or
+    /// complete stream — never mistakable for an exact trace.
+    Statistical = 2,
+}
+
+/// The concrete capture MECHANISM (escalation rung) behind a resolved choice /
+/// `trace_call_auto`'s winning rung — the F22/F26/F37 discriminator (mirrors
+/// `asmtest_trace_mechanism_t`). Every value except `Statistical` is an EXACT
+/// producer.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mechanism {
+    /// No rung produced a trace (EUNAVAIL).
+    None = 0,
+    /// In-process HW branch record (Intel PT / AMD LBR / CoreSight).
+    HwBranch = 1,
+    /// In-process EFLAGS.TF #DB single-step.
+    TfStep = 2,
+    /// In-process MSR-direct LBR re-run (rung 1b).
+    MsrLbr = 3,
+    /// Fork-isolated BTF block-step re-run.
+    BlockStep = 4,
+    /// Fork-isolated per-instruction ptrace re-run.
+    PerInsn = 5,
+    /// In-process DynamoRIO code cache.
+    Dbi = 6,
+    /// Unicorn virtual CPU (isolated guest).
+    Emulator = 7,
+    /// Sampled survey (IBS/LBR sampling): never exact, never parity.
+    Statistical = 8,
 }
 
 /// The cross-tier auto-selection policy bitmask (mirrors the `ASMTEST_TRACE_*`
@@ -145,13 +178,16 @@ pub struct TierChoice {
     pub tier: Tier,
     /// The hardware backend enum, valid only when `tier == Tier::HwTrace`.
     pub backend: i32,
-    /// The execution fidelity (native vs emulated) of this choice.
+    /// The execution fidelity (native / emulated / statistical) of this choice.
     pub fidelity: Fidelity,
+    /// The concrete capture mechanism (F22/F26/F37) — for
+    /// [`HwTrace::trace_call_auto`]'s `used`, the escalation rung that won.
+    pub mechanism: Mechanism,
 }
 
-/// Marshal a raw `asmtest_trace_choice_t` (three C ints) into the safe
-/// [`TierChoice`]. The `tier`/`fidelity` ints come straight from the C enums, so
-/// any value outside the known set is a contract break and panics.
+/// Marshal a raw `asmtest_trace_choice_t` (four C ints) into the safe
+/// [`TierChoice`]. The `tier`/`fidelity`/`mechanism` ints come straight from the
+/// C enums, so any value outside the known set is a contract break and panics.
 fn tier_choice_of(c: TraceChoice) -> TierChoice {
     let tier = match c.tier {
         0 => Tier::HwTrace,
@@ -162,14 +198,29 @@ fn tier_choice_of(c: TraceChoice) -> TierChoice {
     let fidelity = match c.fidelity {
         0 => Fidelity::Native,
         1 => Fidelity::Virtual,
+        2 => Fidelity::Statistical,
         other => panic!("unexpected trace fidelity enum {other}"),
     };
-    TierChoice { tier, backend: c.backend, fidelity }
+    let mechanism = match c.mechanism {
+        0 => Mechanism::None,
+        1 => Mechanism::HwBranch,
+        2 => Mechanism::TfStep,
+        3 => Mechanism::MsrLbr,
+        4 => Mechanism::BlockStep,
+        5 => Mechanism::PerInsn,
+        6 => Mechanism::Dbi,
+        7 => Mechanism::Emulator,
+        8 => Mechanism::Statistical,
+        other => panic!("unexpected trace mechanism enum {other}"),
+    };
+    TierChoice { tier, backend: c.backend, fidelity, mechanism }
 }
 
-/// Mirrors `asmtest_hwtrace_options_t`.
+/// Mirrors `asmtest_hwtrace_options_t` (leading `struct_size` since the F27
+/// flag day — init() sets it, the library clamps its copy to it).
 #[repr(C)]
 struct Options {
+    struct_size: usize, // ABI size negotiator — ALWAYS set
     backend: c_int,
     aux_size: usize,
     data_size: usize,
@@ -179,13 +230,45 @@ struct Options {
     branch_filter: c_int, // AMD LBR opt-in (0 = default BRANCH_ANY)
 }
 
-/// Mirrors `asmtest_trace_choice_t` (three int-sized enum fields, no padding).
+/// Mirrors `asmtest_trace_choice_t` (four int-sized enum fields, no padding).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TraceChoice {
     tier: c_int,
     backend: c_int,
     fidelity: c_int,
+    mechanism: c_int,
+}
+
+/// Mirrors `asmtest_hwtrace_status_t` (five C ints + a 160-byte reason).
+#[repr(C)]
+struct StatusRaw {
+    available: c_int,
+    code: c_int,
+    stage: c_int,
+    perf_event_paranoid: c_int,
+    probe_errno: c_int,
+    reason: [c_char; 160],
+}
+
+/// The F29 machine-readable availability verdict for one backend: `code`
+/// distinguishes [`ASMTEST_HW_EPERM`] (substrate present, perf capture
+/// permission denied) from [`ASMTEST_HW_EUNAVAIL`] (hardware/decoder/PMU
+/// absent) — the split `available()`'s bool deliberately collapses.
+#[derive(Clone, Debug)]
+pub struct HwStatus {
+    /// Same verdict as [`HwTrace::available`].
+    pub available: bool,
+    /// `ASMTEST_HW_OK`, [`ASMTEST_HW_EUNAVAIL`] or [`ASMTEST_HW_EPERM`].
+    pub code: i32,
+    /// Which gate failed (the `ASMTEST_HW_STAGE_*` documented ints).
+    pub stage: i32,
+    /// The kernel's perf_event_paranoid level (`i32::MIN` where absent).
+    pub perf_event_paranoid: i32,
+    /// errno captured at the failing probe open (0 if none).
+    pub probe_errno: i32,
+    /// The human string — byte-identical to [`HwTrace::skip_reason`].
+    pub reason: String,
 }
 
 /// Mirrors `asmtest_jitdump_entry_t` (four `u64` fields, no padding) — a JIT
@@ -227,6 +310,9 @@ type TraceCallAutoFn = unsafe extern "C" fn(
     *mut TraceChoice,     // used out (may be null)
 ) -> c_int;
 type InitFn = unsafe extern "C" fn(*const Options) -> c_int;
+// F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+type StatusFn = unsafe extern "C" fn(c_int, *mut StatusRaw) -> c_int;
+type ParanoidFn = unsafe extern "C" fn() -> c_int;
 type ShutdownFn = unsafe extern "C" fn();
 type ArmTidFn = unsafe extern "C" fn() -> c_int;
 type RegisterRegionFn =
@@ -415,6 +501,8 @@ struct HwFns {
     trace_auto: Option<TraceAutoFn>,
     trace_call_auto: Option<TraceCallAutoFn>,
     init: Option<InitFn>,
+    status: Option<StatusFn>,
+    perf_event_paranoid: Option<ParanoidFn>,
     shutdown: Option<ShutdownFn>,
     arm_tid: Option<ArmTidFn>,
     register_region: Option<RegisterRegionFn>,
@@ -548,6 +636,7 @@ fn hw_fns() -> &'static HwFns {
             // No lib: every pointer stays None, available() returns false.
             return HwFns {
                 available: None, skip_reason: None, resolve: None, auto: None,
+                status: None, perf_event_paranoid: None,
                 trace_resolve: None, trace_auto: None, trace_call_auto: None,
                 init: None, shutdown: None, arm_tid: None,
                 register_region: None, begin: None, end: None,
@@ -611,6 +700,11 @@ fn hw_fns() -> &'static HwFns {
             trace_auto: load!("asmtest_trace_auto", TraceAutoFn),
             trace_call_auto: load!("asmtest_trace_call_auto", TraceCallAutoFn),
             init: load!("asmtest_hwtrace_init", InitFn),
+            status: load!("asmtest_hwtrace_status", StatusFn),
+            perf_event_paranoid: load!(
+                "asmtest_hwtrace_perf_event_paranoid",
+                ParanoidFn
+            ),
             shutdown: load!("asmtest_hwtrace_shutdown", ShutdownFn),
             arm_tid: load!("asmtest_hwtrace_arm_tid", ArmTidFn),
             register_region: load!("asmtest_hwtrace_register_region", RegisterRegionFn),
@@ -1060,7 +1154,8 @@ impl HwTrace {
     pub fn resolve_tiers(policy: TracePolicy) -> Vec<TierChoice> {
         match hw_fns().trace_resolve {
             Some(f) => {
-                let mut out = [TraceChoice { tier: 0, backend: 0, fidelity: 0 }; 8];
+                let mut out =
+            [TraceChoice { tier: 0, backend: 0, fidelity: 0, mechanism: 0 }; 8];
                 let n = unsafe {
                     f(policy as std::os::raw::c_uint, out.as_mut_ptr(), out.len())
                 };
@@ -1077,7 +1172,7 @@ impl HwTrace {
     /// distinguish it from the hardware-tier [`auto`](HwTrace::auto).
     pub fn auto_tier(policy: TracePolicy) -> Option<TierChoice> {
         let f = hw_fns().trace_auto?;
-        let mut out = TraceChoice { tier: 0, backend: 0, fidelity: 0 };
+        let mut out = TraceChoice { tier: 0, backend: 0, fidelity: 0, mechanism: 0 };
         let rc = unsafe { f(policy as std::os::raw::c_uint, &mut out) };
         if rc != ASMTEST_HW_OK {
             return None;
@@ -1090,6 +1185,7 @@ impl HwTrace {
     pub fn init(backend: Backend) -> Result<(), String> {
         let f = hw_fns().init.ok_or("libasmtest_hwtrace not loaded")?;
         let opts = Options {
+            struct_size: std::mem::size_of::<Options>(), // F27 size negotiation
             backend: backend as c_int,
             aux_size: 0,
             data_size: 0,
@@ -1103,6 +1199,51 @@ impl HwTrace {
             return Err(format!("asmtest_hwtrace_init failed: {rc}"));
         }
         Ok(())
+    }
+
+    /// The F29 machine-readable availability verdict (`asmtest_hwtrace_status`):
+    /// unlike [`available`](HwTrace::available)'s bool, `status().code`
+    /// distinguishes [`ASMTEST_HW_EPERM`] (substrate present, perf capture
+    /// permission denied — lower perf_event_paranoid or grant CAP_PERFMON) from
+    /// [`ASMTEST_HW_EUNAVAIL`] (hardware/decoder/PMU absent), with the failing
+    /// stage, the probe errno and the kernel paranoid level.
+    pub fn status(backend: Backend) -> Result<HwStatus, String> {
+        let f = hw_fns()
+            .status
+            .ok_or("libasmtest_hwtrace (or asmtest_hwtrace_status) not loaded")?;
+        let mut raw = StatusRaw {
+            available: 0,
+            code: 0,
+            stage: 0,
+            perf_event_paranoid: 0,
+            probe_errno: 0,
+            reason: [0; 160],
+        };
+        let rc = unsafe { f(backend as c_int, &mut raw) };
+        if rc != ASMTEST_HW_OK {
+            return Err(format!("asmtest_hwtrace_status failed: {rc}"));
+        }
+        let reason = unsafe { std::ffi::CStr::from_ptr(raw.reason.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        Ok(HwStatus {
+            available: raw.available != 0,
+            code: raw.code,
+            stage: raw.stage,
+            perf_event_paranoid: raw.perf_event_paranoid,
+            probe_errno: raw.probe_errno,
+            reason,
+        })
+    }
+
+    /// The kernel's `perf_event_paranoid` level (`i32::MIN` where absent —
+    /// non-Linux or a masked /proc). >2 blocks unprivileged perf_event_open
+    /// entirely (the EPERM case above without CAP_PERFMON).
+    pub fn perf_event_paranoid() -> i32 {
+        match hw_fns().perf_event_paranoid {
+            Some(f) => unsafe { f() },
+            None => i32::MIN,
+        }
     }
 
     /// [`init`](HwTrace::init) with the portable [`DEFAULT_BACKEND`] (single-step).
@@ -1227,8 +1368,8 @@ impl HwTrace {
         let argv: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
         let argp = if argv.is_empty() { std::ptr::null() } else { argv.as_ptr() };
         let mut result: c_long = 0;
-        // `used` is three consecutive C ints (asmtest_trace_choice_t, no padding).
-        let mut used = TraceChoice { tier: 0, backend: 0, fidelity: 0 };
+        // `used` is four consecutive C ints (asmtest_trace_choice_t, no padding).
+        let mut used = TraceChoice { tier: 0, backend: 0, fidelity: 0, mechanism: 0 };
         let rc = unsafe {
             call(
                 code.base() as *const c_void,

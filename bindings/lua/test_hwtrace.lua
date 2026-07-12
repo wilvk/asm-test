@@ -23,6 +23,19 @@ local AMD_LBR = hwtrace.AMD_LBR
 local BEST = hwtrace.BEST
 local CEILING_FREE = hwtrace.CEILING_FREE
 local ASMTEST_HW_EUNAVAIL = hwtrace.ASMTEST_HW_EUNAVAIL
+local ASMTEST_HW_EPERM = hwtrace.ASMTEST_HW_EPERM
+local INTEL_PT = hwtrace.INTEL_PT
+local CORESIGHT = hwtrace.CORESIGHT
+local STAGE_OK = hwtrace.STAGE_OK
+local STAGE_PROBE = hwtrace.STAGE_PROBE
+local FIDELITY_STATISTICAL = hwtrace.FIDELITY_STATISTICAL
+local MECH_NONE = hwtrace.MECH_NONE
+local MECH_HW_BRANCH = hwtrace.MECH_HW_BRANCH
+local MECH_TF_STEP = hwtrace.MECH_TF_STEP
+local MECH_MSR_LBR = hwtrace.MECH_MSR_LBR
+local MECH_BLOCKSTEP = hwtrace.MECH_BLOCKSTEP
+local MECH_PER_INSN = hwtrace.MECH_PER_INSN
+local MECH_STATISTICAL = hwtrace.MECH_STATISTICAL
 local TIER_HWTRACE = hwtrace.TIER_HWTRACE
 local TIER_EMULATOR = hwtrace.TIER_EMULATOR
 local FIDELITY_NATIVE = hwtrace.FIDELITY_NATIVE
@@ -642,6 +655,69 @@ else
     eq(img:watch_bpf(), 0, "codeimage: watch_bpf() == 0 (loads and attaches)")
     img:free()
   end
+end
+
+-- 2026-07 API flag day: F27 struct-size guard + F29 status + F22/F26/F37 mechanism.
+do
+  -- F27: init self-describes via ffi.sizeof of the mirrored options — a drifted
+  -- cdef (or a library that stopped honoring struct_size) would error here.
+  if HwTrace.available(SINGLESTEP) then
+    HwTrace.init(SINGLESTEP)
+    HwTrace.shutdown()
+    ok(true, "flagday: init negotiates struct_size (F27)")
+  end
+
+  -- F29: status is available()/skip_reason() made machine-readable — one
+  -- classifier — and distinguishes EPERM (substrate present) from EUNAVAIL.
+  local paranoid = HwTrace.perf_event_paranoid()
+  local inv = true
+  for _, b in ipairs({ INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP }) do
+    local st = HwTrace.status(b)
+    inv = inv and (st.available == HwTrace.available(b))
+    inv = inv and ((st.code == 0) == st.available)
+    inv = inv and (st.code == 0 or st.code == ASMTEST_HW_EUNAVAIL
+                   or st.code == ASMTEST_HW_EPERM)
+    inv = inv and (st.reason == HwTrace.skip_reason(b))
+    inv = inv and (st.perf_event_paranoid == paranoid)
+  end
+  ok(inv, "flagday: status invariants hold for all four backends (F29)")
+  -- LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD
+  -- probe that reached the perf open under paranoid>2 must classify EPERM.
+  -- (CAP_PERFMON/root would make the probe SUCCEED, so this guard suffices.)
+  local amd = HwTrace.status(AMD_LBR)
+  if amd.stage == STAGE_PROBE and paranoid > 2 then
+    ok(amd.code == ASMTEST_HW_EPERM,
+       "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL")
+  else
+    print(string.format("# SKIP flagday live-EPERM lane (stage=%d paranoid=%d)",
+                        amd.stage, paranoid))
+  end
+
+  -- F22/F26/F37: resolved rows and trace_call_auto's used carry the concrete
+  -- mechanism; no exact producer is ever STATISTICAL.
+  local rows_ok = true
+  for _, c in ipairs(HwTrace.resolve_tiers(TRACE_BEST)) do
+    rows_ok = rows_ok and c.mechanism ~= MECH_NONE
+                      and c.mechanism ~= MECH_STATISTICAL
+                      and c.fidelity ~= FIDELITY_STATISTICAL
+    if c.tier == TIER_HWTRACE and c.backend == SINGLESTEP then
+      rows_ok = rows_ok and c.mechanism == MECH_TF_STEP
+    end
+  end
+  ok(rows_ok, "flagday: resolved rows carry a concrete, exact mechanism (F22)")
+
+  local code = NativeCode.from_bytes(ROUTINE)
+  local res = HwTrace.trace_call_auto(code, 20, 22)
+  if res.rc == 0 then
+    local m = res.used.mechanism
+    ok(m == MECH_HW_BRANCH or m == MECH_TF_STEP or m == MECH_MSR_LBR
+       or m == MECH_BLOCKSTEP or m == MECH_PER_INSN,
+       "flagday: trace_call_auto reports the winning rung")
+    ok(m ~= MECH_STATISTICAL and res.used.fidelity == FIDELITY_NATIVE,
+       "flagday: the exact call-owning ladder is never STATISTICAL")
+    res.trace:free()
+  end
+  code:free()
 end
 
 print(string.format("# %d tests, %d failed", count, failed))

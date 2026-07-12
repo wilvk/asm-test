@@ -112,6 +112,7 @@ public final class HwTraceTest {
             crossTierNativeOnlyResolvesOnLinuxX86_64();
             autoResolveTracesLive();
             traceCallAutoOwnsTheCall();
+            flagdayStatusAndMechanism();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -466,6 +467,77 @@ public final class HwTraceTest {
             }
         } finally {
             loop.free();
+        }
+    }
+
+    // ---- 2026-07 API flag day: F27 struct-size guard + F29 status + F22 mechanism ----
+    private static void flagdayStatusAndMechanism() {
+        // F29: status() is available()/skipReason() made machine-readable — one
+        // classifier, so they can never drift — and distinguishes EPERM (substrate
+        // present, permission denied) from EUNAVAIL (hardware absent).
+        int paranoid = HwTrace.perfEventParanoid();
+        boolean inv = true;
+        for (int b : new int[] { HwTrace.INTEL_PT, HwTrace.CORESIGHT, HwTrace.AMD_LBR, HwTrace.SINGLESTEP }) {
+            HwTrace.HwStatus st = HwTrace.status(b);
+            inv &= (st.available() == HwTrace.available(b));
+            inv &= ((st.code() == HwTrace.ASMTEST_HW_OK) == st.available());
+            inv &= (st.code() == HwTrace.ASMTEST_HW_OK || st.code() == HwTrace.ASMTEST_HW_EUNAVAIL
+                || st.code() == HwTrace.ASMTEST_HW_EPERM);
+            inv &= st.reason().equals(HwTrace.skipReason(b));
+            inv &= (st.perfEventParanoid() == paranoid);
+        }
+        ok(inv, "flagday: status() invariants hold for all four backends (F29)");
+        // LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD
+        // probe that reached the perf open under paranoid>2 must say EPERM, never
+        // missing-silicon EUNAVAIL. (No geteuid in the JDK; CAP_PERFMON/root would
+        // make the probe SUCCEED, so stage==STAGE_PROBE + paranoid>2 is sufficient.)
+        HwTrace.HwStatus amd = HwTrace.status(HwTrace.AMD_LBR);
+        if (amd.stage() == HwTrace.STAGE_PROBE && paranoid > 2) {
+            ok(amd.code() == HwTrace.ASMTEST_HW_EPERM,
+                "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL");
+        } else {
+            System.out.println("# SKIP flagday live-EPERM lane (stage=" + amd.stage()
+                + " paranoid=" + paranoid + ")");
+        }
+
+        // F22/F26/F37: resolved rows carry a concrete, EXACT mechanism.
+        boolean rowsOk = true;
+        for (HwTrace.TierChoice c : HwTrace.resolveTiers(HwTrace.TRACE_BEST)) {
+            rowsOk &= (c.mechanism() != HwTrace.MECH_NONE
+                && c.mechanism() != HwTrace.MECH_STATISTICAL
+                && c.fidelity() != HwTrace.FIDELITY_STATISTICAL);
+            if (c.tier() == HwTrace.TIER_HWTRACE && c.backend() == HwTrace.SINGLESTEP)
+                rowsOk &= (c.mechanism() == HwTrace.MECH_TF_STEP);
+        }
+        ok(rowsOk, "flagday: resolved rows carry a concrete, exact mechanism (F22)");
+
+        // F27 + F22 live half needs a working single-step tier.
+        if (!HwTrace.available(HwTrace.SINGLESTEP)) {
+            System.out.println("# SKIP flagday live half: single-step unavailable");
+            return;
+        }
+        // F27: init() self-describes via the mirrored layout's byteSize — a drifted
+        // mirror (or a library that stopped honoring struct_size) would throw here.
+        HwTrace.init(HwTrace.SINGLESTEP);
+        HwTrace.shutdown();
+        ok(true, "flagday: init() negotiates struct_size (F27)");
+
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        try {
+            HwTrace.TraceCallAutoResult res = HwTrace.traceCallAuto(code, 20, 22);
+            if (res.ok()) {
+                int m = res.used().mechanism();
+                ok(m == HwTrace.MECH_HW_BRANCH || m == HwTrace.MECH_TF_STEP
+                        || m == HwTrace.MECH_MSR_LBR || m == HwTrace.MECH_BLOCKSTEP
+                        || m == HwTrace.MECH_PER_INSN,
+                    "flagday: traceCallAuto reports the winning rung (got " + m + ")");
+                ok(m != HwTrace.MECH_STATISTICAL
+                        && res.used().fidelity() == HwTrace.FIDELITY_NATIVE,
+                    "flagday: the exact call-owning ladder is never STATISTICAL");
+                res.trace().free();
+            }
+        } finally {
+            code.free();
         }
     }
 

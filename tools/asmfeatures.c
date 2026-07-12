@@ -238,6 +238,7 @@ static long long native_hw_capture(int backend, const unsigned char *bytes,
     if (t) {
         asmtest_hwtrace_options_t opts;
         memset(&opts, 0, sizeof opts);
+        opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
         opts.backend = (asmtest_trace_backend_t)backend;
         if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
             if (asmtest_hwtrace_register_region("cap", exec, len, t) ==

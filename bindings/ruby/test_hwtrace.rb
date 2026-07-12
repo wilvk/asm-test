@@ -23,6 +23,20 @@ AMD_LBR      = Asmtest::HwTrace::AMD_LBR
 BEST         = Asmtest::HwTrace::BEST
 CEILING_FREE = Asmtest::HwTrace::CEILING_FREE
 EUNAVAIL     = Asmtest::HwTrace::EUNAVAIL
+HW_OK        = Asmtest::HwTrace::OK
+HW_EPERM     = Asmtest::HwTrace::EPERM
+STAGE_OK     = Asmtest::HwTrace::STAGE_OK
+STAGE_PROBE  = Asmtest::HwTrace::STAGE_PROBE
+INTEL_PT     = Asmtest::HwTrace::INTEL_PT
+CORESIGHT    = Asmtest::HwTrace::CORESIGHT
+MECH_NONE        = Asmtest::HwTrace::MECH_NONE
+MECH_HW_BRANCH   = Asmtest::HwTrace::MECH_HW_BRANCH
+MECH_TF_STEP     = Asmtest::HwTrace::MECH_TF_STEP
+MECH_MSR_LBR     = Asmtest::HwTrace::MECH_MSR_LBR
+MECH_BLOCKSTEP   = Asmtest::HwTrace::MECH_BLOCKSTEP
+MECH_PER_INSN    = Asmtest::HwTrace::MECH_PER_INSN
+MECH_STATISTICAL = Asmtest::HwTrace::MECH_STATISTICAL
+FIDELITY_STATISTICAL = Asmtest::HwTrace::FIDELITY_STATISTICAL
 
 # Cross-tier orchestrator (asmtest_trace_auto.h).
 TIER_HWTRACE       = Asmtest::HwTrace::TIER_HWTRACE
@@ -480,5 +494,56 @@ else
   tcal.trace.free
 end
 tca_loop.free
+
+# --- 2026-07 API flag day: F27 struct-size guard + F29 status + F22 mechanism ---
+# F27: init self-describes via build_options' struct_size — a drifted layout (or a
+# library that stopped honoring it) would fail here.
+HwTrace.init(SINGLESTEP)
+HwTrace.shutdown
+ok(true, "flagday: init negotiates struct_size (F27)")
+
+# F29: status is available?/skip_reason made machine-readable — one classifier —
+# and distinguishes EPERM (substrate present) from EUNAVAIL (hardware absent).
+paranoid = HwTrace.perf_event_paranoid
+inv = [INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP].all? do |b|
+  st = HwTrace.status(b)
+  st.available == HwTrace.available?(b) &&
+    (st.code == HW_OK) == st.available &&
+    [HW_OK, EUNAVAIL, HW_EPERM].include?(st.code) &&
+    st.reason == HwTrace.skip_reason(b) &&
+    st.perf_event_paranoid == paranoid
+end
+ok(inv, "flagday: status invariants hold for all four backends (F29)")
+ss = HwTrace.status(SINGLESTEP)
+ok(ss.code == HW_OK && ss.stage == STAGE_OK, "flagday: status(SINGLESTEP) is OK on this host")
+# LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD probe
+# that reached the perf open under paranoid>2 without root must classify EPERM.
+amd = HwTrace.status(AMD_LBR)
+if amd.stage == STAGE_PROBE && paranoid > 2 && Process.euid != 0
+  ok(amd.code == HW_EPERM, "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL")
+else
+  puts "# SKIP flagday live-EPERM lane (stage=#{amd.stage} paranoid=#{paranoid})"
+end
+
+# F22/F26/F37: resolved rows and trace_call_auto's used carry the concrete
+# mechanism; no exact producer is ever STATISTICAL.
+rows = HwTrace.resolve_tiers(TRACE_BEST)
+ok(rows.all? { |c| c.mechanism != MECH_NONE && c.mechanism != MECH_STATISTICAL &&
+                   c.fidelity != FIDELITY_STATISTICAL },
+   "flagday: resolved rows carry a concrete, exact mechanism (F22)")
+ok(rows.select { |c| c.tier == TIER_HWTRACE && c.backend == SINGLESTEP }
+       .all? { |c| c.mechanism == MECH_TF_STEP },
+   "flagday: the single-step row is the TF-step mechanism")
+fd_code = NativeCode.from_bytes(ROUTINE)
+fd = HwTrace.trace_call_auto(fd_code, 20, 22)
+if fd.rc == HW_OK
+  ok([MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR, MECH_BLOCKSTEP, MECH_PER_INSN]
+       .include?(fd.used.mechanism),
+     "flagday: trace_call_auto reports the winning rung (got #{fd.used.mechanism})")
+  ok(fd.used.mechanism != MECH_STATISTICAL && fd.used.fidelity == FIDELITY_NATIVE,
+     "flagday: the exact call-owning ladder is never STATISTICAL")
+  fd.trace.free
+end
+fd_code.free
 
 exit($failed ? 1 : 0)

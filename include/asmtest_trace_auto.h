@@ -55,21 +55,60 @@ typedef enum {
 
 /* Execution fidelity of a tier. NATIVE runs the real bytes on the real CPU in this
  * process; VIRTUAL runs an isolated guest on an emulated CPU. The single
- * NATIVE->VIRTUAL transition is the fidelity line ASMTEST_TRACE_NATIVE_ONLY gates. */
+ * NATIVE->VIRTUAL transition is the fidelity line ASMTEST_TRACE_NATIVE_ONLY gates.
+ * STATISTICAL is the third, orthogonal honesty class (F22/F26/F37 + the 2026-07-12
+ * Zen-2 IBS review): real bytes on the real CPU, but SAMPLED — a hot-edge/hot-block
+ * histogram (IBS-Op / LBR sampling survey), NOT an exact or complete instruction
+ * stream. It can never prove "block X did not execute" and must never feed the
+ * exact parity contract; no exact producer ever reports it, so a statistical
+ * result is not mistakable for an exact one. */
 typedef enum {
     ASMTEST_FIDELITY_NATIVE = 0,
     ASMTEST_FIDELITY_VIRTUAL = 1,
+    ASMTEST_FIDELITY_STATISTICAL = 2,
 } asmtest_trace_fidelity_t;
 
+/* The concrete capture MECHANISM (escalation rung) that produced a trace — the
+ * F22/F26/F37 discriminator. tier/backend alone cannot express it: on a
+ * branch-record-less host every asmtest_trace_call_auto rung reports
+ * {HWTRACE, SINGLESTEP}, collapsing three mechanically different captures
+ * (in-process EFLAGS.TF step, fork-isolated block-step re-run, fork-isolated
+ * per-instruction re-run) whose overhead, isolation, and side-effect story all
+ * differ. Every value except ASMTEST_TRACE_MECH_STATISTICAL is an EXACT
+ * producer; STATISTICAL marks a sampled survey (see
+ * ASMTEST_FIDELITY_STATISTICAL) and is reserved for the IBS/sampling lane —
+ * asmtest_trace_call_auto never returns it. */
+typedef enum {
+    ASMTEST_TRACE_MECH_NONE = 0, /* no rung produced a trace (EUNAVAIL)      */
+    ASMTEST_TRACE_MECH_HW_BRANCH =
+        1, /* in-process HW branch record: Intel PT AUX,
+              AMD LBR (sampled or boundary snapshot), CoreSight */
+    ASMTEST_TRACE_MECH_TF_STEP =
+        2, /* in-process EFLAGS.TF #DB single-step      */
+    ASMTEST_TRACE_MECH_MSR_LBR =
+        3, /* in-process MSR-direct LBR re-run (rung 1b) */
+    ASMTEST_TRACE_MECH_BLOCKSTEP =
+        4, /* fork-isolated BTF block-step re-run       */
+    ASMTEST_TRACE_MECH_PER_INSN =
+        5, /* fork-isolated per-instruction ptrace re-run */
+    ASMTEST_TRACE_MECH_DBI = 6,      /* in-process DynamoRIO code cache      */
+    ASMTEST_TRACE_MECH_EMULATOR = 7, /* Unicorn virtual CPU (isolated guest) */
+    ASMTEST_TRACE_MECH_STATISTICAL =
+        8, /* sampled survey (IBS-Op / LBR sampling): fidelity ==
+              STATISTICAL, never exact, never parity */
+} asmtest_trace_mechanism_t;
+
 /* A resolved trace option: which tier to use, which hardware backend within it
- * (meaningful ONLY when tier == ASMTEST_TIER_HWTRACE; otherwise 0/ignore), and the
+ * (meaningful ONLY when tier == ASMTEST_TIER_HWTRACE; otherwise 0/ignore), the
  * fidelity class so a caller can see at a glance whether a choice crosses the
- * native->emulator line. */
+ * native->emulator (or exact->statistical) line, and the concrete mechanism —
+ * for asmtest_trace_call_auto's `used`, the escalation rung that actually WON. */
 typedef struct {
     asmtest_trace_tier_t tier;
     asmtest_trace_backend_t
         backend; /* valid iff tier == ASMTEST_TIER_HWTRACE */
     asmtest_trace_fidelity_t fidelity;
+    asmtest_trace_mechanism_t mechanism;
 } asmtest_trace_choice_t;
 
 /* Portable compile-time assert (same idiom as asmtest.h), so the binding layout
@@ -81,10 +120,11 @@ typedef struct {
 #define ASMTEST_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 #endif
-/* Pinned for the language bindings: three int-sized enum fields, no padding, so a
- * binding can marshal a choice as three consecutive C ints. */
-ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 3 * sizeof(int),
-                      "asmtest_trace_choice_t must be three int-sized fields");
+/* Pinned for the language bindings: four int-sized enum fields, no padding, so a
+ * binding can marshal a choice as four consecutive C ints (tier, backend,
+ * fidelity, mechanism — the 2026-07 flag day grew it from three). */
+ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 4 * sizeof(int),
+                      "asmtest_trace_choice_t must be four int-sized fields");
 
 /* Policy is a bitmask (composable), passed across the FFI as an int. */
 #define ASMTEST_TRACE_BEST                                                     \
@@ -133,9 +173,12 @@ int asmtest_trace_auto(unsigned policy, asmtest_trace_choice_t *out);
  * ASMTEST_TRACE_CEILING_FREE skips the ceiling-bounded fast backend up front). On return
  * *result (may be NULL) holds the routine's return value; `trace` (caller-allocated with
  * asmtest_trace_new) is filled by the tier that produced the final trace, and
- * `trace->truncated` reports completeness; *used (may be NULL) reports the {tier, backend}
- * that produced it (so a caller can see whether escalation fired — e.g. used.backend !=
- * ASMTEST_HWTRACE_AMD_LBR).
+ * `trace->truncated` reports completeness; *used (may be NULL) reports the {tier, backend,
+ * fidelity, mechanism} that produced it — `mechanism` is the WINNING escalation rung
+ * (F22/F26/F37), so a caller can see whether escalation fired and exactly where it landed
+ * (in-process TF step vs fork-isolated block-step vs per-instruction re-run vs the AMD
+ * branch-record / MSR rungs). On ASMTEST_HW_EUNAVAIL *used is cleared to
+ * mechanism == ASMTEST_TRACE_MECH_NONE (never a stale prior rung).
  *
  * Ladder: best HWTRACE backend (AMD LBR #3-snapshot / Intel PT / in-proc single-step) ->
  * BTF block-step (asmtest_ptrace_trace_call_blockstep — rootless, no ceiling) ->

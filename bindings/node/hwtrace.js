@@ -38,6 +38,8 @@ const path = require('path');
 const ASMTEST_HW_OK = 0;
 
 const ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available on this host
+const ASMTEST_HW_EPERM = -9;    // perf capture PERMISSION denied (substrate present) —
+                                // reported only by HwTrace.status() (F29)
 
 // asmtest_trace_backend_t
 const INTEL_PT = 0;
@@ -57,8 +59,26 @@ const TIER_HWTRACE = 0;   // HW branch trace / single-step (real CPU)
 const TIER_DYNAMORIO = 1; // in-process software DBI (real CPU)
 const TIER_EMULATOR = 2;  // Unicorn virtual CPU (isolated guest)
 // asmtest_trace_fidelity_t
-const FIDELITY_NATIVE = 0;  // runs the real bytes on the real CPU in-process
-const FIDELITY_VIRTUAL = 1; // isolated guest on an emulated CPU
+const FIDELITY_NATIVE = 0;      // runs the real bytes on the real CPU in-process
+const FIDELITY_VIRTUAL = 1;     // isolated guest on an emulated CPU
+const FIDELITY_STATISTICAL = 2; // sampled survey (IBS/LBR sampling): NOT exact
+// asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator.
+// Every value except MECH_STATISTICAL is an EXACT producer.
+const MECH_NONE = 0;        // no rung produced a trace (EUNAVAIL)
+const MECH_HW_BRANCH = 1;   // in-process HW branch record (PT / AMD LBR / CoreSight)
+const MECH_TF_STEP = 2;     // in-process EFLAGS.TF #DB single-step
+const MECH_MSR_LBR = 3;     // in-process MSR-direct LBR re-run (rung 1b)
+const MECH_BLOCKSTEP = 4;   // fork-isolated BTF block-step re-run
+const MECH_PER_INSN = 5;    // fork-isolated per-instruction ptrace re-run
+const MECH_DBI = 6;         // in-process DynamoRIO code cache
+const MECH_EMULATOR = 7;    // Unicorn virtual CPU (isolated guest)
+const MECH_STATISTICAL = 8; // sampled survey: never exact, never parity
+// asmtest_hwtrace_status_t.stage — which gate of the available() chain failed
+const STAGE_OK = 0;      // no gate failed — backend available
+const STAGE_DECODER = 1; // decoder library not compiled in
+const STAGE_CPU = 2;     // wrong CPU/ISA/vendor (or wrong OS)
+const STAGE_PMU = 3;     // kernel PMU sysfs node absent
+const STAGE_PROBE = 4;   // perf open probe failed (code says EPERM vs EUNAVAIL)
 // cross-tier policy bitmask
 const TRACE_BEST = 0x0;         // most-faithful available; emulator floor allowed
 const TRACE_CEILING_FREE = 0x1; // drop the fixed-window backend (AMD LBR)
@@ -146,6 +166,7 @@ let _resolvedPath = null;
 // koffi struct layout mirroring the C API (the one place we mirror a C struct;
 // the rest of the surface is opaque handles, like asmtest.js).
 const Options = koffi.struct('asmtest_hwtrace_options_t', {
+  struct_size: 'size_t', // ABI size negotiator (F27) — init() ALWAYS sets it
   backend: 'int',
   aux_size: 'size_t',
   data_size: 'size_t',
@@ -157,6 +178,17 @@ const Options = koffi.struct('asmtest_hwtrace_options_t', {
 
 // koffi struct layout mirroring asmtest_codeimage_event_t (40 bytes): three
 // uint64s then three uint32s and an int32, all naturally packed.
+// koffi struct layout mirroring asmtest_hwtrace_status_t (five C ints + a
+// 160-byte reason): the F29 machine-readable EPERM-vs-EUNAVAIL verdict.
+const HwStatus = koffi.struct('asmtest_hwtrace_status_t', {
+  available: 'int',
+  code: 'int',   // ASMTEST_HW_OK / ASMTEST_HW_EUNAVAIL / ASMTEST_HW_EPERM
+  stage: 'int',  // STAGE_* — which gate failed
+  perf_event_paranoid: 'int',
+  probe_errno: 'int',
+  reason: koffi.array('char', 160, 'String'),
+});
+
 const CodeImageEvent = koffi.struct('asmtest_codeimage_event_t', {
   addr: 'uint64',
   len: 'uint64',
@@ -241,6 +273,9 @@ let _loadError = null;
     // three consecutive int32s (an _Out_ int array, exactly like traceAuto/traceResolve above).
     traceCallAuto: lib.func('int asmtest_trace_call_auto(void*, size_t, const long*, int, uint, _Out_ long*, void*, _Out_ int*)'),
     init: lib.func('int asmtest_hwtrace_init(const asmtest_hwtrace_options_t*)'),
+    // F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+    status: lib.func('int asmtest_hwtrace_status(int, _Out_ asmtest_hwtrace_status_t*)'),
+    perfEventParanoid: lib.func('int asmtest_hwtrace_perf_event_paranoid()'),
     registerRegion: lib.func('int asmtest_hwtrace_register_region(const char*, void*, size_t, void*)'),
     begin: lib.func('void asmtest_hwtrace_begin(const char*)'),
     end: lib.func('void asmtest_hwtrace_end(const char*)'),
@@ -533,20 +568,21 @@ class HwTrace {
   /** This host's full CROSS-TIER cascade (asmtest_trace_resolve), most-faithful
    *  first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
    *  emulator, each included only if its tier is available. Returns an array of
-   *  { tier, backend, fidelity } objects. TRACE_NATIVE_ONLY drops the emulator
-   *  floor (no native->emulator fidelity crossing); TRACE_CEILING_FREE drops AMD
-   *  LBR. A choice is three int32s, so we read consecutive triples. */
+   *  { tier, backend, fidelity, mechanism } objects. TRACE_NATIVE_ONLY drops the
+   *  emulator floor (no native->emulator fidelity crossing); TRACE_CEILING_FREE
+   *  drops AMD LBR. A choice is four int32s, so we read consecutive quads. */
   static resolveTiers(policy = TRACE_BEST) {
     if (!_lib) return []; // self-skip, like available(): no lib -> empty cascade
     const cap = 8; // up to 8 cross-tier choices (Intel PT..emulator)
-    const out = Buffer.alloc(cap * 3 * 4); // each choice = 3 int32s
+    const out = Buffer.alloc(cap * 4 * 4); // each choice = 4 int32s
     const n = Number(_fn.traceResolve(policy, out, cap));
     const cascade = new Array(n);
     for (let i = 0; i < n; i++) {
       cascade[i] = {
-        tier: out.readInt32LE(i * 12),
-        backend: out.readInt32LE(i * 12 + 4),
-        fidelity: out.readInt32LE(i * 12 + 8),
+        tier: out.readInt32LE(i * 16),
+        backend: out.readInt32LE(i * 16 + 4),
+        fidelity: out.readInt32LE(i * 16 + 8),
+        mechanism: out.readInt32LE(i * 16 + 12),
       };
     }
     return cascade;
@@ -557,20 +593,52 @@ class HwTrace {
    *  only off a native host under TRACE_NATIVE_ONLY). */
   static autoTier(policy = TRACE_BEST) {
     if (!_lib) return null; // self-skip, like available()
-    const out = Buffer.alloc(3 * 4); // one choice = 3 int32s
+    const out = Buffer.alloc(4 * 4); // one choice = 4 int32s
     const rc = _fn.traceAuto(policy, out);
     if (rc !== ASMTEST_HW_OK) return null;
     return {
       tier: out.readInt32LE(0),
       backend: out.readInt32LE(4),
       fidelity: out.readInt32LE(8),
+      mechanism: out.readInt32LE(12),
     };
+  }
+
+  /** The F29 machine-readable availability verdict (asmtest_hwtrace_status):
+   *  unlike available()'s boolean, `status().code` distinguishes
+   *  ASMTEST_HW_EPERM (substrate present, perf capture permission denied —
+   *  lower perf_event_paranoid or grant CAP_PERFMON) from ASMTEST_HW_EUNAVAIL
+   *  (hardware/decoder/PMU absent), with the failing `stage` (STAGE_*), the
+   *  probe `errno` and the kernel paranoid level. `reason` is byte-identical
+   *  to skipReason(). Throws when the lib is absent. */
+  static status(backend = SINGLESTEP) {
+    if (!_lib) throw new Error('libasmtest_hwtrace not loaded');
+    const out = {};
+    const rc = _fn.status(backend, out);
+    if (rc !== ASMTEST_HW_OK) throw new Error(`asmtest_hwtrace_status failed: ${rc}`);
+    return {
+      available: out.available !== 0,
+      code: out.code,
+      stage: out.stage,
+      perf_event_paranoid: out.perf_event_paranoid,
+      probe_errno: out.probe_errno,
+      reason: out.reason,
+    };
+  }
+
+  /** The kernel's perf_event_paranoid level, or INT_MIN where the proc file is
+   *  absent (non-Linux / masked /proc). >2 blocks unprivileged perf_event_open
+   *  entirely (the EPERM case above without CAP_PERFMON). */
+  static perfEventParanoid() {
+    if (!_lib) return -2147483648;
+    return _fn.perfEventParanoid();
   }
 
   /** Select a backend and initialize the tier. SINGLESTEP is the portable default
    *  that runs on any x86-64 Linux. Throws on a nonzero rc. */
   static init(backend = SINGLESTEP) {
-    const opts = { backend, aux_size: 0, data_size: 0, snapshot: 0, object_hint: null,
+    const opts = { struct_size: koffi.sizeof(Options), // F27 ABI size negotiation
+      backend, aux_size: 0, data_size: 0, snapshot: 0, object_hint: null,
       lbr_period: 0, branch_filter: 0 };
     const rc = _fn.init(opts);
     if (rc !== ASMTEST_HW_OK) throw new Error(`asmtest_hwtrace_init failed: ${rc}`);
@@ -627,7 +695,7 @@ class HwTrace {
    *  pre-armed (a pre-arm would double-init and then leave the tier torn down). Args pass as C
    *  longs (SysV integer ABI, 0-6). Returns `{ result, trace, used, truncated, rc }`: `result`
    *  the call's return (a JS number, BigInt out of safe range), `trace` a queryable `HwTrace`
-   *  the CALLER frees via `trace.free()`, `used` the { tier, backend, fidelity } choice that
+   *  the CALLER frees via `trace.free()`, `used` the { tier, backend, fidelity, mechanism } choice that
    *  produced the final trace (inspect `used.backend` to see whether escalation fired),
    *  `truncated` the honesty bit. Self-skips where no call-owning native tier is available (off
    *  x86-64 Linux, or with no lib): `result`/`trace`/`used` are null and `rc` is negative. */
@@ -642,7 +710,7 @@ class HwTrace {
     const argBuf = Buffer.alloc(8 * Math.max(n, 1));
     for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
     const resultBuf = Buffer.alloc(8);
-    const used = Buffer.alloc(3 * 4); // one choice = three consecutive int32s (autoTier-style)
+    const used = Buffer.alloc(4 * 4); // one choice = four consecutive int32s (autoTier-style)
     // NO pre-arm: asmtest_trace_call_auto owns the tier lifecycle. policy=TRACE_BEST (it escalates
     // to ceiling-free internally when a trace truncates).
     const rc = _fn.traceCallAuto(code.base, code.length, argBuf, n, TRACE_BEST,
@@ -654,7 +722,8 @@ class HwTrace {
     return {
       result: _safeInt(resultBuf.readBigInt64LE(0)),
       trace,
-      used: { tier: used.readInt32LE(0), backend: used.readInt32LE(4), fidelity: used.readInt32LE(8) },
+      used: { tier: used.readInt32LE(0), backend: used.readInt32LE(4),
+        fidelity: used.readInt32LE(8), mechanism: used.readInt32LE(12) },
       truncated: trace.truncated(),
       rc,
     };
@@ -1560,10 +1629,14 @@ function _renderWindow(scope) {
 
 module.exports = {
   HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage,
-  ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
+  ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM,
+  INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
   TIER_HWTRACE, TIER_DYNAMORIO, TIER_EMULATOR,
-  FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+  FIDELITY_NATIVE, FIDELITY_VIRTUAL, FIDELITY_STATISTICAL,
+  MECH_NONE, MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR, MECH_BLOCKSTEP,
+  MECH_PER_INSN, MECH_DBI, MECH_EMULATOR, MECH_STATISTICAL,
+  STAGE_OK, STAGE_DECODER, STAGE_CPU, STAGE_PMU, STAGE_PROBE,
   TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
   ASMTEST_PTRACE_OK, ASMTEST_PTRACE_ENOENT,
   DESCENT_OFF, DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN, DESCENT_DESCEND_ALL,

@@ -621,6 +621,100 @@ int main() {
         }
     }
 
+    // ---- 2026-07 API flag day: struct_size guard + status + mechanism ----
+    // F27: the options struct leads with struct_size and the library honors it —
+    // a size too small to reach `backend` is EINVAL (proving the negotiator is
+    // live), a future (larger) declared size still inits, and the wrapper's own
+    // init() self-describes.
+    {
+        detail::HwApi &a = detail::api();
+        asmtest_hwtrace_options_t tiny{};
+        tiny.struct_size = sizeof(size_t); // cannot even carry `backend`
+        tiny.backend = ASMTEST_HWTRACE_SINGLESTEP;
+        ok(a.init(&tiny) == ASMTEST_HW_EINVAL,
+           "flagday: struct_size too small to reach backend is EINVAL");
+
+        asmtest_hwtrace_options_t fut{};
+        fut.struct_size = sizeof fut + 64; // pretend-future caller
+        fut.backend = ASMTEST_HWTRACE_SINGLESTEP;
+        ok(a.init(&fut) == ASMTEST_HW_OK,
+           "flagday: a future (larger) struct_size inits OK");
+        HwTrace::shutdown();
+
+        HwTrace::init(SINGLESTEP); // wrapper path self-describes
+        HwTrace::shutdown();
+        ok(true, "flagday: wrapper init() negotiates struct_size");
+    }
+
+    // F29: status() is available()/skip_reason() made machine-readable — and
+    // distinguishes EPERM (substrate present, permission denied) from EUNAVAIL.
+    {
+        const int paranoid = HwTrace::perfEventParanoid();
+        bool inv = true;
+        for (int b : {static_cast<int>(INTEL_PT), static_cast<int>(CORESIGHT),
+                      static_cast<int>(AMD_LBR), static_cast<int>(SINGLESTEP)}) {
+            HwStatus st = HwTrace::status(b);
+            inv &= (st.available == HwTrace::available(b));
+            inv &= ((st.code == ASMTEST_HW_OK) == st.available);
+            inv &= (st.code == ASMTEST_HW_OK ||
+                    st.code == ASMTEST_HW_EUNAVAIL ||
+                    st.code == ASMTEST_HW_EPERM);
+            inv &= (st.reason == HwTrace::skip_reason(b));
+            inv &= (st.perf_event_paranoid == paranoid);
+        }
+        ok(inv, "flagday: status() invariants hold for all four backends");
+        HwStatus ss = HwTrace::status(SINGLESTEP);
+        ok(ss.code == ASMTEST_HW_OK && ss.stage == ASMTEST_HW_STAGE_OK,
+           "flagday: status(SINGLESTEP) is OK on this host");
+        // LIVE permission-vs-hardware lane (self-skips where not applicable):
+        // an AMD probe that reached the perf open under paranoid>2 without root
+        // must classify EPERM, never missing-silicon EUNAVAIL.
+        HwStatus amd = HwTrace::status(AMD_LBR);
+        if (amd.stage == ASMTEST_HW_STAGE_PROBE && paranoid > 2 &&
+            ::geteuid() != 0) {
+            ok(amd.code == ASMTEST_HW_EPERM,
+               "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL");
+        } else {
+            std::printf("# SKIP flagday live-EPERM lane (stage=%d paranoid=%d)\n",
+                        amd.stage, paranoid);
+        }
+    }
+
+    // F22/F26/F37: the mechanism discriminator — resolved rows and call_auto's
+    // `used` carry the concrete capture mechanism; exact producers are never
+    // STATISTICAL.
+    {
+        bool rows_ok = true;
+        for (const TierChoice &c : HwTrace::resolveTiers(TRACE_BEST)) {
+            rows_ok &= (c.mechanism != MECH_NONE &&
+                        c.mechanism != MECH_STATISTICAL &&
+                        c.fidelity != FIDELITY_STATISTICAL);
+            if (c.tier == TIER_HWTRACE && c.backend == SINGLESTEP)
+                rows_ok &= (c.mechanism == MECH_TF_STEP);
+        }
+        ok(rows_ok, "flagday: resolved rows carry a concrete, exact mechanism");
+
+        NativeCode code = NativeCode::from_bytes(ROUTINE);
+        auto res = HwTrace::traceCallAuto(code, 20L, 22L);
+        if (res.rc == ASMTEST_HW_OK) {
+            ok(res.used.mechanism == MECH_HW_BRANCH ||
+                   res.used.mechanism == MECH_TF_STEP ||
+                   res.used.mechanism == MECH_MSR_LBR ||
+                   res.used.mechanism == MECH_BLOCKSTEP ||
+                   res.used.mechanism == MECH_PER_INSN,
+               "flagday: traceCallAuto reports the winning rung");
+            ok(res.used.mechanism != MECH_STATISTICAL &&
+                   res.used.fidelity == FIDELITY_NATIVE,
+               "flagday: the exact call-owning ladder is never STATISTICAL");
+            res.trace->free();
+        } else {
+            ok(res.rc == ASMTEST_HW_EUNAVAIL &&
+                   res.used.mechanism == MECH_NONE,
+               "flagday: EUNAVAIL leaves used.mechanism == MECH_NONE");
+        }
+        code.free();
+    }
+
     std::printf("1..%d\n", g_test);
     return g_failed == 0 ? 0 : 1;
 }

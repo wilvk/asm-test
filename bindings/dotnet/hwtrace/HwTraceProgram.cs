@@ -112,6 +112,13 @@ static class HwTraceProgram
         // --- AsmMethod name parsing (pure, host-independent) --- //
         AsmMethodChecks();
 
+        // --- 2026-07 API flag day: struct-size guard + status + mechanism --- //
+        // (Re-inits/Shutdowns the tier internally, so run before the fixtures
+        // below re-Init.)
+        HwTrace.Shutdown();
+        FlagdayChecks();
+        HwTrace.Init(HwBackend.SingleStep);
+
         try
         {
             // --- fixture 1: ROUTINE, exact instruction stream + block coverage --- //
@@ -1184,6 +1191,75 @@ static class HwTraceProgram
             lres.Trace.Free();
         }
         loop.Free();
+    }
+
+    // 2026-07 API flag day: F27 struct-size guard + F29 status + F22/F26/F37 mechanism.
+    static void FlagdayChecks()
+    {
+        // F27: Init() self-describes via Marshal.SizeOf of the mirrored Options — a
+        // drifted mirror (or a library that stopped honoring StructSize) would throw.
+        HwTrace.Init(HwBackend.SingleStep);
+        HwTrace.Shutdown();
+        Check(true, "flagday: Init() negotiates struct_size (F27)");
+
+        // F29: Status() is Available()/SkipReason() made machine-readable — one
+        // classifier, so they can never drift — and distinguishes EPERM (substrate
+        // present, permission denied) from EUNAVAIL (hardware absent).
+        int paranoid = HwTrace.PerfEventParanoid();
+        bool inv = true;
+        foreach (var b in new[] { HwBackend.IntelPt, HwBackend.CoreSight, HwBackend.AmdLbr, HwBackend.SingleStep })
+        {
+            var st = HwTrace.Status(b);
+            inv &= (st.Available == HwTrace.Available(b));
+            inv &= ((st.Code == HwNative.ASMTEST_HW_OK) == st.Available);
+            inv &= (st.Code == HwNative.ASMTEST_HW_OK || st.Code == HwNative.ASMTEST_HW_EUNAVAIL
+                    || st.Code == HwNative.ASMTEST_HW_EPERM);
+            inv &= (st.Reason == HwTrace.SkipReason(b));
+            inv &= (st.PerfEventParanoid == paranoid);
+        }
+        Check(inv, "flagday: Status() invariants hold for all four backends (F29)");
+        var ss = HwTrace.Status(HwBackend.SingleStep);
+        Check(ss.Code == HwNative.ASMTEST_HW_OK && ss.Stage == HwNative.STAGE_OK,
+              "flagday: Status(SingleStep) is OK on this host");
+        // LIVE permission-vs-hardware lane (self-skips where not applicable): an AMD
+        // probe that reached the perf open under paranoid>2 must classify EPERM —
+        // never missing-silicon EUNAVAIL. (CAP_PERFMON/root would make the probe
+        // SUCCEED, so stage==STAGE_PROBE + paranoid>2 is a sufficient guard.)
+        var amd = HwTrace.Status(HwBackend.AmdLbr);
+        if (amd.Stage == HwNative.STAGE_PROBE && paranoid > 2)
+            Check(amd.Code == HwNative.ASMTEST_HW_EPERM,
+                  "flagday LIVE: paranoid-blocked AMD probe is EPERM, not EUNAVAIL");
+        else
+            Console.WriteLine($"# SKIP flagday live-EPERM lane (stage={amd.Stage} paranoid={paranoid})");
+
+        // F22/F26/F37: resolved rows and TraceCallAuto's Used carry the concrete
+        // mechanism; no exact producer is ever Statistical.
+        bool rowsOk = true;
+        foreach (var c in HwTrace.ResolveTiers(TracePolicy.Best))
+        {
+            rowsOk &= (c.Mechanism != TraceMechanism.None
+                       && c.Mechanism != TraceMechanism.Statistical
+                       && c.Fidelity != TraceFidelity.Statistical);
+            if (c.Tier == TraceTier.HwTrace && c.Backend == HwBackend.SingleStep)
+                rowsOk &= (c.Mechanism == TraceMechanism.TfStep);
+        }
+        Check(rowsOk, "flagday: resolved rows carry a concrete, exact mechanism (F22)");
+
+        var code = NativeCode.FromBytes(ROUTINE);
+        var res = HwTrace.TraceCallAuto(code, new long[] { 20, 22 });
+        if (res.Rc == HwNative.ASMTEST_HW_OK)
+        {
+            var m = res.Used.Value.Mechanism;
+            Check(m == TraceMechanism.HwBranch || m == TraceMechanism.TfStep
+                  || m == TraceMechanism.MsrLbr || m == TraceMechanism.BlockStep
+                  || m == TraceMechanism.PerInsn,
+                  $"flagday: TraceCallAuto reports the winning rung (got {m})");
+            Check(m != TraceMechanism.Statistical
+                  && res.Used.Value.Fidelity == TraceFidelity.Native,
+                  "flagday: the exact call-owning ladder is never Statistical");
+            res.Trace.Free();
+        }
+        code.Free();
     }
 
     static void PtraceChecks()

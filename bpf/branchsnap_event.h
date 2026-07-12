@@ -14,8 +14,14 @@
 #define BSNAP_ENTRY_SZ 24u
 
 struct bsnap_event {
-    unsigned long long nr;                       /* valid perf_branch_entry count */
-    unsigned char raw[BSNAP_MAX * BSNAP_ENTRY_SZ]; /* perf_branch_entry[nr], recast */
+    unsigned long long nr; /* valid perf_branch_entry count */
+    /* WHICH boundary froze this window: the absolute address of the exit breakpoint
+     * that fired, threaded through the bpf attach cookie (P5 — with one breakpoint per
+     * exit the drain must know the frozen point to append the deterministic boundary
+     * edge; 0 if the kernel/libbpf did not deliver a cookie). */
+    unsigned long long exit_ip;
+    unsigned char
+        raw[BSNAP_MAX * BSNAP_ENTRY_SZ]; /* perf_branch_entry[nr], recast */
 };
 
 #endif /* ASMTEST_BRANCHSNAP_EVENT_H */

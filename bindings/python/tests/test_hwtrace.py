@@ -12,8 +12,13 @@ import pytest
 
 from asmtest.hwtrace import (
     HwTrace, NativeCode, Ptrace, CodeImage, SINGLESTEP, AMD_LBR,
-    BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL,
+    INTEL_PT, CORESIGHT,
+    BEST, CEILING_FREE, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_OK, ASMTEST_HW_EPERM,
     TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
+    FIDELITY_STATISTICAL,
+    MECH_NONE, MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR, MECH_BLOCKSTEP,
+    MECH_PER_INSN, MECH_STATISTICAL,
+    STAGE_OK, STAGE_PROBE,
     TRACE_BEST, TRACE_CEILING_FREE, TRACE_NATIVE_ONLY,
     ASMTEST_CI_KIND_MPROTECT,
 )
@@ -223,6 +228,87 @@ def test_cross_tier_native_only_resolves_on_linux_x86_64():
     pick = HwTrace.auto_tier(TRACE_NATIVE_ONLY)
     assert nat and pick is not None and pick.fidelity == FIDELITY_NATIVE
     assert any(c.tier == TIER_HWTRACE and c.backend == SINGLESTEP for c in nat)
+
+
+def test_options_struct_size_guard():
+    """F27 flag day: the mirrored options struct leads with ``struct_size`` and
+    the library honors it — a size too small to reach ``backend`` is EINVAL,
+    a future (larger) declared size still inits, and the normal init() path
+    (which self-describes) works."""
+    import ctypes as C
+
+    from asmtest import hwtrace as hw
+
+    if not HwTrace.available(SINGLESTEP):
+        pytest.skip(f"single-step backend unavailable: {HwTrace.skip_reason(SINGLESTEP)}")
+    lib = hw._get()
+
+    # A struct_size that cannot even carry `backend` is rejected — proving the
+    # leading negotiator is at offset 0 and actually honored.
+    tiny = hw._Options()
+    tiny.struct_size = C.sizeof(C.c_size_t)
+    tiny.backend = SINGLESTEP
+    assert lib.asmtest_hwtrace_init(C.byref(tiny)) == -1  # ASMTEST_HW_EINVAL
+
+    # A pretend-future caller declaring a LARGER size inits fine (the library
+    # clamps its copy to its own sizeof and ignores the unknown tail).
+    fut = hw._Options()
+    fut.struct_size = C.sizeof(hw._Options) + 64
+    fut.backend = SINGLESTEP
+    assert lib.asmtest_hwtrace_init(C.byref(fut)) == ASMTEST_HW_OK
+    HwTrace.shutdown()
+
+    # And the ordinary wrapper path self-describes and still traces.
+    HwTrace.init(SINGLESTEP)
+    HwTrace.shutdown()
+
+
+def test_status_surface_invariants():
+    """F29: status() is available()/skip_reason() made machine-readable — one
+    classifier, so they can never drift — and distinguishes EPERM (substrate
+    present, permission denied) from EUNAVAIL (hardware absent)."""
+    paranoid = HwTrace.perf_event_paranoid()
+    for b in (INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP):
+        st = HwTrace.status(b)
+        assert st.available == HwTrace.available(b)
+        assert (st.code == ASMTEST_HW_OK) == st.available
+        assert st.code in (ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM)
+        assert st.reason == HwTrace.skip_reason(b)
+        assert st.perf_event_paranoid == paranoid
+    if HwTrace.available(SINGLESTEP):
+        st = HwTrace.status(SINGLESTEP)
+        assert st.code == ASMTEST_HW_OK and st.stage == STAGE_OK
+
+    # The LIVE permission-vs-hardware distinction (self-skipping lane): an AMD
+    # probe that REACHED the perf open while paranoid blocks unprivileged perf
+    # must classify as EPERM, never as missing silicon.
+    st = HwTrace.status(AMD_LBR)
+    if st.stage == STAGE_PROBE and paranoid > 2 and os.geteuid() != 0:
+        assert st.code == ASMTEST_HW_EPERM
+        assert not st.available and not HwTrace.available(AMD_LBR)
+
+
+def test_mechanism_discriminator():
+    """F22/F26/F37: resolved rows and call_auto's ``used`` carry the concrete
+    capture mechanism; no exact producer ever reports STATISTICAL."""
+    for c in HwTrace.resolve_tiers(TRACE_BEST):
+        assert c.mechanism != MECH_NONE
+        assert c.mechanism != MECH_STATISTICAL
+        assert c.fidelity != FIDELITY_STATISTICAL
+        if c.tier == TIER_HWTRACE and c.backend == SINGLESTEP:
+            assert c.mechanism == MECH_TF_STEP
+
+    if not HwTrace.available(SINGLESTEP):
+        pytest.skip(f"single-step backend unavailable: {HwTrace.skip_reason(SINGLESTEP)}")
+    code = NativeCode.from_bytes(ROUTINE)
+    r = HwTrace.trace_call_auto(code, 20, 22)
+    assert r.rc == ASMTEST_HW_OK and r.result == 42
+    assert r.used.mechanism in (MECH_HW_BRANCH, MECH_TF_STEP, MECH_MSR_LBR,
+                                MECH_BLOCKSTEP, MECH_PER_INSN)
+    assert r.used.mechanism != MECH_STATISTICAL
+    assert r.used.fidelity == FIDELITY_NATIVE
+    r.trace.free()
+    code.free()
 
 
 def test_auto_resolve_traces_live():

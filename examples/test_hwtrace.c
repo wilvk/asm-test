@@ -15,6 +15,8 @@
 #include "asmtest_trace.h"
 #include "asmtest_trace_auto.h"
 
+#include <limits.h> /* INT_MIN — the perf_event_paranoid absent-file sentinel (F29) */
+#include <stddef.h> /* offsetof — the F27 options ABI-guard test */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +59,8 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
                                  struct perf_branch_entry *out);
 size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
+size_t asmtest_amd_all_exits(const void *base, size_t len, size_t *out, int cap,
+                             int *nexit);
 /* F43 ring-parse seam + P9 cpuinfo-flag matchers (internal, defined in
  * hwtrace.c / amd_backend.c; hand-declared here like the AMD decode entries above). */
 void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
@@ -128,6 +132,16 @@ static int checks, failures;
             failures++;                                                        \
     } while (0)
 
+/* F27 flag-day idiom (amd-tracing-followup-plan Phase 1): zero the options,
+ * self-describe the caller's compiled-in struct size, pick the backend. Every
+ * init site below goes through this so no site can miss the size negotiation. */
+#define INIT_OPTS(o, b)                                                        \
+    do {                                                                       \
+        memset(&(o), 0, sizeof(o));                                            \
+        (o).struct_size = sizeof(o);                                           \
+        (o).backend = (b);                                                     \
+    } while (0)
+
 /* AMD-LBR reconstruction is validated WITHOUT capture hardware: feed the decoder
  * a synthetic branch-record array (what Zen 3/4 would capture for a known path)
  * and assert it reconstructs the exact same offsets the PT/DynamoRIO backends do.
@@ -163,8 +177,7 @@ static void test_debug_logging(void) {
                 unsetenv("ASMTEST_AMD_DEBUG");
             }
             asmtest_hwtrace_options_t o;
-            memset(&o, 0, sizeof o);
-            o.backend = ASMTEST_HWTRACE_SINGLESTEP;
+            INIT_OPTS(o, ASMTEST_HWTRACE_SINGLESTEP);
             asmtest_hwtrace_init(
                 &o); /* logs "init: backend=..." when enabled */
             asmtest_hwtrace_shutdown();
@@ -554,8 +567,7 @@ static const unsigned char AMD_LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00,
  * reports loop-body coverage and the truncation bit. */
 static uint64_t amd_capture_loop(void *p, long trips, int *cov7, int *trunc) {
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     asmtest_hwtrace_register_region("amdloop", p, sizeof AMD_LOOP, tr);
@@ -578,8 +590,7 @@ static uint64_t amd_capture_loop(void *p, long trips, int *cov7, int *trunc) {
 static uint64_t amd_capture_loop_period(void *p, long trips, int period,
                                         int *trunc) {
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
     opts.lbr_period = period;
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(4096, 64);
@@ -627,8 +638,7 @@ static void test_amd_live(void) {
         mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
         __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
         asmtest_hwtrace_options_t opts;
-        memset(&opts, 0, sizeof opts);
-        opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+        INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
         CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
               "AMD LBR live init");
         asmtest_trace_t *tr = asmtest_trace_new(64, 64);
@@ -653,8 +663,7 @@ static void test_amd_live(void) {
          * on THIS lane (typically built without libbpf) the arm fails and the
          * markers must fall back to the sampled path with the same honest result —
          * never an error, never empty-yet-complete. */
-        memset(&opts, 0, sizeof opts);
-        opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+        INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
         opts.snapshot = 1;
         CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
               "AMD LBR live snapshot-opt-in init");
@@ -1108,6 +1117,51 @@ static void test_amd_tailcall_exit(void) {
         CHECK(nexit == 0 && off == (size_t)-1,
               "tail-call exit: an in-region direct jmp (loop/forward) does NOT "
               "count");
+    }
+    /* --- P5 asmtest_amd_all_exits: full exit ENUMERATION (the multi-exit boundary
+     * snapshot arms one breakpoint per enumerated offset). --- */
+    /* (5) A 3-ret region: all three offsets written ASCENDING, count 3, return == last. */
+    {
+        const unsigned char R[] = {0xc3, 0x90, 0xc3, 0x90, 0xc3};
+        size_t offs[4] = {(size_t)-2, (size_t)-2, (size_t)-2, (size_t)-2};
+        int nexit = -1;
+        size_t off = asmtest_amd_all_exits(R, sizeof R, offs, 4, &nexit);
+        CHECK(nexit == 3 && off == 4 && offs[0] == 0 && offs[1] == 2 &&
+                  offs[2] == 4 && offs[3] == (size_t)-2,
+              "all exits: a 3-ret region enumerates 3 ascending offsets, "
+              "return == last");
+    }
+    /* (6) FIVE exits with cap=4 (more exits than debug registers): the total count is
+     * still 5 — so hwtrace_begin_amd withholds the default-on snapshot — only the first
+     * 4 are written (out[4] untouched), and the return is the TRUE last exit even
+     * though it did not fit the buffer. */
+    {
+        const unsigned char R[] = {0xc3, 0xc3, 0xc3, 0xc3, 0xc3};
+        size_t offs[5] = {(size_t)-2, (size_t)-2, (size_t)-2, (size_t)-2,
+                          (size_t)-2};
+        int nexit = -1;
+        size_t off = asmtest_amd_all_exits(R, sizeof R, offs, 4, &nexit);
+        CHECK(nexit == 5 && off == 4 && offs[0] == 0 && offs[1] == 1 &&
+                  offs[2] == 2 && offs[3] == 3 && offs[4] == (size_t)-2,
+              "all exits: 5 exits at cap=4 reports the TRUE total (5) and "
+              "last (4), writes only 4");
+    }
+    /* (7) ret + region-leaving tail jmp: BOTH enumerated (n==2), ascending. */
+    {
+        const unsigned char R[] = {0xc3, /* ret */
+                                   0xe9, 0x10, 0x00,
+                                   0x00, 0x00}; /* jmp +0x10 */
+        size_t offs[4] = {(size_t)-2, (size_t)-2, (size_t)-2, (size_t)-2};
+        int nexit = -1;
+        size_t off = asmtest_amd_all_exits(R, sizeof R, offs, 4, &nexit);
+        CHECK(nexit == 2 && off == 1 && offs[0] == 0 && offs[1] == 1,
+              "all exits: ret + tail-jmp enumerates both exits (ret then jmp)");
+        /* Classification contract lock: the thin last_exit_off wrapper agrees with
+         * all_exits byte-for-byte (same count, same last offset). */
+        int nexit_w = -1;
+        size_t off_w = asmtest_amd_last_exit_off(R, sizeof R, &nexit_w);
+        CHECK(nexit_w == nexit && off_w == off,
+              "all exits: last_exit_off is a thin wrapper (same count + last)");
     }
 #else
     printf("# SKIP AMD tail-call exit: not Linux x86-64\n");
@@ -1758,8 +1812,7 @@ static void test_concurrent_amd(void) {
     }
 #if defined(__linux__) && defined(__x86_64__)
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
     if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
         printf("# SKIP concurrent AMD: init failed\n");
         return;
@@ -1807,8 +1860,7 @@ static void test_singlestep_live(void) {
     __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
 
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "single-step init");
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
@@ -1859,8 +1911,7 @@ static void test_singlestep_loop(void) {
     __builtin___clear_cache((char *)p, (char *)p + sizeof LOOP);
 
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(256, 64);
     asmtest_hwtrace_register_region("loop", p, sizeof LOOP, tr);
@@ -1926,8 +1977,7 @@ static void test_call_scoped(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "call_scoped init");
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
@@ -1990,8 +2040,7 @@ static void test_call_scoped_fp(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "call_scoped_fp init");
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
@@ -2041,8 +2090,7 @@ static void test_call_scoped_ex(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
@@ -2100,8 +2148,7 @@ static void test_stitch_handles(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
 
     /* Hop A: add2(20,22)=42 → jle taken → 5 insns {0,3,6,c,11}. */
@@ -2169,8 +2216,7 @@ static void test_try_begin_busy(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     asmtest_hwtrace_register_region("add2", p, sizeof ROUTINE, tr);
@@ -2240,8 +2286,7 @@ static void test_arm_tid_mismatch(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     asmtest_hwtrace_register_region("add2", p, sizeof ROUTINE, tr);
@@ -2290,8 +2335,7 @@ static void test_render_singlestep(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);
     asmtest_hwtrace_register_region("add2", p, sizeof ROUTINE, tr);
@@ -2353,8 +2397,7 @@ static void test_register_idempotent(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
 
     /* Part 1: a second registration under the same name refreshes the slot's trace
      * pointer in place. Register "add2" with tr1, then again with tr2; run it. If
@@ -2428,8 +2471,7 @@ static void test_nested_singlestep(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     asmtest_trace_t *tr_out = asmtest_trace_new(64, 64);
     asmtest_trace_t *tr_in = asmtest_trace_new(64, 64);
@@ -2533,8 +2575,7 @@ static void test_concurrent_singlestep(void) {
     }
 #if defined(__linux__) && defined(__x86_64__)
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     /* add2(20,22)=42 takes the jle -> 5 insns; add2(200,50)=249 falls through the
      * dec -> 6 insns. Different traces prove no cross-thread aliasing. */
@@ -2564,8 +2605,7 @@ static void test_concurrent_samename(void) {
     }
 #if defined(__linux__) && defined(__x86_64__)
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
     struct ss_cc_arg a = {NULL, 20, 22, 42, 5, 1, 0};
     struct ss_cc_arg b = {NULL, 200, 50, 249, 6, 1, 0};
@@ -3009,8 +3049,7 @@ static void test_auto_resolve(void) {
             mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
             __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
             asmtest_hwtrace_options_t opts;
-            memset(&opts, 0, sizeof opts);
-            opts.backend = (asmtest_trace_backend_t)ab;
+            INIT_OPTS(opts, (asmtest_trace_backend_t)ab);
             if (asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK) {
                 asmtest_trace_t *tr = asmtest_trace_new(64, 64);
                 asmtest_hwtrace_register_region("auto", p, sizeof ROUTINE, tr);
@@ -3124,6 +3163,260 @@ static void test_cross_tier_resolve(void) {
                    nat[i].backend == ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(has_ss, "cross-tier native cascade includes the single-step floor "
                   "(x86-64 Linux)");
+#endif
+}
+
+/* F27/F36 — the size-negotiated options ABI guard (amd-tracing-followup-plan
+ * Phase 1). Host-independent: (a) a caller compiled against an OLDER, SMALLER
+ * options struct hands init exactly its legacy-sized allocation and must never
+ * be read out of bounds (an ASan build makes this a hard guard, not a hope);
+ * (b) a nonzero struct_size too small to even carry `backend` is EINVAL; (c) a
+ * pretend-FUTURE caller with a larger struct + struct_size inits fine (the
+ * unknown tail is ignored); (d) reject-0: a caller that never set struct_size
+ * is a bug (a dropped trailing field), so struct_size==0 is EINVAL — every
+ * in-tree caller now self-describes (INIT_OPTS, or an explicit set post-memset). */
+static void test_options_abi_guard(void) {
+#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP options ABI guard: single-step backend unavailable\n");
+        return;
+    }
+    const int ss_backend = (int)ASMTEST_HWTRACE_SINGLESTEP;
+
+    /* (a) legacy-sized caller: EXACTLY sizeof - sizeof(size_t) bytes (the
+     * pre-flag-day 48), self-described. Fields are poked through offsetof so
+     * nothing here reads or writes past the short allocation either. */
+    const size_t legacy = sizeof(asmtest_hwtrace_options_t) - sizeof(size_t);
+    unsigned char *lo = (unsigned char *)calloc(1, legacy);
+    if (lo == NULL) {
+        printf("# SKIP options ABI guard: calloc failed\n");
+        return;
+    }
+    memcpy(lo + offsetof(asmtest_hwtrace_options_t, struct_size), &legacy,
+           sizeof legacy);
+    memcpy(lo + offsetof(asmtest_hwtrace_options_t, backend), &ss_backend,
+           sizeof ss_backend);
+    int rc = asmtest_hwtrace_init((const asmtest_hwtrace_options_t *)lo);
+    CHECK(rc == ASMTEST_HW_OK,
+          "ABI guard: a legacy-sized (smaller) options struct inits OK with "
+          "no out-of-bounds read");
+    asmtest_hwtrace_shutdown();
+    free(lo);
+
+    /* (b) a struct_size that cannot reach `backend` is not a self-description. */
+    asmtest_hwtrace_options_t bad;
+    INIT_OPTS(bad, ASMTEST_HWTRACE_SINGLESTEP);
+    bad.struct_size = sizeof(size_t); /* covers only the negotiator itself */
+    CHECK(asmtest_hwtrace_init(&bad) == ASMTEST_HW_EINVAL,
+          "ABI guard: struct_size too small to reach `backend` is EINVAL");
+
+    /* (c) pretend-FUTURE caller: larger allocation + struct_size, junk tail —
+     * the library copies only its own sizeof and ignores the tail. */
+    const size_t future = sizeof(asmtest_hwtrace_options_t) + 64;
+    unsigned char *fo = (unsigned char *)calloc(1, future);
+    if (fo != NULL) {
+        memcpy(fo + offsetof(asmtest_hwtrace_options_t, struct_size), &future,
+               sizeof future);
+        memcpy(fo + offsetof(asmtest_hwtrace_options_t, backend), &ss_backend,
+               sizeof ss_backend);
+        memset(fo + sizeof(asmtest_hwtrace_options_t), 0xa5, 64);
+        rc = asmtest_hwtrace_init((const asmtest_hwtrace_options_t *)fo);
+        CHECK(rc == ASMTEST_HW_OK,
+              "ABI guard: a future (larger) struct_size inits OK, unknown "
+              "tail ignored");
+        asmtest_hwtrace_shutdown();
+        free(fo);
+    }
+
+    /* (d) reject-0: a zero-filled caller that never set struct_size is not
+     * self-describing (a set trailing field would be silently dropped), so init
+     * refuses it with EINVAL rather than guessing a legacy size. */
+    asmtest_hwtrace_options_t zf;
+    memset(&zf, 0, sizeof zf);
+    zf.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    CHECK(asmtest_hwtrace_init(&zf) == ASMTEST_HW_EINVAL,
+          "ABI guard: struct_size==0 is EINVAL (caller must self-describe)");
+#else
+    printf("# SKIP options ABI guard: single-step tier not on this arch/OS\n");
+#endif
+}
+
+/* F29 — the machine-readable EPERM-vs-EUNAVAIL status surface. The
+ * host-independent invariants lock status() to available()/skip_reason() (one
+ * classifier, no drift); the LIVE lane then asserts the very distinction the
+ * surface exists for: on an AMD host whose branch-record probe REACHED the
+ * perf open (so decoder+vendor gates passed) while unprivileged perf is
+ * blocked kernel-wide (paranoid > 2, non-root — e.g. the Zen 5 dev box at
+ * paranoid=4), the verdict must be EPERM (substrate present, permission
+ * denied), never the EUNAVAIL a missing-silicon host reports. */
+static void test_status_surface(void) {
+    static const asmtest_trace_backend_t all[] = {
+        ASMTEST_HWTRACE_INTEL_PT, ASMTEST_HWTRACE_CORESIGHT,
+        ASMTEST_HWTRACE_AMD_LBR, ASMTEST_HWTRACE_SINGLESTEP};
+    CHECK(asmtest_hwtrace_status(ASMTEST_HWTRACE_INTEL_PT, NULL) ==
+              ASMTEST_HW_EINVAL,
+          "status: NULL out is EINVAL");
+
+    const int paranoid = asmtest_hwtrace_perf_event_paranoid();
+    int inv_avail = 1, inv_code = 1, inv_reason = 1, inv_paranoid = 1,
+        inv_errno = 1;
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) {
+        asmtest_hwtrace_status_t st;
+        if (asmtest_hwtrace_status(all[i], &st) != ASMTEST_HW_OK) {
+            inv_avail = 0;
+            continue;
+        }
+        char why[160];
+        asmtest_hwtrace_skip_reason(all[i], why, sizeof why);
+        printf("# status[%d]: available=%d code=%d stage=%d errno=%d "
+               "reason=\"%s\"\n",
+               (int)all[i], st.available, st.code, st.stage, st.probe_errno,
+               st.reason);
+        inv_avail &=
+            (st.available == (asmtest_hwtrace_available(all[i]) ? 1 : 0));
+        inv_code &= ((st.code == ASMTEST_HW_OK) == (st.available == 1));
+        inv_code &=
+            (st.code == ASMTEST_HW_OK || st.code == ASMTEST_HW_EUNAVAIL ||
+             st.code == ASMTEST_HW_EPERM);
+        inv_reason &= (strcmp(st.reason, why) == 0);
+        inv_paranoid &= (st.perf_event_paranoid == paranoid);
+        inv_errno &=
+            ((st.stage == ASMTEST_HW_STAGE_PROBE) == (st.probe_errno != 0));
+#if defined(__linux__)
+        if (st.code == ASMTEST_HW_EPERM)
+            inv_errno &= (st.probe_errno == EACCES || st.probe_errno == EPERM);
+#endif
+    }
+    CHECK(inv_avail, "status: available mirrors asmtest_hwtrace_available for "
+                     "all four backends");
+    CHECK(inv_code,
+          "status: code is OK exactly when available (else EUNAVAIL/EPERM)");
+    CHECK(inv_reason,
+          "status: reason is byte-identical to skip_reason (one classifier)");
+    CHECK(inv_paranoid,
+          "status: perf_event_paranoid matches the standalone reader");
+    CHECK(inv_errno, "status: probe_errno set exactly at the probe stage "
+                     "(EPERM implies a permission errno)");
+
+#if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
+    asmtest_hwtrace_status_t ss;
+    CHECK(asmtest_hwtrace_status(ASMTEST_HWTRACE_SINGLESTEP, &ss) ==
+                  ASMTEST_HW_OK &&
+              ss.code == ASMTEST_HW_OK && ss.stage == ASMTEST_HW_STAGE_OK,
+          "status: single-step is OK on x86-64 (no PMU/perf/privilege gate)");
+#endif
+
+#if defined(__linux__)
+    CHECK(paranoid != INT_MIN, "status: perf_event_paranoid readable on Linux");
+    asmtest_hwtrace_status_t amd;
+    memset(&amd, 0, sizeof amd);
+    if (asmtest_hwtrace_status(ASMTEST_HWTRACE_AMD_LBR, &amd) ==
+            ASMTEST_HW_OK &&
+        amd.stage == ASMTEST_HW_STAGE_PROBE && paranoid > 2 && geteuid() != 0) {
+        CHECK(amd.code == ASMTEST_HW_EPERM,
+              "status LIVE: paranoid-blocked AMD branch probe is EPERM "
+              "(permission), never EUNAVAIL (missing silicon)");
+        CHECK(amd.available == 0 &&
+                  !asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR),
+              "status LIVE: available() still collapses EPERM to 0 (its 0/1 "
+              "ABI is unchanged)");
+        CHECK(amd.probe_errno == EACCES || amd.probe_errno == EPERM,
+              "status LIVE: the blocking errno is threaded out of the probe");
+    } else {
+        printf("# SKIP status live-EPERM lane: needs an AMD probe reaching "
+               "the perf open under paranoid>2 without root (stage=%d "
+               "paranoid=%d root=%d)\n",
+               amd.stage, paranoid, geteuid() == 0);
+    }
+#endif
+}
+
+/* F22/F26/F37 — the escalation-rung/mechanism discriminator, motivated by the
+ * 2026-07-12 Zen-2 IBS review: resolve() rows carry the concrete capture
+ * mechanism each row drives; asmtest_trace_call_auto's *used reports the rung
+ * that actually WON (in-process TF step vs fork-isolated block-step vs
+ * per-instruction re-run vs the AMD branch-record/MSR rungs); and no exact
+ * producer ever reports STATISTICAL — a statistical (IBS/sampled survey)
+ * result can never be mistaken for an exact one. */
+static void test_mechanism_discriminator(void) {
+    /* (a) static cascade rows map tier/backend -> mechanism, all EXACT. */
+    asmtest_trace_choice_t rows[8];
+    size_t n = asmtest_trace_resolve(ASMTEST_TRACE_BEST, rows, 8);
+    int ok_map = 1, ok_exact = 1;
+    for (size_t i = 0; i < n; i++) {
+        asmtest_trace_mechanism_t want = ASMTEST_TRACE_MECH_NONE;
+        switch (rows[i].tier) {
+        case ASMTEST_TIER_HWTRACE:
+            want = (rows[i].backend == ASMTEST_HWTRACE_SINGLESTEP)
+                       ? ASMTEST_TRACE_MECH_TF_STEP
+                       : ASMTEST_TRACE_MECH_HW_BRANCH;
+            break;
+        case ASMTEST_TIER_DYNAMORIO:
+            want = ASMTEST_TRACE_MECH_DBI;
+            break;
+        case ASMTEST_TIER_EMULATOR:
+            want = ASMTEST_TRACE_MECH_EMULATOR;
+            break;
+        }
+        ok_map &= (rows[i].mechanism == want);
+        ok_exact &= (rows[i].mechanism != ASMTEST_TRACE_MECH_STATISTICAL &&
+                     rows[i].fidelity != ASMTEST_FIDELITY_STATISTICAL);
+    }
+    CHECK(n >= 1, "mechanism: the cross-tier cascade is non-empty");
+    CHECK(ok_map,
+          "mechanism: every resolved row carries its tier's capture mechanism");
+    CHECK(ok_exact,
+          "mechanism: no exact cascade row is STATISTICAL (fidelity or rung)");
+
+#if defined(__linux__) && defined(__x86_64__)
+    /* (b) call_auto stamps the WINNING rung into *used — the F22 triage the
+     * cascade exists to support. *used is poisoned first to prove the stamp. */
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP mechanism call_auto: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    asmtest_trace_t *t = asmtest_trace_new(512, 64);
+    long args[2] = {20, 22}, result = 0;
+    asmtest_trace_choice_t used;
+    memset(&used, 0xff, sizeof used); /* poison: call_auto must write it */
+    int rc = asmtest_trace_call_auto(p, sizeof ROUTINE, args, 2,
+                                     ASMTEST_TRACE_BEST, &result, t, &used);
+    if (rc == ASMTEST_HW_OK) {
+        printf("# mechanism: call_auto won via mechanism=%d (tier=%d "
+               "backend=%d fidelity=%d)\n",
+               (int)used.mechanism, (int)used.tier, (int)used.backend,
+               (int)used.fidelity);
+        CHECK(used.mechanism == ASMTEST_TRACE_MECH_HW_BRANCH ||
+                  used.mechanism == ASMTEST_TRACE_MECH_TF_STEP ||
+                  used.mechanism == ASMTEST_TRACE_MECH_MSR_LBR ||
+                  used.mechanism == ASMTEST_TRACE_MECH_BLOCKSTEP ||
+                  used.mechanism == ASMTEST_TRACE_MECH_PER_INSN,
+              "mechanism: call_auto reports a concrete winning rung, never "
+              "NONE/stale");
+        CHECK(used.mechanism != ASMTEST_TRACE_MECH_STATISTICAL &&
+                  used.fidelity == ASMTEST_FIDELITY_NATIVE,
+              "mechanism: the exact call-owning ladder never reports "
+              "STATISTICAL");
+        if (used.tier == ASMTEST_TIER_HWTRACE &&
+            used.backend == ASMTEST_HWTRACE_SINGLESTEP)
+            CHECK(used.mechanism == ASMTEST_TRACE_MECH_TF_STEP ||
+                      used.mechanism == ASMTEST_TRACE_MECH_BLOCKSTEP ||
+                      used.mechanism == ASMTEST_TRACE_MECH_PER_INSN,
+                  "mechanism: the three SINGLESTEP-reporting rungs no longer "
+                  "collapse (F22)");
+    } else {
+        CHECK(rc == ASMTEST_HW_EUNAVAIL,
+              "mechanism: call_auto returns OK or EUNAVAIL");
+        CHECK(used.mechanism == ASMTEST_TRACE_MECH_NONE,
+              "mechanism: EUNAVAIL clears *used to MECH_NONE (no stale rung)");
+    }
+    asmtest_trace_free(t);
+    munmap(p, sizeof ROUTINE);
 #endif
 }
 
@@ -5500,8 +5793,7 @@ static void test_wholewindow_singlestep(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "whole-window init");
 
     asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
@@ -5603,8 +5895,7 @@ static void test_wholewindow_buckets(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
           "whole-window buckets init");
 
@@ -5707,8 +5998,7 @@ static void test_zeroctor_scope_hygiene(void) {
     sigaction(SIGTRAP, NULL, &sa_before);
 
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "scope hygiene init");
 
     /* (a) Nested: open a region-free window, then a region scope INSIDE it. */
@@ -5845,8 +6135,7 @@ static void test_wholewindow_banner(void) {
         return;
     }
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
           "whole-window banner init");
 
@@ -6212,6 +6501,14 @@ int main(void) {
     /* The cross-tier orchestrator: resolve over hwtrace + DynamoRIO + emulator. */
     test_cross_tier_resolve();
 
+    /* 2026-07 API flag day: the F27 size-negotiated options ABI guard, the F29
+     * EPERM-vs-EUNAVAIL status surface (live permission-distinction lane on a
+     * paranoid-blocked AMD host), and the F22/F26/F37 escalation-rung
+     * discriminator. */
+    test_options_abi_guard();
+    test_status_surface();
+    test_mechanism_discriminator();
+
     asmtest_trace_backend_t backend = ASMTEST_HWTRACE_INTEL_PT;
     if (!asmtest_hwtrace_available(backend)) {
         char why[160];
@@ -6240,8 +6537,7 @@ int main(void) {
     __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
 
     asmtest_hwtrace_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.backend = backend;
+    INIT_OPTS(opts, backend);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "hwtrace init");
 
     asmtest_trace_t *tr = asmtest_trace_new(64, 64);

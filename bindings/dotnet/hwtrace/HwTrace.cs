@@ -50,7 +50,32 @@ namespace Asmtest
     /// the real bytes on the real CPU in-process; Virtual runs an isolated guest on an
     /// emulated CPU. The single Native-&gt;Virtual transition is the line TracePolicy.NativeOnly gates.
     /// </summary>
-    public enum TraceFidelity { Native = 0, Virtual = 1 }
+    public enum TraceFidelity
+    {
+        Native = 0,      // runs the real bytes on the real CPU in-process
+        Virtual = 1,     // isolated guest on an emulated CPU
+        Statistical = 2, // sampled survey (IBS/LBR sampling): real CPU, NOT exact
+    }
+
+    /// <summary>
+    /// The concrete capture MECHANISM (escalation rung) behind a resolved choice /
+    /// <see cref="HwTrace.TraceCallAuto"/>'s winning rung — the F22/F26/F37
+    /// discriminator (mirrors asmtest_trace_mechanism_t). Every value except
+    /// Statistical is an EXACT producer; a statistical result is never mistakable
+    /// for an exact one.
+    /// </summary>
+    public enum TraceMechanism
+    {
+        None = 0,        // no rung produced a trace (EUNAVAIL)
+        HwBranch = 1,    // in-process HW branch record (PT / AMD LBR / CoreSight)
+        TfStep = 2,      // in-process EFLAGS.TF #DB single-step
+        MsrLbr = 3,      // in-process MSR-direct LBR re-run (rung 1b)
+        BlockStep = 4,   // fork-isolated BTF block-step re-run
+        PerInsn = 5,     // fork-isolated per-instruction ptrace re-run
+        Dbi = 6,         // in-process DynamoRIO code cache
+        Emulator = 7,    // Unicorn virtual CPU (isolated guest)
+        Statistical = 8, // sampled survey: never exact, never parity
+    }
 
     /// <summary>
     /// Cross-tier auto-selection policy bitmask (mirrors the ASMTEST_TRACE_* flags).
@@ -79,7 +104,16 @@ namespace Asmtest
         public const int ASMTEST_HW_ENOSYS = -5;   // not built / not this platform
         public const int ASMTEST_HW_EFULL = -6;    // this thread's range stack is full
         public const int ASMTEST_HW_EDECODE = -8;  // capture/decode failure
+        public const int ASMTEST_HW_EPERM = -9;    // perf capture PERMISSION denied
+                                                   // (substrate present) — status() only (F29)
         public const int SINGLESTEP = 3;
+
+        // asmtest_hwtrace_status_t.stage — which gate of the available() chain failed.
+        public const int STAGE_OK = 0;      // no gate failed — backend available
+        public const int STAGE_DECODER = 1; // decoder library not compiled in
+        public const int STAGE_CPU = 2;     // wrong CPU/ISA/vendor (or wrong OS)
+        public const int STAGE_PMU = 3;     // kernel PMU sysfs node absent
+        public const int STAGE_PROBE = 4;   // perf open probe failed (EPERM vs EUNAVAIL)
 
         // asmtest_hwtrace_scope_t: a region-free (§Z0/§Z1) scope handle — an index into
         // the calling thread's range stack tagged with a generation counter. Marshals
@@ -91,15 +125,31 @@ namespace Asmtest
             public uint Gen;
         }
 
-        // asmtest_trace_choice_t: three int-sized enum fields, no padding (pinned by a
-        // static_assert in asmtest_trace_auto.h), so it marshals as three consecutive C
+        // asmtest_trace_choice_t: four int-sized enum fields, no padding (pinned by a
+        // static_assert in asmtest_trace_auto.h), so it marshals as four consecutive C
         // ints — matching the [Out] Choice[] the cross-tier resolve writes into.
         [StructLayout(LayoutKind.Sequential)]
         public struct Choice
         {
-            public int Tier;     // asmtest_trace_tier_t
-            public int Backend;  // asmtest_trace_backend_t (valid iff Tier == TIER_HWTRACE)
-            public int Fidelity; // asmtest_trace_fidelity_t
+            public int Tier;      // asmtest_trace_tier_t
+            public int Backend;   // asmtest_trace_backend_t (valid iff Tier == TIER_HWTRACE)
+            public int Fidelity;  // asmtest_trace_fidelity_t
+            public int Mechanism; // asmtest_trace_mechanism_t (F22/F26/F37)
+        }
+
+        // asmtest_hwtrace_status_t: five C ints then a 160-byte inline reason string —
+        // the F29 machine-readable EPERM-vs-EUNAVAIL verdict. ByValArray keeps the
+        // project unsafe-free (the interop marshaler copies the inline array back).
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Status
+        {
+            public int Available;
+            public int Code;  // ASMTEST_HW_OK / ASMTEST_HW_EUNAVAIL / ASMTEST_HW_EPERM
+            public int Stage; // STAGE_* — which gate failed
+            public int PerfEventParanoid;
+            public int ProbeErrno;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 160)]
+            public byte[] Reason;
         }
 
         // asmtest_hwtrace_options_t: backend + two ring sizes + snapshot flag + an
@@ -110,6 +160,7 @@ namespace Asmtest
         [StructLayout(LayoutKind.Sequential)]
         public struct Options
         {
+            public UIntPtr StructSize; // size_t: the F27 ABI size negotiator — ALWAYS set
             public int Backend;       // asmtest_trace_backend_t
             public UIntPtr AuxSize;   // size_t: AUX (trace) ring bytes (0 = default)
             public UIntPtr DataSize;  // size_t: base perf ring bytes (0 = default)
@@ -239,6 +290,9 @@ namespace Asmtest
             IntPtr code, UIntPtr len, long[] args, int nargs, uint policy,
             out long result, IntPtr trace, out Choice used);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_init(ref Options opts);
+        // F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_status(int backend, out Status status);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_perf_event_paranoid();
         [DllImport(HWTRACE)] public static extern void asmtest_hwtrace_shutdown();
 
         // ---- region registration + markers (const char* name) ----
@@ -595,16 +649,55 @@ namespace Asmtest
         public TraceTier Tier { get; }
         public HwBackend Backend { get; }
         public TraceFidelity Fidelity { get; }
+        /// <summary>The concrete capture mechanism — for
+        /// <see cref="HwTrace.TraceCallAuto"/>'s Used, the escalation rung that
+        /// actually won (F22/F26/F37).</summary>
+        public TraceMechanism Mechanism { get; }
 
-        public TierChoice(TraceTier tier, HwBackend backend, TraceFidelity fidelity)
+        public TierChoice(TraceTier tier, HwBackend backend, TraceFidelity fidelity,
+                          TraceMechanism mechanism = TraceMechanism.None)
         {
             Tier = tier;
             Backend = backend;
             Fidelity = fidelity;
+            Mechanism = mechanism;
         }
 
         public override string ToString() =>
-            $"TierChoice(tier={Tier}, backend={Backend}, fidelity={Fidelity})";
+            $"TierChoice(tier={Tier}, backend={Backend}, fidelity={Fidelity}, mechanism={Mechanism})";
+    }
+
+    /// <summary>
+    /// The F29 machine-readable availability verdict for one backend (mirrors
+    /// asmtest_hwtrace_status_t): <see cref="Code"/> distinguishes EPERM (substrate
+    /// present, perf capture permission denied — lower perf_event_paranoid or grant
+    /// CAP_PERFMON) from EUNAVAIL (hardware/decoder/PMU absent) — the split
+    /// <see cref="HwTrace.Available"/>'s bool deliberately collapses.
+    /// <see cref="Reason"/> is byte-identical to <see cref="HwTrace.SkipReason"/>.
+    /// </summary>
+    public readonly struct HwStatus
+    {
+        public bool Available { get; }
+        public int Code { get; }
+        public int Stage { get; }
+        public int PerfEventParanoid { get; }
+        public int ProbeErrno { get; }
+        public string Reason { get; }
+
+        public HwStatus(bool available, int code, int stage, int perfEventParanoid,
+                        int probeErrno, string reason)
+        {
+            Available = available;
+            Code = code;
+            Stage = stage;
+            PerfEventParanoid = perfEventParanoid;
+            ProbeErrno = probeErrno;
+            Reason = reason;
+        }
+
+        public override string ToString() =>
+            $"HwStatus(available={Available}, code={Code}, stage={Stage}, " +
+            $"paranoid={PerfEventParanoid}, errno={ProbeErrno}, reason=\"{Reason}\")";
     }
 
     /// <summary>
@@ -756,6 +849,39 @@ namespace Asmtest
         }
 
         /// <summary>
+        /// The F29 machine-readable availability verdict (asmtest_hwtrace_status):
+        /// unlike <see cref="Available"/>'s bool, <c>Status().Code</c> distinguishes
+        /// ASMTEST_HW_EPERM (substrate present, perf capture permission denied — lower
+        /// perf_event_paranoid or grant CAP_PERFMON) from ASMTEST_HW_EUNAVAIL
+        /// (hardware/decoder/PMU absent), with the failing stage (STAGE_*), the probe
+        /// errno and the kernel paranoid level. Throws when the lib is missing.
+        /// </summary>
+        public static HwStatus Status(HwBackend backend = HwBackend.SingleStep)
+        {
+            if (!HwNative.LibAvailable)
+                throw new HwTraceException("libasmtest_hwtrace not loaded");
+            int rc = HwNative.asmtest_hwtrace_status((int)backend, out var st);
+            if (rc != HwNative.ASMTEST_HW_OK)
+                throw new HwTraceException($"asmtest_hwtrace_status failed: {rc}");
+            var reason = st.Reason ?? Array.Empty<byte>();
+            int z = Array.IndexOf(reason, (byte)0);
+            return new HwStatus(st.Available != 0, st.Code, st.Stage,
+                st.PerfEventParanoid, st.ProbeErrno,
+                System.Text.Encoding.UTF8.GetString(reason, 0, z < 0 ? reason.Length : z));
+        }
+
+        /// <summary>
+        /// The kernel's perf_event_paranoid level, or <see cref="int.MinValue"/> where
+        /// the proc file is absent (non-Linux / masked /proc). Above 2 blocks
+        /// unprivileged perf_event_open entirely (the EPERM case without CAP_PERFMON).
+        /// </summary>
+        public static int PerfEventParanoid()
+        {
+            if (!HwNative.LibAvailable) return int.MinValue;
+            return HwNative.asmtest_hwtrace_perf_event_paranoid();
+        }
+
+        /// <summary>
         /// §Z5.2 — the composed degradation LADDER: walk the backends most-faithful
         /// first (Intel PT → AMD LBR → single-step → CoreSight), naming each
         /// unavailable tier WITH its reason, ending at the first available one ("using
@@ -836,7 +962,8 @@ namespace Asmtest
             var choices = new TierChoice[n];
             for (int i = 0; i < n; i++)
                 choices[i] = new TierChoice(
-                    (TraceTier)buf[i].Tier, (HwBackend)buf[i].Backend, (TraceFidelity)buf[i].Fidelity);
+                    (TraceTier)buf[i].Tier, (HwBackend)buf[i].Backend,
+                    (TraceFidelity)buf[i].Fidelity, (TraceMechanism)buf[i].Mechanism);
             return choices;
         }
 
@@ -851,7 +978,8 @@ namespace Asmtest
             if (!HwNative.LibAvailable) return null;
             int rc = HwNative.asmtest_trace_auto((uint)policy, out var c);
             if (rc != HwNative.ASMTEST_HW_OK) return null;
-            return new TierChoice((TraceTier)c.Tier, (HwBackend)c.Backend, (TraceFidelity)c.Fidelity);
+            return new TierChoice((TraceTier)c.Tier, (HwBackend)c.Backend,
+                (TraceFidelity)c.Fidelity, (TraceMechanism)c.Mechanism);
         }
 
         /// <summary>
@@ -891,7 +1019,8 @@ namespace Asmtest
                 return new TraceCallAutoResult(0, null, null, false, rc);
             }
             var tc = new TierChoice(
-                (TraceTier)used.Tier, (HwBackend)used.Backend, (TraceFidelity)used.Fidelity);
+                (TraceTier)used.Tier, (HwBackend)used.Backend,
+                (TraceFidelity)used.Fidelity, (TraceMechanism)used.Mechanism);
             return new TraceCallAutoResult(result, trace, tc, trace.Truncated(), rc);
         }
 
@@ -936,7 +1065,12 @@ namespace Asmtest
         {
             lock (TierLock)
             {
-                var opts = new HwNative.Options { Backend = (int)backend };
+                var opts = new HwNative.Options
+                {
+                    // F27 ABI size negotiation: self-describe the mirrored struct.
+                    StructSize = (UIntPtr)Marshal.SizeOf<HwNative.Options>(),
+                    Backend = (int)backend,
+                };
                 int rc = HwNative.asmtest_hwtrace_init(ref opts);
                 if (rc != HwNative.ASMTEST_HW_OK)
                     throw new HwTraceException($"asmtest_hwtrace_init failed: {rc}");
@@ -1829,7 +1963,11 @@ namespace Asmtest
             lock (HwTrace.TierLock)
             {
                 if (HwTrace.TierInited) return HwNative.ASMTEST_HW_OK;
-                var opts = new HwNative.Options { Backend = (int)HwBackend.SingleStep };
+                var opts = new HwNative.Options
+                {
+                    StructSize = (UIntPtr)Marshal.SizeOf<HwNative.Options>(), // F27
+                    Backend = (int)HwBackend.SingleStep,
+                };
                 int rc = HwNative.asmtest_hwtrace_init(ref opts);
                 if (rc == HwNative.ASMTEST_HW_OK) HwTrace.TierInited = true;
                 return rc;

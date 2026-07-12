@@ -52,6 +52,7 @@ static unsigned long long snap_reach(const unsigned char *code, size_t nbytes,
     __builtin___clear_cache((char *)cp, (char *)cp + nbytes);
     asmtest_hwtrace_options_t opts;
     memset(&opts, 0, sizeof opts);
+    opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
     opts.backend = ASMTEST_HWTRACE_AMD_LBR;
     opts.snapshot = 1;
     opts.branch_filter = branch_filter;
@@ -73,6 +74,48 @@ static unsigned long long snap_reach(const unsigned char *code, size_t nbytes,
     }
     munmap(cp, nbytes);
     return ni;
+}
+
+/* P5 multi-exit DEFAULT-ON: run `code(a,b)` through the ordinary begin/end markers
+ * with opts.snapshot UNSET — hwtrace_begin_amd must select the multi-exit boundary
+ * snapshot by DEFAULT (1..4 exits) — and require the entry block covered with
+ * truncated==false: the sampled fallback honestly TRUNCATES a tiny single-shot
+ * routine, so a clean non-truncated reconstruction proves the deterministic path
+ * armed and the taken exit hit its breakpoint. Returns 1 on pass. */
+static int snap_default_run(void *cp, size_t nbytes, long a, long b,
+                            long expect, const char *what) {
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    /* opts.snapshot intentionally UNSET: this drives the DEFAULT-ON selection. */
+    if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+        printf("# SKIP branchsnap multi-exit %s: AMD LBR tier unavailable\n",
+               what);
+        return 1;
+    }
+    int ok = 0;
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    if (asmtest_hwtrace_register_region("bsnapmx", cp, nbytes, t) ==
+        ASMTEST_HW_OK) {
+        long (*fn)(long, long) = (long (*)(long, long))cp;
+        asmtest_hwtrace_begin("bsnapmx");
+        long r = fn(a, b);
+        asmtest_hwtrace_end("bsnapmx");
+        int cov0 = asmtest_trace_covered(t, 0);
+        unsigned long long ni = asmtest_emu_trace_insns_total(t);
+        int trunc = asmtest_emu_trace_truncated(t);
+        printf("branchsnap multi-exit %s: max2(%ld,%ld)=%ld; default-on "
+               "snapshot decoded %llu insns, entry=%d, truncated=%d\n",
+               what, a, b, r, ni, cov0, trunc);
+        ok = (r == expect) && cov0 && ni > 0 && !trunc;
+    } else {
+        printf("not ok - branchsnap multi-exit %s: register_region failed\n",
+               what);
+    }
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(t);
+    return ok;
 }
 
 int main(void) {
@@ -138,6 +181,7 @@ int main(void) {
     {
         asmtest_hwtrace_options_t opts;
         memset(&opts, 0, sizeof opts);
+        opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
         opts.backend = ASMTEST_HWTRACE_AMD_LBR;
         opts.snapshot = 1;
         if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
@@ -180,6 +224,51 @@ int main(void) {
         }
     }
 
+    /* P5 multi-exit default-on (the plan's Phase 5 cap-lane fixture): a TWO-ret
+     * routine — max2 = (rdi < rsi) ? rsi : rdi — driven with opts.snapshot UNSET,
+     * once down EACH exit path. The old single-exit gate (nexit == 1) routed any
+     * multi-exit region to the sampled path, which honestly truncates a tiny
+     * single-shot routine; the multi-exit snapshot plants one breakpoint per ret
+     * (2 of the 4 debug registers), so BOTH paths end on a deterministic boundary:
+     * entry block covered and !truncated on both. Gated on the direct capture above
+     * having run live (rc==OK) — where caps/substrate are absent the whole tier
+     * self-skips, and this proves nothing. */
+    if (rc == ASMTEST_HW_OK) {
+        static const unsigned char MAX2[] = {
+            0x48, 0x39, 0xf7, /* 0x00 cmp rdi, rsi          */
+            0x7c, 0x04,       /* 0x03 jl 0x09 (L)           */
+            0x48, 0x89, 0xf8, /* 0x05 mov rax, rdi          */
+            0xc3,             /* 0x08 ret      (exit 1)     */
+            0x48, 0x89, 0xf0, /* 0x09 L: mov rax, rsi       */
+            0xc3};            /* 0x0c ret      (exit 2)     */
+        void *mp = mmap(NULL, sizeof MAX2, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mp == MAP_FAILED) {
+            printf("# SKIP branchsnap multi-exit: mmap failed\n");
+        } else {
+            memcpy(mp, MAX2, sizeof MAX2);
+            mprotect(mp, sizeof MAX2, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)mp, (char *)mp + sizeof MAX2);
+            int ok_a = snap_default_run(mp, sizeof MAX2, 10, 3, 10,
+                                        "path-A(ret@0x08)");
+            int ok_b = snap_default_run(mp, sizeof MAX2, 3, 10, 10,
+                                        "path-B(ret@0x0c)");
+            munmap(mp, sizeof MAX2);
+            if (ok_a && ok_b)
+                printf("ok - branchsnap multi-exit: default-on snapshot covers "
+                       "BOTH exits of a two-ret routine (!truncated down each "
+                       "path, no opts.snapshot)\n");
+            else {
+                printf("not ok - branchsnap multi-exit: a default-on path "
+                       "missed its boundary\n");
+                munmap(p, sizeof ROUTINE);
+                return 1;
+            }
+        }
+    } else {
+        printf("# SKIP branchsnap multi-exit: snapshot capture not live\n");
+    }
+
     /* #2B live reduced-filter follow (deterministic). A routine with a DIRECT
      * UNCONDITIONAL jmp on the executed path plus a kept conditional anchor: with
      * opts.branch_filter=1 the reduced HW filter DROPS the jmp, so a reconstruction that
@@ -213,6 +302,8 @@ int main(void) {
                                     (char *)jp + sizeof JMP_ROUTINE);
             asmtest_hwtrace_options_t opts;
             memset(&opts, 0, sizeof opts);
+            opts.struct_size =
+                sizeof opts; /* self-describe (flag-day ABI guard) */
             opts.backend = ASMTEST_HWTRACE_AMD_LBR;
             opts.snapshot = 1;
             opts.branch_filter =
@@ -287,6 +378,15 @@ int main(void) {
             snap_reach(JMP_JNZ_LOOP, sizeof JMP_JNZ_LOOP, 0, 1, 50, &rf);
         unsigned long long reduced =
             snap_reach(JMP_JNZ_LOOP, sizeof JMP_JNZ_LOOP, 1, 1, 50, &rr);
+        if (full == 0 && reduced == 0) {
+            /* No snapshot capture on this host (AMD LBR tier unavailable /
+             * unprivileged: init or register self-skipped, so the routine never
+             * ran under capture). Self-skip like every sibling block rather than
+             * asserting a reach ratio that needs a live capture. */
+            printf("# SKIP branchsnap #2B reach: snapshot capture not live\n");
+            munmap(p, sizeof ROUTINE);
+            return 0;
+        }
         printf("branchsnap #2B reach: full-filter=%llu reduced-filter=%llu "
                "insns/window (reduced/full = %.2fx), results %ld/%ld\n",
                full, reduced, full ? (double)reduced / (double)full : 0.0, rf,

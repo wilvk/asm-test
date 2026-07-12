@@ -50,6 +50,20 @@ public final class HwTrace {
     public static final int ASMTEST_HW_OK = 0;
     /** ASMTEST_HW_EUNAVAIL — {@link #auto(int)} returns this when no backend is available. */
     public static final int ASMTEST_HW_EUNAVAIL = -3;
+    /** ASMTEST_HW_EPERM — perf capture PERMISSION denied (substrate present); reported
+     *  only by {@link #status(int)} (F29) — available()/capture keep EUNAVAIL. */
+    public static final int ASMTEST_HW_EPERM = -9;
+    // asmtest_hwtrace_status_t.stage — which gate of the available() chain failed.
+    /** STAGE_OK — no gate failed; the backend is available. */
+    public static final int STAGE_OK = 0;
+    /** STAGE_DECODER — decoder library not compiled in. */
+    public static final int STAGE_DECODER = 1;
+    /** STAGE_CPU — wrong CPU/ISA/vendor (or wrong OS). */
+    public static final int STAGE_CPU = 2;
+    /** STAGE_PMU — kernel PMU sysfs node absent. */
+    public static final int STAGE_PMU = 3;
+    /** STAGE_PROBE — the perf open probe failed (code says EPERM vs EUNAVAIL). */
+    public static final int STAGE_PROBE = 4;
 
     // asmtest_trace_backend_t — the SINGLESTEP backend is the portable default.
     public static final int INTEL_PT = 0;
@@ -72,6 +86,18 @@ public final class HwTrace {
     // asmtest_trace_fidelity_t — execution fidelity of a tier.
     public static final int FIDELITY_NATIVE = 0;  // runs the real bytes on the real CPU in-process
     public static final int FIDELITY_VIRTUAL = 1; // isolated guest on an emulated CPU
+    public static final int FIDELITY_STATISTICAL = 2; // sampled survey (IBS/LBR): NOT exact
+    // asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator.
+    // Every value except MECH_STATISTICAL is an EXACT producer.
+    public static final int MECH_NONE = 0;        // no rung produced a trace (EUNAVAIL)
+    public static final int MECH_HW_BRANCH = 1;   // in-process HW branch record (PT/LBR/CS)
+    public static final int MECH_TF_STEP = 2;     // in-process EFLAGS.TF #DB single-step
+    public static final int MECH_MSR_LBR = 3;     // in-process MSR-direct LBR re-run (rung 1b)
+    public static final int MECH_BLOCKSTEP = 4;   // fork-isolated BTF block-step re-run
+    public static final int MECH_PER_INSN = 5;    // fork-isolated per-instruction re-run
+    public static final int MECH_DBI = 6;         // in-process DynamoRIO code cache
+    public static final int MECH_EMULATOR = 7;    // Unicorn virtual CPU (isolated guest)
+    public static final int MECH_STATISTICAL = 8; // sampled survey: never exact, never parity
     // cross-tier policy bitmask. TRACE_BEST allows the emulator floor; TRACE_CEILING_FREE
     // drops the fixed-window backend (AMD LBR); TRACE_NATIVE_ONLY forbids the
     // native->emulator fidelity crossing.
@@ -111,15 +137,16 @@ public final class HwTrace {
     private static final Linker LINKER = Linker.nativeLinker();
     private static final Arena ARENA = Arena.ofShared();
 
-    // asmtest_hwtrace_options_t {int backend; size_t aux_size; size_t data_size;
-    //   int snapshot; const char* object_hint; int lbr_period; int branch_filter;}.
-    // backend (JAVA_INT, 4) needs 4 bytes of pad before the size_t fields; snapshot
-    // (JAVA_INT, 4) needs 4 bytes of pad before the pointer; the two trailing AMD-LBR
-    // ints pack after object_hint — total 48, 8-byte aligned. (Omitting the trailing
-    // ints under-allocates 40 B, and asmtest_hwtrace_init's `g_opts = *opts` 48-B copy
-    // then reads 8 bytes OOB — harmless for SINGLESTEP, garbage lbr_period/branch_filter
-    // for AMD_LBR.)
+    // asmtest_hwtrace_options_t {size_t struct_size; int backend; size_t aux_size;
+    //   size_t data_size; int snapshot; const char* object_hint; int lbr_period;
+    //   int branch_filter;}. The 2026-07 F27 flag day PREPENDED struct_size (the ABI
+    //   size negotiator every version agrees on at offset 0); init() sets it to this
+    //   layout's byteSize and the library clamps its copy to it, so the old
+    //   hand-padding OOB note is retired. struct_size@0 (8), backend@8 (4) + 4 pad,
+    //   aux_size@16, data_size@24, snapshot@32 (4) + 4 pad, object_hint@40,
+    //   lbr_period@48, branch_filter@52 — total 56, 8-byte aligned.
     private static final MemoryLayout OPTIONS_LAYOUT = MemoryLayout.structLayout(
+        JAVA_LONG.withName("struct_size"),  // ABI size negotiator (F27) — ALWAYS set
         JAVA_INT.withName("backend"),
         MemoryLayout.paddingLayout(4),
         JAVA_LONG.withName("aux_size"),
@@ -129,6 +156,17 @@ public final class HwTrace {
         ADDRESS.withName("object_hint"),
         JAVA_INT.withName("lbr_period"),    // AMD LBR opt-in (0 = default sample_period=1)
         JAVA_INT.withName("branch_filter")); // AMD LBR opt-in (0 = default BRANCH_ANY)
+
+    // asmtest_hwtrace_status_t {int available; int code; int stage;
+    //   int perf_event_paranoid; int probe_errno; char reason[160];} — 180 B, no
+    // padding (five ints then the inline string).
+    private static final MemoryLayout STATUS_LAYOUT = MemoryLayout.structLayout(
+        JAVA_INT.withName("available"),
+        JAVA_INT.withName("code"),
+        JAVA_INT.withName("stage"),
+        JAVA_INT.withName("perf_event_paranoid"),
+        JAVA_INT.withName("probe_errno"),
+        MemoryLayout.sequenceLayout(160, JAVA_BYTE).withName("reason"));
 
     // asmtest_hwtrace_bucket_t {char label[128]; uint64_t count;} — 136 B, no padding.
     private static final long BUCKET_SIZE = 136, BUCKET_LABEL_LEN = 128;
@@ -141,16 +179,27 @@ public final class HwTrace {
         JAVA_LONG.withName("base"), JAVA_LONG.withName("len"));
     private static final long NAMED_REGION_SIZE = 80;
 
-    // asmtest_trace_choice_t {int tier; int backend; int fidelity;} — three int-sized
-    // enum fields, no padding (pinned by a static_assert in the header), so a choice
-    // marshals as three consecutive ints (12 bytes).
-    private static final int CHOICE_INTS = 3;
+    // asmtest_trace_choice_t {int tier; int backend; int fidelity; int mechanism;} —
+    // four int-sized enum fields, no padding (pinned by a static_assert in the
+    // header), so a choice marshals as four consecutive ints (16 bytes).
+    private static final int CHOICE_INTS = 4;
 
     /** A resolved cross-tier trace option: which {@code tier} to use, which hardware
      *  {@code backend} within it (meaningful only when {@code tier == TIER_HWTRACE}),
-     *  and the {@code fidelity} class ({@link #FIDELITY_NATIVE} vs
-     *  {@link #FIDELITY_VIRTUAL}). Mirrors {@code asmtest_trace_choice_t}. */
-    public record TierChoice(int tier, int backend, int fidelity) {}
+     *  the {@code fidelity} class ({@link #FIDELITY_NATIVE} / {@link #FIDELITY_VIRTUAL}
+     *  / {@link #FIDELITY_STATISTICAL}), and the concrete capture {@code mechanism}
+     *  ({@code MECH_*}) — for {@link #traceCallAuto}'s {@code used}, the escalation
+     *  rung that actually won (F22/F26/F37). Mirrors {@code asmtest_trace_choice_t}. */
+    public record TierChoice(int tier, int backend, int fidelity, int mechanism) {}
+
+    /** The F29 machine-readable availability verdict for one backend (mirrors
+     *  {@code asmtest_hwtrace_status_t}): {@code code} distinguishes
+     *  {@link #ASMTEST_HW_EPERM} (substrate present, perf capture permission denied)
+     *  from {@link #ASMTEST_HW_EUNAVAIL} (hardware/decoder/PMU absent) — the split
+     *  {@link #available(int)}'s boolean deliberately collapses. {@code reason} is
+     *  byte-identical to {@link #skipReason(int)}. */
+    public record HwStatus(boolean available, int code, int stage,
+                           int perfEventParanoid, int probeErrno, String reason) {}
 
     /** A JIT method resolved from a jitdump (asmtest_jitdump_entry_t): its load
      *  address ({@code codeAddr}, the base to trace), {@code codeSize}, the JIT's
@@ -237,7 +286,7 @@ public final class HwTrace {
     // Resolved when the library loads; null when it can't (then available() == false).
     private static final MethodHandle HW_AVAILABLE, HW_SKIP_REASON, HW_RESOLVE, HW_AUTO,
         TRACE_RESOLVE, TRACE_AUTO, TRACE_CALL_AUTO,
-        HW_INIT, HW_SHUTDOWN, HW_ARM_TID,
+        HW_INIT, HW_STATUS, HW_PARANOID, HW_SHUTDOWN, HW_ARM_TID,
         REGISTER_REGION, HW_BEGIN, HW_END, HW_TRY_BEGIN, HW_RENDER,
         CALL_SCOPED_EX, RENDER_SCOPE, BEGIN_WINDOW, END_WINDOW, RENDER_WINDOW, STEALTH_TRACE,
         WINDOW_CALL, STEALTH_WINDOWED,
@@ -378,7 +427,7 @@ public final class HwTrace {
     static {
         MethodHandle hwAvailable = null, hwSkipReason = null, hwResolve = null, hwAuto = null,
             traceResolve = null, traceAuto = null, traceCallAuto = null,
-            hwInit = null, hwShutdown = null, hwArmTid = null,
+            hwInit = null, hwStatus = null, hwParanoid = null, hwShutdown = null, hwArmTid = null,
             registerRegion = null, hwBegin = null, hwEnd = null, hwTryBegin = null, hwRender = null,
             callScopedEx = null, renderScope = null,
             beginWindow = null, endWindow = null, renderWindow = null, stealthTrace = null,
@@ -457,6 +506,9 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT,
                     JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             hwInit = h(lib, "asmtest_hwtrace_init", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            // F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+            hwStatus = h(lib, "asmtest_hwtrace_status", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
+            hwParanoid = h(lib, "asmtest_hwtrace_perf_event_paranoid", FunctionDescriptor.of(JAVA_INT));
             hwShutdown = h(lib, "asmtest_hwtrace_shutdown", FunctionDescriptor.ofVoid());
             // asmtest_hwtrace_arm_tid(void) — the OS tid that armed the active scope (-1 = none).
             hwArmTid = h(lib, "asmtest_hwtrace_arm_tid", FunctionDescriptor.of(JAVA_INT));
@@ -702,6 +754,7 @@ public final class HwTrace {
         HW_AVAILABLE = hwAvailable; HW_SKIP_REASON = hwSkipReason; HW_RESOLVE = hwResolve;
         HW_AUTO = hwAuto; TRACE_RESOLVE = traceResolve; TRACE_AUTO = traceAuto;
         TRACE_CALL_AUTO = traceCallAuto; HW_INIT = hwInit;
+        HW_STATUS = hwStatus; HW_PARANOID = hwParanoid;
         HW_SHUTDOWN = hwShutdown; HW_ARM_TID = hwArmTid; REGISTER_REGION = registerRegion; HW_BEGIN = hwBegin;
         HW_END = hwEnd; HW_TRY_BEGIN = hwTryBegin; HW_RENDER = hwRender;
         CALL_SCOPED_EX = callScopedEx; RENDER_SCOPE = renderScope;
@@ -796,6 +849,42 @@ public final class HwTrace {
     /** Convenience: skip reason for the SINGLESTEP default. */
     public static String skipReason() { return skipReason(SINGLESTEP); }
 
+    /** The F29 machine-readable availability verdict (asmtest_hwtrace_status):
+     *  unlike {@link #available(int)}'s boolean, {@code status().code()} distinguishes
+     *  {@link #ASMTEST_HW_EPERM} (substrate present, perf capture permission denied —
+     *  lower perf_event_paranoid or grant CAP_PERFMON) from
+     *  {@link #ASMTEST_HW_EUNAVAIL} (hardware/decoder/PMU absent), with the failing
+     *  {@code stage} ({@code STAGE_*}), the probe errno and the kernel paranoid level. */
+    public static HwStatus status(int backend) {
+        if (HW_STATUS == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment out = a.allocate(STATUS_LAYOUT);
+            int rc = (int) HW_STATUS.invoke(backend, out);
+            if (rc != ASMTEST_HW_OK) throw new RuntimeException("asmtest_hwtrace_status failed: " + rc);
+            long reasonOff = STATUS_LAYOUT.byteOffset(
+                MemoryLayout.PathElement.groupElement("reason"), MemoryLayout.PathElement.sequenceElement(0));
+            return new HwStatus(
+                out.get(JAVA_INT, 0) != 0,
+                out.get(JAVA_INT, 4),
+                out.get(JAVA_INT, 8),
+                out.get(JAVA_INT, 12),
+                out.get(JAVA_INT, 16),
+                out.getString(reasonOff));
+        } catch (RuntimeException re) { throw re; }
+        catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Convenience: status for the SINGLESTEP default. */
+    public static HwStatus status() { return status(SINGLESTEP); }
+
+    /** The kernel's perf_event_paranoid level, or {@code Integer.MIN_VALUE} where the
+     *  proc file is absent (non-Linux / masked /proc). Above 2 blocks unprivileged
+     *  perf_event_open entirely (the EPERM case above without CAP_PERFMON). */
+    public static int perfEventParanoid() {
+        if (HW_PARANOID == null) return Integer.MIN_VALUE;
+        try { return (int) HW_PARANOID.invoke(); } catch (Throwable t) { throw rethrow(t); }
+    }
+
     /** This host's hardware-trace fallback cascade: the available backend enums,
      *  most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
      *  {@code policy}. Empty only off x86-64 Linux (single-step is the floor there).
@@ -834,7 +923,7 @@ public final class HwTrace {
         if (TRACE_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
         try (Arena a = Arena.ofConfined()) {
             final int cap = 8; // the cascade is at most 6 entries; headroom
-            // 3 consecutive JAVA_INT per choice (asmtest_trace_choice_t, no padding).
+            // 4 consecutive JAVA_INT per choice (asmtest_trace_choice_t, no padding).
             MemorySegment out = a.allocate(
                 MemoryLayout.sequenceLayout((long) CHOICE_INTS * cap, JAVA_INT));
             int n = (int) (long) TRACE_RESOLVE.invoke(policy, out, (long) cap);
@@ -842,7 +931,8 @@ public final class HwTrace {
             for (int i = 0; i < n; i++) {
                 int base = i * CHOICE_INTS;
                 choices.add(new TierChoice(out.getAtIndex(JAVA_INT, base),
-                    out.getAtIndex(JAVA_INT, base + 1), out.getAtIndex(JAVA_INT, base + 2)));
+                    out.getAtIndex(JAVA_INT, base + 1), out.getAtIndex(JAVA_INT, base + 2),
+                    out.getAtIndex(JAVA_INT, base + 3)));
             }
             return choices;
         } catch (RuntimeException re) { throw re; }
@@ -860,7 +950,8 @@ public final class HwTrace {
             int rc = (int) TRACE_AUTO.invoke(policy, out);
             if (rc != ASMTEST_HW_OK) return java.util.Optional.empty();
             return java.util.Optional.of(new TierChoice(out.getAtIndex(JAVA_INT, 0),
-                out.getAtIndex(JAVA_INT, 1), out.getAtIndex(JAVA_INT, 2)));
+                out.getAtIndex(JAVA_INT, 1), out.getAtIndex(JAVA_INT, 2),
+                out.getAtIndex(JAVA_INT, 3)));
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
     }
@@ -880,6 +971,9 @@ public final class HwTrace {
         if (HW_INIT == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
         try (Arena a = Arena.ofConfined()) {
             MemorySegment opts = a.allocate(OPTIONS_LAYOUT);
+            opts.set(JAVA_LONG, OPTIONS_LAYOUT.byteOffset(
+                MemoryLayout.PathElement.groupElement("struct_size")),
+                OPTIONS_LAYOUT.byteSize()); // F27 ABI size negotiation
             opts.set(JAVA_INT, OPTIONS_LAYOUT.byteOffset(
                 MemoryLayout.PathElement.groupElement("backend")), backend);
             int rc = (int) HW_INIT.invoke(opts);
@@ -1008,7 +1102,7 @@ public final class HwTrace {
                 : a.allocate(MemoryLayout.sequenceLayout(n, JAVA_LONG));
             for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
             MemorySegment result = a.allocate(JAVA_LONG);
-            // asmtest_trace_choice_t {int tier; int backend; int fidelity;} — 3 consecutive ints.
+            // asmtest_trace_choice_t {tier; backend; fidelity; mechanism} — 4 consecutive ints.
             MemorySegment usedOut = a.allocate(MemoryLayout.sequenceLayout(CHOICE_INTS, JAVA_INT));
             // For a native leaf code == base (offset 0 = entry).
             MemorySegment base = MemorySegment.ofAddress(code.base());
@@ -1016,7 +1110,8 @@ public final class HwTrace {
                 result, trace.handle(), usedOut);
             if (rc != ASMTEST_HW_OK) return new TraceCallAutoResult(0L, null, null, false, rc);
             TierChoice used = new TierChoice(usedOut.getAtIndex(JAVA_INT, 0),
-                usedOut.getAtIndex(JAVA_INT, 1), usedOut.getAtIndex(JAVA_INT, 2));
+                usedOut.getAtIndex(JAVA_INT, 1), usedOut.getAtIndex(JAVA_INT, 2),
+                usedOut.getAtIndex(JAVA_INT, 3));
             handOff = true; // the caller now owns trace
             return new TraceCallAutoResult(result.get(JAVA_LONG, 0), trace, used, trace.truncated(), rc);
         } catch (RuntimeException re) { throw re; }

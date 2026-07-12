@@ -47,14 +47,21 @@ extern "C" {
  * takes a code-image timeline. Identical typedef, so both headers may be included. */
 typedef struct asmtest_codeimage asmtest_codeimage_t;
 
-/* Status codes (shared spirit with asmtest_drtrace.h). */
+/* Status codes (shared spirit with asmtest_drtrace.h; -4/-7 intentionally
+ * skipped, mirroring asmtest_drtrace.h). */
 #define ASMTEST_HW_OK       0
 #define ASMTEST_HW_EINVAL   (-1)
 #define ASMTEST_HW_ESTATE   (-2)
-#define ASMTEST_HW_EUNAVAIL (-3) /* backend/PMU/privilege unavailable */
+#define ASMTEST_HW_EUNAVAIL (-3) /* backend/PMU/hardware unavailable   */
 #define ASMTEST_HW_ENOSYS   (-5) /* decoder library not compiled in    */
 #define ASMTEST_HW_EFULL    (-6)
 #define ASMTEST_HW_EDECODE  (-8) /* capture/decode failure             */
+#define ASMTEST_HW_EPERM                                                       \
+    (-9) /* perf capture PERMISSION denied — the substrate is present but
+            perf_event_paranoid / missing CAP_PERFMON blocks it. Only
+            asmtest_hwtrace_status() reports this distinctly; the capture
+            entry points and asmtest_hwtrace_available() keep their existing
+            EUNAVAIL / 0-vs-1 contract (F29). */
 
 typedef enum {
     ASMTEST_HWTRACE_INTEL_PT = 0,
@@ -66,6 +73,24 @@ typedef enum {
 } asmtest_trace_backend_t;
 
 typedef struct {
+    size_t struct_size; /* ABI size negotiator (F27/F36) — set to
+                       sizeof(asmtest_hwtrace_options_t) as compiled into the
+                       CALLER (the INIT_OPTS idiom). FIRST field by design: a
+                       size negotiator must sit at an offset every struct
+                       version agrees on, and offset 0 is trivially agreed by
+                       all (the sched_attr / perf_event_attr precedent).
+                       asmtest_hwtrace_init copies min(struct_size, its own
+                       sizeof) bytes and zero-fills the tail, so an OLDER
+                       caller is never read out of bounds and a NEWER caller's
+                       unknown tail is ignored; future fields are APPENDED and
+                       default to 0 = today's behavior. struct_size smaller
+                       than offsetof(backend)+sizeof(int) is rejected with
+                       ASMTEST_HW_EINVAL (the caller did not self-describe), and
+                       struct_size == 0 is likewise EINVAL: a caller that does
+                       not self-describe could have a set trailing field silently
+                       dropped, so init refuses it rather than guess a size —
+                       always set struct_size (INIT_OPTS, or explicitly after a
+                       zero-fill). */
     asmtest_trace_backend_t backend;
     size_t
         aux_size; /* AUX (trace) ring bytes; rounded up to 2^n pages (0=64KB) */
@@ -123,6 +148,58 @@ int asmtest_hwtrace_available(asmtest_trace_backend_t backend);
  * (always NUL-terminated). Useful for the self-skip message. */
 void asmtest_hwtrace_skip_reason(asmtest_trace_backend_t backend, char *buf,
                                  size_t buflen);
+
+/* ------------------------------------------------------------------ */
+/* F29 — machine-readable availability status (EPERM vs EUNAVAIL)      */
+/*                                                                     */
+/* available() is deliberately a 0/1 and every capture entry keeps its  */
+/* EUNAVAIL contract; but "the silicon is absent" and "the silicon is   */
+/* present and perf_event_paranoid / a missing CAP_PERFMON blocks it"   */
+/* demand different remedies, and until now were separable only by      */
+/* string-parsing skip_reason(). asmtest_hwtrace_status() surfaces the  */
+/* distinction programmatically, from the SAME classifier skip_reason   */
+/* uses (the two can never drift).                                      */
+/* ------------------------------------------------------------------ */
+
+/* `stage` values for asmtest_hwtrace_status_t — plain documented ints (no
+ * binding-mirrored typedef): which gate of the available() chain failed. */
+#define ASMTEST_HW_STAGE_OK      0 /* no gate failed — backend available     */
+#define ASMTEST_HW_STAGE_DECODER 1 /* decoder library not compiled in        */
+#define ASMTEST_HW_STAGE_CPU     2 /* wrong CPU/ISA/vendor (or wrong OS)     */
+#define ASMTEST_HW_STAGE_PMU     3 /* kernel PMU sysfs node absent           */
+#define ASMTEST_HW_STAGE_PROBE                                                 \
+    4 /* the perf open probe failed — code/probe_errno say whether that is
+         permission (EPERM) or missing hardware (EUNAVAIL) */
+
+typedef struct {
+    int available; /* 1 iff asmtest_hwtrace_available(backend) — same gate  */
+    int code;      /* ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL (hardware/decoder/
+                      PMU absent) or ASMTEST_HW_EPERM (substrate present,
+                      capture permission denied)                            */
+    int stage;     /* ASMTEST_HW_STAGE_* — which gate produced `code`       */
+    int perf_event_paranoid; /* /proc/sys/kernel/perf_event_paranoid, or
+                      INT_MIN where the file is absent (non-Linux)          */
+    int probe_errno;  /* errno captured at the failing probe open (stage ==
+                      ASMTEST_HW_STAGE_PROBE), else 0                       */
+    char reason[160]; /* the skip_reason() string, byte-identical           */
+} asmtest_hwtrace_status_t;
+
+/* Fill *out with the full availability verdict for `backend`. Returns
+ * ASMTEST_HW_OK (the STATUS WAS COMPUTED — out->code carries the verdict) or
+ * ASMTEST_HW_EINVAL on a NULL out. Invariants: out->available ==
+ * asmtest_hwtrace_available(backend) == (out->code == ASMTEST_HW_OK); the
+ * reason string equals asmtest_hwtrace_skip_reason()'s. Known gap: the
+ * BPF-snapshot / MSR-direct / survey privilege points are not backends in the
+ * enum, so their EPERM cases are not covered here (probe errno out-params on
+ * asmtest_amd_snapshot_available / asmtest_amd_msr_available are a follow-up). */
+int asmtest_hwtrace_status(asmtest_trace_backend_t backend,
+                           asmtest_hwtrace_status_t *out);
+
+/* The kernel's perf_event_paranoid level (reads /proc/sys/kernel/
+ * perf_event_paranoid), or INT_MIN where absent (non-Linux / masked /proc).
+ * 2 = unprivileged user-space profiling allowed; >2 blocks unprivileged
+ * perf_event_open entirely (the EPERM case above without CAP_PERFMON). */
+int asmtest_hwtrace_perf_event_paranoid(void);
 
 /* ------------------------------------------------------------------ */
 /* Backend auto-selection (the hardware-tier fallback cascade)         */

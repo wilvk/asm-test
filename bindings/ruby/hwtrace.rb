@@ -44,6 +44,16 @@ module Asmtest
     # No hardware-trace backend available on this host (ASMTEST_HW_EUNAVAIL): what
     # auto returns when even single-step can't run (off x86-64 Linux).
     EUNAVAIL = -3
+    # Perf capture PERMISSION denied, substrate present (ASMTEST_HW_EPERM) —
+    # reported only by HwTrace.status (F29); available()/capture keep EUNAVAIL.
+    EPERM = -9
+
+    # asmtest_hwtrace_status_t.stage — which gate of the available() chain failed.
+    STAGE_OK      = 0 # no gate failed — backend available
+    STAGE_DECODER = 1 # decoder library not compiled in
+    STAGE_CPU     = 2 # wrong CPU/ISA/vendor (or wrong OS)
+    STAGE_PMU     = 3 # kernel PMU sysfs node absent
+    STAGE_PROBE   = 4 # perf open probe failed (code says EPERM vs EUNAVAIL)
 
     # asmtest_trace_backend_t. SINGLESTEP is the portable default that runs on any
     # x86-64 Linux; the others self-skip off the hardware they need.
@@ -65,18 +75,40 @@ module Asmtest
     TIER_DYNAMORIO = 1 # in-process software DBI (real CPU)
     TIER_EMULATOR  = 2 # Unicorn virtual CPU (isolated guest)
     # asmtest_trace_fidelity_t.
-    FIDELITY_NATIVE  = 0 # runs the real bytes on the real CPU in-process
-    FIDELITY_VIRTUAL = 1 # isolated guest on an emulated CPU
+    FIDELITY_NATIVE      = 0 # runs the real bytes on the real CPU in-process
+    FIDELITY_VIRTUAL     = 1 # isolated guest on an emulated CPU
+    FIDELITY_STATISTICAL = 2 # sampled survey (IBS/LBR sampling): NOT exact
+    # asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator.
+    # Every value except MECH_STATISTICAL is an EXACT producer.
+    MECH_NONE        = 0 # no rung produced a trace (EUNAVAIL)
+    MECH_HW_BRANCH   = 1 # in-process HW branch record (PT / AMD LBR / CoreSight)
+    MECH_TF_STEP     = 2 # in-process EFLAGS.TF #DB single-step
+    MECH_MSR_LBR     = 3 # in-process MSR-direct LBR re-run (rung 1b)
+    MECH_BLOCKSTEP   = 4 # fork-isolated BTF block-step re-run
+    MECH_PER_INSN    = 5 # fork-isolated per-instruction ptrace re-run
+    MECH_DBI         = 6 # in-process DynamoRIO code cache
+    MECH_EMULATOR    = 7 # Unicorn virtual CPU (isolated guest)
+    MECH_STATISTICAL = 8 # sampled survey: never exact, never parity
     # cross-tier policy bitmask.
     TRACE_BEST         = 0x0 # most-faithful available; emulator floor allowed
     TRACE_CEILING_FREE = 0x1 # drop the fixed-window backend (AMD LBR)
     TRACE_NATIVE_ONLY  = 0x2 # forbid the native->emulator fidelity crossing
 
     # A resolved cross-tier trace option: which +tier+ to use, which hardware
-    # +backend+ within it (meaningful only when +tier+ == TIER_HWTRACE), and the
-    # +fidelity+ class (FIDELITY_NATIVE vs FIDELITY_VIRTUAL). Mirrors
-    # asmtest_trace_choice_t — three packed C ints.
-    TierChoice = Struct.new(:tier, :backend, :fidelity)
+    # +backend+ within it (meaningful only when +tier+ == TIER_HWTRACE), the
+    # +fidelity+ class (FIDELITY_NATIVE / FIDELITY_VIRTUAL / FIDELITY_STATISTICAL),
+    # and the concrete capture +mechanism+ (MECH_*) — for trace_call_auto's +used+,
+    # the escalation rung that actually won (F22/F26/F37). Mirrors
+    # asmtest_trace_choice_t — four packed C ints.
+    TierChoice = Struct.new(:tier, :backend, :fidelity, :mechanism)
+
+    # The F29 machine-readable availability verdict for one backend (mirrors
+    # asmtest_hwtrace_status_t): +code+ distinguishes EPERM (substrate present,
+    # perf capture permission denied) from EUNAVAIL (hardware/decoder/PMU absent)
+    # — the split available?'s boolean deliberately collapses. +reason+ is
+    # byte-identical to skip_reason.
+    HwStatus = Struct.new(:available, :code, :stage, :perf_event_paranoid,
+                          :probe_errno, :reason)
 
     # asmtest_ptrace.h — out-of-process / foreign-process tracing status codes.
     # PTRACE_OK is the shared success spirit; PTRACE_ENOENT is "region / symbol /
@@ -180,6 +212,9 @@ module Asmtest
         # ---- process-wide lifecycle ----
         available:    func(LIB, "asmtest_hwtrace_available", [INT], INT),
         skip_reason:  func(LIB, "asmtest_hwtrace_skip_reason", [INT, VOIDP, SZ], VOID),
+        # F29 machine-readable status (EPERM vs EUNAVAIL) + the paranoid reader.
+        status:       func(LIB, "asmtest_hwtrace_status", [INT, VOIDP], INT),
+        paranoid:     func(LIB, "asmtest_hwtrace_perf_event_paranoid", [], INT),
         resolve:      func(LIB, "asmtest_hwtrace_resolve", [INT, VOIDP, SZ], SZ),
         auto:         func(LIB, "asmtest_hwtrace_auto", [INT], INT),
         # ---- the cross-tier orchestrator (asmtest_trace_auto.h) ----
@@ -301,18 +336,22 @@ module Asmtest
     end
 
     # Build the asmtest_hwtrace_options_t the C side reads:
-    #   { int backend; size_t aux_size; size_t data_size; int snapshot; const char* object_hint;
-    #     int lbr_period; int branch_filter; }
-    # On x86-64: backend@0 (int, padded to 8), aux_size@8, data_size@16, snapshot@24 (int, padded
-    # to 8), object_hint@32 (ptr), lbr_period@40, branch_filter@44 = 48 bytes. Zeroed first so the
-    # ring sizes/snapshot/hint + the AMD-LBR fields take their C defaults. (A 40-byte buffer would
-    # be read 8 bytes OOB by asmtest_hwtrace_init's g_opts = *opts 48-byte copy.) The struct buffer
-    # is returned as a Fiddle::Pointer kept alive by the caller's scope.
+    #   { size_t struct_size; int backend; size_t aux_size; size_t data_size; int snapshot;
+    #     const char* object_hint; int lbr_period; int branch_filter; }
+    # On x86-64 (the 2026-07 F27 flag day prepended struct_size — the ABI size negotiator
+    # at offset 0 that init clamps its copy to, retiring the old hand-padded-OOB note):
+    # struct_size@0 (size_t), backend@8 (int, padded to 8), aux_size@16, data_size@24,
+    # snapshot@32 (int, padded to 8), object_hint@40 (ptr), lbr_period@48,
+    # branch_filter@52 = 56 bytes. Zeroed first so the ring sizes/snapshot/hint + the
+    # AMD-LBR fields take their C defaults. The struct buffer is returned as a
+    # Fiddle::Pointer kept alive by the caller's scope.
+    OPTIONS_SIZE = 56
     def self.build_options(backend)
-      opts = Fiddle::Pointer.new(Fiddle.malloc(48), 48)
-      opts[0, 48] = "\x00".b * 48
-      opts[0, 4]  = [backend].pack("l") # asmtest_trace_backend_t backend (int)
-      opts                              # everything else 0 / NULL
+      opts = Fiddle::Pointer.new(Fiddle.malloc(OPTIONS_SIZE), OPTIONS_SIZE)
+      opts[0, OPTIONS_SIZE] = "\x00".b * OPTIONS_SIZE
+      opts[0, 8] = [OPTIONS_SIZE].pack("q") # size_t struct_size — F27 size negotiation
+      opts[8, 4] = [backend].pack("l")      # asmtest_trace_backend_t backend (int)
+      opts                                  # everything else 0 / NULL
     end
 
     # Host-native machine code in real executable (W^X) memory. The single-step
@@ -438,20 +477,49 @@ module Asmtest
       # first: Intel PT -> AMD LBR -> DynamoRIO -> single-step -> CoreSight ->
       # emulator, each included only if its tier is available. Returns an Array of
       # TierChoice. TRACE_NATIVE_ONLY drops the emulator floor (no native->emulator
-      # fidelity crossing); TRACE_CEILING_FREE drops AMD LBR. Each choice is three
-      # packed C ints (tier, backend, fidelity); we allocate 3*cap ints and unpack
-      # the first n triples the call reports it wrote.
+      # fidelity crossing); TRACE_CEILING_FREE drops AMD LBR. Each choice is four
+      # packed C ints (tier, backend, fidelity, mechanism); we allocate 4*cap ints
+      # and unpack the first n quads the call reports it wrote.
       def self.resolve_tiers(policy = TRACE_BEST)
         cap = 8
-        out = Fiddle::Pointer.new(Fiddle.malloc(12 * cap), 12 * cap) # 3 ints each
-        out[0, 12 * cap] = "\x00".b * (12 * cap)
+        out = Fiddle::Pointer.new(Fiddle.malloc(16 * cap), 16 * cap) # 4 ints each
+        out[0, 16 * cap] = "\x00".b * (16 * cap)
         n = Asmtest::HwTrace::FN[:trace_resolve].call(policy, out, cap)
         choices = (0...n).map do |i|
-          tier, backend, fidelity = out[i * 12, 12].unpack("l3")
-          TierChoice.new(tier, backend, fidelity)
+          tier, backend, fidelity, mechanism = out[i * 16, 16].unpack("l4")
+          TierChoice.new(tier, backend, fidelity, mechanism)
         end
         Fiddle.free(out.to_i)
         choices
+      end
+
+      # The F29 machine-readable availability verdict (asmtest_hwtrace_status):
+      # unlike available?'s boolean, status(backend).code distinguishes EPERM
+      # (substrate present, perf capture permission denied — lower
+      # perf_event_paranoid or grant CAP_PERFMON) from EUNAVAIL
+      # (hardware/decoder/PMU absent), with the failing stage (STAGE_*), the probe
+      # errno and the kernel paranoid level. Layout: five packed C ints then the
+      # inline char reason[160] = 180 bytes.
+      def self.status(backend = SINGLESTEP)
+        raise "libasmtest_hwtrace not loaded" if Asmtest::HwTrace::FN.nil?
+        out = Fiddle::Pointer.new(Fiddle.malloc(180), 180)
+        out[0, 180] = "\x00".b * 180
+        begin
+          rc = Asmtest::HwTrace::FN[:status].call(backend, out)
+          raise "asmtest_hwtrace_status failed: #{rc}" if rc != OK
+          available, code, stage, paranoid, probe_errno = out[0, 20].unpack("l5")
+          reason = out[20, 160].unpack1("Z*")
+          HwStatus.new(available != 0, code, stage, paranoid, probe_errno, reason)
+        ensure
+          Fiddle.free(out.to_i)
+        end
+      end
+
+      # The kernel's perf_event_paranoid level, or INT_MIN where the proc file is
+      # absent (non-Linux / masked /proc). >2 blocks unprivileged perf_event_open
+      # entirely (the EPERM case above without CAP_PERFMON).
+      def self.perf_event_paranoid
+        Asmtest::HwTrace::FN[:paranoid].call
       end
 
       # The single most-preferred available cross-tier choice under +policy+ as a
@@ -459,13 +527,13 @@ module Asmtest
       # TRACE_NATIVE_ONLY). asmtest_trace_auto returns OK(0) and fills *out, or
       # EUNAVAIL(-3) when the cascade is empty.
       def self.auto_tier(policy = TRACE_BEST)
-        out = Fiddle::Pointer.new(Fiddle.malloc(12), 12) # one choice = 3 ints
-        out[0, 12] = "\x00".b * 12
+        out = Fiddle::Pointer.new(Fiddle.malloc(16), 16) # one choice = 4 ints
+        out[0, 16] = "\x00".b * 16
         rc = Asmtest::HwTrace::FN[:trace_auto].call(policy, out)
         choice = nil
         if rc == OK
-          tier, backend, fidelity = out[0, 12].unpack("l3")
-          choice = TierChoice.new(tier, backend, fidelity)
+          tier, backend, fidelity, mechanism = out[0, 16].unpack("l4")
+          choice = TierChoice.new(tier, backend, fidelity, mechanism)
         end
         Fiddle.free(out.to_i)
         choice
@@ -942,8 +1010,8 @@ module Asmtest
         argbuf[0, 8 * n] = args.pack("q*") if n > 0
         res = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # long result_out
         res[0, 8] = "\x00".b * 8
-        used = Fiddle::Pointer.new(Fiddle.malloc(12), 12) # asmtest_trace_choice_t {3 ints}
-        used[0, 12] = "\x00".b * 12
+        used = Fiddle::Pointer.new(Fiddle.malloc(16), 16) # asmtest_trace_choice_t {4 ints}
+        used[0, 16] = "\x00".b * 16
         begin
           rc = Asmtest::HwTrace::FN[:trace_call_auto].call(
             code.base, code.length, n > 0 ? argbuf : Fiddle::NULL, n, policy,
@@ -952,11 +1020,12 @@ module Asmtest
             trace.free
             return TraceCallAutoResult.new(nil, nil, nil, false, rc)
           end
-          # asmtest_trace_choice_t is three packed C ints (tier, backend, fidelity) — the
-          # same layout resolve_tiers/auto_tier unpack.
-          tier, backend, fidelity = used[0, 12].unpack("l3")
+          # asmtest_trace_choice_t is four packed C ints (tier, backend, fidelity,
+          # mechanism) — the same layout resolve_tiers/auto_tier unpack.
+          tier, backend, fidelity, mechanism = used[0, 16].unpack("l4")
           result = res[0, 8].unpack1("q")
-          TraceCallAutoResult.new(result, trace, TierChoice.new(tier, backend, fidelity),
+          TraceCallAutoResult.new(result, trace,
+                                  TierChoice.new(tier, backend, fidelity, mechanism),
                                   trace.truncated?, rc)
         ensure
           Fiddle.free(argbuf.to_i)

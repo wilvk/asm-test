@@ -46,12 +46,21 @@ _LIBS = Path(__file__).resolve().parent / "_libs"
 
 ASMTEST_HW_OK = 0
 ASMTEST_HW_EUNAVAIL = -3  # no hardware-trace backend available on this host
+ASMTEST_HW_EPERM = -9     # perf capture PERMISSION denied (substrate present) —
+                          # reported only by HwTrace.status() (F29)
 
 # asmtest_trace_backend_t
 INTEL_PT = 0
 CORESIGHT = 1
 AMD_LBR = 2
 SINGLESTEP = 3
+
+# asmtest_hwtrace_status_t.stage — which gate of the available() chain failed
+STAGE_OK = 0       # no gate failed — backend available
+STAGE_DECODER = 1  # decoder library not compiled in
+STAGE_CPU = 2      # wrong CPU/ISA/vendor (or wrong OS)
+STAGE_PMU = 3      # kernel PMU sysfs node absent
+STAGE_PROBE = 4    # perf open probe failed (code says EPERM vs EUNAVAIL)
 
 # asmtest_hwtrace_policy_t — backend auto-selection policy
 BEST = 0          # the most faithful available backend
@@ -65,8 +74,19 @@ TIER_HWTRACE = 0    # HW branch trace / single-step (real CPU)
 TIER_DYNAMORIO = 1  # in-process software DBI (real CPU)
 TIER_EMULATOR = 2   # Unicorn virtual CPU (isolated guest)
 # asmtest_trace_fidelity_t
-FIDELITY_NATIVE = 0   # runs the real bytes on the real CPU in-process
-FIDELITY_VIRTUAL = 1  # isolated guest on an emulated CPU
+FIDELITY_NATIVE = 0       # runs the real bytes on the real CPU in-process
+FIDELITY_VIRTUAL = 1      # isolated guest on an emulated CPU
+FIDELITY_STATISTICAL = 2  # sampled survey (IBS/LBR sampling): real CPU, NOT exact
+# asmtest_trace_mechanism_t — the F22/F26/F37 escalation-rung discriminator
+MECH_NONE = 0         # no rung produced a trace (EUNAVAIL)
+MECH_HW_BRANCH = 1    # in-process HW branch record (PT / AMD LBR / CoreSight)
+MECH_TF_STEP = 2      # in-process EFLAGS.TF #DB single-step
+MECH_MSR_LBR = 3      # in-process MSR-direct LBR re-run (rung 1b)
+MECH_BLOCKSTEP = 4    # fork-isolated BTF block-step re-run
+MECH_PER_INSN = 5     # fork-isolated per-instruction ptrace re-run
+MECH_DBI = 6          # in-process DynamoRIO code cache
+MECH_EMULATOR = 7     # Unicorn virtual CPU (isolated guest)
+MECH_STATISTICAL = 8  # sampled survey: never exact, never parity
 # cross-tier policy bitmask
 TRACE_BEST = 0x0          # most-faithful available; emulator floor allowed
 TRACE_CEILING_FREE = 0x1  # drop the fixed-window backend (AMD LBR)
@@ -99,9 +119,11 @@ ASMTEST_CI_KIND_MEMFD = 3
 
 
 class _Options(C.Structure):
-    """Mirrors asmtest_hwtrace_options_t."""
+    """Mirrors asmtest_hwtrace_options_t (leading ``struct_size`` since the F27
+    flag day — init() sets it, the library clamps its copy to it)."""
 
     _fields_ = [
+        ("struct_size", C.c_size_t),  # ABI size negotiator — ALWAYS set
         ("backend", C.c_int),
         ("aux_size", C.c_size_t),
         ("data_size", C.c_size_t),
@@ -113,25 +135,62 @@ class _Options(C.Structure):
 
 
 class _Choice(C.Structure):
-    """Mirrors asmtest_trace_choice_t (three int-sized enum fields, no padding)."""
+    """Mirrors asmtest_trace_choice_t (four int-sized enum fields, no padding)."""
 
     _fields_ = [
         ("tier", C.c_int),
         ("backend", C.c_int),
         ("fidelity", C.c_int),
+        ("mechanism", C.c_int),  # F22/F26/F37 escalation-rung discriminator
     ]
+
+
+class _Status(C.Structure):
+    """Mirrors asmtest_hwtrace_status_t (five C ints + a 160-byte reason)."""
+
+    _fields_ = [
+        ("available", C.c_int),
+        ("code", C.c_int),   # ASMTEST_HW_OK / ASMTEST_HW_EUNAVAIL / ASMTEST_HW_EPERM
+        ("stage", C.c_int),  # STAGE_* — which gate failed
+        ("perf_event_paranoid", C.c_int),
+        ("probe_errno", C.c_int),
+        ("reason", C.c_char * 160),
+    ]
+
+
+class HwStatus:
+    """The F29 machine-readable availability verdict for one backend:
+    ``code`` distinguishes ``ASMTEST_HW_EPERM`` (substrate present, perf
+    permission denied) from ``ASMTEST_HW_EUNAVAIL`` (hardware/decoder/PMU
+    absent) — the split ``available()``'s 0/1 deliberately collapses."""
+
+    def __init__(self, available, code, stage, perf_event_paranoid,
+                 probe_errno, reason):
+        self.available = bool(available)
+        self.code = code
+        self.stage = stage
+        self.perf_event_paranoid = perf_event_paranoid
+        self.probe_errno = probe_errno
+        self.reason = reason
+
+    def __repr__(self):
+        return (f"HwStatus(available={self.available}, code={self.code}, "
+                f"stage={self.stage}, paranoid={self.perf_event_paranoid}, "
+                f"probe_errno={self.probe_errno}, reason={self.reason!r})")
 
 
 class TierChoice(C.Structure):
     """A resolved cross-tier trace option: which ``tier`` to use, which hardware
-    ``backend`` within it (meaningful only when ``tier == TIER_HWTRACE``), and the
-    ``fidelity`` class (``FIDELITY_NATIVE`` vs ``FIDELITY_VIRTUAL``)."""
+    ``backend`` within it (meaningful only when ``tier == TIER_HWTRACE``), the
+    ``fidelity`` class (``FIDELITY_NATIVE`` / ``FIDELITY_VIRTUAL`` /
+    ``FIDELITY_STATISTICAL``), and the concrete capture ``mechanism`` (``MECH_*``
+    — for ``call_auto``'s ``used``, the escalation rung that actually won)."""
 
     _fields_ = _Choice._fields_
 
     def __repr__(self):
         return (f"TierChoice(tier={self.tier}, backend={self.backend}, "
-                f"fidelity={self.fidelity})")
+                f"fidelity={self.fidelity}, mechanism={self.mechanism})")
 
 
 class _JitEntry(C.Structure):
@@ -248,6 +307,10 @@ def _declare(lib):
     lib.asmtest_trace_call_auto.restype = ci
     lib.asmtest_hwtrace_init.argtypes = [C.POINTER(_Options)]
     lib.asmtest_hwtrace_init.restype = ci
+    # F29 machine-readable status: EPERM-vs-EUNAVAIL + the paranoid reader.
+    lib.asmtest_hwtrace_status.argtypes = [ci, C.POINTER(_Status)]
+    lib.asmtest_hwtrace_status.restype = ci
+    lib.asmtest_hwtrace_perf_event_paranoid.restype = ci
     lib.asmtest_hwtrace_register_region.argtypes = [cc, v, sz, v]
     lib.asmtest_hwtrace_register_region.restype = ci
     lib.asmtest_hwtrace_begin.argtypes = [cc]
@@ -605,6 +668,29 @@ class HwTrace:
         return buf.value.decode()
 
     @staticmethod
+    def status(backend=SINGLESTEP) -> "HwStatus":
+        """The F29 machine-readable availability verdict: unlike
+        :meth:`available`'s 0/1, ``status().code`` distinguishes
+        ``ASMTEST_HW_EPERM`` (substrate present, perf capture permission
+        denied — lower ``perf_event_paranoid`` or grant ``CAP_PERFMON``) from
+        ``ASMTEST_HW_EUNAVAIL`` (hardware/decoder/PMU absent), with the failing
+        ``stage``, the probe ``errno``, and the kernel paranoid level."""
+        st = _Status()
+        rc = _get().asmtest_hwtrace_status(backend, C.byref(st))
+        if rc != ASMTEST_HW_OK:
+            raise RuntimeError(f"asmtest_hwtrace_status failed: {rc}")
+        return HwStatus(st.available, st.code, st.stage,
+                        st.perf_event_paranoid, st.probe_errno,
+                        st.reason.decode())
+
+    @staticmethod
+    def perf_event_paranoid() -> int:
+        """The kernel's ``perf_event_paranoid`` level, or ``INT_MIN`` where
+        the proc file is absent (non-Linux). >2 blocks unprivileged
+        ``perf_event_open`` entirely (the EPERM case without CAP_PERFMON)."""
+        return int(_get().asmtest_hwtrace_perf_event_paranoid())
+
+    @staticmethod
     def resolve(policy=BEST) -> list:
         """This host's hardware-trace fallback cascade: the available backends,
         most-faithful first (INTEL_PT > AMD_LBR > SINGLESTEP > CORESIGHT), honoring
@@ -630,7 +716,8 @@ class HwTrace:
         native->emulator fidelity crossing); ``TRACE_CEILING_FREE`` drops AMD LBR."""
         out = (_Choice * 8)()
         n = _get().asmtest_trace_resolve(policy, out, len(out))
-        return [TierChoice(out[i].tier, out[i].backend, out[i].fidelity)
+        return [TierChoice(out[i].tier, out[i].backend, out[i].fidelity,
+                           out[i].mechanism)
                 for i in range(n)]
 
     @staticmethod
@@ -642,7 +729,7 @@ class HwTrace:
         rc = _get().asmtest_trace_auto(policy, C.byref(out))
         if rc != ASMTEST_HW_OK:
             return None
-        return TierChoice(out.tier, out.backend, out.fidelity)
+        return TierChoice(out.tier, out.backend, out.fidelity, out.mechanism)
 
     @classmethod
     def init(cls, backend=SINGLESTEP):
@@ -650,6 +737,7 @@ class HwTrace:
         default that runs on any x86-64 Linux."""
         lib = _get()
         opts = _Options()
+        opts.struct_size = C.sizeof(_Options)  # F27 ABI size negotiation
         opts.backend = backend
         rc = lib.asmtest_hwtrace_init(C.byref(opts))
         if rc != ASMTEST_HW_OK:
@@ -763,7 +851,8 @@ class HwTrace:
         if rc != ASMTEST_HW_OK:
             trace.free()
             return TraceCallAutoResult(None, None, None, False, rc)
-        tc = TierChoice(used.tier, used.backend, used.fidelity)
+        tc = TierChoice(used.tier, used.backend, used.fidelity,
+                        used.mechanism)
         return TraceCallAutoResult(int(result.value), trace, tc,
                                    bool(trace.truncated()), rc)
 
