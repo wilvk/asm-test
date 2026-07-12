@@ -1146,6 +1146,7 @@ typedef struct {
     char asm_header[256];
     svec asm_dis, asm_fn;
     unsigned asm_sample;
+    int rpaused; /* UI froze the region: skip re-sampling so the scroll is stable */
     const asmspy_symtab_t *syms;
     /* call-graph view (mode 3) */
     graph_snap graph;
@@ -1178,11 +1179,14 @@ static void live_region_sink(void *ctx, unsigned sample_no, long result,
                              size_t len, uint64_t base) {
     live_t *L = ctx;
     pthread_mutex_lock(&L->mu);
-    svec_clear(&L->asm_dis);
-    svec_clear(&L->asm_fn);
-    region_render(L->asm_header, sizeof L->asm_header, &L->asm_dis, &L->asm_fn,
-                  sample_no, result, tr, desc, code, len, base, L->syms);
-    L->asm_sample = sample_no;
+    if (!L->rpaused) { /* while the user scrolls a frozen sample, drop updates */
+        svec_clear(&L->asm_dis);
+        svec_clear(&L->asm_fn);
+        region_render(L->asm_header, sizeof L->asm_header, &L->asm_dis,
+                      &L->asm_fn, sample_no, result, tr, desc, code, len, base,
+                      L->syms);
+        L->asm_sample = sample_no;
+    }
     pthread_mutex_unlock(&L->mu);
 }
 
@@ -1279,6 +1283,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     long vbottom = 0; /* main-log bottom line while paused (absolute index) */
     long vstr = 0;    /* strings-pane bottom while paused (mode 0) */
     int gtop = 0;     /* call-graph (mode 3): first visible row while scrolling */
+    int apane = 0;    /* region (mode 1): focused pane (0 = assembly, 1 = funcs) */
+    int atop = 0, ftop = 0; /* region: per-pane first visible row while scrolling */
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
@@ -1387,23 +1393,47 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 mvprintw(2 + r, 0, "%-*.*s", cols, cols, row);
             }
         } else {
+            /* region view: two stacked panes (function disassembly + its
+             * callees), each scrollable. Frozen (paused or the tracer finished)
+             * so scroll is stable — rpaused stops the sink re-sampling under the
+             * reader. Tab moves focus between the panes. */
+            int rfrozen = paused || fin;
+            L.rpaused = rfrozen;
             mvprintw(1, 0, "%.*s", cols, L.asm_header);
             int split = (rows - 3) * 3 / 5;
             if (split < 1)
                 split = 1;
-            attron(A_BOLD);
-            mvprintw(2, 0, "ASSEMBLY");
-            attroff(A_BOLD);
-            for (int r = 0; r < split && r < (int)L.asm_dis.n; r++)
-                mvprintw(3 + r, 0, "%-*.*s", cols, cols, L.asm_dis.v[r]);
-            int fy = 3 + split;
-            attron(A_BOLD);
-            mvprintw(fy, 0, "FUNCTIONS CALLED");
-            attroff(A_BOLD);
-            if (L.asm_fn.n == 0)
+            int fy = 3 + split;         /* FUNCTIONS CALLED header row        */
+            int asm_h = split;          /* assembly rows: screen 3..fy-1      */
+            int fn_h = rows - fy - 2;   /* funcs rows: screen fy+1..rows-2     */
+            if (fn_h < 1)
+                fn_h = 1;
+            int an = (int)L.asm_dis.n, fnn = (int)L.asm_fn.n;
+            if (!rfrozen) /* live view is top-anchored (newest sample at top) */
+                atop = ftop = 0;
+            if (atop > an - asm_h)
+                atop = an - asm_h;
+            if (atop < 0)
+                atop = 0;
+            if (ftop > fnn - fn_h)
+                ftop = fnn - fn_h;
+            if (ftop < 0)
+                ftop = 0;
+            /* highlight the focused pane's header while frozen (i.e. selecting) */
+            int afocus = rfrozen && apane == 0, ffocus = rfrozen && apane == 1;
+            attron(afocus ? A_REVERSE : A_BOLD);
+            mvprintw(2, 0, "ASSEMBLY%s", an > asm_h ? "  (scroll)" : "");
+            attroff(afocus ? A_REVERSE : A_BOLD);
+            for (int r = 0; r < asm_h && atop + r < an; r++)
+                mvprintw(3 + r, 0, "%-*.*s", cols, cols, L.asm_dis.v[atop + r]);
+            attron(ffocus ? A_REVERSE : A_BOLD);
+            mvprintw(fy, 0, "FUNCTIONS CALLED%s", fnn > fn_h ? "  (scroll)" : "");
+            attroff(ffocus ? A_REVERSE : A_BOLD);
+            if (fnn == 0)
                 mvprintw(fy + 1, 0, "(leaf — no calls, or waiting for a call)");
-            for (int r = 0; r < (rows - fy - 2) && r < (int)L.asm_fn.n; r++)
-                mvprintw(fy + 1 + r, 0, "%-*.*s", cols, cols, L.asm_fn.v[r]);
+            for (int r = 0; r < fn_h && ftop + r < fnn; r++)
+                mvprintw(fy + 1 + r, 0, "%-*.*s", cols, cols,
+                         L.asm_fn.v[ftop + r]);
         }
         pthread_mutex_unlock(&L.mu);
 
@@ -1430,20 +1460,30 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             mvprintw(rows - 1, 0,
                      "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
                      "space: live   b: options   q: processes");
+        else if (mode == 1 && paused && !fin)
+            mvprintw(rows - 1, 0,
+                     "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: pane   "
+                     "space: live   b: options   q: processes");
         else if (fin) {
             char e[128];
             asmspy_strerror(erc, e, sizeof e);
             mvprintw(rows - 1, 0,
                      "[tracer stopped: %s]  %sb: options   q: processes",
                      erc ? e : "target exited or done",
-                     is_log            ? "space: scroll history   "
-                     : mode == 3       ? "up/down PgUp/PgDn Home/End: scroll   "
-                                       : "");
+                     is_log      ? "space: scroll history   "
+                     : mode == 3 ? "up/down PgUp/PgDn Home/End: scroll   "
+                     : mode == 1 ? "up/down PgUp/PgDn Home/End: scroll   "
+                                   "Tab: pane   "
+                                 : "");
         } else if (mode == 3)
             mvprintw(rows - 1, 0,
                      "Tab: sort (invocations/functions-called)   "
                      "space: pause+scroll   b: options   q/ESC: processes   "
                      "(live)");
+        else if (mode == 1)
+            mvprintw(rows - 1, 0,
+                     "space: pause+scroll   Tab: pane   b: back to options   "
+                     "q/ESC: processes   (live)");
         else
             mvprintw(rows - 1, 0,
                      "%sb: back to options   q/ESC: processes   (live)",
@@ -1563,6 +1603,65 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             }
             if (gtop < 0)
                 gtop = 0;
+        }
+        if (mode == 1) { /* region: pause to freeze the sample; Tab switches pane */
+            int split = (rows - 3) * 3 / 5;
+            if (split < 1)
+                split = 1;
+            int ph = apane == 0 ? split : rows - (3 + split) - 2; /* pane height */
+            if (ph < 1)
+                ph = 1;
+            int page = ph > 1 ? ph - 1 : 1;
+            int rscroll = paused || fin; /* a finished sample is already frozen */
+            /* scrolling into a pane freezes the live re-sampling */
+            if ((ch == KEY_UP || ch == KEY_PPAGE) && !rscroll) {
+                paused = 1;
+                rscroll = 1;
+            }
+            int *off = apane == 0 ? &atop : &ftop; /* the focused pane's offset */
+            switch (ch) {
+            case ' ':
+            case 'p':
+                if (!fin) {
+                    paused = !paused;
+                    if (!paused)
+                        atop = ftop = 0; /* resume live -> both panes to the top */
+                }
+                break;
+            case '\t':
+                apane ^= 1; /* switch the focused pane */
+                break;
+            case KEY_UP:
+                if (rscroll)
+                    *off -= 1;
+                break;
+            case KEY_DOWN:
+                if (rscroll)
+                    *off += 1;
+                break;
+            case KEY_PPAGE:
+                if (rscroll)
+                    *off -= page;
+                break;
+            case KEY_NPAGE:
+                if (rscroll)
+                    *off += page;
+                break;
+            case KEY_HOME:
+                if (rscroll)
+                    *off = 0;
+                break;
+            case KEY_END:
+                if (rscroll)
+                    *off = INT_MAX; /* clamped to the last page in the renderer */
+                break;
+            default:
+                break;
+            }
+            if (atop < 0)
+                atop = 0;
+            if (ftop < 0)
+                ftop = 0;
         }
     }
 
