@@ -80,10 +80,15 @@ $(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
                         $(BUILD)/.drapp-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(DRAPP_KS_DEF) $(KEYSTONE_CFLAGS) -c $< -o $@
 
-# DynamoRIO client (.so) via CMake. Real target shape: shells out to cmake.
+# DynamoRIO client (.so) via CMake. Real target shape: shells out to cmake. The one
+# cmake --build produces BOTH clients declared in drclient/CMakeLists.txt: the control
+# client (libasmtest_drclient.so) and the data-flow L0 value client
+# (libasmtest_drval_client.so, Phase 5). The value client's .so is tied to this rule as
+# a grouped output below so a target that needs it triggers this same build.
 .PHONY: drtrace-client
 drtrace-client: $(BUILD)/libasmtest_drclient.so
-$(BUILD)/libasmtest_drclient.so: src/drtrace_client.c drclient/CMakeLists.txt | $(BUILD)
+$(BUILD)/libasmtest_drclient.so: src/drtrace_client.c src/dataflow_dr_client.c \
+                                 src/dataflow_dr.h drclient/CMakeLists.txt | $(BUILD)
 ifndef DR_AVAILABLE
 	@echo "drtrace-client: DynamoRIO not found (set DYNAMORIO_HOME); skipping"
 else
@@ -91,8 +96,12 @@ else
 	cd $(BUILD)/drclient && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
 	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) $(abspath drclient) >/dev/null
 	cmake --build $(BUILD)/drclient >/dev/null
-	@echo "drtrace-client: built $@"
+	@echo "drtrace-client: built $@ + $(BUILD)/libasmtest_drval_client.so"
 endif
+# The value client is emitted by the SAME cmake --build as the control client (both are
+# add_library targets), so it need not re-run cmake: an empty recipe ties it to the rule
+# above (the grouped-output idiom, avoiding GNU make 4.3's `&:` for portability).
+$(BUILD)/libasmtest_drval_client.so: $(BUILD)/libasmtest_drclient.so ;
 
 # App-side shared library (libasmtest_drapp) for the language bindings.
 shared-drtrace: $(call shlib_dev,libasmtest_drapp)
@@ -130,6 +139,68 @@ else
 	ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/test_drtrace
+	@$(MAKE) --no-print-directory dr-valtrace-test
+endif
+
+# --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
+# The in-band, whole-process DynamoRIO analog of the scoped ptrace value producer:
+# src/dataflow_dr.c (app side, reuses the drtrace lifecycle + a dedicated value client)
+# fills the SAME asmtest_valtrace_t as the emulator/ptrace producers, cross-validated
+# against the emulator L0 oracle. Runs inside the `make docker-drtrace` lane (drtrace-
+# test invokes dr-valtrace-test above) and self-skips cleanly without DynamoRIO.
+#
+# dataflow_dr.o needs Capstone (the operand enumerator, asmtest_operands) exactly as
+# dataflow_ptrace.o does; without it the file compiles to an ENOSYS stub that self-skips.
+$(BUILD)/dataflow_dr.o: src/dataflow_dr.c src/dataflow_dr.h \
+                        include/asmtest_valtrace.h include/asmtest_drtrace.h \
+                        include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
+
+# The value-producer test links the emulator L0 as its ORACLE where libunicorn is
+# present (-DDF_HAVE_EMU), mirroring the dataflow-ptrace suite; otherwise it runs the
+# in-band capture assertions alone. Probe unicorn here — dataflow.mk, which owns the
+# canonical DF_HAVE_UNICORN, is included AFTER this file.
+DRVAL_HAVE_UNICORN := $(shell pkg-config --exists unicorn 2>/dev/null && echo 1)
+
+# dr_valtrace links the pure sink + operand enumerator + the DR value producer + the
+# drtrace app-side lifecycle (drtrace_app.o/trace.o, plus the Keystone bridge object
+# when drapp is Keystone-enabled). -rdynamic exports the value marker so the client
+# resolves its PC (as test_drtrace does for its markers).
+ifeq ($(DRVAL_HAVE_UNICORN),1)
+$(BUILD)/dr_valtrace.o: examples/dr_valtrace.c include/asmtest_valtrace.h \
+                        $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -DDF_HAVE_EMU -c $< -o $@
+$(BUILD)/dr_valtrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                      $(BUILD)/dataflow_dr.o $(BUILD)/dataflow_emu.o \
+                      $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                      $(BUILD)/dr_valtrace.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+else
+$(BUILD)/dr_valtrace.o: examples/dr_valtrace.c include/asmtest_valtrace.h \
+                        $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/dr_valtrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                      $(BUILD)/dataflow_dr.o \
+                      $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                      $(BUILD)/dr_valtrace.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+endif
+
+.PHONY: dr-valtrace-test
+dr-valtrace-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-valtrace-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/dr_valtrace
+	@echo "== dr-valtrace-test (DynamoRIO L0 value producer) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drval_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_valtrace
 endif
 
 # --- Optional hardware-assisted native-trace tier (Intel PT / CoreSight) ---

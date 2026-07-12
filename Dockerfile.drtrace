@@ -18,10 +18,16 @@ FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # C/C++ toolchain + CMake (the DR client is CMake-built), Python + pytest (the
-# wrapper test), and curl to fetch the DynamoRIO release.
+# wrapper test), and curl to fetch the DynamoRIO release. The data-flow L0 value
+# producer (Phase 5, exercised by the `dr-valtrace-test` sub-lane of drtrace-test)
+# additionally needs Capstone (its operand enumerator) and — for the emulator L0
+# oracle it cross-validates against — libunicorn: git + build-essential + cmake build
+# Capstone from the pinned source release below (no apt package; see
+# scripts/build-capstone.sh and the main Dockerfile), libunicorn-dev is apt.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config curl ca-certificates xz-utils \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+      libunicorn-dev \
       python3 python3-pytest \
  && rm -rf /var/lib/apt/lists/*
 
@@ -37,8 +43,14 @@ ENV DYNAMORIO_HOME=/opt/dynamorio
 WORKDIR /src
 COPY . .
 
-# Run the C smoke harness and the Python wrapper suite. Both self-skip cleanly if
-# DynamoRIO were somehow absent, but here it is installed, so they execute.
+# Build Capstone from the pinned source release (no apt package — mirrors the main
+# Dockerfile's Keystone build). Enables the data-flow value producer's operand
+# enumerator + the emulator L0 oracle; without it dr-valtrace-test would self-skip.
+RUN sh scripts/build-capstone.sh && ldconfig
+
+# Run the C smoke harness (now also the data-flow value producer's dr-valtrace-test,
+# via drtrace-test) and the Python wrapper suite. All self-skip cleanly if DynamoRIO
+# were somehow absent, but here it is installed, so they execute.
 CMD set -eux; \
     make drtrace-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
     make drtrace-python-test DYNAMORIO_HOME=$DYNAMORIO_HOME

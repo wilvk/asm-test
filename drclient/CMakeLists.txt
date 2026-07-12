@@ -20,6 +20,15 @@ configure_DynamoRIO_client(asmtest_drclient)
 # fail to load under DR's private loader on modern glibc, and avoiding drwrap keeps
 # the tier free of its LGPL-2.1 obligation.
 
-# Emit straight into the asm-test build dir so the Makefile/tests find it.
-set_target_properties(asmtest_drclient PROPERTIES
+# The data-flow L0 VALUE client (Phase 5): a SEPARATE in-process client that records
+# per-instruction register/memory value snapshots (dr_get_mcontext + decode +
+# opnd_compute_address + dr_safe_read) rather than block coverage. Same raw core-API
+# constraint as the control client. It includes the shared capture ABI header from
+# ../src (dataflow_dr.h — <stdint.h>-only, safe alongside dr_api.h), so add that dir.
+add_library(asmtest_drval_client SHARED ${CMAKE_CURRENT_SOURCE_DIR}/../src/dataflow_dr_client.c)
+configure_DynamoRIO_client(asmtest_drval_client)
+target_include_directories(asmtest_drval_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+# Emit straight into the asm-test build dir so the Makefile/tests find them.
+set_target_properties(asmtest_drclient asmtest_drval_client PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
