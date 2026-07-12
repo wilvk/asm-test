@@ -110,6 +110,7 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s) {
 #if defined(__linux__) && defined(__x86_64__)
 
 #include <cpuid.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <linux/perf_event.h>
 #include <stdio.h>
@@ -418,6 +419,124 @@ static uint64_t elapsed_ms(const struct timespec *t0,
            (uint64_t)(t1->tv_nsec - t0->tv_nsec) / 1000000ull;
 }
 
+/* --- per-thread capture channel (one perf event + its mmap ring) --------------- */
+/* Both surveys are built from these: survey_pid drives one channel, survey_process
+ * a vector of them (one per thread). Keeping the open/drain/teardown identical means
+ * whole-process capture is exactly single-thread capture, merged. */
+
+#define IBS_MAX_CHANS 512 /* per-thread events; caps fd/mmap use on huge targets */
+
+/* Fill the IBS-Op perf attr: user-only branch sampling (swfilt + exclude_kernel),
+ * IP|TID|RAW records, initially disabled. Shared by every channel. */
+static void ibs_fill_attr(struct perf_event_attr *a, int type, uint64_t period) {
+    memset(a, 0, sizeof *a);
+    a->size = sizeof *a;
+    a->type = (uint32_t)type;
+    a->sample_period = period;
+    a->config2 = 1;        /* swfilt (config2:0): enables exclude_kernel at p=2 */
+    a->exclude_kernel = 1; /* user-only — the unprivileged envelope            */
+    a->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_RAW;
+    a->disabled = 1;
+}
+
+/* Resolve the effective sample period from opts (rounded to IBS's /16 granularity). */
+static uint64_t ibs_period(const asmtest_ibs_opts_t *opts) {
+    uint64_t period = (opts != NULL && opts->sample_period != 0)
+                          ? opts->sample_period
+                          : IBS_DEFAULT_PERIOD;
+    period &= ~(uint64_t)0xF; /* IBS max-count granularity is 16 */
+    if (period < 16)
+        period = IBS_DEFAULT_PERIOD;
+    return period;
+}
+
+static size_t ibs_page(void) {
+    long pg = sysconf(_SC_PAGESIZE);
+    return pg > 0 ? (size_t)pg : 4096u;
+}
+
+typedef struct {
+    long fd;        /* perf event fd, or -1                */
+    void *base_map; /* mmap base (header page + data ring) */
+    size_t base_sz; /* mmap length                         */
+    pid_t tid;      /* the thread this channel samples     */
+} ibs_chan;
+
+/* Open + mmap + enable one IBS-Op channel on `tid` (0 => the calling thread). Returns
+ * 0 on success; -1 if the thread cannot be attached (it exited, or the open/mmap/
+ * enable failed) — the caller skips it rather than aborting the whole survey. */
+static int ibs_chan_open(ibs_chan *ch, pid_t tid, int type, uint64_t period,
+                         size_t pg, size_t dsz) {
+    ch->fd = -1;
+    ch->base_map = MAP_FAILED;
+    ch->base_sz = 0;
+    ch->tid = tid;
+    struct perf_event_attr a;
+    ibs_fill_attr(&a, type, period);
+    long fd = perf_open(&a, tid, -1, -1, 0);
+    if (fd < 0)
+        return -1;
+    size_t base_sz = pg + dsz;
+    void *m = mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (m == MAP_FAILED) {
+        close((int)fd);
+        return -1;
+    }
+    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
+    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(m, base_sz);
+        close((int)fd);
+        return -1;
+    }
+    ch->fd = fd;
+    ch->base_map = m;
+    ch->base_sz = base_sz;
+    return 0;
+}
+
+static void ibs_chan_disable(ibs_chan *ch) {
+    if (ch->fd >= 0)
+        ioctl((int)ch->fd, PERF_EVENT_IOC_DISABLE, 0);
+}
+static void ibs_chan_free(ibs_chan *ch) {
+    if (ch->base_map != MAP_FAILED)
+        munmap(ch->base_map, ch->base_sz);
+    if (ch->fd >= 0)
+        close((int)ch->fd);
+    ch->fd = -1;
+    ch->base_map = MAP_FAILED;
+}
+
+/* Read up to `max` thread ids of `pid` from /proc/<pid>/task into `out`. Returns the
+ * count (>=0), or -1 if the task directory cannot be read (no such process). */
+static int ibs_list_tids(pid_t pid, pid_t *out, int max) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
+    DIR *d = opendir(path);
+    if (d == NULL)
+        return -1;
+    int n = 0;
+    struct dirent *e;
+    while (n < max && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9')
+            continue; /* skip "." / ".." */
+        long t = strtol(e->d_name, NULL, 10);
+        if (t > 0)
+            out[n++] = (pid_t)t;
+    }
+    closedir(d);
+    return n;
+}
+
+/* Drain every channel once, then sleep a 2 ms slice — the shared inner tick. Draining
+ * often keeps each 256 KiB non-overwrite ring from filling across a long window. */
+static void ibs_drain_all(ibs_chan *chans, int nch, size_t pg, size_t dsz,
+                          uint8_t *scratch, edge_hash *h,
+                          asmtest_ibs_survey_t *out) {
+    for (int i = 0; i < nch; i++)
+        ibs_drain(chans[i].base_map, pg, dsz, scratch, h, out);
+}
+
 int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
                            const asmtest_ibs_opts_t *opts,
                            asmtest_ibs_survey_t *out) {
@@ -430,63 +549,26 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
     if (type < 0)
         return ASMTEST_IBS_EUNAVAIL;
 
-    uint64_t period = (opts != NULL && opts->sample_period != 0)
-                          ? opts->sample_period
-                          : IBS_DEFAULT_PERIOD;
-    period &= ~(uint64_t)0xF; /* IBS max-count granularity is 16 */
-    if (period < 16)
-        period = IBS_DEFAULT_PERIOD;
+    size_t pg = ibs_page();
+    size_t dsz = pg * IBS_RING_DATA_PAGES;
 
-    struct perf_event_attr a;
-    memset(&a, 0, sizeof a);
-    a.size = sizeof a;
-    a.type = (uint32_t)type;
-    a.sample_period = period;
-    a.config2 = 1; /* swfilt (config2:0): enables exclude_kernel at p=2 */
-    a.exclude_kernel =
-        1; /* user-only — the unprivileged envelope             */
-    a.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_RAW;
-    a.disabled = 1;
-
-    long fd = perf_open(&a, tid, -1, -1, 0); /* tid==0 => the calling thread */
-    if (fd < 0)
+    ibs_chan ch;
+    if (ibs_chan_open(&ch, tid, type, ibs_period(opts), pg, dsz) != 0)
         return ASMTEST_IBS_EUNAVAIL;
 
-    long pg = sysconf(_SC_PAGESIZE);
-    if (pg <= 0)
-        pg = 4096;
-    size_t dsz = (size_t)pg * IBS_RING_DATA_PAGES;
-    size_t base_sz = (size_t)pg + dsz;
-    void *base_map =
-        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
-    if (base_map == MAP_FAILED) {
-        close((int)fd);
-        return ASMTEST_IBS_EUNAVAIL;
-    }
     uint8_t *scratch = (uint8_t *)malloc(dsz);
     edge_hash h;
     if (scratch == NULL || eh_init(&h, 1024) != 0) {
         free(scratch);
-        munmap(base_map, base_sz);
-        close((int)fd);
+        ibs_chan_disable(&ch);
+        ibs_chan_free(&ch);
         return ASMTEST_IBS_EUNAVAIL;
     }
 
-    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
-    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
-        eh_free(&h);
-        free(scratch);
-        munmap(base_map, base_sz);
-        close((int)fd);
-        return ASMTEST_IBS_EUNAVAIL;
-    }
-
-    /* Drain periodically so the 256 KiB non-overwrite ring never fills during a
-     * long window. 2 ms slices keep us well under the throttled sample rate. */
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
-        ibs_drain(base_map, (size_t)pg, dsz, scratch, &h, out);
+        ibs_drain(ch.base_map, pg, dsz, scratch, &h, out);
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (elapsed_ms(&t0, &now) >= ms)
@@ -494,14 +576,107 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
         struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
         nanosleep(&slice, NULL);
     }
-    ioctl((int)fd, PERF_EVENT_IOC_DISABLE, 0);
-    ibs_drain(base_map, (size_t)pg, dsz, scratch, &h, out); /* final drain */
+    ibs_chan_disable(&ch);
+    ibs_drain(ch.base_map, pg, dsz, scratch, &h, out); /* final drain */
 
     eh_export(&h, out);
     eh_free(&h);
     free(scratch);
-    munmap(base_map, base_sz);
-    close((int)fd);
+    ibs_chan_free(&ch);
+    return ASMTEST_IBS_OK;
+}
+
+int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
+                               const asmtest_ibs_opts_t *opts,
+                               asmtest_ibs_survey_t *out) {
+    if (out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (!asmtest_ibs_available())
+        return ASMTEST_IBS_EUNAVAIL;
+    int type = ibs_op_type();
+    if (type < 0)
+        return ASMTEST_IBS_EUNAVAIL;
+    if (pid == 0)
+        pid = getpid();
+    uint64_t period = ibs_period(opts);
+
+    size_t pg = ibs_page();
+    size_t dsz = pg * IBS_RING_DATA_PAGES;
+
+    pid_t tids[IBS_MAX_CHANS];
+    int ntid = ibs_list_tids(pid, tids, IBS_MAX_CHANS);
+    if (ntid <= 0)
+        return ASMTEST_IBS_EUNAVAIL; /* no such process / empty task list */
+
+    ibs_chan *chans = (ibs_chan *)calloc(IBS_MAX_CHANS, sizeof *chans);
+    uint8_t *scratch = (uint8_t *)malloc(dsz);
+    edge_hash h;
+    if (chans == NULL || scratch == NULL || eh_init(&h, 2048) != 0) {
+        free(chans);
+        free(scratch);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+
+    /* Attach one out-of-band event per pre-existing thread. Threads that vanished
+     * since the enumeration just fail to open and are skipped. */
+    int nch = 0;
+    for (int i = 0; i < ntid; i++) {
+        if (ibs_chan_open(&chans[nch], tids[i], type, period, pg, dsz) == 0)
+            nch++;
+    }
+    if (nch == 0) { /* every thread gone, or perf_event_open blocked */
+        eh_free(&h);
+        free(scratch);
+        free(chans);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+
+    /* Drain all rings for `ms`, with ONE mid-window rescan of task/ to attach any
+     * thread spawned after we started (see the header's residual-race note). */
+    int rescanned = 0;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t el = elapsed_ms(&t0, &now);
+        if (!rescanned && el >= (uint64_t)ms / 2) {
+            rescanned = 1;
+            if (nch < IBS_MAX_CHANS) {
+                pid_t cur[IBS_MAX_CHANS];
+                int m = ibs_list_tids(pid, cur, IBS_MAX_CHANS);
+                for (int i = 0; i < m && nch < IBS_MAX_CHANS; i++) {
+                    int known = 0;
+                    for (int j = 0; j < nch; j++) {
+                        if (chans[j].tid == cur[i]) {
+                            known = 1;
+                            break;
+                        }
+                    }
+                    if (!known && ibs_chan_open(&chans[nch], cur[i], type, period,
+                                                pg, dsz) == 0)
+                        nch++;
+                }
+            }
+        }
+        if (el >= ms)
+            break;
+        struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
+        nanosleep(&slice, NULL);
+    }
+
+    for (int i = 0; i < nch; i++)
+        ibs_chan_disable(&chans[i]);
+    ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out); /* final drain */
+
+    eh_export(&h, out);
+    eh_free(&h);
+    free(scratch);
+    for (int i = 0; i < nch; i++)
+        ibs_chan_free(&chans[i]);
+    free(chans);
     return ASMTEST_IBS_OK;
 }
 
@@ -515,6 +690,16 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
                            const asmtest_ibs_opts_t *opts,
                            asmtest_ibs_survey_t *out) {
     (void)tid;
+    (void)ms;
+    (void)opts;
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    return ASMTEST_IBS_EUNAVAIL;
+}
+int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
+                               const asmtest_ibs_opts_t *opts,
+                               asmtest_ibs_survey_t *out) {
+    (void)pid;
     (void)ms;
     (void)opts;
     if (out != NULL)

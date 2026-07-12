@@ -31,10 +31,22 @@ Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 p
 > coding (PERF_SAMPLE_IP == `reg[1]` cross-check); the live test captures the spin-loop's
 > back-edge out of band from a separate thread (unprivileged, `paranoid=2`). The current
 > header exposes `asmtest_ibs_available`/`_skip_reason`/`_decode_op`/`_survey_pid`/`_survey_free`;
-> **`asmtest_ibs_survey_process` and the `opts` `cnt_ctl`/`callchain`/`system_wide` fields are
-> deferred to Phases 2/5** (declared here as the target surface, not yet shipped — every
-> shipped symbol has a real, tested body). Phase 3 (the `asmspy --sample` TUI view) is the
-> next deliverable and is **out of scope for this pass** (TUI).
+> **the `opts` `cnt_ctl`/`callchain`/`system_wide` fields are deferred to Phase 5** (declared
+> here as the target surface, not yet shipped — every shipped symbol has a real, tested body).
+
+> **Landed 2026-07-12 — Phase 2** (whole-process coverage). New symbol
+> `asmtest_ibs_survey_process(pid, ms, opts, out)` in the same TU: refactors the single-tid
+> capture path into a reusable per-thread **channel** (one `perf_event_open` + mmap ring per
+> tid), enumerates `/proc/<pid>/task`, opens a channel per pre-existing thread, drains them
+> together into one merged histogram, and does **one mid-window rescan** of `task/` to catch
+> threads spawned after start (the residual born-and-dead-within-window race and the
+> privileged system-wide remedy are documented in the header, not hidden). Thread count is
+> capped at `IBS_MAX_CHANS` (512) to bound fd/mmap use. `examples/test_ibs.c` gains a
+> whole-process test — three distinct hot loops on three worker threads, one out-of-band
+> `survey_process(0, …)`, asserting the merged survey carries edges from ≥2 workers' code
+> windows (something no single-tid survey could produce): reliably recovers 3/3 in practice,
+> `>=2` gate for throttle-robustness. Phase 3 (the `asmspy --sample` view, now unblocked) is
+> the next deliverable and is **out of scope for this pass** (TUI).
 
 ## Relationship to the existing AMD plan (Phase 7)
 
@@ -168,7 +180,7 @@ in CI on **any** host, Zen 2 or not. Live capture self-skips off IBS. On this Ze
 `examples/test_ibs.c` self-profiles a known control-flow fixture and asserts its hot
 back-edge appears in the top edges.
 
-### Phase 2 — Whole-process coverage (`asmtest_ibs_survey_process`) *(planned)*
+### Phase 2 — Whole-process coverage (`asmtest_ibs_survey_process`) *(landed)*
 
 **Goal.** Cover every thread of a target, not just one tid.
 

@@ -112,6 +112,29 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
                            const asmtest_ibs_opts_t *opts,
                            asmtest_ibs_survey_t *out);
 
+/* Attach IBS-Op to EVERY thread of process `pid` (0 => the calling process),
+ * sample for `ms` milliseconds, and return one MERGED edge histogram in *out.
+ * Opens one out-of-band event per thread enumerated from /proc/<pid>/task and
+ * rescans that directory once, mid-window, to pick up threads spawned after the
+ * survey starts. Same statistical / out-of-band / unprivileged contract as
+ * asmtest_ibs_survey_pid — the whole target runs unperturbed (no ptrace, no
+ * single-step).
+ *
+ * RESIDUAL RACE: a thread both born AND dead entirely between the initial scan and
+ * the single mid-window rescan can be missed; the clean fix is a privileged
+ * system-wide per-CPU capture (a later opts.system_wide phase). Threads that vanish
+ * before their event opens are skipped, not fatal. Coverage is capped at a large
+ * fixed number of threads (see ibs_backend.c); a target with more live threads than
+ * that is surveyed partially.
+ *
+ * Returns ASMTEST_IBS_OK (even if only some threads were captured),
+ * ASMTEST_IBS_EINVAL on bad args, or ASMTEST_IBS_EUNAVAIL when IBS is unavailable,
+ * the process has no readable task list, or no thread could be attached. *out is
+ * always zero-initialised first. */
+int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
+                               const asmtest_ibs_opts_t *opts,
+                               asmtest_ibs_survey_t *out);
+
 /* Free the edge array a survey owns and zero the struct (idempotent; NULL-safe). */
 void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s);
 
