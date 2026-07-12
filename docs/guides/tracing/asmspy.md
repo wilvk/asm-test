@@ -9,7 +9,10 @@ Point it at any running process and watch, live and out of band:
   that executed and the functions it called, resampled each time the target
   calls it; or
 - a **whole-process live instruction stream** — every instruction as it runs,
-  resolved to its function and disassembled.
+  resolved to its function and disassembled; or
+- its **statistical hot control-flow edges** — sampled by the CPU itself (AMD
+  IBS-Op), **without ptrace and without single-stepping**, so it is safe on
+  targets the single-step views can destabilize (a live JIT).
 
 It is the interactive companion to the C tracer demos
 ([`examples/attach_trace.c`](https://github.com/wilvk/asm-test/blob/main/examples/attach_trace.c),
@@ -93,13 +96,17 @@ Run `asmspy` with no arguments. It walks four screens:
    **PID**, **most recently active** (a short per-process CPU sample), and a
    **quick string-scan** — samples each process's readable memory and ranks the
    most string-rich (highest alphanumeric density, the `STR` column) first, then
-   by recency. `F3` re-scans (re-sampling). Processes you cannot `ptrace` are
-   marked with `!`. (`Tab` acts when the filter is empty.)
+   by recency. `F2` toggles the flat list to a **process tree** (each root's
+   children nested under it with `├─`/`└─` connectors — selection and filtering
+   still work per row); `F3` re-scans (re-sampling). Processes you cannot
+   `ptrace` are marked with `!`. (`Tab` acts when the filter is empty.)
 2. **Mode select** — `1` syscall log, `2` a function's assembly & call-graph,
    `3` the whole-process live instruction stream, `4` the whole-process call
    graph (caller/callee invocation counts, sortable), `5` the whole-process live
    call tree (indented by call depth), `6` the process/thread topology (the whole
-   process tree — threads and child processes — with per-task counts).
+   process tree — threads and child processes — with per-task counts), `7` the
+   statistical **hot edges** sampler (AMD IBS-Op, out of band — the only rich
+   view that never ptraces or single-steps).
 3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
    filterable; `Enter` picks the function to trace, `F3` reloads the symbols
    (picking up newly-mapped libraries or fresh JIT code).
@@ -137,13 +144,27 @@ Run `asmspy` with no arguments. It walks four screens:
      opening a live call graph of that node's process (the topology detaches
      first, so the drill-in re-attaches cleanly). Pre-existing child processes are
      discovered at attach; ones forked later are followed live.
+   - *Hot edges (sample)* — a live table of the target's **hottest control-flow
+     edges**, sampled out of band by AMD IBS-Op (see the `--sample` subcommand
+     below): per edge a sample
+     count, both endpoints resolved to `function [module]` (ELF symbols *and*
+     JIT perf-map methods), and `[misp N%]`/`[ret]` tags, with honest provenance
+     in the header (`branch/total samples`, `THROTTLED`, window size). **`Tab`**
+     toggles the sort (sample count / mispredicts). The target is **never
+     ptraced and never single-stepped** — it runs at full speed — so this is
+     the safe view for a live JIT. Needs an AMD host with IBS (the menu says
+     why when unavailable).
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
    through the buffered lines (up to 2048); `space` again (or `End`, or scrolling
    past the newest line) resumes the live tail. The status bar shows `[PAUSED
    line/total]` while frozen. Scrolling still works after the target exits, so
-   you can read the final history.
+   you can read the final history. The **call graph**, **hot edges**, and
+   **assembly & functions** views pause + scroll the same way: `space` freezes a
+   stable snapshot (scrolling up auto-pauses), the same keys move through it —
+   in the two-pane region view `Tab` switches which pane scrolls — and `space`
+   resumes the live view.
 
    Press `b` to go back to this process's options, or `q`/`ESC` for the process
    list.
@@ -153,22 +174,30 @@ detaches cleanly and leaves the target running untouched.
 
 ## Headless subcommands
 
-The same engine drives five non-interactive subcommands — for scripts, CI, or
-when you already know the pid. This is what `make cli-smoke` exercises.
+The same engine drives every view as a non-interactive subcommand — for
+scripts, CI, or when you already know the pid. This is what `make cli-smoke`
+exercises.
 
 ```bash
 asmspy --list [active|scan]        # list processes; active=recent CPU, scan=string-rich memory first
 asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name, module)
 asmspy --log    <pid> [n]          # stream n syscalls with decoded data (default 20)
 asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
-asmspy --stream <pid> [n]          # stream n instructions live: function + disassembly (default 20)
-asmspy --graph  <pid> [n] [--sort=invocations|fanout]  # whole-process call graph over n calls (default 200)
-asmspy --tree   <pid> [n]          # whole-process live call tree, indented by depth (n call lines, default 40)
+asmspy --stream <pid> [n] [--tid=<t>]                  # stream n instructions live (default 20)
+asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]
+                                   # whole-process call graph over n calls (default 200)
+asmspy --tree   <pid> [n] [--tid=<t>]                  # whole-process live call tree (default 40 lines)
+asmspy --procs  <pid> [n] [--count=syscalls|calls]     # process/thread topology with live counts
+asmspy --sample <pid> [ms] [--json]                    # statistical hot edges via AMD IBS-Op (default 300 ms)
 ```
 
 A **negative `n`** streams until the target exits or you interrupt. Malformed
 arguments (a non-numeric or non-positive pid, an unknown `--list` sort) are
-rejected with exit status 2 rather than coerced.
+rejected with exit status 2 rather than coerced. On `--stream`/`--tree`/`--graph`,
+**`--tid=<t>`** seizes and steps **only thread `t`** (no clone-following), so you
+can isolate one worker while the process's other threads keep running at full
+speed — a filtered stream drops the `[tid]` prefix, since only one thread is
+followed.
 
 **Live stream** — every instruction as it runs, resolved to its function and
 disassembled (`function+offset [module]  <disasm>`):
@@ -213,6 +242,15 @@ boundaries. Whole-process single-stepping is slow, so the target crawls while
 the graph is built (and resumes full speed on detach). In the TUI (mode `4`) the
 same view refreshes live and **`Tab`** toggles the sort.
 
+The graph also exports: **`--graph <pid> [n] --json`** emits the nodes (entry
+address, resolved/demangled name, module, an `internal`/`external`/`jit`/`unknown`
+kind token, and the three counts) *plus* an `edges` array of
+`{caller, callee, count}` records (addresses as `0x` strings) — pipe it to `jq`
+or a visualizer; **`--dot`** emits a Graphviz digraph (kind-coloured nodes,
+count-labelled caller→callee edges), so
+`asmspy --graph <pid> --dot | dot -Tsvg -o graph.svg` renders the live call
+graph as a picture.
+
 **Call tree** — the same whole-process single-step, rendered as the call tree
 unfolding live: one line per function **entry**, indented by the calling
 thread's current **call depth** (a `call` pushes a level, a `ret` pops one).
@@ -237,6 +275,49 @@ Where `--graph` *aggregates* calls into per-function counts, `--tree` preserves
 the **nesting and order** — the real-time companion to the flat graph. In the
 TUI (mode `5`) the same feed scrolls live, with **`space`** to pause and scroll
 back through history.
+
+**Process/thread topology** — `--procs` draws the target's whole process tree —
+each process node, its threads, and its child processes nested underneath with
+`├─`/`└─`/`│` connectors (like `pstree`) — each task annotated with a live
+count. `--count=syscalls` (the default) counts near full speed and is safe on
+any target; `--count=calls` single-steps for richer counts, so the whole tree
+crawls while it runs. Pre-existing children are discovered at attach; ones
+forked later are followed live. In the TUI (mode `6`) `Tab` toggles the count
+mode and `Enter` drills into a node's live call graph.
+
+**Statistical hot edges** — `--sample` is the odd one out, and deliberately so:
+it never attaches `ptrace` and never single-steps. Instead it asks the CPU
+itself — **AMD IBS-Op** (Instruction-Based Sampling) — to tag retired
+instructions across every thread of the target, and keeps the taken branches:
+each sample carries the branch's **source and target address**, giving a
+statistical `from → to` control-flow edge. asmspy aggregates a window
+(default 300 ms) into a hot-edge histogram with both endpoints resolved through
+ELF symbols *and* the runtime's JIT perf-map, so managed Node/.NET/Java frames
+are named — and the target runs at **full speed, completely unperturbed**,
+which makes this the one rich view that is safe on exactly the targets the
+single-step views can destabilize (a live JIT):
+
+```text
+$ asmspy --sample 1234 500
+statistical hot edges (AMD IBS-Op, out of band) — 12 edges, 812/1604 branch/total samples (pid 1234)
+statistical, not exact: an edge here WAS taken; absence proves nothing.
+     391  hot_spin+0x1c [sample_victim]     -> hot_spin+0x8 [sample_victim]
+     102  hot_spin+0x2e [sample_victim]     -> hot_spin [sample_victim]
+      41  hot_spin+0x33 [sample_victim]     -> main+0x51 [sample_victim]  [ret]
+```
+
+`--json` emits the same histogram machine-readably (edges plus the
+`samples`/`branch_samples`/`lost`/`throttled` provenance). The view is
+**statistical**: it proves an edge *was* taken, never that code did *not* run,
+and cold code may not appear in a short window — lengthen `ms` for more recall
+(the kernel throttles the sampling rate, so a longer window beats a denser
+one). It requires an AMD host with IBS (any Zen, Linux ≥ ~6.2 for the `swfilt`
+user-only filter) but **no elevated privilege** — user-only sampling opens at
+the default `perf_event_paranoid=2`, unlike most of perf; on any other host
+`--sample` prints `# SKIP` and exits 0. In the TUI it is mode `7`. The
+underlying library API is `asmtest_ibs_survey_process()` — see
+[Hardware tracing](hardware-tracing.md) for the C surface and its honesty
+contract.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
 host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
@@ -325,13 +406,30 @@ asmspy is glue over primitives documented elsewhere; the interesting parts:
   `int3` — a **fatal SIGTRAP that kills the whole target**. So detach is two-phase:
   interrupt and stop *every* thread first (clearing any armed single-step), then
   release them all at once — the same all-at-once semantics the kernel uses when a
-  tracer dies (which is why a killed asmspy leaves the target unharmed).
-- **Symbol resolution.** The library resolves JIT methods (perf-map / jitdump)
-  and module extents, but has no reader for ordinary ELF symbols, so asmspy
-  carries its own: it parses the `.symtab`/`.dynsym` of every ELF mapped into the
-  target and offsets each `STT_FUNC` by that module's load bias. That table
-  powers both the symbol picker (forward, by name) and the call-graph pane
-  (reverse, by address).
+  tracer dies (which is why a killed asmspy leaves the target unharmed). The
+  single-step engines additionally **drain any queued debug exception** before
+  releasing: a step that completes across a blocking syscall defers its trap
+  until the syscall returns, so a parked worker thread would otherwise carry
+  the pending trap through detach and die from it seconds later.
+- **A target's own breakpoints are delivered, not swallowed.** The single-step
+  engines distinguish their own step traps from an `int3` the target executed
+  itself (a JIT's or debugger's software breakpoint) by the stop's `si_code`,
+  and deliver the latter back so the target's own SIGTRAP handler runs — a
+  self-breakpointing target keeps working while traced. (Delivering a trap
+  suspends fine-grained stepping of that thread until its next stop, so a
+  target that breakpoints in a loop may never reach a fixed `n` in batch mode —
+  interrupt with `Ctrl-C`.)
+- **Symbol resolution.** asmspy carries its own ELF reader — it parses the
+  `.symtab`/`.dynsym` of every ELF mapped into the target and offsets each
+  `STT_FUNC` by that module's load bias — and layers the runtime's **JIT
+  perf-map** on top (`/tmp/perf-<pid>.map`, the text format V8/Node emit under
+  `--perf-basic-prof`, .NET under `DOTNET_PerfMapEnabled=1`, and OpenJDK via
+  perf-map-agent). Resolution tries the ELF table first, then the JIT map, and
+  on a double miss re-reads the map (rate-limited) — a running JIT keeps
+  compiling, so a one-shot snapshot would go stale. JIT frames render
+  `name [jit]` in the stream/tree views and `[JIT]` in the graph. That combined
+  table powers both the symbol picker (forward, by name) and every view's
+  reverse lookup (by address).
 
 ## Permissions
 
@@ -345,6 +443,11 @@ same rule as the [scoped / foreign-attach tracing](hardware-tracing.md) tiers:
 Otherwise the attach fails and asmspy shows the reason (the process list marks
 non-attachable targets with `!`). In a default container, add
 `--cap-add=SYS_PTRACE` (or have the target opt in, as the example victims do).
+
+`--sample` is the exception: it uses `perf_event_open`, not `ptrace`, so Yama's
+`ptrace_scope` does not apply — it can sample any **same-uid** process at the
+default `perf_event_paranoid=2`, no capability needed (in a container the
+perf syscall must be allowed, e.g. `--security-opt seccomp=unconfined`).
 
 ## Limitations
 
@@ -371,4 +474,8 @@ non-attachable targets with `!`). In a default container, add
   still shows three hex slots. For exhaustive syscall tracing use `strace`; for
   kernel-side IPC/file payloads use `bpftrace`. asmspy is the *in-tree,
   asm-focused* view, not a general strace replacement.
-```
+- **`--sample` is statistical and AMD-only.** It reports edges that *were*
+  sampled — it can never prove code did not run, cold paths may be missing from
+  a short window, and per-thread sampling can miss a thread born and dead
+  within one window. It self-skips (`# SKIP`, exit 0) on non-AMD hosts, in VMs
+  without IBS, and on kernels without the `swfilt` user-only filter.

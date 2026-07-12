@@ -15,9 +15,9 @@ native, real-CPU tiers:
 |---|---|---|---|
 | [Execution traces and coverage](traces.md) | Unicorn emulator | guest blocks + instructions, coverage unions, source-line maps, lcov | any host |
 | [Native runtime tracing](native-tracing.md) | DynamoRIO (software DBI) + single-step (`EFLAGS.TF`) | native blocks + instructions, in-process | DynamoRIO: Linux x86-64; single-step: x86-64 Linux **or macOS** |
-| [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS) |
+| [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step, plus the **statistical AMD IBS-Op lane** (sampled hot edges, out of band, unprivileged) | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS; IBS: any AMD Zen) |
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
-| [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts) + call-graph, or a whole-process live instruction stream; processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
+| [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
 
 Start with the [emulator trace model](traces.md) for the shared trace API,
 coverage helpers, and reporting — the concepts carry across every backend. The

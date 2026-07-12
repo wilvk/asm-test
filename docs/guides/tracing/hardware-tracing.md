@@ -54,6 +54,12 @@ of any generation, VMs, CI, plain unprivileged containers); see
 > The CoreSight backend is a documented scaffold pending AArch64 board access — it
 > always self-skips until completed.
 
+Beside these four *exact* backends sits one deliberately separate, *statistical*
+producer — the [AMD IBS-Op lane](#statistical-edges-out-of-band-the-amd-ibs-op-lane)
+(sampled hot control-flow edges, out of band and unprivileged, on any Zen
+including Zen 2, where every exact hardware backend self-skips). It fills its own
+shape, never `asmtest_trace_t`, so it is documented below rather than in the table.
+
 ---
 
 ## Availability and self-skip
@@ -446,6 +452,68 @@ The .NET binding is the reference: see
 model (following one logical operation across `await` thread hops) is a further,
 opt-in layer not covered here.
 
+## Statistical edges out of band: the AMD IBS-Op lane
+
+The four backends above produce **exact** traces — ordered offsets that can back
+a parity assertion. asm-test also carries one **statistical** hardware producer:
+the AMD **IBS-Op** lane ([asmtest_ibs.h](../../../include/asmtest_ibs.h),
+`src/ibs_backend.c`). IBS (Instruction-Based Sampling) tags one retired
+instruction per sampling window, and when the tagged op is a taken branch the
+sample carries both its **source and target address** — a real, sampled
+`from → to` control-flow edge. Aggregated over a window this yields a hot-edge /
+hot-block histogram of a running process.
+
+Three properties make it worth having as its own lane:
+
+- **It works where the exact AMD backend cannot.** The branch stack the
+  `AMD_LBR` backend needs is Zen 3+ silicon; on a **Zen 2** host every exact
+  hardware backend self-skips. IBS ships on every Zen, so it is the one
+  hardware branch source on that class of machine.
+- **It is out of band and unprivileged.** It attaches `perf_event_open` to any
+  same-uid pid — **no ptrace, no single-step, no elevated privilege** (the
+  kernel's `swfilt` software filter makes user-only sampling open at the
+  default `perf_event_paranoid=2`). The target runs at full speed, completely
+  unperturbed — exactly the safe observation mode for the managed/JIT targets
+  the section above declares hostile to in-process stepping.
+- **It is honest about being statistical.** It fills its own shape
+  (`asmtest_ibs_survey_t`: aggregated edges plus `samples` / `branch_samples` /
+  `lost` / `throttled` provenance), **never** an `asmtest_trace_t`, and is not
+  a member of the exact-backend cascade — a sampled edge proves that edge *was*
+  taken; absence proves nothing, so it can never back a parity assertion.
+
+```c
+#include <asmtest_ibs.h>
+
+int  asmtest_ibs_available(void);           /* 0 off-AMD / no IBS / no swfilt   */
+const char *asmtest_ibs_skip_reason(void);  /* why, exactly                     */
+int  asmtest_ibs_survey_pid(pid_t tid, unsigned ms, const asmtest_ibs_opts_t *,
+                            asmtest_ibs_survey_t *out);      /* one thread     */
+int  asmtest_ibs_survey_process(pid_t pid, unsigned ms, const asmtest_ibs_opts_t *,
+                                asmtest_ibs_survey_t *out);  /* every thread   */
+void asmtest_ibs_survey_free(asmtest_ibs_survey_t *);
+```
+
+`survey_process` opens one perf channel per thread of the target (with a
+mid-window rescan for threads spawned after start) and merges everything into
+one histogram sorted by count. Limits, stated rather than hidden: a thread born
+*and* dead within one window can be missed; the kernel throttles sustained
+sampling, so a **longer window** — not a shorter period — is how you buy more
+cold-edge recall; and fidelity is always statistical.
+
+Two consumers ship today. The interactive one is **`asmspy --sample` / TUI
+mode 7** ([asmspy](asmspy.md)) — the hot-edge view that is safe on a live JIT.
+And the AMD **whole-window statistical survey** (`asmtest_hwtrace_sample_window_amd`)
+**falls back to an IBS-Op survey when the branch stack is absent** — so on a
+Zen 2 host it now returns a real hot-method histogram instead of `EUNAVAIL`
+(set `ASMTEST_FORCE_IBS_SURVEY=1` to force the IBS path on branch-stack hosts
+for cross-validation; the branch-stack path is byte-identical otherwise).
+
+The lane self-validates like everything else: `examples/ibs_probe.c` prints the
+capability table (and the precise skip reason elsewhere), `make ibs-test` runs
+the pure-decoder unit tests on any host plus the live out-of-band capture tests
+on AMD, and `make docker-hwtrace-ibs` is the containerized lane (user-only IBS
+works unprivileged in a container; the perf syscall must be allowed by seccomp).
+
 ## Known limitations
 
 - **Single active region, single thread** in the MVP — capture state is one
@@ -461,7 +529,10 @@ opt-in layer not covered here.
   host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its
   branch stack at the PMU, so it `truncated`s a too-fast single-shot routine —
-  single-step is the deterministic in-process backend for that case.
+  single-step is the deterministic in-process backend for that case. (The
+  [IBS-Op lane](#statistical-edges-out-of-band-the-amd-ibs-op-lane) is the
+  exception on the privilege axis — user-only, unprivileged — but it is
+  statistical, never exact.)
 - **AMD LBR's 16-deep stack is lifted by Tier-B window stitching**; the remaining
   ceiling is the data ring (extend via `data_size`) plus PMI throttling. On a stitch
   gap or sample loss the trace comes back `truncated` — re-resolve under
@@ -483,4 +554,7 @@ opt-in layer not covered here.
   emulator trace model.
 - [Disassembly](../disassembly.md) — rendering recorded offsets back to instruction text.
 - [Language bindings](../../bindings/index.md) — driving the tier from another language.
+- [asmspy](asmspy.md) — the interactive front-end, including the `--sample`
+  statistical hot-edge view built on the IBS lane.
 - [asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) — the API header.
+- [asmtest_ibs.h](../../../include/asmtest_ibs.h) — the statistical IBS-Op lane's header.

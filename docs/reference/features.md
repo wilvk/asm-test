@@ -129,6 +129,15 @@ hardware is absent. All are exposed through **all ten language wrappers**
   most-faithful available backend, and `asmtest_trace_auto` extends the cascade across
   all three tiers (Intel PT → AMD LBR → DynamoRIO → single-step → CoreSight → emulator),
   with a `NATIVE_ONLY` policy that guards the native→emulator fidelity line.
+- **Statistical AMD IBS-Op lane** (`asmtest_ibs.h`): sampled `from → to` hot
+  control-flow edges captured **out of band from any same-uid process,
+  unprivileged** (user-only sampling at the default `perf_event_paranoid=2`), on
+  **any AMD Zen** — including Zen 2, where every exact hardware backend
+  self-skips. A separate *statistical* producer with honest provenance
+  (`samples`/`lost`/`throttled`), never part of the exact-trace cascade; also the
+  automatic fallback that keeps the AMD whole-window statistical survey working
+  without a branch stack.
+  ([Hardware tracing](../guides/tracing/hardware-tracing.md))
 
 ### Interactive process tracer (`asmspy` CLI, optional, Linux x86-64)
 
@@ -137,10 +146,16 @@ hardware is absent. All are exposed through **all ten language wrappers**
   **syscalls with data** (a mini `strace`, decoded strings split out), a chosen
   **function's live assembly** with **per-instruction heat counts** and its
   **call-graph ranked by call count**, resampled each time the target calls it,
-  or a **whole-process live instruction stream** (every instruction as it
-  executes, resolved to its function); plus headless `--list [active|scan]` /
-  `--syms` / `--log` / `--trace` / `--stream` subcommands for scripts and CI
-  (process list sortable by pid, recent CPU activity, or string-scan density).
+  a **whole-process live instruction stream** (every instruction as it
+  executes, resolved to its function), the whole-process **call graph**
+  (JSON/DOT export) and **call tree**, the **process/thread topology** with live
+  counts, or **statistical hot edges** sampled via AMD IBS-Op — no ptrace, no
+  single-step, safe on a live JIT. Managed frames are named through the
+  runtime's JIT perf-map (Node/V8, .NET, JVM); a `--tid` filter isolates one
+  thread. Every view is also a headless subcommand (`--list [active|scan]` /
+  `--syms` / `--log` / `--trace` / `--stream` / `--graph` / `--tree` / `--procs`
+  / `--sample`) for scripts and CI (process list sortable by pid, recent CPU
+  activity, or string-scan density).
   Needs **libncurses** + **Capstone**; `make cli` (or `make docker-cli`) builds
   it and self-skips with build guidance when a dependency is absent.
   ([asmspy](../guides/tracing/asmspy.md))
