@@ -137,6 +137,14 @@ dataflow-lua-test: shared-dataflow
 	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  $(LUAJIT) test_dataflow.lua
 
+# Phase 6 — the Zig data-flow binding (bindings/zig/src/dataflow via std.DynLib). Needs
+# zig 0.13.x (the docker bindings image). `-lc` selects the libc dlopen backend (zig's
+# own ELF loader wants a hash table the plain shared lib omits — ElfHashTableNotFound).
+.PHONY: dataflow-zig-test
+dataflow-zig-test: shared-dataflow
+	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(ZIG) run -lc bindings/zig/src/test_dataflow.zig
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
