@@ -1,7 +1,7 @@
 /*
  * jit_trace.c — REAL managed-runtime trace: attach to a live JIT runtime and trace a
  * genuine JIT-compiled method out of band, driving the whole W2 pipeline (resolve ->
- * attach -> run_to -> single-step) against a real process rather than a fixture.
+ * attach -> run_to -> step) against a real process rather than a fixture.
  *
  * Three runtimes share one harness, selected by argv[1]:
  *   jit_trace node            — spawn Node.js (V8), trace the optimized `asmtjit` body
@@ -14,10 +14,13 @@
  * OPTIMIZED entry, resolves it with the library's own parser (asmtest_proc_perfmap_-
  * symbol) — validating it against the runtime's REAL output — confirms the address
  * against the live /proc/<pid>/maps, PTRACE_ATTACHes the multi-threaded GC'd runtime,
- * run_to's the method entry, and single-steps one invocation. Call-outs to runtime
- * helpers are stepped over (call-depth aware).
+ * run_to's the method entry, and steps one invocation — by PTRACE_SINGLEBLOCK block-step
+ * (one stop per taken branch, byte-identical reconstructed per-instruction stream) when
+ * available, else per-instruction single-step; the *-descend lanes stay per-instruction
+ * (descent needs trace_attached_ex). Call-outs to runtime helpers are stepped over
+ * (call-depth aware).
  *
- * Honest by construction: a watchdog alarm bounds the single-step, so a re-tiered/moved
+ * Honest by construction: a watchdog alarm bounds the stepping, so a re-tiered/moved
  * address self-skips instead of hanging; the resolve + attach checks are firm (they test
  * the library against real runtime output and a real /proc/maps) while the trace is
  * asserted when the runtime cooperates and skipped (never failed) otherwise — so the
@@ -315,7 +318,7 @@ static int trace_runtime(const char *engine, const char *method_substr,
         return failures ? 1 : 0;
     }
 
-    /* (4) Run the runtime to the method (software breakpoint) and single-step one real
+    /* (4) Run the runtime to the method (software breakpoint) and step one real
      * invocation, watchdog-bounded so a moved/re-tiered address self-skips not hangs. */
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -343,21 +346,32 @@ static int trace_runtime(const char *engine, const char *method_substr,
             asmtest_descent_set_watchdog_ms(dh, 2000);
         }
     }
+    /* Default (no-descent) lane: prefer the PTRACE_SINGLEBLOCK rung — one ptrace
+     * stop per TAKEN branch instead of one per retired instruction (roughly an
+     * order of magnitude fewer tracer round-trips on a live JIT), reconstructing
+     * the byte-identical per-instruction stream, so every check below holds
+     * unchanged. The descent lanes stay on trace_attached_ex (block-step has no
+     * descent parameter); hosts without a functional PTRACE_SINGLEBLOCK or
+     * Capstone keep the per-instruction path (the probe is hang-proof + cached). */
+    int use_blockstep = dh == NULL && asmtest_ptrace_blockstep_available();
     rc = asmtest_ptrace_run_to(ttid, base);
     if (rc == ASMTEST_PTRACE_OK)
-        rc = dh != NULL
-                 ? asmtest_ptrace_trace_attached_ex(ttid, base, len, &result,
-                                                    tr, dh)
+        rc = dh != NULL ? asmtest_ptrace_trace_attached_ex(ttid, base, len,
+                                                           &result, tr, dh)
+             : use_blockstep
+                 ? asmtest_ptrace_trace_attached_blockstep(ttid, base, len,
+                                                           &result, tr)
                  : asmtest_ptrace_trace_attached(ttid, base, len, &result, tr);
     alarm(0);
 
     uint64_t insns = asmtest_emu_trace_insns_total(tr);
     if (rc == ASMTEST_PTRACE_OK && insns >= 1) {
         CHECK(asmtest_trace_covered(tr, 0),
-              "trace: real JIT method single-stepped out of band — entry "
-              "covered");
-        printf("# traced %llu instructions of real %s JIT code%s\n",
+              "trace: real JIT method stepped out of band — entry covered");
+        printf("# traced %llu instructions of real %s JIT code via %s%s\n",
                (unsigned long long)insns, engine,
+               use_blockstep ? "block-step (PTRACE_SINGLEBLOCK)"
+                             : "per-instruction single-step",
                asmtest_emu_trace_truncated(tr) ? " (truncated)" : "");
         if (dh != NULL) {
             size_t nf = asmtest_descent_frames_len(dh);
@@ -384,10 +398,9 @@ static int trace_runtime(const char *engine, const char *method_substr,
             }
         }
     } else {
-        printf("# SKIP jit-trace step (%s): could not single-step the live JIT "
-               "method "
+        printf("# SKIP jit-trace step (%s): could not %s the live JIT method "
                "(runtime moved/re-tiered the code, or the watchdog fired)\n",
-               engine);
+               engine, use_blockstep ? "block-step" : "single-step");
     }
 
     asmtest_descent_free(dh);
