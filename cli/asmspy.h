@@ -32,23 +32,24 @@
 /* ------------------------------------------------------------------ */
 typedef struct {
     pid_t pid;
-    pid_t ppid;       /* parent pid (for the process-tree view)         */
-    char user[24];    /* owner username (or numeric uid)           */
-    char cmd[192];    /* cmdline (argv joined), or [comm] for a kthread */
-    char runtime[8];  /* cheap runtime badge ("JVM"/"py"/"node"/"jit"/…),
+    pid_t ppid;      /* parent pid (for the process-tree view)         */
+    char user[24];   /* owner username (or numeric uid)           */
+    char cmd[192];   /* cmdline (argv joined), or [comm] for a kthread */
+    char runtime[8]; /* cheap runtime badge ("JVM"/"py"/"node"/"jit"/…),
                        * from argv0/comm + perf-map; "" if native/unknown */
-    int attachable;   /* 1 if same euid as us (ptrace_scope=1 friendly) */
+    int attachable;  /* 1 if same euid as us (ptrace_scope=1 friendly) */
     unsigned long long cpu; /* CPU jiffies used during the sample window
                              * (ASMSPY_SORT_ACTIVE / _SCAN; 0 otherwise) */
-    unsigned scan; /* per-mille alphanumeric density of a memory sample
+    unsigned scan;          /* per-mille alphanumeric density of a memory sample
                     * (ASMSPY_SORT_SCAN only; 0 otherwise)              */
 } asmspy_proc_t;
 
 /* Process list ordering. */
 typedef enum {
-    ASMSPY_SORT_PID = 0,    /* ascending pid (cheap, no sampling)          */
-    ASMSPY_SORT_ACTIVE = 1, /* most recently active first (a ~150ms CPU sample) */
-    ASMSPY_SORT_SCAN = 2,   /* quick scan: string-rich memory first, then recency
+    ASMSPY_SORT_PID = 0, /* ascending pid (cheap, no sampling)          */
+    ASMSPY_SORT_ACTIVE =
+        1,                /* most recently active first (a ~150ms CPU sample) */
+    ASMSPY_SORT_SCAN = 2, /* quick scan: string-rich memory first, then recency
                              * (samples each process's readable memory)        */
 } asmspy_sort_t;
 
@@ -64,25 +65,28 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort);
 /* we can read. Deeper than the cheap asmspy_proc_t.runtime badge.      */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    char runtime[24];  /* "JVM"/".NET"/"CPython"/"Node/V8"/"Ruby"/"Perl"/"Mono"/
+    char runtime[24]; /* "JVM"/".NET"/"CPython"/"Node/V8"/"Ruby"/"Perl"/"Mono"/
                         * "Erlang/BEAM"/"Go"/"PHP"/"native"/"?"                */
-    char evidence[96]; /* what identified it: "libjvm.so", ".note.go.buildid"  */
-    int jitting;       /* /tmp/perf-<pid>.map present (actively JIT-compiling)  */
-    int threads;       /* Threads: from /proc/<pid>/status (0 if unknown)      */
-    unsigned long rss_kb;   /* VmRSS in KiB (0 if unknown)                     */
-    pid_t tracer_pid;  /* TracerPid: 0 = none, else the tracer already attached */
-    int seccomp;       /* Seccomp: 0 off, 1 strict, 2 filtered, -1 unknown     */
-    char exe[192];     /* /proc/<pid>/exe target path ("" if unreadable)       */
-    int elf_class;     /* 32 or 64, or 0 if the exe ELF couldn't be read       */
-    int pie;           /* 1 = position-independent (ET_DYN) main executable    */
+    char
+        evidence[96]; /* what identified it: "libjvm.so", ".note.go.buildid"  */
+    int jitting; /* /tmp/perf-<pid>.map present (actively JIT-compiling)  */
+    int threads; /* Threads: from /proc/<pid>/status (0 if unknown)      */
+    unsigned long rss_kb; /* VmRSS in KiB (0 if unknown)                     */
+    pid_t
+        tracer_pid; /* TracerPid: 0 = none, else the tracer already attached */
+    int seccomp;    /* Seccomp: 0 off, 1 strict, 2 filtered, -1 unknown     */
+    char exe[192];  /* /proc/<pid>/exe target path ("" if unreadable)       */
+    int elf_class;  /* 32 or 64, or 0 if the exe ELF couldn't be read       */
+    int pie;        /* 1 = position-independent (ET_DYN) main executable    */
     int static_linked; /* 1 = no PT_INTERP (statically linked)                 */
-    char interp[80];   /* PT_INTERP (dynamic loader) basename, "" if static    */
-    char threadnames[6][20]; /* up to 6 distinct per-task comm names           */
+    char interp[80]; /* PT_INTERP (dynamic loader) basename, "" if static    */
+    char threadnames[6]
+                    [20]; /* up to 6 distinct per-task comm names           */
     int n_threadnames;
-    int more_threadnames;    /* 1 if distinct names were dropped past the cap  */
-    char modules[10][48];    /* up to 10 notable mapped-library basenames      */
+    int more_threadnames; /* 1 if distinct names were dropped past the cap  */
+    char modules[10][48]; /* up to 10 notable mapped-library basenames      */
     int n_modules;
-    int more_modules;        /* 1 if notable modules were dropped past the cap */
+    int more_modules; /* 1 if notable modules were dropped past the cap */
 } asmspy_fingerprint_t;
 
 /* Fill *out for `pid`, best-effort (unknown fields left zero/empty). Reads only
@@ -121,29 +125,44 @@ const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
 const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 
 /* ------------------------------------------------------------------ */
-/* JIT / perf-map resolver (asmspy_proc.c)                             */
+/* JIT resolver (asmspy_proc.c) — two sources, one map                 */
 /*                                                                     */
-/* Managed runtimes emit /tmp/perf-<pid>.map — a text table of         */
-/* "<hex addr> <hex size> <name>" lines naming their JIT-compiled code */
-/* (Node/V8 with --perf-basic-prof, .NET with DOTNET_PerfMapEnabled=1, */
-/* and OpenJDK via perf-map-agent all use this one format). That code  */
-/* lives in anonymous executable mappings the ELF symtab can't see, so */
-/* without this every managed frame renders "0x..". Unlike the ELF     */
-/* symtab this table is REFRESHED during the trace, since a running    */
-/* JIT keeps compiling new methods; addresses are absolute (no bias).  */
+/* Managed runtimes name their JIT-compiled code (which lives in       */
+/* anonymous executable mappings the ELF symtab can't see) in either   */
+/* of two standard perf formats, and this map reads BOTH:              */
+/*                                                                     */
+/*  1. the BINARY jitdump file `jit-<pid>.dump` (perf's richer format: */
+/*     sized, timestamped JIT_CODE_LOAD/MOVE records; emitted by       */
+/*     LLVM/Julia/OpenJDK-jvmti/…). Discovered the way perf discovers  */
+/*     it — the emitter mmaps the file's header page so it shows in    */
+/*     /proc/<pid>/maps — with /tmp/jit-<pid>.dump (next to the perf   */
+/*     map) and the target's cwd as fallbacks. Little-endian x86-64.   */
+/*  2. the TEXT perf-map /tmp/perf-<pid>.map — "<addr> <size> <name>"  */
+/*     lines (Node/V8 --perf-basic-prof, .NET DOTNET_PerfMapEnabled=1, */
+/*     OpenJDK via perf-map-agent).                                    */
+/*                                                                     */
+/* When both sources name an address the jitdump entry WINS (it        */
+/* carries exact code sizes and survives tiered recompiles/moves; the  */
+/* text map is the lowest common denominator). Unlike the ELF symtab   */
+/* this table is REFRESHED during the trace, since a running JIT keeps */
+/* compiling new methods; addresses are absolute (no load bias).       */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    asmspy_sym_t *v; /* sorted by addr; `name` owned, `module` the shared "jit" */
+    asmspy_sym_t
+        *v; /* sorted by addr; `name` owned, `module` the shared "jit" */
     size_t n, cap;
-    pid_t pid;             /* whose /tmp/perf-<pid>.map to read                 */
-    unsigned miss_budget;  /* refresh-on-miss rate limiter (see asmspy_resolve) */
+    pid_t pid; /* whose perf-map / jitdump to read                  */
+    unsigned
+        miss_budget;     /* refresh-on-miss rate limiter (see asmspy_resolve) */
+    char dump_path[256]; /* discovered jit-<pid>.dump path ("" until found)   */
 } asmspy_jitmap_t;
 
 /* Bind an (empty) JIT map to `pid`. Pairs with asmspy_jitmap_free. */
 void asmspy_jitmap_init(asmspy_jitmap_t *j, pid_t pid);
-/* Re-read /tmp/perf-<pid>.map, replacing the map (sorted by addr). Cheap next to
- * single-stepping. Returns the method count, or -1 if the file is absent (the
- * map is then emptied). Safe to call repeatedly during a trace. */
+/* Re-read the target's jitdump file AND /tmp/perf-<pid>.map, replacing the map
+ * (sorted by addr; jitdump entries shadow text entries they cover). Cheap next
+ * to single-stepping. Returns the method count, or -1 if neither source exists
+ * (the map is then emptied). Safe to call repeatedly during a trace. */
 int asmspy_jitmap_refresh(asmspy_jitmap_t *j);
 /* Reverse lookup: the JIT method whose [addr, addr+size) contains `addr`, else
  * NULL. Does NOT refresh (pure) — use asmspy_resolve for refresh-on-miss. */
@@ -231,10 +250,10 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
  * calls it MADE; `fanout` = how many DISTINCT functions it calls. `external` is
  * 1 for a shared/system-library function, 0 for the target's own executable. */
 typedef struct {
-    uint64_t addr;                  /* function entry address in the target  */
-    char name[128];                 /* resolved symbol name, or "0x…"         */
-    char module[64];                /* backing module basename ("?" if unknown) */
-    int external;                   /* 1 = external library, 0 = internal exe */
+    uint64_t addr;   /* function entry address in the target  */
+    char name[128];  /* resolved symbol name, or "0x…"         */
+    char module[64]; /* backing module basename ("?" if unknown) */
+    int external;    /* 1 = external library, 0 = internal exe */
     unsigned long long invocations; /* times this function was called         */
     unsigned long long out_calls;   /* total calls this function made         */
     unsigned fanout;                /* number of distinct functions it calls  */
@@ -273,10 +292,23 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx);
 
+/* One call-tree entry, structured — so a front-end can do more than print the
+ * pre-rendered line (the TUI disassembles `addr`; the headless --json/--dot
+ * exporters need the raw tid/depth/name instead of re-parsing indentation).
+ * `name`/`module` are transient (valid only for the sink call — copy to keep). */
+typedef struct {
+    pid_t tid;        /* thread that made the call                          */
+    int depth;        /* that thread's live call depth at entry (0 = top)   */
+    uint64_t addr;    /* callee entry address                               */
+    const char *name; /* resolved symbol name, or "0x…" if unresolved       */
+    const char *module; /* backing module basename, "jit", or "?" if unknown  */
+} asmspy_tree_call_t;
+
 /* One call-tree entry handed to the front-end: `line` is the indented
- * "-> function [module]" text; `addr` is the callee's entry address (0 if
- * unresolved) so a front-end can disassemble that function on demand. */
-typedef void (*asmspy_tree_sink)(void *ctx, const char *line, uint64_t addr);
+ * "-> function [module]" text; `call` carries the same entry structured
+ * (see above) so a front-end can disassemble/export without re-parsing. */
+typedef void (*asmspy_tree_sink)(void *ctx, const char *line,
+                                 const asmspy_tree_call_t *call);
 
 /* Attach to `pid` and ALL its threads, single-step them, and stream a live,
  * indented call TREE through `sink` (one entry per function entry, indented by
@@ -294,26 +326,30 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
 /* What the process/thread topology counts per task. */
 typedef enum {
-    ASMSPY_COUNT_SYSCALLS = 0, /* syscalls made (PTRACE_SYSCALL — fast, crash-safe) */
-    ASMSPY_COUNT_CALLS = 1,    /* CALL instructions (single-step — rich, slow)      */
+    ASMSPY_COUNT_SYSCALLS =
+        0, /* syscalls made (PTRACE_SYSCALL — fast, crash-safe) */
+    ASMSPY_COUNT_CALLS =
+        1, /* CALL instructions (single-step — rich, slow)      */
 } asmspy_count_t;
 
 /* One task (thread) in the traced process tree, with its invocation count. A
  * process is the set of tasks sharing `tgid`; its leader has tid == tgid. */
 typedef struct {
-    pid_t tid;              /* task (thread) id                                */
-    pid_t tgid;            /* thread-group (process) id                       */
-    pid_t ppid;            /* parent process id (for the process forest)      */
-    int is_leader;         /* 1 if tid == tgid (the process's main thread)    */
-    char comm[24];         /* task name (/proc/<tid>/comm)                    */
-    char exe[64];          /* process exe basename (leader tasks only)        */
-    unsigned long long inv; /* invocation count: syscalls or calls per `mode`  */
+    pid_t tid;     /* task (thread) id                                */
+    pid_t tgid;    /* thread-group (process) id                       */
+    pid_t ppid;    /* parent process id (for the process forest)      */
+    int is_leader; /* 1 if tid == tgid (the process's main thread)    */
+    char comm[24]; /* task name (/proc/<tid>/comm)                    */
+    char exe[64];  /* process exe basename (leader tasks only)        */
+    unsigned long long
+        inv; /* invocation count: syscalls or calls per `mode`  */
 } asmspy_task_t;
 
 /* Topology snapshot sink: `tasks[0..n)` is every tracked task (threads of the
  * target and of every child process it forked), owned by the engine and valid
  * only for THIS call. Invoked periodically and once more just before detach. */
-typedef void (*asmspy_topo_sink)(void *ctx, const asmspy_task_t *tasks, size_t n);
+typedef void (*asmspy_topo_sink)(void *ctx, const asmspy_task_t *tasks,
+                                 size_t n);
 
 /* Attach to `pid`, follow every thread (CLONE) and every child PROCESS
  * (FORK/VFORK, recursively) and exec, and count per task either syscalls

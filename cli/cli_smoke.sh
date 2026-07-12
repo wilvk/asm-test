@@ -11,9 +11,14 @@ ASM="$BUILD/asmspy"
 
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 
-# Unit-test the TUI scrollback viewport math first (pure, no ncurses/ptrace).
+# Unit-test the pure pieces first (no ncurses/ptrace): the TUI scrollback
+# viewport math, the call-graph sort comparator, and the jitdump reader.
 echo "--- test_logview (TUI scrollback math) ---"
 "$BUILD/test_logview" || fail "test_logview"
+echo "--- test_graphsort (call-graph sort comparator) ---"
+"$BUILD/test_graphsort" || fail "test_graphsort"
+echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
+"$BUILD/test_jitdump" || fail "test_jitdump"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
@@ -58,10 +63,11 @@ TVPID=""
 DVPID=""
 CVPID=""
 JVPID=""
+UPID=""
 IPID=""
 YPID=""
 MVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -204,6 +210,55 @@ printf '%s\n' "$out" | head -10
 printf '%s\n' "$out" | grep -qE '^-> work ' || fail "tree: work not at depth 0"
 printf '%s\n' "$out" | grep -qE '^  -> helper ' \
     || fail "tree: helper not nested one level under work"
+
+# --tree JSON export: the faithful temporal call log (seq/tid/depth/addr/name/
+# module per call), --graph --json's output conventions.
+echo "--- asmspy --tree $WVPID 30 --json (machine-readable export) ---"
+set +e
+tjout=$(timeout 40 "$ASM" --tree "$WVPID" 30 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree --json hung"
+printf '%s\n' "$tjout" | head -4
+printf '%s' "$tjout" | grep -q '^{"pid":' || fail "--tree --json: no top-level {\"pid\":...} object"
+printf '%s' "$tjout" | grep -q '"calls":\[' || fail "--tree --json: no calls array"
+printf '%s' "$tjout" | grep -qE '"seq":[0-9]+,"tid":[0-9]+,"depth":[0-9]+,"addr":"0x[0-9a-f]+","name":"' \
+    || fail "--tree --json: per-call fields missing"
+printf '%s' "$tjout" | grep -q '"name":"helper"' || fail "--tree --json: callee 'helper' not exported"
+# helper is entered at depth 1 (called from work) — the depth must survive export
+printf '%s' "$tjout" | grep -qE '"depth":1,"addr":"0x[0-9a-f]+","name":"helper"' \
+    || fail "--tree --json: helper not exported at depth 1"
+# the human tree must NOT leak into JSON mode
+printf '%s' "$tjout" | grep -q -- '->' && fail "--tree --json: human '->' lines leaked into JSON"
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$tjout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["calls"]
+assert all(k in d["calls"][0] for k in ("seq","tid","depth","addr","name","module"))' \
+        || fail "--tree --json: not well-formed JSON / missing call keys"
+    echo "  json validated (python3 json.load: calls)"
+else
+    echo "  json structural checks passed (python3 absent; strict parse skipped)"
+fi
+
+# --tree DOT export: a Graphviz digraph with the calls AGGREGATED into
+# caller->callee edges (work -> helper), --graph --dot's output conventions.
+echo "--- asmspy --tree $WVPID 30 --dot (Graphviz export) ---"
+set +e
+tdout=$(timeout 40 "$ASM" --tree "$WVPID" 30 --dot 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree --dot hung"
+printf '%s\n' "$tdout" | head -4
+printf '%s' "$tdout" | grep -q '^digraph asmspy {' || fail "--tree --dot: not a digraph"
+printf '%s' "$tdout" | grep -qE '"0x[0-9a-f]+" \[label="helper' || fail "--tree --dot: node 'helper' missing"
+printf '%s' "$tdout" | grep -qE '"0x[0-9a-f]+" -> "0x[0-9a-f]+" \[label="[0-9]+"\]' \
+    || fail "--tree --dot: no aggregated caller->callee edges"
+printf '%s' "$tdout" | grep -q '^}' || fail "--tree --dot: unterminated digraph"
+if command -v dot >/dev/null 2>&1; then
+    printf '%s' "$tdout" | dot -Tsvg >/dev/null 2>&1 || fail "--tree --dot: graphviz rejected the output"
+    echo "  dot validated (graphviz dot -Tsvg)"
+else
+    echo "  dot structural checks passed (graphviz absent)"
+fi
 kill "$WVPID" 2>/dev/null || true
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
@@ -368,6 +423,25 @@ printf '%s\n' "$gout" | grep -qE '\[JIT\][^Z]*jit_hot_loop' \
     || fail "JIT method not tagged [JIT] in the call graph"
 kill "$JVPID" 2>/dev/null || true
 rm -f "/tmp/perf-$JVPID.map"
+
+# BINARY jitdump resolution: jitdump_victim publishes the same anonymous hot
+# loop via perf's binary jit-<pid>.dump format instead — created in $BUILD (a
+# non-/tmp directory, so the /tmp fallback can't find it) and discovered the
+# way perf discovers it: the victim mmaps the file's header page and asmspy
+# spots the filename in /proc/<pid>/maps. NO text perf-map exists, so the name
+# can only have come from the jitdump reader.
+"$BUILD/jitdump_victim" "$BUILD" 2>/dev/null &
+UPID=$!
+sleep 1
+kill -0 "$UPID" 2>/dev/null || fail "jitdump_victim did not start"
+[ -e "/tmp/perf-$UPID.map" ] && fail "jitdump_victim unexpectedly wrote a text perf-map"
+echo "--- asmspy --stream $UPID 400 (binary jitdump naming, maps-discovered) ---"
+out=$("$ASM" --stream "$UPID" 400 2>&1) || true
+printf '%s\n' "$out" | grep -m3 dump_hot_loop || true
+printf '%s\n' "$out" | grep -qE 'dump_hot_loop.*\[jit\]' \
+    || fail "JIT region not named from the jitdump (expected 'dump_hot_loop ... [jit]')"
+kill "$UPID" 2>/dev/null || true
+rm -f "$BUILD/jit-$UPID.dump"
 
 # PER-THREAD (--tid) FILTER: tid_victim runs two threads in DISTINCT functions
 # (alpha_work / beta_work). --stream with no filter steps the whole process, so

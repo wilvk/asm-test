@@ -30,7 +30,8 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
-$(BUILD)/%.o: cli/%.c cli/asmspy.h include/asmtest_ptrace.h \
+$(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
+              include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
 
@@ -92,6 +93,12 @@ $(BUILD)/cpp_victim: cli/cpp_victim.cpp | $(BUILD)
 $(BUILD)/jit_victim: $(BUILD)/jit_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# jitdump_victim publishes the same anonymous hot loop via the BINARY perf
+# jitdump format instead (jit-<pid>.dump + the perf-style discovery mmap, NO
+# text perf-map), so the smoke can prove the jitdump reader end to end.
+$(BUILD)/jitdump_victim: $(BUILD)/jitdump_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # int3_victim executes its own int3 breakpoints under a SIGTRAP handler, so the
 # smoke can prove asmspy re-injects an app-delivered SIGTRAP (si_code split)
 # instead of swallowing it — and survives (CONT-, not SINGLESTEP-, re-inject).
@@ -109,11 +116,26 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_logview.c
 
+# test_graphsort — headless unit test for the call-graph sort comparator
+# (cli/asmspy_graphsort.h, shared by --graph --sort=... and TUI mode 4).
+$(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
+                         cli/asmspy.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_graphsort.c
+
+# test_jitdump — unit test for the binary jitdump reader + the two-tier JIT
+# resolve chain. Links the resolver TU (asmspy_proc.o) directly; -lstdc++
+# supplies its __cxa_demangle just like the asmspy link line.
+$(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
+                       cli/asmspy.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -pthread cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
+	  -lstdc++ -o $@
+
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
-           $(BUILD)/jit_victim $(BUILD)/int3_victim $(BUILD)/tid_victim \
-           $(BUILD)/sample_victim $(BUILD)/test_logview
+           $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
+           $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/test_logview \
+           $(BUILD)/test_graphsort $(BUILD)/test_jitdump
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

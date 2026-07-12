@@ -61,17 +61,31 @@ static int rd(pid_t pid, uint64_t addr, void *buf, size_t n) {
 void asmspy_strerror(int rc, char *buf, size_t buflen) {
     const char *m;
     switch (rc) {
-    case 0: m = "ok"; break;
+    case 0:
+        m = "ok";
+        break;
     case ASMSPY_REGION_NEVER_RAN:
         m = "region never observed executing (multi-threaded target? --trace "
             "follows only the main thread)";
         break;
-    case ASMTEST_PTRACE_EINVAL: m = "invalid argument"; break;
-    case ASMTEST_PTRACE_EUNAVAIL: m = "tracer unavailable on this host"; break;
-    case ASMTEST_PTRACE_ENOSYS: m = "backend not built in"; break;
-    case ASMTEST_PTRACE_ENOENT: m = "region/symbol not found"; break;
-    case ASMTEST_PTRACE_ETRACE: m = "ptrace/attach failure (permission? ptrace_scope?)"; break;
-    default: m = "attach failed"; break;
+    case ASMTEST_PTRACE_EINVAL:
+        m = "invalid argument";
+        break;
+    case ASMTEST_PTRACE_EUNAVAIL:
+        m = "tracer unavailable on this host";
+        break;
+    case ASMTEST_PTRACE_ENOSYS:
+        m = "backend not built in";
+        break;
+    case ASMTEST_PTRACE_ENOENT:
+        m = "region/symbol not found";
+        break;
+    case ASMTEST_PTRACE_ETRACE:
+        m = "ptrace/attach failure (permission? ptrace_scope?)";
+        break;
+    default:
+        m = "attach failed";
+        break;
     }
     snprintf(buf, buflen, "%s", m);
 }
@@ -210,17 +224,18 @@ static path_kind_t path_kind(long nr) {
     case SYS_mkdir:
     case SYS_rename:
     case SYS_link:
-    case SYS_symlink:  /* (target, linkpath) — target is the datum */
-    case SYS_symlinkat:/* (target, newdirfd, linkpath) — likewise */
+    case SYS_symlink:   /* (target, linkpath) — target is the datum */
+    case SYS_symlinkat: /* (target, newdirfd, linkpath) — likewise */
     case SYS_creat:
     case SYS_mknod:
     case SYS_utimes:
     case SYS_chroot:
     case SYS_acct:
-    case SYS_mount:    /* (source, target, ...) */
+    case SYS_mount: /* (source, target, ...) */
     case SYS_umount2:
     case SYS_swapon:
-    case SYS_swapoff: return PATH_RDI;
+    case SYS_swapoff:
+        return PATH_RDI;
     /* (dirfd, path, ...) — openat has its own case, with flag formatting */
     case SYS_newfstatat:
     case SYS_unlinkat:
@@ -246,7 +261,8 @@ static path_kind_t path_kind(long nr) {
     case SYS_faccessat2:
 #endif
         return PATH_AT_RSI;
-    default: return PATH_NONE;
+    default:
+        return PATH_NONE;
     }
 }
 
@@ -278,8 +294,8 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
 }
 
 static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
-                           pid_t pid, long nr,
-                           const struct user_regs_struct *e, long ret) {
+                           pid_t pid, long nr, const struct user_regs_struct *e,
+                           long ret) {
     size_t o = 0;
     sout[0] = '\0';
     switch (nr) {
@@ -327,7 +343,8 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         if (pk == PATH_RDI) {
             o = ap_cstr(b, cap, o, pid, e->rdi);
             o = apf(b, cap, o, ", 0x%llx, 0x%llx) = %ld",
-                    (unsigned long long)e->rsi, (unsigned long long)e->rdx, ret);
+                    (unsigned long long)e->rsi, (unsigned long long)e->rdx,
+                    ret);
             decode_cstr(pid, e->rdi, sout, scap);
         } else if (pk == PATH_AT_RSI) {
             o = ap_dirfd(b, cap, o, (long long)e->rdi);
@@ -391,13 +408,15 @@ static int syscall_stop_is_entry(pid_t tid) {
 /* Per-thread syscall entry/exit bookkeeping (the stream loop uses only .tid). */
 typedef struct {
     pid_t tid;
-    int at_entry;                  /* fallback toggle: next stop is an ENTRY */
-    long ent_nr;                   /* syscall nr captured at entry, -1 if none */
+    int at_entry; /* fallback toggle: next stop is an ENTRY */
+    long ent_nr;  /* syscall nr captured at entry, -1 if none */
     struct user_regs_struct entry; /* register snapshot at that entry */
-    int pending_call;   /* graph engine: an INDIRECT call awaits its callee entry */
-    uint64_t call_site; /* graph engine: call-site addr of that pending call     */
-    int depth;          /* tree engine: live call depth (push on call, pop on ret) */
-    unsigned long long inv; /* procs engine: per-task invocation count (syscalls/calls) */
+    int pending_call; /* graph engine: an INDIRECT call awaits its callee entry */
+    uint64_t
+        call_site; /* graph engine: call-site addr of that pending call     */
+    int depth;     /* tree engine: live call depth (push on call, pop on ret) */
+    unsigned long long
+        inv; /* procs engine: per-task invocation count (syscalls/calls) */
 } thr_t;
 
 typedef struct {
@@ -498,7 +517,8 @@ static int seize_one(pid_t tid, long opts, thr_tab_t *tab) {
         return -1;
     ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
     if (!thr_get(tab, tid)) {
-        ptrace(PTRACE_DETACH, tid, NULL, NULL); /* OOM: don't strand it seized */
+        ptrace(PTRACE_DETACH, tid, NULL,
+               NULL); /* OOM: don't strand it seized */
         return -1;
     }
     return 0;
@@ -541,8 +561,9 @@ static int at_syscall_insn(pid_t pid, uint64_t rip) {
     struct iovec l = {b, 2}, r = {(void *)(uintptr_t)rip, 2};
     if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 2)
         return 1;
-    return (b[0] == 0x0f && (b[1] == 0x05 || b[1] == 0x34)) || /* syscall/sysenter */
-           (b[0] == 0xcd && b[1] == 0x80);                     /* int 0x80 */
+    return (b[0] == 0x0f &&
+            (b[1] == 0x05 || b[1] == 0x34)) || /* syscall/sysenter */
+           (b[0] == 0xcd && b[1] == 0x80);     /* int 0x80 */
 }
 
 /* Drain a single-step trap the kernel has already QUEUED on a stopped thread but not
@@ -593,7 +614,8 @@ static void drain_pending_step(pid_t pid, pid_t tid) {
  * had none, which is itself the fatal condition on the next re-attach. Then
  * PTRACE_DETACH each thread and free the table. */
 static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
-    for (size_t i = 0; i < tab->n; i++) { /* phase 1: interrupt + drain to a stop */
+    for (size_t i = 0; i < tab->n;
+         i++) { /* phase 1: interrupt + drain to a stop */
         pid_t tid = tab->v[i].tid;
         ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
         for (;;) {
@@ -608,16 +630,19 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
                 break; /* gone; nothing to detach */
             if (WIFSTOPPED(st)) {
                 if (single_stepped)
-                    clear_trap_flag(tid); /* drop any not-yet-taken armed step */
-                break;                    /* leave it STOPPED; drain + release below */
+                    clear_trap_flag(
+                        tid); /* drop any not-yet-taken armed step */
+                break;        /* leave it STOPPED; drain + release below */
             }
         }
     }
 
     if (single_stepped)
-        for (size_t i = 0; i < tab->n; i++) { /* phase 2: drain any QUEUED step #DB */
+        for (size_t i = 0; i < tab->n;
+             i++) { /* phase 2: drain any QUEUED step #DB */
             drain_pending_step(pid, tab->v[i].tid);
-            clear_trap_flag(tab->v[i].tid); /* the drain step re-armed TF; drop it */
+            clear_trap_flag(
+                tab->v[i].tid); /* the drain step re-armed TF; drop it */
         }
 
     for (size_t i = 0; i < tab->n; i++)
@@ -725,7 +750,8 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                     ts->ent_nr = (long)regs.orig_rax;
                     ts->entry = regs;
                     ts->at_entry = 0;
-                } else if (ts->ent_nr >= 0) { /* skip an exit we saw no entry for */
+                } else if (ts->ent_nr >=
+                           0) { /* skip an exit we saw no entry for */
                     char line[1024], sdata[512], out[1088];
                     /* decode via the leader `pid` (shared mm + fd table); the
                      * per-thread label is added below, not inside the decoder */
@@ -754,9 +780,8 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
          * PTRACE_SYSCALL would keep the target running while it should be suspended;
          * PTRACE_LISTEN leaves it stopped (honoring ^Z) yet traced — it wakes on
          * SIGCONT. */
-        if (event == PTRACE_EVENT_STOP &&
-            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU)) {
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
             thr_get(&tab, tid);
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
@@ -882,9 +907,11 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
     }
 
     int multi = tab.n > 1;
-    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_t
+        jit; /* name JIT / managed-runtime frames from the perf-map */
     asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
+    asmspy_jitmap_refresh(
+        &jit); /* pick up methods already compiled at attach */
     long done = 0;
 
     while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
@@ -922,8 +949,10 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
-            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+        if (sig == SIGTRAP &&
+            event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(
+                    tid)) { /* target's own int3/hw bp — deliver it */
                 deliver_app_sigtrap(tid);
                 continue;
             }
@@ -941,8 +970,8 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                  * refused, which would blank the disassembly */
                 ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
                 if (got >= 1 && asmtest_disas_available())
-                    asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip, 0,
-                                  dis, sizeof dis);
+                    asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip,
+                                  0, dis, sizeof dis);
 
                 /* resolve the function this address lands in (ELF, else JIT) */
                 char loc[96];
@@ -973,9 +1002,8 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         /* A job-control group-stop (^Z / SIGSTOP / tty) under SEIZE arrives as
          * PTRACE_EVENT_STOP with the stopping signal: PTRACE_LISTEN so the target
          * stays suspended (honoring ^Z) instead of being single-stepped onward. */
-        if (event == PTRACE_EVENT_STOP &&
-            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU)) {
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
             thr_get(&tab, tid);
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
@@ -1034,7 +1062,8 @@ static void exe_basename(pid_t pid, char *out, size_t cap) {
  * into a single caller node (and every entry of a callee into one node).
  * Returns the node index, or -1 on OOM. */
 static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
-                      asmspy_jitmap_t *jit, const char *exebase, uint64_t addr) {
+                      asmspy_jitmap_t *jit, const char *exebase,
+                      uint64_t addr) {
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, addr);
     uint64_t key = s ? s->addr : addr;
     for (size_t i = 0; i < g->nn; i++)
@@ -1062,9 +1091,8 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
         /* JIT/managed code (module "jit") is the app's OWN logic, not a system
          * library, so it counts as internal despite having no exe-backed file. */
         int is_jit = strcmp(s->module, "jit") == 0;
-        e->external =
-            !is_jit && (is_plt || (exebase && exebase[0] &&
-                                   strcmp(s->module, exebase) != 0));
+        e->external = !is_jit && (is_plt || (exebase && exebase[0] &&
+                                             strcmp(s->module, exebase) != 0));
     } else {
         snprintf(e->name, sizeof e->name, "0x%llx", (unsigned long long)key);
         snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
@@ -1082,7 +1110,8 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     if (ci < 0 || ki < 0)
         return 0;
     for (size_t i = 0; i < g->ne; i++) {
-        if (g->edge[i].caller == (size_t)ci && g->edge[i].callee == (size_t)ki) {
+        if (g->edge[i].caller == (size_t)ci &&
+            g->edge[i].callee == (size_t)ki) {
             g->edge[i].count++;
             g->node[ci].out_calls++;
             g->node[ki].invocations++;
@@ -1151,11 +1180,14 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
     exe_basename(pid, exebase, sizeof exebase);
 
     graph_t g = {0};
-    asmspy_gedge_t *aedges = NULL; /* scratch: address-keyed edges for the sink */
+    asmspy_gedge_t *aedges =
+        NULL; /* scratch: address-keyed edges for the sink */
     size_t aecap = 0;
-    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_t
+        jit; /* name JIT / managed-runtime frames from the perf-map */
     asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
+    asmspy_jitmap_refresh(
+        &jit);           /* pick up methods already compiled at attach */
     long recorded = 0;   /* calls counted so far */
     long published = -1; /* recorded value at the last sink() call */
 
@@ -1192,8 +1224,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
-            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+        if (sig == SIGTRAP &&
+            event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(
+                    tid)) { /* target's own int3/hw bp — deliver it */
                 deliver_app_sigtrap(tid);
                 continue;
             }
@@ -1216,8 +1250,8 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                 }
 
                 if (got >= 1 && asmtest_disas_available() &&
-                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code, (size_t)got,
-                                          0)) {
+                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code,
+                                          (size_t)got, 0)) {
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
@@ -1240,9 +1274,8 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (event == PTRACE_EVENT_STOP &&
-            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU)) {
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
             thr_get(&tab, tid);
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
@@ -1269,19 +1302,22 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 /* Whole-process live call TREE                                        */
 /* ------------------------------------------------------------------ */
 
-/* Emit one "entered a function" line, indented by the caller's live depth. The
- * callee's entry address is passed through so a front-end can disassemble it. */
+/* Emit one "entered a function" line, indented by the caller's live depth,
+ * plus the structured entry (tid/depth/addr/name/module) so a front-end can
+ * disassemble the callee or export the tree without re-parsing the text. */
 static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
                       const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
                       uint64_t callee, int depth) {
     if (!sink)
         return;
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, callee);
-    char name[200];
-    if (s)
+    char name[200], raw[24];
+    if (s) {
         snprintf(name, sizeof name, "%s [%s]", s->name, s->module);
-    else
-        snprintf(name, sizeof name, "0x%llx", (unsigned long long)callee);
+    } else {
+        snprintf(raw, sizeof raw, "0x%llx", (unsigned long long)callee);
+        snprintf(name, sizeof name, "%s", raw);
+    }
     int ind = depth * 2;
     if (ind > 60) /* clamp runaway / drifted indentation to a sane width */
         ind = 60;
@@ -1290,7 +1326,9 @@ static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
         snprintf(line, sizeof line, "[%d] %*s-> %s", (int)tid, ind, "", name);
     else
         snprintf(line, sizeof line, "%*s-> %s", ind, "", name);
-    sink(ctx, line, callee);
+    asmspy_tree_call_t call = {tid, depth, callee, s ? s->name : raw,
+                               s ? s->module : "?"};
+    sink(ctx, line, &call);
 }
 
 int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
@@ -1308,9 +1346,11 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
     }
 
     int multi = tab.n > 1;
-    asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_t
+        jit; /* name JIT / managed-runtime frames from the perf-map */
     asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
+    asmspy_jitmap_refresh(
+        &jit);        /* pick up methods already compiled at attach */
     long emitted = 0; /* call lines produced so far */
 
     while ((max < 0 || emitted < max) && !(stop && atomic_load(stop))) {
@@ -1348,8 +1388,10 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (sig == SIGTRAP && event == 0) { /* our step, or the app's own trap */
-            if (sigtrap_is_app(tid)) { /* target's own int3/hw bp — deliver it */
+        if (sig == SIGTRAP &&
+            event == 0) { /* our step, or the app's own trap */
+            if (sigtrap_is_app(
+                    tid)) { /* target's own int3/hw bp — deliver it */
                 deliver_app_sigtrap(tid);
                 continue;
             }
@@ -1365,7 +1407,8 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
                 /* a pending INDIRECT call resolves at its callee entry (= rip) */
                 if (ts && ts->pending_call) {
-                    tree_emit(sink, ctx, multi, tid, syms, &jit, rip, ts->depth);
+                    tree_emit(sink, ctx, multi, tid, syms, &jit, rip,
+                              ts->depth);
                     ts->depth++;
                     ts->pending_call = 0;
                     emitted++;
@@ -1373,8 +1416,8 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
                 int isc = 0, isr = 0;
                 if (got >= 1 && asmtest_disas_available())
-                    asmtest_disas_probe(ASMTEST_ARCH_X86_64, code, (size_t)got, 0,
-                                        &isc, &isr);
+                    asmtest_disas_probe(ASMTEST_ARCH_X86_64, code, (size_t)got,
+                                        0, &isc, &isr);
                 if (isc && ts) {
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
@@ -1395,9 +1438,8 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (event == PTRACE_EVENT_STOP &&
-            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU)) {
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
             thr_get(&tab, tid);
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
@@ -1556,8 +1598,8 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
     }
 
 /* resume a tracee the way this mode drives it: syscall-stops vs single-steps */
-#define TOPO_RESUME(t, s)                                                       \
-    ptrace(mode == ASMSPY_COUNT_SYSCALLS ? PTRACE_SYSCALL : PTRACE_SINGLESTEP,  \
+#define TOPO_RESUME(t, s)                                                      \
+    ptrace(mode == ASMSPY_COUNT_SYSCALLS ? PTRACE_SYSCALL : PTRACE_SINGLESTEP, \
            (t), NULL, (void *)(long)(s))
 
     asmspy_task_t *snap = NULL;
@@ -1633,8 +1675,8 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
                 struct iovec riov = {(void *)(uintptr_t)regs.rip, sizeof code};
                 ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
                 if (ts && got >= 1 && asmtest_disas_available() &&
-                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code, (size_t)got,
-                                          0)) {
+                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code,
+                                          (size_t)got, 0)) {
                     ts->inv++; /* count every CALL this task executes */
                     counted++;
                 }
@@ -1647,9 +1689,8 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
             continue;
         }
 
-        if (event == PTRACE_EVENT_STOP &&
-            (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU)) {
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
             thr_get(&tab, tid);
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
@@ -1721,7 +1762,8 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
             hard_fail = 1;
             break;
         }
-        if (rc != ASMTEST_IBS_OK) { /* transient (e.g. target vanished); retry/stop */
+        if (rc !=
+            ASMTEST_IBS_OK) { /* transient (e.g. target vanished); retry/stop */
             asmtest_ibs_survey_free(&sv);
             if (!stop)
                 break;
@@ -1729,14 +1771,16 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
         }
         any = 1;
 
-        if (sv.n > rescap) { /* grow the resolved-edge buffer to fit this window */
+        if (sv.n >
+            rescap) { /* grow the resolved-edge buffer to fit this window */
             asmspy_sample_edge_t *nv = realloc(res, sv.n * sizeof *nv);
             if (nv) {
                 res = nv;
                 rescap = sv.n;
             }
         }
-        size_t n = sv.n <= rescap ? sv.n : rescap; /* on OOM: as many as we can */
+        size_t n =
+            sv.n <= rescap ? sv.n : rescap; /* on OOM: as many as we can */
         for (size_t i = 0; i < n; i++) {
             const asmtest_ibs_edge_t *e = &sv.edges[i];
             res[i].from_addr = e->from;

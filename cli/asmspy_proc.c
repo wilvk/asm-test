@@ -156,14 +156,16 @@ static unsigned proc_string_score(pid_t pid) {
     if (!f)
         return 0;
     const size_t CHUNK = 4096;
-    const unsigned long long CAP = 64 * 1024; /* max bytes sampled per process */
+    const unsigned long long CAP =
+        64 * 1024; /* max bytes sampled per process */
     unsigned char buf[4096];
     char line[512];
     unsigned long long alnum = 0, total = 0;
     while (total < CAP && fgets(line, sizeof line, f)) {
         uint64_t start = 0, end = 0;
         char perms[8] = "";
-        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s", &start, &end, perms) < 3)
+        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s", &start, &end, perms) <
+            3)
             continue;
         if (perms[0] != 'r' || perms[2] == 'x') /* readable, non-code data */
             continue;
@@ -233,9 +235,12 @@ static void runtime_badge_cheap(const char *comm, const char *cmdline,
         snprintf(out, n, "%s", rt);
         return;
     }
-    /* not obviously a managed launcher — a perf-map still means a live JIT */
+    /* not obviously a managed launcher — a published JIT symbol table (text
+     * perf-map or binary jitdump) still means a live JIT */
     char pm[64];
     snprintf(pm, sizeof pm, "/tmp/perf-%d.map", (int)pid);
+    if (access(pm, F_OK) != 0)
+        snprintf(pm, sizeof pm, "/tmp/jit-%d.dump", (int)pid);
     if (access(pm, F_OK) == 0)
         snprintf(out, n, "jit");
 }
@@ -375,7 +380,8 @@ static int scan_modules(pid_t pid, module_t **out, char *exe_path,
         char perms[8];
         int pathpos = 0;
         /* "start-end perms offset dev inode path" */
-        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s %" SCNx64 " %*x:%*x %*u %n",
+        if (sscanf(line,
+                   "%" SCNx64 "-%" SCNx64 " %7s %" SCNx64 " %*x:%*x %*u %n",
                    &start, &end, perms, &off, &pathpos) < 4)
             continue;
         if (pathpos <= 0)
@@ -388,7 +394,8 @@ static int scan_modules(pid_t pid, module_t **out, char *exe_path,
         char *del = strstr(path, " (deleted)");
         if (del)
             *del = '\0';
-        if (off != 0) /* only the ELF-header (offset 0) mapping fixes the base */
+        if (off !=
+            0) /* only the ELF-header (offset 0) mapping fixes the base */
             continue;
 
         /* dedup by path; keep the lowest load_start */
@@ -479,7 +486,8 @@ static int sym_push(asmspy_symtab_t *t, size_t *cap, uint64_t addr,
     asmspy_sym_t *s = &t->v[t->n];
     s->addr = addr;
     s->size = size;
-    char *dem = demangle_dup(name); /* C++ names; NULL for plain-C / on failure */
+    char *dem =
+        demangle_dup(name); /* C++ names; NULL for plain-C / on failure */
     s->name = dem ? dem : strdup(name);
     s->module = strdup(module);
     if (!s->name || !s->module) {
@@ -510,8 +518,8 @@ static uint8_t *map_file(const char *path, size_t *len) {
 }
 
 /* Read the STT_FUNC symbols of one ELF file into the table, biased to runtime. */
-static void load_module_syms(pid_t pid, const module_t *mod,
-                             asmspy_symtab_t *t, size_t *cap) {
+static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
+                             size_t *cap) {
     char exe[64];
     const char *open_path = mod->path;
     if (mod->is_exe) {
@@ -555,11 +563,12 @@ static void load_module_syms(pid_t pid, const module_t *mod,
         eh->e_shnum > (flen - eh->e_shoff) / eh->e_shentsize)
         goto done;
 
-    /* Stride section headers by e_shentsize (>= sizeof(Elf64_Shdr), checked above),
+        /* Stride section headers by e_shentsize (>= sizeof(Elf64_Shdr), checked above),
      * NOT sizeof — a non-standard ELF with a larger entsize would otherwise misalign
      * every header past index 0. Mirrors the sh_entsize walk in the symbol loop. */
-#define ASMSPY_SHDR(idx)                                                        \
-    ((const Elf64_Shdr *)(base + eh->e_shoff + (uint64_t)(idx) * eh->e_shentsize))
+#define ASMSPY_SHDR(idx)                                                       \
+    ((const Elf64_Shdr *)(base + eh->e_shoff +                                 \
+                          (uint64_t)(idx) * eh->e_shentsize))
 
     /* prefer .symtab (superset); fall back to .dynsym for stripped libs */
     const int order[2] = {SHT_SYMTAB, SHT_DYNSYM};
@@ -585,8 +594,8 @@ static void load_module_syms(pid_t pid, const module_t *mod,
                 continue;
             size_t count = s->sh_size / s->sh_entsize;
             for (size_t j = 0; j < count; j++) {
-                const Elf64_Sym *sy =
-                    (const Elf64_Sym *)(base + s->sh_offset + j * s->sh_entsize);
+                const Elf64_Sym *sy = (const Elf64_Sym *)(base + s->sh_offset +
+                                                          j * s->sh_entsize);
                 if (ELF64_ST_TYPE(sy->st_info) != STT_FUNC)
                     continue;
                 if (sy->st_shndx == SHN_UNDEF || sy->st_value == 0)
@@ -637,11 +646,13 @@ static void load_module_syms(pid_t pid, const module_t *mod,
             }
             const Elf64_Shdr *stub = pltsec ? pltsec : plt;
             if (rela && stub && rela->sh_entsize >= sizeof(Elf64_Rela) &&
-                rela->sh_offset < flen && rela->sh_size <= flen - rela->sh_offset &&
+                rela->sh_offset < flen &&
+                rela->sh_size <= flen - rela->sh_offset &&
                 rela->sh_link < eh->e_shnum) {
                 const Elf64_Shdr *dsym = ASMSPY_SHDR(rela->sh_link);
-                const Elf64_Shdr *dstr =
-                    dsym->sh_link < eh->e_shnum ? ASMSPY_SHDR(dsym->sh_link) : NULL;
+                const Elf64_Shdr *dstr = dsym->sh_link < eh->e_shnum
+                                             ? ASMSPY_SHDR(dsym->sh_link)
+                                             : NULL;
                 if (dstr && dsym->sh_entsize >= sizeof(Elf64_Sym) &&
                     dsym->sh_offset < flen &&
                     dsym->sh_size <= flen - dsym->sh_offset &&
@@ -651,19 +662,22 @@ static void load_module_syms(pid_t pid, const module_t *mod,
                                         ? dstr->sh_size
                                         : flen - dstr->sh_offset;
                     uint64_t es = stub->sh_entsize ? stub->sh_entsize : 16;
-                    uint64_t slot0 = (stub == plt) ? 1 : 0; /* skip PLT0 in .plt */
+                    uint64_t slot0 =
+                        (stub == plt) ? 1 : 0; /* skip PLT0 in .plt */
                     size_t ndsym = dsym->sh_size / dsym->sh_entsize;
                     size_t nrela = rela->sh_size / rela->sh_entsize;
                     for (size_t i = 0; i < nrela; i++) {
-                        const Elf64_Rela *r = (const Elf64_Rela *)(base +
-                            rela->sh_offset + i * rela->sh_entsize);
+                        const Elf64_Rela *r =
+                            (const Elf64_Rela *)(base + rela->sh_offset +
+                                                 i * rela->sh_entsize);
                         if (ELF64_R_TYPE(r->r_info) != R_X86_64_JUMP_SLOT)
                             continue;
                         uint64_t si = ELF64_R_SYM(r->r_info);
                         if (si == 0 || si >= ndsym)
                             continue;
-                        const Elf64_Sym *ds = (const Elf64_Sym *)(base +
-                            dsym->sh_offset + si * dsym->sh_entsize);
+                        const Elf64_Sym *ds =
+                            (const Elf64_Sym *)(base + dsym->sh_offset +
+                                                si * dsym->sh_entsize);
                         if (ds->st_name >= dynmax)
                             continue;
                         const char *nm = dyns + ds->st_name;
@@ -770,7 +784,8 @@ static void fp_read_threadnames(pid_t pid, asmspy_fingerprint_t *fp) {
         if (!is_all_digits(e->d_name))
             continue;
         char cp[96], nm[64];
-        snprintf(cp, sizeof cp, "/proc/%d/task/%.20s/comm", (int)pid, e->d_name);
+        snprintf(cp, sizeof cp, "/proc/%d/task/%.20s/comm", (int)pid,
+                 e->d_name);
         read_first_line(cp, nm, sizeof nm);
         if (!nm[0])
             continue;
@@ -838,8 +853,7 @@ static void fp_read_elf(pid_t pid, asmspy_fingerprint_t *fp, int *go) {
 
     /* .note.go.buildid section name => a Go binary (survives stripping) */
     if (eh->e_shoff && eh->e_shentsize >= sizeof(Elf64_Shdr) &&
-        eh->e_shstrndx && eh->e_shstrndx < eh->e_shnum &&
-        eh->e_shoff <= flen &&
+        eh->e_shstrndx && eh->e_shstrndx < eh->e_shnum && eh->e_shoff <= flen &&
         eh->e_shnum <= (flen - eh->e_shoff) / eh->e_shentsize) {
         const Elf64_Shdr *shstr =
             (const Elf64_Shdr *)(base + eh->e_shoff +
@@ -874,9 +888,9 @@ static int fp_module_notable(const char *b) {
     if (!strstr(b, ".so")) /* shared objects only; skip locale/data mmaps */
         return 0;
     static const char *skip[] = {
-        "libc.so",   "libm.so",       "libdl.so",   "libpthread.so",
-        "librt.so",  "ld-linux",      "ld-musl",    "libgcc_s.so",
-        "libresolv", "libnss_",       "libselinux",
+        "libc.so",   "libm.so",  "libdl.so",   "libpthread.so",
+        "librt.so",  "ld-linux", "ld-musl",    "libgcc_s.so",
+        "libresolv", "libnss_",  "libselinux",
     };
     for (size_t i = 0; i < sizeof skip / sizeof skip[0]; i++)
         if (strncmp(b, skip[i], strlen(skip[i])) == 0)
@@ -906,6 +920,10 @@ int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out) {
     char pm[64];
     snprintf(pm, sizeof pm, "/tmp/perf-%d.map", (int)pid);
     out->jitting = (access(pm, F_OK) == 0);
+    if (!out->jitting) { /* a binary jitdump published there counts too */
+        snprintf(pm, sizeof pm, "/tmp/jit-%d.dump", (int)pid);
+        out->jitting = (access(pm, F_OK) == 0);
+    }
 
     /* scan mapped modules: pick a runtime from a signature library, and collect
      * the notable (non-ubiquitous) basenames for display */
@@ -1008,7 +1026,8 @@ int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out) {
             else if (strstr(t, "V8 "))
                 snprintf(out->runtime, sizeof out->runtime, "Node/V8");
             if (out->runtime[0])
-                snprintf(out->evidence, sizeof out->evidence, "thread \"%s\"", t);
+                snprintf(out->evidence, sizeof out->evidence, "thread \"%s\"",
+                         t);
         }
     }
     if (!out->runtime[0]) {
@@ -1056,11 +1075,11 @@ const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr) {
 }
 
 /* ================================================================== */
-/* JIT / perf-map resolver                                             */
+/* JIT resolver — binary jitdump + text perf-map                       */
 /* ================================================================== */
 
-/* Every JIT method shares this module tag (the perf-map names no backing file);
- * it is a non-owned literal, so asmspy_jitmap_free frees only the `name`s. */
+/* Every JIT method shares this module tag (neither JIT format names a backing
+ * file); a non-owned literal, so asmspy_jitmap_free frees only the `name`s. */
 static char JIT_MODULE[] = "jit";
 
 /* On a double miss (ELF + current JIT map), asmspy_resolve re-reads the perf-map
@@ -1073,7 +1092,8 @@ void asmspy_jitmap_init(asmspy_jitmap_t *j, pid_t pid) {
     j->v = NULL;
     j->n = j->cap = 0;
     j->pid = pid;
-    j->miss_budget = 0; /* first double-miss refreshes immediately */
+    j->miss_budget = 0;     /* first double-miss refreshes immediately */
+    j->dump_path[0] = '\0'; /* jitdump not discovered yet */
 }
 
 void asmspy_jitmap_free(asmspy_jitmap_t *j) {
@@ -1099,12 +1119,194 @@ static int jit_push(asmspy_jitmap_t *j, uint64_t addr, uint64_t size,
     asmspy_sym_t *s = &j->v[j->n];
     s->addr = addr;
     s->size = size;
-    s->name = strdup(name); /* JIT names are already human-readable — no demangle */
+    s->name =
+        strdup(name); /* JIT names are already human-readable — no demangle */
     if (!s->name)
         return -1;
     s->module = JIT_MODULE;
     j->n++;
     return 0;
+}
+
+/* ---- binary jitdump (perf's jit-<pid>.dump format) ----------------- */
+
+/* On-disk layout, little-endian (this platform's byte order — a byteswapped
+ * magic marks a foreign-endian file, which is skipped). All fields naturally
+ * aligned, so plain structs read straight off the file. */
+#define JITDUMP_MAGIC     0x4A695444u /* 'JiTD' as written by an LE emitter */
+#define JITDUMP_CODE_LOAD 0u          /* new JIT-compiled function + its code */
+#define JITDUMP_CODE_MOVE 1u          /* an existing function moved in memory */
+
+typedef struct {
+    uint32_t magic, version, total_size, elf_mach, pad1, pid;
+    uint64_t timestamp, flags;
+} jitdump_hdr_t;
+typedef struct {
+    uint32_t id,
+        total_size; /* total_size includes this header — the skip key */
+    uint64_t timestamp;
+} jitdump_rhdr_t;
+typedef struct {
+    uint32_t pid, tid;
+    uint64_t vma, code_addr, code_size, code_index;
+    /* then: function name, NUL-terminated; then: the code bytes themselves */
+} jitdump_load_t;
+typedef struct {
+    uint32_t pid, tid;
+    uint64_t vma, old_code_addr, new_code_addr, code_size, code_index;
+} jitdump_move_t;
+
+_Static_assert(sizeof(jitdump_hdr_t) == 40, "jitdump header is 40 bytes");
+_Static_assert(sizeof(jitdump_rhdr_t) == 16,
+               "jitdump record header is 16 bytes");
+_Static_assert(sizeof(jitdump_load_t) == 40,
+               "CODE_LOAD fixed part is 40 bytes");
+_Static_assert(sizeof(jitdump_move_t) == 48,
+               "CODE_MOVE fixed part is 48 bytes");
+
+/* Find the target's jitdump file the way perf tools do: the emitter mmaps the
+ * file's header page (PROT_EXEC) precisely so a tracer can spot the filename in
+ * the target's mappings — scan /proc/<pid>/maps for a mapped "jit-*.dump".
+ * Fallbacks for emitters that skip the marker mmap: /tmp/jit-<pid>.dump (next
+ * to the text perf-map) and the target's cwd (where perf's jvmti agent and
+ * LLVM create it by default). Caches the found path in j->dump_path; returns
+ * 0 when a readable file is known, -1 otherwise. */
+static int jitdump_discover(asmspy_jitmap_t *j) {
+    if (j->dump_path[0] && access(j->dump_path, R_OK) == 0)
+        return 0; /* still where we last found it */
+    j->dump_path[0] = '\0';
+
+    char mp[64];
+    snprintf(mp, sizeof mp, "/proc/%d/maps", (int)j->pid);
+    FILE *f = fopen(mp, "r");
+    if (f) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            line[strcspn(line, "\n")] = '\0';
+            char *p =
+                strchr(line, '/'); /* the pathname column, if file-backed */
+            if (!p)
+                continue;
+            const char *b = strrchr(p, '/') + 1;
+            size_t l = strlen(b); /* want "jit-<pid>.dump" (>= "jit-1.dump") */
+            if (l < 10 || strncmp(b, "jit-", 4) != 0 ||
+                strcmp(b + l - 5, ".dump") != 0)
+                continue; /* a deleted mapping's " (deleted)" also fails here */
+            if (access(p, R_OK) != 0)
+                continue; /* mapped but unreadable here (e.g. another mount
+                             namespace) — keep scanning / try the fallbacks */
+            snprintf(j->dump_path, sizeof j->dump_path, "%s", p);
+            fclose(f);
+            return 0;
+        }
+        fclose(f);
+    }
+    snprintf(j->dump_path, sizeof j->dump_path, "/tmp/jit-%d.dump",
+             (int)j->pid);
+    if (access(j->dump_path, R_OK) == 0)
+        return 0;
+    /* the emitters' default is the runtime's cwd — reachable via /proc */
+    snprintf(j->dump_path, sizeof j->dump_path, "/proc/%d/cwd/jit-%d.dump",
+             (int)j->pid, (int)j->pid);
+    if (access(j->dump_path, R_OK) == 0)
+        return 0;
+    j->dump_path[0] = '\0';
+    return -1;
+}
+
+/* Parse one jitdump file into the map: every JIT_CODE_LOAD contributes a sized,
+ * named entry (the trailing code bytes are skipped, not read); JIT_CODE_MOVE
+ * relocates the matching earlier load (tiered recompile / GC code motion); any
+ * other record type is skipped via its total_size. A truncated tail — the JIT
+ * may be appending while we read — just ends the parse, keeping what's whole.
+ * Returns entries added, or -1 if the file is unreadable / not an LE jitdump. */
+static int jitdump_read(asmspy_jitmap_t *j, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return -1;
+    jitdump_hdr_t h;
+    if (fread(&h, sizeof h, 1, f) != 1 || h.magic != JITDUMP_MAGIC ||
+        h.total_size < sizeof h) {
+        fclose(f);
+        return -1; /* foreign-endian ('DTiJ'), not a jitdump, or corrupt */
+    }
+    if (fseeko(f, (off_t)h.total_size, SEEK_SET) != 0) { /* forward-compat */
+        fclose(f);
+        return -1;
+    }
+
+    size_t before = j->n;
+    struct load_slot { /* code_index -> map slot, so a MOVE can relocate it */
+        uint64_t idx;
+        size_t vi;
+    } *loads = NULL;
+    size_t nl = 0, lcap = 0;
+    off_t pos = (off_t)h.total_size;
+    for (;;) {
+        jitdump_rhdr_t rh;
+        if (fread(&rh, sizeof rh, 1, f) != 1)
+            break; /* clean EOF (or a truncated in-flight record header) */
+        if (rh.total_size < sizeof rh)
+            break; /* corrupt length would loop forever — stop here */
+        off_t next = pos + (off_t)rh.total_size;
+
+        if (rh.id == JITDUMP_CODE_LOAD &&
+            rh.total_size >= sizeof rh + sizeof(jitdump_load_t)) {
+            jitdump_load_t ld;
+            if (fread(&ld, sizeof ld, 1, f) != 1)
+                break;
+            /* the NUL-terminated name sits between the fixed part and the code
+             * bytes; read it bounded by the record so a corrupt/truncated name
+             * can't run away (long names are clipped, never overrun) */
+            uint64_t room = rh.total_size - sizeof rh - sizeof ld;
+            char name[256];
+            size_t o = 0;
+            int c, terminated = 0;
+            while (room-- > 0 && (c = fgetc(f)) != EOF) {
+                if (c == '\0') {
+                    terminated = 1;
+                    break;
+                }
+                if (o + 1 < sizeof name)
+                    name[o++] = (char)c;
+            }
+            name[o] = '\0';
+            if (terminated && o > 0) {
+                if (jit_push(j, ld.code_addr, ld.code_size, name) != 0)
+                    break; /* OOM: keep what we have */
+                if (nl == lcap) {
+                    size_t nc = lcap ? lcap * 2 : 64;
+                    struct load_slot *nv = realloc(loads, nc * sizeof *nv);
+                    if (!nv)
+                        break;
+                    loads = nv;
+                    lcap = nc;
+                }
+                loads[nl].idx = ld.code_index;
+                loads[nl].vi = j->n - 1;
+                nl++;
+            }
+        } else if (rh.id == JITDUMP_CODE_MOVE &&
+                   rh.total_size >= sizeof rh + sizeof(jitdump_move_t)) {
+            jitdump_move_t mv;
+            if (fread(&mv, sizeof mv, 1, f) != 1)
+                break;
+            for (size_t i = nl; i-- > 0;) /* newest load with that index wins */
+                if (loads[i].idx == mv.code_index) {
+                    j->v[loads[i].vi].addr = mv.new_code_addr;
+                    j->v[loads[i].vi].size = mv.code_size;
+                    break;
+                }
+        }
+        /* skip the record's remainder: a LOAD's code bytes, or the whole
+         * payload of a type we don't decode (DEBUG_INFO, CLOSE, UNWIND…) */
+        if (fseeko(f, next, SEEK_SET) != 0)
+            break;
+        pos = next;
+    }
+    free(loads);
+    fclose(f);
+    return (int)(j->n - before);
 }
 
 int asmspy_jitmap_refresh(asmspy_jitmap_t *j) {
@@ -1113,36 +1315,53 @@ int asmspy_jitmap_refresh(asmspy_jitmap_t *j) {
     j->n = 0;
     j->miss_budget = JIT_MISS_COOLDOWN; /* rearm the rate limiter */
 
+    /* Tier 1: the binary jitdump — sized, move-aware records. Parsed (and
+     * sorted) FIRST so the text tier below can defer to its coverage. */
+    int dumped = -1;
+    if (jitdump_discover(j) == 0)
+        dumped = jitdump_read(j, j->dump_path);
+    size_t ndump = j->n;
+    if (ndump)
+        qsort(j->v, j->n, sizeof *j->v, sym_cmp_addr);
+
+    /* Tier 2: the text perf-map. A line whose start address a jitdump entry
+     * already covers is SKIPPED — jitdump wins where both name an address
+     * (exact sizes, tiered-recompile-aware; the text map is the LCD). */
     char path[64];
     snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)j->pid);
     FILE *f = fopen(path, "r");
-    if (!f)
-        return -1; /* no JIT (or not readable): an empty map, resolves nothing */
+    if (!f && dumped < 0)
+        return -1; /* no JIT source at all: an empty map, resolves nothing */
 
-    char *line = NULL;
-    size_t cap = 0;
-    while (getline(&line, &cap, f) != -1) {
-        unsigned long long start = 0, size = 0;
-        int off = 0;
-        /* "<hex start> <hex size> <name...>"; %n gives the name's offset. The
-         * same format V8/Node, .NET, and OpenJDK (+perf-map-agent) all write. */
-        if (sscanf(line, "%llx %llx %n", &start, &size, &off) < 2 || off == 0)
-            continue;
-        char *nm = line + off;
-        size_t l = strlen(nm);
-        while (l > 0 && (nm[l - 1] == '\n' || nm[l - 1] == '\r' ||
-                         nm[l - 1] == ' ' || nm[l - 1] == '\t'))
-            nm[--l] = '\0';
-        if (l == 0)
-            continue;
-        if (jit_push(j, start, size, nm) != 0)
-            break; /* OOM: keep what we have */
+    if (f) {
+        char *line = NULL;
+        size_t cap = 0;
+        while (getline(&line, &cap, f) != -1) {
+            unsigned long long start = 0, size = 0;
+            int off = 0;
+            /* "<hex start> <hex size> <name...>"; %n gives the name's offset.
+             * The format V8/Node, .NET, and OpenJDK (+perf-map-agent) write. */
+            if (sscanf(line, "%llx %llx %n", &start, &size, &off) < 2 ||
+                off == 0)
+                continue;
+            char *nm = line + off;
+            size_t l = strlen(nm);
+            while (l > 0 && (nm[l - 1] == '\n' || nm[l - 1] == '\r' ||
+                             nm[l - 1] == ' ' || nm[l - 1] == '\t'))
+                nm[--l] = '\0';
+            if (l == 0)
+                continue;
+            if (ndump && sym_at(j->v, ndump, start))
+                continue; /* a jitdump entry already names this code */
+            if (jit_push(j, start, size, nm) != 0)
+                break; /* OOM: keep what we have */
+        }
+        free(line);
+        fclose(f);
     }
-    free(line);
-    fclose(f);
     /* Sort by addr for the reverse search. A method recompiled at a reused
-     * address (tiered/OSR) leaves the stale line too; both share a start so the
-     * extent check still names the right method. */
+     * address (tiered/OSR) leaves the stale entry too; both share a start so
+     * the extent check still names the right method. */
     if (j->n)
         qsort(j->v, j->n, sizeof *j->v, sym_cmp_addr);
     return (int)j->n;

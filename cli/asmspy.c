@@ -12,7 +12,7 @@
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
  *   asmspy --stream <pid> [n] [--tid=<t>]   stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph
- *   asmspy --tree   <pid> [n] [--tid=<t>]   whole-process live call tree (indented by depth)
+ *   asmspy --tree   <pid> [n] [--json|--dot] [--tid=<t>]  whole-process live call tree (indented by depth)
  *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
  * A negative n streams until the target exits or you interrupt.
@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 
@@ -77,7 +78,7 @@ static int u64cmp(const void *a, const void *b) {
 }
 
 #define MAX_DISASM 512 /* cap displayed distinct instructions           */
-#define MAX_EDGES 256  /* cap displayed distinct call edges             */
+#define MAX_EDGES  256 /* cap displayed distinct call edges             */
 
 /* an aggregated call edge: a callee, a representative call-site, and how many
  * times it was called (so the functions pane can rank most-active first) */
@@ -174,7 +175,8 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
     qsort(agg, nagg, sizeof agg[0], edge_agg_cmp);
     for (size_t i = 0; i < nagg; i++) {
         char line[220];
-        const asmspy_sym_t *s = syms ? asmspy_symtab_at(syms, agg[i].tgt) : NULL;
+        const asmspy_sym_t *s =
+            syms ? asmspy_symtab_at(syms, agg[i].tgt) : NULL;
         if (s) {
             uint64_t delta = agg[i].tgt - s->addr;
             if (delta)
@@ -201,11 +203,8 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
 /* Shared call-graph view: sort + row format (used by headless + TUI)  */
 /* ================================================================== */
 
-/* How to rank the whole-process call graph. */
-typedef enum {
-    GSORT_INVOCATIONS = 0, /* most-called functions first                 */
-    GSORT_FANOUT = 1,      /* most distinct callees (functions called) first */
-} gsort_t;
+/* gsort_t + gnode_cmp live in asmspy_graphsort.h (extracted so the ordering/
+ * tiebreak contract is unit-testable — cli/test_graphsort.c). */
 
 /* A retained copy of an engine snapshot (the engine's arrays are transient). */
 typedef struct {
@@ -217,8 +216,8 @@ typedef struct {
 
 /* Copy the node + edge snapshot in, growing as needed (replace, not append —
  * each engine snapshot is the whole graph so far). `edges` may be NULL. */
-static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes, size_t n,
-                            const asmspy_gedge_t *edges, size_t ne) {
+static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes,
+                            size_t n, const asmspy_gedge_t *edges, size_t ne) {
     if (n > s->cap) {
         asmspy_gnode_t *nv = realloc(s->v, n * sizeof *nv);
         if (!nv)
@@ -241,27 +240,6 @@ static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes, size_t n
     if (ne)
         memcpy(s->e, edges, ne * sizeof *edges);
     s->ne = ne;
-}
-
-/* qsort comparator; the active key is set through this file-scope selector right
- * before each qsort (both callers are single-threaded at the sort point). */
-static gsort_t graph_sort_key = GSORT_INVOCATIONS;
-static int gnode_cmp(const void *a, const void *b) {
-    const asmspy_gnode_t *x = a, *y = b;
-    unsigned long long kx = graph_sort_key == GSORT_FANOUT ? x->fanout
-                                                           : x->invocations;
-    unsigned long long ky = graph_sort_key == GSORT_FANOUT ? y->fanout
-                                                           : y->invocations;
-    if (kx != ky)
-        return kx < ky ? 1 : -1; /* descending */
-    /* tie-break on the OTHER metric, then name, so the order is stable */
-    unsigned long long tx = graph_sort_key == GSORT_FANOUT ? x->invocations
-                                                           : x->fanout;
-    unsigned long long ty = graph_sort_key == GSORT_FANOUT ? y->invocations
-                                                           : y->fanout;
-    if (tx != ty)
-        return tx < ty ? 1 : -1;
-    return strcmp(x->name, y->name);
 }
 
 /* The node's class as a stable machine-readable token (the JSON counterpart of
@@ -366,8 +344,8 @@ static void gpeer_format(char *buf, size_t cap, const graph_snap *g,
                       : nd->external                   ? "[EXT]"
                                                        : "[int]";
     if (nd)
-        snprintf(buf, cap, "  %-8llu %-5s %-30.30s [%s]", p->count, tag, nd->name,
-                 nd->module);
+        snprintf(buf, cap, "  %-8llu %-5s %-30.30s [%s]", p->count, tag,
+                 nd->name, nd->module);
     else
         snprintf(buf, cap, "  %-8llu %-5s 0x%llx", p->count, tag,
                  (unsigned long long)p->addr);
@@ -421,8 +399,8 @@ static void graph_build_detail(const graph_snap *g, const asmspy_gnode_t *sel,
 /* Disassemble the function containing `addr` (extent from `syms`, else a fixed
  * window) by reading its bytes live from the target, into `out` (header + one
  * line per instruction). Used by the call-tree view's assembly pane. */
-static void asm_of_function(pid_t pid, const asmspy_symtab_t *syms, uint64_t addr,
-                            svec *out) {
+static void asm_of_function(pid_t pid, const asmspy_symtab_t *syms,
+                            uint64_t addr, svec *out) {
     svec_clear(out);
     if (!addr)
         return;
@@ -499,7 +477,8 @@ static void topo_snap_copy(topo_snap *s, const asmspy_task_t *tasks, size_t n) {
 /* One rendered topology row (a process header or a thread), with the ids it maps
  * to so the TUI can select it and drill in. */
 typedef struct {
-    char text[256]; /* room for a deep glyph prefix + "node/tid <id> [exe] inv=" */
+    char text
+        [256]; /* room for a deep glyph prefix + "node/tid <id> [exe] inv=" */
     pid_t tid, tgid;
     int is_process;
     unsigned long long inv;
@@ -529,7 +508,7 @@ typedef struct {
     unsigned long long inv; /* summed over the process's tasks */
     size_t *task;           /* indices into the task snapshot   */
     size_t ntask, taskcap;
-    int emitted;            /* forest guard: render each process once */
+    int emitted; /* forest guard: render each process once */
 } proc_agg;
 
 /* Sort helper: process-aggregate indices by summed inv (desc), then pid. */
@@ -556,10 +535,10 @@ static int task_idx_cmp(const void *a, const void *b) {
 
 /* Box-drawing connectors for the process/thread forest (UTF-8; the TUI is
  * ncursesw and setlocale(LC_ALL,"") is set, so wide glyphs render). */
-#define TG_TEE "├─ "  /* ├─  a child with more siblings below */
-#define TG_ELB "└─ "  /* └─  the last child                  */
-#define TG_PIPE "│  "      /* │   an ancestor with more below     */
-#define TG_GAP "   "            /*     an ancestor that was last       */
+#define TG_TEE  "├─ " /* ├─  a child with more siblings below */
+#define TG_ELB  "└─ " /* └─  the last child                  */
+#define TG_PIPE "│  " /* │   an ancestor with more below     */
+#define TG_GAP  "   " /*     an ancestor that was last       */
 
 /* Emit the subtree rooted at process P[k]. `prefix` is the glyph column string
  * for this node's descendants' ancestors; `is_last` is whether P[k] is the last
@@ -568,8 +547,8 @@ static int task_idx_cmp(const void *a, const void *b) {
  * process's children are its threads (when it has more than its lone leader),
  * then its child processes — the last of the combined set gets the └─ elbow. */
 static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
-                           size_t k, const char *prefix, int is_last, int is_root,
-                           topo_rows *out) {
+                           size_t k, const char *prefix, int is_last,
+                           int is_root, topo_rows *out) {
     if (P[k].emitted)
         return; /* cycle / already-rendered guard */
     P[k].emitted = 1;
@@ -577,8 +556,11 @@ static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
     topo_row_t row;
     memset(&row, 0, sizeof row);
     snprintf(row.text, sizeof row.text, "%s%snode %d%s%s%s  inv=%llu", prefix,
-             is_root ? "" : is_last ? TG_ELB : TG_TEE, (int)P[k].tgid,
-             P[k].exe[0] ? " [" : "", P[k].exe, P[k].exe[0] ? "]" : "", P[k].inv);
+             is_root   ? ""
+             : is_last ? TG_ELB
+                       : TG_TEE,
+             (int)P[k].tgid, P[k].exe[0] ? " [" : "", P[k].exe,
+             P[k].exe[0] ? "]" : "", P[k].inv);
     row.tgid = row.tid = P[k].tgid;
     row.is_process = 1;
     row.inv = P[k].inv;
@@ -621,7 +603,8 @@ static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
         memset(&row, 0, sizeof row);
         snprintf(row.text, sizeof row.text, "%s%stid %d%s%s%s  inv=%llu", cpx,
                  idx + 1 == total ? TG_ELB : TG_TEE, (int)t->tid,
-                 t->comm[0] ? " (" : "", t->comm, t->comm[0] ? ")" : "", t->inv);
+                 t->comm[0] ? " (" : "", t->comm, t->comm[0] ? ")" : "",
+                 t->inv);
         row.tid = t->tid;
         row.tgid = t->tgid;
         row.is_process = 0;
@@ -725,8 +708,9 @@ static int cmd_list(asmspy_sort_t sort) {
         printf("%-8s %-5s %-8s %-12s %-4s %s\n", "PID", "STR", "CPU", "USER",
                "ATT", "COMMAND");
         for (size_t i = 0; i < n; i++)
-            printf("%-8d %-5u %-8llu %-12.12s %-4s %.64s\n", v[i].pid, v[i].scan,
-                   v[i].cpu, v[i].user, v[i].attachable ? "yes" : "-", v[i].cmd);
+            printf("%-8d %-5u %-8llu %-12.12s %-4s %.64s\n", v[i].pid,
+                   v[i].scan, v[i].cpu, v[i].user,
+                   v[i].attachable ? "yes" : "-", v[i].cmd);
     } else if (sort == ASMSPY_SORT_ACTIVE) {
         printf("%-8s %-8s %-12s %-4s %s\n", "PID", "CPU", "USER", "ATT",
                "COMMAND");
@@ -754,8 +738,8 @@ static int cmd_syms(pid_t pid, const char *filter) {
         if (filter && !strstr(t.v[i].name, filter))
             continue;
         printf("0x%012llx  %6llu  %-40s [%s]\n",
-               (unsigned long long)t.v[i].addr,
-               (unsigned long long)t.v[i].size, t.v[i].name, t.v[i].module);
+               (unsigned long long)t.v[i].addr, (unsigned long long)t.v[i].size,
+               t.v[i].name, t.v[i].module);
         shown++;
     }
     fprintf(stderr, "%zu function symbols%s\n", shown,
@@ -791,7 +775,8 @@ static void stream_print_sink(void *ctx, const char *line) {
 static int cmd_stream(pid_t pid, pid_t tid, long n) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
-    int rc = asmspy_engine_stream(pid, tid, n, NULL, &t, stream_print_sink, NULL);
+    int rc =
+        asmspy_engine_stream(pid, tid, n, NULL, &t, stream_print_sink, NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
@@ -802,36 +787,202 @@ static int cmd_stream(pid_t pid, pid_t tid, long n) {
     return 0;
 }
 
-static void tree_print_sink(void *ctx, const char *line, uint64_t addr) {
+static void tree_print_sink(void *ctx, const char *line,
+                            const asmspy_tree_call_t *call) {
     (void)ctx;
-    (void)addr; /* headless: the address only matters to the TUI assembly pane */
+    (void)call; /* headless text: the pre-rendered line is the whole output */
     printf("%s\n", line);
     fflush(stdout);
 }
 
-static int cmd_tree(pid_t pid, pid_t tid, long n) {
+/* One retained call-tree entry for the --json/--dot exporters (the sink's
+ * name/module pointers are transient, so the strings are copied in). */
+typedef struct {
+    pid_t tid;
+    int depth;
+    uint64_t addr;
+    char name[128];
+    char module[64];
+} tree_rec;
+
+typedef struct {
+    tree_rec *v;
+    size_t n, cap;
+} tree_capture;
+
+static void tree_capture_sink(void *ctx, const char *line,
+                              const asmspy_tree_call_t *call) {
+    (void)line;
+    tree_capture *tc = ctx;
+    if (tc->n == tc->cap) {
+        size_t nc = tc->cap ? tc->cap * 2 : 256;
+        tree_rec *nv = realloc(tc->v, nc * sizeof *nv);
+        if (!nv)
+            return; /* OOM: drop this entry, keep what we have */
+        tc->v = nv;
+        tc->cap = nc;
+    }
+    tree_rec *r = &tc->v[tc->n++];
+    r->tid = call->tid;
+    r->depth = call->depth;
+    r->addr = call->addr;
+    snprintf(r->name, sizeof r->name, "%s", call->name);
+    snprintf(r->module, sizeof r->module, "%s", call->module);
+}
+
+/* Node fill colour for the --tree DOT export. The tree records carry no
+ * internal/external split (unlike the graph engine's nodes), so this colours
+ * what they do know: JIT/managed, unresolved, or named. */
+static const char *tree_fill(const char *module) {
+    if (strcmp(module, "jit") == 0)
+        return "#fff3c4"; /* JIT/managed */
+    if (strcmp(module, "?") == 0)
+        return "#ffe0e0"; /* unresolved */
+    return "#e8f0ff";     /* named (exe or library) */
+}
+
+/* Emit the captured call tree as a Graphviz digraph, mirroring the --graph
+ * exporter's conventions (addr-keyed nodes, count-labelled edges). The tree is
+ * a temporal log, so edges are AGGREGATED here: each entry at depth d is a call
+ * from the latest depth-(d-1) entry on the same thread — the same shadow-stack
+ * discipline the engine used to compute the depths in the first place. */
+static void tree_export_dot(const tree_capture *tc, pid_t pid) {
+    typedef struct { /* per-addr node: last-seen naming + times entered */
+        uint64_t addr;
+        const tree_rec *rec;
+        unsigned long long entered;
+    } dnode;
+    typedef struct { /* aggregated caller->callee edge */
+        uint64_t from, to;
+        unsigned long long count;
+    } dedge;
+    typedef struct { /* one thread's live shadow stack of entry addresses */
+        pid_t tid;
+        uint64_t at[64];
+    } dstack;
+    dnode *nodes = NULL;
+    dedge *edges = NULL;
+    dstack *stacks = NULL;
+    size_t nn = 0, ne = 0, ns = 0;
+    if (tc->n) { /* one alloc each — the capture bounds every table */
+        nodes = calloc(tc->n, sizeof *nodes);
+        edges = calloc(tc->n, sizeof *edges);
+        stacks = calloc(tc->n, sizeof *stacks);
+    }
+    if (nodes && edges && stacks) {
+        for (size_t i = 0; i < tc->n; i++) {
+            const tree_rec *r = &tc->v[i];
+            size_t k;
+            for (k = 0; k < nn && nodes[k].addr != r->addr; k++)
+                ;
+            if (k == nn) {
+                nodes[nn].addr = r->addr;
+                nn++;
+            }
+            nodes[k].rec = r; /* newest naming wins (a JIT may recompile) */
+            nodes[k].entered++;
+
+            for (k = 0; k < ns && stacks[k].tid != r->tid; k++)
+                ;
+            if (k == ns) {
+                stacks[ns].tid = r->tid;
+                ns++;
+            }
+            int d = r->depth < 63 ? r->depth : 63;
+            /* the caller is the latest shallower entry on this thread; depth 0
+             * (or a parent the capture never saw) roots a new subtree */
+            uint64_t parent = d > 0 ? stacks[k].at[d - 1] : 0;
+            stacks[k].at[d] = r->addr;
+            if (parent) {
+                size_t e;
+                for (e = 0; e < ne && !(edges[e].from == parent &&
+                                        edges[e].to == r->addr);
+                     e++)
+                    ;
+                if (e == ne) {
+                    edges[ne].from = parent;
+                    edges[ne].to = r->addr;
+                    ne++;
+                }
+                edges[e].count++;
+            }
+        }
+    }
+    printf("digraph asmspy {\n  rankdir=LR;\n  node [shape=box, style=filled,"
+           " fontname=monospace, fontsize=10];\n");
+    for (size_t i = 0; i < nn; i++) {
+        char lbl[4 * sizeof nodes[i].rec->name];
+        dot_escape(nodes[i].rec->name, lbl, sizeof lbl);
+        printf("  \"0x%llx\" [label=\"%s\\n[%s] entered=%llu\","
+               " fillcolor=\"%s\"];\n",
+               (unsigned long long)nodes[i].addr, lbl, nodes[i].rec->module,
+               nodes[i].entered, tree_fill(nodes[i].rec->module));
+    }
+    for (size_t i = 0; i < ne; i++)
+        printf("  \"0x%llx\" -> \"0x%llx\" [label=\"%llu\"];\n",
+               (unsigned long long)edges[i].from,
+               (unsigned long long)edges[i].to, edges[i].count);
+    printf("}\n");
+    (void)pid;
+    free(nodes);
+    free(edges);
+    free(stacks);
+}
+
+/* Emit the captured call tree as JSON: the faithful temporal call log (one
+ * object per call, in emission order, with tid/depth/addr/name/module), same
+ * top-level shape as the --graph exporter ({"pid":…, one array}). */
+static void tree_export_json(const tree_capture *tc, pid_t pid) {
+    printf("{\"pid\":%d,\"calls\":[", (int)pid);
+    for (size_t i = 0; i < tc->n; i++) {
+        const tree_rec *r = &tc->v[i];
+        char en[4 * sizeof r->name], em[4 * sizeof r->module];
+        json_escape(r->name, en, sizeof en);
+        json_escape(r->module, em, sizeof em);
+        printf("%s\n  {\"seq\":%zu,\"tid\":%d,\"depth\":%d,\"addr\":\"0x%llx\","
+               "\"name\":\"%s\",\"module\":\"%s\"}",
+               i ? "," : "", i, (int)r->tid, r->depth,
+               (unsigned long long)r->addr, en, em);
+    }
+    printf("%s]}\n", tc->n ? "\n" : "");
+}
+
+static int cmd_tree(pid_t pid, pid_t tid, long n, int json, int dot) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
-    int rc = asmspy_engine_tree(pid, tid, n, NULL, &t, tree_print_sink, NULL);
+    tree_capture tc = {0};
+    int export = json || dot;
+    int rc = asmspy_engine_tree(pid, tid, n, NULL, &t,
+                                export ? tree_capture_sink : tree_print_sink,
+                                export ? &tc : NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "attach failed: %s\n", e);
+        free(tc.v);
         return 1;
     }
+    if (dot) /* like --graph: --dot wins when both flags are given */
+        tree_export_dot(&tc, pid);
+    else if (json)
+        tree_export_json(&tc, pid);
+    free(tc.v);
     return 0;
 }
 
-static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
-                               const asmspy_gedge_t *edges, size_t ne) {
-    graph_snap_copy(ctx, nodes, nn, edges, ne); /* keep only the latest snapshot */
+static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
+                               size_t nn, const asmspy_gedge_t *edges,
+                               size_t ne) {
+    graph_snap_copy(ctx, nodes, nn, edges,
+                    ne); /* keep only the latest snapshot */
 }
 
 static int cmd_graph(pid_t pid, pid_t tid, long n, gsort_t sort, int json,
                      int dot) {
     asmspy_symtab_t t;
-    asmspy_symtab_load(pid, &t); /* best-effort; raw addrs (all internal) if empty */
+    asmspy_symtab_load(pid,
+                       &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
     int rc =
         asmspy_engine_graph(pid, tid, n, NULL, &t, graph_capture_sink, &snap);
@@ -848,16 +999,18 @@ static int cmd_graph(pid_t pid, pid_t tid, long n, gsort_t sort, int json,
     qsort(snap.v, snap.n, sizeof *snap.v, gnode_cmp);
 
     if (dot) { /* Graphviz: asmspy --graph <pid> --dot | dot -Tsvg -o graph.svg */
-        printf("digraph asmspy {\n  rankdir=LR;\n  node [shape=box, style=filled,"
-               " fontname=monospace, fontsize=10];\n");
+        printf(
+            "digraph asmspy {\n  rankdir=LR;\n  node [shape=box, style=filled,"
+            " fontname=monospace, fontsize=10];\n");
         for (size_t i = 0; i < snap.n; i++) {
             const asmspy_gnode_t *nd = &snap.v[i];
             char lbl[4 * sizeof nd->name];
             dot_escape(nd->name, lbl, sizeof lbl);
-            printf("  \"0x%llx\" [label=\"%s\\n[%s] inv=%llu\", fillcolor=\"%s\"];"
-                   "\n",
-                   (unsigned long long)nd->addr, lbl, gnode_kind(nd),
-                   nd->invocations, gnode_fill(nd));
+            printf(
+                "  \"0x%llx\" [label=\"%s\\n[%s] inv=%llu\", fillcolor=\"%s\"];"
+                "\n",
+                (unsigned long long)nd->addr, lbl, gnode_kind(nd),
+                nd->invocations, gnode_fill(nd));
         }
         for (size_t i = 0; i < snap.ne; i++)
             printf("  \"0x%llx\" -> \"0x%llx\" [label=\"%llu\"];\n",
@@ -877,11 +1030,12 @@ static int cmd_graph(pid_t pid, pid_t tid, long n, gsort_t sort, int json,
             char en[4 * sizeof nd->name], em[4 * sizeof nd->module];
             json_escape(nd->name, en, sizeof en);
             json_escape(nd->module, em, sizeof em);
-            printf("%s\n  {\"addr\":\"0x%llx\",\"name\":\"%s\",\"module\":\"%s\","
-                   "\"kind\":\"%s\",\"invocations\":%llu,\"out_calls\":%llu,"
-                   "\"fanout\":%u}",
-                   i ? "," : "", (unsigned long long)nd->addr, en, em,
-                   gnode_kind(nd), nd->invocations, nd->out_calls, nd->fanout);
+            printf(
+                "%s\n  {\"addr\":\"0x%llx\",\"name\":\"%s\",\"module\":\"%s\","
+                "\"kind\":\"%s\",\"invocations\":%llu,\"out_calls\":%llu,"
+                "\"fanout\":%u}",
+                i ? "," : "", (unsigned long long)nd->addr, en, em,
+                gnode_kind(nd), nd->invocations, nd->out_calls, nd->fanout);
         }
         printf("%s],\"edges\":[", snap.n ? "\n" : "");
         for (size_t i = 0; i < snap.ne; i++)
@@ -962,8 +1116,10 @@ typedef enum {
 static ssort_t sample_sort_key = SSORT_COUNT;
 static int sedge_cmp(const void *a, const void *b) {
     const asmspy_sample_edge_t *x = a, *y = b;
-    unsigned long long kx = sample_sort_key == SSORT_MISPRED ? x->mispred : x->count;
-    unsigned long long ky = sample_sort_key == SSORT_MISPRED ? y->mispred : y->count;
+    unsigned long long kx =
+        sample_sort_key == SSORT_MISPRED ? x->mispred : x->count;
+    unsigned long long ky =
+        sample_sort_key == SSORT_MISPRED ? y->mispred : y->count;
     if (kx != ky)
         return kx < ky ? 1 : -1; /* descending */
     if (x->count != y->count)    /* stable tiebreak: heavier edge first */
@@ -972,7 +1128,8 @@ static int sedge_cmp(const void *a, const void *b) {
 }
 
 /* A short human tag for an edge's misprediction / return character. */
-static void sample_edge_tag(const asmspy_sample_edge_t *e, char *out, size_t cap) {
+static void sample_edge_tag(const asmspy_sample_edge_t *e, char *out,
+                            size_t cap) {
     int mp = e->count ? (int)((e->mispred * 100ull) / e->count) : 0;
     if (e->is_return && e->mispred)
         snprintf(out, cap, " [ret misp %d%%]", mp);
@@ -989,8 +1146,8 @@ static void sample_format_row(char *buf, size_t cap,
                               const asmspy_sample_edge_t *e) {
     char tag[32];
     sample_edge_tag(e, tag, sizeof tag);
-    snprintf(buf, cap, "%8llu  %-30.30s -> %-30.30s%s", e->count, e->from, e->to,
-             tag);
+    snprintf(buf, cap, "%8llu  %-30.30s -> %-30.30s%s", e->count, e->from,
+             e->to, tag);
 }
 
 static int cmd_sample(pid_t pid, long ms, int json) {
@@ -1004,14 +1161,16 @@ static int cmd_sample(pid_t pid, long ms, int json) {
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     asmspy_jitmap_t jit;
     asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(&jit); /* name methods already JIT-compiled at attach */
+    asmspy_jitmap_refresh(
+        &jit); /* name methods already JIT-compiled at attach */
     sample_snap snap = {0};
     int rc = asmspy_engine_sample(pid, (unsigned)ms, NULL, &t, &jit,
                                   sample_capture_sink, &snap);
     asmspy_jitmap_free(&jit);
     asmspy_symtab_free(&t);
 
-    if (rc == ASMSPY_SAMPLE_UNAVAIL) { /* substrate present but perf_open blocked */
+    if (rc ==
+        ASMSPY_SAMPLE_UNAVAIL) { /* substrate present but perf_open blocked */
         printf("# SKIP --sample: %s\n", asmtest_ibs_skip_reason());
         free(snap.v);
         return 0;
@@ -1030,7 +1189,8 @@ static int cmd_sample(pid_t pid, long ms, int json) {
                "\"edges\":[",
                (int)pid, (unsigned long long)snap.samples,
                (unsigned long long)snap.branch_samples,
-               (unsigned long long)snap.lost, snap.throttled ? "true" : "false");
+               (unsigned long long)snap.lost,
+               snap.throttled ? "true" : "false");
         for (size_t i = 0; i < snap.n; i++) {
             const asmspy_sample_edge_t *e = &snap.v[i];
             char ef[4 * sizeof e->from], et[4 * sizeof e->to];
@@ -1062,7 +1222,8 @@ static int cmd_sample(pid_t pid, long ms, int json) {
         const asmspy_sample_edge_t *e = &snap.v[i];
         char tag[32];
         sample_edge_tag(e, tag, sizeof tag);
-        printf("%8llu  %-34.34s -> %-34.34s%s\n", e->count, e->from, e->to, tag);
+        printf("%8llu  %-34.34s -> %-34.34s%s\n", e->count, e->from, e->to,
+               tag);
     }
     free(snap.v);
     return 0;
@@ -1084,8 +1245,8 @@ static int cmd_procs(pid_t pid, long n, asmspy_count_t mode) {
     }
     topo_rows rows = {0};
     topo_build_rows(snap.v, snap.n, &rows);
-    printf("process/thread topology — %zu tasks, counting %s (pid %d)\n", snap.n,
-           mode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls", (int)pid);
+    printf("process/thread topology — %zu tasks, counting %s (pid %d)\n",
+           snap.n, mode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls", (int)pid);
     if (snap.n == 0)
         printf("(no tasks observed — target idle or gone)\n");
     for (size_t i = 0; i < rows.n; i++)
@@ -1179,8 +1340,8 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
     }
     fprintf(stderr, "tracing %s @ 0x%llx (%zu bytes) in pid %d\n", sym,
             (unsigned long long)base, len, (int)pid);
-    int rc = asmspy_engine_region(pid, base, len, n, NULL, region_print_sink,
-                                  &t);
+    int rc =
+        asmspy_engine_region(pid, base, len, n, NULL, region_print_sink, &t);
     if (rc == ASMSPY_REGION_NEVER_RAN) {
         fprintf(stderr,
                 "%s never executed while traced in pid %d\n"
@@ -1290,7 +1451,8 @@ static void list_refilter(List *L) {
 static int list_init(List *L, char **items, int n) {
     L->items = items;
     L->n = n;
-    L->nmatch = L->top = L->sel = L->flen = 0; /* init BEFORE the fallible alloc */
+    L->nmatch = L->top = L->sel = L->flen =
+        0; /* init BEFORE the fallible alloc */
     L->filter[0] = '\0';
     L->match = malloc((n ? n : 1) * sizeof(int));
     if (!L->match)
@@ -1451,10 +1613,11 @@ static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
 }
 
 /* Call-tree line + its callee address (for the assembly pane's disassembly). */
-static void live_tree_sink(void *ctx, const char *line, uint64_t addr) {
+static void live_tree_sink(void *ctx, const char *line,
+                           const asmspy_tree_call_t *call) {
     live_t *L = ctx;
     pthread_mutex_lock(&L->mu);
-    log_push_aux(&L->log, line, addr);
+    log_push_aux(&L->log, line, call->addr);
     pthread_mutex_unlock(&L->mu);
 }
 
@@ -1477,8 +1640,8 @@ static void *tracer_thread(void *arg) {
         rc = asmspy_engine_graph(L->pid, 0, -1, &L->stop, L->syms,
                                  live_graph_sink, L);
     else if (L->mode == 4)
-        rc = asmspy_engine_tree(L->pid, 0, -1, &L->stop, L->syms, live_tree_sink,
-                                L);
+        rc = asmspy_engine_tree(L->pid, 0, -1, &L->stop, L->syms,
+                                live_tree_sink, L);
     else if (L->mode == 5)
         rc = asmspy_engine_procs(L->pid, -1, &L->stop, L->count_mode,
                                  live_topo_sink, L);
@@ -1525,8 +1688,8 @@ static void run_graph_detail(const char *title, const asmspy_gnode_t *sel,
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
-        int bodytop = 4;                   /* header rows 0..3 */
-        int vis = rows - bodytop - 1;      /* keep the last row for the hint */
+        int bodytop = 4;              /* header rows 0..3 */
+        int vis = rows - bodytop - 1; /* keep the last row for the hint */
         if (vis < 1)
             vis = 1;
         int bn = (int)body.n;
@@ -1546,8 +1709,9 @@ static void run_graph_detail(const char *title, const asmspy_gnode_t *sel,
                  (unsigned long long)sel->addr);
         for (int r = 0; r < vis && top + r < bn; r++)
             mvprintw(bodytop + r, 0, "%-*.*s", cols, cols, body.v[top + r]);
-        mvprintw(rows - 1, 0,
-                 "up/down PgUp/PgDn Home/End: scroll   Enter/b/q: back to graph");
+        mvprintw(
+            rows - 1, 0,
+            "up/down PgUp/PgDn Home/End: scroll   Enter/b/q: back to graph");
         clrtoeol();
         refresh();
 
@@ -1616,10 +1780,11 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     int paused = 0;   /* freeze the log tail / graph snapshot to scroll it */
     long vbottom = 0; /* main-log bottom line while paused (absolute index) */
     long vstr = 0;    /* strings-pane bottom while paused (mode 0) */
-    int gtop = 0;     /* call-graph (mode 3): first visible row while scrolling */
-    int gsel = 0;     /* call-graph (mode 3): selected row (for Enter: drill-in) */
-    int apane = 0;    /* region (mode 1): focused pane (0 = assembly, 1 = funcs) */
-    int atop = 0, ftop = 0; /* region: per-pane first visible row while scrolling */
+    int gtop = 0;  /* call-graph (mode 3): first visible row while scrolling */
+    int gsel = 0;  /* call-graph (mode 3): selected row (for Enter: drill-in) */
+    int apane = 0; /* region (mode 1): focused pane (0 = assembly, 1 = funcs) */
+    int atop = 0,
+        ftop = 0; /* region: per-pane first visible row while scrolling */
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
@@ -1728,12 +1893,14 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             mvprintw(1, 0,
                      "CALL GRAPH  (%d functions, sort: %s)   [int]=own exe  "
                      "[EXT]=library",
-                     gn, L.gsort == GSORT_FANOUT ? "functions called"
-                                                 : "invocations");
+                     gn,
+                     L.gsort == GSORT_FANOUT ? "functions called"
+                                             : "invocations");
             attroff(A_BOLD);
             if (gn == 0)
-                mvprintw(2, 0, "(waiting for calls — whole-process "
-                               "single-stepping is slow)");
+                mvprintw(2, 0,
+                         "(waiting for calls — whole-process "
+                         "single-stepping is slow)");
             for (int r = 0; r < vis && gtop + r < gn; r++) {
                 char row[256];
                 graph_format_row(row, sizeof row, &L.graph.v[gtop + r]);
@@ -1756,9 +1923,9 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             int split = (rows - 3) * 3 / 5;
             if (split < 1)
                 split = 1;
-            int fy = 3 + split;         /* FUNCTIONS CALLED header row        */
-            int asm_h = split;          /* assembly rows: screen 3..fy-1      */
-            int fn_h = rows - fy - 2;   /* funcs rows: screen fy+1..rows-2     */
+            int fy = 3 + split;       /* FUNCTIONS CALLED header row        */
+            int asm_h = split;        /* assembly rows: screen 3..fy-1      */
+            int fn_h = rows - fy - 2; /* funcs rows: screen fy+1..rows-2     */
             if (fn_h < 1)
                 fn_h = 1;
             int an = (int)L.asm_dis.n, fnn = (int)L.asm_fn.n;
@@ -1780,7 +1947,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             for (int r = 0; r < asm_h && atop + r < an; r++)
                 mvprintw(3 + r, 0, "%-*.*s", cols, cols, L.asm_dis.v[atop + r]);
             attron(ffocus ? A_REVERSE : A_BOLD);
-            mvprintw(fy, 0, "FUNCTIONS CALLED%s", fnn > fn_h ? "  (scroll)" : "");
+            mvprintw(fy, 0, "FUNCTIONS CALLED%s",
+                     fnn > fn_h ? "  (scroll)" : "");
             attroff(ffocus ? A_REVERSE : A_BOLD);
             if (fnn == 0)
                 mvprintw(fy + 1, 0, "(leaf — no calls, or waiting for a call)");
@@ -1810,13 +1978,15 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      "space: live   b: options   q: processes",
                      vbottom < 0 ? 0 : vbottom + 1, logtotal);
         else if (mode == 3 && paused && !fin)
-            mvprintw(rows - 1, 0,
-                     "[PAUSED]  up/down: select   Enter: drill in   Tab: sort   "
-                     "space: live   b: options   q: processes");
+            mvprintw(
+                rows - 1, 0,
+                "[PAUSED]  up/down: select   Enter: drill in   Tab: sort   "
+                "space: live   b: options   q: processes");
         else if (mode == 1 && paused && !fin)
-            mvprintw(rows - 1, 0,
-                     "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: pane   "
-                     "space: live   b: options   q: processes");
+            mvprintw(
+                rows - 1, 0,
+                "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: pane   "
+                "space: live   b: options   q: processes");
         else if (fin) {
             char e[128];
             asmspy_strerror(erc, e, sizeof e);
@@ -1859,7 +2029,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
         if (is_log) {
             int page = log_h > 1 ? log_h - 1 : 1;
             /* scrolling up while live-tailing enters pause at the current tail */
-            if ((ch == KEY_UP || ch == KEY_PPAGE || ch == KEY_HOME) && !paused) {
+            if ((ch == KEY_UP || ch == KEY_PPAGE || ch == KEY_HOME) &&
+                !paused) {
                 paused = 1;
                 vbottom = lognewest;
                 vstr = strnewest;
@@ -1891,7 +2062,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 break;
             case KEY_NPAGE:
                 if (paused)
-                    vbottom += page; /* clamped to the tail below (stays paused) */
+                    vbottom +=
+                        page; /* clamped to the tail below (stays paused) */
                 break;
             case KEY_END:
                 paused = 0; /* jump back to the live tail */
@@ -1909,9 +2081,11 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                     vbottom = lognewest;
             }
         }
-        if (mode == 3) { /* call graph: freeze to select a node, Enter to drill in */
+        if (mode ==
+            3) { /* call graph: freeze to select a node, Enter to drill in */
             int page = log_h > 1 ? log_h - 1 : 1;
-            int gscroll = paused || fin; /* a finished graph is already frozen */
+            int gscroll =
+                paused || fin; /* a finished graph is already frozen */
             /* any navigation (or Enter) into the list freezes the live re-sort */
             if ((ch == KEY_UP || ch == KEY_DOWN || ch == KEY_PPAGE ||
                  ch == KEY_NPAGE || ch == KEY_HOME || ch == KEY_END ||
@@ -1926,7 +2100,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 if (!fin) {
                     paused = !paused;
                     if (!paused) {
-                        gtop = 0; /* resume live -> back to the top-ranked rows */
+                        gtop =
+                            0; /* resume live -> back to the top-ranked rows */
                         gsel = 0;
                     }
                 }
@@ -1953,7 +2128,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 break;
             case KEY_END:
                 if (gscroll)
-                    gsel = INT_MAX; /* clamped to the last node in the renderer */
+                    gsel =
+                        INT_MAX; /* clamped to the last node in the renderer */
                 break;
             case '\n':
             case KEY_ENTER:
@@ -1970,7 +2146,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                          * is frozen, so v[i] is exactly the highlighted node */
                         asmspy_gnode_t selnode = L.graph.v[i];
                         svec callers = {0}, callees = {0};
-                        graph_build_detail(&L.graph, &selnode, &callers, &callees);
+                        graph_build_detail(&L.graph, &selnode, &callers,
+                                           &callees);
                         pthread_mutex_unlock(&L.mu);
                         char dt[176];
                         snprintf(dt, sizeof dt,
@@ -1990,28 +2167,33 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
             if (gsel < 0)
                 gsel = 0;
         }
-        if (mode == 1) { /* region: pause to freeze the sample; Tab switches pane */
+        if (mode ==
+            1) { /* region: pause to freeze the sample; Tab switches pane */
             int split = (rows - 3) * 3 / 5;
             if (split < 1)
                 split = 1;
-            int ph = apane == 0 ? split : rows - (3 + split) - 2; /* pane height */
+            int ph =
+                apane == 0 ? split : rows - (3 + split) - 2; /* pane height */
             if (ph < 1)
                 ph = 1;
             int page = ph > 1 ? ph - 1 : 1;
-            int rscroll = paused || fin; /* a finished sample is already frozen */
+            int rscroll =
+                paused || fin; /* a finished sample is already frozen */
             /* scrolling into a pane freezes the live re-sampling */
             if ((ch == KEY_UP || ch == KEY_PPAGE) && !rscroll) {
                 paused = 1;
                 rscroll = 1;
             }
-            int *off = apane == 0 ? &atop : &ftop; /* the focused pane's offset */
+            int *off =
+                apane == 0 ? &atop : &ftop; /* the focused pane's offset */
             switch (ch) {
             case ' ':
             case 'p':
                 if (!fin) {
                     paused = !paused;
                     if (!paused)
-                        atop = ftop = 0; /* resume live -> both panes to the top */
+                        atop = ftop =
+                            0; /* resume live -> both panes to the top */
                 }
                 break;
             case '\t':
@@ -2039,7 +2221,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 break;
             case KEY_END:
                 if (rscroll)
-                    *off = INT_MAX; /* clamped to the last page in the renderer */
+                    *off =
+                        INT_MAX; /* clamped to the last page in the renderer */
                 break;
             default:
                 break;
@@ -2080,9 +2263,11 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
 }
 
 /* run_topo_view action (out-param): what the user asked for on exit. */
-#define TOPO_ACT_NONE 0   /* left the view (b/q) — use the returned nav        */
-#define TOPO_ACT_TOGGLE 1 /* Tab: flip the count mode and re-enter             */
-#define TOPO_ACT_DRILL 2  /* Enter: drill into *out_drill's call graph          */
+#define TOPO_ACT_NONE 0 /* left the view (b/q) — use the returned nav        */
+#define TOPO_ACT_TOGGLE                                                        \
+    1 /* Tab: flip the count mode and re-enter             */
+#define TOPO_ACT_DRILL                                                         \
+    2 /* Enter: drill into *out_drill's call graph          */
 
 /* Live process/thread topology view (internal mode 5). Scroll the tree, Tab to
  * toggle the syscalls/calls count, Enter to drill into the selected node's
@@ -2187,7 +2372,8 @@ static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
             back = 0;
             break;
         }
-        if (ch == '\t') { /* Tab toggles the count option (restarts the engine) */
+        if (ch ==
+            '\t') { /* Tab toggles the count option (restarts the engine) */
             *action = TOPO_ACT_TOGGLE;
             back = 0;
             break;
@@ -2195,7 +2381,8 @@ static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
         if ((ch == '\n' || ch == KEY_ENTER) && sel_tgid) {
             *action = TOPO_ACT_DRILL;
             *out_drill = sel_tgid;
-            (void)sel_is_proc; /* a thread's tgid == its process, so either works */
+            (void)
+                sel_is_proc; /* a thread's tgid == its process, so either works */
             back = 0;
             break;
         }
@@ -2214,7 +2401,9 @@ static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
     }
 
     atomic_store(&L.stop, true);
-    for (;;) { /* wake the tracer's blocked waitpid, then join (as run_live_view) */
+    for (
+        ;
+        ;) { /* wake the tracer's blocked waitpid, then join (as run_live_view) */
         pthread_kill(th, SIGALRM);
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -2241,18 +2430,20 @@ typedef struct {
     pthread_mutex_t mu;
     atomic_bool stop;
     atomic_bool finished;
-    int rc;                       /* engine return code (set before finished)   */
-    sample_snap snap;             /* latest resolved hot-edge window            */
-    int paused;                   /* freeze the snapshot so scrolling is stable */
-    pid_t pid;                    /* target                                     */
-    unsigned window_ms;           /* per-window sample duration                 */
-    const asmspy_symtab_t *syms;  /* ELF resolver (owned by caller)             */
-    asmspy_jitmap_t *jit;         /* JIT/perf-map resolver (owned by caller)    */
+    int rc;             /* engine return code (set before finished)   */
+    sample_snap snap;   /* latest resolved hot-edge window            */
+    int paused;         /* freeze the snapshot so scrolling is stable */
+    pid_t pid;          /* target                                     */
+    unsigned window_ms; /* per-window sample duration                 */
+    const asmspy_symtab_t
+        *syms;            /* ELF resolver (owned by caller)             */
+    asmspy_jitmap_t *jit; /* JIT/perf-map resolver (owned by caller)    */
 } sample_view_t;
 
 static void sample_view_sink(void *ctx, const asmspy_sample_edge_t *edges,
-                             size_t n, uint64_t samples, uint64_t branch_samples,
-                             uint64_t lost, int throttled) {
+                             size_t n, uint64_t samples,
+                             uint64_t branch_samples, uint64_t lost,
+                             int throttled) {
     sample_view_t *V = ctx;
     pthread_mutex_lock(&V->mu);
     if (!V->paused) /* while the user scrolls a frozen window, drop updates */
@@ -2266,8 +2457,8 @@ static void *sample_tracer(void *arg) {
     /* Loops surveying `window_ms` windows until *stop; unlike the ptrace engines
      * it is never blocked in waitpid, so no SIGALRM wake is needed — it notices
      * *stop within one window. */
-    int rc = asmspy_engine_sample(V->pid, V->window_ms, &V->stop, V->syms, V->jit,
-                                  sample_view_sink, V);
+    int rc = asmspy_engine_sample(V->pid, V->window_ms, &V->stop, V->syms,
+                                  V->jit, sample_view_sink, V);
     pthread_mutex_lock(&V->mu);
     V->rc = rc;
     pthread_mutex_unlock(&V->mu);
@@ -2283,7 +2474,8 @@ static int run_sample_view(pid_t pid, const char *title,
     atomic_store(&V.stop, false);
     atomic_store(&V.finished, false);
     V.pid = pid;
-    V.window_ms = 250; /* responsive live windows; quit lands within one window */
+    V.window_ms =
+        250; /* responsive live windows; quit lands within one window */
     V.syms = syms;
     V.jit = jit;
 
@@ -2332,9 +2524,10 @@ static int run_sample_view(pid_t pid, const char *title,
                  V.snap.lost ? "   (samples lost)" : "", V.window_ms);
         attroff(A_BOLD);
         if (en == 0)
-            mvprintw(3, 0, fin ? "(no taken-branch samples — target idle?)"
-                                : "(sampling out of band — no ptrace, no "
-                                  "single-step…)");
+            mvprintw(3, 0,
+                     fin ? "(no taken-branch samples — target idle?)"
+                         : "(sampling out of band — no ptrace, no "
+                           "single-step…)");
         for (int r = 0; r < vis && top + r < en; r++) {
             char row[256];
             sample_format_row(row, sizeof row, &V.snap.v[top + r]);
@@ -2343,17 +2536,19 @@ static int run_sample_view(pid_t pid, const char *title,
         pthread_mutex_unlock(&V.mu);
 
         if (fin && erc == ASMSPY_SAMPLE_UNAVAIL)
-            mvprintw(rows - 1, 0, "[IBS-Op unavailable: %.*s]   b: options   "
-                                  "q/ESC: processes",
+            mvprintw(rows - 1, 0,
+                     "[IBS-Op unavailable: %.*s]   b: options   "
+                     "q/ESC: processes",
                      cols - 40, asmtest_ibs_skip_reason());
         else if (fin)
             mvprintw(rows - 1, 0,
                      "[tracer stopped]   up/down PgUp/PgDn Home/End: scroll   "
                      "b: options   q/ESC: processes");
         else if (V.paused)
-            mvprintw(rows - 1, 0,
-                     "[PAUSED]   up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
-                     "space: live   b: options   q: processes");
+            mvprintw(
+                rows - 1, 0,
+                "[PAUSED]   up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
+                "space: live   b: options   q: processes");
         else
             mvprintw(rows - 1, 0,
                      "Tab: sort (count/mispredicts)   space: pause+scroll   "
@@ -2420,7 +2615,8 @@ static int run_sample_view(pid_t pid, const char *title,
     }
 
     atomic_store(&V.stop, true);
-    pthread_join(th, NULL); /* returns within one window (sampler checks stop) */
+    pthread_join(th,
+                 NULL); /* returns within one window (sampler checks stop) */
     free(V.snap.v);
     pthread_mutex_destroy(&V.mu);
     return back;
@@ -2437,16 +2633,32 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(0, 0, "asmspy — pid %d (%.*s)", p->pid, cols - 24, p->cmd);
         attroff(A_BOLD);
         if (!p->attachable)
-            mvprintw(1, 0, "! not owned by you — attach may fail "
-                           "(needs CAP_SYS_PTRACE / ptrace_scope=0)");
-        mvprintw(3, 2, "1)  Syscall log        — live syscalls with data (a strace)");
-        mvprintw(4, 2, "2)  Assembly & funcs   — live disassembly + call-graph of a function");
-        mvprintw(5, 2, "3)  Live stream        — every instruction as it runs (function + assembly)");
-        mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable; Enter drills into a node)");
-        mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
-        mvprintw(8, 2, "6)  Process tree       — procs+threads+children with counts (drill into a call graph)");
-        mvprintw(9, 2, "7)  Hot edges (sample) — statistical hot edges via AMD IBS-Op, OUT OF BAND (safe on a JIT)");
-        mvprintw(10, 2, "8)  Process details    — runtime (JVM/.NET/py/Go/…), threads, modules, ELF traits (safe, no attach)");
+            mvprintw(1, 0,
+                     "! not owned by you — attach may fail "
+                     "(needs CAP_SYS_PTRACE / ptrace_scope=0)");
+        mvprintw(3, 2,
+                 "1)  Syscall log        — live syscalls with data (a strace)");
+        mvprintw(4, 2,
+                 "2)  Assembly & funcs   — live disassembly + call-graph of a "
+                 "function");
+        mvprintw(5, 2,
+                 "3)  Live stream        — every instruction as it runs "
+                 "(function + assembly)");
+        mvprintw(6, 2,
+                 "4)  Call graph         — whole-process caller/callee counts "
+                 "(sortable; Enter drills into a node)");
+        mvprintw(7, 2,
+                 "5)  Call tree          — whole-process live call tree "
+                 "(indented by depth)");
+        mvprintw(8, 2,
+                 "6)  Process tree       — procs+threads+children with counts "
+                 "(drill into a call graph)");
+        mvprintw(9, 2,
+                 "7)  Hot edges (sample) — statistical hot edges via AMD "
+                 "IBS-Op, OUT OF BAND (safe on a JIT)");
+        mvprintw(10, 2,
+                 "8)  Process details    — runtime (JVM/.NET/py/Go/…), "
+                 "threads, modules, ELF traits (safe, no attach)");
         mvprintw(rows - 1, 0, "1/2/3/4/5/6/7/8: choose   b/ESC: back");
         refresh();
         int ch = getch();
@@ -2588,8 +2800,7 @@ static void rss_human(unsigned long kb, char *out, size_t n) {
  * threads/RSS/seccomp, thread names, notable modules, exe. Adapts to `h` rows
  * (separator + up to 5 content lines); the caller clears the screen each frame,
  * so no padding is needed. Draws nothing for h < 2 or a NULL selection. */
-static void proc_details_render(int y0, int h, int cols,
-                                const asmspy_proc_t *p,
+static void proc_details_render(int y0, int h, int cols, const asmspy_proc_t *p,
                                 const asmspy_fingerprint_t *fp) {
     if (h < 2 || !p)
         return;
@@ -2621,8 +2832,9 @@ static void proc_details_render(int y0, int h, int cols,
         char rss[32];
         rss_human(fp->rss_kb, rss, sizeof rss);
         snprintf(line, sizeof line,
-                 "threads  %-4d  rss %-10s  seccomp %-9s  tracer %s", fp->threads,
-                 rss, seccomp_label(fp->seccomp), fp->tracer_pid ? "YES" : "none");
+                 "threads  %-4d  rss %-10s  seccomp %-9s  tracer %s",
+                 fp->threads, rss, seccomp_label(fp->seccomp),
+                 fp->tracer_pid ? "YES" : "none");
         mvprintw(y++, 0, "%.*s", cols, line);
     }
     if (y <= last) {
@@ -2646,7 +2858,8 @@ static void proc_details_render(int y0, int h, int cols,
         }
         if (fp->more_modules)
             strncat(md, ", …", sizeof md - strlen(md) - 1);
-        snprintf(line, sizeof line, "modules  %s", md[0] ? md : "(none notable)");
+        snprintf(line, sizeof line, "modules  %s",
+                 md[0] ? md : "(none notable)");
         mvprintw(y++, 0, "%.*s", cols, line);
     }
     if (y <= last) {
@@ -2658,14 +2871,18 @@ static void proc_details_render(int y0, int h, int cols,
 
 static void picker_emit(const asmspy_proc_t *pr, size_t np, size_t k,
                         const char *prefix, int is_last, int is_root,
-                        char **items, size_t *order, size_t *ni, char *emitted) {
+                        char **items, size_t *order, size_t *ni,
+                        char *emitted) {
     if (emitted[k])
         return;
     emitted[k] = 1;
     char row[320];
     snprintf(row, sizeof row, "%s%s%-7d %c %-12.12s %-5s %.180s", prefix,
-             is_root ? "" : is_last ? TG_ELB : TG_TEE, (int)pr[k].pid,
-             pr[k].attachable ? ' ' : '!', pr[k].user, pr[k].runtime, pr[k].cmd);
+             is_root   ? ""
+             : is_last ? TG_ELB
+                       : TG_TEE,
+             (int)pr[k].pid, pr[k].attachable ? ' ' : '!', pr[k].user,
+             pr[k].runtime, pr[k].cmd);
     items[*ni] = strdup(row);
     order[*ni] = k;
     (*ni)++;
@@ -2693,8 +2910,8 @@ static void picker_emit(const asmspy_proc_t *pr, size_t np, size_t k,
 /* Build the tree-ordered picker rows: a root (a process whose parent is not in
  * the list) then its descendants, repeated. Returns the row count (== np; every
  * process appears exactly once). items[]/order[] must hold >= np entries. */
-static size_t picker_build_tree(const asmspy_proc_t *pr, size_t np, char **items,
-                                size_t *order) {
+static size_t picker_build_tree(const asmspy_proc_t *pr, size_t np,
+                                char **items, size_t *order) {
     char *emitted = calloc(np ? np : 1, 1);
     if (!emitted)
         return 0;
@@ -2728,7 +2945,8 @@ static size_t picker_build_tree(const asmspy_proc_t *pr, size_t np, char **items
 static int screen_procs(asmspy_proc_t *picked) {
     asmspy_sort_t sort = ASMSPY_SORT_PID;
     int view = 0; /* 0 = flat sorted list, 1 = process tree */
-    for (;;) { /* (re-)scan loop — Tab re-sorts, F2 toggles tree, F3 refreshes */
+    for (;
+         ;) { /* (re-)scan loop — Tab re-sorts, F2 toggles tree, F3 refreshes */
         asmspy_proc_t *procs = NULL;
         size_t np = 0;
         /* the tree re-orders by pid/ppid, so it only needs the cheap pid scan */
@@ -2750,7 +2968,8 @@ static int screen_procs(asmspy_proc_t *picked) {
             for (size_t i = 0; i < np; i++) {
                 char b[256];
                 if (sort == ASMSPY_SORT_SCAN)
-                    snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %-5s %.150s",
+                    snprintf(b, sizeof b,
+                             "%-7d %4u %5llu %c %-12.12s %-5s %.150s",
                              procs[i].pid, procs[i].scan, procs[i].cpu,
                              procs[i].attachable ? ' ' : '!', procs[i].user,
                              procs[i].runtime, procs[i].cmd);
@@ -2790,7 +3009,8 @@ static int screen_procs(asmspy_proc_t *picked) {
             /* reserve a bottom strip for the selected process's details */
             int detail_h = 6;
             if (detail_h > rows - 6)
-                detail_h = rows - 6; /* keep the list usable on a short screen */
+                detail_h =
+                    rows - 6; /* keep the list usable on a short screen */
             if (detail_h < 0)
                 detail_h = 0;
             int list_h = rows - 3 - detail_h;
@@ -2801,14 +3021,15 @@ static int screen_procs(asmspy_proc_t *picked) {
             const char *sortname =
                 sort == ASMSPY_SORT_SCAN
                     ? "string-scan (alnum density, then recent)  [PID STR CPU]"
-                    : sort == ASMSPY_SORT_ACTIVE
-                          ? "recent activity (CPU jiffies)  [PID CPU]"
-                          : "pid";
+                : sort == ASMSPY_SORT_ACTIVE
+                    ? "recent activity (CPU jiffies)  [PID CPU]"
+                    : "pid";
             if (view)
-                mvprintw(0, 0,
-                         "asmspy — select a process   [process tree]   (%zu; '!' "
-                         "= not yours)",
-                         np);
+                mvprintw(
+                    0, 0,
+                    "asmspy — select a process   [process tree]   (%zu; '!' "
+                    "= not yours)",
+                    np);
             else
                 mvprintw(0, 0,
                          "asmspy — select a process   [sort: %s]   (%zu; '!' = "
@@ -2914,7 +3135,8 @@ static int run_details_view(pid_t pid, const char *title) {
             mvprintw(y, 12 + (int)strlen(fp.runtime), "(%s)", fp.evidence);
         y++;
         if (fp.jitting)
-            mvprintw(y++, 10, "actively JIT-compiling — /tmp/perf-%d.map present",
+            mvprintw(y++, 10,
+                     "actively JIT-compiling — /tmp/perf-%d.map present",
                      (int)pid);
         y++;
 
@@ -2925,10 +3147,12 @@ static int run_details_view(pid_t pid, const char *title) {
 
         char elf[176];
         if (fp.elf_class) {
-            int o = snprintf(elf, sizeof elf, "%d-bit, %s, %s", fp.elf_class,
-                             fp.pie ? "PIE" : "non-PIE",
-                             fp.static_linked ? "statically linked" : "dynamic");
-            if (!fp.static_linked && fp.interp[0] && o > 0 && o < (int)sizeof elf)
+            int o =
+                snprintf(elf, sizeof elf, "%d-bit, %s, %s", fp.elf_class,
+                         fp.pie ? "PIE" : "non-PIE",
+                         fp.static_linked ? "statically linked" : "dynamic");
+            if (!fp.static_linked && fp.interp[0] && o > 0 &&
+                o < (int)sizeof elf)
                 snprintf(elf + o, sizeof elf - (size_t)o, " (loader %s)",
                          fp.interp);
             mvprintw(y++, 0, "ELF:      %.*s", cols - 11, elf);
@@ -2938,8 +3162,8 @@ static int run_details_view(pid_t pid, const char *title) {
 
         char rss[32];
         rss_human(fp.rss_kb, rss, sizeof rss);
-        mvprintw(y++, 0, "Threads:  %-6d   RSS: %-10s   Seccomp: %s", fp.threads,
-                 rss, seccomp_label(fp.seccomp));
+        mvprintw(y++, 0, "Threads:  %-6d   RSS: %-10s   Seccomp: %s",
+                 fp.threads, rss, seccomp_label(fp.seccomp));
         mvprintw(y++, 0, "TracerPid: %d%s", (int)fp.tracer_pid,
                  fp.tracer_pid ? "   (already being traced by another process!)"
                                : "   (not currently traced)");
@@ -3032,7 +3256,9 @@ int asmspy_tui(void) {
         if (screen_procs(&picked) != 0)
             break; /* quit */
 
-        for (;;) { /* per-process options loop ('b' in a live view returns here) */
+        for (
+            ;
+            ;) { /* per-process options loop ('b' in a live view returns here) */
             int mode = screen_mode(&picked);
             if (mode < 0)
                 break; /* back to the process list */
@@ -3107,7 +3333,8 @@ int asmspy_tui(void) {
                     asmspy_symtab_load(picked.pid, &t); /* raw addrs if empty */
                     asmspy_jitmap_t jit;
                     asmspy_jitmap_init(&jit, picked.pid);
-                    asmspy_jitmap_refresh(&jit); /* name already-JITted methods */
+                    asmspy_jitmap_refresh(
+                        &jit); /* name already-JITted methods */
                     char title[128];
                     snprintf(title, sizeof title,
                              "asmspy — hot edges of pid %d (%.*s)", picked.pid,
@@ -3196,27 +3423,38 @@ static int bad_arg(const char *what, const char *got) {
 }
 
 static int usage(const char *argv0) {
-    fprintf(stderr,
-            "asmspy — watch a running process out of band\n\n"
-            "  %s                         interactive TUI\n"
-            "  %s --list [active|scan]    list processes (active=recent CPU; scan=string-rich memory)\n"
-            "  %s --syms   <pid> [filter] list resolved function symbols\n"
-            "  %s --log    <pid> [n]      stream n syscalls with data\n"
-            "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
-            "  %s --stream <pid> [n] [--tid=<t>]  stream n instructions live (function + asm)\n"
-            "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph over n calls\n"
-            "  %s --tree   <pid> [n] [--tid=<t>]  whole-process live call tree, indented by depth (n call lines)\n"
-            "                                   (--tid=<t> traces only thread t; others run full speed)\n"
-            "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n"
-            "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD IBS-Op, OUT OF BAND — safe on a JIT (no single-step); needs an AMD IBS host\n"
-            "\n"
-            "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
-            "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
-            "faithfully, which suspends fine-grained stepping of that thread until\n"
-            "its next stop — so a target that uses software breakpoints (a JIT or\n"
-            "debugger) may never reach a fixed n in batch mode; interrupt with Ctrl-C.\n",
-            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
-            argv0);
+    fprintf(
+        stderr,
+        "asmspy — watch a running process out of band\n\n"
+        "  %s                         interactive TUI\n"
+        "  %s --list [active|scan]    list processes (active=recent CPU; "
+        "scan=string-rich memory)\n"
+        "  %s --syms   <pid> [filter] list resolved function symbols\n"
+        "  %s --log    <pid> [n]      stream n syscalls with data\n"
+        "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a "
+        "function/region\n"
+        "  %s --stream <pid> [n] [--tid=<t>]  stream n instructions live "
+        "(function + asm)\n"
+        "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] "
+        "[--tid=<t>]  whole-process call graph over n calls\n"
+        "  %s --tree   <pid> [n] [--json|--dot] [--tid=<t>]  whole-process "
+        "live call tree, indented by depth (n call lines)\n"
+        "                                   (--tid=<t> traces only thread t; "
+        "others run full speed)\n"
+        "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree "
+        "(procs+threads+children) with counts\n"
+        "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD "
+        "IBS-Op, OUT OF BAND — safe on a JIT (no single-step); needs an AMD "
+        "IBS host\n"
+        "\n"
+        "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
+        "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
+        "faithfully, which suspends fine-grained stepping of that thread "
+        "until\n"
+        "its next stop — so a target that uses software breakpoints (a JIT or\n"
+        "debugger) may never reach a fixed n in batch mode; interrupt with "
+        "Ctrl-C.\n",
+        argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -3281,15 +3519,20 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 40;
         pid_t tid = 0;
-        for (int i = 3; i < argc; i++) { /* [n] and --tid= in any order */
+        int json = 0, dot = 0;
+        for (int i = 3; i < argc; i++) { /* [n], --json/--dot, --tid= */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
+            } else if (strcmp(argv[i], "--json") == 0) {
+                json = 1;
+            } else if (strcmp(argv[i], "--dot") == 0) {
+                dot = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_tree(pid, tid, n);
+        return cmd_tree(pid, tid, n, json, dot);
     }
     if (strcmp(argv[1], "--procs") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -3318,7 +3561,8 @@ int main(int argc, char **argv) {
         gsort_t sort = GSORT_INVOCATIONS;
         int json = 0, dot = 0;
         pid_t tid = 0;
-        for (int i = 3; i < argc; i++) { /* [n], --sort=, --json/--dot, --tid= */
+        for (int i = 3; i < argc;
+             i++) { /* [n], --sort=, --json/--dot, --tid= */
             if (strncmp(argv[i], "--sort=", 7) == 0) {
                 const char *v = argv[i] + 7;
                 if (strcmp(v, "invocations") == 0)
