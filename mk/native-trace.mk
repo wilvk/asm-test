@@ -129,7 +129,7 @@ else
 	@echo "== drtrace-test =="
 	ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
-	    ./$(BUILD)/test_drtrace
+	    $(BUILD)/test_drtrace
 endif
 
 # --- Optional hardware-assisted native-trace tier (Intel PT / CoreSight) ---
@@ -311,7 +311,7 @@ $(BUILD)/test_branchsnap: $(HWTRACE_OBJS) $(BUILD)/test_branchsnap.o
 	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 .PHONY: branchsnap-test
 branchsnap-test: $(BUILD)/test_branchsnap
-	./$(BUILD)/test_branchsnap
+	$(BUILD)/test_branchsnap
 
 # Statistical AMD IBS-Op edge lane. test_ibs's PURE decoder checks (synthetic raw
 # records) run and pass on ANY host; its live out-of-band capture self-skips (exit 0)
@@ -325,8 +325,8 @@ $(BUILD)/ibs_probe: $(BUILD)/ibs_backend.o $(BUILD)/ibs_probe.o
 .PHONY: ibs-test
 ibs-test: $(BUILD)/test_ibs $(BUILD)/ibs_probe
 	@echo "== ibs-test =="
-	./$(BUILD)/ibs_probe
-	./$(BUILD)/test_ibs
+	$(BUILD)/ibs_probe
+	$(BUILD)/test_ibs
 
 # §D3 bundled stepper: a real separate process the managed packages ship (vs. the
 # in-process forked child). Links only the ptrace stepper + Capstone length-decoder
@@ -349,10 +349,10 @@ stealth-helper: $(BUILD)/asmtest-stealth-helper
 hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper \
               $(BUILD)/test_ibs $(BUILD)/ibs_probe
 	@echo "== hwtrace-test =="
-	./$(BUILD)/test_hwtrace
+	$(BUILD)/test_hwtrace
 	@echo "== ibs (statistical IBS-Op edge lane) =="
-	./$(BUILD)/ibs_probe
-	./$(BUILD)/test_ibs
+	$(BUILD)/ibs_probe
+	$(BUILD)/test_ibs
 
 # Code-image recorder self-test (same-address-different-bytes temporal proof; runs live on
 # any Linux with soft-dirty — no privilege). When built with libbpf it additionally
@@ -363,11 +363,12 @@ $(BUILD)/test_codeimage: $(HWTRACE_OBJS) $(BUILD)/test_codeimage.o
 .PHONY: codeimage-test
 codeimage-test: $(BUILD)/test_codeimage
 	@echo "== codeimage-test =="
-	./$(BUILD)/test_codeimage
+	$(BUILD)/test_codeimage
 
 # Real managed-runtime trace: attach to a LIVE JIT runtime and trace a genuine
 # JIT-compiled method out of band (resolve from the runtime's perf-map -> attach ->
-# run_to -> single-step). One argv-driven harness drives all three runtimes (V8, CoreCLR,
+# run_to -> step: block-step preferred, per-instruction fallback — F18). One
+# argv-driven harness drives all three runtimes (V8, CoreCLR,
 # HotSpot); each self-skips (never hangs/flakes) when the runtime is absent, ptrace is
 # denied, or the JIT re-tiered the code. Driven in plain containers by
 # `make docker-hwtrace-jit{,-dotnet,-java}`.
@@ -383,11 +384,11 @@ $(BUILD)/windowed_trace: $(HWTRACE_OBJS) $(BUILD)/windowed_trace.o
 
 .PHONY: windowed-trace
 windowed-trace: $(BUILD)/windowed_trace
-	./$(BUILD)/windowed_trace
+	$(BUILD)/windowed_trace
 
 # "Trace a process asm-test did NOT start": attach_victim runs as a wholly SEPARATE
 # process; attach_trace attaches to it BY PID, resolves the hot function from its
-# symbol table, run_to's the entry, and single-steps one call — the foreign-attach
+# symbol table, run_to's the entry, and steps one call — the foreign-attach
 # path (resolve -> PTRACE_ATTACH -> run_to -> trace_attached -> DETACH), no managed
 # runtime needed. The tracer links the hwtrace tier (Capstone gives the disassembly);
 # the victim is a plain standalone binary. Runs on any ptrace-capable x86-64/AArch64
@@ -438,14 +439,14 @@ PERF_JVMTI := $(firstword $(wildcard /usr/lib/linux-tools*/*/libperf-jvmti.so \
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
 hwtrace-jit-node: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-node (real Node.js V8 JIT method) =="
-	./$(BUILD)/jit_trace node
+	$(BUILD)/jit_trace node
 
 # Binary jitdump path (asmtest_jitdump_find) against a real V8 jit-<pid>.dump
 # (node --perf-prof): recover a method's recorded bytes and validate them vs the perf-map
 # address and the live code. Needs node + Capstone.
 hwtrace-jit-jitdump: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-jitdump (real V8 jitdump byte recovery) =="
-	./$(BUILD)/jit_trace jitdump
+	$(BUILD)/jit_trace jitdump
 
 # .NET (CoreCLR): build the bare console app (offline, from the SDK packs) and trace its
 # `Program::Add` body. DOTNET_TieredCompilation=0 (set by the harness) gives a stable
@@ -454,18 +455,18 @@ hwtrace-jit-dotnet: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet (real .NET CoreCLR JIT method) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
-	./$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
+	$(BUILD)/jit_trace dotnet $(BUILD)/jit_dotnet/jit_dotnet.dll
 
 # .NET (CoreCLR) FRAMEWORK method: trace System.Console::WriteLine — BCL code that ships as
 # ReadyToRun precompiled native, so the JIT never emits it by default. The harness sets
-# DOTNET_ReadyToRun=0 to force the whole BCL to JIT on demand, then single-steps WriteLine
+# DOTNET_ReadyToRun=0 to force the whole BCL to JIT on demand, then steps WriteLine
 # like any user method. Reuses the jit_dotnet app (invoked with the "bcl" arg). Needs the
 # dotnet SDK + Capstone.
 hwtrace-jit-dotnet-bcl: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-bcl (real .NET CoreCLR BCL method: Console.WriteLine) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
-	./$(BUILD)/jit_trace dotnet-bcl $(BUILD)/jit_dotnet/jit_dotnet.dll
+	$(BUILD)/jit_trace dotnet-bcl $(BUILD)/jit_dotnet/jit_dotnet.dll
 
 # Binary jitdump path against a THIRD producer: .NET CoreCLR. Unlike HotSpot, CoreCLR writes
 # a real /tmp/jit-<pid>.dump NATIVELY (no agent) under DOTNET_PerfMapEnabled=1 (set by the
@@ -477,7 +478,7 @@ hwtrace-jit-dotnet-jitdump: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-jitdump (real .NET CoreCLR jitdump byte recovery) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
-	./$(BUILD)/jit_trace dotnet-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
+	$(BUILD)/jit_trace dotnet-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
 
 # OpenJDK (HotSpot): compile the one-method hot loop and trace its `Hot.asmtjit` C2 body.
 # -XX:-TieredCompilation + CompileCommand dontinline (set by the harness) give a stable,
@@ -488,7 +489,7 @@ hwtrace-jit-java: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-java (real OpenJDK HotSpot JIT method) =="
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
-	./$(BUILD)/jit_trace java $(BUILD)/jit_java
+	$(BUILD)/jit_trace java $(BUILD)/jit_java
 
 # --- Call-descent demo lanes (Phase 8 of docs/internal/archive/plans/call-descent-plan.md) ---------------
 # `<lane>-descend` runs the same live trace at descent level 2 (DESCEND_KNOWN): the tracer
@@ -505,17 +506,17 @@ hwtrace-jit-dotnet-descend hwtrace-jit-dotnet-descend-all: hwtrace-jit-dotnet-%:
 	@echo "== hwtrace-jit-dotnet-$* (descend into CoreCLR sibling JIT methods) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
-	./$(BUILD)/jit_trace dotnet-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
+	$(BUILD)/jit_trace dotnet-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
 hwtrace-jit-dotnet-bcl-descend hwtrace-jit-dotnet-bcl-descend-all: hwtrace-jit-dotnet-bcl-%: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-dotnet-bcl-$* (descend Console.WriteLine -> get_Out) =="
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
-	./$(BUILD)/jit_trace dotnet-bcl-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
+	$(BUILD)/jit_trace dotnet-bcl-$* $(BUILD)/jit_dotnet/jit_dotnet.dll
 hwtrace-jit-java-descend hwtrace-jit-java-descend-all: hwtrace-jit-java-%: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-java-$* (descend into HotSpot sibling JIT methods) =="
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
-	./$(BUILD)/jit_trace java-$* $(BUILD)/jit_java
+	$(BUILD)/jit_trace java-$* $(BUILD)/jit_java
 
 # OpenJDK (HotSpot) LIBRARY method: trace java.lang.Math::floorDiv. Unlike .NET, HotSpot JITs
 # JDK methods on demand BY DEFAULT — no precompilation-disable flag — so this needs only the
@@ -525,7 +526,7 @@ hwtrace-jit-java-bcl: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-java-bcl (real OpenJDK HotSpot JDK method: Math.floorDiv) =="
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
-	./$(BUILD)/jit_trace java-bcl $(BUILD)/jit_java
+	$(BUILD)/jit_trace java-bcl $(BUILD)/jit_java
 
 # Binary jitdump path against a SECOND producer: OpenJDK HotSpot via the perf JVMTI agent
 # (libperf-jvmti.so). The agent records each C2 method's bytes to a real jitdump; the lane
@@ -537,7 +538,7 @@ hwtrace-jit-java-jitdump: $(BUILD)/jit_trace
 	@mkdir -p $(BUILD)/jit_java
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	@rm -rf /tmp/.debug/jit 2>/dev/null || true
-	./$(BUILD)/jit_trace java-jitdump $(BUILD)/jit_java "$(PERF_JVMTI)"
+	$(BUILD)/jit_trace java-jitdump $(BUILD)/jit_java "$(PERF_JVMTI)"
 
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.
@@ -637,7 +638,7 @@ ifndef DR_AVAILABLE
 else
 	@echo "== drtrace-cpp-test =="
 	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_drtrace.cpp -ldl -o $(BUILD)/test_drtrace_cpp
-	$(drtrace_env) ./$(BUILD)/test_drtrace_cpp
+	$(drtrace_env) $(BUILD)/test_drtrace_cpp
 endif
 
 drtrace-rust-test: drtrace-shared-prep-emu
@@ -754,7 +755,7 @@ hwtrace-python-test: shared-hwtrace
 hwtrace-cpp-test: shared-hwtrace
 	@echo "== hwtrace-cpp-test =="
 	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_hwtrace.cpp -ldl -o $(BUILD)/test_hwtrace_cpp
-	$(hwtrace_env) ./$(BUILD)/test_hwtrace_cpp
+	$(hwtrace_env) $(BUILD)/test_hwtrace_cpp
 
 # rust/go link libasmtest_emu (their wrapper shares the crate/package), so build
 # the emu superset + corpus lib too — mirroring the drtrace-rust/go lanes.

@@ -35,8 +35,8 @@ $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
 conformance: $(BUILD)/conformance
-	./$(BUILD)/conformance
-	./$(BUILD)/conformance --emit > bindings/conformance/corpus.json
+	$(BUILD)/conformance
+	$(BUILD)/conformance --emit > bindings/conformance/corpus.json
 	@echo "conformance: wrote bindings/conformance/corpus.json"
 
 # --- Binding function-surface parity (Track 0.5) ---------------------------
@@ -71,7 +71,7 @@ $(BUILD)/conformance_asm: $(BUILD)/conformance_asm.o $(BUILD)/asmtest_nomain.o \
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) -o $@
 
 conformance-asm: $(BUILD)/conformance_asm
-	./$(BUILD)/conformance_asm
+	$(BUILD)/conformance_asm
 
 # --- Python binding (Track P) ----------------------------------------------
 # A pure-ctypes binding that loads the shared lib + manifest and replays the
@@ -135,7 +135,7 @@ $(BUILD)/test_cpp: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/trace.o \
 	$(CXX) $(CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
 
 cpp-test: $(BUILD)/test_cpp
-	./$(BUILD)/test_cpp
+	$(BUILD)/test_cpp
 
 # --- Rust binding (Track R) ------------------------------------------------
 # A no-dependency crate (#[repr(C)] structs + extern "C" over the binding ABI)

@@ -22,7 +22,7 @@ $(BUILD)/emu-bench: $(BUILD)/emu_bench.o $(BUILD)/emu.o $(BUILD)/trace.o \
 
 .PHONY: emu-bench
 emu-bench: $(BUILD)/emu-bench
-	./$(BUILD)/emu-bench
+	$(BUILD)/emu-bench
 
 # --- asmfeatures: capability + trace-completeness probe --------------------
 # Links the full native-trace object set (HWTRACE_OBJS gives availability +
@@ -48,7 +48,7 @@ $(BUILD)/asmfeatures: $(BUILD)/asmfeatures.o $(HWTRACE_OBJS) $(BUILD)/emu.o \
 
 .PHONY: features
 features: $(BUILD)/asmfeatures
-	./$(BUILD)/asmfeatures
+	$(BUILD)/asmfeatures
 
 # --- bench-report: one merged, self-describing per-system JSON report -------
 BENCH_PRODUCERS := $(BUILD)/test_bench $(BUILD)/emu-bench $(BUILD)/asmfeatures

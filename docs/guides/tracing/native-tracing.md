@@ -594,7 +594,7 @@ from one run; they vary with ASLR):
 
 ```
 # resolved real CoreCLR-BCL JIT method: 'void [System.Console] System.Console::WriteLine(string)[Optimized]' @ 0x7f8560b55a20 (41 bytes, tier 2)
-# traced 16 instructions of real CoreCLR-BCL JIT code
+# traced 16 instructions of real CoreCLR-BCL JIT code via block-step (PTRACE_SINGLEBLOCK)
 trace: 16 instructions
     0x0  push rbp
     0x1  push rbx
@@ -623,7 +623,7 @@ differ (`xor ebp, r11d` / `test` / `jl` at `0x3b`–`0x42`), and the safepoint-p
 
 ```
 # resolved real HotSpot-BCL JIT method: 'int java.lang.Math.floorDiv(int, int)' @ 0x7fc5f8889300 (200 bytes, tier 0)
-# traced 24 instructions of real HotSpot-BCL JIT code
+# traced 24 instructions of real HotSpot-BCL JIT code via block-step (PTRACE_SINGLEBLOCK)
 trace: 24 instructions
     0x0  mov dword ptr [rsp - 0x14000], eax
     0x7  push rbp

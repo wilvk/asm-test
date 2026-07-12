@@ -635,22 +635,22 @@ coverage:
 	$(MAKE) COV=1 $(BUILD)/tests_positive $(BUILD)/tests_negative \
 	    $(BUILD)/test_fp $(BUILD)/test_simd $(BUILD)/test_refmatch \
 	    $(BUILD)/test_bench
-	-./$(BUILD)/tests_positive --no-fork >/dev/null 2>&1
-	-./$(BUILD)/tests_positive --format=junit >/dev/null 2>&1
-	-./$(BUILD)/tests_positive --shuffle --seed=1 >/dev/null 2>&1
-	-./$(BUILD)/tests_negative --no-fork --filter='neg.eq' >/dev/null 2>&1
-	-./$(BUILD)/tests_negative --no-fork --filter='neg.mem_eq' >/dev/null 2>&1
-	-./$(BUILD)/tests_negative --format=junit --filter='neg.flag_set' >/dev/null 2>&1
-	-./$(BUILD)/test_fp --no-fork >/dev/null 2>&1       # FP return + ULP paths
-	-./$(BUILD)/test_simd --no-fork >/dev/null 2>&1     # vector capture/assert
-	-./$(BUILD)/test_refmatch --no-fork >/dev/null 2>&1 # differential engine
-	-./$(BUILD)/test_bench --bench >/dev/null 2>&1      # benchmark mode
+	-$(BUILD)/tests_positive --no-fork >/dev/null 2>&1
+	-$(BUILD)/tests_positive --format=junit >/dev/null 2>&1
+	-$(BUILD)/tests_positive --shuffle --seed=1 >/dev/null 2>&1
+	-$(BUILD)/tests_negative --no-fork --filter='neg.eq' >/dev/null 2>&1
+	-$(BUILD)/tests_negative --no-fork --filter='neg.mem_eq' >/dev/null 2>&1
+	-$(BUILD)/tests_negative --format=junit --filter='neg.flag_set' >/dev/null 2>&1
+	-$(BUILD)/test_fp --no-fork >/dev/null 2>&1       # FP return + ULP paths
+	-$(BUILD)/test_simd --no-fork >/dev/null 2>&1     # vector capture/assert
+	-$(BUILD)/test_refmatch --no-fork >/dev/null 2>&1 # differential engine
+	-$(BUILD)/test_bench --bench >/dev/null 2>&1      # benchmark mode
 	# K3: cover the emulator tier too (emu.c + ffi/fuzz/trace/disasm) — the code
 	# the language bindings dlopen — when libunicorn is present. --no-fork so gcov
 	# flushes (forked children _exit without writing .gcda).
 	@if pkg-config --exists unicorn 2>/dev/null; then \
 	    $(MAKE) COV=1 $(BUILD)/test_emu && \
-	    ./$(BUILD)/test_emu --no-fork >/dev/null 2>&1 || true; \
+	    $(BUILD)/test_emu --no-fork >/dev/null 2>&1 || true; \
 	 else echo "coverage: skip emu tier (no libunicorn)"; fi
 	gcov -o $(BUILD) src/asmtest.c
 	@pkg-config --exists unicorn 2>/dev/null && \
@@ -741,7 +741,7 @@ $(BUILD)/test_failure_demo: $(FRAMEWORK_OBJS) $(BUILD)/flags.o $(BUILD)/fp.o \
 	$(CC) $(CFLAGS) $^ -o $@
 
 demo-fail: $(BUILD)/test_failure_demo
-	-./$(BUILD)/test_failure_demo
+	-$(BUILD)/test_failure_demo
 
 # Phase 8 robustness demo: a hang and a crash are contained and reported, while
 # the run continues. A short timeout catches the infinite loop quickly. Exits
@@ -751,7 +751,7 @@ $(BUILD)/test_robust: $(FRAMEWORK_OBJS) $(BUILD)/robust.o $(BUILD)/test_robust.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 demo-robust: $(BUILD)/test_robust
-	-./$(BUILD)/test_robust --timeout=2
+	-$(BUILD)/test_robust --timeout=2
 
 # Phase 9 benchmark demo: time the BENCH cases (cycles/call, min/median over
 # repeated rounds). Auto-calibrates the inner repeat count per benchmark.
@@ -761,7 +761,7 @@ $(BUILD)/test_bench: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/bench.o \
 	$(CC) $(CFLAGS) $^ -o $@
 
 bench: $(BUILD)/test_bench
-	./$(BUILD)/test_bench --bench
+	$(BUILD)/test_bench --bench
 
 # --- Optional emulator tier (Phase 4; requires libunicorn) -----------------
 # `make emu-test` runs the Unicorn-backed suite. The emulated guest is x86-64
@@ -816,7 +816,7 @@ $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
 
 .PHONY: emu-test
 emu-test: $(BUILD)/test_emu
-	./$(BUILD)/test_emu
+	$(BUILD)/test_emu
 
 # --- Optional in-line assembler (Phase: Keystone; requires libkeystone) -----
 # `make asm-test` assembles routines from strings (asmtest_assemble) and runs
@@ -836,7 +836,7 @@ $(BUILD)/test_asm: $(FRAMEWORK_OBJS) $(BUILD)/emu.o $(BUILD)/trace.o \
 
 .PHONY: asm-test
 asm-test: $(BUILD)/test_asm
-	./$(BUILD)/test_asm
+	$(BUILD)/test_asm
 
 # Emulator "unusual use case" suite (Track F): the virtual CPU as a security
 # sandbox (precise over-read/over-write fault localization) and a cross-ISA
@@ -848,7 +848,7 @@ $(BUILD)/test_emu_usecases: $(FRAMEWORK_OBJS) $(BUILD)/emucases.o \
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) -o $@
 
 usecases-emu: $(BUILD)/test_emu_usecases
-	./$(BUILD)/test_emu_usecases
+	$(BUILD)/test_emu_usecases
 
 include mk/native-trace.mk  # DynamoRIO + hardware native-trace tiers
 include mk/dataflow.mk      # data-flow tracing: L0 value trace / L1 def-use / L2 slice
