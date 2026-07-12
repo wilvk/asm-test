@@ -75,6 +75,11 @@ $(BUILD)/spy_victim: $(BUILD)/spy_victim.o
 $(BUILD)/threads_victim: $(BUILD)/threads_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# tid_victim runs two threads in DISTINCT functions (alpha_work/beta_work) for
+# the --tid per-thread filter smoke; multi-threaded, so -pthread.
+$(BUILD)/tid_victim: $(BUILD)/tid_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 # cpp_victim is C++ (its hot function demo::hot_loop(int) keeps a MANGLED ELF
 # symbol) so the smoke can prove asmspy demangles it. Built with $(CXX)/$(CXXFLAGS)
 # (from mk/bindings.mk) — a one-shot compile+link, no shared cli/ pattern rule.
@@ -101,7 +106,8 @@ $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 .PHONY: cli-smoke
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
-           $(BUILD)/jit_victim $(BUILD)/int3_victim $(BUILD)/test_logview
+           $(BUILD)/jit_victim $(BUILD)/int3_victim $(BUILD)/tid_victim \
+           $(BUILD)/test_logview
 	@echo "== cli-smoke =="
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 

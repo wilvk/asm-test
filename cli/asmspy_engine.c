@@ -489,6 +489,27 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
     return 0;
 }
 
+/* SEIZE + INTERRUPT a SINGLE thread `tid` (the --tid filter): trace exactly this
+ * one task and leave the rest of its process running untraced (no TRACECLONE
+ * following). Returns 0, or -1 if it cannot be seized (gone / not permitted). */
+static int seize_one(pid_t tid, long opts, thr_tab_t *tab) {
+    if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) != 0)
+        return -1;
+    ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+    if (!thr_get(tab, tid)) {
+        ptrace(PTRACE_DETACH, tid, NULL, NULL); /* OOM: don't strand it seized */
+        return -1;
+    }
+    return 0;
+}
+
+/* Attach for a single-step engine: one thread when `only_tid` is set, else the
+ * whole process (all threads, following clones). Returns 0 or -1. */
+static int seize_for_engine(pid_t pid, pid_t only_tid, thr_tab_t *tab) {
+    return only_tid ? seize_one(only_tid, 0, tab)
+                    : seize_threads(pid, PTRACE_O_TRACECLONE, tab);
+}
+
 /* x86 EFLAGS Trap Flag: set by PTRACE_SINGLESTEP to fire a #DB after one insn. */
 #define ASMSPY_EFLAGS_TF 0x100UL
 
@@ -786,7 +807,7 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 /* Whole-process live instruction stream                               */
 /* ------------------------------------------------------------------ */
 
-int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                          const asmspy_symtab_t *syms, asmspy_stream_sink sink,
                          void *ctx) {
     if (!asmtest_ptrace_available())
@@ -794,12 +815,11 @@ int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
 
     arm_quit_wake();
 
-    /* Same whole-process following as the syscall stream, but single-stepping:
-     * SEIZE every thread, then PTRACE_SINGLESTEP each so the live instruction
-     * stream is genuinely whole-process, interleaving all threads (not just the
-     * one we happened to attach). No TRACESYSGOOD — every stop here is a step. */
+    /* Whole-process single-stepping (all threads, interleaved), or — when
+     * only_tid is set — just that one thread while the rest run at full speed.
+     * No TRACESYSGOOD — every stop here is a step. */
     thr_tab_t tab = {0};
-    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, &tab) != 0) {
         detach_threads(&tab);
         return ASMTEST_PTRACE_ETRACE;
     }
@@ -1056,7 +1076,7 @@ static void graph_emit(asmspy_graph_sink sink, void *ctx, const graph_t *g,
     sink(ctx, g->node, g->nn, *ae, g->ne);
 }
 
-int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx) {
     if (!asmtest_ptrace_available())
@@ -1065,7 +1085,7 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
     arm_quit_wake();
 
     thr_tab_t tab = {0};
-    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, &tab) != 0) {
         detach_threads(&tab);
         return ASMTEST_PTRACE_ETRACE;
     }
@@ -1216,7 +1236,7 @@ static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
     sink(ctx, line, callee);
 }
 
-int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                        const asmspy_symtab_t *syms, asmspy_tree_sink sink,
                        void *ctx) {
     if (!asmtest_ptrace_available())
@@ -1225,7 +1245,7 @@ int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
     arm_quit_wake();
 
     thr_tab_t tab = {0};
-    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, &tab) != 0) {
         detach_threads(&tab);
         return ASMTEST_PTRACE_ETRACE;
     }

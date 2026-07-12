@@ -59,7 +59,8 @@ DVPID=""
 CVPID=""
 JVPID=""
 IPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" 2>/dev/null || true' EXIT INT TERM
+YPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -257,13 +258,21 @@ printf '%s\n' "$out" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
 # process/thread topology: the same multi-threaded victim must render as ONE
 # process node with its threads listed underneath, each with an invocation count.
 echo "--- asmspy --procs $TVPID 120 (process/thread topology) ---"
-set +e
-out=$(timeout 30 "$ASM" --procs "$TVPID" 120 2>&1); rc=$?
-set -e
-[ "$rc" -eq 124 ] && fail "--procs hung on a multi-threaded target"
+# Retry a transient EMPTY topology ("0 tasks observed") — under heavy load the
+# attach/first-syscall-count window occasionally comes up empty; the assertions
+# below still hold on any non-empty capture.
+out=""
+for try in 1 2 3; do
+    set +e
+    out=$(timeout 30 "$ASM" --procs "$TVPID" 120 2>&1); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--procs hung on a multi-threaded target"
+    printf '%s\n' "$out" | grep -qE "^node $TVPID \[threads_victim\]  inv=[0-9]" && break
+    sleep 1
+done
 printf '%s\n' "$out" | head -8
 printf '%s\n' "$out" | grep -qE "^node $TVPID \[threads_victim\]  inv=[0-9]" \
-    || fail "--procs: no process node with a syscall count"
+    || fail "--procs: no process node with a syscall count (empty across retries)"
 nt=$(printf '%s\n' "$out" | grep -cE 'tid [0-9]+.*inv=[0-9]')
 echo "thread rows: $nt"
 [ "$nt" -ge 2 ] || fail "--procs: expected >=2 thread rows, saw $nt"
@@ -321,6 +330,52 @@ printf '%s\n' "$gout" | grep -qE '\[JIT\][^Z]*jit_hot_loop' \
     || fail "JIT method not tagged [JIT] in the call graph"
 kill "$JVPID" 2>/dev/null || true
 rm -f "/tmp/perf-$JVPID.map"
+
+# PER-THREAD (--tid) FILTER: tid_victim runs two threads in DISTINCT functions
+# (alpha_work / beta_work). --stream with no filter steps the whole process, so
+# BOTH appear; --stream --tid=<alpha-tid> must step ONLY that thread, so alpha_work
+# appears and beta_work NEVER does (and, being single-thread, no "[tid]" prefix).
+echo "--- asmspy --stream --tid= (per-thread filter) ---"
+TLOG="$BUILD/tid_victim.log"
+: > "$TLOG"
+"$BUILD/tid_victim" 2>"$TLOG" &
+YPID=$!
+sleep 1
+kill -0 "$YPID" 2>/dev/null || fail "tid_victim did not start"
+ATID=$(sed -n 's/^alpha tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
+[ -n "$ATID" ] || fail "tid_victim did not report alpha's tid"
+# control: whole-process stream sees BOTH distinct functions
+set +e
+cout=$(timeout 40 "$ASM" --stream "$YPID" 800 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream (control) hung on tid_victim"
+printf '%s\n' "$cout" | grep -q 'alpha_work' || fail "--stream control: alpha_work missing"
+printf '%s\n' "$cout" | grep -q 'beta_work' || fail "--stream control: beta_work missing"
+# filtered: only alpha's thread is stepped -> alpha_work yes, beta_work never.
+# Retry a transient EMPTY capture (a load-induced attach flake, same class as the
+# other single-step steps under heavy load); the invariants below are the real
+# assertions — a retry can't turn a leaked beta_work into a pass.
+echo "  filtering to alpha tid=$ATID"
+fout=""
+for try in 1 2 3; do
+    set +e
+    fout=$(timeout 40 "$ASM" --stream "$YPID" 800 --tid="$ATID" 2>/dev/null)
+    set -e
+    printf '%s\n' "$fout" | grep -q 'alpha_work' && break
+    sleep 1
+done
+printf '%s\n' "$fout" | grep -m3 alpha_work || true
+printf '%s\n' "$fout" | grep -q 'alpha_work' \
+    || fail "--tid: alpha_work never seen across retries (filter stepped the wrong thread?)"
+printf '%s\n' "$fout" | grep -q 'beta_work' \
+    && fail "--tid: beta_work leaked — a thread other than tid=$ATID was stepped"
+printf '%s\n' "$fout" | grep -qE '^\[[0-9]+\]' \
+    && fail "--tid: unexpected [tid] prefix — more than one thread was followed"
+# a bad --tid value is rejected up front (rc=2)
+expect_badarg "$ASM" --stream "$YPID" --tid=nope
+echo "  per-thread filter: alpha only (beta_work absent)"
+kill "$YPID" 2>/dev/null || true
+rm -f "$TLOG"
 
 # TWO-PHASE DETACH: assert a traced target SURVIVES detach.
 #

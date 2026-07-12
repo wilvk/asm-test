@@ -183,9 +183,12 @@ typedef void (*asmspy_stream_sink)(void *ctx, const char *line);
  * whole-process: SEIZEs every thread and steps them all (following threads
  * spawned later), tagging each line "[tid]" once more than one is followed.
  * Single-stepping is slow, so the target crawls while streamed (and resumes full
- * speed on detach). Returns 0 on clean detach, negative on an attach/
- * availability failure. `syms` may be NULL (raw addrs). */
-int asmspy_engine_stream(pid_t pid, long max, atomic_bool *stop,
+ * speed on detach). `only_tid` (non-0) restricts the trace to that ONE thread —
+ * only that tid is seized/stepped, so the process's other threads keep running at
+ * full speed (isolation + no per-step slowdown on them); 0 = whole process (all
+ * threads). Returns 0 on clean detach, negative on an attach/availability
+ * failure. `syms` may be NULL (raw addrs). */
+int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                          const asmspy_symtab_t *syms, asmspy_stream_sink sink,
                          void *ctx);
 
@@ -229,9 +232,10 @@ typedef void (*asmspy_graph_sink)(void *ctx, const asmspy_gnode_t *nodes,
  * addresses, all internal). Direct calls are resolved exactly; an indirect call
  * is attributed to wherever the next step lands, so the graph is best-effort at
  * signal boundaries. Whole-process single-stepping is slow — the target crawls
- * while traced. Returns 0 on clean detach, negative on an attach/availability
- * failure. */
-int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
+ * while traced. `only_tid` (non-0) restricts the trace to that one thread (see
+ * asmspy_engine_stream). Returns 0 on clean detach, negative on an attach/
+ * availability failure. */
+int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx);
 
@@ -247,9 +251,10 @@ typedef void (*asmspy_tree_sink)(void *ctx, const char *line, uint64_t addr);
  * tail-call/longjmp/signal can drift the indentation but never desync fatally.
  * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
  * single-stepping is slow, so the target crawls while traced. Each line is
- * prefixed "[tid] " once more than one thread is followed. Returns 0 on clean
- * detach, negative on an attach/availability failure. `syms` may be NULL. */
-int asmspy_engine_tree(pid_t pid, long max, atomic_bool *stop,
+ * prefixed "[tid] " once more than one thread is followed. `only_tid` (non-0)
+ * restricts the trace to that one thread (see asmspy_engine_stream). Returns 0 on
+ * clean detach, negative on an attach/availability failure. `syms` may be NULL. */
+int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                        const asmspy_symtab_t *syms, asmspy_tree_sink sink,
                        void *ctx);
 
