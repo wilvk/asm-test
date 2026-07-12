@@ -1150,6 +1150,7 @@ typedef struct {
     /* call-graph view (mode 3) */
     graph_snap graph;
     gsort_t gsort;
+    int gpaused; /* UI froze the graph: skip snapshot copies so scroll is stable */
     /* call-tree view (mode 4): disassembly of the selected function (UI-thread only) */
     svec tree_asm;
     uint64_t tree_asm_addr;
@@ -1196,7 +1197,8 @@ static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
                             const asmspy_gedge_t *edges, size_t ne) {
     live_t *L = ctx;
     pthread_mutex_lock(&L->mu);
-    graph_snap_copy(&L->graph, nodes, nn, edges, ne);
+    if (!L->gpaused) /* while the user scrolls a frozen snapshot, drop updates */
+        graph_snap_copy(&L->graph, nodes, nn, edges, ne);
     pthread_mutex_unlock(&L->mu);
 }
 
@@ -1273,9 +1275,10 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     }
 
     int back = 1;     /* 1 = to process list (q/ESC), 0 = to options (b) */
-    int paused = 0;   /* freeze the log tail to scroll history (modes 0/2) */
+    int paused = 0;   /* freeze the log tail / graph snapshot to scroll it */
     long vbottom = 0; /* main-log bottom line while paused (absolute index) */
     long vstr = 0;    /* strings-pane bottom while paused (mode 0) */
+    int gtop = 0;     /* call-graph (mode 3): first visible row while scrolling */
     for (;;) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
@@ -1353,22 +1356,34 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                             paused ? cursor : -1);
             /* the assembly pane itself is drawn after the lock is released */
         } else if (mode == 3) {
-            /* whole-process call graph, sorted live; sort in place under mu */
+            /* whole-process call graph, sorted live; sort in place under mu.
+             * Frozen (paused or the tracer finished) so scroll is stable — see
+             * gpaused, which stops the sink overwriting the snapshot. */
+            int gfrozen = paused || fin;
+            L.gpaused = gfrozen;
             graph_sort_key = L.gsort;
             qsort(L.graph.v, L.graph.n, sizeof *L.graph.v, gnode_cmp);
+            int gn = (int)L.graph.n;
+            int vis = rows - 3 > 0 ? rows - 3 : 1;
+            if (!gfrozen)
+                gtop = 0; /* live view is top-anchored (highest-ranked first) */
+            if (gtop > gn - vis)
+                gtop = gn - vis;
+            if (gtop < 0)
+                gtop = 0;
             attron(A_BOLD);
             mvprintw(1, 0,
-                     "CALL GRAPH  (%zu functions, sort: %s)   [int]=own exe  "
+                     "CALL GRAPH  (%d functions, sort: %s)   [int]=own exe  "
                      "[EXT]=library",
-                     L.graph.n,
-                     L.gsort == GSORT_FANOUT ? "functions called" : "invocations");
+                     gn, L.gsort == GSORT_FANOUT ? "functions called"
+                                                 : "invocations");
             attroff(A_BOLD);
-            if (L.graph.n == 0)
+            if (gn == 0)
                 mvprintw(2, 0, "(waiting for calls — whole-process "
                                "single-stepping is slow)");
-            for (int r = 0; r < rows - 3 && r < (int)L.graph.n; r++) {
+            for (int r = 0; r < vis && gtop + r < gn; r++) {
                 char row[256];
-                graph_format_row(row, sizeof row, &L.graph.v[r]);
+                graph_format_row(row, sizeof row, &L.graph.v[gtop + r]);
                 mvprintw(2 + r, 0, "%-*.*s", cols, cols, row);
             }
         } else {
@@ -1411,17 +1426,24 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                      "[PAUSED %ld/%lu]  up/down PgUp/PgDn Home/End: select fn  "
                      "space: live   b: options   q: processes",
                      vbottom < 0 ? 0 : vbottom + 1, logtotal);
+        else if (mode == 3 && paused && !fin)
+            mvprintw(rows - 1, 0,
+                     "[PAUSED]  up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
+                     "space: live   b: options   q: processes");
         else if (fin) {
             char e[128];
             asmspy_strerror(erc, e, sizeof e);
             mvprintw(rows - 1, 0,
                      "[tracer stopped: %s]  %sb: options   q: processes",
                      erc ? e : "target exited or done",
-                     is_log ? "space: scroll history   " : "");
+                     is_log            ? "space: scroll history   "
+                     : mode == 3       ? "up/down PgUp/PgDn Home/End: scroll   "
+                                       : "");
         } else if (mode == 3)
             mvprintw(rows - 1, 0,
-                     "Tab: sort (invocations/functions-called)   b: options   "
-                     "q/ESC: processes   (live)");
+                     "Tab: sort (invocations/functions-called)   "
+                     "space: pause+scroll   b: options   q/ESC: processes   "
+                     "(live)");
         else
             mvprintw(rows - 1, 0,
                      "%sb: back to options   q/ESC: processes   (live)",
@@ -1494,6 +1516,53 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
                 if (vbottom > lognewest)
                     vbottom = lognewest;
             }
+        }
+        if (mode == 3) { /* call graph: pause to freeze the snapshot, then scroll */
+            int page = log_h > 1 ? log_h - 1 : 1;
+            int gscroll = paused || fin; /* a finished graph is already frozen */
+            /* scrolling into the list freezes the live re-sort at the top */
+            if ((ch == KEY_UP || ch == KEY_PPAGE) && !gscroll) {
+                paused = 1;
+                gscroll = 1;
+            }
+            switch (ch) {
+            case ' ':
+            case 'p':
+                if (!fin) {
+                    paused = !paused;
+                    if (!paused)
+                        gtop = 0; /* resume live -> back to the top-ranked rows */
+                }
+                break;
+            case KEY_UP:
+                if (gscroll)
+                    gtop -= 1;
+                break;
+            case KEY_DOWN:
+                if (gscroll)
+                    gtop += 1;
+                break;
+            case KEY_PPAGE:
+                if (gscroll)
+                    gtop -= page;
+                break;
+            case KEY_NPAGE:
+                if (gscroll)
+                    gtop += page;
+                break;
+            case KEY_HOME:
+                if (gscroll)
+                    gtop = 0;
+                break;
+            case KEY_END:
+                if (gscroll)
+                    gtop = INT_MAX; /* clamped to the last page in the renderer */
+                break;
+            default:
+                break;
+            }
+            if (gtop < 0)
+                gtop = 0;
         }
     }
 

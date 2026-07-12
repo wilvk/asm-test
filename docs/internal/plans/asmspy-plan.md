@@ -73,7 +73,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| Call-graph view (mode 4) neither scrollable nor pausable — only the top `rows-3` visible, re-sorts every frame | med | M |
+| ~~Call-graph view (mode 4) neither scrollable nor pausable — only the top `rows-3` visible, re-sorts every frame~~ — **landed**: `space` freezes the snapshot (a `gpaused` flag stops the sink overwriting it) and up/down·PgUp/PgDn·Home/End scroll a `gtop` window over the frozen, sorted nodes; a finished tracer is scrollable too, and `space` resumes the live top-anchored re-sort. Verified end-to-end through the ncurses TUI (pty-driven). Mirrors the log-view pause/scroll idiom | med | M |
 | Region view (mode 2) disasm/functions panes don't scroll — overflow off-screen | med | M |
 | Call tree has no depth cap / symbol focus / module filter — a firehose on busy processes | med | M |
 | ~~No per-thread (tid) filter for stream/tree/graph — can't isolate one worker or cut single-step slowdown on others~~ — **landed**: `--stream`/`--tree`/`--graph --tid=<t>` seizes/steps only that thread (`seize_one`/`seize_for_engine`), leaving the rest of the process at full speed; `tid_victim` (distinct alpha/beta functions) smoke proves the other thread's code never appears | med | M |
@@ -102,7 +102,8 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
    managed frames too.~~ — **landed**: `asmspy_resolve` layers a refreshed perf-map over the
    ELF symtab in all three single-step engines (see Theme A). **All three original Top-3 have
    now landed.** Next candidates: jitdump (bytes-accurate, handles tiered recompilation) and
-   the graph/tree scroll/filter items in Theme E.
+   the remaining Theme E scroll/filter items (region pane and call-tree scroll; the
+   call-graph pause+scroll has since landed).
 2. ~~**Add the crash-safe two-phase-detach regression test** *(D, med, S)*~~ — **landed**
    (a happy-path survival tripwire across `--stream`/`--tree`; see Theme D for the honest
    scope note on why a simple victim can't deterministically reproduce the V8 crash).
