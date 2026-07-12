@@ -245,4 +245,4 @@ gives no gain on loops.)*
   live escalating LBR→block-step on the Zen 5 box.
 - The managed bindings pick their Class-3 posture per
   [scoped-tracing-managed-plan.md](../plans/scoped-tracing-managed-plan.md) and
-  [managed-singlestep-posture-plan.md](../plans/managed-singlestep-posture-plan.md).
+  [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md).

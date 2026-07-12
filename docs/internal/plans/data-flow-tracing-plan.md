@@ -18,7 +18,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > Status legend: **all phases are *(planned)*** — nothing here is landed. Phase 0–2 are the
 > shared spine + CI proving ground and are prerequisites for everything else; Phases 3–5 are
 > the two target tiers. Update this file as phases land, the way
-> [dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md) tracks its own.
+> [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
 ---
 

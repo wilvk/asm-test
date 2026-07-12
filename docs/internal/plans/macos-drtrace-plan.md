@@ -6,7 +6,7 @@ both the Intel x86-64 (Rosetta-capable) and Apple Silicon arm64 targets.
 
 The DynamoRIO tier (Phases 0–7) is **implemented and validated** on Linux x86-64.
 macOS was explicitly deferred in the
-[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md): "Start Linux x86-64
+[DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md): "Start Linux x86-64
 only; treat macOS/AArch64 as follow-up." This plan is that follow-up.
 
 Hardware-assisted tracing (Intel PT / CoreSight) is **not** the subject of this

@@ -393,7 +393,7 @@ In-process instrumentation with region markers exists (`asmtest_drtrace.h`), but
 must be **launched under `drrun`** — failing the deployment axis and "only import +
 using" outright — and in-process DBI's collisions with managed runtimes are the
 documented premise of this whole line of work
-([dynamorio-native-trace-plan.md](../plans/dynamorio-native-trace-plan.md#language-runtime-support)).
+([dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)).
 Use it for native-code coverage on hosts where it is already the chosen tier; never for
 a scope inside a managed app.
 

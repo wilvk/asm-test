@@ -1,7 +1,7 @@
 # asm-test — Managed single-step: the lazy-arm implementation (Option B + C-fallback + D)
 
 Implementation plan for the posture the
-[managed single-step decision doc](../../plans/managed-singlestep-posture-plan.md)
+[managed single-step decision doc](managed-singlestep-posture-plan.md)
 recommended and that is now approved: **B** (lazy-arm around a native-dispatched call)
 as the in-process default for `AsmTrace.Method()`, **C** (out-of-process stepper) as the
 automatic fallback for signatures B cannot cover, **D** (a runtime honesty note)

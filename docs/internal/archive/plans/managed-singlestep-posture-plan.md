@@ -1,7 +1,7 @@
 # asm-test — Managed single-step posture: design proposal (the open decision)
 
 The one design decision the 2026-07-06 review of the
-[managed tier](scoped-tracing-managed-plan.md) left open, now forced by hard
+[managed tier](../../plans/scoped-tracing-managed-plan.md) left open, now forced by hard
 evidence: **what contract should in-process EFLAGS.TF single-step offer against
 a managed runtime's threads?**
 
@@ -10,7 +10,7 @@ a managed runtime's threads?**
 > approved posture (lazy-arm the body in-process, out-of-process fallback for the
 > signatures the shim set can't cover, the honesty note, and the pinned-worker
 > mitigation retained) is built and validated in
-> [managed-singlestep-lazy-arm-plan.md](../archive/plans/managed-singlestep-lazy-arm-plan.md)
+> [managed-singlestep-lazy-arm-plan.md](managed-singlestep-lazy-arm-plan.md)
 > (now **archived — complete**, including the slow-host / throttled-CI confirmation
 > of the crash-avoidance property, which passed on a real loaded GitHub runner).
 > Options are ordered by increasing invasiveness; the recommendation is at the end.
@@ -150,6 +150,6 @@ Suggested phasing if B is approved:
   §Z1 form's own definition. PT (§Z2) is the strong hardware tier for that (Intel,
   hardware permitting); on AMD the crash-proof route is **out-of-process** — the §D3
   whole-window channel, now specified in
-  [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md) (the tracee's
+  [managed-wholewindow-oop-plan.md](../../plans/managed-wholewindow-oop-plan.md) (the tracee's
   signal mask is irrelevant to a ptrace-stop, so `pthread_create`/exception dispatch
   cannot force-kill it).

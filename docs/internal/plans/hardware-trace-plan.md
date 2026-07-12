@@ -10,16 +10,16 @@ hardware block can span direct branches — see
 [Risks](#risks-and-open-points-hardware-trace)).
 
 This plan is a **sibling** of the
-[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md): it depends on that
+[DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md): it depends on that
 plan's Phase 1 (the engine-neutral trace substrate) and Phase 5 (instruction-mode
 semantics), reuses its begin/end markers, and is the backend the native-trace
-plan's [Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)
+plan's [Language runtime support](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)
 matrix routes JIT/GC-heavy managed runtimes toward. It was split out of that plan
 because it pulls in entirely different dependencies (libipt, OpenCSD,
 `perf_event_open`, eBPF) and is even-more-optional and mostly bare-metal; keeping
 it inline made shipping DynamoRIO read as if it required shipping CoreSight.
 Throughout this plan, **native-trace Phase N** means a phase of the
-[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md); an unqualified
+[DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md); an unqualified
 **Phase 1 / Phase 2** is one of *this* plan's own two phases.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the
@@ -112,7 +112,7 @@ a fast-path complement to DynamoRIO, never a replacement and never a default —
 **except** for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where it is the
 *recommended* backend because it sidesteps DynamoRIO's signal and code-cache
 collisions entirely (see the native-trace plan's
-[Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)).
+[Language runtime support](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)).
 
 **Why it fits.** Both Intel PT and ARM CoreSight, after decode, yield exactly the
 two dimensions `asmtest_trace_t` already carries: ordered instruction offsets and
@@ -267,7 +267,7 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
 least-invasively, at instruction granularity. This is the capability the
 native-trace plan's
-[Language runtime support](dynamorio-native-trace-plan.md#language-runtime-support)
+[Language runtime support](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)
 matrix routes the hard managed runtimes toward. **Full treatment:**
 [Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
 

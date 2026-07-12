@@ -151,3 +151,11 @@ The AMD *plan* docs describe the dev box as a Ryzen 9 9950X (Zen 5) while the AM
 describes it as Zen 2. The machine this review ran on is unambiguously Zen 2 (Ryzen 9
 4900HS, family 0x17). Either there are two hosts or one of those references is stale; worth
 reconciling when the plan below lands.
+
+> **Resolved 2026-07-12: there are two hosts.** The benchmark box records under
+> [benchmarks/boxes/](../../../benchmarks/boxes/) carry both — `amd-linux-x86_64-f39fe67d`
+> is the Ryzen 9 9950X (zen5) and `amd-linux-x86_64-9e05f0f2` is the Ryzen 9 4900HS
+> (zen1-2, this review's machine). The single-host wording in
+> [amd-tracing-followup-plan.md](../plans/amd-tracing-followup-plan.md) and
+> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) has been amended
+> to the two-host reality.

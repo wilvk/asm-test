@@ -4,8 +4,8 @@
 not shipped behaviour. The corresponding implementation roadmap is the
 [hardware-trace plan](../plans/hardware-trace-plan.md) (Phase 1 hardware trace,
 and the Phase 2 foreign-JIT forward-look it adds), a sibling of the
-[DynamoRIO native-trace plan](../plans/dynamorio-native-trace-plan.md). It is the
-sequel to the DynamoRIO plan's [Language runtime support](../plans/dynamorio-native-trace-plan.md#language-runtime-support)
+[DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md). It is the
+sequel to the DynamoRIO plan's [Language runtime support](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)
 section: that section explains why in-process DBI fights managed runtimes; this
 one asks how to trace a **foreign** JIT's generated code anyway. For the in-process,
 **cooperative** face of the same machinery — wrapping a region of your own managed code
@@ -410,4 +410,4 @@ Hypervisor / replay prior art: [Xen altp2m], [DRAKVUF IPT], [DRAKVUF codemon],
 [TTD]: https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/time-travel-debugging-overview
 [rr]: https://rr-project.org/
 [src/disasm.c]: ../../../src/disasm.c
-[Language runtime support]: ../plans/dynamorio-native-trace-plan.md#language-runtime-support
+[Language runtime support]: ../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support

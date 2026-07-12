@@ -8,6 +8,60 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`asmspy --sample` + TUI mode 7 — a live statistical hot-edge view, out of band (IBS lane
+  Phases 2–3, the flagship deliverable).** Built on the new
+  `asmtest_ibs_survey_process(pid, ms, opts, out)`: whole-process IBS-Op coverage that opens
+  one perf event + ring per thread of the target (enumerating `/proc/<pid>/task`, with one
+  mid-window rescan for threads spawned after start; the residual born-and-died-in-window
+  race and the privileged system-wide remedy are documented, not hidden) and merges
+  everything into one hot-edge histogram. `asmspy_engine_sample` resolves both endpoints of
+  each edge through the existing ELF-symtab → JIT-perf-map chain, so managed Node/.NET/Java
+  frames are named. Headless `asmspy --sample <pid> [ms] [--json]` prints the histogram —
+  `count  from -> to` with `[misp N%]`/`[ret]` tags and honest `branch/total samples` /
+  `throttled` provenance — or machine-readable JSON; TUI menu item **"7) Hot edges (sample)"**
+  shows the same table live, pausable + scrollable + Tab-sortable (count / mispredicts).
+  Unlike the stream/graph/tree views this **never attaches ptrace and never single-steps** —
+  the target runs at full speed — making it the only rich view that is safe on a live JIT,
+  exactly the targets single-stepping can crash. Self-skips (`# SKIP`, exit 0) off IBS; new
+  busy victim `cli/sample_victim.c` + a `--sample` smoke in `cli/cli_smoke.sh`; the TUI view
+  is driven end-to-end through a pty harness. Verified live on Zen 2: both surfaces name the
+  victim's hot back-edge without perturbing it.
+
+- **IBS-Op fallback for the AMD whole-window statistical survey (IBS lane Phase 4; fixes the
+  AMD review's F6).** On Zen 2 the branch stack (BRS / LbrExtV2) does not exist, so
+  `asmtest_hwtrace_sample_window_amd` (and its begin/end split) returned `EUNAVAIL` on the
+  one AMD host class that most needs a crash-proof survey. New internal window primitives
+  (`asmtest_ibs_window_begin`/`_end`, `src/ibs_backend.h`) arm IBS-Op on the calling thread
+  around the caller's window body, reusing the channel/drain/edge-hash machinery; on
+  branch-stack `perf_open` failure — or when `ASMTEST_FORCE_IBS_SURVEY` is set, for
+  cross-validation on Zen 3+/CI — the survey delegates to IBS and flattens each sampled
+  edge's target into the `ips[]` endpoint histogram weighted by count, so the caller's
+  bucket-by-method hotness view is unchanged in shape. Purely **STATISTICAL**: a separate
+  producer that never feeds the exact `insns[]`/`blocks[]` parity cascade; the branch-stack
+  path is byte-identical when the stack is present and the env unset. Covered by
+  `test_amd_sample_window_ibs` (self-skips off IBS); verified live on Zen 2 (~468/468
+  endpoints in the hot loop, full `hwtrace-test` 341/341).
+
+- **`asmspy` gained three whole-process structure views and a per-thread lens since the
+  entry below.** A **call graph** (TUI mode 4, headless `--graph <pid> [n]
+  [--sort=invocations|fanout]`): every `call` attributed caller→callee across all threads,
+  aggregated per function, with `--json` export (nodes *and* `{caller,callee,count}` edges,
+  addresses as `0x` strings) and `--dot` emitting a Graphviz digraph (kind-coloured nodes,
+  count-labelled edges) ready for `dot -Tsvg`. A **call tree** (TUI mode 5, headless
+  `--tree <pid> [n]`): the same feed with nesting/order preserved, indented by depth, in a
+  two-pane TUI. A **process/thread topology** view (headless `--procs`, plus an `F2`
+  flat-list ↔ tree toggle in the process picker): the process forest drawn with `├─`/`└─`/`│`
+  box glyphs, threads then child processes nested under each process. A **`--tid=<t>`
+  filter** for `--stream`/`--tree`/`--graph` seizes and steps *only* that thread, leaving
+  the rest of the process at full speed. The call-graph and region (assembly & funcs) TUI
+  views now **pause + scroll** like the log views (`space` freezes a stable snapshot,
+  arrows/PgUp/PgDn/Home/End move, `Tab` switches pane focus in the region view). And all
+  single-step engines resolve **JIT frames through the runtime's perf map**
+  (`/tmp/perf-<pid>.map` — Node/V8 `--perf-basic-prof`, .NET `DOTNET_PerfMapEnabled=1`,
+  OpenJDK perf-map-agent), refreshed rate-limited on miss so a compiling JIT keeps getting
+  named: managed frames render `name [jit]` in the stream/tree and `[JIT]`-tagged internal
+  nodes in the graph.
+
 - **Statistical AMD IBS-Op tracing lane (`asmtest_ibs.h`, `src/ibs_backend.c`) — Phases 0–1.**
   A new, self-contained *statistical* trace producer for AMD hosts where every branch-**stack**
   facility is absent (Zen 2 has no BRS / LbrExtV2, so every exact hwtrace backend self-skips and
@@ -31,8 +85,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into `make hwtrace-test`) and the containerized `make docker-hwtrace-ibs`; probe binary
   `examples/ibs_probe.c`. The live path is validated on an AMD Ryzen 9 4900HS (Zen 2, kernel
   6.14): the test captures a spin loop's back-edge out of band from a separate thread. Plan:
-  `docs/internal/plans/zen2-ibs-tracing-plan.md` (Phase 3, the `asmspy --sample` TUI view, is the
-  next deliverable and not yet landed).
+  `docs/internal/plans/zen2-ibs-tracing-plan.md`. Phases 2–4 landed subsequently — the
+  whole-process survey, the `asmspy --sample` view (headless + TUI mode 7), and the
+  statistical survey fallback; see their own entries above.
 
 - **`asmspy` — an interactive process tracer (new `cli/` subsystem, Linux x86-64)** — a small
   ncurses front-end over the out-of-process (`ptrace`) tracer: attach to any running process
@@ -467,6 +522,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **`asmspy`'s single-step engines could kill a V8/Node target seconds *after* a clean
+  detach.** V8 worker threads park in blocking futex syscalls; a `PTRACE_SINGLESTEP` that
+  completes across a syscall defers its `#DB` debug exception until the syscall returns, so a
+  parked worker carried a *queued* trap through detach — when its futex later woke, the trap
+  fired with no tracer attached and terminated the whole process (reproduced: ~1 detach in
+  2–6 fatal on an 11-thread V8 target). Two prior defenses missed it: the two-phase detach
+  orders resumes, and the trap-flag clear was gated on a read-back TF bit that a
+  kernel-forced TF masks out of `GETREGS`. `detach_threads` now clears TF unconditionally
+  and **drains the pending step** — each stopped thread is single-stepped once more to
+  consume its queued `#DB` while we are still the tracer (skipping threads poised on a
+  syscall instruction so the drain cannot block); the `PTRACE_SYSCALL` engines skip both
+  phases, since draining them would inject step state into a target that had none.
+  30 + 25 consecutive attach/trace/detach cycles on the 11-thread V8 target now survive.
+
+- **`asmspy` swallowed a target's own `int3` breakpoints (and could have killed it
+  re-injecting them).** The single-step engines treated every `SIGTRAP` stop as their own
+  step, so an application-executed `int3` (a JIT/debugger breakpoint, e.g. V8's
+  `IMMEDIATE_CRASH`) was mis-decoded and silently dropped, breaking the app's own breakpoint
+  logic. Stops are now split by `si_code` (`PTRACE_GETSIGINFO`): only `SI_KERNEL` (an
+  executed `int3` on x86) and `TRAP_HWBKPT` are delivered back to the target — via
+  `PTRACE_CONT`, never `SINGLESTEP`, because re-arming the trap flag fires a `#DB` inside
+  the (SIGTRAP-masked) handler and the kernel force-kills the target. Everything else
+  (`TRAP_TRACE`, `TRAP_BRKPT` from a step completing across a syscall, the `SI_USER` exec
+  trap) is still absorbed. New `int3_victim` + smoke prove a self-breakpointing target
+  survives tracing with its handler intact.
+
+- **Fork-based tracers aborted the whole trace when an unrelated signal interrupted the
+  post-fork handshake.** `trace_call`, `trace_call_blockstep`, `trace_window_call`, and
+  `trace_call_descend` waited for the child's initial `raise(SIGSTOP)` with a bare
+  `waitpid` that treated `EINTR` as a failed handshake (rc=`ETRACE`, zero frames). A host
+  runtime's repeating timer — or the descent stale-alarm test's deliberate 200 µs `SIGALRM`
+  storm, which failed ~70 % of runs on a fast box — could land in that window. All four
+  handshake sites now retry across `EINTR` exactly as the step loop always has; a genuine
+  child death still surfaces. The stale-alarm test passes 20/20.
 
 - **Four defects found by a deep multi-agent audit of the whole tree** (each survived
   double adversarial verification; the newest subsystem — `asmspy` — and the AMD/LBR, PT,

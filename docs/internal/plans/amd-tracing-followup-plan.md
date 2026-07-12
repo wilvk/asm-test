@@ -14,13 +14,20 @@ finding here was **re-verified against the current tree** (the `src/` anchors ho
 `58d8263` — the intervening commits are docs-only) before being written down, not carried
 forward from the audit.
 
-> Status: **All ten items are *planned*** — none has landed. Grounding that reorders
-> priorities versus the 2026-07-09 audit: the dev/CI split is now a **Zen 5 Ryzen 9
-> 9950X** dev box (`AuthenticAMD`, `amd_lbr_v2` + `perfmon_v2` + `ibs`, Linux 6.17) with
-> `perf_event_paranoid=4`, plus generic/Intel CI runners. So the audit's *"dev host is
-> Zen 2, every branch-stack path self-skips"* framing is **superseded**: the LBR-v2
-> paths now run live under `make docker-hwtrace-amd`, and IBS-Op decode is validatable
-> live on this box. Already landed (context, out of scope here): the MSR spec-filter,
+> Status: **Nine items remain *planned*; Phase 7 (IBS-Op survey fallback) is
+> SUPERSEDED + LANDED 2026-07-12** via
+> [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
+> integration — including this plan's `ASMTEST_FORCE_IBS_SURVEY` env — on the
+> standalone `asmtest_ibs_*` engine instead of 7a–7d's in-`amd_backend.c` shape).
+> Grounding that reorders priorities versus the 2026-07-09 audit: development runs on
+> **two AMD hosts** (both recorded under [benchmarks/boxes/](../../../benchmarks/boxes/)) —
+> a **Zen 5 Ryzen 9 9950X** box (`AuthenticAMD`, `amd_lbr_v2` + `perfmon_v2` + `ibs`,
+> Linux 6.17) with `perf_event_paranoid=4`, and a **Zen 2 Ryzen 9 4900HS** (no branch
+> stack, `paranoid=2`, Linux 6.14) — plus generic/Intel CI runners. So the audit's
+> *"dev host is Zen 2, every branch-stack path self-skips"* framing is **superseded on
+> the Zen 5 box** (the LBR-v2 paths run live under `make docker-hwtrace-amd`) while
+> remaining literally true on the Zen 2 one, which is where the IBS lane was
+> empirically built and validated. Already landed (context, out of scope here): the MSR spec-filter,
 > the MSR-direct cascade rung, and the internal `amd_backend.h` header (`37118ec`), and
 > the partial-never-complete honesty invariant (`07a9e7d`). House rule in force
 > throughout: **no untested hardware code** — a path that cannot self-validate on its
@@ -41,7 +48,7 @@ by risk, dependency, and how much of each is testable on the generic CI host.
 | **2** | 3 | Observability — `EPERM` vs `EUNAVAIL` + paranoid reader | Standalone diagnostics; the errno it threads also enriches Phase 4's log lines (each independently shippable) | Yes (invariants) + cap lane for the positive `EPERM` |
 | **3** | 1 | ABI-guard the options struct (10-binding flag day) | High blast radius; do it deliberately, after the cheap wins | Yes (ASan, single-step) |
 | **4** | 5 → 6 | Multi-exit deterministic snapshot; then the cascade-comment fix it enables | 6 is comment-only and only correct *after* 5 | Exit-enum: yes · live snapshot: cap lane |
-| **5** | 7 (7a–7d) | IBS-Op survey fallback | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: cap lane |
+| **5** | 7 (7a–7d) | IBS-Op survey fallback — **superseded + landed** via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: unprivileged (`swfilt`) |
 | **6** | 10 | Document the AMD LBR window-reach levers | Naturally documents Phase 5's snapshot + the levers | Docs build only |
 
 ---
@@ -286,7 +293,18 @@ reach the ~1000× block-step; assert "covered OR truncated" per the AMD-LBR trun
 lesson. A doc check confirms `trace_auto.c` no longer claims the snapshot skips all
 multi-exit regions.
 
-## Phase 7 — IBS-Op survey fallback (`src/hwtrace.c`, `src/amd_backend.c`) *(planned)*
+## Phase 7 — IBS-Op survey fallback (`src/hwtrace.c`, `src/amd_backend.c`) *(SUPERSEDED + LANDED 2026-07-12)*
+
+> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md), whose Phase 4
+> landed this integration 2026-07-12.** The shipped shape differs from 7a–7d below: the
+> probe/decoder/capture live in the standalone `asmtest_ibs_*` engine
+> (`include/asmtest_ibs.h`, `src/ibs_backend.c`) rather than `amd_backend.c`, with internal
+> window primitives (`asmtest_ibs_window_begin`/`_end`) giving `sample_window_amd` and the
+> begin/end split their fallback; this plan's `ASMTEST_FORCE_IBS_SURVEY` env and the
+> "survey-only, never parity" invariant shipped as specced. Also note 7a–7b's privilege
+> framing was corrected empirically: with the kernel `swfilt` bit, user-only IBS opens
+> **unprivileged at `paranoid=2`** and `exclude_kernel` works (no cap lane needed for the
+> user-only path). Kept below for the record.
 
 **Goal.** The statistical whole-window survey
 ([src/hwtrace.c:976](../../../src/hwtrace.c)) has one hardware source — the LBR/BRS branch

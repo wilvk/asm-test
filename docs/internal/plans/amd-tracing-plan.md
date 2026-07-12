@@ -19,7 +19,7 @@ emulator, the DynamoRIO native tier, and Intel PT, and block offsets that match 
 the same branch-edge normalization step. It is a **sibling** of the
 [hardware-trace plan](hardware-trace-plan.md) (Intel PT / ARM CoreSight), the
 [single-step plan](zen2-singlestep-trace-plan.md) (Trap Flag `#DB`), and the
-[DynamoRIO native-trace plan](dynamorio-native-trace-plan.md).
+[DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md).
 
 > Status legend: **planned** unless noted; forward-look phases are tagged
 > *(forward-look)*. Update this file as phases land, the way
@@ -475,7 +475,7 @@ CPU do the block-stepping.
 | **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | **LANDED** (2026-07, Phase 4) | Small |
 | **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | **LANDED** (ring 64KB→256KB, Phase 5) | Small |
 | **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
-| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–3, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
+| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–4, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
 | **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
 | **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | real (composition gap, MSR-only) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
 
@@ -1210,10 +1210,21 @@ switch must keep them coherent or justify the divergence.
 Zen 5.)* On a Zen 3 BRS host, a ≤16-branch routine reconstructs identically to the
 `sample_period=1` path with a single PMI; the Tier-B stitch path is untouched.
 
-## Improvement Phase 7 — IBS-Op complementary coverage lane (`src/hwtrace.c` + new backend) *(forward-look)*
+## Improvement Phase 7 — IBS-Op complementary coverage lane (`src/hwtrace.c` + new backend) *(SUPERSEDED + LANDED via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md))*
+
+> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–4 landed
+> 2026-07-12).** Two mechanics below were **refuted empirically on the Zen 2 host** and are
+> corrected in the superseding plan: the branch target arrives in the perf
+> `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`, delivered whenever `IBS_CAPS_BRNTRGT` is
+> set) — **no `MSR_AMD64_IBSBRTARGET` read** — and with the kernel `swfilt` bit
+> (`ibs_op/format/swfilt`) user-only IBS opens **unprivileged at `perf_event_paranoid=2`**
+> — **no `CAP_PERFMON`/`CAP_SYS_ADMIN`**. Shipped: the `asmtest_ibs_*` API
+> (`include/asmtest_ibs.h`, `src/ibs_backend.c`), `asmspy --sample` + TUI mode 7, and the
+> whole-window survey fallback. The statistical caveats below hold and are carried forward
+> verbatim. Kept for the record; do not implement from this section.
 
 **Goal.** The **only** hardware branch source on **Zen 2** (which has no branch stack): a
-statistical, precise-IP source→target edge via `MSR_AMD64_IBSBRTARGET` (gated on
+statistical, precise-IP source→target edge ~~via `MSR_AMD64_IBSBRTARGET`~~ (gated on
 `IBS_CAPS_BRNTRGT`), used as a *coverage-confirmer* / hot-edge pre-cover to shrink — not
 bound — the Phase-2 block-step / DynamoRIO residual, and as an indirect-branch-target
 resolver on Zen 3/4/5.
@@ -1221,14 +1232,16 @@ resolver on Zen 3/4/5.
 **Work / caveat.** IBS is **statistical** (one tagged op per NMI, worse edge-yield than
 LBR) and cannot produce an ordered, complete path, so it is explicitly *not* a replacement
 for the branch stack and must never feed the `insns[]`/`blocks[]` parity contract as if
-complete. It needs `CAP_PERFMON`/`CAP_SYS_ADMIN` (no user/kernel filter). If exposed, it is
+complete. ~~It needs `CAP_PERFMON`/`CAP_SYS_ADMIN` (no user/kernel filter).~~ **Corrected:
+user-only IBS opens unprivileged via `swfilt` — see the superseding plan.** If exposed, it is
 a *separate diagnostic producer*, not a member of the fidelity cascade. Two raw proposals
 were refuted in verification and must be avoided: `rand_en` is an IBS-*Fetch* knob (not Op),
 and the branch target is capability-gated and valid only for retired taken branches.
 
-**Acceptance.** *(forward-look — deferred; low priority.)* On a Zen 2 host, IBS-Op edges
-mark a subset of region basic blocks as covered and reduce the number of blocks the
-block-step fallback must walk; self-skips without `IBS_CAPS_BRNTRGT` / `CAP_PERFMON`.
+**Acceptance.** *(met by the superseding plan.)* On a Zen 2 host, IBS-Op edges
+mark a subset of region basic blocks as covered ~~and reduce the number of blocks the
+block-step fallback must walk~~ (the block-step pre-cover integration remains that plan's
+forward-look Phase 6); self-skips without `IBS_CAPS_BRNTRGT`.
 
 ## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(landed 2026-07-10)*
 

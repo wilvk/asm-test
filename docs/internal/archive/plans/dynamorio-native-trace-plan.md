@@ -13,14 +13,14 @@ instructions.
 
 Two hardware-assisted backends (Intel PT, ARM CoreSight) and a foreign-JIT
 forward-look that once lived here as Phases 9–10 now have their own
-[hardware-trace plan](hardware-trace-plan.md); this plan covers the DynamoRIO
+[hardware-trace plan](../../plans/hardware-trace-plan.md); this plan covers the DynamoRIO
 tier (Phases 0–8) plus the shared trace substrate all backends reuse.
 
 > Status legend: Phases 0–8 are **✅ landed** (see "Implementation status" below;
 > the one open stretch is Phase 7's drsyms internal-symbol mode). Headings were
 > retagged 2026-07-07 to match. Update this file as changes land, the
-> way [inline-asm-keystone-plan.md](../archive/plans/inline-asm-keystone-plan.md) and
-> [win64-native-tier-plan.md](../archive/plans/win64-native-tier-plan.md) track theirs.
+> way [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) and
+> [win64-native-tier-plan.md](win64-native-tier-plan.md) track theirs.
 
 ---
 
@@ -29,7 +29,7 @@ tier (Phases 0–8) plus the shared trace substrate all backends reuse.
 Phases 0–5 are **implemented and validated** on Linux x86-64 (against a prebuilt
 DynamoRIO release), shipping as `libasmtest_drapp` + `libasmtest_drclient` with the
 `drtrace-test` / `shared-drtrace` / `drtrace-client` Make targets and a Python
-wrapper (`asmtest.drtrace`). User-facing docs: [native-tracing.md](../../guides/tracing/native-tracing.md).
+wrapper (`asmtest.drtrace`). User-facing docs: [native-tracing.md](../../../guides/tracing/native-tracing.md).
 
 **One deliberate deviation from the original design.** The client uses DynamoRIO's
 **raw BSD core API** (`dr_register_bb_event`, clean calls, `dr_get_proc_address`),
@@ -64,7 +64,7 @@ blocked-by-decision, not merely unstarted** (assessed 2026-07-07): drsyms is a D
 *extension*, and the client deliberately restricts itself to the BSD core API
 because the prebuilt release extensions fail to load under DR's private loader on
 modern glibc (the drmgr/drwrap decision recorded in
-[src/drtrace_client.c](../../../src/drtrace_client.c)'s header). Wiring drsyms in
+[src/drtrace_client.c](../../../../src/drtrace_client.c)'s header). Wiring drsyms in
 means either solving that ext-loading problem or static-linking
 `libdrsyms_drstatic.a` + its elftoolchain deps into the client — a build/licensing
 investigation of its own, not a contained fallback-lookup patch. Exported-symbol
@@ -119,17 +119,17 @@ DynamoRIO documentation.
 
 - The existing trace contract is `emu_trace_t`: ordered instruction offsets,
   distinct basic-block offsets, dynamic totals, and a truncation bit in
-  [include/asmtest_emu.h](../../../include/asmtest_emu.h). DynamoRIO should reuse
+  [include/asmtest_emu.h](../../../../include/asmtest_emu.h). DynamoRIO should reuse
   this shape or a source-compatible extracted form.
 - Unicorn fills that trace via `UC_HOOK_CODE` and `UC_HOOK_BLOCK` in
-  [src/emu.c](../../../src/emu.c). DynamoRIO's `drmgr` basic-block hooks map
+  [src/emu.c](../../../../src/emu.c). DynamoRIO's `drmgr` basic-block hooks map
   naturally to the block side; instruction tracing is a separate heavier mode.
 - Dynamic-language bindings already use opaque trace handles in
-  [src/ffi.c](../../../src/ffi.c), so the native tracing tier should follow that
+  [src/ffi.c](../../../../src/ffi.c), so the native tracing tier should follow that
   handle/accessor style instead of exposing struct layout everywhere.
 - Keystone already assembles text to bytes in
-  [include/asmtest_assemble.h](../../../include/asmtest_assemble.h) and
-  [src/assemble.c](../../../src/assemble.c). Native DynamoRIO tracing needs an
+  [include/asmtest_assemble.h](../../../../include/asmtest_assemble.h) and
+  [src/assemble.c](../../../../src/assemble.c). Native DynamoRIO tracing needs an
   additional executable-memory path for host-native bytes; cross-ISA Keystone
   output remains emulator-only.
 - The Makefile keeps optional tiers dependency-gated (`UNICORN_*`,
@@ -211,7 +211,7 @@ begin/end markers are backend-neutral. The Capstone annotation layer is *offset-
 based* (it renders recorded offsets from caller-supplied code bytes) but today is
 `emu_*`/`emu_arch_t`-typed and declared in `asmtest_emu.h`; Phase 1 makes it
 backend-neutral *by name*. With that, a caller can switch backends without
-changing test code. A separate [hardware-trace plan](hardware-trace-plan.md)
+changing test code. A separate [hardware-trace plan](../../plans/hardware-trace-plan.md)
 adds two hardware-trace backends (Intel PT, ARM CoreSight); the rest of this
 plan builds the DynamoRIO one.
 
@@ -468,7 +468,7 @@ hinge is proven.
     failure (e.g. a `CLONE_VM` thread without `CLONE_SIGHAND`, where DR's signal
     "would have no effect") as **data**.
   If CPython passes all three, proceed; if not, route managed runtimes to the
-  hardware-trace backend earlier (see the [hardware-trace plan](hardware-trace-plan.md)
+  hardware-trace backend earlier (see the [hardware-trace plan](../../plans/hardware-trace-plan.md)
   and [Language runtime support](#language-runtime-support)).
 
 **Acceptance.** A minimal program runs under DynamoRIO control without `drrun`,
@@ -680,7 +680,7 @@ call.
   uses pkg-config `<DEP>_CFLAGS`/`<DEP>_LIBS`. The new shape is unavoidable
   because DynamoRIO ships **no** pkg-config file and requires
   `find_package(DynamoRIO)`; call it out as a deliberate new convention. (libipt
-  and OpenCSD in the [hardware-trace plan](hardware-trace-plan.md) *do* ship
+  and OpenCSD in the [hardware-trace plan](../../plans/hardware-trace-plan.md) *do* ship
   pkg-config, so they keep the `*_CFLAGS`/`*_LIBS` style.)
 
 **Runner integration (owned here).** The asm-test runner's headline features are
@@ -929,7 +929,7 @@ manual region calls in the test body.
 - Cache or install a pinned DynamoRIO release.
 - Run `make drtrace-test`.
 - Keep normal tests independent of DynamoRIO.
-- Hardware-assisted trace (see the [hardware-trace plan](hardware-trace-plan.md))
+- Hardware-assisted trace (see the [hardware-trace plan](../../plans/hardware-trace-plan.md))
   needs a *separate* self-hosted bare-metal
   runner job and is allowed to be absent; it never gates normal tests.
 
@@ -1006,14 +1006,14 @@ both DynamoRIO and CPython."
 
 **Consequence for the plan.** The DynamoRIO tier targets **CPython + native/C
 callers**. For **JVM/.NET/Node**, prefer the **Intel PT backend** (in the
-[hardware-trace plan](hardware-trace-plan.md)): it reads branch packets without
+[hardware-trace plan](../../plans/hardware-trace-plan.md)): it reads branch packets without
 intercepting signals or perturbing JITed code, sidestepping all three collisions.
 This reframes the hardware-trace tier from an optional fast path into the
 *correct* backend for the hard managed runtimes (where bare-metal PT is
 available). Tracing a **foreign** JIT's generated code in a live process (rather
 than asm-test's own Keystone output) is the subject of the
-[hardware-trace plan](hardware-trace-plan.md)'s foreign-JIT phase and its detailed
-[Analysis: tracing JIT-generated assembly at runtime](../analysis/jit-runtime-tracing.md).
+[hardware-trace plan](../../plans/hardware-trace-plan.md)'s foreign-JIT phase and its detailed
+[Analysis: tracing JIT-generated assembly at runtime](../../analysis/jit-runtime-tracing.md).
 
 **Sources.** DynamoRIO [dr_app.h](https://dynamorio.org/dr__app_8h.html),
 [transparency.html](https://dynamorio.org/transparency.html),
@@ -1046,7 +1046,7 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   own section: see [Language runtime support](#language-runtime-support) for the
   root cause, the record-window-vs-instrument-window reframe, and the per-runtime
   fix matrix with viability verdicts. Summary: CPython is robust; JVM/.NET/Node
-  are best-effort and should prefer the [hardware-trace plan](hardware-trace-plan.md)
+  are best-effort and should prefer the [hardware-trace plan](../../plans/hardware-trace-plan.md)
   backend. The single biggest unknown is whether repeated bracketed all-thread
   takeover/detach is cheap and stable enough on Linux (the Phase 0b gate); that, not
   any individual runtime quirk, is the critical path for CPython viability.
@@ -1086,7 +1086,7 @@ CPython [signal](https://docs.python.org/3/library/signal.html),
   memory-event modes must be opt-in.
 - **Hardware-trace tier (separate plan).** The Intel PT / ARM CoreSight backends —
   and their availability, privilege, fidelity, and CI caveats — moved to the
-  sibling [hardware-trace plan](hardware-trace-plan.md).
+  sibling [hardware-trace plan](../../plans/hardware-trace-plan.md).
 
 ---
 

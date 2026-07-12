@@ -55,7 +55,7 @@ already-shipping out-of-process stepper from a **region** primitive into a
 >
 > This document is the design + phasing; the sections below are the original proposal,
 > now largely landed per the updates above.
-> Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)
+> Related: [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md)
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
 > "concealed out-of-process ptrace stepper scope"),

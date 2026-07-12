@@ -9,7 +9,7 @@ family stays coherent rather than accreting one-off flags.
 > [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs); the native
 > substrate is in [src/hwtrace.c](../../../src/hwtrace.c), [src/ptrace_backend.c](../../../src/ptrace_backend.c),
 > [src/stealth_helper.c](../../../src/stealth_helper.c), [src/amd_backend.c](../../../src/amd_backend.c).
-> Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md),
+> Related: [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md),
 > [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md),
 > [amd-tracing-plan.md](amd-tracing-plan.md).
 
@@ -146,7 +146,7 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 ## Non-goals
 
 - Exact whole-window on AMD (hardware dead end — see [amd-tracing-plan.md](amd-tracing-plan.md)).
-- Making the in-process whole-window crash-proof (impossible in-process — see [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)).
+- Making the in-process whole-window crash-proof (impossible in-process — see [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md)).
 - A dedicated permissioned CI lane for the AMD dotnet examples — they self-skip in the plain
   lane and are validated on a self-hosted Zen runner (mirroring `docker-hwtrace-amd`); a
   `docker-hwtrace-dotnet-amd` lane is optional operational plumbing, not a capability.

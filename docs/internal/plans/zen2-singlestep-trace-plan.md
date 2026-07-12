@@ -15,7 +15,7 @@ offsets that match after the same branch-edge normalization.
 
 This plan is a **sibling** of the [hardware-trace plan](hardware-trace-plan.md)
 (Intel PT / ARM CoreSight), the [AMD LBR plan](amd-tracing-plan.md) (Zen 3 BRS /
-Zen 4 LbrExtV2), and the [DynamoRIO native-trace plan](dynamorio-native-trace-plan.md).
+Zen 4 LbrExtV2), and the [DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md).
 It exists because of a hardware fact established while validating the AMD LBR
 backend: **Zen 2 has no branch-trace facility of any kind** — no Intel-PT-style ring
 (AMD has none on any Zen part), no BRS (Zen 3), no LbrExtV2 (Zen 4); its legacy LBR
@@ -62,18 +62,23 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 
 ## Implementation status
 
-> **Correction (dev host is Zen 5, not Zen 2).** This plan was written assuming the
-> project's primary dev host is an AMD **Zen 2** box with no branch facility — making
-> single-step "the only exact native option here." The host is in fact a **Ryzen 9
-> 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)**, on which **AMD LBR is available and
-> live-verified** (see the [AMD LBR plan](amd-tracing-plan.md) and
-> [trace-parity-matrix](../analysis/trace-parity-matrix.md)). The single-step
-> backend's value is **unchanged** — it is the portable, no-PMU/perf/privilege,
-> depth-unbounded backend that runs on *any* x86-64 Linux host (including a true
-> Zen 2, VMs, plain containers, and standard CI) and is the deterministic in-process
-> path for tiny single-shot routines that AMD LBR's sampling cannot snapshot. Read
-> the "this Zen 2 host" phrasing below as "this x86-64 Linux dev host": single-step
-> runs live there regardless of microarchitecture.
+> **Correction, amended 2026-07-12 (there are TWO dev hosts).** This plan was written
+> assuming the project's primary dev host is an AMD **Zen 2** box with no branch
+> facility — making single-step "the only exact native option here." An earlier
+> revision of this note then over-corrected to "the dev host is a Zen 5, not Zen 2."
+> Both hosts exist and both run the suites (see the two AMD records under
+> [benchmarks/boxes/](../../../benchmarks/boxes/)): a **Ryzen 9 9950X (Family 0x1A,
+> Zen 5, `amd_lbr_v2`)**, on which **AMD LBR is available and live-verified** (see the
+> [AMD LBR plan](amd-tracing-plan.md) and
+> [trace-parity-matrix](../analysis/trace-parity-matrix.md)), and a **Ryzen 9 4900HS
+> (Family 0x17, Zen 2)** with no branch stack at all, on which the premise holds
+> literally and the [IBS statistical lane](zen2-ibs-tracing-plan.md) was built and
+> validated. The single-step backend's value is **unchanged** — it is the portable,
+> no-PMU/perf/privilege, depth-unbounded backend that runs on *any* x86-64 Linux host
+> (including the true Zen 2, VMs, plain containers, and standard CI) and is the
+> deterministic in-process path for tiny single-shot routines that AMD LBR's sampling
+> cannot snapshot. "This Zen 2 host" phrasing below is literal on the 4900HS and reads
+> as "this x86-64 Linux dev host" on the 9950X: single-step runs live on both.
 
 **Phases 0–4 implemented (Linux/x86-64).** The `ASMTEST_HWTRACE_SINGLESTEP` backend
 ships: gating ([src/hwtrace.c](../../../src/hwtrace.c)), the stepper + block

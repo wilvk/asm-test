@@ -966,7 +966,7 @@ code-cache consistency, and pre-existing threads at takeover.
   JITed code, sidestepping all three collisions.
 
 The full root-cause analysis and per-runtime fix matrix live in the
-[DynamoRIO native-trace plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/dynamorio-native-trace-plan.md#language-runtime-support).
+[DynamoRIO native-trace plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/dynamorio-native-trace-plan.md#language-runtime-support).
 
 ---
 
