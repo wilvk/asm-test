@@ -235,9 +235,13 @@ set -e
 printf '%s\n' "$out" | head -8
 printf '%s\n' "$out" | grep -qE "^node $TVPID \[threads_victim\]  inv=[0-9]" \
     || fail "--procs: no process node with a syscall count"
-nt=$(printf '%s\n' "$out" | grep -cE '^  tid [0-9]+.*inv=[0-9]')
+nt=$(printf '%s\n' "$out" | grep -cE 'tid [0-9]+.*inv=[0-9]')
 echo "thread rows: $nt"
 [ "$nt" -ge 2 ] || fail "--procs: expected >=2 thread rows, saw $nt"
+# threads (and child processes) are drawn under their process with box-tree
+# glyphs (├─ for a sibling with more below, └─ for the last)
+printf '%s\n' "$out" | grep -qE '(├─|└─) tid [0-9]' \
+    || fail "--procs: thread rows not drawn with tree glyphs (├─/└─)"
 # calls mode (single-step) also produces a counted topology
 out2=$(timeout 40 "$ASM" --procs "$TVPID" 60 --count=calls 2>&1) \
     || fail "--procs --count=calls"

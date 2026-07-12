@@ -374,7 +374,7 @@ static void topo_snap_copy(topo_snap *s, const asmspy_task_t *tasks, size_t n) {
 /* One rendered topology row (a process header or a thread), with the ids it maps
  * to so the TUI can select it and drill in. */
 typedef struct {
-    char text[176];
+    char text[256]; /* room for a deep glyph prefix + "node/tid <id> [exe] inv=" */
     pid_t tid, tgid;
     int is_process;
     unsigned long long inv;
@@ -429,49 +429,57 @@ static int task_idx_cmp(const void *a, const void *b) {
     return x->tid < y->tid ? -1 : x->tid > y->tid ? 1 : 0;
 }
 
+/* Box-drawing connectors for the process/thread forest (UTF-8; the TUI is
+ * ncursesw and setlocale(LC_ALL,"") is set, so wide glyphs render). */
+#define TG_TEE "├─ "  /* ├─  a child with more siblings below */
+#define TG_ELB "└─ "  /* └─  the last child                  */
+#define TG_PIPE "│  "      /* │   an ancestor with more below     */
+#define TG_GAP "   "            /*     an ancestor that was last       */
+
+/* Emit the subtree rooted at process P[k]. `prefix` is the glyph column string
+ * for this node's descendants' ancestors; `is_last` is whether P[k] is the last
+ * of its own siblings (picks its elbow and its children's continuation column);
+ * `is_root` suppresses a connector (top-level processes draw flush-left). A
+ * process's children are its threads (when it has more than its lone leader),
+ * then its child processes — the last of the combined set gets the └─ elbow. */
 static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
-                           size_t k, int depth, topo_rows *out) {
+                           size_t k, const char *prefix, int is_last, int is_root,
+                           topo_rows *out) {
     if (P[k].emitted)
         return; /* cycle / already-rendered guard */
     P[k].emitted = 1;
-    int ind = depth * 2;
-    if (ind > 40)
-        ind = 40;
+
     topo_row_t row;
     memset(&row, 0, sizeof row);
-    snprintf(row.text, sizeof row.text, "%*snode %d%s%s%s  inv=%llu", ind, "",
-             (int)P[k].tgid, P[k].exe[0] ? " [" : "", P[k].exe,
-             P[k].exe[0] ? "]" : "", P[k].inv);
+    snprintf(row.text, sizeof row.text, "%s%snode %d%s%s%s  inv=%llu", prefix,
+             is_root ? "" : is_last ? TG_ELB : TG_TEE, (int)P[k].tgid,
+             P[k].exe[0] ? " [" : "", P[k].exe, P[k].exe[0] ? "]" : "", P[k].inv);
     row.tgid = row.tid = P[k].tgid;
     row.is_process = 1;
     row.inv = P[k].inv;
     trows_push(out, &row);
 
-    /* threads (only when the process has more than its lone leader) */
+    /* column prefix for THIS node's children: extend the parent's with a pipe if
+     * this node has more siblings below it, else blank. Roots start empty. */
+    char cpx[160];
+    if (is_root)
+        cpx[0] = '\0';
+    else
+        snprintf(cpx, sizeof cpx, "%s%s", prefix, is_last ? TG_GAP : TG_PIPE);
+
+    /* gather the threads (sorted) — only when more than the lone leader — and the
+     * child processes (sorted), so the combined last child gets the elbow. */
+    size_t *ti = NULL, nth = 0;
     if (P[k].ntask > 1) {
-        size_t *ti = malloc(P[k].ntask * sizeof *ti);
+        ti = malloc(P[k].ntask * sizeof *ti);
         if (ti) {
             for (size_t j = 0; j < P[k].ntask; j++)
                 ti[j] = P[k].task[j];
             g_tasks_for_cmp = tasks;
             qsort(ti, P[k].ntask, sizeof *ti, task_idx_cmp);
-            for (size_t j = 0; j < P[k].ntask; j++) {
-                const asmspy_task_t *t = &tasks[ti[j]];
-                memset(&row, 0, sizeof row);
-                snprintf(row.text, sizeof row.text, "%*stid %d%s%s%s  inv=%llu",
-                         ind + 2, "", (int)t->tid, t->comm[0] ? " (" : "",
-                         t->comm, t->comm[0] ? ")" : "", t->inv);
-                row.tid = t->tid;
-                row.tgid = t->tgid;
-                row.is_process = 0;
-                row.inv = t->inv;
-                trows_push(out, &row);
-            }
-            free(ti);
+            nth = P[k].ntask;
         }
     }
-
-    /* child processes: those whose parent is this process, by inv desc */
     size_t *ci = malloc(np * sizeof *ci);
     size_t nc = 0;
     if (ci) {
@@ -480,10 +488,26 @@ static void topo_emit_proc(proc_agg *P, size_t np, const asmspy_task_t *tasks,
                 ci[nc++] = j;
         g_procs_for_cmp = P;
         qsort(ci, nc, sizeof *ci, proc_idx_cmp);
-        for (size_t j = 0; j < nc; j++)
-            topo_emit_proc(P, np, tasks, ci[j], depth + 1, out);
-        free(ci);
     }
+
+    size_t total = nth + nc, idx = 0;
+    for (size_t j = 0; j < nth; j++, idx++) {
+        const asmspy_task_t *t = &tasks[ti[j]];
+        memset(&row, 0, sizeof row);
+        snprintf(row.text, sizeof row.text, "%s%stid %d%s%s%s  inv=%llu", cpx,
+                 idx + 1 == total ? TG_ELB : TG_TEE, (int)t->tid,
+                 t->comm[0] ? " (" : "", t->comm, t->comm[0] ? ")" : "", t->inv);
+        row.tid = t->tid;
+        row.tgid = t->tgid;
+        row.is_process = 0;
+        row.inv = t->inv;
+        trows_push(out, &row);
+    }
+    for (size_t j = 0; j < nc; j++, idx++)
+        topo_emit_proc(P, np, tasks, ci[j], cpx, idx + 1 == total, 0, out);
+
+    free(ti);
+    free(ci);
 }
 
 /* Turn a task snapshot into an indented process/thread forest. Roots are the
@@ -547,11 +571,11 @@ static void topo_build_rows(const asmspy_task_t *tasks, size_t n,
         g_procs_for_cmp = P;
         qsort(roots, nr, sizeof *roots, proc_idx_cmp);
         for (size_t j = 0; j < nr; j++)
-            topo_emit_proc(P, np, tasks, roots[j], 0, out);
-        /* any process not reached (orphaned parent chain) — emit at depth 0 */
+            topo_emit_proc(P, np, tasks, roots[j], "", 0, 1, out);
+        /* any process not reached (orphaned parent chain) — emit as a root */
         for (size_t k = 0; k < np; k++)
             if (!P[k].emitted)
-                topo_emit_proc(P, np, tasks, k, 0, out);
+                topo_emit_proc(P, np, tasks, k, "", 0, 1, out);
         free(roots);
     }
 
