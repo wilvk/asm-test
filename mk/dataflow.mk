@@ -145,6 +145,16 @@ dataflow-zig-test: shared-dataflow
 	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  $(ZIG) run -lc bindings/zig/src/test_dataflow.zig
 
+# Phase 6 — the Rust data-flow binding (bindings/rust/test_dataflow.rs, direct FFI).
+# Standalone rustc smoke (no cargo project) linked against the analysis lib; needs
+# rustc (the docker bindings image).
+RUSTC ?= rustc
+.PHONY: dataflow-rust-test
+dataflow-rust-test: shared-dataflow
+	$(RUSTC) bindings/rust/test_dataflow.rs -L $(BUILD) -l asmtest_dataflow \
+	  -o $(BUILD)/rust_dataflow_test
+	LD_LIBRARY_PATH=$(abspath $(BUILD)) $(BUILD)/rust_dataflow_test
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
