@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Statistical AMD IBS-Op tracing lane (`asmtest_ibs.h`, `src/ibs_backend.c`) — Phases 0–1.**
+  A new, self-contained *statistical* trace producer for AMD hosts where every branch-**stack**
+  facility is absent (Zen 2 has no BRS / LbrExtV2, so every exact hwtrace backend self-skips and
+  the machine falls back to ~1000×-slower single-stepping). IBS-Op (Instruction-Based Sampling)
+  is the one branch-tracing facility this silicon has: it tags a retired op per NMI window and,
+  for taken branches, delivers both the source (`IbsOpRip`) and target (`IbsBrTarget`) — a
+  **statistical `from → to` control-flow edge**, sampled **out of band, against a running thread,
+  unprivileged** (the kernel `swfilt` bit makes user-only sampling open at
+  `perf_event_paranoid=2`) and **without perturbing the target** — exactly the case the
+  single-step views are dangerous on (a live JIT / managed runtime). It needs **no external
+  library** (raw `perf_event_open` + a pure decoder). Public surface:
+  `asmtest_ibs_available()` / `asmtest_ibs_skip_reason()` (the full AMD/IBS/`BrnTrgt`/`swfilt`
+  detect-and-skip chain), `asmtest_ibs_decode_op()` (a **pure, host-independent** decode of one
+  IBS-Op `PERF_SAMPLE_RAW` record into an edge — unit-tested with synthetic records on **every**
+  CI host, AMD or not), and `asmtest_ibs_survey_pid()` (attach IBS-Op to one thread, drain for
+  N ms, return an aggregated hot-edge histogram sorted by count with honest provenance —
+  `samples` / `branch_samples` / `lost` / `throttled`). **INVARIANT:** statistical only — it can
+  prove a block *was* seen, never that one was *not*, so it never feeds the exact
+  `insns[]`/`blocks[]` parity contract; it is a separate diagnostic producer, not a member of the
+  exact-trace cascade. Built into `libasmtest_hwtrace`; validated by `make ibs-test` (also folded
+  into `make hwtrace-test`) and the containerized `make docker-hwtrace-ibs`; probe binary
+  `examples/ibs_probe.c`. The live path is validated on an AMD Ryzen 9 4900HS (Zen 2, kernel
+  6.14): the test captures a spin loop's back-edge out of band from a separate thread. Plan:
+  `docs/internal/plans/zen2-ibs-tracing-plan.md` (Phase 3, the `asmspy --sample` TUI view, is the
+  next deliverable and not yet landed).
+
 - **`asmspy` — an interactive process tracer (new `cli/` subsystem, Linux x86-64)** — a small
   ncurses front-end over the out-of-process (`ptrace`) tracer: attach to any running process
   and watch it live and out of band. Three live views: **syscalls with data** (a mini `strace`;

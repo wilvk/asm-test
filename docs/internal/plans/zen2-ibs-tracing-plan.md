@@ -20,6 +20,22 @@ Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 p
 > **IBS is statistical and must never feed the exact `insns[]`/`blocks[]` parity
 > contract** — it is a separate diagnostic producer, not a member of the fidelity cascade.
 
+> **Landed 2026-07-12 — Phases 0 + 1** (the pure decoder + out-of-band capture engine,
+> the non-TUI foundation). New surface: [include/asmtest_ibs.h](../../../include/asmtest_ibs.h),
+> [src/ibs_backend.c](../../../src/ibs_backend.c) (wired into `libasmtest_hwtrace` via
+> `HWTRACE_OBJS` in [mk/native-trace.mk](../../../mk/native-trace.mk)),
+> [examples/ibs_probe.c](../../../examples/ibs_probe.c) (capability probe) and
+> [examples/test_ibs.c](../../../examples/test_ibs.c) (synthetic-decoder unit tests +
+> live out-of-band capture test), run by `make ibs-test` and folded into `make hwtrace-test`.
+> The raw-record byte layout was **empirically re-confirmed on this Zen 2 host** before
+> coding (PERF_SAMPLE_IP == `reg[1]` cross-check); the live test captures the spin-loop's
+> back-edge out of band from a separate thread (unprivileged, `paranoid=2`). The current
+> header exposes `asmtest_ibs_available`/`_skip_reason`/`_decode_op`/`_survey_pid`/`_survey_free`;
+> **`asmtest_ibs_survey_process` and the `opts` `cnt_ctl`/`callchain`/`system_wide` fields are
+> deferred to Phases 2/5** (declared here as the target surface, not yet shipped — every
+> shipped symbol has a real, tested body). Phase 3 (the `asmspy --sample` TUI view) is the
+> next deliverable and is **out of scope for this pass** (TUI).
+
 ## Relationship to the existing AMD plan (Phase 7)
 
 This plan **refines and supersedes** [amd-tracing-plan.md](amd-tracing-plan.md) **Improvement
@@ -117,7 +133,7 @@ object list in [mk/](../../../mk/) alongside `hwtrace.c`/`amd_backend.c`, and in
 
 ## Phases
 
-### Phase 0 — Capability probe + availability gate + a checked-in repro *(planned)*
+### Phase 0 — Capability probe + availability gate + a checked-in repro *(landed)*
 
 **Goal.** `asmtest_ibs_available()` / `asmtest_ibs_skip_reason()` and a self-skipping
 `examples/ibs_probe.c` so every downstream phase can gate cleanly and CI can prove the skip.
@@ -133,7 +149,7 @@ capability table and self-skips with a `# SKIP` line off IBS.
 **Acceptance.** On this Zen 2: reports available + `BrnTrgt`. On non-AMD / VM / CI: reports
 the specific skip reason and exits 0 (skip, not fail). `make hwtrace-test` stays green.
 
-### Phase 1 — Core out-of-band capture engine (`src/ibs_backend.c`) *(planned)*
+### Phase 1 — Core out-of-band capture engine (`src/ibs_backend.c`) *(landed)*
 
 **Goal.** `asmtest_ibs_survey_pid` + the pure `asmtest_ibs_decode_op`: attach IBS-Op to one
 tid, drain the ring for `ms` milliseconds, decode raw records into an aggregated edge

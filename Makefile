@@ -60,7 +60,8 @@ FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_bittricks test_vm \
                   test_emu test_emu_usecases test_asm \
-                  test_drtrace test_hwtrace test_codeimage test_branchsnap
+                  test_drtrace test_hwtrace test_codeimage test_branchsnap \
+                  test_ibs
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
@@ -109,7 +110,8 @@ help:
 	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
 	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
-	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR'
+	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'
+	@echo '  ibs-test        statistical AMD IBS-Op edge lane (pure decoder + live out-of-band)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
 	@echo '  dev-dotnet      interactive container shell for the .NET examples'

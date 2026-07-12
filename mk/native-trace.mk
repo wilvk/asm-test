@@ -277,13 +277,20 @@ $(BUILD)/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/stealth_helper_main.o: src/stealth_helper_main.c src/stealth_helper.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# Statistical AMD IBS-Op edge lane (src/ibs_backend.c, asmtest_ibs.h): the one
+# hardware branch source on Zen 2, where every branch-STACK path self-skips. No
+# external library and no Capstone (Phase 0-1) — raw perf_event_open + a pure decoder
+# that is host-independent (unit-tested on every CI host). A SEPARATE statistical
+# producer, never a member of the exact insns[]/blocks[] parity cascade.
+$(BUILD)/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-                $(BUILD)/msr_lbr.o \
+                $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 # The test builds a synthetic wrong-path perf_branch_entry (test_amd_spec_filter), so
@@ -301,6 +308,21 @@ $(BUILD)/test_branchsnap: $(HWTRACE_OBJS) $(BUILD)/test_branchsnap.o
 .PHONY: branchsnap-test
 branchsnap-test: $(BUILD)/test_branchsnap
 	./$(BUILD)/test_branchsnap
+
+# Statistical AMD IBS-Op edge lane. test_ibs's PURE decoder checks (synthetic raw
+# records) run and pass on ANY host; its live out-of-band capture self-skips (exit 0)
+# off AMD IBS-Op. Links only ibs_backend.o (a self-contained producer, no Capstone /
+# PT / OpenCSD decoders) + -lpthread for the test's worker thread. ibs_probe is the
+# standalone capability probe. Both are wired into hwtrace-test below.
+$(BUILD)/test_ibs: $(BUILD)/ibs_backend.o $(BUILD)/test_ibs.o
+	$(CC) $(CFLAGS) $^ -lpthread -o $@
+$(BUILD)/ibs_probe: $(BUILD)/ibs_backend.o $(BUILD)/ibs_probe.o
+	$(CC) $(CFLAGS) $^ -o $@
+.PHONY: ibs-test
+ibs-test: $(BUILD)/test_ibs $(BUILD)/ibs_probe
+	@echo "== ibs-test =="
+	./$(BUILD)/ibs_probe
+	./$(BUILD)/test_ibs
 
 # §D3 bundled stepper: a real separate process the managed packages ship (vs. the
 # in-process forked child). Links only the ptrace stepper + Capstone length-decoder
@@ -320,9 +342,13 @@ stealth-helper: $(BUILD)/asmtest-stealth-helper
 # bundled sub-case (which finds asmtest-stealth-helper as test_hwtrace's sibling in
 # $(BUILD)/) exercises the real exec'd-binary path, not only the forked child.
 .PHONY: hwtrace-test
-hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper
+hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper \
+              $(BUILD)/test_ibs $(BUILD)/ibs_probe
 	@echo "== hwtrace-test =="
 	./$(BUILD)/test_hwtrace
+	@echo "== ibs (statistical IBS-Op edge lane) =="
+	./$(BUILD)/ibs_probe
+	./$(BUILD)/test_ibs
 
 # Code-image recorder self-test (same-address-different-bytes temporal proof; runs live on
 # any Linux with soft-dirty — no privilege). When built with libbpf it additionally

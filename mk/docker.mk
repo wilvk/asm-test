@@ -379,6 +379,19 @@ docker-hwtrace-msr: docker-bindings-base
 	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
 	  --privileged asmtest-hwtrace make hwtrace-test
 
+# Statistical AMD IBS-Op edge lane (src/ibs_backend.c). Same hwtrace image; runs
+# `make ibs-test` (the pure decoder checks always run; the live out-of-band capture
+# runs on an AMD IBS host, self-skips elsewhere). Unlike the LBR lane this needs NO
+# capability: the kernel `swfilt` bit makes user-only IBS sampling open unprivileged
+# at perf_event_paranoid=2 — but Docker's default seccomp still blocks perf_event_open,
+# so seccomp must be unconfined. Needs an AMD host with the ibs_op PMU (Zen 2+) and a
+# kernel exposing swfilt (~6.2+); the live test self-skips on any other host.
+docker-hwtrace-ibs: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  asmtest-hwtrace make ibs-test
+
 # Optional eBPF code-emission detector lane. Builds an image WITH the eBPF toolchain
 # (clang + libbpf-dev + bpftool — which the plain hwtrace image omits), compiles the CO-RE
 # program + skeleton, and runs `make codeimage-test`: the userspace soft-dirty recorder
