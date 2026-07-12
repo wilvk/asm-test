@@ -121,6 +121,14 @@ dataflow-node-test: shared-dataflow
 	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  $(NODE) test_dataflow.js
 
+# Phase 6 — the Ruby data-flow binding (bindings/ruby/dataflow.rb, Fiddle). Needs a
+# Ruby interpreter (the docker bindings image); validated in ubuntu:24.04 locally.
+.PHONY: dataflow-ruby-test
+dataflow-ruby-test: shared-dataflow
+	cd bindings/ruby && \
+	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(RUBY) test_dataflow.rb
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
