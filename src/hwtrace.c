@@ -21,6 +21,7 @@
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
+#include "debug.h"          /* Phase 4: ASMTEST_HWDBG env-gated tier logging */
 #include "ibs_backend.h" /* §D3 Zen-2 F6: statistical IBS-Op survey fallback */
 #include "stealth_helper.h" /* §D3 shared stepping body + bundled-binary discovery */
 
@@ -250,10 +251,19 @@ static int amd_branch_probe(void) {
     long fd = perf_open(&a, 0, -1, -1, 0);
     if (fd >= 0) {
         close((int)fd);
+        ASMTEST_HWDBG("OK (branch-stack open succeeded)");
         return AMD_OK;
     }
-    if (errno == EACCES || errno == EPERM)
+    int e = errno;
+    if (e == EACCES || e == EPERM) {
+        ASMTEST_HWDBG("NOPERM (errno=%d) — lower "
+                      "perf_event_paranoid or grant CAP_PERFMON",
+                      e);
         return AMD_NOPERM;
+    }
+    ASMTEST_HWDBG("NOHW (errno=%d) — no Zen 3 BRS / Zen 4 "
+                  "LbrExtV2",
+                  e);
     return AMD_NOHW; /* EOPNOTSUPP/EINVAL: no Zen 3 BRS / Zen 4 LbrExtV2 */
 }
 #endif /* __x86_64__ */
@@ -459,6 +469,9 @@ static size_t round_pages(size_t want, size_t dflt) {
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts) {
     if (opts == NULL)
         return ASMTEST_HW_EINVAL;
+    ASMTEST_HWDBG("init: backend=%d snapshot=%d branch_filter=%d lbr_period=%d",
+                  (int)opts->backend, opts->snapshot, opts->branch_filter,
+                  opts->lbr_period);
 #if defined(__linux__)
     /* Refuse to re-init while a capture is live: end() dispatches teardown on the
      * CURRENT backend, so switching backend mid-capture would run the wrong end
@@ -631,15 +644,21 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * unchanged. */
     int amd_nexit = 0;
     size_t exit_off = asmtest_amd_last_exit_off(r->base, r->len, &amd_nexit);
+    ASMTEST_HWDBG("begin_amd: nexit=%d exit_off=%zd snapshot_opt=%d "
+                  "snapshot_avail=%d filter=%d",
+                  amd_nexit, (ssize_t)exit_off, g_opts.snapshot,
+                  asmtest_amd_snapshot_available(), g_opts.branch_filter);
     if ((g_opts.snapshot ||
          (asmtest_amd_snapshot_available() && amd_nexit == 1)) &&
         exit_off != (size_t)-1) {
         if (asmtest_amd_snapshot_begin(r->base, r->len, exit_off,
                                        g_opts.branch_filter) == ASMTEST_HW_OK) {
+            ASMTEST_HWDBG("begin_amd: mode=snapshot (deterministic boundary)");
             g_amd_snap = 1;
             g_active = r; /* g_fd stays -1: no sampled ring in snapshot mode */
             return 0;
         }
+        ASMTEST_HWDBG("begin_amd: snapshot arm failed -> sampled fallback");
     }
     struct perf_event_attr a;
     memset(&a, 0, sizeof a);
@@ -715,6 +734,223 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     return 0;
 }
 
+/* F43 test seam — decode a LINEARIZED perf data-ring span. [buf, buf+span) holds
+ * back-to-back perf_event_header records: each PERF_RECORD_SAMPLE body is
+ * {u64 nr; perf_branch_entry[nr]} (only PERF_SAMPLE_BRANCH_STACK is set), and a
+ * PERF_RECORD_LOST / PERF_RECORD_THROTTLE marks a dropped-sample tail. Counts the
+ * samples, selects the richest-in-region window, runs the Tier-A single-window or the
+ * Tier-B stitched decode into *trace, and applies the SAME truncation rules as the live
+ * end path: a near-full ring (span + one max-size sample > dsz, when dsz > 0), a
+ * loss/throttle record, a Tier-A window that never captured the region exit on a
+ * non-freeze part, no in-region window, and an empty (insns_total == 0) reconstruction.
+ * `dsz` is the ring data-area size for the near-full heuristic (0 disables it). trace may
+ * be NULL (drain-and-discard). Non-static + declared in amd_backend.h so a host-
+ * independent test (test_amd_ring_parse) can exercise the ring framing / richest-window /
+ * nr-clamp / LOST / Tier-A-vs-Tier-B logic with a crafted buffer; hwtrace_end_amd calls it
+ * after linearizing the mmap'd circular ring. */
+void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
+                                   const void *base, size_t len,
+                                   asmtest_trace_t *trace) {
+    const uint64_t base_ip = (uint64_t)(uintptr_t)base;
+    const uint64_t end_ip = base_ip + len;
+    struct perf_branch_entry *best = NULL;
+    uint64_t best_nr = 0;
+    size_t best_inregion = 0;
+    int lost = 0; /* a dropped-sample record: the ring could not hold the run */
+    size_t n_samples = 0; /* branch-stack samples, time order (tail -> head) */
+    struct perf_branch_entry **samples = NULL;
+    size_t *nrs = NULL;
+    if (buf != NULL && span > 0) {
+        /* Pass 1: count samples and detect drops (ring overflow / rate throttle).
+         * The data ring is non-overwrite, so on overflow the kernel drops the
+         * NEWEST samples and emits PERF_RECORD_LOST — the precise "the run did not
+         * fit" signal that the surviving windows alone cannot show (they stitch
+         * gaplessly yet are missing the tail). */
+        for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
+            /* memcpy the record header out of the malloc'd ring into a local: a
+             * plain struct-pointer cast is -fstrict-aliasing UB (the buffer's
+             * effective type is bytes). Alignment is fine (malloc'd, 8-multiple
+             * records), so this is a sanitize-lane fix, not a misalignment guard. */
+            struct perf_event_header h;
+            memcpy(&h, buf + off, sizeof h);
+            if (h.size == 0 || off + h.size > span)
+                break;
+            if (h.type == PERF_RECORD_SAMPLE)
+                n_samples++;
+            else if (h.type == PERF_RECORD_LOST ||
+                     h.type == PERF_RECORD_THROTTLE)
+                lost = 1;
+            off += h.size;
+        }
+        if (n_samples > 0) {
+            samples = (struct perf_branch_entry **)malloc(n_samples *
+                                                          sizeof *samples);
+            nrs = (size_t *)malloc(n_samples * sizeof *nrs);
+        }
+
+        /* Pass 2: record each sample in time order (for Tier-B stitching) and
+         * track the single richest-in-region window (Tier-A pick / fallback). */
+        size_t si = 0;
+        for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
+            struct perf_event_header h;
+            memcpy(&h, buf + off, sizeof h);
+            if (h.size == 0 || off + h.size > span)
+                break;
+            if (h.type == PERF_RECORD_SAMPLE) {
+                /* Only PERF_SAMPLE_BRANCH_STACK is set, so the body is
+                 * {u64 nr; perf_branch_entry[nr]}. `e` stays a typed pointer INTO
+                 * buf — samples[]/best retain it for the post-loop stitch/decode —
+                 * so only the transient nr scalar is memcpy'd out. */
+                uint8_t *body = buf + off + sizeof h;
+                uint64_t nr = 0;
+                /* F7: require the body to actually hold the 8-byte nr before reading
+                 * it — a short tail SAMPLE (h.size in [sizeof h, sizeof h + 7]) would
+                 * otherwise over-read up to 7 bytes past the ring. */
+                if (off + sizeof h + sizeof(uint64_t) <= span)
+                    memcpy(&nr, body, sizeof nr);
+                /* F5: bound nr BEFORE the multiply so a corrupt/huge nr cannot wrap the
+                 * size check into a false pass and drive the e[i] scan out of bounds
+                 * (the branch stack is <=32 deep on any part; 64 is a safe ceiling,
+                 * matching the two survey drains at sample_window/_end_amd). */
+                if (nr > 0 && nr <= 64 &&
+                    sizeof h + sizeof(uint64_t) +
+                            nr * sizeof(struct perf_branch_entry) <=
+                        h.size) {
+                    struct perf_branch_entry *e =
+                        (struct perf_branch_entry *)(body + sizeof(uint64_t));
+                    if (samples != NULL && nrs != NULL) {
+                        samples[si] = e;
+                        nrs[si] = (size_t)nr;
+                        si++;
+                    }
+                    size_t inregion = 0;
+                    for (uint64_t i = 0; i < nr; i++)
+                        if ((e[i].from >= base_ip && e[i].from < end_ip) ||
+                            (e[i].to >= base_ip && e[i].to < end_ip))
+                            inregion++;
+                    /* Richest-in-region wins; on a tie keep the earliest (closest
+                     * to the routine, least surrounding glue). */
+                    if (best == NULL || inregion > best_inregion) {
+                        best = e;
+                        best_nr = nr;
+                        best_inregion = inregion;
+                    }
+                }
+            }
+            off += h.size;
+        }
+        n_samples = si; /* only well-formed samples retained */
+    }
+
+    /* The data ring is never drained mid-capture (data_tail only advances at the
+     * very end), so the kernel never gets the next successful reservation needed to
+     * emit a pending PERF_RECORD_LOST — a ring that filled therefore shows NO loss
+     * record even though it dropped the newest samples (the run's tail, where
+     * sample_period=1 windows would otherwise stitch gaplessly). Treat a (near-)full
+     * ring as loss: if less than one maximum-size branch-stack sample of headroom
+     * remains, the tail was almost certainly dropped and the trace must be honestly
+     * truncated rather than claimed complete. */
+    const int amd_depth = asmtest_amd_lbr_depth();
+    {
+        size_t max_sample =
+            sizeof(struct perf_event_header) + sizeof(uint64_t) +
+            (size_t)amd_depth * sizeof(struct perf_branch_entry);
+        if (dsz > 0 && span + max_sample > dsz)
+            lost = 1;
+    }
+
+    ASMTEST_HWDBG("n_samples=%zu best_nr=%llu best_inregion=%zu lost=%d "
+                  "span=%zu dsz=%zu depth=%d",
+                  n_samples, (unsigned long long)best_nr, best_inregion, lost,
+                  span, dsz, amd_depth);
+
+    /* Decode. Tier-A (the single richest in-region window) is complete when the
+     * routine's branches fit one 16-deep stack (best_nr < AMD_LBR_DEPTH) — the common
+     * small-routine case, unchanged. When that window overflowed (best_nr >= depth)
+     * the routine took more taken branches than the stack is deep, so escalate to
+     * Tier-B: stitch the overlapping sample_period=1 windows (collected above, time
+     * order) into one gapless sequence and decode THAT past the ceiling. A stitch gap
+     * or a dropped-sample record (`lost`) means the ring could not hold the whole run,
+     * so the result is honestly truncated; otherwise Tier-B reconstructs the full
+     * >16-branch trace where a single window cannot. */
+    int done = 0;
+    if (best != NULL && best_nr > 0 && best_inregion > 0) {
+        if (best_nr >= (uint64_t)amd_depth && n_samples > 1 &&
+            samples != NULL && nrs != NULL) {
+            size_t out_cap = n_samples + (size_t)amd_depth;
+            struct perf_branch_entry *out =
+                (struct perf_branch_entry *)malloc(out_cap * sizeof *out);
+            if (out != NULL) {
+                int gap = 0;
+                size_t st = asmtest_amd_stitch(
+                    (const struct perf_branch_entry *const *)samples, nrs,
+                    n_samples, base, base_ip, len, out, out_cap, &gap);
+                if (st > 0) {
+                    ASMTEST_HWDBG("tier=B stitched=%zu gap=%d", st, gap);
+                    asmtest_amd_decode_stitched(out, st, base, len, trace,
+                                                gap || lost);
+                    done = 1;
+                }
+                free(out);
+            }
+        }
+        if (!done) {
+            ASMTEST_HWDBG("tier=A best_nr=%llu", (unsigned long long)best_nr);
+            asmtest_amd_decode(best, (size_t)best_nr, base, len, trace);
+            /* Freeze gate (CPUID 0x80000022 EAX[2]). WITHOUT LBR freeze-on-PMI the
+             * sampled stack keeps advancing after the overflow reaches CPL0, so a
+             * single Tier-A window may not have halted at the region exit — trust it
+             * complete only if it actually CONTAINS the region-exit branch (from
+             * in-region, to outside the region, i.e. the routine's ret/tail-jump).
+             * Otherwise the exit was not captured, so flag truncated rather than
+             * present a possibly-mid-routine window as complete. On a freeze-capable
+             * part this check is skipped and behavior is unchanged. */
+            if (trace != NULL && !asmtest_amd_freeze_available()) {
+                int saw_exit = 0;
+                for (uint64_t i = 0; i < best_nr; i++) {
+                    uint64_t f = best[i].from, t = best[i].to;
+                    if (f >= base_ip && f < end_ip &&
+                        (t < base_ip || t >= end_ip)) {
+                        saw_exit = 1;
+                        break;
+                    }
+                }
+                if (!saw_exit) {
+                    ASMTEST_HWDBG("truncated: Tier-A window missed the region "
+                                  "exit (no freeze)");
+                    trace->truncated = true;
+                }
+            }
+        }
+    } else if (trace != NULL) {
+        ASMTEST_HWDBG("truncated: no in-region branch window captured");
+        trace->truncated =
+            true; /* no in-region branches captured: not complete */
+    }
+
+    /* A dropped-sample record, or a ring that filled (detected above), means the
+     * capture holds only a prefix of the run — flag it truncated regardless of
+     * which tier decoded, so the single-window Tier-A path can't report a
+     * ring-truncated capture as complete. */
+    if (lost && trace != NULL) {
+        ASMTEST_HWDBG("truncated: dropped/throttled sample or near-full ring");
+        trace->truncated = true;
+    }
+
+    /* Honesty invariant (matches the other backends): an in-region branch window that
+     * reconstructs to ZERO instructions — a boundary branch, or endpoints that do not
+     * bound a decodable run — is not a complete empty trace. Flag it truncated so the
+     * AMD path never reports empty-yet-complete (the intermittent case on a tiny
+     * single-shot routine whose branches barely enter the region). */
+    if (trace != NULL && trace->insns_total == 0) {
+        ASMTEST_HWDBG("truncated: reconstruction is empty (insns_total==0)");
+        trace->truncated = true;
+    }
+
+    free(samples);
+    free(nrs);
+}
+
 static void hwtrace_end_amd(void) {
     if (g_amd_snap) {
         /* Boundary-snapshot mode: drain + decode the frozen exit window. The same
@@ -745,208 +981,29 @@ static void hwtrace_end_amd(void) {
     uint64_t tail = mp->data_tail;
     hw_region_t *r = g_active;
 
-    /* Linearize [tail, head) (it may wrap the circular data ring) into scratch,
-     * then walk perf_event_header records to pick the branch sample to decode.
+    /* Linearize [tail, head) (it may wrap the circular data ring) into scratch, then
+     * hand the linear span to the shared ring parser (also the F43 test seam,
+     * asmtest_amd_ring_parse_decode). The record framing / richest-window selection /
+     * Tier-A-vs-Tier-B decision / truncation rules live there so a host-independent test
+     * can exercise them with a crafted buffer.
      *
-     * With sample_period=1 every taken branch emits a sample whose branch stack is
-     * the 16 most-recent branches AT THAT POINT. A small registered routine's own
-     * branches live in the stack only briefly: the post-routine glue (returning
-     * into asmtest_hwtrace_end and its callees, before the perf DISABLE) is itself
-     * a dozen-plus taken branches that push the routine's branches out of the
-     * 16-deep window. So the LAST sample is all glue and decodes to nothing —
-     * instead keep the sample with the MOST in-region branch entries: the one taken
-     * at/just after the routine, whose window still holds its jcc/ret. (Verified on
-     * a Zen 5 host: last-sample gave insns_total=0; richest-sample reconstructs the
-     * exact stream.) */
-    const uint64_t base_ip = (uint64_t)(uintptr_t)r->base;
-    const uint64_t end_ip = base_ip + r->len;
+     * Why richest-window and not last-sample: with sample_period=1 every taken branch
+     * emits a sample whose stack is the 16 most-recent branches AT THAT POINT; a small
+     * routine's own branches get pushed out of the window by the post-routine glue
+     * (returning through asmtest_hwtrace_end before the perf DISABLE), so the LAST sample
+     * is all glue and decodes to nothing. (Verified on a Zen 5 host: last-sample gave
+     * insns_total=0; richest-sample reconstructs the exact stream.) */
     size_t span = (size_t)(head - tail);
-    struct perf_branch_entry *best = NULL;
-    uint64_t best_nr = 0;
-    size_t best_inregion = 0;
-    int lost = 0; /* a dropped-sample record: the ring could not hold the run */
-    size_t n_samples = 0; /* branch-stack samples, time order (tail -> head) */
-    struct perf_branch_entry **samples = NULL;
-    size_t *nrs = NULL;
     uint8_t *buf = NULL;
     if (span > 0 && span <= dsz) {
         buf = (uint8_t *)malloc(span);
-        if (buf != NULL) {
+        if (buf != NULL)
             for (size_t i = 0; i < span; i++)
                 buf[i] = data[(tail + i) % dsz];
-
-            /* Pass 1: count samples and detect drops (ring overflow / rate throttle).
-             * The data ring is non-overwrite, so on overflow the kernel drops the
-             * NEWEST samples and emits PERF_RECORD_LOST — the precise "the run did not
-             * fit" signal that the surviving windows alone cannot show (they stitch
-             * gaplessly yet are missing the tail). */
-            for (size_t off = 0;
-                 off + sizeof(struct perf_event_header) <= span;) {
-                /* memcpy the record header out of the malloc'd ring into a local: a
-                 * plain struct-pointer cast is -fstrict-aliasing UB (the buffer's
-                 * effective type is bytes). Alignment is fine (malloc'd, 8-multiple
-                 * records), so this is a sanitize-lane fix, not a misalignment guard. */
-                struct perf_event_header h;
-                memcpy(&h, buf + off, sizeof h);
-                if (h.size == 0 || off + h.size > span)
-                    break;
-                if (h.type == PERF_RECORD_SAMPLE)
-                    n_samples++;
-                else if (h.type == PERF_RECORD_LOST ||
-                         h.type == PERF_RECORD_THROTTLE)
-                    lost = 1;
-                off += h.size;
-            }
-            if (n_samples > 0) {
-                samples = (struct perf_branch_entry **)malloc(n_samples *
-                                                              sizeof *samples);
-                nrs = (size_t *)malloc(n_samples * sizeof *nrs);
-            }
-
-            /* Pass 2: record each sample in time order (for Tier-B stitching) and
-             * track the single richest-in-region window (Tier-A pick / fallback). */
-            size_t si = 0;
-            for (size_t off = 0;
-                 off + sizeof(struct perf_event_header) <= span;) {
-                struct perf_event_header h;
-                memcpy(&h, buf + off, sizeof h);
-                if (h.size == 0 || off + h.size > span)
-                    break;
-                if (h.type == PERF_RECORD_SAMPLE) {
-                    /* Only PERF_SAMPLE_BRANCH_STACK is set, so the body is
-                     * {u64 nr; perf_branch_entry[nr]}. `e` stays a typed pointer INTO
-                     * buf — samples[]/best retain it for the post-loop stitch/decode —
-                     * so only the transient nr scalar is memcpy'd out. */
-                    uint8_t *body = buf + off + sizeof h;
-                    uint64_t nr;
-                    memcpy(&nr, body, sizeof nr);
-                    if (nr > 0 &&
-                        sizeof h + sizeof(uint64_t) +
-                                nr * sizeof(struct perf_branch_entry) <=
-                            h.size) {
-                        struct perf_branch_entry *e =
-                            (struct perf_branch_entry *)(body +
-                                                         sizeof(uint64_t));
-                        if (samples != NULL && nrs != NULL) {
-                            samples[si] = e;
-                            nrs[si] = (size_t)nr;
-                            si++;
-                        }
-                        size_t inregion = 0;
-                        for (uint64_t i = 0; i < nr; i++)
-                            if ((e[i].from >= base_ip && e[i].from < end_ip) ||
-                                (e[i].to >= base_ip && e[i].to < end_ip))
-                                inregion++;
-                        /* Richest-in-region wins; on a tie keep the earliest (closest
-                         * to the routine, least surrounding glue). */
-                        if (best == NULL || inregion > best_inregion) {
-                            best = e;
-                            best_nr = nr;
-                            best_inregion = inregion;
-                        }
-                    }
-                }
-                off += h.size;
-            }
-            n_samples = si; /* only well-formed samples retained */
-        }
     }
-
-    /* The data ring is never drained mid-capture (data_tail only advances at the
-     * very end, line below), so the kernel never gets the next successful
-     * reservation needed to emit a pending PERF_RECORD_LOST — a ring that filled
-     * therefore shows NO loss record even though it dropped the newest samples
-     * (the run's tail, where sample_period=1 windows would otherwise stitch
-     * gaplessly). Treat a (near-)full ring as loss: if less than one maximum-size
-     * branch-stack sample of headroom remains, the tail was almost certainly
-     * dropped and the trace must be honestly truncated rather than claimed complete. */
-    const int amd_depth = asmtest_amd_lbr_depth();
-    {
-        size_t max_sample =
-            sizeof(struct perf_event_header) + sizeof(uint64_t) +
-            (size_t)amd_depth * sizeof(struct perf_branch_entry);
-        if (dsz > 0 && span + max_sample > dsz)
-            lost = 1;
-    }
-
-    /* Decode. Tier-A (the single richest in-region window) is complete when the
-     * routine's branches fit one 16-deep stack (best_nr < AMD_LBR_DEPTH) — the common
-     * small-routine case, unchanged. When that window overflowed (best_nr >= depth)
-     * the routine took more taken branches than the stack is deep, so escalate to
-     * Tier-B: stitch the overlapping sample_period=1 windows (collected above, time
-     * order) into one gapless sequence and decode THAT past the ceiling. A stitch gap
-     * or a dropped-sample record (`lost`) means the ring could not hold the whole run,
-     * so the result is honestly truncated; otherwise Tier-B reconstructs the full
-     * >16-branch trace where a single window cannot. */
-    int done = 0;
-    if (best != NULL && best_nr > 0 && best_inregion > 0) {
-        if (best_nr >= (uint64_t)amd_depth && n_samples > 1 &&
-            samples != NULL && nrs != NULL) {
-            size_t out_cap = n_samples + (size_t)amd_depth;
-            struct perf_branch_entry *out =
-                (struct perf_branch_entry *)malloc(out_cap * sizeof *out);
-            if (out != NULL) {
-                int gap = 0;
-                size_t st = asmtest_amd_stitch(
-                    (const struct perf_branch_entry *const *)samples, nrs,
-                    n_samples, r->base, (uint64_t)(uintptr_t)r->base, r->len,
-                    out, out_cap, &gap);
-                if (st > 0) {
-                    asmtest_amd_decode_stitched(out, st, r->base, r->len,
-                                                r->trace, gap || lost);
-                    done = 1;
-                }
-                free(out);
-            }
-        }
-        if (!done) {
-            asmtest_amd_decode(best, (size_t)best_nr, r->base, r->len,
-                               r->trace);
-            /* Freeze gate (CPUID 0x80000022 EAX[2]). WITHOUT LBR freeze-on-PMI the
-             * sampled stack keeps advancing after the overflow reaches CPL0, so a
-             * single Tier-A window may not have halted at the region exit — trust it
-             * complete only if it actually CONTAINS the region-exit branch (from
-             * in-region, to outside the region, i.e. the routine's ret/tail-jump).
-             * Otherwise the exit was not captured, so flag truncated rather than
-             * present a possibly-mid-routine window as complete. On a freeze-capable
-             * part this check is skipped and behavior is unchanged. */
-            if (r->trace != NULL && !asmtest_amd_freeze_available()) {
-                int saw_exit = 0;
-                for (uint64_t i = 0; i < best_nr; i++) {
-                    uint64_t f = best[i].from, t = best[i].to;
-                    if (f >= base_ip && f < end_ip &&
-                        (t < base_ip || t >= end_ip)) {
-                        saw_exit = 1;
-                        break;
-                    }
-                }
-                if (!saw_exit)
-                    r->trace->truncated = true;
-            }
-        }
-    } else if (r->trace != NULL) {
-        r->trace->truncated =
-            true; /* no in-region branches captured: not complete */
-    }
-
-    /* A dropped-sample record, or a ring that filled (detected above), means the
-     * capture holds only a prefix of the run — flag it truncated regardless of
-     * which tier decoded, so the single-window Tier-A path can't report a
-     * ring-truncated capture as complete. */
-    if (lost && r->trace != NULL)
-        r->trace->truncated = true;
-
-    /* Honesty invariant (matches the other backends): an in-region branch window that
-     * reconstructs to ZERO instructions — a boundary branch, or endpoints that do not
-     * bound a decodable run — is not a complete empty trace. Flag it truncated so the
-     * AMD path never reports empty-yet-complete (the intermittent case on a tiny
-     * single-shot routine whose branches barely enter the region). */
-    if (r->trace != NULL && r->trace->insns_total == 0)
-        r->trace->truncated = true;
-
-    free(samples);
-    free(nrs);
+    asmtest_amd_ring_parse_decode(buf, span, dsz, r->base, r->len, r->trace);
     free(buf);
+
     mp->data_tail = head; /* consume */
     munmap(g_base_map, g_base_sz);
     close(g_fd);

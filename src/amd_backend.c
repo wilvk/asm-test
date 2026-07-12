@@ -26,6 +26,7 @@
  */
 #include "amd_backend.h" /* shared decls (this TU's definitions) + ASMTEST_HW_* codes */
 #include "asmtest_trace.h"
+#include "debug.h" /* Phase 4: ASMTEST_HWDBG env-gated tier logging */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,6 +41,52 @@
 int asmtest_amd_decoder_present(void) {
     /* Reconstruction needs the Capstone length-decoder (via asmtest_disas). */
     return asmtest_disas_available() ? 1 : 0;
+}
+
+/* P9 — pure (no I/O) exact-token matcher over a /proc/cpuinfo `flags` line: 1 iff `flag`
+ * appears as a whole space-delimited token. Leading-space + trailing-boundary match, so a
+ * left-prefix ("xamd_lbr_v2") or right-suffix ("amd_lbr_v2x") does not falsely hit — a
+ * superset of the previous strstr(" flag") copies that agrees with them on every real
+ * cpuinfo line (flags are space-separated). Exposed for a host-independent unit test. */
+int asmtest_amd_flags_have(const char *line, const char *flag) {
+    if (line == NULL || flag == NULL || flag[0] == '\0')
+        return 0;
+    size_t fl = strlen(flag);
+    for (const char *p = line; (p = strchr(p, ' ')) != NULL; p++) {
+        const char *tok = p + 1; /* token begins right after the space */
+        if (strncmp(tok, flag, fl) == 0 && (tok[fl] == ' ' || tok[fl] == '\n' ||
+                                            tok[fl] == '\t' || tok[fl] == '\0'))
+            return 1;
+    }
+    return 0;
+}
+
+/* P9 — cached single-read /proc/cpuinfo `flags` probe: 1 iff the first `flags` line (all
+ * cores are identical) advertises `flag`. Caches the LINE (not a per-flag result), so
+ * amd_lbr_v2 / perfmon_v2 / … queries share one read. Replaces the byte-duplicated
+ * fopen/strncmp("flags")/strstr(" flag") loops in amd_backend.c + msr_lbr.c. */
+int asmtest_amd_has_cpu_flag(const char *flag) {
+    static char flags_line[4096];
+    static int loaded = -1; /* -1 not read, 0 no flags line, 1 line cached */
+    if (loaded < 0) {
+        loaded = 0;
+        flags_line[0] = '\0';
+        FILE *f = fopen("/proc/cpuinfo", "r");
+        if (f != NULL) {
+            char line[4096];
+            while (fgets(line, sizeof line, f) != NULL) {
+                if (strncmp(line, "flags", 5) == 0) {
+                    snprintf(flags_line, sizeof flags_line, "%s", line);
+                    loaded = 1;
+                    break; /* one flags line describes every (identical) core */
+                }
+            }
+            fclose(f);
+        }
+    }
+    if (loaded != 1)
+        return 0;
+    return asmtest_amd_flags_have(flags_line, flag);
 }
 
 /* Probe X86_FEATURE_AMD_LBR_PMC_FREEZE (CPUID 0x80000022 EAX[2]): whether this part
@@ -85,24 +132,11 @@ int asmtest_amd_snapshot_available(void) {
     if (cached >= 0)
         return cached;
     cached = 0;
-    /* (1)+(2): the amd_lbr_v2 and perfmon_v2 CPU features, from /proc/cpuinfo flags
-     * (the kernel only sets amd_lbr_v2 on parts whose LBR the snapshot path drives). */
-    FILE *f = fopen("/proc/cpuinfo", "r");
-    if (f == NULL)
-        return cached;
-    int have_lbr_v2 = 0, have_perfmon_v2 = 0;
-    char line[4096];
-    while (fgets(line, sizeof line, f) != NULL) {
-        if (strncmp(line, "flags", 5) == 0) {
-            if (strstr(line, " amd_lbr_v2") != NULL)
-                have_lbr_v2 = 1;
-            if (strstr(line, " perfmon_v2") != NULL)
-                have_perfmon_v2 = 1;
-            break; /* one flags line describes every (identical) core */
-        }
-    }
-    fclose(f);
-    if (!have_lbr_v2 || !have_perfmon_v2)
+    /* (1)+(2): the amd_lbr_v2 and perfmon_v2 CPU features, via the shared cached
+     * /proc/cpuinfo flags probe (P9 — the kernel only sets amd_lbr_v2 on parts whose LBR
+     * the snapshot path drives). */
+    if (!asmtest_amd_has_cpu_flag("amd_lbr_v2") ||
+        !asmtest_amd_has_cpu_flag("perfmon_v2"))
         return cached;
     /* (3): Linux >= 6.10 (the AMD snapshot backport floor). */
     struct utsname u;
@@ -203,6 +237,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
             for (size_t guard = 0;; guard++) {
                 if (guard >
                     len) { /* divergent follow (dropped back-edge cycle) */
+                    ASMTEST_HWDBG("desync: divergent follow "
+                                  "(dropped back-edge cycle) at o=%llu",
+                                  (unsigned long long)o);
                     trace->truncated = true;
                     return;
                 }
@@ -214,6 +251,8 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                                                (const uint8_t *)base, len, o,
                                                &is_call, &is_ret);
                 if (l == 0) { /* undecodable: cannot trust the rest */
+                    ASMTEST_HWDBG("desync: undecodable byte at o=%llu",
+                                  (unsigned long long)o);
                     trace->truncated = true;
                     return;
                 }
@@ -242,6 +281,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                     /* A recorded class (ret / indirect transfer / direct call) can
                      * only legally appear AT from_off; mid-run it is a desync. */
                     if (!direct || is_call) {
+                        ASMTEST_HWDBG("desync: recorded-class branch "
+                                      "(ret/indirect/call) mid-run at o=%llu",
+                                      (unsigned long long)o);
                         trace->truncated = true;
                         return;
                     }
@@ -252,12 +294,18 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                         if (tgt < base_ip || tgt >= end_ip) {
                             /* Leaves the region: the in-region from_off this run was
                              * decoding toward is now unreachable straight-line. */
+                            ASMTEST_HWDBG("desync: dropped jmp leaves "
+                                          "the region at o=%llu",
+                                          (unsigned long long)o);
                             trace->truncated = true;
                             return;
                         }
                         uint64_t no = tgt - base_ip;
                         if (no >
                             from_off) { /* jumped past the recorded source */
+                            ASMTEST_HWDBG("desync: dropped jmp past "
+                                          "the recorded source at o=%llu",
+                                          (unsigned long long)o);
                             trace->truncated = true;
                             return;
                         }
@@ -271,6 +319,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
                 }
                 o += l;
                 if (o > from_off) { /* walked past the branch: decode desync */
+                    ASMTEST_HWDBG("desync: walked past the recorded "
+                                  "branch source (from_off=%llu)",
+                                  (unsigned long long)from_off);
                     trace->truncated = true;
                     return;
                 }
@@ -497,6 +548,17 @@ int asmtest_amd_decoder_present(void) { return 0; }
 int asmtest_amd_freeze_available(void) { return 0; }
 int asmtest_amd_snapshot_available(void) { return 0; }
 int asmtest_amd_lbr_depth(void) { return 16; }
+
+/* P9 stubs — no /proc/cpuinfo x86 feature flags off x86-64 Linux. */
+int asmtest_amd_has_cpu_flag(const char *flag) {
+    (void)flag;
+    return 0;
+}
+int asmtest_amd_flags_have(const char *line, const char *flag) {
+    (void)line;
+    (void)flag;
+    return 0;
+}
 
 /* struct perf_branch_entry is Linux-only; use void* so the prototypes in
  * hwtrace.c's dispatch still link on other platforms. */

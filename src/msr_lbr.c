@@ -22,6 +22,7 @@
 #include "amd_backend.h" /* shared asmtest_amd_decode / _lbr_depth decls + ASMTEST_HW_* */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
+#include "debug.h" /* Phase 4: ASMTEST_HWDBG env-gated tier logging */
 
 #include <stddef.h>
 
@@ -54,25 +55,10 @@ static int msr_wr(int fd, uint32_t reg, uint64_t v) {
 
 /* amd_lbr_v2 flag from /proc/cpuinfo — the LBR-stack MSRs exist only on parts that report
  * it (the same gate the kernel's snapshot path uses, minus perfmon_v2/kernel which this
- * path does not need). Cached. */
+ * path does not need). P9: delegates to the single cached probe in amd_backend.c so this
+ * path and the snapshot path can never drift on the flag test. */
 static int amd_lbr_v2_present(void) {
-    static int cached = -1;
-    if (cached >= 0)
-        return cached;
-    cached = 0;
-    FILE *f = fopen("/proc/cpuinfo", "r");
-    if (f == NULL)
-        return cached;
-    char line[4096];
-    while (fgets(line, sizeof line, f) != NULL) {
-        if (strncmp(line, "flags", 5) == 0) {
-            if (strstr(line, " amd_lbr_v2") != NULL)
-                cached = 1;
-            break;
-        }
-    }
-    fclose(f);
-    return cached;
+    return asmtest_amd_has_cpu_flag("amd_lbr_v2");
 }
 
 /* Open /dev/cpu/N/msr O_RDWR for CPU `cpu` (needs CAP_SYS_ADMIN + the `msr` module). */
@@ -143,6 +129,9 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
 
     int fd = open_msr(cpu);
     if (fd < 0) {
+        ASMTEST_HWDBG("msr_trace: /dev/cpu/%d/msr open failed (need "
+                      "CAP_SYS_ADMIN + msr module)",
+                      cpu);
         if (had_prev)
             sched_setaffinity(0, sizeof prev, &prev);
         return ASMTEST_HW_EUNAVAIL;
@@ -199,11 +188,16 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
         }
         /* Decode via the shared path (in-region-filtered; window overflow -> truncated). */
         if (n > 0 && any_in_region) {
+            ASMTEST_HWDBG("msr_trace: decode %zu retired entries short_read=%d",
+                          n, short_read);
             rc = asmtest_amd_decode(br, n, base, len, trace);
             if (short_read)
                 trace->truncated =
                     true; /* a partial stack is never a complete capture */
         } else {
+            ASMTEST_HWDBG("msr_trace: truncated — no in-region branch in the "
+                          "frozen stack (n=%zu)",
+                          n);
             trace->truncated =
                 true; /* nothing in-region: honest, never empty-complete */
             rc = ASMTEST_HW_OK;

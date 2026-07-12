@@ -40,6 +40,16 @@ int asmtest_amd_snapshot_available(void);
  * part): a richest-window count at the ceiling means the routine overflowed one
  * snapshot, so escalate from Tier-A to Tier-B stitching. */
 int asmtest_amd_lbr_depth(void);
+
+/* P9 — one cached /proc/cpuinfo `flags` probe, shared by amd_backend.c (amd_lbr_v2 +
+ * perfmon_v2 snapshot gate) and msr_lbr.c (amd_lbr_v2 MSR gate), replacing two hand-rolled
+ * fopen/strstr copies whose drift would silently break the byte-identical-trace invariant.
+ * asmtest_amd_has_cpu_flag caches the first `flags` line and reports whether `flag` is a
+ * space-delimited token on it; asmtest_amd_flags_have is the PURE (no-I/O) matcher it uses,
+ * exposed for a host-independent unit test (mirroring asmtest_amd_msr_decode_entry). Both
+ * return 0 off x86-64 Linux (stubs). */
+int asmtest_amd_has_cpu_flag(const char *flag);
+int asmtest_amd_flags_have(const char *line, const char *flag);
 /* Deterministic boundary LBR snapshot (branchsnap.c): arm an LBR-on event + a HW
  * execution breakpoint at base+exit_off + the bpf_get_branch_snapshot program, drain and
  * decode at end. Routed here by the `snapshot` option or by default on the substrate that
@@ -90,6 +100,16 @@ int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
  * be NULL) receives the exit count; the default-on snapshot gates on *nexit == 1. Defined
  * in hwtrace.c; exposed for the host-independent tail-call exit-classification test. */
 size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
+
+/* F43 test seam (defined in hwtrace.c) — decode a LINEARIZED perf data-ring span
+ * [buf, buf+span) of PERF_RECORD_SAMPLE/LOST/THROTTLE records into *trace, selecting the
+ * richest-in-region window and applying the Tier-A/Tier-B + truncation rules the live
+ * hwtrace_end_amd uses. `dsz` is the ring data size for the near-full-loss heuristic (0
+ * disables it). Exposed for the host-independent ring-parse test (crafted buffers exercise
+ * the framing / richest-window / nr-clamp / LOST logic that self-skips off AMD hardware). */
+void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
+                                   const void *base, size_t len,
+                                   asmtest_trace_t *trace);
 
 #else /* not Linux x86-64: struct perf_branch_entry is Linux-only -> void*-typed stubs */
 

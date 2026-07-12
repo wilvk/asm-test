@@ -23,6 +23,7 @@
 #include "amd_backend.h" /* shared asmtest_amd_decode / _snapshot_* decls + reduced filter */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
+#include "debug.h" /* Phase 4: ASMTEST_HWDBG env-gated tier logging */
 
 #include <stddef.h>
 
@@ -207,10 +208,12 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
         return ASMTEST_HW_EUNAVAIL;
     }
     g_bsnap.active = 1;
+    ASMTEST_HWDBG("snapshot_begin: armed exit_off=%zu filter=%d", exit_off,
+                  branch_filter);
     return ASMTEST_HW_OK;
 }
 
-/* DRAIN the armed snapshot: disable the events, poll the BPF ring, decode the
+/* DRAIN the armed snapshot: disable the events, drain the BPF ring, decode the
  * richest boundary window into `trace` (truncated if the boundary was never hit),
  * and release everything. The region end marker's counterpart to _begin. */
 int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
@@ -222,15 +225,27 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
     }
     ioctl(g_bsnap.bfd, PERF_EVENT_IOC_DISABLE, 0);
     ioctl(g_bsnap.lfd, PERF_EVENT_IOC_DISABLE, 0);
-    ring_buffer__poll(g_bsnap.rb, 200);
+    /* P8: NON-BLOCKING drain. The exit breakpoint fires synchronously during run_fn and
+     * the BPF program bpf_ringbuf_submit()s immediately, so by here every record is
+     * already committed; the disable above guarantees no later producer. ring_buffer__poll
+     * (…, 200) did a 200 ms epoll_wait FIRST — and on the no-hit / honest-truncation path
+     * (now the common case, snapshot is default-on) nothing ever wakes epoll, so it burned
+     * the full 200 ms and drained nothing. ring_buffer__consume reads the producer position
+     * directly, drains all queued records, and returns at once (libbpf >= 0.4.0; the only
+     * image building this TU carries 1.3.0). */
+    ring_buffer__consume(g_bsnap.rb);
 
     int rc;
-    if (g_bsnap.drain.best_inregion > 0)
+    if (g_bsnap.drain.best_inregion > 0) {
+        ASMTEST_HWDBG("snapshot_end: decode best_nr=%llu best_inregion=%zu",
+                      g_bsnap.drain.best_nr, g_bsnap.drain.best_inregion);
         rc = asmtest_amd_decode(
             (const struct perf_branch_entry *)g_bsnap.drain.best,
             (size_t)g_bsnap.drain.best_nr, g_bsnap.drain.base,
             g_bsnap.drain.len, trace);
-    else {
+    } else {
+        ASMTEST_HWDBG("snapshot_end: truncated — boundary never hit / no "
+                      "in-region branch");
         trace->truncated = true; /* boundary never hit / no in-region branch */
         rc = ASMTEST_HW_OK;
     }

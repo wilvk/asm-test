@@ -57,6 +57,13 @@ int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
                                  struct perf_branch_entry *out);
 size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
+/* F43 ring-parse seam + P9 cpuinfo-flag matchers (internal, defined in
+ * hwtrace.c / amd_backend.c; hand-declared here like the AMD decode entries above). */
+void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
+                                   const void *base, size_t len,
+                                   asmtest_trace_t *trace);
+int asmtest_amd_has_cpu_flag(const char *flag);
+int asmtest_amd_flags_have(const char *line, const char *flag);
 #endif
 
 /* CoreSight reconstruction-core interface (decoder-independent half of
@@ -130,6 +137,64 @@ static int checks, failures;
  * perf access), so it runs even where the AMD LBR CAPTURE self-skips. Asserts the probe
  * returns a definite, stable answer; prints this host's actual support so the freeze gate
  * in hwtrace_end_amd is observable. On non-AMD / non-x86 it is honestly 0. */
+/* Phase 4 — env-gated debug logging (src/debug.{c,h}). Forked children so the
+ * getenv-once cache starts pristine (this runs FIRST in main, before any tier call caches
+ * it in the parent): a child with ASMTEST_HWTRACE_DEBUG=1 must emit a "[asmtest hwtrace] "
+ * line to stderr on the first tier call (asmtest_hwtrace_init); a child with it unset must
+ * keep stderr empty (zero overhead when off). Host-independent (the init log fires on any
+ * arch, before the availability gate). */
+static void test_debug_logging(void) {
+#if defined(__linux__)
+    for (int on = 0; on <= 1; on++) {
+        int fds[2];
+        if (pipe(fds) != 0) {
+            CHECK(0, "debug logging: pipe() failed");
+            return;
+        }
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(fds[0]);
+            dup2(fds[1], 2); /* stderr -> pipe */
+            close(fds[1]);
+            if (on)
+                setenv("ASMTEST_HWTRACE_DEBUG", "1", 1);
+            else {
+                unsetenv("ASMTEST_HWTRACE_DEBUG");
+                unsetenv("ASMTEST_AMD_DEBUG");
+            }
+            asmtest_hwtrace_options_t o;
+            memset(&o, 0, sizeof o);
+            o.backend = ASMTEST_HWTRACE_SINGLESTEP;
+            asmtest_hwtrace_init(
+                &o); /* logs "init: backend=..." when enabled */
+            asmtest_hwtrace_shutdown();
+            fflush(stderr);
+            _exit(0);
+        }
+        close(fds[1]);
+        char buf[512];
+        ssize_t tot = 0, k;
+        while (tot < (ssize_t)sizeof buf - 1 &&
+               (k = read(fds[0], buf + tot, sizeof buf - 1 - (size_t)tot)) > 0)
+            tot += k;
+        buf[tot > 0 ? tot : 0] = '\0';
+        close(fds[0]);
+        int st = 0;
+        waitpid(pid, &st, 0);
+        int has = strstr(buf, "[asmtest hwtrace] ") != NULL;
+        if (on)
+            CHECK(has,
+                  "debug logging: ASMTEST_HWTRACE_DEBUG=1 emits a tier log "
+                  "line to stderr");
+        else
+            CHECK(!has, "debug logging: unset env keeps stderr empty (zero "
+                        "overhead when off)");
+    }
+#else
+    printf("# SKIP debug logging: Linux only\n");
+#endif
+}
+
 static void test_amd_freeze_probe(void) {
 #if defined(__linux__) && defined(__x86_64__)
     int a = asmtest_amd_freeze_available();
@@ -1348,6 +1413,300 @@ static void test_amd_drain_reconstruction(void) {
     asmtest_trace_free(tb);
 #else
     printf("# SKIP AMD drain reconstruction: not Linux x86-64\n");
+#endif
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+/* Append a PERF_RECORD_SAMPLE {u64 nr; perf_branch_entry[n]} to buf at *off. When
+ * claim_nr is nonzero it OVERRIDES the encoded nr field (to forge a corrupt/oversized
+ * nr) while only `n` real entries are written — the F5 malicious-nr fixture. */
+static void ring_put_sample(uint8_t *buf, size_t *off,
+                            const struct perf_branch_entry *e, size_t n,
+                            uint64_t claim_nr) {
+    struct perf_event_header h;
+    memset(&h, 0, sizeof h);
+    h.type = PERF_RECORD_SAMPLE;
+    h.size = (uint16_t)(sizeof h + sizeof(uint64_t) +
+                        n * sizeof(struct perf_branch_entry));
+    memcpy(buf + *off, &h, sizeof h);
+    uint64_t nr = claim_nr ? claim_nr : (uint64_t)n;
+    memcpy(buf + *off + sizeof h, &nr, sizeof nr);
+    if (n > 0)
+        memcpy(buf + *off + sizeof h + sizeof(uint64_t), e,
+               n * sizeof(struct perf_branch_entry));
+    *off += h.size;
+}
+/* Append a bare PERF_RECORD_LOST header (the "ring dropped the tail" marker). */
+static void ring_put_lost(uint8_t *buf, size_t *off) {
+    struct perf_event_header h;
+    memset(&h, 0, sizeof h);
+    h.type = PERF_RECORD_LOST;
+    h.size = (uint16_t)sizeof h;
+    memcpy(buf + *off, &h, sizeof h);
+    *off += h.size;
+}
+#endif
+
+/* F43 — host-independent test of the AMD perf data-ring parse/select
+ * (asmtest_amd_ring_parse_decode, the seam hwtrace_end_amd calls after linearizing the
+ * mmap'd ring). Every LIVE path into this logic self-skips off AMD LBR hardware (always,
+ * on Intel/CI), so a crafted {perf_event_header + u64 nr + perf_branch_entry[]} buffer is
+ * the only coverage the ring framing / richest-in-region pick / oversized-nr clamp / LOST
+ * / near-full / Tier-A-overflow logic gets. Runs on any Linux x86-64 with Capstone. */
+static void test_amd_ring_parse(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD ring parse: built without Capstone\n");
+        return;
+    }
+    const uint64_t b = (uint64_t)(uintptr_t)ROUTINE;
+
+    /* (1) Richest-in-region window pick. An earlier glue-only window (both endpoints
+     * far outside the region -> inregion 0) then the real add2 stack [ret(0x11->out),
+     * jle(0xc->0x11)] (2 in-region). The parser must select the richer window and
+     * reconstruct the exact add2 stream; because the window holds the ret exit branch
+     * it is COMPLETE on freeze and non-freeze parts alike. */
+    {
+        uint8_t buf[512];
+        size_t off = 0;
+        struct perf_branch_entry glue[1];
+        memset(glue, 0, sizeof glue);
+        glue[0].from = b + 0x10000; /* far outside [b, b+len) */
+        glue[0].to = b + 0x10008;
+        struct perf_branch_entry rich[2];
+        memset(rich, 0, sizeof rich);
+        rich[0].from = b + 0x11;
+        rich[0].to = b + sizeof ROUTINE; /* ret -> outside (the exit edge) */
+        rich[1].from = b + 0xc;
+        rich[1].to = b + 0x11; /* jle -> ret */
+        ring_put_sample(buf, &off, glue, 1, 0);
+        ring_put_sample(buf, &off, rich, 2, 0);
+
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        asmtest_amd_ring_parse_decode(buf, off, 0, ROUTINE, sizeof ROUTINE, tr);
+        static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+        int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+        for (size_t i = 0; seq && i < 5; i++)
+            seq = (tr->insns[i] == EXPECT[i]);
+        CHECK(seq, "AMD ring parse: picks the richest-in-region window "
+                   "([0,3,6,c,11])");
+        CHECK(!asmtest_emu_trace_truncated(tr),
+              "AMD ring parse: a richest window holding the exit branch is "
+              "COMPLETE");
+        asmtest_trace_free(tr);
+    }
+
+    /* (2) Malicious/oversized nr (the F5 clamp). A SAMPLE whose nr field claims 2^63
+     * while its body holds none: nr * sizeof(perf_branch_entry) WRAPS to 0, so without
+     * the nr<=64 clamp the size check passes and the e[i] scan runs 2^63 times off the
+     * end of the buffer. The clamp rejects the record; the parser returns with an empty,
+     * honestly-truncated trace and no out-of-bounds read (proven under ASan). */
+    {
+        uint8_t buf[64];
+        size_t off = 0;
+        ring_put_sample(buf, &off, NULL, 0, (uint64_t)1 << 63);
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        asmtest_amd_ring_parse_decode(buf, off, 0, ROUTINE, sizeof ROUTINE, tr);
+        CHECK(asmtest_emu_trace_insns_total(tr) == 0 &&
+                  asmtest_emu_trace_truncated(tr),
+              "AMD ring parse: an oversized nr is rejected (F5 clamp; "
+              "empty+truncated, no OOB)");
+        asmtest_trace_free(tr);
+    }
+
+    /* (3) LOST detection. A COMPLETE add2 window followed by a PERF_RECORD_LOST record
+     * must be flagged truncated even though the window decoded fully (the ring dropped
+     * the run's tail — the surviving prefix is not the whole run). */
+    {
+        uint8_t buf[512];
+        size_t off = 0;
+        struct perf_branch_entry rich[2];
+        memset(rich, 0, sizeof rich);
+        rich[0].from = b + 0x11;
+        rich[0].to = b + sizeof ROUTINE;
+        rich[1].from = b + 0xc;
+        rich[1].to = b + 0x11;
+        ring_put_sample(buf, &off, rich, 2, 0);
+        ring_put_lost(buf, &off);
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        asmtest_amd_ring_parse_decode(buf, off, 0, ROUTINE, sizeof ROUTINE, tr);
+        CHECK(asmtest_emu_trace_insns_total(tr) == 5 &&
+                  asmtest_emu_trace_truncated(tr),
+              "AMD ring parse: a PERF_RECORD_LOST after a full window flags "
+              "truncated");
+        asmtest_trace_free(tr);
+    }
+
+    /* (4) Tier-A overflow prefix. A single depth-deep window of identical AMD_LOOP
+     * back-edges (best_nr >= depth, n_samples == 1 so no Tier-B stitch) is honestly
+     * truncated — the window overflowed and there is no second window to stitch. */
+    {
+        const uint64_t lb = (uint64_t)(uintptr_t)AMD_LOOP;
+        int depth = asmtest_amd_lbr_depth();
+        struct perf_branch_entry full[64];
+        memset(full, 0, sizeof full);
+        for (int i = 0; i < depth && i < 64; i++) {
+            full[i].from = lb + 0xd;
+            full[i].to = lb + 0x7;
+        }
+        uint8_t buf[64 * sizeof(struct perf_branch_entry) + 64];
+        size_t off = 0;
+        ring_put_sample(buf, &off, full, (size_t)depth, 0);
+        asmtest_trace_t *tr = asmtest_trace_new(256, 64);
+        asmtest_amd_ring_parse_decode(buf, off, 0, AMD_LOOP, sizeof AMD_LOOP,
+                                      tr);
+        CHECK(asmtest_emu_trace_truncated(tr),
+              "AMD ring parse: a lone depth-deep window (Tier-A overflow) "
+              "truncates");
+        asmtest_trace_free(tr);
+    }
+
+    /* (5) Near-full ring, no LOST record. A span within one max-size sample of `dsz`
+     * is treated as loss even though the window decoded complete (a filled non-overwrite
+     * ring emits no LOST — the kernel never gets the next reservation). */
+    {
+        uint8_t buf[512];
+        size_t off = 0;
+        struct perf_branch_entry rich[2];
+        memset(rich, 0, sizeof rich);
+        rich[0].from = b + 0x11;
+        rich[0].to = b + sizeof ROUTINE;
+        rich[1].from = b + 0xc;
+        rich[1].to = b + 0x11;
+        ring_put_sample(buf, &off, rich, 2, 0);
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        /* dsz only a few bytes above span, so span + one max-size sample overruns it. */
+        asmtest_amd_ring_parse_decode(buf, off, off + 8, ROUTINE,
+                                      sizeof ROUTINE, tr);
+        CHECK(asmtest_emu_trace_truncated(tr),
+              "AMD ring parse: a near-full ring (span+max_sample>dsz) flags "
+              "truncated");
+        asmtest_trace_free(tr);
+    }
+#else
+    printf("# SKIP AMD ring parse: not Linux x86-64\n");
+#endif
+}
+
+/* F44 — the dropped-uncond-jmp FOLLOW in amd_span_decodable (amd_backend.c), reached only
+ * through asmtest_amd_stitch's splice-decodability guard. The three existing stitch tests
+ * never enter that branch (AMD_LOOP's back-edge is a conditional jnz, and the period-spaced
+ * test passes base=NULL, short-circuiting the guard). Here a reduced-filter loop drops a
+ * direct in-region jmp, so validating each window's overlap requires FOLLOWING that jmp
+ * across the splice — assert the stitch stays gapless. A second window pair puts the splice
+ * across a region-LEAVING jmp (the "cannot disprove" arm). Host-independent. */
+static void test_amd_stitch_reduced_filter(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD reduced-filter stitch: built without Capstone\n");
+        return;
+    }
+    /* mov rax,0 ; L: add rax,rsi ; jmp 0x0f (DROPPED, skips 3 dead bytes) ; dec rsi ;
+     * jnz L (RECORDED back-edge) ; ret. Under the reduced filter only the jnz is
+     * recorded, so the splice out[..].to(L=0x07) -> next.from(jnz=0x12) must follow the
+     * dropped jmp at 0x0a to decode. */
+    static const unsigned char RLOOP[] = {
+        0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, /* 0x00 mov rax,0 */
+        0x48, 0x01, 0xf8,                         /* 0x07 add rax,rdi */
+        0xeb, 0x03,                               /* 0x0a jmp 0x0f    */
+        0xcc, 0xcc, 0xcc,                         /* 0x0c dead        */
+        0x48, 0xff, 0xce,                         /* 0x0f dec rsi     */
+        0x75, 0xf3,                               /* 0x12 jnz 0x07    */
+        0xc3};                                    /* 0x14 ret         */
+    const uint64_t b = (uint64_t)(uintptr_t)RLOOP;
+    enum { K = 18 };
+    struct perf_branch_entry
+        edge[K]; /* the lone recorded jnz back-edge, K times */
+    memset(edge, 0, sizeof edge);
+    for (int i = 0; i < K; i++) {
+        edge[i].from = b + 0x12;
+        edge[i].to = b + 0x07;
+    }
+    struct perf_branch_entry win[K][16];
+    const struct perf_branch_entry *samples[K];
+    size_t nrs[K];
+    for (int j = 0; j < K; j++) {
+        int depth = (j + 1 < 16) ? (j + 1) : 16;
+        for (int e = 0; e < depth; e++)
+            win[j][e] = edge[0]; /* every edge identical */
+        samples[j] = win[j];
+        nrs[j] = (size_t)depth;
+    }
+    struct perf_branch_entry out[64];
+    int gap = 0;
+    size_t n = asmtest_amd_stitch(samples, nrs, K, RLOOP, b, sizeof RLOOP, out,
+                                  64, &gap);
+    CHECK(n == K && gap == 0,
+          "AMD reduced-filter stitch: splice follows the dropped in-region jmp "
+          "(gapless)");
+    asmtest_trace_t *tb = asmtest_trace_new(256, 64);
+    int rc = asmtest_amd_decode_stitched(out, n, RLOOP, sizeof RLOOP, tb, gap);
+    CHECK(rc == ASMTEST_HW_OK && !asmtest_emu_trace_truncated(tb),
+          "AMD reduced-filter stitch: the stitched sequence decodes COMPLETE");
+    CHECK(asmtest_trace_covered(tb, 0x07) && !asmtest_trace_covered(tb, 0x0c),
+          "AMD reduced-filter stitch: loop body (0x07) covered, dead bytes "
+          "(0x0c) are not");
+    asmtest_trace_free(tb);
+
+    /* Region-LEAVING jmp arm: the splice from-point decodes a direct uncond jmp whose
+     * target is OUTSIDE the region, so amd_span_decodable cannot disprove the splice and
+     * accepts it (gap == 0). jmp +0x20 (target 0x22, past the len-8 region) at 0x00. */
+    static const unsigned char LEAVE[] = {0xeb, 0x20, 0xcc, 0xcc,
+                                          0xcc, 0x90, 0x90, 0x90};
+    const uint64_t lb = (uint64_t)(uintptr_t)LEAVE;
+    struct perf_branch_entry A;
+    memset(&A, 0, sizeof A);
+    A.from = lb + 0x05; /* the next-window source the splice must reach */
+    A.to = lb + 0x00;   /* lands on the region-leaving jmp              */
+    struct perf_branch_entry w0[1] = {A};
+    struct perf_branch_entry w1[2] = {A, A};
+    const struct perf_branch_entry *ls[2] = {w0, w1};
+    size_t ln[2] = {1, 2};
+    struct perf_branch_entry lout[8];
+    int lgap = 0;
+    size_t ln2 =
+        asmtest_amd_stitch(ls, ln, 2, LEAVE, lb, sizeof LEAVE, lout, 8, &lgap);
+    CHECK(ln2 == 2 && lgap == 0,
+          "AMD reduced-filter stitch: a splice across a region-leaving jmp is "
+          "accepted (cannot disprove)");
+#else
+    printf("# SKIP AMD reduced-filter stitch: not Linux x86-64\n");
+#endif
+}
+
+/* P9 — the shared /proc/cpuinfo flag probe. asmtest_amd_flags_have is pure (no I/O), so
+ * synthetic `flags` lines exercise the exact token semantics host-independently; the cached
+ * whole-file asmtest_amd_has_cpu_flag is asserted stable (the dedup must not change any
+ * availability verdict). */
+static void test_amd_cpu_flag(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    const char *line = "flags\t: fpu vme de amd_lbr_v2 perfmon_v2 lm\n";
+    CHECK(asmtest_amd_flags_have(line, "amd_lbr_v2") == 1,
+          "cpu flag: a present token matches");
+    CHECK(asmtest_amd_flags_have(line, "perfmon_v2") == 1,
+          "cpu flag: a second present token matches");
+    CHECK(asmtest_amd_flags_have(line, "fpu") == 1,
+          "cpu flag: the first token (right after the colon) matches");
+    CHECK(asmtest_amd_flags_have(line, "lm") == 1,
+          "cpu flag: the last token (newline-terminated) matches");
+    CHECK(asmtest_amd_flags_have(line, "avx512") == 0,
+          "cpu flag: an absent token does not match");
+    CHECK(asmtest_amd_flags_have(line, "amd_lbr_v") == 0,
+          "cpu flag: a right-truncated token ('amd_lbr_v') does not match");
+    CHECK(asmtest_amd_flags_have("flags\t: xamd_lbr_v2 lm\n", "amd_lbr_v2") ==
+              0,
+          "cpu flag: a left-prefixed token ('xamd_lbr_v2') does not match");
+    CHECK(asmtest_amd_flags_have(line, "") == 0 &&
+              asmtest_amd_flags_have(NULL, "lm") == 0 &&
+              asmtest_amd_flags_have(line, NULL) == 0,
+          "cpu flag: empty / NULL inputs are rejected");
+    int lbr = asmtest_amd_has_cpu_flag("amd_lbr_v2");
+    CHECK(lbr == 0 || lbr == 1,
+          "cpu flag: cached /proc/cpuinfo probe returns a definite 0/1");
+    CHECK(lbr == asmtest_amd_has_cpu_flag("amd_lbr_v2"),
+          "cpu flag: cached probe is stable across calls");
+#else
+    printf("# SKIP AMD cpu flag: not Linux x86-64\n");
 #endif
 }
 
@@ -5690,6 +6049,10 @@ static void test_zeroctor_managed_compose(void) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    /* Phase 4 debug logging FIRST — its forked children need the getenv-once cache still
+     * pristine in the parent (no tier call has run yet). */
+    test_debug_logging();
+
     /* Backend-independent: validate the AMD reconstruction decoder. */
     test_amd_freeze_probe();
     test_amd_reconstruction();
@@ -5697,6 +6060,11 @@ int main(void) {
     test_amd_msr_spec_filter();
     test_amd_tailcall_exit();
     test_amd_reduced_filter();
+    /* F43 ring-parse seam + F44 reduced-filter stitch follow + P9 cpuinfo-flag probe:
+     * host-independent, exercise logic that self-skips off AMD LBR hardware. */
+    test_amd_ring_parse();
+    test_amd_stitch_reduced_filter();
+    test_amd_cpu_flag();
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */
     test_stitch_slices();

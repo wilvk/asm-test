@@ -122,7 +122,17 @@ static long call_auto_invoke(const void *code, const long *args, int nargs) {
 }
 
 /* Clear a caller-owned trace between escalation attempts (keeps the insns/blocks
- * buffers; zeroes the counts + the truncated bit so the winning tier stands alone). */
+ * buffers; zeroes the counts + the truncated bit so the winning tier stands alone).
+ *
+ * F24: a reset DISCARDS whatever the prior rung had captured, so `ran` (the "we hold a
+ * committed trace" flag) must be cleared in lock-step at every reset site and re-set to 1
+ * ONLY when a rung actually commits a usable trace. Otherwise a rung that resets and then
+ * FAILS at runtime (fork/ptrace blocked by seccomp/ptrace_scope, ENOMEM) leaves the trace
+ * empty while `ran` still reads 1 from an EARLIER rung whose partial this reset wiped — and
+ * the function returns ASMTEST_HW_OK with insns_len==0 + truncated==true (a successful
+ * empty trace). Skipped (unavailable) rungs never reset, so a rung-1 best-effort partial
+ * survives to be returned when nothing downstream runs — the legitimate truncated-but-OK
+ * case is preserved. */
 static void call_auto_reset(asmtest_trace_t *t) {
     t->insns_len = 0;
     t->insns_total = 0;
@@ -205,6 +215,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
      * early-return on a failed tier) so a too-small-for-MSR routine still reaches block-step. */
     if (!(policy & ASMTEST_TRACE_CEILING_FREE) && asmtest_amd_msr_available()) {
         call_auto_reset(trace);
+        ran =
+            0; /* F24: the reset discarded any prior partial — re-earn `ran` below */
         struct msr_call_closure cl = {code, args, nargs, 0};
         if (asmtest_amd_msr_trace(code, len, msr_call_trampoline, &cl, trace) ==
                 ASMTEST_HW_OK &&
@@ -224,6 +236,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
      * entry, not a resolve backend). */
     if (asmtest_ptrace_blockstep_available()) {
         call_auto_reset(trace);
+        ran =
+            0; /* F24: reset wiped any prior partial — re-earn `ran` on success only */
         if (asmtest_ptrace_trace_call_blockstep(code, len, args, nargs, result,
                                                 trace) == ASMTEST_PTRACE_OK) {
             ran = 1;
@@ -241,6 +255,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     /* (3) Complete floor — per-instruction single-step, fork-isolated re-run. */
     if (asmtest_ptrace_available()) {
         call_auto_reset(trace);
+        ran =
+            0; /* F24: reset wiped any prior partial — re-earn `ran` on success only */
         if (asmtest_ptrace_trace_call(code, len, args, nargs, result, trace) ==
             ASMTEST_PTRACE_OK) {
             ran = 1;
