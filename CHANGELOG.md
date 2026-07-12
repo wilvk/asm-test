@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-flow tracing Phase 5 Increment 1 — DynamoRIO in-band L0 value producer
+  (`src/dataflow_dr.c`, `src/dataflow_dr_client.c`).** The in-band, whole-process analog of
+  the scoped ptrace L0 producer: a DynamoRIO client instruments a target under real DR and
+  captures per-instruction operand values into the same `asmtest_valtrace_t` sink, so the L1
+  def-use builder and L2 slicer work unchanged on an in-band capture. Cross-validated against
+  the emulator L0 oracle on a shared fixture (in-band def-use edges and forward/backward
+  slices equal the oracle's), validated live via `make docker-drtrace` (`dr-valtrace-test`
+  14/14; DR is a software DBI engine, so the lane needs no privilege or special hardware).
+  Self-skips (exit 0) without `DYNAMORIO_HOME`. Store *values* and RIP-relative/segmented/VSIB
+  memory EAs are deferred to a later increment (the current fixture avoids them); DR-side taint
+  shadowing and whole-process breadth are also later increments.
+
+- **Data-flow tracing Phase 4 Increment 3 — runtime-helper summary edges
+  (`src/dataflow_helpers.c`).** `asmtest_defuse_build_summarized` recognizes a .NET
+  runtime-helper call in an L0 value trace (via the Increment-1 method resolver → a helper
+  table matched by name/prefix) and collapses the helper run into a **summary node** — emitting
+  only its declared input reads and output writes and dropping the body — so caller dataflow
+  connects *across* the helper (arg def → summary → return use) without instrumenting CoreCLR
+  internals. Supports reg→reg helpers (allocation, generic-dict lookup) and a `MEM_AT_REG`
+  write-barrier output. Conservative by construction: an **unrecognized** call is descended
+  normally, never given a fabricated edge. Pure, host-independent suite `test_dataflow_helpers`
+  (36 checks).
+
 - **Data-flow tracing Phase 4 Increment 2 — GC-move canonicalization
   (`src/dataflow_gcmove.c`).** A pure, host-independent transform (`asmtest_gcmove_t`,
   the shape of EventPipe `GCBulkMovedObjectRanges`: `old_base`/`new_base`/`len`) that remaps

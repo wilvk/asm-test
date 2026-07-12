@@ -354,6 +354,105 @@ size_t asmtest_gcmove_canonicalize(asmtest_valtrace_t *v,
                                    const asmtest_gcmove_t *moves,
                                    size_t nmoves);
 
+/* ------------------------------------------------------------------ */
+/* Phase 4 (increment 3) — runtime-helper SUMMARY EDGES                */
+/*                                                                     */
+/* A managed value trace steps THROUGH the CoreCLR runtime helpers the  */
+/* JIT emits for language-level operations: an ALLOCATION helper for a   */
+/* `new`, a WRITE-BARRIER for a reference-field store, a GENERIC-DICT     */
+/* lookup for a shared-generic type/method handle. Those helper bodies    */
+/* are ordinary instrumented blocks — a raw def-use built over the trace  */
+/* WOULD thread the caller's data flow through the helper's internal      */
+/* instructions (scratch regs, card-table math, slow-path branches),      */
+/* which is both noisy and CoreCLR-version-specific.                       */
+/*                                                                        */
+/* This pass instead models a RECOGNIZED helper call as a SUMMARY: at the  */
+/* helper's entry step it emits exactly the helper's declared INPUT reads   */
+/* and OUTPUT writes (its data-flow contract — e.g. an alloc helper reads    */
+/* its MethodTable arg and writes the new object reference to the return     */
+/* register) and DROPS the helper body's own records, so a def-use built     */
+/* over the trace connects the caller's flow ACROSS the helper (arg def ->    */
+/* summary node -> return use) WITHOUT descending into CoreCLR internals.     */
+/* An UNRECOGNIZED call is left alone — its body is descended normally, so    */
+/* the pass never fabricates a summary edge it cannot justify (conservative). */
+/*                                                                            */
+/* Helpers are identified by the increment-1 method resolver: each step's PC  */
+/* resolves to a method record whose NAME is matched against a helper table   */
+/* (exact, or a trailing '*' prefix pattern). A representative built-in table  */
+/* of the three canonical helper shapes ships as asmtest_helper_default_table; */
+/* the register ids there mirror the x86-64 SysV convention (Capstone reg ids, */
+/* kept as literals so this PURE C TU needs no Capstone). The transform reuses  */
+/* asmtest_defuse_build over a rewritten record stream, so it stays on the same */
+/* pure tier as the L1/L2 passes and unit-tests on every host. The LIVE helper  */
+/* identification (a runtime symbolizer feeding the method-map) is a producer   */
+/* concern; this is the pure model it drives. Incidental caller-saved clobbers   */
+/* are deliberately NOT modelled — only the declared input->output contract.     */
+/* ------------------------------------------------------------------ */
+
+/* A helper input/output LOCATION. AT_HELPER_REG names a register directly (the
+ * common case: an arg or the return register). AT_HELPER_MEM_AT_REG names the
+ * memory the helper touches THROUGH a pointer register — the write-barrier's
+ * destination field, whose absolute address is resolved from `reg`'s captured
+ * value at the call site (skipped, conservatively, when that value is unknown). */
+typedef enum {
+    AT_HELPER_REG = 0, /* a register, by reg id                              */
+    AT_HELPER_MEM_AT_REG =
+        1, /* memory at the address currently held in reg `reg`  */
+} at_helper_loc_kind_t;
+
+typedef struct asmtest_helper_loc {
+    at_helper_loc_kind_t kind;
+    uint32_t reg;  /* REG: the reg id; MEM_AT_REG: the pointer reg          */
+    uint16_t size; /* MEM_AT_REG byte width (0 -> 8); ignored for REG        */
+} asmtest_helper_loc_t;
+
+/* One known-helper entry: a method NAME (or a trailing-'*' prefix pattern) and
+ * its data-flow contract — the input locations that flow to the output
+ * locations. `ins` / `outs` are borrowed (the caller's table owns them). */
+typedef struct asmtest_helper {
+    const char *name;
+    const asmtest_helper_loc_t *ins;
+    size_t n_in;
+    const asmtest_helper_loc_t *outs;
+    size_t n_out;
+} asmtest_helper_t;
+
+/* Match a resolved method `name` against a helper table: an entry matches on an
+ * exact string equality, or — when the entry name ends in '*' — on that prefix.
+ * Returns the FIRST matching entry index, or -1 (a NULL name / NULL table never
+ * matches). Pure; the table is a small hand-curated list, so a linear scan is
+ * both simplest and ample. */
+int asmtest_helper_match(const asmtest_helper_t *helpers, size_t nhelpers,
+                         const char *name);
+
+/* The built-in representative .NET runtime-helper table: an allocation helper
+ * (MethodTable arg -> new object reference in the return reg), a write-barrier
+ * (reference value -> the destination field in memory), and a generic-dictionary
+ * lookup (context -> resolved handle in the return reg). Register ids mirror the
+ * x86-64 SysV convention as Capstone reg ids. Returns a pointer to static storage
+ * (never NULL); `*n_out`, when non-NULL, receives the entry count. */
+const asmtest_helper_t *asmtest_helper_default_table(size_t *n_out);
+
+/* Build the last-writer def-use graph over `v` (as asmtest_defuse_build does) but
+ * SUMMARIZE each recognized runtime-helper call. A step whose PC resolves (via the
+ * increment-1 method-map) to a method whose name matches `helpers` begins a helper
+ * RUN — the maximal following stretch of steps that resolve to the SAME helper
+ * entry. At the run's FIRST step the graph gains the helper's declared input reads
+ * and output writes, and every record inside the run is dropped, so the caller's
+ * flow links across the helper without the body's internal instructions. An
+ * unrecognized call is descended normally (its records pass through unchanged), so
+ * no summary edge is invented for it. A MEM_AT_REG output/input resolves its
+ * absolute address from the pointer register's most recent captured value; when
+ * that value is unknown the memory location is skipped (no false edge).
+ *
+ * Returns an asmtest_defuse_t (free with asmtest_defuse_free) whose nsteps still
+ * spans the whole trace, so the L2 slicer works over it unchanged. A NULL trace
+ * returns NULL; a NULL/empty helper table (or a NULL/empty method-map) degrades to
+ * a plain asmtest_defuse_build (nothing is summarized). */
+asmtest_defuse_t *asmtest_defuse_build_summarized(
+    const asmtest_valtrace_t *v, const asmtest_method_t *methods,
+    size_t nmethods, const asmtest_helper_t *helpers, size_t nhelpers);
+
 #ifdef __cplusplus
 }
 #endif

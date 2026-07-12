@@ -35,6 +35,15 @@ $(BUILD)/dataflow_gcmove.o: src/dataflow_gcmove.c include/asmtest_valtrace.h \
                             include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Phase 4 (increment 3): the pure runtime-helper SUMMARY-EDGE modeler over an L0
+# value trace. Same PURE-C tier as dataflow.o (no Capstone, no Unicorn) — runs
+# everywhere; rewrites a recognized CoreCLR helper call (alloc / write-barrier /
+# generic-dict) into its declared input->output summary and reuses the shared
+# asmtest_defuse_build, so caller data-flow connects across the helper body.
+$(BUILD)/dataflow_helpers.o: src/dataflow_helpers.c include/asmtest_valtrace.h \
+                             include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h \
                               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
@@ -87,6 +96,18 @@ $(BUILD)/test_dataflow_gcmove: $(BUILD)/dataflow.o $(BUILD)/dataflow_gcmove.o \
                                $(BUILD)/test_dataflow_gcmove.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# Phase 4 (increment 3) runtime-helper summary-edge suite. PURE — links the
+# value-trace sink + the increment-1 resolver (name identification) + the helper
+# modeler, no framework/Capstone/Unicorn. Like the increment-1/2 rules above, this
+# EXPLICIT rule beats the root Makefile's generic test_% pattern (which would link
+# the framework runtime + a same-named routine object it does not have), so the
+# suite builds wherever it is requested — including before the root SUITE_EXCLUDES
+# is updated to keep it out of `make test`.
+$(BUILD)/test_dataflow_helpers: $(BUILD)/dataflow.o $(BUILD)/dataflow_method.o \
+                                $(BUILD)/dataflow_helpers.o \
+                                $(BUILD)/test_dataflow_helpers.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(BUILD)/test_operands: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                         $(BUILD)/test_operands.o
 	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) -o $@
@@ -123,7 +144,7 @@ endif
 
 .PHONY: dataflow-test dataflow-grep-gate
 dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
-               $(BUILD)/test_dataflow_gcmove \
+               $(BUILD)/test_dataflow_gcmove $(BUILD)/test_dataflow_helpers \
                $(BUILD)/test_operands $(DF_EMU_SUITE) \
                $(BUILD)/test_dataflow_ptrace
 	@echo "== dataflow-test =="
@@ -131,6 +152,7 @@ dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
 	$(BUILD)/test_dataflow
 	$(BUILD)/test_dataflow_method
 	$(BUILD)/test_dataflow_gcmove
+	$(BUILD)/test_dataflow_helpers
 	$(BUILD)/test_operands
 ifeq ($(DF_HAVE_UNICORN),1)
 	$(BUILD)/test_dataflow_emu

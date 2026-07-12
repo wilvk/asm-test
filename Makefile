@@ -64,7 +64,7 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_ibs \
                   test_dataflow test_operands test_dataflow_emu \
                   test_dataflow_ptrace test_dataflow_method \
-                  test_dataflow_gcmove
+                  test_dataflow_gcmove test_dataflow_helpers
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
