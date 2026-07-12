@@ -10,6 +10,7 @@
  */
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
+#include "asmtest_ibs.h" /* Zen-2 F6: gate the IBS-Op survey-fallback test */
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 #include "asmtest_trace_auto.h"
@@ -3402,6 +3403,100 @@ static void test_amd_sample_window(void) {
 #endif
 }
 
+/* Zen-2 F6: the whole-window survey's IBS-Op FALLBACK. On Zen 2 the branch stack is
+ * absent, so asmtest_hwtrace_sample_window_amd delegates to the statistical IBS-Op
+ * survey and still returns a hot-method histogram (was EUNAVAIL). We force that path
+ * with ASMTEST_FORCE_IBS_SURVEY so it also exercises + cross-validates on Zen 3+/CI
+ * boxes that DO have the branch stack. Gated on asmtest_ibs_available(), so it self-
+ * skips on any non-AMD-IBS host. Also covers the begin/end (using-block) split. */
+static void test_amd_sample_window_ibs(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ibs_available()) {
+        printf("# SKIP AMD IBS survey fallback: %s\n",
+               asmtest_ibs_skip_reason());
+        return;
+    }
+    /* Same hot loop as test_amd_sample_window; its taken back-edge target (loop top,
+     * offset 0x3) dominates the sampled endpoints. A larger trip count than the
+     * branch-stack test gives IBS-Op (coarser period) enough samples. */
+    static const unsigned char LOOP[] = {
+        0x48, 0x31, 0xC0, /* 0x0: xor rax, rax    */
+        0x48, 0x01, 0xF8, /* 0x3: L: add rax, rdi */
+        0x48, 0xFF, 0xCF, /* 0x6: dec rdi         */
+        0x75, 0xF8,       /* 0x9: jnz L (-> 0x3)  */
+        0xC3,             /* 0xb: ret             */
+    };
+    void *fn = mmap(NULL, sizeof LOOP, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fn == MAP_FAILED) {
+        printf("# SKIP AMD IBS survey fallback: mmap failed\n");
+        return;
+    }
+    memcpy(fn, LOOP, sizeof LOOP);
+    mprotect(fn, sizeof LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)fn, (char *)fn + sizeof LOOP);
+    g_asw_fn = fn;
+    g_asw_arg =
+        40000000; /* 40M taken branches — enough IBS-Op samples in-window */
+    uint64_t base = (uint64_t)(uintptr_t)fn, end = base + sizeof LOOP;
+
+    setenv("ASMTEST_FORCE_IBS_SURVEY", "1",
+           1); /* force the IBS path everywhere */
+
+    size_t cap = 65536;
+    uint64_t *ips = (uint64_t *)malloc(cap * sizeof(uint64_t));
+    size_t nips = 0;
+    int trunc = 0;
+    int rc = asmtest_hwtrace_sample_window_amd(asw_run, NULL, 16, ips, cap,
+                                               &nips, &trunc);
+    /* available() is a substrate probe; perf_event_open can still be blocked. */
+    if (rc == ASMTEST_HW_EUNAVAIL) {
+        printf("# SKIP AMD IBS survey fallback: IBS perf_open blocked\n");
+        unsetenv("ASMTEST_FORCE_IBS_SURVEY");
+        free(ips);
+        munmap(fn, sizeof LOOP);
+        return;
+    }
+    CHECK(rc == ASMTEST_HW_OK,
+          "AMD IBS survey fallback returns OK (not EUNAVAIL)");
+    CHECK(nips > 0, "AMD IBS survey fallback collected endpoints");
+    size_t inregion = 0;
+    for (size_t i = 0; i < nips; i++)
+        if (ips[i] >= base && ips[i] < end)
+            inregion++;
+    CHECK(inregion * 2 > nips,
+          "AMD IBS survey fallback: most endpoints land in the hot loop");
+    printf("# AMD IBS survey fallback: nips=%zu in-loop=%zu truncated=%d\n",
+           nips, inregion, trunc);
+
+    /* The begin/end (using-block) split must take the same IBS path. */
+    void *ctx = NULL;
+    int brc = asmtest_hwtrace_sample_begin_amd(16, &ctx);
+    if (brc == ASMTEST_HW_OK) {
+        asw_run(NULL); /* window body runs inline while IBS samples */
+        size_t bn = 0;
+        int btr = 0;
+        int erc = asmtest_hwtrace_sample_end_amd(ctx, ips, cap, &bn, &btr);
+        CHECK(erc == ASMTEST_HW_OK, "AMD IBS begin/end split returns OK");
+        size_t bin = 0;
+        for (size_t i = 0; i < bn; i++)
+            if (ips[i] >= base && ips[i] < end)
+                bin++;
+        CHECK(bn > 0 && bin * 2 > bn,
+              "AMD IBS begin/end split: most endpoints in the hot loop");
+    } else {
+        CHECK(brc == ASMTEST_HW_EUNAVAIL,
+              "AMD IBS begin returns OK or a clean EUNAVAIL");
+    }
+
+    unsetenv("ASMTEST_FORCE_IBS_SURVEY");
+    free(ips);
+    munmap(fn, sizeof LOOP);
+#else
+    printf("# SKIP AMD IBS survey fallback: Linux x86-64 only\n");
+#endif
+}
+
 /* Faulting-routine trace must NOT leak the forked tracee. Tracing a routine that
  * takes a real signal (SIGILL/SIGSEGV) is the whole point of the out-of-process
  * stepper — a buggy routine is exactly what you trace. The single-step loop breaks
@@ -5709,6 +5804,7 @@ int main(void) {
     test_ptrace_window_call();
     test_stealth_windowed();
     test_amd_sample_window();
+    test_amd_sample_window_ibs();
 
     /* Live: tracing a routine that faults (SIGILL) must reap its tracee, not leak it. */
     test_ptrace_faulting_no_leak();

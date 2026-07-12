@@ -32,6 +32,8 @@
  */
 #include "asmtest_ibs.h"
 
+#include "ibs_backend.h" /* internal window primitives (asmtest_ibs_window_*) */
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -684,6 +686,70 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     return ASMTEST_IBS_OK;
 }
 
+/* --- window primitives (arm on the calling thread, run body, drain) ------------ */
+/* The begin/run/end shape hwtrace.c's F6 fallback needs: unlike survey_pid (which
+ * owns a timed drain loop), here the CALLER runs its own workload between begin and
+ * end while IBS-Op samples the calling thread — exactly the branch-stack
+ * sample_begin_amd/_end_amd control flow, so the two survey paths line up. */
+typedef struct {
+    ibs_chan ch;
+    size_t pg, dsz;
+    uint8_t *scratch;
+    edge_hash h;
+} ibs_window;
+
+int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
+    if (ctx_out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    *ctx_out = NULL;
+    if (!asmtest_ibs_available())
+        return ASMTEST_IBS_EUNAVAIL;
+    int type = ibs_op_type();
+    if (type < 0)
+        return ASMTEST_IBS_EUNAVAIL;
+
+    ibs_window *w = (ibs_window *)calloc(1, sizeof *w);
+    if (w == NULL)
+        return ASMTEST_IBS_EUNAVAIL;
+    w->pg = ibs_page();
+    w->dsz = w->pg * IBS_RING_DATA_PAGES;
+    if (ibs_chan_open(&w->ch, 0, type, ibs_period(opts), w->pg, w->dsz) != 0) {
+        free(w);
+        return ASMTEST_IBS_EUNAVAIL; /* tid 0 => the calling thread */
+    }
+    w->scratch = (uint8_t *)malloc(w->dsz);
+    if (w->scratch == NULL || eh_init(&w->h, 1024) != 0) {
+        free(w->scratch);
+        ibs_chan_disable(&w->ch);
+        ibs_chan_free(&w->ch);
+        free(w);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+    *ctx_out = w;
+    return ASMTEST_IBS_OK; /* sampling is live; caller runs its window body next */
+}
+
+int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
+    if (out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (ctx == NULL)
+        return ASMTEST_IBS_EINVAL;
+    ibs_window *w = (ibs_window *)ctx;
+    ibs_chan_disable(&w->ch);
+    /* Single drain at end (the caller's thread was busy running the body, so there was
+     * no chance to drain mid-window). A window that overran the 256 KiB non-overwrite
+     * ring loses its tail — ibs_drain flags that as out->throttled, mirroring the
+     * branch-stack survey's near-full handling. */
+    ibs_drain(w->ch.base_map, w->pg, w->dsz, w->scratch, &w->h, out);
+    eh_export(&w->h, out);
+    eh_free(&w->h);
+    free(w->scratch);
+    ibs_chan_free(&w->ch);
+    free(w);
+    return ASMTEST_IBS_OK;
+}
+
 #else /* not Linux x86-64 --------------------------------------------------------- */
 
 int asmtest_ibs_available(void) { return 0; }
@@ -706,6 +772,18 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     (void)pid;
     (void)ms;
     (void)opts;
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    return ASMTEST_IBS_EUNAVAIL;
+}
+int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
+    (void)opts;
+    if (ctx_out != NULL)
+        *ctx_out = NULL;
+    return ASMTEST_IBS_EUNAVAIL;
+}
+int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
+    (void)ctx;
     if (out != NULL)
         memset(out, 0, sizeof *out);
     return ASMTEST_IBS_EUNAVAIL;

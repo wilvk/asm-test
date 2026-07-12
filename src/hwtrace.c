@@ -21,6 +21,7 @@
 #include "asmtest_codeimage.h"
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
+#include "ibs_backend.h" /* §D3 Zen-2 F6: statistical IBS-Op survey fallback */
 #include "stealth_helper.h" /* §D3 shared stepping body + bundled-binary discovery */
 
 #include <stdio.h>
@@ -973,6 +974,62 @@ static void hwtrace_end_amd(void) {
  * when the branch-stack event cannot open (no Zen 3+ / no CAP_PERFMON), ENOSYS off
  * x86-64 Linux. */
 #if defined(__linux__) && defined(__x86_64__)
+
+/* --- Zen-2 F6 fallback: statistical IBS-Op survey (branch stack absent) --------- */
+/* On Zen 2 the branch stack (BRS/LbrExtV2) does not exist, so the branch-stack survey
+ * above self-skips (perf_open fails). IBS-Op is the one branch source this silicon has,
+ * out of band and unprivileged. It produces {from->to} EDGES; the survey contract wants
+ * branch-TARGET endpoints (ips[]), so we flatten each edge's `to` weighted by its sample
+ * count — reconstructing the per-sample endpoint stream the branch-stack path emits, so
+ * the caller's bucket-by-method HOT-METHOD histogram is identical in shape. Still purely
+ * STATISTICAL: it never feeds the exact insns[]/blocks[] parity cascade. */
+
+/* Flatten an IBS edge survey into the ips[] endpoint histogram (each edge target
+ * repeated `count` times, capped). Sets *lost if the buffer filled with edges left, or
+ * the survey itself dropped/throttled samples. */
+static void ibs_survey_to_ips(const asmtest_ibs_survey_t *sv, uint64_t *ips,
+                              size_t cap, size_t *np, int *lost) {
+    size_t n = 0;
+    int overflow = 0;
+    for (size_t i = 0; i < sv->n; i++) {
+        for (uint64_t k = 0; k < sv->edges[i].count; k++) {
+            if (n >= cap) {
+                overflow = 1;
+                break;
+            }
+            ips[n++] = sv->edges[i].to;
+        }
+        if (overflow)
+            break;
+    }
+    *np = n;
+    if (overflow || sv->throttled || sv->lost)
+        *lost = 1;
+}
+
+/* Run `run_fn(arg)` on the calling thread with IBS-Op armed and flatten the sampled
+ * hot edges into ips[]. Returns ASMTEST_HW_OK, or ASMTEST_HW_EUNAVAIL if IBS-Op is
+ * unavailable / cannot open (so a non-IBS, non-branch-stack host still reports EUNAVAIL,
+ * preserving the old contract). Same *nips / *truncated semantics as the monolith. */
+static int sample_window_ibs(void (*run_fn)(void *), void *arg, uint64_t *ips,
+                             size_t cap, size_t *nips, int *truncated) {
+    void *wc = NULL;
+    if (asmtest_ibs_window_begin(NULL, &wc) != ASMTEST_IBS_OK)
+        return ASMTEST_HW_EUNAVAIL;
+    run_fn(arg); /* the window body runs at native speed while IBS samples it */
+    asmtest_ibs_survey_t sv;
+    asmtest_ibs_window_end(wc, &sv);
+    size_t n = 0;
+    int lost = 0;
+    ibs_survey_to_ips(&sv, ips, cap, &n, &lost);
+    asmtest_ibs_survey_free(&sv);
+    if (nips != NULL)
+        *nips = n;
+    if (truncated != NULL)
+        *truncated = (lost || n == 0) ? 1 : 0;
+    return ASMTEST_HW_OK;
+}
+
 int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated) {
@@ -998,8 +1055,16 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     a.exclude_hv = 1;
     a.disabled = 1;
     long fd = perf_open(&a, 0, -1, -1, 0); /* pid=0: the calling thread */
-    if (fd < 0)
-        return ASMTEST_HW_EUNAVAIL;
+    /* Zen-2 F6: no branch stack here (fd<0). Fall back to the statistical IBS-Op survey
+     * so the whole-window survey returns a real hot-method histogram instead of EUNAVAIL.
+     * ASMTEST_FORCE_IBS_SURVEY forces the IBS path even where the branch stack works, for
+     * cross-validation on Zen 3+/CI. */
+    if (fd < 0 || getenv("ASMTEST_FORCE_IBS_SURVEY") != NULL) {
+        if (fd >= 0)
+            close((
+                int)fd); /* forced IBS: drop the just-opened branch-stack event */
+        return sample_window_ibs(run_fn, arg, ips, cap, nips, truncated);
+    }
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
@@ -1112,6 +1177,9 @@ struct asmtest_amd_sample_ctx {
     int fd;
     void *base_map;
     size_t base_sz;
+    int is_ibs; /* 1: this is the Zen-2 IBS-Op fallback (ibs != NULL, fd unused) */
+    void *
+        ibs; /* asmtest_ibs_window handle when is_ibs                         */
 };
 
 int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
@@ -1132,8 +1200,28 @@ int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
     a.exclude_hv = 1;
     a.disabled = 1;
     long fd = perf_open(&a, 0, -1, -1, 0); /* pid=0: the calling thread */
-    if (fd < 0)
-        return ASMTEST_HW_EUNAVAIL;
+    /* Zen-2 F6 fallback (same as the monolith): arm an IBS-Op window instead of the
+     * absent branch stack; sample_end_amd drains it. is_ibs steers the teardown. */
+    if (fd < 0 || getenv("ASMTEST_FORCE_IBS_SURVEY") != NULL) {
+        if (fd >= 0)
+            close((int)fd);
+        void *wc = NULL;
+        if (asmtest_ibs_window_begin(NULL, &wc) != ASMTEST_IBS_OK)
+            return ASMTEST_HW_EUNAVAIL;
+        struct asmtest_amd_sample_ctx *c =
+            (struct asmtest_amd_sample_ctx *)calloc(1, sizeof *c);
+        if (c == NULL) {
+            asmtest_ibs_survey_t sv;
+            asmtest_ibs_window_end(wc, &sv); /* release the armed window */
+            asmtest_ibs_survey_free(&sv);
+            return ASMTEST_HW_EUNAVAIL;
+        }
+        c->fd = -1;
+        c->is_ibs = 1;
+        c->ibs = wc;
+        *ctx_out = c;
+        return ASMTEST_HW_OK;
+    }
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
@@ -1145,7 +1233,7 @@ int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
         return ASMTEST_HW_EUNAVAIL;
     }
     struct asmtest_amd_sample_ctx *c =
-        (struct asmtest_amd_sample_ctx *)malloc(sizeof *c);
+        (struct asmtest_amd_sample_ctx *)calloc(1, sizeof *c);
     if (c == NULL) {
         munmap(base_map, base_sz);
         close((int)fd);
@@ -1154,6 +1242,7 @@ int asmtest_hwtrace_sample_begin_amd(int period, void **ctx_out) {
     c->fd = (int)fd;
     c->base_map = base_map;
     c->base_sz = base_sz;
+    c->is_ibs = 0;
     ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
     if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
         free(c);
@@ -1174,6 +1263,23 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
         *nips = 0;
     if (truncated != NULL)
         *truncated = 0;
+    if (c->is_ibs) { /* Zen-2 IBS-Op fallback: drain the window, flatten to ips[] */
+        asmtest_ibs_survey_t sv;
+        asmtest_ibs_window_end(c->ibs, &sv);
+        size_t n = 0;
+        int lost = 0;
+        if (ips != NULL && cap > 0)
+            ibs_survey_to_ips(&sv, ips, cap, &n, &lost);
+        else if (sv.throttled || sv.lost)
+            lost = 1;
+        asmtest_ibs_survey_free(&sv);
+        free(c);
+        if (nips != NULL)
+            *nips = n;
+        if (truncated != NULL)
+            *truncated = (lost || n == 0) ? 1 : 0;
+        return ASMTEST_HW_OK;
+    }
     ioctl(c->fd, PERF_EVENT_IOC_DISABLE, 0);
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
