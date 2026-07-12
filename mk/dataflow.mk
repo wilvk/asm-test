@@ -163,6 +163,15 @@ dataflow-go-test: shared-dataflow
 	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  GOFLAGS=-mod=mod $(GO) run ./cmd/dataflowsmoke
 
+# Phase 6 — the Java data-flow binding (bindings/java/TestDataflow.java, Project Panama
+# FFM). Needs JDK 22+ (the docker bindings image uses openjdk-25); validated in JDK 23.
+JAVA ?= java
+.PHONY: dataflow-java-test
+dataflow-java-test: shared-dataflow
+	$(JAVAC) --release 22 -d $(BUILD)/java-df bindings/java/TestDataflow.java
+	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(JAVA) --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-df TestDataflow
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
