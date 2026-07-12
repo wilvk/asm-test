@@ -1031,15 +1031,28 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
         if (!done) {
             ASMTEST_HWDBG("tier=A best_nr=%llu", (unsigned long long)best_nr);
             asmtest_amd_decode(best, (size_t)best_nr, base, len, trace);
-            /* Freeze gate (CPUID 0x80000022 EAX[2]). WITHOUT LBR freeze-on-PMI the
-             * sampled stack keeps advancing after the overflow reaches CPL0, so a
-             * single Tier-A window may not have halted at the region exit — trust it
-             * complete only if it actually CONTAINS the region-exit branch (from
-             * in-region, to outside the region, i.e. the routine's ret/tail-jump).
-             * Otherwise the exit was not captured, so flag truncated rather than
-             * present a possibly-mid-routine window as complete. On a freeze-capable
-             * part this check is skipped and behavior is unchanged. */
-            if (trace != NULL && !asmtest_amd_freeze_available()) {
+            /* Tier-A completeness — a SINGLE window is trustworthy as complete only
+             * if it actually CONTAINS the region-exit branch (from in-region, to
+             * outside the region: the routine's ret / tail-jmp). Combined with the
+             * depth-overflow flag asmtest_amd_decode just set (best_nr >= depth ->
+             * truncated), this is exactly the "complete iff the exit window fit"
+             * invariant: a window anchored at the region exit whose stack was NOT full
+             * holds the run's whole branch tail back to the entry (so it is complete);
+             * an overflowed exit window, or ANY window that never held the exit, is a
+             * mid-run fragment that dropped earlier branches.
+             *
+             * Checked on EVERY part — freeze-capable or not. The check was once gated
+             * behind !asmtest_amd_freeze_available() on the theory that LBR
+             * freeze-on-PMI guarantees the sampled window halts at the region exit. But
+             * the capture keeps sample_period=1 and then selects the RICHEST-in-region
+             * window among whatever sparse samples survived PMI coalescing / throttling
+             * — frequently an arbitrary mid-run window that never held the exit. On a
+             * Zen 5 (freeze=1) that gap let asmtest_trace_call_auto's 25-back-edge loop
+             * reconstruct a 4-edge fragment (best_nr=4, no exit edge) and report
+             * truncated=0, so the cascade never escalated (the vacuous pass this lane
+             * fixes). Freeze does NOT make a non-exit richest window complete, so the
+             * exit-presence requirement now holds regardless of the freeze bit. */
+            if (trace != NULL) {
                 int saw_exit = 0;
                 for (uint64_t i = 0; i < best_nr; i++) {
                     uint64_t f = best[i].from, t = best[i].to;
@@ -1051,7 +1064,7 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
                 }
                 if (!saw_exit) {
                     ASMTEST_HWDBG("truncated: Tier-A window missed the region "
-                                  "exit (no freeze)");
+                                  "exit (mid-run fragment)");
                     trace->truncated = true;
                 }
             }

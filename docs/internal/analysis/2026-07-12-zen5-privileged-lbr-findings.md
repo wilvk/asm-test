@@ -28,9 +28,25 @@ necessary; the privileged run proves it is sufficient.
 Still expected-skipped: Intel PT (wrong vendor), AMD MSR-direct (needs
 `/dev/cpu/N/msr` + `CAP_SYS_ADMIN` — a separate `docker-hwtrace-msr` lane).
 
-## 2. OPEN finding — `trace_call_auto` AMD-LBR rung mis-reports completeness
+## 2. ~~OPEN~~ RESOLVED finding — `trace_call_auto` AMD-LBR rung mis-reports completeness
 
-**Severity: correctness (flaky, can pass vacuously). Not yet fixed.**
+**Severity: correctness (flaky, can pass vacuously). RESOLVED 2026-07-12.**
+
+> **Fixed 2026-07-12.** Root cause: `asmtest_amd_ring_parse_decode`'s Tier-A
+> completeness check — "trust a single window as complete only if it CONTAINS the
+> region-exit branch" — was gated behind `!asmtest_amd_freeze_available()`. On a
+> freeze-capable part (Zen 5, `freeze=1`) the check was skipped, so when the
+> sample-period=1 capture picked the *richest-in-region* window (an arbitrary
+> mid-run fragment that never held the exit — `best_nr=4`, no exit edge), a
+> 6-of-77-instruction reconstruction passed as complete → no escalation. Fix
+> (`src/hwtrace.c`): the exit-presence requirement now runs on **every** part
+> (freeze does not make a non-exit richest window complete); combined with the
+> existing `best_nr >= depth` overflow flag this is the airtight "complete iff a
+> non-overflowed exit-anchored window exists" invariant. `test_call_auto` case (b)
+> hardened with a `CEILING_FREE` honest-count baseline so a dropped-branch
+> fragment reported complete is now a HARD failure. Verified deterministic across
+> **16 privileged AMD runs** (every one escalates `backend=3 insns=77`; zero
+> `insns=3 truncated=0`). Both cosmetic misreports in §3 also fixed.
 
 `examples/test_hwtrace.c` `test_call_auto` case (b) drives a loop with **25
 taken back-edges** through `asmtest_trace_call_auto` on `backend=AMD_LBR`. A

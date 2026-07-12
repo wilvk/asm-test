@@ -843,6 +843,44 @@ static void test_call_auto(void) {
                   "COMPLETE trace");
             CHECK(asmtest_trace_covered(lt, 0x7),
                   "call_auto: loop-body block (0x7) covered");
+
+            /* Anti-vacuity: a 25-back-edge loop CANNOT fit one 16-deep LbrExtV2
+             * window, so a result reported COMPLETE must be a real full
+             * reconstruction, never a dropped-branch fragment. Establish the honest
+             * retired-instruction baseline via a CEILING_FREE call (which EXCLUDES the
+             * fixed-window AMD_LBR tier, so it runs on the ceiling-free block-step /
+             * single-step floor and is always complete), then require the fast (BEST)
+             * capture to EITHER have escalated off AMD_LBR OR reconstruct that exact
+             * full count. Without this, a live-AMD sampled-LBR flake that mis-reported
+             * a 4-edge fragment (insns << baseline) as truncated=0 passed vacuously
+             * (see docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md);
+             * now it is a HARD failure. Host-independent: where AMD LBR is absent the
+             * fast tier self-skips, `lused.backend` is already the escalated floor, and
+             * the OR's first arm holds trivially. */
+            asmtest_trace_t *bt = asmtest_trace_new(512, 64);
+            long baseline_r = 0;
+            asmtest_trace_choice_t bused;
+            memset(&bused, 0, sizeof bused);
+            int brc = asmtest_trace_call_auto(q, sizeof AMD_LOOP, largs, 2,
+                                              ASMTEST_TRACE_CEILING_FREE,
+                                              &baseline_r, bt, &bused);
+            if (brc == ASMTEST_HW_OK && !asmtest_emu_trace_truncated(bt)) {
+                unsigned long long baseline = asmtest_emu_trace_insns_total(bt);
+                /* 1 (mov) + 25*3 (add/dec/jnz) + 1 (ret) = 77 retired instructions. */
+                CHECK(
+                    baseline == 77,
+                    "call_auto: ceiling-free baseline is the full 25-trip loop "
+                    "(77 retired insns)");
+                int honest = (lused.backend != ASMTEST_HWTRACE_AMD_LBR) ||
+                             (asmtest_emu_trace_insns_total(lt) == baseline);
+                CHECK(
+                    honest,
+                    "call_auto: a COMPLETE result reconstructs the FULL "
+                    "retired "
+                    "path (escalated off AMD_LBR, or a real Tier-B stitch — a "
+                    "dropped-branch fragment is NOT passed as complete)");
+            }
+            asmtest_trace_free(bt);
         }
         asmtest_trace_free(lt);
         munmap(q, sizeof AMD_LOOP);
@@ -6514,9 +6552,23 @@ int main(void) {
         char why[160];
         asmtest_hwtrace_skip_reason(backend, why, sizeof why);
         printf("# SKIP hwtrace PT capture (Intel PT): %s\n", why);
-        char awhy[160];
-        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, awhy, sizeof awhy);
-        printf("# SKIP hwtrace AMD capture (AMD LBR): %s\n", awhy);
+        /* This early-return block is PT-specific (the AMD capture is exercised by the
+         * AMD-only tests that already ran — test_amd_live, the Tier-B live loop, the
+         * ring-parse seam). Report AMD's status HONESTLY: only "# SKIP … : <reason>"
+         * when it is genuinely unavailable; naming its skip reason unconditionally
+         * printed "# SKIP hwtrace AMD capture (AMD LBR): available" on a Zen 5 host
+         * (CAP_PERFMON present, only PT missing) — a SKIP line whose reason says the
+         * opposite. */
+        if (asmtest_hwtrace_available(ASMTEST_HWTRACE_AMD_LBR)) {
+            printf(
+                "# hwtrace AMD capture (AMD LBR): available (exercised by the "
+                "AMD-specific tests above)\n");
+        } else {
+            char awhy[160];
+            asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_AMD_LBR, awhy,
+                                        sizeof awhy);
+            printf("# SKIP hwtrace AMD capture (AMD LBR): %s\n", awhy);
+        }
         if (checks == 0)
             printf("1..0 # skipped\n");
         else
