@@ -236,7 +236,7 @@ current tier, not an extension.
 managed code; taint survives a GC; overhead measured on a representative workload; validates
 beyond the current offset-only dotnet smoke (`bindings/dotnet/drtrace/`).
 
-## Phase 6 - Bindings, docs, CI *(LANDED 2026-07-13: libasmtest_dataflow shared lib; ALL 10 language bindings (Python/C++/Node/Ruby/Lua/Zig/Rust/Go/Java/.NET) wrap the pure gcmove+method helpers, each `make dataflow-<lang>-test`-validated (host or docker); Python/C++/Node also wrap the full L0/L1/L2 ValueTrace pipeline; data-flow guide page; `dataflow` CI job gates python+cpp. Remaining: CI-gate the 7 docker bindings)*
+## Phase 6 - Bindings, docs, CI *(LANDED 2026-07-13: libasmtest_dataflow shared lib; ALL 10 language bindings (Python/C++/Node/Ruby/Lua/Zig/Rust/Go/Java/.NET) wrap the pure gcmove+method helpers, each `make dataflow-<lang>-test`-validated (host or docker); Python/C++/Node also wrap the full L0/L1/L2 ValueTrace pipeline; data-flow guide page; `dataflow` CI job gates python+cpp, and a `dataflow-bindings` matrix job gates the other seven in their pinned toolchain images. Phase 6 fully landed — only hardware/upstream/credential-gated forward-look items remain across the plan set)*
 
 - Wrap `asmtest_valtrace_t` + slice accessors in the dynamic-FFI bindings (opaque-handle
   pattern, as `asmtest_trace_t` is wrapped).

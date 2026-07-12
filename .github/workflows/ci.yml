@@ -419,6 +419,52 @@ jobs:
           make WERROR=1 dataflow-python-test
           make WERROR=1 dataflow-cpp-test
 
+  # The remaining seven data-flow language bindings, each run in the pinned toolchain
+  # image it was validated in (a `docker run` on the host runner — checkout stays on the
+  # host so no in-container git is needed). Each `make dataflow-<lang>-test` builds
+  # libasmtest_dataflow into /tmp/b and runs that language's 16-check smoke.
+  dataflow-bindings:
+    name: dataflow-bindings (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: ruby
+            image: "ubuntu:24.04"
+            setup: "apt-get update && apt-get install -y --no-install-recommends ruby build-essential libcapstone-dev pkg-config make"
+          - lang: lua
+            image: "ubuntu:24.04"
+            setup: "apt-get update && apt-get install -y --no-install-recommends luajit build-essential libcapstone-dev pkg-config make"
+          - lang: rust
+            image: "rust:1-slim-bookworm"
+            setup: "apt-get update && apt-get install -y --no-install-recommends build-essential libcapstone-dev pkg-config make"
+          - lang: go
+            image: "golang:1-bookworm"
+            setup: "apt-get update && apt-get install -y --no-install-recommends build-essential libcapstone-dev pkg-config make"
+          - lang: java
+            image: "eclipse-temurin:23-jdk"
+            setup: "apt-get update && apt-get install -y --no-install-recommends build-essential libcapstone-dev pkg-config make"
+          - lang: dotnet
+            image: "mcr.microsoft.com/dotnet/sdk:8.0"
+            setup: "apt-get update && apt-get install -y --no-install-recommends build-essential libcapstone-dev pkg-config make"
+          - lang: zig
+            image: "ubuntu:24.04"
+            setup: "apt-get update && apt-get install -y --no-install-recommends build-essential libcapstone-dev pkg-config make curl xz-utils ca-certificates && curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ -C /opt && export PATH=/opt/zig-linux-x86_64-0.13.0:$PATH"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the ${{ matrix.lang }} data-flow binding in ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD":/w -w /w -e HOME=/tmp \
+            -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 \
+            ${{ matrix.image }} bash -c '
+              set -e
+              ${{ matrix.setup }}
+              make BUILD=/tmp/b dataflow-${{ matrix.lang }}-test
+            '
+
   # K2: the cross-language hardware-trace wrappers — each binding's in-process
   # single-step tracer, in the same isolated per-language images the `bindings`
   # job builds. Run as ONE job so the shared bindings base (and its Keystone /
