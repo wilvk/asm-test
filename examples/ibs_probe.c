@@ -8,6 +8,8 @@
  */
 #include "asmtest_ibs.h"
 
+#include "ibs_backend.h" /* internal IBS-Fetch front-end probe (Phase 7) */
+
 #include <limits.h>
 #include <stdio.h>
 
@@ -25,10 +27,29 @@ static int perf_event_paranoid(void) {
     return v;
 }
 
+/* Report the front-end IBS-Fetch lane (Phase 7): an independent substrate (its own
+ * FetchSam cap + ibs_fetch PMU), so probe and print it separately from the Op lane. */
+static void report_fetch(void) {
+    printf("#\n");
+    if (!asmtest_ibs_fetch_available()) {
+        printf("# IBS-Fetch front-end coverage: unavailable — %s\n",
+               asmtest_ibs_fetch_skip_reason());
+        return;
+    }
+    printf("# IBS-Fetch front-end coverage: AVAILABLE\n");
+    printf("#   ibs_fetch PMU present; FetchSam capable; swfilt user-only "
+           "sampling\n");
+    printf("#   asmtest_ibs_survey_fetch_pid(tid, ms, NULL, &fsurvey);\n");
+    printf("# Samples FETCH addresses (i-cache / ITLB miss, fetch latency) — "
+           "the\n");
+    printf("# front-end coverage the retire-side Op sampler can miss.\n");
+}
+
 int main(void) {
     printf("# asm-test AMD IBS-Op capability probe\n");
     if (!asmtest_ibs_available()) {
         printf("# SKIP ibs_probe: %s\n", asmtest_ibs_skip_reason());
+        report_fetch();
         return 0;
     }
     printf("# IBS-Op statistical edge sampling: AVAILABLE\n");
@@ -52,5 +73,6 @@ int main(void) {
     printf("# It observes a running target without single-stepping it — the "
            "safe\n");
     printf("# control-flow view for JIT / managed runtimes.\n");
+    report_fetch();
     return 0;
 }

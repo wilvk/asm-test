@@ -293,7 +293,7 @@ straight-line blocks between waypoints as covered — explicitly **partial/stati
 coverage (marks blocks *seen*, never blocks *not* executed). Gated on Capstone; self-skips
 without it.
 
-### Phase 7 — IBS Fetch lane (front-end coverage) *(forward-look)*
+### Phase 7 — IBS Fetch lane (front-end coverage) *(LANDED 2026-07-13)*
 
 **Goal.** Complement Op's retire-side view with fetch-side coverage: `ibs_fetch` (type 10,
 `swfilt`, verified working) gives fetch address + i-cache/ITLB miss + fetch-completed. Same

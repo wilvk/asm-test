@@ -15,6 +15,8 @@
  */
 #include "asmtest_ibs.h"
 
+#include "ibs_backend.h" /* internal IBS-Fetch front-end lane (Phase 7) */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -92,6 +94,87 @@ static void test_decode(void) {
           "decode: NULL raw -> EINVAL");
     CHECK(asmtest_ibs_decode_op(raw, RAW_LEN, NULL) == ASMTEST_IBS_EINVAL,
           "decode: NULL out -> EINVAL");
+}
+
+/* ---- IBS-Fetch front-end lane (Phase 7): pure synthetic-record checks --------- */
+/* IbsFetchCtl (reg[0]) fields, mirroring the backend's fetch decoder. */
+#define F_VAL      (1ull << 49) /* IbsFetchVal: sample valid   */
+#define F_COMP     (1ull << 50) /* IbsFetchComp: fetch complete */
+#define F_ICMISS   (1ull << 51) /* IbsIcMiss: i-cache miss     */
+#define F_ITLBMISS (1ull << 55) /* IbsL1TlbMiss: L1 ITLB miss  */
+#define F_LAT(x)   (((uint64_t)(x) & 0xFFFFull) << 32) /* IbsFetchLat [47:32] */
+
+/* Build a synthetic ibs_fetch PERF_SAMPLE_RAW payload: [u32 caps][u64 reg0..reg2].
+ * reg[0]=IbsFetchCtl (status), reg[1]=IbsFetchLinAd (addr), reg[2]=IbsFetchPhysAd. */
+#define FRAW_LEN (4u + 8u * 3u) /* 28 */
+static void build_fetch_raw(uint8_t *buf, uint64_t ctl, uint64_t linad) {
+    memset(buf, 0, FRAW_LEN);
+    uint32_t caps = 0x81bff;
+    memcpy(buf + 0, &caps, 4);
+    memcpy(buf + 4 + 8 * 0, &ctl, 8);
+    memcpy(buf + 4 + 8 * 1, &linad, 8);
+    /* reg[2] (physical address) left zero — the decoder does not read it. */
+}
+
+/* Host-independent: the pure fetch decoder over synthetic records. */
+static void test_decode_fetch(void) {
+    uint8_t raw[FRAW_LEN];
+    asmtest_ibs_fetch_sample_t f;
+
+    /* 1. A valid, complete fetch is a usable coverage sample at its linear addr. */
+    build_fetch_raw(raw, F_VAL | F_COMP, 0x401080);
+    CHECK(asmtest_ibs_decode_fetch(raw, FRAW_LEN, &f) == ASMTEST_IBS_OK,
+          "decode_fetch: valid complete fetch -> OK");
+    CHECK(f.fetch_addr == 0x401080 && f.valid == 1 && f.complete == 1 &&
+              f.icache_miss == 0 && f.itlb_miss == 0,
+          "decode_fetch: yields the exact fetched address + clean status");
+
+    /* 2. A valid fetch that missed the i-cache carries the miss + its latency. */
+    build_fetch_raw(raw, F_VAL | F_COMP | F_ICMISS | F_LAT(200), 0x401100);
+    CHECK(asmtest_ibs_decode_fetch(raw, FRAW_LEN, &f) == ASMTEST_IBS_OK &&
+              f.icache_miss == 1 && f.latency == 200,
+          "decode_fetch: i-cache miss -> OK with icache_miss + latency");
+
+    /* 3. A valid fetch that missed the L1 ITLB carries the itlb_miss bit. */
+    build_fetch_raw(raw, F_VAL | F_ITLBMISS, 0x401140);
+    CHECK(asmtest_ibs_decode_fetch(raw, FRAW_LEN, &f) == ASMTEST_IBS_OK &&
+              f.itlb_miss == 1 && f.icache_miss == 0,
+          "decode_fetch: ITLB miss -> OK with itlb_miss");
+
+    /* 4. A record with IbsFetchVal clear decoded fine but has nothing to record. */
+    build_fetch_raw(raw, F_COMP, 0x401180);
+    CHECK(asmtest_ibs_decode_fetch(raw, FRAW_LEN, &f) == ASMTEST_IBS_NOEDGE &&
+              f.valid == 0,
+          "decode_fetch: not-valid fetch -> NOEDGE (valid=0)");
+
+    /* 5. A record too short to hold the fetch linear-addr register is undecodable. */
+    build_fetch_raw(raw, F_VAL, 0x401080);
+    CHECK(asmtest_ibs_decode_fetch(raw, 4u + 8u, &f) == ASMTEST_IBS_EDECODE,
+          "decode_fetch: short record (no LinAd reg) -> EDECODE");
+
+    /* 6. NULL arguments are rejected. */
+    CHECK(asmtest_ibs_decode_fetch(NULL, FRAW_LEN, &f) == ASMTEST_IBS_EINVAL,
+          "decode_fetch: NULL raw -> EINVAL");
+    CHECK(asmtest_ibs_decode_fetch(raw, FRAW_LEN, NULL) == ASMTEST_IBS_EINVAL,
+          "decode_fetch: NULL out -> EINVAL");
+}
+
+/* The fetch availability probe must be definite and stable (cached), independent of
+ * the Op probe. */
+static void test_fetch_available(void) {
+    int a = asmtest_ibs_fetch_available();
+    int b = asmtest_ibs_fetch_available();
+    CHECK(a == 0 || a == 1, "fetch_available() returns a definite 0/1");
+    CHECK(a == b, "fetch_available() is stable across calls");
+    const char *why = asmtest_ibs_fetch_skip_reason();
+    CHECK(why != NULL, "fetch_skip_reason() is never NULL");
+    if (a)
+        CHECK(why[0] == '\0', "fetch_skip_reason() is empty when available");
+    else
+        CHECK(why[0] != '\0',
+              "fetch_skip_reason() names a reason when unavailable");
+    printf("# IBS-Fetch on this host: %s%s%s\n",
+           a ? "AVAILABLE" : "unavailable", a ? "" : " — ", a ? "" : why);
 }
 
 /* The availability probe must be definite and stable (cached). */
@@ -330,6 +413,82 @@ static void test_live_process(void) {
         (unsigned long long)s.samples, s.throttled ? ", throttled" : "");
     asmtest_ibs_survey_free(&s);
 }
+
+/* Live IBS-FETCH front-end coverage: run the same hot loop on a worker thread, survey
+ * its FETCH stream out of band, and assert a fetched address lands inside spin_loop()'s
+ * own code window — proving the front-end sampler covers the code the loop runs. Same
+ * self-skip discipline as the Op tests (off IBS-Fetch / perf-blocked). */
+static void test_live_fetch(void) {
+    if (!asmtest_ibs_fetch_available()) {
+        printf("# SKIP IBS-Fetch survey: %s\n",
+               asmtest_ibs_fetch_skip_reason());
+        return;
+    }
+    g_stop = 0;
+    g_tid_ready = 0;
+    pthread_t th;
+    if (pthread_create(&th, NULL, worker, NULL) != 0) {
+        printf("# SKIP IBS-Fetch survey: pthread_create failed\n");
+        return;
+    }
+    while (!g_tid_ready) {
+        struct timespec s = {0, 1000 * 1000};
+        nanosleep(&s, NULL);
+    }
+
+    /* Survey the WORKER's fetched code out of band from THIS thread. */
+    asmtest_ibs_fetch_survey_t fs;
+    int rc = asmtest_ibs_survey_fetch_pid(g_worker_tid, 300, NULL, &fs);
+
+    g_stop = 1;
+    pthread_join(th, NULL);
+
+    /* fetch_available() is a SUBSTRATE probe; perf_event_open can still be blocked
+     * (paranoid=4 without CAP_PERFMON, seccomp) — a skip, not a failure. */
+    if (rc == ASMTEST_IBS_EUNAVAIL) {
+        printf("# SKIP IBS-Fetch survey: perf_event_open blocked "
+               "(paranoid/seccomp), substrate present\n");
+        asmtest_ibs_fetch_survey_free(&fs);
+        return;
+    }
+
+    CHECK(rc == ASMTEST_IBS_OK,
+          "survey_fetch_pid: out-of-band fetch survey succeeds");
+    CHECK(fs.samples > 0,
+          "survey_fetch_pid: sampled the worker's fetch stream");
+    CHECK(fs.valid_samples > 0,
+          "survey_fetch_pid: recorded valid fetch samples");
+    CHECK(fs.n > 0,
+          "survey_fetch_pid: produced at least one fetch-address bucket");
+
+    /* A fetched address must fall within spin_loop()'s own code window — the front-end
+     * fetched the loop body it is running. */
+    uintptr_t fn = (uintptr_t)(void *)&spin_loop;
+    const uintptr_t WIN = 0x2000; /* generous for an -O0 function */
+    int in_range = 0;
+    for (size_t i = 0; i < fs.n; i++) {
+        uintptr_t a = (uintptr_t)fs.hot[i].addr;
+        if (a >= fn && a < fn + WIN)
+            in_range = 1;
+    }
+    CHECK(in_range,
+          "survey_fetch_pid: a fetched address lies within spin_loop()");
+
+    if (fs.n > 0) {
+        printf(
+            "# top fetch: %#lx  count=%llu  (%zu addrs, %llu/%llu valid/total "
+            "samples, %llu ic-miss, %llu itlb-miss%s)\n",
+            (unsigned long)fs.hot[0].addr, (unsigned long long)fs.hot[0].count,
+            fs.n, (unsigned long long)fs.valid_samples,
+            (unsigned long long)fs.samples,
+            (unsigned long long)fs.icache_misses,
+            (unsigned long long)fs.itlb_misses,
+            fs.throttled ? ", throttled" : "");
+    }
+    asmtest_ibs_fetch_survey_free(&fs);
+    CHECK(fs.hot == NULL && fs.n == 0,
+          "fetch_survey_free: releases and zeroes the survey");
+}
 #else
 static void test_live(void) {
     printf("# SKIP IBS live capture: not Linux x86-64\n");
@@ -337,13 +496,19 @@ static void test_live(void) {
 static void test_live_process(void) {
     printf("# SKIP IBS whole-process capture: not Linux x86-64\n");
 }
+static void test_live_fetch(void) {
+    printf("# SKIP IBS-Fetch survey: not Linux x86-64\n");
+}
 #endif
 
 int main(void) {
     test_decode();
+    test_decode_fetch();
     test_available();
+    test_fetch_available();
     test_live();
     test_live_process();
+    test_live_fetch();
     printf("1..%d\n", checks);
     if (failures)
         printf("# %d/%d checks FAILED\n", failures, checks);

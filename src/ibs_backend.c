@@ -29,6 +29,11 @@
  * docs/internal/plans/zen2-ibs-tracing-plan.md and the 2026-07-12 review.
  *
  * INVARIANT: statistical only — never feeds the exact insns[]/blocks[] parity path.
+ *
+ * Phase 7 adds the front-end IBS-FETCH lane below (asmtest_ibs_fetch_* in the
+ * internal ibs_backend.h): the same open/mmap/drain machinery pointed at the
+ * ibs_fetch PMU, decoding IbsFetchCtl/IbsFetchLinAd into a fetch-ADDRESS coverage
+ * histogram (i-cache/ITLB miss + fetch latency) rather than control-flow edges.
  */
 #include "asmtest_ibs.h"
 
@@ -53,6 +58,23 @@
 #define IBS_OPDATA_BRN_MISP    36 /* the retired branch was mispredicted    */
 #define IBS_OPDATA_BRN_RET     37 /* this op retired a branch               */
 #define IBS_OPDATA_RIP_INVALID 38 /* the tagged RIP is invalid: drop it     */
+
+/* --- IBS-Fetch raw record layout (Phase 7 front-end lane) ---------------------- */
+/* Same [u32 caps][u64 regs...] framing; the fetch record carries three registers:
+ * reg[0]=IbsFetchCtl, reg[1]=IbsFetchLinAd, reg[2]=IbsFetchPhysAd. */
+#define IBS_FETCH_REG_CTL   0 /* IbsFetchCtl: fetch status bitfield (below)  */
+#define IBS_FETCH_REG_LINAD 1 /* IbsFetchLinAd: fetched linear instr address */
+/* Smallest payload that carries the fetch linear-address register (reg[1]): the
+ * physical-address reg[2] is unused, so decode needs only through reg[1]: 4+8*2=20. */
+#define IBS_FETCH_RAW_MIN_BYTES                                                \
+    (IBS_RAW_CAPS_BYTES + 8u * (IBS_FETCH_REG_LINAD + 1u))
+/* IbsFetchCtl (reg[0]) fields (kernel union ibs_fetch_ctl). */
+#define IBS_FETCHCTL_LAT_SHIFT  32 /* IbsFetchLat: bits [47:32]           */
+#define IBS_FETCHCTL_LAT_MASK   0xFFFFu
+#define IBS_FETCHCTL_VAL        49 /* IbsFetchVal: sample valid           */
+#define IBS_FETCHCTL_COMP       50 /* IbsFetchComp: fetch completed       */
+#define IBS_FETCHCTL_IC_MISS    51 /* IbsIcMiss: i-cache miss             */
+#define IBS_FETCHCTL_L1TLB_MISS 55 /* IbsL1TlbMiss: L1 ITLB miss          */
 
 static uint64_t ld_u64(const uint8_t *p) {
     uint64_t v;
@@ -105,6 +127,44 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s) {
     if (s == NULL)
         return;
     free(s->edges);
+    memset(s, 0, sizeof *s);
+}
+
+/* ---- Pure IBS-Fetch decoder + free: all platforms (no perf, no hardware) ------ */
+
+int asmtest_ibs_decode_fetch(const void *raw, size_t raw_len,
+                             asmtest_ibs_fetch_sample_t *out) {
+    if (raw == NULL || out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    /* Need the caps word through the fetch linear-address register (reg[1]); a
+     * record shorter than that is truncated — no fetch address is derivable. */
+    if (raw_len < IBS_FETCH_RAW_MIN_BYTES)
+        return ASMTEST_IBS_EDECODE;
+
+    const uint8_t *p = (const uint8_t *)raw;
+    uint64_t ctl = ld_u64(p + IBS_RAW_REG_OFF(IBS_FETCH_REG_CTL));
+    uint64_t linad = ld_u64(p + IBS_RAW_REG_OFF(IBS_FETCH_REG_LINAD));
+
+    /* Decode every status field regardless of validity so a caller can inspect the
+     * record; the return code carries whether the fetch tag is usable. */
+    out->fetch_addr = linad;
+    out->valid = (unsigned)bit(ctl, IBS_FETCHCTL_VAL);
+    out->complete = (unsigned)bit(ctl, IBS_FETCHCTL_COMP);
+    out->icache_miss = (unsigned)bit(ctl, IBS_FETCHCTL_IC_MISS);
+    out->itlb_miss = (unsigned)bit(ctl, IBS_FETCHCTL_L1TLB_MISS);
+    out->latency =
+        (unsigned)((ctl >> IBS_FETCHCTL_LAT_SHIFT) & IBS_FETCHCTL_LAT_MASK);
+
+    /* IbsFetchVal set => the fetch tag (and its linear address) is meaningful and
+     * belongs in the coverage histogram; clear => decoded, nothing to aggregate. */
+    return out->valid ? ASMTEST_IBS_OK : ASMTEST_IBS_NOEDGE;
+}
+
+void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s) {
+    if (s == NULL)
+        return;
+    free(s->hot);
     memset(s, 0, sizeof *s);
 }
 
@@ -750,6 +810,308 @@ int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
     return ASMTEST_IBS_OK;
 }
 
+/* ============================ IBS-Fetch front-end lane ========================= */
+/* Phase 7: the same open/mmap/drain machinery (ibs_chan_*, ibs_period, ibs_page) as
+ * the Op survey, pointed at the ibs_fetch PMU, decoding fetch records into a
+ * fetch-ADDRESS coverage histogram instead of control-flow edges. */
+
+/* ibs_fetch PMU type from sysfs (dynamic, read at runtime), or -1 if absent. */
+static int ibs_fetch_type(void) {
+    static int cached = -2; /* -2 unread, -1 absent, >=0 type */
+    if (cached != -2)
+        return cached;
+    cached = -1;
+    FILE *f = fopen("/sys/bus/event_source/devices/ibs_fetch/type", "r");
+    if (f != NULL) {
+        int t = -1;
+        if (fscanf(f, "%d", &t) == 1 && t >= 0)
+            cached = t;
+        fclose(f);
+    }
+    return cached;
+}
+
+static int g_fetch_avail = -1;
+static const char *g_fetch_reason = "";
+
+static void ibs_fetch_probe(void) {
+    if (g_fetch_avail >= 0)
+        return;
+    if (!is_amd()) {
+        g_fetch_avail = 0;
+        g_fetch_reason = "not AMD";
+        return;
+    }
+    unsigned caps = ibs_caps_eax();
+    if (caps == 0) {
+        g_fetch_avail = 0;
+        g_fetch_reason = "no IBS (CPUID 8000_001B absent)";
+        return;
+    }
+    if (!(caps & (1u << 1))) { /* FetchSam */
+        g_fetch_avail = 0;
+        g_fetch_reason = "no IBS fetch sampling (FetchSam)";
+        return;
+    }
+    if (ibs_fetch_type() < 0) {
+        g_fetch_avail = 0;
+        g_fetch_reason = "no ibs_fetch PMU";
+        return;
+    }
+    if (access("/sys/bus/event_source/devices/ibs_fetch/format/swfilt", F_OK) !=
+        0) {
+        g_fetch_avail = 0;
+        g_fetch_reason = "no swfilt (kernel < ~6.2)";
+        return;
+    }
+    g_fetch_avail = 1;
+    g_fetch_reason = "";
+}
+
+int asmtest_ibs_fetch_available(void) {
+    ibs_fetch_probe();
+    return g_fetch_avail;
+}
+const char *asmtest_ibs_fetch_skip_reason(void) {
+    ibs_fetch_probe();
+    return g_fetch_avail == 1 ? "" : g_fetch_reason;
+}
+
+/* --- fetch-address aggregation (open-addressing hash keyed on `addr`) ---------- */
+
+typedef struct {
+    uint64_t addr, count, icache_miss, itlb_miss, latency_sum;
+    int used;
+} fh_slot;
+typedef struct {
+    fh_slot *slots;
+    size_t cap; /* power of two */
+    size_t n;
+} fetch_hash;
+
+static int fh_init(fetch_hash *h, size_t cap) {
+    h->slots = (fh_slot *)calloc(cap, sizeof *h->slots);
+    if (h->slots == NULL)
+        return -1;
+    h->cap = cap;
+    h->n = 0;
+    return 0;
+}
+static void fh_free(fetch_hash *h) {
+    free(h->slots);
+    h->slots = NULL;
+    h->cap = h->n = 0;
+}
+static size_t fh_hash(uint64_t addr, size_t mask) {
+    uint64_t k = addr * 0x9E3779B97F4A7C15ull;
+    k ^= k >> 29;
+    return (size_t)k & mask;
+}
+static int fh_grow(fetch_hash *h); /* fwd */
+
+/* Add one valid fetch sample. Aggregates duplicates; grows past a 0.7 load factor. */
+static void fh_add(fetch_hash *h, uint64_t addr, unsigned icmiss,
+                   unsigned itlbmiss, unsigned lat) {
+    if (h->slots == NULL)
+        return;
+    if ((h->n + 1) * 10 >= h->cap * 7) {
+        if (fh_grow(h) != 0)
+            return; /* OOM: drop the sample rather than crash (survey is a prefix) */
+    }
+    size_t mask = h->cap - 1;
+    size_t i = fh_hash(addr, mask);
+    for (;;) {
+        fh_slot *s = &h->slots[i];
+        if (!s->used) {
+            s->used = 1;
+            s->addr = addr;
+            s->count = 1;
+            s->icache_miss = icmiss;
+            s->itlb_miss = itlbmiss;
+            s->latency_sum = lat;
+            h->n++;
+            return;
+        }
+        if (s->addr == addr) {
+            s->count++;
+            s->icache_miss += icmiss;
+            s->itlb_miss += itlbmiss;
+            s->latency_sum += lat;
+            return;
+        }
+        i = (i + 1) & mask;
+    }
+}
+static int fh_grow(fetch_hash *h) {
+    fetch_hash bigger;
+    if (fh_init(&bigger, h->cap * 2) != 0)
+        return -1;
+    for (size_t i = 0; i < h->cap; i++) {
+        fh_slot *s = &h->slots[i];
+        if (!s->used)
+            continue;
+        size_t mask = bigger.cap - 1;
+        size_t j = fh_hash(s->addr, mask);
+        while (bigger.slots[j].used)
+            j = (j + 1) & mask;
+        bigger.slots[j] = *s;
+        bigger.n++;
+    }
+    fh_free(h);
+    *h = bigger;
+    return 0;
+}
+static int fh_cmp_desc(const void *a, const void *b) {
+    const asmtest_ibs_fetch_hot_t *x = (const asmtest_ibs_fetch_hot_t *)a;
+    const asmtest_ibs_fetch_hot_t *y = (const asmtest_ibs_fetch_hot_t *)b;
+    if (x->count != y->count)
+        return x->count < y->count ? 1 : -1; /* descending by count */
+    if (x->addr != y->addr)
+        return x->addr < y->addr ? -1 : 1; /* deterministic tiebreak */
+    return 0;
+}
+/* Export used slots into a freshly-malloc'd array sorted by descending count. */
+static int fh_export(fetch_hash *h, asmtest_ibs_fetch_survey_t *out) {
+    if (h->n == 0) {
+        out->hot = NULL;
+        out->n = 0;
+        return 0;
+    }
+    asmtest_ibs_fetch_hot_t *arr =
+        (asmtest_ibs_fetch_hot_t *)calloc(h->n, sizeof *arr);
+    if (arr == NULL)
+        return -1;
+    size_t k = 0;
+    for (size_t i = 0; i < h->cap && k < h->n; i++) {
+        fh_slot *s = &h->slots[i];
+        if (!s->used)
+            continue;
+        arr[k].addr = s->addr;
+        arr[k].count = s->count;
+        arr[k].icache_miss = s->icache_miss;
+        arr[k].itlb_miss = s->itlb_miss;
+        arr[k].latency_sum = s->latency_sum;
+        k++;
+    }
+    qsort(arr, k, sizeof *arr, fh_cmp_desc);
+    out->hot = arr;
+    out->n = k;
+    return 0;
+}
+
+/* --- fetch ring drain ---------------------------------------------------------- */
+/* Mirrors ibs_drain, but decodes fetch records (asmtest_ibs_decode_fetch) into the
+ * fetch-address hash and tracks fetch provenance (valid samples, aggregate misses). */
+static void ibs_fetch_drain(void *base_map, size_t pg, size_t dsz,
+                            uint8_t *scratch, fetch_hash *h,
+                            asmtest_ibs_fetch_survey_t *out) {
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
+    uint8_t *data = (uint8_t *)base_map + pg;
+    uint64_t head = mp->data_head;
+    __sync_synchronize(); /* read data_head before the records (smp_rmb) */
+    uint64_t tail = mp->data_tail;
+    size_t span = (size_t)(head - tail);
+    if (span == 0)
+        return;
+    if (span > dsz)
+        span = dsz; /* defensive: never over-read the scratch buffer */
+    if (span + IBS_MAX_RECORD > dsz)
+        out->throttled =
+            1; /* less than one record of headroom == silent loss */
+
+    for (size_t i = 0; i < span; i++)
+        scratch[i] = data[(tail + i) % dsz];
+
+    for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
+        struct perf_event_header hd;
+        memcpy(&hd, scratch + off, sizeof hd);
+        if (hd.size == 0 || off + hd.size > span)
+            break;
+        if (hd.type == PERF_RECORD_SAMPLE) {
+            out->samples++;
+            /* body order for sample_type IP|TID|RAW: u64 ip; u32 pid,tid;
+             * u32 raw_size; char raw[raw_size]. */
+            size_t need = sizeof hd + 8 + 8 + 4;
+            if (hd.size >= need) {
+                uint8_t *rawsz_p = scratch + off + sizeof hd + 8 + 8;
+                uint32_t rawsz = ld_u32(rawsz_p);
+                uint8_t *raw = rawsz_p + 4;
+                if ((size_t)(raw - (scratch + off)) + rawsz <= hd.size) {
+                    asmtest_ibs_fetch_sample_t fs;
+                    if (asmtest_ibs_decode_fetch(raw, rawsz, &fs) ==
+                        ASMTEST_IBS_OK) {
+                        out->valid_samples++;
+                        out->icache_misses += fs.icache_miss;
+                        out->itlb_misses += fs.itlb_miss;
+                        fh_add(h, fs.fetch_addr, fs.icache_miss, fs.itlb_miss,
+                               fs.latency);
+                    }
+                }
+            }
+        } else if (hd.type == PERF_RECORD_LOST) {
+            if (hd.size >= sizeof hd + 16)
+                out->lost += ld_u64(scratch + off + sizeof hd + 8);
+            else
+                out->lost += 1;
+        } else if (hd.type == PERF_RECORD_THROTTLE) {
+            out->throttled = 1;
+        }
+        off += hd.size;
+    }
+
+    __sync_synchronize(); /* publish reads before advancing data_tail (smp_mb) */
+    mp->data_tail = tail + span;
+}
+
+int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
+                                 const asmtest_ibs_opts_t *opts,
+                                 asmtest_ibs_fetch_survey_t *out) {
+    if (out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (!asmtest_ibs_fetch_available())
+        return ASMTEST_IBS_EUNAVAIL;
+    int type = ibs_fetch_type();
+    if (type < 0)
+        return ASMTEST_IBS_EUNAVAIL;
+
+    size_t pg = ibs_page();
+    size_t dsz = pg * IBS_RING_DATA_PAGES;
+
+    ibs_chan ch;
+    if (ibs_chan_open(&ch, tid, type, ibs_period(opts), pg, dsz) != 0)
+        return ASMTEST_IBS_EUNAVAIL;
+
+    uint8_t *scratch = (uint8_t *)malloc(dsz);
+    fetch_hash h;
+    if (scratch == NULL || fh_init(&h, 1024) != 0) {
+        free(scratch);
+        ibs_chan_disable(&ch);
+        ibs_chan_free(&ch);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        ibs_fetch_drain(ch.base_map, pg, dsz, scratch, &h, out);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (elapsed_ms(&t0, &now) >= ms)
+            break;
+        struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
+        nanosleep(&slice, NULL);
+    }
+    ibs_chan_disable(&ch);
+    ibs_fetch_drain(ch.base_map, pg, dsz, scratch, &h, out); /* final drain */
+
+    fh_export(&h, out);
+    fh_free(&h);
+    free(scratch);
+    ibs_chan_free(&ch);
+    return ASMTEST_IBS_OK;
+}
+
 #else /* not Linux x86-64 --------------------------------------------------------- */
 
 int asmtest_ibs_available(void) { return 0; }
@@ -784,6 +1146,23 @@ int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
 }
 int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
     (void)ctx;
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    return ASMTEST_IBS_EUNAVAIL;
+}
+
+/* IBS-Fetch front-end lane: self-skips off Linux/x86-64/AMD (the pure decoder +
+ * asmtest_ibs_fetch_survey_free are defined above for ALL platforms). */
+int asmtest_ibs_fetch_available(void) { return 0; }
+const char *asmtest_ibs_fetch_skip_reason(void) {
+    return "IBS is Linux/x86-64 AMD only";
+}
+int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
+                                 const asmtest_ibs_opts_t *opts,
+                                 asmtest_ibs_fetch_survey_t *out) {
+    (void)tid;
+    (void)ms;
+    (void)opts;
     if (out != NULL)
         memset(out, 0, sizeof *out);
     return ASMTEST_IBS_EUNAVAIL;

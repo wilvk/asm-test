@@ -318,6 +318,18 @@ branchsnap-test: $(BUILD)/test_branchsnap
 # off AMD IBS-Op. Links only ibs_backend.o (a self-contained producer, no Capstone /
 # PT / OpenCSD decoders) + -lpthread for the test's worker thread. ibs_probe is the
 # standalone capability probe. Both are wired into hwtrace-test below.
+#
+# test_ibs.c / ibs_probe.c include the INTERNAL src/ibs_backend.h — the Phase 7
+# IBS-Fetch front-end lane (asmtest_ibs_fetch_*) lives there, kept off the public
+# asmtest_ibs.h surface — so they compile with -Isrc. Explicit object rules override
+# the generic examples pattern rule (which is -Iinclude only); they depend on the
+# internal header + .build-flags so an edit / knob flip forces a rebuild.
+$(BUILD)/test_ibs.o: examples/test_ibs.c include/asmtest_ibs.h src/ibs_backend.h \
+                     $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -c $< -o $@
+$(BUILD)/ibs_probe.o: examples/ibs_probe.c include/asmtest_ibs.h src/ibs_backend.h \
+                      $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -c $< -o $@
 $(BUILD)/test_ibs: $(BUILD)/ibs_backend.o $(BUILD)/test_ibs.o
 	$(CC) $(CFLAGS) $^ -lpthread -o $@
 $(BUILD)/ibs_probe: $(BUILD)/ibs_backend.o $(BUILD)/ibs_probe.o
