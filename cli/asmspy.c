@@ -2560,6 +2560,102 @@ static int pr_pid_idx_cmp(const void *a, const void *b) {
  * with the same box glyphs as the --procs forest. `emitted` guards cycles; `*ni`
  * runs; order[row] maps a display row back to its index in `pr`. Children are the
  * processes whose ppid is this pid, by pid asc; the last gets the └─ elbow. */
+static const char *seccomp_label(int s) {
+    switch (s) {
+    case 0:
+        return "disabled";
+    case 1:
+        return "strict";
+    case 2:
+        return "filtered";
+    default:
+        return "unknown";
+    }
+}
+
+/* Human-readable RSS from KiB. */
+static void rss_human(unsigned long kb, char *out, size_t n) {
+    if (kb >= 1024UL * 1024)
+        snprintf(out, n, "%.1f GB", kb / (1024.0 * 1024.0));
+    else if (kb >= 1024)
+        snprintf(out, n, "%.1f MB", kb / 1024.0);
+    else
+        snprintf(out, n, "%lu KB", kb);
+}
+
+/* Draw the process-list detail strip (bottom of the picker): a separator naming
+ * the selected pid + runtime badge, then a compact fingerprint — runtime,
+ * threads/RSS/seccomp, thread names, notable modules, exe. Adapts to `h` rows
+ * (separator + up to 5 content lines); the caller clears the screen each frame,
+ * so no padding is needed. Draws nothing for h < 2 or a NULL selection. */
+static void proc_details_render(int y0, int h, int cols,
+                                const asmspy_proc_t *p,
+                                const asmspy_fingerprint_t *fp) {
+    if (h < 2 || !p)
+        return;
+    char sep[96];
+    int sl = snprintf(sep, sizeof sep, "── details: pid %d  [%s] ", (int)p->pid,
+                      fp->runtime[0] ? fp->runtime : "?");
+    attron(A_BOLD);
+    mvprintw(y0, 0, "%.*s", cols, sep);
+    for (int x = sl; x < cols; x++) /* extend the rule to the right margin */
+        mvaddch(y0, x, ACS_HLINE);
+    attroff(A_BOLD);
+
+    int y = y0 + 1, last = y0 + h - 1;
+    char line[600];
+
+    char ev[100] = "", elf[64] = "";
+    if (fp->evidence[0])
+        snprintf(ev, sizeof ev, " (%s)", fp->evidence);
+    if (fp->elf_class)
+        snprintf(elf, sizeof elf, "   %d-bit %s %s", fp->elf_class,
+                 fp->pie ? "PIE" : "non-PIE",
+                 fp->static_linked ? "static" : "dynamic");
+    if (y <= last) {
+        snprintf(line, sizeof line, "runtime  %s%s   jit:%s%s", fp->runtime, ev,
+                 fp->jitting ? "yes" : "no", elf);
+        mvprintw(y++, 0, "%.*s", cols, line);
+    }
+    if (y <= last) {
+        char rss[32];
+        rss_human(fp->rss_kb, rss, sizeof rss);
+        snprintf(line, sizeof line,
+                 "threads  %-4d  rss %-10s  seccomp %-9s  tracer %s", fp->threads,
+                 rss, seccomp_label(fp->seccomp), fp->tracer_pid ? "YES" : "none");
+        mvprintw(y++, 0, "%.*s", cols, line);
+    }
+    if (y <= last) {
+        char tn[400] = "";
+        for (int i = 0; i < fp->n_threadnames; i++) {
+            if (i)
+                strncat(tn, ", ", sizeof tn - strlen(tn) - 1);
+            strncat(tn, fp->threadnames[i], sizeof tn - strlen(tn) - 1);
+        }
+        if (fp->more_threadnames)
+            strncat(tn, ", …", sizeof tn - strlen(tn) - 1);
+        snprintf(line, sizeof line, "names    %s", tn[0] ? tn : "(none)");
+        mvprintw(y++, 0, "%.*s", cols, line);
+    }
+    if (y <= last) {
+        char md[400] = "";
+        for (int i = 0; i < fp->n_modules; i++) {
+            if (i)
+                strncat(md, ", ", sizeof md - strlen(md) - 1);
+            strncat(md, fp->modules[i], sizeof md - strlen(md) - 1);
+        }
+        if (fp->more_modules)
+            strncat(md, ", …", sizeof md - strlen(md) - 1);
+        snprintf(line, sizeof line, "modules  %s", md[0] ? md : "(none notable)");
+        mvprintw(y++, 0, "%.*s", cols, line);
+    }
+    if (y <= last) {
+        snprintf(line, sizeof line, "exe      %s",
+                 fp->exe[0] ? fp->exe : "(unreadable — not owned by you?)");
+        mvprintw(y++, 0, "%.*s", cols, line);
+    }
+}
+
 static void picker_emit(const asmspy_proc_t *pr, size_t np, size_t k,
                         const char *prefix, int is_last, int is_root,
                         char **items, size_t *order, size_t *ni, char *emitted) {
@@ -2567,9 +2663,9 @@ static void picker_emit(const asmspy_proc_t *pr, size_t np, size_t k,
         return;
     emitted[k] = 1;
     char row[320];
-    snprintf(row, sizeof row, "%s%s%-7d %c %-12.12s %.180s", prefix,
+    snprintf(row, sizeof row, "%s%s%-7d %c %-12.12s %-5s %.180s", prefix,
              is_root ? "" : is_last ? TG_ELB : TG_TEE, (int)pr[k].pid,
-             pr[k].attachable ? ' ' : '!', pr[k].user, pr[k].cmd);
+             pr[k].attachable ? ' ' : '!', pr[k].user, pr[k].runtime, pr[k].cmd);
     items[*ni] = strdup(row);
     order[*ni] = k;
     (*ni)++;
@@ -2683,9 +2779,23 @@ static int screen_procs(asmspy_proc_t *picked) {
 
         int outcome = 0; /* 1 pick, 2 quit, 3 toggle, 4 refresh */
         int selidx = -1;
+        /* fingerprint cache for the bottom detail strip: recomputed when the
+         * highlighted pid changes, and periodically so RSS/threads stay live */
+        asmspy_fingerprint_t fp;
+        memset(&fp, 0, sizeof fp);
+        int fp_pid = -1, refresh_tick = 0;
         while (outcome == 0) {
             int rows, cols;
             getmaxyx(stdscr, rows, cols);
+            /* reserve a bottom strip for the selected process's details */
+            int detail_h = 6;
+            if (detail_h > rows - 6)
+                detail_h = rows - 6; /* keep the list usable on a short screen */
+            if (detail_h < 0)
+                detail_h = 0;
+            int list_h = rows - 3 - detail_h;
+            if (list_h < 1)
+                list_h = 1;
             erase();
             attron(A_BOLD);
             const char *sortname =
@@ -2705,14 +2815,33 @@ static int screen_procs(asmspy_proc_t *picked) {
                          "not yours)",
                          sortname, np);
             attroff(A_BOLD);
-            list_render(&L, 1, rows - 3, cols);
+            list_render(&L, 1, list_h, cols);
+
+            /* fingerprint the highlighted process for the detail strip */
+            const asmspy_proc_t *selp = NULL;
+            if (L.nmatch > 0 && L.sel >= 0 && L.sel < L.nmatch)
+                selp = &procs[order[L.match[L.sel]]];
+            if (detail_h >= 2 && selp &&
+                ((int)selp->pid != fp_pid || refresh_tick <= 0)) {
+                asmspy_fingerprint(selp->pid, &fp);
+                fp_pid = (int)selp->pid;
+                refresh_tick = 2; /* ~2 idle ticks (≈2s) between refreshes */
+            }
+            if (detail_h >= 2)
+                proc_details_render(rows - 1 - detail_h, detail_h, cols, selp,
+                                    &fp);
+
             mvprintw(rows - 1, 0,
                      "type: filter   Enter: select   Tab: sort   F2: %s   F3: "
                      "refresh   q: quit",
                      view ? "flat list" : "tree");
             clrtoeol();
             refresh();
+            timeout(1000); /* poll so the detail strip refreshes while idle */
             int ch = getch();
+            refresh_tick--;
+            if (ch == ERR)
+                continue; /* idle tick: redraw (refreshes the detail strip) */
             if ((ch == 'q' && L.flen == 0) || ch == 27)
                 outcome = 2;
             else if (ch == '\t')
@@ -2722,7 +2851,7 @@ static int screen_procs(asmspy_proc_t *picked) {
             else if (ch == KEY_F(3))
                 outcome = 4; /* re-scan (re-samples CPU in activity sort) */
             else {
-                int sel = list_key(&L, ch, rows - 3);
+                int sel = list_key(&L, ch, list_h);
                 if (sel >= 0) {
                     selidx = sel;
                     outcome = 1;
@@ -2753,29 +2882,6 @@ static int screen_procs(asmspy_proc_t *picked) {
             view = !view;
         /* outcome 3/4/5: fall through -> outer loop re-scans */
     }
-}
-
-static const char *seccomp_label(int s) {
-    switch (s) {
-    case 0:
-        return "disabled";
-    case 1:
-        return "strict";
-    case 2:
-        return "filtered";
-    default:
-        return "unknown";
-    }
-}
-
-/* Human-readable RSS from KiB. */
-static void rss_human(unsigned long kb, char *out, size_t n) {
-    if (kb >= 1024UL * 1024)
-        snprintf(out, n, "%.1f GB", kb / (1024.0 * 1024.0));
-    else if (kb >= 1024)
-        snprintf(out, n, "%.1f MB", kb / 1024.0);
-    else
-        snprintf(out, n, "%lu KB", kb);
 }
 
 /* Per-process details view (menu 8): what kind of process this is — runtime,
