@@ -75,6 +75,33 @@ def test_two_compactions_compose_to_final():
     assert dataflow.gcmove_canon(moves, 4, 0x2010) == 0x3010
 
 
+def test_method_resolve_point_and_range():
+    # Foo [0x1000,+0x40) v3; Bar [0x2000,+0x20) v1; Baz point-match at 0x3000 v2.
+    methods = [
+        (0x1000, 0x40, "Foo", 3),
+        (0x2000, 0x20, "Bar", 1),
+        (0x3000, 0, "Baz", 2),
+    ]
+    assert dataflow.method_resolve_pc(methods, 0x1000) == 0  # Foo start
+    assert dataflow.method_resolve_pc(methods, 0x103F) == 0  # Foo last byte (half-open)
+    assert dataflow.method_resolve_pc(methods, 0x1040) == -1  # one past Foo -> none
+    assert dataflow.method_resolve_pc(methods, 0x2010) == 1  # Bar
+    assert dataflow.method_resolve_pc(methods, 0x3000) == 2  # Baz point match
+    assert dataflow.method_resolve_pc(methods, 0x3001) == -1  # Baz is point-only
+    assert dataflow.method_resolve_pc(methods, 0x9999) == -1  # nothing
+
+
+def test_method_resolve_tiered_rejit_newest_version_wins():
+    # Two records cover 0x1000 after an in-place re-JIT (v1 then v5); the greatest
+    # version — the newest load — wins.
+    methods = [(0x1000, 0x40, "Foo", 1), (0x1000, 0x40, "Foo", 5)]
+    assert dataflow.method_resolve_pc(methods, 0x1010) == 1
+
+
+def test_method_resolve_empty_map():
+    assert dataflow.method_resolve_pc([], 0x1000) == -1
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     n = 0

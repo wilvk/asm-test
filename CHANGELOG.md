@@ -13,9 +13,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   def-use + L2 slice + method identity + GC-move canonicalization + runtime-helper summaries;
   the emu/ptrace/DR producers stay separate tiers) into a dlopen-able shared library — the
   packaging target the language bindings consume. First binding: `asmtest.dataflow` (Python,
-  ctypes) wraps the pure GC-move canonicalizer `asmtest_gcmove_canon`; `make
-  dataflow-python-test` builds the lib and runs the wrapper's TAP suite (5 checks mirroring
-  the C `test_dataflow_gcmove` forward-to-final semantics), standalone so it needs no pytest.
+  ctypes) wraps the pure GC-move canonicalizer `asmtest_gcmove_canon` and the tiered-re-JIT-aware
+  method resolver `asmtest_method_resolve_pc`; `make dataflow-python-test` builds the lib and
+  runs the wrapper's TAP suite (8 checks mirroring the C `test_dataflow_gcmove` /
+  `test_dataflow_method` semantics), standalone so it needs no pytest.
   The pytest file skips cleanly when the lib is not built, so it never reddens the general
   binding job. Remaining language bindings + the wider L0/L1/L2 surface + CI-wiring are later
   increments.
