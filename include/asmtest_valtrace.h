@@ -282,6 +282,78 @@ int asmtest_method_attribute(const asmtest_method_t *methods, size_t nmethods,
                              const asmtest_valtrace_t *v,
                              asmtest_method_attr_t *out, size_t out_cap);
 
+/* ------------------------------------------------------------------ */
+/* Phase 4 (increment 2) — GC-move address canonicalization            */
+/*                                                                     */
+/* The HARD half of the managed-interpretability layer. When the .NET   */
+/* GC COMPACTS the heap, a live object at OldRangeBase is relocated to   */
+/* NewRangeBase; a raw L0 value trace captured ACROSS the compaction     */
+/* then keys memory def-use on addresses that alias FALSELY. A store to  */
+/* an object BEFORE the move (at the old address) and the matching load  */
+/* AFTER the move (at the new address) look unrelated, so the def-use    */
+/* edge is LOST; and an unrelated object that later occupies the vacated */
+/* old address ALIASES the first, forging a false edge. Both break the   */
+/* memory last-writer map (asmtest_defuse_build), which is "GC-uncanoni- */
+/* calized" until this pass runs.                                        */
+/*                                                                       */
+/* This canonicalizer consumes the move-range records EventPipe's         */
+/* GCBulkMovedObjectRanges publishes — {OldRangeBase, NewRangeBase,        */
+/* RangeLength}, each tagged with the value-trace STEP boundary its GC     */
+/* takes effect at — and remaps every absolute memory address in a value  */
+/* trace to a STABLE canonical identity: the object's FINAL resting        */
+/* address after every compaction that will relocate it. A pre-move access */
+/* is forwarded to that final address; a post-move access already sits     */
+/* there; so the def-use survives the move, the offset WITHIN the object   */
+/* is preserved (i.e. (object, field) identity), and an unrelated object   */
+/* that reuses the vacated old address is NOT forwarded, so it no longer   */
+/* aliases.                                                                */
+/*                                                                        */
+/* PURE address math — no Capstone, no Unicorn, no runtime — so it unit-    */
+/* tests on every host, exactly like the L1 / L2 passes above. The LIVE     */
+/* EventPipe feed that turns GCBulkMovedObjectRanges events into            */
+/* asmtest_gcmove_t records at the right step boundaries is a LATER          */
+/* increment; this is the pure transform it will drive. Full object          */
+/* identity via GCBulkType / Node / Edge is likewise deferred.               */
+/* ------------------------------------------------------------------ */
+
+/* One GC move-range record — the shape of an EventPipe GCBulkMovedObjectRanges
+ * entry. The half-open heap range [old_base, old_base+len) was relocated to
+ * [new_base, new_base+len) by a compacting GC. `step` is the value-trace step
+ * boundary the compaction takes effect at: a record at a step < `step` predates
+ * the move (its address is in the OLD space and is forwarded), a record at a
+ * step >= `step` postdates it (already at the NEW address). Ranges sharing one
+ * `step` model a single GC's GCBulkMovedObjectRanges batch — they are disjoint
+ * in the old space, so an address is relocated at most once per boundary. */
+typedef struct asmtest_gcmove {
+    uint64_t old_base;
+    uint64_t new_base;
+    uint64_t len;
+    uint32_t step;
+} asmtest_gcmove_t;
+
+/* Map an absolute memory address `phys` observed at value-trace `step` to its
+ * canonical address — the object's FINAL resting place after every compaction
+ * (a move whose boundary is strictly greater than `step`) that will relocate it.
+ * Pure and allocation-free: `moves` MUST be sorted ascending by `step` (the
+ * order EventPipe emits GC events in; ranges within one GC may appear in any
+ * order among themselves). The same (moves, step, phys) always yields the same
+ * result; a NULL / empty move set returns `phys` unchanged. */
+uint64_t asmtest_gcmove_canon(const asmtest_gcmove_t *moves, size_t nmoves,
+                              uint32_t step, uint64_t phys);
+
+/* Rewrite every ABSOLUTE-memory (AT_LOC_MEM_ABS) record's resolved `addr` in `v`
+ * to its canonical address (asmtest_gcmove_canon), in place, so a subsequent
+ * asmtest_defuse_build links def-use across GC compactions with no false alias.
+ * Register and routine-offset (AT_LOC_MEM_OFF) records are left untouched — GC
+ * moves live in the absolute heap space. `moves` need not be pre-sorted: the
+ * caller's array is used directly when already ascending by `step`, else a
+ * private sorted copy is made. Returns the count of records whose address
+ * actually changed, or (size_t)-1 on a NULL trace. Call it ONCE on a freshly
+ * captured trace (it mutates the addresses in place). */
+size_t asmtest_gcmove_canonicalize(asmtest_valtrace_t *v,
+                                   const asmtest_gcmove_t *moves,
+                                   size_t nmoves);
+
 #ifdef __cplusplus
 }
 #endif

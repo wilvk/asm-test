@@ -27,6 +27,14 @@ $(BUILD)/dataflow_method.o: src/dataflow_method.c include/asmtest_valtrace.h \
                             include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Phase 4 (increment 2): the pure GC-move address canonicalizer over an L0 value
+# trace. Same PURE-C tier as dataflow.o (no Capstone, no Unicorn) — runs
+# everywhere; remaps memory addresses across a GC compaction to a stable
+# (object, field) identity so def-use survives without false aliasing.
+$(BUILD)/dataflow_gcmove.o: src/dataflow_gcmove.c include/asmtest_valtrace.h \
+                            include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h \
                               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
@@ -68,6 +76,17 @@ $(BUILD)/test_dataflow_method: $(BUILD)/dataflow.o $(BUILD)/dataflow_method.o \
                                $(BUILD)/test_dataflow_method.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# Phase 4 (increment 2) GC-move canonicalization suite. PURE — links only the
+# value-trace sink + the canonicalizer, no framework/Capstone/Unicorn. Like the
+# increment-1 rule above, this EXPLICIT rule beats the root Makefile's generic
+# test_% pattern (which would otherwise link the framework runtime + a same-named
+# routine object it does not have), so the suite builds correctly wherever it is
+# requested — including before the root SUITE_EXCLUDES is updated to keep it out
+# of `make test`.
+$(BUILD)/test_dataflow_gcmove: $(BUILD)/dataflow.o $(BUILD)/dataflow_gcmove.o \
+                               $(BUILD)/test_dataflow_gcmove.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(BUILD)/test_operands: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                         $(BUILD)/test_operands.o
 	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) -o $@
@@ -104,12 +123,14 @@ endif
 
 .PHONY: dataflow-test dataflow-grep-gate
 dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
+               $(BUILD)/test_dataflow_gcmove \
                $(BUILD)/test_operands $(DF_EMU_SUITE) \
                $(BUILD)/test_dataflow_ptrace
 	@echo "== dataflow-test =="
 	$(MAKE) --no-print-directory dataflow-grep-gate
 	$(BUILD)/test_dataflow
 	$(BUILD)/test_dataflow_method
+	$(BUILD)/test_dataflow_gcmove
 	$(BUILD)/test_operands
 ifeq ($(DF_HAVE_UNICORN),1)
 	$(BUILD)/test_dataflow_emu
