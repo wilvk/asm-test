@@ -215,6 +215,73 @@ void asmtest_slice_free(asmtest_slice_t *s);
 /* 1 if `step` is in the slice, else 0. */
 int asmtest_slice_contains(const asmtest_slice_t *s, uint32_t step);
 
+/* ------------------------------------------------------------------ */
+/* Phase 4 (increment 1) — PC -> method identity + version             */
+/*                                                                     */
+/* The managed-taint PREREQUISITE: attribute each executed step of an   */
+/* L0 value trace to the METHOD + VERSION whose JIT-compiled body owns   */
+/* its instruction PC. The method-map is the SAME shape the asmspy       */
+/* jitdump reader (code_addr / code_size / name / code_index) and the    */
+/* text perf-map (addr / size / name, version 0) both produce, and the   */
+/* §D3 addr-channel (asmtest_addr_channel.h) publishes (base / len /     */
+/* version). Pure address math — no Capstone, no Unicorn — so it runs on  */
+/* every host, exactly like the L1 / L2 passes above.                    */
+/*                                                                       */
+/* Versioning mirrors the code-image recorder's concept (asmtest_code-    */
+/* image.h): a monotonic version stamps each compilation. Tiered re-JIT   */
+/* is handled two ways, both by the version field: an IN-PLACE recompile  */
+/* at a REUSED address leaves both records live and the GREATEST version   */
+/* wins for that address; a re-JIT to a NEW address is simply a new        */
+/* record carrying a higher version, so its PCs attribute to the new       */
+/* version while the old body's PCs still resolve to the old one. GC-move  */
+/* object-identity canonicalization is DEFERRED to a later increment.      */
+/* ------------------------------------------------------------------ */
+
+/* One method-map entry. [addr, addr+size) bounds the emitted body (half-open);
+ * size == 0 means unknown extent — a point match on `addr` only. `name` is the
+ * method identity (borrowed; the caller's map owns its strings). `version` is
+ * the code_index / re-JIT counter described above. */
+typedef struct asmtest_method {
+    uint64_t addr;
+    uint64_t size;
+    const char *name;
+    uint64_t version;
+} asmtest_method_t;
+
+/* Per-step attribution, one entry per value-trace step. `method` is a STABLE
+ * identity id: records naming the same method share it (compact, assigned in
+ * first-seen order over the map), so a method keeps its identity across a
+ * tiered re-JIT even when its version and address change; it is -1 when the PC
+ * is in no method. `record` is the exact owning method-map index (-1 when
+ * unattributed); `version` is that record's version/code_index (0 when
+ * unattributed). */
+typedef struct asmtest_method_attr {
+    int32_t method;
+    int32_t record;
+    uint64_t version;
+} asmtest_method_attr_t;
+
+/* Resolve `pc` to the method-map record that owns it: the record whose
+ * [addr, addr+size) contains pc (or, for a size == 0 record, whose addr equals
+ * pc) and — when several records cover pc after an in-place tiered re-JIT at a
+ * reused address — the one with the GREATEST version (ties resolve to the last
+ * such record, the newest load). Returns the record index in `methods`, or -1
+ * if pc is owned by no method. Pure; the map need not be sorted (a linear scan
+ * keeps the tiered-collision rule simple and a JIT method-map is small). */
+int asmtest_method_resolve_pc(const asmtest_method_t *methods, size_t nmethods,
+                              uint64_t pc);
+
+/* Attribute every step of `v` — its per-step instruction offset read as an
+ * absolute PC — to its owning method + version, writing up to `out_cap` entries
+ * into `out` (one per step, in step order). Reuses asmtest_method_resolve_pc per
+ * step and assigns each distinct method NAME a stable identity id, so re-JIT'd
+ * versions of one method share their `method` id while their `version` differs.
+ * Returns the number of steps written (min(steps_len, out_cap)), or -1 on a NULL
+ * trace or NULL out. A NULL / empty method-map attributes every step to -1. */
+int asmtest_method_attribute(const asmtest_method_t *methods, size_t nmethods,
+                             const asmtest_valtrace_t *v,
+                             asmtest_method_attr_t *out, size_t out_cap);
+
 #ifdef __cplusplus
 }
 #endif

@@ -20,6 +20,13 @@ $(BUILD)/dataflow.o: src/dataflow.c include/asmtest_valtrace.h \
                      include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Phase 4 (increment 1): the pure PC -> (method, version) resolver over an L0
+# value trace. Same PURE-C tier as dataflow.o (no Capstone, no Unicorn) — runs
+# everywhere; the managed-taint prerequisite.
+$(BUILD)/dataflow_method.o: src/dataflow_method.c include/asmtest_valtrace.h \
+                            include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h \
                               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
@@ -49,6 +56,16 @@ $(BUILD)/test_dataflow_emu.o: CFLAGS += $(UNICORN_CFLAGS) $(CAPSTONE_CFLAGS) \
 
 # --- test binaries (standalone TAP, like test_ibs; no framework runtime) ----
 $(BUILD)/test_dataflow: $(BUILD)/dataflow.o $(BUILD)/test_dataflow.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# Phase 4 (increment 1) PC -> (method, version) resolver suite. PURE — links only
+# the value-trace sink + the resolver, no framework/Capstone/Unicorn. This EXPLICIT
+# rule beats the root Makefile's generic test_% pattern (which would otherwise link
+# the framework runtime + a same-named routine object it does not have), so the
+# suite builds correctly wherever it is requested — including if the root
+# SUITE_EXCLUDES has not yet been updated to keep it out of `make test`.
+$(BUILD)/test_dataflow_method: $(BUILD)/dataflow.o $(BUILD)/dataflow_method.o \
+                               $(BUILD)/test_dataflow_method.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(BUILD)/test_operands: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
@@ -86,11 +103,13 @@ $(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o 
 endif
 
 .PHONY: dataflow-test dataflow-grep-gate
-dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_operands $(DF_EMU_SUITE) \
+dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
+               $(BUILD)/test_operands $(DF_EMU_SUITE) \
                $(BUILD)/test_dataflow_ptrace
 	@echo "== dataflow-test =="
 	$(MAKE) --no-print-directory dataflow-grep-gate
 	$(BUILD)/test_dataflow
+	$(BUILD)/test_dataflow_method
 	$(BUILD)/test_operands
 ifeq ($(DF_HAVE_UNICORN),1)
 	$(BUILD)/test_dataflow_emu
