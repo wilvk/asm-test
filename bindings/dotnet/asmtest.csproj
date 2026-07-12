@@ -13,11 +13,13 @@
   </PropertyGroup>
 
   <!-- The native-trace smoke tests are their own projects
-       (drtrace/drtrace.csproj, hwtrace/hwtrace.csproj); exclude their sources from
-       this app's default glob so the projects never glob-collide (a second Main). -->
+       (drtrace/drtrace.csproj, hwtrace/hwtrace.csproj, dataflow_smoke/); exclude their
+       sources from this app's default glob so the projects never glob-collide (a
+       second Main). -->
   <ItemGroup>
     <Compile Remove="drtrace/**/*.cs" />
     <Compile Remove="hwtrace/**/*.cs" />
+    <Compile Remove="dataflow_smoke/**/*.cs" />
   </ItemGroup>
 
 </Project>
