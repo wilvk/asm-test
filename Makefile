@@ -61,7 +61,8 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_bittricks test_vm \
                   test_emu test_emu_usecases test_asm \
                   test_drtrace test_hwtrace test_codeimage test_branchsnap \
-                  test_ibs
+                  test_ibs \
+                  test_dataflow test_operands test_dataflow_emu
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
@@ -112,6 +113,7 @@ help:
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'
 	@echo '  ibs-test        statistical AMD IBS-Op edge lane (pure decoder + live out-of-band)'
+	@echo '  dataflow-test   data-flow tracing: L0 value trace / L1 def-use / L2 slice (emulator L0; pure spine runs everywhere)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
 	@echo '  dev-dotnet      interactive container shell for the .NET examples'
@@ -849,6 +851,7 @@ usecases-emu: $(BUILD)/test_emu_usecases
 	./$(BUILD)/test_emu_usecases
 
 include mk/native-trace.mk  # DynamoRIO + hardware native-trace tiers
+include mk/dataflow.mk      # data-flow tracing: L0 value trace / L1 def-use / L2 slice
 include mk/bench.mk          # cross-system performance + feature benchmarking
 include mk/cli.mk            # asmspy: ncurses front-end over the tracer
 include mk/bindings.mk       # conformance corpus + language bindings + packaging
