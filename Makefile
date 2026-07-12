@@ -62,7 +62,8 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_emu test_emu_usecases test_asm \
                   test_drtrace test_hwtrace test_codeimage test_branchsnap \
                   test_ibs \
-                  test_dataflow test_operands test_dataflow_emu
+                  test_dataflow test_operands test_dataflow_emu \
+                  test_dataflow_ptrace
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
@@ -310,7 +311,7 @@ $(BUILD)/test_struct: $(FRAMEWORK_OBJS) $(BUILD)/structs.o $(BUILD)/test_struct.
 	$(CC) $(CFLAGS) $^ -o $@
 
 test: $(SUITES)
-	@set -e; for t in $(SUITES); do echo "== $$t =="; ./$$t; done
+	@set -e; for t in $(SUITES); do echo "== $$t =="; $$t; done
 
 # --- "Unusual use case" suites (Track F) -----------------------------------
 # Property-tested branchless bit hacks and a stateful RPN bytecode interpreter.
@@ -324,7 +325,7 @@ $(BUILD)/test_vm: $(FRAMEWORK_OBJS) $(BUILD)/vm.o $(BUILD)/test_vm.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 usecases: $(USECASE_SUITES)
-	@set -e; for t in $(USECASE_SUITES); do echo "== $$t =="; ./$$t; done
+	@set -e; for t in $(USECASE_SUITES); do echo "== $$t =="; $$t; done
 
 # Framework self-tests (Track A). The meta-suites are pure C (register/flag/
 # vector cases build a regs_t by hand), linked against the framework runtime;
@@ -731,7 +732,7 @@ VALGRIND_OPTS ?= --leak-check=full --errors-for-leak-kinds=definite \
 valgrind: $(SUITES) $(BUILD)/tests_positive
 	@set -e; for t in $(SUITES) $(BUILD)/tests_positive; do \
 	  echo "== valgrind $$t =="; \
-	  $(VALGRIND) $(VALGRIND_OPTS) ./$$t --no-fork >/dev/null; \
+	  $(VALGRIND) $(VALGRIND_OPTS) $$t --no-fork >/dev/null; \
 	done
 	@echo "valgrind: clean"
 
