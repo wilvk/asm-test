@@ -648,6 +648,24 @@ static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
         t->truncated = true;
 }
 
+/* Blocking waitpid for the initial post-fork PTRACE_TRACEME handshake (the child's
+ * raise(SIGSTOP)), retrying across EINTR. The tracee stops essentially immediately,
+ * so the ONLY reason this wait returns EINTR is an UNRELATED signal delivered to the
+ * tracer — a host process's own repeating timer / alarm, or a test's signal storm.
+ * The bare waitpid used to treat that EINTR as a failed handshake and abort the whole
+ * trace with ETRACE (racy: it fired ~70% of the time on a fast box under a 200us
+ * SIGALRM storm). The step loop already retries across EINTR; the handshake must too,
+ * so descent honours its "undisturbed by the caller's signal flow" contract from the
+ * very first wait. (A real child-death still surfaces: waitpid returns the exit status
+ * and !WIFSTOPPED, or -1 with errno!=EINTR.) */
+static pid_t waitpid_handshake(pid_t pid, int *status) {
+    for (;;) {
+        pid_t w = waitpid(pid, status, 0);
+        if (w >= 0 || errno != EINTR)
+            return w;
+    }
+}
+
 /* Plant a software breakpoint at `target`, PTRACE_CONT the tracee until it reaches it,
  * remove the breakpoint, and (x86) rewind the PC so the tracee is left stopped exactly
  * at `target`. PTRACE_POKETEXT patches even an r-x text page the way a debugger does
@@ -1336,7 +1354,7 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
     int pending_sig =
         0; /* signal to inject on the next step (forwarded, unrelated) */
 
-    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+    if (waitpid_handshake(pid, &status) < 0 || !WIFSTOPPED(status)) {
         /* Could not reach the initial SIGSTOP. */
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
@@ -1615,7 +1633,7 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
     int overflow = 0, returned = 0, rc = ASMTEST_PTRACE_OK, status = 0;
     int pending_sig = 0;
 
-    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+    if (waitpid_handshake(pid, &status) < 0 || !WIFSTOPPED(status)) {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         free(stream);
@@ -2157,7 +2175,7 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
     uint32_t n = 0;
     long retval_final = 0;
 
-    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+    if (waitpid_handshake(pid, &status) < 0 || !WIFSTOPPED(status)) {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         free(stream);
@@ -2577,7 +2595,7 @@ static int trace_call_descend(const void *code, size_t len, const long *args,
     }
 
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0 || !WIFSTOPPED(status)) {
+    if (waitpid_handshake(pid, &status) < 0 || !WIFSTOPPED(status)) {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         return ASMTEST_PTRACE_ETRACE;
