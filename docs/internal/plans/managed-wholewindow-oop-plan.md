@@ -40,7 +40,12 @@ already-shipping out-of-process stepper from a **region** primitive into a
 > in-scope thrown/caught exception the in-process `localscope` must omit (validated: exit 0,
 > deterministic, the block's own JIT'd code named).
 >
-> **The one remaining gap — deep mid-window JIT attribution.** Coarse `/proc/self/maps`
+> **The one remaining gap — deep mid-window JIT attribution — CLOSED 2026-07-12**
+> *(extensions plan [E3](asmtrace-extensions-plan.md)): `JitMethodMap.SetPublishChannel`
+> now arms exactly the sibling-thread publisher described below (EventPipe callback →
+> lock-free queue → never-stepped publisher thread → shared channel, joined before the
+> channel is freed); `AsmTrace.Window` reports it via `LiveJitPublished`. The paragraph
+> below records the pre-E3 rationale.* Coarse `/proc/self/maps`
 > ranges (JIT heap + R2R BCL `.dll` images) are pre-published, so the block's OWN code + the
 > already-mapped BCL are captured; but a method JIT'd FRESH mid-window (a first-call generic
 > instantiation like `Enumerable.Where<int>`, a local function) lands OUTSIDE the pre-window

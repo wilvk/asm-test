@@ -8,6 +8,66 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-flow tracing tier, Phases 0–2 (`include/asmtest_valtrace.h`, `make dataflow-test`)
+  — the CI-runnable milestone of the data-flow plan.** Phase 0: the shared L0 value-trace
+  sink (`asmtest_valtrace_t`: caller-owned buffers, append/stash-wide/truncate discipline
+  mirroring `asmtest_trace_t`) plus the Capstone operand read/write-set enumerator
+  (explicit register + memory operands with base/index/scale/disp/segment, and the implicit
+  ones — `eflags` writes, `rsp` read+write on push/pop — via `cs_regs_access`). Phase 1: the
+  L1 def-use graph over a recorded value trace (register moves and load-after-store memory
+  edges) and the L2 forward/backward slicer on top of it. Phase 2: the emulator (Unicorn)
+  L0 producer — replay a routine under `uc_hook` instrumentation and emit the value trace
+  the pure phases analyze; validated live (per-step values, def-use edges, and both slice
+  directions asserted against a hand-traced fixture). Pure phases run on every host;
+  the emulator cases self-skip without Unicorn. New `mk/dataflow.mk`; suites
+  `test_dataflow` / `test_operands` / `test_dataflow_emu` (53 checks). The known
+  raw-address aliasing false positive (pre-GC-canonicalization) is asserted AS a false
+  positive, per the plan's Phase 4 note.
+
+- **`asmspy` reads binary jitdump files — the bytes-accurate, tiered-recompile-aware JIT
+  symbol source (asmspy plan Theme A).** A `jit-<pid>.dump` reader (LE header +
+  `JIT_CODE_LOAD` / `JIT_CODE_MOVE` records; unknown record types skipped via
+  `total_size`; a truncated in-flight tail ends the parse keeping what's whole) is now
+  **tier 1** of the JIT resolve chain — discovered the way perf does (a mapped marker in
+  `/proc/<pid>/maps`, then `/tmp` and the target's cwd), parsed ahead of the text perf-map
+  (tier 2, the LCD), re-JIT and code-motion aware (newest `code_index` wins, `CODE_MOVE`
+  relocates). Same rate-limited refresh-on-miss discipline as the perf-map path. Hardened
+  against hostile files (bounded name reads, zero/short `total_size` rejection — fuzzed
+  under ASan/UBSan). Also new: `--tree --json/--dot` exports mirroring the `--graph`
+  exporters, the extracted call-graph sort comparator (`cli/asmspy_graphsort.h`) with its
+  ordering/tiebreak unit test, and a `jitdump_victim` end-to-end smoke.
+
+- **.NET `AsmTrace.Window` captures methods JIT'd *mid-window* — the sibling-thread live
+  JIT publish (extensions plan E3), closing the deep-BCL gap.** `JitMethodMap.SetPublishChannel`
+  now starts a dedicated, never-stepped publisher thread: the `MethodLoadVerbose` callback
+  only enqueues `(base,len)` onto a lock-free queue (publishing inline could fire on the
+  single-stepped thread and re-enter the runtime under step — the observed SIGABRT that
+  kept this OFF), and the sibling drains it and P/Invokes each record into the shared
+  address channel while the window runs. Stop **joins** the publisher before the channel
+  is freed (no use-after-free window); the §E1 hybrid keeps live publish off by design
+  (it must capture only the surveyed hot slice). New `WholeWindowScope.LiveJitPublished`
+  counter; suite grows 161 → 169 checks including a ptrace-free mechanism test (native
+  ring-head readback) and a mid-window-JIT integration case (52 records live-published
+  in the docker lane).
+
+- **Env-gated debug logging for the hwtrace/AMD tier (`src/debug.{c,h}`, followup Phase 4 /
+  F32).** `ASMTEST_HWTRACE_DEBUG=1` (or `ASMTEST_AMD_DEBUG=1`) turns on stderr tier
+  diagnostics; unset costs one cached `getenv` per process. Covered by two suite checks
+  (silent when off, emits when on).
+
+- **Host-independent synthetic-ring tests for the AMD branch-stack parse (review F43/F44).**
+  The `hwtrace_end_amd` ring-parse now has an internal, linkable entry
+  (`asmtest_amd_ring_parse_decode`) driven by crafted `PERF_RECORD_SAMPLE` buffers — the
+  nr-clamp / LOST / Tier-A-vs-Tier-B logic and `amd_span_decodable`'s dropped-jmp follow
+  finally run on every CI host, AMD or not (+368 lines in `examples/test_hwtrace.c`,
+  suite 341 → 358).
+
+- **AMD LBR window-reach tuning guide (`docs/guides/tracing/amd-lbr-tuning.md`, review
+  F47 / followup Phase 10)** — what bounds a 16-deep LbrExtV2 window, the sizing/splitting
+  levers, what `truncated` means and how it is reported, when the statistical IBS lane is
+  the better tool, and the privileged-vs-unprivileged lanes including
+  `perf_event_paranoid`.
+
 - **`asmspy --sample` + TUI mode 7 — a live statistical hot-edge view, out of band (IBS lane
   Phases 2–3, the flagship deliverable).** Built on the new
   `asmtest_ibs_survey_process(pid, ms, opts, out)`: whole-process IBS-Op coverage that opens
@@ -408,6 +468,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`jit_trace`'s JIT lanes prefer the byte-identical block-step rung (review F18).** The
+  no-descent lanes select `asmtest_ptrace_trace_attached_blockstep` when
+  `asmtest_ptrace_blockstep_available()`, falling back to the per-instruction stepper
+  otherwise; the `*-descend` lanes intentionally stay per-instruction (block-step has no
+  descent parameter). Verified byte-identical on a live V8 target: the ASLR-normalized
+  disasm stream from block-step matches the pre-change single-step stream exactly.
+
+- **`asmtest_amd_snapshot_end` drains the BPF ring without blocking (followup Phase 8 /
+  F15).** `ring_buffer__poll(rb, 200)` epoll-waited 200 ms on the no-hit /
+  honest-truncation path (the common case) before draining; `ring_buffer__consume` reads
+  the producer position directly and returns at once — every record is already committed
+  by the time the events are disabled.
+
+- **One cached `amd_lbr_v2` cpuinfo probe (followup Phase 9 / F35/F11).** The duplicated
+  `/proc/cpuinfo` parse in `amd_backend.c` and `msr_lbr.c` now shares a single internal
+  cached probe.
+
 - **CI / tooling hardening.** The documentation site now builds warnings-as-errors in a
   dedicated `docs` CI job (`sphinx -W`), so a broken cross-reference fails the PR in-repo
   instead of only reddening Read the Docs after merge. The `format` gate is pinned to
@@ -522,6 +599,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **The shared `libasmtest_hwtrace` shipped with an undefined `asmtest_ibs_window_end`.**
+  The Zen-2 F6 IBS survey fallback made `hwtrace.c` call the IBS window primitives, but
+  the shared-lib link recipe never included `ibs_backend.o` — every binding's dlopen
+  failed on every host (the static test binaries link `HWTRACE_OBJS`, which carries it,
+  masking the gap in `hwtrace-test`). `pic/ibs_backend.o` is now compiled and linked, and
+  tracked by the knob-flip rebuild sentinel.
+
+- **A corrupt/huge `nr` in an AMD branch-stack sample could drive the ring parse out of
+  bounds (review F5/F7, followup Phase 2).** The sampled-branch count from the perf ring
+  is now clamped (`nr <= 64`, comfortably above the 32-deep hardware maximum) *before*
+  the `nr * sizeof(perf_branch_entry)` size check can wrap, and a short-tail sample too
+  small to hold the 8-byte `nr` itself is rejected instead of read. Exercised by the new
+  synthetic-ring tests on every host.
+
+- **`asmtest_trace_call_auto` could return `ASMTEST_HW_OK` with an *empty* trace (review
+  F24).** Each escalation rung's reset discards the prior rung's partial capture, but
+  `ran` kept reading 1 from that earlier rung — so a rung that reset and then failed at
+  runtime (seccomp/`ptrace_scope`, ENOMEM) reported a successful empty trace. `ran` is
+  now cleared at every reset site and re-earned only when a rung actually commits; the
+  legitimate truncated-but-OK partial (no downstream rung runs) is preserved.
 
 - **`asmspy`'s single-step engines could kill a V8/Node target seconds *after* a clean
   detach.** V8 worker threads park in blocking futex syscalls; a `PTRACE_SINGLESTEP` that

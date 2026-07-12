@@ -14,7 +14,7 @@ and docs and proposed candidate improvements with `file:line` evidence; every
 candidate was then run past an adversarial verifier checking three things —
 already implemented? already tracked in a plan/review/summary/DESIGN? real
 value? — with the tracked P0–P5 set from
-[open-defects-and-review-items-plan.md](../../plans/open-defects-and-review-items-plan.md)
+[open-defects-and-review-items-plan.md](../plans/open-defects-and-review-items-plan.md)
 and the hardware/privilege-blocked set from
 2026-07-02-roadmap-assessment.md
 supplied as exclusions. ~30 recommendations survived.

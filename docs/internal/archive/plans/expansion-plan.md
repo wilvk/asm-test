@@ -1,7 +1,7 @@
 # asm-test — Expansion Plan
 
 A roadmap for expanding `asm-test` beyond the Phase 0–11 feature set documented in
-[DESIGN.md](../../../DESIGN.md). Phases 0–11 widened *what can be tested* and *how the
+[DESIGN.md](../../../../DESIGN.md). Phases 0–11 widened *what can be tested* and *how the
 runner behaves*; this plan turns the polished single-repo project into a tool others
 can **adopt**, **trust**, and **extend** — and brings the emulator tier up to the
 ergonomics of the native tier.
@@ -290,8 +290,8 @@ the only deferred remainder).
   and as a real PE under **Docker + Wine** — with a first-class `regs_t` layout,
   manifest, and a CI `win64` job. The POSIX runner is *not* ported to Win32 (the
   suite runs `--no-fork`); that remains scoped for on-demand pickup. See the
-  [Native Win64 tier implementation plan](../archive/plans/win64-native-tier-plan.md) for the full
-  build, [docs/win64.md](../../guides/win64.md) for usage, and [Track E.1 — Native Win64
+  [Native Win64 tier implementation plan](win64-native-tier-plan.md) for the full
+  build, [docs/win64.md](../../../guides/win64.md) for usage, and [Track E.1 — Native Win64
   trampoline (scoping)](#track-e1--native-win64-trampoline-scoping) below for what
   the remaining runner port takes.
 - **Parallel execution** — *done.* `-jN` / `--jobs=N` runs up to N tests
@@ -324,7 +324,7 @@ the only deferred remainder).
 ## Track E.1 — Native Win64 trampoline (scoping)
 
 > For the concrete phased *how* (substrate, trampoline, layout, runner port, CI),
-> see the [Native Win64 tier implementation plan](../archive/plans/win64-native-tier-plan.md). This
+> see the [Native Win64 tier implementation plan](win64-native-tier-plan.md). This
 > section is the *scoping* it builds on.
 
 The one Track E item left undone. This section records *what it takes* so the
@@ -493,5 +493,5 @@ isolation port is worth doing can be decided from there.
 - Rewriting in another language; the C + asm core is the point. (Note: *wrapping*
   the C core with bindings for other languages — distinct from rewriting it — is a
   separate, planned effort; see the
-  [Multi-language bindings plan](../archive/plans/multi-language-bindings-plan.md) and its
-  [feasibility analysis](../analysis/multi-language-wrappers.md).)
+  [Multi-language bindings plan](multi-language-bindings-plan.md) and its
+  [feasibility analysis](../../analysis/multi-language-wrappers.md).)

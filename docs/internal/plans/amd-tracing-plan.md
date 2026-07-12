@@ -28,6 +28,15 @@ the same branch-edge normalization step. It is a **sibling** of the
 > rule holds: **no untested hardware code** — a lane that cannot self-validate on its
 > target silicon self-skips (`available()` → 0) rather than shipping unproven.
 
+> **Status (2026-07-12): everything landed except one hardware-blocked phase.**
+> Part I (the LBR snapshot backend, Phases 0–5) shipped; Part III Improvement
+> Phases 0–5 and 8–9 landed and are validated on the Zen 5 dev box, and Phase 7
+> (IBS-Op) is **superseded + landed** via
+> [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md). The single open item is
+> **Improvement Phase 6 (BRS period-adjust)** — hardware-blocked on a Zen 3 host
+> neither dev box provides, per the house rule above — which is why this plan
+> stays in `plans/` rather than `archive/plans/` until that silicon is available.
+
 ---
 
 ## The governing constraint
@@ -309,7 +318,7 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
     with DynamoRIO (no ceiling) the answer for whole-program reach. The *complete*,
     drop-free reconstruction is proven host-independently by `test_amd_stitch` (synthetic
     `sample_period=1` windows → the exact 55-instruction trace, not truncated).
-- **MSR-direct snapshot — LANDED** (see [amd-msr-direct-lbr-plan.md](amd-msr-direct-lbr-plan.md)).
+- **MSR-direct snapshot — LANDED** (see [amd-msr-direct-lbr-plan.md](../archive/plans/amd-msr-direct-lbr-plan.md)).
   Read the LbrExtV2 `FROM`/`TO` MSRs directly (`/dev/cpu/N/msr`) around the region for an
   exact Tier-A snapshot with *zero* interrupts (vs Phase 1's per-branch PMIs), decoded by the
   shared `asmtest_amd_decode`. Needs `CAP_SYS_ADMIN` + the `msr` module (a self-hosted-runner
@@ -825,7 +834,9 @@ shipped LBR backend.
 
 ## Implementation status
 
-**Phases 0–5 and 8–9 landed; Phases 6–7 remain forward-look (hardware-blocked).** The
+**Phases 0–5 and 8–9 landed; Phase 7 superseded + landed via
+[zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md); Phase 6 remains forward-look
+(hardware-blocked).** The
 [2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) surfaced two
 further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and
 landed on this Zen 5 dev box (2026-07-10): **Phase 8** composes the fidelity cascade so a
@@ -856,11 +867,12 @@ refinements. As of **2026-07-06** all of them ship and are validated on the Zen 
 - **Phase 4 (LbrExtV2 spec filtering)** — landed (below).
 - **Phase 5 (stitch decodable-distance guard + ring hardening)** — landed (below).
 
-**Phases 6 (BRS period-adjust, Zen 3 only) and 7 (IBS-Op, Zen 2 / statistical) stay
-forward-look**: both require silicon this dev box does not have (Zen 3 BRS; Zen 2 with
-`CAP_PERFMON`), so per the house "no untested hardware code" rule they are not
-implemented — a lane that cannot self-validate on its target silicon must not ship
-unproven. They remain fully specified below for when that hardware is available.
+**Phase 6 (BRS period-adjust, Zen 3 only) stays forward-look**: it requires silicon
+neither dev host has (Zen 3 BRS), so per the house "no untested hardware code" rule it
+is not implemented — a lane that cannot self-validate on its target silicon must not
+ship unproven. It remains fully specified below for when that hardware is available.
+*(Phase 7, once grouped here as hardware-blocked, has since landed — unprivileged, on
+the Zen 2 host — via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md).)*
 
 Two **documentation corrections** Part II surfaced shipped alongside Phase 0/2 (see
 Deliverables): the `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim in

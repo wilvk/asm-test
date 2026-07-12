@@ -6,13 +6,13 @@ the framework — to complement the existing **emulator** path (`emu_call_win64`
 which already runs Win64 on a System V host).
 
 This plan is the *how + in what order*. The *why + what it takes* is
-[Track E.1 — Native Win64 trampoline (scoping)](../../plans/expansion-plan.md#track-e1--native-win64-trampoline-scoping)
+[Track E.1 — Native Win64 trampoline (scoping)](expansion-plan.md#track-e1--native-win64-trampoline-scoping)
 in the expansion plan; read that first. The headline it establishes: **the
 trampoline is the easy part; the runner is POSIX and that is the cost** — and the
 **Docker + Wine** option there means none of this needs a Windows host.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
-> [expansion-plan.md](../../plans/expansion-plan.md) and
+> [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
 >
 > **Status: complete (2026-07-04).** All phases landed, including Phase 4 (Win32
@@ -488,4 +488,4 @@ investment, deferred until isolated Win64 execution is actually needed.
 
 - A native Win64 tier on AArch64 hosts.
 - Porting to native MSVC Windows beyond the optional `windows-latest` job.
-- New guest architectures (see [expansion-plan.md](../../plans/expansion-plan.md)).
+- New guest architectures (see [expansion-plan.md](expansion-plan.md)).

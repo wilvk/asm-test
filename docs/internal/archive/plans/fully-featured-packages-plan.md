@@ -21,7 +21,7 @@ MIT-clean *prebuilt* package; MIT-clean consumption remains the *link* bindings
 built from source with the optional tiers compiled out (see non-goals).
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
-> [expansion-plan.md](../../plans/expansion-plan.md) and
+> [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
 >
 > **Status: implemented (2026-06-26).** All phases landed. Capstone source build

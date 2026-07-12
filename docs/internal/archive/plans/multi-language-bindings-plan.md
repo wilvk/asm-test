@@ -11,7 +11,7 @@ that first for *why* it works and the correctness rules; this document is the
 *how* and *in what order*.
 
 > Status legend: **planned** unless noted. Update this file as tracks land, the
-> way [DESIGN.md](../../../../DESIGN.md) and [expansion-plan.md](../../plans/expansion-plan.md) track
+> way [DESIGN.md](../../../../DESIGN.md) and [expansion-plan.md](expansion-plan.md) track
 > their phases.
 >
 > **Status: complete (2026-07-07).** Track 0 (shared substrate) and all ten
@@ -506,6 +506,6 @@ credentialed, multi-platform publish.
 
 - Tier 3 (porting the runner/discovery into another language).
 - New guest architectures beyond the existing four (deferred in
-  [expansion-plan.md](../../plans/expansion-plan.md)).
+  [expansion-plan.md](expansion-plan.md)).
 - A native Win64 trampoline (Win64 stays emulator-only; see Track E.1 in
-  [expansion-plan.md](../../plans/expansion-plan.md)).
+  [expansion-plan.md](expansion-plan.md)).

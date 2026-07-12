@@ -13,7 +13,7 @@ execution engine, and no native/capture-tier work (that would need an executable
 `mmap`; in-line source belongs in the emulator tier where code is already bytes).
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
-> [expansion-plan.md](../../plans/expansion-plan.md) and
+> [expansion-plan.md](expansion-plan.md) and
 > [multi-language-bindings-plan.md](multi-language-bindings-plan.md) track theirs.
 >
 > **Status: complete (2026-07-04).** All seven phases landed — assembler core,

@@ -41,7 +41,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| ~~Resolve **JIT/perf-map** (`/tmp/perf-<pid>.map`, jitdump) in stream/graph/tree — managed frames (Node/V8 JS, **.NET**, **Java**) render as `[?]`/`0x..` today; one resolver addition names all three (they emit the same perf-map format)…must refresh during the trace~~ — **landed**: `asmspy_jitmap_t` + `asmspy_resolve` (ELF→JIT→rate-limited refresh-on-miss) in all three single-step engines; JIT frames render `name [jit]` (stream/tree) and `[JIT]` (graph); `jit_victim` smoke proves it. (`.NET`/Java need the runtime launched with the perf-map flag/agent — asmspy can't enable it from outside.) *jitdump (bytes-accurate, tiered-recompile-aware) not yet read — text perf-map only* | **high** | L |
+| ~~Resolve **JIT/perf-map** (`/tmp/perf-<pid>.map`, jitdump) in stream/graph/tree — managed frames (Node/V8 JS, **.NET**, **Java**) render as `[?]`/`0x..` today; one resolver addition names all three (they emit the same perf-map format)…must refresh during the trace~~ — **landed**: `asmspy_jitmap_t` + `asmspy_resolve` (ELF→JIT→rate-limited refresh-on-miss) in all three single-step engines; JIT frames render `name [jit]` (stream/tree) and `[JIT]` (graph); `jit_victim` smoke proves it. (`.NET`/Java need the runtime launched with the perf-map flag/agent — asmspy can't enable it from outside.) *binary jitdump reader **landed 2026-07-12**: tier-1 source (maps-discovered `jit-<pid>.dump`, `CODE_LOAD`/`CODE_MOVE`-aware, exact sizes; ASan/UBSan-fuzzed against hostile files); the text perf-map is tier 2* | **high** | L |
 | Separate-debug / `.gnu_debuglink` / build-id resolution for stripped distro binaries | med | M |
 | ~~C++ **demangling** via `__cxa_demangle` at the single `sym_push` chokepoint (guard on `_Z`, demangle before appending `@plt`, add `-lstdc++`) — reads through picker/graph/tree/stream at once~~ — **landed**: `demangle_dup()` at the `sym_push` chokepoint (peels/re-appends `@plt`), `-lstdc++` on the link line, `cpp_victim.cpp` smoke assertion | med | **S** |
 
@@ -67,7 +67,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | Item | Sev | Eff |
 |---|---|---|
 | ~~**No regression test for the crash-safe two-phase detach** — the exact bug the fix closed has zero guard, and every smoke victim is killed right after tracing, so a regression that silently kills the target looks like success. Trace a multi-threaded victim, then assert it **survives** detach~~ — **landed** as a happy-path survival tripwire (single-step via `--stream`+`--tree`, then assert alive) in `cli_smoke.sh`. Honest scope: the historical fatal SIGTRAP reproduced *reliably only on a real V8/Node JIT* (per 6aaad45's own notes — simple victims survive even the pre-fix detach), so this guards gross regressions, not that JIT crash (which needs a live JIT, an inherent limit) | med | S |
-| Graph sort comparator (`gnode_cmp`) ordering/tiebreaks unasserted — extract into a testable header + `test_graphsort.c` | med | M |
+| ~~Graph sort comparator (`gnode_cmp`) ordering/tiebreaks unasserted — extract into a testable header + `test_graphsort.c`~~ — **landed 2026-07-12**: `cli/asmspy_graphsort.h` + `cli/test_graphsort.c` (ties included), wired into the smoke | med | M |
 | `asmspy_symtab_at` reverse-lookup edge cases; multi-thread `[tid]` tagging for graph/tree; attach-failure + `REGION_NEVER_RAN`; negative-`n` "until exit"; `--tree` depth > 1; post-attach clone-following; job-control group-stop; syscall-decoder breadth; region edge aggregation; a pure TUI view-model (`test_view.c`) | low | S–M each |
 
 ### Theme E — TUI / UX & interop
@@ -78,7 +78,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | ~~Region view (mode 2) disasm/functions panes don't scroll — overflow off-screen~~ — **landed**: `space` freezes the sample (an `rpaused` flag stops the sink re-sampling) and up/down·PgUp/PgDn·Home/End scroll the focused pane; `Tab` moves focus between the ASSEMBLY and FUNCTIONS panes (each with its own `atop`/`ftop` offset and a `(scroll)` overflow hint), a finished sample stays scrollable, and `space` resumes the live top-anchored re-sample. Verified end-to-end through the ncurses TUI (pty-driven). Same idiom as the call-graph pause/scroll | med | M |
 | Call tree has no depth cap / symbol focus / module filter — a firehose on busy processes | med | M |
 | ~~No per-thread (tid) filter for stream/tree/graph — can't isolate one worker or cut single-step slowdown on others~~ — **landed**: `--stream`/`--tree`/`--graph --tid=<t>` seizes/steps only that thread (`seize_one`/`seize_for_engine`), leaving the rest of the process at full speed; `tid_victim` (distinct alpha/beta functions) smoke proves the other thread's code never appears | med | M |
-| **DOT/JSON export** — *landed for `--graph`*: `--graph --json` emits nodes (addr/name/module/kind/counts) **and edges** (address-keyed caller→callee + count — `gedge_t` now crosses the sink via `asmspy_gedge_t`/`graph_emit`), and `--graph --dot` emits a Graphviz digraph (kind-coloured nodes, count-labelled edges; `dot -Tsvg`-validated in the smoke). Still open: `--json`/`--dot` for `--tree`/`--procs` | low | M |
+| **DOT/JSON export** — *landed for `--graph`*: `--graph --json` emits nodes (addr/name/module/kind/counts) **and edges** (address-keyed caller→callee + count — `gedge_t` now crosses the sink via `asmspy_gedge_t`/`graph_emit`), and `--graph --dot` emits a Graphviz digraph (kind-coloured nodes, count-labelled edges; `dot -Tsvg`-validated in the smoke). `--tree --json/--dot` **landed 2026-07-12** (mirrors the `--graph` exporters). Still open: `--json`/`--dot` for `--procs` | low | M |
 | Syscall arg decoding is a hardcoded subset (flags/structs/vectors/sigsets → hex); the always-3-hex-slots default is a small standalone blemish | low | L |
 | fd→path shows `socket:[inode]`/`pipe:[inode]`, not the endpoint (enrich via `/proc/<pid>/net`); graph node/edge lookups are O(n) per call (hash index; single-stepping dominates so secondary); `usage()` omits the `0xADDR+LEN` form and the `functions-called` sort synonym | low | S–M |
 
@@ -102,7 +102,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
    dominant JIT'd JS frame renders `[?]`/`0x..`; the same fix names **.NET** and **Java**
    managed frames too.~~ — **landed**: `asmspy_resolve` layers a refreshed perf-map over the
    ELF symtab in all three single-step engines (see Theme A). **All three original Top-3 have
-   now landed.** Next candidates: jitdump (bytes-accurate, handles tiered recompilation) and
+   now landed.** Next candidates: ~~jitdump (bytes-accurate, handles tiered recompilation)~~ (**landed 2026-07-12**) and
    the remaining Theme E items (call-tree depth cap / focus / module filter; the
    call-graph and region-pane pause+scroll have since landed).
 2. ~~**Add the crash-safe two-phase-detach regression test** *(D, med, S)*~~ — **landed**

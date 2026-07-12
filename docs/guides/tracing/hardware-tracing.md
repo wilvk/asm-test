@@ -119,10 +119,14 @@ The tier reuses the native-trace begin/end region model. The five calls are:
 rounded up to a power-of-two pages, `0` → 64 KB), `data_size` (base perf ring, `0` →
 8 KB for PT/CoreSight; the AMD backend defaults it to 256 KB, and it bounds the Tier-B
 stitched capture — raise it, and `kernel.perf_event_max_sample_rate` /
-`kernel.perf_cpu_time_max_percent=0` on the runner, to extend reach), `snapshot` (nonzero maps a circular snapshot ring instead of a linear drain —
+`kernel.perf_cpu_time_max_percent=0` on the runner, to extend reach), `snapshot` (on
+Intel PT, nonzero maps a circular snapshot ring instead of a linear drain —
 capture-side only so far: `end()` decodes the linear ring, and the circular-ring walk
-from `aux_tail` is a named follow-up), and an optional `object_hint` path for hardware
-address filters.
+from `aux_tail` is a named follow-up; on the AMD backend it opts the markers into the
+**deterministic boundary LBR snapshot** instead of the sampled path), and an optional
+`object_hint` path for hardware address filters. The AMD-specific reach knobs
+(`lbr_period`, `branch_filter`, the snapshot, ring sizing) are covered in
+[Tuning AMD LBR window reach](amd-lbr-tuning.md).
 
 Only the `backend` field is required; the rest default sensibly when zero-initialized.
 
@@ -536,7 +540,8 @@ works unprivileged in a container; the perf syscall must be allowed by seccomp).
 - **AMD LBR's 16-deep stack is lifted by Tier-B window stitching**; the remaining
   ceiling is the data ring (extend via `data_size`) plus PMI throttling. On a stitch
   gap or sample loss the trace comes back `truncated` — re-resolve under
-  `CEILING_FREE`.
+  `CEILING_FREE`. The reach levers are documented in
+  [Tuning AMD LBR window reach](amd-lbr-tuning.md).
 - **CoreSight is a scaffold** pending AArch64 board access — it always self-skips.
 - **Single-step is x86-64 Linux/macOS** (Windows/AArch64 planned); the
   out-of-process ptrace form adds AArch64. It targets well-behaved compute routines

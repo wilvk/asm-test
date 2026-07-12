@@ -77,7 +77,7 @@ honesty is delivered by `Weight`/`WeightIn` + tightened docs instead. The native
 refuse-a-statistical-trace item is not needed at the managed layer (statistical scopes never
 render a `Path`).
 
-### E3 — sibling-thread live JIT publish (close the `Window` deep-BCL gap) *(planned)*
+### E3 — sibling-thread live JIT publish (close the `Window` deep-BCL gap) *(LANDED 2026-07-12)*
 
 `AsmTrace.Window` (OOP) captures the block's OWN code + already-mapped R2R BCL, but methods
 JIT'd FRESH mid-window (first-call generic instantiations, local functions) land outside the

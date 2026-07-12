@@ -223,4 +223,4 @@ per-system JSON, and the `benchmarks-compare` job merges them. See
 [CI & Docker](../reference/ci.md). Extending to the Windows and Intel-macOS legs,
 and auto-committing per-box history on the nightly schedule, are the tracked
 follow-ups in
-[the plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/cross-arch-benchmarking-plan.md).
+[the plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/cross-arch-benchmarking-plan.md).

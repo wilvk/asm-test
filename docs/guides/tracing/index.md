@@ -19,6 +19,11 @@ native, real-CPU tiers:
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
 | [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
 
+The AMD LBR backend's reach knobs — window sizing, `lbr_period`,
+`branch_filter`, the deterministic boundary snapshot, and the privilege lanes
+they run in — have their own page:
+[Tuning AMD LBR window reach](amd-lbr-tuning.md).
+
 Start with the [emulator trace model](traces.md) for the shared trace API,
 coverage helpers, and reporting — the concepts carry across every backend. The
 two native tiers are **optional, advanced, and self-skipping**: they are kept out
@@ -36,6 +41,7 @@ toolchain is present, and degrade to a clear "skipped" message otherwise.
 traces
 native-tracing
 hardware-tracing
+amd-lbr-tuning
 scoped-tracing
 asmspy
 ```

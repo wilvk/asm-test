@@ -14,8 +14,10 @@ finding here was **re-verified against the current tree** (the `src/` anchors ho
 `58d8263` — the intervening commits are docs-only) before being written down, not carried
 forward from the audit.
 
-> Status: **Nine items remain *planned*; Phase 7 (IBS-Op survey fallback) is
-> SUPERSEDED + LANDED 2026-07-12** via
+> Status: **Four items remain *planned* (Phases 1, 3, 5, 6). Phases 2, 4, 8, 9 and 10
+> LANDED 2026-07-12** (the Wave-1 hardening batch + the tuning guide; verified on the
+> Zen 5 box — `hwtrace-test` 358/358 with the new synthetic-ring coverage). **Phase 7
+> (IBS-Op survey fallback) is SUPERSEDED + LANDED 2026-07-12** via
 > [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
 > integration — including this plan's `ASMTEST_FORCE_IBS_SURVEY` env — on the
 > standalone `asmtest_ibs_*` engine instead of 7a–7d's in-`amd_backend.c` shape).
@@ -117,7 +119,7 @@ sizeof+64` returns OK without over-reading. Every `make docker-hwtrace-<lang>` s
 marshals + inits and traces the single-step backend. `scripts/check-bindings-parity.sh`
 (symbol-based) stays green with no allow-list edit.
 
-## Phase 2 — Overflow-safe `nr` clamp at the sampled branch-stack parse (`src/hwtrace.c`) *(planned)*
+## Phase 2 — Overflow-safe `nr` clamp at the sampled branch-stack parse (`src/hwtrace.c`) *(LANDED 2026-07-12)*
 
 **Goal.** Close a latent OOB read in the Tier-B sampled decode. At
 [src/hwtrace.c:822](../../../src/hwtrace.c) the per-sample gate is only `nr > 0 &&` before
@@ -187,7 +189,7 @@ dropped) asserting `status(AMD_LBR).code==ASMTEST_HW_EPERM`, and once permitted 
 `OK`. Parity gate passes after the allow-list lands; the `rc in {OK,EUNAVAIL}` binding
 assertions stay green (no capture-entry code changed).
 
-## Phase 4 — Env-gated debug logging for the AMD/hwtrace tier (`src/debug.{c,h}`) *(planned)*
+## Phase 4 — Env-gated debug logging for the AMD/hwtrace tier (`src/debug.{c,h}`) *(LANDED 2026-07-12)*
 
 **Goal.** With this many stacked gates (vendor → PMU → `perfmon_v2` → kernel → caps →
 freeze bit), a self-skip is opaque. Add zero-overhead-when-off logging that explains the
@@ -359,7 +361,7 @@ cross-validated against branch-stack). With the env unset and branch-stack avail
 behavior is byte-identical to today. The true Zen-2 (branch-stack-absent) production path is
 called out as **forward-look**.
 
-## Phase 8 — `ring_buffer__consume` instead of a 200 ms `poll` in snapshot end() (`src/branchsnap.c`) *(planned)*
+## Phase 8 — `ring_buffer__consume` instead of a 200 ms `poll` in snapshot end() (`src/branchsnap.c`) *(LANDED 2026-07-12)*
 
 **Goal.** Remove a fixed ~200 ms wall stall on every no-hit/truncated snapshot region. The
 exit breakpoint fires synchronously during `run_fn` and the BPF program submits immediately,
@@ -379,7 +381,7 @@ sub-test — `begin("x")` then `end("x")` without invoking `fn`, wrap `end()` in
 `CLOCK_MONOTONIC` delta, assert `< ~50 ms` and `truncated==true` (was ~200 ms). Self-skips
 where the substrate/caps are absent.
 
-## Phase 9 — Single cached `/proc/cpuinfo` flag probe (`src/amd_backend.c`, `src/msr_lbr.c`) *(planned)*
+## Phase 9 — Single cached `/proc/cpuinfo` flag probe (`src/amd_backend.c`, `src/msr_lbr.c`) *(LANDED 2026-07-12)*
 
 **Goal.** `/proc/cpuinfo` `flags` is parsed independently in
 [src/msr_lbr.c:58](../../../src/msr_lbr.c) and
@@ -404,7 +406,7 @@ synthetic lines: present flag → 1, second flag → 1, absent → 0, left-prefi
 `asmtest_amd_msr_available()` return their pre-change values on the dev host. `#else` stubs
 keep non-x86_64 links clean.
 
-## Phase 10 — Document the AMD LBR window-reach levers (`docs/guides/tracing/`) *(planned)*
+## Phase 10 — Document the AMD LBR window-reach levers (`docs/guides/tracing/`) *(LANDED 2026-07-12: [amd-lbr-tuning.md](../../guides/tracing/amd-lbr-tuning.md))*
 
 **Goal.** `lbr_period`, `branch_filter`, and the AMD meaning of `snapshot` have rich header
 docs ([include/asmtest_hwtrace.h:78-112](../../../include/asmtest_hwtrace.h)) but appear in

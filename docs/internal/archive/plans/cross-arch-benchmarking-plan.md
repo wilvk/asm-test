@@ -5,7 +5,7 @@ benchmarks and a feature benchmark on any system** — across Linux, macOS, and
 Windows on x86-64 and AArch64 — emit one normalized per-system report, **persist
 each box's results in the git repo**, and diff them into a cross-system matrix
 (both live and over history). It turns the findings of
-[cross-arch benchmarking analysis](../analysis/2026-07-11-cross-arch-benchmarking.md)
+[cross-arch benchmarking analysis](../../analysis/2026-07-11-cross-arch-benchmarking.md)
 into buildable phases.
 
 > Status legend: **planned** unless noted. This plan follows the house rules the
@@ -20,7 +20,7 @@ into buildable phases.
 > (`make features` / `emu-bench` / `bench-report` / `bench-record` / `bench-check` /
 > `bench-compare` / `docker-bench`), the `benchmarks/` tree (golden + this box's
 > record), the `benchmarks` + `benchmarks-compare` CI jobs, and the docs
-> ([cross-system benchmarking guide](../../guides/cross-system-benchmarking.md)).
+> ([cross-system benchmarking guide](../../../guides/cross-system-benchmarking.md)).
 > **Two deviations from the text below**, both deliberate: (1) the golden file is a
 > single host/OS-independent `benchmarks/golden/emu-insns.json` (emu-bench emits
 > every guest ISA in one run) rather than per-arch `insns-<arch>.json`; (2) the CI
@@ -29,9 +29,9 @@ into buildable phases.
 > shell runner is portable to them, but those lanes need the emu deps installed and
 > auto-commit needs `contents:write`, so they are not shipped untested).
 
-Siblings: the [analysis](../analysis/2026-07-11-cross-arch-benchmarking.md) it
-derives from, the user guide [benchmarks](../../guides/benchmarks.md), and the
-[trace parity matrix](../analysis/trace-parity-matrix.md) whose capability
+Siblings: the [analysis](../../analysis/2026-07-11-cross-arch-benchmarking.md) it
+derives from, the user guide [benchmarks](../../../guides/benchmarks.md), and the
+[trace parity matrix](../../analysis/trace-parity-matrix.md) whose capability
 matrices this plan instantiates *live*, per system.
 
 ---
@@ -43,17 +43,17 @@ Two benchmark **dimensions**, both run by one runner and merged into one report:
 - **Performance benchmark — how costly is the code?**
   - *Real time*: cycles / ticks per call on the host CPU, from the existing
     native `BENCH` tier (`--bench --bench-format=json`,
-    [src/asmtest.c](../../../src/asmtest.c)). Host arch only.
+    [src/asmtest.c](../../../../src/asmtest.c)). Host arch only.
   - *Deterministic work*: dynamic instruction / basic-block count per call, per
     guest ISA, from the emulated `EMU_BENCH` tier
     (`asmtest_trace_t.insns_total` / `blocks_*`,
-    [include/asmtest_trace.h](../../../include/asmtest_trace.h)). All four guest
+    [include/asmtest_trace.h](../../../../include/asmtest_trace.h)). All four guest
     ISAs, any host.
 - **Feature benchmark — what does this system actually support?**
   A live capability sweep: probe every trace tier/backend, the emulator guest
   set, the disassembler/assembler, and each language binding's `available()`,
   recording `{available, skip_reason, fidelity}`. This is the
-  [trace-parity matrices](../analysis/trace-parity-matrix.md) (backend × OS/arch,
+  [trace-parity matrices](../../analysis/trace-parity-matrix.md) (backend × OS/arch,
   vendor/uarch, binding, packaging) **instantiated as a per-system report**
   instead of a hand-maintained table — the honest "what works *here*" answer.
 
@@ -62,7 +62,7 @@ asm-test runs on **Linux, macOS, and Windows** across x86-64 and AArch64, and th
 OS is often the *dominant* axis. It decides which native trace tiers exist at all
 (DynamoRIO is Linux-only; Intel PT / AMD LBR are Linux bare-metal; single-step
 runs on Linux, macOS-Intel, and Windows-VEH; the emulator runs everywhere — see
-[trace-parity Matrix 2](../analysis/trace-parity-matrix.md)), and it moves
+[trace-parity Matrix 2](../../analysis/trace-parity-matrix.md)), and it moves
 real-cycle numbers on identical silicon (scheduler, thermal, syscall cost). So
 the feature benchmark is largely an *OS* story, the real-time performance
 benchmark is an *(OS, CPU)* story, and only the deterministic counts are OS- and
@@ -101,7 +101,7 @@ Linux-only.
 
 ### 2.2 Performance result — `asmtest_bench_result_t`
 
-The metric-shape from the [analysis §5.2](../analysis/2026-07-11-cross-arch-benchmarking.md),
+The metric-shape from the [analysis §5.2](../../analysis/2026-07-11-cross-arch-benchmarking.md),
 one record per (routine, arch, metric):
 
 ```c
@@ -140,20 +140,20 @@ deliverable (Phase 7).
 ### Phase 1 — Feature-benchmark probe *(smallest, ships first)*
 
 A small C program `tools/asmfeatures.c` (mirroring
-[scripts/gen-manifest.c](../../../scripts/gen-manifest.c)'s "emit JSON" role),
+[scripts/gen-manifest.c](../../../../scripts/gen-manifest.c)'s "emit JSON" role),
 built as `build/asmfeatures`, that enumerates capabilities using **only existing
 APIs** and prints the `features[]` array:
 
 - Trace tiers via the cross-tier resolver
   `asmtest_trace_resolve(policy, out, cap)` / `asmtest_trace_choice_t`
-  ([include/asmtest_trace_auto.h](../../../include/asmtest_trace_auto.h)) — the
+  ([include/asmtest_trace_auto.h](../../../../include/asmtest_trace_auto.h)) — the
   ordered, available cascade with fidelity.
 - Hardware backends via `asmtest_hwtrace_available(backend)` +
   `asmtest_hwtrace_skip_reason(backend, …)`
-  ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)) for
+  ([include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h)) for
   `{INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP}`.
 - DynamoRIO via `asmtest_dr_available()` + its skip reason
-  ([include/asmtest_drtrace.h](../../../include/asmtest_drtrace.h)).
+  ([include/asmtest_drtrace.h](../../../../include/asmtest_drtrace.h)).
 - Emulator guest set (always present) and `asmtest_disas_available()` /
   `asm_available()` for the Capstone/Keystone tiers.
 
@@ -231,7 +231,7 @@ Ingests any number of `bench-report-*.json` and emits a cross-system comparison
   counts compared directly across arches (their whole point).
 - **Feature matrix** — rows = capability (`tier/backend`), columns = each
   `(OS, arch)` system; cell = ✓ / the `skip_reason`. This is trace-parity
-  [Matrix 2](../analysis/trace-parity-matrix.md) generated from real probes — the
+  [Matrix 2](../../analysis/trace-parity-matrix.md) generated from real probes — the
   OS axis is where most of the variation lives.
 - **Regression gate** (reads the persisted baselines of §6): the host/OS-
   independent **golden** instruction counts are checked exactly (a diff = an
@@ -329,7 +329,7 @@ is a read over checked-in data, not a one-shot over transient CI logs.
 
 ## 8. CI wiring — Phase 6
 
-Extend [.github/workflows/ci.yml](../../../.github/workflows/ci.yml) to run `make
+Extend [.github/workflows/ci.yml](../../../../.github/workflows/ci.yml) to run `make
 bench-report` on **every OS × arch leg the matrix already has** and
 `actions/upload-artifact` the per-leg JSON:
 
@@ -339,7 +339,7 @@ bench-report` on **every OS × arch leg the matrix already has** and
 | `ubuntu-24.04-arm` | Linux | AArch64 | ✅ `ticks` | ptrace stepper (stream HW-pending) + emulator |
 | `macos-latest` | macOS | AArch64 | ✅ `ticks` | emulator-only |
 | `macos-13` (nightly) | macOS | x86-64 | ✅ `cyc` | single-step (macOS-Intel) + emulator |
-| `windows-latest` | Windows | x86-64 | ✅ `cyc` | the existing "win64 (real Windows)" job ([ci.yml](../../../.github/workflows/ci.yml) L534) — VEH single-step + emulator |
+| `windows-latest` | Windows | x86-64 | ✅ `cyc` | the existing "win64 (real Windows)" job ([ci.yml](../../../../.github/workflows/ci.yml) L534) — VEH single-step + emulator |
 
 A dependent **merge job** downloads every leg artifact, runs
 `scripts/bench-compare`, publishes the combined Markdown/HTML, and (§6) commits
@@ -358,7 +358,7 @@ each new page is added to the toctree and cross-links resolve.
    coverage** and what differs per OS; how a contributor records their own box
    with `make bench-record`; how to compare systems with `scripts/bench-compare`;
    reading the output (cyc vs ticks vs insn; the feature grid); and the
-   qemu/virtualized caveat. Linked from [docs/index.md](../../index.md) and the
+   qemu/virtualized caveat. Linked from [docs/index.md](../../../index.md) and the
    README Quick start (`make bench-report`).
 2. **JSON schema reference.** Document the per-system report shape (§2) — system
    descriptor (incl. `box_id`, `os`), `asmtest_bench_result_t`, feature record —
@@ -368,16 +368,16 @@ each new page is added to the toctree and cross-links resolve.
    per-box-history split, `box_id`, `make bench-record`, and the golden-file
    regeneration/gate workflow (mirrors the manifest/conformance docs), so
    contributors know how their committed numbers are used.
-4. **Extend [docs/guides/benchmarks.md](../../guides/benchmarks.md)** with a
+4. **Extend [docs/guides/benchmarks.md](../../../guides/benchmarks.md)** with a
    "Comparing systems & architectures" section that draws the cyc-vs-ticks line
    and points cross-ISA questions at the emulated/count tier and the new guide.
-5. **Extend [docs/reference/ci.md](../../reference/ci.md)** with the
+5. **Extend [docs/reference/ci.md](../../../reference/ci.md)** with the
    `bench-report` job across all five OS × arch legs, its artifacts, and the
    merge/commit job.
-6. **Update [docs/reference/features.md](../../reference/features.md)** to note
+6. **Update [docs/reference/features.md](../../../reference/features.md)** to note
    the feature matrix can be generated live per system by `make features`, not
    only hand-maintained.
-7. **Update [trace-parity-matrix.md](../analysis/trace-parity-matrix.md)** with
+7. **Update [trace-parity-matrix.md](../../analysis/trace-parity-matrix.md)** with
    the benchmark-metric rows once `EMU_BENCH` lands, closing the loop with the
    analysis that motivated this plan.
 8. **`make help`** entries for `bench-report`, `bench-record`, `features`,

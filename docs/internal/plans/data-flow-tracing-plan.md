@@ -15,8 +15,10 @@ live values on an attached, running process** (out-of-band ptrace tier) and **(b
 production-grade taint over live managed runtimes** (DynamoRIO tier) — so the plan carries
 through the DynamoRIO and .NET-interpretability phases rather than stopping at the CI demo.
 
-> Status legend: **all phases are *(planned)*** — nothing here is landed. Phase 0–2 are the
-> shared spine + CI proving ground and are prerequisites for everything else; Phases 3–5 are
+> Status legend: **Phases 0–2 *(LANDED 2026-07-12)*** — the shared spine + CI proving
+> ground (`include/asmtest_valtrace.h`, `src/dataflow.c` / `src/dataflow_operands.c` /
+> `src/dataflow_emu.c`, `make dataflow-test`, 53 checks; the Unicorn L0 producer validated
+> live). **Phases 3–6 remain *(planned)***; Phases 3–5 are
 > the two target tiers. Update this file as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
@@ -105,7 +107,7 @@ asmtest_slice_t  *asmtest_slice_forward(const asmtest_defuse_t *g, at_val_rec_t 
 asmtest_slice_t  *asmtest_slice_backward(const asmtest_defuse_t *g, at_val_rec_t sink);
 ```
 
-## Phase 0 - Shared value-trace sink + operand enumerator *(planned)*
+## Phase 0 - Shared value-trace sink + operand enumerator *(LANDED 2026-07-12)*
 
 The tier-neutral spine — highest leverage, mostly extension of existing code.
 
@@ -125,7 +127,7 @@ The tier-neutral spine — highest leverage, mostly extension of existing code.
 both arches; `asmtest_valtrace_append` round-trips + truncates under a fixture; no per-op
 `cs_open` in the hot path (grep gate).
 
-## Phase 1 - L1 def-use + L2 slicer *(planned)*
+## Phase 1 - L1 def-use + L2 slicer *(LANDED 2026-07-12)*
 
 Pure passes, testable against synthetic L0 fixtures with **no producer** yet.
 
@@ -141,7 +143,7 @@ backward slices over synthetic traces (incl. a load-after-store chain and a regi
 chain); a documented alias case (two addresses that collide pre-canonicalization) is asserted
 as a known limitation.
 
-## Phase 2 - Emulator L0 producer (CI proving ground + oracle) *(planned)*
+## Phase 2 - Emulator L0 producer (CI proving ground + oracle) *(LANDED 2026-07-12)*
 
 Least-work producer; proves L0→L1→L2 end-to-end with no hardware; doubles as the reference
 oracle for the live tiers.

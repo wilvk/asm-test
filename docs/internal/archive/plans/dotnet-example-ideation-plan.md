@@ -17,7 +17,7 @@ its tier is unavailable. All validated in the `asmtest-dotnet` container on this
 `asmtest_amd_snapshot_trace` / `asmtest_amd_snapshot_available` (src/branchsnap.c, the deterministic
 boundary LBR snapshot) existed in the native lib but had **no managed DllImport**. Added the two
 P/Invokes + a public `AmdSnapshot` class (`Available()` / `SkipReason()` / `Trace(NativeCode, exitOff,
-Action, HwTrace)`) to [HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs). The run callback reuses
+Action, HwTrace)`) to [HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs). The run callback reuses
 `StealthRunFn` (the Cdecl `void(void*)` upcall). `branchsnap.o` is already linked into
 `libasmtest_hwtrace.so`, so the symbols resolve; without a BPF-toolchain build / `CAP_BPF` the wrapper
 returns `ENOSYS`/`EUNAVAIL` and the example self-skips.
@@ -41,7 +41,7 @@ returns `ENOSYS`/`EUNAVAIL` and the example self-skips.
 | `amd-snapshot` | the deterministic boundary LBR snapshot (`AmdSnapshot.Trace`) | AMD snapshot / `CAP_BPF`+`CAP_PERFMON` |
 
 All 14 are wired into `make hwtrace-dotnet-example` (mk/native-trace.mk) and the
-[examples/dotnet/README.md](../../../examples/dotnet/README.md) index. On the plain lane the AMD trio
+[examples/dotnet/README.md](../../../../examples/dotnet/README.md) index. On the plain lane the AMD trio
 (`amd-period-sweep`, `amd-snapshot`, and `crashproof-survey`'s AMD leg) self-skip; the permissioned
 lane (`--cap-add=PERFMON`, plus `--cap-add=BPF` for the snapshot) runs them live.
 
@@ -75,4 +75,4 @@ misconceived, or CI-flaky example on this box. Deferring is the honest call; the
 
 - A dedicated permissioned CI lane for the AMD/snapshot dotnet examples — they self-skip in the plain
   lane and are validated on a self-hosted Zen runner (mirroring `docker-hwtrace-amd`).
-- Exact whole-window on AMD (hardware dead end — see [amd-tracing-plan.md](amd-tracing-plan.md)).
+- Exact whole-window on AMD (hardware dead end — see [amd-tracing-plan.md](../../plans/amd-tracing-plan.md)).

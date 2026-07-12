@@ -3,7 +3,7 @@
 Read the AMD LbrExtV2 branch-record MSRs **directly** around a region — enable the LBR,
 run the routine, freeze, read the 16 `FROM`/`TO` entries — to get an exact Tier-A snapshot
 with **zero PMU interrupts**, decoded by the shared `asmtest_amd_decode`. This is Phase 5's
-"MSR-direct snapshot" item from [amd-tracing-plan.md](amd-tracing-plan.md), and the
+"MSR-direct snapshot" item from [amd-tracing-plan.md](../../plans/amd-tracing-plan.md), and the
 "option 4" of the Zen 5 tracing-improvement determination.
 
 > **Status: LANDED, empirically validated on Zen 5 (Ryzen 9 9950X).** The analysis below
@@ -107,7 +107,7 @@ surface beyond the one capture entry (allow-listed C-level, like `asmtest_amd_sn
 ## Phases
 
 - **Phase 0 — MSR read/write plumbing + availability probe.** *(landed)* `pread`/`pwrite`
-  on `/dev/cpu/N/msr` ([src/msr_lbr.c](../../../src/msr_lbr.c)); `asmtest_amd_msr_available()`
+  on `/dev/cpu/N/msr` ([src/msr_lbr.c](../../../../src/msr_lbr.c)); `asmtest_amd_msr_available()`
   = `amd_lbr_v2` + `/dev/cpu/N/msr` openable `O_RDWR`.
 - **Phase 1 — enable/reset/freeze/read sequence.** *(landed)* `asmtest_amd_msr_trace`
   (callback-thunk): pin CPU, disable→user-only filter→reset→enable, run, freeze, read 16
