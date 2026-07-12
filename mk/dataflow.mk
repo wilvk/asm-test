@@ -29,6 +29,16 @@ $(BUILD)/dataflow_emu.o: src/dataflow_emu.c include/asmtest_valtrace.h \
                          include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
+# Scoped ptrace L0 producer (Phase 3): fills the SAME asmtest_valtrace_t from a live,
+# single-stepped tracee (its own fork/attach + PTRACE_SINGLESTEP loop). Ships no header —
+# a value-trace PRODUCER is a tier, not part of the shared sink API (its test re-declares
+# the entry points, like the emulator producer). Needs Capstone (the operand enumerator);
+# off Linux x86-64 / without Capstone it compiles to an ENOSYS stub.
+$(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c \
+                            include/asmtest_valtrace.h include/asmtest_trace.h \
+                            $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
@@ -56,8 +66,28 @@ ifeq ($(DF_HAVE_UNICORN),1)
 DF_EMU_SUITE := $(BUILD)/test_dataflow_emu
 endif
 
+# The Phase 3 ptrace suite always builds (Capstone); it CROSS-VALIDATES against the
+# emulator oracle only where Unicorn is present (-DDF_HAVE_EMU pulls in dataflow_emu.o +
+# libunicorn), and otherwise still runs its live-capture assertions, skipping just the
+# oracle comparison. At runtime it self-skips where ptrace is blocked (seccomp).
+ifeq ($(DF_HAVE_UNICORN),1)
+$(BUILD)/test_dataflow_ptrace.o: CFLAGS += $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) \
+                                           $(UNICORN_CFLAGS) -DDF_HAVE_EMU
+$(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                               $(BUILD)/dataflow_ptrace.o $(BUILD)/dataflow_emu.o \
+                               $(BUILD)/test_dataflow_ptrace.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+else
+$(BUILD)/test_dataflow_ptrace.o: CFLAGS += $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF)
+$(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                               $(BUILD)/dataflow_ptrace.o \
+                               $(BUILD)/test_dataflow_ptrace.o
+	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) -o $@
+endif
+
 .PHONY: dataflow-test dataflow-grep-gate
-dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_operands $(DF_EMU_SUITE)
+dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_operands $(DF_EMU_SUITE) \
+               $(BUILD)/test_dataflow_ptrace
 	@echo "== dataflow-test =="
 	$(MAKE) --no-print-directory dataflow-grep-gate
 	$(BUILD)/test_dataflow
@@ -67,6 +97,7 @@ ifeq ($(DF_HAVE_UNICORN),1)
 else
 	@echo "# SKIP test_dataflow_emu: no libunicorn (make deps DEPS_ARGS=--emu)"
 endif
+	$(BUILD)/test_dataflow_ptrace
 
 # Phase 0 exit-criterion grep gate: the operand enumerator must hold ONE persistent
 # csh, never a per-op cs_open in the hot path — so exactly one cs_open call site.
