@@ -257,7 +257,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-codeimage docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-ibs docker-hwtrace-privileged docker-hwtrace-codeimage docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump \
@@ -391,6 +391,23 @@ docker-hwtrace-ibs: docker-bindings-base
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
 	  asmtest-hwtrace make ibs-test
+
+# First-class privileged hardware-capture lane: the same hwtrace image, run with
+# CAP_PERFMON under Docker's DEFAULT seccomp profile — which gates perf_event_open
+# on exactly that capability, so unlike the -amd/-ibs lanes above this needs NO
+# seccomp=unconfined (and no --privileged, no custom profile). CAP_PERFMON also
+# bypasses kernel.perf_event_paranoid — including the Debian/Ubuntu "=4, no
+# unprivileged perf at all" setting — so on an AMD Zen 3+/4/5 host the exact AMD
+# LBR tier (LbrExtV2 live capture, sample_window survey) AND the live IBS lanes
+# (out-of-band capture + whole-process survey) actually run instead of
+# self-skipping. This is the one lane for a self-hosted AMD runner; everywhere
+# else the same tests self-skip and it degrades to the plain single-step run.
+# (Intel PT stays bare-metal; the MSR-direct test still needs docker-hwtrace-msr.)
+docker-hwtrace-privileged: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	$(DOCKER) run --rm $(_docker_plat) --cap-add=PERFMON \
+	  asmtest-hwtrace make hwtrace-test ibs-test
 
 # Optional eBPF code-emission detector lane. Builds an image WITH the eBPF toolchain
 # (clang + libbpf-dev + bpftool — which the plain hwtrace image omits), compiles the CO-RE
