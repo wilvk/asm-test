@@ -12,14 +12,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   binding.** `make shared-dataflow` builds the pure analysis pipeline (L0 value sink + L1
   def-use + L2 slice + method identity + GC-move canonicalization + runtime-helper summaries;
   the emu/ptrace/DR producers stay separate tiers) into a dlopen-able shared library — the
-  packaging target the language bindings consume. First bindings: `asmtest.dataflow` (Python,
-  ctypes) and `bindings/cpp/asmtest_dataflow.hpp` (C++, header-only typed wrappers) both wrap
-  the pure GC-move canonicalizer `asmtest_gcmove_canon` and the tiered-re-JIT-aware method
-  resolver `asmtest_method_resolve_pc`; `make dataflow-python-test` / `make dataflow-cpp-test`
-  build and run their TAP suites (8 and 16 checks, mirroring the C `test_dataflow_gcmove` /
-  `test_dataflow_method` semantics), standalone so they need no pytest. The pytest file skips
-  cleanly when the lib is not built, so it never reddens the general binding job. The remaining
-  eight language bindings + the wider L0/L1/L2 surface + CI-wiring are later increments.
+  packaging target the language bindings consume. First bindings: **Python** (`asmtest.dataflow`,
+  ctypes), **C++** (`bindings/cpp/asmtest_dataflow.hpp`, header-only), and **Node** (koffi,
+  `bindings/node/dataflow.js`) all wrap the pure GC-move canonicalizer `asmtest_gcmove_canon`
+  and the tiered-re-JIT-aware method resolver `asmtest_method_resolve_pc`; `make
+  dataflow-{python,cpp,node}-test` build and run their TAP suites (8 / 16 / 16 checks,
+  mirroring the C `test_dataflow_gcmove` / `test_dataflow_method` semantics). Each self-skips
+  cleanly when the lib is not built, so none reddens a general binding job. The remaining seven
+  language bindings + the wider L0/L1/L2 surface + CI-wiring are later increments.
 
 - **Live GC-move detection feed for the data-flow tier (`GcMoveMap`, .NET).** An in-proc
   `EventListener` on the CoreCLR runtime provider that enables the GCHeapSurvivalAndMovement

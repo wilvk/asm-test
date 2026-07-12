@@ -109,6 +109,15 @@ dataflow-cpp-test: $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
 	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o -o $(BUILD)/test_dataflow_cpp
 	$(BUILD)/test_dataflow_cpp
 
+# Phase 6 — the Node data-flow binding (bindings/node/dataflow.js, koffi). Self-skips
+# (available()===false) when the analysis lib isn't built, so it never reddens a general
+# node run; this dedicated target builds the lib + points the loader at it.
+.PHONY: dataflow-node-test
+dataflow-node-test: shared-dataflow
+	cd bindings/node && \
+	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(NODE) test_dataflow.js
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
