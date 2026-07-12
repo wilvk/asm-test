@@ -11,7 +11,7 @@
  *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
  *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
- *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json]  whole-process call graph
+ *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot]  whole-process call graph
  *   asmspy --tree   <pid> [n]         whole-process live call tree (indented by depth)
  *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
@@ -206,16 +206,18 @@ typedef enum {
     GSORT_FANOUT = 1,      /* most distinct callees (functions called) first */
 } gsort_t;
 
-/* A retained copy of an engine snapshot (the engine's array is transient). */
+/* A retained copy of an engine snapshot (the engine's arrays are transient). */
 typedef struct {
     asmspy_gnode_t *v;
     size_t n, cap;
+    asmspy_gedge_t *e; /* caller->callee edges, keyed by endpoint addresses */
+    size_t ne, ecap;
 } graph_snap;
 
-/* Copy `nodes[0..n)` into the snapshot, growing it as needed (replace, not
- * append — each engine snapshot is the whole graph so far). */
-static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes,
-                            size_t n) {
+/* Copy the node + edge snapshot in, growing as needed (replace, not append —
+ * each engine snapshot is the whole graph so far). `edges` may be NULL. */
+static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes, size_t n,
+                            const asmspy_gedge_t *edges, size_t ne) {
     if (n > s->cap) {
         asmspy_gnode_t *nv = realloc(s->v, n * sizeof *nv);
         if (!nv)
@@ -226,6 +228,18 @@ static void graph_snap_copy(graph_snap *s, const asmspy_gnode_t *nodes,
     if (n)
         memcpy(s->v, nodes, n * sizeof *nodes);
     s->n = n;
+    if (ne > s->ecap) {
+        asmspy_gedge_t *ne2 = realloc(s->e, ne * sizeof *ne2);
+        if (ne2) {
+            s->e = ne2;
+            s->ecap = ne;
+        } else {
+            ne = 0; /* OOM: drop edges this snapshot, keep the nodes */
+        }
+    }
+    if (ne)
+        memcpy(s->e, edges, ne * sizeof *edges);
+    s->ne = ne;
 }
 
 /* qsort comparator; the active key is set through this file-scope selector right
@@ -277,6 +291,30 @@ static void json_escape(const char *s, char *out, size_t cap) {
         }
     }
     out[o] = '\0';
+}
+
+/* Escape `s` for a Graphviz DOT double-quoted string (only " and \ matter; a
+ * demangled/JIT name never carries a newline). Always NUL-terminates. */
+static void dot_escape(const char *s, char *out, size_t cap) {
+    size_t o = 0;
+    for (; *s && o + 2 < cap; s++) {
+        if (*s == '"' || *s == '\\')
+            out[o++] = '\\';
+        out[o++] = *s;
+    }
+    out[o] = '\0';
+}
+
+/* Node fill colour by class, for the DOT export. */
+static const char *gnode_fill(const asmspy_gnode_t *nd) {
+    const char *k = gnode_kind(nd);
+    if (strcmp(k, "jit") == 0)
+        return "#fff3c4"; /* JIT/managed */
+    if (strcmp(k, "external") == 0)
+        return "#eeeeee"; /* library / PLT */
+    if (strcmp(k, "unknown") == 0)
+        return "#ffe0e0"; /* unresolved */
+    return "#e8f0ff";     /* internal */
 }
 
 /* One call-graph row: an internal/external/JIT marker, the function, its counts
@@ -698,12 +736,12 @@ static int cmd_tree(pid_t pid, long n) {
     return 0;
 }
 
-static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
-                               size_t n) {
-    graph_snap_copy(ctx, nodes, n); /* headless: keep only the latest snapshot */
+static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
+                               const asmspy_gedge_t *edges, size_t ne) {
+    graph_snap_copy(ctx, nodes, nn, edges, ne); /* keep only the latest snapshot */
 }
 
-static int cmd_graph(pid_t pid, long n, gsort_t sort, int json) {
+static int cmd_graph(pid_t pid, long n, gsort_t sort, int json, int dot) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
@@ -714,11 +752,35 @@ static int cmd_graph(pid_t pid, long n, gsort_t sort, int json) {
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "attach failed: %s\n", e);
         free(snap.v);
+        free(snap.e);
         return 1;
     }
     graph_sort_key = sort;
     qsort(snap.v, snap.n, sizeof *snap.v, gnode_cmp);
-    if (json) { /* machine-readable node list (pipe to jq / a visualizer) */
+
+    if (dot) { /* Graphviz: asmspy --graph <pid> --dot | dot -Tsvg -o graph.svg */
+        printf("digraph asmspy {\n  rankdir=LR;\n  node [shape=box, style=filled,"
+               " fontname=monospace, fontsize=10];\n");
+        for (size_t i = 0; i < snap.n; i++) {
+            const asmspy_gnode_t *nd = &snap.v[i];
+            char lbl[4 * sizeof nd->name];
+            dot_escape(nd->name, lbl, sizeof lbl);
+            printf("  \"0x%llx\" [label=\"%s\\n[%s] inv=%llu\", fillcolor=\"%s\"];"
+                   "\n",
+                   (unsigned long long)nd->addr, lbl, gnode_kind(nd),
+                   nd->invocations, gnode_fill(nd));
+        }
+        for (size_t i = 0; i < snap.ne; i++)
+            printf("  \"0x%llx\" -> \"0x%llx\" [label=\"%llu\"];\n",
+                   (unsigned long long)snap.e[i].caller_addr,
+                   (unsigned long long)snap.e[i].callee_addr, snap.e[i].count);
+        printf("}\n");
+        free(snap.v);
+        free(snap.e);
+        return 0;
+    }
+
+    if (json) { /* machine-readable nodes + edges (pipe to jq / a visualizer) */
         printf("{\"pid\":%d,\"sort\":\"%s\",\"functions\":[", (int)pid,
                sort == GSORT_FANOUT ? "fanout" : "invocations");
         for (size_t i = 0; i < snap.n; i++) {
@@ -732,10 +794,18 @@ static int cmd_graph(pid_t pid, long n, gsort_t sort, int json) {
                    i ? "," : "", (unsigned long long)nd->addr, en, em,
                    gnode_kind(nd), nd->invocations, nd->out_calls, nd->fanout);
         }
-        printf("%s]}\n", snap.n ? "\n" : "");
+        printf("%s],\"edges\":[", snap.n ? "\n" : "");
+        for (size_t i = 0; i < snap.ne; i++)
+            printf("%s\n  {\"caller\":\"0x%llx\",\"callee\":\"0x%llx\","
+                   "\"count\":%llu}",
+                   i ? "," : "", (unsigned long long)snap.e[i].caller_addr,
+                   (unsigned long long)snap.e[i].callee_addr, snap.e[i].count);
+        printf("%s]}\n", snap.ne ? "\n" : "");
         free(snap.v);
+        free(snap.e);
         return 0;
     }
+
     printf("call graph — %zu functions, sorted by %s (pid %d)\n", snap.n,
            sort == GSORT_FANOUT ? "functions called (fanout)" : "invocations",
            (int)pid);
@@ -748,6 +818,7 @@ static int cmd_graph(pid_t pid, long n, gsort_t sort, int json) {
         printf("%s\n", row);
     }
     free(snap.v);
+    free(snap.e);
     return 0;
 }
 
@@ -1119,10 +1190,11 @@ static void live_stream_sink(void *ctx, const char *line) {
     pthread_mutex_unlock(&L->mu);
 }
 
-static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t n) {
+static void live_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
+                            const asmspy_gedge_t *edges, size_t ne) {
     live_t *L = ctx;
     pthread_mutex_lock(&L->mu);
-    graph_snap_copy(&L->graph, nodes, n);
+    graph_snap_copy(&L->graph, nodes, nn, edges, ne);
     pthread_mutex_unlock(&L->mu);
 }
 
@@ -1446,6 +1518,7 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
     svec_free(&L.asm_fn);
     svec_free(&L.tree_asm);
     free(L.graph.v);
+    free(L.graph.e);
     pthread_mutex_destroy(&L.mu);
     return back;
 }
@@ -2077,7 +2150,7 @@ static int usage(const char *argv0) {
             "  %s --log    <pid> [n]      stream n syscalls with data\n"
             "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
-            "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json]  whole-process call graph over n calls\n"
+            "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot]  whole-process call graph over n calls\n"
             "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n"
             "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n"
             "\n"
@@ -2172,8 +2245,8 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 200; /* calls to record before reporting; negative = until exit */
         gsort_t sort = GSORT_INVOCATIONS;
-        int json = 0;
-        for (int i = 3; i < argc; i++) { /* [n], --sort=, --json in any order */
+        int json = 0, dot = 0;
+        for (int i = 3; i < argc; i++) { /* [n], --sort=, --json/--dot in any order */
             if (strncmp(argv[i], "--sort=", 7) == 0) {
                 const char *v = argv[i] + 7;
                 if (strcmp(v, "invocations") == 0)
@@ -2185,11 +2258,13 @@ int main(int argc, char **argv) {
                     return bad_arg("sort (want 'invocations' or 'fanout')", v);
             } else if (strcmp(argv[i], "--json") == 0) {
                 json = 1;
+            } else if (strcmp(argv[i], "--dot") == 0) {
+                dot = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_graph(pid, n, sort, json);
+        return cmd_graph(pid, n, sort, json, dot);
     }
     return usage(argv[0]);
 }

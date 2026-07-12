@@ -1030,6 +1030,32 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     return 1;
 }
 
+/* Hand the current graph to `sink`, converting the internal index-based edges to
+ * the public address-keyed asmspy_gedge_t (so the sink may sort/filter nodes
+ * without invalidating edges). `ae`/`aecap` is a caller-owned scratch buffer,
+ * grown as needed and reused across snapshots. On OOM the sink still gets the
+ * nodes (edges NULL/0). */
+static void graph_emit(asmspy_graph_sink sink, void *ctx, const graph_t *g,
+                       asmspy_gedge_t **ae, size_t *aecap) {
+    if (!sink)
+        return;
+    if (g->ne > *aecap) {
+        asmspy_gedge_t *nv = realloc(*ae, g->ne * sizeof **ae);
+        if (!nv) {
+            sink(ctx, g->node, g->nn, NULL, 0);
+            return;
+        }
+        *ae = nv;
+        *aecap = g->ne;
+    }
+    for (size_t i = 0; i < g->ne; i++) {
+        (*ae)[i].caller_addr = g->node[g->edge[i].caller].addr;
+        (*ae)[i].callee_addr = g->node[g->edge[i].callee].addr;
+        (*ae)[i].count = g->edge[i].count;
+    }
+    sink(ctx, g->node, g->nn, *ae, g->ne);
+}
+
 int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
                         const asmspy_symtab_t *syms, asmspy_graph_sink sink,
                         void *ctx) {
@@ -1048,6 +1074,8 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
     exe_basename(pid, exebase, sizeof exebase);
 
     graph_t g = {0};
+    asmspy_gedge_t *aedges = NULL; /* scratch: address-keyed edges for the sink */
+    size_t aecap = 0;
     asmspy_jitmap_t jit; /* name JIT / managed-runtime frames from the perf-map */
     asmspy_jitmap_init(&jit, pid);
     asmspy_jitmap_refresh(&jit); /* pick up methods already compiled at attach */
@@ -1127,7 +1155,7 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
 
                 /* throttle live snapshots (single-step is slow; 16 calls/pub) */
                 if (sink && recorded - published >= 16) {
-                    sink(ctx, g.node, g.nn);
+                    graph_emit(sink, ctx, &g, &aedges, &aecap);
                     published = recorded;
                 }
             }
@@ -1152,9 +1180,10 @@ int asmspy_engine_graph(pid_t pid, long max, atomic_bool *stop,
 
     detach_threads(&tab);
     if (sink) /* always hand over a final snapshot */
-        sink(ctx, g.node, g.nn);
+        graph_emit(sink, ctx, &g, &aedges, &aecap);
     free(g.node);
     free(g.edge);
+    free(aedges);
     asmspy_jitmap_free(&jit);
     return 0;
 }

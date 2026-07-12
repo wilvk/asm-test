@@ -150,15 +150,44 @@ printf '%s' "$jout" | grep -q '"kind":"internal"' || fail "--json: no internal-c
 printf '%s' "$jout" | grep -q '"kind":"external"' || fail "--json: no external (libc/PLT) node"
 printf '%s' "$jout" | grep -qE '"invocations":[0-9]+,"out_calls":[0-9]+,"fanout":[0-9]+}' \
     || fail "--json: per-node counts missing"
+# edges carry the caller->callee structure (work -> helper etc.), address-keyed
+printf '%s' "$jout" | grep -q '"edges":\[' || fail "--json: no edges array"
+printf '%s' "$jout" | grep -qE '"caller":"0x[0-9a-f]+","callee":"0x[0-9a-f]+","count":[0-9]+' \
+    || fail "--json: edges missing caller/callee/count"
 # the human table must NOT leak into JSON mode
 printf '%s' "$jout" | grep -q 'call graph' && fail "--json: human header leaked into JSON"
 # strict well-formedness when python3 is present; degrade cleanly otherwise
 if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$jout" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["functions"]; n=d["functions"][0]; assert all(k in n for k in ("addr","name","module","kind","invocations","out_calls","fanout"))' \
-        || fail "--json: not well-formed JSON / missing per-node keys"
-    echo "  json validated (python3 json.load)"
+    printf '%s' "$jout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["functions"] and d["edges"]
+assert all(k in d["functions"][0] for k in ("addr","name","module","kind","invocations","out_calls","fanout"))
+assert all(k in d["edges"][0] for k in ("caller","callee","count"))' \
+        || fail "--json: not well-formed JSON / missing node or edge keys"
+    echo "  json validated (python3 json.load: nodes + edges)"
 else
     echo "  json structural checks passed (python3 absent; strict parse skipped)"
+fi
+
+# DOT export: --graph --dot emits a Graphviz digraph (asmspy --graph <pid> --dot
+# | dot -Tsvg). Assert the digraph structure + a caller->callee edge; if graphviz
+# is installed, assert `dot` actually parses it.
+echo "--- asmspy --graph $WVPID 60 --dot (Graphviz export) ---"
+set +e
+dout=$(timeout 40 "$ASM" --graph "$WVPID" 60 --dot 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph --dot hung"
+printf '%s\n' "$dout" | head -4
+printf '%s' "$dout" | grep -q '^digraph asmspy {' || fail "--dot: not a digraph"
+printf '%s' "$dout" | grep -qE '"0x[0-9a-f]+" \[label="helper' || fail "--dot: node 'helper' missing"
+printf '%s' "$dout" | grep -qE '"0x[0-9a-f]+" -> "0x[0-9a-f]+" \[label="[0-9]+"\]' \
+    || fail "--dot: no caller->callee edges"
+printf '%s' "$dout" | grep -q '^}' || fail "--dot: unterminated digraph"
+if command -v dot >/dev/null 2>&1; then
+    printf '%s' "$dout" | dot -Tsvg >/dev/null 2>&1 || fail "--dot: graphviz rejected the output"
+    echo "  dot validated (graphviz dot -Tsvg)"
+else
+    echo "  dot structural checks passed (graphviz absent)"
 fi
 
 # live call tree: same victim (main -> work -> helper). The indentation must

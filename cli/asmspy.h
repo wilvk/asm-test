@@ -203,11 +203,22 @@ typedef struct {
     unsigned fanout;                /* number of distinct functions it calls  */
 } asmspy_gnode_t;
 
-/* Snapshot sink: `nodes[0..n)` is the current whole-process call graph, owned by
- * the engine and valid only for THIS call (copy what you keep). Invoked
- * periodically as the graph grows and once more just before detach. */
+/* One caller->callee edge of the call graph, keyed by the endpoints' entry
+ * ADDRESSES (not node-array indices) so a consumer can sort/filter the nodes
+ * without invalidating edges. `count` is how many times that call was seen. */
+typedef struct {
+    uint64_t caller_addr; /* entry addr of the calling function */
+    uint64_t callee_addr; /* entry addr of the called function  */
+    unsigned long long count;
+} asmspy_gedge_t;
+
+/* Snapshot sink: `nodes[0..nn)` and `edges[0..ne)` are the current whole-process
+ * call graph, owned by the engine and valid only for THIS call (copy what you
+ * keep). Invoked periodically as the graph grows and once more just before
+ * detach. `edges` may be NULL (with ne==0) if the engine could not build them. */
 typedef void (*asmspy_graph_sink)(void *ctx, const asmspy_gnode_t *nodes,
-                                  size_t n);
+                                  size_t nn, const asmspy_gedge_t *edges,
+                                  size_t ne);
 
 /* Attach to `pid` and ALL its threads, single-step them, and build a
  * caller->callee call graph: each observed CALL adds/thickens an edge and bumps
