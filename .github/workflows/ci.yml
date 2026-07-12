@@ -469,6 +469,52 @@ jobs:
       - name: Build + run the eBPF code-image detector
         run: make docker-hwtrace-codeimage
 
+  # K2: the privileged hardware-capture lane — the ONE place the exact AMD
+  # LbrExtV2 branch-stack + live IBS paths get exercised end to end. Runs
+  # `make docker-hwtrace-privileged`: the hwtrace image under Docker's DEFAULT
+  # seccomp profile with --cap-add=PERFMON (which gates perf_event_open on
+  # exactly that cap and bypasses kernel.perf_event_paranoid — no
+  # seccomp=unconfined, no --privileged). On GitHub's non-AMD runner the
+  # AMD-exact live tests (LbrExtV2 capture, sample_window survey, live IBS
+  # out-of-band + whole-process survey) self-skip — they need a Zen 3+/4/5 CPU
+  # — so here this lane validates that the target builds and runs, the IBS-Op
+  # decoder + substrate/PMU detection execute, and the whole detect-and-skip
+  # gating chain stays green. It goes RED only on a real regression, never for
+  # lack of AMD silicon; the missing coverage is exactly the exact-AMD paths,
+  # which are validated manually pre-release on Zen hardware — see
+  # docs/internal/amd-hardware-validation.md (and the open call_auto finding in
+  # docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md that this
+  # lane exists to eventually catch). A future self-hosted AMD runner would
+  # light the live paths up here for free.
+  hwtrace-privileged:
+    name: hwtrace-privileged (PERFMON; AMD-exact self-skips off Zen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # K1: cached bindings-base build — see the hwtrace-bindings job's note.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base
+        --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v9
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
+      # --cap-add=PERFMON is a plain capability add (PERFMON is a Linux 5.8+
+      # capability; Docker 20.10+ knows the name), and GitHub's runner Docker
+      # accepts it: an unknown or kernel-absent cap is simply dropped from the
+      # container bounding set, never a `docker run` failure. So this step cannot
+      # go red for want of the cap. IBS decode + substrate detection run
+      # regardless; the AMD-exact live capture self-skips off Zen.
+      - name: Build + run the privileged capture lane (IBS decode + substrate; AMD-exact self-skips)
+        run: make docker-hwtrace-privileged
+
   # Language wrappers (Tracks P/R/X/Z/N/J/D/C). Each is tested in its OWN
   # container (the generic bindings/Dockerfile.lang on a shared base) so the
   # toolchains stay isolated — one matrix job per language, `make docker-<lang>`,
