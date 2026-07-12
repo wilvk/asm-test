@@ -837,11 +837,11 @@ typedef struct {
     int throttled;
 } sample_snap;
 
-static void sample_capture_sink(void *ctx, const asmspy_sample_edge_t *edges,
-                                size_t n, uint64_t samples,
-                                uint64_t branch_samples, uint64_t lost,
-                                int throttled) {
-    sample_snap *s = ctx;
+/* Replace a retained snapshot with the engine's transient one (grows as needed;
+ * keeps the previous snapshot on OOM). Shared by the headless sink and the TUI. */
+static void sample_snap_set(sample_snap *s, const asmspy_sample_edge_t *edges,
+                            size_t n, uint64_t samples, uint64_t branch_samples,
+                            uint64_t lost, int throttled) {
     if (n > s->cap) {
         asmspy_sample_edge_t *nv = realloc(s->v, n * sizeof *nv);
         if (!nv)
@@ -858,6 +858,33 @@ static void sample_capture_sink(void *ctx, const asmspy_sample_edge_t *edges,
     s->throttled = throttled;
 }
 
+static void sample_capture_sink(void *ctx, const asmspy_sample_edge_t *edges,
+                                size_t n, uint64_t samples,
+                                uint64_t branch_samples, uint64_t lost,
+                                int throttled) {
+    sample_snap_set(ctx, edges, n, samples, branch_samples, lost, throttled);
+}
+
+/* How to rank the statistical hot-edge table. */
+typedef enum {
+    SSORT_COUNT = 0,   /* hottest (most-sampled) edges first — the default */
+    SSORT_MISPRED = 1, /* most-mispredicted edges first                    */
+} ssort_t;
+
+/* qsort comparator; the active key is set through this file-scope selector right
+ * before each qsort (the sort point is single-threaded under the view lock). */
+static ssort_t sample_sort_key = SSORT_COUNT;
+static int sedge_cmp(const void *a, const void *b) {
+    const asmspy_sample_edge_t *x = a, *y = b;
+    unsigned long long kx = sample_sort_key == SSORT_MISPRED ? x->mispred : x->count;
+    unsigned long long ky = sample_sort_key == SSORT_MISPRED ? y->mispred : y->count;
+    if (kx != ky)
+        return kx < ky ? 1 : -1; /* descending */
+    if (x->count != y->count)    /* stable tiebreak: heavier edge first */
+        return x->count < y->count ? 1 : -1;
+    return 0;
+}
+
 /* A short human tag for an edge's misprediction / return character. */
 static void sample_edge_tag(const asmspy_sample_edge_t *e, char *out, size_t cap) {
     int mp = e->count ? (int)((e->mispred * 100ull) / e->count) : 0;
@@ -869,6 +896,15 @@ static void sample_edge_tag(const asmspy_sample_edge_t *e, char *out, size_t cap
         snprintf(out, cap, " [misp %d%%]", mp);
     else
         out[0] = '\0';
+}
+
+/* One hot-edge row: "<count>  <from> -> <to>  [misp N%]/[ret]". */
+static void sample_format_row(char *buf, size_t cap,
+                              const asmspy_sample_edge_t *e) {
+    char tag[32];
+    sample_edge_tag(e, tag, sizeof tag);
+    snprintf(buf, cap, "%8llu  %-30.30s -> %-30.30s%s", e->count, e->from, e->to,
+             tag);
 }
 
 static int cmd_sample(pid_t pid, long ms, int json) {
@@ -1968,6 +2004,200 @@ static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
     return back;
 }
 
+/* --- statistical hot-edge view (mode 6): the ONLY rich TUI view that never
+ * ptraces or single-steps its target. The tracer thread runs the IBS-Op sampler
+ * OUT OF BAND, so this is the safe view on a live JIT. Each ~window_ms window's
+ * hot-edge histogram REPLACES the table (recent hotness), which the UI can freeze
+ * and scroll like the call-graph view. --- */
+typedef struct {
+    pthread_mutex_t mu;
+    atomic_bool stop;
+    atomic_bool finished;
+    int rc;                       /* engine return code (set before finished)   */
+    sample_snap snap;             /* latest resolved hot-edge window            */
+    int paused;                   /* freeze the snapshot so scrolling is stable */
+    pid_t pid;                    /* target                                     */
+    unsigned window_ms;           /* per-window sample duration                 */
+    const asmspy_symtab_t *syms;  /* ELF resolver (owned by caller)             */
+    asmspy_jitmap_t *jit;         /* JIT/perf-map resolver (owned by caller)    */
+} sample_view_t;
+
+static void sample_view_sink(void *ctx, const asmspy_sample_edge_t *edges,
+                             size_t n, uint64_t samples, uint64_t branch_samples,
+                             uint64_t lost, int throttled) {
+    sample_view_t *V = ctx;
+    pthread_mutex_lock(&V->mu);
+    if (!V->paused) /* while the user scrolls a frozen window, drop updates */
+        sample_snap_set(&V->snap, edges, n, samples, branch_samples, lost,
+                        throttled);
+    pthread_mutex_unlock(&V->mu);
+}
+
+static void *sample_tracer(void *arg) {
+    sample_view_t *V = arg;
+    /* Loops surveying `window_ms` windows until *stop; unlike the ptrace engines
+     * it is never blocked in waitpid, so no SIGALRM wake is needed — it notices
+     * *stop within one window. */
+    int rc = asmspy_engine_sample(V->pid, V->window_ms, &V->stop, V->syms, V->jit,
+                                  sample_view_sink, V);
+    pthread_mutex_lock(&V->mu);
+    V->rc = rc;
+    pthread_mutex_unlock(&V->mu);
+    atomic_store(&V->finished, true);
+    return NULL;
+}
+
+static int run_sample_view(pid_t pid, const char *title,
+                           const asmspy_symtab_t *syms, asmspy_jitmap_t *jit) {
+    sample_view_t V;
+    memset(&V, 0, sizeof V);
+    pthread_mutex_init(&V.mu, NULL);
+    atomic_store(&V.stop, false);
+    atomic_store(&V.finished, false);
+    V.pid = pid;
+    V.window_ms = 250; /* responsive live windows; quit lands within one window */
+    V.syms = syms;
+    V.jit = jit;
+
+    pthread_t th;
+    if (pthread_create(&th, NULL, sample_tracer, &V) != 0) {
+        pthread_mutex_destroy(&V.mu);
+        return 1;
+    }
+
+    int back = 1; /* 1 = to process list (q/ESC), 0 = to options (b) */
+    int top = 0;  /* first visible row while scrolling a frozen window */
+    ssort_t sort = SSORT_COUNT;
+    for (;;) {
+        int rows, cols;
+        getmaxyx(stdscr, rows, cols);
+        int vis = rows - 4 > 0 ? rows - 4 : 1;
+        erase();
+        attron(A_BOLD);
+        mvprintw(0, 0, "%.*s", cols, title);
+        attroff(A_BOLD);
+
+        pthread_mutex_lock(&V.mu);
+        int fin = atomic_load(&V.finished);
+        int erc = V.rc;
+        int frozen = V.paused || fin;
+        V.paused = frozen; /* stop the sink overwriting the frozen window */
+        sample_sort_key = sort;
+        qsort(V.snap.v, V.snap.n, sizeof *V.snap.v, sedge_cmp);
+        int en = (int)V.snap.n;
+        if (!frozen)
+            top = 0; /* live view is top-anchored (hottest first) */
+        if (top > en - vis)
+            top = en - vis;
+        if (top < 0)
+            top = 0;
+        attron(A_BOLD);
+        mvprintw(1, 0,
+                 "HOT EDGES  (AMD IBS-Op, out of band — safe on a JIT)   "
+                 "sort: %s",
+                 sort == SSORT_MISPRED ? "mispredicts" : "sample count");
+        mvprintw(2, 0,
+                 "%d edges   %llu/%llu branch/total samples%s%s   window %ums",
+                 en, (unsigned long long)V.snap.branch_samples,
+                 (unsigned long long)V.snap.samples,
+                 V.snap.throttled ? "   THROTTLED" : "",
+                 V.snap.lost ? "   (samples lost)" : "", V.window_ms);
+        attroff(A_BOLD);
+        if (en == 0)
+            mvprintw(3, 0, fin ? "(no taken-branch samples — target idle?)"
+                                : "(sampling out of band — no ptrace, no "
+                                  "single-step…)");
+        for (int r = 0; r < vis && top + r < en; r++) {
+            char row[256];
+            sample_format_row(row, sizeof row, &V.snap.v[top + r]);
+            mvprintw(3 + r, 0, "%-*.*s", cols, cols, row);
+        }
+        pthread_mutex_unlock(&V.mu);
+
+        if (fin && erc == ASMSPY_SAMPLE_UNAVAIL)
+            mvprintw(rows - 1, 0, "[IBS-Op unavailable: %.*s]   b: options   "
+                                  "q/ESC: processes",
+                     cols - 40, asmtest_ibs_skip_reason());
+        else if (fin)
+            mvprintw(rows - 1, 0,
+                     "[tracer stopped]   up/down PgUp/PgDn Home/End: scroll   "
+                     "b: options   q/ESC: processes");
+        else if (V.paused)
+            mvprintw(rows - 1, 0,
+                     "[PAUSED]   up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
+                     "space: live   b: options   q: processes");
+        else
+            mvprintw(rows - 1, 0,
+                     "Tab: sort (count/mispredicts)   space: pause+scroll   "
+                     "b: options   q/ESC: processes   (live)");
+        clrtoeol();
+        refresh();
+
+        timeout(120);
+        int ch = getch();
+        if (ch == 'q' || ch == 27) {
+            back = 1;
+            break;
+        }
+        if (ch == 'b') {
+            back = 0;
+            break;
+        }
+        if (ch == '\t')
+            sort = sort == SSORT_COUNT ? SSORT_MISPRED : SSORT_COUNT;
+        int page = vis > 1 ? vis - 1 : 1;
+        int scroll = V.paused || fin; /* a finished window is already frozen */
+        if ((ch == KEY_UP || ch == KEY_PPAGE) && !scroll) {
+            V.paused = 1; /* scrolling into the list freezes the live re-sort */
+            scroll = 1;
+        }
+        switch (ch) {
+        case ' ':
+        case 'p':
+            if (!fin) {
+                V.paused = !V.paused;
+                if (!V.paused)
+                    top = 0; /* resume live -> back to the hottest rows */
+            }
+            break;
+        case KEY_UP:
+            if (scroll)
+                top -= 1;
+            break;
+        case KEY_DOWN:
+            if (scroll)
+                top += 1;
+            break;
+        case KEY_PPAGE:
+            if (scroll)
+                top -= page;
+            break;
+        case KEY_NPAGE:
+            if (scroll)
+                top += page;
+            break;
+        case KEY_HOME:
+            if (scroll)
+                top = 0;
+            break;
+        case KEY_END:
+            if (scroll)
+                top = INT_MAX; /* clamped to the last page in the renderer */
+            break;
+        default:
+            break;
+        }
+        if (top < 0)
+            top = 0;
+    }
+
+    atomic_store(&V.stop, true);
+    pthread_join(th, NULL); /* returns within one window (sampler checks stop) */
+    free(V.snap.v);
+    pthread_mutex_destroy(&V.mu);
+    return back;
+}
+
 /* mode-select screen; returns 0 syscalls, 1 region, 2 stream, 3 graph, -1 back */
 static int screen_mode(const asmspy_proc_t *p) {
     for (;;) {
@@ -1987,7 +2217,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(6, 2, "4)  Call graph         — whole-process caller/callee counts (sortable)");
         mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
         mvprintw(8, 2, "6)  Process tree       — procs+threads+children with counts (drill into a call graph)");
-        mvprintw(rows - 1, 0, "1/2/3/4/5/6: choose   b/ESC: back");
+        mvprintw(9, 2, "7)  Hot edges (sample) — statistical hot edges via AMD IBS-Op, OUT OF BAND (safe on a JIT)");
+        mvprintw(rows - 1, 0, "1/2/3/4/5/6/7: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -2002,6 +2233,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 4;
         if (ch == '6')
             return 5;
+        if (ch == '7')
+            return 6;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -2360,6 +2593,33 @@ int asmspy_tui(void) {
                         continue; /* back to the topology */
                     }
                     break; /* b / q */
+                }
+            } else if (mode == 6) {
+                /* statistical hot edges via AMD IBS-Op, OUT OF BAND (no ptrace /
+                 * single-step) — the safe rich view on a live JIT. Gate up front
+                 * so an IBS-less host gets a clear message, not an empty pane. */
+                if (!asmtest_ibs_available()) {
+                    erase();
+                    mvprintw(0, 0,
+                             "hot-edge sampling needs an AMD IBS-Op host — %s",
+                             asmtest_ibs_skip_reason());
+                    mvprintw(2, 0, "press a key");
+                    refresh();
+                    getch();
+                    nav = 0; /* back to options */
+                } else {
+                    asmspy_symtab_t t;
+                    asmspy_symtab_load(picked.pid, &t); /* raw addrs if empty */
+                    asmspy_jitmap_t jit;
+                    asmspy_jitmap_init(&jit, picked.pid);
+                    asmspy_jitmap_refresh(&jit); /* name already-JITted methods */
+                    char title[128];
+                    snprintf(title, sizeof title,
+                             "asmspy — hot edges of pid %d (%.*s)", picked.pid,
+                             40, picked.cmd);
+                    nav = run_sample_view(picked.pid, title, &t, &jit);
+                    asmspy_jitmap_free(&jit);
+                    asmspy_symtab_free(&t);
                 }
             } else {
                 asmspy_symtab_t t;

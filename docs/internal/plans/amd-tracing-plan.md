@@ -475,7 +475,7 @@ CPU do the block-stepping.
 | **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | **LANDED** (2026-07, Phase 4) | Small |
 | **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | **LANDED** (ring 64KB→256KB, Phase 5) | Small |
 | **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
-| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (precise-IP source→target via `MSR_AMD64_IBSBRTARGET`, gated on `IBS_CAPS_BRNTRGT`); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered — **forward-look (needs Zen 2)** | Medium |
+| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–3, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
 | **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
 | **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | real (composition gap, MSR-only) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
 
@@ -759,14 +759,22 @@ All refuted against a named primary source. Stop spending fallback complexity he
 
 ## Notes on IBS (why it is P2, not P0)
 
+> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (landed 2026-07-12).**
+> The paragraph below is kept for history but was **wrong on the privilege model**: the branch
+> target is delivered in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so with the
+> kernel `swfilt` bit the lane runs **user-only and unprivileged** at `paranoid=2` — **no
+> `CAP_PERFMON`/`CAP_SYS_ADMIN` and no `MSR_AMD64_IBSBRTARGET` read**. It shipped as the
+> `asmtest_ibs_*` API + `asmspy --sample` (headless) and TUI mode 7.
+
 IBS-Op is worth exactly one thing: it is the **only hardware branch source on Zen 2**,
-and it carries a real precise-IP source→target edge (`IbsOpRip` → `MSR_AMD64_IBSBRTARGET`,
+and it carries a real precise-IP source→target edge (`IbsOpRip` → `IbsBrTarget`,
 with `op_brn_ret`/`op_brn_taken`/`op_brn_misp` bits) — **capability-gated** on
 `IBS_CAPS_BRNTRGT` (CPUID `Fn8000_001B` EAX[5], present on all Zen but must be probed).
 But it is **statistical**: one tagged micro-op per counter period, so it yields a sparse,
 probabilistic edge set — never an ordered, complete path — and its per-NMI edge yield is
-*lower* than LBR's ~16 records per interrupt. It also requires
-`CAP_SYS_ADMIN`/`CAP_PERFMON` (IBS PMUs have no user/kernel filter). So the honest role is
+*lower* than LBR's ~16 records per interrupt. ~~It also requires
+`CAP_SYS_ADMIN`/`CAP_PERFMON` (IBS PMUs have no user/kernel filter).~~ **Corrected: user-only
+IBS opens unprivileged via `swfilt` — see the superseding plan.** So the honest role is
 a **coverage-confirmer / hot-edge pre-cover** that shrinks (does not bound) the block-step
 / DynamoRIO residual, or an indirect-branch-target resolver — not a replacement for the
 branch stack. (Two raw research proposals here were themselves wrong and were caught in

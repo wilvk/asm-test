@@ -195,9 +195,9 @@ present+future threads) filtered to the target's pids in software — gated behi
 **Acceptance.** A multi-threaded fixture: per-tid mode recovers the hot edges of every
 pre-existing worker; the race and the system-wide remedy are documented, not hidden.
 
-### Phase 3 — asmspy `--sample` view (the flagship deliverable) *(headless landed; TUI mode 7 remaining)*
+### Phase 3 — asmspy `--sample` view (the flagship deliverable) *(landed)*
 
-> **Landed 2026-07-12 — the headless `--sample` command + engine + smoke.**
+> **Landed 2026-07-12 — the full `--sample` view: headless + TUI mode 7.**
 > `asmspy_engine_sample(pid, ms, stop, syms, jit, sink, ctx)` in
 > [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) drives `asmtest_ibs_survey_process`
 > **out of band** (no ptrace, no single-step) and resolves both endpoints of each hot edge
@@ -205,13 +205,17 @@ pre-existing worker; the race and the system-wide remedy are documented, not hid
 > `asmspy --sample <pid> [ms] [--json]` ([cli/asmspy.c](../../../cli/asmspy.c) `cmd_sample`)
 > prints the edge histogram — `count  from -> to` with `[misp N%]`/`[ret]` tags and honest
 > `branch/total samples`, `throttled` provenance — or a machine-readable JSON export; it
-> **self-skips** (`# SKIP`, exit 0) off IBS. New busy victim
-> [cli/sample_victim.c](../../../cli/sample_victim.c) (a hot `hot_spin()`) + a `--sample`
-> smoke in [cli/cli_smoke.sh](../../../cli/cli_smoke.sh) prove the hot function is named out
-> of band and that JSON resolves it; the smoke self-skips off IBS. Verified live on this
-> Zen 2: `--sample` names `hot_spin`'s back-edge without perturbing the target. **Remaining:
-> the TUI mode-7 view** (sortable hot functions/edges pane) — the interactive front-end over
-> the same engine.
+> **self-skips** (`# SKIP`, exit 0) off IBS. The **TUI mode 7** (menu item "7) Hot edges
+> (sample)") runs the same engine on a tracer thread, showing a live hot-edge table that is
+> pausable + scrollable + Tab-sortable (count / mispredicts) like the call-graph view — the
+> only rich TUI view that never ptraces or single-steps (gated up front off IBS with a clear
+> message). New busy victim [cli/sample_victim.c](../../../cli/sample_victim.c) (a hot
+> `hot_spin()`) + a `--sample` smoke in [cli/cli_smoke.sh](../../../cli/cli_smoke.sh) prove
+> the hot function is named out of band and that JSON resolves it (self-skips off IBS); the
+> TUI view was driven end-to-end through a pty+pyte harness (menu → filter → mode 7 →
+> Tab/space), asserting `HOT EDGES` + `hot_spin` render and the sort/pause keys work.
+> Verified live on this Zen 2: both surfaces name `hot_spin`'s back-edge without perturbing
+> the target — the exact case the single-step views risk crashing on a JIT.
 
 **Goal.** A new asmspy view that shows a live statistical hot-edge / hot-block profile of
 any target **out of band** — the safe view for JITs where stream/graph/tree single-step is
