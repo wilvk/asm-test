@@ -18,7 +18,10 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > Status legend: **Phases 0–2 *(LANDED 2026-07-12)*** — the shared spine + CI proving
 > ground (`include/asmtest_valtrace.h`, `src/dataflow.c` / `src/dataflow_operands.c` /
 > `src/dataflow_emu.c`, `make dataflow-test`, 53 checks; the Unicorn L0 producer validated
-> live). **Phases 3–6 remain *(planned)***; Phases 3–5 are
+> live). **Phase 3 (scoped ptrace L0) LANDED 2026-07-12** — a live out-of-band producer
+> emitting the same `asmtest_valtrace_t` stream, cross-validated against the emulator L0
+> oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach). **Phases 4–6
+> remain *(planned)***; Phases 3–5 are
 > the two target tiers. Update this file as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
@@ -159,7 +162,7 @@ oracle for the live tiers.
 expectation in CI, no hardware; output is labelled **replay, not observation**; emulator L0
 is wired as the cross-check oracle in the ptrace tier's tests.
 
-## Phase 3 - Scoped ptrace L0 (real live values, out-of-band) — *goal (a)* *(planned)*
+## Phase 3 - Scoped ptrace L0 (real live values, out-of-band) — *goal (a)* *(LANDED 2026-07-12)*
 
 The differentiated capability: real data flow on an **attached, running** process, bounded
 to a `using` region.

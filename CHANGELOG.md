@@ -8,6 +8,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Size-negotiated hwtrace options ABI + machine-readable status surface + escalation
+  mechanism, across all ten bindings (the AMD-followup API flag day — Phases 1, 3, and
+  F22/F26/F37).** `asmtest_hwtrace_options_t` now leads with a `size_t struct_size` the
+  caller sets (the `INIT_OPTS` idiom, or explicitly after a zero-fill); `asmtest_hwtrace_init`
+  copies `min(struct_size, sizeof)` and zero-fills the tail, so an older/newer caller is
+  never read out of bounds — and a caller that fails to self-describe (`struct_size == 0` or
+  too small to reach `backend`) is rejected with `EINVAL` rather than having a set field
+  silently dropped. New `asmtest_hwtrace_status()` (available / code / stage / probe errno /
+  `perf_event_paranoid` / reason) and `asmtest_hwtrace_perf_event_paranoid()` distinguish
+  **`ASMTEST_HW_EPERM`** (substrate present, permission denied — e.g. AMD LBR on an
+  unprivileged `paranoid > 2` host) from `EUNAVAIL` (missing silicon), backed by one shared
+  classifier so `status()` and `skip_reason()` cannot drift. `asmtest_trace_choice_t` grew a
+  `mechanism` field (`HW_BRANCH` / `TF_STEP` / `MSR_LBR` / `BLOCKSTEP` / `PER_INSN` / `DBI` /
+  `EMULATOR` / `STATISTICAL`) plus `ASMTEST_FIDELITY_STATISTICAL`, so `trace_call_auto`
+  reports which rung actually won and a statistical result is structurally unmistakable for
+  an exact one. All ten wrappers mirror the new layouts and wrap the new calls; the parity
+  gate passes with zero allow-list changes. Suite 358 → 383 (ABI guard, status incl. the
+  live-EPERM assertion, mechanism).
+
+- **Data-flow tracing gains a live scoped ptrace L0 producer (Phase 3 — real values,
+  out of band).** `src/dataflow_ptrace.c` single-steps a routine (fork+`PTRACE_TRACEME`, or
+  `PTRACE_SEIZE` attach to a live victim that survives detach) and emits the **same**
+  `asmtest_valtrace_t` stream the Phase-0/1 analyzers consume, so def-use + slicing work
+  unchanged on live captures — reading each step's registers (`GETREGS`, `GETFPREGS` for
+  XMM, `NT_X86_XSTATE` for 256-bit YMM) and the memory its operands touch. Cross-validated
+  edge-for-edge and value-for-value against the emulator L0 oracle; RIP-relative effective
+  addresses resolve against the next instruction (a bug an adversarial verify caught before
+  merge), gs-based and wide-vector operands captured. `dataflow-test` 26 → 36.
+
 - **Data-flow tracing tier, Phases 0–2 (`include/asmtest_valtrace.h`, `make dataflow-test`)
   — the CI-runnable milestone of the data-flow plan.** Phase 0: the shared L0 value-trace
   sink (`asmtest_valtrace_t`: caller-owned buffers, append/stash-wide/truncate discipline
@@ -467,6 +496,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Apple-Silicon-tart / bare-metal-KVM hosts this environment lacks.
 
 ### Changed
+
+- **Multi-exit deterministic BPF boundary snapshot, default-on (followup Phase 5 / F13).**
+  `hwtrace_begin_amd` now plants one hardware breakpoint per region exit (1–4 exits, one
+  debug register each) via `asmtest_amd_all_exits` + `asmtest_amd_snapshot_begin_multi`, so
+  whichever `ret`/tail-call a multi-exit routine leaves through hits a boundary — the old
+  single-exit gate missed earlier exits and truncated. A BPF-side drop counter drives an
+  honest truncated-on-drop contract (F13: a dropped ring record marks the result truncated,
+  never silently complete — verified with a 1670-drop overflow fixture). >4 exits or any arm
+  failure falls through to the sampled path unchanged. First live-validated on Zen 5 via the
+  new privileged docker lane.
+
+- **First-class privileged hardware-capture docker lane (`make docker-hwtrace-privileged`).**
+  Runs `hwtrace-test ibs-test` under `--cap-add=PERFMON` alone (no `--privileged`, no
+  `SYS_ADMIN`, default seccomp) — the first live validation of the exact AMD LBR (LbrExtV2)
+  and IBS capture paths on the Zen 5 dev box: the previously-skipping AMD/IBS live tests
+  (LBR capture, Tier-B stitch, per-thread concurrent fds, `sample_window`, IBS
+  `survey_pid`/`survey_process`) all run and pass (test_hwtrace 389/389, test_ibs 23/23).
+
+- **`make BUILD=<abs> test` / `usecases` / `valgrind` now work.** The suite-loop recipes ran
+  `./$$t` where `$$t` already holds a `$(BUILD)/`-prefixed path, which broke under an
+  absolute `BUILD` override (`.//tmp/...`); dropping the `./` prefix (the path always
+  contains a slash) completes the earlier out-of-tree-build fix.
 
 - **`jit_trace`'s JIT lanes prefer the byte-identical block-step rung (review F18).** The
   no-descent lanes select `asmtest_ptrace_trace_attached_blockstep` when

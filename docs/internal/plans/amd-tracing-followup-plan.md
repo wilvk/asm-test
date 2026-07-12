@@ -14,7 +14,10 @@ finding here was **re-verified against the current tree** (the `src/` anchors ho
 `58d8263` — the intervening commits are docs-only) before being written down, not carried
 forward from the audit.
 
-> Status: **Four items remain *planned* (Phases 1, 3, 5, 6). Phases 2, 4, 8, 9 and 10
+> Status: **ALL phases LANDED as of 2026-07-12** — Phases 1, 3, 5, 6 landed in the
+> second parallel batch (the API flag day: struct_size ABI guard + status/paranoid
+> surface + mechanism discriminator, the multi-exit BPF boundary snapshot, and the
+> cascade comment). Phases 2, 4, 8, 9, 10
 > LANDED 2026-07-12** (the Wave-1 hardening batch + the tuning guide; verified on the
 > Zen 5 box — `hwtrace-test` 358/358 with the new synthetic-ring coverage). **Phase 7
 > (IBS-Op survey fallback) is SUPERSEDED + LANDED 2026-07-12** via
@@ -55,7 +58,7 @@ by risk, dependency, and how much of each is testable on the generic CI host.
 
 ---
 
-## Phase 1 — ABI-guard the hwtrace options struct (`include/asmtest_hwtrace.h`, all 10 bindings) *(planned)*
+## Phase 1 — ABI-guard the hwtrace options struct (`include/asmtest_hwtrace.h`, all 10 bindings) *(LANDED 2026-07-12)*
 
 **Goal.** Make growing `asmtest_hwtrace_options_t` permanently safe: a caller compiled against an
 older, smaller struct must never be read out of bounds by the library's init copy. Today
@@ -149,7 +152,7 @@ already-tested logic at 1070/1219; `make docker-hwtrace-amd` shows no regression
 Tier-B decoding. (The overflow is not reproducible from real hardware — the kernel never
 emits `nr>16` — so the synthetic ASan test is the real guard.)
 
-## Phase 3 — Distinguish `EPERM` from `EUNAVAIL`; expose a rich status + paranoid reader (`src/hwtrace.c`) *(planned)*
+## Phase 3 — Distinguish `EPERM` from `EUNAVAIL`; expose a rich status + paranoid reader (`src/hwtrace.c`) *(LANDED 2026-07-12)*
 
 **Goal.** On this very host (`perf_event_paranoid=4`) a permission denial and a hardware
 absence both surface as `available()==0` / `EUNAVAIL`, separable only by string-parsing
@@ -227,7 +230,7 @@ check). Cap lane: `ASMTEST_AMD_DEBUG=1 make docker-hwtrace-amd` emits the `begin
 line, an `end_amd` tier line, and ≥1 truncation-reason line on a deliberately-overflowing
 fixture. `debug.{c,h}` are internal → no parity allow-list entry.
 
-## Phase 5 — Multi-exit deterministic BPF boundary snapshot (`src/branchsnap.c`, `src/hwtrace.c`) *(planned)*
+## Phase 5 — Multi-exit deterministic BPF boundary snapshot (`src/branchsnap.c`, `src/hwtrace.c`) *(LANDED 2026-07-12)*
 
 **Goal.** Make the deterministic snapshot the default for **2..4-exit** routines, not just
 single-exit ones — retiring most reliance on the sampled path's fragile richest-window
@@ -269,7 +272,7 @@ a 3-`ret` region (`n==3`, ascending offsets, return==last); a 5-exit region with
 **unset** (proving default-on) once down each path — entry block covered and `!truncated`
 on both. DR-slot arbitration self-skips honestly to sampled where a debugger holds a DR.
 
-## Phase 6 — Cascade rung: no new code; correct the now-stale MSR-rung comment (`src/trace_auto.c`) *(planned, depends on Phase 5)*
+## Phase 6 — Cascade rung: no new code; correct the now-stale MSR-rung comment (`src/trace_auto.c`) *(LANDED 2026-07-12)*
 
 **Goal.** Confirm and document that no explicit BPF-snapshot rung belongs in
 `asmtest_trace_call_auto` — the snapshot is already effectively rung 1 via
