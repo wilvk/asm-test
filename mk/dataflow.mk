@@ -172,6 +172,22 @@ dataflow-java-test: shared-dataflow
 	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  $(JAVA) --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-df TestDataflow
 
+# Phase 6 — the .NET data-flow binding (bindings/dotnet/dataflow_smoke, P/Invoke).
+# Needs the .NET SDK (the docker bindings image); validated in dotnet/sdk:8.0.
+.PHONY: dataflow-dotnet-test
+dataflow-dotnet-test: shared-dataflow
+	cd bindings/dotnet/dataflow_smoke && \
+	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  $(DOTNET) run -c Release
+
+# All-bindings convenience target (each self-selects its interpreter/compiler).
+.PHONY: dataflow-bindings-test
+dataflow-bindings-test: dataflow-python-test dataflow-cpp-test dataflow-node-test \
+                        dataflow-ruby-test dataflow-lua-test dataflow-zig-test \
+                        dataflow-rust-test dataflow-go-test dataflow-java-test \
+                        dataflow-dotnet-test
+	@echo "dataflow-bindings-test: all 10 language bindings passed"
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
