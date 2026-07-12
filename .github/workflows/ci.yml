@@ -399,6 +399,26 @@ jobs:
       - name: Build asmspy + victims, run the headless smoke
         run: make WERROR=1 cli-smoke
 
+  # The data-flow analysis tier: build libasmtest_dataflow (the pure L0/L1/L2
+  # pipeline) and run the host-toolchain language bindings against it (Phase 6).
+  # Python (ctypes) + C++ (header-only) need only Capstone + the stock ubuntu
+  # python3/g++; the Node (koffi) binding is exercised in the docker bindings
+  # lane, matching this repo's node-in-docker pattern.
+  dataflow:
+    name: dataflow (analysis lib + bindings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Capstone (the operand enumerator the analysis lib links)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev pkg-config
+
+      - name: Build libasmtest_dataflow + run the Python and C++ bindings
+        run: |
+          make WERROR=1 dataflow-python-test
+          make WERROR=1 dataflow-cpp-test
+
   # K2: the cross-language hardware-trace wrappers — each binding's in-process
   # single-step tracer, in the same isolated per-language images the `bindings`
   # job builds. Run as ONE job so the shared bindings base (and its Keystone /

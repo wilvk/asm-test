@@ -18,8 +18,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the tiered-re-JIT-aware method resolver `asmtest_method_resolve_pc`; `make
   dataflow-{python,cpp,node}-test` build and run their TAP suites (8 / 16 / 16 checks,
   mirroring the C `test_dataflow_gcmove` / `test_dataflow_method` semantics). Each self-skips
-  cleanly when the lib is not built, so none reddens a general binding job. The remaining seven
-  language bindings + the wider L0/L1/L2 surface + CI-wiring are later increments.
+  cleanly when the lib is not built, so none reddens a general binding job. A new `dataflow` CI
+  job builds the lib and runs the Python + C++ bindings on every push (the Node binding runs in
+  the docker bindings lane). The remaining seven language bindings + the wider L0/L1/L2 surface
+  are later increments.
 
 - **Live GC-move detection feed for the data-flow tier (`GcMoveMap`, .NET).** An in-proc
   `EventListener` on the CoreCLR runtime provider that enables the GCHeapSurvivalAndMovement
