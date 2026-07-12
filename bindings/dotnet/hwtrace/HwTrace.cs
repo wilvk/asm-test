@@ -3661,6 +3661,110 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// Data-flow Phase 4 — the LIVE feed for the GC-move canonicalizer (the pure C side
+    /// <c>asmtest_gcmove_canonicalize</c> in <c>src/dataflow_gcmove.c</c>). An in-proc
+    /// <see cref="EventListener"/> on the CoreCLR runtime provider that captures
+    /// <c>GCBulkMovedObjectRanges</c> (emitted only for a COMPACTING GC, under the
+    /// GCHeapSurvivalAndMovement keyword) — each event reports how many object ranges the
+    /// collector relocated, and (where the runtime surfaces the struct-array payload) the
+    /// concrete {old_base → new_base, len} triples. Those triples are exactly the
+    /// <c>asmtest_gcmove_t</c> the C canonicalizer consumes to remap a value trace's memory
+    /// addresses across a compaction so a managed value's def-use survives the move.
+    ///
+    /// Construct it BEFORE the traced window so it sees compactions during the window.
+    /// Follows the §E3 never-throw / enqueue-light callback discipline (the GC callback can
+    /// fire on ANY runtime thread, including a single-stepped one — it only records, it never
+    /// P/Invokes). CoreCLR only; a no-op elsewhere.
+    /// </summary>
+    public sealed class GcMoveMap : EventListener
+    {
+        const string RuntimeProvider = "Microsoft-Windows-DotNETRuntime";
+        // GCKeyword (0x1) tracks GCs; GCHeapSurvivalAndMovement (0x400000) is the one that
+        // actually emits GCBulkMovedObjectRanges/GCBulkSurvivingObjectRanges. Enable both.
+        const EventKeywords GcMoveKeywords = (EventKeywords)(0x1 | 0x400000);
+
+        /// <summary>One relocated object range: [OldBase, OldBase+Len) moved to
+        /// [NewBase, NewBase+Len). Feeds <c>asmtest_gcmove_t</c>.</summary>
+        public readonly struct MoveRange
+        {
+            public readonly ulong OldBase, NewBase, Len;
+            public MoveRange(ulong o, ulong nw, ulong l) { OldBase = o; NewBase = nw; Len = l; }
+        }
+
+        readonly object _lock = new object();
+        readonly List<MoveRange> _ranges = new List<MoveRange>();
+        long _eventCount;   // GCBulkMovedObjectRanges events observed (Interlocked)
+        long _rangeCount;   // sum of each event's Count field — reliably surfaced even when
+                            // the Values struct-array is not (Interlocked)
+        volatile bool _stopped;
+
+        /// <summary>GCBulkMovedObjectRanges events observed since construction.</summary>
+        public long EventCount => Interlocked.Read(ref _eventCount);
+        /// <summary>Total object ranges the collector reported moving (the event Count sum) —
+        /// non-zero proves a real compaction was fed, independent of struct-array decode.</summary>
+        public long RangeCount => Interlocked.Read(ref _rangeCount);
+        /// <summary>The concrete {old,new,len} triples decoded from the Values payload (may be
+        /// fewer than <see cref="RangeCount"/> if the runtime does not surface the struct array
+        /// to an in-proc listener — see <see cref="TriplesDecoded"/>).</summary>
+        public MoveRange[] Ranges { get { lock (_lock) return _ranges.ToArray(); } }
+        /// <summary>How many concrete triples were decoded (vs only counted).</summary>
+        public int TriplesDecoded { get { lock (_lock) return _ranges.Count; } }
+
+        /// <summary>Freeze the map after the traced window closes.</summary>
+        public void Freeze() { _stopped = true; }
+
+        protected override void OnEventSourceCreated(EventSource src)
+        {
+            if (src != null && src.Name == RuntimeProvider)
+                EnableEvents(src, EventLevel.Verbose, GcMoveKeywords);
+        }
+
+        protected override void OnEventWritten(EventWrittenEventArgs e)
+        {
+            // The base ctor can dispatch before this instance's fields init; a listener
+            // callback must never throw. Guard + wrap.
+            if (_stopped || _lock == null || _ranges == null) return;
+            try
+            {
+                if (e.EventName == null || e.EventName != "GCBulkMovedObjectRanges") return;
+                Interlocked.Increment(ref _eventCount);
+                var names = e.PayloadNames;
+                if (names == null) return;
+                object valuesObj = null;
+                for (int i = 0; i < names.Count; i++)
+                {
+                    switch (names[i])
+                    {
+                        case "Count": Interlocked.Add(ref _rangeCount, Convert.ToInt64(e.Payload[i])); break;
+                        case "Values": valuesObj = e.Payload[i]; break;
+                    }
+                }
+                // Best-effort decode of the per-range struct array. In-proc EventListener
+                // surfaces a manifest struct-array inconsistently across runtimes: it may be a
+                // byte[] blob (each entry {Address:u64, NewAddress:u64, Length:u64} = 24B on
+                // x64), an IEnumerable of field maps, or absent. Handle the byte[] form (the
+                // common one) and skip silently otherwise — RangeCount still records the move.
+                if (valuesObj is byte[] blob)
+                {
+                    const int ENTRY = 24; // 3 x u64, little-endian x64
+                    lock (_lock)
+                    {
+                        for (int off = 0; off + ENTRY <= blob.Length; off += ENTRY)
+                        {
+                            ulong oldB = BitConverter.ToUInt64(blob, off);
+                            ulong newB = BitConverter.ToUInt64(blob, off + 8);
+                            ulong len = BitConverter.ToUInt64(blob, off + 16);
+                            if (len != 0)
+                                _ranges.Add(new MoveRange(oldB, newB, len));
+                        }
+                    }
+                }
+            }
+            catch { /* never let a diagnostics callback take the process down */ }
+        }
+    }
+
+    /// <summary>
     /// §D0.2 — a dependency-free client for the ONE CoreCLR diagnostics-IPC command we
     /// need: <c>EnablePerfMap(JitDump)</c>. It asks the runtime (over the Unix domain socket
     /// the runtime opens at startup) to run down ALL already-loaded methods — JIT'd AND

@@ -190,7 +190,7 @@ slices match the emulator oracle on a deterministic region; XMM/YMM and a `gs:`-
 access are covered; the target **survives detach** (reuse the crash-safe two-phase detach);
 cost is documented per-region, not per-run.
 
-## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(Increments 1-3 LANDED 2026-07-12/13; live EventPipe GC-move feed planned)*
+## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(Increments 1-3 LANDED; live GC-move DETECTION feed LANDED 2026-07-13 — GcMoveMap captures GCBulkMovedObjectRanges from a compacting GC; concrete {old,new,len} triple extraction + remap wiring deferred, in-proc EventListener does not surface the Values struct-array)*
 
 Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identity.
 

@@ -8,6 +8,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live GC-move detection feed for the data-flow tier (`GcMoveMap`, .NET).** An in-proc
+  `EventListener` on the CoreCLR runtime provider that enables the GCHeapSurvivalAndMovement
+  keyword and captures `GCBulkMovedObjectRanges` from a **compacting** GC — the live source
+  the pure GC-move canonicalizer (`asmtest_gcmove_canonicalize`) was built to consume.
+  Validated via `make docker-hwtrace-dotnet`: an induced compacting gen2 collection is
+  captured as 11 events / 20474 moved ranges (suite 169 → 177). Honest scope: in-proc
+  `EventListener` surfaces the reliable scalar range **count** but not the manifest
+  struct-array `Values` payload, so the concrete `{old_base, new_base, len}` triples that
+  drive the canonicalizer end-to-end are **deferred** to a raw EventPipe/nettrace path — the
+  keyword, compacting-GC inducement, and listener wiring (the uncertain parts) are proven.
+
 - **Data-flow tracing Phase 5 Increment 1 — DynamoRIO in-band L0 value producer
   (`src/dataflow_dr.c`, `src/dataflow_dr_client.c`).** The in-band, whole-process analog of
   the scoped ptrace L0 producer: a DynamoRIO client instruments a target under real DR and

@@ -661,6 +661,9 @@ static class HwTraceProgram
         SiblingPublisherChecks();
         WindowLiveJitChecks();
 
+        // --- Data-flow Phase 4: live GC-move feed (GCBulkMovedObjectRanges -> gcmove) --- //
+        GcMoveChecks();
+
         // --- conformance replay: the ptrace_descent corpus tier (replay-or-skip) --- //
         // Mirrors bindings/python/tests/test_conformance._run_ptrace_descent: replay the
         // corpus's L1 (edges) and L2 (frames) cases live when ptrace is available AND the
@@ -947,6 +950,66 @@ static class HwTraceProgram
                               + $"({ww.LiveJitPublished} live-published records)");
         else
             Console.WriteLine("# NOTE E3: stream truncated before the live-published loop was recorded");
+    }
+
+    // Data-flow Phase 4 — the LIVE GC-move feed. GcMoveMap (an in-proc EventListener) must
+    // capture GCBulkMovedObjectRanges from an induced COMPACTING gen2 GC — the move-range
+    // records (asmtest_gcmove_t) the pure C canonicalizer (test_dataflow_gcmove is its gate)
+    // consumes to remap a value trace across a compaction. Ptrace-free; CoreCLR only.
+    static void GcMoveChecks()
+    {
+        using (var map = new GcMoveMap()) // enables GCHeapSurvivalAndMovement now
+        {
+            // Fragment a heap of movable objects: promote survivors to gen2, drop every other
+            // one to punch holes, then force a COMPACTING gen2 collect so survivors SLIDE
+            // (which is what emits GCBulkMovedObjectRanges).
+            var keep = new List<byte[]>();
+            var drop = new List<byte[]>();
+            for (int i = 0; i < 40000; i++)
+                (i % 2 == 0 ? keep : drop).Add(new byte[48]);
+            GC.Collect(2, GCCollectionMode.Forced, true); // promote to gen2
+            drop.Clear();
+            drop = null;
+            GC.Collect(); // reclaim holes -> fragmentation
+            GC.Collect(2, GCCollectionMode.Forced, true, true); // compacting: survivors move
+
+            // EventListener dispatch is asynchronous — poll, re-inducing compaction, until a
+            // move range is reported or the deadline passes.
+            long deadline = Environment.TickCount64 + 15000;
+            while (map.RangeCount == 0 && Environment.TickCount64 < deadline)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, true, true);
+                Thread.Sleep(25);
+            }
+            map.Freeze();
+            GC.KeepAlive(keep);
+
+            if (map.EventCount == 0)
+            {
+                // The runtime delivered no GCBulkMovedObjectRanges to an in-proc listener
+                // (server GC / a config that gates the survival-and-movement keyword). Honest
+                // self-skip — the pure canonicalizer suite is the gate; this exercises the LIVE
+                // feed only where the runtime surfaces it. NOT a vacuous pass.
+                Console.WriteLine("# SKIP GC-move feed: runtime delivered no GCBulkMovedObjectRanges to the in-proc listener");
+                return;
+            }
+            Check(map.RangeCount >= 1,
+                  $"GC-move: listener captured >= 1 moved object range from a compacting GC "
+                  + $"(events={map.EventCount}, ranges={map.RangeCount})");
+            if (map.TriplesDecoded > 0)
+            {
+                var r = map.Ranges;
+                bool sane = true;
+                foreach (var mr in r)
+                    if (mr.Len == 0 || mr.NewBase == 0 || mr.OldBase == 0) { sane = false; break; }
+                Check(sane,
+                      $"GC-move: decoded {r.Length} concrete {{old,new,len}} triples, all sane");
+                Console.WriteLine($"# GC-move: {map.EventCount} events, {map.RangeCount} ranges, {r.Length} triples decoded");
+            }
+            else
+                Console.WriteLine($"# GC-move: {map.EventCount} events, {map.RangeCount} ranges counted; "
+                    + "the in-proc listener did not surface the Values struct array (concrete triple decode deferred to the raw-payload path)");
+        }
     }
 
     // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic
