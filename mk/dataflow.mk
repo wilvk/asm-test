@@ -155,6 +155,14 @@ dataflow-rust-test: shared-dataflow
 	  -o $(BUILD)/rust_dataflow_test
 	LD_LIBRARY_PATH=$(abspath $(BUILD)) $(BUILD)/rust_dataflow_test
 
+# Phase 6 — the Go data-flow binding (bindings/go/cmd/dataflowsmoke, cgo dlopen).
+# Needs Go + a C toolchain (cgo); validated in golang:1 locally.
+.PHONY: dataflow-go-test
+dataflow-go-test: shared-dataflow
+	cd bindings/go && \
+	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  GOFLAGS=-mod=mod $(GO) run ./cmd/dataflowsmoke
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
