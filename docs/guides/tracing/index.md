@@ -17,6 +17,7 @@ native, real-CPU tiers:
 | [Native runtime tracing](native-tracing.md) | DynamoRIO (software DBI) + single-step (`EFLAGS.TF`) | native blocks + instructions, in-process | DynamoRIO: Linux x86-64; single-step: x86-64 Linux **or macOS** |
 | [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step, plus the **statistical AMD IBS-Op lane** (sampled hot edges, out of band, unprivileged) | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS; IBS: any AMD Zen) |
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
+| [Data-flow tracing](data-flow.md) | emulator / ptrace / DynamoRIO producers, cross-language | operand **values** → def-use graph → forward/backward **slices**; managed method-identity + GC-move canonicalization | x86-64 Linux |
 | [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
 
 The AMD LBR backend's reach knobs — window sizing, `lbr_period`,
@@ -43,5 +44,6 @@ native-tracing
 hardware-tracing
 amd-lbr-tuning
 scoped-tracing
+data-flow
 asmspy
 ```
