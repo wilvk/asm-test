@@ -103,10 +103,13 @@ dataflow-python-test: shared-dataflow
 # header-only typed wrapper. Links the two PURE analysis objects it calls
 # (gcmove canon + method resolver); no Capstone/Unicorn, so it builds anywhere.
 .PHONY: dataflow-cpp-test
-dataflow-cpp-test: $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+dataflow-cpp-test: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                   $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
                    bindings/cpp/asmtest_dataflow.hpp bindings/cpp/test_dataflow.cpp | $(BUILD)
 	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_dataflow.cpp \
-	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o -o $(BUILD)/test_dataflow_cpp
+	  $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o $(CAPSTONE_LIBS) \
+	  -o $(BUILD)/test_dataflow_cpp
 	$(BUILD)/test_dataflow_cpp
 
 # Phase 6 — the Node data-flow binding (bindings/node/dataflow.js, koffi). Self-skips

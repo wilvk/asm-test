@@ -46,6 +46,36 @@ int main() {
     check(method_resolve_pc(rj, 0x1010) == 1, "method: tiered re-JIT newest version wins");
     check(method_resolve_pc({}, 0x1000) == -1, "method: empty map -> -1");
 
+    // --- L0->L1->L2 pipeline (ValueTrace: build -> def-use -> slice) --- //
+    {
+        ValueTrace vt;
+        vt.step(0x00, {}, {Reg(10)});                 // def r10
+        vt.step(0x03, {Reg(10)}, {Reg(11)});          // r11 <- r10
+        vt.step(0x06, {Reg(11)}, {Reg(12)});          // r12 <- r11
+        check(vt.forwardSlice(0) == std::set<std::uint32_t>({0, 1, 2}),
+              "pipeline: register move chain forward slice");
+        check(vt.backwardSlice(2) == std::set<std::uint32_t>({0, 1, 2}),
+              "pipeline: register move chain backward slice");
+        check(vt.forwardSlice(2) == std::set<std::uint32_t>({2}),
+              "pipeline: nothing downstream of the tail");
+    }
+    {
+        ValueTrace vt;  // load-after-store through memory
+        vt.step(0x00, {Reg(8)}, {MemAbs(0x7FFF0000)});
+        vt.step(0x04, {MemAbs(0x7FFF0000)}, {Reg(9)});
+        check(vt.forwardSlice(0) == std::set<std::uint32_t>({0, 1}),
+              "pipeline: load-after-store def-use edge through memory");
+    }
+    {
+        ValueTrace vt;  // independent chains must not cross-link
+        vt.step(0x00, {}, {Reg(1)});
+        vt.step(0x02, {Reg(1)}, {Reg(2)});
+        vt.step(0x04, {}, {Reg(3)});
+        vt.step(0x06, {Reg(3)}, {Reg(4)});
+        check(vt.forwardSlice(0) == std::set<std::uint32_t>({0, 1}),
+              "pipeline: no spurious cross-link between independent chains");
+    }
+
     std::printf("1..%d\n", g_n);
     return g_fail;
 }
