@@ -134,6 +134,33 @@ printf '%s\n' "$out" | grep -q 'functions called' || fail "sort=fanout header mi
 # a bad --sort value is rejected up front (rc=2), not silently coerced
 expect_badarg "$ASM" --graph "$WVPID" --sort=bogus
 
+# JSON export: --graph --json emits a machine-readable node list (pipe to jq / a
+# visualizer) instead of the human table. Assert it is well-formed and carries
+# the per-function fields plus the internal/external/jit classification.
+echo "--- asmspy --graph $WVPID 60 --json (machine-readable export) ---"
+set +e
+jout=$(timeout 40 "$ASM" --graph "$WVPID" 60 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph --json hung"
+printf '%s\n' "$jout" | head -4
+printf '%s' "$jout" | grep -q '^{"pid":' || fail "--json: no top-level {\"pid\":...} object"
+printf '%s' "$jout" | grep -q '"functions":\[' || fail "--json: no functions array"
+printf '%s' "$jout" | grep -q '"name":"helper"' || fail "--json: callee 'helper' not exported"
+printf '%s' "$jout" | grep -q '"kind":"internal"' || fail "--json: no internal-classified node"
+printf '%s' "$jout" | grep -q '"kind":"external"' || fail "--json: no external (libc/PLT) node"
+printf '%s' "$jout" | grep -qE '"invocations":[0-9]+,"out_calls":[0-9]+,"fanout":[0-9]+}' \
+    || fail "--json: per-node counts missing"
+# the human table must NOT leak into JSON mode
+printf '%s' "$jout" | grep -q 'call graph' && fail "--json: human header leaked into JSON"
+# strict well-formedness when python3 is present; degrade cleanly otherwise
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$jout" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["functions"]; n=d["functions"][0]; assert all(k in n for k in ("addr","name","module","kind","invocations","out_calls","fanout"))' \
+        || fail "--json: not well-formed JSON / missing per-node keys"
+    echo "  json validated (python3 json.load)"
+else
+    echo "  json structural checks passed (python3 absent; strict parse skipped)"
+fi
+
 # live call tree: same victim (main -> work -> helper). The indentation must
 # reflect real depth — work is called from main (depth 0) and helper from work
 # (depth 1, indented two spaces). timeout-guarded (whole-process single-step).

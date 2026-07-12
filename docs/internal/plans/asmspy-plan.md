@@ -77,7 +77,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | Region view (mode 2) disasm/functions panes don't scroll — overflow off-screen | med | M |
 | Call tree has no depth cap / symbol focus / module filter — a firehose on busy processes | med | M |
 | No per-thread (tid) filter for stream/tree/graph — can't isolate one worker or cut single-step slowdown on others | med | M |
-| No **DOT/JSON export** for `--graph`/`--tree`/`--procs` — edges exist internally (`gedge_t`) but never cross the engine boundary | low | M |
+| **DOT/JSON export** — *partially landed*: `--graph --json` emits a machine-readable node list (addr/name/module/kind/invocations/out_calls/fanout, `cpp`-demangle- and JIT-aware, `jq`-pipeable; smoke-validated). Still open: **edges** (`gedge_t` never crosses the engine sink boundary — the caller→callee structure), a **DOT** emitter, and `--json` for `--tree`/`--procs` | low | M |
 | Syscall arg decoding is a hardcoded subset (flags/structs/vectors/sigsets → hex); the always-3-hex-slots default is a small standalone blemish | low | L |
 | fd→path shows `socket:[inode]`/`pipe:[inode]`, not the endpoint (enrich via `/proc/<pid>/net`); graph node/edge lookups are O(n) per call (hash index; single-stepping dominates so secondary); `usage()` omits the `0xADDR+LEN` form and the `functions-called` sort synonym | low | S–M |
 

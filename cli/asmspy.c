@@ -11,7 +11,7 @@
  *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
  *   asmspy --stream <pid> [n]         stream n instructions live (function + asm)
- *   asmspy --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph
+ *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json]  whole-process call graph
  *   asmspy --tree   <pid> [n]         whole-process live call tree (indented by depth)
  *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
@@ -247,6 +247,36 @@ static int gnode_cmp(const void *a, const void *b) {
     if (tx != ty)
         return tx < ty ? 1 : -1;
     return strcmp(x->name, y->name);
+}
+
+/* The node's class as a stable machine-readable token (the JSON counterpart of
+ * the human [int]/[EXT]/[JIT]/[?] tag): "internal" (target's own exe), "external"
+ * (shared/system library or a PLT thunk), "jit" (perf-map managed method), or
+ * "unknown" (no symbol resolved). */
+static const char *gnode_kind(const asmspy_gnode_t *nd) {
+    if (strcmp(nd->module, "?") == 0)
+        return "unknown";
+    if (strcmp(nd->module, "jit") == 0)
+        return "jit";
+    return nd->external ? "external" : "internal";
+}
+
+/* Escape `s` into `out` as the body of a JSON double-quoted string (demangled C++
+ * and JIT names carry quotes, backslashes, and spaces). Always NUL-terminates. */
+static void json_escape(const char *s, char *out, size_t cap) {
+    size_t o = 0;
+    for (; *s && o + 7 < cap; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c < 0x20) {
+            o += (size_t)snprintf(out + o, cap - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
 }
 
 /* One call-graph row: an internal/external/JIT marker, the function, its counts
@@ -649,7 +679,7 @@ static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
     graph_snap_copy(ctx, nodes, n); /* headless: keep only the latest snapshot */
 }
 
-static int cmd_graph(pid_t pid, long n, gsort_t sort) {
+static int cmd_graph(pid_t pid, long n, gsort_t sort, int json) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
@@ -664,6 +694,24 @@ static int cmd_graph(pid_t pid, long n, gsort_t sort) {
     }
     graph_sort_key = sort;
     qsort(snap.v, snap.n, sizeof *snap.v, gnode_cmp);
+    if (json) { /* machine-readable node list (pipe to jq / a visualizer) */
+        printf("{\"pid\":%d,\"sort\":\"%s\",\"functions\":[", (int)pid,
+               sort == GSORT_FANOUT ? "fanout" : "invocations");
+        for (size_t i = 0; i < snap.n; i++) {
+            const asmspy_gnode_t *nd = &snap.v[i];
+            char en[4 * sizeof nd->name], em[4 * sizeof nd->module];
+            json_escape(nd->name, en, sizeof en);
+            json_escape(nd->module, em, sizeof em);
+            printf("%s\n  {\"addr\":\"0x%llx\",\"name\":\"%s\",\"module\":\"%s\","
+                   "\"kind\":\"%s\",\"invocations\":%llu,\"out_calls\":%llu,"
+                   "\"fanout\":%u}",
+                   i ? "," : "", (unsigned long long)nd->addr, en, em,
+                   gnode_kind(nd), nd->invocations, nd->out_calls, nd->fanout);
+        }
+        printf("%s]}\n", snap.n ? "\n" : "");
+        free(snap.v);
+        return 0;
+    }
     printf("call graph — %zu functions, sorted by %s (pid %d)\n", snap.n,
            sort == GSORT_FANOUT ? "functions called (fanout)" : "invocations",
            (int)pid);
@@ -1900,7 +1948,7 @@ static int usage(const char *argv0) {
             "  %s --log    <pid> [n]      stream n syscalls with data\n"
             "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a function/region\n"
             "  %s --stream <pid> [n]      stream n instructions live (function + asm)\n"
-            "  %s --graph  <pid> [n] [--sort=invocations|fanout]  whole-process call graph over n calls\n"
+            "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json]  whole-process call graph over n calls\n"
             "  %s --tree   <pid> [n]      whole-process live call tree, indented by depth (n call lines)\n"
             "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree (procs+threads+children) with counts\n"
             "\n"
@@ -1995,7 +2043,8 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 200; /* calls to record before reporting; negative = until exit */
         gsort_t sort = GSORT_INVOCATIONS;
-        for (int i = 3; i < argc; i++) { /* [n] and --sort= in any order */
+        int json = 0;
+        for (int i = 3; i < argc; i++) { /* [n], --sort=, --json in any order */
             if (strncmp(argv[i], "--sort=", 7) == 0) {
                 const char *v = argv[i] + 7;
                 if (strcmp(v, "invocations") == 0)
@@ -2005,11 +2054,13 @@ int main(int argc, char **argv) {
                     sort = GSORT_FANOUT;
                 else
                     return bad_arg("sort (want 'invocations' or 'fanout')", v);
+            } else if (strcmp(argv[i], "--json") == 0) {
+                json = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_graph(pid, n, sort);
+        return cmd_graph(pid, n, sort, json);
     }
     return usage(argv[0]);
 }
