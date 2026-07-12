@@ -236,7 +236,7 @@ current tier, not an extension.
 managed code; taint survives a GC; overhead measured on a representative workload; validates
 beyond the current offset-only dotnet smoke (`bindings/dotnet/drtrace/`).
 
-## Phase 6 - Bindings, docs, CI *(planned)*
+## Phase 6 - Bindings, docs, CI *(Increment 1 LANDED 2026-07-13: libasmtest_dataflow shared lib + Python GC-move-canon binding, host-validated; remaining language bindings + docs + CI-wiring planned)*
 
 - Wrap `asmtest_valtrace_t` + slice accessors in the dynamic-FFI bindings (opaque-handle
   pattern, as `asmtest_trace_t` is wrapped).

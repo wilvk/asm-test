@@ -63,6 +63,42 @@ $(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c \
                             $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
+# --- Phase 6: the data-flow ANALYSIS shared lib (libasmtest_dataflow) --------
+# The L0 value sink + L1 def-use + L2 slice + method identity + GC-move
+# canonicalization + runtime-helper summaries — the pure analysis pipeline, the
+# packaging target the language bindings (Phase 6) dlopen. The value-trace
+# PRODUCERS (emu / ptrace / DR) are separate tiers and are NOT bundled here.
+# Links Capstone (the operand enumerator dataflow_operands uses in detail mode).
+$(BUILD)/pic/dataflow.o: src/dataflow.c include/asmtest_valtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/dataflow_method.o: src/dataflow_method.c include/asmtest_valtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/dataflow_gcmove.o: src/dataflow_gcmove.c include/asmtest_valtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/dataflow_helpers.o: src/dataflow_helpers.c include/asmtest_valtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
+
+DATAFLOW_SHLIB_OBJS := $(BUILD)/pic/dataflow.o $(BUILD)/pic/dataflow_operands.o \
+                       $(BUILD)/pic/dataflow_method.o $(BUILD)/pic/dataflow_gcmove.o \
+                       $(BUILD)/pic/dataflow_helpers.o
+
+.PHONY: shared-dataflow dataflow-python-test
+shared-dataflow: $(call shlib_dev,libasmtest_dataflow)
+$(call shlib_real,libasmtest_dataflow): $(DATAFLOW_SHLIB_OBJS)
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_dataflow) $^ $(CAPSTONE_LIBS) -o $@
+$(call shlib_dev,libasmtest_dataflow): $(call shlib_real,libasmtest_dataflow)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_dataflow)
+	ln -sf $(notdir $(call shlib_compat,libasmtest_dataflow)) $@
+
+# Phase 6 — the Python data-flow binding (bindings/python/asmtest/dataflow.py).
+# Runs the standalone TAP reporter (no pytest dependency) against the freshly
+# built analysis lib, so it validates the ctypes wrapper on any host.
+dataflow-python-test: shared-dataflow
+	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	  python3 bindings/python/tests/test_dataflow.py
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
