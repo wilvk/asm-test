@@ -2446,7 +2446,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(7, 2, "5)  Call tree          — whole-process live call tree (indented by depth)");
         mvprintw(8, 2, "6)  Process tree       — procs+threads+children with counts (drill into a call graph)");
         mvprintw(9, 2, "7)  Hot edges (sample) — statistical hot edges via AMD IBS-Op, OUT OF BAND (safe on a JIT)");
-        mvprintw(rows - 1, 0, "1/2/3/4/5/6/7: choose   b/ESC: back");
+        mvprintw(10, 2, "8)  Process details    — runtime (JVM/.NET/py/Go/…), threads, modules, ELF traits (safe, no attach)");
+        mvprintw(rows - 1, 0, "1/2/3/4/5/6/7/8: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -2463,6 +2464,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 5;
         if (ch == '7')
             return 6;
+        if (ch == '8')
+            return 7;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -2651,19 +2654,19 @@ static int screen_procs(asmspy_proc_t *picked) {
             for (size_t i = 0; i < np; i++) {
                 char b[256];
                 if (sort == ASMSPY_SORT_SCAN)
-                    snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %.150s",
+                    snprintf(b, sizeof b, "%-7d %4u %5llu %c %-12.12s %-5s %.150s",
                              procs[i].pid, procs[i].scan, procs[i].cpu,
                              procs[i].attachable ? ' ' : '!', procs[i].user,
-                             procs[i].cmd);
+                             procs[i].runtime, procs[i].cmd);
                 else if (sort == ASMSPY_SORT_ACTIVE)
-                    snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %.170s",
+                    snprintf(b, sizeof b, "%-7d %6llu %c %-12.12s %-5s %.170s",
                              procs[i].pid, procs[i].cpu,
                              procs[i].attachable ? ' ' : '!', procs[i].user,
-                             procs[i].cmd);
+                             procs[i].runtime, procs[i].cmd);
                 else
-                    snprintf(b, sizeof b, "%-7d %c %-12.12s %.200s",
+                    snprintf(b, sizeof b, "%-7d %c %-12.12s %-5s %.200s",
                              procs[i].pid, procs[i].attachable ? ' ' : '!',
-                             procs[i].user, procs[i].cmd);
+                             procs[i].user, procs[i].runtime, procs[i].cmd);
                 items[i] = strdup(b);
                 order[i] = i;
             }
@@ -2750,6 +2753,164 @@ static int screen_procs(asmspy_proc_t *picked) {
             view = !view;
         /* outcome 3/4/5: fall through -> outer loop re-scans */
     }
+}
+
+static const char *seccomp_label(int s) {
+    switch (s) {
+    case 0:
+        return "disabled";
+    case 1:
+        return "strict";
+    case 2:
+        return "filtered";
+    default:
+        return "unknown";
+    }
+}
+
+/* Human-readable RSS from KiB. */
+static void rss_human(unsigned long kb, char *out, size_t n) {
+    if (kb >= 1024UL * 1024)
+        snprintf(out, n, "%.1f GB", kb / (1024.0 * 1024.0));
+    else if (kb >= 1024)
+        snprintf(out, n, "%.1f MB", kb / 1024.0);
+    else
+        snprintf(out, n, "%lu KB", kb);
+}
+
+/* Per-process details view (menu 8): what kind of process this is — runtime,
+ * threads, notable modules, ELF traits — all from /proc + the mapped ELF, so it
+ * NEVER attaches/ptraces and is safe on any target (even a JIT). Re-fingerprints
+ * on a ~1s timer so threads/RSS/JIT status track the live process. Returns 0 to
+ * the options menu (b), 1 to the process list (q/ESC). */
+static int run_details_view(pid_t pid, const char *title) {
+    int back = 1, top = 0, tick = 0, have = 0, vis = 1;
+    asmspy_fingerprint_t fp;
+    memset(&fp, 0, sizeof fp);
+    for (;;) {
+        if (!have || tick <= 0) { /* (re)fingerprint on entry and every ~1s */
+            asmspy_fingerprint(pid, &fp);
+            have = 1;
+            tick = 8; /* 8 * 125ms getch timeout ≈ 1s */
+        }
+        int rows, cols;
+        getmaxyx(stdscr, rows, cols);
+        erase();
+        attron(A_BOLD);
+        mvprintw(0, 0, "%.*s", cols, title);
+        attroff(A_BOLD);
+
+        int y = 2;
+        attron(A_BOLD);
+        mvprintw(y, 0, "Runtime:  %s", fp.runtime);
+        attroff(A_BOLD);
+        if (fp.evidence[0])
+            mvprintw(y, 12 + (int)strlen(fp.runtime), "(%s)", fp.evidence);
+        y++;
+        if (fp.jitting)
+            mvprintw(y++, 10, "actively JIT-compiling — /tmp/perf-%d.map present",
+                     (int)pid);
+        y++;
+
+        if (fp.exe[0])
+            mvprintw(y++, 0, "Exe:      %.*s", cols - 11, fp.exe);
+        else
+            mvprintw(y++, 0, "Exe:      (unreadable — not owned by you?)");
+
+        char elf[176];
+        if (fp.elf_class) {
+            int o = snprintf(elf, sizeof elf, "%d-bit, %s, %s", fp.elf_class,
+                             fp.pie ? "PIE" : "non-PIE",
+                             fp.static_linked ? "statically linked" : "dynamic");
+            if (!fp.static_linked && fp.interp[0] && o > 0 && o < (int)sizeof elf)
+                snprintf(elf + o, sizeof elf - (size_t)o, " (loader %s)",
+                         fp.interp);
+            mvprintw(y++, 0, "ELF:      %.*s", cols - 11, elf);
+        } else {
+            mvprintw(y++, 0, "ELF:      (exe not readable)");
+        }
+
+        char rss[32];
+        rss_human(fp.rss_kb, rss, sizeof rss);
+        mvprintw(y++, 0, "Threads:  %-6d   RSS: %-10s   Seccomp: %s", fp.threads,
+                 rss, seccomp_label(fp.seccomp));
+        mvprintw(y++, 0, "TracerPid: %d%s", (int)fp.tracer_pid,
+                 fp.tracer_pid ? "   (already being traced by another process!)"
+                               : "   (not currently traced)");
+
+        /* thread names on one line — a managed runtime self-identifies here */
+        char tn[512] = "";
+        for (int i = 0; i < fp.n_threadnames; i++) {
+            if (i)
+                strncat(tn, ", ", sizeof tn - strlen(tn) - 1);
+            strncat(tn, fp.threadnames[i], sizeof tn - strlen(tn) - 1);
+        }
+        if (fp.more_threadnames)
+            strncat(tn, ", …", sizeof tn - strlen(tn) - 1);
+        mvprintw(y++, 0, "Threads named: %.*s", cols - 15,
+                 tn[0] ? tn : "(none readable)");
+
+        y++;
+        attron(A_BOLD);
+        mvprintw(y++, 0, "Notable modules (%d%s):", fp.n_modules,
+                 fp.more_modules ? "+" : "");
+        attroff(A_BOLD);
+        int listrow = y;
+        vis = rows - 1 - listrow;
+        if (vis < 1)
+            vis = 1;
+        if (top > fp.n_modules - vis)
+            top = fp.n_modules - vis;
+        if (top < 0)
+            top = 0;
+        if (fp.n_modules == 0)
+            mvprintw(listrow, 2, "(only ubiquitous libs, or none mapped)");
+        for (int i = 0; i < vis && top + i < fp.n_modules; i++)
+            mvprintw(listrow + i, 2, "%.*s", cols - 2, fp.modules[top + i]);
+
+        mvprintw(rows - 1, 0,
+                 "up/down: scroll modules   b: options   q/ESC: processes   "
+                 "(live)");
+        clrtoeol();
+        refresh();
+
+        timeout(125);
+        int ch = getch();
+        tick--;
+        if (ch == 'q' || ch == 27) {
+            back = 1;
+            break;
+        }
+        if (ch == 'b') {
+            back = 0;
+            break;
+        }
+        switch (ch) {
+        case KEY_UP:
+            top -= 1;
+            break;
+        case KEY_DOWN:
+            top += 1;
+            break;
+        case KEY_PPAGE:
+            top -= vis > 1 ? vis - 1 : 1;
+            break;
+        case KEY_NPAGE:
+            top += vis > 1 ? vis - 1 : 1;
+            break;
+        case KEY_HOME:
+            top = 0;
+            break;
+        case KEY_END:
+            top = INT_MAX; /* clamped above on next draw */
+            break;
+        default:
+            break;
+        }
+        if (top < 0)
+            top = 0;
+    }
+    return back;
 }
 
 int asmspy_tui(void) {
@@ -2849,6 +3010,13 @@ int asmspy_tui(void) {
                     asmspy_jitmap_free(&jit);
                     asmspy_symtab_free(&t);
                 }
+            } else if (mode == 7) {
+                /* process details: /proc + ELF only, no attach (safe on a JIT) */
+                char title[160];
+                snprintf(title, sizeof title,
+                         "asmspy — details of pid %d (%.*s)", picked.pid, 60,
+                         picked.cmd);
+                nav = run_details_view(picked.pid, title);
             } else {
                 asmspy_symtab_t t;
                 if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {

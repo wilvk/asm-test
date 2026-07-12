@@ -194,6 +194,52 @@ static int proc_scan_cmp(const void *a, const void *b) {
     return x->pid < y->pid ? -1 : x->pid > y->pid ? 1 : 0;
 }
 
+/* Cheap runtime badge for the process list: classify from argv0 (or comm) and
+ * the presence of a perf-map — no maps/ELF read, so it stays fast across every
+ * pid on every rescan. "" for a plain native binary. The richer, maps+ELF-based
+ * classification lives in asmspy_fingerprint (the details panel). */
+static void runtime_badge_cheap(const char *comm, const char *cmdline,
+                                pid_t pid, char *out, size_t n) {
+    out[0] = '\0';
+    char a0[160];
+    snprintf(a0, sizeof a0, "%s", (cmdline && cmdline[0]) ? cmdline : comm);
+    char *sp = strchr(a0, ' '); /* argv0 = first token */
+    if (sp)
+        *sp = '\0';
+    const char *b = strrchr(a0, '/');
+    b = b ? b + 1 : a0;
+
+    const char *rt = "";
+    if (strncmp(b, "java", 4) == 0)
+        rt = "JVM";
+    else if (strncmp(b, "python", 6) == 0)
+        rt = "py";
+    else if (strcmp(b, "node") == 0 || strcmp(b, "nodejs") == 0)
+        rt = "node";
+    else if (strncmp(b, "ruby", 4) == 0)
+        rt = "rb";
+    else if (strncmp(b, "perl", 4) == 0)
+        rt = "pl";
+    else if (strcmp(b, "dotnet") == 0)
+        rt = ".NET";
+    else if (strncmp(b, "mono", 4) == 0)
+        rt = "mono";
+    else if (strncmp(b, "beam", 4) == 0)
+        rt = "beam";
+    else if (strncmp(b, "php", 3) == 0)
+        rt = "php";
+
+    if (rt[0]) {
+        snprintf(out, n, "%s", rt);
+        return;
+    }
+    /* not obviously a managed launcher — a perf-map still means a live JIT */
+    char pm[64];
+    snprintf(pm, sizeof pm, "/tmp/perf-%d.map", (int)pid);
+    if (access(pm, F_OK) == 0)
+        snprintf(out, n, "jit");
+}
+
 int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
     DIR *d = opendir("/proc");
     if (!d)
@@ -232,6 +278,9 @@ int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort) {
         proc_cmdline(e->d_name, p->cmd, sizeof p->cmd);
         if (!p->cmd[0])
             snprintf(p->cmd, sizeof p->cmd, "[%s]", comm);
+
+        runtime_badge_cheap(comm, p->cmd, p->pid, p->runtime,
+                            sizeof p->runtime);
 
         uid_t uid = proc_uid(e->d_name);
         struct passwd *pw = (uid != (uid_t)-1) ? getpwuid(uid) : NULL;
@@ -676,6 +725,299 @@ void asmspy_symtab_free(asmspy_symtab_t *t) {
     free(t->v);
     t->v = NULL;
     t->n = 0;
+}
+
+/* ================================================================== */
+/* Process fingerprint — runtime / threads / modules / ELF traits      */
+/* ================================================================== */
+
+/* Pull Threads / VmRSS / TracerPid / Seccomp out of /proc/<pid>/status. */
+static void fp_read_status(pid_t pid, asmspy_fingerprint_t *fp) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/status", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "Threads:", 8) == 0)
+            sscanf(line + 8, "%d", &fp->threads);
+        else if (strncmp(line, "VmRSS:", 6) == 0)
+            sscanf(line + 6, "%lu", &fp->rss_kb);
+        else if (strncmp(line, "TracerPid:", 10) == 0) {
+            int t = 0;
+            sscanf(line + 10, "%d", &t);
+            fp->tracer_pid = (pid_t)t;
+        } else if (strncmp(line, "Seccomp:", 8) == 0)
+            sscanf(line + 8, "%d", &fp->seccomp);
+    }
+    fclose(f);
+}
+
+/* Collect up to N distinct per-task comm names from the process's task dir,
+ * which on a managed runtime self-identify it ("C2 CompilerThread0",
+ * "GC Thread#0", ".NET Finalizer", "V8 DefaultWorke"). Sets more_threadnames
+ * if any distinct name was dropped past the cap. */
+static void fp_read_threadnames(pid_t pid, asmspy_fingerprint_t *fp) {
+    char tp[64];
+    snprintf(tp, sizeof tp, "/proc/%d/task", (int)pid);
+    DIR *d = opendir(tp);
+    if (!d)
+        return;
+    const int CAP = (int)(sizeof fp->threadnames / sizeof fp->threadnames[0]);
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!is_all_digits(e->d_name))
+            continue;
+        char cp[96], nm[64];
+        snprintf(cp, sizeof cp, "/proc/%d/task/%.20s/comm", (int)pid, e->d_name);
+        read_first_line(cp, nm, sizeof nm);
+        if (!nm[0])
+            continue;
+        int dup = 0;
+        for (int i = 0; i < fp->n_threadnames; i++)
+            if (strcmp(fp->threadnames[i], nm) == 0) {
+                dup = 1;
+                break;
+            }
+        if (dup)
+            continue;
+        if (fp->n_threadnames < CAP)
+            snprintf(fp->threadnames[fp->n_threadnames++],
+                     sizeof fp->threadnames[0], "%.19s", nm);
+        else {
+            fp->more_threadnames = 1;
+            break;
+        }
+    }
+    closedir(d);
+}
+
+/* ELF traits of the main executable (via /proc/<pid>/exe): 32/64-bit, PIE,
+ * static vs its PT_INTERP loader, and whether a .note.go.buildid marks it as a
+ * Go binary (*go set). Bounds-checked like load_module_syms. */
+static void fp_read_elf(pid_t pid, asmspy_fingerprint_t *fp, int *go) {
+    *go = 0;
+    char exe[64];
+    snprintf(exe, sizeof exe, "/proc/%d/exe", (int)pid);
+    size_t flen = 0;
+    uint8_t *base = map_file(exe, &flen);
+    if (!base)
+        return;
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0)
+        goto done;
+    fp->elf_class = eh->e_ident[EI_CLASS] == ELFCLASS32   ? 32
+                    : eh->e_ident[EI_CLASS] == ELFCLASS64 ? 64
+                                                          : 0;
+    if (fp->elf_class != 64) /* 32-bit headers differ; report class only */
+        goto done;
+    fp->pie = (eh->e_type == ET_DYN);
+
+    /* PT_INTERP => dynamically linked; its payload is the loader path */
+    fp->static_linked = 1;
+    if (eh->e_phoff && eh->e_phentsize >= sizeof(Elf64_Phdr)) {
+        for (unsigned i = 0; i < eh->e_phnum; i++) {
+            uint64_t o = eh->e_phoff + (uint64_t)i * eh->e_phentsize;
+            if (o + sizeof(Elf64_Phdr) > flen)
+                break;
+            const Elf64_Phdr *ph = (const Elf64_Phdr *)(base + o);
+            if (ph->p_type != PT_INTERP)
+                continue;
+            fp->static_linked = 0;
+            if (ph->p_offset < flen) {
+                const char *ip = (const char *)(base + ph->p_offset);
+                if (memchr(ip, '\0', flen - ph->p_offset)) {
+                    const char *ib = strrchr(ip, '/');
+                    snprintf(fp->interp, sizeof fp->interp, "%s",
+                             ib ? ib + 1 : ip);
+                }
+            }
+        }
+    }
+
+    /* .note.go.buildid section name => a Go binary (survives stripping) */
+    if (eh->e_shoff && eh->e_shentsize >= sizeof(Elf64_Shdr) &&
+        eh->e_shstrndx && eh->e_shstrndx < eh->e_shnum &&
+        eh->e_shoff <= flen &&
+        eh->e_shnum <= (flen - eh->e_shoff) / eh->e_shentsize) {
+        const Elf64_Shdr *shstr =
+            (const Elf64_Shdr *)(base + eh->e_shoff +
+                                 (uint64_t)eh->e_shstrndx * eh->e_shentsize);
+        if (shstr->sh_offset < flen) {
+            const char *names = (const char *)(base + shstr->sh_offset);
+            size_t nmax = flen - shstr->sh_offset;
+            for (unsigned i = 0; i < eh->e_shnum; i++) {
+                const Elf64_Shdr *s =
+                    (const Elf64_Shdr *)(base + eh->e_shoff +
+                                         (uint64_t)i * eh->e_shentsize);
+                if (s->sh_name >= nmax)
+                    continue;
+                const char *snm = names + s->sh_name;
+                if (memchr(snm, '\0', nmax - s->sh_name) == NULL)
+                    continue;
+                if (strcmp(snm, ".note.go.buildid") == 0) {
+                    *go = 1;
+                    break;
+                }
+            }
+        }
+    }
+done:
+    munmap(base, flen);
+}
+
+/* Is a mapped library basename worth surfacing? Keep only real shared objects
+ * (drops locale archives, gconv caches, the JDK module image and other data
+ * mmaps), minus the handful of ubiquitous libs, so the list stays distinctive. */
+static int fp_module_notable(const char *b) {
+    if (!strstr(b, ".so")) /* shared objects only; skip locale/data mmaps */
+        return 0;
+    static const char *skip[] = {
+        "libc.so",   "libm.so",       "libdl.so",   "libpthread.so",
+        "librt.so",  "ld-linux",      "ld-musl",    "libgcc_s.so",
+        "libresolv", "libnss_",       "libselinux",
+    };
+    for (size_t i = 0; i < sizeof skip / sizeof skip[0]; i++)
+        if (strncmp(b, skip[i], strlen(skip[i])) == 0)
+            return 0;
+    return 1;
+}
+
+int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out) {
+    memset(out, 0, sizeof *out);
+    out->seccomp = -1; /* "unknown" until /proc/<pid>/status says otherwise */
+
+    char el[64];
+    snprintf(el, sizeof el, "/proc/%d/exe", (int)pid);
+    ssize_t r = readlink(el, out->exe, sizeof out->exe - 1);
+    out->exe[r > 0 ? r : 0] = '\0';
+
+    char cp[64], comm[64] = "";
+    snprintf(cp, sizeof cp, "/proc/%d/comm", (int)pid);
+    read_first_line(cp, comm, sizeof comm);
+
+    fp_read_status(pid, out);
+    fp_read_threadnames(pid, out);
+
+    int go_note = 0;
+    fp_read_elf(pid, out, &go_note);
+
+    char pm[64];
+    snprintf(pm, sizeof pm, "/tmp/perf-%d.map", (int)pid);
+    out->jitting = (access(pm, F_OK) == 0);
+
+    /* scan mapped modules: pick a runtime from a signature library, and collect
+     * the notable (non-ubiquitous) basenames for display */
+    module_t *mods = NULL;
+    char exe_path[PATH_MAX];
+    int nm = scan_modules(pid, &mods, exe_path, sizeof exe_path);
+    /* lib_ev is COPIED (not a pointer into mods) — mods is freed below before the
+     * runtime verdict reads it, so a borrowed pointer would dangle. */
+    const char *lib_rt = NULL;
+    char lib_ev[64] = "";
+    const int MODCAP = (int)(sizeof out->modules / sizeof out->modules[0]);
+    for (int i = 0; i < nm; i++) {
+        const char *b = strrchr(mods[i].path, '/');
+        b = b ? b + 1 : mods[i].path;
+        if (!lib_rt) {
+            const char *m = NULL;
+            if (strstr(b, "libjvm.so"))
+                m = "JVM";
+            else if (strstr(b, "libcoreclr") || strstr(b, "libclrjit"))
+                m = ".NET";
+            else if (strstr(b, "libpython"))
+                m = "CPython";
+            else if (strstr(b, "libnode") || strstr(b, "libv8"))
+                m = "Node/V8";
+            else if (strstr(b, "libruby"))
+                m = "Ruby";
+            else if (strstr(b, "libperl"))
+                m = "Perl";
+            else if (strstr(b, "libmono"))
+                m = "Mono";
+            else if (strstr(b, "libphp"))
+                m = "PHP";
+            if (m) {
+                lib_rt = m;
+                snprintf(lib_ev, sizeof lib_ev, "%.63s", b);
+            }
+        }
+        if (!mods[i].is_exe && fp_module_notable(b)) {
+            int dup = 0;
+            for (int k = 0; k < out->n_modules; k++)
+                if (strcmp(out->modules[k], b) == 0) {
+                    dup = 1;
+                    break;
+                }
+            if (!dup) {
+                if (out->n_modules < MODCAP)
+                    snprintf(out->modules[out->n_modules++],
+                             sizeof out->modules[0], "%.47s", b);
+                else
+                    out->more_modules = 1;
+            }
+        }
+    }
+    free(mods);
+
+    /* runtime verdict, strongest evidence first */
+    const char *base = strrchr(out->exe[0] ? out->exe : comm, '/');
+    base = base ? base + 1 : (out->exe[0] ? out->exe : comm);
+    if (go_note) {
+        snprintf(out->runtime, sizeof out->runtime, "Go");
+        snprintf(out->evidence, sizeof out->evidence, ".note.go.buildid");
+    } else if (lib_rt) {
+        snprintf(out->runtime, sizeof out->runtime, "%s", lib_rt);
+        snprintf(out->evidence, sizeof out->evidence, "%.95s", lib_ev);
+    } else if (base[0]) {
+        /* interpreters that embed their VM statically show no signature lib
+         * (node embeds V8; beam.smp is Erlang) — fall back to the exe name */
+        const char *rt = NULL;
+        if (strncmp(base, "java", 4) == 0)
+            rt = "JVM";
+        else if (strncmp(base, "python", 6) == 0)
+            rt = "CPython";
+        else if (strcmp(base, "node") == 0 || strcmp(base, "nodejs") == 0)
+            rt = "Node/V8";
+        else if (strncmp(base, "ruby", 4) == 0)
+            rt = "Ruby";
+        else if (strncmp(base, "perl", 4) == 0)
+            rt = "Perl";
+        else if (strncmp(base, "beam", 4) == 0)
+            rt = "Erlang/BEAM";
+        else if (strcmp(base, "dotnet") == 0)
+            rt = ".NET";
+        else if (strncmp(base, "mono", 4) == 0)
+            rt = "Mono";
+        else if (strncmp(base, "php", 3) == 0)
+            rt = "PHP";
+        if (rt) {
+            snprintf(out->runtime, sizeof out->runtime, "%s", rt);
+            snprintf(out->evidence, sizeof out->evidence, "%.95s", base);
+        }
+    }
+    if (!out->runtime[0]) {
+        /* last resort: a distinctive thread name betrays some runtimes */
+        for (int i = 0; i < out->n_threadnames && !out->runtime[0]; i++) {
+            const char *t = out->threadnames[i];
+            if (strstr(t, "CompilerThread") || strstr(t, "GC Thread"))
+                snprintf(out->runtime, sizeof out->runtime, "JVM");
+            else if (strstr(t, ".NET"))
+                snprintf(out->runtime, sizeof out->runtime, ".NET");
+            else if (strstr(t, "V8 "))
+                snprintf(out->runtime, sizeof out->runtime, "Node/V8");
+            if (out->runtime[0])
+                snprintf(out->evidence, sizeof out->evidence, "thread \"%s\"", t);
+        }
+    }
+    if (!out->runtime[0]) {
+        /* a readable ELF with no runtime signature is an ordinary native binary;
+         * if we couldn't even read the exe, say so */
+        snprintf(out->runtime, sizeof out->runtime, "%s",
+                 out->elf_class ? "native" : "?");
+    }
+    return 0;
 }
 
 const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,

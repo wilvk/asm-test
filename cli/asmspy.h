@@ -35,6 +35,8 @@ typedef struct {
     pid_t ppid;       /* parent pid (for the process-tree view)         */
     char user[24];    /* owner username (or numeric uid)           */
     char cmd[192];    /* cmdline (argv joined), or [comm] for a kthread */
+    char runtime[8];  /* cheap runtime badge ("JVM"/"py"/"node"/"jit"/…),
+                       * from argv0/comm + perf-map; "" if native/unknown */
     int attachable;   /* 1 if same euid as us (ptrace_scope=1 friendly) */
     unsigned long long cpu; /* CPU jiffies used during the sample window
                              * (ASMSPY_SORT_ACTIVE / _SCAN; 0 otherwise) */
@@ -54,6 +56,38 @@ typedef enum {
  * *out (caller frees with free()), or -1 on failure. ASMSPY_SORT_ACTIVE samples
  * per-process CPU time over a short window, so it briefly sleeps. */
 int asmspy_proclist(asmspy_proc_t **out, size_t *count, asmspy_sort_t sort);
+
+/* ------------------------------------------------------------------ */
+/* Process fingerprint (asmspy_proc.c) — "what kind of process is this":*/
+/* language runtime, thread makeup, notable modules, and ELF traits,   */
+/* all from /proc + the mapped ELF (no ptrace), so it runs on any pid   */
+/* we can read. Deeper than the cheap asmspy_proc_t.runtime badge.      */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    char runtime[24];  /* "JVM"/".NET"/"CPython"/"Node/V8"/"Ruby"/"Perl"/"Mono"/
+                        * "Erlang/BEAM"/"Go"/"PHP"/"native"/"?"                */
+    char evidence[96]; /* what identified it: "libjvm.so", ".note.go.buildid"  */
+    int jitting;       /* /tmp/perf-<pid>.map present (actively JIT-compiling)  */
+    int threads;       /* Threads: from /proc/<pid>/status (0 if unknown)      */
+    unsigned long rss_kb;   /* VmRSS in KiB (0 if unknown)                     */
+    pid_t tracer_pid;  /* TracerPid: 0 = none, else the tracer already attached */
+    int seccomp;       /* Seccomp: 0 off, 1 strict, 2 filtered, -1 unknown     */
+    char exe[192];     /* /proc/<pid>/exe target path ("" if unreadable)       */
+    int elf_class;     /* 32 or 64, or 0 if the exe ELF couldn't be read       */
+    int pie;           /* 1 = position-independent (ET_DYN) main executable    */
+    int static_linked; /* 1 = no PT_INTERP (statically linked)                 */
+    char interp[80];   /* PT_INTERP (dynamic loader) basename, "" if static    */
+    char threadnames[6][20]; /* up to 6 distinct per-task comm names           */
+    int n_threadnames;
+    int more_threadnames;    /* 1 if distinct names were dropped past the cap  */
+    char modules[10][48];    /* up to 10 notable mapped-library basenames      */
+    int n_modules;
+    int more_modules;        /* 1 if notable modules were dropped past the cap */
+} asmspy_fingerprint_t;
+
+/* Fill *out for `pid`, best-effort (unknown fields left zero/empty). Reads only
+ * /proc and the mapped ELF — no ptrace, no attach. Always returns 0. */
+int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out);
 
 /* ------------------------------------------------------------------ */
 /* Function-symbol resolver (asmspy_proc.c)                            */
