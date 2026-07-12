@@ -21,7 +21,11 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > live). **Phase 3 (scoped ptrace L0) LANDED 2026-07-12** — a live out-of-band producer
 > emitting the same `asmtest_valtrace_t` stream, cross-validated against the emulator L0
 > oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach). **Phases 4–6
-> remain *(planned)***; Phases 3–5 are
+> remain *(planned)*** except **Phase 4 Increment 1 (PC → method identity + version)
+> LANDED 2026-07-12** — a pure, host-independent resolver (`src/dataflow_method.c`) over
+> the jitdump/perf-map method-map shape, tiered-re-JIT aware (newest code_index wins; a
+> move is a new version); the hard GC-move canonicalization is deferred to a later
+> increment. Phases 3–5 are
 > the two target tiers. Update this file as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
@@ -186,7 +190,7 @@ slices match the emulator oracle on a deterministic region; XMM/YMM and a `gs:`-
 access are covered; the target **survives detach** (reuse the crash-safe two-phase detach);
 cost is documented per-region, not per-run.
 
-## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(planned)*
+## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(Increment 1 LANDED 2026-07-12; GC-move canonicalization planned)*
 
 Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identity.
 

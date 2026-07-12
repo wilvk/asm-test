@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-flow tracing Phase 4 Increment 1 — PC→method-identity+version resolver
+  (`src/dataflow_method.c`).** A pure, host-independent resolver that labels each step of
+  an L0 value trace with its owning method + version from a jitdump/perf-map-shaped
+  method-map, correctly handling tiered re-JIT (newest `code_index` wins for an address; a
+  re-JIT to a new address is a new version) — the managed-taint prerequisite. Synthetic
+  suite `test_dataflow_method` (29 checks, incl. the moved-re-JIT version distinction);
+  the hard GC-move canonicalization is deferred to a later increment.
+
+- **`hwtrace-privileged` CI job + AMD hardware-validation doc.** A CI job exercises
+  `make docker-hwtrace-privileged` so the `--cap-add=PERFMON` lane can't bitrot (the
+  AMD-exact tests self-skip on GitHub's non-AMD runners — honest by design; it lights up
+  on a future AMD runner). `docs/internal/amd-hardware-validation.md` documents the manual
+  pre-release validation on real Zen 3+/Zen 5 silicon — closing the gap that let the
+  `call_auto` LBR truncation bug hide (the exact AMD paths never ran in CI).
+
 - **Size-negotiated hwtrace options ABI + machine-readable status surface + escalation
   mechanism, across all ten bindings (the AMD-followup API flag day — Phases 1, 3, and
   F22/F26/F37).** `asmtest_hwtrace_options_t` now leads with a `size_t struct_size` the
@@ -650,6 +665,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **`asmtest_trace_call_auto` could report a window-overflowing AMD-LBR capture as
+  complete, so escalation never fired (a real Zen 5 silicon finding).** The Tier-A
+  completeness check in `asmtest_amd_ring_parse_decode` — trust a single sampled window as
+  complete only if it contains the region-exit branch — was gated behind
+  `!asmtest_amd_freeze_available()` and thus skipped on freeze-capable parts (Zen 5). With
+  `sample_period=1` the capture picks the *richest-in-region* window, often an arbitrary
+  mid-run fragment that never held the exit, so a 25-back-edge loop reconstructed a 4-edge
+  fragment and reported `truncated=0` — `trace_call_auto` returned it as complete instead
+  of escalating to block-step (and `test_call_auto` passed vacuously). The exit-presence
+  requirement now runs on every part; combined with the existing overflow flag it is the
+  airtight "complete iff a non-overflowed exit-anchored window exists" invariant. Verified
+  deterministic across 16 privileged AMD runs; `test_call_auto` case (b) hardened to fail
+  hard on a fragment-reported-complete. Surfaced only because the new
+  `docker-hwtrace-privileged` lane runs the exact AMD paths live.
 
 - **The shared `libasmtest_hwtrace` shipped with an undefined `asmtest_ibs_window_end`.**
   The Zen-2 F6 IBS survey fallback made `hwtrace.c` call the IBS window primitives, but
