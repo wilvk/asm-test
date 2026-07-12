@@ -424,17 +424,20 @@ static uint64_t elapsed_ms(const struct timespec *t0,
  * a vector of them (one per thread). Keeping the open/drain/teardown identical means
  * whole-process capture is exactly single-thread capture, merged. */
 
-#define IBS_MAX_CHANS 512 /* per-thread events; caps fd/mmap use on huge targets */
+#define IBS_MAX_CHANS                                                          \
+    512 /* per-thread events; caps fd/mmap use on huge targets */
 
 /* Fill the IBS-Op perf attr: user-only branch sampling (swfilt + exclude_kernel),
  * IP|TID|RAW records, initially disabled. Shared by every channel. */
-static void ibs_fill_attr(struct perf_event_attr *a, int type, uint64_t period) {
+static void ibs_fill_attr(struct perf_event_attr *a, int type,
+                          uint64_t period) {
     memset(a, 0, sizeof *a);
     a->size = sizeof *a;
     a->type = (uint32_t)type;
     a->sample_period = period;
-    a->config2 = 1;        /* swfilt (config2:0): enables exclude_kernel at p=2 */
-    a->exclude_kernel = 1; /* user-only — the unprivileged envelope            */
+    a->config2 = 1; /* swfilt (config2:0): enables exclude_kernel at p=2 */
+    a->exclude_kernel =
+        1; /* user-only — the unprivileged envelope            */
     a->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_RAW;
     a->disabled = 1;
 }
@@ -477,7 +480,8 @@ static int ibs_chan_open(ibs_chan *ch, pid_t tid, int type, uint64_t period,
     if (fd < 0)
         return -1;
     size_t base_sz = pg + dsz;
-    void *m = mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    void *m =
+        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
     if (m == MAP_FAILED) {
         close((int)fd);
         return -1;
@@ -655,8 +659,8 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
                             break;
                         }
                     }
-                    if (!known && ibs_chan_open(&chans[nch], cur[i], type, period,
-                                                pg, dsz) == 0)
+                    if (!known && ibs_chan_open(&chans[nch], cur[i], type,
+                                                period, pg, dsz) == 0)
                         nch++;
                 }
             }

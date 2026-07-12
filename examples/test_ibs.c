@@ -323,10 +323,11 @@ static void test_live_process(void) {
      * sample budget across the three concurrent events. */
     CHECK(covered >= 2,
           "survey_process: merged edges from multiple worker threads");
-    printf("# whole-process: %d/3 worker functions covered, %zu edges, %llu/%llu "
-           "branch/total samples%s\n",
-           covered, s.n, (unsigned long long)s.branch_samples,
-           (unsigned long long)s.samples, s.throttled ? ", throttled" : "");
+    printf(
+        "# whole-process: %d/3 worker functions covered, %zu edges, %llu/%llu "
+        "branch/total samples%s\n",
+        covered, s.n, (unsigned long long)s.branch_samples,
+        (unsigned long long)s.samples, s.throttled ? ", throttled" : "");
     asmtest_ibs_survey_free(&s);
 }
 #else
