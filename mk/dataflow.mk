@@ -99,6 +99,16 @@ dataflow-python-test: shared-dataflow
 	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
 	  python3 bindings/python/tests/test_dataflow.py
 
+# Phase 6 — the C++ data-flow binding (bindings/cpp/asmtest_dataflow.hpp): a
+# header-only typed wrapper. Links the two PURE analysis objects it calls
+# (gcmove canon + method resolver); no Capstone/Unicorn, so it builds anywhere.
+.PHONY: dataflow-cpp-test
+dataflow-cpp-test: $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                   bindings/cpp/asmtest_dataflow.hpp bindings/cpp/test_dataflow.cpp | $(BUILD)
+	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_dataflow.cpp \
+	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o -o $(BUILD)/test_dataflow_cpp
+	$(BUILD)/test_dataflow_cpp
+
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
 # the Capstone/Unicorn suites need the extra include paths + the -DASMTEST_HAVE_CAPSTONE
