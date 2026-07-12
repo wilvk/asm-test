@@ -514,38 +514,85 @@ static int seize_for_engine(pid_t pid, pid_t only_tid, thr_tab_t *tab) {
 /* x86 EFLAGS Trap Flag: set by PTRACE_SINGLESTEP to fire a #DB after one insn. */
 #define ASMSPY_EFLAGS_TF 0x100UL
 
-/* Clear the Trap Flag on a stopped tracee before detaching. A single-step engine
- * leaves each thread resumed with PTRACE_SINGLESTEP (TF set); if we INTERRUPT and
- * DETACH while a thread's step is still armed, it resumes WITH TF set, executes
- * one instruction, and takes a #DB -> SIGTRAP with no tracer to absorb it, which
- * TERMINATES the tracee (fatal SIGTRAP). Debuggers avoid this by clearing TF
- * before detach; the kernel's own clear on detach does not cover a detach from
- * the INTERRUPT group-stop of a mid-step thread. NB: only clears TF the tracer
- * forced — if the app itself was single-stepping (rare) TF stays as it was, since
- * we never re-armed it here. */
+/* Clear the Trap Flag on a stopped tracee. A single-step engine leaves each thread
+ * resumed with PTRACE_SINGLESTEP (TF set); a thread that resumes still step-armed
+ * takes a #DB -> SIGTRAP with no tracer to absorb it, which TERMINATES the tracee.
+ * We write eflags back with TF clear UNCONDITIONALLY — not gated on the read-back TF
+ * bit — because when PTRACE_SINGLESTEP armed the step the kernel sets an INTERNAL
+ * forced TF and MASKS it out of PTRACE_GETREGS (eflags reads TF=0); a gated write
+ * would skip exactly the still-armed threads. (This cancels a step not yet taken;
+ * it does NOT undo a step already COMPLETED but not yet reported — see
+ * drain_pending_step for that.) */
 static void clear_trap_flag(pid_t tid) {
     struct user_regs_struct regs;
     if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
         return;
-    if (regs.eflags & ASMSPY_EFLAGS_TF) {
-        regs.eflags &= ~ASMSPY_EFLAGS_TF;
-        ptrace(PTRACE_SETREGS, tid, NULL, &regs);
-    }
+    regs.eflags &= ~ASMSPY_EFLAGS_TF;
+    ptrace(PTRACE_SETREGS, tid, NULL, &regs);
 }
 
-/* Stop tracing: INTERRUPT each tracee, drain to its next ptrace-stop, clear any
- * armed single-step (TF), then DETACH so it runs on normally. A thread already
- * gone is simply reaped. Frees the table. */
-static void detach_threads(thr_tab_t *tab) {
-    /* TWO-PHASE detach. A whole-process single-step run leaves every thread SEIZEd
-     * and step-armed. Detaching them one-at-a-time lets an already-detached thread
-     * resume and RUN while its siblings are still stopped mid-step — in a JIT /
-     * managed runtime (V8/Node, JVM, …) that transient cross-thread inconsistency
-     * trips an internal self-check that IMMEDIATE_CRASHes via int3 -> a fatal
-     * SIGTRAP that kills the whole process. Phase 1 stops EVERY thread (clearing
-     * any armed single-step); phase 2 releases them all, so none runs until all
-     * are quiescent — mirroring the kernel's own all-at-once detach on tracer
-     * death (which is precisely why a killed tracer leaves the target alive). */
+/* True if `rip` points at a syscall-entry instruction (x86-64 `syscall`, or the
+ * legacy `sysenter` / `int 0x80`). We must never single-step ACROSS one at teardown:
+ * the step would only complete when the — possibly indefinitely blocking — syscall
+ * returns. Fails safe (returns 1) if the bytes can't be read, so an unreadable rip
+ * is treated as "don't step". */
+static int at_syscall_insn(pid_t pid, uint64_t rip) {
+    unsigned char b[2] = {0};
+    struct iovec l = {b, 2}, r = {(void *)(uintptr_t)rip, 2};
+    if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 2)
+        return 1;
+    return (b[0] == 0x0f && (b[1] == 0x05 || b[1] == 0x34)) || /* syscall/sysenter */
+           (b[0] == 0xcd && b[1] == 0x80);                     /* int 0x80 */
+}
+
+/* Drain a single-step trap the kernel has already QUEUED on a stopped thread but not
+ * yet reported. When a step completes across a syscall, the resulting #DB is deferred
+ * until the syscall returns; if the thread was parked in a blocking call (a JIT's
+ * worker futex-waiting) the engine moved on and the trap is still pending at teardown.
+ * Detach with it unconsumed and, when the call later returns, the #DB fires with no
+ * tracer -> a fatal SIGTRAP that kills the whole process SECONDS after we left. So we
+ * single-step once more: the queued trap is reported first (the thread does not
+ * advance) and we swallow it, leaving the thread genuinely quiescent. A thread poised
+ * ON a syscall instruction is skipped — stepping it would enter (and maybe block in)
+ * the call — and clear_trap_flag alone disarms that not-yet-taken step. Because we
+ * only ever step a NON-syscall instruction, the follow-up wait cannot hang. */
+static void drain_pending_step(pid_t pid, pid_t tid) {
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+        return;
+    if (at_syscall_insn(pid, regs.rip))
+        return;
+    if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
+        return;
+    int st;
+    while (waitpid(tid, &st, __WALL) < 0 && errno == EINTR)
+        ;
+    /* Whatever it reported — the queued #DB, or the one guarded step — is consumed. */
+}
+
+/* Stop tracing and let the target run on normally. A SINGLE-STEP engine leaves the
+ * target in a state that, released carelessly, kills a JIT / managed runtime
+ * (V8/Node, JVM, …) with a fatal SIGTRAP seconds later, so when `single_stepped` is
+ * set we clean up in two phases:
+ *
+ *   Phase 1 — stop + clear armed steps. INTERRUPT every thread, drain it to a
+ *   ptrace-stop, and clear_trap_flag() so none resumes with a step still armed
+ *   (that #DB would be fatal with no tracer to absorb it).
+ *
+ *   Phase 2 — drain deferred steps. A step that completed across a syscall leaves
+ *   its #DB QUEUED until the syscall returns; a worker parked in a blocking call
+ *   (futex) carries that pending trap right through detach, and it fires — fatally —
+ *   when the call later returns. drain_pending_step() swallows it while we are still
+ *   the tracer. (MEASURED on a live Node/V8 process: without this, ~1 in 2-6 detaches
+ *   killed it with SIGTRAP a second or two after we left; the caught trap was a step
+ *   #DB, si_code=TRAP_BRKPT, at the instruction just past a `syscall`.)
+ *
+ * A PTRACE_SYSCALL engine (the syscall log, procs in syscall-count mode) never arms a
+ * step, so `single_stepped` is 0 and both phases are skipped — running them would
+ * INJECT single-step state (an extra PTRACE_SINGLESTEP per thread) into a target that
+ * had none, which is itself the fatal condition on the next re-attach. Then
+ * PTRACE_DETACH each thread and free the table. */
+static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
     for (size_t i = 0; i < tab->n; i++) { /* phase 1: interrupt + drain to a stop */
         pid_t tid = tab->v[i].tid;
         ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
@@ -560,13 +607,22 @@ static void detach_threads(thr_tab_t *tab) {
             if (WIFEXITED(st) || WIFSIGNALED(st))
                 break; /* gone; nothing to detach */
             if (WIFSTOPPED(st)) {
-                clear_trap_flag(tid); /* drop any armed single-step (defensive) */
-                break;                /* leave it STOPPED; release in phase 2 */
+                if (single_stepped)
+                    clear_trap_flag(tid); /* drop any not-yet-taken armed step */
+                break;                    /* leave it STOPPED; drain + release below */
             }
         }
     }
-    for (size_t i = 0; i < tab->n; i++) /* phase 2: release all at once */
+
+    if (single_stepped)
+        for (size_t i = 0; i < tab->n; i++) { /* phase 2: drain any QUEUED step #DB */
+            drain_pending_step(pid, tab->v[i].tid);
+            clear_trap_flag(tab->v[i].tid); /* the drain step re-armed TF; drop it */
+        }
+
+    for (size_t i = 0; i < tab->n; i++)
         ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
+
     free(tab->v);
     tab->v = NULL;
     tab->n = tab->cap = 0;
@@ -613,7 +669,7 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
     thr_tab_t tab = {0};
     long opts = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE;
     if (seize_threads(pid, opts, &tab) != 0) {
-        detach_threads(&tab); /* frees the (empty) table */
+        detach_threads(pid, &tab, 0); /* frees the (empty) table */
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -718,7 +774,7 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
         ptrace(PTRACE_SYSCALL, tid, NULL, (void *)(long)deliver);
     }
 
-    detach_threads(&tab);
+    detach_threads(pid, &tab, 0);
     return 0;
 }
 
@@ -821,7 +877,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
      * No TRACESYSGOOD — every stop here is a step. */
     thr_tab_t tab = {0};
     if (seize_for_engine(pid, only_tid, &tab) != 0) {
-        detach_threads(&tab);
+        detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -936,7 +992,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
-    detach_threads(&tab);
+    detach_threads(pid, &tab, 1);
     asmspy_jitmap_free(&jit);
     return 0;
 }
@@ -1087,7 +1143,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
     thr_tab_t tab = {0};
     if (seize_for_engine(pid, only_tid, &tab) != 0) {
-        detach_threads(&tab);
+        detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -1199,7 +1255,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
-    detach_threads(&tab);
+    detach_threads(pid, &tab, 1);
     if (sink) /* always hand over a final snapshot */
         graph_emit(sink, ctx, &g, &aedges, &aecap);
     free(g.node);
@@ -1247,7 +1303,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
     thr_tab_t tab = {0};
     if (seize_for_engine(pid, only_tid, &tab) != 0) {
-        detach_threads(&tab);
+        detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -1354,7 +1410,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
-    detach_threads(&tab);
+    detach_threads(pid, &tab, 1);
     asmspy_jitmap_free(&jit);
     return 0;
 }
@@ -1495,7 +1551,7 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
     if (mode == ASMSPY_COUNT_SYSCALLS)
         opts |= PTRACE_O_TRACESYSGOOD;
     if (seize_process_tree(pid, opts, &tab) != 0) {
-        detach_threads(&tab);
+        detach_threads(pid, &tab, (mode == ASMSPY_COUNT_CALLS));
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -1609,7 +1665,7 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
 #undef TOPO_RESUME
     if (sink) /* final snapshot BEFORE detach frees the table */
         topo_publish(&tab, sink, ctx, &snap, &snapcap);
-    detach_threads(&tab);
+    detach_threads(pid, &tab, (mode == ASMSPY_COUNT_CALLS));
     free(snap);
     return 0;
 }
