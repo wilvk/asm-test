@@ -239,7 +239,24 @@ without single-stepping it; run against a Node/.NET process it survives and (wit
 runtime's perf-map enabled) names managed frames — the exact case the single-step views
 risk crashing.
 
-### Phase 4 — Survey fallback (fixes F6) + honest tiering *(planned)*
+### Phase 4 — Survey fallback (fixes F6) + honest tiering *(landed)*
+
+> **Landed 2026-07-12.** `asmtest_hwtrace_sample_window_amd` (and the begin/end split
+> `sample_begin_amd`/`sample_end_amd`) now fall back to a statistical IBS-Op survey when the
+> branch stack is absent (Zen 2, `perf_open` fails) or `ASMTEST_FORCE_IBS_SURVEY` is set
+> (cross-validation on Zen 3+/CI). New **internal** window primitives
+> [src/ibs_backend.h](../../../src/ibs_backend.h) `asmtest_ibs_window_begin`/`_end` arm IBS-Op
+> on the calling thread, let the caller run its window body inline, then drain — the same
+> begin/run/end shape as the branch-stack pair, reusing the channel/drain/edge-hash machinery.
+> [src/hwtrace.c](../../../src/hwtrace.c) flattens each sampled edge's TARGET into the `ips[]`
+> endpoint histogram weighted by count, so the caller's bucket-by-method hotness view is
+> unchanged in shape. Purely STATISTICAL — a separate producer, never in the exact
+> `insns[]/blocks[]` parity cascade; the branch-stack path is byte-identical when the stack is
+> present and the env unset. `examples/test_hwtrace.c` `test_amd_sample_window_ibs` forces the
+> IBS path over the hot-loop fixture (self-skips off IBS) and asserts most endpoints land
+> in-loop (both the monolith and the split) — ~468/468 in-loop live on this Zen 2; full
+> `hwtrace-test` 341/341. This supersedes [amd-tracing-followup-plan.md](amd-tracing-followup-plan.md)
+> Phase 7c, which specced the same integration before the IBS lane existed.
 
 **Goal.** Make the statistical whole-window survey produce a result on Zen 2 instead of
 `EUNAVAIL`, and label statistical output so it is never mistaken for exact.
