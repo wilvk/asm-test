@@ -1,0 +1,53 @@
+# Dockerfile.taint-attach — containerized test lane for the DynamoRIO ATTACH tier
+# (dynamorio-attach-tier-plan.md, Increment 1, first slice): COOPERATIVE attach + detach on
+# an already-running NATIVE process, on the proven dr_app_* API (external foreign-PID
+# injection is the experimental Increment 2 probe, not this lane).
+#
+# Mirrors Dockerfile.taint-native: installs a prebuilt DynamoRIO release (needed at build
+# time for the CMake-built taint client and at runtime for dlopen'd libdynamorio), plus
+# Capstone (the operand enumerator) + libunicorn (the emulator L0 oracle the out-of-process
+# taint_validator diffs against). It then runs `make dr-taint-attach-coop-test`, which starts
+# examples/taint_attach_coop as a PLAIN native process (NOT under drrun): the process runs a
+# fixture natively, self-attaches DR + the UNCHANGED taint client mid-run, captures a scoped
+# window into POSIX-shm, detaches, runs native again, and the separate validator oracle-diffs
+# the captured window. No experimental API, no host toolchain, no SYS_PTRACE — a plain
+# `docker run` (the cooperative dr_app_* path needs no capability; that requirement arrives
+# with the external injector in Increment 2).
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine, so it runs on Intel and AMD.
+#
+# Build + run:  make docker-taint-attach
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+      libunicorn-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin a DynamoRIO release. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Build Capstone from the pinned source release (no apt package — mirrors the main
+# Dockerfile / Dockerfile.taint-native); the out-of-process taint_validator's operand
+# enumerator + emulator L0 oracle need it, and without it the oracle diff self-skips.
+RUN sh scripts/build-capstone.sh && ldconfig
+
+# Run the cooperative attach + detach lifecycle lane: native -> dr_app_* self-attach ->
+# armed in-band capture -> dr_app_stop_and_cleanup detach -> native, POSIX-shm transport,
+# out-of-process oracle diff. Self-skips cleanly if DynamoRIO were absent, but here it is
+# installed, so it executes.
+CMD set -eux; \
+    make dr-taint-attach-coop-test DYNAMORIO_HOME=$DYNAMORIO_HOME

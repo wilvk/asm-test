@@ -149,6 +149,7 @@ else
 	@$(MAKE) --no-print-directory dr-valtrace-inlined-test
 	@$(MAKE) --no-print-directory dr-taint-native-test
 	@$(MAKE) --no-print-directory dr-taint-launch-test
+	@$(MAKE) --no-print-directory dr-taint-attach-coop-test
 	@$(MAKE) --no-print-directory dr-taint-stress-test
 endif
 
@@ -374,6 +375,52 @@ else
 	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
 	    $(abspath $(BUILD)/taint_workload) $(LAUNCH_SHM)
 	$(BUILD)/taint_validator $(LAUNCH_SHM)
+endif
+
+# --- DR ATTACH tier, Increment 1 (first slice): cooperative attach + detach --
+# The launch tier owns a process from a CLEAN START (drrun -c ... -- app); this lane instead
+# takes over a process that is ALREADY RUNNING NATIVELY and lets it go again — the attach
+# tier's headline lifecycle, on the PROVEN, non-experimental dr_app_* API (external foreign-
+# PID injection is the experimental Increment 2 probe, deferred). examples/taint_attach_coop.c
+# is started as a PLAIN native process (NOT under drrun): it runs the seed->derive->branch-sink
+# fixture NATIVELY (DR absent, no capture), then dr_app_setup_and_start brings DR + the
+# UNCHANGED libasmtest_drtaint_client.so up on itself, arms a scoped taint window (the client
+# captures, sink hit written synchronously to POSIX-shm), then dr_app_stop_and_cleanup DETACHES
+# (its exit event flushes the value/taint trace) and the fixture runs NATIVELY once more with
+# nothing new captured. The workload emits TAP for the attach-lifecycle assertions
+# (under_dynamorio() false->true->false + capture-only-while-armed); the SAME out-of-process
+# taint_validator then oracle-diffs the captured window. Self-skips without DynamoRIO. The
+# client is reused VERBATIM — this lane adds only the native launcher + the detach lifecycle.
+$(BUILD)/taint_attach_coop.o: examples/taint_attach_coop.c include/asmtest_drtrace.h \
+                              include/asmtest_taint.h include/asmtest_taint_shm.h \
+                              include/asmtest_trace.h src/dataflow_dr.h \
+                              $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -c $< -o $@
+
+# Links the drtrace app-side lifecycle (drtrace_app.o = dr_app_setup/start/stop_and_cleanup +
+# W^X asmtest_exec_alloc; trace.o + the Keystone bridge object when drapp is Keystone-enabled),
+# exactly as $(BUILD)/test_drtrace and $(BUILD)/dr_taint do. -rdynamic exports the marker
+# symbols so the client resolves their PCs; -lrt for shm_open.
+$(BUILD)/taint_attach_coop: $(BUILD)/taint_attach_coop.o $(BUILD)/drtrace_app.o \
+                            $(BUILD)/trace.o $(DRAPP_KS_OBJ)
+	$(CC) $(CFLAGS) -rdynamic $^ $(DRAPP_KS_LIBS) -ldl -lpthread -lrt -o $@
+
+ATTACH_SHM ?= /asmtest_taint_attach_ci
+.PHONY: dr-taint-attach-coop-test
+dr-taint-attach-coop-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-attach-coop-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_attach_coop $(BUILD)/taint_validator
+	@echo "== dr-taint-attach-coop-test (native -> dr_app_* self-attach -> armed capture -> detach -> native; shm; out-of-proc validator) =="
+	@rm -f /dev/shm$(ATTACH_SHM) 2>/dev/null || true
+	ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/taint_attach_coop $(ATTACH_SHM)
+	$(BUILD)/taint_validator $(ATTACH_SHM)
 endif
 
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------
