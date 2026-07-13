@@ -1,0 +1,48 @@
+# Dockerfile.drext-probe — throwaway lane for the DynamoRIO extension-load probe
+# (data-flow taint tier, dynamorio-taint-tier-plan.md Increment 2).
+#
+# The Phase-5 taint re-platform is gated on the prebuilt DR extensions
+# (drmgr/drreg/drx) loading under DR's private loader — a blocker documented
+# generically ("modern glibc") but never empirically tested. This image builds
+# the probe client (drclient/probe_extensions.c) and runs it under `drrun` over a
+# trivial workload, printing a load-success line per extension plus a non-zero
+# instrumented-instruction count. It carries NO Capstone/Unicorn (the probe needs
+# neither) and is far lighter than Dockerfile.drtrace.
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine, so it runs on Intel and
+# AMD alike.
+#
+# Build + run:  make docker-drext-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C/C++ toolchain + CMake (the probe is CMake-built via drclient/CMakeLists.txt)
+# and curl to fetch the DynamoRIO release. No Capstone/Unicorn: this lane only
+# load-checks the extension stack, it does not capture or replay.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin the SAME DynamoRIO release the drtrace lane uses. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Build the probe (BSD-clean stack) and run it under drrun. Prints the record of
+# which extensions loaded and the observed glibc; the make target build-fails if
+# any extension fails to load or the instruction count is zero. umbra (LGPL-2.1)
+# is NOT part of this default gate — run `make drext-probe PROBE_UMBRA=1` to also
+# load-check it (informational only).
+CMD set -eux; \
+    ldd --version | head -1; \
+    make drext-probe DYNAMORIO_HOME=$DYNAMORIO_HOME

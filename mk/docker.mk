@@ -215,6 +215,19 @@ docker-drtrace:
 	  -t asmtest-drtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drtrace
 
+# Throwaway extension-load probe lane (taint tier, Increment 2). A light image
+# (DynamoRIO only, no Capstone/Unicorn) that builds drclient/probe_extensions.c
+# and runs it under drrun, asserting the BSD-clean extension stack
+# (drmgr/drreg/drx) loads under DR's private loader with a non-zero instrumented
+# instruction count — the empirical yes/no gating the whole Phase-5 re-platform.
+# See docs/internal/analysis/dr-extension-load-probe-findings.md.
+.PHONY: docker-drext-probe
+docker-drext-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.drext-probe \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-drext-probe .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-drext-probe
+
 # Per-language native-trace lane: layer DynamoRIO onto each already-built
 # per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
 # against a real in-process DynamoRIO — the cross-language counterpart of

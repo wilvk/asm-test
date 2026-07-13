@@ -354,6 +354,41 @@ jobs:
       - name: Build + run the Python native-trace wrapper suite
         run: make drtrace-python-test DYNAMORIO_HOME="$HOME/dynamorio"
 
+  # DynamoRIO extension-load probe (data-flow taint tier, Increment 2). The
+  # Phase-5 taint re-platform onto inlined drmgr/drreg/drx instrumentation is
+  # gated on those prebuilt extensions loading under DR's private loader — a
+  # blocker documented generically ("modern glibc") but never empirically tested.
+  # This job builds the throwaway probe (drclient/probe_extensions.c) and runs it
+  # under drrun, failing red if any of drmgr/drreg/drx fails to load or the
+  # instrumented-instruction count is zero. It stays on the BSD-clean stack only:
+  # umbra is LGPL-2.1 (Dr. Memory Framework), so its load-check is opt-in
+  # (PROBE_UMBRA=1) and NOT part of this gate. See
+  # docs/internal/analysis/dr-extension-load-probe-findings.md.
+  drext-probe:
+    name: drext-probe (DR extension private-loader check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DR_VERSION: 11.91.20630
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps (cmake)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
+
+      - name: Record the runner glibc (the blocker is a glibc-version claim)
+        run: ldd --version | head -1
+
+      - name: Fetch a pinned DynamoRIO release
+        run: |
+          url="https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz"
+          curl -fsSL "$url" -o /tmp/dr.tar.gz
+          mkdir -p "$HOME/dynamorio"
+          tar -xzf /tmp/dr.tar.gz -C "$HOME/dynamorio" --strip-components=1
+
+      - name: Build + run the extension-load probe (drmgr/drreg/drx)
+        run: make drext-probe DYNAMORIO_HOME="$HOME/dynamorio"
+
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
   # not expose, so they self-skip — but the AMD branch-record RECONSTRUCTION is

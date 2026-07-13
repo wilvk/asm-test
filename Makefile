@@ -161,6 +161,7 @@ help:
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
 	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
+	@echo '  docker-drext-probe         DynamoRIO extension-load probe (taint tier, Increment 2)'
 	@echo ''
 	@echo 'Native Win64 (cross-compile + Wine):'
 	@echo '  win64-check     substrate smoke + capture + runner-port slices'

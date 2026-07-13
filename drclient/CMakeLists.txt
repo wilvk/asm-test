@@ -32,3 +32,37 @@ target_include_directories(asmtest_drval_client PRIVATE ${CMAKE_CURRENT_SOURCE_D
 # Emit straight into the asm-test build dir so the Makefile/tests find them.
 set_target_properties(asmtest_drclient asmtest_drval_client PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
+
+# --- Throwaway extension-load probe (taint tier, Increment 2) ---------------
+# Opt-in only (-DASMTEST_BUILD_DREXT_PROBE=ON): the sole client here that DOES
+# use_DynamoRIO_extension(), to empirically test whether the prebuilt release
+# extensions load under DR's private loader — the documented-but-never-tested
+# blocker gating the whole Phase-5 taint re-platform. It is NOT a product artifact
+# and is never built by the normal `make drtrace-client` path (which stays raw
+# core API). See drclient/probe_extensions.c and
+# docs/internal/analysis/dr-extension-load-probe-findings.md.
+#
+# Default stack is the BSD-clean set only: drmgr + drreg + drx (the drx_buf
+# trace-buffer API lives in drx.h — there is no separate drx_buf extension).
+# umbra is LGPL-2.1 (it ships under the Dr. Memory Framework, not DR core), so it
+# is gated behind a SECOND opt-in (-DPROBE_UMBRA=ON) and stays out of the default
+# probe and the CI gate.
+option(ASMTEST_BUILD_DREXT_PROBE "Build the throwaway DR extension-load probe" OFF)
+option(PROBE_UMBRA "Additionally link umbra (LGPL-2.1) into the probe" OFF)
+if(ASMTEST_BUILD_DREXT_PROBE)
+  add_library(asmtest_drext_probe SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/probe_extensions.c)
+  configure_DynamoRIO_client(asmtest_drext_probe)
+  use_DynamoRIO_extension(asmtest_drext_probe drmgr)
+  use_DynamoRIO_extension(asmtest_drext_probe drreg)
+  use_DynamoRIO_extension(asmtest_drext_probe drx)
+  if(PROBE_UMBRA)
+    # umbra lives in the Dr. Memory Framework, a separate find_package that
+    # registers the umbra ext include dir so use_DynamoRIO_extension resolves it.
+    find_package(DrMemoryFramework REQUIRED)
+    use_DynamoRIO_extension(asmtest_drext_probe umbra)
+    target_compile_definitions(asmtest_drext_probe PRIVATE PROBE_UMBRA)
+  endif()
+  set_target_properties(asmtest_drext_probe PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
+endif()

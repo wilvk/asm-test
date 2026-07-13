@@ -203,6 +203,46 @@ else
 	    $(BUILD)/dr_valtrace
 endif
 
+# --- DR extension-load probe (taint tier, Increment 2) ---------------------
+# THROWAWAY diagnostic, not a product artifact. Builds the opt-in probe client
+# (drclient/probe_extensions.c — the sole client that use_DynamoRIO_extension()s)
+# and runs it under `drrun` over /bin/true, asserting each of the BSD-clean stack
+# drmgr/drreg/drx loads under DR's private loader (the never-tested blocker gating
+# the whole Phase-5 taint re-platform) and that a non-zero instruction count was
+# instrumented. Self-skips without DynamoRIO. Body of the `make docker-drext-probe`
+# lane. See docs/internal/analysis/dr-extension-load-probe-findings.md.
+#
+# Set PROBE_UMBRA=1 to ALSO load-check umbra — but umbra is LGPL-2.1 (it ships in
+# the Dr. Memory Framework, not DR core), so that path is informational only and
+# deliberately NOT the committed CI gate.
+DR_DRRUN := $(DYNAMORIO_HOME)/bin64/drrun
+PROBE_UMBRA ?=
+ifeq ($(PROBE_UMBRA),1)
+DREXT_PROBE_CMAKE_ARGS := -DPROBE_UMBRA=ON \
+    -DDrMemoryFramework_DIR=$(abspath $(DYNAMORIO_HOME)/drmemory/drmf)
+endif
+
+.PHONY: drext-probe
+drext-probe:
+ifndef DR_AVAILABLE
+	@echo "== drext-probe =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@mkdir -p $(BUILD)/drext_probe
+	cd $(BUILD)/drext_probe && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
+	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) -DASMTEST_BUILD_DREXT_PROBE=ON \
+	    $(DREXT_PROBE_CMAKE_ARGS) $(abspath drclient) >/dev/null
+	cmake --build $(BUILD)/drext_probe >/dev/null
+	@echo "== drext-probe (DR extension private-loader check) =="
+	@out=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drext_probe.so) -- /bin/true 2>&1); \
+	  rc=$$?; printf '%s\n' "$$out"; \
+	  if [ $$rc -ne 0 ]; then echo "drext-probe: FAIL (drrun rc=$$rc)"; exit 1; fi; \
+	  printf '%s' "$$out" | grep -q "drext-probe: PROBE OK" \
+	    || { echo "drext-probe: FAIL (no PROBE OK line — an extension did not load)"; exit 1; }
+	@echo "drext-probe: PASS (drmgr+drreg+drx loaded under the private loader)"
+endif
+
 # --- Optional hardware-assisted native-trace tier (Intel PT / CoreSight) ---
 # `make hwtrace-test` records native coverage with near-zero capture overhead via
 # the CPU's branch-trace unit (Intel PT / ARM CoreSight) + a software decoder

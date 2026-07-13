@@ -15,18 +15,25 @@ live values on an attached, running process** (out-of-band ptrace tier) and **(b
 production-grade taint over live managed runtimes** (DynamoRIO tier) — so the plan carries
 through the DynamoRIO and .NET-interpretability phases rather than stopping at the CI demo.
 
-> Status legend: **Phases 0–2 *(LANDED 2026-07-12)*** — the shared spine + CI proving
+> Status legend: **Phases 0–3 *(LANDED 2026-07-12)*** — the shared spine + CI proving
 > ground (`include/asmtest_valtrace.h`, `src/dataflow.c` / `src/dataflow_operands.c` /
 > `src/dataflow_emu.c`, `make dataflow-test`, 53 checks; the Unicorn L0 producer validated
-> live). **Phase 3 (scoped ptrace L0) LANDED 2026-07-12** — a live out-of-band producer
-> emitting the same `asmtest_valtrace_t` stream, cross-validated against the emulator L0
-> oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach). **Phases 4–6
-> remain *(planned)*** except **Phase 4 Increment 1 (PC → method identity + version)
-> LANDED 2026-07-12** — a pure, host-independent resolver (`src/dataflow_method.c`) over
-> the jitdump/perf-map method-map shape, tiered-re-JIT aware (newest code_index wins; a
-> move is a new version); the hard GC-move canonicalization is deferred to a later
-> increment. Phases 3–5 are
-> the two target tiers. Update this file as phases land, the way
+> live) and the scoped ptrace L0 live out-of-band producer, cross-validated against the
+> emulator L0 oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach).
+> **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13** — the pure
+> host-independent PC→method+version resolver (`src/dataflow_method.c`), runtime-helper
+> summary edges, and the GC-move *detection* feed (`GcMoveMap` from `GCBulkMovedObjectRanges`);
+> the concrete `{old,new,len}` triple extraction is **deferred** (the in-proc EventListener
+> does not surface the `Values` struct-array — needs an out-of-proc EventPipe/nettrace consumer).
+> **Phase 5 (DynamoRIO taint tier): Increment 1 (in-band L0 value producer) LANDED 2026-07-13;
+> Increment 2 (extension-load probe) LANDED 2026-07-13** — the prebuilt `drmgr`/`drreg`/`drx`
+> load under DR's private loader (blocker does not reproduce; **option (c) version-pin**), with
+> the license question resolved to a split (`drmgr`/`drreg`/`drx` BSD; **`umbra` LGPL-2.1**);
+> Increments 3–9 (the inlined re-platform + in-band taint + launch container) remain planned in
+> the standalone [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md). **Phase 6
+> (bindings/docs/CI) LANDED 2026-07-13.** Remaining implementable work: Phase 4's deferred
+> concrete GC-move triples and Phase 5 Increments 3–9. Phases 3 and 5 are the two target tiers.
+> Update this file as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
 ---
@@ -212,29 +219,33 @@ Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identi
 aliasing pre/post-move addresses; a value is attributed to the correct method+version after a
 tiered re-JIT.
 
-## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(Increment 1: in-band L0 value producer LANDED 2026-07-13; DR-side taint shadowing + whole-process breadth planned)*
+## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(Increments 1–2 LANDED 2026-07-13; DR-side taint shadowing + whole-process breadth planned)*
 
-The largest lift: production-grade taint over live managed code. A re-architecture of the
-current tier, not an extension.
+The largest lift — production-grade taint over live JIT'd managed code — is a re-architecture of
+the current tier, not an extension, and now has its own standalone plan:
+**[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)**.
 
-- Move off the clean-call recorder ([drtrace_client.c](../../../src/drtrace_client.c)) to
-  **inlined instrumentation** on the standard extension stack (`drmgr` pass ordering, `drreg`
-  scratch regs, `umbra` shadow memory, `drx_buf` buffered trace) — the drcachesim/memtrace
-  pattern + operand values + inline tag propagation (`dst_tag = ∪ src_tags`) → the ~10–50×
-  band (cf. libdft 1.14–6.03×, TaintTrace ~5.5×).
-- **Launch-under-DR container** (`drrun -c … -- dotnet app.dll`) to sidestep the in-process
-  collision — a new integration path (the shipped tier is in-process `dr_app_*`; there is no
-  `drrun` launcher today). The signal half is already mitigated (`DR_SIGNAL_DELIVER` for .NET
-  null-check `SIGSEGV`). *Attach* (`drrun -attach`) is out of scope for managed here — it
-  freezes the runtime at an arbitrary state and needs safepoint coordination (record why; see
-  the analysis note).
-- Umbra shadow must be remapped on GC moves (Phase 4) so taint survives compaction.
-- Scope instrumentation to registered method ranges to bound cost.
+Increment 1 (the in-band L0 VALUE producer `libasmtest_drval_client.so`, a clean-call
+per-instruction register/memory value snapshot cross-validated against the emulator oracle,
+[dataflow_dr_client.c](../../../src/dataflow_dr_client.c)) **LANDED 2026-07-13**. Increment 2 (the
+extension-load probe [drclient/probe_extensions.c](../../../drclient/probe_extensions.c)) **LANDED
+2026-07-13** and settled the gating question: the prebuilt `drmgr`/`drreg`/`drx` load under DR's
+private loader on glibc 2.39 (blocker does not reproduce → **option (c) version-pin**), and the
+license resolved to a **split** — `drmgr`/`drreg`/`drx` are BSD, but **`umbra` is LGPL-2.1** (Dr.
+Memory Framework), so the byte-granular shadow must hand-roll a BSD map or explicitly accept LGPL
+([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). The
+deferred remainder — re-platforming off the clean-call recorder onto inlined
+`drmgr`/`drreg`/`drx_buf` instrumentation (`dst_tag = ∪ src_tags`, the ~10–50× band), the
+launch-under-DR container (`drrun -c … -- dotnet app.dll`), the shadow remap on GC moves
+(hard-gated on the deferred Phase 4 `{old,new,len}` extraction), whole-process breadth, and SIMD
+taint — is decomposed into Increments 3–9 there. The signal half is already mitigated
+(`DR_SIGNAL_DELIVER`); external attach stays out of scope for managed.
 
 **Exit criteria:** a launched `dotnet` workload runs under DR with a taint seed at a source
-(e.g. a `read()` buffer) detected at a sink (a `memcpy` length / branch) over real JIT'd
-managed code; taint survives a GC; overhead measured on a representative workload; validates
-beyond the current offset-only dotnet smoke (`bindings/dotnet/drtrace/`).
+(e.g. a `read()` buffer) detected at a sink (a `memcpy` length / branch) over real JIT'd managed
+code; taint survives a GC; overhead measured on a representative workload; validates beyond the
+current offset-only dotnet smoke (`bindings/dotnet/drtrace/`). See
+[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md) for the full increment sequence.
 
 ## Phase 6 - Bindings, docs, CI *(LANDED 2026-07-13: libasmtest_dataflow shared lib; ALL 10 language bindings (Python/C++/Node/Ruby/Lua/Zig/Rust/Go/Java/.NET) wrap the pure gcmove+method helpers, each `make dataflow-<lang>-test`-validated (host or docker); Python/C++/Node also wrap the full L0/L1/L2 ValueTrace pipeline; data-flow guide page; `dataflow` CI job gates python+cpp, and a `dataflow-bindings` matrix job gates the other seven in their pinned toolchain images. Phase 6 fully landed — only hardware/upstream/credential-gated forward-look items remain across the plan set)*
 
