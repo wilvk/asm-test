@@ -615,7 +615,26 @@ together, but all on a single-threaded native fixture, so it carries no launch/m
 The concurrency *policy* is cheap to state; its *validation* is deferred to Increment 5 where real
 concurrency exists.
 
-## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(native launch + dotnet JIT-coexistence LANDED 2026-07-13; managed seed→sink + concurrency stress next)*
+## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(native launch + dotnet JIT-coexistence + concurrency-stress LANDED 2026-07-13; managed seed→sink (needs Inc6 method ranges) remains)*
+
+> **Concurrent-writer stress LANDED 2026-07-13 — exit criterion (4) MET; the Increment-4 race policy is
+> now VALIDATED, not just stated.** `make dr-taint-stress-test` /
+> [taint_stress.c](../../../examples/taint_stress.c): `drrun -c <taint client>.so -- ./taint_stress`
+> launches N=8 threads released together by a barrier, ALL seeding a disjoint buffer + running the
+> branch-sink fixture at once — so the process-global tag shadow takes concurrent leaf-CAS installs
+> (nearby seed buffers share a leaf; each thread's stack spill first-touches its own) and concurrent
+> single-byte tag stores, and the sink report takes concurrent appends. Result (deterministic over
+> repeated runs): **exactly N sink hits, every one correct (offset/tag/kind), no crash, no hang, no
+> false clean→tainted flip, no lost/corrupted hit** — confirming aligned at_tag_t byte stores are
+> atomic, the leaf CAS is the one mandatory-atomic mutation, and per-thread reg tags never race. One
+> small principled client change (under `-DASMTEST_TAINT`, so the flag-off value client stays 14/14):
+> the sink-report append is now thread-safe — an atomic fetch-add reserves a unique disjoint slot
+> (`hits_total` is the true count; `hits_len` a best-effort mirror). Chained into `drtrace-test` + the
+> `docker-taint-native` lane (48/48 green: native 35 + launch 9 + stress 4). **Only exit criterion (3)
+> remains** — instrumenting REAL JIT'd managed code with a managed seed→sink — which needs managed
+> method ranges, wired by Increment 6's method-load events; the shm channel + out-of-process validator
+> + the atomic report are the reusable plumbing it will ride on.
+
 
 > **dotnet JIT/code-cache coexistence LANDED 2026-07-13 — the plan's risk concentration is RETIRED.**
 > `make dr-taint-dotnet-test` / `make docker-taint-dotnet` runs

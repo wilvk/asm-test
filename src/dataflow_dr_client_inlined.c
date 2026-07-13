@@ -331,18 +331,26 @@ static void on_sink(uint64_t off, uint64_t ea, uint64_t kind) {
     if (tag == AT_TAG_CLEAN)
         return; /* clean flow does not reach the sink */
 
-    g_report->hits_total++;
-    if (g_report->hits == NULL || g_report->hits_len >= g_report->hits_cap) {
-        g_report->truncated =
-            1; /* honest overflow, like at_drval_t / asmtest_trace_t */
+    /* Thread-safe append (a launched managed workload sinks from many threads): reserve a
+     * unique slot with an atomic fetch-add on hits_total, then fill that DISJOINT slot —
+     * no lock on the append path. hits_total is the true count; hits_len is a best-effort
+     * mirror (the reader uses min(hits_total, hits_cap)). Overflow past the cap flips
+     * truncated (the honest-overflow contract of at_drval_t / asmtest_trace_t). */
+    if (g_report->hits == NULL)
+        return;
+    uint64_t idx =
+        __atomic_fetch_add(&g_report->hits_total, 1, __ATOMIC_RELAXED);
+    if (idx >= g_report->hits_cap) {
+        __atomic_store_n(&g_report->truncated, 1, __ATOMIC_RELAXED);
         return;
     }
-    at_taint_hit_t *h = &g_report->hits[g_report->hits_len++];
+    at_taint_hit_t *h = &g_report->hits[idx];
     memset(h, 0, sizeof *h);
     h->off = off;
     h->ea = ea;
     h->tag = tag;
     h->kind = (uint8_t)kind;
+    __atomic_store_n(&g_report->hits_len, idx + 1, __ATOMIC_RELAXED);
 }
 
 /* ---- inline-emit helpers for the propagation phase ---------------------------- */

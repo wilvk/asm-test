@@ -149,6 +149,7 @@ else
 	@$(MAKE) --no-print-directory dr-valtrace-inlined-test
 	@$(MAKE) --no-print-directory dr-taint-native-test
 	@$(MAKE) --no-print-directory dr-taint-launch-test
+	@$(MAKE) --no-print-directory dr-taint-stress-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -373,6 +374,32 @@ else
 	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
 	    $(abspath $(BUILD)/taint_workload) $(LAUNCH_SHM)
 	$(BUILD)/taint_validator $(LAUNCH_SHM)
+endif
+
+# --- Taint tier Increment 5: concurrent-writer shadow stress ---------------
+# `drrun -c <taint client>.so -- ./taint_stress` launches an N-thread native workload
+# whose threads, released together by a barrier, ALL seed a disjoint buffer + run the
+# branch-sink fixture at once — stressing the process-global tag shadow's concurrent
+# leaf-CAS installs + single-byte tag stores and the atomic sink-report append. Validates
+# the Increment-4 race policy: exactly N correct sink hits, no crash/hang, no false
+# clean->tainted flip. Self-skips without DynamoRIO; needs no Capstone/Unicorn.
+$(BUILD)/taint_stress: examples/taint_stress.c include/asmtest_taint.h \
+                       src/dataflow_dr.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -rdynamic examples/taint_stress.c \
+	      -lpthread -o $@
+
+.PHONY: dr-taint-stress-test
+dr-taint-stress-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-stress-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_stress
+	@echo "== dr-taint-stress-test (drrun -c taint-client -- N-thread concurrent process-global shadow stress) =="
+	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	    $(abspath $(BUILD)/taint_stress)
 endif
 
 # --- Taint tier Increment 5: dotnet launch — JIT / code-cache coexistence ---
