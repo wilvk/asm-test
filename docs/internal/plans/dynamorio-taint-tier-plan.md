@@ -738,7 +738,35 @@ DR + .NET-SDK image, the `drrun` launcher, the shm transport, the out-of-process
 managed shim, and the first real JIT-coexistence test. The build-mode fallback is small if it
 triggers; the risk concentration is the un-demonstrated JIT/code-cache coexistence.
 
-## Increment 6 - Whole-process breadth + method-range scoping *(planned)*
+## Increment 6 - Whole-process breadth + method-range scoping *(native multi-range mechanism + boundary policy + inscount scoping LANDED 2026-07-13; dotnet method-load auto-registration remains)*
+
+> **Native multi-range mechanism LANDED 2026-07-13 — the range-set core + boundary policy +
+> inscount cost bound.** The single `g_region` is generalized to a published SET of registered
+> ranges (`g_regions[AT_MAX_REGIONS]` + release-stored `g_nregions`) sharing one capture buffer
+> (`g_drval`) and ONE offset origin (`g_origin` = the lowest registered base, so a multi-range
+> trace shares the emulator oracle's blob-relative offset space). The bb-build gate is now
+> `in_scope(ipc,&off)` — membership in the range set (default), or the whole window spanning them
+> under the `scope=whole` client option. The region marker (`on_marker`) APPENDS instead of
+> overwriting; everything downstream (shadow, propagation, sink, shm) is unchanged, and with a
+> single registered range the client is behaviourally identical to Increments 1-5 (the value +
+> taint + launch + stress lanes stay green, inline gate still exactly 5 clean calls).
+> `make dr-taint-multirange-test` / `docker-taint-native` (now the 4th native lane): a launched
+> native workload (`examples/taint_multirange.c`) registers TWO disjoint ranges around an
+> **un-instrumented gap** and carries the taint across it through the **process-global stack
+> shadow** (store in range A, reload in range B). The `taint_multirange_validator` oracle-diffs the
+> taint set OUT OF PROCESS: 9/9 green — range-count = 2, the sink fires at the range-B branch, and
+> the client's captured taint set (range A + range B steps only, the gap absent) equals the
+> emulator forward slice across the gap. The **cost bound is demonstrated**: `scope=whole`
+> instruments 13 instructions (the whole window incl. the gap) vs `scope=ranges` 7 (the two ranges
+> only) — the client reports both via a grep-able `ASMTEST_TAINT_INSCOUNT` line at exit.
+> **Boundary policy (validated + documented):** the shadow is process-global and the reg-tag file
+> is per-thread, so a tag written in a scoped range PERSISTS through an un-instrumented gap
+> unchanged (neither propagated nor cleared) — EXACT precisely when the gap does not transform the
+> tagged location (the fixture's gap touches only a scratch register, never the carried
+> `[rsp-8]`), an under/over-approximation otherwise. **Still remaining for Increment 6:**
+> auto-registering ranges from .NET **method-load events** on a launched dotnet workload (the
+> perfmap/`MethodLoadVerbose` addr-channel) so range-count > 1 arises WITHOUT a per-range C marker
+> — the slice that unblocks Increment 5's managed seed→sink.
 
 Move beyond Increment 1's single registered region to whole-process taint, but bound cost by
 scoping the expensive per-operand shadow work to registered method ranges (the ~10–50× band

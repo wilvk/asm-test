@@ -150,6 +150,7 @@ else
 	@$(MAKE) --no-print-directory dr-taint-native-test
 	@$(MAKE) --no-print-directory dr-taint-launch-test
 	@$(MAKE) --no-print-directory dr-taint-stress-test
+	@$(MAKE) --no-print-directory dr-taint-multirange-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -400,6 +401,71 @@ else
 	@echo "== dr-taint-stress-test (drrun -c taint-client -- N-thread concurrent process-global shadow stress) =="
 	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
 	    $(abspath $(BUILD)/taint_stress)
+endif
+
+# --- Taint tier Increment 6: multi-range / method-range scoping (native) -----
+# `drrun -c <taint client>.so -- ./taint_multirange` launches a native workload whose
+# fixture is ONE contiguous blob but is registered as TWO disjoint instrumented ranges with
+# an un-instrumented GAP between them; the taint is carried across the gap through the
+# process-global stack shadow (store in range A, reload in range B). Proves:
+#   (1) range-count > 1: the client auto-appends a SET of ranges (regions=2 in its stderr);
+#   (2) the boundary policy: the sink fires + the taint set oracle-diffs across the gap;
+#   (3) the cost bound: scope=whole (instrument the whole window, gap included) instruments
+#       strictly MORE instructions than scope=ranges (the default) — an inscount delta.
+# Self-skips without DynamoRIO; the taint-set oracle self-skips without libunicorn (the
+# structural checks + range-count + inscount delta still run). Body of docker-taint-native.
+$(BUILD)/taint_multirange: examples/taint_multirange.c examples/taint_multirange_fixture.h \
+                           include/asmtest_taint.h include/asmtest_taint_shm.h \
+                           src/dataflow_dr.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -rdynamic examples/taint_multirange.c -lrt -o $@
+
+ifeq ($(DRVAL_HAVE_UNICORN),1)
+$(BUILD)/taint_multirange_validator: examples/taint_multirange_validator.c \
+                          examples/taint_multirange_fixture.h include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h include/asmtest_valtrace.h \
+                          src/dataflow_dr.h $(BUILD)/dataflow.o \
+                          $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+                          $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc $(UNICORN_CFLAGS) -DDF_HAVE_EMU \
+	      examples/taint_multirange_validator.c \
+	      $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+	      $(UNICORN_LIBS) $(CAPSTONE_LIBS) -lrt -o $@
+else
+$(BUILD)/taint_multirange_validator: examples/taint_multirange_validator.c \
+                          examples/taint_multirange_fixture.h include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h include/asmtest_valtrace.h \
+                          src/dataflow_dr.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc examples/taint_multirange_validator.c -lrt -o $@
+endif
+
+MULTIRANGE_SHM ?= /asmtest_taint_multirange_ci
+.PHONY: dr-taint-multirange-test
+dr-taint-multirange-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-multirange-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_multirange $(BUILD)/taint_multirange_validator
+	@echo "== dr-taint-multirange-test (scope=ranges: 2 ranges + un-instrumented gap; cross-gap seed->sink; oracle diff) =="
+	@rm -f /dev/shm$(MULTIRANGE_SHM) /dev/shm$(MULTIRANGE_SHM)_whole 2>/dev/null || true
+	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	    $(abspath $(BUILD)/taint_multirange) $(MULTIRANGE_SHM) 2> $(BUILD)/mr_ranges.log
+	@grep -Eq 'ASMTEST_TAINT_INSCOUNT .*regions=2 scope=ranges' $(BUILD)/mr_ranges.log \
+	  && echo "ok - client auto-registered a range SET (range-count > 1: regions=2)" \
+	  || { echo "not ok - expected regions=2 scope=ranges in client output"; cat $(BUILD)/mr_ranges.log; exit 1; }
+	$(BUILD)/taint_multirange_validator $(MULTIRANGE_SHM)
+	@echo "== dr-taint-multirange-test (scope=whole vs scope=ranges: instrumented-instruction-count delta) =="
+	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) scope=whole -- \
+	    $(abspath $(BUILD)/taint_multirange) $(MULTIRANGE_SHM)_whole 2> $(BUILD)/mr_whole.log
+	@rm -f /dev/shm$(MULTIRANGE_SHM)_whole 2>/dev/null || true
+	@ir=$$(grep -oE 'inscount=[0-9]+ regions=2 scope=ranges' $(BUILD)/mr_ranges.log | grep -oE 'inscount=[0-9]+' | grep -oE '[0-9]+' | head -1); \
+	 iw=$$(grep -oE 'inscount=[0-9]+ regions=2 scope=whole'  $(BUILD)/mr_whole.log  | grep -oE 'inscount=[0-9]+' | grep -oE '[0-9]+' | head -1); \
+	 echo "# instrumented instructions: scope=ranges=$$ir  scope=whole=$$iw"; \
+	 if [ -n "$$ir" ] && [ -n "$$iw" ] && [ "$$ir" -lt "$$iw" ]; then \
+	   echo "ok - method-range scoping reduced instrumented-instruction count ($$ir < $$iw) — cost bound is real"; \
+	 else echo "not ok - expected inscount(ranges) < inscount(whole) [ranges=$$ir whole=$$iw]"; exit 1; fi
 endif
 
 # --- Taint tier Increment 5: dotnet launch — JIT / code-cache coexistence ---

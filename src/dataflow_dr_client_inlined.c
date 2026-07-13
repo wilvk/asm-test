@@ -149,14 +149,45 @@ typedef struct {
 #endif
 } raw_step_t;
 
-/* Single registered value-capture region (same contract as the clean-call client:
- * set once before traced code runs, read unlocked on the hot path). */
+/* Registered value-capture regions (Increment 6: a SET of instrumented ranges, replacing
+ * the single region of Increments 1-5). Each entry is a half-open range [base, base+len);
+ * the client instruments an app instruction only if it lies in SOME registered range
+ * (scope=ranges, the default) — or, under scope=whole, anywhere in the window spanning
+ * them. Ranges are appended by the region marker (native fixtures) or the method-load
+ * poller (managed workloads, the dotnet slice). g_nregions is published with RELEASE after
+ * an entry's fields are written, so a concurrent reader (a bb-build on another thread) sees
+ * a complete entry or none. The per-range set-once-before-traced-code contract still holds.
+ * Read only at instrumentation (bb-build) time, never on the runtime hot path. */
+#define AT_MAX_REGIONS 256
 typedef struct {
     app_pc base;
     size_t len;
-    at_drval_t *drval;
 } region_t;
-static region_t g_region;
+static region_t g_regions[AT_MAX_REGIONS];
+static volatile int g_nregions;
+
+/* Single shared value/taint capture buffer (was per-region): latched at the first region
+ * marker; every registered range's captured steps land here. */
+static at_drval_t *g_drval;
+
+/* Offset origin for at_vstep_t.off. With multiple ranges, a region-relative offset would
+ * collide across ranges, so all ranges share ONE offset space rooted at the LOWEST
+ * registered base — which, for a fixture laid out as one contiguous blob with disjoint
+ * instrumented sub-ranges, equals the emulator oracle's blob-relative offsets, keeping the
+ * out-of-process taint-set diff exact. Latched/lowered as ranges register (before traced
+ * code runs, per the contract). */
+static app_pc g_origin;
+
+/* Scoping cost metric + toggle (Increment 6 exit criterion). g_inscount counts the app
+ * instructions the client actually instruments; scope=whole instruments the entire window
+ * spanning the registered ranges (gaps included), scope=ranges (default) only the ranges
+ * themselves. So g_inscount(ranges) < g_inscount(whole) demonstrates that method-range
+ * scoping bounds the instrumented-instruction count (the ~10-50x band assumes we are NOT
+ * tag-tracking the un-instrumented gaps). Reported at client exit; bumped at bb-build time
+ * (off the runtime hot path), atomically since bb builds can race across threads. */
+static volatile uint64_t g_inscount;
+static int g_scope_whole; /* set by the `scope=whole` client option */
+
 static void *g_lock;
 
 static app_pc pc_marker;
@@ -507,7 +538,7 @@ static void emit_regtag_store(void *dc, instrlist_t *bb, instr_t *where,
 
 static void buf_flush(void *drcontext, void *buf_base, size_t size) {
     (void)drcontext;
-    at_drval_t *dv = g_region.drval;
+    at_drval_t *dv = g_drval;
     if (dv == NULL)
         return;
     size_t n = size / sizeof(raw_step_t);
@@ -560,10 +591,19 @@ static void buf_flush(void *drcontext, void *buf_base, size_t size) {
 
 static void on_marker(app_pc base, size_t len, at_drval_t *drval) {
     dr_mutex_lock(g_lock);
-    g_region.base = base;
-    g_region.len = len;
-    g_region.drval = drval;
+    if (g_drval == NULL)
+        g_drval = drval; /* first marker latches the shared capture buffer */
+    if (g_origin == NULL || base < g_origin)
+        g_origin = base; /* offset origin = lowest registered base */
+    int n = g_nregions;
+    if (n < AT_MAX_REGIONS) {
+        g_regions[n].base = base;
+        g_regions[n].len = len;
+        __atomic_store_n(&g_nregions, n + 1, __ATOMIC_RELEASE); /* publish */
+    }
     dr_mutex_unlock(g_lock);
+    /* (Re)instrument the range: a freshly-registered (or freshly-mmap'd, never-executed)
+     * range picks up the value/taint instrumentation on its next execution. */
     dr_delay_flush_region(base, len, 0, NULL);
 }
 
@@ -723,6 +763,42 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
 }
 #endif /* ASMTEST_TAINT */
 
+/* Is `ipc` in the client's instrumentation scope? On yes, set *off to its offset in the
+ * shared origin space (at_vstep_t.off). scope=ranges (default) tests membership in the
+ * registered range set; scope=whole tests the single window [min base, max end) that spans
+ * them, so it also instruments the un-instrumented GAPS between ranges — the extra cost the
+ * scoped default avoids (the inscount-delta exit criterion). Runs at bb-build time, not the
+ * runtime hot path, so a linear scan over <=AT_MAX_REGIONS ranges is fine. */
+static int in_scope(app_pc ipc, uint64_t *off) {
+    int n = __atomic_load_n(&g_nregions, __ATOMIC_ACQUIRE);
+    if (n <= 0)
+        return 0;
+    if (g_scope_whole) {
+        app_pc lo = g_regions[0].base,
+               hi = g_regions[0].base + g_regions[0].len;
+        for (int i = 1; i < n; i++) {
+            app_pc e = g_regions[i].base + g_regions[i].len;
+            if (g_regions[i].base < lo)
+                lo = g_regions[i].base;
+            if (e > hi)
+                hi = e;
+        }
+        if (ipc >= lo && ipc < hi) {
+            *off = (uint64_t)(ipc - g_origin);
+            return 1;
+        }
+        return 0;
+    }
+    for (int i = 0; i < n; i++) {
+        if (ipc >= g_regions[i].base &&
+            ipc < g_regions[i].base + g_regions[i].len) {
+            *off = (uint64_t)(ipc - g_origin);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                                     instr_t *instr, bool for_trace,
                                     bool translating, void *user_data) {
@@ -763,11 +839,13 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     }
 #endif
 
-    at_drval_t *dv = g_region.drval;
-    app_pc base = g_region.base;
-    size_t len = g_region.len;
-    if (dv == NULL || ipc < base || ipc >= base + len)
+    uint64_t off;
+    if (!in_scope(ipc, &off))
         return DR_EMIT_DEFAULT;
+    at_drval_t *dv = g_drval;
+    if (dv == NULL)
+        return DR_EMIT_DEFAULT; /* in scope but no capture buffer registered yet */
+    __atomic_fetch_add(&g_inscount, 1, __ATOMIC_RELAXED);
 
 #ifdef ASMTEST_TAINT
     /* Branch-condition SINK (kind = 1): at each in-region conditional branch, insert a
@@ -775,10 +853,11 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
      * FIRST (before the value/propagation instrumentation of this branch), so at runtime
      * it observes the reg-tag file as left by the PRIOR (flag-defining) instruction's
      * inline propagation; being a clean call it restores the app flags the branch then
-     * reads. off is the branch's region offset; ea = 0 (a register/flag sink). */
+     * reads. off is the branch's offset in the shared origin space; ea = 0 (a
+     * register/flag sink). */
     if (instr_is_cbr(instr)) {
         dr_insert_clean_call(dc, bb, instr, (void *)on_sink, false, 3,
-                             OPND_CREATE_INTPTR((ptr_uint_t)(ipc - base)),
+                             OPND_CREATE_INTPTR((ptr_uint_t)off),
                              OPND_CREATE_INTPTR((ptr_uint_t)0),
                              OPND_CREATE_INTPTR((ptr_uint_t)1));
     }
@@ -839,7 +918,7 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     drx_buf_insert_load_buf_ptr(dc, g_buf, bb, instr, s_ptr);
 
     /* off, rip: compile-time immediates. */
-    store_imm64(dc, bb, instr, s_ptr, s_a, (uint64_t)(ipc - base),
+    store_imm64(dc, bb, instr, s_ptr, s_a, off,
                 (short)offsetof(raw_step_t, off));
     store_imm64(dc, bb, instr, s_ptr, s_a, (uint64_t)(ptr_uint_t)ipc,
                 (short)offsetof(raw_step_t, rip));
@@ -1023,6 +1102,13 @@ static dr_signal_action_t event_signal(void *drcontext, dr_siginfo_t *info) {
 }
 
 static void event_exit(void) {
+    /* Scoping cost metric (Increment 6): report how many app instructions the client
+     * instrumented and how many ranges it scoped to, so a scope=whole vs scope=ranges pair
+     * of runs can prove the inscount delta (the cost bound). A single grep-able line. */
+    dr_fprintf(STDERR,
+               "ASMTEST_TAINT_INSCOUNT inscount=%llu regions=%d scope=%s\n",
+               (unsigned long long)g_inscount, g_nregions,
+               g_scope_whole ? "whole" : "ranges");
     if (g_buf != NULL)
         drx_buf_free(g_buf);
     drx_exit();
@@ -1047,8 +1133,13 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
                                  false};
 #endif
     (void)id;
-    (void)argc;
-    (void)argv;
+    /* Client options (drrun -c <client> [opts] -- <app>): `scope=whole` instruments the
+     * whole window spanning the registered ranges instead of only the ranges (Increment 6
+     * inscount toggle). Scanned across all argv (argv[0] is the client path). */
+    for (int i = 0; i < argc; i++) {
+        if (argv[i] != NULL && strcmp(argv[i], "scope=whole") == 0)
+            g_scope_whole = 1;
+    }
 #ifdef ASMTEST_TAINT
     dr_set_client_name("asm-test data-flow taint client (inlined)", "");
 #else
