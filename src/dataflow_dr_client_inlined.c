@@ -90,7 +90,13 @@
  *    (surfaced parallel-to-steps via dv->step_taint[]). No hot-path clean call.
  *  - on_seed: a rare PC-resolved clean call (the on_marker pattern, no drwrap) that
  *    paints tag_ptr(base..+len) = color at seed time (pre-traced-code, no concurrency).
- *    on_sink / at_taint_hit_t are the NEXT slice (deferred, per the plan's first slice).
+ *  - Sink slice: on_sink_register (PC-resolved, rdi = at_taint_report_t*) records the
+ *    report; a branch-condition sink (kind = 1) appends one at_taint_hit_t at each in-
+ *    region conditional branch whose flag is tainted, via a transparent clean call that
+ *    reads the eflags tag from this thread's reg-tag file (off the per-instruction path;
+ *    seed_off/depth are left 0 and filled app-side by the validator's def-use BFS). The
+ *    guarded INLINE skip (no call when the flag is clean) and other sink kinds (mem-len /
+ *    call-arg watching a passed-in operand tag) are the next refinement.
  *
  * Two deliberate first-slice simplifications, each a safe under-approximation (a
  * conservative MISS, never corruption or a false positive), documented at their sites:
@@ -196,8 +202,13 @@ static uint8_t g_sink_byte;
 #define AT_RT_COUNT    17
 static int g_tls_regfile = -1;
 
-/* App-emitted seed marker PC (resolved by dr_get_proc_address, like pc_marker). */
+/* App-emitted seed/sink marker PCs (resolved by dr_get_proc_address, like pc_marker),
+ * and the app-owned sink report the client appends hits into (registered at the sink
+ * marker). Single-threaded native fixture this increment, so appends are unlocked; the
+ * launched multithreaded workload (Increment 5) backs g_report with shared memory. */
 static app_pc pc_seed_marker;
+static app_pc pc_sink_marker;
+static at_taint_report_t *g_report;
 
 /* Map a DR reg id to its reg-tag-file index (canonical 64-bit GP container -> 0..15),
  * or -1 if not a tracked GP register. */
@@ -282,6 +293,50 @@ static void event_thread_exit(void *drcontext) {
     at_tag_t *rf = (at_tag_t *)drmgr_get_tls_field(drcontext, g_tls_regfile);
     if (rf != NULL)
         dr_thread_free(drcontext, rf, AT_RT_COUNT);
+}
+
+/* Sink marker clean call (rare; not the hot path): register the app-owned report the
+ * sink appends hits into. Same on_marker pattern (rdi = at_taint_report_t*), no drwrap. */
+static void on_sink_register(at_taint_report_t *report) {
+    dr_mutex_lock(g_lock);
+    g_report = report;
+    dr_mutex_unlock(g_lock);
+}
+
+/* Sink append (rare; per watched-branch, NOT per-instruction — the propagation stays
+ * inline). Inserted UNCONDITIONALLY at each in-region conditional branch (a transparent
+ * clean call, so the app's flags the branch reads are preserved); the taint GUARD is
+ * the data check below (append only when the watched operand is tainted). For a branch
+ * (kind = 1) the watched operand is eflags, read from THIS thread's reg-tag file — set
+ * by the flag-defining instruction's inline propagation, which already executed. off is
+ * the branch's region offset; seed_off/depth are left 0 and filled app-side by the
+ * validator's def-use BFS. (A guarded INLINE skip — no call when the flag is clean — is
+ * the immediate refinement; unconditional-per-branch is correct and simpler here.) */
+static void on_sink(uint64_t off, uint64_t ea, uint64_t kind) {
+    if (g_report == NULL)
+        return;
+    void *dc = dr_get_current_drcontext();
+    if (dc == NULL)
+        return;
+    at_tag_t *rf = (at_tag_t *)drmgr_get_tls_field(dc, g_tls_regfile);
+    if (rf == NULL)
+        return;
+    at_tag_t tag = rf[AT_RT_EFLAGS]; /* watched operand for a branch sink */
+    if (tag == AT_TAG_CLEAN)
+        return; /* clean flow does not reach the sink */
+
+    g_report->hits_total++;
+    if (g_report->hits == NULL || g_report->hits_len >= g_report->hits_cap) {
+        g_report->truncated =
+            1; /* honest overflow, like at_drval_t / asmtest_trace_t */
+        return;
+    }
+    at_taint_hit_t *h = &g_report->hits[g_report->hits_len++];
+    memset(h, 0, sizeof *h);
+    h->off = off;
+    h->ea = ea;
+    h->tag = tag;
+    h->kind = (uint8_t)kind;
 }
 
 /* ---- inline-emit helpers for the propagation phase ---------------------------- */
@@ -630,6 +685,12 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                              opnd_create_reg(DR_REG_RDX));
         return DR_EMIT_DEFAULT;
     }
+    /* Sink marker: register the app-owned report (rdi = at_taint_report_t*). */
+    if (ipc == pc_sink_marker) {
+        dr_insert_clean_call(dc, bb, instr, (void *)on_sink_register, false, 1,
+                             opnd_create_reg(DR_REG_RDI));
+        return DR_EMIT_DEFAULT;
+    }
 #endif
 
     at_drval_t *dv = g_region.drval;
@@ -637,6 +698,21 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     size_t len = g_region.len;
     if (dv == NULL || ipc < base || ipc >= base + len)
         return DR_EMIT_DEFAULT;
+
+#ifdef ASMTEST_TAINT
+    /* Branch-condition SINK (kind = 1): at each in-region conditional branch, insert a
+     * transparent clean call that appends a hit iff the flag it reads is tainted. Placed
+     * FIRST (before the value/propagation instrumentation of this branch), so at runtime
+     * it observes the reg-tag file as left by the PRIOR (flag-defining) instruction's
+     * inline propagation; being a clean call it restores the app flags the branch then
+     * reads. off is the branch's region offset; ea = 0 (a register/flag sink). */
+    if (instr_is_cbr(instr)) {
+        dr_insert_clean_call(dc, bb, instr, (void *)on_sink, false, 3,
+                             OPND_CREATE_INTPTR((ptr_uint_t)(ipc - base)),
+                             OPND_CREATE_INTPTR((ptr_uint_t)0),
+                             OPND_CREATE_INTPTR((ptr_uint_t)1));
+    }
+#endif
 
     /* Reserve three scratch GPRs FIRST (buffer pointer + two work registers); the
      * memory-operand enumeration below needs s_ptr to skip operands whose base or
@@ -848,6 +924,8 @@ static void try_resolve(module_handle_t h) {
 #ifdef ASMTEST_TAINT
     if (pc_seed_marker == NULL)
         pc_seed_marker = (app_pc)dr_get_proc_address(h, AT_TAINT_SEED_SYM);
+    if (pc_sink_marker == NULL)
+        pc_sink_marker = (app_pc)dr_get_proc_address(h, AT_TAINT_SINK_SYM);
 #endif
 }
 

@@ -84,6 +84,16 @@ __attribute__((noinline, visibility("default"))) void
 asmtest_dr_taint_seed_marker(void *base, size_t len, unsigned long color) {
     g_seedmarker_sink += 0x91 + (unsigned long)(uintptr_t)base + len + color;
 }
+
+/* The app-side SINK marker the taint client resolves by PC (AT_TAINT_SINK_SYM) and
+ * wraps — reading rdi = at_taint_report_t* to register the report the client appends
+ * hits into. Same stable-entry-PC discipline as the value/seed markers. */
+static volatile unsigned long g_sinkmarker_sink;
+
+__attribute__((noinline, visibility("default"))) void
+asmtest_dr_taint_sink_marker(void *report) {
+    g_sinkmarker_sink += 0xA3 + (unsigned long)(uintptr_t)report;
+}
 #endif
 
 #if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_CAPSTONE)
@@ -425,7 +435,8 @@ int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
                                   uint64_t max_insns, uint64_t seed_base,
                                   uint64_t seed_len, at_tag_t seed_color,
                                   long *result, asmtest_valtrace_t *vt,
-                                  at_tag_t *step_taint, size_t step_taint_cap) {
+                                  at_tag_t *step_taint, size_t step_taint_cap,
+                                  at_taint_report_t *report) {
     if (vt == NULL || code == NULL || code_len == 0 || nargs < 0 || nargs > 6 ||
         (nargs > 0 && args == NULL))
         return DF_DR_EINVAL;
@@ -481,9 +492,16 @@ int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
     for (int i = 0; i < nargs; i++)
         a[i] = args[i];
 
-    /* Register the capture region + buffer, THEN paint the seed (both are rare PC-
-     * resolved clean calls in the client, off the hot path), THEN run the routine. */
+    /* Register the capture region + buffer, register the sink report, THEN paint the
+     * seed (all rare PC-resolved clean calls in the client, off the hot path), THEN run
+     * the routine. */
     asmtest_dr_valcapture_marker(exec.base, exec.len, &dv);
+    if (report != NULL) {
+        report->hits_len = 0;
+        report->hits_total = 0;
+        report->truncated = 0;
+        asmtest_dr_taint_sink_marker(report);
+    }
     if (seed_len > 0)
         asmtest_dr_taint_seed_marker((void *)(uintptr_t)seed_base,
                                      (size_t)seed_len,
@@ -527,7 +545,8 @@ int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
                                   uint64_t max_insns, uint64_t seed_base,
                                   uint64_t seed_len, at_tag_t seed_color,
                                   long *result, asmtest_valtrace_t *vt,
-                                  at_tag_t *step_taint, size_t step_taint_cap) {
+                                  at_tag_t *step_taint, size_t step_taint_cap,
+                                  at_taint_report_t *report) {
     (void)code;
     (void)code_len;
     (void)args;
@@ -540,6 +559,7 @@ int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
     (void)vt;
     (void)step_taint;
     (void)step_taint_cap;
+    (void)report;
     return DF_DR_ENOSYS;
 }
 #endif

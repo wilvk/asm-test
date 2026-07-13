@@ -1,29 +1,33 @@
 /*
- * dr_taint.c — DynamoRIO taint tier (Increment 4, first slice): the in-band inline
- * dst_tag = union(src_tags) producer end-to-end. Runs a self-contained x86-64 routine
- * NATIVELY, in-band, whole-process under DynamoRIO with the taint client
- * (src/dataflow_dr_client_inlined.c built -DASMTEST_TAINT), SEEDS a known buffer, and
- * asserts the client's per-step taint witness (dv->step_taint) equals the emulator-
- * oracle FORWARD SLICE from the seed step — i.e. inline taint propagation reproduces
- * def-use forward reachability. Plus a negative control (unseeded => empty taint set).
+ * dr_taint.c — DynamoRIO taint tier (Increment 4): the in-band inline
+ * dst_tag = union(src_tags) producer + seed/sink surface end-to-end. Runs a self-
+ * contained x86-64 routine NATIVELY, in-band, whole-process under DynamoRIO with the
+ * taint client (src/dataflow_dr_client_inlined.c built -DASMTEST_TAINT), SEEDS a known
+ * buffer, and (a) asserts the client's per-step taint witness (dv->step_taint) equals
+ * the emulator-oracle FORWARD SLICE from the seed step — inline propagation reproduces
+ * def-use forward reachability — and (b) asserts a tainted value reaching a conditional-
+ * branch SINK produces one at_taint_hit_t with the right off/tag/kind, its off in the
+ * forward slice, and the app-side def-use BFS resolving seed_off + depth. Each has a
+ * negative control (unseeded => empty taint set / zero hits).
  *
  * This mirrors dr_valtrace.c's structure + oracle discipline; the ADDITIVE value
  * capture still runs (asserted: result + step count), so this also proves the taint
  * client fills at_drval_t identically. Named dr_taint.c (not test_*.c) so the root
  * Makefile's SUITES wildcard does not sweep this standalone DynamoRIO harness into the
  * forking runner; it is wired + run explicitly by mk/native-trace.mk's
- * dr-taint-native-test lane (twice: seeded, then `negative`).
+ * dr-taint-native-test lane (four modes: seeded / negative / sink / sink-negative).
  *
  * DynamoRIO permits ONE in-process lifecycle per process, so each invocation drives ONE
- * scenario: default = seeded (positive oracle diff), argv[1]=="negative" = the unseeded
- * control. Self-skips cleanly (exit 0) when DynamoRIO / the client is unavailable.
+ * scenario, selected by argv[1] (default = seeded). Self-skips cleanly (exit 0) when
+ * DynamoRIO / the client is unavailable.
  *
- * Fixture (leaf, x86-64 SysV — rdi=buf, rsi=b) — df_chain with step0 reading a SEEDED
- * memory buffer instead of a register arg, so taint originates in the shadow:
- *   taint_chain(buf,b): mov rax,[rdi] / mov [rsp-8],rax / mov rcx,[rsp-8] /
- *                       lea rdx,[rcx+rsi] / mov rax,rdx / ret
- *   Seed M[buf] => forward(step0) = {0,1,2,3,4} (excludes ret); the store/reload at
- *   steps 1->2 exercise the integer-memory (stack) shadow, the moves + lea the reg tags.
+ * Fixtures (leaf, x86-64 SysV — rdi=buf, rsi=b), both reading a SEEDED memory buffer at
+ * step0 so taint originates in the shadow:
+ *   taint_chain:      mov rax,[rdi] / mov [rsp-8],rax / mov rcx,[rsp-8] /
+ *                     lea rdx,[rcx+rsi] / mov rax,rdx / ret   (propagation oracle)
+ *   taint_sink_chain: ... / add rcx,rsi / jz +3 / ...         (branch-condition sink)
+ * The store/reload exercise the integer-memory (stack) shadow, the moves/lea/add the reg
+ * + flag tags; forward(step0) excludes ret.
  */
 #include "asmtest_valtrace.h"
 
@@ -48,7 +52,8 @@ int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
                                   uint64_t max_insns, uint64_t seed_base,
                                   uint64_t seed_len, at_tag_t seed_color,
                                   long *result, asmtest_valtrace_t *vt,
-                                  at_tag_t *step_taint, size_t step_taint_cap);
+                                  at_tag_t *step_taint, size_t step_taint_cap,
+                                  at_taint_report_t *report);
 
 #ifdef DF_HAVE_EMU
 /* The emulator L0 producer (oracle); linked + declared only where Unicorn is present. */
@@ -79,6 +84,24 @@ static const uint8_t taint_chain[] = {
     0xc3,                         /* 0x14 ret                              */
 };
 
+/* Sink fixture (rdi=buf seeded, rsi=b): derives the seeded value into a flag, then
+ * branches on it — the tainted flag reaches a conditional-branch SINK (kind = 1).
+ *   taint_sink_chain: mov rax,[rdi] / mov [rsp-8],rax / mov rcx,[rsp-8] /
+ *                     add rcx,rsi / jz +3 / mov rax,rcx / ret
+ * add taints rcx AND the flags; the jz at 0x10 reads the tainted ZF => one hit at 0x10.
+ * forward(step0) = {0,1,2,3,4,5} (jz at step4, mov rax,rcx at step5; ret excluded). */
+static const uint8_t taint_sink_chain[] = {
+    0x48, 0x8b, 0x07,             /* 0x00 mov rax, [rdi]   (SEED origin)    */
+    0x48, 0x89, 0x44, 0x24, 0xf8, /* 0x03 mov [rsp-8], rax (spill)          */
+    0x48, 0x8b, 0x4c, 0x24, 0xf8, /* 0x08 mov rcx, [rsp-8] (reload)         */
+    0x48, 0x01, 0xf1,             /* 0x0d add rcx, rsi     (rcx+flags taint)*/
+    0x74, 0x03,                   /* 0x10 jz 0x15          (SINK: taint ZF) */
+    0x48, 0x89, 0xc8,             /* 0x12 mov rax, rcx                      */
+    0xc3,                         /* 0x15 ret                               */
+};
+#define SINK_OFF   0x10 /* the jz instruction's region offset */
+#define SINK_DEPTH 4    /* def-use edges seed(step0) -> jz(step4)          */
+
 static int slices_equal(const asmtest_slice_t *a, const asmtest_slice_t *b) {
     if (a == NULL || b == NULL || a->n != b->n)
         return 0;
@@ -86,6 +109,66 @@ static int slices_equal(const asmtest_slice_t *a, const asmtest_slice_t *b) {
         if (a->steps[i] != b->steps[i])
             return 0;
     return 1;
+}
+
+/* The trace step whose instruction offset is `off`, or -1. */
+static int step_at_off(const asmtest_valtrace_t *v, uint64_t off) {
+    for (size_t i = 0; i < v->steps_len; i++)
+        if (v->insn_off[i] == off)
+            return (int)i;
+    return -1;
+}
+
+/* BFS shortest def-use distance from `from` to `to` over the graph's edges, or -1 if
+ * unreachable. This is the app-side "validator's def-use BFS" the taint ABI defers the
+ * hit's seed_off/depth to (the client leaves them 0). */
+static int defuse_depth(const asmtest_defuse_t *g, size_t nsteps, int from,
+                        int to) {
+    if (g == NULL || from < 0 || to < 0 || (size_t)from >= nsteps ||
+        (size_t)to >= nsteps)
+        return -1;
+    int *dist = (int *)malloc(nsteps * sizeof *dist);
+    int *q = (int *)malloc(nsteps * sizeof *q);
+    if (dist == NULL || q == NULL) {
+        free(dist);
+        free(q);
+        return -1;
+    }
+    for (size_t i = 0; i < nsteps; i++)
+        dist[i] = -1;
+    int head = 0, tail = 0;
+    dist[from] = 0;
+    q[tail++] = from;
+    while (head < tail) {
+        int cur = q[head++];
+        for (size_t e = 0; e < g->n; e++) {
+            if ((int)g->edges[e].from_step != cur)
+                continue;
+            int nx = (int)g->edges[e].to_step;
+            if (nx >= 0 && (size_t)nx < nsteps && dist[nx] == -1) {
+                dist[nx] = dist[cur] + 1;
+                q[tail++] = nx;
+            }
+        }
+    }
+    int d = dist[to];
+    free(dist);
+    free(q);
+    return d;
+}
+
+/* Fill each hit's app-side seed_off + depth (the client leaves them 0): seed_off is the
+ * seed step's offset; depth is the def-use BFS distance seed_step -> sink_step. */
+static void fill_seed_and_depth(at_taint_report_t *report,
+                                const asmtest_defuse_t *g,
+                                const asmtest_valtrace_t *v, int seed_step) {
+    for (size_t i = 0; i < report->hits_len; i++) {
+        at_taint_hit_t *h = &report->hits[i];
+        int sink_step = step_at_off(v, h->off);
+        h->seed_off = (seed_step >= 0) ? v->insn_off[seed_step] : 0;
+        int d = defuse_depth(g, v->steps_len, seed_step, sink_step);
+        h->depth = (d >= 0) ? (uint32_t)d : 0;
+    }
 }
 
 /* Seeded scenario: seed M[buf], run, and diff the client taint witness against the
@@ -112,7 +195,7 @@ static void test_seeded(void) {
     int rc = asmtest_dataflow_dr_taint_run(
         taint_chain, sizeof taint_chain, args, 2, 0, (uint64_t)(uintptr_t)buf,
         sizeof(uint64_t), AT_TAG_TAINTED, &result, v, step_taint,
-        sizeof step_taint / sizeof step_taint[0]);
+        sizeof step_taint / sizeof step_taint[0], NULL);
 
     CHECK(rc == DF_DR_OK,
           "seeded: routine captured in-band under the taint client");
@@ -195,7 +278,7 @@ static void test_negative(void) {
     int rc = asmtest_dataflow_dr_taint_run(
         taint_chain, sizeof taint_chain, args, 2, 0, /*seed_base*/ 0,
         /*seed_len*/ 0, AT_TAG_TAINTED, &result, v, step_taint,
-        sizeof step_taint / sizeof step_taint[0]);
+        sizeof step_taint / sizeof step_taint[0], NULL);
 
     CHECK(rc == DF_DR_OK, "negative: routine captured in-band (unseeded)");
     CHECK(result == 12,
@@ -222,14 +305,124 @@ static void test_negative(void) {
     asmtest_valtrace_free(v);
 }
 
+/* Sink scenario: a tainted flag reaches a conditional-branch sink => one at_taint_hit_t
+ * with the right off/tag/kind, its off in the forward slice, and the app-side def-use
+ * BFS resolving seed_off + depth. */
+static void test_sink(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "sink: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL) {
+        CHECK(0, "sink: buffer alloc");
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    long args[2] = {(long)(uintptr_t)buf, 5};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_sink_chain, sizeof taint_sink_chain, args, 2, 0,
+        (uint64_t)(uintptr_t)buf, sizeof(uint64_t), AT_TAG_TAINTED, &result, v,
+        step_taint, sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK,
+          "sink: routine captured in-band under the taint client");
+    CHECK(result == 12,
+          "sink: routine returned 12 (rcx = *buf + b; jz not taken)");
+    CHECK(v->steps_len == 7, "sink: seven in-region steps captured");
+    CHECK(report.hits_total == 1 && report.hits_len == 1 && !report.truncated,
+          "sink: exactly one taint hit recorded");
+    if (report.hits_len == 1) {
+        at_taint_hit_t *h = &report.hits[0];
+        CHECK(h->off == SINK_OFF, "sink: hit offset is the jz branch (0x10)");
+        CHECK(h->tag != AT_TAG_CLEAN, "sink: hit tag is tainted");
+        CHECK(h->kind == 1, "sink: hit kind = 1 (branch condition)");
+        CHECK(h->ea == 0, "sink: hit ea = 0 (register/flag sink)");
+    }
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    int sink_step = step_at_off(v, SINK_OFF);
+    CHECK(fwd && sink_step >= 0 &&
+              asmtest_slice_contains(fwd, (uint32_t)sink_step),
+          "sink: sink instruction is in forward slice(seed) [ORACLE]");
+
+    /* App-side validator fills seed_off + depth from the def-use graph. */
+    fill_seed_and_depth(&report, g, v, 0);
+    if (report.hits_len == 1) {
+        CHECK(report.hits[0].seed_off == 0x00,
+              "sink: app-side seed_off resolves to the seed load (0x00)");
+        CHECK(report.hits[0].depth == SINK_DEPTH,
+              "sink: app-side depth = 4 def-use edges seed->sink");
+    }
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    asmtest_valtrace_free(v);
+}
+
+/* Sink negative control: the SAME sink fixture unseeded => the branch flag stays clean
+ * => zero hits (the sink is seed-gated, not structural). */
+static void test_sink_negative(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "sink-negative: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL) {
+        CHECK(0, "sink-negative: buffer alloc");
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    long args[2] = {(long)(uintptr_t)buf, 5};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_sink_chain, sizeof taint_sink_chain, args, 2, 0, /*seed_base*/ 0,
+        /*seed_len*/ 0, AT_TAG_TAINTED, &result, v, step_taint,
+        sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK, "sink-negative: routine captured (unseeded)");
+    CHECK(
+        report.hits_total == 0 && report.hits_len == 0 && !report.truncated,
+        "sink-negative: zero hits (unseeded => clean flag never reaches sink)");
+
+    free(buf);
+    asmtest_valtrace_free(v);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* progress survives a hard kill */
     if (!asmtest_dataflow_dr_available()) {
         printf("# SKIP dr-taint: DynamoRIO / taint client unavailable\n1..0\n");
         return 0;
     }
-    if (argc > 1 && strcmp(argv[1], "negative") == 0)
+    const char *mode = (argc > 1) ? argv[1] : "";
+    if (strcmp(mode, "negative") == 0)
         test_negative();
+    else if (strcmp(mode, "sink") == 0)
+        test_sink();
+    else if (strcmp(mode, "sink-negative") == 0)
+        test_sink_negative();
     else
         test_seeded();
     printf("1..%d\n", checks);

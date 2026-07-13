@@ -290,19 +290,28 @@ else
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_taint negative
+	@echo "== dr-taint-native-test (sink: tainted flag reaches a branch => at_taint_hit_t) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint sink
+	@echo "== dr-taint-native-test (sink negative control: unseeded => zero hits) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint sink-negative
 endif
 
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
-# the ONLY dr_insert_clean_call sites are the two rare PC-resolved markers (on_marker +
-# on_seed), never per-instruction in the hot path.
+# the ONLY dr_insert_clean_call sites are rare + off the per-instruction path: on_marker
+# (region), on_seed (seed paint), on_sink_register (report), and on_sink (per watched
+# conditional branch, NOT per-instruction). The per-instruction union/broadcast is inline.
 .PHONY: dr-taint-inline-gate
 dr-taint-inline-gate:
 	@n=$$(grep -c 'dr_insert_clean_call(' src/dataflow_dr_client_inlined.c); \
-	 if [ "$$n" -ne 2 ]; then \
-	   echo "dr-taint: expected exactly 2 clean calls (on_marker + on_seed markers), found $$n"; \
+	 if [ "$$n" -ne 4 ]; then \
+	   echo "dr-taint: expected exactly 4 clean calls (on_marker/on_seed/on_sink_register/on_sink), found $$n"; \
 	   exit 1; \
 	 fi; \
-	 echo "dr-taint: propagation is inline (clean calls only at the 2 markers) — OK"
+	 echo "dr-taint: propagation is inline (clean calls only at markers + per-branch sink) — OK"
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value

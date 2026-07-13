@@ -430,7 +430,7 @@ operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_b
 reproduce `at_drval_t` **byte-identically** under the existing oracle gate. Correctness bar is
 exacting even though no new semantics land.
 
-## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(first slice LANDED 2026-07-13; sink slice next)*
+## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(LANDED 2026-07-13 — exit criteria met; two documented hardening refinements remain)*
 
 First taint semantics: a byte-granular shadow and inline `dst_tag = ∪ src_tags`, driven
 by the seed/sink surface, validated on a **native in-process fixture** — still docker,
@@ -510,8 +510,25 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > paint every byte, so the store/reload share it) — per-byte multi-byte union is next; (2) inline
 > store-tag broadcast is branchless *write-if-leaf-present-else-drop* (cmov to a throwaway on a null
 > leaf) with the seed buffer's leaf and each thread's stack leaves pre-touched at seed time — general
-> create-on-touch-on-store via a first-touch slowpath clean call is next, alongside
-> `on_sink`/`at_taint_hit_t`.
+> create-on-touch-on-store via a first-touch slowpath clean call is next.
+>
+> **Sink slice LANDED 2026-07-13 — Increment 4 exit criteria MET.** Added the seed/sink surface's
+> other half: `on_sink_register` (PC-resolved `asmtest_dr_taint_sink_marker`, rdi = `at_taint_report_t*`)
+> and a branch-condition sink (`kind = 1`) that appends one `at_taint_hit_t` at each in-region
+> conditional branch whose eflags tag is tainted, via a transparent clean call reading this thread's
+> reg-tag file (off the per-instruction propagation path; `seed_off`/`depth` left 0 and filled app-side
+> by the harness's def-use BFS, exactly as the ABI specifies). New `dr_taint.c` scenarios `sink`
+> (tainted seed → `add` taints the flag → `jz` sink → **one hit at off 0x10, tag tainted, kind 1, in
+> `forward(seed)`, app-side seed_off 0x00 + depth 4**, 11/11) and `sink-negative` (unseeded → **zero
+> hits**, 2/2), plus the first-slice seeded/negative still 8/8 + 5/5 and flag-off `dr-valtrace-inlined-test`
+> still 14/14 — all green in the fresh `make docker-taint-native` image. This meets the Increment 4
+> exit criteria (seed a color, derive through GP regs + integer memory, the sink fires with the correct
+> `seed_off`→`off` and `depth`, the tag graph is diffed against the emulator L2 slicer, a negative
+> control reports zero hits, propagation is inline). **Two hardening refinements remain** (both safe
+> under-approximations today, not correctness gaps): per-byte multi-byte memory-tag union (currently
+> low-byte), and general create-on-touch-on-store via a first-touch slowpath clean call (currently
+> pre-touch + drop-if-absent). The guarded inline sink skip + other sink kinds (mem-len / call-arg) are
+> also follow-ons. Increment 5 (launch-under-DR container) is the next major push.
 >
 > **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
 > (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update
