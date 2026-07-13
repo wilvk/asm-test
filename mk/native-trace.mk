@@ -108,6 +108,10 @@ $(BUILD)/libasmtest_drval_client_inlined.so: $(BUILD)/libasmtest_drclient.so ;
 # The taint client (taint-tier Increment 4) is the SAME source built -DASMTEST_TAINT (a
 # fourth add_library target), emitted by the SAME cmake --build; tie it in too.
 $(BUILD)/libasmtest_drtaint_client.so: $(BUILD)/libasmtest_drclient.so ;
+# The GC-remap taint client (taint-tier Increment 7, PARTIAL slice) is the SAME source
+# built -DASMTEST_TAINT -DASMTEST_TAINT_GCREMAP (a fifth add_library target), emitted by
+# the SAME cmake --build; tie it in too.
+$(BUILD)/libasmtest_drtaint_gcremap_client.so: $(BUILD)/libasmtest_drclient.so ;
 
 # App-side shared library (libasmtest_drapp) for the language bindings.
 shared-drtrace: $(call shlib_dev,libasmtest_drapp)
@@ -150,6 +154,7 @@ else
 	@$(MAKE) --no-print-directory dr-taint-native-test
 	@$(MAKE) --no-print-directory dr-taint-launch-test
 	@$(MAKE) --no-print-directory dr-taint-stress-test
+	@$(MAKE) --no-print-directory dr-taint-gcremap-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -400,6 +405,41 @@ else
 	@echo "== dr-taint-stress-test (drrun -c taint-client -- N-thread concurrent process-global shadow stress) =="
 	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
 	    $(abspath $(BUILD)/taint_stress)
+endif
+
+# --- Taint tier Increment 7 (PARTIAL slice): GC-move shadow remap -------------
+# `drrun -c <gcremap client>.so gcremap_selftest -- /bin/true` runs, at client init, the
+# synthetic-triple GC-move remap unit test: hand-provided {old,new,len} triples copied
+# through the SAME BSD 2-level create-on-touch tag shadow (at_gc_remap, serialized under
+# g_lock + SEQ_CST fences per the Increment-4 concurrency policy), asserting the tag is
+# readable at the NEW address and absent at the OLD one — for a disjoint move, per-byte
+# colour fidelity, a negative (unseeded => no phantom taint), and an OVERLAPPING slide.
+# The remap path lives behind the DISABLED compile flag ASMTEST_TAINT_GCREMAP (a SEPARATE
+# .so), so the default value/taint clients are byte-identical and this adds no clean call.
+# DEFERRED (externally hard-blocked on Phase 4): the live .NET GCBulkMovedObjectRanges
+# {old,new,len} feed, the coherence canary over a real forced GC, and the launch-under-DR
+# CI gate. TAP + a grep-able `ASMTEST_GCREMAP_SELFTEST checks=.. fails=..` land on stderr;
+# the lane asserts fails=0 and checks>0. Self-skips cleanly without DynamoRIO.
+.PHONY: dr-taint-gcremap-test
+dr-taint-gcremap-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-gcremap-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@echo "== dr-taint-gcremap-test (Increment 7 partial: synthetic {old,new,len} triples; remap behind ASMTEST_TAINT_GCREMAP) =="
+	@out=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_gcremap_client.so) \
+	          gcremap_selftest -- /bin/true 2>&1); \
+	 printf '%s\n' "$$out"; \
+	 line=$$(printf '%s\n' "$$out" | grep 'ASMTEST_GCREMAP_SELFTEST'); \
+	 checks=$$(printf '%s\n' "$$line" | sed -n 's/.*checks=\([0-9]*\).*/\1/p'); \
+	 fails=$$(printf '%s\n' "$$line" | sed -n 's/.*fails=\([0-9]*\).*/\1/p'); \
+	 if [ -n "$$fails" ] && [ "$$fails" -eq 0 ] && [ -n "$$checks" ] && [ "$$checks" -gt 0 ]; then \
+	   echo "dr-taint-gcremap: $$checks synthetic-triple checks passed, 0 failed — OK"; \
+	 else \
+	   echo "dr-taint-gcremap: FAILED (checks=$$checks fails=$$fails)"; exit 1; \
+	 fi
 endif
 
 # --- Taint tier Increment 5: dotnet launch — JIT / code-cache coexistence ---

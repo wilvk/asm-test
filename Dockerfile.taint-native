@@ -43,10 +43,13 @@ RUN sh scripts/build-capstone.sh && ldconfig
 
 # Run (1) the in-process oracle diffs + negative controls (make dr-taint-native-test),
 # (2) the launch-under-DR native workload + POSIX-shm + out-of-process validator (make
-# dr-taint-launch-test), and (3) the N-thread concurrent process-global-shadow stress
-# validating the Increment-4 race policy (make dr-taint-stress-test). All self-skip
+# dr-taint-launch-test), (3) the N-thread concurrent process-global-shadow stress
+# validating the Increment-4 race policy (make dr-taint-stress-test), and (4) the
+# Increment-7 PARTIAL slice: the GC-move shadow remap over synthetic {old,new,len} triples,
+# behind the disabled ASMTEST_TAINT_GCREMAP flag (make dr-taint-gcremap-test). All self-skip
 # cleanly if DynamoRIO were absent, but here it is installed, so they execute.
 CMD set -eux; \
     make dr-taint-native-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
     make dr-taint-launch-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
-    make dr-taint-stress-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-stress-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-gcremap-test DYNAMORIO_HOME=$DYNAMORIO_HOME
