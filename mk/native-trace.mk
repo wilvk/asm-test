@@ -414,13 +414,19 @@ endif
 # instrumented. Self-skips without DynamoRIO. Body of the `make docker-drext-probe`
 # lane. See docs/internal/analysis/dr-extension-load-probe-findings.md.
 #
-# Set PROBE_UMBRA=1 to ALSO load-check umbra — but umbra is LGPL-2.1 (it ships in
-# the Dr. Memory Framework, not DR core), so that path is informational only and
-# deliberately NOT the committed CI gate.
+# Set PROBE_DRWRAP=1 and/or PROBE_UMBRA=1 to ALSO load-check the LGPL-2.1 extensions
+# (drwrap is a DR core ext/ extension; umbra ships in the Dr. Memory Framework). Both
+# paths are informational only and deliberately NOT the committed CI gate; the
+# packaging conveys either compliantly (scripts/collect-licenses.sh + licenses/LGPL-2.1.txt).
 DR_DRRUN := $(DYNAMORIO_HOME)/bin64/drrun
 PROBE_UMBRA ?=
+PROBE_DRWRAP ?=
+DREXT_PROBE_CMAKE_ARGS :=
+ifeq ($(PROBE_DRWRAP),1)
+DREXT_PROBE_CMAKE_ARGS += -DPROBE_DRWRAP=ON
+endif
 ifeq ($(PROBE_UMBRA),1)
-DREXT_PROBE_CMAKE_ARGS := -DPROBE_UMBRA=ON \
+DREXT_PROBE_CMAKE_ARGS += -DPROBE_UMBRA=ON \
     -DDrMemoryFramework_DIR=$(abspath $(DYNAMORIO_HOME)/drmemory/drmf)
 endif
 

@@ -77,10 +77,17 @@ set_target_properties(asmtest_drclient asmtest_drval_client asmtest_drval_client
 #
 # Default stack is the BSD-clean set only: drmgr + drreg + drx (the drx_buf
 # trace-buffer API lives in drx.h — there is no separate drx_buf extension).
-# umbra is LGPL-2.1 (it ships under the Dr. Memory Framework, not DR core), so it
-# is gated behind a SECOND opt-in (-DPROBE_UMBRA=ON) and stays out of the default
-# probe and the CI gate.
+# The two LGPL-2.1 extensions each sit behind their own opt-in and stay out of the
+# default probe and the CI gate:
+#   -DPROBE_DRWRAP=ON  links drwrap (a DynamoRIO CORE ext/ extension — no separate
+#                      find_package; use_DynamoRIO_extension resolves it directly).
+#   -DPROBE_UMBRA=ON   links umbra (ships under the Dr. Memory Framework, NOT DR
+#                      core — needs find_package(DrMemoryFramework)).
+# Linking either is compliant: the packaging conveys them as unmodified dynamic
+# libraries under LGPL-2.1 section 6 (scripts/collect-licenses.sh emits the license
+# text + written offer; scripts/fetch-corresponding-source.sh supplies the source).
 option(ASMTEST_BUILD_DREXT_PROBE "Build the throwaway DR extension-load probe" OFF)
+option(PROBE_DRWRAP "Additionally link drwrap (LGPL-2.1) into the probe" OFF)
 option(PROBE_UMBRA "Additionally link umbra (LGPL-2.1) into the probe" OFF)
 if(ASMTEST_BUILD_DREXT_PROBE)
   add_library(asmtest_drext_probe SHARED
@@ -89,6 +96,12 @@ if(ASMTEST_BUILD_DREXT_PROBE)
   use_DynamoRIO_extension(asmtest_drext_probe drmgr)
   use_DynamoRIO_extension(asmtest_drext_probe drreg)
   use_DynamoRIO_extension(asmtest_drext_probe drx)
+  if(PROBE_DRWRAP)
+    # drwrap is a DynamoRIO core extension (ext/), covered by DR's BSD config's
+    # extension registry — use_DynamoRIO_extension resolves it with no extra package.
+    use_DynamoRIO_extension(asmtest_drext_probe drwrap)
+    target_compile_definitions(asmtest_drext_probe PRIVATE PROBE_DRWRAP)
+  endif()
   if(PROBE_UMBRA)
     # umbra lives in the Dr. Memory Framework, a separate find_package that
     # registers the umbra ext include dir so use_DynamoRIO_extension resolves it.

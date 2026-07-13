@@ -10,13 +10,25 @@ fetched from the **pinned upstream releases** the build scripts use:
 | `Capstone-LICENSE.TXT` | Capstone (disassembler) | 5.0.1 ([build-capstone.sh](../scripts/build-capstone.sh)) | BSD-3-Clause |
 | `Capstone-LICENSE_LLVM.TXT` | Capstone (LLVM-derived tables) | 5.0.1 | LLVM (Apache-2.0-with-LLVM-exception) |
 | `DynamoRIO-<ver>.txt` | DynamoRIO (native-trace tier runtime) | 11.91.20630 ([fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh)) | BSD-3-Clause |
+| `LGPL-2.1.txt` | drwrap (DynamoRIO ext/) and umbra (Dr. Memory Framework) — verbatim GNU LGPL v2.1 | 11.91.20630 | LGPL-2.1-only |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own
-`License.txt`); only the BSD-licensed core runtime (`libdynamorio.so`) is shipped. The
-"full" hardware-trace build additionally bundles libipt / OpenCSD (both permissive) and,
-when present, libbpf (conveyed under its BSD-2-Clause option) — their texts are captured
-the same way when those libs are staged.
+`License.txt`); only the BSD-licensed core runtime (`libdynamorio.so`) is shipped by
+default. The "full" hardware-trace build additionally bundles libipt / OpenCSD (both
+permissive) and, when present, libbpf (conveyed under its BSD-2-Clause option) — their
+texts are captured the same way when those libs are staged.
+
+`LGPL-2.1.txt` is the §6 "copy of this License" that ships **only** when a drtrace build
+opts into linking the LGPL-2.1 extensions `drwrap` (`-DPROBE_DRWRAP` / a future LGPL
+client) or `umbra` (`-DPROBE_UMBRA`) and their `.so` is vendored into the slot. Default
+drtrace builds are BSD-clean and bundle neither, so it is not emitted. When they are
+bundled, [collect-licenses.sh](../scripts/collect-licenses.sh) records them as
+`LGPL-2.1-only` and adds an LGPL-2.1 §6 written offer backed by
+[fetch-corresponding-source.sh](../scripts/fetch-corresponding-source.sh)
+(`INCLUDE_LGPL_SOURCE=1`). They are conveyed as unmodified, dynamically-linked shared
+objects (§6 relink is satisfiable); GPL-2.0 already dominates the bundle, so they add no
+stronger copyleft.
 
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies these into each
 package's `THIRD-PARTY-LICENSES/` — emitting the native-trace tier entries only when the

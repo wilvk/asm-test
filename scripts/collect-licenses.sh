@@ -97,28 +97,74 @@ present 'libopencsd*' && \
 present 'libbpf*' && \
   emit libbpf libbpf BSD-2-Clause https://github.com/libbpf/libbpf "licenses/libbpf-*"
 
+# LGPL-2.1 DynamoRIO extensions, emitted only when a build opted into linking them
+# into the drtrace client and package-native.sh vendored the shared object into the
+# slot (default drtrace builds are BSD-clean and stage neither). Both are conveyed as
+# UNMODIFIED shared libraries, dynamically linked → LGPL-2.1 §6 relink is satisfied.
+# drwrap ships in the DynamoRIO release; umbra ships in its bundled Dr. Memory
+# Framework — both provenance the same DynamoRIO-Linux-<ver> tarball, so version by
+# the DR release. Their license text is the verbatim LGPL-2.1 in licenses/.
+lgpl_present() { present 'libdrwrap*' || present 'libumbra*'; }
+present 'libdrwrap*' && \
+  emit_lit drwrap drwrap "${ASMTEST_DR_VERSION:-unknown}" LGPL-2.1-only \
+           https://github.com/DynamoRIO/dynamorio "licenses/LGPL-2.1.txt"
+present 'libumbra*' && \
+  emit_lit umbra umbra "${ASMTEST_DRMF_VERSION:-${ASMTEST_DR_VERSION:-unknown}}" LGPL-2.1-only \
+           https://github.com/DynamoRIO/drmemory "licenses/LGPL-2.1.txt"
+
 {
     echo
     echo "Because this package conveys the GPL-2.0 engines Unicorn and Keystone as"
     echo "binaries dynamically linked into libasmtest_emu, the package as distributed"
-    echo "is effectively GPL-2.0 (MIT is GPL-compatible; Capstone is BSD-3-Clause). Any"
-    echo "native-trace tier libraries listed above (DynamoRIO, libipt, OpenCSD, libbpf)"
-    echo "are permissively licensed and add no further copyleft obligation."
-    echo
-    echo "WRITTEN OFFER (GPL-2.0 section 3b)"
-    echo "----------------------------------"
-    echo "For three (3) years from the date you received this package, the asm-test"
-    echo "maintainers offer to give any third party, for no more than the cost of"
-    echo "physically performing source distribution, the complete corresponding"
-    echo "machine-readable source code for the GPL-2.0 components listed above, at the"
-    echo "exact versions shown. Request it by opening an issue at"
-    echo "https://github.com/wilvk/asm-test . The same source is attached to the"
-    echo "matching GitHub release as corresponding-source-*.tar.gz (assembled by"
-    echo "scripts/fetch-corresponding-source.sh) and is the upstream release tagged"
-    echo "with the version shown for each component:"
-    echo "  Unicorn   https://github.com/unicorn-engine/unicorn"
-    echo "  Keystone  https://github.com/keystone-engine/keystone"
-    echo "  Capstone  https://github.com/capstone-engine/capstone"
+    echo "is effectively GPL-2.0 (MIT is GPL-compatible; Capstone is BSD-3-Clause)."
 } >> "$notice"
+
+if lgpl_present; then
+    {
+        echo "The DynamoRIO native-trace tier runtime (DynamoRIO/libipt/OpenCSD/libbpf)"
+        echo "is permissively licensed, but this package ADDITIONALLY bundles the LGPL-2.1"
+        echo "libraries listed above (drwrap and/or umbra). They are conveyed unmodified"
+        echo "and dynamically linked, so under LGPL-2.1 section 6 you may replace either"
+        echo "with a modified version and relink; the corresponding source is offered below."
+        echo "(GPL-2.0 already dominates the bundle, so these add no stronger copyleft.)"
+        echo
+        echo "WRITTEN OFFER (GPL-2.0 section 3b + LGPL-2.1 section 6)"
+        echo "------------------------------------------------------"
+        echo "For three (3) years from the date you received this package, the asm-test"
+        echo "maintainers offer to give any third party, for no more than the cost of"
+        echo "physically performing source distribution, the complete corresponding"
+        echo "machine-readable source code for the GPL-2.0 AND LGPL-2.1 components listed"
+        echo "above, at the exact versions shown. Request it by opening an issue at"
+        echo "https://github.com/wilvk/asm-test . The same source is attached to the"
+        echo "matching GitHub release as corresponding-source-*.tar.gz (assembled by"
+        echo "scripts/fetch-corresponding-source.sh) and is the upstream release tagged"
+        echo "with the version shown for each component:"
+        echo "  Unicorn    https://github.com/unicorn-engine/unicorn"
+        echo "  Keystone   https://github.com/keystone-engine/keystone"
+        echo "  Capstone   https://github.com/capstone-engine/capstone"
+        echo "  drwrap     https://github.com/DynamoRIO/dynamorio  (in ext/drwrap)"
+        echo "  umbra      https://github.com/DynamoRIO/drmemory   (in the Dr. Memory Framework)"
+    } >> "$notice"
+else
+    {
+        echo "Any native-trace tier libraries listed above (DynamoRIO, libipt, OpenCSD,"
+        echo "libbpf) are permissively licensed and add no further copyleft obligation."
+        echo
+        echo "WRITTEN OFFER (GPL-2.0 section 3b)"
+        echo "----------------------------------"
+        echo "For three (3) years from the date you received this package, the asm-test"
+        echo "maintainers offer to give any third party, for no more than the cost of"
+        echo "physically performing source distribution, the complete corresponding"
+        echo "machine-readable source code for the GPL-2.0 components listed above, at the"
+        echo "exact versions shown. Request it by opening an issue at"
+        echo "https://github.com/wilvk/asm-test . The same source is attached to the"
+        echo "matching GitHub release as corresponding-source-*.tar.gz (assembled by"
+        echo "scripts/fetch-corresponding-source.sh) and is the upstream release tagged"
+        echo "with the version shown for each component:"
+        echo "  Unicorn   https://github.com/unicorn-engine/unicorn"
+        echo "  Keystone  https://github.com/keystone-engine/keystone"
+        echo "  Capstone  https://github.com/capstone-engine/capstone"
+    } >> "$notice"
+fi
 
 echo "$prog: wrote $dest (see NOTICE)"

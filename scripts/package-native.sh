@@ -166,7 +166,12 @@ if [ -n "$tier" ]; then
             # libasmtest_drapp dlopens libdynamorio at run time; the co-staged
             # libasmtest_drclient (loaded by DR) links it too. Vendor it once and
             # rpath every staged lib to $ORIGIN so both resolve it in-package.
-            vendor_and_rpath "$lib" dynamorio
+            # drwrap/umbra are the LGPL-2.1 extensions: default clients are BSD-clean
+            # and link neither (ldd matches nothing → not vendored), but a client
+            # built to link them is vendored here as UNMODIFIED, dynamically-linked
+            # .so's — satisfying LGPL-2.1 §6 relink; collect-licenses.sh then emits
+            # their license text + written offer once they appear in the slot.
+            vendor_and_rpath "$lib" dynamorio drwrap umbra
             ;;
         *)
             echo "$prog: unknown tier role '$tier'" >&2; exit 1 ;;

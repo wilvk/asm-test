@@ -29,15 +29,21 @@
  *     one extension the tier deliberately avoids.
  *
  * Because of that, the DEFAULT probe covers only the BSD-clean stack
- * (drmgr + drreg + drx/drx_buf); the umbra load-check is compiled in only under
- * -DPROBE_UMBRA (cmake option PROBE_UMBRA=ON), is informational, and is not part
- * of the committed CI gate — its purpose is to record whether the DrMemoryFramework
- * private-loader path works at all, not to bless umbra for adoption.
+ * (drmgr + drreg + drx/drx_buf); the two LGPL-2.1 extensions are each compiled in
+ * only under their own opt-in — umbra under -DPROBE_UMBRA (cmake PROBE_UMBRA=ON)
+ * and drwrap under -DPROBE_DRWRAP (cmake PROBE_DRWRAP=ON). Both are informational
+ * and outside the committed CI gate — their purpose is to record whether the
+ * private-loader path works for the LGPL extensions, not to bless either for the
+ * license-clean product clients (which the packaging can now convey compliantly;
+ * see scripts/collect-licenses.sh + licenses/LGPL-2.1.txt).
  */
 #include "dr_api.h"
 #include "drmgr.h"
 #include "drreg.h"
 #include "drx.h"
+#ifdef PROBE_DRWRAP
+#    include "drwrap.h"
+#endif
 #ifdef PROBE_UMBRA
 #    include "umbra.h"
 #endif
@@ -99,6 +105,9 @@ event_exit(void)
 {
     if (g_buf != NULL)
         drx_buf_free(g_buf);
+#ifdef PROBE_DRWRAP
+    drwrap_exit();
+#endif
 #ifdef PROBE_UMBRA
     umbra_exit();
 #endif
@@ -112,11 +121,14 @@ event_exit(void)
         dr_fprintf(STDERR, "drext-probe: FAIL (zero instructions instrumented)\n");
         dr_abort();
     }
-#ifdef PROBE_UMBRA
-    dr_fprintf(STDERR, "drext-probe: PROBE OK (drmgr+drreg+drx+umbra)\n");
-#else
-    dr_fprintf(STDERR, "drext-probe: PROBE OK (drmgr+drreg+drx)\n");
+    dr_fprintf(STDERR, "drext-probe: PROBE OK (drmgr+drreg+drx"
+#ifdef PROBE_DRWRAP
+                       "+drwrap"
 #endif
+#ifdef PROBE_UMBRA
+                       "+umbra"
+#endif
+                       ")\n");
 }
 
 DR_EXPORT void
@@ -157,6 +169,18 @@ dr_client_main(client_id_t id, int argc, const char *argv[])
         dr_abort();
     }
     dr_fprintf(STDERR, "drext-probe: drx_buf trace-buffer created\n");
+
+#ifdef PROBE_DRWRAP
+    /* Informational only — drwrap is LGPL-2.1 (a DynamoRIO core ext/ extension),
+     * the wrapping extension the product clients deliberately avoid (marker/arg
+     * resolution stays PC-resolved). drwrap_init() is a call into libdrwrap.so, so
+     * the .so must have resolved under the private loader to reach it. */
+    if (!drwrap_init()) {
+        dr_fprintf(STDERR, "drext-probe: FAIL drwrap_init\n");
+        dr_abort();
+    }
+    dr_fprintf(STDERR, "drext-probe: drwrap loaded (LGPL-2.1 — informational)\n");
+#endif
 
 #ifdef PROBE_UMBRA
     /* Informational only — umbra is LGPL-2.1 (Dr. Memory Framework); this checks
