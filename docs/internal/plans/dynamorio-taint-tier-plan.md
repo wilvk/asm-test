@@ -615,7 +615,24 @@ together, but all on a single-threaded native fixture, so it carries no launch/m
 The concurrency *policy* is cheap to state; its *validation* is deferred to Increment 5 where real
 concurrency exists.
 
-## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(first slice LANDED 2026-07-13 — native launcher de-risked; dotnet/JIT next)*
+## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(native launch + dotnet JIT-coexistence LANDED 2026-07-13; managed seed→sink + concurrency stress next)*
+
+> **dotnet JIT/code-cache coexistence LANDED 2026-07-13 — the plan's risk concentration is RETIRED.**
+> `make dr-taint-dotnet-test` / `make docker-taint-dotnet` runs
+> `drrun -c libasmtest_drtaint_client.so -- dotnet taint_hello.dll`: a managed workload
+> ([examples/taint_hello/](../../../examples/taint_hello/)) whose hot method tiers up (tier-0 → tier-1)
+> mid-run — so DR's code cache must handle .NET's tiered JIT **rewriting live code** — runs to
+> **completion, exit 0, no swallowed SIGSEGV, no SIGTRAP/crash, no hang** (2/2 in a fresh docker image
+> built from `Dockerfile.taint-dotnet` = DR + the .NET SDK). This is the **first in-tree demonstration
+> that DR coexists with .NET tiered-JIT** — the "hypothesis under test" the plan flagged as the risk
+> concentration — and it held on the **first attempt**, with the taint client UNCHANGED (single build,
+> no launched-runmode target). Meets exit criterion (2). Wired: a new CI `taint` job runs
+> `docker-taint-native` + `docker-taint-dotnet` (additive to the in-process `drtrace` job, per the
+> plan). Notes: the workload here is a plain managed program (no C markers), so the client's region
+> gate keeps it un-instrumented for taint — this slice proves DR-vs-runtime COEXISTENCE; **instrumenting
+> real JIT'd managed code with a managed seed→sink (exit criterion 3, needs a managed shim) and the
+> concurrent-writer stress (exit criterion 4) are the next slices.**
+
 
 > **First slice LANDED 2026-07-13 (native launcher de-risk).** The launcher mechanics + shm transport
 > + out-of-process validator are proven on a NATIVE workload (no dotnet/JIT yet): `make

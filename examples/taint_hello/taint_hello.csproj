@@ -1,0 +1,15 @@
+<!-- Minimal managed workload for the DynamoRIO taint tier's launch-under-DR dotnet
+     coexistence smoke (dynamorio-taint-tier-plan.md, Increment 5). Driven by
+     mk/native-trace.mk dr-taint-dotnet-test, which runs it as the target of a drrun
+     client launch. Tiered compilation is left ON (the default) on purpose: the hot
+     method tiers up from tier 0 to tier 1 mid-run, so DR's code cache must handle the
+     .NET JIT rewriting live code, the coexistence hypothesis under test. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>taint_hello</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,43 @@
+# Dockerfile.taint-dotnet — the DynamoRIO taint tier's LAUNCH-under-DR dotnet coexistence
+# lane (dynamorio-taint-tier-plan.md, Increment 5). Runs
+#   drrun -c libasmtest_drtaint_client.so -- dotnet taint_hello.dll
+# so DR owns a real .NET process from a clean start; the managed hot method tiers up
+# (tier-0 -> tier-1) mid-run, exercising DR's code cache against .NET's tiered JIT — the
+# plan's RISK CONCENTRATION and the first in-tree demonstration of the coexistence.
+#
+# Unlike Dockerfile.taint-native this image needs the .NET SDK (+ DR + the CMake
+# toolchain) but NOT Capstone/libunicorn: the coexistence smoke builds the taint client
+# (DR only) and asserts the managed workload runs to completion — there is no emulator
+# oracle here (that is the native lanes' job).
+#
+# Linux x86-64 only. Build + run:  make docker-taint-dotnet
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+# C/C++ toolchain + CMake (the DR client is CMake-built), the .NET SDK (the managed
+# workload), and curl to fetch the DynamoRIO release.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin a DynamoRIO release. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Run the coexistence smoke. Self-skips cleanly if DynamoRIO / the .NET SDK were absent,
+# but here both are installed, so it executes.
+CMD set -eux; \
+    make dr-taint-dotnet-test DYNAMORIO_HOME=$DYNAMORIO_HOME

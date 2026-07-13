@@ -375,6 +375,45 @@ else
 	$(BUILD)/taint_validator $(LAUNCH_SHM)
 endif
 
+# --- Taint tier Increment 5: dotnet launch — JIT / code-cache coexistence ---
+# `drrun -c <taint client>.so -- dotnet taint_hello.dll` runs a trivial MANAGED workload
+# under DR. Its hot method tiers up (tier-0 -> tier-1) mid-run, so DR's code cache must
+# handle .NET's tiered JIT rewriting live code — the plan's RISK CONCENTRATION, and the
+# first in-tree demonstration of DR coexisting with .NET tiered-JIT. Success = the
+# workload runs to completion (prints HELLO_TAINT_DOTNET, exits 0) with no swallowed .NET
+# SIGSEGV, no SIGTRAP/crash, no hang. Self-skips without DynamoRIO OR without the .NET SDK.
+# The client is UNCHANGED from the native launch (single build). This slice is the
+# coexistence smoke; a managed seed->sink over a managed buffer is the next slice.
+DOTNET ?= dotnet
+.PHONY: dr-taint-dotnet-test
+dr-taint-dotnet-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-dotnet-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { \
+	  echo "== dr-taint-dotnet-test =="; echo "# SKIP: dotnet SDK not found"; \
+	  echo "1..0 # skipped"; exit 0; }
+	@$(MAKE) drtrace-client
+	@echo "== dr-taint-dotnet-test (drrun -c taint-client -- dotnet: .NET tiered-JIT / DR code-cache coexistence) =="
+	@rm -rf $(BUILD)/taint_hello_out
+	@$(DOTNET) build -c Release examples/taint_hello/taint_hello.csproj \
+	    -o $(BUILD)/taint_hello_out >$(BUILD)/taint_hello_build.log 2>&1 \
+	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/taint_hello_build.log; exit 1; }
+	@out=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	          $(DOTNET) $(abspath $(BUILD)/taint_hello_out/taint_hello.dll) 2>&1); \
+	  rc=$$?; printf '%s\n' "$$out"; \
+	  if [ $$rc -eq 0 ]; then \
+	    echo "ok 1 - dotnet workload ran to completion under drrun + taint client (rc=0, no SIGTRAP/SIGSEGV/crash/hang)"; \
+	  else echo "not ok 1 - dotnet under drrun crashed/hung (rc=$$rc)"; fi; \
+	  if printf '%s' "$$out" | grep -q "HELLO_TAINT_DOTNET"; then \
+	    echo "ok 2 - managed tiered-JIT'd code executed correctly under DR's code cache"; \
+	  else echo "not ok 2 - expected managed output missing (coexistence failure)"; fi; \
+	  echo "1..2"; \
+	  [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "HELLO_TAINT_DOTNET"
+endif
+
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value
 # client across fresh processes and reports the per-instruction capture-cost

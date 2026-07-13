@@ -389,6 +389,31 @@ jobs:
       - name: Build + run the extension-load probe (drmgr/drreg/drx)
         run: make drext-probe DYNAMORIO_HOME="$HOME/dynamorio"
 
+  # In-band DynamoRIO taint tier (data-flow taint, Increments 4-5). Two containerized
+  # lanes, each self-contained (its image installs its own DynamoRIO + Capstone/Unicorn
+  # or .NET SDK; both self-skip cleanly if DynamoRIO were absent):
+  #   docker-taint-native  the in-process inline-taint-vs-emulator-forward-slice oracle
+  #                         diffs + negative controls, AND the launch-under-DR native
+  #                         workload with a POSIX-shm channel drained + oracle-diffed by a
+  #                         separate out-of-process validator.
+  #   docker-taint-dotnet   the drrun-over-dotnet coexistence smoke — the first in-tree
+  #                         test of DR's code cache against .NET's tiered JIT (the plan's
+  #                         risk concentration): a managed workload whose hot method tiers
+  #                         up mid-run must run to completion with no SIGTRAP/SIGSEGV/crash.
+  # See docs/internal/plans/dynamorio-taint-tier-plan.md, Increments 4-5.
+  taint:
+    name: taint (DR in-band taint tier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: In-band taint — Inc4 oracle diffs + Inc5 native launch-under-DR + shm
+        run: make docker-taint-native
+
+      - name: dotnet launch coexistence — .NET tiered-JIT vs DR code cache
+        run: make docker-taint-dotnet
+
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
   # not expose, so they self-skip — but the AMD branch-record RECONSTRUCTION is

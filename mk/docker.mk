@@ -228,16 +228,28 @@ docker-drext-probe:
 	  -t asmtest-drext-probe .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drext-probe
 
-# In-band TAINT tier lane (taint tier, Increment 4). Like docker-drtrace it installs
-# DynamoRIO + Capstone + libunicorn, then runs `make dr-taint-native-test`: the seeded
-# inline-taint-vs-emulator-forward-slice oracle diff + the unseeded negative control.
-# See docs/internal/plans/dynamorio-taint-tier-plan.md, Increment 4.
+# In-band TAINT tier lane (taint tier, Increment 4 + Increment 5 native launch). Like
+# docker-drtrace it installs DynamoRIO + Capstone + libunicorn, then runs `make
+# dr-taint-native-test` (the in-process oracle diffs + negative controls) AND `make
+# dr-taint-launch-test` (the launch-under-DR native workload + POSIX-shm + out-of-process
+# validator). See docs/internal/plans/dynamorio-taint-tier-plan.md, Increments 4-5.
 .PHONY: docker-taint-native
 docker-taint-native:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-native \
 	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
 	  -t asmtest-taint-native .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-native
+
+# TAINT tier dotnet coexistence lane (taint tier, Increment 5). Installs DynamoRIO + the
+# .NET SDK (no Capstone/Unicorn) and runs `make dr-taint-dotnet-test`:
+# `drrun -c <taint client> -- dotnet taint_hello.dll` — the first in-tree test of DR's
+# code cache coexisting with .NET's tiered JIT (the plan's risk concentration).
+.PHONY: docker-taint-dotnet
+docker-taint-dotnet:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-dotnet \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-dotnet .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-dotnet
 
 # Per-language native-trace lane: layer DynamoRIO onto each already-built
 # per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
