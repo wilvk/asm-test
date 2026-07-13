@@ -105,11 +105,16 @@
  *
  * Memory operand tags are BYTE-GRANULAR: a source read unions all `size` shadow bytes
  * into the result (taint in any byte reaches it) and a store writes all `size` bytes.
- * Registers keep whole-register (1-byte) tags this increment. Leaves are allocated one
- * guard page larger than their span so a per-byte access straddling a leaf boundary is
- * fault-safe (the straddling bytes land in the guard = a conservative miss, never a
- * fault or false positive). No first-slice simplifications remain in the native scope;
- * XMM/YMM (SIMD) tags are Increment 8.
+ * GP registers keep whole-register (1-byte) tags. Leaves are allocated one guard page larger
+ * than their span so a per-byte access straddling a leaf boundary is fault-safe (the straddling
+ * bytes land in the guard = a conservative miss, never a fault or false positive).
+ *
+ * Increment 8 (XMM/SIMD taint, FIRST slice): the reg-tag file additionally carries 16 XMM
+ * registers with PER-BYTE lane tags (see the AT_RT_XMM_* granularity note), and the taint phase
+ * unions/broadcasts XMM register tags plus 16-byte SSE memory loads/stores (movdqu/movdqa/movq
+ * ...) — so taint flows through an XMM register and an SSE vectorized copy. The PROPAGATION is
+ * whole-register scalar union+broadcast (conservative); lane-independent SIMD flow, YMM/ZMM
+ * upper lanes, and VSIB vector-gather EA math are deferred. All additive under -DASMTEST_TAINT.
  */
 #include "dr_api.h"
 #include "drmgr.h"
@@ -236,11 +241,33 @@ static at_tag_t *
 static const uint8_t g_zero_pad[64];
 
 /* Per-thread flat reg-tag file (drmgr TLS): 16 GP containers + 1 eflags slot, keyed by
- * the DR reg id canonicalized to its 64-bit container (whole-register tags this
- * increment). eflags is a location too, so flag-carried flow is representable. */
-#define AT_RT_GPR_BASE 0
-#define AT_RT_EFLAGS   16
-#define AT_RT_COUNT    17
+ * the DR reg id canonicalized to its 64-bit container (whole-register tags for GP), then
+ * (Increment 8, SIMD) 16 XMM registers with PER-BYTE lane tags (16 bytes each). eflags is a
+ * location too, so flag-carried flow is representable.
+ *
+ * ===== Increment 8 (XMM/SIMD taint) GRANULARITY DECISION — per-byte, documented in-code =====
+ * XMM lane tags are stored PER-BYTE (AT_RT_XMM_BYTES = 16 tag bytes per 128-bit register),
+ * mirroring the integer MEMORY shadow's 1:1 byte scale rather than the GP file's whole-
+ * register single byte. Rationale: an SSE load/store moves a whole 16-byte span to/from the
+ * per-byte memory shadow, so per-byte XMM lanes let a later increment carry lane-precise
+ * taint end-to-end WITHOUT another storage/ABI change (the storage is the forward-compatible
+ * seam, exactly as the memory shadow is already per-byte). COST, as the plan warns: this
+ * MULTIPLIES the reg-tag traffic — a 16-byte XMM source/dest is 16 byte OR/store ops rather
+ * than one. What this FIRST SLICE actually PROPAGATES is still the whole-register scalar
+ * union+broadcast used for GP: every source lane (and every mem/GP source) is unioned into the
+ * single scalar accumulator s_t, and s_t is broadcast to ALL 16 dest lane bytes. So this slice
+ * is conservative (any tainted lane taints the whole dest; a narrow SIMD write like movq/movd
+ * over-taints the untouched high lanes) and lane-INDEPENDENT flow (pshufd, per-lane arithmetic,
+ * narrow-write masking) is DEFERRED — the per-byte storage is where that refinement lands. This
+ * matches the GP whole-register posture and keeps the oracle diff exact at STEP granularity
+ * (all asmtest_slice_forward distinguishes). YMM/ZMM upper lanes and VSIB vector-gather EA math
+ * remain deferred (XMM-only this slice). */
+#define AT_RT_GPR_BASE  0
+#define AT_RT_EFLAGS    16
+#define AT_RT_XMM_BASE  17 /* first XMM lane-tag byte                       */
+#define AT_RT_XMM_BYTES 16 /* per-byte lanes: 16 tag bytes per 128-bit reg  */
+#define AT_RT_XMM_COUNT 16 /* XMM0..XMM15                                   */
+#define AT_RT_COUNT     (AT_RT_XMM_BASE + AT_RT_XMM_COUNT * AT_RT_XMM_BYTES)
 static int g_tls_regfile = -1;
 
 /* App-emitted seed/sink marker PCs (resolved by dr_get_proc_address, like pc_marker),
@@ -259,6 +286,16 @@ static int rt_index(reg_id_t reg) {
     reg_id_t r64 = reg_to_pointer_sized(reg);
     int idx = (int)(r64 - DR_REG_RAX);
     return (idx >= 0 && idx < 16) ? (AT_RT_GPR_BASE + idx) : -1;
+}
+
+/* Increment 8 (SIMD): map an XMM register id to the byte offset of its lane-0 tag in the
+ * reg-tag file, or -1 if not a tracked XMM register. XMM0..XMM15 are contiguous DR reg ids;
+ * a YMM/ZMM operand (upper lanes) is intentionally NOT mapped here (deferred) so it falls
+ * through as untracked rather than aliasing the low 128 bits inconsistently. */
+static int rt_xmm_base(reg_id_t reg) {
+    if (reg >= DR_REG_XMM0 && reg <= DR_REG_XMM15)
+        return AT_RT_XMM_BASE + (int)(reg - DR_REG_XMM0) * AT_RT_XMM_BYTES;
+    return -1;
 }
 
 /* Install `leaf` at directory slot i via CAS; on loss free our spare and return the
@@ -530,6 +567,34 @@ static void emit_regtag_store(void *dc, instrlist_t *bb, instr_t *where,
             dc, opnd_create_base_disp(t_rf, DR_REG_NULL, 0, idx, OPSZ_1),
             opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
 }
+
+/* Increment 8 (SIMD): union ALL 16 per-byte lane tags of an XMM source register at
+ * reg-tag-file byte offset `base` into s_t (whole-register collapse — any tainted lane
+ * taints the result). 16 byte-ORs: the per-byte reg-tag traffic the granularity note flags.
+ * t_rf = regfile base. */
+static void emit_xmm_regtag_or(void *dc, instrlist_t *bb, instr_t *where,
+                               reg_id_t t_rf, int base, reg_id_t s_t) {
+    for (int k = 0; k < AT_RT_XMM_BYTES; k++)
+        instrlist_meta_preinsert(
+            bb, where,
+            INSTR_CREATE_or(
+                dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1)),
+                opnd_create_base_disp(t_rf, DR_REG_NULL, 0, base + k, OPSZ_1)));
+}
+
+/* Increment 8 (SIMD): broadcast s_t's low tag byte to ALL 16 per-byte lane tags of an XMM
+ * dst register at reg-tag-file byte offset `base` (whole-register broadcast — conservative,
+ * see the granularity note). 16 byte-stores. */
+static void emit_xmm_regtag_store(void *dc, instrlist_t *bb, instr_t *where,
+                                  reg_id_t t_rf, int base, reg_id_t s_t) {
+    for (int k = 0; k < AT_RT_XMM_BYTES; k++)
+        instrlist_meta_preinsert(
+            bb, where,
+            INSTR_CREATE_mov_st(
+                dc,
+                opnd_create_base_disp(t_rf, DR_REG_NULL, 0, base + k, OPSZ_1),
+                opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+}
 #endif /* ASMTEST_TAINT */
 
 /* ------------------------------------------------------------------ */
@@ -640,6 +705,26 @@ static uint16_t capturable_mem_size(opnd_t op) {
 }
 
 #ifdef ASMTEST_TAINT
+/* Increment 8 (SIMD): the taint phase's shadow accessors (emit_shadow_or/emit_shadow_store)
+ * are per-byte loops and so handle any width, UNLIKE the value pass's inline GP load/store
+ * which is bounded to 1/2/4/8 (capturable_mem_size). This width gate additionally admits the
+ * 16-byte SSE operand (movdqu/movdqa/movups...) for TAINT ONLY — the value capture still
+ * skips it (no 16-byte GP load exists), which is why the SIMD memory SOURCE tag is unioned by
+ * a dedicated inline-EA loop below rather than read back from the value record. Same base+disp
+ * / non-far / non-segmented restriction as the value pass. 32-byte YMM is deferred. */
+static uint16_t taint_mem_size(opnd_t op) {
+    if (!opnd_is_base_disp(op))
+        return 0;
+    if (opnd_is_far_memory_reference(op))
+        return 0;
+    if (opnd_get_segment(op) != DR_REG_NULL)
+        return 0;
+    uint16_t sz = (uint16_t)opnd_size_in_bytes(opnd_get_size(op));
+    if (sz != 1 && sz != 2 && sz != 4 && sz != 8 && sz != 16)
+        return 0;
+    return sz;
+}
+
 /* Emit the inline dst_tag = union(src_tags) propagation for one in-region app instr,
  * as an extra phase of the value-capture insertion pass. Runs AFTER the value pass's
  * memory loop (so mem-source EAs are already in this step's record at mem_ea[0..nmem))
@@ -669,9 +754,15 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
     for (int s = 0; s < instr_num_srcs(instr); s++) {
         opnd_t op = instr_get_src(instr, s);
         if (opnd_is_reg(op)) {
-            int idx = rt_index(opnd_get_reg(op));
+            reg_id_t r = opnd_get_reg(op);
+            int idx = rt_index(r);
             if (idx >= 0)
                 emit_regtag_or(dc, bb, instr, t_rf, idx, s_t);
+            else {
+                int xb = rt_xmm_base(r); /* Increment 8: XMM source register */
+                if (xb >= 0)
+                    emit_xmm_regtag_or(dc, bb, instr, t_rf, xb, s_t);
+            }
         } else if (opnd_is_memory_reference(op)) {
             int bi = rt_index(opnd_get_base(op)),
                 ii = rt_index(opnd_get_index(op));
@@ -709,6 +800,40 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
         emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t, memsz[j]);
     }
 
+    /* Increment 8 (SIMD) memory sources: the value pass captures only 1/2/4/8-byte loads, so a
+     * 16-byte SSE load's EA is NOT in this record. Enumerate the instruction's memory SOURCE
+     * operands ourselves, and for any WIDER-than-8 (16-byte) one compute its EA inline (like
+     * the store-dst path) and OR its per-byte shadow into s_t. The <=8 ones are already handled
+     * above via the record, so gate on >8 to avoid double-processing. Same address-register
+     * aliasing skip as the store path (a conservative miss). */
+    if (instr_reads_memory(instr)) {
+        for (int s = 0; s < instr_num_srcs(instr); s++) {
+            opnd_t op = instr_get_src(instr, s);
+            if (!opnd_is_memory_reference(op))
+                continue;
+            uint16_t ssz = taint_mem_size(op);
+            if (ssz <= 8)
+                continue; /* handled by the record-based loop above */
+            reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
+            if (bse == s_ptr || bse == s_a || bse == s_b || bse == s_t ||
+                bse == t_rf || idxr == s_ptr || idxr == s_a || idxr == s_b ||
+                idxr == s_t || idxr == t_rf)
+                continue;
+            reg_id_t swap = DR_REG_NULL;
+            drreg_restore_app_values(dc, bb, instr, op, &swap);
+            instrlist_meta_preinsert(
+                bb, instr,
+                INSTR_CREATE_lea(dc, opnd_create_reg(s_a),
+                                 opnd_create_base_disp(
+                                     opnd_get_base(op), opnd_get_index(op),
+                                     opnd_get_scale(op), opnd_get_disp(op),
+                                     OPSZ_lea)));
+            emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t, ssz);
+            if (swap != DR_REG_NULL)
+                drreg_unreserve_register(dc, bb, instr, swap);
+        }
+    }
+
     /* ---- step witness: raw_step_t.taint = s_t (rides this record) ---------- */
     instrlist_meta_preinsert(
         bb, instr,
@@ -724,9 +849,15 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
     for (int d = 0; d < instr_num_dsts(instr); d++) {
         opnd_t op = instr_get_dst(instr, d);
         if (opnd_is_reg(op)) {
-            int idx = rt_index(opnd_get_reg(op));
+            reg_id_t r = opnd_get_reg(op);
+            int idx = rt_index(r);
             if (idx >= 0)
                 emit_regtag_store(dc, bb, instr, t_rf, idx, s_t);
+            else {
+                int xb = rt_xmm_base(r); /* Increment 8: XMM dest register */
+                if (xb >= 0)
+                    emit_xmm_regtag_store(dc, bb, instr, t_rf, xb, s_t);
+            }
         }
     }
     if (instr_get_eflags(instr, DR_QUERY_DEFAULT) & EFLAGS_WRITE_ARITH)
@@ -738,10 +869,9 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
      * rsp is never a drreg scratch, so it never skips). */
     for (int d = 0; d < instr_num_dsts(instr); d++) {
         opnd_t op = instr_get_dst(instr, d);
-        uint16_t dsz =
-            opnd_is_memory_reference(op) ? capturable_mem_size(op) : 0;
+        uint16_t dsz = opnd_is_memory_reference(op) ? taint_mem_size(op) : 0;
         if (dsz == 0)
-            continue;
+            continue; /* Increment 8: taint_mem_size also admits the 16-byte SSE store */
         reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
         if (bse == s_ptr || bse == s_a || bse == s_b || bse == s_t ||
             bse == t_rf || idxr == s_ptr || idxr == s_a || idxr == s_b ||

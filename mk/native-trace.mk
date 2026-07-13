@@ -311,6 +311,63 @@ else
 	    $(BUILD)/dr_taint highbyte
 endif
 
+# --- Taint tier (Increment 8, first slice): XMM/YMM (SIMD) taint -------------
+# dr_taint_simd is the SIMD analog of dr_taint: the SAME taint client + app driver, driven by
+# examples/dr_taint_simd.c whose fixtures flow taint THROUGH an XMM register AND an SSE 16-byte
+# vectorized copy (movdqu/movdqa/movq), oracle-diffed against asmtest_slice_forward + negative
+# controls + a branch-condition sink. The client's per-byte XMM lane tags + 16-byte SSE memory
+# shadow are additive under -DASMTEST_TAINT (the flag-off value client is byte-identical). Runs
+# in the `make docker-taint-native` lane and self-skips cleanly without DynamoRIO.
+ifeq ($(DRVAL_HAVE_UNICORN),1)
+$(BUILD)/dr_taint_simd.o: examples/dr_taint_simd.c include/asmtest_valtrace.h \
+                          include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -DDF_HAVE_EMU -c $< -o $@
+$(BUILD)/dr_taint_simd: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                        $(BUILD)/dataflow_dr_taint.o $(BUILD)/dataflow_emu.o \
+                        $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                        $(BUILD)/dr_taint_simd.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+else
+$(BUILD)/dr_taint_simd.o: examples/dr_taint_simd.c include/asmtest_valtrace.h \
+                          include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/dr_taint_simd: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                        $(BUILD)/dataflow_dr_taint.o \
+                        $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                        $(BUILD)/dr_taint_simd.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+endif
+
+.PHONY: dr-taint-simd-test
+dr-taint-simd-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-simd-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/dr_taint_simd
+	@$(MAKE) --no-print-directory dr-taint-inline-gate
+	@echo "== dr-taint-simd-test (copy: XMM + SSE 16-byte copy taint set vs forward slice) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd
+	@echo "== dr-taint-simd-test (negative control: unseeded => empty SIMD taint set) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd negative
+	@echo "== dr-taint-simd-test (sink: seeded XMM lane reaches a branch => at_taint_hit_t) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd sink
+	@echo "== dr-taint-simd-test (sink negative control: unseeded => zero hits) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd sink-negative
+endif
+
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
 # the ONLY dr_insert_clean_call sites are rare + off the per-instruction path: on_marker
 # (region), on_seed (seed paint), on_sink_register (report), on_sink (per watched
