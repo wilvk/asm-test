@@ -29,9 +29,24 @@ add_library(asmtest_drval_client SHARED ${CMAKE_CURRENT_SOURCE_DIR}/../src/dataf
 configure_DynamoRIO_client(asmtest_drval_client)
 target_include_directories(asmtest_drval_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+# The INLINED data-flow value client (Phase 5 / taint-tier Increment 3): the same
+# at_drval_t capture as asmtest_drval_client, but re-platformed off the per-instruction
+# clean call onto the BSD-clean extension stack (drmgr phased events + drreg scratch
+# regs + drx_buf buffered trace) proved to load by Increment 2. NO umbra (LGPL-2.1),
+# NO drwrap — marker/arg resolution stays PC-resolved (see the client header). The
+# clean-call asmtest_drval_client stays intact as the oracle/fallback; point
+# ASMTEST_DRVAL_CLIENT at either .so to A/B them against the emulator oracle.
+add_library(asmtest_drval_client_inlined SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/dataflow_dr_client_inlined.c)
+configure_DynamoRIO_client(asmtest_drval_client_inlined)
+use_DynamoRIO_extension(asmtest_drval_client_inlined drmgr)
+use_DynamoRIO_extension(asmtest_drval_client_inlined drreg)
+use_DynamoRIO_extension(asmtest_drval_client_inlined drx)
+target_include_directories(asmtest_drval_client_inlined PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
 # Emit straight into the asm-test build dir so the Makefile/tests find them.
-set_target_properties(asmtest_drclient asmtest_drval_client PROPERTIES
-  LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
+set_target_properties(asmtest_drclient asmtest_drval_client asmtest_drval_client_inlined
+  PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
 
 # --- Throwaway extension-load probe (taint tier, Increment 2) ---------------
 # Opt-in only (-DASMTEST_BUILD_DREXT_PROBE=ON): the sole client here that DOES

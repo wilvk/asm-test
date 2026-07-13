@@ -49,9 +49,13 @@ closes each phase the same way.
 > `drltrace` are its BSD carve-outs), contradicting the plan's permissive-umbra assumption.
 > Probe [drclient/probe_extensions.c](../../../drclient/probe_extensions.c); findings
 > [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md); gate
-> `make docker-drext-probe` + CI `drext-probe`. **Increments 3–9** *(planned)* — 3 re-platform
-> the L0 client onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation
-> (regression-gated byte-identical vs the oracle, no taint yet); 4 in-band tag propagation
+> `make docker-drext-probe` + CI `drext-probe`. **Increment 3 — inlined L0 value client (CORE)**
+> *(LANDED 2026-07-13)* — [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)
+> re-platforms the clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and passes the emulator-oracle
+> cross-check identically to the clean-call client (`make dr-valtrace-inlined-test`, wired into
+> `drtrace-test`); `rflags`/dead-register slots are documented clean-call-only divergences; the
+> direction-of-travel microbenchmark is the one deferred piece. **Increments 4–9** *(planned)* — 4
+> in-band tag propagation
 > (`dst_tag = ∪ src_tags`) + shadow-concurrency policy + seed/sink API; 5 launch-under-DR
 > container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator; 6
 > whole-process breadth + method-range scoping; 7 GC-move `umbra` remap *(hard-gated on the
@@ -330,7 +334,36 @@ of a/b/c loads, the glibc boundary, and the true license of each extension), not
 Realized as S; the load blocker did not reproduce and the umbra=LGPL split was the load-bearing
 discovery.
 
-## Increment 3 - Re-platform the L0 value client onto inlined instrumentation *(planned)*
+## Increment 3 - Re-platform the L0 value client onto inlined instrumentation *(CORE LANDED 2026-07-13; microbenchmark remaining)*
+
+**Outcome.** The inlined client [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)
+(`libasmtest_drval_client_inlined.so`) re-platforms the clean-call recorder onto the BSD-clean
+extension stack — `drmgr` phased instrumentation, `drreg` scratch regs + aflags, `drx_buf` trace
+buffer — and fills the SAME `at_drval_t`. Driven by the SAME `dr_valtrace` harness via
+`ASMTEST_DRVAL_CLIENT` (`make dr-valtrace-inlined-test`), it passes all 14 checks **identically to
+the clean-call client, including both emulator-oracle slice cross-checks** (stable over 5/5 runs),
+now wired into the `drtrace-test` CI gate alongside the clean-call client. The shipped clean-call
+`asmtest_drval_client` is untouched as oracle/fallback. **Remaining:** the direction-of-travel
+microbenchmark (needs a larger-fixture timing harness; the 6-instruction oracle fixture is too
+small to time meaningfully) — the one deferred piece before this increment is fully closed.
+
+Two **principled divergences** surfaced (documented in the client header), both semantically
+irrelevant — the oracle gate passes identically:
+- **`rflags` value is clean-call-only** (stored 0). Full `rflags` can only be read inline via
+  `pushfq`, which writes the app red zone (`[rsp-8]`) — and the fixture stores its live value
+  there, so `pushfq` would corrupt it. `lahf`/`seto` give only the arith subset, not `mc.xflags`.
+  Flag def-use *locations* still enter the graph; only the flag *value* is absent.
+- **Dead register slots are not literal.** `dr_get_mcontext` snapshots the whole register file;
+  `drreg` treats a dead register as free scratch, so `drreg_get_app_value` returns a scratch value
+  for a never-consumed (dead-on-entry) slot. Every value the def-use graph/slices actually consume
+  matches. Byte-for-byte identity of the full literal register file is therefore a clean-call-only
+  property (like `rflags`); the *semantic* value trace is identical.
+
+Key implementation lessons (for Increments 4+): `drreg_get_app_value(X,Y)` restores `X` in place,
+so the register backing the `drx_buf` pointer must be captured last via a pointer copy; the trace
+buffer's `update_buf_ptr` clobbers arithmetic flags, so reserve `aflags` **only** around it (late)
+so its `lahf`/`rax` spill does not perturb the register capture. The subsections below are the
+as-planned scope, retained for provenance.
 
 Swap the recorder, not the semantics: reproduce the exact `at_drval_t` capture the clean-call
 client produces, but inlined + buffered, and re-validate against the emulator oracle before any
@@ -357,13 +390,16 @@ fallback/oracle during the swap.
   increment is a performance/architecture swap only. Keep the `DR_SIGNAL_DELIVER` handler
   ([:213-217](../../../src/dataflow_dr_client.c#L213)) unchanged.
 
-**Exit criteria:** the inlined+buffered client produces **byte-identical `at_drval_t` records**
-to the clean-call client on the existing value-trace fixtures and passes the existing
-`make dr-valtrace-test` cross-validation against the emulator oracle
-([dataflow_emu.c](../../../src/dataflow_emu.c)) — the same green CI gate, now on the extension
-stack; a `make`-driven microbenchmark in the pinned DR Docker lane shows a measurable
-per-instruction cost drop vs the clean-call path (direction-of-travel check, not the 10–50× claim
-yet). No taint.
+**Exit criteria:** the inlined+buffered client passes the existing `dr_valtrace`
+cross-validation against the emulator oracle ([dataflow_emu.c](../../../src/dataflow_emu.c)) —
+same green CI gate, now on the extension stack — via `make dr-valtrace-inlined-test`, wired into
+`drtrace-test` ✅ (**MET 2026-07-13**; 14/14, both oracle slice cross-checks, 5/5 stable). Records
+match the clean-call client for every def-use-consumed field (byte-identical on live reads,
+memory EA/values, and deferred writes valued from the next LIVE snapshot); `rflags` value and
+dead-register slots are principled clean-call-only divergences (above), not captured inline ✅. No
+taint ✅. **Remaining:** a `make`-driven microbenchmark in the pinned DR Docker lane showing a
+measurable per-instruction cost drop vs the clean-call path (direction-of-travel check, not the
+10–50× claim) — needs a larger straight-line fixture than the oracle's 6-instruction `df_chain`.
 
 **Effort.** **L** — the central re-platform lift and the highest-risk single increment: every
 operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_buf` code and must
@@ -645,7 +681,14 @@ hard gate, not new instrumentation.
   [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md); gates
   `make drext-probe` / `make docker-drext-probe` ([native-trace.mk](../../../mk/native-trace.mk),
   [docker.mk](../../../mk/docker.mk)) + CI `drext-probe`.
-- ⬜ Increments 3–9 — planned (this document).
+- ✅ **Increment 3 — inlined L0 value client (CORE)** *(LANDED 2026-07-13)*:
+  `libasmtest_drval_client_inlined.so`
+  ([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)) re-platforms the
+  clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and fills the same `at_drval_t`; passes the
+  `dr_valtrace` emulator-oracle cross-check identically to the clean-call client (14/14, 5/5
+  stable) via `make dr-valtrace-inlined-test`, wired into the `drtrace-test` CI gate. `rflags`
+  value + dead-register slots are documented clean-call-only divergences. Microbenchmark deferred.
+- ⬜ Increments 4–9 — planned (this document).
 
 ## Validation notes
 

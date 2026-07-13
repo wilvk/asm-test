@@ -102,6 +102,9 @@ endif
 # add_library targets), so it need not re-run cmake: an empty recipe ties it to the rule
 # above (the grouped-output idiom, avoiding GNU make 4.3's `&:` for portability).
 $(BUILD)/libasmtest_drval_client.so: $(BUILD)/libasmtest_drclient.so ;
+# The inlined value client (taint-tier Increment 3) is emitted by the SAME cmake
+# --build (a third add_library target), so tie it to the rule above too.
+$(BUILD)/libasmtest_drval_client_inlined.so: $(BUILD)/libasmtest_drclient.so ;
 
 # App-side shared library (libasmtest_drapp) for the language bindings.
 shared-drtrace: $(call shlib_dev,libasmtest_drapp)
@@ -140,6 +143,7 @@ else
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/test_drtrace
 	@$(MAKE) --no-print-directory dr-valtrace-test
+	@$(MAKE) --no-print-directory dr-valtrace-inlined-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -199,6 +203,30 @@ else
 	@$(MAKE) $(BUILD)/dr_valtrace
 	@echo "== dr-valtrace-test (DynamoRIO L0 value producer) =="
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drval_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_valtrace
+endif
+
+# --- Inlined value client (taint-tier Increment 3) -------------------------
+# The re-platform of the clean-call value client onto inlined drmgr/drreg/drx_buf
+# instrumentation (src/dataflow_dr_client_inlined.c). Runs the SAME dr_valtrace
+# oracle harness — the app side (dataflow_dr.c) picks the client from
+# ASMTEST_DRVAL_CLIENT, so pointing it at the inlined .so re-runs the identical
+# 14-check + emulator-oracle cross-validation against the inlined producer. This
+# is the A/B gate: the inlined client must pass identically to the clean-call
+# client (byte-identical for every def-use-consumed field; see the client header
+# for the rflags/dead-register clean-call-only divergences). Self-skips without DR.
+.PHONY: dr-valtrace-inlined-test
+dr-valtrace-inlined-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-valtrace-inlined-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/dr_valtrace
+	@echo "== dr-valtrace-inlined-test (inlined drmgr/drreg/drx_buf client vs emulator oracle) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drval_client_inlined.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_valtrace
 endif

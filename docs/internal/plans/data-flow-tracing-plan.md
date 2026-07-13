@@ -25,11 +25,12 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > summary edges, and the GC-move *detection* feed (`GcMoveMap` from `GCBulkMovedObjectRanges`);
 > the concrete `{old,new,len}` triple extraction is **deferred** (the in-proc EventListener
 > does not surface the `Values` struct-array — needs an out-of-proc EventPipe/nettrace consumer).
-> **Phase 5 (DynamoRIO taint tier): Increment 1 (in-band L0 value producer) LANDED 2026-07-13;
-> Increment 2 (extension-load probe) LANDED 2026-07-13** — the prebuilt `drmgr`/`drreg`/`drx`
-> load under DR's private loader (blocker does not reproduce; **option (c) version-pin**), with
-> the license question resolved to a split (`drmgr`/`drreg`/`drx` BSD; **`umbra` LGPL-2.1**);
-> Increments 3–9 (the inlined re-platform + in-band taint + launch container) remain planned in
+> **Phase 5 (DynamoRIO taint tier): Increments 1–3 LANDED 2026-07-13** — Increment 1 the in-band
+> L0 value producer; Increment 2 the extension-load probe (prebuilt `drmgr`/`drreg`/`drx` load
+> under DR's private loader — blocker does not reproduce, **option (c) version-pin**; license
+> resolved to a split, `drmgr`/`drreg`/`drx` BSD but **`umbra` LGPL-2.1**); Increment 3 (CORE) the
+> inlined `drmgr`/`drreg`/`drx_buf` re-platform of the value client, oracle-validated identically
+> to the clean-call client; Increments 4–9 (in-band taint + launch container) remain planned in
 > the standalone [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md). **Phase 6
 > (bindings/docs/CI) LANDED 2026-07-13.** Remaining implementable work: Phase 4's deferred
 > concrete GC-move triples and Phase 5 Increments 3–9. Phases 3 and 5 are the two target tiers.
@@ -219,7 +220,7 @@ Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identi
 aliasing pre/post-move addresses; a value is attributed to the correct method+version after a
 tiered re-JIT.
 
-## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(Increments 1–2 LANDED 2026-07-13; DR-side taint shadowing + whole-process breadth planned)*
+## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(Increments 1–3 LANDED 2026-07-13; DR-side taint shadowing + whole-process breadth planned)*
 
 The largest lift — production-grade taint over live JIT'd managed code — is a re-architecture of
 the current tier, not an extension, and now has its own standalone plan:
@@ -233,13 +234,15 @@ extension-load probe [drclient/probe_extensions.c](../../../drclient/probe_exten
 private loader on glibc 2.39 (blocker does not reproduce → **option (c) version-pin**), and the
 license resolved to a **split** — `drmgr`/`drreg`/`drx` are BSD, but **`umbra` is LGPL-2.1** (Dr.
 Memory Framework), so the byte-granular shadow must hand-roll a BSD map or explicitly accept LGPL
-([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). The
-deferred remainder — re-platforming off the clean-call recorder onto inlined
-`drmgr`/`drreg`/`drx_buf` instrumentation (`dst_tag = ∪ src_tags`, the ~10–50× band), the
-launch-under-DR container (`drrun -c … -- dotnet app.dll`), the shadow remap on GC moves
-(hard-gated on the deferred Phase 4 `{old,new,len}` extraction), whole-process breadth, and SIMD
-taint — is decomposed into Increments 3–9 there. The signal half is already mitigated
-(`DR_SIGNAL_DELIVER`); external attach stays out of scope for managed.
+([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). Increment
+3 (CORE) then re-platformed the value client onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation
+([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)), oracle-validated
+identically to the clean-call client (`make dr-valtrace-inlined-test`). The deferred remainder — in-band
+tag propagation (`dst_tag = ∪ src_tags`, the ~10–50× band), the launch-under-DR container
+(`drrun -c … -- dotnet app.dll`), the shadow remap on GC moves (hard-gated on the deferred Phase 4
+`{old,new,len}` extraction), whole-process breadth, and SIMD taint — is decomposed into Increments
+4–9 there. The signal half is already mitigated (`DR_SIGNAL_DELIVER`); external attach stays out of
+scope for managed.
 
 **Exit criteria:** a launched `dotnet` workload runs under DR with a taint seed at a source
 (e.g. a `read()` buffer) detected at a sink (a `memcpy` length / branch) over real JIT'd managed
