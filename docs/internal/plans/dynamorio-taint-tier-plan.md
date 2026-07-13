@@ -624,18 +624,22 @@ concurrency exists.
 > writes the branch-condition sink hit into a **POSIX shared-memory** channel
 > ([include/asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h)); a SEPARATE
 > [taint_validator](../../../examples/taint_validator.c) process drains it and oracle-diffs the hit
-> against the emulator forward slice **out of process** (7/7 green in the fresh `make
+> against the emulator forward slice **out of process** (9/9 green in the fresh `make
 > docker-taint-native` image; chained into `drtrace-test` so the CI `drtrace` job runs it too, oracle
 > auto-skipped there without libunicorn). **The build-mode question is RESOLVED: a SINGLE build** — the
 > same `configure_DynamoRIO_client` `.so` works unmodified under `drrun -c` (no launched-runmode CMake
 > target needed), and **ZERO client changes** were required (the markers + synchronous sink append
 > already work under launch; only the report is shm-backed, and cross-process reads go by offset, never
-> the producer-space `.hits` pointer). Notes for the next slices: the drx_buf-buffered VALUE trace
-> flushes at process exit (after the workload's `main`), so this slice carries only the **synchronous**
-> sink report over shm — a process-exit drain for the full value trace is a follow-on; and the `dotnet`
-> launch + first real JIT/code-cache coexistence test (the plan's risk concentration) is the next slice.
-> [taint_workload.c](../../../examples/taint_workload.c) is self-contained (defines the marker symbols,
-> maps shm, mmaps an RWX fixture) — no in-process `dr_init`/`dr_start`, since DR owns the process.
+> the producer-space pointers). **Exit criterion (1) — "a `drrun … -- <native workload>` lane produces
+> a non-empty value/taint trace, drained and oracle-diffed by the out-of-process validator" — is fully
+> MET:** BOTH channels ride the shm segment — the SYNCHRONOUS sink report (written by the sink clean
+> call, present when the fixture returns) and the drx_buf-buffered VALUE / taint trace (flushed by the
+> client's exit event at PROCESS EXIT, complete once `drrun` returns). The validator diffs the sink hit
+> AND the full taint SET (`{steps[i].off : step_taint[i]}` == the emulator forward slice) out of
+> process. [taint_workload.c](../../../examples/taint_workload.c) is self-contained (defines the marker
+> symbols, maps shm, mmaps an RWX fixture) — no in-process `dr_init`/`dr_start`, since DR owns the
+> process. **Next slices:** the `dotnet` launch + first real JIT/code-cache coexistence test (the
+> plan's risk concentration), and a concurrent-writer stress validating the Increment-4 race policy.
 
 The new integration path — there is **no** `drrun`/`dr_inject` launcher in-tree today (a clean
 grep returns zero matches, [data-flow-capture.md:203](../analysis/data-flow-capture.md#L203)).

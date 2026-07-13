@@ -337,19 +337,24 @@ $(BUILD)/taint_workload: examples/taint_workload.c include/asmtest_taint.h \
                          $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -rdynamic examples/taint_workload.c -lrt -o $@
 
+# The validator includes asmtest_taint_shm.h, which embeds at_drval_t/at_vstep_t
+# (src/dataflow_dr.h) — so it compiles -DASMTEST_TAINT -Isrc to agree with the workload
+# on the shm struct layout (at_drval_t gains step_taint under the flag).
 ifeq ($(DRVAL_HAVE_UNICORN),1)
 $(BUILD)/taint_validator: examples/taint_validator.c include/asmtest_taint.h \
                           include/asmtest_taint_shm.h include/asmtest_valtrace.h \
-                          $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
-                          $(BUILD)/dataflow_emu.o $(BUILD)/.build-flags | $(BUILD)
-	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -DDF_HAVE_EMU examples/taint_validator.c \
+                          src/dataflow_dr.h $(BUILD)/dataflow.o \
+                          $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+                          $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc $(UNICORN_CFLAGS) -DDF_HAVE_EMU \
+	      examples/taint_validator.c \
 	      $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
 	      $(UNICORN_LIBS) $(CAPSTONE_LIBS) -lrt -o $@
 else
 $(BUILD)/taint_validator: examples/taint_validator.c include/asmtest_taint.h \
                           include/asmtest_taint_shm.h include/asmtest_valtrace.h \
-                          $(BUILD)/.build-flags | $(BUILD)
-	$(CC) $(CFLAGS) examples/taint_validator.c -lrt -o $@
+                          src/dataflow_dr.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc examples/taint_validator.c -lrt -o $@
 endif
 
 DR_DRRUN ?= $(DYNAMORIO_HOME)/bin64/drrun

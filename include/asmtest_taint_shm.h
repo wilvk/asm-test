@@ -13,12 +13,21 @@
  * the .hits pointer. The producer still fills via the pointer (valid in its own space),
  * which is the same physical memory the consumer reads by offset.
  *
- * Dependency-free beyond the taint ABI (<stdint.h> only), so the standalone workload +
- * validator can both include it. This increment carries the SINK report only; the value
- * trace is drx_buf-buffered and flushes at process exit (after the workload's main
- * returns), so it is not reliably readable mid-run — a later slice adds a process-exit
- * drain for the full trace. The sink hits are written SYNCHRONOUSLY by the sink clean
- * call, so they are present in the segment the instant the fixture returns.
+ * Two channels ride the segment, drained at different times:
+ *  - The SINK report (hits) is written SYNCHRONOUSLY by the sink clean call, so it is
+ *    present the instant the fixture returns.
+ *  - The VALUE / TAINT trace (at_drval_t + its steps[] + step_taint[]) is drx_buf-
+ *    buffered and flushes at PROCESS EXIT (in the client's exit event, after the
+ *    workload's main returns), so it is complete only once the launched process has
+ *    fully exited — i.e. after `drrun` returns. The validator therefore runs AFTER drrun
+ *    (the Makefile sequences them) and does NOT rely on the done flag (set in main,
+ *    before the flush) for the value trace.
+ *
+ * Because the embedded at_drval_t layout depends on -DASMTEST_TAINT (it gains the
+ * step_taint fields), the workload AND the validator both compile -DASMTEST_TAINT -Isrc
+ * so they agree on this struct. The client fills steps[]/step_taint[] via at_drval_t
+ * pointers that are PRODUCER-space addresses into this same segment; the consumer reads
+ * steps[]/step_taint[] + the scalar drval.steps_len by OFFSET, never the pointers.
  */
 #ifndef ASMTEST_TAINT_SHM_H
 #define ASMTEST_TAINT_SHM_H
@@ -27,10 +36,13 @@
 
 #include "asmtest_taint.h"
 
+#include "dataflow_dr.h" /* at_drval_t / at_vstep_t (compile the harness with -Isrc) */
+
 /* Default segment name (a POSIX shm name: leading slash, no other slashes). The workload
  * and validator take an override as argv[1]; this is the fallback both default to. */
-#define AT_SHM_NAME     "/asmtest_taint_launch"
-#define AT_SHM_HITS_CAP 16
+#define AT_SHM_NAME      "/asmtest_taint_launch"
+#define AT_SHM_HITS_CAP  16
+#define AT_SHM_STEPS_CAP 64
 
 /* The shared channel. done transitions 0->1 (release) once the workload's fixture has
  * returned and every synchronous sink hit is in place; the validator spins on it
@@ -46,6 +58,13 @@ typedef struct at_shm_channel {
      * ignores that pointer and reads hits[] + the counters by offset. */
     at_taint_report_t report;
     at_taint_hit_t hits[AT_SHM_HITS_CAP];
+    /* Value / taint trace, drained by the client's drx_buf flush at process exit. The
+     * workload registers &drval at the region marker with drval.steps -> steps[] and
+     * drval.step_taint -> step_taint[] (mem left NULL — the taint SET needs no values);
+     * the consumer reads drval.steps_len + steps[].off + step_taint[] by offset. */
+    at_drval_t drval;
+    at_vstep_t steps[AT_SHM_STEPS_CAP];
+    at_tag_t step_taint[AT_SHM_STEPS_CAP];
 } at_shm_channel_t;
 
 #endif /* ASMTEST_TAINT_SHM_H */

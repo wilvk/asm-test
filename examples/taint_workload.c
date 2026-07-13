@@ -6,8 +6,10 @@
  * program does NOT drive the in-process DR lifecycle (no dr_init/dr_start — DR is already
  * active via drrun); it just exports the marker symbols the client resolves by PC, maps
  * the POSIX shared-memory results channel, materializes a fixture into an RWX page, and
- * runs it. The client seeds the buffer, propagates taint inline, and writes the sink hit
- * SYNCHRONOUSLY into the shared report; a separate validator process drains + oracle-diffs.
+ * runs it. The client seeds the buffer, propagates taint inline, writes the sink hit
+ * SYNCHRONOUSLY into the shared report, and (via its drx_buf flush at process exit) drains
+ * the value/taint trace into the segment's steps[]/step_taint[]; a separate validator
+ * process reads both and oracle-diffs the sink hit AND the full taint set.
  *
  * The marker symbols are defined HERE (not linked from dataflow_dr.c) so the workload is
  * self-contained; -rdynamic puts them in the dynamic symbol table for dr_get_proc_address.
@@ -58,11 +60,6 @@ static const uint8_t taint_sink_chain[] = {
     0xc3,                         /* 0x15 ret                               */
 };
 
-/* A region marker needs a non-NULL at_drval_t so the client activates taint for the
- * range; the value arrays stay NULL (this slice ships only the synchronous sink report,
- * not the drx_buf-buffered value trace). Static so it outlives main for the exit flush. */
-static at_drval_t g_dv;
-
 typedef long (*fn2_t)(long, long);
 
 int main(int argc, char **argv) {
@@ -88,6 +85,14 @@ int main(int argc, char **argv) {
     shm->report.hits =
         shm->hits; /* producer-space ptr; consumer reads hits[] by offset */
     shm->report.hits_cap = AT_SHM_HITS_CAP;
+    /* Point the value-capture buffer's step + taint arrays into the segment so the
+     * client's drx_buf flush (at process exit) lands the value trace + taint set where
+     * the validator can read them. mem stays NULL — the taint SET oracle needs step
+     * offsets + step_taint, not captured memory values. */
+    shm->drval.steps = shm->steps;
+    shm->drval.steps_cap = AT_SHM_STEPS_CAP;
+    shm->drval.step_taint = shm->step_taint;
+    shm->drval.step_taint_cap = AT_SHM_STEPS_CAP;
 
     /* Seeded buffer the fixture loads from (a plain data page; the client paints its
      * shadow via the seed marker). */
@@ -105,7 +110,7 @@ int main(int argc, char **argv) {
     /* Register the region + the sink report, paint the seed, then run (each a rare PC-
      * resolved clean call in the client). The sink hit is written synchronously when the
      * branch executes, so it is in the shared report by the time the fixture returns. */
-    asmtest_dr_valcapture_marker(code, sizeof taint_sink_chain, &g_dv);
+    asmtest_dr_valcapture_marker(code, sizeof taint_sink_chain, &shm->drval);
     asmtest_dr_taint_sink_marker(&shm->report);
     asmtest_dr_taint_seed_marker(&seedbuf, sizeof seedbuf, AT_TAG_TAINTED);
     long r = ((fn2_t)code)((long)(uintptr_t)&seedbuf, 5);
