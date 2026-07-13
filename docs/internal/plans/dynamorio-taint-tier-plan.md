@@ -430,7 +430,7 @@ operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_b
 reproduce `at_drval_t` **byte-identically** under the existing oracle gate. Correctness bar is
 exacting even though no new semantics land.
 
-## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(LANDED 2026-07-13 — exit criteria met; two documented hardening refinements remain)*
+## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(LANDED 2026-07-13 — exit criteria met; create-on-touch-on-store done; per-byte union remains)*
 
 First taint semantics: a byte-granular shadow and inline `dst_tag = ∪ src_tags`, driven
 by the seed/sink surface, validated on a **native in-process fixture** — still docker,
@@ -524,11 +524,22 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > still 14/14 — all green in the fresh `make docker-taint-native` image. This meets the Increment 4
 > exit criteria (seed a color, derive through GP regs + integer memory, the sink fires with the correct
 > `seed_off`→`off` and `depth`, the tag graph is diffed against the emulator L2 slicer, a negative
-> control reports zero hits, propagation is inline). **Two hardening refinements remain** (both safe
-> under-approximations today, not correctness gaps): per-byte multi-byte memory-tag union (currently
-> low-byte), and general create-on-touch-on-store via a first-touch slowpath clean call (currently
-> pre-touch + drop-if-absent). The guarded inline sink skip + other sink kinds (mem-len / call-arg) are
-> also follow-ons. Increment 5 (launch-under-DR container) is the next major push.
+> control reports zero hits, propagation is inline).
+>
+> **Create-on-touch-on-store LANDED 2026-07-13.** Replaced the first-slice pre-touch-plus-drop store
+> policy with real create-on-touch: the inline store-tag fast path writes the tag when the leaf
+> exists, else a first-touch SLOWPATH clean call (`on_store_slow`, a conditional `jz` over a
+> transparent `dr_insert_clean_call`) allocates the leaf and writes it — so arbitrary store targets
+> (the managed heap, Increment 5) are handled with **no pre-touch**, and the slowpath is taken at most
+> once per 1 MiB page (the fast path is an inline store; the inline gate now allows 5 clean-call sites,
+> all rare/off the per-instruction path). The fragile `pre_touch_stack` hack is **deleted** — its proof
+> is that the stack-spill fixtures still pass, plus a new `heapstore` scenario (5/5) that flows taint
+> through a store to a **fresh, never-touched heap buffer** and back (would return clean under the old
+> drop policy). Landed first-try (the conditional-clean-call construct held); flag-off value client
+> still 14/14; all 31/31 in the fresh docker image. **One hardening refinement remains** (a safe
+> under-approximation, not a correctness gap): per-byte multi-byte memory-tag union (currently the
+> operand's low byte). The guarded inline sink skip + other sink kinds (mem-len / call-arg) are also
+> follow-ons. Increment 5 (launch-under-DR container) is the next major push.
 >
 > **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
 > (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update

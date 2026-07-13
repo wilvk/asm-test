@@ -15,19 +15,22 @@
  * client fills at_drval_t identically. Named dr_taint.c (not test_*.c) so the root
  * Makefile's SUITES wildcard does not sweep this standalone DynamoRIO harness into the
  * forking runner; it is wired + run explicitly by mk/native-trace.mk's
- * dr-taint-native-test lane (four modes: seeded / negative / sink / sink-negative).
+ * dr-taint-native-test lane (five modes: seeded / negative / sink / sink-negative /
+ * heapstore).
  *
  * DynamoRIO permits ONE in-process lifecycle per process, so each invocation drives ONE
  * scenario, selected by argv[1] (default = seeded). Self-skips cleanly (exit 0) when
  * DynamoRIO / the client is unavailable.
  *
- * Fixtures (leaf, x86-64 SysV — rdi=buf, rsi=b), both reading a SEEDED memory buffer at
- * step0 so taint originates in the shadow:
+ * Fixtures (leaf, x86-64 SysV — rdi=buf, rsi=b/buf2), all reading a SEEDED memory buffer
+ * at step0 so taint originates in the shadow:
  *   taint_chain:      mov rax,[rdi] / mov [rsp-8],rax / mov rcx,[rsp-8] /
  *                     lea rdx,[rcx+rsi] / mov rax,rdx / ret   (propagation oracle)
  *   taint_sink_chain: ... / add rcx,rsi / jz +3 / ...         (branch-condition sink)
- * The store/reload exercise the integer-memory (stack) shadow, the moves/lea/add the reg
- * + flag tags; forward(step0) excludes ret.
+ *   taint_heapstore:  mov rax,[rdi] / mov [rsi],rax / mov rcx,[rsi] / ... (create-on-
+ *                     touch through a fresh, never-pre-touched heap store)
+ * The store/reload exercise the integer-memory shadow, the moves/lea/add the reg + flag
+ * tags; forward(step0) excludes ret.
  */
 #include "asmtest_valtrace.h"
 
@@ -101,6 +104,20 @@ static const uint8_t taint_sink_chain[] = {
 };
 #define SINK_OFF   0x10 /* the jz instruction's region offset */
 #define SINK_DEPTH 4    /* def-use edges seed(step0) -> jz(step4)          */
+
+/* Create-on-touch fixture (rdi=buf seeded, rsi=buf2 a FRESH heap buffer, never seeded
+ * or otherwise touched in the shadow): stores the tainted value to buf2 then reloads it.
+ * The store to buf2 hits a null leaf => the inline store-tag SLOWPATH must create the
+ * leaf on touch, or the reloaded rcx would come back clean.
+ *   taint_heapstore: mov rax,[rdi] / mov [rsi],rax / mov rcx,[rsi] / mov rax,rcx / ret
+ * forward(step0) = {0,1,2,3} (ret excluded). */
+static const uint8_t taint_heapstore[] = {
+    0x48, 0x8b, 0x07, /* 0x00 mov rax, [rdi] (SEED origin)              */
+    0x48, 0x89, 0x06, /* 0x03 mov [rsi], rax (store to fresh heap buf2) */
+    0x48, 0x8b, 0x0e, /* 0x06 mov rcx, [rsi] (reload from buf2)         */
+    0x48, 0x89, 0xc8, /* 0x09 mov rax, rcx                              */
+    0xc3,             /* 0x0c ret                                       */
+};
 
 static int slices_equal(const asmtest_slice_t *a, const asmtest_slice_t *b) {
     if (a == NULL || b == NULL || a->n != b->n)
@@ -410,6 +427,63 @@ static void test_sink_negative(void) {
     asmtest_valtrace_free(v);
 }
 
+/* Create-on-touch scenario: taint flows THROUGH a store to a fresh, never-touched heap
+ * buffer and back. Passes only if the inline store-tag slowpath creates the leaf on
+ * first touch (no pre-touch); the taint set must equal forward(seed) = {0,1,2,3}. */
+static void test_heapstore(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    if (v == NULL) {
+        CHECK(0, "heapstore: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    uint64_t *buf2 = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL || buf2 == NULL) {
+        CHECK(0, "heapstore: buffer alloc");
+        free(buf);
+        free(buf2);
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    *buf2 = 0;
+    long args[2] = {(long)(uintptr_t)buf, (long)(uintptr_t)buf2};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_heapstore, sizeof taint_heapstore, args, 2, 0,
+        (uint64_t)(uintptr_t)buf, sizeof(uint64_t), AT_TAG_TAINTED, &result, v,
+        step_taint, sizeof step_taint / sizeof step_taint[0], NULL);
+
+    CHECK(rc == DF_DR_OK,
+          "heapstore: routine captured in-band under the taint client");
+    CHECK(result == 7,
+          "heapstore: routine returned 7 (round-tripped *buf via buf2)");
+    CHECK(v->steps_len == 5, "heapstore: five in-region steps captured");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    int mism = 0;
+    for (size_t i = 0; i < v->steps_len; i++) {
+        int tainted = step_taint[i] != 0;
+        int inslice = fwd ? asmtest_slice_contains(fwd, (uint32_t)i) : 0;
+        if (tainted != inslice)
+            mism++;
+    }
+    CHECK(mism == 0, "heapstore: taint flows through the fresh-heap store "
+                     "[CREATE-ON-TOUCH]");
+    CHECK(step_taint[2] != 0, "heapstore: reload from buf2 (step2) tainted "
+                              "(slowpath created the leaf)");
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    free(buf2);
+    asmtest_valtrace_free(v);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* progress survives a hard kill */
     if (!asmtest_dataflow_dr_available()) {
@@ -423,6 +497,8 @@ int main(int argc, char **argv) {
         test_sink();
     else if (strcmp(mode, "sink-negative") == 0)
         test_sink_negative();
+    else if (strcmp(mode, "heapstore") == 0)
+        test_heapstore();
     else
         test_seeded();
     printf("1..%d\n", checks);

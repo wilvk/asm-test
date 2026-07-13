@@ -298,20 +298,26 @@ else
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_taint sink-negative
+	@echo "== dr-taint-native-test (create-on-touch: taint through a fresh-heap store) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint heapstore
 endif
 
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
 # the ONLY dr_insert_clean_call sites are rare + off the per-instruction path: on_marker
-# (region), on_seed (seed paint), on_sink_register (report), and on_sink (per watched
-# conditional branch, NOT per-instruction). The per-instruction union/broadcast is inline.
+# (region), on_seed (seed paint), on_sink_register (report), on_sink (per watched
+# conditional branch), and on_store_slow (a store-tag FIRST-TOUCH slowpath, taken at most
+# once per 1 MiB page — the fast path is an inline store). The per-instruction
+# union/broadcast never calls out.
 .PHONY: dr-taint-inline-gate
 dr-taint-inline-gate:
 	@n=$$(grep -c 'dr_insert_clean_call(' src/dataflow_dr_client_inlined.c); \
-	 if [ "$$n" -ne 4 ]; then \
-	   echo "dr-taint: expected exactly 4 clean calls (on_marker/on_seed/on_sink_register/on_sink), found $$n"; \
+	 if [ "$$n" -ne 5 ]; then \
+	   echo "dr-taint: expected exactly 5 clean calls (markers + per-branch sink + store first-touch slowpath), found $$n"; \
 	   exit 1; \
 	 fi; \
-	 echo "dr-taint: propagation is inline (clean calls only at markers + per-branch sink) — OK"
+	 echo "dr-taint: propagation is inline (clean calls only at markers + sink + store slowpath) — OK"
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value

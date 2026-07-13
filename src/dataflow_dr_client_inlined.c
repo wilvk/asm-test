@@ -98,17 +98,16 @@
  *    guarded INLINE skip (no call when the flag is clean) and other sink kinds (mem-len /
  *    call-arg watching a passed-in operand tag) are the next refinement.
  *
- * Two deliberate first-slice simplifications, each a safe under-approximation (a
- * conservative MISS, never corruption or a false positive), documented at their sites:
- *  (1) Memory operand tags use the operand's LOW byte only (not a per-byte union over
- *      all `size` bytes). Sufficient because seeds paint every byte and the fixture's
- *      store/reload share the low-byte address; multi-byte byte-granular union is next.
- *  (2) Inline store-tag broadcast is branchless "write-if-leaf-present-else-drop"
- *      (cmov to a throwaway byte on a null leaf) rather than inline create-on-touch
- *      (which would need a first-touch slowpath clean call). Correct because the seed
- *      buffer's leaf (on_seed) and each thread's stack leaves (thread-init) are pre-
- *      touched, so every address the single-threaded fixture stores a tag to already
- *      has a leaf; a dropped write elsewhere degrades to a conservative miss.
+ * Store-tag broadcast is real CREATE-ON-TOUCH: the inline fast path stores the tag when
+ * the leaf exists, else a first-touch SLOWPATH clean call (on_store_slow) allocates the
+ * leaf and writes it — so arbitrary store targets (the managed heap, Increment 5) are
+ * handled with no pre-touch, and the slowpath is taken at most once per 1 MiB page.
+ *
+ * One remaining first-slice simplification, a safe under-approximation (a conservative
+ * MISS, never corruption or a false positive), documented at its site: memory operand
+ * tags use the operand's LOW byte only (not a per-byte union over all `size` bytes).
+ * Sufficient because seeds paint every byte and a store/reload share the low-byte
+ * address; per-byte multi-byte byte-granular union is the next refinement.
  */
 #include "dr_api.h"
 #include "drmgr.h"
@@ -188,11 +187,11 @@ static const reg_id_t g_gpr_order[AT_GPR_COUNT] = {
 static at_tag_t *
     *g_dir; /* [AT_DIR_LEN], dr_raw_mem_alloc'd once, demand-zero      */
 
-/* Branchless-fallback bytes for the inline shadow accessors: a null leaf makes a
- * source read hit g_zero_byte (reads clean = 0, a no-op OR) and a store-tag write hit
- * g_sink_byte (dropped = conservative miss). g_zero_byte MUST stay zero. */
+/* Branchless-fallback byte for the inline shadow READ accessor: a null leaf makes a
+ * source read hit g_zero_byte (reads clean = 0, a no-op OR — unwritten memory is clean).
+ * Store writes instead take a create-on-touch slowpath, so they need no fallback byte.
+ * g_zero_byte MUST stay zero. */
 static const uint8_t g_zero_byte = 0;
-static uint8_t g_sink_byte;
 
 /* Per-thread flat reg-tag file (drmgr TLS): 16 GP containers + 1 eflags slot, keyed by
  * the DR reg id canonicalized to its 64-bit container (whole-register tags this
@@ -252,33 +251,27 @@ static at_tag_t *tag_ptr_create(uint64_t ea) {
     return lf + (ea & AT_LEAF_MASK);
 }
 
-/* Pre-touch a window of stack leaves around `sp` (create-on-touch), so inline store-tag
- * broadcasts to the stack never hit a null leaf (simplification (2)). Covers a few MiB
- * below sp (the stack grows down) plus the leaf above, so a spill just under a leaf
- * boundary is still backed. */
-static void pre_touch_stack(uint64_t sp) {
-    for (int k = -1; k <= 8; k++)
-        (void)tag_ptr_create(sp - (int64_t)k * (int64_t)AT_LEAF_SPAN);
+/* Store-tag broadcast SLOWPATH (rare; taken only when the inline fast path finds a null
+ * leaf — i.e. the first tag write to a 1 MiB page). Creates the leaf on touch and writes
+ * the tag; a real create-on-touch store shadow, so NO stack (or any other) pre-touch is
+ * needed and arbitrary store targets (the managed heap, Increment 5) are handled. Off
+ * the per-instruction path: after a page's first touch its leaf exists and every later
+ * store to it takes the inline fast path. */
+static void on_store_slow(uint64_t ea, uint64_t tag) {
+    at_tag_t *p = tag_ptr_create(ea);
+    if (p != NULL)
+        *p = (at_tag_t)tag;
 }
 
 /* Seed marker clean call (rare; not the hot path): paint [base, base+len) = color in
- * the shadow before traced code runs. Also pre-touch the CURRENT thread's stack leaves
- * here — the seed marker runs one frame above the traced routine, so its rsp reliably
- * shares the routine's stack leaves (thread-init's early context did not), guaranteeing
- * the fixture's inline spill-store tags land (see simplification (2) in the header). */
+ * the shadow before traced code runs. Create-on-touch (tag_ptr_create) allocates the
+ * seeded buffer's leaf; store leaves are created on first touch by on_store_slow, so no
+ * pre-touch is required. */
 static void on_seed(uint64_t base, uint64_t len, uint64_t color) {
     for (uint64_t i = 0; i < len; i++) {
         at_tag_t *p = tag_ptr_create(base + i);
         if (p != NULL)
             *p = (at_tag_t)color;
-    }
-    void *dc = dr_get_current_drcontext();
-    if (dc != NULL) {
-        dr_mcontext_t mc;
-        mc.size = sizeof(mc);
-        mc.flags = DR_MC_CONTROL; /* rsp */
-        if (dr_get_mcontext(dc, &mc))
-            pre_touch_stack((uint64_t)mc.xsp);
     }
 }
 
@@ -400,17 +393,60 @@ static void emit_shadow_or(void *dc, instrlist_t *bb, instr_t *where,
                         opnd_create_base_disp(r2, DR_REG_NULL, 0, 0, OPSZ_1)));
 }
 
-/* Store s_t's low tag byte to `ea_reg`'s shadow (a store dst broadcast). Clobbers
- * ea_reg/r1/r2. Null leaf -> writes g_sink_byte (dropped = conservative miss). */
+/* Store s_t's low tag byte to `ea_reg`'s shadow (a store dst broadcast), with real
+ * CREATE-ON-TOUCH: if the leaf exists, store inline (fast path); if not, a first-touch
+ * SLOWPATH clean call (on_store_slow) allocates the leaf and writes the tag. `ea_reg` is
+ * PRESERVED (the slowpath passes it as the EA); r1/r2 are clobbered scratch. The clean
+ * call is transparent, so s_t/ea_reg survive it; both paths reconverge at `done`. */
 static void emit_shadow_store(void *dc, instrlist_t *bb, instr_t *where,
                               reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
                               reg_id_t s_t) {
-    emit_shadow_lookup(dc, bb, where, ea_reg, r1, r2, &g_sink_byte);
+    instr_t *slow = INSTR_CREATE_label(dc);
+    instr_t *done = INSTR_CREATE_label(dc);
+    /* r1 = ea >> LEAF_BITS (leaf index) */
     instrlist_meta_preinsert(
         bb, where,
-        INSTR_CREATE_mov_st(
-            dc, opnd_create_base_disp(r2, DR_REG_NULL, 0, 0, OPSZ_1),
-            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+        INSTR_CREATE_mov_ld(dc, opnd_create_reg(r1), opnd_create_reg(ea_reg)));
+    instrlist_meta_preinsert(bb, where,
+                             INSTR_CREATE_shr(dc, opnd_create_reg(r1),
+                                              OPND_CREATE_INT8(AT_LEAF_BITS)));
+    /* r2 = g_dir[r1] (leaf ptr, maybe null) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_imm(dc, opnd_create_reg(r2),
+                             OPND_CREATE_INTPTR((ptr_uint_t)g_dir)));
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_ld(
+            dc, opnd_create_reg(r2),
+            opnd_create_base_disp(r2, r1, sizeof(at_tag_t *), 0, OPSZ_8)));
+    /* r1 = ea & LEAF_MASK (offset within leaf) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_ld(dc, opnd_create_reg(r1), opnd_create_reg(ea_reg)));
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_and(dc, opnd_create_reg(r1),
+                         OPND_CREATE_INT32((int)AT_LEAF_MASK)));
+    /* if (leaf == NULL) goto slow */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_test(dc, opnd_create_reg(r2), opnd_create_reg(r2)));
+    instrlist_meta_preinsert(
+        bb, where, INSTR_CREATE_jcc(dc, OP_jz, opnd_create_instr(slow)));
+    /* fast path: byte[leaf + offset] = s_t; goto done */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_st(dc, opnd_create_base_disp(r2, r1, 1, 0, OPSZ_1),
+                            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+    instrlist_meta_preinsert(bb, where,
+                             INSTR_CREATE_jmp(dc, opnd_create_instr(done)));
+    /* slowpath: on_store_slow(ea, tag) creates the leaf on first touch and writes it */
+    instrlist_meta_preinsert(bb, where, slow);
+    dr_insert_clean_call(dc, bb, where, (void *)on_store_slow, false, 2,
+                         opnd_create_reg(ea_reg),
+                         opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_8)));
+    instrlist_meta_preinsert(bb, where, done);
 }
 
 /* OR reg-tag-file[idx]'s byte into s_t (a register source read). t_rf = regfile base. */
