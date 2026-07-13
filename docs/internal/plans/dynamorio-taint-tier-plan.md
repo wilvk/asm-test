@@ -371,8 +371,23 @@ irrelevant — the oracle gate passes identically:
 Key implementation lessons (for Increments 4+): `drreg_get_app_value(X,Y)` restores `X` in place,
 so the register backing the `drx_buf` pointer must be captured last via a pointer copy; the trace
 buffer's `update_buf_ptr` clobbers arithmetic flags, so reserve `aflags` **only** around it (late)
-so its `lahf`/`rax` spill does not perturb the register capture. The subsections below are the
-as-planned scope, retained for provenance.
+so its `lahf`/`rax` spill does not perturb the register capture.
+
+**Post-landing adversarial review** (a 4-dimension find → verify → judge workflow, run before
+Increment 4 rides on this client). Two confirmed **inlined-specific** defects were **fixed** and
+re-validated (oracle 14/14, bench ~2.6×): (a) a captured memory operand whose base/index aliases
+the `drx_buf`-pointer register would let `drreg_restore_app_values` restore it in place and destroy
+the buffer pointer (memory corruption; latent — needs drreg to pick a base/index reg as scratch) —
+now skipped conservatively; (b) the inline value load dereferenced no-load memory operands
+(`lea`/`nop [mem]`/`prefetch`), crashing on an unmapped EA the app never touches — now gated by
+`instr_reads_memory`, bounding the "assumes valid EA" divergence to genuine loads (where the app
+faults too). Two **shared** (both value producers), latent, design/ABI-level findings are
+**documented** in-code as known limitations, deferred to the increment that owns their real fix:
+the deferred-write model mis-values a `call`'s `rsp`/`rip` across an out-of-region callee (proper
+fix = call-out step-over / whole-process capture; [dataflow_dr.c](../../../src/dataflow_dr.c)
+`build_valtrace`), and high-byte sub-registers (`AH`/`BH`/`CH`/`DH`) fold to the low byte (needs a
+sub-register byte-offset in the record ABI; `snap_gp`). The subsections below are the as-planned
+scope, retained for provenance.
 
 Swap the recorder, not the semantics: reproduce the exact `at_drval_t` capture the clean-call
 client produces, but inlined + buffered, and re-validate against the emulator oracle before any

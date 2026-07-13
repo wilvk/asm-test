@@ -84,7 +84,15 @@ typedef long (*fn6_t)(long, long, long, long, long, long);
  * 32/16/8-bit sub-register to its 64-bit container (the record's size carries the real
  * operand width). Mirrors dataflow_ptrace.c's gp_value over the snapshot layout.
  * Returns false for a register not in the GP/flags/rip file (segment selectors, vector
- * regs), whose value is then left uncaptured — exactly as the ptrace producer does. */
+ * regs), whose value is then left uncaptured — exactly as the ptrace producer does.
+ *
+ * KNOWN LIMITATION (high-byte sub-registers): AH/BH/CH/DH fold to the full 64-bit
+ * container like every other sub-register, but they occupy bits 8-15, not the low
+ * byte the record's size=1 implies — a consumer that masks the value to `size` bytes
+ * reads AL, not AH. Value-only (the raw snapshot is lossless — bits 8-15 recoverable),
+ * latent (no current consumer masks-by-size for a high byte), and identical across all
+ * three producers (dr/ptrace/emu), so the oracle cannot expose it. A correct fix needs
+ * a sub-register byte-offset in the record ABI; deferred until a consumer needs it. */
 static bool snap_gp(const at_vstep_t *st, uint32_t reg, uint64_t *out) {
     switch (reg) {
     case X86_REG_RAX:
@@ -221,7 +229,19 @@ static void fill_mem_read(const at_drval_t *dv, const at_vstep_t *st,
  * (destination state — the deferred-write model the emulator/ptrace producers use),
  * resolve memory addresses from the snapshot, and annotate memory reads with the
  * DR-captured load value. The LAST step has no successor snapshot, so its register
- * writes stay value-unfilled (their locations still enter def-use). */
+ * writes stay value-unfilled (their locations still enter def-use).
+ *
+ * KNOWN LIMITATION (region-exit gap): the deferred-write model assumes steps[i+1] is
+ * the dynamic successor of step i. This holds for all IN-region control flow (both
+ * edges of a taken branch/back-edge are instrumented), but NOT across a call/jmp to a
+ * target OUTSIDE [base,base+len): the un-instrumented callee produces no step, so
+ * steps[i+1] is the post-return re-entry, and a `call`'s rsp/rip WRITE gets valued
+ * from the return snapshot (rsp rebalanced, rip = return addr) rather than its true
+ * post-state. Value-only on the boundary instruction; location-based def-use/slices
+ * stay correct; latent on the current leaf/self-contained fixtures, and the emulator
+ * oracle (single mapped region) cannot run out-of-region code so cannot expose it.
+ * The proper fix is call-out step-over / whole-process capture (a later increment);
+ * shared with the clean-call producer, so not inlined-specific. */
 static void build_valtrace(asmtest_valtrace_t *vt, const uint8_t *code,
                            size_t code_len, const at_drval_t *dv) {
     vt->mem_space = AT_LOC_MEM_ABS;

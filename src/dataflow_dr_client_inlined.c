@@ -37,9 +37,19 @@
  *     unaffected. (Surfacing this: full-context fields like rflags are a genuine
  *     reason to keep a narrow clean call — noted for the taint tier.)
  *   - The inlined memory-value load assumes a valid EA (a faulting load crashes the
- *     app, where the clean call's dr_safe_read fails gracefully). Safe for the
- *     deterministic fixtures; hardening (a fault-safe inline load) is a later
- *     increment, matching the clean-call client's own "breadth deferred" posture.
+ *     app, where the clean call's dr_safe_read fails gracefully). The enumeration
+ *     gate now bounds this to GENUINE loads: `instr_reads_memory` skips no-load
+ *     forms (lea agen, `nop [mem]`, prefetch) whose EA the app never dereferences,
+ *     so the only remaining exposure is a real load of a genuinely-unmapped address
+ *     — where the app instruction itself faults one step later anyway, so there is
+ *     no divergence from unmodified execution. A fully fault-safe inline load is
+ *     still a later increment, matching the clean-call client's "breadth deferred"
+ *     posture.
+ *   - A captured memory operand whose base/index aliases the drx_buf-pointer
+ *     register (s_ptr) is skipped (value left unfilled): drreg_restore_app_values
+ *     restores that register in place and would destroy the buffer pointer. Rare
+ *     (needs drreg to pick a base/index register as scratch under register
+ *     pressure); the location still enters def-use via the app-side enumerator.
  *   - RIP-relative / far / segmented (fs:/gs:) memory operands are skipped inline
  *     (the clean call resolves RIP-relative via opnd_compute_address; the fixtures
  *     have none). Same far/segmented exclusion the clean-call client documents.
@@ -226,30 +236,13 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     if (dv == NULL || ipc < base || ipc >= base + len)
         return DR_EMIT_DEFAULT;
 
-    /* Enumerate the capturable explicit memory SOURCE operands up front (their
-     * count/sizes are compile-time, emitted as immediates below). */
-    opnd_t memops[AT_INLINE_MAXMEM];
-    uint16_t memsz[AT_INLINE_MAXMEM];
-    uint32_t nmem = 0;
-    for (int s = 0; s < instr_num_srcs(instr) && nmem < AT_INLINE_MAXMEM; s++) {
-        opnd_t op = instr_get_src(instr, s);
-        if (!opnd_is_memory_reference(op))
-            continue;
-        uint16_t sz = capturable_mem_size(op);
-        if (sz == 0)
-            continue;
-        memops[nmem] = op;
-        memsz[nmem] = sz;
-        nmem++;
-    }
-
-    /* Reserve arithmetic flags (the trace-buffer update_buf_ptr emits a bounds
-     * check that clobbers flags; our lea/mov capture does not, but the update
-     * does) + three scratch GPRs: buffer pointer + two work registers. */
+    /* Reserve three scratch GPRs FIRST (buffer pointer + two work registers); the
+     * memory-operand enumeration below needs s_ptr to skip operands whose base or
+     * index aliases it. (Arithmetic flags are reserved later, only around the
+     * trace-buffer update — the mov/lea/movzx capture here is flag-neutral.) */
     reg_id_t s_ptr, s_a, s_b;
-    if (drreg_reserve_register(dc, bb, instr, NULL, &s_ptr) != DRREG_SUCCESS) {
+    if (drreg_reserve_register(dc, bb, instr, NULL, &s_ptr) != DRREG_SUCCESS)
         return DR_EMIT_DEFAULT;
-    }
     if (drreg_reserve_register(dc, bb, instr, NULL, &s_a) != DRREG_SUCCESS) {
         drreg_unreserve_register(dc, bb, instr, s_ptr);
         return DR_EMIT_DEFAULT;
@@ -258,6 +251,40 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
         drreg_unreserve_register(dc, bb, instr, s_a);
         drreg_unreserve_register(dc, bb, instr, s_ptr);
         return DR_EMIT_DEFAULT;
+    }
+
+    /* Enumerate the capturable explicit memory SOURCE operands (count/sizes are
+     * compile-time, emitted as immediates below). Two conservative gates beyond
+     * capturable_mem_size — a skipped operand's VALUE is simply left unfilled; the
+     * app-side enumerator still produces its read record and resolves the location
+     * from the register snapshot, so def-use/slices are unaffected:
+     *  - instr_reads_memory: skip NO-LOAD forms (lea agen, `nop [mem]`, prefetch)
+     *    whose "source" memory operand the instruction never dereferences. An
+     *    inline load of them would fault on an unmapped/non-pointer address the app
+     *    itself never touches — unlike a real load, where the app would fault too,
+     *    so the "assumes a valid EA" divergence (file header) stays bounded to
+     *    genuine loads.
+     *  - base/index != s_ptr: if the buffer-pointer register aliases this operand's
+     *    base or index, drreg_restore_app_values (below) would restore it IN PLACE
+     *    and destroy the buffer pointer — the same in-place-restore hazard the GPR
+     *    loop guards against. Skip rather than corrupt the capture / app memory. */
+    opnd_t memops[AT_INLINE_MAXMEM];
+    uint16_t memsz[AT_INLINE_MAXMEM];
+    uint32_t nmem = 0;
+    bool reads_mem = instr_reads_memory(instr);
+    for (int s = 0; reads_mem && s < instr_num_srcs(instr) && nmem < AT_INLINE_MAXMEM;
+         s++) {
+        opnd_t op = instr_get_src(instr, s);
+        if (!opnd_is_memory_reference(op))
+            continue;
+        uint16_t sz = capturable_mem_size(op);
+        if (sz == 0)
+            continue;
+        if (opnd_get_base(op) == s_ptr || opnd_get_index(op) == s_ptr)
+            continue;
+        memops[nmem] = op;
+        memsz[nmem] = sz;
+        nmem++;
     }
 
     drx_buf_insert_load_buf_ptr(dc, g_buf, bb, instr, s_ptr);
