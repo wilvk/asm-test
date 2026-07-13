@@ -54,8 +54,10 @@
 #define DF_DR_ENODR                                                            \
     (-4) /* no libdynamorio / value client resolvable: self-skip */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* The app-side marker the value client resolves by PC and wraps (reading its SysV
  * argument registers at entry). A real exported function — noinline + default
@@ -340,9 +342,25 @@ int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len,
     for (int i = 0; i < nargs; i++)
         a[i] = args[i];
 
+    /* Optional capture-window timer (ASMTEST_DRVAL_BENCH): brackets ONLY the
+     * instrumented run + DR shutdown (the inlined client's drx_buf flush happens
+     * at shutdown), isolating the asymmetric per-instruction CAPTURE cost from the
+     * symmetric DR init and app-side replay (build_valtrace). Emits one
+     * "DRVAL_CAPTURE_NS <n>" line to stderr for the dr-valtrace-bench lane. */
+    const char *bench_env = getenv("ASMTEST_DRVAL_BENCH");
+    struct timespec cap_t0, cap_t1;
     asmtest_dr_valcapture_marker(exec.base, exec.len, &dv);
+    if (bench_env != NULL && bench_env[0] != '\0')
+        clock_gettime(CLOCK_MONOTONIC, &cap_t0);
     long r = ((fn6_t)exec.base)(a[0], a[1], a[2], a[3], a[4], a[5]);
     asmtest_dr_shutdown();
+    if (bench_env != NULL && bench_env[0] != '\0') {
+        clock_gettime(CLOCK_MONOTONIC, &cap_t1);
+        unsigned long long cap_ns =
+            (unsigned long long)(cap_t1.tv_sec - cap_t0.tv_sec) * 1000000000ull +
+            (unsigned long long)(cap_t1.tv_nsec - cap_t0.tv_nsec);
+        fprintf(stderr, "DRVAL_CAPTURE_NS %llu\n", cap_ns);
+    }
     if (result != NULL)
         *result = r;
 

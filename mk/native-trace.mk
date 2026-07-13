@@ -231,6 +231,41 @@ else
 	    $(BUILD)/dr_valtrace
 endif
 
+# --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
+# Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value
+# client across fresh processes and reports the per-instruction capture-cost
+# delta (DR init + app-side replay are identical, so the delta is the asymmetric
+# capture cost). Also a correctness stress the tiny oracle fixture skips (a
+# back-edge, a flag-dependent branch, many drx_buf flushes). No Unicorn needed.
+$(BUILD)/dr_valtrace_bench.o: examples/dr_valtrace_bench.c \
+                             include/asmtest_valtrace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/dr_valtrace_bench: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                           $(BUILD)/dataflow_dr.o $(BUILD)/drtrace_app.o \
+                           $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                           $(BUILD)/dr_valtrace_bench.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) $(DRAPP_KS_LIBS) \
+	      -ldl -lpthread -o $@
+
+BENCH_ITERS   ?= 40000
+BENCH_SAMPLES ?= 5
+.PHONY: dr-valtrace-bench
+dr-valtrace-bench:
+ifndef DR_AVAILABLE
+	@echo "== dr-valtrace-bench =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/dr_valtrace_bench
+	@echo "== dr-valtrace-bench (per-instruction capture cost: clean-call vs inlined) =="
+	@ITERS=$(BENCH_ITERS) SAMPLES=$(BENCH_SAMPLES) \
+	  CLEAN=$(abspath $(BUILD)/libasmtest_drval_client.so) \
+	  INLINED=$(abspath $(BUILD)/libasmtest_drval_client_inlined.so) \
+	  DRLIB=$(abspath $(DR_DLLIB)) BIN=$(abspath $(BUILD)/dr_valtrace_bench) \
+	  bash scripts/dr_valtrace_bench.sh
+endif
+
 # --- DR extension-load probe (taint tier, Increment 2) ---------------------
 # THROWAWAY diagnostic, not a product artifact. Builds the opt-in probe client
 # (drclient/probe_extensions.c — the sole client that use_DynamoRIO_extension()s)

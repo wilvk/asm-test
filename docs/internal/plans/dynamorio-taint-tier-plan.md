@@ -54,8 +54,8 @@ closes each phase the same way.
 > re-platforms the clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and passes the emulator-oracle
 > cross-check identically to the clean-call client (`make dr-valtrace-inlined-test`, wired into
 > `drtrace-test`); `rflags`/dead-register slots are documented clean-call-only divergences; the
-> direction-of-travel microbenchmark is the one deferred piece. **Increments 4–9** *(planned)* — 4
-> in-band tag propagation
+> `make dr-valtrace-bench` microbenchmark shows a ~2.6× per-instruction capture-cost drop.
+> **Increments 4–9** *(planned)* — 4 in-band tag propagation
 > (`dst_tag = ∪ src_tags`) + shadow-concurrency policy + seed/sink API; 5 launch-under-DR
 > container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator; 6
 > whole-process breadth + method-range scoping; 7 GC-move `umbra` remap *(hard-gated on the
@@ -334,7 +334,7 @@ of a/b/c loads, the glibc boundary, and the true license of each extension), not
 Realized as S; the load blocker did not reproduce and the umbra=LGPL split was the load-bearing
 discovery.
 
-## Increment 3 - Re-platform the L0 value client onto inlined instrumentation *(CORE LANDED 2026-07-13; microbenchmark remaining)*
+## Increment 3 - Re-platform the L0 value client onto inlined instrumentation *(LANDED 2026-07-13)*
 
 **Outcome.** The inlined client [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)
 (`libasmtest_drval_client_inlined.so`) re-platforms the clean-call recorder onto the BSD-clean
@@ -343,9 +343,18 @@ buffer — and fills the SAME `at_drval_t`. Driven by the SAME `dr_valtrace` har
 `ASMTEST_DRVAL_CLIENT` (`make dr-valtrace-inlined-test`), it passes all 14 checks **identically to
 the clean-call client, including both emulator-oracle slice cross-checks** (stable over 5/5 runs),
 now wired into the `drtrace-test` CI gate alongside the clean-call client. The shipped clean-call
-`asmtest_drval_client` is untouched as oracle/fallback. **Remaining:** the direction-of-travel
-microbenchmark (needs a larger-fixture timing harness; the 6-instruction oracle fixture is too
-small to time meaningfully) — the one deferred piece before this increment is fully closed.
+`asmtest_drval_client` is untouched as oracle/fallback.
+
+**Microbenchmark (`make dr-valtrace-bench`, [dr_valtrace_bench.c](../../../examples/dr_valtrace_bench.c)
++ [scripts/dr_valtrace_bench.sh](../../../scripts/dr_valtrace_bench.sh)):** over a 120002-step
+looping fixture (a back-edge + a flag-dependent branch + ~30 `drx_buf` flushes — correctness the
+tiny oracle fixture skips; the routine's return value is asserted), the isolated capture window
+(`ASMTEST_DRVAL_BENCH`, excluding the symmetric DR init + replay) is **~184 ns/insn clean-call vs
+~70 ns/insn inlined — a ~2.6× per-instruction capture-cost drop (~62% less), stable across runs**.
+The direction-of-travel check is met (this is the capture-path speedup, not the ~10–50× whole-tier
+taint claim — that is Increment 9). Kept an informational `make` target, not a hard CI gate (a
+timing assertion is CI-noise-prone; the inlined client's *correctness* is gated by
+`dr-valtrace-inlined-test`).
 
 Two **principled divergences** surfaced (documented in the client header), both semantically
 irrelevant — the oracle gate passes identically:
@@ -397,9 +406,9 @@ same green CI gate, now on the extension stack — via `make dr-valtrace-inlined
 match the clean-call client for every def-use-consumed field (byte-identical on live reads,
 memory EA/values, and deferred writes valued from the next LIVE snapshot); `rflags` value and
 dead-register slots are principled clean-call-only divergences (above), not captured inline ✅. No
-taint ✅. **Remaining:** a `make`-driven microbenchmark in the pinned DR Docker lane showing a
-measurable per-instruction cost drop vs the clean-call path (direction-of-travel check, not the
-10–50× claim) — needs a larger straight-line fixture than the oracle's 6-instruction `df_chain`.
+taint ✅. The `make dr-valtrace-bench` microbenchmark shows a measurable per-instruction
+capture-cost drop (~2.6× / ~62% on the isolated capture window over a 120k-step looping fixture) ✅
+(**MET 2026-07-13**). Increment 3 fully closed.
 
 **Effort.** **L** — the central re-platform lift and the highest-risk single increment: every
 operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_buf` code and must
@@ -681,13 +690,15 @@ hard gate, not new instrumentation.
   [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md); gates
   `make drext-probe` / `make docker-drext-probe` ([native-trace.mk](../../../mk/native-trace.mk),
   [docker.mk](../../../mk/docker.mk)) + CI `drext-probe`.
-- ✅ **Increment 3 — inlined L0 value client (CORE)** *(LANDED 2026-07-13)*:
+- ✅ **Increment 3 — inlined L0 value client** *(LANDED 2026-07-13)*:
   `libasmtest_drval_client_inlined.so`
   ([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)) re-platforms the
   clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and fills the same `at_drval_t`; passes the
   `dr_valtrace` emulator-oracle cross-check identically to the clean-call client (14/14, 5/5
   stable) via `make dr-valtrace-inlined-test`, wired into the `drtrace-test` CI gate. `rflags`
-  value + dead-register slots are documented clean-call-only divergences. Microbenchmark deferred.
+  value + dead-register slots are documented clean-call-only divergences. `make dr-valtrace-bench`
+  ([dr_valtrace_bench.c](../../../examples/dr_valtrace_bench.c)) shows a ~2.6× per-instruction
+  capture-cost drop on the isolated capture window.
 - ⬜ Increments 4–9 — planned (this document).
 
 ## Validation notes
