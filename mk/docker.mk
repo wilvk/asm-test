@@ -240,6 +240,22 @@ docker-taint-native:
 	  -t asmtest-taint-native .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-native
 
+# DR ATTACH tier lane (dynamorio-attach-tier-plan.md, Increment 1, first slice): COOPERATIVE
+# attach + detach on an already-running NATIVE process via the proven dr_app_* API. Like
+# docker-taint-native it installs DynamoRIO + Capstone + libunicorn, then runs `make
+# dr-taint-attach-coop-test`: examples/taint_attach_coop starts as a PLAIN native process (NOT
+# under drrun), runs a fixture natively, self-attaches DR + the UNCHANGED taint client mid-run,
+# captures a scoped window into POSIX-shm, detaches, runs native again, and a separate
+# validator oracle-diffs the captured window out of process. No experimental API, no
+# SYS_PTRACE — a plain `docker run` (the external foreign-PID injector is the experimental
+# Increment 2 probe, deferred). See docs/internal/plans/dynamorio-attach-tier-plan.md.
+.PHONY: docker-taint-attach
+docker-taint-attach:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-attach \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-attach .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-attach
+
 # TAINT tier dotnet coexistence lane (taint tier, Increment 5). Installs DynamoRIO + the
 # .NET SDK (no Capstone/Unicorn) and runs `make dr-taint-dotnet-test`:
 # `drrun -c <taint client> -- dotnet taint_hello.dll` — the first in-tree test of DR's
