@@ -103,11 +103,13 @@
  * leaf and writes it — so arbitrary store targets (the managed heap, Increment 5) are
  * handled with no pre-touch, and the slowpath is taken at most once per 1 MiB page.
  *
- * One remaining first-slice simplification, a safe under-approximation (a conservative
- * MISS, never corruption or a false positive), documented at its site: memory operand
- * tags use the operand's LOW byte only (not a per-byte union over all `size` bytes).
- * Sufficient because seeds paint every byte and a store/reload share the low-byte
- * address; per-byte multi-byte byte-granular union is the next refinement.
+ * Memory operand tags are BYTE-GRANULAR: a source read unions all `size` shadow bytes
+ * into the result (taint in any byte reaches it) and a store writes all `size` bytes.
+ * Registers keep whole-register (1-byte) tags this increment. Leaves are allocated one
+ * guard page larger than their span so a per-byte access straddling a leaf boundary is
+ * fault-safe (the straddling bytes land in the guard = a conservative miss, never a
+ * fault or false positive). No first-slice simplifications remain in the native scope;
+ * XMM/YMM (SIMD) tags are Increment 8.
  */
 #include "dr_api.h"
 #include "drmgr.h"
@@ -180,18 +182,27 @@ static const reg_id_t g_gpr_order[AT_GPR_COUNT] = {
 #define AT_LEAF_SPAN                                                           \
     ((size_t)1 << AT_LEAF_BITS) /* 1 MiB per leaf                */
 #define AT_LEAF_MASK (AT_LEAF_SPAN - 1)
-#define AT_VA_BITS   47 /* canonical x86-64 user VA      */
+/* Each leaf is allocated one guard page LARGER than its 1 MiB span, so an inline
+ * per-byte tag access on an operand STRADDLING a leaf boundary (offset + size > SPAN)
+ * reads/writes into the mapped guard instead of faulting past the mmap. The straddling
+ * high bytes then miss the next leaf's real tags (a conservative miss, never a fault or
+ * a false positive); the create-on-touch slowpath maps each byte independently, so it
+ * has no straddle gap. */
+#define AT_LEAF_GUARD 4096
+#define AT_LEAF_ALLOC (AT_LEAF_SPAN + AT_LEAF_GUARD)
+#define AT_VA_BITS    47 /* canonical x86-64 user VA      */
 #define AT_DIR_LEN                                                             \
     ((size_t)1 << (AT_VA_BITS - AT_LEAF_BITS)) /* 2^27 leaf ptrs */
 
 static at_tag_t *
     *g_dir; /* [AT_DIR_LEN], dr_raw_mem_alloc'd once, demand-zero      */
 
-/* Branchless-fallback byte for the inline shadow READ accessor: a null leaf makes a
- * source read hit g_zero_byte (reads clean = 0, a no-op OR — unwritten memory is clean).
- * Store writes instead take a create-on-touch slowpath, so they need no fallback byte.
- * g_zero_byte MUST stay zero. */
-static const uint8_t g_zero_byte = 0;
+/* Branchless-fallback ZERO region for the inline shadow READ accessor: a null leaf makes
+ * a source read hit g_zero_pad (reads clean = 0, a no-op OR — unwritten memory is clean).
+ * Sized for a full per-byte operand read (up to 8 bytes) so a multi-byte OR off a null
+ * leaf stays in-bounds. Store writes take a create-on-touch slowpath instead, so they
+ * need no fallback. g_zero_pad MUST stay all-zero. */
+static const uint8_t g_zero_pad[64];
 
 /* Per-thread flat reg-tag file (drmgr TLS): 16 GP containers + 1 eflags slot, keyed by
  * the DR reg id canonicalized to its 64-bit container (whole-register tags this
@@ -227,7 +238,7 @@ static at_tag_t *leaf_install(size_t i, at_tag_t *leaf) {
     if (__atomic_compare_exchange_n(&g_dir[i], &expect, leaf, false,
                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return leaf; /* we won */
-    dr_raw_mem_free(leaf, AT_LEAF_SPAN);
+    dr_raw_mem_free(leaf, AT_LEAF_ALLOC);
     return expect; /* lost: the value now in the slot */
 }
 
@@ -242,7 +253,7 @@ static at_tag_t *tag_ptr_create(uint64_t ea) {
     at_tag_t *lf = __atomic_load_n(&g_dir[i], __ATOMIC_ACQUIRE);
     if (lf == NULL) {
         at_tag_t *nl = (at_tag_t *)dr_raw_mem_alloc(
-            AT_LEAF_SPAN, DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
+            AT_LEAF_ALLOC, DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
         if (nl == NULL)
             return NULL;
         lf = leaf_install(
@@ -257,10 +268,12 @@ static at_tag_t *tag_ptr_create(uint64_t ea) {
  * needed and arbitrary store targets (the managed heap, Increment 5) are handled. Off
  * the per-instruction path: after a page's first touch its leaf exists and every later
  * store to it takes the inline fast path. */
-static void on_store_slow(uint64_t ea, uint64_t tag) {
-    at_tag_t *p = tag_ptr_create(ea);
-    if (p != NULL)
-        *p = (at_tag_t)tag;
+static void on_store_slow(uint64_t ea, uint64_t tag, uint64_t size) {
+    for (uint64_t k = 0; k < size; k++) {
+        at_tag_t *p = tag_ptr_create(ea + k); /* per-byte -> no straddle gap */
+        if (p != NULL)
+            *p = (at_tag_t)tag;
+    }
 }
 
 /* Seed marker clean call (rare; not the hot path): paint [base, base+len) = color in
@@ -381,16 +394,20 @@ static void emit_shadow_lookup(void *dc, instrlist_t *bb, instr_t *where,
                                                  opnd_create_reg(r1)));
 }
 
-/* OR the low tag byte at `ea_reg`'s shadow into s_t (a source read). Clobbers
- * ea_reg/r1/r2. Null leaf -> reads g_zero_byte (no-op OR). */
+/* OR the tag of a `size`-byte memory operand at `ea_reg`'s shadow into s_t (a source
+ * read): a per-byte union over all `size` shadow bytes, so a taint in ANY byte of the
+ * operand reaches the result. Clobbers ea_reg/r1/r2. Null leaf -> reads g_zero_pad
+ * (no-op OR); the guard page makes a leaf-straddling read fault-safe. */
 static void emit_shadow_or(void *dc, instrlist_t *bb, instr_t *where,
                            reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
-                           reg_id_t s_t) {
-    emit_shadow_lookup(dc, bb, where, ea_reg, r1, r2, &g_zero_byte);
-    instrlist_meta_preinsert(
-        bb, where,
-        INSTR_CREATE_or(dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1)),
-                        opnd_create_base_disp(r2, DR_REG_NULL, 0, 0, OPSZ_1)));
+                           reg_id_t s_t, uint16_t size) {
+    emit_shadow_lookup(dc, bb, where, ea_reg, r1, r2, &g_zero_pad[0]);
+    for (uint16_t k = 0; k < size; k++)
+        instrlist_meta_preinsert(
+            bb, where,
+            INSTR_CREATE_or(
+                dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1)),
+                opnd_create_base_disp(r2, DR_REG_NULL, 0, k, OPSZ_1)));
 }
 
 /* Store s_t's low tag byte to `ea_reg`'s shadow (a store dst broadcast), with real
@@ -400,7 +417,7 @@ static void emit_shadow_or(void *dc, instrlist_t *bb, instr_t *where,
  * call is transparent, so s_t/ea_reg survive it; both paths reconverge at `done`. */
 static void emit_shadow_store(void *dc, instrlist_t *bb, instr_t *where,
                               reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
-                              reg_id_t s_t) {
+                              reg_id_t s_t, uint16_t size) {
     instr_t *slow = INSTR_CREATE_label(dc);
     instr_t *done = INSTR_CREATE_label(dc);
     /* r1 = ea >> LEAF_BITS (leaf index) */
@@ -434,18 +451,24 @@ static void emit_shadow_store(void *dc, instrlist_t *bb, instr_t *where,
         INSTR_CREATE_test(dc, opnd_create_reg(r2), opnd_create_reg(r2)));
     instrlist_meta_preinsert(
         bb, where, INSTR_CREATE_jcc(dc, OP_jz, opnd_create_instr(slow)));
-    /* fast path: byte[leaf + offset] = s_t; goto done */
-    instrlist_meta_preinsert(
-        bb, where,
-        INSTR_CREATE_mov_st(dc, opnd_create_base_disp(r2, r1, 1, 0, OPSZ_1),
-                            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+    /* fast path: byte[leaf + offset + k] = s_t for k in [0, size); goto done. The guard
+     * page makes a leaf-straddling write fault-safe (the straddling bytes land in the
+     * guard = a conservative miss). */
+    for (uint16_t k = 0; k < size; k++)
+        instrlist_meta_preinsert(
+            bb, where,
+            INSTR_CREATE_mov_st(
+                dc, opnd_create_base_disp(r2, r1, 1, k, OPSZ_1),
+                opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
     instrlist_meta_preinsert(bb, where,
                              INSTR_CREATE_jmp(dc, opnd_create_instr(done)));
-    /* slowpath: on_store_slow(ea, tag) creates the leaf on first touch and writes it */
+    /* slowpath: on_store_slow(ea, tag, size) creates the leaf(s) on first touch and
+     * writes all size bytes (per-byte, so no straddle gap). */
     instrlist_meta_preinsert(bb, where, slow);
-    dr_insert_clean_call(dc, bb, where, (void *)on_store_slow, false, 2,
+    dr_insert_clean_call(dc, bb, where, (void *)on_store_slow, false, 3,
                          opnd_create_reg(ea_reg),
-                         opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_8)));
+                         opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_8)),
+                         OPND_CREATE_INTPTR((ptr_uint_t)size));
     instrlist_meta_preinsert(bb, where, done);
 }
 
@@ -579,8 +602,9 @@ static uint16_t capturable_mem_size(opnd_t op) {
  * aflags reserved. Uses the DR-native operand walk (NO Capstone) — congruence with the
  * app-side enumerator's read/write set is proven by the oracle diff, not assumed. */
 static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
-                             uint32_t nmem, reg_id_t s_ptr, reg_id_t s_a,
-                             reg_id_t s_b, reg_id_t s_t, reg_id_t t_rf) {
+                             uint32_t nmem, const uint16_t *memsz,
+                             reg_id_t s_ptr, reg_id_t s_a, reg_id_t s_b,
+                             reg_id_t s_t, reg_id_t t_rf) {
     /* s_t = 0 (32-bit xor zeroes the whole container). */
     instrlist_meta_preinsert(
         bb, instr,
@@ -634,7 +658,7 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
                                     s_ptr, DR_REG_NULL, 0,
                                     (int)(offsetof(raw_step_t, mem_ea) + j * 8),
                                     OPSZ_8)));
-        emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t);
+        emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t, memsz[j]);
     }
 
     /* ---- step witness: raw_step_t.taint = s_t (rides this record) ---------- */
@@ -666,7 +690,9 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
      * rsp is never a drreg scratch, so it never skips). */
     for (int d = 0; d < instr_num_dsts(instr); d++) {
         opnd_t op = instr_get_dst(instr, d);
-        if (!opnd_is_memory_reference(op) || capturable_mem_size(op) == 0)
+        uint16_t dsz =
+            opnd_is_memory_reference(op) ? capturable_mem_size(op) : 0;
+        if (dsz == 0)
             continue;
         reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
         if (bse == s_ptr || bse == s_a || bse == s_b || bse == s_t ||
@@ -682,7 +708,7 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
                 opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
                                       opnd_get_scale(op), opnd_get_disp(op),
                                       OPSZ_lea)));
-        emit_shadow_store(dc, bb, instr, s_a, s_b, t_rf, s_t);
+        emit_shadow_store(dc, bb, instr, s_a, s_b, t_rf, s_t, dsz);
         if (swap != DR_REG_NULL)
             drreg_unreserve_register(dc, bb, instr, swap);
     }
@@ -905,8 +931,8 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
             if (drreg_reserve_register(dc, bb, instr, NULL, &t_rf) ==
                 DRREG_SUCCESS) {
                 if (drreg_reserve_aflags(dc, bb, instr) == DRREG_SUCCESS) {
-                    emit_taint_phase(dc, bb, instr, nmem, s_ptr, s_a, s_b, s_t,
-                                     t_rf);
+                    emit_taint_phase(dc, bb, instr, nmem, memsz, s_ptr, s_a,
+                                     s_b, s_t, t_rf);
                     drreg_unreserve_aflags(dc, bb, instr);
                 }
                 drreg_unreserve_register(dc, bb, instr, t_rf);

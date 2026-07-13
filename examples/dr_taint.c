@@ -15,8 +15,8 @@
  * client fills at_drval_t identically. Named dr_taint.c (not test_*.c) so the root
  * Makefile's SUITES wildcard does not sweep this standalone DynamoRIO harness into the
  * forking runner; it is wired + run explicitly by mk/native-trace.mk's
- * dr-taint-native-test lane (five modes: seeded / negative / sink / sink-negative /
- * heapstore).
+ * dr-taint-native-test lane (six modes: seeded / negative / sink / sink-negative /
+ * heapstore / highbyte).
  *
  * DynamoRIO permits ONE in-process lifecycle per process, so each invocation drives ONE
  * scenario, selected by argv[1] (default = seeded). Self-skips cleanly (exit 0) when
@@ -25,7 +25,8 @@
  * Fixtures (leaf, x86-64 SysV — rdi=buf, rsi=b/buf2), all reading a SEEDED memory buffer
  * at step0 so taint originates in the shadow:
  *   taint_chain:      mov rax,[rdi] / mov [rsp-8],rax / mov rcx,[rsp-8] /
- *                     lea rdx,[rcx+rsi] / mov rax,rdx / ret   (propagation oracle)
+ *                     lea rdx,[rcx+rsi] / mov rax,rdx / ret   (propagation oracle; also
+ *                     the `highbyte` per-byte-union case, seeding only buf's high bytes)
  *   taint_sink_chain: ... / add rcx,rsi / jz +3 / ...         (branch-condition sink)
  *   taint_heapstore:  mov rax,[rdi] / mov [rsi],rax / mov rcx,[rsi] / ... (create-on-
  *                     touch through a fresh, never-pre-touched heap store)
@@ -484,6 +485,57 @@ static void test_heapstore(void) {
     asmtest_valtrace_free(v);
 }
 
+/* Per-byte union scenario: seed ONLY the HIGH 4 bytes of the 8-byte buffer, then load
+ * all 8. A low-byte-only tag read (shadow[buf+0], clean) would miss it and taint nothing;
+ * the byte-granular per-byte union reads shadow[buf+0..7], catches the tainted high bytes,
+ * and the taint set must equal forward(seed) = {0,1,2,3,4}. Reuses taint_chain. */
+static void test_highbyte(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    if (v == NULL) {
+        CHECK(0, "highbyte: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL) {
+        CHECK(0, "highbyte: buffer alloc");
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    long args[2] = {(long)(uintptr_t)buf, 5};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_chain, sizeof taint_chain, args, 2, 0,
+        (uint64_t)(uintptr_t)buf + 4, /*seed_len*/ 4, AT_TAG_TAINTED, &result,
+        v, step_taint, sizeof step_taint / sizeof step_taint[0], NULL);
+
+    CHECK(rc == DF_DR_OK,
+          "highbyte: routine captured in-band under the taint client");
+    CHECK(v->steps_len == 6, "highbyte: six in-region steps captured");
+    CHECK(step_taint[0] != 0, "highbyte: step0 load catches the high-byte-only "
+                              "seed [PER-BYTE UNION]");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    int mism = 0;
+    for (size_t i = 0; i < v->steps_len; i++) {
+        int tainted = step_taint[i] != 0;
+        int inslice = fwd ? asmtest_slice_contains(fwd, (uint32_t)i) : 0;
+        if (tainted != inslice)
+            mism++;
+    }
+    CHECK(mism == 0,
+          "highbyte: taint set == forward slice (high bytes propagate)");
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    asmtest_valtrace_free(v);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* progress survives a hard kill */
     if (!asmtest_dataflow_dr_available()) {
@@ -499,6 +551,8 @@ int main(int argc, char **argv) {
         test_sink_negative();
     else if (strcmp(mode, "heapstore") == 0)
         test_heapstore();
+    else if (strcmp(mode, "highbyte") == 0)
+        test_highbyte();
     else
         test_seeded();
     printf("1..%d\n", checks);

@@ -430,7 +430,7 @@ operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_b
 reproduce `at_drval_t` **byte-identically** under the existing oracle gate. Correctness bar is
 exacting even though no new semantics land.
 
-## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(LANDED 2026-07-13 — exit criteria met; create-on-touch-on-store done; per-byte union remains)*
+## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(FULLY LANDED 2026-07-13 — exit criteria met + all hardening done; Increment 5 next)*
 
 First taint semantics: a byte-granular shadow and inline `dst_tag = ∪ src_tags`, driven
 by the seed/sink surface, validated on a **native in-process fixture** — still docker,
@@ -536,10 +536,20 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > is that the stack-spill fixtures still pass, plus a new `heapstore` scenario (5/5) that flows taint
 > through a store to a **fresh, never-touched heap buffer** and back (would return clean under the old
 > drop policy). Landed first-try (the conditional-clean-call construct held); flag-off value client
-> still 14/14; all 31/31 in the fresh docker image. **One hardening refinement remains** (a safe
-> under-approximation, not a correctness gap): per-byte multi-byte memory-tag union (currently the
-> operand's low byte). The guarded inline sink skip + other sink kinds (mem-len / call-arg) are also
-> follow-ons. Increment 5 (launch-under-DR container) is the next major push.
+> still 14/14; all 31/31 in the fresh docker image.
+>
+> **Per-byte memory-tag union LANDED 2026-07-13 — all Increment-4 hardening now done.** Memory operand
+> tags are byte-granular: a source read unions all `size` shadow bytes (`emit_shadow_or` loops the
+> operand's bytes) and a store writes all `size` bytes (`emit_shadow_store` fast path + `on_store_slow`
+> per-byte); registers keep whole-register 1-byte tags (SIMD is Increment 8). Each leaf is allocated one
+> guard page larger than its 1 MiB span, so a per-byte access STRADDLING a leaf boundary reads/writes
+> the guard instead of faulting past the mmap (the straddling bytes miss the next leaf = a conservative
+> miss, never a fault or false positive). A new `highbyte` scenario (4/4) seeds ONLY the high 4 bytes of
+> an 8-byte buffer, then loads all 8: the load's low-byte tag is clean, so this passes only under the
+> per-byte union (a low-byte-only read would taint nothing). flag-off value client still 14/14; all
+> 35/35 in the fresh docker image; landed first-try. The guarded inline sink skip + other sink kinds
+> (mem-len / call-arg) remain as generality follow-ons, not correctness gaps. **Increment 4 is
+> complete; Increment 5 (launch-under-DR container + out-of-process validator) is the next major push.**
 >
 > **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
 > (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update

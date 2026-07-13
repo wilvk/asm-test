@@ -302,6 +302,10 @@ else
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_taint heapstore
+	@echo "== dr-taint-native-test (per-byte union: high-byte-only seed reaches the load) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint highbyte
 endif
 
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
