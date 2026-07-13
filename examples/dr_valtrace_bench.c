@@ -32,26 +32,29 @@
 /* The DR value producer ships no header; re-declare its entry points (as dr_valtrace.c does). */
 #define DF_DR_OK 0
 int asmtest_dataflow_dr_available(void);
-int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len, const long *args,
-                            int nargs, uint64_t max_insns, long *result,
-                            asmtest_valtrace_t *vt);
+int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len,
+                            const long *args, int nargs, uint64_t max_insns,
+                            long *result, asmtest_valtrace_t *vt);
 
 /* Leaf loop (x86-64 SysV, rdi = iteration count):
  *   xor eax,eax / L: add rax,rdi / dec rdi / jnz L / ret
  * Returns rdi + (rdi-1) + ... + 1 = rdi*(rdi+1)/2. Executes 3*iters+2 in-region
  * dynamic instructions (a back-edge, a flag-dependent branch). */
 static const uint8_t loop_fixture[] = {
-    0x31, 0xC0,             /* 0x00 xor eax, eax       */
-    0x48, 0x01, 0xF8,       /* 0x02 add rax, rdi       */
-    0x48, 0xFF, 0xCF,       /* 0x05 dec rdi            */
-    0x75, 0xF8,             /* 0x08 jnz 0x02           */
-    0xC3,                   /* 0x0a ret                */
+    0x31, 0xC0,       /* 0x00 xor eax, eax       */
+    0x48, 0x01, 0xF8, /* 0x02 add rax, rdi       */
+    0x48, 0xFF, 0xCF, /* 0x05 dec rdi            */
+    0x75, 0xF8,       /* 0x08 jnz 0x02           */
+    0xC3,             /* 0x0a ret                */
 };
 
 int main(int argc, char **argv) {
     if (!asmtest_dataflow_dr_available()) {
-        printf("0 0\n"); /* stdout contract kept; the lane treats 0 steps as SKIP */
-        fprintf(stderr, "# SKIP dr-valtrace-bench: DynamoRIO / value client unavailable\n");
+        printf(
+            "0 0\n"); /* stdout contract kept; the lane treats 0 steps as SKIP */
+        fprintf(
+            stderr,
+            "# SKIP dr-valtrace-bench: DynamoRIO / value client unavailable\n");
         return 0;
     }
     long iters = argc > 1 ? atol(argv[1]) : 30000;
@@ -59,7 +62,8 @@ int main(int argc, char **argv) {
         iters = 1;
     long expected_steps = 3 * iters + 2;
     long expected_result = iters * (iters + 1) / 2;
-    uint64_t cap = (uint64_t)expected_steps + 16; /* size at_drval_t so capture never truncates (fair) */
+    uint64_t cap = (uint64_t)expected_steps +
+                   16; /* size at_drval_t so capture never truncates (fair) */
 
     /* A small replay sink: build_valtrace still iterates every captured step
      * (symmetric cost) but drops most appends — we only need the timing + the
@@ -70,12 +74,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    long args[1] = { iters };
+    long args[1] = {iters};
     long result = 0;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    int rc = asmtest_dataflow_dr_run(loop_fixture, sizeof loop_fixture, args, 1, cap,
-                                     &result, v);
+    int rc = asmtest_dataflow_dr_run(loop_fixture, sizeof loop_fixture, args, 1,
+                                     cap, &result, v);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     uint64_t ns = (uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000ull +
                   (uint64_t)(t1.tv_nsec - t0.tv_nsec);
@@ -86,10 +90,11 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (result != expected_result) {
-        fprintf(stderr,
-                "# dr-valtrace-bench: WRONG RESULT %ld (expected %ld) — capture "
-                "corrupted app state (flags/registers)\n",
-                result, expected_result);
+        fprintf(
+            stderr,
+            "# dr-valtrace-bench: WRONG RESULT %ld (expected %ld) — capture "
+            "corrupted app state (flags/registers)\n",
+            result, expected_result);
         asmtest_valtrace_free(v);
         return 1;
     }

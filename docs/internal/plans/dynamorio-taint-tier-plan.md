@@ -430,7 +430,7 @@ operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_b
 reproduce `at_drval_t` **byte-identically** under the existing oracle gate. Correctness bar is
 exacting even though no new semantics land.
 
-## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(planned — design locked 2026-07-13; ABI landed)*
+## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(first slice LANDED 2026-07-13; sink slice next)*
 
 First taint semantics: a byte-granular shadow and inline `dst_tag = ∪ src_tags`, driven
 by the seed/sink surface, validated on a **native in-process fixture** — still docker,
@@ -491,6 +491,27 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > against the forward slice (+ negative control). Smallest thing that builds in the pinned DR docker
 > lane reusing Inc3's proven DR-native walk + EA `lea` (no Capstone-in-client, no full-span
 > reservation), is oracle-checkable, and leaves the Inc3 value gate provably untouched.
+>
+> **First slice LANDED 2026-07-13.** Shipped exactly as scoped: the BSD 2-level create-on-touch
+> shadow (`g_dir` → 1 MiB leaves over `dr_raw_mem_alloc`, atomic-CAS leaf install), a per-thread
+> reg-tag TLS file (16 GP containers + eflags), the inline `dst_tag = ∪ src_tags` propagation +
+> `step_tainted` witness (a phase of the value-capture insertion pass, placed after the mem loop and
+> before the buffer advances, so the witness rides the same `drx_buf` record via `dv->step_taint[]`),
+> and `on_seed`, all additive under `-DASMTEST_TAINT` in the SAME
+> [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c). Validated by
+> `make docker-taint-native` / `make dr-taint-native-test`
+> ([examples/dr_taint.c](../../../examples/dr_taint.c)): the seeded run's client taint set is
+> **EQUAL to `asmtest_slice_forward(seed_step)`** (8/8, incl. the emulator-oracle forward-slice
+> cross-check), the unseeded **negative control reports zero tainted steps** (5/5), the inline gate
+> proves the only clean calls are the two markers, and — the key invariant — the flag-OFF value
+> client stays **byte-identical** (`dr-valtrace-inlined-test` still 14/14). Two documented first-slice
+> simplifications, each a safe under-approximation (a conservative MISS, never corruption/false
+> positive), at their sites in the client: (1) memory operand tags use the operand's LOW byte (seeds
+> paint every byte, so the store/reload share it) — per-byte multi-byte union is next; (2) inline
+> store-tag broadcast is branchless *write-if-leaf-present-else-drop* (cmov to a throwaway on a null
+> leaf) with the seed buffer's leaf and each thread's stack leaves pre-touched at seed time — general
+> create-on-touch-on-store via a first-touch slowpath clean call is next, alongside
+> `on_sink`/`at_taint_hit_t`.
 >
 > **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
 > (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update

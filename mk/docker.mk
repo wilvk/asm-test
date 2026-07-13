@@ -228,6 +228,17 @@ docker-drext-probe:
 	  -t asmtest-drext-probe .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drext-probe
 
+# In-band TAINT tier lane (taint tier, Increment 4). Like docker-drtrace it installs
+# DynamoRIO + Capstone + libunicorn, then runs `make dr-taint-native-test`: the seeded
+# inline-taint-vs-emulator-forward-slice oracle diff + the unseeded negative control.
+# See docs/internal/plans/dynamorio-taint-tier-plan.md, Increment 4.
+.PHONY: docker-taint-native
+docker-taint-native:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-native \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-native .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-native
+
 # Per-language native-trace lane: layer DynamoRIO onto each already-built
 # per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
 # against a real in-process DynamoRIO — the cross-language counterpart of

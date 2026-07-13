@@ -44,8 +44,26 @@ use_DynamoRIO_extension(asmtest_drval_client_inlined drreg)
 use_DynamoRIO_extension(asmtest_drval_client_inlined drx)
 target_include_directories(asmtest_drval_client_inlined PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+# The TAINT client (taint-tier Increment 4): the SAME TU built -DASMTEST_TAINT, layering
+# the BSD 2-level tag shadow + per-thread reg-tag file + inline dst_tag = union(src_tags)
+# propagation + on_seed on top of the value capture (which still runs byte-for-byte). Same
+# BSD-clean drmgr/drreg/drx stack, NO umbra (LGPL-2.1), NO drwrap. It additionally needs
+# the public taint ABI header (include/asmtest_taint.h), so add ../include. With the flag
+# off this source compiles to asmtest_drval_client_inlined above; point ASMTEST_DRVAL_CLIENT
+# at this .so to run the taint oracle diff (examples/dr_taint.c).
+add_library(asmtest_drtaint_client SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/dataflow_dr_client_inlined.c)
+configure_DynamoRIO_client(asmtest_drtaint_client)
+use_DynamoRIO_extension(asmtest_drtaint_client drmgr)
+use_DynamoRIO_extension(asmtest_drtaint_client drreg)
+use_DynamoRIO_extension(asmtest_drtaint_client drx)
+target_compile_definitions(asmtest_drtaint_client PRIVATE ASMTEST_TAINT)
+target_include_directories(asmtest_drtaint_client PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
 # Emit straight into the asm-test build dir so the Makefile/tests find them.
 set_target_properties(asmtest_drclient asmtest_drval_client asmtest_drval_client_inlined
+  asmtest_drtaint_client
   PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
 
 # --- Throwaway extension-load probe (taint tier, Increment 2) ---------------

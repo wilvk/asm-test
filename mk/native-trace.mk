@@ -105,6 +105,9 @@ $(BUILD)/libasmtest_drval_client.so: $(BUILD)/libasmtest_drclient.so ;
 # The inlined value client (taint-tier Increment 3) is emitted by the SAME cmake
 # --build (a third add_library target), so tie it to the rule above too.
 $(BUILD)/libasmtest_drval_client_inlined.so: $(BUILD)/libasmtest_drclient.so ;
+# The taint client (taint-tier Increment 4) is the SAME source built -DASMTEST_TAINT (a
+# fourth add_library target), emitted by the SAME cmake --build; tie it in too.
+$(BUILD)/libasmtest_drtaint_client.so: $(BUILD)/libasmtest_drclient.so ;
 
 # App-side shared library (libasmtest_drapp) for the language bindings.
 shared-drtrace: $(call shlib_dev,libasmtest_drapp)
@@ -144,6 +147,7 @@ else
 	    $(BUILD)/test_drtrace
 	@$(MAKE) --no-print-directory dr-valtrace-test
 	@$(MAKE) --no-print-directory dr-valtrace-inlined-test
+	@$(MAKE) --no-print-directory dr-taint-native-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -230,6 +234,75 @@ else
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_valtrace
 endif
+
+# --- Taint tier (Increment 4): in-band inline dst_tag = union(src_tags) -----
+# The taint app driver is dataflow_dr.c built -DASMTEST_TAINT (adds the seed marker +
+# asmtest_dataflow_dr_taint_run); it fills the SAME asmtest_valtrace_t PLUS a parallel
+# per-step taint witness. The oracle harness (examples/dr_taint.c) diffs the client
+# taint set against asmtest_slice_forward from the emulator L0, + a negative control.
+# Self-skips cleanly without DynamoRIO; the body of the `make docker-taint-native` lane.
+$(BUILD)/dataflow_dr_taint.o: src/dataflow_dr.c src/dataflow_dr.h \
+                              include/asmtest_taint.h include/asmtest_valtrace.h \
+                              include/asmtest_drtrace.h include/asmtest_trace.h \
+                              $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
+
+# dr_taint links the pure sink + operand enumerator + the TAINT app driver + the drtrace
+# lifecycle (+ the emulator oracle where Unicorn is present, -DDF_HAVE_EMU). -rdynamic
+# exports the value + seed markers so the client resolves their PCs.
+ifeq ($(DRVAL_HAVE_UNICORN),1)
+$(BUILD)/dr_taint.o: examples/dr_taint.c include/asmtest_valtrace.h \
+                     include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -DDF_HAVE_EMU -c $< -o $@
+$(BUILD)/dr_taint: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                   $(BUILD)/dataflow_dr_taint.o $(BUILD)/dataflow_emu.o \
+                   $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                   $(BUILD)/dr_taint.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+else
+$(BUILD)/dr_taint.o: examples/dr_taint.c include/asmtest_valtrace.h \
+                     include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/dr_taint: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                   $(BUILD)/dataflow_dr_taint.o \
+                   $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                   $(BUILD)/dr_taint.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+endif
+
+.PHONY: dr-taint-native-test
+dr-taint-native-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-native-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/dr_taint
+	@$(MAKE) --no-print-directory dr-taint-inline-gate
+	@echo "== dr-taint-native-test (seeded: inline taint set vs emulator forward slice) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint
+	@echo "== dr-taint-native-test (negative control: unseeded => empty taint set) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint negative
+endif
+
+# Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
+# the ONLY dr_insert_clean_call sites are the two rare PC-resolved markers (on_marker +
+# on_seed), never per-instruction in the hot path.
+.PHONY: dr-taint-inline-gate
+dr-taint-inline-gate:
+	@n=$$(grep -c 'dr_insert_clean_call(' src/dataflow_dr_client_inlined.c); \
+	 if [ "$$n" -ne 2 ]; then \
+	   echo "dr-taint: expected exactly 2 clean calls (on_marker + on_seed markers), found $$n"; \
+	   exit 1; \
+	 fi; \
+	 echo "dr-taint: propagation is inline (clean calls only at the 2 markers) — OK"
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value

@@ -38,8 +38,10 @@ typedef uint8_t at_tag_t;
  * SysV argument registers at, exactly as the value client resolves
  * AT_DRVAL_MARKER_SYM (src/dataflow_dr_client.c) — NO drwrap. Under launch-under-DR
  * (Increment 5) the seed/sink config instead arrives via drrun client options. */
-#define AT_TAINT_SEED_SYM "asmtest_dr_taint_seed_marker" /* rdi=base rsi=len rdx=color */
-#define AT_TAINT_SINK_SYM "asmtest_dr_taint_sink_marker" /* rdi=at_taint_report_t*     */
+#define AT_TAINT_SEED_SYM                                                      \
+    "asmtest_dr_taint_seed_marker" /* rdi=base rsi=len rdx=color */
+#define AT_TAINT_SINK_SYM                                                      \
+    "asmtest_dr_taint_sink_marker" /* rdi=at_taint_report_t*     */
 
 /* A seeded source: [base, base+len) bytes get `color` in the shadow at seed time
  * (before traced code runs -> no concurrency). */
@@ -47,7 +49,7 @@ typedef struct at_taint_seed {
     uint64_t base;
     uint64_t len;
     at_tag_t color;
-    uint8_t  pad[7];
+    uint8_t pad[7];
 } at_taint_seed_t;
 
 /* A sink hit: appended when a tainted value reaches a watched sink operand. `off`
@@ -56,13 +58,15 @@ typedef struct at_taint_seed {
  * def-use BFS — the client may leave them 0 — so the client stays inline and the
  * app-side oracle diff can compare the taint graph to the offline L2 slice. */
 typedef struct at_taint_hit {
-    uint64_t off;      /* sink instruction offset within a registered range      */
-    uint64_t ea;       /* sink operand effective address (0 for reg/branch)      */
-    uint64_t seed_off; /* where the arriving tag was first seeded (app-side)      */
-    at_tag_t tag;      /* union tag observed at the sink                          */
-    uint8_t  kind;     /* 0 = mem-len arg, 1 = branch cond, 2 = call arg, ...     */
-    uint8_t  pad[2];
-    uint32_t depth;    /* propagation steps seed->sink (app-side, for oracle diff) */
+    uint64_t off; /* sink instruction offset within a registered range      */
+    uint64_t ea;  /* sink operand effective address (0 for reg/branch)      */
+    uint64_t
+        seed_off; /* where the arriving tag was first seeded (app-side)      */
+    at_tag_t tag; /* union tag observed at the sink                          */
+    uint8_t kind; /* 0 = mem-len arg, 1 = branch cond, 2 = call arg, ...     */
+    uint8_t pad[2];
+    uint32_t
+        depth; /* propagation steps seed->sink (app-side, for oracle diff) */
 } at_taint_hit_t;
 
 /* App-owned sink report the client fills in place — same append/truncate discipline
@@ -71,10 +75,10 @@ typedef struct at_taint_hit {
  * POSIX shared-memory segment drained by a separate app-side validator. */
 typedef struct at_taint_report {
     at_taint_hit_t *hits;
-    size_t   hits_cap;
-    size_t   hits_len;
+    size_t hits_cap;
+    size_t hits_len;
     uint64_t hits_total;
-    uint8_t  truncated;
+    uint8_t truncated;
 } at_taint_report_t;
 
 #endif /* ASMTEST_TAINT_H */

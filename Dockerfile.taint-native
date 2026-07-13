@@ -1,0 +1,47 @@
+# Dockerfile.taint-native — containerized test lane for the DynamoRIO in-band TAINT
+# tier (dynamorio-taint-tier-plan.md, Increment 4, first slice): the BSD 2-level tag
+# shadow + per-thread reg-tag file + inline dst_tag = union(src_tags) propagation +
+# on_seed, oracle-diffed by examples/dr_taint.c against the emulator L0 forward slice.
+#
+# Mirrors Dockerfile.drtrace: installs a prebuilt DynamoRIO release (needed at build
+# time for the CMake-built taint client and at runtime for dlopen'd libdynamorio), plus
+# Capstone (the operand enumerator) + libunicorn (the emulator L0 oracle). It then runs
+# `make dr-taint-native-test`, which builds the client + harness and runs the seeded
+# oracle diff and the unseeded negative control. Still native, still no dotnet — the
+# launch container (Increment 5) is a separable change.
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine, so it runs on Intel and AMD.
+#
+# Build + run:  make docker-taint-native
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+      libunicorn-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin a DynamoRIO release. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Build Capstone from the pinned source release (no apt package — mirrors the main
+# Dockerfile / Dockerfile.drtrace); the taint app driver's operand enumerator + the
+# emulator L0 oracle need it, and without it dr-taint-native-test would self-skip.
+RUN sh scripts/build-capstone.sh && ldconfig
+
+# Run the seeded oracle diff + the unseeded negative control. Self-skips cleanly if
+# DynamoRIO were somehow absent, but here it is installed, so it executes.
+CMD set -eux; \
+    make dr-taint-native-test DYNAMORIO_HOME=$DYNAMORIO_HOME

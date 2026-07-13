@@ -26,6 +26,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef ASMTEST_TAINT
+/* Taint tier (Increment 4) rides ADDITIVELY on this value ABI: the same client TU
+ * built -DASMTEST_TAINT keeps filling at_drval_t byte-for-byte and layers a byte-
+ * granular tag shadow + a per-step taint witness on top. at_tag_t (the 1-byte union
+ * tag) and the seed/sink surface live in the public taint ABI header. */
+#include "asmtest_taint.h"
+#endif
+
 /* Exported app-side marker the client resolves by PC (dr_get_proc_address) and
  * wraps: reading its SysV argument registers at entry (rdi=base, rsi=len,
  * rdx=at_drval_t*) tells the client which range to instrument and where to append
@@ -93,6 +101,16 @@ typedef struct at_drval {
     size_t mem_cap;
     size_t mem_len;
     uint8_t truncated;
+#ifdef ASMTEST_TAINT
+    /* Taint tier (Increment 4): a caller-owned parallel per-step taint witness, one
+     * at_tag_t per steps[] slot (step_taint[i] is the union tag observed at step i by
+     * the inline dst_tag = union(src_tags) pass). The client fills it in buf_flush,
+     * indexed identically to steps[]; entries past step_taint_cap are dropped with the
+     * same honest-overflow discipline as steps[]/mem[]. Additive under the flag — with
+     * the flag off this struct (and the value ABI) is byte-for-byte unchanged. */
+    at_tag_t *step_taint;
+    size_t step_taint_cap;
+#endif
 } at_drval_t;
 
 #endif /* ASMTEST_DATAFLOW_DR_H */

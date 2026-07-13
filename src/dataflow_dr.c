@@ -72,6 +72,20 @@ asmtest_dr_valcapture_marker(void *base, size_t len, void *drval) {
                         (unsigned long)(uintptr_t)drval;
 }
 
+#ifdef ASMTEST_TAINT
+/* Taint tier (Increment 4): the app-side SEED marker the taint client resolves by PC
+ * (AT_TAINT_SEED_SYM) and wraps — reading rdi=base, rsi=len, rdx=color to paint the
+ * shadow before traced code runs. Same stable-entry-PC discipline as the value marker
+ * (noinline + default visibility + a volatile side effect). Defined only in the taint
+ * build; dr_taint links it and -rdynamic exports its PC. */
+static volatile unsigned long g_seedmarker_sink;
+
+__attribute__((noinline, visibility("default"))) void
+asmtest_dr_taint_seed_marker(void *base, size_t len, unsigned long color) {
+    g_seedmarker_sink += 0x91 + (unsigned long)(uintptr_t)base + len + color;
+}
+#endif
+
 #if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_CAPSTONE)
 
 #include "asmtest_drtrace.h" /* DR lifecycle + W^X asmtest_exec_alloc */
@@ -377,7 +391,8 @@ int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len,
     if (bench_env != NULL && bench_env[0] != '\0') {
         clock_gettime(CLOCK_MONOTONIC, &cap_t1);
         unsigned long long cap_ns =
-            (unsigned long long)(cap_t1.tv_sec - cap_t0.tv_sec) * 1000000000ull +
+            (unsigned long long)(cap_t1.tv_sec - cap_t0.tv_sec) *
+                1000000000ull +
             (unsigned long long)(cap_t1.tv_nsec - cap_t0.tv_nsec);
         fprintf(stderr, "DRVAL_CAPTURE_NS %llu\n", cap_ns);
     }
@@ -393,6 +408,101 @@ int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len,
     free(dv.mem);
     return rc;
 }
+
+#ifdef ASMTEST_TAINT
+/*
+ * Taint tier (Increment 4): run `code` under the DynamoRIO taint client, seeding
+ * [seed_base, seed_base+seed_len) with `seed_color` before the routine runs (seed_len=0
+ * = the unseeded negative control). Fills *vt with the per-step value trace (identical
+ * to asmtest_dataflow_dr_run — the taint capture is ADDITIVE) AND `step_taint[i]` with
+ * the union tag the client's inline propagation observed at step i. Returns DF_DR_OK on
+ * a clean capture, DF_DR_ENODR when DR/the client is unavailable (self-skip), else a
+ * DF_DR_* error. `seed_base` is a REAL app address (the fixture reads from it), so the
+ * caller allocates the buffer and passes its address here AND as args[0].
+ */
+int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
+                                  const long *args, int nargs,
+                                  uint64_t max_insns, uint64_t seed_base,
+                                  uint64_t seed_len, at_tag_t seed_color,
+                                  long *result, asmtest_valtrace_t *vt,
+                                  at_tag_t *step_taint, size_t step_taint_cap) {
+    if (vt == NULL || code == NULL || code_len == 0 || nargs < 0 || nargs > 6 ||
+        (nargs > 0 && args == NULL))
+        return DF_DR_EINVAL;
+    vt->mem_space = AT_LOC_MEM_ABS;
+
+    const char *client = getenv("ASMTEST_DRVAL_CLIENT");
+    if (client == NULL || client[0] == '\0' || !asmtest_dr_available())
+        return DF_DR_ENODR;
+
+    size_t steps_cap = max_insns ? (size_t)max_insns : 4096;
+    at_drval_t dv;
+    memset(&dv, 0, sizeof dv);
+    dv.steps = (at_vstep_t *)calloc(steps_cap, sizeof *dv.steps);
+    dv.mem = (at_vmem_t *)calloc(steps_cap * 4, sizeof *dv.mem);
+    if (dv.steps == NULL || dv.mem == NULL) {
+        free(dv.steps);
+        free(dv.mem);
+        return DF_DR_ENODR;
+    }
+    dv.steps_cap = steps_cap;
+    dv.mem_cap = steps_cap * 4;
+    /* Wire the caller-owned parallel taint witness (zeroed so untraced slots read
+     * clean; the client fills [0, steps_len) in buf_flush). */
+    if (step_taint != NULL && step_taint_cap > 0)
+        memset(step_taint, 0, step_taint_cap * sizeof *step_taint);
+    dv.step_taint = step_taint;
+    dv.step_taint_cap = step_taint_cap;
+
+    asmtest_drtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.client_path = client;
+    if (asmtest_dr_init(&opts) != ASMTEST_DR_OK) {
+        free(dv.steps);
+        free(dv.mem);
+        return DF_DR_ENODR;
+    }
+    if (asmtest_dr_start() != ASMTEST_DR_OK) {
+        asmtest_dr_shutdown();
+        free(dv.steps);
+        free(dv.mem);
+        return DF_DR_ENODR;
+    }
+
+    int rc = DF_DR_OK;
+    asmtest_exec_code_t exec;
+    if (asmtest_exec_alloc(code, code_len, &exec) != ASMTEST_DR_OK) {
+        asmtest_dr_shutdown();
+        free(dv.steps);
+        free(dv.mem);
+        return DF_DR_ENODR;
+    }
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs; i++)
+        a[i] = args[i];
+
+    /* Register the capture region + buffer, THEN paint the seed (both are rare PC-
+     * resolved clean calls in the client, off the hot path), THEN run the routine. */
+    asmtest_dr_valcapture_marker(exec.base, exec.len, &dv);
+    if (seed_len > 0)
+        asmtest_dr_taint_seed_marker((void *)(uintptr_t)seed_base,
+                                     (size_t)seed_len,
+                                     (unsigned long)seed_color);
+    long r = ((fn6_t)exec.base)(a[0], a[1], a[2], a[3], a[4], a[5]);
+    asmtest_dr_shutdown();
+    if (result != NULL)
+        *result = r;
+
+    build_valtrace(vt, code, code_len, &dv);
+    if (dv.truncated)
+        vt->truncated = true;
+
+    asmtest_exec_free(&exec);
+    free(dv.steps);
+    free(dv.mem);
+    return rc;
+}
+#endif /* ASMTEST_TAINT */
 
 #else /* not (Linux x86-64 + Capstone) */
 
@@ -410,5 +520,28 @@ int asmtest_dataflow_dr_run(const uint8_t *code, size_t code_len,
     (void)vt;
     return DF_DR_ENOSYS;
 }
+
+#ifdef ASMTEST_TAINT
+int asmtest_dataflow_dr_taint_run(const uint8_t *code, size_t code_len,
+                                  const long *args, int nargs,
+                                  uint64_t max_insns, uint64_t seed_base,
+                                  uint64_t seed_len, at_tag_t seed_color,
+                                  long *result, asmtest_valtrace_t *vt,
+                                  at_tag_t *step_taint, size_t step_taint_cap) {
+    (void)code;
+    (void)code_len;
+    (void)args;
+    (void)nargs;
+    (void)max_insns;
+    (void)seed_base;
+    (void)seed_len;
+    (void)seed_color;
+    (void)result;
+    (void)vt;
+    (void)step_taint;
+    (void)step_taint_cap;
+    return DF_DR_ENOSYS;
+}
+#endif
 
 #endif

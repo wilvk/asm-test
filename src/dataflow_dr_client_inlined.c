@@ -68,6 +68,41 @@
  * Increment 2 (drmgr/drreg/drx); NO umbra (LGPL-2.1) and NO drwrap — marker/arg
  * resolution stays PC-resolved via dr_get_proc_address + a SysV-arg clean call,
  * exactly as the clean-call client does.
+ *
+ * ============================ TAINT TIER (Increment 4) ============================
+ * Built a SECOND time from this SAME TU under -DASMTEST_TAINT to ship
+ * libasmtest_drtaint_client.so (drclient/CMakeLists.txt). Every taint line is under
+ * `#ifdef ASMTEST_TAINT`, so with the flag OFF this file compiles byte-for-byte to the
+ * Increment-3 value client above and dr-valtrace-inlined-test stays provably untouched.
+ *
+ * What the flag ADDS (all additive over the value capture, which still runs unchanged):
+ *  - A hand-rolled BSD 2-level create-on-touch tag shadow (g_dir -> 1 MiB leaves) over
+ *    DR-core dr_raw_mem_alloc — one at_tag_t per app byte, AT_TAG_CLEAN = 0. No umbra
+ *    (LGPL-2.1); the tier stays fully BSD. This is the localized growth seam to Inc5.
+ *  - A per-thread flat reg-tag file in a drmgr TLS slot (16 GP containers + 1 eflags),
+ *    keyed by the DR reg id canonicalized to its 64-bit container. Per-thread => never
+ *    races; the memory shadow is process-global with the tolerated-benign-race single-
+ *    byte-store policy (aligned at_tag_t writes atomic on x86-64; union monotone within
+ *    a seed epoch => a lost update is a conservative MISS, never a false clean->tainted).
+ *  - Inline dst_tag = union(src_tags) propagation emitted as an extra phase of THIS
+ *    insertion pass, placed after the value capture's mem loop and BEFORE the buffer
+ *    pointer advances, so the per-step `taint` witness rides the same drx_buf record
+ *    (surfaced parallel-to-steps via dv->step_taint[]). No hot-path clean call.
+ *  - on_seed: a rare PC-resolved clean call (the on_marker pattern, no drwrap) that
+ *    paints tag_ptr(base..+len) = color at seed time (pre-traced-code, no concurrency).
+ *    on_sink / at_taint_hit_t are the NEXT slice (deferred, per the plan's first slice).
+ *
+ * Two deliberate first-slice simplifications, each a safe under-approximation (a
+ * conservative MISS, never corruption or a false positive), documented at their sites:
+ *  (1) Memory operand tags use the operand's LOW byte only (not a per-byte union over
+ *      all `size` bytes). Sufficient because seeds paint every byte and the fixture's
+ *      store/reload share the low-byte address; multi-byte byte-granular union is next.
+ *  (2) Inline store-tag broadcast is branchless "write-if-leaf-present-else-drop"
+ *      (cmov to a throwaway byte on a null leaf) rather than inline create-on-touch
+ *      (which would need a first-touch slowpath clean call). Correct because the seed
+ *      buffer's leaf (on_seed) and each thread's stack leaves (thread-init) are pre-
+ *      touched, so every address the single-threaded fixture stores a tag to already
+ *      has a leaf; a dropped write elsewhere degrades to a conservative miss.
  */
 #include "dr_api.h"
 #include "drmgr.h"
@@ -95,7 +130,16 @@ typedef struct {
     uint64_t mem_val[AT_INLINE_MAXMEM];
     uint16_t mem_size[AT_INLINE_MAXMEM];
     uint8_t mem_valid[AT_INLINE_MAXMEM];
+#ifdef ASMTEST_TAINT
+    /* Per-step taint witness (Increment 4): the union tag observed at this step by the
+     * inline propagation phase, written via the same buffer pointer before it advances,
+     * drained to dv->step_taint[] in buf_flush. Additive at the struct tail so the
+     * flag-off record layout (and every offsetof above) is byte-identical. */
+    uint8_t taint;
+    uint8_t pad1[3];
+#else
     uint8_t pad1[4];
+#endif
 } raw_step_t;
 
 /* Single registered value-capture region (same contract as the clean-call client:
@@ -116,6 +160,224 @@ static const reg_id_t g_gpr_order[AT_GPR_COUNT] = {
     DR_REG_RAX, DR_REG_RBX, DR_REG_RCX, DR_REG_RDX, DR_REG_RSI, DR_REG_RDI,
     DR_REG_RBP, DR_REG_RSP, DR_REG_R8,  DR_REG_R9,  DR_REG_R10, DR_REG_R11,
     DR_REG_R12, DR_REG_R13, DR_REG_R14, DR_REG_R15};
+
+#ifdef ASMTEST_TAINT
+/* ================================================================== */
+/* Taint tier (Increment 4): BSD 2-level shadow + per-thread reg tags   */
+/* ================================================================== */
+
+/* BSD 2-level create-on-touch shadow, 1:1 byte scale. A static directory of leaf
+ * pointers (one dr_raw_mem_alloc, demand-zero) indexes 1 MiB leaves allocated
+ * zero-filled on first touch and installed by an atomic CAS (the one mandatory-atomic
+ * mutation). Canonical user VA (0..2^47) only — covers the raw C stack + heap the
+ * fixture uses, so no arena crutch. This IS the localized umbra-swap growth seam. */
+#define AT_LEAF_BITS 20
+#define AT_LEAF_SPAN                                                           \
+    ((size_t)1 << AT_LEAF_BITS) /* 1 MiB per leaf                */
+#define AT_LEAF_MASK (AT_LEAF_SPAN - 1)
+#define AT_VA_BITS   47 /* canonical x86-64 user VA      */
+#define AT_DIR_LEN                                                             \
+    ((size_t)1 << (AT_VA_BITS - AT_LEAF_BITS)) /* 2^27 leaf ptrs */
+
+static at_tag_t *
+    *g_dir; /* [AT_DIR_LEN], dr_raw_mem_alloc'd once, demand-zero      */
+
+/* Branchless-fallback bytes for the inline shadow accessors: a null leaf makes a
+ * source read hit g_zero_byte (reads clean = 0, a no-op OR) and a store-tag write hit
+ * g_sink_byte (dropped = conservative miss). g_zero_byte MUST stay zero. */
+static const uint8_t g_zero_byte = 0;
+static uint8_t g_sink_byte;
+
+/* Per-thread flat reg-tag file (drmgr TLS): 16 GP containers + 1 eflags slot, keyed by
+ * the DR reg id canonicalized to its 64-bit container (whole-register tags this
+ * increment). eflags is a location too, so flag-carried flow is representable. */
+#define AT_RT_GPR_BASE 0
+#define AT_RT_EFLAGS   16
+#define AT_RT_COUNT    17
+static int g_tls_regfile = -1;
+
+/* App-emitted seed marker PC (resolved by dr_get_proc_address, like pc_marker). */
+static app_pc pc_seed_marker;
+
+/* Map a DR reg id to its reg-tag-file index (canonical 64-bit GP container -> 0..15),
+ * or -1 if not a tracked GP register. */
+static int rt_index(reg_id_t reg) {
+    if (!reg_is_gpr(reg))
+        return -1;
+    reg_id_t r64 = reg_to_pointer_sized(reg);
+    int idx = (int)(r64 - DR_REG_RAX);
+    return (idx >= 0 && idx < 16) ? (AT_RT_GPR_BASE + idx) : -1;
+}
+
+/* Install `leaf` at directory slot i via CAS; on loss free our spare and return the
+ * winner. The lone mandatory-atomic shadow mutation (compiler builtin -> lock cmpxchg,
+ * no libc). Called only off the hot path (on_seed / thread-init pre-touch). */
+static at_tag_t *leaf_install(size_t i, at_tag_t *leaf) {
+    at_tag_t *expect = NULL;
+    if (__atomic_compare_exchange_n(&g_dir[i], &expect, leaf, false,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return leaf; /* we won */
+    dr_raw_mem_free(leaf, AT_LEAF_SPAN);
+    return expect; /* lost: the value now in the slot */
+}
+
+/* Resolve a shadow byte pointer for `ea`, creating its leaf on first touch. Off the
+ * hot path only (clean-call / init contexts); the inline hot path reads g_dir directly
+ * and treats a null leaf as clean/drop. Returns NULL for a non-canonical address or an
+ * allocation failure. */
+static at_tag_t *tag_ptr_create(uint64_t ea) {
+    size_t i = (size_t)(ea >> AT_LEAF_BITS);
+    if (i >= AT_DIR_LEN)
+        return NULL;
+    at_tag_t *lf = __atomic_load_n(&g_dir[i], __ATOMIC_ACQUIRE);
+    if (lf == NULL) {
+        at_tag_t *nl = (at_tag_t *)dr_raw_mem_alloc(
+            AT_LEAF_SPAN, DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
+        if (nl == NULL)
+            return NULL;
+        lf = leaf_install(
+            i, nl); /* zeroed by dr_raw_mem_alloc (mmap ANON)         */
+    }
+    return lf + (ea & AT_LEAF_MASK);
+}
+
+/* Pre-touch a window of stack leaves around `sp` (create-on-touch), so inline store-tag
+ * broadcasts to the stack never hit a null leaf (simplification (2)). Covers a few MiB
+ * below sp (the stack grows down) plus the leaf above, so a spill just under a leaf
+ * boundary is still backed. */
+static void pre_touch_stack(uint64_t sp) {
+    for (int k = -1; k <= 8; k++)
+        (void)tag_ptr_create(sp - (int64_t)k * (int64_t)AT_LEAF_SPAN);
+}
+
+/* Seed marker clean call (rare; not the hot path): paint [base, base+len) = color in
+ * the shadow before traced code runs. Also pre-touch the CURRENT thread's stack leaves
+ * here — the seed marker runs one frame above the traced routine, so its rsp reliably
+ * shares the routine's stack leaves (thread-init's early context did not), guaranteeing
+ * the fixture's inline spill-store tags land (see simplification (2) in the header). */
+static void on_seed(uint64_t base, uint64_t len, uint64_t color) {
+    for (uint64_t i = 0; i < len; i++) {
+        at_tag_t *p = tag_ptr_create(base + i);
+        if (p != NULL)
+            *p = (at_tag_t)color;
+    }
+    void *dc = dr_get_current_drcontext();
+    if (dc != NULL) {
+        dr_mcontext_t mc;
+        mc.size = sizeof(mc);
+        mc.flags = DR_MC_CONTROL; /* rsp */
+        if (dr_get_mcontext(dc, &mc))
+            pre_touch_stack((uint64_t)mc.xsp);
+    }
+}
+
+static void event_thread_init(void *drcontext) {
+    at_tag_t *rf = (at_tag_t *)dr_thread_alloc(drcontext, AT_RT_COUNT);
+    if (rf != NULL)
+        memset(rf, 0, AT_RT_COUNT);
+    drmgr_set_tls_field(drcontext, g_tls_regfile, rf);
+}
+
+static void event_thread_exit(void *drcontext) {
+    at_tag_t *rf = (at_tag_t *)drmgr_get_tls_field(drcontext, g_tls_regfile);
+    if (rf != NULL)
+        dr_thread_free(drcontext, rf, AT_RT_COUNT);
+}
+
+/* ---- inline-emit helpers for the propagation phase ---------------------------- */
+
+/* Emit the 2-level shadow lookup for `ea_reg` (clobbered) into `pp` (a valid byte
+ * pointer: the real leaf slot, or `fallback` on a null leaf), using scratch r1/r2.
+ * Branchless (cmov, no hot-path branch). `pp` may equal r2. */
+static void emit_shadow_lookup(void *dc, instrlist_t *bb, instr_t *where,
+                               reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
+                               const void *fallback) {
+    /* r1 = ea >> LEAF_BITS (leaf index) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_ld(dc, opnd_create_reg(r1), opnd_create_reg(ea_reg)));
+    instrlist_meta_preinsert(bb, where,
+                             INSTR_CREATE_shr(dc, opnd_create_reg(r1),
+                                              OPND_CREATE_INT8(AT_LEAF_BITS)));
+    /* r2 = g_dir; r2 = g_dir[r1] (leaf ptr, maybe null) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_imm(dc, opnd_create_reg(r2),
+                             OPND_CREATE_INTPTR((ptr_uint_t)g_dir)));
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_ld(
+            dc, opnd_create_reg(r2),
+            opnd_create_base_disp(r2, r1, sizeof(at_tag_t *), 0, OPSZ_8)));
+    /* ea_reg = ea & LEAF_MASK (offset within leaf) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_and(dc, opnd_create_reg(ea_reg),
+                         OPND_CREATE_INT32((int)AT_LEAF_MASK)));
+    /* r1 = &fallback (flag-neutral, before test) */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_imm(dc, opnd_create_reg(r1),
+                             OPND_CREATE_INTPTR((ptr_uint_t)fallback)));
+    /* test leaf; r2 = leaf + offset (lea is flag-neutral, preserves ZF); cmovz r2,r1 */
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_test(dc, opnd_create_reg(r2), opnd_create_reg(r2)));
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_lea(dc, opnd_create_reg(r2),
+                         opnd_create_base_disp(r2, ea_reg, 1, 0, OPSZ_lea)));
+    instrlist_meta_preinsert(bb, where,
+                             INSTR_CREATE_cmovcc(dc, OP_cmovz,
+                                                 opnd_create_reg(r2),
+                                                 opnd_create_reg(r1)));
+}
+
+/* OR the low tag byte at `ea_reg`'s shadow into s_t (a source read). Clobbers
+ * ea_reg/r1/r2. Null leaf -> reads g_zero_byte (no-op OR). */
+static void emit_shadow_or(void *dc, instrlist_t *bb, instr_t *where,
+                           reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
+                           reg_id_t s_t) {
+    emit_shadow_lookup(dc, bb, where, ea_reg, r1, r2, &g_zero_byte);
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_or(dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1)),
+                        opnd_create_base_disp(r2, DR_REG_NULL, 0, 0, OPSZ_1)));
+}
+
+/* Store s_t's low tag byte to `ea_reg`'s shadow (a store dst broadcast). Clobbers
+ * ea_reg/r1/r2. Null leaf -> writes g_sink_byte (dropped = conservative miss). */
+static void emit_shadow_store(void *dc, instrlist_t *bb, instr_t *where,
+                              reg_id_t ea_reg, reg_id_t r1, reg_id_t r2,
+                              reg_id_t s_t) {
+    emit_shadow_lookup(dc, bb, where, ea_reg, r1, r2, &g_sink_byte);
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_st(
+            dc, opnd_create_base_disp(r2, DR_REG_NULL, 0, 0, OPSZ_1),
+            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+}
+
+/* OR reg-tag-file[idx]'s byte into s_t (a register source read). t_rf = regfile base. */
+static void emit_regtag_or(void *dc, instrlist_t *bb, instr_t *where,
+                           reg_id_t t_rf, int idx, reg_id_t s_t) {
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_or(
+            dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1)),
+            opnd_create_base_disp(t_rf, DR_REG_NULL, 0, idx, OPSZ_1)));
+}
+
+/* Store s_t's low tag byte into reg-tag-file[idx] (a register dst broadcast). */
+static void emit_regtag_store(void *dc, instrlist_t *bb, instr_t *where,
+                              reg_id_t t_rf, int idx, reg_id_t s_t) {
+    instrlist_meta_preinsert(
+        bb, where,
+        INSTR_CREATE_mov_st(
+            dc, opnd_create_base_disp(t_rf, DR_REG_NULL, 0, idx, OPSZ_1),
+            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+}
+#endif /* ASMTEST_TAINT */
 
 /* ------------------------------------------------------------------ */
 /* drx_buf flush: drain raw records into the app-owned at_drval_t        */
@@ -144,7 +406,8 @@ static void buf_flush(void *drcontext, void *buf_base, size_t size) {
         st->rflags = 0; /* clean-call-only field; see file header */
         st->mem_first = (uint32_t)dv->mem_len;
         st->mem_n = 0;
-        uint32_t mn = rs->mem_n <= AT_INLINE_MAXMEM ? rs->mem_n : AT_INLINE_MAXMEM;
+        uint32_t mn =
+            rs->mem_n <= AT_INLINE_MAXMEM ? rs->mem_n : AT_INLINE_MAXMEM;
         for (uint32_t j = 0; j < mn; j++) {
             if (dv->mem == NULL || dv->mem_len >= dv->mem_cap) {
                 dv->truncated = 1;
@@ -159,6 +422,12 @@ static void buf_flush(void *drcontext, void *buf_base, size_t size) {
             dv->mem_len++;
             st->mem_n++;
         }
+#ifdef ASMTEST_TAINT
+        /* Drain this step's taint witness parallel to steps[] (same index + honest
+         * overflow); dropped only if steps[] itself did not truncate above. */
+        if (dv->step_taint != NULL && dv->steps_len < dv->step_taint_cap)
+            dv->step_taint[dv->steps_len] = rs->taint;
+#endif
         dv->steps_len++;
     }
 }
@@ -183,11 +452,12 @@ static void on_marker(app_pc base, size_t len, at_drval_t *drval) {
 /* Materialize a 64-bit immediate into val_reg and store it into the buffer slot.
  * On x86-64 a [buf_ptr+disp] store needs no scratch, so pass DR_REG_NULL (the
  * bbbuf sample idiom). */
-static void store_imm64(void *dc, instrlist_t *bb, instr_t *where, reg_id_t buf_ptr,
-                        reg_id_t val_reg, uint64_t imm, short offset) {
-    instrlist_meta_preinsert(
-        bb, where,
-        INSTR_CREATE_mov_imm(dc, opnd_create_reg(val_reg), OPND_CREATE_INTPTR(imm)));
+static void store_imm64(void *dc, instrlist_t *bb, instr_t *where,
+                        reg_id_t buf_ptr, reg_id_t val_reg, uint64_t imm,
+                        short offset) {
+    instrlist_meta_preinsert(bb, where,
+                             INSTR_CREATE_mov_imm(dc, opnd_create_reg(val_reg),
+                                                  OPND_CREATE_INTPTR(imm)));
     drx_buf_insert_buf_store(dc, g_buf, bb, where, buf_ptr, DR_REG_NULL,
                              opnd_create_reg(val_reg), OPSZ_8, offset);
 }
@@ -206,6 +476,127 @@ static uint16_t capturable_mem_size(opnd_t op) {
         return 0; /* only 1/2/4/8 inline loads this increment */
     return sz;
 }
+
+#ifdef ASMTEST_TAINT
+/* Emit the inline dst_tag = union(src_tags) propagation for one in-region app instr,
+ * as an extra phase of the value-capture insertion pass. Runs AFTER the value pass's
+ * memory loop (so mem-source EAs are already in this step's record at mem_ea[0..nmem))
+ * and BEFORE the buffer pointer advances (so the step witness rides this record).
+ *
+ * Register contract at entry: s_ptr = buffer pointer (preserved); s_a/s_b = free
+ * scratch (clobbered); s_t = union accumulator; t_rf = reg-tag-file base scratch;
+ * aflags reserved. Uses the DR-native operand walk (NO Capstone) — congruence with the
+ * app-side enumerator's read/write set is proven by the oracle diff, not assumed. */
+static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
+                             uint32_t nmem, reg_id_t s_ptr, reg_id_t s_a,
+                             reg_id_t s_b, reg_id_t s_t, reg_id_t t_rf) {
+    /* s_t = 0 (32-bit xor zeroes the whole container). */
+    instrlist_meta_preinsert(
+        bb, instr,
+        INSTR_CREATE_xor(dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_4)),
+                         opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_4))));
+
+    /* ---- union SOURCE tags into s_t --------------------------------------- */
+    drmgr_insert_read_tls_field(dc, g_tls_regfile, bb, instr,
+                                t_rf); /* regfile base */
+
+    /* Register sources: every src reg, plus the base/index registers of every memory
+     * operand (a load's OR a store's address is computed from registers that are READ,
+     * matching the app-side enumerator's read set). */
+    for (int s = 0; s < instr_num_srcs(instr); s++) {
+        opnd_t op = instr_get_src(instr, s);
+        if (opnd_is_reg(op)) {
+            int idx = rt_index(opnd_get_reg(op));
+            if (idx >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, idx, s_t);
+        } else if (opnd_is_memory_reference(op)) {
+            int bi = rt_index(opnd_get_base(op)),
+                ii = rt_index(opnd_get_index(op));
+            if (bi >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, bi, s_t);
+            if (ii >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, ii, s_t);
+        }
+    }
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        if (opnd_is_memory_reference(op)) {
+            int bi = rt_index(opnd_get_base(op)),
+                ii = rt_index(opnd_get_index(op));
+            if (bi >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, bi, s_t);
+            if (ii >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, ii, s_t);
+        }
+    }
+    if (instr_get_eflags(instr, DR_QUERY_DEFAULT) & EFLAGS_READ_ARITH)
+        emit_regtag_or(dc, bb, instr, t_rf, AT_RT_EFLAGS, s_t);
+
+    /* Memory sources: OR the shadow tag at each captured load EA (read back from this
+     * step's record — decoupled from app-register aliasing). t_rf is free scratch here
+     * (its regfile-base role is done until the dst broadcast re-reads it). */
+    for (uint32_t j = 0; j < nmem; j++) {
+        instrlist_meta_preinsert(
+            bb, instr,
+            INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_a),
+                                opnd_create_base_disp(
+                                    s_ptr, DR_REG_NULL, 0,
+                                    (int)(offsetof(raw_step_t, mem_ea) + j * 8),
+                                    OPSZ_8)));
+        emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t);
+    }
+
+    /* ---- step witness: raw_step_t.taint = s_t (rides this record) ---------- */
+    instrlist_meta_preinsert(
+        bb, instr,
+        INSTR_CREATE_mov_st(
+            dc,
+            opnd_create_base_disp(s_ptr, DR_REG_NULL, 0,
+                                  (int)offsetof(raw_step_t, taint), OPSZ_1),
+            opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_1))));
+
+    /* ---- broadcast s_t to every DST -------------------------------------- */
+    drmgr_insert_read_tls_field(dc, g_tls_regfile, bb, instr,
+                                t_rf); /* re-read base */
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        if (opnd_is_reg(op)) {
+            int idx = rt_index(opnd_get_reg(op));
+            if (idx >= 0)
+                emit_regtag_store(dc, bb, instr, t_rf, idx, s_t);
+        }
+    }
+    if (instr_get_eflags(instr, DR_QUERY_DEFAULT) & EFLAGS_WRITE_ARITH)
+        emit_regtag_store(dc, bb, instr, t_rf, AT_RT_EFLAGS, s_t);
+
+    /* Store dsts: broadcast s_t into the destination-address shadow. EA computed inline
+     * from the app base/index (drreg_restore_app_values). Skip if an address register
+     * is one of our held/scratch regs (a conservative miss; the fixture's stack base
+     * rsp is never a drreg scratch, so it never skips). */
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        if (!opnd_is_memory_reference(op) || capturable_mem_size(op) == 0)
+            continue;
+        reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
+        if (bse == s_ptr || bse == s_a || bse == s_b || bse == s_t ||
+            bse == t_rf || idxr == s_ptr || idxr == s_a || idxr == s_b ||
+            idxr == s_t || idxr == t_rf)
+            continue;
+        reg_id_t swap = DR_REG_NULL;
+        drreg_restore_app_values(dc, bb, instr, op, &swap);
+        instrlist_meta_preinsert(
+            bb, instr,
+            INSTR_CREATE_lea(
+                dc, opnd_create_reg(s_a),
+                opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
+                                      opnd_get_scale(op), opnd_get_disp(op),
+                                      OPSZ_lea)));
+        emit_shadow_store(dc, bb, instr, s_a, s_b, t_rf, s_t);
+        if (swap != DR_REG_NULL)
+            drreg_unreserve_register(dc, bb, instr, swap);
+    }
+}
+#endif /* ASMTEST_TAINT */
 
 static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                                     instr_t *instr, bool for_trace,
@@ -229,6 +620,17 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                              opnd_create_reg(DR_REG_RDX));
         return DR_EMIT_DEFAULT;
     }
+#ifdef ASMTEST_TAINT
+    /* Seed marker: same rare PC-resolved SysV-arg clean call (no drwrap). Paints the
+     * shadow (rdi=base, rsi=len, rdx=color) at seed time, before traced code runs. */
+    if (ipc == pc_seed_marker) {
+        dr_insert_clean_call(dc, bb, instr, (void *)on_seed, false, 3,
+                             opnd_create_reg(DR_REG_RDI),
+                             opnd_create_reg(DR_REG_RSI),
+                             opnd_create_reg(DR_REG_RDX));
+        return DR_EMIT_DEFAULT;
+    }
+#endif
 
     at_drval_t *dv = g_region.drval;
     app_pc base = g_region.base;
@@ -272,7 +674,8 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     uint16_t memsz[AT_INLINE_MAXMEM];
     uint32_t nmem = 0;
     bool reads_mem = instr_reads_memory(instr);
-    for (int s = 0; reads_mem && s < instr_num_srcs(instr) && nmem < AT_INLINE_MAXMEM;
+    for (int s = 0;
+         reads_mem && s < instr_num_srcs(instr) && nmem < AT_INLINE_MAXMEM;
          s++) {
         opnd_t op = instr_get_src(instr, s);
         if (!opnd_is_memory_reference(op))
@@ -298,10 +701,11 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     /* mem_n immediate (materialize as a full 64-bit imm; store the low 4 bytes). */
     instrlist_meta_preinsert(
         bb, instr,
-        INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a), OPND_CREATE_INTPTR((ptr_uint_t)nmem)));
+        INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
+                             OPND_CREATE_INTPTR((ptr_uint_t)nmem)));
     drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                             opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_4)), OPSZ_4,
-                             (short)offsetof(raw_step_t, mem_n));
+                             opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_4)),
+                             OPSZ_4, (short)offsetof(raw_step_t, mem_n));
 
     /* gpr[16]: each register's APP value. drreg_get_app_value(X, s_a) restores X
      * IN PLACE, so capturing the register that backs s_ptr here would destroy the
@@ -322,9 +726,9 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
         reg_id_t swap = DR_REG_NULL;
         drreg_restore_app_values(dc, bb, instr, op, &swap);
 
-        opnd_t addr = opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
-                                            opnd_get_scale(op), opnd_get_disp(op),
-                                            OPSZ_lea);
+        opnd_t addr = opnd_create_base_disp(
+            opnd_get_base(op), opnd_get_index(op), opnd_get_scale(op),
+            opnd_get_disp(op), OPSZ_lea);
         instrlist_meta_preinsert(
             bb, instr, INSTR_CREATE_lea(dc, opnd_create_reg(s_a), addr));
         drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
@@ -348,12 +752,11 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
             src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0,
                                         memsz[j] == 2 ? OPSZ_2 : OPSZ_1);
             instrlist_meta_preinsert(
-                bb, instr,
-                INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
+                bb, instr, INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
         }
-        drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                                 opnd_create_reg(s_b), OPSZ_8,
-                                 (short)(offsetof(raw_step_t, mem_val) + j * 8));
+        drx_buf_insert_buf_store(
+            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL, opnd_create_reg(s_b),
+            OPSZ_8, (short)(offsetof(raw_step_t, mem_val) + j * 8));
 
         if (swap != DR_REG_NULL)
             drreg_unreserve_register(dc, bb, instr, swap);
@@ -363,18 +766,43 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
             bb, instr,
             INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
                                  OPND_CREATE_INTPTR((ptr_uint_t)memsz[j])));
-        drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                                 opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_2)),
-                                 OPSZ_2,
-                                 (short)(offsetof(raw_step_t, mem_size) + j * 2));
-        instrlist_meta_preinsert(
-            bb, instr,
-            INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a), OPND_CREATE_INTPTR(1)));
-        drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                                 opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_1)),
-                                 OPSZ_1,
-                                 (short)(offsetof(raw_step_t, mem_valid) + j));
+        drx_buf_insert_buf_store(
+            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
+            opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_2)), OPSZ_2,
+            (short)(offsetof(raw_step_t, mem_size) + j * 2));
+        instrlist_meta_preinsert(bb, instr,
+                                 INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
+                                                      OPND_CREATE_INTPTR(1)));
+        drx_buf_insert_buf_store(
+            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
+            opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_1)), OPSZ_1,
+            (short)(offsetof(raw_step_t, mem_valid) + j));
     }
+
+#ifdef ASMTEST_TAINT
+    /* Inline dst_tag = union(src_tags) propagation + per-step witness. s_ptr still holds
+     * the buffer pointer and mem-source EAs are already in this record; s_a/s_b are free.
+     * Reserve the union accumulator (s_t), the reg-tag-file base (t_rf), and aflags —
+     * peak ~6 GPR + aflags with the value pass's s_ptr/s_a/s_b (drreg slots bumped under
+     * the flag). On any drreg failure skip taint for this step (a conservative miss)
+     * without disturbing the value capture below. */
+    {
+        reg_id_t s_t = DR_REG_NULL, t_rf = DR_REG_NULL;
+        if (drreg_reserve_register(dc, bb, instr, NULL, &s_t) ==
+            DRREG_SUCCESS) {
+            if (drreg_reserve_register(dc, bb, instr, NULL, &t_rf) ==
+                DRREG_SUCCESS) {
+                if (drreg_reserve_aflags(dc, bb, instr) == DRREG_SUCCESS) {
+                    emit_taint_phase(dc, bb, instr, nmem, s_ptr, s_a, s_b, s_t,
+                                     t_rf);
+                    drreg_unreserve_aflags(dc, bb, instr);
+                }
+                drreg_unreserve_register(dc, bb, instr, t_rf);
+            }
+            drreg_unreserve_register(dc, bb, instr, s_t);
+        }
+    }
+#endif
 
     /* Capture the buffer-pointer register's own app value LAST: copy the buffer
      * pointer into s_b, restore app-s_ptr into s_a (clobbering s_ptr, now dead as
@@ -383,9 +811,9 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     for (int g = 0; g < AT_GPR_COUNT; g++) {
         if (g_gpr_order[g] != s_ptr)
             continue;
-        instrlist_meta_preinsert(
-            bb, instr,
-            INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_b), opnd_create_reg(s_ptr)));
+        instrlist_meta_preinsert(bb, instr,
+                                 INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_b),
+                                                     opnd_create_reg(s_ptr)));
         drreg_get_app_value(dc, bb, instr, s_ptr, s_a);
         drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_b, DR_REG_NULL,
                                  opnd_create_reg(s_a), OPSZ_8,
@@ -417,6 +845,10 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
 static void try_resolve(module_handle_t h) {
     if (pc_marker == NULL)
         pc_marker = (app_pc)dr_get_proc_address(h, AT_DRVAL_MARKER_SYM);
+#ifdef ASMTEST_TAINT
+    if (pc_seed_marker == NULL)
+        pc_seed_marker = (app_pc)dr_get_proc_address(h, AT_TAINT_SEED_SYM);
+#endif
 }
 
 static void resolve_all_modules(void) {
@@ -449,25 +881,67 @@ static void event_exit(void) {
     drreg_exit();
     drmgr_exit();
     dr_mutex_destroy(g_lock);
+#ifdef ASMTEST_TAINT
+    if (g_dir != NULL)
+        dr_raw_mem_free(g_dir, AT_DIR_LEN * sizeof(at_tag_t *));
+#endif
 }
 
 DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
-    drreg_options_t drreg_ops = { sizeof(drreg_ops), 5 /*scratch slots (3 GPR + aflags + margin)*/, false };
+#ifdef ASMTEST_TAINT
+    /* Taint build reserves more drreg slots: the value pass (3 GPR) plus the taint
+     * phase (s_t + t_rf + a transient drreg_restore_app_values swap) + aflags. */
+    drreg_options_t drreg_ops = {sizeof(drreg_ops), 10 /*scratch slots*/,
+                                 false};
+#else
+    drreg_options_t drreg_ops = {sizeof(drreg_ops),
+                                 5 /*scratch slots (3 GPR + aflags + margin)*/,
+                                 false};
+#endif
     (void)id;
     (void)argc;
     (void)argv;
+#ifdef ASMTEST_TAINT
+    dr_set_client_name("asm-test data-flow taint client (inlined)", "");
+#else
     dr_set_client_name("asm-test data-flow value client (inlined)", "");
+#endif
 
-    if (!drmgr_init() || drreg_init(&drreg_ops) != DRREG_SUCCESS || !drx_init()) {
+    if (!drmgr_init() || drreg_init(&drreg_ops) != DRREG_SUCCESS ||
+        !drx_init()) {
         dr_fprintf(STDERR, "drval-inlined: extension init failed\n");
         dr_abort();
     }
-    g_buf = drx_buf_create_trace_buffer(
-        (size_t)sizeof(raw_step_t) * 4096, buf_flush);
+    g_buf = drx_buf_create_trace_buffer((size_t)sizeof(raw_step_t) * 4096,
+                                        buf_flush);
     if (g_buf == NULL) {
         dr_fprintf(STDERR, "drval-inlined: drx_buf create failed\n");
         dr_abort();
     }
+
+#ifdef ASMTEST_TAINT
+    /* Allocate the 2-level shadow directory (1 GiB VA, demand-zero -> ~0 RAM until
+     * leaves are touched) and the per-thread reg-tag TLS slot; register the thread
+     * init/exit events that manage the reg-tag file + stack-leaf pre-touch. */
+    g_dir =
+        (at_tag_t **)dr_raw_mem_alloc(AT_DIR_LEN * sizeof(at_tag_t *),
+                                      DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
+    if (g_dir == NULL) {
+        dr_fprintf(STDERR, "drtaint-inlined: shadow directory alloc failed\n");
+        dr_abort();
+    }
+    g_tls_regfile = drmgr_register_tls_field();
+    if (g_tls_regfile == -1) {
+        dr_fprintf(STDERR, "drtaint-inlined: tls field alloc failed\n");
+        dr_abort();
+    }
+    if (!drmgr_register_thread_init_event(event_thread_init) ||
+        !drmgr_register_thread_exit_event(event_thread_exit)) {
+        dr_fprintf(STDERR,
+                   "drtaint-inlined: thread-event registration failed\n");
+        dr_abort();
+    }
+#endif
 
     g_lock = dr_mutex_create();
     resolve_all_modules();
