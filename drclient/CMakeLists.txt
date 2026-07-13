@@ -61,9 +61,26 @@ target_compile_definitions(asmtest_drtaint_client PRIVATE ASMTEST_TAINT)
 target_include_directories(asmtest_drtaint_client PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
+# The GC-REMAP taint client (taint-tier Increment 7, PARTIAL slice): the SAME TU as the
+# taint client built additionally -DASMTEST_TAINT_GCREMAP, which compiles in the GC-move
+# umbra shadow remap code path (at_gc_remap) and its synthetic-triple unit test (run via
+# the `gcremap_selftest` client option). The flag is OFF for every other client, so this
+# is a SEPARATE .so and the default value/taint clients stay byte-identical; the full live
+# .NET GC path (Phase-4 {old,new,len} feed, coherence canary) is deferred / hard-blocked.
+add_library(asmtest_drtaint_gcremap_client SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/dataflow_dr_client_inlined.c)
+configure_DynamoRIO_client(asmtest_drtaint_gcremap_client)
+use_DynamoRIO_extension(asmtest_drtaint_gcremap_client drmgr)
+use_DynamoRIO_extension(asmtest_drtaint_gcremap_client drreg)
+use_DynamoRIO_extension(asmtest_drtaint_gcremap_client drx)
+target_compile_definitions(asmtest_drtaint_gcremap_client PRIVATE
+  ASMTEST_TAINT ASMTEST_TAINT_GCREMAP)
+target_include_directories(asmtest_drtaint_gcremap_client PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
 # Emit straight into the asm-test build dir so the Makefile/tests find them.
 set_target_properties(asmtest_drclient asmtest_drval_client asmtest_drval_client_inlined
-  asmtest_drtaint_client
+  asmtest_drtaint_client asmtest_drtaint_gcremap_client
   PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
 
 # --- Throwaway extension-load probe (taint tier, Increment 2) ---------------

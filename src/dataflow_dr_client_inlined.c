@@ -293,6 +293,23 @@ static at_tag_t *tag_ptr_create(uint64_t ea) {
     return lf + (ea & AT_LEAF_MASK);
 }
 
+#ifdef ASMTEST_TAINT_GCREMAP
+/* Resolve a shadow byte pointer for `ea` WITHOUT creating its leaf: returns NULL for a
+ * non-canonical address or an as-yet-untouched (null-leaf) page. Read-only companion to
+ * tag_ptr_create — the GC-move remap uses it to read source tags and to clear the old
+ * range without materializing leaves for never-touched memory. Behind the disabled
+ * ASMTEST_TAINT_GCREMAP flag so the default taint client is unchanged. */
+static at_tag_t *tag_ptr_lookup(uint64_t ea) {
+    size_t i = (size_t)(ea >> AT_LEAF_BITS);
+    if (i >= AT_DIR_LEN)
+        return NULL;
+    at_tag_t *lf = __atomic_load_n(&g_dir[i], __ATOMIC_ACQUIRE);
+    if (lf == NULL)
+        return NULL;
+    return lf + (ea & AT_LEAF_MASK);
+}
+#endif /* ASMTEST_TAINT_GCREMAP */
+
 /* Store-tag broadcast SLOWPATH (rare; taken only when the inline fast path finds a null
  * leaf — i.e. the first tag write to a 1 MiB page). Creates the leaf on touch and writes
  * the tag; a real create-on-touch store shadow, so NO stack (or any other) pre-touch is
@@ -318,6 +335,163 @@ static void on_seed(uint64_t base, uint64_t len, uint64_t color) {
             *p = (at_tag_t)color;
     }
 }
+
+#ifdef ASMTEST_TAINT_GCREMAP
+/* ================================================================== */
+/* Increment 7 (PARTIAL slice): GC-move umbra shadow remap             */
+/* ================================================================== */
+/*
+ * When a compacting .NET GC relocates an object, its shadow tags must move with it or a
+ * post-compaction read sees stale/aliased taint. This is the LANDABLE PARTIAL slice of
+ * Increment 7: the remap CODE PATH plus a synthetic-triple unit test, behind the DISABLED
+ * compile flag ASMTEST_TAINT_GCREMAP so the default value/taint clients are byte-identical
+ * (dr-valtrace-inlined-test, dr-taint-native-test stay green) and no hot-path clean call
+ * is added (the inline-gate count is unchanged). DEFERRED as externally hard-blocked on
+ * Phase 4: the live GCBulkMovedObjectRanges {old,new,len} feed via EventPipe, the coherence
+ * canary over a real forced GC, and the launch-under-DR CI gate. This slice proves ONLY
+ * that, GIVEN a {old,new,len} triple, the tag survives at the NEW address and is absent at
+ * the OLD one.
+ *
+ * SEQUENCING vs the Increment-4 concurrent-writer policy: the remap is a BULK shadow
+ * mutation, not a hot-path byte store, so it is serialized under g_lock and bracketed by
+ * SEQ_CST fences against in-flight inline tag stores. The FULL live path would additionally
+ * dr_suspend_all_other_threads()/resume around the copy (a true world-stop quiesce, since
+ * the hot-path tag stores are plain non-atomic byte writes) — deferred with the rest of the
+ * live GC path. In the synthetic unit test the client is single-threaded (the remap runs at
+ * client init, before the app's threads start), so the lock+fence is sufficient and exact.
+ */
+
+/* Remap the shadow for one moved range: copy tags from [old_base, +len) to
+ * [new_base, +len), then CLEAR the old range so no stale tag aliases the freed memory.
+ * A source-snapshot (dr_global_alloc) makes it correct for ARBITRARY old/new overlap: read
+ * all source tags first, clear old, then paint new from the snapshot — an address in both
+ * ranges ends with its snapshot value, never a spurious clear. Off the hot path. */
+static void at_gc_remap(uint64_t old_base, uint64_t new_base, uint64_t len) {
+    if (len == 0 || old_base == new_base)
+        return;
+    dr_mutex_lock(g_lock);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST); /* order vs in-flight inline tag stores */
+
+    at_tag_t *snap = (at_tag_t *)dr_global_alloc((size_t)len);
+    if (snap == NULL) {
+        dr_mutex_unlock(g_lock);
+        return; /* conservative: leave the shadow untouched rather than corrupt it */
+    }
+    for (uint64_t k = 0; k < len; k++) {
+        at_tag_t *s = tag_ptr_lookup(old_base + k);
+        snap[k] = (s != NULL) ? *s : AT_TAG_CLEAN;
+    }
+    /* Clear the old range first (never-touched bytes stay null-leaf; no leaf is created
+     * just to write CLEAN), so an overlapped byte is re-established by the new-range paint. */
+    for (uint64_t k = 0; k < len; k++) {
+        at_tag_t *s = tag_ptr_lookup(old_base + k);
+        if (s != NULL)
+            *s = AT_TAG_CLEAN;
+    }
+    /* Paint the new range from the snapshot (create-on-touch for the destination leaves). */
+    for (uint64_t k = 0; k < len; k++) {
+        if (snap[k] == AT_TAG_CLEAN)
+            continue; /* nothing to move; do not materialize a clean leaf */
+        at_tag_t *d = tag_ptr_create(new_base + k);
+        if (d != NULL)
+            *d = snap[k];
+    }
+    dr_global_free(snap, (size_t)len);
+
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    dr_mutex_unlock(g_lock);
+}
+
+/* Synthetic-triple unit test (Increment 7 partial): hand-provided {old,new,len} triples,
+ * NO live GC. For each: seed the OLD range, remap, and assert the tag is readable at the
+ * NEW address and absent at the OLD one. Emits TAP on STDERR + a grep-able summary line the
+ * dr-taint-gcremap-test lane checks. Runs once at client init (single-threaded). */
+static int g_gcr_checks, g_gcr_fails;
+static void gcr_check(int cond, const char *msg) {
+    g_gcr_checks++;
+    dr_fprintf(STDERR, "%s %d - %s\n", cond ? "ok" : "not ok", g_gcr_checks, msg);
+    if (!cond)
+        g_gcr_fails++;
+}
+static at_tag_t gcr_rd(uint64_t ea) {
+    at_tag_t *p = tag_ptr_lookup(ea);
+    return (p != NULL) ? *p : AT_TAG_CLEAN;
+}
+
+/* Synthetic shadow VAs: canonical, page-spread, never dereferenced (only their shadow is
+ * touched), chosen to sit in distinct 1 MiB leaves and not collide with app memory. */
+static void run_gcremap_selftest(void) {
+    dr_fprintf(STDERR, "# gcremap-selftest: synthetic {old,new,len} triples "
+                       "(no live GC; Phase-4-blocked full path deferred)\n");
+
+    /* T1: disjoint move, uniform color. Tag survives at NEW, absent at OLD. */
+    {
+        uint64_t old = 0x40000000ull, nw = 0x50000000ull, len = 16;
+        on_seed(old, len, AT_TAG_TAINTED);
+        gcr_check(gcr_rd(nw) == AT_TAG_CLEAN, "T1 pre: new range clean before remap");
+        at_gc_remap(old, nw, len);
+        int new_ok = 1, old_ok = 1;
+        for (uint64_t k = 0; k < len; k++) {
+            if (gcr_rd(nw + k) != AT_TAG_TAINTED)
+                new_ok = 0;
+            if (gcr_rd(old + k) != AT_TAG_CLEAN)
+                old_ok = 0;
+        }
+        gcr_check(new_ok, "T1: tag readable at NEW address after remap");
+        gcr_check(old_ok, "T1: no stale tag at OLD address after remap");
+    }
+
+    /* T2: per-byte colour fidelity — distinct tag per byte survives the move 1:1. */
+    {
+        uint64_t old = 0x41000000ull, nw = 0x52000000ull, len = 8;
+        for (uint64_t k = 0; k < len; k++) {
+            at_tag_t *p = tag_ptr_create(old + k);
+            if (p != NULL)
+                *p = (at_tag_t)(0x80u + k); /* distinct non-clean colours */
+        }
+        at_gc_remap(old, nw, len);
+        int fid = 1;
+        for (uint64_t k = 0; k < len; k++)
+            if (gcr_rd(nw + k) != (at_tag_t)(0x80u + k) ||
+                gcr_rd(old + k) != AT_TAG_CLEAN)
+                fid = 0;
+        gcr_check(fid, "T2: per-byte colours move 1:1 (new match, old cleared)");
+    }
+
+    /* T3: NEGATIVE — an unseeded OLD range must not conjure taint at NEW. */
+    {
+        uint64_t old = 0x43000000ull, nw = 0x54000000ull, len = 16;
+        at_gc_remap(old, nw, len);
+        int clean = 1;
+        for (uint64_t k = 0; k < len; k++)
+            if (gcr_rd(nw + k) != AT_TAG_CLEAN)
+                clean = 0;
+        gcr_check(clean, "T3 negative: unseeded move leaves NEW clean (no phantom taint)");
+    }
+
+    /* T4: OVERLAPPING move (compaction slides an object down/up over itself). Snapshot +
+     * clear-then-paint must keep the overlap byte's tag, clear only the non-overlap tail. */
+    {
+        uint64_t old = 0x60000000ull, len = 32, nw = old + 16; /* 16-byte overlap */
+        on_seed(old, len, AT_TAG_TAINTED);
+        at_gc_remap(old, nw, len);
+        int new_all = 1;
+        for (uint64_t k = 0; k < len; k++)
+            if (gcr_rd(nw + k) != AT_TAG_TAINTED)
+                new_all = 0;
+        gcr_check(new_all, "T4 overlap: whole NEW range tainted after slide");
+        int head_clear = 1;
+        for (uint64_t k = 0; k < 16; k++) /* [old, new) is the freed non-overlap head */
+            if (gcr_rd(old + k) != AT_TAG_CLEAN)
+                head_clear = 0;
+        gcr_check(head_clear, "T4 overlap: freed non-overlap head cleared (no stale alias)");
+    }
+
+    dr_fprintf(STDERR, "1..%d\n", g_gcr_checks);
+    dr_fprintf(STDERR, "ASMTEST_GCREMAP_SELFTEST checks=%d fails=%d\n",
+               g_gcr_checks, g_gcr_fails);
+}
+#endif /* ASMTEST_TAINT_GCREMAP */
 
 static void event_thread_init(void *drcontext) {
     at_tag_t *rf = (at_tag_t *)dr_thread_alloc(drcontext, AT_RT_COUNT);
@@ -1140,6 +1314,14 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
         if (argv[i] != NULL && strcmp(argv[i], "scope=whole") == 0)
             g_scope_whole = 1;
     }
+#ifdef ASMTEST_TAINT_GCREMAP
+    /* Client option (drrun -c <client> gcremap_selftest -- <app>): run the Increment 7
+     * PARTIAL synthetic-triple GC-move remap unit test at init, then let the app run. */
+    int gcremap_selftest = 0;
+    for (int i = 0; i < argc; i++)
+        if (argv[i] != NULL && strcmp(argv[i], "gcremap_selftest") == 0)
+            gcremap_selftest = 1;
+#endif
 #ifdef ASMTEST_TAINT
     dr_set_client_name("asm-test data-flow taint client (inlined)", "");
 #else
@@ -1188,4 +1370,11 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     drmgr_register_bb_instrumentation_event(NULL, event_insert, NULL);
     drmgr_register_signal_event(event_signal);
     drmgr_register_exit_event(event_exit);
+
+#ifdef ASMTEST_TAINT_GCREMAP
+    /* Increment 7 (partial): run the synthetic GC-move remap unit test now, before the
+     * app's threads exist (so the lock+fence quiesce in at_gc_remap is exact). */
+    if (gcremap_selftest)
+        run_gcremap_selftest();
+#endif
 }
