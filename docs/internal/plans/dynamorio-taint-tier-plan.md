@@ -430,20 +430,83 @@ operand-capture path moves from a clean call to inlined `drreg`-scratch + `drx_b
 reproduce `at_drval_t` **byte-identically** under the existing oracle gate. Correctness bar is
 exacting even though no new semantics land.
 
-## Increment 4 - In-band taint: umbra shadow + concurrency policy + seed/sink API *(planned)*
+## Increment 4 - In-band taint: BSD shadow + concurrency policy + seed/sink API *(planned — design locked 2026-07-13; ABI landed)*
 
 First taint semantics: a byte-granular shadow and inline `dst_tag = ∪ src_tags`, driven
-by the proposed seed/sink surface, validated on a **native in-process fixture** — still docker,
+by the seed/sink surface, validated on a **native in-process fixture** — still docker,
 still no dotnet, so the launch container (Increment 5) is a separable change.
 
-> **License decision (from Increment 2): do not assume `umbra`.** Increment 2 found `umbra` is
-> **LGPL-2.1** (Dr. Memory Framework), not the permissive core extension the plan first assumed
-> ([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). Before
-> this increment builds the shadow, choose: **(i)** hand-roll a BSD direct-mapped shadow over
-> DR-core `dr_raw_mem_alloc` (recommended — keeps the tier fully BSD; read "`umbra` shadow" below
-> as "byte-granular shadow" on this path), or **(ii)** accept LGPL-2.1 for `umbra`. The
-> `dst_tag = ∪ src_tags` semantics and the concurrency policy below are identical either way; only
-> the shadow *provider* changes.
+> **Design (locked 2026-07-13 by a 3-way design panel; winner: *hand-rolled BSD 2-level
+> create-on-touch shadow behind a `tag_ptr` seam*).** The ABI is **LANDED**:
+> [include/asmtest_taint.h](../../../include/asmtest_taint.h) (`at_tag_t` = 1-byte union tag,
+> bit0 = tainted + up-to-7 colors; `AT_TAINT_SEED_SYM`/`AT_TAINT_SINK_SYM` PC-resolved markers;
+> `at_taint_seed_t`/`at_taint_hit_t`/`at_taint_report_t`; `<stdint.h>`-only, no `<stdbool.h>`).
+> Build plan:
+> - **Same file, additive `-DASMTEST_TAINT`.** Ship `libasmtest_drtaint_client.so` from the SAME
+>   [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c) under the flag; with
+>   the flag off the TU compiles byte-for-byte to the Increment-3 value client, so
+>   `dr-valtrace-inlined-test` stays provably untouched (stronger than a second TU that can drift).
+> - **Shadow (BSD, DR-core only — the umbra-swap seam kept tiny).** 1:1 byte scale, 2-level
+>   create-on-touch: a static directory `at_tag_t **g_dir` (2^47 / LEAF_SPAN pointers,
+>   `dr_raw_mem_alloc`'d once, demand-zero) → 1 MiB (`LEAF_SPAN = 1<<20`) leaves allocated
+>   zero-filled on first touch, installed by an **atomic CAS** (the one mandatory-atomic mutation;
+>   the CAS loser frees its spare). `tag_ptr(ea) { i=ea>>20; lf=g_dir[i]; if(!lf) lf=leaf_alloc(i);
+>   return lf + (ea & (LEAF_SPAN-1)); }` — canonical user VA (0..2^47) only; covers the raw C
+>   stack, so the fixture needs no arena crutch. This IS the localized growth path to Inc5/umbra
+>   (swap `tag_ptr`/`leaf_alloc` at the same scale; propagation untouched).
+> - **Registers (per-thread, no concurrency policy needed).** A flat `at_tag_t` reg-tag file in a
+>   `drmgr` TLS slot, zeroed in the thread-init event, indexed by the **DR reg id canonicalized to
+>   its 64-bit container** (whole-register tags this increment; eflags is a location too, so
+>   `cmp`→`Jcc` flag-carried flow reaches a branch sink). Uses Increment 3's DR-native operand walk
+>   — do **NOT** link Capstone/`asmtest_operands` into the client (Inc2 proved only
+>   `drmgr`/`drreg`/`drx` load; the Capstone-in-client link + full-span reservation are exactly the
+>   risks that sank the rejected "enumerator-anchored" approach). Enumerator congruence is instead a
+>   *validation guard* — the oracle diff proves the DR walk matches the slicer's set.
+> - **Propagation — inline, a SECOND `drmgr` insertion pass ordered AFTER value capture via
+>   `drmgr_priority_t`, no hot-path clean call.** (1) union sources into a `drreg` scratch `s_t`:
+>   `xor s_t,s_t`; per src reg `or s_t, byte[tls_regfile+id]`; per src integer-mem reuse Inc3's
+>   app-restored base/index `lea` then the `tag_ptr` sequence, OR the operand's low tag byte(s).
+>   (2) broadcast `s_t` to every dst (reg → `mov byte[tls+id],s_t`; integer-mem store *location* →
+>   `tag_ptr`, store `s_t`). (3) **step witness** (the oracle-diff wiring): extend `raw_step_t` with
+>   one `uint8_t step_tainted` set inline `or byte[buf+off], s_t`, surfaced via a parallel
+>   `dv->step_taint[]` app array — `at_vstep_t`/`at_drval_t` ABI stays byte-identical. Bracket the
+>   propagation block in its OWN `drreg_reserve_aflags` (distinct from the late one around
+>   `update_buf_ptr`); bump `drreg` slots 5→7; on `drreg` failure **degrade gracefully** (skip
+>   taint for that step = conservative miss), never corrupt `at_drval_t`.
+> - **Seed/sink — rare PC-resolved clean calls (the `on_marker` pattern, no drwrap), off the hot
+>   path.** `on_seed` paints `tag_ptr(base..+len)=color` at seed time (pre-traced-code, no
+>   concurrency); `on_sink` inline-loads the watched operand's tag and, if nonzero, a guarded clean
+>   call appends one `at_taint_hit_t`.
+> - **Validation.** New `make docker-taint-native` / `make dr-taint-native-test` (mirror
+>   `docker-drtrace` / `dr-valtrace-inlined-test`, self-skip without DR), a hand-written
+>   `examples/dr_taint.c` fixture (seed a buffer → derive through GP regs AND integer memory incl. a
+>   natural stack spill/reload → sink) whose client tainted-step set (from `dv->step_taint`) is
+>   asserted **EQUAL to `asmtest_slice_forward(seed_step)`** from the emulator oracle
+>   (`slices_equal` discipline), plus a **negative control** (unseeded → empty set) and an inscount
+>   sanity (no hot-path clean call).
+>
+> **First slice (recommended):** ABI (done) + the 2-level shadow + per-thread reg-tag file + the
+> inline union/broadcast pass + `step_tainted` + **`on_seed` only** (defer `on_sink`/`at_taint_hit_t`
+> to the next slice), built as `libasmtest_drtaint_client.so` and oracle-diffed by `dr_taint.c`
+> against the forward slice (+ negative control). Smallest thing that builds in the pinned DR docker
+> lane reusing Inc3's proven DR-native walk + EA `lea` (no Capstone-in-client, no full-span
+> reservation), is oracle-checkable, and leaves the Inc3 value gate provably untouched.
+>
+> **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
+> (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update
+> is a conservative MISS, never a false clean→tainted flip). Reg tags are per-thread (never race).
+> The only mandatory-atomic mutation is the leaf CAS install; bulk mutations (seed paint, Inc7 GC
+> remap) are fenced/quiesced, not raced. Rejected: a global hot-path lock (blows the ~10–50× band);
+> per-thread memory shadows (cannot express cross-thread managed flows).
+
+> **License decision (from Increment 2): RESOLVED — hand-rolled BSD shadow, no `umbra`.** Increment
+> 2 found `umbra` is **LGPL-2.1** (Dr. Memory Framework), not permissive
+> ([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)), so the
+> locked design above hand-rolls a BSD 2-level shadow over DR-core `dr_raw_mem_alloc` (option (i)) —
+> the tier stays fully BSD. The `dst_tag = ∪ src_tags` semantics and concurrency policy are
+> provider-independent; only the shadow provider is fixed to BSD. The as-planned subsections below
+> (which still say "`umbra` shadow") predate this decision — read "`umbra` shadow" as "the BSD
+> byte-granular shadow" throughout; they are retained for provenance.
 
 - Allocate a shadow of `at_tag_t` per app byte (1 byte/byte, `AT_TAG_CLEAN = 0`), via the chosen
   provider (BSD direct-map, or `umbra` if (ii)). On
