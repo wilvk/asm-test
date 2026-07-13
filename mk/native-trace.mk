@@ -148,6 +148,7 @@ else
 	@$(MAKE) --no-print-directory dr-valtrace-test
 	@$(MAKE) --no-print-directory dr-valtrace-inlined-test
 	@$(MAKE) --no-print-directory dr-taint-native-test
+	@$(MAKE) --no-print-directory dr-taint-launch-test
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
@@ -322,6 +323,52 @@ dr-taint-inline-gate:
 	   exit 1; \
 	 fi; \
 	 echo "dr-taint: propagation is inline (clean calls only at markers + sink + store slowpath) — OK"
+
+# --- Taint tier Increment 5 (first slice): launch-under-DR native de-risk ---
+# `drrun -c <taint client>.so -- ./taint_workload` runs a native workload under DR from a
+# CLEAN START (not the in-process dr_inject path); the client instruments it and writes
+# the sink hit into a POSIX shared-memory channel; a SEPARATE ./taint_validator process
+# drains + oracle-diffs it OUT OF PROCESS. De-risks the launcher mechanics (does the same
+# client work under drrun -c?), the shm transport, and the out-of-process validator — all
+# WITHOUT dotnet/JIT (that is the next slice). Self-skips without DynamoRIO. The client is
+# UNCHANGED from the in-process build (the build-mode question resolves to a single build).
+$(BUILD)/taint_workload: examples/taint_workload.c include/asmtest_taint.h \
+                         include/asmtest_taint_shm.h src/dataflow_dr.h \
+                         $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -rdynamic examples/taint_workload.c -lrt -o $@
+
+ifeq ($(DRVAL_HAVE_UNICORN),1)
+$(BUILD)/taint_validator: examples/taint_validator.c include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h include/asmtest_valtrace.h \
+                          $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                          $(BUILD)/dataflow_emu.o $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) -DDF_HAVE_EMU examples/taint_validator.c \
+	      $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+	      $(UNICORN_LIBS) $(CAPSTONE_LIBS) -lrt -o $@
+else
+$(BUILD)/taint_validator: examples/taint_validator.c include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h include/asmtest_valtrace.h \
+                          $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) examples/taint_validator.c -lrt -o $@
+endif
+
+DR_DRRUN ?= $(DYNAMORIO_HOME)/bin64/drrun
+LAUNCH_SHM ?= /asmtest_taint_launch_ci
+.PHONY: dr-taint-launch-test
+dr-taint-launch-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-launch-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_workload $(BUILD)/taint_validator
+	@echo "== dr-taint-launch-test (drrun -c taint-client -- native workload; shm; out-of-proc validator) =="
+	@rm -f /dev/shm$(LAUNCH_SHM) 2>/dev/null || true
+	$(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	    $(abspath $(BUILD)/taint_workload) $(LAUNCH_SHM)
+	$(BUILD)/taint_validator $(LAUNCH_SHM)
+endif
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value

@@ -615,7 +615,27 @@ together, but all on a single-threaded native fixture, so it carries no launch/m
 The concurrency *policy* is cheap to state; its *validation* is deferred to Increment 5 where real
 concurrency exists.
 
-## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(planned)*
+## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(first slice LANDED 2026-07-13 — native launcher de-risked; dotnet/JIT next)*
+
+> **First slice LANDED 2026-07-13 (native launcher de-risk).** The launcher mechanics + shm transport
+> + out-of-process validator are proven on a NATIVE workload (no dotnet/JIT yet): `make
+> dr-taint-launch-test` runs `drrun -c libasmtest_drtaint_client.so -- ./taint_workload`, and the
+> launched client (running under DR from a CLEAN START) seeds a buffer, propagates taint inline, and
+> writes the branch-condition sink hit into a **POSIX shared-memory** channel
+> ([include/asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h)); a SEPARATE
+> [taint_validator](../../../examples/taint_validator.c) process drains it and oracle-diffs the hit
+> against the emulator forward slice **out of process** (7/7 green in the fresh `make
+> docker-taint-native` image; chained into `drtrace-test` so the CI `drtrace` job runs it too, oracle
+> auto-skipped there without libunicorn). **The build-mode question is RESOLVED: a SINGLE build** — the
+> same `configure_DynamoRIO_client` `.so` works unmodified under `drrun -c` (no launched-runmode CMake
+> target needed), and **ZERO client changes** were required (the markers + synchronous sink append
+> already work under launch; only the report is shm-backed, and cross-process reads go by offset, never
+> the producer-space `.hits` pointer). Notes for the next slices: the drx_buf-buffered VALUE trace
+> flushes at process exit (after the workload's `main`), so this slice carries only the **synchronous**
+> sink report over shm — a process-exit drain for the full value trace is a follow-on; and the `dotnet`
+> launch + first real JIT/code-cache coexistence test (the plan's risk concentration) is the next slice.
+> [taint_workload.c](../../../examples/taint_workload.c) is self-contained (defines the marker symbols,
+> maps shm, mmaps an RWX fixture) — no in-process `dr_init`/`dr_start`, since DR owns the process.
 
 The new integration path — there is **no** `drrun`/`dr_inject` launcher in-tree today (a clean
 grep returns zero matches, [data-flow-capture.md:203](../analysis/data-flow-capture.md#L203)).
