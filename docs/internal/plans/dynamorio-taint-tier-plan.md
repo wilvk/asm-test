@@ -820,12 +820,44 @@ inscount delta.
 
 ## Increment 7 - GC-move umbra shadow remap *(planned — hard-blocked on Phase 4)*
 
+> **UPDATE 2026-07-14 — triple-extraction mechanism researched; recommendation changed.**
+> The Phase-4 `{old,new,len}` extraction has now been researched (deep-research
+> investigation, 23/25 claims 3-0 verified) and the recommended mechanism is **no longer**
+> the out-of-process EventPipe/nettrace parser this section assumes below. It is a **native
+> in-process CLR profiler using `ICorProfilerCallback4::MovedReferences2`**, which delivers
+> the runtime's own per-range `{oldObjectIDRangeStart, newObjectIDRangeStart,
+> cObjectIDRangeLength}` parallel arrays directly. Why it wins: it is **in-process /
+> native** (same address space as the DR'd target, so it calls the already-landed
+> `at_gc_remap` **directly and synchronously** — no cross-process hop), delivers the
+> **exact** triple with no schema reconstruction, is **guaranteed-complete** (no
+> drop/truncate, unlike EventPipe under load), fires **only on real moves**, and fires at a
+> **fully-suspended-EE fence** — a natural world-stop for the bulk remap. **Tradeoff:** it
+> requires the `COR_PRF_MONITOR_GC` mask, which **disables background/concurrent GC** in the
+> target (forces blocking collections) — clean fences, but an observable change to the
+> target's GC behaviour. **Go/no-go gate: PASSED (GO, 2026-07-14).** The one untested risk —
+> profiler-vs-DynamoRIO coexistence on Linux — was probed and **confirmed working**: a minimal
+> `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../examples/gcprofiler_probe/)),
+> run under `drrun -c <taint client> -- dotnet <compacting-GC workload>`, loaded + Initialized
+> and delivered the **exact `{old,new,len}` ranges under DR (same count as native, no crash/hang)** —
+> `make dr-gcprofiler-probe` / `make docker-gcprofiler-probe`. So the profiler path is adoptable;
+> the EventPipe fallback (separate helper over the POSIX shm channel) is retained only for a later
+> constraint (e.g. not wanting `COR_PRF_MONITOR_GC` to disable background GC). The in-proc
+> `EventListener` is a confirmed **dead end** (scalar count only, no `Values` array). Full
+> analysis, candidates, sources, the probe result, and caveats:
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> The as-planned text below is **superseded on the extraction mechanism** (EventPipe → in-proc
+> profiler) but otherwise stands; the increment remains hard-blocked until the coexistence
+> probe is green.
+
 Make taint survive .NET GC compaction: when the GC moves an object, its shadow tags must move
 with it, or a compacting GC silently drops/aliases taint. **Hard dependency:** this needs Phase
 4's concrete `GCBulkMovedObjectRanges` `{OldRangeBase, NewRangeBase, RangeLength}` triple (via
 EventPipe), which is **still deferred** — the in-proc `EventListener` landed only the DETECTION
 feed (`GcMoveMap`) and does not surface the `Values` struct-array
-([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)).
+([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)). *(Superseded 2026-07-14: the
+recommended extraction mechanism is now the `ICorProfilerCallback4::MovedReferences2` in-process
+profiler, not out-of-process EventPipe — see the update note above and
+[gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).)*
 
 - On each GC-move event, remap the `umbra` shadow for every moved range: copy tags from
   `[OldRangeBase, +RangeLength)` to `[NewRangeBase, +RangeLength)` so post-compaction reads see

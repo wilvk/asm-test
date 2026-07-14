@@ -267,6 +267,19 @@ docker-taint-dotnet:
 	  -t asmtest-taint-dotnet .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-dotnet
 
+# GC-move-range extraction go/no-go PROBE (taint tier, Increment 7 / Phase-4). Installs
+# DynamoRIO + the .NET SDK + git and runs `make dr-gcprofiler-probe`: a minimal in-process CLR
+# profiler (ICorProfilerCallback4::MovedReferences2) runs under `drrun -c <taint client> --
+# dotnet <compacting-GC workload>`, proving a profiler coexists with DynamoRIO on Linux and
+# delivers the {old,new,len} move ranges the shadow remap needs. See
+# docs/internal/analysis/gc-move-range-extraction-findings.md.
+.PHONY: docker-gcprofiler-probe
+docker-gcprofiler-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.gcprofiler-probe \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-gcprofiler-probe .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-gcprofiler-probe
+
 # Per-language native-trace lane: layer DynamoRIO onto each already-built
 # per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
 # against a real in-process DynamoRIO — the cross-language counterpart of

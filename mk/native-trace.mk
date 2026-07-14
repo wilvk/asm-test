@@ -799,6 +799,67 @@ else
 	 [ "$$taint" -ge "$$val" ] && [ "$$val" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]
 endif
 
+# --- GC-move-range extraction: DR + ICorProfiler coexistence PROBE (go/no-go) -----
+# The go/no-go for the recommended Phase-4/Increment-7 mechanism: extract .NET compacting-GC
+# object-move {old,new,len} ranges via an in-process ICorProfilerCallback4::MovedReferences2
+# profiler and feed them to the DR taint client's shadow remap (at_gc_remap). The one untested
+# risk (docs/internal/analysis/gc-move-range-extraction-findings.md) is whether a CLR profiler
+# .so coexists with a process running under DynamoRIO on Linux. This lane builds a MINIMAL
+# profiler (examples/gcprofiler_probe/gcprofiler.cpp), a workload that forces compacting GCs
+# (gcmover), and runs it BOTH natively and under `drrun -c <taint client>`, asserting the
+# profiler loads + Initializes and MovedReferences2 delivers ranges UNDER DR with no crash/hang.
+# The CoreCLR profiler headers (corprof.h/cor.h + PAL) are fetched once from dotnet/runtime
+# (pinned tag) — self-skips without DynamoRIO OR the .NET SDK OR git.
+GCPROBE_CLSID  ?= {A4B2C1D0-1111-2222-3333-444455556666}
+GCPROBE_RT_TAG ?= v8.0.8
+GCPROBE_RT     := $(BUILD)/coreclr-headers
+.PHONY: dr-gcprofiler-probe
+dr-gcprofiler-probe:
+ifndef DR_AVAILABLE
+	@echo "== dr-gcprofiler-probe =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-gcprofiler-probe =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
+	@command -v git >/dev/null 2>&1 || { echo "== dr-gcprofiler-probe =="; echo "# SKIP: git not found (needed to fetch CoreCLR profiler headers)"; echo "1..0 # skipped"; exit 0; }
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   echo "# fetching CoreCLR profiler headers (dotnet/runtime $(GCPROBE_RT_TAG))..."; \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== dr-gcprofiler-probe =="; echo "# SKIP: could not fetch CoreCLR headers (no network?)"; echo "1..0 # skipped"; exit 0; }; \
+	 fi
+	@R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libgcprobe.so examples/gcprofiler_probe/gcprofiler.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc \
+	   || { echo "# profiler build failed"; exit 1; }
+	@$(MAKE) drtrace-client
+	@rm -rf $(BUILD)/gcmover_out
+	@$(DOTNET) build -c Release examples/gcprofiler_probe/gcmover/gcmover.csproj -o $(BUILD)/gcmover_out \
+	    >$(BUILD)/gcmover_build.log 2>&1 || { echo "# dotnet build failed:"; tail -15 $(BUILD)/gcmover_build.log; exit 1; }
+	@echo "== dr-gcprofiler-probe (ICorProfilerCallback4::MovedReferences2 under DynamoRIO) =="
+	@P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(GCPROBE_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libgcprobe.so)"; \
+	 base=$$(env $$P $(DOTNET) $(abspath $(BUILD)/gcmover_out/gcmover.dll) 2>&1 | grep -c "MovedReferences2 ranges"); \
+	 out=$$(env $$P $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	         $(DOTNET) $(abspath $(BUILD)/gcmover_out/gcmover.dll) 2>&1); rc=$$?; \
+	 dr=$$(printf '%s\n' "$$out" | grep -c "MovedReferences2 ranges"); \
+	 init=$$(printf '%s\n' "$$out" | grep -c "Initialize OK"); \
+	 hello=$$(printf '%s' "$$out" | grep -c "HELLO_GC_MOVER"); \
+	 crash=$$(printf '%s\n' "$$out" | grep -icE "SIGSEGV|Segmentation|SIGTRAP|fatal error"); \
+	 echo "# baseline(no-DR) MovedReferences2=$$base ;  under-DR MovedReferences2=$$dr ;  init=$$init hello=$$hello crash=$$crash rc=$$rc"; \
+	 printf '%s\n' "$$out" | grep -m1 "MovedReferences2 ranges" | sed 's/^GCPROBE: /# sample: /'; \
+	 if [ "$$init" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ]; then \
+	   echo "ok 1 - profiler loaded + Initialize + workload completed UNDER DR (no crash/hang)"; \
+	 else echo "not ok 1 - DR/profiler coexistence failed (init=$$init rc=$$rc hello=$$hello crash=$$crash)"; fi; \
+	 if [ "$$dr" -ge 1 ]; then \
+	   echo "ok 2 - MovedReferences2 delivered {old,new,len} ranges UNDER DR ($$dr calls)"; \
+	 else echo "not ok 2 - no MovedReferences2 under DR (got $$dr)"; fi; \
+	 echo "1..2"; \
+	 [ "$$init" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$dr" -ge 1 ]
+endif
+
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value
 # client across fresh processes and reports the per-instruction capture-cost

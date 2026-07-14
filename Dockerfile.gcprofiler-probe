@@ -1,0 +1,40 @@
+# Dockerfile.gcprofiler-probe — the GC-move-range extraction go/no-go PROBE
+# (dynamorio-taint-tier-plan.md Increment 7 / Phase-4; findings in
+# docs/internal/analysis/gc-move-range-extraction-findings.md). Answers the one untested risk
+# in the recommended mechanism: does an in-process CLR profiler (ICorProfilerCallback4::
+# MovedReferences2, which delivers the compacting-GC {old,new,len} move ranges the shadow
+# remap needs) COEXIST with a .NET process running under DynamoRIO on Linux?
+#
+# Needs DynamoRIO + the .NET SDK + a C++ toolchain + git (to fetch the CoreCLR profiler
+# headers corprof.h/cor.h + the PAL from dotnet/runtime, pinned). Linux x86-64 only.
+# Build + run:  make docker-gcprofiler-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin a DynamoRIO release (same pin as the other DR images).
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# The lane fetches the pinned CoreCLR profiler headers, builds the minimal profiler + the
+# compacting-GC workload, and runs it natively AND under `drrun -c <taint client>`, asserting
+# MovedReferences2 delivers move ranges under DR with no crash/hang. Self-skips cleanly if any
+# prerequisite is absent, but here all are installed, so it executes.
+CMD set -eux; \
+    make dr-gcprofiler-probe DYNAMORIO_HOME=$DYNAMORIO_HOME
