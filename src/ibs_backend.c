@@ -184,6 +184,13 @@ void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s) {
 
 /* Dispatched-op count between samples (a multiple of 16). */
 #define IBS_DEFAULT_PERIOD 0x4000u
+/* IBS-Op attr.config bit 19 = cnt_ctl: 1 => count DISPATCHED OPS between samples
+ * (the Phase-5 default: more uniform instruction coverage than cycle counting),
+ * 0 => count clock cycles. Only set when the OpCnt capability (EAX bit 4) is present. */
+#define IBS_OP_CNT_CTL_BIT 19
+/* Default sample-period jitter magnitude: +/- period/IBS_JITTER_FRAC per sample,
+ * re-rolled each drain tick, to de-alias against a periodic loop's own period. */
+#define IBS_JITTER_FRAC 8u
 /* 256 KiB data ring (64 * 4 KiB pages). */
 #define IBS_RING_DATA_PAGES 64u
 /* Largest single record we parse: header + IP + TID + RAW(size + caps + 8 regs). */
@@ -412,10 +419,48 @@ static int eh_export(edge_hash *h, asmtest_ibs_survey_t *out) {
 
 /* --- ring drain ---------------------------------------------------------------- */
 
+/* Locate the PERF_SAMPLE_RAW payload inside a sample record whose body layout is
+ * IP|TID|[CALLCHAIN]|RAW (has_callchain selects the optional callchain block, which
+ * precedes RAW). On success returns a pointer to the raw payload and fills *rawsz;
+ * returns NULL if the record is too short / malformed. The sample's pid
+ * (PERF_SAMPLE_TID) is filled when present, so a system-wide drain can filter on it
+ * before decoding. */
+static const uint8_t *ibs_sample_raw(const uint8_t *rec, size_t recsz,
+                                     int has_callchain, uint32_t *pid_out,
+                                     uint32_t *rawsz_out) {
+    size_t p = sizeof(struct perf_event_header);
+    if (p + 8 + 8 > recsz) /* u64 ip; u32 pid, tid */
+        return NULL;
+    if (pid_out != NULL)
+        *pid_out = ld_u32(rec + p + 8); /* pid precedes tid */
+    p += 8 + 8;
+    if (has_callchain) {
+        if (p + 8 > recsz) /* u64 nr */
+            return NULL;
+        uint64_t nr = ld_u64(rec + p);
+        p += 8;
+        if (nr > (recsz - p) / 8) /* nr * u64 ips[] must fit in the record */
+            return NULL;
+        p += (size_t)nr * 8;
+    }
+    if (p + 4 > recsz) /* u32 raw_size */
+        return NULL;
+    uint32_t rawsz = ld_u32(rec + p);
+    p += 4;
+    if ((size_t)rawsz > recsz - p) /* raw payload must fit inside this record */
+        return NULL;
+    if (rawsz_out != NULL)
+        *rawsz_out = rawsz;
+    return rec + p;
+}
+
 /* Copy [tail,head) out of the (possibly wrapping) non-overwrite ring into `scratch`
- * (dsz bytes), parse each record, aggregate edges, advance data_tail. */
+ * (dsz bytes), parse each record, aggregate edges, advance data_tail. has_callchain
+ * selects the IP|TID|CALLCHAIN|RAW body layout; filter_pid (nonzero) keeps only
+ * samples from that pid — the system-wide per-CPU capture aggregates the target only. */
 static void ibs_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
-                      edge_hash *h, asmtest_ibs_survey_t *out) {
+                      edge_hash *h, asmtest_ibs_survey_t *out,
+                      int has_callchain, pid_t filter_pid) {
     struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
     uint8_t *data = (uint8_t *)base_map + pg;
     uint64_t head = mp->data_head;
@@ -441,16 +486,13 @@ static void ibs_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
         if (hd.size == 0 || off + hd.size > span)
             break;
         if (hd.type == PERF_RECORD_SAMPLE) {
-            out->samples++;
-            /* body order for sample_type IP|TID|RAW: u64 ip; u32 pid,tid;
-             * u32 raw_size; char raw[raw_size]. */
-            size_t need = sizeof hd + 8 + 8 + 4;
-            if (hd.size >= need) {
-                uint8_t *rawsz_p = scratch + off + sizeof hd + 8 + 8;
-                uint32_t rawsz = ld_u32(rawsz_p);
-                uint8_t *raw = rawsz_p + 4;
-                /* raw payload must fit inside this record */
-                if ((size_t)(raw - (scratch + off)) + rawsz <= hd.size) {
+            uint32_t pid = 0, rawsz = 0;
+            const uint8_t *raw = ibs_sample_raw(scratch + off, hd.size,
+                                                has_callchain, &pid, &rawsz);
+            /* System-wide (per-CPU) capture sees every process; keep the target's. */
+            if (filter_pid == 0 || (pid_t)pid == filter_pid) {
+                out->samples++;
+                if (raw != NULL) {
                     asmtest_ibs_edge_t e;
                     if (asmtest_ibs_decode_op(raw, rawsz, &e) ==
                         ASMTEST_IBS_OK) {
@@ -489,21 +531,6 @@ static uint64_t elapsed_ms(const struct timespec *t0,
 #define IBS_MAX_CHANS                                                          \
     512 /* per-thread events; caps fd/mmap use on huge targets */
 
-/* Fill the IBS-Op perf attr: user-only branch sampling (swfilt + exclude_kernel),
- * IP|TID|RAW records, initially disabled. Shared by every channel. */
-static void ibs_fill_attr(struct perf_event_attr *a, int type,
-                          uint64_t period) {
-    memset(a, 0, sizeof *a);
-    a->size = sizeof *a;
-    a->type = (uint32_t)type;
-    a->sample_period = period;
-    a->config2 = 1; /* swfilt (config2:0): enables exclude_kernel at p=2 */
-    a->exclude_kernel =
-        1; /* user-only — the unprivileged envelope            */
-    a->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_RAW;
-    a->disabled = 1;
-}
-
 /* Resolve the effective sample period from opts (rounded to IBS's /16 granularity). */
 static uint64_t ibs_period(const asmtest_ibs_opts_t *opts) {
     uint64_t period = (opts != NULL && opts->sample_period != 0)
@@ -513,6 +540,105 @@ static uint64_t ibs_period(const asmtest_ibs_opts_t *opts) {
     if (period < 16)
         period = IBS_DEFAULT_PERIOD;
     return period;
+}
+
+/* Does this IBS support dispatched-op count control (cnt_ctl / OpCnt, EAX bit 4)? */
+static int ibs_has_opcnt(void) { return (ibs_caps_eax() & (1u << 4)) != 0; }
+
+/* Resolved capture configuration, derived once from the public opts (which grows
+ * additively). Threaded through the open/drain machinery so the Op survey, the
+ * whole-process survey, and the window primitive share one control flow. */
+typedef struct {
+    uint64_t period; /* base sample period (rounded /16)                   */
+    unsigned
+        jitter_frac;    /* 0 => no jitter; else +/- period/jitter_frac        */
+    int cnt_dispatched; /* set cnt_ctl=1 (config:19) => count dispatched ops  */
+    int callchain;      /* PERF_SAMPLE_CALLCHAIN caller stack per sample      */
+    int system_wide;    /* per-CPU capture (pid=-1), filtered by pid in drain */
+} ibs_cfg;
+
+/* Derive the resolved config from the public opts (NULL => all defaults). The two
+ * legacy fields (sample_period, flags) are read for any non-NULL opts; the appended
+ * period_jitter is read only when struct_size covers it (additive-ABI guard). */
+static void ibs_cfg_from_opts(const asmtest_ibs_opts_t *opts, ibs_cfg *c) {
+    memset(c, 0, sizeof *c);
+    c->period = ibs_period(opts);
+    /* Phase-5 defaults (apply even to NULL / legacy callers): dispatched-op count
+     * control where the silicon supports it + period jitter on. */
+    c->cnt_dispatched = ibs_has_opcnt();
+    c->jitter_frac = IBS_JITTER_FRAC;
+    unsigned flags = (opts != NULL) ? opts->flags : 0u;
+    if (flags & ASMTEST_IBS_OPT_COUNT_CYCLES)
+        c->cnt_dispatched = 0;
+    if (flags & ASMTEST_IBS_OPT_CALLCHAIN)
+        c->callchain = 1;
+    if (flags & ASMTEST_IBS_OPT_SYSTEM_WIDE)
+        c->system_wide = 1;
+    if (flags & ASMTEST_IBS_OPT_NO_JITTER)
+        c->jitter_frac = 0;
+    /* period_jitter is an appended field: honour a caller-set magnitude only when
+     * struct_size proves the caller compiled with it (else keep the default). */
+    if (opts != NULL && !(flags & ASMTEST_IBS_OPT_NO_JITTER) &&
+        opts->struct_size >= offsetof(asmtest_ibs_opts_t, period_jitter) +
+                                 sizeof opts->period_jitter &&
+        opts->period_jitter != 0)
+        c->jitter_frac = opts->period_jitter;
+}
+
+/* A cheap self-contained xorshift64 for period jitter (seeded lazily from the
+ * clock). Not cryptographic — jitter only needs to break periodicity. */
+static uint64_t ibs_rand(void) {
+    static uint64_t s;
+    if (s == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        s = (uint64_t)ts.tv_nsec ^ ((uint64_t)ts.tv_sec << 32) ^
+            0x9E3779B97F4A7C15ull;
+        if (s == 0)
+            s = 0x9E3779B97F4A7C15ull;
+    }
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    return s;
+}
+
+/* A jittered sample period: base +/- base/frac, kept a positive multiple of 16. */
+static uint64_t ibs_jitter_period(uint64_t base, unsigned frac) {
+    if (frac == 0)
+        return base;
+    uint64_t amp = base / frac;
+    if (amp == 0)
+        return base;
+    int64_t off = (int64_t)(ibs_rand() % (2u * amp + 1u)) - (int64_t)amp;
+    int64_t p = (int64_t)base + off;
+    if (p < 16)
+        p = 16;
+    uint64_t period = (uint64_t)p & ~(uint64_t)0xF;
+    if (period < 16)
+        period = 16;
+    return period;
+}
+
+/* Fill the IBS perf attr: user-only sampling (swfilt + exclude_kernel), IP|TID|RAW
+ * records, initially disabled. cfg carries the Op-only knobs (cnt_ctl, callchain);
+ * a fetch caller passes a cfg with those clear so the shared opener stays generic. */
+static void ibs_fill_attr(struct perf_event_attr *a, int type,
+                          const ibs_cfg *cfg) {
+    memset(a, 0, sizeof *a);
+    a->size = sizeof *a;
+    a->type = (uint32_t)type;
+    a->sample_period = cfg->period;
+    a->config2 = 1; /* swfilt (config2:0): enables exclude_kernel at p=2 */
+    if (cfg->cnt_dispatched) /* cnt_ctl=1: sample per dispatched op */
+        a->config |= (1ull << IBS_OP_CNT_CTL_BIT);
+    a->exclude_kernel = 1; /* user-only — the unprivileged envelope */
+    a->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_RAW;
+    if (cfg->callchain) {
+        a->sample_type |= PERF_SAMPLE_CALLCHAIN;
+        a->exclude_callchain_kernel = 1; /* user-only caller stack */
+    }
+    a->disabled = 1;
 }
 
 static size_t ibs_page(void) {
@@ -527,18 +653,21 @@ typedef struct {
     pid_t tid;      /* the thread this channel samples     */
 } ibs_chan;
 
-/* Open + mmap + enable one IBS-Op channel on `tid` (0 => the calling thread). Returns
- * 0 on success; -1 if the thread cannot be attached (it exited, or the open/mmap/
- * enable failed) — the caller skips it rather than aborting the whole survey. */
-static int ibs_chan_open(ibs_chan *ch, pid_t tid, int type, uint64_t period,
-                         size_t pg, size_t dsz) {
+/* Open + mmap + enable one IBS channel on (`tid`, `cpu`) — tid 0 => the calling
+ * thread, cpu -1 => any CPU; a system-wide channel is (tid -1, cpu k). Returns 0 on
+ * success; -1 if it cannot be attached (the thread exited, or open/mmap/enable
+ * failed) — the caller skips it rather than aborting the whole survey. */
+static int ibs_chan_open(ibs_chan *ch, pid_t tid, int cpu, int type,
+                         const ibs_cfg *cfg, size_t pg, size_t dsz) {
     ch->fd = -1;
     ch->base_map = MAP_FAILED;
     ch->base_sz = 0;
     ch->tid = tid;
     struct perf_event_attr a;
-    ibs_fill_attr(&a, type, period);
-    long fd = perf_open(&a, tid, -1, -1, 0);
+    ibs_fill_attr(&a, type, cfg);
+    if (cfg->jitter_frac) /* jitter the opening period too, not just per tick */
+        a.sample_period = ibs_jitter_period(cfg->period, cfg->jitter_frac);
+    long fd = perf_open(&a, tid, cpu, -1, 0);
     if (fd < 0)
         return -1;
     size_t base_sz = pg + dsz;
@@ -563,6 +692,14 @@ static int ibs_chan_open(ibs_chan *ch, pid_t tid, int type, uint64_t period,
 static void ibs_chan_disable(ibs_chan *ch) {
     if (ch->fd >= 0)
         ioctl((int)ch->fd, PERF_EVENT_IOC_DISABLE, 0);
+}
+/* Roll a fresh jittered period onto a live channel (a no-op without jitter). Called
+ * each drain tick so a long single-thread window keeps varying its sample phase. */
+static void ibs_chan_rejitter(ibs_chan *ch, const ibs_cfg *cfg) {
+    if (ch->fd < 0 || cfg->jitter_frac == 0)
+        return;
+    uint64_t p = ibs_jitter_period(cfg->period, cfg->jitter_frac);
+    ioctl((int)ch->fd, PERF_EVENT_IOC_PERIOD, &p);
 }
 static void ibs_chan_free(ibs_chan *ch) {
     if (ch->base_map != MAP_FAILED)
@@ -598,9 +735,11 @@ static int ibs_list_tids(pid_t pid, pid_t *out, int max) {
  * often keeps each 256 KiB non-overwrite ring from filling across a long window. */
 static void ibs_drain_all(ibs_chan *chans, int nch, size_t pg, size_t dsz,
                           uint8_t *scratch, edge_hash *h,
-                          asmtest_ibs_survey_t *out) {
+                          asmtest_ibs_survey_t *out, int has_callchain,
+                          pid_t filter_pid) {
     for (int i = 0; i < nch; i++)
-        ibs_drain(chans[i].base_map, pg, dsz, scratch, h, out);
+        ibs_drain(chans[i].base_map, pg, dsz, scratch, h, out, has_callchain,
+                  filter_pid);
 }
 
 int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
@@ -615,11 +754,13 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
     if (type < 0)
         return ASMTEST_IBS_EUNAVAIL;
 
+    ibs_cfg cfg;
+    ibs_cfg_from_opts(opts, &cfg);
     size_t pg = ibs_page();
     size_t dsz = pg * IBS_RING_DATA_PAGES;
 
     ibs_chan ch;
-    if (ibs_chan_open(&ch, tid, type, ibs_period(opts), pg, dsz) != 0)
+    if (ibs_chan_open(&ch, tid, -1, type, &cfg, pg, dsz) != 0)
         return ASMTEST_IBS_EUNAVAIL;
 
     uint8_t *scratch = (uint8_t *)malloc(dsz);
@@ -634,16 +775,18 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
-        ibs_drain(ch.base_map, pg, dsz, scratch, &h, out);
+        ibs_drain(ch.base_map, pg, dsz, scratch, &h, out, cfg.callchain, 0);
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (elapsed_ms(&t0, &now) >= ms)
             break;
+        ibs_chan_rejitter(&ch, &cfg);
         struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
         nanosleep(&slice, NULL);
     }
     ibs_chan_disable(&ch);
-    ibs_drain(ch.base_map, pg, dsz, scratch, &h, out); /* final drain */
+    ibs_drain(ch.base_map, pg, dsz, scratch, &h, out, cfg.callchain,
+              0); /* final drain */
 
     eh_export(&h, out);
     eh_free(&h);
@@ -665,15 +808,11 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
         return ASMTEST_IBS_EUNAVAIL;
     if (pid == 0)
         pid = getpid();
-    uint64_t period = ibs_period(opts);
 
+    ibs_cfg cfg;
+    ibs_cfg_from_opts(opts, &cfg);
     size_t pg = ibs_page();
     size_t dsz = pg * IBS_RING_DATA_PAGES;
-
-    pid_t tids[IBS_MAX_CHANS];
-    int ntid = ibs_list_tids(pid, tids, IBS_MAX_CHANS);
-    if (ntid <= 0)
-        return ASMTEST_IBS_EUNAVAIL; /* no such process / empty task list */
 
     ibs_chan *chans = (ibs_chan *)calloc(IBS_MAX_CHANS, sizeof *chans);
     uint8_t *scratch = (uint8_t *)malloc(dsz);
@@ -684,27 +823,56 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
         return ASMTEST_IBS_EUNAVAIL;
     }
 
-    /* Attach one out-of-band event per pre-existing thread. Threads that vanished
-     * since the enumeration just fail to open and are skipped. */
+    /* Two coverage strategies. DEFAULT: one out-of-band event per pre-existing
+     * thread, with one mid-window task/ rescan (races a thread born-and-dead inside
+     * the window). SYSTEM-WIDE: one per-CPU event (pid=-1) covers all present AND
+     * future threads with no race — at the cost of CAP_PERFMON / paranoid<=0 — and the
+     * drain filters samples down to the target `pid`. */
     int nch = 0;
-    for (int i = 0; i < ntid; i++) {
-        if (ibs_chan_open(&chans[nch], tids[i], type, period, pg, dsz) == 0)
-            nch++;
+    pid_t filter_pid = 0;
+    if (cfg.system_wide) {
+        long ncpu = sysconf(_SC_NPROCESSORS_CONF);
+        if (ncpu < 1)
+            ncpu = 1;
+        for (long c = 0; c < ncpu && nch < IBS_MAX_CHANS; c++) {
+            if (ibs_chan_open(&chans[nch], -1, (int)c, type, &cfg, pg, dsz) ==
+                0)
+                nch++;
+        }
+        filter_pid =
+            pid; /* per-CPU sees the whole system; keep the target only */
+    } else {
+        pid_t tids[IBS_MAX_CHANS];
+        int ntid = ibs_list_tids(pid, tids, IBS_MAX_CHANS);
+        if (ntid <= 0) { /* no such process / empty task list */
+            eh_free(&h);
+            free(scratch);
+            free(chans);
+            return ASMTEST_IBS_EUNAVAIL;
+        }
+        for (int i = 0; i < ntid; i++) {
+            if (ibs_chan_open(&chans[nch], tids[i], -1, type, &cfg, pg, dsz) ==
+                0)
+                nch++;
+        }
     }
-    if (nch == 0) { /* every thread gone, or perf_event_open blocked */
+    if (nch ==
+        0) { /* every thread gone, or perf_event_open blocked/unpermitted */
         eh_free(&h);
         free(scratch);
         free(chans);
         return ASMTEST_IBS_EUNAVAIL;
     }
 
-    /* Drain all rings for `ms`, with ONE mid-window rescan of task/ to attach any
-     * thread spawned after we started (see the header's residual-race note). */
-    int rescanned = 0;
+    /* Drain all rings for `ms`. Per-thread mode does ONE mid-window task/ rescan to
+     * attach threads spawned after we started; system-wide needs none (the per-CPU
+     * events already see new threads). */
+    int rescanned = cfg.system_wide;
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
-        ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out);
+        ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out, cfg.callchain,
+                      filter_pid);
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         uint64_t el = elapsed_ms(&t0, &now);
@@ -721,21 +889,24 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
                             break;
                         }
                     }
-                    if (!known && ibs_chan_open(&chans[nch], cur[i], type,
-                                                period, pg, dsz) == 0)
+                    if (!known && ibs_chan_open(&chans[nch], cur[i], -1, type,
+                                                &cfg, pg, dsz) == 0)
                         nch++;
                 }
             }
         }
         if (el >= ms)
             break;
+        for (int i = 0; i < nch; i++)
+            ibs_chan_rejitter(&chans[i], &cfg);
         struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
         nanosleep(&slice, NULL);
     }
 
     for (int i = 0; i < nch; i++)
         ibs_chan_disable(&chans[i]);
-    ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out); /* final drain */
+    ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out, cfg.callchain,
+                  filter_pid); /* final drain */
 
     eh_export(&h, out);
     eh_free(&h);
@@ -756,6 +927,7 @@ typedef struct {
     size_t pg, dsz;
     uint8_t *scratch;
     edge_hash h;
+    ibs_cfg cfg;
 } ibs_window;
 
 int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
@@ -771,9 +943,10 @@ int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
     ibs_window *w = (ibs_window *)calloc(1, sizeof *w);
     if (w == NULL)
         return ASMTEST_IBS_EUNAVAIL;
+    ibs_cfg_from_opts(opts, &w->cfg);
     w->pg = ibs_page();
     w->dsz = w->pg * IBS_RING_DATA_PAGES;
-    if (ibs_chan_open(&w->ch, 0, type, ibs_period(opts), w->pg, w->dsz) != 0) {
+    if (ibs_chan_open(&w->ch, 0, -1, type, &w->cfg, w->pg, w->dsz) != 0) {
         free(w);
         return ASMTEST_IBS_EUNAVAIL; /* tid 0 => the calling thread */
     }
@@ -801,7 +974,8 @@ int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
      * no chance to drain mid-window). A window that overran the 256 KiB non-overwrite
      * ring loses its tail — ibs_drain flags that as out->throttled, mirroring the
      * branch-stack survey's near-full handling. */
-    ibs_drain(w->ch.base_map, w->pg, w->dsz, w->scratch, &w->h, out);
+    ibs_drain(w->ch.base_map, w->pg, w->dsz, w->scratch, &w->h, out,
+              w->cfg.callchain, 0);
     eh_export(&w->h, out);
     eh_free(&w->h);
     free(w->scratch);
@@ -1075,11 +1249,19 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
     if (type < 0)
         return ASMTEST_IBS_EUNAVAIL;
 
+    /* Reuse the shared config resolver for period + jitter, but clear the Op-only
+     * knobs (cnt_ctl / callchain are ibs_op fields; system_wide is an Op-survey mode)
+     * so the fetch attr stays a plain user-only fetch sampler. */
+    ibs_cfg cfg;
+    ibs_cfg_from_opts(opts, &cfg);
+    cfg.cnt_dispatched = 0;
+    cfg.callchain = 0;
+    cfg.system_wide = 0;
     size_t pg = ibs_page();
     size_t dsz = pg * IBS_RING_DATA_PAGES;
 
     ibs_chan ch;
-    if (ibs_chan_open(&ch, tid, type, ibs_period(opts), pg, dsz) != 0)
+    if (ibs_chan_open(&ch, tid, -1, type, &cfg, pg, dsz) != 0)
         return ASMTEST_IBS_EUNAVAIL;
 
     uint8_t *scratch = (uint8_t *)malloc(dsz);
@@ -1099,6 +1281,7 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (elapsed_ms(&t0, &now) >= ms)
             break;
+        ibs_chan_rejitter(&ch, &cfg);
         struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
         nanosleep(&slice, NULL);
     }

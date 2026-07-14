@@ -159,6 +159,19 @@ static void test_decode_fetch(void) {
           "decode_fetch: NULL out -> EINVAL");
 }
 
+/* Host-independent: the Phase-5 additive opts ABI. ASMTEST_IBS_OPTS_INIT must
+ * self-describe struct_size and zero every knob, and the additive tail must have
+ * landed inside the old reserved words (the struct did not grow past Phase 0). */
+static void test_opts_abi(void) {
+    asmtest_ibs_opts_t o = ASMTEST_IBS_OPTS_INIT;
+    CHECK(o.struct_size == sizeof(asmtest_ibs_opts_t),
+          "opts: INIT self-describes struct_size");
+    CHECK(o.sample_period == 0 && o.flags == 0 && o.period_jitter == 0,
+          "opts: INIT zero-fills every knob");
+    CHECK(sizeof(asmtest_ibs_opts_t) == 32,
+          "opts: additive tail kept the struct at 32 bytes");
+}
+
 /* The fetch availability probe must be definite and stable (cached), independent of
  * the Op probe. */
 static void test_fetch_available(void) {
@@ -489,6 +502,124 @@ static void test_live_fetch(void) {
     CHECK(fs.hot == NULL && fs.n == 0,
           "fetch_survey_free: releases and zeroes the survey");
 }
+
+/* Phase 5: drive the opt knobs on the live out-of-band survey. Callchain ON must
+ * still recover the spin loop's back-edge — proving the drain steps over the
+ * per-sample caller-stack block to reach the RAW edge record. A second window opts
+ * OUT of the dispatched-op default and disables jitter, exercising those paths too. */
+static void test_live_phase5(void) {
+    if (!asmtest_ibs_available()) {
+        printf("# SKIP IBS Phase-5 opts: %s\n", asmtest_ibs_skip_reason());
+        return;
+    }
+    g_stop = 0;
+    g_tid_ready = 0;
+    pthread_t th;
+    if (pthread_create(&th, NULL, worker, NULL) != 0) {
+        printf("# SKIP IBS Phase-5 opts: pthread_create failed\n");
+        return;
+    }
+    while (!g_tid_ready) {
+        struct timespec s = {0, 1000 * 1000};
+        nanosleep(&s, NULL);
+    }
+
+    asmtest_ibs_opts_t o = ASMTEST_IBS_OPTS_INIT;
+    o.flags = ASMTEST_IBS_OPT_CALLCHAIN; /* attach a caller stack per sample */
+    asmtest_ibs_survey_t s1;
+    int rc = asmtest_ibs_survey_pid(g_worker_tid, 300, &o, &s1);
+
+    /* Opt out of BOTH Phase-5 defaults: legacy cycle counting + no period jitter. */
+    asmtest_ibs_opts_t o2 = ASMTEST_IBS_OPTS_INIT;
+    o2.flags = ASMTEST_IBS_OPT_COUNT_CYCLES | ASMTEST_IBS_OPT_NO_JITTER;
+    asmtest_ibs_survey_t s2;
+    int rc2 = asmtest_ibs_survey_pid(g_worker_tid, 200, &o2, &s2);
+
+    g_stop = 1;
+    pthread_join(th, NULL);
+
+    if (rc == ASMTEST_IBS_EUNAVAIL) {
+        printf("# SKIP IBS Phase-5 opts: perf_event_open blocked "
+               "(paranoid/seccomp), substrate present\n");
+        asmtest_ibs_survey_free(&s1);
+        asmtest_ibs_survey_free(&s2);
+        return;
+    }
+
+    CHECK(rc == ASMTEST_IBS_OK, "phase5: callchain survey succeeds");
+    CHECK(edge_in_fn(&s1, spin_loop),
+          "phase5: callchain-on survey still recovers the spin_loop edge");
+    CHECK(rc2 == ASMTEST_IBS_OK && s2.n > 0,
+          "phase5: cycle-count + no-jitter survey still produces edges");
+    asmtest_ibs_survey_free(&s1);
+    asmtest_ibs_survey_free(&s2);
+}
+
+/* Phase 5: system-wide (per-CPU) whole-process capture. Needs CAP_PERFMON /
+ * perf_event_paranoid<=0 and self-skips (EUNAVAIL) otherwise. When it opens it must
+ * still surface edges from the target's own worker code — proving the per-CPU open +
+ * software pid-filter path delivers the target (not the whole system) unperturbed. */
+static void test_live_system_wide(void) {
+    if (!asmtest_ibs_available()) {
+        printf("# SKIP IBS system-wide capture: %s\n",
+               asmtest_ibs_skip_reason());
+        return;
+    }
+    g_stop = 0;
+    g_ready = 0;
+    pthread_t th[3];
+    int made = 0;
+    for (int i = 0; i < 3; i++) {
+        if (pthread_create(&th[i], NULL, worker_n, (void *)(intptr_t)i) == 0)
+            made++;
+        else
+            break;
+    }
+    if (made < 3) {
+        g_stop = 1;
+        for (int i = 0; i < made; i++)
+            pthread_join(th[i], NULL);
+        printf("# SKIP IBS system-wide capture: pthread_create failed\n");
+        return;
+    }
+    while (g_ready < 3) {
+        struct timespec s = {0, 1000 * 1000};
+        nanosleep(&s, NULL);
+    }
+
+    asmtest_ibs_opts_t o = ASMTEST_IBS_OPTS_INIT;
+    o.flags = ASMTEST_IBS_OPT_SYSTEM_WIDE;
+    asmtest_ibs_survey_t s;
+    int rc = asmtest_ibs_survey_process(0, 400, &o, &s);
+
+    g_stop = 1;
+    for (int i = 0; i < 3; i++)
+        pthread_join(th[i], NULL);
+
+    if (rc == ASMTEST_IBS_EUNAVAIL) {
+        printf("# SKIP IBS system-wide capture: needs CAP_PERFMON / "
+               "paranoid<=0 (substrate present)\n");
+        asmtest_ibs_survey_free(&s);
+        return;
+    }
+    CHECK(rc == ASMTEST_IBS_OK,
+          "system_wide: per-CPU whole-process capture succeeds");
+    CHECK(s.n > 0, "system_wide: produced aggregated edges");
+    int covered = edge_in_fn(&s, spin_loop) + edge_in_fn(&s, spin_loop2) +
+                  edge_in_fn(&s, spin_loop3);
+    /* The address windows are in THIS binary, so any covered edge is the target's
+     * own code: covered>=1 proves the pid-filter delivered us, not the whole system.
+     * (A >=1 gate stays robust under the throttle governor sharing the whole-machine
+     * sample budget across every process.) */
+    CHECK(
+        covered >= 1,
+        "system_wide: recovered the target's own worker edges (pid-filtered)");
+    printf("# system-wide: %d/3 worker functions covered, %zu edges, %llu/%llu "
+           "branch/total samples%s\n",
+           covered, s.n, (unsigned long long)s.branch_samples,
+           (unsigned long long)s.samples, s.throttled ? ", throttled" : "");
+    asmtest_ibs_survey_free(&s);
+}
 #else
 static void test_live(void) {
     printf("# SKIP IBS live capture: not Linux x86-64\n");
@@ -499,16 +630,25 @@ static void test_live_process(void) {
 static void test_live_fetch(void) {
     printf("# SKIP IBS-Fetch survey: not Linux x86-64\n");
 }
+static void test_live_phase5(void) {
+    printf("# SKIP IBS Phase-5 opts: not Linux x86-64\n");
+}
+static void test_live_system_wide(void) {
+    printf("# SKIP IBS system-wide capture: not Linux x86-64\n");
+}
 #endif
 
 int main(void) {
     test_decode();
     test_decode_fetch();
+    test_opts_abi();
     test_available();
     test_fetch_available();
     test_live();
     test_live_process();
     test_live_fetch();
+    test_live_phase5();
+    test_live_system_wide();
     printf("1..%d\n", checks);
     if (failures)
         printf("# %d/%d checks FAILED\n", failures, checks);

@@ -68,13 +68,41 @@ typedef struct {
     int throttled;             /* throttled / ring near-full     */
 } asmtest_ibs_survey_t;
 
-/* Capture options. Pass NULL for defaults. Reserved fields are 0 today and carry
- * later phases (cnt_ctl dispatched-op sampling, callchain, whole-process). */
+/* opts.flags bits (Phase 5 sampling-quality / call-graph knobs). flags == 0
+ * selects the Phase-5 DEFAULTS: dispatched-op count control (uniform instruction
+ * coverage) + sample-period jitter ON (breaks aliasing against periodic loops). */
+/* opt OUT of the dispatched-op default -> count clock cycles (cnt_ctl=0). */
+#define ASMTEST_IBS_OPT_COUNT_CYCLES (1u << 0)
+/* attach a frame-pointer caller stack per sample (PERF_SAMPLE_CALLCHAIN +
+ * exclude_callchain_kernel) for statistical call-graph context. Op lane only. */
+#define ASMTEST_IBS_OPT_CALLCHAIN (1u << 1)
+/* asmtest_ibs_survey_process only: capture SYSTEM-WIDE per-CPU (all present +
+ * future threads, no per-thread race), filtered to the target pid in software.
+ * Needs CAP_PERFMON / perf_event_paranoid<=0, else the survey self-skips. */
+#define ASMTEST_IBS_OPT_SYSTEM_WIDE (1u << 2)
+/* disable sample-period jitter (use a fixed period). */
+#define ASMTEST_IBS_OPT_NO_JITTER (1u << 3)
+
+/* Capture options. Pass NULL for defaults. The struct grows ADDITIVELY: the two
+ * legacy fields (sample_period, flags) sit at fixed offsets and are honoured for
+ * any non-NULL opts; every field AFTER struct_size is read only when the caller's
+ * struct_size covers it, so an older caller (struct_size 0 / a smaller value) gets
+ * the defaults for the tail and a newer caller's unknown tail is ignored (the
+ * perf_event_attr / asmtest_hwtrace_options_t precedent). Zero-initialise and set
+ * struct_size = sizeof(asmtest_ibs_opts_t) — or use ASMTEST_IBS_OPTS_INIT. Total
+ * size is unchanged from Phase 0 (the tail lands in the old reserved words). */
 typedef struct {
-    uint64_t sample_period; /* 0 => default 0x4000; rounded to /16 */
-    unsigned flags;         /* reserved (0)                        */
-    unsigned reserved[5];   /* reserved (0)                        */
+    uint64_t sample_period; /* 0 => default 0x4000; rounded to /16   */
+    unsigned flags;         /* ASMTEST_IBS_OPT_* mask (0 = defaults) */
+    unsigned struct_size;   /* sizeof(asmtest_ibs_opts_t); 0=>legacy */
+    unsigned period_jitter; /* jitter fraction 1/N; 0 => default     */
+    unsigned reserved[3];   /* reserved (0)                          */
 } asmtest_ibs_opts_t;
+
+/* Zero-initialise + self-describe: `asmtest_ibs_opts_t o = ASMTEST_IBS_OPTS_INIT;`
+ * sets struct_size so the backend honours the appended fields (see struct_size). */
+#define ASMTEST_IBS_OPTS_INIT                                                  \
+    { .struct_size = (unsigned)sizeof(asmtest_ibs_opts_t) }
 
 /* 1 iff this is a Linux/x86-64 AMD host whose IBS-Op supports op sampling (OpSam)
  * and branch target (BrnTrgt), the ibs_op PMU is present, and the kernel exposes
