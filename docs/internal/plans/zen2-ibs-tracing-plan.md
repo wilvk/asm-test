@@ -255,7 +255,7 @@ risk crashing.
 > present and the env unset. `examples/test_hwtrace.c` `test_amd_sample_window_ibs` forces the
 > IBS path over the hot-loop fixture (self-skips off IBS) and asserts most endpoints land
 > in-loop (both the monolith and the split) — ~468/468 in-loop live on this Zen 2; full
-> `hwtrace-test` 341/341. This supersedes [amd-tracing-followup-plan.md](amd-tracing-followup-plan.md)
+> `hwtrace-test` 341/341. This supersedes [amd-tracing-followup-plan.md](../archive/plans/amd-tracing-followup-plan.md)
 > Phase 7c, which specced the same integration before the IBS lane existed.
 
 **Goal.** Make the statistical whole-window survey produce a result on Zen 2 instead of

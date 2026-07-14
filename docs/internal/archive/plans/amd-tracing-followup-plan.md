@@ -1,15 +1,15 @@
 # asm-test — AMD tracing improvements (10-item follow-up): implementation plan
 
-A focused follow-up to [amd-tracing-plan.md](amd-tracing-plan.md) that lands ten
+A focused follow-up to [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) that lands ten
 concrete improvements to the AMD branch-record trace tier
-([src/amd_backend.c](../../../src/amd_backend.c),
-[src/hwtrace.c](../../../src/hwtrace.c),
-[src/branchsnap.c](../../../src/branchsnap.c),
-[src/msr_lbr.c](../../../src/msr_lbr.c),
-[src/trace_auto.c](../../../src/trace_auto.c)). The items come from a fresh drill-down
+([src/amd_backend.c](../../../../src/amd_backend.c),
+[src/hwtrace.c](../../../../src/hwtrace.c),
+[src/branchsnap.c](../../../../src/branchsnap.c),
+[src/msr_lbr.c](../../../../src/msr_lbr.c),
+[src/trace_auto.c](../../../../src/trace_auto.c)). The items come from a fresh drill-down
 against the source of record — the gating chain and capture paths above, cross-read
-with the [tracing decision matrix](../analysis/tracing-decision-matrix.md) and the
-F1–F47 audit in [../../amd_tracing_review.md](../../amd_tracing_review.md) — and every
+with the [tracing decision matrix](../../analysis/tracing-decision-matrix.md) and the
+F1–F47 audit in [../../amd_tracing_review.md](../../../amd_tracing_review.md) — and every
 finding here was **re-verified against the current tree** (the `src/` anchors hold at
 `58d8263` — the intervening commits are docs-only) before being written down, not carried
 forward from the audit.
@@ -21,11 +21,11 @@ forward from the audit.
 > LANDED 2026-07-12** (the Wave-1 hardening batch + the tuning guide; verified on the
 > Zen 5 box — `hwtrace-test` 358/358 with the new synthetic-ring coverage). **Phase 7
 > (IBS-Op survey fallback) is SUPERSEDED + LANDED 2026-07-12** via
-> [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
+> [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
 > integration — including this plan's `ASMTEST_FORCE_IBS_SURVEY` env — on the
 > standalone `asmtest_ibs_*` engine instead of 7a–7d's in-`amd_backend.c` shape).
 > Grounding that reorders priorities versus the 2026-07-09 audit: development runs on
-> **two AMD hosts** (both recorded under [benchmarks/boxes/](../../../benchmarks/boxes/)) —
+> **two AMD hosts** (both recorded under [benchmarks/boxes/](../../../../benchmarks/boxes/)) —
 > a **Zen 5 Ryzen 9 9950X** box (`AuthenticAMD`, `amd_lbr_v2` + `perfmon_v2` + `ibs`,
 > Linux 6.17) with `perf_event_paranoid=4`, and a **Zen 2 Ryzen 9 4900HS** (no branch
 > stack, `paranoid=2`, Linux 6.14) — plus generic/Intel CI runners. So the audit's
@@ -53,7 +53,7 @@ by risk, dependency, and how much of each is testable on the generic CI host.
 | **2** | 3 | Observability — `EPERM` vs `EUNAVAIL` + paranoid reader | Standalone diagnostics; the errno it threads also enriches Phase 4's log lines (each independently shippable) | Yes (invariants) + cap lane for the positive `EPERM` |
 | **3** | 1 | ABI-guard the options struct (10-binding flag day) | High blast radius; do it deliberately, after the cheap wins | Yes (ASan, single-step) |
 | **4** | 5 → 6 | Multi-exit deterministic snapshot; then the cascade-comment fix it enables | 6 is comment-only and only correct *after* 5 | Exit-enum: yes · live snapshot: cap lane |
-| **5** | 7 (7a–7d) | IBS-Op survey fallback — **superseded + landed** via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: unprivileged (`swfilt`) |
+| **5** | 7 (7a–7d) | IBS-Op survey fallback — **superseded + landed** via [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md) | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: unprivileged (`swfilt`) |
 | **6** | 10 | Document the AMD LBR window-reach levers | Naturally documents Phase 5's snapshot + the levers | Docs build only |
 
 ---
@@ -62,23 +62,23 @@ by risk, dependency, and how much of each is testable on the generic CI host.
 
 **Goal.** Make growing `asmtest_hwtrace_options_t` permanently safe: a caller compiled against an
 older, smaller struct must never be read out of bounds by the library's init copy. Today
-[src/hwtrace.c:471](../../../src/hwtrace.c) does `g_opts = *opts;` — a full
+[src/hwtrace.c:471](../../../../src/hwtrace.c) does `g_opts = *opts;` — a full
 `sizeof g_opts` (48-byte) struct copy — while the struct has already grown twice
 (`lbr_period`, `branch_filter` appended). Two mirrors already hand-pad to 48 bytes and
 cite *"`g_opts = *opts` reads 8 bytes OOB"* in comments
-([bindings/java/HwTrace.java](../../../bindings/java/HwTrace.java),
-[bindings/ruby/hwtrace.rb](../../../bindings/ruby/hwtrace.rb)) — this replaces that
+([bindings/java/HwTrace.java](../../../../bindings/java/HwTrace.java),
+[bindings/ruby/hwtrace.rb](../../../../bindings/ruby/hwtrace.rb)) — this replaces that
 fragile per-binding hand-padding with a real size negotiation.
 
 **Work.**
 - **Prepend** `size_t struct_size` as the **first** field of `asmtest_hwtrace_options_t`
-  ([include/asmtest_hwtrace.h:68](../../../include/asmtest_hwtrace.h)). Prepend, not
+  ([include/asmtest_hwtrace.h:68](../../../../include/asmtest_hwtrace.h)). Prepend, not
   append: a size negotiator must sit at an offset every version agrees on, and offset 0 is
   trivially agreed by all — as in `sched_attr` (leading `size`) and `perf_event_attr`
   (`size` at a fixed offset directly after its immutable `type`). Appending is
   self-defeating: you cannot locate a trailing field without already knowing the total
   size, the exact unknown.
-- Replace the blind copy at [src/hwtrace.c:469-471](../../../src/hwtrace.c) with a
+- Replace the blind copy at [src/hwtrace.c:469-471](../../../../src/hwtrace.c) with a
   clamped, zero-tail copy (recommended **reject-0** semantics):
   ```c
   size_t n = opts->struct_size;
@@ -95,24 +95,24 @@ fragile per-binding hand-padding with a real size negotiation.
   `sizeof g_opts - sizeof(size_t)` (keeps existing zero-fill callers working, still
   memory-safe, but can silently drop a trailing AMD field). **Never** map `0 → sizeof g_opts`
   (that re-introduces the OOB for a legacy `INTEL_PT=0` caller).
-- **Set `struct_size` in every caller.** In-repo C: [src/trace_auto.c:170-173](../../../src/trace_auto.c)
-  and ~27 sites in [examples/test_hwtrace.c](../../../examples/test_hwtrace.c) /
-  [examples/test_branchsnap.c](../../../examples/test_branchsnap.c) — add a local
+- **Set `struct_size` in every caller.** In-repo C: [src/trace_auto.c:170-173](../../../../src/trace_auto.c)
+  and ~27 sites in [examples/test_hwtrace.c](../../../../examples/test_hwtrace.c) /
+  [examples/test_branchsnap.c](../../../../examples/test_branchsnap.c) — add a local
   `#define INIT_OPTS(o,b) do{ memset(&(o),0,sizeof(o)); (o).struct_size=sizeof(o); (o).backend=(b);}while(0)`
   to cut churn and prevent a missed site.
 - **Every binding mirror** must add the field *and* set it (layout-from-header bindings
   still must set it):
-  [python](../../../bindings/python/asmtest/hwtrace.py) (`c_size_t` first in `_Options._fields_`),
-  [cpp](../../../bindings/cpp/asmtest_hwtrace.hpp) (`opts.struct_size = sizeof(opts)`),
-  [rust](../../../bindings/rust/src/hwtrace.rs) (`struct_size: usize` first),
-  [go](../../../bindings/go/hwtrace.go) (first cgo field **and** fix the pre-existing bug
+  [python](../../../../bindings/python/asmtest/hwtrace.py) (`c_size_t` first in `_Options._fields_`),
+  [cpp](../../../../bindings/cpp/asmtest_hwtrace.hpp) (`opts.struct_size = sizeof(opts)`),
+  [rust](../../../../bindings/rust/src/hwtrace.rs) (`struct_size: usize` first),
+  [go](../../../../bindings/go/hwtrace.go) (first cgo field **and** fix the pre-existing bug
   at `hwtrace.go:438-446` that leaves `lbr_period`/`branch_filter` uninitialized),
-  [node](../../../bindings/node/hwtrace.js) (`koffi.sizeof`),
-  [java](../../../bindings/java/HwTrace.java) (`JAVA_LONG` first in `OPTIONS_LAYOUT`, 48→56 bytes; update the offset comment),
-  [dotnet](../../../bindings/dotnet/hwtrace/HwTrace.cs) (`UIntPtr StructSize` first, both init sites),
-  [ruby](../../../bindings/ruby/hwtrace.rb) (48→56-byte pack; update offsets),
-  [lua](../../../bindings/lua/hwtrace.lua) (`ffi.sizeof`),
-  [zig](../../../bindings/zig/src/hwtrace.zig) (`@sizeOf`).
+  [node](../../../../bindings/node/hwtrace.js) (`koffi.sizeof`),
+  [java](../../../../bindings/java/HwTrace.java) (`JAVA_LONG` first in `OPTIONS_LAYOUT`, 48→56 bytes; update the offset comment),
+  [dotnet](../../../../bindings/dotnet/hwtrace/HwTrace.cs) (`UIntPtr StructSize` first, both init sites),
+  [ruby](../../../../bindings/ruby/hwtrace.rb) (48→56-byte pack; update offsets),
+  [lua](../../../../bindings/lua/hwtrace.lua) (`ffi.sizeof`),
+  [zig](../../../../bindings/zig/src/hwtrace.zig) (`@sizeOf`).
 
 **Acceptance.** A host-independent C unit test allocates *exactly* a legacy-sized buffer
 (`sizeof(asmtest_hwtrace_options_t) - sizeof(size_t)`), sets `struct_size` to that legacy
@@ -125,12 +125,12 @@ marshals + inits and traces the single-step backend. `scripts/check-bindings-par
 ## Phase 2 — Overflow-safe `nr` clamp at the sampled branch-stack parse (`src/hwtrace.c`) *(LANDED 2026-07-12)*
 
 **Goal.** Close a latent OOB read in the Tier-B sampled decode. At
-[src/hwtrace.c:822](../../../src/hwtrace.c) the per-sample gate is only `nr > 0 &&` before
+[src/hwtrace.c:822](../../../../src/hwtrace.c) the per-sample gate is only `nr > 0 &&` before
 computing `nr * sizeof(struct perf_branch_entry) <= h.size` — a `uint64_t` multiply that
 can wrap under `h.size`, after which the tally loop at
-[src/hwtrace.c:835](../../../src/hwtrace.c) reads `e[i]` for `i < nr` unbounded. The two
-sibling survey drains at [src/hwtrace.c:1070](../../../src/hwtrace.c) and
-[src/hwtrace.c:1219](../../../src/hwtrace.c) already carry the `nr <= 64` guard; this site was missed.
+[src/hwtrace.c:835](../../../../src/hwtrace.c) reads `e[i]` for `i < nr` unbounded. The two
+sibling survey drains at [src/hwtrace.c:1070](../../../../src/hwtrace.c) and
+[src/hwtrace.c:1219](../../../../src/hwtrace.c) already carry the `nr <= 64` guard; this site was missed.
 
 **Work.** Add `nr <= 64` **before** the multiply (short-circuit), matching the siblings
 verbatim:
@@ -139,7 +139,7 @@ if (nr > 0 && nr <= 64 &&
     sizeof h + sizeof(uint64_t) + nr * sizeof(struct perf_branch_entry) <= h.size) {
 ```
 Use the constant `64` (not `amd_depth`, which is not computed until
-[src/hwtrace.c:862](../../../src/hwtrace.c)) to keep the three parse sites byte-identical. Real AMD
+[src/hwtrace.c:862](../../../../src/hwtrace.c)) to keep the three parse sites byte-identical. Real AMD
 LBR is ≤16-deep, so a well-formed sample is never rejected; an `nr>64` record is corrupt
 and correctly dropped (the surrounding `lost`/near-full logic already flags truncation
 honestly).
@@ -157,13 +157,13 @@ emits `nr>16` — so the synthetic ASan test is the real guard.)
 **Goal.** On this very host (`perf_event_paranoid=4`) a permission denial and a hardware
 absence both surface as `available()==0` / `EUNAVAIL`, separable only by string-parsing
 `skip_reason`. `amd_branch_probe` already tags `AMD_NOPERM` internally
-([src/hwtrace.c:238-257](../../../src/hwtrace.c)) but `available()` collapses it. Surface
+([src/hwtrace.c:238-257](../../../../src/hwtrace.c)) but `available()` collapses it. Surface
 `EPERM` distinctly **without** changing the `available()→{0,1}` ABI or any capture entry's
 return code.
 
 **Work.**
 - Append (only) `#define ASMTEST_HW_EPERM (-9)` after `EDECODE=-8`
-  ([include/asmtest_hwtrace.h:57](../../../include/asmtest_hwtrace.h)); `-4/-7` stay
+  ([include/asmtest_hwtrace.h:57](../../../../include/asmtest_hwtrace.h)); `-4/-7` stay
   intentionally skipped, mirroring `asmtest_drtrace.h`.
 - Add `asmtest_hwtrace_status_t {available; code; stage; perf_event_paranoid; probe_errno;
   reason[160];}` and `int asmtest_hwtrace_status(backend, *out)` plus
@@ -180,7 +180,7 @@ return code.
   the drill-down's edge-case list; the snapshot/MSR/survey paths are **not** in the backend
   enum, so `status()` documents them as a known gap (errno out-params are a follow-up).
 - Add `ALL asmtest_hwtrace_status` and `ALL asmtest_hwtrace_perf_event_paranoid` to
-  [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt) (both are
+  [scripts/bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt) (both are
   TIER_HEADER symbols; additive diagnostics wrapped opportunistically like `skip_reason`).
 
 **Acceptance.** Host-independent: `status(SINGLESTEP).code==OK`; the invariant
@@ -198,7 +198,7 @@ assertions stay green (no capture-entry code changed).
 freeze bit), a self-skip is opaque. Add zero-overhead-when-off logging that explains the
 skip, the backend/mode chosen, the Tier-A vs Tier-B pick, and every truncation reason.
 There is no logging in `src/` today; precedent is
-[src/codeimage.c](../../../src/codeimage.c)'s `ASMTEST_CODEIMAGE_DEBUG`.
+[src/codeimage.c](../../../../src/codeimage.c)'s `ASMTEST_CODEIMAGE_DEBUG`.
 
 **Work.**
 - New internal `src/debug.h` / `src/debug.c` (not in `include/`, mirroring
@@ -207,7 +207,7 @@ There is no logging in `src/` today; precedent is
   `printf`-attributed `asmtest_hwtrace_debugf(fn, fmt, ...)`, wrapped in an
   `ASMTEST_HWDBG(...)` macro that prefixes `[asmtest hwtrace] <func>: `.
 - `#include "debug.h"` in `hwtrace.c` / `amd_backend.c` / `branchsnap.c` / `msr_lbr.c`;
-  add `src/debug.c` to [mk/native-trace.mk](../../../mk/native-trace.mk)'s object list **and
+  add `src/debug.c` to [mk/native-trace.mk](../../../../mk/native-trace.mk)'s object list **and
   every link list that pulls the hwtrace objects** (a missed list is a build-visible link
   error).
 - Log sites (`key=val`, one line): `amd_branch_probe` rc/errno; each `available()` self-skip
@@ -218,7 +218,7 @@ There is no logging in `src/` today; precedent is
   survey period/nips/truncated; PT/CS arm+decode.
 - **Signal-safety:** every listed site is ordinary thread context (reached via
   `asmtest_hwtrace_try_begin`/`_end`), *not* the single-step `SIGTRAP` handler
-  `ss_on_sigtrap` ([src/ss_backend.c:202](../../../src/ss_backend.c)), which stays
+  `ss_on_sigtrap` ([src/ss_backend.c:202](../../../../src/ss_backend.c)), which stays
   async-signal-safe — add a one-line comment there forbidding `ASMTEST_HWDBG`.
 
 **Acceptance.** Host-independent (a standalone program / forked child so the getenv cache
@@ -235,18 +235,18 @@ fixture. `debug.{c,h}` are internal → no parity allow-list entry.
 **Goal.** Make the deterministic snapshot the default for **2..4-exit** routines, not just
 single-exit ones — retiring most reliance on the sampled path's fragile richest-window
 guess. Today `hwtrace_begin_amd` selects the snapshot only when `amd_nexit == 1`
-([src/hwtrace.c:633](../../../src/hwtrace.c)), and `branchsnap.c` plants exactly one HW
+([src/hwtrace.c:633](../../../../src/hwtrace.c)), and `branchsnap.c` plants exactly one HW
 execution breakpoint, so a tiny routine leaving via an earlier `ret`/tail-jmp truncates on
 the flood.
 
 **Work.**
 - **Enumerate all exits.** Add `asmtest_amd_all_exits(base, len, out, cap, *n)` next to
-  [src/hwtrace.c:579](../../../src/hwtrace.c) `asmtest_amd_last_exit_off`, reusing the same
+  [src/hwtrace.c:579](../../../../src/hwtrace.c) `asmtest_amd_last_exit_off`, reusing the same
   Capstone ret/region-leaving-tail-jmp classification; refactor `last_exit_off` to a thin
   wrapper (`all_exits(base,len,NULL,0,nexit)`) so the existing host-independent exit test
   passes byte-for-byte. Add `#define ASMTEST_AMD_MAX_EXITS 4` (x86 `HBP_NUM`) to
-  [src/amd_backend.h](../../../src/amd_backend.h); declare `all_exits` there.
-- **Multi-breakpoint begin.** In [src/branchsnap.c](../../../src/branchsnap.c) turn the
+  [src/amd_backend.h](../../../../src/amd_backend.h); declare `all_exits` there.
+- **Multi-breakpoint begin.** In [src/branchsnap.c](../../../../src/branchsnap.c) turn the
   single `int bfd` / `struct bpf_link *link` into `bfd[ASMTEST_AMD_MAX_EXITS]` /
   `link[ASMTEST_AMD_MAX_EXITS]` (+ `int nbp`); add
   `asmtest_amd_snapshot_begin_multi(base, len, exit_offs[], nexit, filter)` that opens one
@@ -258,7 +258,7 @@ the flood.
   / `bsnap_drain` / `snapshot_end` need **no change** — all breakpoints feed one ring and the
   richest-in-region selection already works across multiple hits.
 - **Default-on for 1..4 exits.** In `hwtrace_begin_amd` (rewrite
-  [src/hwtrace.c:631-642](../../../src/hwtrace.c)) enumerate once; select the snapshot when
+  [src/hwtrace.c:631-642](../../../../src/hwtrace.c)) enumerate once; select the snapshot when
   `asmtest_amd_snapshot_available() && nexit_total ∈ [1,4]`; `>4` exits stay sampled;
   explicit `opts.snapshot` with `>4` keeps the legacy last-exit best-effort. Update the
   comment block.
@@ -268,7 +268,7 @@ a 3-`ret` region (`n==3`, ascending offsets, return==last); a 5-exit region with
 (`n==5` total, `written==4`, return==true last, so `begin_amd` skips it); `ret+tail-jmp`
 (`n==2`); classification equals `last_exit_off`. Cap lane (Zen 4/5 + `CAP_BPF` +
 `CAP_PERFMON`, the codeimage image): a two-`ret` fixture in
-[examples/test_branchsnap.c](../../../examples/test_branchsnap.c) driven with `opts.snapshot`
+[examples/test_branchsnap.c](../../../../examples/test_branchsnap.c) driven with `opts.snapshot`
 **unset** (proving default-on) once down each path — entry block covered and `!truncated`
 on both. DR-slot arbitration self-skips honestly to sampled where a debugger holds a DR.
 
@@ -281,12 +281,12 @@ multi-exit tiny-routine case a rung would have targeted. A re-run rung would onl
 a completed capture or re-attempt a deterministically-failed one.
 
 **Work.** Comment-only:
-- Reword the rung-1b comment at [src/trace_auto.c:192-205](../../../src/trace_auto.c): its
+- Reword the rung-1b comment at [src/trace_auto.c:192-205](../../../../src/trace_auto.c): its
   claim that the snapshot *"must skip"* every multi-exit region becomes false once Phase 5
   lands. New wording: the MSR rung is the backstop for regions with **more exits than the 4
   debug registers** (`>ASMTEST_AMD_MAX_EXITS`) or any multi-exit region on a host without
   `CAP_BPF`; the 1..4-exit case is completed in rung 1 by the multi-exit snapshot.
-- Add a short rationale comment after [src/trace_auto.c:190](../../../src/trace_auto.c)
+- Add a short rationale comment after [src/trace_auto.c:190](../../../../src/trace_auto.c)
   recording the rejected rung and the correct order (snapshot in rung 1: `CAP_BPF+PERFMON`,
   no extra run; MSR rung 1b: `CAP_SYS_ADMIN`, a second in-process run; both share the
   16-branch ceiling and are excluded under `CEILING_FREE` in lock-step — verify the rung-1
@@ -300,7 +300,7 @@ multi-exit regions.
 
 ## Phase 7 — IBS-Op survey fallback (`src/hwtrace.c`, `src/amd_backend.c`) *(SUPERSEDED + LANDED 2026-07-12)*
 
-> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md), whose Phase 4
+> **Superseded by [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md), whose Phase 4
 > landed this integration 2026-07-12.** The shipped shape differs from 7a–7d below: the
 > probe/decoder/capture live in the standalone `asmtest_ibs_*` engine
 > (`include/asmtest_ibs.h`, `src/ibs_backend.c`) rather than `amd_backend.c`, with internal
@@ -312,18 +312,18 @@ multi-exit regions.
 > user-only path). Kept below for the record.
 
 **Goal.** The statistical whole-window survey
-([src/hwtrace.c:976](../../../src/hwtrace.c)) has one hardware source — the LBR/BRS branch
+([src/hwtrace.c:976](../../../../src/hwtrace.c)) has one hardware source — the LBR/BRS branch
 stack — and returns `EUNAVAIL` without `CAP_PERFMON`. This host reports `ibs`. Add **AMD
 IBS-Op** as a second source *under the survey tier only*, ordered strictly after
 branch-stack, self-skipping by default (so the Zen 5 box and all CI are byte-identical to
 today). IBS never feeds `asmtest_amd_decode` / `insns[]` / the fidelity cascade — it stays
-survey-only, exactly as [amd-tracing-plan.md](amd-tracing-plan.md) requires.
+survey-only, exactly as [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) requires.
 
 **Work (four sub-phases).**
 
 ### 7a — Probe + attr builder
 - Cached CPUID caps probe `asmtest_amd_ibs_brntrgt()` (Fn`8000_001B` EAX[0]=IBSFFV &&
-  EAX[5]=BrnTrgt) in [src/amd_backend.c](../../../src/amd_backend.c), next to
+  EAX[5]=BrnTrgt) in [src/amd_backend.c](../../../../src/amd_backend.c), next to
   `asmtest_amd_freeze_available`; declare in `amd_backend.h`.
 - `ibs_op_pmu_type()` reading `/sys/bus/event_source/devices/ibs_op/type`; `ibs_op_fill_attr()`
   building the attr with **no** `exclude_kernel`/`exclude_hv` (the IBS PMU has no user filter
@@ -354,7 +354,7 @@ survey-only, exactly as [amd-tracing-plan.md](amd-tracing-plan.md) requires.
   constants — converting the one hardware-truth uncertainty (bit/word positions) into a safe
   self-skip, never garbage endpoints.
 - Add a `docker-hwtrace-amd-ibs` cap lane and update
-  [amd-tracing-plan.md](amd-tracing-plan.md) Phase 7 for what landed vs stays forward-look.
+  [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) Phase 7 for what landed vs stays forward-look.
 
 **Acceptance.** `test_ibs_decode_raw` (synthetic `u64 w[8]`, retired-taken → endpoint;
 non-taken / zero-target / short `rawlen` → 0) and `test_ibs_op_available` (returns 0, no
@@ -369,11 +369,11 @@ called out as **forward-look**.
 **Goal.** Remove a fixed ~200 ms wall stall on every no-hit/truncated snapshot region. The
 exit breakpoint fires synchronously during `run_fn` and the BPF program submits immediately,
 so by `snapshot_end` the records are committed; the `ring_buffer__poll(rb, 200)` at
-[src/branchsnap.c:225](../../../src/branchsnap.c) only ever burns its full timeout when the
+[src/branchsnap.c:225](../../../../src/branchsnap.c) only ever burns its full timeout when the
 ring is empty — now the common path since the snapshot is default-on.
 
 **Work.** One-line swap to non-blocking `ring_buffer__consume(g_bsnap.rb)` (the
-disable-before-drain guard at [src/branchsnap.c:223-224](../../../src/branchsnap.c) already prevents any
+disable-before-drain guard at [src/branchsnap.c:223-224](../../../../src/branchsnap.c) already prevents any
 later record; `consume` reads the producer position directly, drains all queued records, and
 returns at once). `consume` has been in libbpf since 0.4.0 and the only image building this
 TU carries libbpf 1.3.0. Optional: fix the two "poll" comments.
@@ -387,8 +387,8 @@ where the substrate/caps are absent.
 ## Phase 9 — Single cached `/proc/cpuinfo` flag probe (`src/amd_backend.c`, `src/msr_lbr.c`) *(LANDED 2026-07-12)*
 
 **Goal.** `/proc/cpuinfo` `flags` is parsed independently in
-[src/msr_lbr.c:58](../../../src/msr_lbr.c) and
-[src/amd_backend.c:90](../../../src/amd_backend.c) (and `vendor_id` a third time in
+[src/msr_lbr.c:58](../../../../src/msr_lbr.c) and
+[src/amd_backend.c:90](../../../../src/amd_backend.c) (and `vendor_id` a third time in
 `hwtrace.c`). Factor one cached probe; drift here would silently break the byte-identical-trace
 invariant.
 
@@ -396,8 +396,8 @@ invariant.
 line into a `char[4096]`, substring-searches with the exact `" <flag>"` leading-space
 semantics) and a **pure** `int asmtest_amd_flags_have(const char *line, const char *flag)`
 (no I/O, exposed for a host-independent test, mirroring the `asmtest_amd_msr_decode_entry`
-precedent) in [src/amd_backend.c](../../../src/amd_backend.c); declare both in
-[src/amd_backend.h](../../../src/amd_backend.h) with `#else` stubs. Collapse
+precedent) in [src/amd_backend.c](../../../../src/amd_backend.c); declare both in
+[src/amd_backend.h](../../../../src/amd_backend.h) with `#else` stubs. Collapse
 `amd_lbr_v2_present` (msr_lbr.c) and the `snapshot_available` flag block (amd_backend.c) to
 call it. Preserve the `char[4096]` first-chunk window and leading-space match exactly — the
 hard constraint is *no availability result changes*. Defer the `hwtrace.c` `vendor_is`
@@ -409,15 +409,15 @@ synthetic lines: present flag → 1, second flag → 1, absent → 0, left-prefi
 `asmtest_amd_msr_available()` return their pre-change values on the dev host. `#else` stubs
 keep non-x86_64 links clean.
 
-## Phase 10 — Document the AMD LBR window-reach levers (`docs/guides/tracing/`) *(LANDED 2026-07-12: [amd-lbr-tuning.md](../../guides/tracing/amd-lbr-tuning.md))*
+## Phase 10 — Document the AMD LBR window-reach levers (`docs/guides/tracing/`) *(LANDED 2026-07-12: [amd-lbr-tuning.md](../../../guides/tracing/amd-lbr-tuning.md))*
 
 **Goal.** `lbr_period`, `branch_filter`, and the AMD meaning of `snapshot` have rich header
-docs ([include/asmtest_hwtrace.h:78-112](../../../include/asmtest_hwtrace.h)) but appear in
+docs ([include/asmtest_hwtrace.h:78-112](../../../../include/asmtest_hwtrace.h)) but appear in
 neither user guide — real reach-extending levers a user can't discover. Implements the
 audit's F47.
 
 **Work.** All substantive prose in
-[docs/guides/tracing/hardware-tracing.md](../../../docs/guides/tracing/hardware-tracing.md)
+[docs/guides/tracing/hardware-tracing.md](../../../../docs/guides/tracing/hardware-tracing.md)
 (native-tracing.md delegates tier detail to it): (1) give `snapshot` its AMD
 deterministic-boundary meaning in the options paragraph and add a forward pointer;
 (2) insert a `### Tuning AMD LBR window reach` subsection before the scoped-tracing-primitives
@@ -426,10 +426,10 @@ truncation, the **self-similar-loop undercount** caveat — 231 vs 297 insns at 
 and `branch_filter` (drops direct-uncond-`jmp`, byte-identical, ~1.86× reach per window, the
 loop lever), both framed **fidelity-neutral by construction**. Link the internal plan via a
 full github blob URL (internal/ is outside the Sphinx tree). Add one cross-ref clause to
-[docs/guides/tracing/native-tracing.md](../../../docs/guides/tracing/native-tracing.md). No
+[docs/guides/tracing/native-tracing.md](../../../../docs/guides/tracing/native-tracing.md). No
 `DESIGN.md` edit (its only 'AMD' hits are the System V AMD64 ABI name — no hardware-trace
 section). No `features.md` edit either: its Hardware-trace bullet
-([docs/reference/features.md:113-120](../../../docs/reference/features.md)) does name AMD
+([docs/reference/features.md:113-120](../../../../docs/reference/features.md)) does name AMD
 LBR, but per-field tuning knobs sit below a feature catalogue's altitude — it lists no
 option knobs at all (not even `aux_size`) — and Matrix 5 is external-deps only. Do **not**
 touch the header.
@@ -445,7 +445,7 @@ the anchor; `grep 'lbr_period\|branch_filter' hardware-tracing.md` is now non-em
 
 - **Memory safety:** a size-negotiated `asmtest_hwtrace_options_t` with a clamped init copy
   across the library + all 10 bindings (P1); an overflow-safe `nr` clamp at
-  [src/hwtrace.c:822](../../../src/hwtrace.c) matching the guarded sibling sites, optionally
+  [src/hwtrace.c:822](../../../../src/hwtrace.c) matching the guarded sibling sites, optionally
   unified behind a shared `amd_parse_sample()` (P2).
 - **Observability:** `ASMTEST_HW_EPERM`, `asmtest_hwtrace_status()`, and
   `asmtest_hwtrace_perf_event_paranoid()` (P3); an `ASMTEST_HWTRACE_DEBUG`/`ASMTEST_AMD_DEBUG`
@@ -463,7 +463,7 @@ When the last phase lands, **move this file to `../archive/plans/`** in the same
 ## Validation
 
 Grounded in the tier's test harness (all C cases in
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c), run by `make hwtrace-test`; live
+[examples/test_hwtrace.c](../../../../examples/test_hwtrace.c), run by `make hwtrace-test`; live
 cases self-skip via `asmtest_hwtrace_available()`):
 
 - **Host-independent (real execution on the generic/Intel CI host — Capstone-only):** the

@@ -156,6 +156,6 @@ reconciling when the plan below lands.
 > [benchmarks/boxes/](../../../benchmarks/boxes/) carry both — `amd-linux-x86_64-f39fe67d`
 > is the Ryzen 9 9950X (zen5) and `amd-linux-x86_64-9e05f0f2` is the Ryzen 9 4900HS
 > (zen1-2, this review's machine). The single-host wording in
-> [amd-tracing-followup-plan.md](../plans/amd-tracing-followup-plan.md) and
+> [amd-tracing-followup-plan.md](../archive/plans/amd-tracing-followup-plan.md) and
 > [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) has been amended
 > to the two-host reality.
