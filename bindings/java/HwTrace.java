@@ -1778,9 +1778,12 @@ public final class HwTrace {
      * operation, but a plain JVM thread-local does NOT flow across an executor submit by itself
      * (unlike dotnet's {@code AsyncLocal}, and {@link java.lang.ScopedValue} only PROPAGATES a
      * value — it is not a value-changed hop signal, as the managed roadmap notes), so this
-     * producer carries the id two ways: {@link #propagate} wraps a {@link Runnable}/{@link
+     * producer carries the id three ways: {@link #propagate} wraps a {@link Runnable}/{@link
      * java.util.concurrent.Callable} so the id crosses the submit onto the pool thread (the
-     * AsyncLocal analog), and {@link #step} RE-ASSERTS the id on whatever thread runs the hop.
+     * AsyncLocal analog); {@link #propagatingExecutor} decorates a whole
+     * {@link java.util.concurrent.ExecutorService} so a BARE {@code submit} propagates with no
+     * per-task wrapping (the transparent {@code ExecutionContext}-across-{@code await} analog); and
+     * {@link #step} RE-ASSERTS the id on whatever thread runs the hop.
      * Each hop reuses the managed-safe lazy-arm path ({@code call_scoped_ex} — no runtime
      * machinery is single-stepped, no {@code MAX_REGIONS} slot is consumed), so a long operation
      * with many hops is safe; {@link #complete} merges the captured hops by seq via the shipped
@@ -1870,6 +1873,52 @@ public final class HwTrace {
                 CURRENT.set(id);
                 try { return body.call(); } finally { CURRENT.set(prev); }
             };
+        }
+
+        /** Wrap an {@link java.util.concurrent.ExecutorService} so the AMBIENT operation scope id
+         *  (the {@link #currentScopeId()} AsyncLocal analog) is captured at SUBMIT time and
+         *  re-asserted on the worker thread that runs each task — the TRANSPARENT propagation form
+         *  that removes the per-task {@link #propagate} wrapping, the JVM analog of dotnet's
+         *  {@code ExecutionContext} flow across {@code await}. Whatever scope id is in effect on the
+         *  SUBMITTING thread flows to the task, and the worker's prior id is restored afterwards so
+         *  a shared pool stays uncontaminated across operations (and across a nested inner
+         *  operation). Every {@code submit}/{@code execute}/{@code invokeAll}/{@code invokeAny}
+         *  routes through the single {@code execute} decoration (via {@link
+         *  java.util.concurrent.AbstractExecutorService}); lifecycle ({@code shutdown}/{@code
+         *  awaitTermination}) delegates to {@code pool}. A no-op (captures 0) when no operation is
+         *  active on the submitting thread, so wrapping a shared pool is always safe. */
+        public static java.util.concurrent.ExecutorService propagatingExecutor(
+                java.util.concurrent.ExecutorService pool) {
+            return new PropagatingExecutorService(pool);
+        }
+
+        // An ExecutorService decorator that captures the SUBMITTING thread's scope id and
+        // re-asserts it around each task on the worker (restoring the worker's prior id).
+        // AbstractExecutorService funnels submit()/invokeAll()/invokeAny() through execute(), so
+        // this single override covers every submission path — the manual propagate() equivalent,
+        // applied automatically at submit.
+        private static final class PropagatingExecutorService
+                extends java.util.concurrent.AbstractExecutorService {
+            private final java.util.concurrent.ExecutorService delegate;
+            PropagatingExecutorService(java.util.concurrent.ExecutorService delegate) {
+                this.delegate = delegate;
+            }
+            @Override public void execute(Runnable command) {
+                long id = CURRENT.get();
+                delegate.execute(() -> {
+                    long prev = CURRENT.get();
+                    CURRENT.set(id);
+                    try { command.run(); } finally { CURRENT.set(prev); }
+                });
+            }
+            @Override public void shutdown() { delegate.shutdown(); }
+            @Override public java.util.List<Runnable> shutdownNow() { return delegate.shutdownNow(); }
+            @Override public boolean isShutdown() { return delegate.isShutdown(); }
+            @Override public boolean isTerminated() { return delegate.isTerminated(); }
+            @Override public boolean awaitTermination(long timeout, java.util.concurrent.TimeUnit unit)
+                    throws InterruptedException {
+                return delegate.awaitTermination(timeout, unit);
+            }
         }
 
         /** Capture ONE hop: re-assert this operation's scope id on the current thread, then lazily

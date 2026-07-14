@@ -157,6 +157,7 @@ public final class HwTraceTest {
             singlestepLoopNoDepthCeiling();
             callScopedTracesANativeCall();
             stitchedTraceProducerAcrossHops();
+            stitchedTraceAutoPropagatesAcrossExecutor();
             windowTracesAWholeScope();
             attributeWindowSplitsNamedLeaves();
         } catch (Throwable t) {
@@ -289,6 +290,55 @@ public final class HwTraceTest {
                 "stitchedTrace: the merged path has a per-hop header for each stitched hop");
         } finally {
             pool.shutdown();
+            code.free();
+        }
+    }
+
+    // §D2 TRANSPARENT async-hop propagation (HwTrace.AsmStitchedTrace.propagatingExecutor): the
+    // complement to the manual propagate() wrapper — an ExecutorService decorator carries the
+    // ambient operation scope id across the submit with NO per-task wrapping, the JVM analog of
+    // dotnet's ExecutionContext auto-flow across `await`. Proves (1) a BARE submit() through the
+    // wrapped pool reaches the pool thread already carrying the scope id (read BEFORE step(), so it
+    // is the executor — not step()'s re-assert — that propagated it), (2) the hop really ran on a
+    // DIFFERENT OS thread, and (3) the two hops stitch back by seq under the one operation.
+    private static void stitchedTraceAutoPropagatesAcrossExecutor() throws Exception {
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        java.util.concurrent.ExecutorService raw = java.util.concurrent.Executors.newSingleThreadExecutor();
+        java.util.concurrent.ExecutorService pool = HwTrace.AsmStitchedTrace.propagatingExecutor(raw);
+        try (HwTrace.AsmStitchedTrace op = new HwTrace.AsmStitchedTrace()) {
+            long opId = op.scopeId();
+            int mainTid = (int) Thread.currentThread().threadId();
+
+            long r0 = op.step(code, 20, 22); // hop 0 on THIS thread -> 42
+            ok(r0 == 42, "autoPropagate: hop 0 runs on the calling thread (result 42)");
+
+            // hop 1 through the PROPAGATING executor — NO op.propagate() wrapping. The lambda reads
+            // the ambient scope id BEFORE calling step(), so a passing assert proves the executor
+            // (not step()) carried it across the submit.
+            long[] hopScope = new long[1];
+            int[] hopTid = new int[1];
+            long r1 = pool.submit(() -> {
+                hopScope[0] = HwTrace.AsmStitchedTrace.currentScopeId();
+                hopTid[0] = (int) Thread.currentThread().threadId();
+                return op.step(code, 4, 5); // -> 9
+            }).get();
+            ok(r1 == 9, "autoPropagate: hop 1 runs on a pool thread (result 9)");
+            ok(hopScope[0] == opId,
+                "autoPropagate: the executor carries the scope id across a BARE submit (no propagate())");
+            ok(hopTid[0] != mainTid, "autoPropagate: hop 1 really ran on a DIFFERENT OS thread");
+
+            op.complete();
+            HwTrace.StitchBound[] b = op.hops();
+            ok(b.length == 2, "autoPropagate: both hops captured and stitched (got " + b.length + ")");
+            ok(b[0].seq() == 0 && b[1].seq() == 1 && b[1].insnOff() > 0,
+                "autoPropagate: hop 1 is stitched AFTER hop 0 in the merged stream (off " + b[1].insnOff() + ")");
+            ok(b[0].scopeId() == opId && b[1].scopeId() == opId,
+                "autoPropagate: every slice carries the one operation's scope id");
+            ok(b[0].tid() == mainTid && b[1].tid() == hopTid[0],
+                "autoPropagate: each slice retains its own capturing thread id");
+            ok(!op.truncated(), "autoPropagate: the merged trace is complete (not truncated)");
+        } finally {
+            raw.shutdown();
             code.free();
         }
     }
