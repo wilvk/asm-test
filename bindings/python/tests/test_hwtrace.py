@@ -517,3 +517,61 @@ def test_codeimage_bpf_probe():
         assert ASMTEST_CI_KIND_MPROTECT == 1
     finally:
         img.free()
+
+
+# ---- §3.1(c) whole-window noise attribution (region_name + symbolize_bucket) ----
+
+def test_symbolize_bucket_and_region_name():
+    """The address->name REVERSE resolver (region_name) + IP bucketer (symbolize_buckets).
+    Feed a synthetic IP list spanning three regions — this process's own loaded native lib
+    (a mapped file), an anonymous mmap ([anon]), and a synthetic perf-map JIT symbol — and
+    assert the bucket counts + resolved labels. Host-testable: no live PT capture, no TF
+    arming. Mirrors the C reference test_symbolize_bucket."""
+    import ctypes as _ct
+    import mmap as _mmap
+
+    from asmtest import hwtrace as hw
+
+    if not os.path.exists("/proc/self/maps"):
+        pytest.skip("region_name / symbolize_bucket read /proc/<pid>/maps (Linux only)")
+
+    lib = hw._get()
+    pid = os.getpid()
+    mappath = f"/tmp/perf-{pid}.map"
+    with open(mappath, "w") as f:
+        f.write("40000000 1000 MyJitMethod\n")  # synthetic JIT symbol range
+    mm = _mmap.mmap(-1, _mmap.PAGESIZE, prot=_mmap.PROT_READ | _mmap.PROT_WRITE)
+    try:
+        # A real mapped-FILE address: any function inside the loaded native lib resolves to
+        # its .so pathname — the mapped-file counterpart of the mmap'd anon region.
+        ip_self = _ct.cast(lib.asmtest_hwtrace_available, _ct.c_void_p).value
+        ip_mmap = _ct.addressof(_ct.c_char.from_buffer(mm)) + 16  # a private mmap region
+        ip_jit = 0x40000500                                       # MyJitMethod
+        ips = [ip_self, ip_self, ip_self, ip_mmap, ip_jit, ip_jit]
+
+        buckets = HwTrace.symbolize_buckets(ips, pid=pid, cap=8)
+        labels = {b.label: b.count for b in buckets}
+        # Three distinct regions (lib text, mmap, JIT), every IP attributed.
+        assert len(buckets) == 3
+        assert sum(b.count for b in buckets) == 6
+        # The perf-map JIT symbol wins over any mapping and is counted x2.
+        assert labels.get("MyJitMethod") == 2
+        # The self-code IPs bucket together (x3); with the JIT (2) and mmap (1) buckets that
+        # accounts for all six, so none fall through to [unknown].
+        assert "[unknown]" not in labels
+        assert any(c == 3 for c in labels.values())
+        # The mmap region is attributed to a real named mapping, not [unknown] (its exact
+        # label — "[anon]" vs a "/dev/zero" backing — is glibc/kernel dependent).
+        assert HwTrace.region_name(ip_mmap, pid=0) is not None
+
+        # region_name keeps the maps pathname + extent for the self-code address (the
+        # reverse of Ptrace.region_by_addr, which discards the pathname).
+        got = HwTrace.region_name(ip_self, pid=0)
+        assert got is not None
+        name, start, end = got
+        assert name and start <= ip_self < end
+        # A miss returns None (nothing maps address 1).
+        assert HwTrace.region_name(0x1, pid=0) is None
+    finally:
+        mm.close()
+        os.remove(mappath)

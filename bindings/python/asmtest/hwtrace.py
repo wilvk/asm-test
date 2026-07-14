@@ -254,6 +254,27 @@ class CodeEmission:
                 f"pid={self.pid}, tid={self.tid}, fd={self.fd})")
 
 
+class _Bucket(C.Structure):
+    """Mirrors asmtest_hwtrace_bucket_t (char label[128] + u64 count = 136 bytes)."""
+
+    _fields_ = [("label", C.c_char * 128), ("count", C.c_uint64)]
+
+
+class Bucket:
+    """One entry from :meth:`HwTrace.symbolize_buckets`: a resolved ``label`` (perf-map JIT
+    symbol, mapped-file pathname, ``[anon]``, or ``[unknown]``) and the ``count`` of IPs
+    that bucketed to it."""
+
+    __slots__ = ("label", "count")
+
+    def __init__(self, label, count):
+        self.label = label
+        self.count = count
+
+    def __repr__(self):
+        return f"Bucket(label={self.label!r}, count={self.count})"
+
+
 def _lib_name():
     return "libasmtest_hwtrace.dylib" if sys.platform == "darwin" else "libasmtest_hwtrace.so"
 
@@ -329,6 +350,13 @@ def _declare(lib):
     lib.asmtest_hwtrace_render_scope.argtypes = [_HwScope, cc, sz]
     lib.asmtest_hwtrace_render_scope.restype = ci
     lib.asmtest_hwtrace_arm_tid.restype = ci
+    # §3.1(c) whole-window noise attribution: address->name reverse resolver + IP bucketer.
+    lib.asmtest_hwtrace_region_name.argtypes = [
+        ci, u64, cc, sz, C.POINTER(u64), C.POINTER(u64)]
+    lib.asmtest_hwtrace_region_name.restype = ci
+    lib.asmtest_hwtrace_symbolize_bucket.argtypes = [
+        ci, C.POINTER(u64), sz, C.POINTER(_Bucket), sz]
+    lib.asmtest_hwtrace_symbolize_bucket.restype = sz
     lib.asmtest_hwtrace_shutdown.restype = None
     lib.asmtest_hwtrace_exec_alloc.argtypes = [v, sz, C.POINTER(v), C.POINTER(sz)]
     lib.asmtest_hwtrace_exec_alloc.restype = ci
@@ -689,6 +717,38 @@ class HwTrace:
         the proc file is absent (non-Linux). >2 blocks unprivileged
         ``perf_event_open`` entirely (the EPERM case without CAP_PERFMON)."""
         return int(_get().asmtest_hwtrace_perf_event_paranoid())
+
+    @staticmethod
+    def region_name(addr, pid=0):
+        """§3.1(c) address->name REVERSE resolver: the mapped-file pathname (or a
+        ``[...]`` pseudo-name / ``[anon]``) and ``(start, end)`` extent of the mapping
+        containing ``addr`` in process ``pid`` (0 = self), as a ``(name, start, end)``
+        tuple, or ``None`` on a miss (address unmapped, or off Linux). The reverse of
+        :meth:`Ptrace.region_by_addr`, which discards the maps pathname — the piece
+        whole-window noise attribution needs to label a captured IP."""
+        name = C.create_string_buffer(256)
+        start = C.c_uint64()
+        end = C.c_uint64()
+        hit = int(_get().asmtest_hwtrace_region_name(
+            pid, addr, name, len(name), C.byref(start), C.byref(end)))
+        if hit != 1:
+            return None
+        return (name.value.decode(errors="replace"), start.value, end.value)
+
+    @staticmethod
+    def symbolize_buckets(ips, pid=0, cap=64) -> list:
+        """§3.1(c) whole-window noise ATTRIBUTION: bucket ``ips`` by the containing
+        perf-map JIT symbol (preferred) or mapped-file region in process ``pid`` (0 =
+        self), returning up to ``cap`` :class:`Bucket` (``label``, ``count``) entries.
+        Unresolved IPs bucket under ``[unknown]``; if more than ``cap`` distinct labels
+        appear the surplus IPs are dropped (size ``cap`` to the expected label count for
+        exact totals). Host-testable — takes an IP list, not a live capture."""
+        n = len(ips)
+        arr = (C.c_uint64 * max(n, 1))(*ips)
+        buckets = (_Bucket * cap)()
+        nb = int(_get().asmtest_hwtrace_symbolize_bucket(pid, arr, n, buckets, cap))
+        return [Bucket(buckets[i].label.decode(errors="replace"),
+                       int(buckets[i].count)) for i in range(nb)]
 
     @staticmethod
     def resolve(policy=BEST) -> list:
