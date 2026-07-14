@@ -929,9 +929,15 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > the taint set is the `step_taint` witness + offset, never the GP values; the flag-off value client stays
 > 14/14). **Measured: full-taint ≈ 423× → PROD-taint ≈ 216× bare — a ~2× win, but NOT yet in the ~10-50×
 > band.** A CORRECTION of this note's earlier optimism ("the band is reachable by just dropping the value
-> trace"): the remaining ~216× is the **2-level create-on-touch shadow** (multiple loads per access) + the
-> **drx_buf record round-trip** for the EA. The next lever to the band is a **direct-mapped shadow +
-> drx_buf-free EA**; the band-threshold HARD gate over the `prod` build is Increment 9 proper. Also landed
+> trace"). **A decomposition of the remaining `prod` cost (throwaway `dbg_noprop` measurement toggle,
+> not committed) pinpoints the lever: of `prod` ≈ 187× bare, the drx_buf RECORD SKELETON is ~60% (≈113×)
+> and tag PROPAGATION (reg-tag unions + shadow + witness) is only ~40% (≈74×).** So the biggest lever to
+> the band is **NOT the shadow — it is ELIMINATING THE drx_buf RECORD** in production: the value trace AND
+> the `step_taint` witness are validation-only, so a true production build keeps neither and computes the
+> mem-source EA inline (`lea`) for propagation instead of round-tripping it through a record. That alone
+> takes `prod` from ~187× toward ~75× (propagation-only + baseline); a **direct-mapped shadow** then
+> attacks the residual ~74× propagation. So Increment-9-proper's sequence is: (1) drx_buf-free / record-
+> free production propagation, (2) direct-mapped shadow, (3) the band-threshold HARD gate. Also landed
 > alongside: the **guarded-inline-sink-skip**
 > (the Increment-4 follow-on) — the branch-condition sink now inline-tests the eflags tag (drreg-reserved
 > aflags around it, so the app flags the branch reads are preserved) and only makes the on_sink clean call
@@ -941,10 +947,11 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > microbench notes), so the lane asserts only the monotonic structural fact `T_taint >= T_value > T_dr >=
 > T_bare` and REPORTS the decomposition. The **managed seed→sink** half of this increment's exit criteria
 > is already met by Increment 5 ([taint_managed](../../../examples/taint_managed/)), and the production
-> propagation-only build now landed (above); what remains for full Increment 9 is the **direct-mapped
-> shadow + drx_buf-free EA** to bring `prod` into the ~10-50× band, GC-survival (Increment 7 — now
-> unblocked, profiler path), the shared-fixture emulator cross-check, and the hard band + non-detection
-> CI gate.
+> propagation-only build now landed (above); what remains for full Increment 9 is to bring `prod` into the
+> ~10-50× band via the measured lever sequence — **(1) a record-free production propagation path** (drop
+> the drx_buf record + witness, inline `lea` for the EA — the ~60% chunk), **(2) a direct-mapped shadow**
+> (the residual propagation) — then GC-survival (Increment 7 — now unblocked, profiler path), the
+> shared-fixture emulator cross-check, and the hard band + non-detection CI gate.
 
 The Phase-5 exit gate the whole plan works backward from: everything above composed into a real
 managed data-flow assertion with a measured cost, replacing the offset-only dotnet smoke
