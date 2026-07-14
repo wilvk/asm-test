@@ -90,6 +90,17 @@ DR runtime-option variants on the pinned DR (baseline counting client unless not
 | `-thread_private` | stack-smashing → SIGSEGV (rc 139) |
 | `-native_exec` | stack-smashing → SIGSEGV (rc 139) |
 
+Whole-process **SIGSTOP-then-attach** (`make dr-taint-managed-attach-probe PROBE_SIGSTOP=1`, `kill
+-STOP` ALL threads — native GC/JIT/finalizer included — before the seize, `kill -CONT` after) — the
+test of whether the crash is a seize-time *race* on live threads vs a fundamental arbitrary-*state*
+problem. Result (both `noinstr` and counting): **NO-GO, and it fails EARLIER + differently** — DR
+prints `ERROR: unable to attach; check pid and system ptrace permissions` (the client is never
+delivered, `client_reached=0`), i.e. **DR's ptrace-seize refuses a group-stopped target**, so you
+cannot even use whole-process freezing as a pre-attach quiesce step. And freezing the live CLR for a
+few seconds then resuming it **destabilized the runtime regardless** — the victim aborted (`rc 134
+SIGABRT`) even though DR never took over. So freezing does not rescue managed attach; it removes the
+ability to attach at all and perturbs the runtime on its own.
+
 Three findings that sharpen the diagnosis and rule out the easy fixes:
 
 1. **It is the SEIZE, not the instrumentation.** The `noinstr` control takes the process over

@@ -614,6 +614,13 @@ MANAGED_ATTACH_OUT ?= $(BUILD)/managed_attach_victim_out
 # (the baseline counting-client run reproduced above).
 PROBE_DROPS       ?=
 PROBE_CLIENT_ARGS ?=
+# PROBE_SIGSTOP=1: freeze the WHOLE victim (kill -STOP — ALL threads incl. the native GC/JIT/
+# finalizer/diagnostics threads) BEFORE the DR seize, then kill -CONT once DR has taken over. The
+# safepoint spike parked only MANAGED threads (SuspendRuntime) and still crashed; this tests the
+# remaining hypothesis — is the crash a seize-time RACE on live threads (freezing removes it) or a
+# fundamental arbitrary-STATE incompatibility (freezing changes nothing)? Sharpens the finding /
+# any DR bug report either way. Empty default = the normal live-seize probe.
+PROBE_SIGSTOP     ?=
 .PHONY: dr-taint-managed-attach-probe
 dr-taint-managed-attach-probe:
 ifndef DR_AVAILABLE
@@ -633,7 +640,7 @@ else
 	@$(DOTNET) build -c Release examples/managed_attach_victim/managed_attach_victim.csproj \
 	    -o $(MANAGED_ATTACH_OUT) >$(BUILD)/managed_attach_build.log 2>&1 \
 	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/managed_attach_build.log; exit 1; }
-	@echo "== dr-taint-managed-attach-probe (DR EXTERNAL attach to a running .NET process — Increment 6 go/no-go) [DROPS='$(PROBE_DROPS)' CLIENT_ARGS='$(PROBE_CLIENT_ARGS)'] =="
+	@echo "== dr-taint-managed-attach-probe (DR EXTERNAL attach to a running .NET process — Increment 6 go/no-go) [DROPS='$(PROBE_DROPS)' CLIENT_ARGS='$(PROBE_CLIENT_ARGS)' SIGSTOP='$(PROBE_SIGSTOP)'] =="
 	@vlog=$(BUILD)/managed_attach_victim.log; alog=$(BUILD)/managed_attach_drrun.log; \
 	 rm -f $$vlog $$alog; \
 	 $(DOTNET) $(abspath $(MANAGED_ATTACH_OUT)/managed_attach_victim.dll) 2>$$vlog & lpid=$$!; \
@@ -646,8 +653,9 @@ else
 	 sleep 3; \
 	 pre=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$pre" ] && pre=0; \
 	 echo "# managed victim pid=$$vpid ($$pre heartbeats native, pre-attach; JIT warmed); attaching via 'drrun -attach' ..."; \
+	 if [ -n "$(PROBE_SIGSTOP)" ]; then echo "# SIGSTOP: freezing ALL victim threads (native GC/JIT/finalizer incl.) BEFORE the seize ..."; kill -STOP $$vpid 2>/dev/null || true; sleep 1; fi; \
 	 timeout 120 $(DR_DRRUN) -attach $$vpid $(PROBE_DROPS) -c $(abspath $(BUILD)/libasmtest_attach_probe.so) $(PROBE_CLIENT_ARGS) >$$alog 2>&1 & apid=$$!; \
-	 sleep 5; \
+	 if [ -n "$(PROBE_SIGSTOP)" ]; then sleep 3; echo "# SIGCONT: releasing the frozen victim (DR has now seized it) ..."; kill -CONT $$vpid 2>/dev/null || true; sleep 3; else sleep 5; fi; \
 	 beats_attach=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$beats_attach" ] && beats_attach=0; \
 	 echo "# ~5 s attached; detaching via 'drconfig -detach' ..."; \
 	 $(DR_DRCONFIG) -detach $$vpid >$(BUILD)/managed_attach_cfg.log 2>&1 || true; \
