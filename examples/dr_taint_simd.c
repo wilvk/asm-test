@@ -202,8 +202,9 @@ static void test_copy(void) {
 
     CHECK(rc == DF_DR_OK,
           "copy: routine captured in-band under the taint client");
-    CHECK(result == (long)SEED_LO64,
-          "copy: rax = low 8 bytes round-tripped via the SSE copy through buf2");
+    CHECK(
+        result == (long)SEED_LO64,
+        "copy: rax = low 8 bytes round-tripped via the SSE copy through buf2");
     CHECK(v->steps_len == 5, "copy: five in-region steps captured");
 
     /* The taint witness set must be exactly {0,1,2,3} (ret excluded). */
@@ -216,7 +217,8 @@ static void test_copy(void) {
     asmtest_defuse_t *g = asmtest_defuse_build(v);
     CHECK(g != NULL, "copy: def-use graph built over the in-band SIMD trace");
     at_val_rec_t seed = {0};
-    seed.step = 0; /* the 16-byte load from the seeded buffer is the taint origin */
+    seed.step =
+        0; /* the 16-byte load from the seeded buffer is the taint origin */
     asmtest_slice_t *fwd = asmtest_slice_forward(g, seed);
     CHECK(fwd && asmtest_slice_contains(fwd, 0) &&
               asmtest_slice_contains(fwd, 3) && !asmtest_slice_contains(fwd, 4),
@@ -230,8 +232,9 @@ static void test_copy(void) {
         if (tainted != inslice)
             mism++;
     }
-    CHECK(mism == 0, "copy: client SIMD taint set == asmtest_slice_forward(seed "
-                     "step) [ORACLE DIFF]");
+    CHECK(mism == 0,
+          "copy: client SIMD taint set == asmtest_slice_forward(seed "
+          "step) [ORACLE DIFF]");
 
 #ifdef DF_HAVE_EMU
     /* Secondary cross-check against the independent emulator oracle's forward slice. Tolerant:

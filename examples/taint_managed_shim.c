@@ -78,7 +78,8 @@ __attribute__((visibility("default"))) int shim_init(const char *name) {
         return 2;
     }
     memset(g_shm, 0, sizeof *g_shm);
-    g_shm->report.hits = g_shm->hits; /* producer-space; consumer reads by offset */
+    g_shm->report.hits =
+        g_shm->hits; /* producer-space; consumer reads by offset */
     g_shm->report.hits_cap = AT_SHM_HITS_CAP;
     /* Register the shm report at the sink marker (a PC-resolved clean call in the client). */
     asmtest_dr_taint_sink_marker(&g_shm->report);
@@ -114,7 +115,8 @@ __attribute__((visibility("default"))) void shim_finish(long result) {
         return;
     g_shm->result = result;
     __atomic_store_n(&g_shm->done, 1u, __ATOMIC_RELEASE);
-    fprintf(stderr, "taint_managed_shim: done (result=%ld, hits=%u total=%llu)\n",
+    fprintf(stderr,
+            "taint_managed_shim: done (result=%ld, hits=%u total=%llu)\n",
             result, (unsigned)g_shm->report.hits_len,
             (unsigned long long)g_shm->report.hits_total);
 }

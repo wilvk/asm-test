@@ -23,11 +23,13 @@
 #define AT_GCMOVE_MAGIC    0x47434D56u /* "GCMV" — set once gc_move is published */
 
 typedef struct at_gcmove_channel {
-    volatile uint32_t magic; /* AT_GCMOVE_MAGIC once `gc_move` is valid                   */
+    volatile uint32_t
+        magic; /* AT_GCMOVE_MAGIC once `gc_move` is valid                   */
     volatile uint32_t pad;
     volatile uint64_t
-        gc_move;             /* fn ptr: void (*)(uint64_t old, uint64_t nw, uint64_t len) */
-    volatile uint64_t moves; /* # of moved ranges remapped (client bumps; diag/liveness)  */
+        gc_move; /* fn ptr: void (*)(uint64_t old, uint64_t nw, uint64_t len) */
+    volatile uint64_t
+        moves; /* # of moved ranges remapped (client bumps; diag/liveness)  */
 } at_gcmove_channel_t;
 
 #endif /* ASMTEST_TAINT_GCMOVE_H */
