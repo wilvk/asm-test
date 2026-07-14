@@ -37,7 +37,10 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
 #define EMU_MAPPED_PTR 0x00200100L
 #endif
 
-/* KEEP IN SYNC with examples/taint_workload.c / dr_taint.c taint_sink_chain. */
+#ifdef DF_HAVE_EMU
+/* KEEP IN SYNC with examples/taint_workload.c / dr_taint.c taint_sink_chain. Only the emulator
+ * oracle replays these bytes; a no-emu build (DR-only attach image) drops them (else -Werror
+ * flags the unused array). */
 static const uint8_t taint_sink_chain[] = {
     0x48, 0x8b, 0x07,             /* 0x00 mov rax, [rdi]   (SEED origin)    */
     0x48, 0x89, 0x44, 0x24, 0xf8, /* 0x03 mov [rsp-8], rax (spill)          */
@@ -47,6 +50,7 @@ static const uint8_t taint_sink_chain[] = {
     0x48, 0x89, 0xc8,             /* 0x12 mov rax, rcx                      */
     0xc3,                         /* 0x15 ret                               */
 };
+#endif
 #define SINK_OFF 0x10
 
 static int checks, failures;
@@ -110,7 +114,7 @@ int main(int argc, char **argv) {
      * `noseed` — the negative control, expect ZERO sink hits. Neither flag → the full Increment-5
      * launch validation (backward-compatible). */
     const char *name = AT_SHM_NAME;
-    int prod = 0, noseed = 0, markerless = 0;
+    int prod = 0, noseed = 0, markerless = 0, attach = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "prod") == 0)
             prod = 1;
@@ -119,9 +123,15 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "markerless") == 0)
             markerless =
                 1; /* client-owned shm, no app-set result — skip the result check */
+        else if (strcmp(argv[i], "attach") == 0)
+            attach =
+                1; /* external attach mid-run: variable post-seed runs -> SINK-based */
         else
             name = argv[i];
     }
+    if (attach)
+        markerless =
+            1; /* the attached capture is marker-less too (client owns the shm) */
 
     int fd = shm_open(name, O_RDWR, 0600);
     if (fd < 0) {
@@ -155,14 +165,19 @@ int main(int argc, char **argv) {
         CHECK(shm->report.hits_total == 0 && shm->report.hits_len == 0 &&
                   !shm->report.truncated,
               "prod-negative: unseeded => ZERO sink hits (no phantom taint)");
+    else if (attach)
+        /* External attach seeds mid-run, so a VARIABLE number of post-seed fixture runs trip
+         * the sink — assert >= 1 (the seed propagated through the ATTACHED capture). */
+        CHECK(shm->report.hits_total >= 1, "attach: >=1 tainted sink hit from "
+                                           "the externally-attached capture");
     else
         CHECK(shm->report.hits_len == 1 && shm->report.hits_total == 1 &&
                   !shm->report.truncated,
               "launch: exactly one sink hit crossed the shm channel");
     /* The value / taint trace is drained by the client's drx_buf flush at process exit; it is
-     * complete now (we run AFTER drrun returned). PRODUCTION (`prod`) writes no value trace, so
-     * skip this — the sink checks below are the record-free path's gate. */
-    if (!prod)
+     * complete now (we run AFTER drrun returned). PRODUCTION (`prod`) writes no value trace, and
+     * ATTACH captures a variable multi-run trace (not exactly 7 steps), so skip the fixed count. */
+    if (!prod && !attach)
         CHECK(shm->drval.steps_len == 7,
               "launch: value trace drained via drx_buf process-exit flush (7 "
               "steps)");
@@ -177,10 +192,11 @@ int main(int argc, char **argv) {
               "launch: sink hit offset is the jz branch (0x10)");
         CHECK(h->tag != AT_TAG_CLEAN, "launch: sink hit tag is tainted");
         CHECK(h->kind == 1, "launch: sink hit kind = 1 (branch condition)");
-        /* prod: no value trace => no emu forward slice to place the sink off in — sink-only. */
-        if (prod)
-            printf("# prod: sink off/tag/kind are the record-free path's proof "
-                   "(no value-trace oracle)\n");
+        /* prod/attach: sink-only (no clean single-run value trace to place the off in). */
+        if (prod || attach)
+            printf("# %s: sink off/tag/kind are the capture's proof (no "
+                   "single-run value-trace oracle)\n",
+                   attach ? "attach" : "prod");
         else if (!have_oracle)
             printf("# SKIP out-of-process sink oracle: built without "
                    "libunicorn\n");
@@ -193,9 +209,10 @@ int main(int argc, char **argv) {
     /* THE OUT-OF-PROCESS TAINT-SET ORACLE: the launched client's tainted step offsets
      * (drained over shm) must equal the emulator forward slice from the seed. PRODUCTION
      * (`prod`) writes no step_taint witness, so there is no taint SET to diff — skip. */
-    if (prod) {
-        printf("# prod: no taint-SET oracle (record-free client writes no "
-               "witness) — the sink is the gate\n");
+    if (prod || attach) {
+        printf("# %s: no single-run taint-SET oracle — the tainted sink hit is "
+               "the gate\n",
+               attach ? "attach" : "prod");
     } else if (noseed) {
         printf(
             "# noseed: taint set is empty by construction; the emulator "

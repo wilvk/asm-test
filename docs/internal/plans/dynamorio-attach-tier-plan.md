@@ -251,18 +251,34 @@ window mid-run. **Effort: M.**
 
 ---
 
-## Increment 4 - Native attach data-flow/taint end-to-end + out-of-process oracle *(planned)*
+## Increment 4 - Native attach data-flow/taint end-to-end + out-of-process oracle *(**LANDED 2026-07-14** — first full external-attach taint capture)*
+
+> **UPDATE 2026-07-14 — external-attach taint capture LANDED.** Composed Increment 2 (external
+> attach GO) + Increment 3 (marker-less config): the UNCHANGED taint client is injected into a
+> SEPARATE, already-RUNNING native victim via `drrun -attach <pid> -c <client>` and configured
+> entirely by options (`region=<mod>+off seed=<mod>+off shm=/name`, resolved by module+offset) — a
+> producer ATTACHED to a process it did not start. `make dr-taint-attach-test` (in the
+> `--cap-add=SYS_PTRACE` external-attach image alongside the probe): the victim
+> (`taint_markerless_victim attach`) loops the seeded fixture for ~12 s; the client seizes it mid-run,
+> seeds + registers the region, and its post-seed runs trip the branch-condition sink into the
+> client-owned shm. `taint_validator` (`attach` mode) drains + gates it — **seeded 5/5: ≥1 tainted
+> `kind=1` sink hit from the attached capture, sink off 0x10, victim SURVIVED attach + detach and
+> exited native; noseed negative 2/2 (zero hits)**. SINK-based (the attach window captures a VARIABLE
+> number of post-seed runs, so the exact-count + single-run taint-SET oracle are relaxed vs the launch
+> lane; the marker-less LAUNCH lane keeps the full oracle diff). No client changes beyond Increment 3.
 
 Compose 2 + 3: attach to a **separate long-running native workload** that loops over a
 known region with a seeded buffer, capture the in-band taint set + value/taint trace via
 the reused client, drain over shm, and oracle-diff out of process — the launch tier's
 `dr-taint-launch-test`, but the producer is *attached to a process it did not start*.
 
-**Exit criteria:** `make docker-taint-attach` attaches to the running victim, the client's
-tainted-step set == `asmtest_slice_forward(seed)` from the emulator oracle (drained by
-`taint_validator`), the sink hit crosses shm with the right off/tag/kind, and the victim
-survives attach + detach; a negative control (unseeded window) reports zero hits. **Effort:
-L** (first full external-attach capture; gated on Increment 2's probe result).
+**Exit criteria: MET 2026-07-14.** `make dr-taint-attach-test` (in the SYS_PTRACE external-attach
+image) attaches to the running victim, the client's seeded capture reports a tainted `kind=1` sink
+hit at 0x10 crossing shm (the seed propagated through the attached capture), and the victim survives
+attach + detach + exits native; the negative control (unseeded) reports zero hits. The taint-SET emu
+oracle diff is exercised on the marker-less LAUNCH lane (`dr-taint-markerless-test`, 8/8) — the same
+config path; the attach lane, capturing a variable multi-run window, gates SINK-based. **Effort: L
+(delivered)** — the first full external-attach capture, gated on (and unblocked by) Increment 2's GO.
 
 ---
 

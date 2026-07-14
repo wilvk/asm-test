@@ -1,5 +1,7 @@
-# Dockerfile.taint-attach-probe — throwaway lane for the DynamoRIO ATTACH tier's
-# EXTERNAL-attach go/no-go probe (dynamorio-attach-tier-plan.md, Increment 2).
+# Dockerfile.taint-attach-probe — DynamoRIO ATTACH tier EXTERNAL-attach lanes: the Increment-2
+# go/no-go PROBE and the Increment-4 external-attach TAINT CAPTURE (dynamorio-attach-tier-plan.md).
+# Both need CAP_SYS_PTRACE for the ptrace-seize (the docker RUN adds it) and run DR-only (no
+# Capstone/Unicorn — the probe counts instructions; the attach taint lane validates SINK-based).
 #
 # Increment 1 landed COOPERATIVE self-attach (dr_app_*, no experimental API, no
 # SYS_PTRACE). This lane probes DR's EXPERIMENTAL EXTERNAL attach: it starts a plain
@@ -41,4 +43,5 @@ COPY . .
 # target adds it). The kernel's ptrace_scope is reported for the findings record.
 CMD set -eux; \
     cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "no yama ptrace_scope"; \
-    make dr-taint-attach-probe DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-attach-probe DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-attach-test DYNAMORIO_HOME=$DYNAMORIO_HOME

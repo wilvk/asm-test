@@ -636,6 +636,57 @@ else
 	 $(BUILD)/taint_validator $(MARKERLESS_SHM) markerless noseed
 endif
 
+# --- DR ATTACH tier, Increment 4: EXTERNAL attach data-flow/taint end-to-end ---
+# Composes Increment 2 (external attach GO) + Increment 3 (marker-less config): the taint client
+# is injected into a SEPARATE, already-RUNNING native victim via `drrun -attach <pid>` and
+# configured entirely by options (region/seed/shm by module+offset) — a producer ATTACHED to a
+# process it did not start. The victim (taint_markerless_victim `attach`) loops the seeded
+# fixture for ~12 s; the client seizes it mid-run, seeds + registers the region, and its
+# post-seed runs trip the branch-condition sink into the client-owned shm, drained + checked by a
+# separate taint_validator (`attach` mode: >=1 tainted kind=1 hit — SINK-based, since the attach
+# window captures a VARIABLE number of runs). The victim SURVIVES attach + detach (exits native).
+# Negative control: attach WITHOUT seed= => zero hits. Needs SYS_PTRACE for the ptrace-seize (the
+# docker lane adds the cap, mirroring the attach probe). Self-skips without DynamoRIO.
+ATTACH_EXT_SHM ?= /asmtest_taint_attach_ext_ci
+.PHONY: dr-taint-attach-test
+dr-taint-attach-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-attach-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_markerless_victim $(BUILD)/taint_validator
+	@echo "== dr-taint-attach-test (Increment 4: EXTERNAL attach to a running native process + marker-less taint capture) =="
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 echo "# fixture_off=$$fixoff seedbuf_off=$$seedoff"; \
+	 rm -f /dev/shm$(ATTACH_EXT_SHM) 2>/dev/null || true; \
+	 echo "-- seeded: attach to the RUNNING victim + marker-less region/seed/shm; expect >=1 tainted sink hit --"; \
+	 $$vbin attach 2>$(BUILD)/attach_ext_victim.log & vpid=$$!; \
+	 sleep 2; \
+	 timeout 90 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   region=taint_markerless_victim+$$fixoff,0x16 \
+	   seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$(ATTACH_EXT_SHM) >$(BUILD)/attach_ext_drrun.log 2>&1; arc=$$?; \
+	 wait $$vpid 2>/dev/null; vrc=$$?; \
+	 hb=$$(grep -c "MARKERLESS_VICTIM heartbeat" $(BUILD)/attach_ext_victim.log 2>/dev/null || true); [ -z "$$hb" ] && hb=0; \
+	 end=$$(grep -c "MARKERLESS_VICTIM done" $(BUILD)/attach_ext_victim.log 2>/dev/null || true); [ -z "$$end" ] && end=0; \
+	 echo "# attach_rc=$$arc victim_rc=$$vrc heartbeats=$$hb victim_done=$$end (victim survived attach + detach, exited native)"; \
+	 if [ "$$end" -lt 1 ]; then echo "not ok - victim did not exit native after attach (survival failed)"; exit 1; fi; \
+	 $(BUILD)/taint_validator $(ATTACH_EXT_SHM) attach
+	@rm -f /dev/shm$(ATTACH_EXT_SHM) 2>/dev/null || true
+	@echo "-- negative control: attach WITHOUT seed= => zero hits --"
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 $$vbin attach 2>/dev/null & vpid=$$!; \
+	 sleep 2; \
+	 timeout 90 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   region=taint_markerless_victim+$$fixoff,0x16 shm=$(ATTACH_EXT_SHM) >/dev/null 2>&1; \
+	 wait $$vpid 2>/dev/null; \
+	 $(BUILD)/taint_validator $(ATTACH_EXT_SHM) attach noseed
+endif
+
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------
 # `drrun -c <taint client>.so -- ./taint_stress` launches an N-thread native workload
 # whose threads, released together by a barrier, ALL seed a disjoint buffer + run the
