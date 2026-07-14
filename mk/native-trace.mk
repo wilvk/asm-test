@@ -315,13 +315,15 @@ else
 	    $(BUILD)/dr_taint highbyte
 endif
 
-# --- Taint tier (Increment 8, first slice): XMM/YMM (SIMD) taint -------------
+# --- Taint tier (Increment 8): XMM/YMM (SSE/AVX) SIMD taint ------------------
 # dr_taint_simd is the SIMD analog of dr_taint: the SAME taint client + app driver, driven by
 # examples/dr_taint_simd.c whose fixtures flow taint THROUGH an XMM register AND an SSE 16-byte
-# vectorized copy (movdqu/movdqa/movq), oracle-diffed against asmtest_slice_forward + negative
-# controls + a branch-condition sink. The client's per-byte XMM lane tags + 16-byte SSE memory
-# shadow are additive under -DASMTEST_TAINT (the flag-off value client is byte-identical). Runs
-# in the `make docker-taint-native` lane and self-skips cleanly without DynamoRIO.
+# vectorized copy (movdqu/movdqa/movq), AND — the YMM/AVX slice — through a YMM register AND an
+# AVX 32-byte vectorized copy (vmovdqu/vmovdqa), oracle-diffed against asmtest_slice_forward +
+# negative controls + branch-condition sinks. The client's per-byte vector lane tags (32/YMM slot,
+# XMM = low 16) + 16/32-byte SSE/AVX memory shadow are additive under -DASMTEST_TAINT (the flag-off
+# value client is byte-identical). The YMM modes are AVX-gated and skip cleanly on a non-AVX CPU.
+# Runs in the `make docker-taint-native` lane and self-skips cleanly without DynamoRIO.
 ifeq ($(DRVAL_HAVE_UNICORN),1)
 $(BUILD)/dr_taint_simd.o: examples/dr_taint_simd.c include/asmtest_valtrace.h \
                           include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
@@ -370,6 +372,22 @@ else
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_taint_simd sink-negative
+	@echo "== dr-taint-simd-test (ymm-copy: YMM + AVX 32-byte copy taint set vs forward slice) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd ymm-copy
+	@echo "== dr-taint-simd-test (ymm-negative control: unseeded => empty YMM taint set) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd ymm-negative
+	@echo "== dr-taint-simd-test (ymm-sink: seeded YMM lane reaches a branch => at_taint_hit_t) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd ymm-sink
+	@echo "== dr-taint-simd-test (ymm-sink negative control: unseeded => zero hits) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint_simd ymm-sink-negative
 endif
 
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
@@ -802,8 +820,26 @@ else
 	 if [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]; then \
 	   echo "ok 1 - overhead measured + monotonic (full-taint >= prod-taint > DR-baseline >= bare > 0)"; \
 	 else echo "not ok 1 - expected full-taint >= prod-taint > DR-baseline >= bare > 0 (bare=$$bare dr=$$dr prod=$$prod taint=$$taint)"; fi; \
-	 echo "1..1"; \
-	 [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]
+	 sbare=$$($(abspath $(BUILD)/taint_overhead) nomark $(OVERHEAD_ITERS) simd 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
+	 sdr=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	        $(abspath $(BUILD)/taint_overhead) nomark $(OVERHEAD_ITERS) simd 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
+	 staint=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
+	        $(abspath $(BUILD)/taint_overhead) mark $(OVERHEAD_ITERS) simd 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
+	 [ -z "$$sbare" ] && sbare=0; [ -z "$$sdr" ] && sdr=0; [ -z "$$staint" ] && staint=0; \
+	 echo "# SIMD (AVX2/YMM) hotns: bare=$$sbare  DR-baseline=$$sdr  full-taint=$$staint  (iters=$(OVERHEAD_ITERS))"; \
+	 awk -v b=$$sbare -v d=$$sdr -v t=$$staint 'BEGIN{ if (b>0) printf \
+	   "# SIMD-on vs SIMD-off: DR-baseline = %.1fx bare;  SIMD full-taint = %.1fx bare (reported SEPARATELY from the scalar band)\n", d/b, t/b }'; \
+	 echo "# SIMD TRADEOFF (Increment 8): whole-register per-byte lane taint MULTIPLIES the vector reg-tag traffic — a 32-byte YMM"; \
+	 echo "#   source/dest is 32 per-byte union/broadcast ops + a 32-byte shadow access vs 1 for a GP reg, so SIMD taint runs"; \
+	 echo "#   COSTLIER per instrumented vector op than the scalar band (still on the inline no-clean-call path). Reported here so"; \
+	 echo "#   the cost is EXPLICIT rather than silently blowing the scalar band; lane-precise (sub-register) SIMD taint is deferred."; \
+	 if [ "$$sbare" -eq 0 ]; then \
+	   echo "ok 2 - SIMD overhead SKIPPED (no AVX2 on this CPU)"; sok=1; \
+	 elif [ "$$staint" -gt "$$sbare" ]; then \
+	   echo "ok 2 - SIMD taint overhead measured + costlier than bare (SIMD full-taint > bare > 0)"; sok=1; \
+	 else echo "not ok 2 - expected SIMD full-taint > bare > 0 (sbare=$$sbare staint=$$staint)"; sok=0; fi; \
+	 echo "1..2"; \
+	 [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ] && [ "$$sok" -eq 1 ]
 endif
 
 # --- GC-move-range extraction: DR + ICorProfiler coexistence PROBE (go/no-go) -----

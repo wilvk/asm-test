@@ -118,12 +118,27 @@ static void put_mem(at_val_rec_t *buf, size_t *cnt, size_t cap, uint32_t seg,
     buf[(*cnt)++] = r;
 }
 
+/* Capstone (through at least 5.0) mis-reports the DESTINATION memory operand of a VEX/EVEX
+ * vector STORE — `vmovdqu [rsi],ymm1` / `vmovaps [rsi],ymm1` come back access=READ, whereas the
+ * SSE form `movdqu [rsi],xmm1` is correctly access=WRITE. Left uncorrected, the def-use oracle
+ * never records the store, so an AVX store->load edge is silently dropped. Correct it: a
+ * MOV-family instruction's operand[0] (the Intel-order destination) is written, never read.
+ * Scoped to the mov/vmov mnemonic + the operand-0 position, so GP/SSE moves (already correct) are
+ * idempotent and loads (mem at op[1]) / RMW / compares are untouched. */
+static bool x86_move_store_dest(const char *mnem, int op_index) {
+    if (op_index != 0 || mnem == NULL)
+        return false;
+    return strncmp(mnem, "mov", 3) == 0 || strncmp(mnem, "vmov", 4) == 0;
+}
+
 /* Add the instruction's explicit MEMORY operands to the read / write buffers.
  * Direction comes from the per-operand .access bits (a read-modify-write operand
- * lands in BOTH); on a Capstone DIET build (no .access) it defaults to a read. */
+ * lands in BOTH), corrected for the Capstone AVX-store quirk above; on a Capstone
+ * DIET build (no .access) it defaults to a read. */
 static void add_mem_ops(cs_arch a, const cs_detail *d, bool diet,
-                        at_val_rec_t *reads, size_t *nr, size_t rcap,
-                        at_val_rec_t *writes, size_t *nw, size_t wcap) {
+                        const char *mnem, at_val_rec_t *reads, size_t *nr,
+                        size_t rcap, at_val_rec_t *writes, size_t *nw,
+                        size_t wcap) {
     if (a == CS_ARCH_X86) {
         for (int i = 0; i < d->x86.op_count; i++) {
             const cs_x86_op *op = &d->x86.operands[i];
@@ -138,6 +153,11 @@ static void add_mem_ops(cs_arch a, const cs_detail *d, bool diet,
                 op->mem.index == X86_REG_INVALID ? 0 : (uint32_t)op->mem.index;
             bool w = !diet && (op->access & CS_AC_WRITE);
             bool rd = diet || (op->access & CS_AC_READ);
+            if (x86_move_store_dest(mnem, i)) {
+                w = true; /* a MOV store writes its op[0] destination... */
+                rd =
+                    false; /* ...and never reads it (fixes the AVX-store quirk) */
+            }
             if (rd)
                 put_mem(reads, nr, rcap, seg, base, index, op->mem.scale,
                         op->mem.disp, op->size, false);
@@ -204,7 +224,8 @@ size_t asmtest_operands(asmtest_arch_t arch, const uint8_t *code, size_t len,
             for (uint8_t i = 0; i < nw; i++)
                 put_reg(writes, &wc, wcap, rw[i], true);
         }
-        add_mem_ops(a, d, diet, reads, &rc, rcap, writes, &wc, wcap);
+        add_mem_ops(a, d, diet, insn[0].mnemonic, reads, &rc, rcap, writes, &wc,
+                    wcap);
     }
     if (nreads != NULL)
         *nreads = rc;

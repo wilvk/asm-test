@@ -60,7 +60,9 @@ closes each phase the same way.
 > container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator; 6
 > whole-process breadth + method-range scoping; 7 GC-move shadow remap *(**COMPLETE 2026-07-14** —
 > profiler-fed live remap + full seed→move→sink survival via a DR-API-free raw-mmap leaf allocator)*;
-> 8 XMM/YMM SIMD taint; 9
+> 8 XMM/YMM SIMD taint *(**COMPLETE 2026-07-14** — XMM/SSE + YMM/AVX register + memory taint, a
+> shared Capstone AVX-store-access oracle fix, and the SIMD-vs-scalar overhead delta; ZMM/VSIB/
+> lane-precise deferred)*; 9
 > managed seed→sink validation + measured overhead + CI. Update this file as increments land, the
 > way [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its
 > own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
@@ -931,7 +933,37 @@ survival, not the disabled-flag placeholder the original text anticipated.
 The original "externally hard-blocked on Phase 4" framing is resolved — the profiler path (Slice 1)
 surfaced the triple in-process, and Slice 2 carried the tag across the move.
 
-## Increment 8 - XMM/YMM (SIMD) taint *(planned)*
+## Increment 8 - XMM/YMM (SIMD) taint *(first slice XMM/SSE c5431f8; **YMM/AVX breadth + overhead + Capstone oracle fix LANDED 2026-07-14 — Increment 8 COMPLETE** for the scoped SIMD surface; ZMM / VSIB / lane-precise flow explicitly deferred)*
+
+> **UPDATE 2026-07-14 — YMM/AVX breadth LANDED; Increment 8 exit criteria MET.** The reg-tag file
+> now carries 32 per-byte lanes per 256-bit vector slot (an XMM operand is the low 16, since XMMn
+> aliases YMMn[127:0]); `rt_ymm_base`/`rt_vec_base` map YMM0-15 to the same slots XMM0-15 use, the
+> emit helpers are width-parameterized (16 for XMM, 32 for YMM), and `taint_mem_size` admits 32-byte
+> AVX loads/stores — so taint flows through a **YMM** register AND an **AVX** 32-byte vectorized copy,
+> not just SSE. New fixtures `ymm_copy` (oracle-diffed forward slice `{0,1,2,3}`) + `ymm_sink` (a
+> seeded YMM lane reaches a branch sink, `kind=1`, depth 4) with negative controls, AVX-gated
+> (`__builtin_cpu_supports("avx")`) so they skip cleanly on a non-AVX CPU. `dr-taint-simd-test`:
+> ymm-copy 5/5 (ORACLE DIFF), ymm-negative 5/5, ymm-sink 7/7, ymm-sink-negative 2/2; SSE lanes + all
+> other lanes unchanged; value client still **14/14 byte-identical**; `docker-drtrace` 0 failures.
+> **BONUS BUG FIX (shared, load-bearing):** Capstone (through 5.0) mis-reports the DESTINATION memory
+> operand of a **VEX/EVEX vector STORE** as `access=READ` (the SSE `movdqu [m],xmm` is correct
+> `WRITE`), so the def-use oracle silently dropped every AVX store→load edge — the ymm-copy forward
+> slice came back `{0,1,2}` (missing the reload). Fixed in the shared operand enumerator
+> ([dataflow_operands.c](../../../src/dataflow_operands.c)): a MOV-family instruction's operand[0] (the
+> Intel-order destination) is written, never read (`x86_move_store_dest`); scoped to the mov/vmov
+> mnemonic + operand-0 so GP/SSE moves are idempotent and loads/RMW/compares are untouched. Host
+> `make dataflow-test` 180/180 (incl. the pre-existing ptrace YMM tests) confirms no regression.
+> **SIMD overhead delta (the "on vs off" exit criterion), reported SEPARATELY from the scalar band:**
+> `dr-taint-overhead-test` gained an AVX2 (YMM) hot-loop variant (`simd` arg → `simd_hot_loop`,
+> `target("avx2")`). Measured (1M iters): scalar full-taint ≈ **428× bare**, **SIMD full-taint ≈ 785×
+> bare** — SIMD taint runs ~1.8× costlier per the per-byte-lane granularity note (a 32-byte YMM
+> source/dest = 32 union/broadcast ops + a 32-byte shadow access vs 1 for a GP reg). Reported so the
+> cost is EXPLICIT rather than silently blowing the scalar band; the lane asserts the monotonic
+> `SIMD full-taint > bare` (`ok 2`) + prints the tradeoff. Gated in `docker-taint-native` (the
+> overhead + SIMD lanes). **DEFERRED, all documented in-code:** ZMM (512-bit) upper lanes; VSIB
+> vector-gather EA math; lane-precise (sub-register) SIMD flow (pshufd / narrow-write masking) — the
+> per-byte storage is the forward-compatible seam for that; and the VEX.128 zero-upper semantics (a
+> conservative over-taint, never a miss).
 
 Genuine research, not a checkbox — even **libdft punts on XMM/SSE/MMX**, and its cited low
 overhead (1.14–6.03× utils) is partly *that coverage tradeoff*
@@ -948,15 +980,20 @@ measurement.
   behind a flag and record the coverage/cost tradeoff explicitly rather than silently
   under-covering.
 
-**Exit criteria:** a native docker fixture that flows taint through an XMM/YMM register and an
-SSE/AVX vectorized copy/reduce shows the sink firing with the expected tag — SIMD taint is not
-silently dropped; the SIMD-on vs SIMD-off overhead delta is reported separately from the scalar
-band; CI gates the SIMD taint fixture green with the tradeoff documented.
+**Exit criteria: MET 2026-07-14.** A native docker fixture flows taint through an XMM **and** a YMM
+register and an SSE **and** an AVX vectorized copy/reduce, the sink fires with the expected tag —
+SIMD taint is not silently dropped (`dr-taint-simd-test`: SSE copy/sink + `ymm-copy`/`ymm-sink`, all
+oracle-diffed, with negative controls); the SIMD-on vs SIMD-off overhead delta is reported separately
+from the scalar band (`dr-taint-overhead-test` SIMD block, ~785× bare vs the scalar ~428×); CI gates
+the SIMD taint fixtures green with the tradeoff documented (both lanes in `docker-taint-native`).
+Scoped to XMM/YMM integer-lane taint; ZMM / VSIB / lane-precise flow are deferred with an in-code
+rationale, not silently under-covered.
 
-**Effort.** **L** — genuine research (SIMD taint is under-solved industry-wide), with a real risk
-of blowing the band and a per-byte-vs-per-lane granularity call that multiplies shadow traffic;
-carries its own overhead re-measurement rather than inheriting the scalar band. Given equal ORDER
-weight to earlier increments but not equal scope — sequenced late for exactly this reason.
+**Effort.** **L** (delivered) — genuine research (SIMD taint is under-solved industry-wide); the real
+work turned out to include a shared Capstone AVX-store-access bug fix in the operand enumerator (the
+def-use oracle silently dropped AVX store→load edges) that gates the oracle-diff for every vector
+store. Carried its own overhead re-measurement (SIMD ~1.8× the scalar band per the per-byte-lane
+traffic) rather than inheriting the scalar band, exactly as the increment anticipated.
 
 ## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(overhead-measurement first slice LANDED 2026-07-14; managed seed→sink already met by Increment 5; GC-survival + hard band gate remain)*
 

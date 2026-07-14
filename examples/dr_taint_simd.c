@@ -1,9 +1,10 @@
 /*
- * dr_taint_simd.c — DynamoRIO taint tier (Increment 8, FIRST slice): XMM/SIMD taint.
+ * dr_taint_simd.c — DynamoRIO taint tier (Increment 8): XMM/YMM (SSE/AVX) SIMD taint.
  *
  * Proves the SIMD extension of the in-band inline dst_tag = union(src_tags) producer: taint
- * flows THROUGH an XMM register AND an SSE vectorized (16-byte) copy, oracle-diffed against
- * the def-use forward slice exactly as examples/dr_taint.c does for the GP/integer path. It
+ * flows THROUGH an XMM OR YMM register AND an SSE (16-byte) OR AVX (32-byte) vectorized copy,
+ * oracle-diffed against the def-use forward slice exactly as examples/dr_taint.c does for the
+ * GP/integer path (the YMM modes are AVX-gated and skip cleanly on a non-AVX CPU). It
  * runs a self-contained x86-64 routine NATIVELY, in-band, whole-process under DynamoRIO with
  * the taint client (src/dataflow_dr_client_inlined.c built -DASMTEST_TAINT), SEEDS a 16-byte
  * buffer, and asserts the client's per-step taint witness (dv->step_taint) equals the
@@ -433,6 +434,181 @@ static void test_sink_negative(void) {
     asmtest_valtrace_free(v);
 }
 
+/* ==== Increment 8 YMM/AVX slice: 256-bit vector taint (breadth over the SSE slice above) ====
+ * Structural clones of simd_copy/simd_sink using VEX-encoded AVX (vmovdqu/vmovdqa ymm, 32-byte
+ * loads/stores; a 2-byte VEX op is 4 bytes, exactly like the SSE forms, so the offsets line up).
+ * The reduction to a GP register is through MEMORY (a 32-byte store then an 8-byte reload), NOT a
+ * YMM->XMM sub-register read, so the oracle def-use needs no XMM/YMM sub-register aliasing —
+ * exactly how the SSE copy reduces. These prove taint flows through a YMM register AND an AVX
+ * 32-byte vectorized copy, and (sink) reaches a branch condition. AVX-gated at the call site. */
+static const uint8_t SEED32[32] = {
+    0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, /* low 8 -> SEED_LO64 */
+    0x00, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x11, 0x22, 0x33, 0x44,
+    0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
+};
+
+/* ymm_copy: taint through a YMM register AND an AVX 32-byte vectorized copy. */
+static const uint8_t ymm_copy[] = {
+    0xc5, 0xfe, 0x6f, 0x07, /* 0x00 vmovdqu ymm0, [rdi]  (SEED load, 32B) */
+    0xc5, 0xfd, 0x6f, 0xc8, /* 0x04 vmovdqa ymm1, ymm0   (YMM reg copy)   */
+    0xc5, 0xfe, 0x7f, 0x0e, /* 0x08 vmovdqu [rsi], ymm1  (32B store->buf2)*/
+    0x48, 0x8b, 0x06,       /* 0x0c mov     rax, [rsi]   (reload low 8)   */
+    0xc3,                   /* 0x0f ret                                   */
+};
+
+/* ymm_sink: a seeded YMM lane reaches a GP register (via a 32B store + 8B reload) then a
+ * branch flag (SINK). forward(step0) = {0,1,2,3,4,5}; seed(step0)->jz(step4) = 4 edges. */
+static const uint8_t ymm_sink[] = {
+    0xc5, 0xfe, 0x6f, 0x07, /* 0x00 vmovdqu ymm0, [rdi]  (SEED load, 32B) */
+    0xc5, 0xfe, 0x7f, 0x06, /* 0x04 vmovdqu [rsi], ymm0  (32B store->buf2)*/
+    0x48, 0x8b, 0x0e,       /* 0x08 mov     rcx, [rsi]   (reload low 8)   */
+    0x48, 0x85, 0xc9,       /* 0x0b test    rcx, rcx     (taint ZF)       */
+    0x74, 0x03,             /* 0x0e jz 0x15             (SINK)            */
+    0x48, 0x89, 0xc8,       /* 0x10 mov     rax, rcx                      */
+    0xc3,                   /* 0x13 ret                                   */
+};
+#define YMM_SINK_OFF   0x0e /* the jz instruction's region offset */
+#define YMM_SINK_DEPTH 4    /* def-use edges seed(step0) -> jz(step4) */
+
+/* YMM copy oracle: seeded => the client YMM taint set == the forward slice {0,1,2,3};
+ * unseeded => zero tainted steps (seed-gated, not structural). */
+static void run_ymm_copy(int seeded) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    if (v == NULL) {
+        CHECK(0, "ymm-copy: valtrace_new");
+        return;
+    }
+    uint8_t *buf = (uint8_t *)malloc(32);
+    uint8_t *buf2 = (uint8_t *)malloc(32);
+    if (buf == NULL || buf2 == NULL) {
+        CHECK(0, "ymm-copy: buffer alloc");
+        free(buf);
+        free(buf2);
+        asmtest_valtrace_free(v);
+        return;
+    }
+    memcpy(buf, SEED32, 32);
+    memset(buf2, 0, 32);
+    long args[2] = {(long)(uintptr_t)buf, (long)(uintptr_t)buf2};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        ymm_copy, sizeof ymm_copy, args, 2, 0,
+        seeded ? (uint64_t)(uintptr_t)buf : 0, seeded ? 32 : 0, AT_TAG_TAINTED,
+        &result, v, step_taint, sizeof step_taint / sizeof step_taint[0], NULL);
+
+    CHECK(rc == DF_DR_OK,
+          "ymm-copy: routine captured under the taint client (AVX)");
+    CHECK(result == (long)SEED_LO64,
+          "ymm-copy: rax = low 8 bytes round-tripped via the AVX 32-byte copy");
+    CHECK(v->steps_len == 5, "ymm-copy: five in-region steps captured");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    CHECK(fwd && asmtest_slice_contains(fwd, 0) &&
+              asmtest_slice_contains(fwd, 3) && !asmtest_slice_contains(fwd, 4),
+          "ymm-copy: forward slice(step0) = {0,1,2,3} across YMM + AVX memory");
+
+    if (seeded) {
+        int mism = 0;
+        for (size_t i = 0; i < v->steps_len; i++) {
+            int tainted = step_taint[i] != 0;
+            int inslice = fwd ? asmtest_slice_contains(fwd, (uint32_t)i) : 0;
+            if (tainted != inslice)
+                mism++;
+        }
+        CHECK(mism == 0, "ymm-copy: client YMM taint set == "
+                         "asmtest_slice_forward(seed step) [ORACLE DIFF]");
+    } else {
+        int any = 0;
+        for (size_t i = 0; i < v->steps_len; i++)
+            if (step_taint[i])
+                any++;
+        CHECK(any == 0, "ymm-negative: unseeded => zero tainted steps (empty "
+                        "YMM taint set)");
+    }
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    free(buf2);
+    asmtest_valtrace_free(v);
+}
+
+/* YMM sink: seeded => one at_taint_hit_t at the jz (right off/tag/kind + app-side depth);
+ * unseeded => zero hits. */
+static void run_ymm_sink(int seeded) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "ymm-sink: valtrace_new");
+        return;
+    }
+    uint8_t *buf = (uint8_t *)malloc(32);
+    uint8_t *buf2 = (uint8_t *)malloc(32);
+    if (buf == NULL || buf2 == NULL) {
+        CHECK(0, "ymm-sink: buffer alloc");
+        free(buf);
+        free(buf2);
+        asmtest_valtrace_free(v);
+        return;
+    }
+    memcpy(buf, SEED32, 32);
+    memset(buf2, 0, 32);
+    long args[2] = {(long)(uintptr_t)buf, (long)(uintptr_t)buf2};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        ymm_sink, sizeof ymm_sink, args, 2, 0,
+        seeded ? (uint64_t)(uintptr_t)buf : 0, seeded ? 32 : 0, AT_TAG_TAINTED,
+        &result, v, step_taint, sizeof step_taint / sizeof step_taint[0],
+        &report);
+
+    CHECK(rc == DF_DR_OK,
+          "ymm-sink: routine captured under the taint client (AVX)");
+    if (seeded) {
+        CHECK(report.hits_total == 1 && report.hits_len == 1 &&
+                  !report.truncated,
+              "ymm-sink: exactly one taint hit (YMM seed reached the branch)");
+        if (report.hits_len == 1) {
+            at_taint_hit_t *h = &report.hits[0];
+            CHECK(h->off == YMM_SINK_OFF,
+                  "ymm-sink: hit offset is the jz branch (0x0e)");
+            CHECK(h->tag != AT_TAG_CLEAN, "ymm-sink: hit tag is tainted");
+            CHECK(h->kind == 1, "ymm-sink: hit kind = 1 (branch condition)");
+        }
+        asmtest_defuse_t *g = asmtest_defuse_build(v);
+        at_val_rec_t seed = {0};
+        seed.step = 0;
+        asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+        int sink_step = step_at_off(v, YMM_SINK_OFF);
+        CHECK(fwd && sink_step >= 0 &&
+                  asmtest_slice_contains(fwd, (uint32_t)sink_step),
+              "ymm-sink: sink instruction is in forward slice(seed) [ORACLE]");
+        fill_seed_and_depth(&report, g, v, 0);
+        if (report.hits_len == 1)
+            CHECK(report.hits[0].depth == YMM_SINK_DEPTH,
+                  "ymm-sink: app-side depth = 4 def-use edges seed->sink");
+        asmtest_slice_free(fwd);
+        asmtest_defuse_free(g);
+    } else {
+        CHECK(report.hits_total == 0 && report.hits_len == 0 &&
+                  !report.truncated,
+              "ymm-sink-negative: zero hits (unseeded => clean flag never "
+              "reaches sink)");
+    }
+
+    free(buf);
+    free(buf2);
+    asmtest_valtrace_free(v);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* progress survives a hard kill */
     if (!asmtest_dataflow_dr_available()) {
@@ -441,12 +617,26 @@ int main(int argc, char **argv) {
         return 0;
     }
     const char *mode = (argc > 1) ? argv[1] : "";
+    /* The YMM/AVX modes need a CPU with AVX; skip cleanly (not fail) where it is absent. */
+    if (strncmp(mode, "ymm", 3) == 0 && !__builtin_cpu_supports("avx")) {
+        printf("# SKIP dr-taint-simd %s: AVX not available on this CPU\n1..0\n",
+               mode);
+        return 0;
+    }
     if (strcmp(mode, "negative") == 0)
         test_negative();
     else if (strcmp(mode, "sink") == 0)
         test_sink();
     else if (strcmp(mode, "sink-negative") == 0)
         test_sink_negative();
+    else if (strcmp(mode, "ymm-copy") == 0)
+        run_ymm_copy(1);
+    else if (strcmp(mode, "ymm-negative") == 0)
+        run_ymm_copy(0);
+    else if (strcmp(mode, "ymm-sink") == 0)
+        run_ymm_sink(1);
+    else if (strcmp(mode, "ymm-sink-negative") == 0)
+        run_ymm_sink(0);
     else
         test_copy();
     printf("1..%d\n", checks);
