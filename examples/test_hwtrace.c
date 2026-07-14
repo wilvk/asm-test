@@ -2980,6 +2980,97 @@ static void test_stitch_slices(void) {
     asmtest_trace_free(out1);
 }
 
+/* §D4 scripted-hop coverage — the host-independent native analog of the Node/Java
+ * AsyncStitchedTrace tests. Exercises the binding-facing merge (stitch_handles) that
+ * those wrappers drive, but from a SCRIPTED set of faked hops instead of a live
+ * single-step capture: three pre-decoded hop bodies of ONE logical operation, all on a
+ * single (continuation) tid, handed OUT of seq order, must stitch back densely by seq
+ * with each hop's bound marking its concatenated start offset. Complements
+ * test_stitch_slices (the slice-struct form) and test_stitch_handles (the LIVE,
+ * single-step-gated capture): this is the handle form with NO backend dependency. */
+static void test_stitch_hops_scripted(void) {
+    /* Three faked hop bodies of DISTINCT length so the concatenated offsets are
+     * non-uniform (an off-by-one in the merge math cannot pass by coincidence). */
+    asmtest_trace_t *hop0 = asmtest_trace_new(16, 16); /* seq 0: 3 insns */
+    asmtest_trace_t *hop1 = asmtest_trace_new(16, 16); /* seq 1: 4 insns */
+    asmtest_trace_t *hop2 = asmtest_trace_new(16, 16); /* seq 2: 2 insns */
+    trace_append_insn(hop0, 0x0);
+    trace_append_insn(hop0, 0x5);
+    trace_append_insn(hop0, 0xa);
+    trace_append_block(hop0, 0);
+    trace_append_insn(hop1, 0x0);
+    trace_append_insn(hop1, 0x4);
+    trace_append_insn(hop1, 0x8);
+    trace_append_insn(hop1, 0xc);
+    trace_append_block(hop1, 1);
+    trace_append_insn(hop2, 0x0);
+    trace_append_insn(hop2, 0x6);
+    trace_append_block(hop2, 2);
+
+    /* Hand the hops OUT of seq order (hop2, hop0, hop1), all on the continuation tid
+     * 909 with one scope_id + one version — three await-continuation hops of a single
+     * logical operation, captured out of arrival order. */
+    const asmtest_trace_t *traces[3] = {hop2, hop0, hop1};
+    const uint64_t scope_ids[3] = {0xA5, 0xA5, 0xA5};
+    const uint32_t seqs[3] = {2, 0, 1};
+    const int tids[3] = {909, 909, 909};
+    const uint64_t versions[3] = {11, 11, 11};
+
+    asmtest_trace_t *merged = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_slice_bound_t bounds[3];
+    size_t nb = 0;
+    int rc = asmtest_hwtrace_stitch_handles(traces, scope_ids, seqs, tids,
+                                            versions, 3, merged, bounds, &nb);
+    CHECK(rc == ASMTEST_HW_OK && nb == 3,
+          "stitch_handles: merges 3 scripted async hops");
+
+    /* Seq order hop0(3) then hop1(4) then hop2(2) = 9 insns, hop bodies back to back. */
+    static const uint64_t EXP[] = {0x0, 0x5, 0xa, 0x0, 0x4, 0x8, 0xc, 0x0, 0x6};
+    int seq_ok = (asmtest_emu_trace_insns_len(merged) == 9);
+    for (size_t i = 0; seq_ok && i < 9; i++)
+        seq_ok = (merged->insns[i] == EXP[i]);
+    CHECK(seq_ok, "stitch_handles: scripted hops merge densely by seq "
+                  "(hop0,hop1,hop2) despite out-of-order input");
+    CHECK(bounds[0].insn_off == 0 && bounds[0].seq == 0 &&
+              bounds[1].insn_off == 3 && bounds[1].seq == 1 &&
+              bounds[2].insn_off == 7 && bounds[2].seq == 2,
+          "stitch_handles: per-hop bounds mark each hop's concatenated start "
+          "offset (0/3/7)");
+    CHECK(
+        bounds[0].tid == 909 && bounds[1].tid == 909 && bounds[2].tid == 909,
+        "stitch_handles: continuation hops carry the single (tid 909) thread");
+    CHECK(bounds[1].scope_id == 0xA5 && bounds[1].version == 11,
+          "stitch_handles: per-hop bounds carry (scope_id, version) through");
+    CHECK(!asmtest_emu_trace_truncated(merged),
+          "stitch_handles: merged scripted trace is not truncated");
+
+    /* NULL scalar arrays: seq defaults to the input index, the rest to 0 (the
+     * documented binding default). Feed the same hops in natural (seq) order. */
+    const asmtest_trace_t *nat[3] = {hop0, hop1, hop2};
+    asmtest_trace_t *merged2 = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_slice_bound_t db[3];
+    size_t nb2 = 0;
+    int rc2 = asmtest_hwtrace_stitch_handles(nat, NULL, NULL, NULL, NULL, 3,
+                                             merged2, db, &nb2);
+    int nat_ok = (rc2 == ASMTEST_HW_OK && nb2 == 3 &&
+                  asmtest_emu_trace_insns_len(merged2) == 9);
+    for (size_t i = 0; nat_ok && i < 9; i++)
+        nat_ok = (merged2->insns[i] == EXP[i]);
+    CHECK(nat_ok, "stitch_handles: NULL arrays default seq to the input index "
+                  "(same merged stream)");
+    CHECK(db[0].seq == 0 && db[1].seq == 1 && db[2].seq == 2 &&
+              db[0].insn_off == 0 && db[1].insn_off == 3 && db[2].insn_off == 7,
+          "stitch_handles: index-defaulted seq bounds keep the 0/3/7 offsets");
+    CHECK(db[0].scope_id == 0 && db[0].tid == 0 && db[0].version == 0,
+          "stitch_handles: NULL scope_id/tid/version arrays default to 0");
+
+    asmtest_trace_free(hop0);
+    asmtest_trace_free(hop1);
+    asmtest_trace_free(hop2);
+    asmtest_trace_free(merged);
+    asmtest_trace_free(merged2);
+}
+
 /* §2 — the recorder-backed PT image adapter (host-testable half; no PT hardware, no
  * libipt). Build a codeimage with two versions of the bytes at one address and drive
  * the adapter at two `when` values: it must serve the version live THEN (the
@@ -6692,6 +6783,9 @@ int main(void) {
 
     /* Backend-independent: the §D4 async-hop stitching merge core. */
     test_stitch_slices();
+    /* §D4 scripted-hop coverage: the handle-form merge from faked hops (the
+     * host-independent native analog of the Node/Java AsyncStitchedTrace tests). */
+    test_stitch_hops_scripted();
 
     /* §2: the recorder-backed PT image adapter (host-testable, no libipt/PT hw). */
     test_pt_image_from_codeimage();
