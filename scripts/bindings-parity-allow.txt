@@ -85,7 +85,19 @@ ALL asmtest_hwtrace_end_window        #   (dotnet wraps it); the other bindings 
 ALL asmtest_hwtrace_render_window     #   gain the trio when they grow a scope construct — same posture as §1 above
 ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: node + java (HwTrace.attributeWindow) wrap it against a live whole-window scope (named-region + perf-map fallback); the other eight gain it with a whole-window scope
 ALL asmtest_hwtrace_call_scoped       # Option B lazy-arm NAMED-call scope (managed-singlestep-lazy-arm-plan): dotnet wraps it (AsmTrace.Method's Invoke); the other nine ship the registry-FREE call_scoped_ex form instead (no fixed-table slot), so none bind the registry-keyed call_scoped
-ALL asmtest_hwtrace_call_scoped_fp    # FP (double…)->double sibling of call_scoped: dotnet wraps it (AsmTrace.Method's Invoke FP path); the integer call_scoped_ex now ships in all ten, but the FP sibling stays dotnet-only until a binding traces a double->double leaf
+# FP (double…)->double sibling of call_scoped: python (HwTrace.call_scoped_fp) + dotnet
+# (AsmTrace.Method's Invoke FP path) wrap it — the former ALL exemption was retired
+# 2026-07-14 when python grew a double->double leaf trace (side item). The integer
+# call_scoped_ex ships in all ten; the FP sibling stays exempt in the eight below until
+# they too trace a double->double leaf.
+cpp asmtest_hwtrace_call_scoped_fp
+rust asmtest_hwtrace_call_scoped_fp
+zig asmtest_hwtrace_call_scoped_fp
+node asmtest_hwtrace_call_scoped_fp
+java asmtest_hwtrace_call_scoped_fp
+ruby asmtest_hwtrace_call_scoped_fp
+lua asmtest_hwtrace_call_scoped_fp
+go asmtest_hwtrace_call_scoped_fp
 ALL asmtest_hwtrace_stitch_handles    # §D0.4 async-hop merge bridge for asmtest_hwtrace_stitch: dotnet (AsmStitchedTrace, the async-hop producer), node + java (HwTrace.stitchHandles) wrap it; the other seven consume the shipped stitch core when they grow a stitched-scope form, host-tested (test_stitch_handles)
 ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI

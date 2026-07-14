@@ -76,6 +76,30 @@ def test_call_scoped_traces_a_native_call(hwtrace):
     code.free()
 
 
+# double add(double a, double b) { return a + b; }  ->  addsd xmm0, xmm1; ret
+FADD2 = bytes([0xF2, 0x0F, 0x58, 0xC1, 0xC3])
+
+
+def test_call_scoped_fp_traces_a_double_call(hwtrace):
+    # call_scoped_fp: the FP (double…)->double sibling of call_scoped — arm + call + disarm
+    # in native code, args in xmm0..xmm7, return in xmm0. Traces a double->double leaf the
+    # integer call_scoped ABI cannot express.
+    code = NativeCode.from_bytes(FADD2)
+    res = HwTrace.call_scoped_fp(code, 20.0, 22.0)  # addsd xmm0,xmm1 -> 42.0
+    assert res.result == 42.0
+    assert isinstance(res.result, float)
+    assert res.rc == 0
+    assert not res.truncated
+    if res.path:  # non-empty when Capstone is present
+        assert "addsd" in res.path.lower()
+        assert res.path.count("\n") == 2  # addsd + ret
+    # The named form registers under a call-site-constant name, so a loop at one site
+    # reuses one MAX_REGIONS slot — no fixed-table exhaustion.
+    for i in range(40):
+        assert HwTrace.call_scoped_fp(code, float(i), 1.0).result == float(i) + 1.0
+    code.free()
+
+
 def test_trace_call_auto_owns_the_call_and_completes():
     # trace_call_auto OWNS the invocation: run under the fastest exact tier and
     # auto-escalate to a ceiling-free tier if the trace truncates. It self-manages the

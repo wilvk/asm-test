@@ -347,6 +347,11 @@ def _declare(lib):
         v, sz, v, v, C.POINTER(C.c_long), ci, C.POINTER(C.c_long),
         C.POINTER(_HwScope)]
     lib.asmtest_hwtrace_call_scoped_ex.restype = ci
+    # FP (double…)->double sibling of the named call_scoped (args xmm0..7, return xmm0).
+    lib.asmtest_hwtrace_call_scoped_fp.argtypes = [
+        cc, v, C.POINTER(C.c_double), ci, C.POINTER(C.c_double),
+        C.POINTER(_HwScope)]
+    lib.asmtest_hwtrace_call_scoped_fp.restype = ci
     lib.asmtest_hwtrace_render_scope.argtypes = [_HwScope, cc, sz]
     lib.asmtest_hwtrace_render_scope.restype = ci
     lib.asmtest_hwtrace_arm_tid.restype = ci
@@ -877,6 +882,54 @@ class HwTrace:
                 path = buf.value.decode(errors="replace")
             trunc = bool(lib.asmtest_emu_trace_truncated(handle))
             return CallScopedResult(int(result.value), path, trunc, rc)
+        finally:
+            lib.asmtest_trace_free(handle)
+
+    @classmethod
+    def call_scoped_fp(cls, code: "NativeCode", *args, name=None,
+                       instructions=256, blocks=64) -> "CallScopedResult":
+        """The FP ``(double…)->double`` sibling of :meth:`call_scoped`: arm, call
+        ``code(*args)`` through the SysV FP ABI (args in ``xmm0..xmm7``, return in
+        ``xmm0``), and disarm entirely in native code (``asmtest_hwtrace_call_scoped_fp``),
+        so nothing the binding runs between arm and disarm is stepped — the signature family
+        the integer :meth:`call_scoped` cannot express. ``args`` are Python floats (0-8,
+        register-resident). Unlike :meth:`call_scoped` this is the NAMED form
+        (call_scoped_fp has no registry-free sibling), so it registers a region under
+        ``name`` (default: a ``basename:line`` call-site label — call-site-constant, so a
+        loop at one site reuses one MAX_REGIONS slot). Returns a :class:`CallScopedResult`
+        (``.result`` the call's ``float`` return, ``.path`` the executed body disassembly,
+        ``.truncated``). Self-skips (``.result`` None, negative ``.rc``) where no single-step
+        backend is available (the FP shim is single-step-only, like call_scoped)."""
+        lib = _get()
+        cls._lazy_arm()
+        if name is None:
+            name = _auto_name(2)  # the caller's frame
+        cname = name.encode()
+        handle = lib.asmtest_trace_new(instructions, blocks)
+        if not handle:
+            raise RuntimeError("asmtest_trace_new returned NULL")
+        try:
+            # Register-then-call under the same name (Core §0.4 idempotent): call_scoped_fp
+            # is the named form, so the region must exist before the arm.
+            lib.asmtest_hwtrace_register_region(
+                cname, code.base, code.length, handle)
+            n = len(args)
+            arr = (C.c_double * n)(*args) if n else None
+            result = C.c_double(0.0)
+            scope = _HwScope()
+            rc = int(lib.asmtest_hwtrace_call_scoped_fp(
+                cname, code.base, arr, n, C.byref(result), C.byref(scope)))
+            if rc != ASMTEST_HW_OK:
+                return CallScopedResult(None, "", False, rc)
+            # Render the body from the just-captured (thread-local) scope handle.
+            need = int(lib.asmtest_hwtrace_render_scope(scope, None, 0))
+            path = ""
+            if need > 0:
+                buf = C.create_string_buffer(need + 1)
+                lib.asmtest_hwtrace_render_scope(scope, buf, need + 1)
+                path = buf.value.decode(errors="replace")
+            trunc = bool(lib.asmtest_emu_trace_truncated(handle))
+            return CallScopedResult(float(result.value), path, trunc, rc)
         finally:
             lib.asmtest_trace_free(handle)
 
