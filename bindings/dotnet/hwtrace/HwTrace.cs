@@ -1741,7 +1741,7 @@ namespace Asmtest
     public sealed class AsmTrace : IDisposable
     {
         readonly string _name;
-        readonly IntPtr _handle;
+        IntPtr _handle;             // ctor-assigned (R3: also by the shared ArmWholeWindow)
         readonly bool _emit;
         // R1: the single Dispose discriminator that replaces the four parallel `_*Window`
         // bools — it names which teardown Dispose runs. Region (the default) covers the
@@ -1761,9 +1761,9 @@ namespace Asmtest
         IntPtr _oopWinChan;         // the shared address channel for JIT regions
         ulong[] _amdIps;            // the endpoint buffer drained in Dispose
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
-        readonly bool _rundownRequested; // §D0.2: pair DisablePerfMap with the REQUEST
+        bool _rundownRequested;     // §D0.2: pair DisablePerfMap with the REQUEST (R3: also set by ArmWholeWindow)
         readonly int _rundownSettleMs;   // §D0.2: opt-in bound to let the async R2R jitdump flush before Dispose reads it
-        readonly JitMethodMap _map; // §D0.1: managed-method labelling (byMethod only)
+        JitMethodMap _map;          // §D0.1: managed-method labelling (byMethod only; R3: also set by ArmWholeWindow)
         readonly Delegate _target;  // §D0.3: the named method (Method(...) scopes only)
         readonly IntPtr _methodBase; // §D0.3: resolved JIT'd body base
         readonly UIntPtr _methodLen; // §D0.3: resolved JIT'd body length
@@ -1932,6 +1932,21 @@ namespace Asmtest
                 SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
                 return;
             }
+            // R3: single-step whole-window arming, shared with the backend-keyed
+            // `new AsmTrace(HwBackend.SingleStep)` ctor (see ArmWholeWindow).
+            ArmWholeWindow(byMethod, withRundown);
+        }
+
+        // R3: the single-step whole-window arming shared by the empty `new AsmTrace()` ctor
+        // and the backend-keyed `new AsmTrace(HwBackend.SingleStep)` ctor. Sets up the JIT
+        // map + perf-map rundown BEFORE arming (an in-proc listener sees only methods JIT'd
+        // after enable, and the socket-driven rundown must run at full speed, not under
+        // single-step), allocates the retained whole-window trace, opens the region-free
+        // scope, and auto-inits the portable single-step tier on ESTATE (so no explicit
+        // HwTrace.Init is needed). Callers must have set the readonly ctor fields and
+        // returned on the no-lib self-skip first.
+        void ArmWholeWindow(bool byMethod, bool withRundown)
+        {
             // §D0.1/§D0.2: enable the method map BEFORE arming, so it sees the methods JIT'd
             // inside the scope (an in-proc listener sees only methods JIT'd after enable).
             // trackBytes (§Z3): also snapshot each method's bytes into a code-image so the
@@ -2271,10 +2286,11 @@ namespace Asmtest
         /// marshaled callback. <see cref="IsStatistical"/> is true (see it for how
         /// <see cref="Methods"/>/<see cref="Addresses"/> change meaning). Self-skips
         /// (<see cref="Armed"/> false, <see cref="SkipReason"/> set) off Zen 3+/LBR or without
-        /// <c>CAP_PERFMON</c>. Today only <see cref="HwBackend.AmdLbr"/> has an inline
-        /// start/stop whole-window: <see cref="HwBackend.SingleStep"/> is the empty-ctor
-        /// <c>new AsmTrace()</c> form, and <see cref="HwBackend.IntelPt"/> is forward-look — this
-        /// ctor self-skips on those. NOTE: the sampled perf event is per-OS-thread, so the block
+        /// <c>CAP_PERFMON</c>. R3: <see cref="HwBackend.SingleStep"/> is ALSO accepted here —
+        /// it forwards to the same in-process single-step whole-window arming as the empty-ctor
+        /// <c>new AsmTrace()</c> form (exact, not statistical); <see cref="HwBackend.IntelPt"/>
+        /// and <see cref="HwBackend.CoreSight"/> stay forward-look and self-skip. NOTE: the AMD
+        /// sampled perf event is per-OS-thread, so the block
         /// must run SYNCHRONOUSLY on the calling thread (an <c>await</c>/thread hop would sample
         /// the wrong thread). MUST be disposed (a leaked scope's event is released by a
         /// finalizer). Linux x86-64 only.
@@ -2287,7 +2303,10 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = false;
-            _kind = Kind.AmdWindow;
+            // R3: single-step forwards to the shared whole-window arming below, so this
+            // backend-keyed ctor now covers SingleStep too — set the Dispose kind accordingly
+            // (WholeWindow for the single-step forward, AmdWindow for the AMD-LBR survey).
+            _kind = backend == HwBackend.SingleStep ? Kind.WholeWindow : Kind.AmdWindow;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             if (!HwNative.LibAvailable)
@@ -2295,11 +2314,20 @@ namespace Asmtest
                 SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
                 return;
             }
+            if (backend == HwBackend.SingleStep)
+            {
+                // R3: single-step whole-window — forward to the SAME arming the empty
+                // `new AsmTrace()` ctor uses (was: a self-skip pointing callers at the empty
+                // ctor). Behavior matches `new AsmTrace(byMethod:, withRundown:)`, and
+                // _kind == Kind.WholeWindow routes Dispose to the whole-window teardown.
+                ArmWholeWindow(byMethod, withRundown);
+                return;
+            }
             if (backend != HwBackend.AmdLbr)
             {
-                SkipReason = backend == HwBackend.SingleStep
-                    ? "single-step whole-window is the empty ctor `new AsmTrace()` — this ctor is the AMD-LBR statistical survey"
-                    : $"{backend} inline whole-window is forward-look (not wired) — use `new AsmTrace()` (single-step) or AsmTrace.Window (out-of-process)";
+                SkipReason = $"{backend} inline whole-window is forward-look (not wired) — use "
+                    + "`new AsmTrace(HwBackend.SingleStep)` / `new AsmTrace()` (single-step) or "
+                    + "AsmTrace.Window (out-of-process)";
                 return;
             }
             IsStatistical = true;
