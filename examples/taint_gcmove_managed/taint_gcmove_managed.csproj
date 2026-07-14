@@ -1,0 +1,21 @@
+<!-- Managed GC-move SURVIVAL workload for the DynamoRIO taint tier (dynamorio-taint-tier-plan.md,
+     Increment 7, Slice 2). Driven by mk/native-trace.mk dr-taint-gcmove-survival-test as the
+     target of a drrun client launch (client options `gcmove methodscan=GcMove`) with the
+     in-process MovedReferences2 profiler attached and DOTNET_PerfMapEnabled=1: a seed painted on
+     a GC-MOVABLE managed object (via the P/Invoked shim's shim_seed_at) survives a compacting
+     gen2 GC that relocates the object — the profiler feeds every moved range to the client's
+     DR-API-free live remap — and the moved object's load->cmp->branch in GcMoveSink trips the
+     branch-condition sink, reported out-of-process over shm. AllowUnsafeBlocks: GcMoveSink reads
+     the object through a `fixed` pointer so the JIT emits a plain instrumented load.
+     TieredCompilation off so GcMoveSink JITs once to a stable perfmap address. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>taint_gcmove_managed</AssemblyName>
+    <TieredCompilation>false</TieredCompilation>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

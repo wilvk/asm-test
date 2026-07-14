@@ -58,8 +58,9 @@ closes each phase the same way.
 > **Increments 4–9** *(planned)* — 4 in-band tag propagation
 > (`dst_tag = ∪ src_tags`) + shadow-concurrency policy + seed/sink API; 5 launch-under-DR
 > container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator; 6
-> whole-process breadth + method-range scoping; 7 GC-move `umbra` remap *(hard-gated on the
-> still-deferred Phase-4 concrete `{old,new,len}` triple extraction)*; 8 XMM/YMM SIMD taint; 9
+> whole-process breadth + method-range scoping; 7 GC-move shadow remap *(**COMPLETE 2026-07-14** —
+> profiler-fed live remap + full seed→move→sink survival via a DR-API-free raw-mmap leaf allocator)*;
+> 8 XMM/YMM SIMD taint; 9
 > managed seed→sink validation + measured overhead + CI. Update this file as increments land, the
 > way [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its
 > own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
@@ -142,7 +143,7 @@ closes each phase the same way.
 | Region registration | One region, learned from an app-emitted marker's SysV args `rdi/rsi/rdx` ([on_marker :64](../../../src/dataflow_dr_client.c#L64), re-instrument via `dr_delay_flush_region` [:70](../../../src/dataflow_dr_client.c#L70), resolved by PC [:188](../../../src/dataflow_dr_client.c#L188)) | Whole-process breadth scoped to **registered method ranges**; a launched `dotnet app.dll` never calls the C-harness marker, so a new registration mechanism is needed |
 | Integration model | In-process cooperative `dr_app_*`; header flags in-process re-attach as unreliable ([asmtest_drtrace.h:86](../../../include/asmtest_drtrace.h#L86)); driven by the self-init harness `dr_valtrace` via `ASMTEST_DRVAL_CLIENT` ([native-trace.mk:201](../../../mk/native-trace.mk#L201)) | **Launch-under-DR** container over a live `dotnet` — no `drrun` launcher in-tree; plus an out-of-process validator to consume the results channel |
 | Signal coexistence | **Mitigated** — `event_signal` → `DR_SIGNAL_DELIVER` in both clients ([dataflow_dr_client.c:213-217](../../../src/dataflow_dr_client.c#L213); rationale in the control client [drtrace_client.c:386](../../../src/drtrace_client.c#L386)) so .NET null-check `SIGSEGV` reaches the runtime | Carries over unchanged to launch; the **code-cache/JIT-collision half** is only *asserted* solved by launch, not demonstrated — a hypothesis first tested in Increment 5 |
-| GC-move survival | Phase-4 `GcMoveMap` captures `GCBulkMovedObjectRanges` (DETECTION landed 2026-07-13) | Concrete `{old,new,len}` triple extraction + `umbra` remap **deferred** ([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)) — Increment 7 hard-depends on it |
+| GC-move survival | Phase-4 `GcMoveMap` captures `GCBulkMovedObjectRanges` (DETECTION landed 2026-07-13) | **DONE (Increment 7, 2026-07-14)** — the in-process `MovedReferences2` profiler feeds exact `{old,new,len}` ranges to `at_gc_remap_live` at the GC fence; a DR-API-free raw-mmap leaf allocator carries the tag across never-touched destination leaves, so a seed survives a compacting GC end-to-end (`dr-taint-gcmove-survival-test`) |
 | Oracle-diff validation | In-process `dr_valtrace` replays `at_drval_t` through the shared spine and diffs the emulator oracle in the same address space | Under launch the client no longer hosts the diff — a **separate app-side validator** must drain the shm channel and run the replay/diff out-of-process (Increment 5) |
 | Overhead evidence | None on this repo's managed workload; all figures external literature | Increment 9 must measure on a representative `dotnet` workload against an explicit budget |
 
@@ -818,7 +819,31 @@ reuses the Phase-4 PC→method addr-channel, so the plumbing is known; the subtl
 conservative un-instrumented-gap boundary policy and proving the scoping cost bound with an
 inscount delta.
 
-## Increment 7 - GC-move umbra shadow remap *(partial slice 092142d + Phase-4 unblock 55763e7; **live-wiring Slice 1 LANDED 2026-07-14** — the profiler drives the shadow remap on REAL GC moves under DR; full seed→sink SURVIVAL (Slice 2) remains)*
+## Increment 7 - GC-move umbra shadow remap *(**COMPLETE 2026-07-14** — Slice 1 live-wiring + **Slice 2 full seed→move→sink SURVIVAL**: a taint seed on a GC-movable managed object survives a compacting GC and the sink fires at the object's NEW address; the DR-API-free raw-mmap leaf allocator carries the tag across a never-touched destination leaf)*
+
+> **UPDATE 2026-07-14 — Slice 2 (full seed→move→sink SURVIVAL) LANDED; Increment 7 COMPLETE.** The
+> Slice-1 conservative miss (a move into a never-touched destination leaf DROPPED the tag) is removed:
+> `at_gc_remap_live`'s destination paint now uses `tag_ptr_create_raw` — a **bare `mmap` SYSCALL**
+> (`raw_mmap_anon`, inline `syscall`, no libc/errno, DR-API-free), installed into the SAME `g_dir` as
+> the hot-path `dr_raw_mem_alloc` leaves (a leaf is a leaf; leaves are never freed after install — only
+> a losing CAS spare is, each by its own allocator, so provenances never cross). Proven two ways:
+> - **Synthetic (deterministic, dotnet-free):** `dr-taint-gcremap-test` gained T5-T7 exercising the LIVE
+>   `at_gc_remap_live` (not the DR-API `at_gc_remap`): a tag survives into a never-touched NEW leaf (T5),
+>   per-byte colours move 1:1 into a fresh leaf (T6), and an unseeded move materializes NO destination
+>   leaf / conjures no phantom taint (T7) — the shadow-level present-at-new + absent-at-old coherence.
+>   Now **13/13** (was 7/7); `docker-drtrace` **161/161**, value client still **14/14 byte-identical**.
+> - **Live end-to-end (the de-risk):** new `dr-taint-gcmove-survival-test` lane
+>   ([taint_gcmove_managed](../../../examples/taint_gcmove_managed/) + the shim's `shim_seed_at`): seed a
+>   GC-movable managed `byte[]` at its briefly-pinned current address, force compacting gen2 GCs that
+>   RELOCATE it (measured `moved=1`, old→new ~44 MB apart), the profiler feeds every moved range to
+>   `at_gc_remap_live` at the fence, and the instrumented `GcMoveSink` (`methodscan=MoveSink`) reads the
+>   MOVED object → the branch-condition sink FIRES with the tainted tag at the NEW address (**4/4**); the
+>   `noseed` negative control reports ZERO hits (no phantom taint at the freshly-mmap'd leaf, **2/2**).
+>   **This is the FIRST run to call `raw_mmap_anon` from the profiler's dcontext-less app-code thread on a
+>   REAL GC fence — 20,022 ranges remapped, no crash — empirically confirming the bare-mmap claim** (the
+>   load-bearing Slice-1 finding was that DR heap APIs crash there). Wired into `docker-gcprofiler-probe`
+>   (now 3 lanes). Remaining conservative miss (never a crash/false positive): a move range wider than the
+>   1 MiB static snapshot is skipped rather than truncated.
 
 > **UPDATE 2026-07-14 — live wiring (Slice 1) LANDED.** The profiler→client GC-move path is wired
 > end-to-end and validated under DR (`make dr-gcmove-live-test` / `docker-gcprofiler-probe`): the DR
@@ -891,17 +916,20 @@ profiler, not out-of-process EventPipe — see the update note above and
   flag plus a unit test over synthetic `{old,new,len}` triples, so the chain does not fully stall
   on the external blocker.
 
-**Exit criteria (full):** a launched dotnet workload seeds a color on a heap object, forces a
-compacting Gen-2 GC that relocates it, and the sink downstream still fires with the original
-`seed_off` at the object's **new** address with **no** stale tag at the old address; the
-coherence canary passes; gated in the launch-under-DR CI lane **once Phase 4's `{old,new,len}`
-extraction lands**. Until then, the increment ships only the disabled-flag remap path + the
-synthetic-triple unit test green in CI, and the plan says so rather than faking a remap.
+**Exit criteria (full): MET 2026-07-14.** A launched dotnet workload seeds a color on a GC-movable
+managed object, forces a compacting Gen-2 GC that relocates it (`moved=1`), and the branch-condition
+sink still fires with the tainted tag at the object's **new** address (`dr-taint-gcmove-survival-test`
+seeded 4/4); the `noseed` negative control reports zero hits (no phantom taint at the moved-into leaf,
+2/2); the shadow-level present-at-new + absent-at-old coherence is proven deterministically by the
+synthetic T5-T7 (`dr-taint-gcremap-test` 13/13). Gated in `docker-gcprofiler-probe` (3 lanes). Phase 4
+was resolved not by the deferred EventPipe `{old,new,len}` feed but by the in-process
+`MovedReferences2` profiler (the go/no-go note above), so the increment shipped the full live remap +
+survival, not the disabled-flag placeholder the original text anticipated.
 
-**Effort.** **M** for the code, but **externally hard-blocked** on Phase 4's still-deferred
-`{old,new,len}` extraction, so the landable slice *now* is only the disabled-flag remap path + the
-synthetic-triple unit test (**S**). The full remap + canary is unblocked only when Phase 4 surfaces
-the triple.
+**Effort.** **M** for the code (delivered): the DR-API-free raw-mmap leaf allocator
+(`tag_ptr_create_raw` / `raw_mmap_anon`) + the managed seed→move→sink choreography + the survival lane.
+The original "externally hard-blocked on Phase 4" framing is resolved — the profiler path (Slice 1)
+surfaced the triple in-process, and Slice 2 carried the tag across the move.
 
 ## Increment 8 - XMM/YMM (SIMD) taint *(planned)*
 

@@ -575,19 +575,22 @@ else
 	 else echo "not ok - expected inscount(ranges) < inscount(whole) [ranges=$$ir whole=$$iw]"; exit 1; fi
 endif
 
-# --- Taint tier Increment 7 (PARTIAL slice): GC-move shadow remap -------------
+# --- Taint tier Increment 7: GC-move shadow remap (synthetic-triple unit test) -------------
 # `drrun -c <gcremap client>.so gcremap_selftest -- /bin/true` runs, at client init, the
 # synthetic-triple GC-move remap unit test: hand-provided {old,new,len} triples copied
-# through the SAME BSD 2-level create-on-touch tag shadow (at_gc_remap, serialized under
-# g_lock + SEQ_CST fences per the Increment-4 concurrency policy), asserting the tag is
-# readable at the NEW address and absent at the OLD one — for a disjoint move, per-byte
-# colour fidelity, a negative (unseeded => no phantom taint), and an OVERLAPPING slide.
-# The remap path lives behind the DISABLED compile flag ASMTEST_TAINT_GCREMAP (a SEPARATE
-# .so), so the default value/taint clients are byte-identical and this adds no clean call.
-# DEFERRED (externally hard-blocked on Phase 4): the live .NET GCBulkMovedObjectRanges
-# {old,new,len} feed, the coherence canary over a real forced GC, and the launch-under-DR
-# CI gate. TAP + a grep-able `ASMTEST_GCREMAP_SELFTEST checks=.. fails=..` land on stderr;
-# the lane asserts fails=0 and checks>0. Self-skips cleanly without DynamoRIO.
+# through the SAME BSD 2-level create-on-touch tag shadow, asserting the tag is readable at
+# the NEW address and absent at the OLD one. T1-T4 exercise at_gc_remap (the DR-API remap,
+# serialized under g_lock + SEQ_CST fences per the Increment-4 concurrency policy) — disjoint
+# move, per-byte colour fidelity, a negative (unseeded => no phantom taint), and an OVERLAPPING
+# slide. T5-T7 exercise the LIVE, DR-API-FREE at_gc_remap_live the profiler drives at the GC
+# fence, proving Slice 2's raw-mmap leaf allocator (tag_ptr_create_raw, a bare mmap syscall)
+# carries a tag into a NEVER-TOUCHED destination leaf — the case Slice 1 conservatively dropped.
+# The remap path lives behind the DISABLED compile flag ASMTEST_TAINT_GCREMAP (a SEPARATE .so),
+# so the default value/taint clients are byte-identical and this adds no clean call.
+# STILL DEFERRED: the managed seed->move->sink choreography + coherence canary over a real
+# forced .NET GC (the profiler-fed live path landed in dr-gcmove-live-test). TAP + a grep-able
+# `ASMTEST_GCREMAP_SELFTEST checks=.. fails=..` land on stderr; the lane asserts fails=0 and
+# checks>0. Self-skips cleanly without DynamoRIO.
 .PHONY: dr-taint-gcremap-test
 dr-taint-gcremap-test:
 ifndef DR_AVAILABLE
@@ -919,6 +922,73 @@ else
 	 else echo "not ok 2 - no live remaps (remapped_ranges=$$rr)"; fi; \
 	 echo "1..2"; \
 	 [ "$$hs" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$rr" -ge 1 ]
+endif
+
+# --- Taint tier Increment 7 (Slice 2): MANAGED GC-move SURVIVAL (seed->move->sink) ---------
+# The end-to-end proof that a taint seed on a GC-MOVABLE managed object SURVIVES a compacting GC
+# that relocates it — closing what the Increment-5 managed lane deferred (it seeds a stable NATIVE
+# buffer). Composes: the in-process MovedReferences2 profiler (libgcprobe.so) feeding real moved
+# ranges to the client's DR-API-FREE live remap (at_gc_remap_live) at the GC fence; Slice 2's
+# raw-syscall (bare mmap) leaf allocator (tag_ptr_create_raw) carrying the tag into a never-touched
+# destination leaf; the shim's shim_seed_at painting the object at its briefly-pinned current
+# address; and methodscan=MoveSink auto-registering the JIT'd GcMoveSink whose tainted
+# load->cmp->branch trips the sink at the object's NEW address. This is the FIRST run that
+# exercises tag_ptr_create_raw from the profiler's dcontext-less app-code thread on a REAL fence —
+# the load-bearing de-risk of the bare-mmap claim: a crash here would mean raw mmap is not safe
+# there. Seeded run: assert the object actually moved (moved=1) AND a tainted branch hit (kind=1)
+# crossed the shm channel (seed survived to the new address); negative control (noseed): ZERO hits
+# (no phantom taint conjured at the freshly-mmap'd destination leaf). The shadow-level both-sides
+# coherence (present-at-new + absent-at-old) is proven deterministically by the synthetic T5-T7
+# in dr-taint-gcremap-test; this lane proves the live end-to-end survival. Self-skips without
+# DynamoRIO / dotnet / git (CoreCLR profiler headers).
+GCMOVE_SURV_SHM ?= /asmtest_taint_gcmove_surv_ci
+.PHONY: dr-taint-gcmove-survival-test
+dr-taint-gcmove-survival-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-gcmove-survival-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-taint-gcmove-survival-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
+	@command -v git >/dev/null 2>&1 || { echo "== dr-taint-gcmove-survival-test =="; echo "# SKIP: git not found (CoreCLR profiler headers)"; echo "1..0 # skipped"; exit 0; }
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== dr-taint-gcmove-survival-test =="; echo "# SKIP: could not fetch CoreCLR headers"; echo "1..0 # skipped"; exit 0; }; \
+	 fi
+	@R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libgcprobe.so examples/gcprofiler_probe/gcprofiler.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude \
+	   || { echo "# profiler build failed"; exit 1; }
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/libtaint_managed_shim.so $(BUILD)/taint_managed_validator
+	@rm -rf $(BUILD)/taint_gcmove_managed_out
+	@$(DOTNET) build -c Release examples/taint_gcmove_managed/taint_gcmove_managed.csproj \
+	    -o $(BUILD)/taint_gcmove_managed_out >$(BUILD)/taint_gcmove_managed_build.log 2>&1 \
+	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/taint_gcmove_managed_build.log; exit 1; }
+	@echo "== dr-taint-gcmove-survival-test (seed on a GC-movable object survives a compacting GC; sink fires at the NEW address) =="
+	@rm -f /dev/shm$(GCMOVE_SURV_SHM) /dev/shm/asmtest_taint_gcmove 2>/dev/null || true
+	@echo "-- seeded run (expect moved=1 + a tainted branch-condition sink hit at the moved address) --"
+	@P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(GCPROBE_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libgcprobe.so)"; \
+	 out=$$(env $$P LD_LIBRARY_PATH=$(abspath $(BUILD)) DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 \
+	    $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) gcmove methodscan=MoveSink -- \
+	    $(DOTNET) $(abspath $(BUILD)/taint_gcmove_managed_out/taint_gcmove_managed.dll) seed $(GCMOVE_SURV_SHM) 2>&1); \
+	 printf '%s\n' "$$out" | grep -E 'GCMOVE_MANAGED|HELLO_GCMOVE_MANAGED|taint_managed_shim:|remapped_ranges' | head -8; \
+	 printf '%s\n' "$$out" | grep -q 'moved=1' \
+	   && echo "# object relocated by a compacting GC (moved=1) — the sink at the new address is a real cross-move test" \
+	   || { echo "# FAIL: object did not move (moved=0); GC-move survival is inconclusive"; exit 1; }
+	@$(BUILD)/taint_managed_validator seed $(GCMOVE_SURV_SHM)
+	@rm -f /dev/shm$(GCMOVE_SURV_SHM) /dev/shm/asmtest_taint_gcmove 2>/dev/null || true
+	@echo "-- negative control (unseeded => zero hits; no phantom taint at the moved-into leaf) --"
+	@P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(GCPROBE_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libgcprobe.so)"; \
+	 env $$P LD_LIBRARY_PATH=$(abspath $(BUILD)) DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 \
+	    $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) gcmove methodscan=MoveSink -- \
+	    $(DOTNET) $(abspath $(BUILD)/taint_gcmove_managed_out/taint_gcmove_managed.dll) noseed $(GCMOVE_SURV_SHM) 2>&1 | \
+	  grep -E 'GCMOVE_MANAGED|HELLO_GCMOVE_MANAGED|taint_managed_shim:' | head -4 || true
+	@$(BUILD)/taint_managed_validator noseed $(GCMOVE_SURV_SHM)
 endif
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------

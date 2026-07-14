@@ -124,6 +124,8 @@
 #include "dataflow_dr.h"
 #ifdef ASMTEST_TAINT
 #include "asmtest_taint_gcmove.h" /* live GC-move handshake (Increment 7) */
+#include <sys/mman.h> /* PROT_*/MAP_* macros for the raw-syscall leaf allocator */
+#include <sys/syscall.h> /* SYS_mmap / SYS_munmap — bare syscalls on the GC-fence path */
 #endif
 
 #include <string.h>
@@ -482,17 +484,76 @@ static void at_gc_remap(uint64_t old_base, uint64_t new_base, uint64_t len) {
     dr_mutex_unlock(g_lock);
 }
 
+/* --- Raw-syscall leaf allocator (Increment 7 Slice 2), DR-API-free ---------------------- */
+/* The live remap runs on the profiler's app-code thread at the GC fence, where every DR heap
+ * API (dr_raw_mem_alloc) crashes for want of a client dcontext. So a never-touched DESTINATION
+ * leaf must be mapped WITHOUT DR: a bare mmap SYSCALL (demand-zero ANON, so the new leaf reads
+ * clean), installed into the SAME g_dir as the hot-path dr_raw_mem_alloc leaves. A leaf is a
+ * leaf regardless of allocator; leaves are never freed after install (only a losing CAS spare
+ * is, each by its own allocator — dr_raw_mem_free for the hot path, munmap here), so the two
+ * provenances never cross. Bare syscalls (inline `syscall`, no libc errno) are safe from any
+ * thread/context — that is the whole point. */
+static void *raw_mmap_anon(size_t len) {
+    register long r10 __asm__("r10") = MAP_PRIVATE | MAP_ANONYMOUS;
+    register long r8 __asm__("r8") = -1; /* fd     */
+    register long r9 __asm__("r9") = 0;  /* offset */
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_mmap), "D"((long)0), "S"((long)len),
+                       "d"((long)(PROT_READ | PROT_WRITE)), "r"(r10), "r"(r8),
+                       "r"(r9)
+                     : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) /* kernel returns -errno in [-4095,-1] */
+        return NULL;
+    return (void *)ret;
+}
+static void raw_munmap(void *addr, size_t len) {
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_munmap), "D"(addr), "S"((long)len)
+                     : "rcx", "r11", "memory");
+    (void)ret;
+}
+/* CAS-install a raw-mmap leaf; on loss, munmap our spare and return the winner. The DR-API-free
+ * twin of leaf_install (raw_munmap instead of dr_raw_mem_free). */
+static at_tag_t *leaf_install_raw(size_t i, at_tag_t *leaf) {
+    at_tag_t *expect = NULL;
+    if (__atomic_compare_exchange_n(&g_dir[i], &expect, leaf, false,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return leaf;
+    raw_munmap(leaf, AT_LEAF_ALLOC);
+    return expect;
+}
+/* Resolve a shadow byte pointer for `ea`, creating its leaf on first touch via the bare mmap
+ * syscall. The DR-API-free twin of tag_ptr_create; used ONLY by the live GC-fence remap. */
+static at_tag_t *tag_ptr_create_raw(uint64_t ea) {
+    size_t i = (size_t)(ea >> AT_LEAF_BITS);
+    if (i >= AT_DIR_LEN)
+        return NULL;
+    at_tag_t *lf = __atomic_load_n(&g_dir[i], __ATOMIC_ACQUIRE);
+    if (lf == NULL) {
+        at_tag_t *nl = (at_tag_t *)raw_mmap_anon(AT_LEAF_ALLOC);
+        if (nl == NULL)
+            return NULL;
+        lf = leaf_install_raw(i, nl);
+    }
+    return lf + (ea & AT_LEAF_MASK);
+}
+
 /* --- LIVE variant, called from the PROFILER'S app-code thread at the GC fence ------------ */
 /* CRITICAL constraint (found empirically): DR heap/lock APIs — dr_mutex_lock, dr_global_alloc,
  * dr_raw_mem_alloc — CRASH when called from the profiler's app-code thread (they need the client
  * dcontext, which only exists inside a DR event / clean call; only dr_fprintf survives). So the
- * live remap must be DR-API-FREE: a plain atomic spinlock, a STATIC snapshot (no allocation), and
- * tag_ptr_lookup ONLY (no tag_ptr_create -> no dr_raw_mem_alloc). Consequences, all conservative
- * (a MISS, never a crash or false positive): a range wider than the static snapshot is skipped,
- * and a move into an as-yet-untouched NEW leaf is skipped (the tag is not carried — full
- * seed-survival across a never-touched destination needs a raw-syscall leaf allocator, Slice 2).
- * The runtime is fully suspended at the fence, so the spinlock is essentially uncontended and the
- * shadow is quiescent. */
+ * live remap is DR-API-FREE: a plain atomic spinlock, a STATIC snapshot (no allocation), and
+ * tag_ptr_lookup for the SOURCE read / old-range clear (never materializes a leaf for
+ * never-touched memory). The DESTINATION paint (Slice 2) uses tag_ptr_create_raw — a bare mmap
+ * SYSCALL — so a tainted move into an as-yet-untouched NEW leaf now CARRIES the tag instead of
+ * conservatively dropping it. Clean bytes are still skipped (never materialize a clean leaf), so
+ * an unseeded move maps nothing. Remaining conservative miss (never a crash/false positive): a
+ * range wider than the static snapshot is skipped rather than truncated. The runtime is fully
+ * suspended at the fence, so the spinlock is essentially uncontended and the shadow is quiescent. */
 static volatile int g_remap_spin;
 static void at_gc_remap_live(uint64_t old_base, uint64_t new_base, uint64_t len) {
     if (len == 0 || old_base == new_base)
@@ -513,8 +574,9 @@ static void at_gc_remap_live(uint64_t old_base, uint64_t new_base, uint64_t len)
     }
     for (uint64_t k = 0; k < len; k++) {
         if (snap[k] == AT_TAG_CLEAN)
-            continue;
-        at_tag_t *d = tag_ptr_lookup(new_base + k); /* NO create — DR-API-free */
+            continue; /* never materialize a clean destination leaf */
+        at_tag_t *d = tag_ptr_create_raw(new_base +
+                                         k); /* bare-mmap create, DR-API-free */
         if (d != NULL)
             *d = snap[k];
     }
@@ -553,10 +615,13 @@ static void gcmove_publish(void) {
 #endif /* ASMTEST_TAINT */
 
 #ifdef ASMTEST_TAINT_GCREMAP
-/* Synthetic-triple unit test (Increment 7 partial): hand-provided {old,new,len} triples,
- * NO live GC. For each: seed the OLD range, remap, and assert the tag is readable at the
- * NEW address and absent at the OLD one. Emits TAP on STDERR + a grep-able summary line the
- * dr-taint-gcremap-test lane checks. Runs once at client init (single-threaded). */
+/* Synthetic-triple unit test (Increment 7): hand-provided {old,new,len} triples, NO live GC.
+ * For each: seed the OLD range, remap, and assert the tag is readable at the NEW address and
+ * absent at the OLD one. T1-T4 exercise at_gc_remap (the DR-API remap, client-init context);
+ * T5-T7 exercise the LIVE, DR-API-FREE at_gc_remap_live the profiler drives at the GC fence —
+ * proving the Slice-2 raw-mmap leaf allocator carries a tag into a never-touched destination
+ * leaf (the case Slice 1 conservatively dropped). Emits TAP on STDERR + a grep-able summary
+ * line the dr-taint-gcremap-test lane checks. Runs once at client init (single-threaded). */
 static int g_gcr_checks, g_gcr_fails;
 static void gcr_check(int cond, const char *msg) {
     g_gcr_checks++;
@@ -572,8 +637,10 @@ static at_tag_t gcr_rd(uint64_t ea) {
 /* Synthetic shadow VAs: canonical, page-spread, never dereferenced (only their shadow is
  * touched), chosen to sit in distinct 1 MiB leaves and not collide with app memory. */
 static void run_gcremap_selftest(void) {
-    dr_fprintf(STDERR, "# gcremap-selftest: synthetic {old,new,len} triples "
-                       "(no live GC; Phase-4-blocked full path deferred)\n");
+    dr_fprintf(
+        STDERR,
+        "# gcremap-selftest: synthetic {old,new,len} triples "
+        "(T1-4 at_gc_remap; T5-7 LIVE at_gc_remap_live raw-mmap new-leaf)\n");
 
     /* T1: disjoint move, uniform color. Tag survives at NEW, absent at OLD. */
     {
@@ -636,6 +703,66 @@ static void run_gcremap_selftest(void) {
             if (gcr_rd(old + k) != AT_TAG_CLEAN)
                 head_clear = 0;
         gcr_check(head_clear, "T4 overlap: freed non-overlap head cleared (no stale alias)");
+    }
+
+    /* --- LIVE path (at_gc_remap_live) — the Slice-2 proof. T1-T4 above exercise at_gc_remap
+     * (the DR-API remap used at client-init context); the LIVE remap is the DR-API-FREE variant
+     * the profiler drives from the GC fence. Its Slice-1 limitation was that a move into a
+     * never-touched destination leaf was DROPPED (tag_ptr_lookup only, no create). Slice 2's
+     * raw-mmap leaf allocator (tag_ptr_create_raw) fixes exactly that; these cases prove it. */
+
+    /* T5: LIVE move into a NEVER-TOUCHED destination leaf carries the tag (was a Slice-1 miss). */
+    {
+        uint64_t old = 0x70000000ull, nw = 0x80000000ull, len = 24;
+        on_seed(old, len, AT_TAG_TAINTED);
+        gcr_check(
+            tag_ptr_lookup(nw) == NULL,
+            "T5 pre: destination leaf untouched (null) before live remap");
+        at_gc_remap_live(old, nw, len);
+        int new_ok = 1, old_ok = 1;
+        for (uint64_t k = 0; k < len; k++) {
+            if (gcr_rd(nw + k) != AT_TAG_TAINTED)
+                new_ok = 0;
+            if (gcr_rd(old + k) != AT_TAG_CLEAN)
+                old_ok = 0;
+        }
+        gcr_check(new_ok, "T5 LIVE: tag survives into a never-touched NEW leaf "
+                          "(raw-mmap alloc)");
+        gcr_check(old_ok,
+                  "T5 LIVE: no stale tag at OLD address after live remap");
+    }
+
+    /* T6: LIVE per-byte colour fidelity into a fresh leaf — distinct tag per byte, 1:1. */
+    {
+        uint64_t old = 0x71000000ull, nw = 0x82000000ull, len = 8;
+        for (uint64_t k = 0; k < len; k++) {
+            at_tag_t *p = tag_ptr_create(old + k);
+            if (p != NULL)
+                *p = (at_tag_t)(0x90u + k); /* distinct non-clean colours */
+        }
+        at_gc_remap_live(old, nw, len);
+        int fid = 1;
+        for (uint64_t k = 0; k < len; k++)
+            if (gcr_rd(nw + k) != (at_tag_t)(0x90u + k) ||
+                gcr_rd(old + k) != AT_TAG_CLEAN)
+                fid = 0;
+        gcr_check(fid, "T6 LIVE: per-byte colours move 1:1 into a fresh leaf");
+    }
+
+    /* T7: LIVE NEGATIVE — an unseeded move must leave NEW clean AND must NOT materialize a
+     * destination leaf (clean bytes are skipped, so no raw mmap fires — no phantom taint). */
+    {
+        uint64_t old = 0x73000000ull, nw = 0x84000000ull, len = 16;
+        at_gc_remap_live(old, nw, len);
+        gcr_check(
+            tag_ptr_lookup(nw) == NULL,
+            "T7 LIVE negative: unseeded move materializes no destination leaf");
+        int clean = 1;
+        for (uint64_t k = 0; k < len; k++)
+            if (gcr_rd(nw + k) != AT_TAG_CLEAN)
+                clean = 0;
+        gcr_check(clean, "T7 LIVE negative: unseeded move leaves NEW clean (no "
+                         "phantom taint)");
     }
 
     dr_fprintf(STDERR, "1..%d\n", g_gcr_checks);

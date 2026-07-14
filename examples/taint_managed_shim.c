@@ -11,8 +11,10 @@
  *  - it maps the POSIX shared-memory results channel and registers &shm->report at the sink
  *    marker, so the branch-condition sink's hit crosses to the out-of-process validator;
  *  - it holds a NATIVE seed buffer (g_seedbuf) — a stable, never-GC-moved address — that the
- *    managed HotSeedSink() reads through a raw pointer; painting a managed heap object is
- *    Increment 7 (GC-move remap) territory and deliberately out of scope here.
+ *    managed HotSeedSink() reads through a raw pointer (the Increment-5 seed->sink lane); and it
+ *    exposes shim_seed_at() to paint an ARBITRARY address, which the Increment-7 GC-move
+ *    survival lane uses to seed a GC-movable managed object at its current (briefly-pinned)
+ *    address so the seed can survive a compacting GC move (taint_gcmove_managed).
  *
  * Flow (driven from managed Main): shim_init(name) maps shm + registers the sink report;
  * shim_seed() paints g_seedbuf's shadow via the seed marker; managed code then loops calling
@@ -94,6 +96,16 @@ __attribute__((visibility("default"))) void *shim_seedbuf(void) {
 __attribute__((visibility("default"))) void shim_seed(uint64_t val) {
     g_seedbuf = val;
     asmtest_dr_taint_seed_marker(&g_seedbuf, sizeof g_seedbuf, AT_TAG_TAINTED);
+}
+
+/* Seed an ARBITRARY address's shadow tainted via the seed marker (Increment 7 GC-move
+ * survival). Unlike shim_seed (which paints the stable native g_seedbuf), this paints a
+ * caller-supplied address — the managed workload passes a GC-movable object's CURRENT data
+ * address (obtained by a brief pin) so the seed can then survive a compacting GC move. The
+ * shadow is created-on-touch by the seed marker's clean call, so any canonical address works. */
+__attribute__((visibility("default"))) void shim_seed_at(void *addr,
+                                                         uint64_t len) {
+    asmtest_dr_taint_seed_marker(addr, (size_t)len, AT_TAG_TAINTED);
 }
 
 /* Publish the fixture result + done so the out-of-process validator can drain. */
