@@ -16,9 +16,11 @@
  * the granularity note flags). Prints one grep-able line:
  * `OVH mode=<m> kind=<scalar|simd> hotns=<ns> iters=<N> r=<checksum>`.
  *
- * Deliberately NOT a hard CI threshold: wall-clock ratios are noise-prone (the Increment-3
- * microbench makes the same call). The lane asserts only the monotonic STRUCTURAL fact
- * (T_taint > T_dr >= T_bare) and REPORTS the ratios against the plan's ~10-50x band.
+ * The lane (dr-taint-overhead-test) asserts the monotonic STRUCTURAL facts (T_taint > T_dr >=
+ * T_bare) as noise-tolerant checks AND — the Increment-9 exit criterion — HARD-GATES the band:
+ * the build FAILS if the record-free PRODUCTION overhead regresses past the ~10-50x budget
+ * (prod-taint > BAND_MAX x bare). The gate sits well above the measured ~11x (headroom for
+ * wall-clock noise) so it catches a real regression, not jitter.
  *
  * Self-contained: defines the region + seed marker symbols the client resolves by PC
  * (-rdynamic), same ABI as taint_workload.c.

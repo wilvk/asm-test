@@ -63,9 +63,9 @@ closes each phase the same way.
 > 8 XMM/YMM SIMD taint *(**COMPLETE 2026-07-14** — XMM/SSE + YMM/AVX register + memory taint, a
 > shared Capstone AVX-store-access oracle fix, and the SIMD-vs-scalar overhead delta; ZMM/VSIB/
 > lane-precise deferred)*; 9
-> managed seed→sink validation + measured overhead + CI *(overhead + **record-free production
-> propagation (lever 1) LANDED 2026-07-14 — production ~11× bare, IN the ~10-50× band**; the
-> band-threshold hard CI gate is the remaining piece)*. Update this file as increments land, the
+> managed seed→sink validation + measured overhead + CI *(**COMPLETE 2026-07-14** — record-free
+> production propagation put production at ~11× bare (IN the ~10-50× band), the HARD BAND GATE + the
+> GC-survival CI job landed; all exit criteria MET — the plan is ready to archive)*. Update this file as increments land, the
 > way [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its
 > own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
 > status tag in sync with this child.
@@ -997,7 +997,19 @@ def-use oracle silently dropped AVX store→load edges) that gates the oracle-di
 store. Carried its own overhead re-measurement (SIMD ~1.8× the scalar band per the per-byte-lane
 traffic) rather than inheriting the scalar band, exactly as the increment anticipated.
 
-## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(overhead-measurement first slice LANDED 2026-07-14; **lever 1 (record-free production propagation) LANDED 2026-07-14 — production overhead now ~11× bare, IN the ~10-50× band**; managed seed→sink already met by Increment 5; the band-threshold hard CI gate remains)*
+## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(**COMPLETE 2026-07-14** — record-free production propagation put production at ~11× bare (IN the ~10-50× band); the HARD BAND GATE + GC-survival CI wiring landed; all exit criteria MET)*
+
+> **UPDATE 2026-07-14 — hard band gate + GC-survival CI wiring LANDED; Increment 9 COMPLETE.**
+> `dr-taint-overhead-test` now HARD-GATES the band (`ok 3`: build-FAILS if `prod-taint > BAND_MAX=50×
+> bare`; measured ~11×, so ~4.5× noise headroom — the ratio prod/bare is runner-speed-independent, and
+> a real regression such as re-adding the drx_buf record → ~187× trips it). `docker-gcprofiler-probe`
+> (the GC-move survival lane, Increment 7 Slice 2) is wired into CI as the new **`taint-gcmove` job**,
+> so "taint survives a GC" is now build-gated. The other exit clauses were already gated: managed
+> seed→sink detection (`docker-taint-dotnet`), native prod detection (`dr-taint-prod-test`), and the
+> shared-fixture emulator cross-check (`dr-taint-launch-test`, out-of-process `taint_validator` over
+> `taint_sink_chain`). Validated: `docker-taint-native` 0 failures (band gate `ok 3` green at ~11×).
+> **All Increment-9 exit criteria are MET → the taint-tier plan is complete** (ready to archive per the
+> archive rule; the parent Phase-5 stub updates to LANDED in the same change).
 
 > **UPDATE 2026-07-14 — lever 1 (record-free production propagation) LANDED; production is IN the band.**
 > The `prod` client option now takes a SEPARATE, RECORD-FREE emit path (`event_insert` branches to
@@ -1114,15 +1126,28 @@ managed data-flow assertion with a measured cost, replacing the offset-only dotn
   regression past a set threshold; the seed→sink verdict is cross-checked against the emulator
   L0/L2 oracle on a shared fixture by the out-of-process validator.
 
-**Exit criteria:** CI runs a launched dotnet workload under DR where a seed at a source is
-detected at a sink over real JIT'd managed code, **taint survives a GC**, and the **measured
-overhead is reported against the ~10–50× budget** (build fails on non-detection or on overhead
-regressing past the threshold); the verdict is cross-checked against the emulator oracle
-([dataflow_emu.c](../../../src/dataflow_emu.c)) on a shared fixture — matching
-[data-flow-tracing-plan.md:215](data-flow-tracing-plan.md#L215) and validating beyond the
-offset-only `bindings/dotnet/drtrace/` smoke. On landing, this plan moves to
-`docs/internal/archive/plans/` per the archive rule and the parent Phase-5 stub is updated to
-LANDED in the same change.
+**Exit criteria: MET 2026-07-14.** CI gates, across the taint-tier lanes, every clause:
+- **seed→sink over real JIT'd managed code** — `dr-taint-managed-test` (seeded reports a tainted
+  `kind=1` branch hit 4/4; unseeded 0 hits) in `docker-taint-dotnet` (CI `taint` job); build-FAILS on
+  non-detection. The native `dr-taint-prod-test` / `dr-taint-launch-test` gate detection too.
+- **taint survives a GC** — `dr-taint-gcmove-survival-test` (a seed on a GC-movable managed object
+  survives a compacting GC; sink fires at the NEW address 4/4; noseed 0 hits 2/2) in
+  `docker-gcprofiler-probe`, now wired into CI as the **`taint-gcmove` job**.
+- **overhead in the ~10–50× band, build-FAILS on regression** — `dr-taint-overhead-test` `ok 3`
+  HARD BAND GATE (`prod-taint <= BAND_MAX=50× bare`; measured ~11×) in `docker-taint-native` (CI
+  `taint` job). NB the overhead is measured on the native hot-loop proxy `taint_overhead` (the clean
+  per-instruction isolation the first slice established), not a full dotnet run — a dotnet-workload
+  number would be dominated by the scope=ranges ~1× baseline plus JIT/GC noise; the record-free
+  production per-instruction cost is the meaningful figure and it is band-gated.
+- **verdict cross-checked vs the emulator oracle on a shared fixture** —
+  `dr-taint-launch-test`'s out-of-process `taint_validator` runs the emulator
+  ([dataflow_emu.c](../../../src/dataflow_emu.c)) on the shared native `taint_sink_chain` fixture and
+  diffs BOTH the sink hit AND the full taint SET vs the emulator forward slice (the record-free
+  `prod` path is validated sink-only, since it keeps no witness). In the CI `drtrace` job.
+
+This validates beyond the offset-only `bindings/dotnet/drtrace/` smoke, matching
+[data-flow-tracing-plan.md:215](data-flow-tracing-plan.md#L215). Per the archive rule, on landing this
+plan moves to `docs/internal/archive/plans/` and the parent Phase-5 stub is updated to LANDED.
 
 **Effort.** **M** in code — mostly composition of 5–8 plus the CI/threshold wiring — but gated on
 those increments landing; the real work here is the measurement harness and the budget/threshold

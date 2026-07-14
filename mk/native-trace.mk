@@ -807,19 +807,28 @@ else
 	@$(BUILD)/taint_managed_validator noseed $(MANAGED_SHM)
 endif
 
-# --- Taint tier Increment 9 (first slice): overhead measurement -------------
-# The FIRST in-repo overhead NUMBER for the taint tier — every figure in the plan is external
-# literature. Times a hot loop (seeded load + arithmetic + data-dependent branch — the ops the
-# client instruments) three ways and DECOMPOSES the cost: bare native, DR code-cache baseline
-# (regions=0, no instrumentation), and + inline taint instrumentation. Reports the ratios
-# against the plan's ~10-50x band. INFORMATIONAL: wall-clock ratios are noise-prone (as the
-# Increment-3 microbench notes), so it asserts only the monotonic STRUCTURAL fact
-# T_taint > T_dr >= T_bare, not an absolute band. Self-skips without DynamoRIO.
+# --- Taint tier Increment 9: overhead measurement + HARD BAND GATE ----------
+# The in-repo overhead NUMBER for the taint tier — every figure in the plan is external literature.
+# Times a hot loop (seeded load + arithmetic + data-dependent branch — the ops the client
+# instruments) and DECOMPOSES the cost: bare native, DR code-cache baseline (regions=0), the value
+# client (value capture), the full-taint client (value + taint), and the record-free PRODUCTION
+# client (`prod`). Also a separate AVX2/YMM SIMD variant (Increment 8). Reports the ratios against
+# the plan's ~10-50x band, and — the Increment-9 exit criterion — HARD-GATES on it: ok 3 build-FAILS
+# if the record-free production overhead regresses past the band (prod-taint > BAND_MAX x bare). The
+# monotonic wall-clock facts (ok 1) stay noise-tolerant structural checks (as the Increment-3
+# microbench notes), but the band gate has ~4.5x headroom over the measured ~11x, so it flags a real
+# regression (e.g. re-adding the drx_buf record -> ~187x) without flaking. Self-skips without DynamoRIO.
 $(BUILD)/taint_overhead: examples/taint_overhead.c include/asmtest_taint.h \
                          src/dataflow_dr.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -O2 -DASMTEST_TAINT -Isrc -rdynamic examples/taint_overhead.c -o $@
 
 OVERHEAD_ITERS ?= 5000000
+# Increment-9 HARD BAND GATE: production taint overhead must stay within the plan's ~10-50x band
+# or the build fails. Set at the band's upper bound (50x bare); the record-free `prod` path measures
+# ~11x, so this has ~4.5x headroom for CI noise while still catching a real regression (e.g. someone
+# re-introducing the drx_buf record round-trip, which put prod at ~187x). The ratio prod/bare is
+# runner-speed-independent (bare and prod scale together), so an absolute x-bare threshold is stable.
+BAND_MAX ?= 50
 .PHONY: dr-taint-overhead-test
 dr-taint-overhead-test:
 ifndef DR_AVAILABLE
@@ -853,7 +862,7 @@ else
 	 echo "#   seeded + 3/3 negative). RESULT: PROD is now ~11x bare — IN the plan's ~10-50x band. Removing the"; \
 	 echo "#   drx_buf record ALONE reached the band (it was the bulk of production cost, more than the earlier"; \
 	 echo "#   ~60% estimate); a direct-mapped shadow (lever 2) is a further optimization, not needed to enter"; \
-	 echo "#   the band. The remaining Increment-9 work is the band-threshold HARD CI gate."; \
+	 echo "#   the band. The band is now ENFORCED (ok 3 below: prod-taint <= $(BAND_MAX)x bare, a HARD gate)."; \
 	 if [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]; then \
 	   echo "ok 1 - overhead measured + monotonic (full-taint >= prod-taint > DR-baseline >= bare > 0)"; \
 	 else echo "not ok 1 - expected full-taint >= prod-taint > DR-baseline >= bare > 0 (bare=$$bare dr=$$dr prod=$$prod taint=$$taint)"; fi; \
@@ -875,8 +884,12 @@ else
 	 elif [ "$$staint" -gt "$$sbare" ]; then \
 	   echo "ok 2 - SIMD taint overhead measured + costlier than bare (SIMD full-taint > bare > 0)"; sok=1; \
 	 else echo "not ok 2 - expected SIMD full-taint > bare > 0 (sbare=$$sbare staint=$$staint)"; sok=0; fi; \
-	 echo "1..2"; \
-	 [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ] && [ "$$sok" -eq 1 ]
+	 bmax=$(BAND_MAX); \
+	 if [ "$$bare" -gt 0 ] && [ "$$prod" -gt 0 ] && [ "$$prod" -le $$(( bmax * bare )) ]; then \
+	   echo "ok 3 - PRODUCTION taint overhead within the ~10-50x band (prod-taint <= $${bmax}x bare) [HARD BAND GATE]"; bandok=1; \
+	 else echo "not ok 3 - PRODUCTION taint overhead REGRESSED PAST the band (limit $${bmax}x bare; bare=$$bare prod=$$prod) [HARD BAND GATE]"; bandok=0; fi; \
+	 echo "1..3"; \
+	 [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ] && [ "$$sok" -eq 1 ] && [ "$$bandok" -eq 1 ]
 endif
 
 # --- GC-move-range extraction: DR + ICorProfiler coexistence PROBE (go/no-go) -----

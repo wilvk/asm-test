@@ -408,11 +408,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: In-band taint — Inc4 oracle diffs + Inc5 native launch-under-DR + shm
+      - name: In-band taint — Inc4 oracle diffs + Inc5 native launch-under-DR + shm + Inc8 SIMD + Inc9 HARD BAND GATE
         run: make docker-taint-native
 
       - name: dotnet launch coexistence — .NET tiered-JIT vs DR code cache
         run: make docker-taint-dotnet
+
+  # GC-move taint SURVIVAL (data-flow taint, Increment 7 Slice 2 + the Increment-9 GC-survival
+  # gate). A self-contained image (DynamoRIO + .NET SDK + git for the pinned CoreCLR profiler
+  # headers) that runs, under `drrun -c <taint client>`: the in-process MovedReferences2 profiler
+  # coexistence probe; the live GC-move remap driven by that profiler on real compacting GCs; and
+  # the seed->move->sink SURVIVAL lane — a taint seed on a GC-movable managed object survives a
+  # compacting GC (the DR-API-free raw-mmap leaf allocator carries the tag into the moved-into
+  # leaf) and the sink still fires at the object's NEW address. Self-skips cleanly without the
+  # .NET SDK / git / network. See dynamorio-taint-tier-plan.md Increments 7 + 9.
+  taint-gcmove:
+    name: taint (GC-move survival)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: GC-move survival — profiler-fed live remap + managed seed->move->sink
+        run: make docker-gcprofiler-probe
 
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
