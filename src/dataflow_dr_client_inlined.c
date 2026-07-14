@@ -122,6 +122,9 @@
 #include "drx.h"
 
 #include "dataflow_dr.h"
+#ifdef ASMTEST_TAINT
+#include "asmtest_taint_gcmove.h" /* live GC-move handshake (Increment 7) */
+#endif
 
 #include <string.h>
 
@@ -201,6 +204,7 @@ static int g_scope_whole; /* set by the `scope=whole` client option */
  * offset, not the GP values). This is the Increment-9 production posture: the value trace is the
  * ~300x cost the overhead bench isolated; dropping it is what a real deployment does. */
 static int g_prod;
+static int g_gcmove; /* `gcmove` option: publish the gc_move handshake for the live GC-move path */
 #define AT_PROD_SKIP (g_prod) /* taint build: honor `prod` */
 #else
 #define AT_PROD_SKIP (0)      /* value build: always capture (oracle) — keeps it 14/14 */
@@ -368,12 +372,12 @@ static at_tag_t *tag_ptr_create(uint64_t ea) {
     return lf + (ea & AT_LEAF_MASK);
 }
 
-#ifdef ASMTEST_TAINT_GCREMAP
+#ifdef ASMTEST_TAINT
 /* Resolve a shadow byte pointer for `ea` WITHOUT creating its leaf: returns NULL for a
  * non-canonical address or an as-yet-untouched (null-leaf) page. Read-only companion to
  * tag_ptr_create — the GC-move remap uses it to read source tags and to clear the old
- * range without materializing leaves for never-touched memory. Behind the disabled
- * ASMTEST_TAINT_GCREMAP flag so the default taint client is unchanged. */
+ * range without materializing leaves for never-touched memory. In the taint build (used by
+ * at_gc_remap, which the live GC-move path drives from the profiler). */
 static at_tag_t *tag_ptr_lookup(uint64_t ea) {
     size_t i = (size_t)(ea >> AT_LEAF_BITS);
     if (i >= AT_DIR_LEN)
@@ -383,7 +387,7 @@ static at_tag_t *tag_ptr_lookup(uint64_t ea) {
         return NULL;
     return lf + (ea & AT_LEAF_MASK);
 }
-#endif /* ASMTEST_TAINT_GCREMAP */
+#endif /* ASMTEST_TAINT */
 
 /* Store-tag broadcast SLOWPATH (rare; taken only when the inline fast path finds a null
  * leaf — i.e. the first tag write to a 1 MiB page). Creates the leaf on touch and writes
@@ -411,21 +415,22 @@ static void on_seed(uint64_t base, uint64_t len, uint64_t color) {
     }
 }
 
-#ifdef ASMTEST_TAINT_GCREMAP
+#ifdef ASMTEST_TAINT
 /* ================================================================== */
-/* Increment 7 (PARTIAL slice): GC-move umbra shadow remap             */
+/* Increment 7: GC-move shadow remap                                   */
 /* ================================================================== */
 /*
  * When a compacting .NET GC relocates an object, its shadow tags must move with it or a
- * post-compaction read sees stale/aliased taint. This is the LANDABLE PARTIAL slice of
- * Increment 7: the remap CODE PATH plus a synthetic-triple unit test, behind the DISABLED
- * compile flag ASMTEST_TAINT_GCREMAP so the default value/taint clients are byte-identical
- * (dr-valtrace-inlined-test, dr-taint-native-test stay green) and no hot-path clean call
- * is added (the inline-gate count is unchanged). DEFERRED as externally hard-blocked on
- * Phase 4: the live GCBulkMovedObjectRanges {old,new,len} feed via EventPipe, the coherence
- * canary over a real forced GC, and the launch-under-DR CI gate. This slice proves ONLY
- * that, GIVEN a {old,new,len} triple, the tag survives at the NEW address and is absent at
- * the OLD one.
+ * post-compaction read sees stale/aliased taint. at_gc_remap does the copy; it is now in the
+ * main taint build (not the disabled ASMTEST_TAINT_GCREMAP flag) because the LIVE path drives
+ * it from an in-process ICorProfilerCallback4::MovedReferences2 profiler (the go-path proven by
+ * the coexistence probe — docs/internal/analysis/gc-move-range-extraction-findings.md): the
+ * client publishes at_gc_remap's entry to a small POSIX-shm handshake and the profiler calls it
+ * per moved range at the (fully-suspended-EE) GC fence. at_gc_remap is DEAD CODE unless the
+ * `gcmove` client option activates the handshake, so the default taint client's hot path +
+ * inline-gate count are unchanged, and the flag-off VALUE client (ASMTEST_TAINT undefined) is
+ * byte-identical. The synthetic-triple UNIT TEST (run_gcremap_selftest, below) stays behind the
+ * ASMTEST_TAINT_GCREMAP flag / separate .so.
  *
  * SEQUENCING vs the Increment-4 concurrent-writer policy: the remap is a BULK shadow
  * mutation, not a hot-path byte store, so it is serialized under g_lock and bracketed by
@@ -477,6 +482,77 @@ static void at_gc_remap(uint64_t old_base, uint64_t new_base, uint64_t len) {
     dr_mutex_unlock(g_lock);
 }
 
+/* --- LIVE variant, called from the PROFILER'S app-code thread at the GC fence ------------ */
+/* CRITICAL constraint (found empirically): DR heap/lock APIs — dr_mutex_lock, dr_global_alloc,
+ * dr_raw_mem_alloc — CRASH when called from the profiler's app-code thread (they need the client
+ * dcontext, which only exists inside a DR event / clean call; only dr_fprintf survives). So the
+ * live remap must be DR-API-FREE: a plain atomic spinlock, a STATIC snapshot (no allocation), and
+ * tag_ptr_lookup ONLY (no tag_ptr_create -> no dr_raw_mem_alloc). Consequences, all conservative
+ * (a MISS, never a crash or false positive): a range wider than the static snapshot is skipped,
+ * and a move into an as-yet-untouched NEW leaf is skipped (the tag is not carried — full
+ * seed-survival across a never-touched destination needs a raw-syscall leaf allocator, Slice 2).
+ * The runtime is fully suspended at the fence, so the spinlock is essentially uncontended and the
+ * shadow is quiescent. */
+static volatile int g_remap_spin;
+static void at_gc_remap_live(uint64_t old_base, uint64_t new_base, uint64_t len) {
+    if (len == 0 || old_base == new_base)
+        return;
+    static at_tag_t snap[1 << 20]; /* 1 MiB — covers typical object move ranges */
+    if (len > sizeof snap)
+        return; /* conservative: skip an over-large range rather than truncate */
+    while (__atomic_exchange_n(&g_remap_spin, 1, __ATOMIC_ACQUIRE))
+        ;
+    for (uint64_t k = 0; k < len; k++) {
+        at_tag_t *s = tag_ptr_lookup(old_base + k);
+        snap[k] = (s != NULL) ? *s : AT_TAG_CLEAN;
+    }
+    for (uint64_t k = 0; k < len; k++) {
+        at_tag_t *s = tag_ptr_lookup(old_base + k);
+        if (s != NULL)
+            *s = AT_TAG_CLEAN;
+    }
+    for (uint64_t k = 0; k < len; k++) {
+        if (snap[k] == AT_TAG_CLEAN)
+            continue;
+        at_tag_t *d = tag_ptr_lookup(new_base + k); /* NO create — DR-API-free */
+        if (d != NULL)
+            *d = snap[k];
+    }
+    __atomic_store_n(&g_remap_spin, 0, __ATOMIC_RELEASE);
+}
+
+/* --- LIVE GC-move path: profiler handshake (Increment 7) --------------------------- */
+/* The in-process ICorProfilerCallback4 profiler calls this per moved range at the GC fence.
+ * A tiny stderr line proves the live path drove a real remap under DR (the test greps it). */
+static volatile uint64_t g_gcmove_count; /* # of moved ranges remapped (a grep-able liveness) */
+static void asmtest_dr_taint_gc_move(uint64_t old_base, uint64_t new_base, uint64_t len) {
+    at_gc_remap_live(old_base, new_base, len); /* DR-API-free (app-code thread at the fence) */
+    __atomic_fetch_add(&g_gcmove_count, 1, __ATOMIC_RELAXED);
+}
+
+/* Publish gc_move's address to the shm-backed handshake file so the (separately loaded,
+ * DR-private-loader-invisible) profiler can find + call it. Same address space, so the raw
+ * function pointer is valid across the two .so's; the file is only the discovery channel.
+ * Written with DR file APIs (the client runs under DR's private loader); the profiler reads it
+ * with plain POSIX. Armed only by the `gcmove` client option, so the default client is inert. */
+static void gcmove_publish(void) {
+    /* shm_open("/name") maps to /dev/shm/name — write there via DR so the profiler's
+     * shm_open("/asmtest_taint_gcmove") + mmap sees the same bytes. */
+    file_t f = dr_open_file("/dev/shm" AT_GCMOVE_SHM_NAME,
+                            DR_FILE_WRITE_OVERWRITE | DR_FILE_ALLOW_LARGE);
+    if (f == INVALID_FILE)
+        return;
+    at_gcmove_channel_t ch;
+    ch.pad = 0;
+    ch.moves = 0;
+    ch.gc_move = (uint64_t)(uintptr_t)&asmtest_dr_taint_gc_move;
+    ch.magic = AT_GCMOVE_MAGIC; /* last: a reader that sees magic sees a valid gc_move */
+    dr_write_file(f, &ch, sizeof ch);
+    dr_close_file(f);
+}
+#endif /* ASMTEST_TAINT */
+
+#ifdef ASMTEST_TAINT_GCREMAP
 /* Synthetic-triple unit test (Increment 7 partial): hand-provided {old,new,len} triples,
  * NO live GC. For each: seed the OLD range, remap, and assert the tag is readable at the
  * NEW address and absent at the OLD one. Emits TAP on STDERR + a grep-able summary line the
@@ -1654,6 +1730,11 @@ static void event_exit(void) {
                "ASMTEST_TAINT_INSCOUNT inscount=%llu regions=%d scope=%s\n",
                (unsigned long long)g_inscount, g_nregions,
                g_scope_whole ? "whole" : "ranges");
+#ifdef ASMTEST_TAINT
+    if (g_gcmove)
+        dr_fprintf(STDERR, "ASMTEST_GCMOVE remapped_ranges=%llu\n",
+                   (unsigned long long)g_gcmove_count);
+#endif
     if (g_buf != NULL)
         drx_buf_free(g_buf);
     drx_exit();
@@ -1701,6 +1782,8 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
             g_methodscan_active = (g_methodscan[0] != '\0');
         } else if (strcmp(argv[i], "prod") == 0)
             g_prod = 1;
+        else if (strcmp(argv[i], "gcmove") == 0)
+            g_gcmove = 1;
 #endif
     }
 #ifdef ASMTEST_TAINT_GCREMAP
@@ -1765,6 +1848,12 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
      * app's threads exist (so the lock+fence quiesce in at_gc_remap is exact). */
     if (gcremap_selftest)
         run_gcremap_selftest();
+#endif
+#ifdef ASMTEST_TAINT
+    /* Increment 7 (live path): publish at_gc_remap's entry so the in-process profiler can feed
+     * it real compacting-GC {old,new,len} ranges. */
+    if (g_gcmove)
+        gcmove_publish();
 #endif
 #ifdef ASMTEST_TAINT
     /* Managed method-load auto-registration (Increment 6 dotnet slice): a launched managed

@@ -837,7 +837,7 @@ else
 	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libgcprobe.so examples/gcprofiler_probe/gcprofiler.cpp \
 	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
 	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
-	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude \
 	   || { echo "# profiler build failed"; exit 1; }
 	@$(MAKE) drtrace-client
 	@rm -rf $(BUILD)/gcmover_out
@@ -862,6 +862,63 @@ else
 	 else echo "not ok 2 - no MovedReferences2 under DR (got $$dr)"; fi; \
 	 echo "1..2"; \
 	 [ "$$init" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$dr" -ge 1 ]
+endif
+
+# --- Taint tier Increment 7 (Slice 1): LIVE GC-move remap driven by the profiler ---
+# Composes the go/no-go probe's proven pieces into the actual Increment-7 capability wiring: the
+# ICorProfilerCallback4 profiler (built with the gc_move handshake), the compacting-GC workload,
+# and the DR taint client's in-tree at_gc_remap_live. Under `drrun -c <taint client> gcmove --
+# dotnet gcmover` + the profiler, the client publishes gc_move's address (POSIX-shm handshake)
+# and the profiler feeds every MovedReferences2 {old,new,len} range to at_gc_remap_live AT THE
+# GC FENCE. Load-bearing finding baked into at_gc_remap_live: DR heap/lock APIs (dr_mutex,
+# dr_global_alloc, dr_raw_mem_alloc) CRASH from the profiler's app-code thread, so the live remap
+# is DR-API-FREE (plain spinlock + static snapshot + tag_ptr_lookup, no leaf create). Asserts the
+# remap ran on real moves (remapped_ranges > 0), the workload completed, no crash/hang. The full
+# seed->move->sink SURVIVAL is Slice 2 (needs a raw-syscall leaf allocator so a move into an
+# untouched destination leaf carries the tag). Self-skips without DynamoRIO/dotnet/git.
+.PHONY: dr-gcmove-live-test
+dr-gcmove-live-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-gcmove-live-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-gcmove-live-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
+	@command -v git >/dev/null 2>&1 || { echo "== dr-gcmove-live-test =="; echo "# SKIP: git not found (CoreCLR profiler headers)"; echo "1..0 # skipped"; exit 0; }
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== dr-gcmove-live-test =="; echo "# SKIP: could not fetch CoreCLR headers"; echo "1..0 # skipped"; exit 0; }; \
+	 fi
+	@R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libgcprobe.so examples/gcprofiler_probe/gcprofiler.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude \
+	   || { echo "# profiler build failed"; exit 1; }
+	@$(MAKE) drtrace-client
+	@rm -rf $(BUILD)/gcmover_out
+	@$(DOTNET) build -c Release examples/gcprofiler_probe/gcmover/gcmover.csproj -o $(BUILD)/gcmover_out \
+	    >$(BUILD)/gcmover_build.log 2>&1 || { echo "# dotnet build failed:"; tail -15 $(BUILD)/gcmover_build.log; exit 1; }
+	@echo "== dr-gcmove-live-test (profiler drives at_gc_remap_live on real GC moves under DR) =="
+	@rm -f /dev/shm/asmtest_taint_gcmove; \
+	 P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(GCPROBE_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libgcprobe.so)"; \
+	 env $$P $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) gcmove -- \
+	   $(DOTNET) $(abspath $(BUILD)/gcmover_out/gcmover.dll) >$(BUILD)/gcmove_live.out 2>&1; rc=$$?; \
+	 hs=$$(grep -c "handshake found" $(BUILD)/gcmove_live.out); \
+	 rr=$$(grep -oE 'remapped_ranges=[0-9]+' $(BUILD)/gcmove_live.out | grep -oE '[0-9]+' | tail -1); [ -z "$$rr" ] && rr=0; \
+	 hello=$$(grep -c HELLO_GC_MOVER $(BUILD)/gcmove_live.out); \
+	 crash=$$(grep -icE "SIGSEGV|Segmentation|SIGTRAP|fatal error" $(BUILD)/gcmove_live.out); \
+	 echo "# handshake=$$hs  remapped_ranges=$$rr  hello=$$hello  crash=$$crash  rc=$$rc"; \
+	 if [ "$$hs" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ]; then \
+	   echo "ok 1 - gc_move handshake + workload completed UNDER DR (no crash/hang)"; \
+	 else echo "not ok 1 - live gc_move path failed (hs=$$hs rc=$$rc hello=$$hello crash=$$crash)"; fi; \
+	 if [ "$$rr" -ge 1 ]; then \
+	   echo "ok 2 - at_gc_remap_live drove real compacting-GC move ranges under DR ($$rr ranges)"; \
+	 else echo "not ok 2 - no live remaps (remapped_ranges=$$rr)"; fi; \
+	 echo "1..2"; \
+	 [ "$$hs" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$rr" -ge 1 ]
 endif
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------

@@ -37,4 +37,5 @@ COPY . .
 # MovedReferences2 delivers move ranges under DR with no crash/hang. Self-skips cleanly if any
 # prerequisite is absent, but here all are installed, so it executes.
 CMD set -eux; \
-    make dr-gcprofiler-probe DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-gcprofiler-probe DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-gcmove-live-test DYNAMORIO_HOME=$DYNAMORIO_HOME

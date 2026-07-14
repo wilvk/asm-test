@@ -25,6 +25,36 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include "asmtest_taint_gcmove.h" // live GC-move handshake with the DR taint client (Increment 7)
+
+// LIVE path (Increment 7): if the DR taint client published its gc_move entry (client option
+// `gcmove` -> the shm handshake), drive at_gc_remap with every moved range so tags follow moved
+// objects. When there is no handshake (the bare coexistence PROBE), this stays inert and the
+// profiler only logs — so the go/no-go probe is unaffected.
+typedef void (*gcmove_fn)(uint64_t /*old*/, uint64_t /*new*/, uint64_t /*len*/);
+static gcmove_fn g_gc_move;
+static void ensure_gcmove(void) {
+    if (g_gc_move != nullptr)
+        return;
+    int fd = shm_open(AT_GCMOVE_SHM_NAME, O_RDONLY, 0600);
+    if (fd < 0)
+        return;
+    at_gcmove_channel_t *ch = (at_gcmove_channel_t *)mmap(
+        nullptr, sizeof *ch, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (ch == MAP_FAILED)
+        return;
+    if (ch->magic == AT_GCMOVE_MAGIC && ch->gc_move != 0) {
+        g_gc_move = (gcmove_fn)(uintptr_t)ch->gc_move;
+        fprintf(stderr, "GCPROBE: gc_move handshake found — driving live shadow remap\n");
+        fflush(stderr);
+    }
+    munmap(ch, sizeof *ch);
+}
 
 // Our CLSID — the workload sets CORECLR_PROFILER to this. {A4B2C1D0-1111-2222-3333-444455556666}
 // IID_ICorProfilerInfo (28B5557D-3F3F-48b4-90B2-5F9EEA2F6C48) — to fetch SetEventMask.
@@ -79,6 +109,12 @@ static HRESULT STDMETHODCALLTYPE Prof_MovedReferences2(ICorProfilerCallback4 *Th
         fprintf(stderr, "  range[0]={old=0x%zx new=0x%zx len=%zu}",
                 (size_t)oldS[0], (size_t)newS[0], (size_t)len[0]);
     fprintf(stderr, "\n"); fflush(stderr);
+    // LIVE path: feed each moved range to the DR taint client's shadow remap (if published).
+    // The runtime is suspended here, so this is the natural quiesce fence for the bulk remap.
+    ensure_gcmove();
+    if (g_gc_move != nullptr)
+        for (ULONG i = 0; i < c; i++)
+            g_gc_move((uint64_t)oldS[i], (uint64_t)newS[i], (uint64_t)len[i]);
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE Prof_GCFinished(ICorProfilerCallback4 *This) {

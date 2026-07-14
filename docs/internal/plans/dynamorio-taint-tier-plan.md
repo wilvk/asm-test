@@ -818,7 +818,27 @@ reuses the Phase-4 PC→method addr-channel, so the plumbing is known; the subtl
 conservative un-instrumented-gap boundary policy and proving the scoping cost bound with an
 inscount delta.
 
-## Increment 7 - GC-move umbra shadow remap *(partial slice LANDED 2026-07-13 (disabled-flag remap + synthetic test, 092142d); full path now UNBLOCKED 2026-07-14 — the Phase-4 extraction blocker is solved by the ICorProfilerCallback4::MovedReferences2 profiler, coexistence-probe GO 55763e7; remap wiring + live-GC survival test remain)*
+## Increment 7 - GC-move umbra shadow remap *(partial slice 092142d + Phase-4 unblock 55763e7; **live-wiring Slice 1 LANDED 2026-07-14** — the profiler drives the shadow remap on REAL GC moves under DR; full seed→sink SURVIVAL (Slice 2) remains)*
+
+> **UPDATE 2026-07-14 — live wiring (Slice 1) LANDED.** The profiler→client GC-move path is wired
+> end-to-end and validated under DR (`make dr-gcmove-live-test` / `docker-gcprofiler-probe`): the DR
+> taint client, under the new `gcmove` option, publishes the address of its `at_gc_remap` entry to a
+> POSIX-shm handshake ([asmtest_taint_gcmove.h](../../../include/asmtest_taint_gcmove.h)); the
+> in-process `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../examples/gcprofiler_probe/))
+> reads it and feeds every moved `{old,new,len}` range to the client at the GC fence. Measured: **60,021
+> real compacting-GC move ranges remapped under DR across 120 GC events, workload completed, no
+> crash/hang**; flag-off value client still 14/14, gcremap selftest still 7/7, docker-drtrace 155/155.
+> **LOAD-BEARING FINDING baked into the design:** DR heap/lock APIs — `dr_mutex_lock`, `dr_global_alloc`,
+> `dr_raw_mem_alloc` — **CRASH when called from the profiler's app-code thread** (they need the client
+> `dcontext`, which only exists inside a DR event/clean call; only `dr_fprintf` survives). So the live
+> remap is a **DR-API-FREE** variant `at_gc_remap_live` (plain atomic spinlock + a static snapshot +
+> `tag_ptr_lookup` only — NO `tag_ptr_create`/leaf alloc); the original DR-API `at_gc_remap` stays for the
+> client-init-context synthetic selftest. **Slice-1 limitation (conservative, never a crash/false-positive):**
+> the live remap does NOT create a destination leaf, so a move into an as-yet-untouched NEW leaf is a
+> conservative MISS. **Slice 2 (full seed→move→sink survival)** needs a **raw-syscall leaf allocator**
+> (a bare `mmap` syscall, DR-API-free) so the tag is carried across a never-touched destination, plus the
+> managed seed→move→sink choreography + the coherence canary. Details:
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 
 > **UPDATE 2026-07-14 — triple-extraction mechanism researched; recommendation changed.**
 > The Phase-4 `{old,new,len}` extraction has now been researched (deep-research
@@ -953,8 +973,14 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > (the residual propagation) — then GC-survival (Increment 7 — now unblocked, profiler path), the
 > shared-fixture emulator cross-check, and the hard band + non-detection CI gate.
 
-> **Implementation spec — lever (1) record-free production propagation (the ~60% chunk, next up).**
-> A precise scope so this delicate `event_insert` change is a clean pickup, not a rushed re-architecture.
+> **Implementation spec — record-free production propagation (DEFERRED FOLLOWUP optimization).**
+> Priority note (2026-07-14): this is a **followup**, not the active next step. The tier already beats the
+> shipped ptrace-single-step L0 tier (~10³–10⁵×) by 1–3 orders of magnitude at today's ~187× production
+> overhead, so band-compliance strengthens an already-winning number rather than unlocking a capability —
+> and reaching the band additionally needs the uncertain direct-mapped-shadow lever. The active priority
+> is capability breadth (Increment 7 GC survival, now unblocked). Spec retained below for a clean pickup
+> when in-band overhead becomes a hard requirement. A precise scope so this delicate `event_insert` change
+> is a clean pickup, not a rushed re-architecture.
 > - **What to remove under `prod`:** the entire drx_buf record path — the per-instruction buffer-pointer
 >   load (`drx_buf_insert_load_buf_ptr`) + advance (`drx_buf_insert_update_buf_ptr`), the `off`/`mem_n`/
 >   `mem_ea` stores, and the `step_taint` witness store. Production needs neither the value trace nor the
