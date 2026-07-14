@@ -1243,9 +1243,74 @@ static int sample_window_ibs(void (*run_fn)(void *), void *arg, uint64_t *ips,
     return ASMTEST_HW_OK;
 }
 
-int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
-                                      int period, uint64_t *ips, size_t cap,
-                                      size_t *nips, int *truncated) {
+/* --- E5: AutoFDO/BOLT block-frequency reweighting of the survey endpoints ------- */
+/* The plain drain records ONE endpoint per taken branch (each retired e[i].to, weight
+ * 1). That over-weights branchy code: a hot straight-line run that takes few branches
+ * contributes few endpoints even though it retired MANY instructions, while a tiny
+ * branch-dense block contributes one endpoint per branch. The AutoFDO/BOLT model
+ * (MCF-style basic-block frequencies, https://arxiv.org/pdf/1807.06735) instead credits
+ * the BLOCK that spans [to_i, from_{i+1}] — the straight-line run from a branch's TARGET
+ * to the NEXT branch's SOURCE — by its LENGTH, so a method's weight tracks the
+ * instructions it retired, not the branches it took.
+ *
+ * Region-free (no [base,len), no decoder), so the block length is estimated from the
+ * byte span from_{i+1} - to_i at the amd64 average encoded instruction length, and the
+ * block head to_i is appended to ips[] that many times (the same "repeat by weight"
+ * shape ibs_survey_to_ips uses for IBS edges). One sample's branch stack is a
+ * chronologically contiguous history with no intervening taken branch, so adjacent
+ * records' [to_i, from_{i+1}] IS a real straight-line span within one function; a
+ * backward or implausibly-large span (a corrupt record, never a real fall-through)
+ * degrades to a single weight-1 hit, and each block's weight is clamped so no one block
+ * can monopolize the bounded endpoint buffer. `e` is one sample's stack (newest-first,
+ * `nr` entries); appends starting at ips[at], stops at `cap`, and returns the new count.
+ * Aborted (rolled-back) records are skipped, so pairing is over the retired branches
+ * only. Exposed (no public header) for a host-independent unit test, like the
+ * amd_backend decode entries. */
+#define AMD_BLOCK_AVG_INSN_BYTES 4  /* mean amd64 encoded instruction length */
+#define AMD_BLOCK_WEIGHT_MAX     64 /* per-block clamp: keep the buffer usable */
+/* Bigger than any real fall-through: a span past this is a corrupt record. */
+#define AMD_BLOCK_SPAN_MAX (1ull << 16)
+
+size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,
+                                       uint64_t nr, uint64_t *ips, size_t at,
+                                       size_t cap) {
+    size_t n = at;
+    if (e == NULL || ips == NULL)
+        return n;
+    uint64_t head =
+        0; /* the previous (older) retired branch's TARGET = block head */
+    int have_head = 0;
+    /* Walk oldest -> newest (the stack is newest-first): each retired record's `from`
+     * closes the block opened by the previous (older) record's `to`. */
+    for (uint64_t k = nr; k-- > 0;) {
+        if (e[k].abort)
+            continue; /* rolled back: not retired, so no real adjacency to close */
+        if (have_head && n < cap) {
+            uint64_t src = e[k].from;
+            uint64_t w = 1;
+            if (src >= head && (src - head) <= AMD_BLOCK_SPAN_MAX)
+                w = (src - head) / AMD_BLOCK_AVG_INSN_BYTES +
+                    1; /* approx insns */
+            if (w > AMD_BLOCK_WEIGHT_MAX)
+                w = AMD_BLOCK_WEIGHT_MAX;
+            for (uint64_t c = 0; c < w && n < cap; c++)
+                ips[n++] = head; /* credit the block frequency at its head PC */
+        }
+        head = e[k].to;
+        have_head = 1;
+    }
+    /* The newest retired target opens a block the sample never closed (no younger
+     * branch), so credit it once — every sampled target still appears at least once. */
+    if (have_head && n < cap)
+        ips[n++] = head;
+    return n;
+}
+
+/* Shared core of the whole-window survey; block_weight != 0 selects the E5 AutoFDO
+ * block-frequency drain above, 0 the plain one-endpoint-per-branch drain. */
+static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
+                                  uint64_t *ips, size_t cap, size_t *nips,
+                                  int *truncated, int block_weight) {
     if (run_fn == NULL || ips == NULL || cap == 0)
         return ASMTEST_HW_EINVAL;
     if (nips != NULL)
@@ -1352,12 +1417,19 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                         struct perf_branch_entry *e =
                             (struct perf_branch_entry *)(body +
                                                          sizeof(uint64_t));
-                        for (uint64_t i = 0; i < nr && n < cap; i++) {
-                            if (e[i].abort)
-                                continue; /* transactional abort: not executed */
-                            /* Record the branch TARGET (block head / method entry) —
-                             * the label the caller buckets by method for hotness. */
-                            ips[n++] = e[i].to;
+                        if (block_weight) {
+                            /* E5: credit each fall-through BLOCK by its length. */
+                            n = asmtest_amd_block_weight_sample(e, nr, ips, n,
+                                                                cap);
+                        } else {
+                            for (uint64_t i = 0; i < nr && n < cap; i++) {
+                                if (e[i].abort)
+                                    continue; /* transactional abort: not run */
+                                /* Record the branch TARGET (block head / method
+                                 * entry) — the label the caller buckets by
+                                 * method for hotness. */
+                                ips[n++] = e[i].to;
+                            }
                         }
                         if (n >= cap)
                             lost =
@@ -1380,6 +1452,26 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     if (truncated != NULL)
         *truncated = (lost || n == 0) ? 1 : 0;
     return ASMTEST_HW_OK;
+}
+
+/* WindowHot survey (E2 semantics): one branch-target endpoint per taken branch. */
+int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
+                                      int period, uint64_t *ips, size_t cap,
+                                      size_t *nips, int *truncated) {
+    return sample_window_amd_impl(run_fn, arg, period, ips, cap, nips,
+                                  truncated, 0);
+}
+
+/* E5 variant: the AutoFDO/BOLT block-frequency reweighting behind the same survey
+ * surface — weight each straight-line block [to_i, from_{i+1}] by its length so branchy
+ * code is not over-weighted vs. hot straight-line code. Same self-skip / IBS-fallback /
+ * truncation contract as the plain survey; the branch-stack drain is the only change. */
+int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
+                                               void *arg, int period,
+                                               uint64_t *ips, size_t cap,
+                                               size_t *nips, int *truncated) {
+    return sample_window_amd_impl(run_fn, arg, period, ips, cap, nips,
+                                  truncated, 1);
 }
 
 /* BEGIN/END split of the survey above — lets a caller ARM the sampler, run a block INLINE,
@@ -1571,6 +1663,19 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
 int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated) {
+    (void)run_fn;
+    (void)arg;
+    (void)period;
+    (void)ips;
+    (void)cap;
+    (void)nips;
+    (void)truncated;
+    return ASMTEST_HW_ENOSYS;
+}
+int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
+                                               void *arg, int period,
+                                               uint64_t *ips, size_t cap,
+                                               size_t *nips, int *truncated) {
     (void)run_fn;
     (void)arg;
     (void)period;

@@ -500,6 +500,13 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_window_amd(
             IntPtr runFn, IntPtr arg, int period, ulong[] ips, UIntPtr cap,
             out UIntPtr nips, out int truncated);
+        // §E5: the AutoFDO/BOLT block-frequency variant of the same survey — weights the
+        // BLOCK spanning [to_i, from_{i+1}] (a branch target to the next branch's source) by
+        // its length instead of counting one endpoint per branch, so branchy code is not
+        // over-weighted vs. hot straight-line code. Identical surface + self-skip contract.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_window_amd_weighted(
+            IntPtr runFn, IntPtr arg, int period, ulong[] ips, UIntPtr cap,
+            out UIntPtr nips, out int truncated);
         // Begin/end split of the AMD-LBR survey: arm in a ctor, drain in Dispose, so the block
         // runs INLINE between them (`using (new AsmTrace(HwBackend.AmdLbr)) { block }`). _end's
         // ips may be null (a drain-less release of a leaked scope's fd+mapping).
@@ -2139,7 +2146,7 @@ namespace Asmtest
         {
             Action run = body ?? (() => { });
             // Pass 1 — the cheap, crash-proof statistical survey (the hot-method histogram).
-            AsmTrace survey = WindowHot(run, 16, withRundown, rundownSettleMs, member, line);
+            AsmTrace survey = WindowHot(run, 16, withRundown, rundownSettleMs, member: member, line: line);
 
             // Pass 2 — the exact out-of-process window (same private ctor as Window).
             var ww = new AsmTrace(ScopeName(member, line), byMethod, withRundown, rundownSettleMs);
@@ -2398,17 +2405,24 @@ namespace Asmtest
         /// </summary>
         /// <param name="period">Branch-retired sample period (clamped &gt;=2). Larger = fewer
         /// PMIs / less throttling but coarser; ~16 is a good survey default.</param>
+        /// <param name="blockWeighted">§E5: weight each sampled straight-line BLOCK
+        /// <c>[to_i, from_{i+1}]</c> (a branch target to the next branch's source) by its length
+        /// — the AutoFDO/BOLT MCF block-frequency model — instead of counting one endpoint per
+        /// branch, so a method's <see cref="Methods"/> weight tracks the instructions it retired
+        /// and branchy code is not over-weighted vs. hot straight-line code. Additive fidelity
+        /// behind the same survey surface; degrades to the plain endpoint model on the Zen-2
+        /// IBS-Op fallback. Default keeps the E2 one-endpoint-per-branch weighting.</param>
         public static AsmTrace WindowHot(Action body, int period = 16, bool withRundown = true,
-                                         int rundownSettleMs = 300,
+                                         int rundownSettleMs = 300, bool blockWeighted = false,
                                          [CallerMemberName] string member = null,
                                          [CallerLineNumber] int line = 0)
         {
             var ww = new AsmTrace(ScopeName(member, line), byMethod: true, withRundown, rundownSettleMs);
-            ww.RunWindowHotAmd(body ?? (() => { }), period);
+            ww.RunWindowHotAmd(body ?? (() => { }), period, blockWeighted);
             return ww;
         }
 
-        void RunWindowHotAmd(Action body, int period)
+        void RunWindowHotAmd(Action body, int period, bool blockWeighted = false)
         {
             _disposed = true;       // this factory already closed the scope
             IsStatistical = true;   // the result is a sampled survey, always
@@ -2432,8 +2446,12 @@ namespace Asmtest
             Thread.BeginThreadAffinity(); // the sampled event is on this OS thread
             try
             {
-                rc = HwNative.asmtest_hwtrace_sample_window_amd(
-                    fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc);
+                // §E5: the block-frequency drain when requested, else the E2 endpoint drain.
+                rc = blockWeighted
+                    ? HwNative.asmtest_hwtrace_sample_window_amd_weighted(
+                        fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc)
+                    : HwNative.asmtest_hwtrace_sample_window_amd(
+                        fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc);
             }
             finally { Thread.EndThreadAffinity(); GC.KeepAlive(cb); }
 

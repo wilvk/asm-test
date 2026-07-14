@@ -71,6 +71,15 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
                                    asmtest_trace_t *trace);
 int asmtest_amd_has_cpu_flag(const char *flag);
 int asmtest_amd_flags_have(const char *line, const char *flag);
+/* §E5 AutoFDO block-frequency reweighting of the survey endpoints + the survey entry
+ * that drives it (internal, defined in hwtrace.c; not in the public header). */
+size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,
+                                       uint64_t nr, uint64_t *ips, size_t at,
+                                       size_t cap);
+int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
+                                               void *arg, int period,
+                                               uint64_t *ips, size_t cap,
+                                               size_t *nips, int *truncated);
 #endif
 
 /* CoreSight reconstruction-core interface (decoder-independent half of
@@ -4225,6 +4234,77 @@ static void asw_run(void *arg) {
 }
 #endif
 
+/* §E5 AutoFDO/BOLT block-frequency reweighting (asmtest_amd_block_weight_sample): a
+ * host-independent, DETERMINISTIC guard for the reweighting math, run on every host with
+ * a synthetic branch stack (like test_amd_reconstruction) so it does not depend on live
+ * AMD hardware. The plain drain records one endpoint per branch; this instead credits the
+ * BLOCK [to_i, from_{i+1}] by its byte span (approx instruction count), so a long
+ * straight-line block outweighs a tiny branchy one — the E5 fidelity upgrade. */
+static void test_amd_block_weight(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    /* Three retired branches, newest-first (as perf delivers): e[0] newest .. e[2] oldest.
+     * The blocks are the runs between an older branch's TARGET and the next branch's
+     * SOURCE: [0x2000, 0x2040) = 0x40 bytes (big straight-line run) and [0x3000, 0x3004)
+     * = 4 bytes (tiny). The oldest target 0x2000 heads the big block; the newest target
+     * 0x4000 opens a block the sample never closed, credited once. */
+    struct perf_branch_entry br[3];
+    memset(br, 0, sizeof br);
+    br[0].from = 0x3004;
+    br[0].to = 0x4000; /* newest */
+    br[1].from = 0x2040;
+    br[1].to = 0x3000;
+    br[2].from = 0x1000;
+    br[2].to = 0x2000; /* oldest */
+
+    uint64_t ips[64];
+    size_t n = asmtest_amd_block_weight_sample(br, 3, ips, 0, 64);
+    /* w(big) = 0x40/4 + 1 = 17 copies of 0x2000; w(tiny) = 4/4 + 1 = 2 copies of 0x3000;
+     * newest target 0x4000 once. Total 17 + 2 + 1 = 20. */
+    size_t c2000 = 0, c3000 = 0, c4000 = 0, other = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (ips[i] == 0x2000)
+            c2000++;
+        else if (ips[i] == 0x3000)
+            c3000++;
+        else if (ips[i] == 0x4000)
+            c4000++;
+        else
+            other++;
+    }
+    CHECK(n == 20 && other == 0,
+          "E5 block-weight: 3-branch stack yields 20 span-weighted endpoints");
+    CHECK(c2000 == 17 && c3000 == 2 && c4000 == 1,
+          "E5 block-weight: big block (0x2000) outweighs the tiny block "
+          "(0x3000)");
+    CHECK(c2000 > c3000,
+          "E5 block-weight: a long straight-line block is NOT under-weighted "
+          "vs. branchy code");
+
+    /* Abort skip + backward-span degrade. e[1] aborted (rolled back) -> skipped, so the
+     * surviving adjacency is oldest(0x100) -> newest, whose from (0x50) is BEFORE the head
+     * (0x100): not a real forward fall-through, so it degrades to a single weight-1 hit. */
+    struct perf_branch_entry deg[3];
+    memset(deg, 0, sizeof deg);
+    deg[0].from = 0x50;
+    deg[0].to = 0x60; /* newest */
+    deg[1].from = 0xFF;
+    deg[1].to = 0x80;
+    deg[1].abort = 1; /* rolled back: skipped */
+    deg[2].from = 0x40;
+    deg[2].to = 0x100; /* oldest */
+    size_t dn = asmtest_amd_block_weight_sample(deg, 3, ips, 0, 64);
+    CHECK(dn == 2 && ips[0] == 0x100 && ips[1] == 0x60,
+          "E5 block-weight: aborts are skipped and a backward span degrades to "
+          "weight 1");
+
+    /* The cap is honored: starting near the end appends at most (cap - at) endpoints. */
+    size_t cn = asmtest_amd_block_weight_sample(br, 3, ips, 62, 64);
+    CHECK(cn == 64, "E5 block-weight: respects the ips[] buffer cap");
+#else
+    printf("# SKIP AMD block-weight: Linux x86-64 only\n");
+#endif
+}
+
 /* §D3 statistical AMD-LBR whole-window survey (asmtest_hwtrace_sample_window_amd): a
  * region-free branch-stack SAMPLE of a hot loop, collecting absolute branch-target
  * endpoints. Not an exact trace — a sampled hot-address histogram. Needs Zen 3+/LBR +
@@ -4279,6 +4359,28 @@ static void test_amd_sample_window(void) {
           "AMD sample_window: most sampled endpoints land in the hot loop");
     printf("# AMD sample_window: nips=%zu in-loop=%zu truncated=%d\n", nips,
            inregion, trunc);
+
+    /* §E5: the SAME survey with AutoFDO/BOLT block-frequency reweighting. It weights each
+     * fall-through block by its span, so the loop body [0x3,0x9) is credited by length
+     * rather than one hit per back-edge — the in-loop dominance still holds, and (since a
+     * span-of-6 block contributes >1 copy) the reweighted survey collects at least as many
+     * endpoints as the plain one for the same run. */
+    size_t wnips = 0;
+    int wtrunc = 0;
+    int wrc = asmtest_hwtrace_sample_window_amd_weighted(asw_run, NULL, 16, ips,
+                                                         cap, &wnips, &wtrunc);
+    CHECK(wrc == ASMTEST_HW_OK,
+          "AMD sample_window (E5 block-weighted) returns OK");
+    CHECK(wnips > 0,
+          "AMD sample_window (E5 block-weighted) collected weighted endpoints");
+    size_t winregion = 0;
+    for (size_t i = 0; i < wnips; i++)
+        if (ips[i] >= base && ips[i] < end)
+            winregion++;
+    CHECK(winregion * 2 > wnips, "AMD sample_window (E5 block-weighted): most "
+                                 "weight lands in the hot loop");
+    printf("# AMD sample_window E5: nips=%zu in-loop=%zu truncated=%d\n", wnips,
+           winregion, wtrunc);
 
     free(ips);
     munmap(fn, sizeof LOOP);
@@ -6581,6 +6683,7 @@ int main(void) {
     test_amd_msr_spec_filter();
     test_amd_tailcall_exit();
     test_amd_reduced_filter();
+    test_amd_block_weight(); /* §E5 AutoFDO block-frequency reweighting (deterministic) */
     /* F43 ring-parse seam + F44 reduced-filter stitch follow + P9 cpuinfo-flag probe:
      * host-independent, exercise logic that self-skips off AMD LBR hardware. */
     test_amd_ring_parse();
