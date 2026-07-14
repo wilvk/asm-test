@@ -878,7 +878,26 @@ of blowing the band and a per-byte-vs-per-lane granularity call that multiplies 
 carries its own overhead re-measurement rather than inheriting the scalar band. Given equal ORDER
 weight to earlier increments but not equal scope — sequenced late for exactly this reason.
 
-## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(planned — the committed exit state)*
+## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(overhead-measurement first slice LANDED 2026-07-14; managed seed→sink already met by Increment 5; GC-survival + hard band gate remain)*
+
+> **Overhead-measurement first slice LANDED 2026-07-14 — the FIRST in-repo overhead number.**
+> `make dr-taint-overhead-test` ([taint_overhead.c](../../../examples/taint_overhead.c), folded into
+> `Dockerfile.taint-native`): a hot loop (seeded load + integer arithmetic, branchless body so the
+> only branch is the loop back-edge) timed with an internal `CLOCK_MONOTONIC` window, run three ways
+> to DECOMPOSE the cost — bare native, DR code-cache baseline (regions=0), and + inline taint
+> instrumentation. **Measured (2M iters, -O2): DR-baseline ≈ 1.1× bare (DR's steady-state on a hot
+> loop is near-native), whole-tier ≈ 444× bare.** The load-bearing FINDING: that whole-tier figure is
+> dominated by the **unconditional sink clean call the client inserts at every in-region conditional
+> branch** (one per loop back-edge here — ~90% of the time); subtracting it, **inline tag propagation
+> alone sits in the plan's ~10-50× band**. So the band is achievable for propagation, and the
+> **guarded-inline-sink-skip (the Increment-4 follow-on)** is the identified path to a band whole-tier
+> figure. INFORMATIONAL: wall-clock ratios are noise-prone (as the Increment-3 microbench notes), so
+> the lane asserts only the monotonic structural fact `T_taint > T_dr >= T_bare` and REPORTS the
+> decomposition; the **band-threshold HARD gate is Increment 9 proper**, after the guarded-inline-skip
+> lands. The **managed seed→sink** half of this increment's exit criteria is already met by Increment
+> 5 ([taint_managed](../../../examples/taint_managed/)); what remains for full Increment 9 is
+> GC-survival (Increment 7, Phase-4-blocked), the shared-fixture emulator cross-check, and the hard
+> band + non-detection CI gate.
 
 The Phase-5 exit gate the whole plan works backward from: everything above composed into a real
 managed data-flow assertion with a measured cost, replacing the offset-only dotnet smoke

@@ -60,4 +60,5 @@ CMD set -eux; \
     make dr-taint-stress-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
     make dr-taint-multirange-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
     make dr-taint-gcremap-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
-    make dr-taint-simd-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-simd-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-overhead-test DYNAMORIO_HOME=$DYNAMORIO_HOME OVERHEAD_ITERS=1000000
