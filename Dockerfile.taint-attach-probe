@@ -44,4 +44,5 @@ COPY . .
 CMD set -eux; \
     cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "no yama ptrace_scope"; \
     make dr-taint-attach-probe DYNAMORIO_HOME=$DYNAMORIO_HOME; \
-    make dr-taint-attach-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-attach-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-detach-test DYNAMORIO_HOME=$DYNAMORIO_HOME

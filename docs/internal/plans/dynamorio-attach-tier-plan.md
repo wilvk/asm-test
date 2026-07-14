@@ -282,7 +282,20 @@ config path; the attach lane, capturing a variable multi-run window, gates SINK-
 
 ---
 
-## Increment 5 - Detach correctness + attach/detach cycling *(planned)*
+## Increment 5 - Detach correctness + attach/detach cycling *(**first slice LANDED 2026-07-14** — mid-run detach returns the victim to native; K-cycling + leak assertion remain)*
+
+> **UPDATE 2026-07-14 — DETACH correctness (return-to-native) LANDED.** The take-over-and-LET-GO half
+> of the contract. Unlike `dr-taint-attach-test` (which stays attached until the victim exits),
+> `make dr-taint-detach-test` attaches to the running victim (background `drrun -attach`), captures a
+> ~4 s window, then DETACHES MID-RUN via `drconfig -detach <pid>` and asserts the victim RETURNS TO
+> NATIVE: its heartbeats keep advancing AFTER the detach (measured 5 → 10 past detach) and it exits
+> cleanly (`victim_rc=0`, uncorrupted) — DR restored its register/flag state and removed the
+> instrumentation. The attach-window capture is checked too (≥1 tainted `kind=1` hit). The detach
+> mechanism is `drconfig -detach <pid>` (in the pinned DR; needs CAP_SYS_PTRACE like the attach). In
+> the external-attach docker image (now 3 lanes: probe + attach + detach). **Remaining Increment-5
+> slices:** K-round attach/detach CYCLING on one PID (each window capturing, native + uncorrupted
+> between) — the re-attach reliability the taint plan flagged; and an explicit shadow/TLS leak
+> assertion (each detach frees `g_dir` + the reg-tag TLS + the drx buffers).
 
 Launch's "one lifecycle per process" contract is *replaced* by attach's take-over-and-let-go.
 

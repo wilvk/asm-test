@@ -687,6 +687,52 @@ else
 	 $(BUILD)/taint_validator $(ATTACH_EXT_SHM) attach noseed
 endif
 
+# --- DR ATTACH tier, Increment 5 (first slice): DETACH correctness (return to native) ---
+# Attach's take-over-and-LET-GO contract (replacing launch's one-lifecycle-per-process). Unlike
+# dr-taint-attach-test (which stays attached until the victim exits), this attaches to the running
+# victim, captures a window, then DETACHES MID-RUN via `drconfig -detach <pid>` and asserts the
+# victim RETURNS TO NATIVE: its heartbeats keep advancing AFTER the detach (more beats at exit than
+# at detach), and it exits cleanly (uncorrupted). Proof the tier can seize a process, capture, and
+# release it, leaving it running native. The attach-window capture is checked too (>=1 tainted hit).
+# Needs SYS_PTRACE (attach + detach both ptrace); the external-attach docker image adds the cap.
+# The K-round cycling + the shadow/TLS leak assertion are the remaining Increment-5 slices.
+DR_DRCONFIG ?= $(DYNAMORIO_HOME)/bin64/drconfig
+DETACH_SHM ?= /asmtest_taint_detach_ci
+.PHONY: dr-taint-detach-test
+dr-taint-detach-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-detach-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_markerless_victim $(BUILD)/taint_validator
+	@echo "== dr-taint-detach-test (Increment 5: attach -> capture -> DETACH mid-run -> victim continues NATIVE -> exits clean) =="
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 vlog=$(BUILD)/detach_victim.log; rm -f $$vlog /dev/shm$(DETACH_SHM) 2>/dev/null || true; \
+	 $$vbin attach 2>$$vlog & vpid=$$!; \
+	 sleep 2; \
+	 echo "# attaching (background) to running victim pid=$$vpid, capturing ~4s, then detaching mid-run ..."; \
+	 timeout 90 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   region=taint_markerless_victim+$$fixoff,0x16 \
+	   seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$(DETACH_SHM) >$(BUILD)/detach_drrun.log 2>&1 & apid=$$!; \
+	 sleep 4; \
+	 beats_detach=$$(grep -c "MARKERLESS_VICTIM heartbeat" $$vlog 2>/dev/null || true); [ -z "$$beats_detach" ] && beats_detach=0; \
+	 $(DR_DRCONFIG) -detach $$vpid >$(BUILD)/detach_cfg.log 2>&1 || true; \
+	 wait $$apid 2>/dev/null; \
+	 sleep 3; \
+	 wait $$vpid 2>/dev/null; vrc=$$?; \
+	 beats_exit=$$(grep -c "MARKERLESS_VICTIM heartbeat" $$vlog 2>/dev/null || true); [ -z "$$beats_exit" ] && beats_exit=0; \
+	 end=$$(grep -c "MARKERLESS_VICTIM done" $$vlog 2>/dev/null || true); [ -z "$$end" ] && end=0; \
+	 echo "# beats_at_detach=$$beats_detach  beats_at_exit=$$beats_exit  victim_done=$$end  victim_rc=$$vrc"; \
+	 $(BUILD)/taint_validator $(DETACH_SHM) attach; \
+	 if [ "$$beats_exit" -gt "$$beats_detach" ] && [ "$$end" -ge 1 ]; then \
+	   echo "ok - victim RETURNED TO NATIVE after mid-run detach ($$beats_detach -> $$beats_exit heartbeats past detach) and exited clean [DETACH -> NATIVE]"; \
+	 else echo "not ok - victim did not continue native after detach or exit clean (beats $$beats_detach->$$beats_exit end=$$end)"; exit 1; fi
+endif
+
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------
 # `drrun -c <taint client>.so -- ./taint_stress` launches an N-thread native workload
 # whose threads, released together by a barrier, ALL seed a disjoint buffer + run the
