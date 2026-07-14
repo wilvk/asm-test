@@ -411,6 +411,143 @@ static void test_attach(void) {
     asmtest_valtrace_free(v);
 }
 
+/* ---- Increment 1: attach to a FOREIGN, already-running process by pid ---- */
+#if defined(__linux__) && defined(__x86_64__)
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
+                                       size_t code_len, uint64_t max_insns,
+                                       long *result, asmtest_valtrace_t *vt);
+
+typedef long (*fn2_t)(long, long);
+typedef struct {
+    volatile long counter;
+} sp_ctl;
+
+static void test_attach_pid(void) {
+    /* Increment 1: attach to a process we did NOT create. The victim runs INDEPENDENTLY (no
+     * PTRACE_TRACEME) — it loops calling df_chain at a known mmap'd address, bumping a shared
+     * counter each iteration. We attach BY PID: SEIZE, run_to the region entry, read the
+     * region bytes FROM the target (process_vm_readv), single-step the region, then DETACH so
+     * the victim SURVIVES — proven by the counter still advancing after the detach. */
+    size_t len = sizeof df_chain;
+    void *ex = mmap(NULL, len, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ex == MAP_FAILED) {
+        printf("# SKIP attach_pid: mmap failed\n");
+        return;
+    }
+    memcpy(ex, df_chain, len);
+    if (mprotect(ex, len, PROT_READ | PROT_EXEC) != 0) {
+        munmap(ex, len);
+        printf("# SKIP attach_pid: mprotect failed\n");
+        return;
+    }
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    sp_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP attach_pid: shm mmap failed\n");
+        return;
+    }
+    ctl->counter = 0;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap(ctl, sizeof *ctl);
+        printf("# SKIP attach_pid: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        /* Independent victim: loop the fixture at `base`, bump the counter, forever. */
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        for (;;) {
+            volatile long r = ((fn2_t)base)(7, 5);
+            (void)r;
+            ctl->counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_pid(pid, base, len, 0, &result, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP attach_pid: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        asmtest_valtrace_free(v);
+        munmap(ex, len);
+        munmap(ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "attach_pid: attached a FOREIGN running pid + stepped the region");
+    CHECK(result == 12,
+          "attach_pid: attached region returned 12 (rax = rdi + rsi)");
+    CHECK(v->steps_len == 6,
+          "attach_pid: six in-region steps captured over the foreign victim");
+
+    /* Survival: the detached victim keeps looping, so the shared counter advances. */
+    long c0 = ctl->counter;
+    struct timespec ts = {0, 40 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->counter > c0,
+          "attach_pid: victim SURVIVED the detach (counter kept advancing)");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(g != NULL && has_edge(g, 1, 2),
+          "attach_pid: load-after-store edge step1 -> step2");
+    CHECK(has_edge(g, 0, 1) && has_edge(g, 2, 3) && has_edge(g, 3, 4),
+          "attach_pid: register move chain edges 0->1, 2->3, 3->4");
+    at_val_rec_t seed = {0}; /* step 0 */
+    at_val_rec_t sink = {0};
+    sink.step = 4;
+    asmtest_slice_t *fwd = asmtest_slice_forward(g, seed);
+    asmtest_slice_t *bwd = asmtest_slice_backward(g, sink);
+#ifdef DF_HAVE_EMU
+    asmtest_valtrace_t *ve = asmtest_valtrace_new(64, 512, 512);
+    long ea[2] = {7, 5};
+    asmtest_dataflow_emu_run(df_chain, sizeof df_chain, ea, 2, 0, ve);
+    asmtest_defuse_t *ge = asmtest_defuse_build(ve);
+    asmtest_slice_t *efwd = ge ? asmtest_slice_forward(ge, seed) : NULL;
+    asmtest_slice_t *ebwd = ge ? asmtest_slice_backward(ge, sink) : NULL;
+    CHECK(efwd && slices_equal(fwd, efwd),
+          "attach_pid: live forward slice == emulator oracle forward slice");
+    CHECK(ebwd && slices_equal(bwd, ebwd),
+          "attach_pid: live backward slice == emulator oracle backward slice");
+    asmtest_slice_free(efwd);
+    asmtest_slice_free(ebwd);
+    asmtest_defuse_free(ge);
+    asmtest_valtrace_free(ve);
+#else
+    CHECK(bwd && bwd->n == 5 && asmtest_slice_contains(bwd, 0) &&
+              asmtest_slice_contains(bwd, 4),
+          "attach_pid: backward slice(step4) = {0,1,2,3,4}");
+#endif
+    asmtest_slice_free(fwd);
+    asmtest_slice_free(bwd);
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap(ctl, sizeof *ctl);
+}
+#else
+static void test_attach_pid(void) {}
+#endif
+
 int main(void) {
     /* Probe once; a negative code means the environment cannot ptrace (seccomp) or the
      * build lacks Capstone / is off-platform — self-skip cleanly like the other tiers. */
@@ -438,6 +575,7 @@ int main(void) {
     test_xmm();
     test_ymm();
     test_attach();
+    test_attach_pid();
 
     printf("1..%d\n", checks);
     if (failures)

@@ -46,6 +46,20 @@ docker-emu: docker-build
 docker-asm: docker-build
 	$(_docker_run) make asm-test
 
+# Data-flow live-attach lane (live-attach-dataflow-plan.md, Increment 1). A dedicated Capstone +
+# Unicorn image (the base CI image builds Capstone from source only under --emu/--asm, not --all)
+# running `make dataflow-test` with seccomp=unconfined so the PTRACE_SEIZE-based attach_pid
+# producer — attach to an already-running FOREIGN pid, single-step a scoped region, DETACH so it
+# SURVIVES — actually EXECUTES in-container (the default docker seccomp profile blocks the ptrace
+# path, on which it self-skips DF_PTRACE_ETRACE rather than fail). The victim is the ptrace suite's
+# own forked child (yama-safe) and the live L2 slices are cross-checked against the emulator L0.
+.PHONY: docker-dataflow-attach
+docker-dataflow-attach:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.dataflow-attach \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-dataflow-attach .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  asmtest-dataflow-attach
+
 docker-valgrind: docker-build
 	$(_docker_run) make valgrind
 

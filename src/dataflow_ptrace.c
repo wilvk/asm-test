@@ -73,6 +73,8 @@
  */
 #define _GNU_SOURCE
 
+#include <sys/types.h> /* pid_t — used by the attach_pid signature on every platform */
+
 #include "asmtest_valtrace.h"
 
 /* Return codes from the scoped ptrace producers (kept in step with the test's copy). */
@@ -306,6 +308,16 @@ typedef struct {
     int have_cur;
     uint64_t cur_off;
     recbuf cur;
+    /* Foreign-attach disposition (attach_pid path). `foreign` = the tracee is a process we
+     * did NOT create, so dfp_step_loop must NEVER kill it on an error/truncation exit —
+     * it leaves it trap-stopped (*left_stopped=1) and the caller PTRACE_DETACHes it (with
+     * `detach_sig` forwarded on a fault) so it SURVIVES. `pre_positioned` = the tracee is
+     * already trap-stopped AT the region entry (run_to), so the loop must examine THAT stop
+     * as the first instruction's pre-state instead of single-stepping past it. Both default
+     * 0 (the fork `_run` + the forked-victim `attach` paths are byte-unchanged). */
+    int foreign;
+    int pre_positioned;
+    int detach_sig;
 } dfp_ctx;
 
 /* Fill a record's value from a register (GP inline, XMM/YMM spilled to wide[]) at the
@@ -450,61 +462,87 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
 /* The shared single-step driver                                       */
 /* ------------------------------------------------------------------ */
 
+/* End a step loop on a DIRTY outcome (fault / backstop / bound / ptrace-wait failure). The
+ * kill-vs-detach decision lives HERE so both callers share it: a FOREIGN tracee (attach_pid)
+ * is never killed — it is left trap-stopped (*left_stopped=1) for the caller to PTRACE_DETACH
+ * (with `fatal_sig` forwarded, 0 = none) so it SURVIVES; a self-owned tracee (the fork `_run`
+ * / forked-victim `attach` paths) is killed+reaped here, exactly as before. Returns `code`. */
+static int dfp_dirty_exit(dfp_ctx *c, int code, int fatal_sig,
+                          int *left_stopped) {
+    if (c->foreign) {
+        c->detach_sig = fatal_sig;
+        *left_stopped = 1;
+        return code;
+    }
+    int status;
+    kill(c->pid, SIGKILL);
+    waitpid(c->pid, &status, 0);
+    return code;
+}
+
 /* Drive PTRACE_SINGLESTEP over [base_ip, base_ip+code_len) of an already trace-stopped
  * tracee (c->pid), capturing each in-region step's values. On a CLEAN region exit the
  * tracee is left ptrace-stopped just past the region, `result` (if non-NULL) receives
  * rax, and *left_stopped is set to 1 — the caller then resumes it (the fork owner runs
  * it to _exit; an attached victim is DETACHed so it SURVIVES). On any other outcome the
- * tracee is killed+reaped and *left_stopped stays 0. Returns a DF_PTRACE_* code. */
+ * disposition is dfp_dirty_exit's (self-owned → kill+reap; foreign → left stopped for
+ * detach). When c->pre_positioned the tracee is already trap-stopped AT base_ip (run_to),
+ * so the first iteration examines THAT stop as the entry instruction's pre-state instead of
+ * single-stepping past it. Returns a DF_PTRACE_* code. */
 static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                          uint64_t max_insns, long *result, int *left_stopped) {
     pid_t pid = c->pid;
     int status = 0, entered = 0, pending_sig = 0;
     uint64_t recorded = 0, total = 0;
+    int skip_step =
+        c->pre_positioned; /* examine the run_to entry stop before stepping */
     *left_stopped = 0;
 
     for (;;) {
-        if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
-                   (void *)(uintptr_t)pending_sig) != 0)
-            break; /* stepping failed → kill+reap below */
-        pending_sig = 0;
-        if (waitpid(pid, &status, 0) < 0) {
-            if (errno == EINTR)
-                continue;
-            break;
-        }
-        if (WIFEXITED(status) || WIFSIGNALED(status)) {
-            /* Tracee gone (already reaped by this waitpid). If we entered but never
-             * observed the return, the capture is incomplete; if we never entered,
-             * this is a setup failure. */
-            if (c->have_cur)
-                c->vt->truncated = true;
-            return entered ? DF_PTRACE_OK : DF_PTRACE_ETRACE;
-        }
-        if (!WIFSTOPPED(status))
-            continue;
-        if (WSTOPSIG(status) != SIGTRAP) {
-            int sig = WSTOPSIG(status);
-            if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
-                sig == SIGFPE) {
-                c->vt->truncated = true;
-                kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
-                return DF_PTRACE_FAULT;
+        if (skip_step) {
+            skip_step =
+                0; /* first iteration only: the tracee is already at the entry */
+        } else {
+            if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
+                       (void *)(uintptr_t)pending_sig) != 0)
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            pending_sig = 0;
+            if (waitpid(pid, &status, 0) < 0) {
+                if (errno == EINTR)
+                    continue;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
             }
-            pending_sig = sig; /* unrelated signal: forward and keep stepping */
-            continue;
-        }
-        if (++total > DFP_STEP_BACKSTOP) {
-            c->vt->truncated = true;
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            return DF_PTRACE_ETRACE;
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                /* Tracee gone (already reaped by this waitpid) — nothing to detach. If we
+                 * entered but never observed the return, the capture is incomplete; if we
+                 * never entered, this is a setup failure. */
+                if (c->have_cur)
+                    c->vt->truncated = true;
+                return entered ? DF_PTRACE_OK : DF_PTRACE_ETRACE;
+            }
+            if (!WIFSTOPPED(status))
+                continue;
+            if (WSTOPSIG(status) != SIGTRAP) {
+                int sig = WSTOPSIG(status);
+                if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+                    sig == SIGFPE) {
+                    c->vt->truncated = true;
+                    return dfp_dirty_exit(c, DF_PTRACE_FAULT, sig,
+                                          left_stopped);
+                }
+                pending_sig =
+                    sig; /* unrelated signal: forward and keep stepping */
+                continue;
+            }
+            if (++total > DFP_STEP_BACKSTOP) {
+                c->vt->truncated = true;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            }
         }
 
         struct user_regs_struct regs;
         if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
-            break;
+            return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
         uint64_t pc = regs.rip;
 
         if (pc >= base_ip && pc < base_ip + code_len) {
@@ -520,9 +558,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                 asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
                 c->have_cur = 0;
                 c->vt->truncated = true;
-                kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
-                return DF_PTRACE_ETRACE;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
             }
         } else if (entered) {
             /* Left the region (a leaf routine's ret): finalize the last in-region step
@@ -537,11 +573,6 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
         }
         /* else: prologue / libc before the region — keep stepping, capture nothing. */
     }
-
-    /* Broke out on a ptrace/wait failure: kill+reap the tracee. */
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
-    return DF_PTRACE_ETRACE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -570,6 +601,58 @@ static void *map_exec(const uint8_t *code, size_t code_len) {
         return NULL;
     }
     return ex;
+}
+
+/* Breakpoint-and-continue an already-SEIZEd, INTERRUPT-stopped tracee to `base` and leave it
+ * trap-stopped THERE (original byte restored, rip rewound past the int3) — the region-entry
+ * precondition dfp_step_loop's pre_positioned path expects. int3 via PTRACE_POKETEXT only (a
+ * native r-x or r-w-x region: ptrace writes bypass the page write bit); the DR0 hardware-
+ * breakpoint fallback for a W^X JIT heap that cannot be poked is a later increment. Non-SIGTRAP
+ * signals the target takes on the way to the region are forwarded. Returns 0 on success, -1 if
+ * the target exited or a ptrace call failed. */
+static int dfp_run_to(pid_t pid, uint64_t base) {
+    errno = 0;
+    long orig = ptrace(PTRACE_PEEKTEXT, pid, (void *)(uintptr_t)base, NULL);
+    if (orig == -1 && errno != 0)
+        return -1;
+    long trap = (orig & ~0xffL) | 0xccL;
+    if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)base,
+               (void *)(uintptr_t)trap) != 0)
+        return -1;
+
+    int status = 0, pending = 0;
+    for (;;) {
+        if (ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)pending) != 0)
+            return -1;
+        pending = 0;
+        if (waitpid(pid, &status, 0) < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            return -1; /* target gone before reaching the region */
+        if (!WIFSTOPPED(status))
+            continue;
+        if (WSTOPSIG(status) == SIGTRAP)
+            break;
+        pending =
+            WSTOPSIG(status); /* forward an unrelated signal, keep running */
+    }
+
+    /* Restore the original byte and rewind rip from base+1 (past the int3) back to base. */
+    if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)base,
+               (void *)(uintptr_t)orig) != 0)
+        return -1;
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
+        return -1;
+    if (regs.rip != base + 1)
+        return -1; /* stopped somewhere other than our breakpoint */
+    regs.rip = base;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0)
+        return -1;
+    return 0;
 }
 
 int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
@@ -756,6 +839,73 @@ kill_out:
     return DF_PTRACE_ETRACE;
 }
 
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
+                                       size_t code_len, uint64_t max_insns,
+                                       long *result, asmtest_valtrace_t *vt) {
+    if (vt == NULL || pid <= 0 || base == 0 || code_len == 0)
+        return DF_PTRACE_EINVAL;
+    vt->mem_space = AT_LOC_MEM_ABS;
+
+    int status = 0, left_stopped = 0, rc = DF_PTRACE_ETRACE;
+
+    /* SEIZE the already-running FOREIGN target. NO PTRACE_O_EXITKILL — a tracer crash must not
+     * take a process we do not own down with it. INTERRUPT it into an event-stop so we can
+     * drive it; a ptrace-permission failure (seccomp / yama) surfaces as ETRACE and the caller
+     * self-skips. */
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0)
+        return DF_PTRACE_ETRACE;
+    if (ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0)
+        goto detach;
+    for (;;) {
+        pid_t w = waitpid(pid, &status, 0);
+        if (w >= 0 || errno != EINTR)
+            break;
+    }
+    if (!WIFSTOPPED(status))
+        goto detach;
+
+    /* Run the target to the region entry (breakpoint-cont-rewind), then read the region's
+     * bytes FROM the target for the operand enumerator (process_vm_readv, not fork inheritance
+     * — we did not create this process). */
+    if (dfp_run_to(pid, base) != 0)
+        goto detach;
+    uint8_t *code = (uint8_t *)malloc(code_len);
+    if (code == NULL)
+        goto detach;
+    if (!child_read(pid, base, code, code_len)) {
+        free(code);
+        goto detach;
+    }
+
+    dfp_ctx c;
+    memset(&c, 0, sizeof c);
+    c.pid = pid;
+    c.vt = vt;
+    c.code = code;
+    c.code_len = code_len;
+    c.base = base;
+    c.foreign = 1;        /* NEVER kill the target on any exit */
+    c.pre_positioned = 1; /* already trap-stopped AT base (dfp_run_to) */
+
+    rc = dfp_step_loop(&c, base, code_len, max_insns, result, &left_stopped);
+    free(c.cur.v);
+    free(code);
+
+    /* Crash-safe detach: the target is trap-stopped (just past the region on a clean exit, or
+     * left in place on a dirty one) — PTRACE_DETACH resumes it FREE (untraced) so it SURVIVES,
+     * forwarding a fault signal (c.detach_sig, 0 otherwise) so the target handles its own
+     * fault. It is NOT our child, so we do not waitpid it. If it already exited mid-capture
+     * (left_stopped == 0) the detach is a harmless no-op. */
+    if (left_stopped)
+        ptrace(PTRACE_DETACH, pid, NULL, (void *)(uintptr_t)c.detach_sig);
+    return rc;
+
+detach:
+    /* Setup failed after SEIZE: detach cleanly, leaving the target running + alive. */
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    return DF_PTRACE_ETRACE;
+}
+
 #else /* not (Linux x86-64 + Capstone) */
 
 int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
@@ -788,6 +938,18 @@ int asmtest_dataflow_ptrace_attach(const uint8_t *code, size_t code_len,
     (void)vt;
     if (survived != NULL)
         *survived = 0;
+    return DF_PTRACE_ENOSYS;
+}
+
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
+                                       size_t code_len, uint64_t max_insns,
+                                       long *result, asmtest_valtrace_t *vt) {
+    (void)pid;
+    (void)base;
+    (void)code_len;
+    (void)max_insns;
+    (void)result;
+    (void)vt;
     return DF_PTRACE_ENOSYS;
 }
 

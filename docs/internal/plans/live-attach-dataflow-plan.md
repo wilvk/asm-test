@@ -138,7 +138,25 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
 
 ---
 
-## Increment 1 — Native live-attach value producer *(planned — recommended first milestone)*
+## Increment 1 — Native live-attach value producer *(**LANDED 2026-07-14**)*
+
+> **UPDATE 2026-07-14 — LANDED.** `asmtest_dataflow_ptrace_attach_pid(pid, base, len, max_insns,
+> result, vt)` attaches to an ALREADY-RUNNING, FOREIGN process (a pid we did not create): SEIZE (no
+> `PTRACE_O_EXITKILL`), INTERRUPT, an inline `dfp_run_to` (int3 breakpoint-cont-rewind) to the region
+> entry, read the region bytes FROM the target via `process_vm_readv`, single-step `[base, base+len)`
+> filling the same `asmtest_valtrace_t`, then `PTRACE_DETACH` so the target SURVIVES. The shared
+> `dfp_step_loop` was made **foreign-safe**: a new `dfp_dirty_exit` owns the kill-vs-detach decision
+> via `dfp_ctx.foreign` (self-owned → kill+reap, exactly as before; foreign → left trap-stopped for
+> the caller to detach, forwarding a fault signal), and a `pre_positioned` first-iteration examines
+> the `run_to` entry stop as the entry instruction's pre-state. The fork `_run` + forked-victim
+> `attach` paths are **byte-unchanged** (existing 36/36 held). New `test_attach_pid` in
+> `examples/test_dataflow_ptrace.c` forks an INDEPENDENT looping victim (no `TRACEME`), attaches by
+> pid, and asserts: the region returns 12, six steps captured, the def-use edges, **the live L2
+> slices == the emulator L0 oracle** (fwd + bwd), and the victim SURVIVED the detach (a shared
+> counter keeps advancing) — **44/44** on real ptrace (this host). `make docker-dataflow-attach` runs
+> it in the CI image with `seccomp=unconfined`; on a ptrace-denied host it self-skips
+> `DF_PTRACE_ETRACE`. DR0 hardware-breakpoint fallback (W^X JIT heaps) + call-out step-over are
+> Increments 2-3.
 
 Add `asmtest_dataflow_ptrace_attach_pid` and make the shared step loop foreign-safe.
 

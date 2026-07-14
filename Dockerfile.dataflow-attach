@@ -1,0 +1,26 @@
+# Dockerfile.dataflow-attach — live-attach-dataflow tier, Increment 1 lane
+# (docs/internal/plans/live-attach-dataflow-plan.md). Builds the data-flow analysis lib + the
+# scoped PTRACE value producer with Capstone (the operand enumerator) + Unicorn (the emulator L0
+# ORACLE), and runs `make dataflow-test` — which includes the new attach_pid case: attach to an
+# already-running FOREIGN pid (process_vm_readv the region bytes, run_to the entry, single-step,
+# DETACH so it SURVIVES) and cross-check the live L2 slices against the emulator L0 oracle.
+#
+# Run with `--security-opt seccomp=unconfined` (the docker target adds it) so the PTRACE_SEIZE
+# path actually executes in-container — on a ptrace-denied host the producer self-skips
+# (DF_PTRACE_ETRACE) rather than fail. The victim is the test's own forked child (yama-safe, no
+# extra capability needed). Linux x86-64 only. Build + run:  make docker-dataflow-attach
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The analysis lib + operand enumerator need Capstone; the oracle cross-check needs Unicorn.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates pkg-config libcapstone-dev libunicorn-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+CMD make WERROR=1 dataflow-test
