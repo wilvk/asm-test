@@ -360,6 +360,19 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 > [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md). Docker:
 > `make docker-taint-managed-attach-probe` (DR + .NET SDK, `--cap-add=SYS_PTRACE`); THROWAWAY
 > diagnostic, not in the main CI gate.
+>
+> **UPDATE 2026-07-14 (2/2) — Option-1 cheap experiments swept; still NO-GO; Option-2 plan written.**
+> A bounded sweep (parameterized via `PROBE_DROPS` / `PROBE_CLIENT_ARGS` on the probe lane) confirmed
+> the NO-GO is fundamental: a **`noinstr` seize-only control** (take the process over with ZERO
+> instrumentation) crashes **identically** → it is the SEIZE of arbitrary managed state, not the
+> per-instruction client; `-no_mangle_app_seg` removes the `%fs` stack-canary symptom but the process
+> still SIGSEGVs (segment/TLS handling is one facet of a deeper takeover incompatibility);
+> `-thread_private` / `-native_exec` don't help; and **no DR release helps** (newest cronbuild
+> 11.91.20644 identical; newest stable 11.3.0 fails differently — exit 255 — but still no survival).
+> Option 1 is exhausted. The one credible remaining path — **park all managed threads at GC-safe
+> points BEFORE the seize** — is written up as a research-grade spike (may not land) in
+> [dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md); the
+> managed default stays launch-under-DR / ptrace regardless.
 
 The hard, explicitly-fragile direction — treated as a **spike with a kill criterion**, not
 a milestone. Attach a native DR client to a **running dotnet** process and survive it.

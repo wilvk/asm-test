@@ -606,6 +606,14 @@ endif
 # diagnostic — a no-go is a valid research finding (recorded in
 # docs/internal/analysis/dr-managed-attach-probe-findings.md); NOT wired into the main CI gate.
 MANAGED_ATTACH_OUT ?= $(BUILD)/managed_attach_victim_out
+# Increment-6 Option-1 sweep knobs (bounded experiments to see if a DR option/version flips the
+# NO-GO): PROBE_DROPS = DR runtime options placed in the [DR options] slot before -c (e.g.
+# `-no_mangle_app_seg` — the %fs stack-canary hypothesis — or `-thread_private`); PROBE_CLIENT_ARGS
+# = client options after the client path (e.g. `noinstr` = the seize-only control: take over with
+# ZERO instrumentation to isolate the seize from the per-instruction clean call). Both default empty
+# (the baseline counting-client run reproduced above).
+PROBE_DROPS       ?=
+PROBE_CLIENT_ARGS ?=
 .PHONY: dr-taint-managed-attach-probe
 dr-taint-managed-attach-probe:
 ifndef DR_AVAILABLE
@@ -625,7 +633,7 @@ else
 	@$(DOTNET) build -c Release examples/managed_attach_victim/managed_attach_victim.csproj \
 	    -o $(MANAGED_ATTACH_OUT) >$(BUILD)/managed_attach_build.log 2>&1 \
 	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/managed_attach_build.log; exit 1; }
-	@echo "== dr-taint-managed-attach-probe (DR EXTERNAL attach to a running .NET process — Increment 6 go/no-go) =="
+	@echo "== dr-taint-managed-attach-probe (DR EXTERNAL attach to a running .NET process — Increment 6 go/no-go) [DROPS='$(PROBE_DROPS)' CLIENT_ARGS='$(PROBE_CLIENT_ARGS)'] =="
 	@vlog=$(BUILD)/managed_attach_victim.log; alog=$(BUILD)/managed_attach_drrun.log; \
 	 rm -f $$vlog $$alog; \
 	 $(DOTNET) $(abspath $(MANAGED_ATTACH_OUT)/managed_attach_victim.dll) 2>$$vlog & lpid=$$!; \
@@ -638,7 +646,7 @@ else
 	 sleep 3; \
 	 pre=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$pre" ] && pre=0; \
 	 echo "# managed victim pid=$$vpid ($$pre heartbeats native, pre-attach; JIT warmed); attaching via 'drrun -attach' ..."; \
-	 timeout 120 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_attach_probe.so) >$$alog 2>&1 & apid=$$!; \
+	 timeout 120 $(DR_DRRUN) -attach $$vpid $(PROBE_DROPS) -c $(abspath $(BUILD)/libasmtest_attach_probe.so) $(PROBE_CLIENT_ARGS) >$$alog 2>&1 & apid=$$!; \
 	 sleep 5; \
 	 beats_attach=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$beats_attach" ] && beats_attach=0; \
 	 echo "# ~5 s attached; detaching via 'drconfig -detach' ..."; \

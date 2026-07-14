@@ -22,6 +22,7 @@
 #include "drmgr.h"
 
 #include <stdint.h>
+#include <string.h> /* strcmp — the `noinstr` sweep control option */
 
 /* Instrumented instructions EXECUTED under the attached client (racy across threads, but this is
  * a go/no-go probe, not a measurement — an approximate non-zero count is all the gate needs). */
@@ -55,19 +56,28 @@ static void event_exit(void) {
 
 DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     (void)id;
-    (void)argc;
-    (void)argv;
+    /* `noinstr` client option (managed-attach sweep control): take the process over but register
+     * NO bb-instrumentation event — DR still seizes every thread + builds its code cache, but adds
+     * zero clean calls. This isolates the SEIZE from the INSTRUMENTATION: if a .NET process crashes
+     * under the counting client but SURVIVES noinstr, the crash is the per-instruction clean call,
+     * not DR taking the runtime over; if it crashes under noinstr too, the seize itself is fatal. */
+    int noinstr = 0;
+    for (int i = 0; i < argc; i++)
+        if (argv[i] != NULL && strcmp(argv[i], "noinstr") == 0)
+            noinstr = 1;
     dr_set_client_name("asm-test DR external-attach probe", "");
     /* Reaching here at all proves the injector delivered + started the client in the running
      * victim (dr_client_main runs after DR takes the process over). */
     dr_fprintf(STDERR,
                "ATTACH_PROBE: dr_client_main reached (attach delivered the "
-               "client into the running victim)\n");
+               "client into the running victim; noinstr=%d)\n",
+               noinstr);
     if (!drmgr_init()) {
         dr_fprintf(STDERR, "ATTACH_PROBE: FAIL drmgr_init\n");
         dr_abort();
     }
-    if (!drmgr_register_bb_instrumentation_event(NULL, event_insert, NULL)) {
+    if (!noinstr &&
+        !drmgr_register_bb_instrumentation_event(NULL, event_insert, NULL)) {
         dr_fprintf(STDERR, "ATTACH_PROBE: FAIL register bb event\n");
         dr_abort();
     }

@@ -68,6 +68,49 @@ ATTACH_PROBE: dr_client_main reached (attach delivered the client into the runni
   attach and the attempted detach), and `event_exit` never runs (so `takeover_ok=0`) — the
   process is gone before any instrumented-and-cleanly-exited execution.
 
+## Option-1 sweep — DR options + versions (all NO-GO, 2026-07-14)
+
+Before concluding, a bounded sweep tested whether a DR runtime option or a different DR release
+flips the result (the probe is the go/no-go gate; `PROBE_DROPS` / `PROBE_CLIENT_ARGS` on
+`make dr-taint-managed-attach-probe` parameterize it). **Every cell is NO-GO** — the running
+`dotnet` never survives the takeover:
+
+| DR version | baseline (counting client) | `noinstr` (seize only, zero instrumentation) |
+|---|---|---|
+| **11.91.20630** (pinned) | stack-smashing → SIGSEGV (rc 139) | **stack-smashing → SIGSEGV (rc 139)** |
+| **11.91.20644** (newest cronbuild) | stack-smashing → SIGSEGV (rc 139) | **stack-smashing → SIGSEGV (rc 139)** |
+| **11.3.0** (newest stable) | dies rc 255 (no canary msg) | dies rc 255 (no canary msg) |
+
+DR runtime-option variants on the pinned DR (baseline counting client unless noted):
+
+| DR option | result |
+|---|---|
+| `-no_mangle_app_seg` | **no "stack smashing" message**, but still SIGSEGV (rc 139) |
+| `-no_mangle_app_seg` + `noinstr` | no "stack smashing" message, still SIGSEGV (rc 139) |
+| `-thread_private` | stack-smashing → SIGSEGV (rc 139) |
+| `-native_exec` | stack-smashing → SIGSEGV (rc 139) |
+
+Three findings that sharpen the diagnosis and rule out the easy fixes:
+
+1. **It is the SEIZE, not the instrumentation.** The `noinstr` control takes the process over
+   with **zero** bb-instrumentation (DR still seizes every thread + builds its code cache, but
+   adds no clean calls) and crashes **identically** (same canary trip, same SIGSEGV). So the per-
+   instruction counting client is not the cause — DR *taking the running .NET runtime over* is.
+2. **`-no_mangle_app_seg` is a partial-but-insufficient lead.** Disabling DR's app-segment
+   (`%fs`/`%gs`) mangling **removes the stack-canary trip** (the "stack smashing detected" message
+   disappears) — confirming the `%fs`-relative canary read *was* one facet of the takeover damage —
+   **but the process still SIGSEGVs**, just without that specific symptom. So segment/TLS handling
+   is one layer of a **deeper arbitrary-state-takeover incompatibility**, not the whole problem.
+3. **No DR release helps.** The newest cronbuild (11.91.20644) is byte-identical in behavior; the
+   newest stable (11.3.0) fails *differently* (exit 255, no canary message) but still never
+   survives. External attach into a .NET runtime is not a version-specific regression.
+
+**Conclusion: Option 1 (cheap DR-option / version experiments) is exhausted — NO-GO.** The failure
+is fundamental (seizing arbitrary managed thread state), not a narrow segment bug or a bad build.
+The only credible path left is **Option 2: park all managed threads at GC-safe points *before* the
+seize** — a research-grade effort planned in
+[dynamorio-managed-attach-safepoint-plan.md](../plans/dynamorio-managed-attach-safepoint-plan.md).
+
 ## Kill criterion — exercised
 
 The plan's Increment-6 kill criterion is met exactly: *"if a trivial `dotnet` process
