@@ -588,6 +588,83 @@ else
 	 fi
 endif
 
+# --- DR ATTACH tier, Increment 6: MANAGED-attach go/no-go probe (research-gated) --------------
+# The managed analog of the Increment-2 native external-attach probe. Increment 6 is a SPIKE with a
+# KILL CRITERION: the managed default deliberately stays launch-under-DR / ptrace (a clean managed
+# attach wants GC-safepoint coordination — prior managed+tracing SIGTRAP history is a live warning).
+# This lane empirically answers the go/no-go: can a trivial, already-RUNNING .NET process SURVIVE DR
+# EXTERNAL attach + detach without swallowing a .NET SIGSEGV/SIGTRAP or crashing? It starts
+# examples/managed_attach_victim (a plain dotnet process, NOT under drrun — a long-running managed
+# heartbeat loop whose hot method tiers up), injects DR + the MINIMAL counting client
+# (drclient/attach_probe.c, reused VERBATIM from the native probe) via `drrun -attach <pid>` mid-run,
+# DETACHES via `drconfig -detach <pid>` (reaping the lingering injector — the Increment-5 lesson),
+# and records whether the managed process TOOK the instrumentation (non-zero executed count =
+# takeover), SURVIVED (heartbeats continued while attached), returned to NATIVE after detach
+# (heartbeats advanced past detach) and exited clean with NO fatal .NET signal. Prints
+# `MANAGED ATTACH PROBE OK` (GO) iff all hold, else `MANAGED ATTACH PROBE NO-GO` with the failure
+# mode. Needs SYS_PTRACE (ptrace-seize) + the .NET SDK (the docker lane provides both). THROWAWAY
+# diagnostic — a no-go is a valid research finding (recorded in
+# docs/internal/analysis/dr-managed-attach-probe-findings.md); NOT wired into the main CI gate.
+MANAGED_ATTACH_OUT ?= $(BUILD)/managed_attach_victim_out
+.PHONY: dr-taint-managed-attach-probe
+dr-taint-managed-attach-probe:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-managed-attach-probe =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { \
+	  echo "== dr-taint-managed-attach-probe =="; echo "# SKIP: dotnet SDK not found"; \
+	  echo "1..0 # skipped"; exit 0; }
+	@mkdir -p $(BUILD)/attach_probe
+	cd $(BUILD)/attach_probe && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
+	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) -DASMTEST_BUILD_ATTACH_PROBE=ON \
+	    $(abspath drclient) >/dev/null
+	cmake --build $(BUILD)/attach_probe >/dev/null
+	@rm -rf $(MANAGED_ATTACH_OUT)
+	@$(DOTNET) build -c Release examples/managed_attach_victim/managed_attach_victim.csproj \
+	    -o $(MANAGED_ATTACH_OUT) >$(BUILD)/managed_attach_build.log 2>&1 \
+	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/managed_attach_build.log; exit 1; }
+	@echo "== dr-taint-managed-attach-probe (DR EXTERNAL attach to a running .NET process — Increment 6 go/no-go) =="
+	@vlog=$(BUILD)/managed_attach_victim.log; alog=$(BUILD)/managed_attach_drrun.log; \
+	 rm -f $$vlog $$alog; \
+	 $(DOTNET) $(abspath $(MANAGED_ATTACH_OUT)/managed_attach_victim.dll) 2>$$vlog & lpid=$$!; \
+	 vpid=""; \
+	 for t in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	   vpid=$$(sed -n 's/.*MANAGED_VICTIM_START pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	   [ -n "$$vpid" ] && break; sleep 1; \
+	 done; \
+	 if [ -z "$$vpid" ]; then echo "not ok - managed victim never reported its pid (did not start)"; kill $$lpid 2>/dev/null; echo "MANAGED ATTACH PROBE NO-GO — victim failed to start"; exit 1; fi; \
+	 sleep 3; \
+	 pre=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$pre" ] && pre=0; \
+	 echo "# managed victim pid=$$vpid ($$pre heartbeats native, pre-attach; JIT warmed); attaching via 'drrun -attach' ..."; \
+	 timeout 120 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_attach_probe.so) >$$alog 2>&1 & apid=$$!; \
+	 sleep 5; \
+	 beats_attach=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$beats_attach" ] && beats_attach=0; \
+	 echo "# ~5 s attached; detaching via 'drconfig -detach' ..."; \
+	 $(DR_DRCONFIG) -detach $$vpid >$(BUILD)/managed_attach_cfg.log 2>&1 || true; \
+	 sleep 1; kill $$apid 2>/dev/null || true; wait $$apid 2>/dev/null || true; \
+	 sleep 3; \
+	 beats_detach=$$(grep -c MANAGED_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$beats_detach" ] && beats_detach=0; \
+	 alive=$$(kill -0 $$vpid 2>/dev/null && echo 1 || echo 0); \
+	 wait $$lpid 2>/dev/null; vrc=$$?; \
+	 reached=$$(cat $$vlog $$alog 2>/dev/null | grep -c 'dr_client_main reached' || true); [ -z "$$reached" ] && reached=0; \
+	 takeover=$$(cat $$vlog $$alog 2>/dev/null | grep -c ATTACH_PROBE_TAKEOVER_OK || true); [ -z "$$takeover" ] && takeover=0; \
+	 ended=$$(grep -c MANAGED_VICTIM_END $$vlog 2>/dev/null || true); [ -z "$$ended" ] && ended=0; \
+	 crash=$$(cat $$vlog $$alog 2>/dev/null | grep -icE 'stack smashing|SIGSEGV|SIGTRAP|SIGILL|SIGABRT|Segmentation fault|Fatal error|double free|corrupt|core dumped' || true); [ -z "$$crash" ] && crash=0; \
+	 signame=none; if [ "$$vrc" -gt 128 ]; then n=$$((vrc-128)); \
+	   case $$n in 11) signame=SIGSEGV;; 6) signame=SIGABRT;; 5) signame=SIGTRAP;; 4) signame=SIGILL;; 8) signame=SIGFPE;; *) signame=SIG$$n;; esac; fi; \
+	 fatal=0; if [ "$$vrc" -ne 0 ] || [ "$$crash" -ge 1 ]; then fatal=1; fi; \
+	 echo "# --- drrun -attach output (head) ---"; head -15 $$alog | sed 's/^/#   /'; \
+	 echo "# --- victim log tail ---"; tail -8 $$vlog | sed 's/^/#   /'; \
+	 echo "# SUMMARY: client_reached=$$reached takeover_ok=$$takeover pre_beats=$$pre attach_beats=$$beats_attach detach_beats=$$beats_detach alive_after_detach=$$alive victim_end=$$ended crash_text=$$crash fatal=$$fatal victim_rc=$$vrc ($$signame)"; \
+	 if [ "$$reached" -ge 1 ] && [ "$$takeover" -ge 1 ] && [ "$$beats_detach" -gt "$$beats_attach" ] && [ "$$ended" -ge 1 ] && [ "$$fatal" -eq 0 ]; then \
+	   echo "MANAGED ATTACH PROBE OK — GO: DR external attach took over a running .NET process (non-zero instrumentation executed), it SURVIVED takeover + detach (no fatal .NET signal), returned to native after detach and exited clean. Record GO in dr-managed-attach-probe-findings.md; a managed seed->sink is the follow-on."; \
+	 else \
+	   echo "MANAGED ATTACH PROBE NO-GO — a trivial .NET process did not survive DR external attach+detach cleanly (client_reached=$$reached, then rc=$$vrc/$$signame; see SUMMARY). Kill criterion: record the concrete failure mode in dr-managed-attach-probe-findings.md and keep managed on launch-under-DR / ptrace."; \
+	 fi
+endif
+
 # --- DR ATTACH tier, Increment 3: MARKER-LESS seed/sink/region config ---------
 # An attached foreign target fires NO taint markers, so the client learns what to instrument, what
 # to seed, and where to report ENTIRELY from client OPTIONS + runtime module+offset resolution.

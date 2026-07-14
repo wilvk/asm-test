@@ -340,7 +340,26 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 
 ---
 
-## Increment 6 - Managed attach: GC-safepoint spike *(research-gated; may not land)*
+## Increment 6 - Managed attach: GC-safepoint spike *(**PROBE LANDED 2026-07-14 — NO-GO**; kill criterion exercised, managed stays launch/ptrace)*
+
+> **UPDATE 2026-07-14 — managed-attach go/no-go PROBE landed; verdict NO-GO.** The bounded
+> spike (the Increment-2 probe move, for managed): `make dr-taint-managed-attach-probe` starts a
+> plain long-running `dotnet` process (`examples/managed_attach_victim`, a managed heartbeat loop
+> whose hot method tiers up), injects DR + the minimal counting client (`drclient/attach_probe.c`,
+> reused verbatim) via `drrun -attach <pid>` mid-run, and detaches. **RESULT: DR external attach
+> DELIVERS + starts the client inside the running .NET process (`dr_client_main` runs — injection
+> works exactly as for native), but the TAKEOVER immediately trips glibc stack-smashing detection
+> and the process dies with SIGSEGV (rc 139)** — no managed heartbeat progresses past the seize,
+> reproducibly across two runs (`client_reached=1 takeover_ok=0 crash_text=1 victim_rc=139`). This
+> is the arbitrary-state-takeover hazard: DR seizing the runtime's many threads (GC / tiered-comp /
+> finalizer / JIT) at arbitrary points does not preserve their stack/TLS/guard invariants. **Kill
+> criterion MET** — record it and keep managed on **launch-under-DR / ptrace** (both landed/planned);
+> native external attach is unaffected (GO, Increments 2-5). The research tail (diagnostics-IPC
+> safepoint park, `DR_SIGNAL_DELIVER` pass-through, `-late` posture) was deliberately NOT chased —
+> a bounded spike, not the XL effort. Findings + the exact failure mode:
+> [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md). Docker:
+> `make docker-taint-managed-attach-probe` (DR + .NET SDK, `--cap-add=SYS_PTRACE`); THROWAWAY
+> diagnostic, not in the main CI gate.
 
 The hard, explicitly-fragile direction — treated as a **spike with a kill criterion**, not
 a milestone. Attach a native DR client to a **running dotnet** process and survive it.

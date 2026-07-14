@@ -1,0 +1,47 @@
+# Dockerfile.taint-managed-attach-probe — DynamoRIO ATTACH tier Increment-6 MANAGED-attach go/no-go
+# PROBE (dynamorio-attach-tier-plan.md). The managed analog of Dockerfile.taint-attach-probe's
+# native external-attach probe: it starts a plain, already-running .NET process
+# (examples/managed_attach_victim, a long-running managed heartbeat loop whose hot method tiers up),
+# injects DR + the minimal counting client into it via `drrun -attach <pid>` mid-run, detaches via
+# `drconfig -detach`, and records whether the managed process SURVIVES takeover + detach without
+# swallowing a .NET SIGSEGV/SIGTRAP or crashing — the plan's Increment-6 KILL-CRITERION question.
+#
+# Needs the .NET SDK (build + run the managed victim) + DR + the CMake toolchain — but NOT
+# Capstone/Unicorn (the probe counts instructions; there is no emulator oracle). The DR ptrace-seize
+# needs CAP_SYS_PTRACE, added by the docker target at run time (mirroring the native attach probe).
+#
+# THROWAWAY diagnostic: a NO-GO is a valid research finding (managed attach is research-gated; the
+# managed default stays launch-under-DR / ptrace). Linux x86-64 only. Build + run:
+#   make docker-taint-managed-attach-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+# C/C++ toolchain + CMake (the probe client is CMake-built via drclient/CMakeLists.txt), the .NET
+# SDK (the managed victim), and curl to fetch the DynamoRIO release. No Capstone/Unicorn.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin the SAME DynamoRIO release the other taint lanes use. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Run the managed-attach probe: start the .NET victim, inject DR into it via `drrun -attach`,
+# detach, and print the GO / NO-GO verdict. Needs `--cap-add=SYS_PTRACE` at run time (the docker
+# target adds it). The kernel's ptrace_scope is reported for the findings record.
+CMD set -eux; \
+    cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "no yama ptrace_scope"; \
+    make dr-taint-managed-attach-probe DYNAMORIO_HOME=$DYNAMORIO_HOME

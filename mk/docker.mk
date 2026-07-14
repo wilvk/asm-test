@@ -269,6 +269,19 @@ docker-taint-attach-probe:
 	  -t asmtest-taint-attach-probe .
 	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-taint-attach-probe
 
+# DR ATTACH tier Increment 6: MANAGED-attach empirical probe (research-gated spike). Like the
+# native probe above but the victim is a running .NET process: it injects DR + the counting client
+# into `dotnet` via `drrun -attach <pid>` and prints GO/NO-GO for whether the managed process
+# survives takeover + detach without swallowing a .NET signal or crashing (the kill criterion).
+# Needs the .NET SDK (in the image) + CAP_SYS_PTRACE (added here). A no-go is a valid research
+# finding (recorded in dr-managed-attach-probe-findings.md) — a manual diagnostic, not in the gate.
+.PHONY: docker-taint-managed-attach-probe
+docker-taint-managed-attach-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-managed-attach-probe \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-managed-attach-probe .
+	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-taint-managed-attach-probe
+
 # TAINT tier dotnet coexistence lane (taint tier, Increment 5). Installs DynamoRIO + the
 # .NET SDK (no Capstone/Unicorn) and runs `make dr-taint-dotnet-test`:
 # `drrun -c <taint client> -- dotnet taint_hello.dll` — the first in-tree test of DR's

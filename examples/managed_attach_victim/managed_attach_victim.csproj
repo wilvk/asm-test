@@ -1,0 +1,15 @@
+<!-- Long-running managed victim for the DynamoRIO ATTACH tier's Increment-6 managed-attach
+     go/no-go probe (dynamorio-attach-tier-plan.md). Started as a plain dotnet/apphost process
+     (NOT under drrun) by mk/native-trace.mk dr-taint-managed-attach-probe, which injects DR via
+     drrun -attach <pid> mid-run and checks the process survives takeover + detach. Tiered
+     compilation is left ON (the default) so the hot method tiers up mid-run — DR's code cache
+     must handle the .NET JIT rewriting live code while attached, the coexistence risk. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>managed_attach_victim</AssemblyName>
+  </PropertyGroup>
+</Project>
