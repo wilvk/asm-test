@@ -15,11 +15,20 @@ instrumentation** (a zero-instrumentation `noinstr` seize crashes identically;
 `-no_mangle_app_seg` removes the `%fs` canary symptom but the process still dies; no DR
 release helps).
 
-> **Status: PLANNED (not implemented). Research-grade spike with a kill criterion — may not
-> land.** The managed default stays **launch-under-DR** (taint tier Increment 5, landed) /
-> **ptrace-attach** (out-of-band, the [live-attach-dataflow plan](live-attach-dataflow-plan.md))
-> regardless of the outcome here. This plan exists so the *one* remaining credible mechanism is
-> written down with its exit + kill criteria, not so it is force-landed.
+> **Status: SPIKE EXECUTED 2026-07-14 — Increment 1 GO, Increment 2 NO-GO -> Option 2 CLOSED (the
+> hypothesis is REFUTED).** The suspension primitive works (Inc 1: `SuspendRuntime`/`ResumeRuntime`
+> cycle cleanly natively AND under a coexisting DR), but a runtime with **all managed threads parked
+> at GC-safe points still crashes IDENTICALLY** at the DR seize (Inc 2: `SuspendRuntime` succeeded
+> hr=0, `drrun -attach` delivered the client, then stack-smashing -> SIGSEGV rc 139 — the SAME crash
+> as the Increment-6 baseline, `resumed=0`, no heartbeat past the seize). So safepoint coordination
+> does **not** make managed external attach viable: the crash is the **native** runtime threads DR
+> also seizes (GC/JIT/finalizer/diagnostics), which a managed suspend cannot park — exactly the risk
+> called out below. Increment 3 was not reached. **Managed stays launch-under-DR** (taint tier
+> Increment 5, landed) **/ ptrace-attach** (out-of-band, the
+> [live-attach-dataflow plan](live-attach-dataflow-plan.md)) — the accepted outcome, not a failure.
+> Findings: [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md).
+> Lanes: `make docker-suspendprof-probe` (Inc 1 `dr-suspendprof-test` + Inc 2
+> `dr-suspendprof-attach-test`).
 
 ---
 
@@ -58,7 +67,14 @@ any capture work rides on it.
 
 ---
 
-## Increment 1 — Suspension primitive under DR (safe, launch-first) *(recommended first milestone)*
+## Increment 1 — Suspension primitive under DR (safe, launch-first) *(**GO 2026-07-14** — `dr-suspendprof-test`)*
+
+> **RESULT — GO.** `make dr-suspendprof-test` (`examples/suspendprof_probe/`): a co-loaded profiler
+> (`ICorProfilerInfo10::SuspendRuntime`/`ResumeRuntime` on a profiler-created native thread) cycled
+> the runtime **5/5 times clean, both natively and under `drrun -c <taint client> -- dotnet`** —
+> every `SuspendRuntime` returned S_OK, the managed victim's heartbeats advanced across each cycle,
+> the process exited rc 0 with no crash/hang. The suspension primitive is sound and survives DR
+> coexistence, so the suspend-then-seize ordering (Increment 2) was worth building.
 
 Prove the suspension primitive works **before** touching attach. Under the SAFE launch path
 (`drrun -c <taint client> -- dotnet <victim>`, where DR is already in from a clean start), a
@@ -71,7 +87,18 @@ SIGSEGV/SIGTRAP/hang), managed work resuming each cycle.
 - Kill: if `SuspendRuntime` under DR-launch coexistence already crashes/hangs, the primitive is
   unusable and Option 2 is dead here (record it; stay launch/ptrace). **Effort: M.**
 
-## Increment 2 — Suspend-then-seize ordering harness (the core experiment)
+## Increment 2 — Suspend-then-seize ordering harness (the core experiment) *(**NO-GO 2026-07-14** — hypothesis refuted; `dr-suspendprof-attach-test`)*
+
+> **RESULT — NO-GO (the make-or-break).** `make dr-suspendprof-attach-test`: the profiler
+> `SuspendRuntime`'d the running victim (hr=0, all managed threads parked at GC-safe points, a
+> "suspended" sentinel published), the harness DR-attached the PARKED process (`drrun -attach`,
+> noinstr) and the client was delivered (`dr_client_main` ran) — but the seize **still tripped
+> stack-smashing -> SIGSEGV (rc 139), IDENTICAL to the Increment-6 baseline**; `ResumeRuntime` never
+> ran (`resumed=0`), no heartbeat advanced past the seize. **Parking managed threads did not help at
+> all** — decisive evidence that the fatal takeover is of the **native** runtime threads (GC / JIT /
+> finalizer / diagnostics-IPC), which `SuspendRuntime` does not park. Per the kill criterion, Option
+> 2 is exhausted here; the ICorDebug fallback below would fail for the same reason (it also only
+> stops managed threads), so it was not pursued. Managed stays launch/ptrace.
 
 The choreography, and the crux. On an already-running `dotnet`:
 
@@ -92,7 +119,7 @@ The choreography, and the crux. On an already-running `dotnet`:
   runtime threads, or the seize itself, are the problem); **record NO-GO and stop** — Option 2 is
   exhausted, managed stays launch/ptrace. **Effort: XL / research** — the make-or-break increment.
 
-## Increment 3 — Managed seed→sink over the attached, resumed process *(only if 2 is GO)*
+## Increment 3 — Managed seed→sink over the attached, resumed process *(NOT REACHED — gated on Increment 2 GO, which failed)*
 
 Compose the survival with capture: attach + suspend + seize + resume, then the reused taint client
 seeds a managed buffer and the branch-condition sink fires, drained + validated out of process

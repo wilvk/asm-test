@@ -107,9 +107,30 @@ Three findings that sharpen the diagnosis and rule out the easy fixes:
 
 **Conclusion: Option 1 (cheap DR-option / version experiments) is exhausted — NO-GO.** The failure
 is fundamental (seizing arbitrary managed thread state), not a narrow segment bug or a bad build.
-The only credible path left is **Option 2: park all managed threads at GC-safe points *before* the
-seize** — a research-grade effort planned in
-[dynamorio-managed-attach-safepoint-plan.md](../plans/dynamorio-managed-attach-safepoint-plan.md).
+The only credible path left was **Option 2: park all managed threads at GC-safe points *before* the
+seize** — planned + then EXECUTED as a spike
+([dynamorio-managed-attach-safepoint-plan.md](../plans/dynamorio-managed-attach-safepoint-plan.md)).
+
+## Option-2 safepoint spike — EXECUTED, also NO-GO (2026-07-14)
+
+The spike went end to end and **closed the question with direct evidence**:
+
+- **Increment 1 (GO):** a co-loaded CLR profiler (`ICorProfilerInfo10::SuspendRuntime`/
+  `ResumeRuntime`, `examples/suspendprof_probe/`) cycles the runtime 5/5 times clean — natively AND
+  under `drrun -c <taint client> -- dotnet` (`make dr-suspendprof-test`). The suspension primitive
+  is sound and survives DR coexistence.
+- **Increment 2 (NO-GO — the make-or-break):** `make dr-suspendprof-attach-test` parks the running
+  victim with `SuspendRuntime` (hr=0, all managed threads at GC-safe points), then DR-attaches the
+  **parked** process. The client is delivered (`dr_client_main` runs) — and the seize **still trips
+  stack-smashing → SIGSEGV (rc 139), IDENTICAL to the baseline above**; `ResumeRuntime` never runs,
+  no heartbeat advances past the seize. **Parking managed threads changed nothing.**
+
+This is decisive: the fatal takeover is **not** of the managed thread states (those were parked and
+it crashed identically) — it is the **native runtime threads** DR also seizes (GC / JIT / finalizer
+/ diagnostics-IPC), which a managed-only suspend cannot park. The ICorDebug fallback would fail for
+the same reason (it also stops only managed threads), so it was not pursued. **Both options are
+exhausted; managed data-flow/taint of an already-running process stays on launch-under-DR /
+ptrace-attach (out-of-band).**
 
 ## Kill criterion — exercised
 

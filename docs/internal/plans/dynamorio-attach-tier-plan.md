@@ -370,9 +370,14 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 > `-thread_private` / `-native_exec` don't help; and **no DR release helps** (newest cronbuild
 > 11.91.20644 identical; newest stable 11.3.0 fails differently — exit 255 — but still no survival).
 > Option 1 is exhausted. The one credible remaining path — **park all managed threads at GC-safe
-> points BEFORE the seize** — is written up as a research-grade spike (may not land) in
-> [dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md); the
-> managed default stays launch-under-DR / ptrace regardless.
+> points BEFORE the seize** — was planned + then EXECUTED as a spike
+> ([dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md)):
+> **Increment 1 GO** (a co-loaded profiler's `SuspendRuntime`/`ResumeRuntime` cycles the runtime
+> clean, natively and under DR), but **Increment 2 NO-GO** — a runtime with ALL managed threads
+> parked at GC-safe points **still crashes identically** at the DR seize (stack-smashing → SIGSEGV
+> rc 139; `ResumeRuntime` never runs). Decisive: the fatal takeover is the **native** runtime threads
+> DR also seizes, which a managed suspend cannot park — so **both options are exhausted**; managed
+> stays launch-under-DR / ptrace. Lanes: `make docker-suspendprof-probe`.
 
 The hard, explicitly-fragile direction — treated as a **spike with a kill criterion**, not
 a milestone. Attach a native DR client to a **running dotnet** process and survive it.

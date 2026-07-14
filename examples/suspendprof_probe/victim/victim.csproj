@@ -1,0 +1,15 @@
+<!-- Managed victim for the MANAGED-ATTACH SAFEPOINT plan Increment-1 suspend-primitive probe
+     (dynamorio-managed-attach-safepoint-plan.md). A long-ish managed heartbeat loop whose hot
+     method tiers up; the co-loaded suspendprof profiler SuspendRuntime/ResumeRuntime-cycles it
+     while it runs, and mk/native-trace.mk dr-suspendprof-test asserts the heartbeats keep
+     advancing across the cycles (managed progress resumes) and the process exits clean. Tiered
+     compilation left ON (default). -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>suspendprof_victim</AssemblyName>
+  </PropertyGroup>
+</Project>

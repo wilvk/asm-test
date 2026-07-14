@@ -1,0 +1,43 @@
+# Dockerfile.suspendprof-probe — MANAGED-ATTACH SAFEPOINT plan, Increment-1 suspend-primitive PROBE
+# (dynamorio-managed-attach-safepoint-plan.md). Answers the cheapest prerequisite of the Option-2
+# managed-attach path: can a co-loaded CLR profiler drive ICorProfilerInfo10::SuspendRuntime /
+# ResumeRuntime (park all managed threads at GC-safe points, then resume), in a loop, WITHOUT
+# crashing — first natively, then under a DynamoRIO that is already coexisting
+# (drrun -c <taint client> -- dotnet)? A clean pass means the suspend-then-SEIZE ordering
+# (Increment 2) is worth building; a crash/hang is the Increment-1 kill criterion.
+#
+# Needs DynamoRIO + the .NET SDK + a C++ toolchain + git (to fetch the pinned CoreCLR profiler
+# headers). No Capstone/Unicorn, and — UNLIKE the attach probes — no SYS_PTRACE (this is launch,
+# not attach). Linux x86-64 only. Build + run:  make docker-suspendprof-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin the SAME DynamoRIO release as the other DR images.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Fetch the pinned CoreCLR profiler headers, build the suspend profiler + the managed victim, and
+# drive N SuspendRuntime/ResumeRuntime cycles both natively AND under `drrun -c <taint client>`,
+# asserting the process survives + the victim's heartbeats keep advancing. Self-skips cleanly if a
+# prerequisite is absent, but here all are installed.
+CMD set -eux; \
+    cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "no yama ptrace_scope"; \
+    make dr-suspendprof-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-suspendprof-attach-test DYNAMORIO_HOME=$DYNAMORIO_HOME

@@ -1318,6 +1318,147 @@ else
 	 [ "$$init" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$dr" -ge 1 ]
 endif
 
+# --- MANAGED-ATTACH SAFEPOINT plan, Increment 1: suspend/resume primitive under DR launch ------
+# Proves the suspension primitive the Option-2 managed-attach path depends on
+# (dynamorio-managed-attach-safepoint-plan.md): a co-loaded CLR profiler (examples/suspendprof_probe/
+# suspendprof.cpp, ICorProfilerInfo10::SuspendRuntime/ResumeRuntime) parks all managed threads at
+# GC-safe points + resumes them, N times, while a managed heartbeat victim runs — FIRST NATIVELY,
+# THEN under a DynamoRIO that is already coexisting (drrun -c <taint client> -- dotnet). Asserts the
+# process SURVIVES the cycles (no SIGSEGV/SIGTRAP/hang), the profiler drove all N SuspendRuntime +
+# ResumeRuntime pairs, and the victim's heartbeats kept ADVANCING across them (managed progress
+# resumes). If SuspendRuntime cannot be driven cleanly under DR-launch coexistence, this is the
+# Increment-1 KILL criterion (Option 2 dead here — keep managed on launch/ptrace); if it survives,
+# the suspend-then-SEIZE ordering (Increment 2) is worth building. Reuses the pinned CoreCLR headers
+# (GCPROBE_RT) + the taint client. Self-skips without DynamoRIO/dotnet/git. Needs no SYS_PTRACE
+# (launch, not attach). The body of the `make docker-suspendprof-probe` lane.
+SUSPENDPROF_CLSID  ?= {B5C3D2E1-2222-3333-4444-555566667777}
+SUSPENDPROF_CYCLES ?= 5
+.PHONY: dr-suspendprof-test
+dr-suspendprof-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-suspendprof-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-suspendprof-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
+	@command -v git >/dev/null 2>&1 || { echo "== dr-suspendprof-test =="; echo "# SKIP: git not found (needed to fetch CoreCLR profiler headers)"; echo "1..0 # skipped"; exit 0; }
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   echo "# fetching CoreCLR profiler headers (dotnet/runtime $(GCPROBE_RT_TAG))..."; \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== dr-suspendprof-test =="; echo "# SKIP: could not fetch CoreCLR headers (no network?)"; echo "1..0 # skipped"; exit 0; }; \
+	 fi
+	@R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libsuspendprof.so examples/suspendprof_probe/suspendprof.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude -lpthread \
+	   || { echo "# profiler build failed"; exit 1; }
+	@$(MAKE) drtrace-client
+	@rm -rf $(BUILD)/suspendprof_victim_out
+	@$(DOTNET) build -c Release examples/suspendprof_probe/victim/victim.csproj -o $(BUILD)/suspendprof_victim_out \
+	    >$(BUILD)/suspendprof_build.log 2>&1 || { echo "# dotnet build failed:"; tail -15 $(BUILD)/suspendprof_build.log; exit 1; }
+	@echo "== dr-suspendprof-test (Increment 1: ICorProfilerInfo10 SuspendRuntime/ResumeRuntime cycles, native + under DR) =="
+	@P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(SUSPENDPROF_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libsuspendprof.so) SUSPENDPROF_CYCLES=$(SUSPENDPROF_CYCLES)"; \
+	 dll=$(abspath $(BUILD)/suspendprof_victim_out/suspendprof_victim.dll); want=$(SUSPENDPROF_CYCLES); \
+	 echo "-- NATIVE (no DR): drive $$want suspend/resume cycles --"; \
+	 nout=$$(env $$P $(DOTNET) $$dll 2>&1); nrc=$$?; \
+	 nsus=$$(printf '%s\n' "$$nout" | grep -c 'SuspendRuntime'); nres=$$(printf '%s\n' "$$nout" | grep -c 'ResumeRuntime'); \
+	 nbeats=$$(printf '%s\n' "$$nout" | grep -c 'SUSPENDPROF_VICTIM heartbeat'); nend=$$(printf '%s\n' "$$nout" | grep -c 'SUSPENDPROF_VICTIM done'); \
+	 ncrash=$$(printf '%s\n' "$$nout" | grep -icE 'SIGSEGV|SIGTRAP|Segmentation|stack smashing|Fatal error'); \
+	 echo "# NATIVE: suspends=$$nsus resumes=$$nres beats=$$nbeats done=$$nend crash=$$ncrash rc=$$nrc"; \
+	 echo "-- UNDER DR: drrun -c <taint client> -- dotnet victim (+ suspend profiler) --"; \
+	 dout=$$(env $$P $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- $(DOTNET) $$dll 2>&1); drc=$$?; \
+	 dsus=$$(printf '%s\n' "$$dout" | grep -c 'SuspendRuntime'); dres=$$(printf '%s\n' "$$dout" | grep -c 'ResumeRuntime'); \
+	 dbeats=$$(printf '%s\n' "$$dout" | grep -c 'SUSPENDPROF_VICTIM heartbeat'); dend=$$(printf '%s\n' "$$dout" | grep -c 'SUSPENDPROF_VICTIM done'); \
+	 dcrash=$$(printf '%s\n' "$$dout" | grep -icE 'SIGSEGV|SIGTRAP|Segmentation|stack smashing|Fatal error'); \
+	 echo "# UNDER-DR: suspends=$$dsus resumes=$$dres beats=$$dbeats done=$$dend crash=$$dcrash rc=$$drc"; \
+	 printf '%s\n' "$$dout" | grep -m1 'SuspendRuntime' | sed 's/^/# sample: /'; \
+	 fail=0; \
+	 if [ "$$nsus" -lt "$$want" ] || [ "$$nres" -lt "$$want" ] || [ "$$nend" -lt 1 ] || [ "$$ncrash" -ne 0 ] || [ "$$nrc" -ne 0 ]; then echo "not ok 1 - NATIVE suspend/resume cycles did not all complete clean (suspends=$$nsus/$$want resumes=$$nres end=$$nend crash=$$ncrash rc=$$nrc)"; fail=1; else echo "ok 1 - NATIVE: $$want SuspendRuntime/ResumeRuntime cycles clean, victim progressed + exited (baseline primitive works)"; fi; \
+	 if [ "$$dsus" -lt "$$want" ] || [ "$$dres" -lt "$$want" ] || [ "$$dend" -lt 1 ] || [ "$$dcrash" -ne 0 ] || [ "$$drc" -ne 0 ]; then echo "not ok 2 - UNDER-DR suspend/resume FAILED — Increment-1 KILL criterion (suspends=$$dsus/$$want resumes=$$dres end=$$dend crash=$$dcrash rc=$$drc); Option 2 dead here, keep managed on launch/ptrace"; fail=1; else echo "ok 2 - UNDER DR: $$want SuspendRuntime/ResumeRuntime cycles clean, heartbeats advanced + victim exited (suspension primitive survives DR coexistence)"; fi; \
+	 echo "1..2"; \
+	 [ "$$fail" -eq 0 ]
+endif
+
+# --- MANAGED-ATTACH SAFEPOINT plan, Increment 2: suspend-then-SEIZE ordering (make-or-break) -----
+# The crux of Option 2. Composes the Increment-1 suspension primitive with external attach: start a
+# plain dotnet victim with the suspend profiler in MODE=hold; the profiler SuspendRuntime's ONCE
+# (parking all managed threads at GC-safe points) + publishes a "suspended" sentinel; the harness
+# then DR-attaches (`drrun -attach <pid>`) WHILE the runtime is parked, waits for the client to be
+# delivered (dr_client_main), signals RESUME (profiler ResumeRuntime), detaches, and checks the
+# managed process SURVIVES the seize — heartbeats advance after resume, no fatal signal, clean exit.
+# Direct counterfactual to the Increment-6 baseline (which SIGSEGV'd seizing ARBITRARY managed
+# state): if a SUSPENDED runtime survives the seize, the safepoint-coordination hypothesis holds
+# (GO -> Increment 3). Uses the noinstr counting client (isolate the SEIZE — Increment 6 proved
+# noinstr crashes too). Needs SYS_PTRACE (attach) + the .NET SDK; the docker lane provides both.
+# Self-skips without DynamoRIO/dotnet/git. THROWAWAY research spike; not in the main CI gate.
+.PHONY: dr-suspendprof-attach-test
+dr-suspendprof-attach-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-suspendprof-attach-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-suspendprof-attach-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
+	@command -v git >/dev/null 2>&1 || { echo "== dr-suspendprof-attach-test =="; echo "# SKIP: git not found"; echo "1..0 # skipped"; exit 0; }
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== dr-suspendprof-attach-test =="; echo "# SKIP: could not fetch CoreCLR headers"; echo "1..0 # skipped"; exit 0; }; \
+	 fi
+	@R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libsuspendprof.so examples/suspendprof_probe/suspendprof.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude -lpthread \
+	   || { echo "# profiler build failed"; exit 1; }
+	@mkdir -p $(BUILD)/attach_probe
+	cd $(BUILD)/attach_probe && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
+	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) -DASMTEST_BUILD_ATTACH_PROBE=ON \
+	    $(abspath drclient) >/dev/null
+	cmake --build $(BUILD)/attach_probe >/dev/null
+	@rm -rf $(BUILD)/suspendprof_victim_out
+	@$(DOTNET) build -c Release examples/suspendprof_probe/victim/victim.csproj -o $(BUILD)/suspendprof_victim_out \
+	    >$(BUILD)/suspendprof_build.log 2>&1 || { echo "# dotnet build failed:"; tail -15 $(BUILD)/suspendprof_build.log; exit 1; }
+	@echo "== dr-suspendprof-attach-test (Increment 2: suspend -> SEIZE -> resume; does a PARKED .NET runtime survive DR external attach?) =="
+	@susf=$(BUILD)/sp_suspended; resf=$(BUILD)/sp_resume; vlog=$(BUILD)/sp_attach_victim.log; alog=$(BUILD)/sp_attach_drrun.log; \
+	 rm -f $$susf $$resf $$vlog $$alog; \
+	 P="CORECLR_ENABLE_PROFILING=1 CORECLR_PROFILER=$(SUSPENDPROF_CLSID) CORECLR_PROFILER_PATH=$(abspath $(BUILD)/libsuspendprof.so) SUSPENDPROF_MODE=hold SUSPENDPROF_SUSPENDED_FILE=$$susf SUSPENDPROF_RESUME_FILE=$$resf SUSPENDPROF_VICTIM_SECS=30"; \
+	 env $$P $(DOTNET) $(abspath $(BUILD)/suspendprof_victim_out/suspendprof_victim.dll) 2>$$vlog & lpid=$$!; \
+	 vpid=""; for t in $$(seq 1 15); do vpid=$$(sed -n 's/.*SUSPENDPROF_VICTIM start pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); [ -n "$$vpid" ] && break; sleep 1; done; \
+	 if [ -z "$$vpid" ]; then echo "not ok - victim never started"; kill $$lpid 2>/dev/null; echo "MANAGED SUSPEND-ATTACH PROBE NO-GO — victim failed to start"; exit 1; fi; \
+	 echo "# victim pid=$$vpid; waiting for the profiler to SuspendRuntime (parked sentinel) ..."; \
+	 sus=0; for t in $$(seq 1 20); do [ -f $$susf ] && { sus=1; break; }; sleep 1; done; \
+	 if [ "$$sus" -ne 1 ]; then echo "not ok - runtime never reported SUSPENDED"; kill $$lpid 2>/dev/null; echo "MANAGED SUSPEND-ATTACH PROBE NO-GO — SuspendRuntime never signalled"; exit 1; fi; \
+	 beats_pre=$$(grep -c 'SUSPENDPROF_VICTIM heartbeat' $$vlog 2>/dev/null || true); [ -z "$$beats_pre" ] && beats_pre=0; \
+	 echo "# runtime SUSPENDED at $$beats_pre beats; DR-attaching the PARKED process (noinstr seize) ..."; \
+	 timeout 90 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_attach_probe.so) noinstr >$$alog 2>&1 & apid=$$!; \
+	 reached=0; for t in $$(seq 1 25); do r=$$(cat $$vlog $$alog 2>/dev/null | grep -c 'dr_client_main reached' || true); [ "$$r" -ge 1 ] && { reached=1; break; }; kill -0 $$vpid 2>/dev/null || break; sleep 1; done; \
+	 echo "# client_reached=$$reached; signaling RESUME (ResumeRuntime) ..."; \
+	 : > $$resf; \
+	 sleep 4; \
+	 $(DR_DRCONFIG) -detach $$vpid >$(BUILD)/sp_attach_cfg.log 2>&1 || true; \
+	 sleep 1; kill $$apid 2>/dev/null || true; wait $$apid 2>/dev/null || true; \
+	 sleep 3; \
+	 beats_post=$$(grep -c 'SUSPENDPROF_VICTIM heartbeat' $$vlog 2>/dev/null || true); [ -z "$$beats_post" ] && beats_post=0; \
+	 alive=$$(kill -0 $$vpid 2>/dev/null && echo 1 || echo 0); \
+	 wait $$lpid 2>/dev/null; vrc=$$?; \
+	 resumed=$$(grep -c 'HOLD ResumeRuntime' $$vlog 2>/dev/null || true); [ -z "$$resumed" ] && resumed=0; \
+	 end=$$(grep -c 'SUSPENDPROF_VICTIM done' $$vlog 2>/dev/null || true); [ -z "$$end" ] && end=0; \
+	 sig=$$(cat $$vlog $$alog 2>/dev/null | grep -icE 'stack smashing|SIGSEGV|SIGTRAP|Segmentation|Fatal error' || true); [ -z "$$sig" ] && sig=0; \
+	 signame=none; if [ "$$vrc" -gt 128 ]; then n=$$((vrc-128)); case $$n in 11) signame=SIGSEGV;; 6) signame=SIGABRT;; 5) signame=SIGTRAP;; 4) signame=SIGILL;; *) signame=SIG$$n;; esac; fi; \
+	 echo "# --- victim log tail ---"; tail -8 $$vlog | sed 's/^/#   /'; \
+	 echo "# SUMMARY: client_reached=$$reached resumed=$$resumed beats(pre->post)=$$beats_pre->$$beats_post alive_after_detach=$$alive victim_end=$$end crash=$$sig victim_rc=$$vrc ($$signame)"; \
+	 if [ "$$reached" -ge 1 ] && [ "$$resumed" -ge 1 ] && [ "$$beats_post" -gt "$$beats_pre" ] && [ "$$end" -ge 1 ] && [ "$$sig" -eq 0 ] && [ "$$vrc" -eq 0 ]; then \
+	   echo "MANAGED SUSPEND-ATTACH PROBE OK — GO: a .NET runtime PARKED at safepoints SURVIVED DR external attach (client delivered, ResumeRuntime ran, heartbeats advanced past the seize, clean exit). The safepoint-coordination hypothesis HOLDS -> Increment 3 (managed seed->sink over attach)."; \
+	 else \
+	   echo "MANAGED SUSPEND-ATTACH PROBE NO-GO — even a SUSPENDED runtime did not survive the seize (client_reached=$$reached, rc=$$vrc/$$signame; see SUMMARY). Most likely the native runtime threads DR also seizes; Option 2 exhausted — keep managed on launch/ptrace."; \
+	 fi
+endif
+
 # --- Taint tier Increment 7 (Slice 1): LIVE GC-move remap driven by the profiler ---
 # Composes the go/no-go probe's proven pieces into the actual Increment-7 capability wiring: the
 # ICorProfilerCallback4 profiler (built with the gc_move handshake), the compacting-GC workload,

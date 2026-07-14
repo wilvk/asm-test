@@ -306,6 +306,18 @@ docker-gcprofiler-probe:
 	  -t asmtest-gcprofiler-probe .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-gcprofiler-probe
 
+# MANAGED-ATTACH SAFEPOINT plan Increment-1 suspend-primitive probe. Same image shape as the
+# gcprofiler probe (DynamoRIO + .NET SDK + git for the CoreCLR profiler headers), no SYS_PTRACE
+# (launch, not attach): drives ICorProfilerInfo10::SuspendRuntime/ResumeRuntime cycles natively and
+# under `drrun -c <taint client>`, the go/no-go for whether the Option-2 managed-attach path's
+# suspension primitive survives DR coexistence. See dynamorio-managed-attach-safepoint-plan.md.
+.PHONY: docker-suspendprof-probe
+docker-suspendprof-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.suspendprof-probe \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-suspendprof-probe .
+	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-suspendprof-probe
+
 # Per-language native-trace lane: layer DynamoRIO onto each already-built
 # per-language image (asmtest-<lang>) and run that binding's drtrace wrapper test
 # against a real in-process DynamoRIO — the cross-language counterpart of
