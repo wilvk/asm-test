@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 const koffi = require('koffi');
 const {
-  HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
+  HwTrace, NativeCode, AddrChannel, AsyncStitchedTrace, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
   INTEL_PT, CORESIGHT,
   BEST, CEILING_FREE, ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM,
   TIER_HWTRACE, TIER_EMULATOR, FIDELITY_NATIVE, FIDELITY_VIRTUAL,
@@ -85,7 +85,7 @@ function ok(cond, msg) {
   }
 }
 
-function main() {
+async function main() {
   // --- auto-select orchestrator: selection invariants (hold on every host, even
   //     where all backends self-skip and the cascade is empty) ---
   {
@@ -437,6 +437,69 @@ function main() {
       && st.bounds[1].version === 9n, 'stitchHandles: bound[1] is hop B (seq 1, off 3, tid 222, v9)');
     trA.free();
     trB.free(); // free the hops only AFTER reading the merged result (shallow-copy lifetime)
+  }
+
+  // --- AsyncStitchedTrace: the LIVE §D0.4 async-hop PRODUCER (dotnet AsmStitchedTrace parity).
+  //     Propagate a ScopeId across await/continuation hops via AsyncLocalStorage (async_hooks) and
+  //     feed the stitch merge, so ONE logical operation's trace is stitched across callback hops.
+  //     Unlike the synthetic merge above this ARMS the single-step tier live per hop; the outer
+  //     guard already exited off it (line ~185), so the tier is available here. ---
+  {
+    HwTrace.init(SINGLESTEP);
+    const code = NativeCode.fromBytes(ROUTINE); // add2 leaf: taken path is [0,3,6,0xC,0x11] (5 insns)
+    const op = new AsyncStitchedTrace();
+    try {
+      ok(op.scopeId >= 1, 'AsyncStitchedTrace: operation carries a scope id');
+      ok(AsyncStitchedTrace.currentScopeId() === 0,
+        'AsyncStitchedTrace: no scope on this context before run()');
+
+      // Three hops of ONE logical operation, each captured on a DIFFERENT await continuation
+      // (a later event-loop tick / microtask), proving the ScopeId flows across the hops.
+      let flowedBefore = false, flowedAfterMacro = false, flowedAfterMicro = false;
+      const results = await op.run(async () => {
+        flowedBefore = AsyncStitchedTrace.currentScopeId() === op.scopeId;
+        const r0 = op.step(code, 20, 22);              // hop 0 (synchronous entry)
+        await new Promise((res) => setImmediate(res)); // macrotask hop -> resumes on a later tick
+        flowedAfterMacro = AsyncStitchedTrace.currentScopeId() === op.scopeId;
+        const r1 = op.step(code, 1, 2);                // hop 1 (post-continuation)
+        await Promise.resolve();                       // microtask hop
+        flowedAfterMicro = AsyncStitchedTrace.currentScopeId() === op.scopeId;
+        const r2 = op.step(code, 5, 5);                // hop 2 (post-continuation)
+        return [r0, r1, r2];
+      });
+
+      ok(flowedBefore, 'AsyncStitchedTrace: ScopeId established on the run() context');
+      ok(flowedAfterMacro && flowedAfterMicro,
+        'AsyncStitchedTrace: ScopeId propagates across await/continuation hops (AsyncLocalStorage)');
+      ok(AsyncStitchedTrace.currentScopeId() === 0,
+        'AsyncStitchedTrace: scope does not leak past run()');
+      ok(results[0] === 42 && results[1] === 3 && results[2] === 10,
+        'AsyncStitchedTrace: every hop call returns its real result (execution intact)');
+      ok(op.hopCount === 3, 'AsyncStitchedTrace: three hops recorded');
+
+      op.complete();
+      ok(op.skipReason === '', 'AsyncStitchedTrace: all hops captured on the single-step tier');
+      ok(op.hops.length === 3, 'AsyncStitchedTrace: complete() stitched one bound per hop');
+      ok(op.hops.every((h, i) => h.seq === i), 'AsyncStitchedTrace: hops ordered densely by seq');
+      // Each add2 taken-path body is 5 insns, concatenated by seq -> hop boundaries at 0/5/10.
+      ok(op.hops[0].insnOff === 0 && op.hops[1].insnOff === 5 && op.hops[2].insnOff === 10,
+        'AsyncStitchedTrace: bounds concatenate each 5-insn hop body (offsets 0/5/10)');
+      ok(op.hops.every((h) => h.tid === op.hops[0].tid),
+        'AsyncStitchedTrace: continuation hops carry the (single-threaded) event-loop tid');
+      ok((op.path.match(/; hop \d+ /g) || []).length === 3,
+        'AsyncStitchedTrace: merged path carries all three per-hop sections');
+      if (op.path.includes('ret')) // Capstone present -> the rendered per-hop bodies show the ret
+        ok((op.path.match(/\bret\b/g) || []).length === 3,
+          'AsyncStitchedTrace: each captured hop body renders its ret');
+      ok(!op.truncated, 'AsyncStitchedTrace: merged trace not truncated');
+
+      op.complete(); // idempotent
+      ok(op.hops.length === 3, 'AsyncStitchedTrace: complete() is idempotent');
+    } finally {
+      op.free();
+      code.free();
+      HwTrace.shutdown();
+    }
   }
 
   // --- symbolizeBuckets + regionName: whole-window noise attribution. HOST-INDEPENDENT-ish
@@ -910,4 +973,4 @@ function main() {
   console.log(`1..${_n}`);
 }
 
-main();
+main().catch((e) => { console.error(e); process.exit(1); });

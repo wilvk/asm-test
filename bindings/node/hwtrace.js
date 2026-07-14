@@ -34,6 +34,8 @@
 'use strict';
 const koffi = require('koffi');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks'); // §D0.4 async-hop ScopeId propagation
+const { threadId } = require('worker_threads');        // per-hop provenance tag
 
 const ASMTEST_HW_OK = 0;
 
@@ -1084,6 +1086,136 @@ class HwTrace {
   }
 }
 
+/** §D0.4 — the LIVE async-hop producer: follow ONE logical operation across await /
+ *  continuation hops and stitch each hop's registry-free capture into one ordered trace.
+ *  The Node counterpart to dotnet's `AsmStitchedTrace` (its `AsyncLocal<ScopeId>` hop hook).
+ *  A per-operation ScopeId flows through `await` continuations — which may resume on a later
+ *  event-loop tick — via `AsyncLocalStorage` (Node's `async_hooks`, the ExecutionContext
+ *  analog), so slices captured after an await are recognised as the SAME operation;
+ *  `HwTrace.stitchHandles` (the shipped `asmtest_hwtrace_stitch` merge core) concatenates
+ *  them by hop `seq`. This is the first LIVE feeder for that merge in Node — previously it
+ *  was exercised only from synthetic hand-appended slices.
+ *
+ *  Each hop reuses the managed-safe REGISTRY-FREE lazy-arm path (`call_scoped_ex` — the same
+ *  arm -> call -> disarm entirely in native code as `HwTrace.callScoped`), so no runtime
+ *  machinery is ever single-stepped and no MAX_REGIONS slot is consumed per hop (a long
+ *  operation may run many hops). Only native `NativeCode` leaves are captured in-process; live
+ *  V8 JIT-method resolution is forward-look (no CI). A self-skip off the single-step backend
+ *  runs that hop UNINSTRUMENTED (still recorded, result never lost), mirroring the .NET path.
+ *
+ *    const op = new AsyncStitchedTrace();
+ *    await op.run(async () => {
+ *      op.step(code, 20, 22);                     // hop 0
+ *      await new Promise((r) => setImmediate(r)); // async hop — ScopeId flows across it
+ *      op.step(code, 1, 2);                       // hop 1, resumed on a later tick
+ *    });
+ *    op.complete();
+ *    // op.path — merged per-hop disassembly; op.hops — each hop's { seq, tid, insnOff }
+ *
+ *  Captured hop handles are retained until `free()` (which also `complete()`s if needed).
+ *  A `worker_threads` hop escapes the ExecutionContext — the disclosed Node gap (the tag
+ *  still records the worker `threadId`, but the ScopeId does not auto-propagate there). */
+class AsyncStitchedTrace {
+  /** The scope id flowing through `AsyncLocalStorage` for the active operation, 0 when none
+   *  is on this execution context (read it inside `run(...)` / an awaited continuation of it). */
+  static currentScopeId() { return AsyncStitchedTrace._als.getStore() || 0; }
+
+  constructor() {
+    this._scopeId = ++AsyncStitchedTrace._nextScopeId;
+    this._hops = [];       // { handle, text, seq, tid, captured }
+    this._seq = 0;
+    this._completed = false;
+    this._freed = false;
+    this.skipReason = '';  // honest reason any hop ran uninstrumented ('' when all captured)
+    this.path = '';        // merged per-hop disassembly (set by complete())
+    this.truncated = false;
+    this.hops = [];        // per-hop { seq, tid, insnOff } bounds (set by complete())
+  }
+
+  /** This operation's scope id (>= 1). */
+  get scopeId() { return this._scopeId; }
+  /** Hops attempted so far (including any that ran uninstrumented). */
+  get hopCount() { return this._hops.length; }
+
+  /** Run `fn` with this operation's ScopeId established in the `AsyncLocalStorage` store, so
+   *  it flows into every `await` continuation `fn` spawns (where `AsyncStitchedTrace.currentScopeId()`
+   *  reads it back — the same context propagation dotnet gets from `AsyncLocal<ScopeId>`).
+   *  Returns whatever `fn` returns (await it when `fn` is async). */
+  run(fn) { return AsyncStitchedTrace._als.run(this._scopeId, fn); }
+
+  /** Capture one hop of the operation: registry-free lazy-arm ONLY `code`'s body
+   *  (`call_scoped_ex`), tag the slice with this operation's scope id, the current worker
+   *  thread, and the next seq. The call ALWAYS runs and its result is returned; a failed arm
+   *  (no single-step tier) runs the leaf UNINSTRUMENTED — the hop is still recorded so seq
+   *  numbering stays dense — and sets `skipReason`. `args` pass as C longs (0-6, SysV ABI).
+   *  Renders THIS hop's body now, while its thread-local scope handle is live. */
+  step(code, ...args) {
+    if (this._completed) throw new Error('AsyncStitchedTrace.step after complete()');
+    const seq = this._seq++;
+    const tid = threadId;
+    const handle = _fn.traceNew(256, 64);
+    if (!handle) throw new Error('asmtest_trace_new failed');
+    const n = args.length;
+    const argBuf = Buffer.alloc(8 * Math.max(n, 1));
+    for (let i = 0; i < n; i++) argBuf.writeBigInt64LE(BigInt(args[i]), i * 8);
+    const resultBuf = Buffer.alloc(8);
+    const scope = {}; // _Out_ asmtest_hwtrace_scope_t — koffi fills idx/gen
+    const rc = _fn.callScopedEx(code.base, code.length, handle, code.base,
+      argBuf, n, resultBuf, scope);
+    if (rc !== ASMTEST_HW_OK) {
+      // No single-step tier: self-skip THIS hop. Free its handle, record it uncaptured (keeps
+      // seq dense), and run the leaf uninstrumented so the result is never a silent miss.
+      _fn.traceFree(handle);
+      if (!this.skipReason) this.skipReason = `hop ${seq} did not arm (rc=${rc}); ran uninstrumented`;
+      this._hops.push({ handle: null, text: null, seq, tid, captured: false });
+      return code.call(...args.slice(0, 2));
+    }
+    const text = _renderScope(scope); // handle is thread-local + short-lived — render NOW
+    this._hops.push({ handle, text, seq, tid, captured: true });
+    return _safeInt(resultBuf.readBigInt64LE(0));
+  }
+
+  /** Close the operation and stitch every captured hop into one ordered trace BY seq —
+   *  populating `hops` (per-hop { seq, tid, insnOff } bounds), `path` (merged per-hop
+   *  disassembly in seq order), and `truncated`. Idempotent; the retained hop handles are
+   *  released by `free()`. Self-skips (empty `path`) when nothing captured or the lib is absent. */
+  complete() {
+    if (this._completed) return;
+    this._completed = true;
+    const cap = this._hops.filter((h) => h.captured && h.handle);
+    if (cap.length === 0 || !_lib) { this.path = ''; return; }
+    const st = HwTrace.stitchHandles(cap.map((h) => new HwTrace(h.handle)), {
+      scopeIds: cap.map(() => this._scopeId),
+      seqs: cap.map((h) => h.seq),
+      tids: cap.map((h) => h.tid),
+      versions: cap.map(() => 0),
+    });
+    this.hops = st.bounds.map((b) => ({ seq: b.seq, tid: b.tid, insnOff: b.insnOff }));
+    this.truncated = st.truncated;
+    // Each hop's offsets are relative to its OWN body and were rendered at capture time (in
+    // step(), while its handle was live); concatenate the stored text in seq order.
+    let out = '';
+    for (const b of this.hops) {
+      const h = cap.find((x) => x.seq === b.seq);
+      out += `; hop ${b.seq} (tid ${b.tid}, +${b.insnOff}):\n`;
+      if (h && h.text) out += h.text;
+    }
+    this.path = out;
+  }
+
+  /** Complete (if not already) and free every retained hop trace handle. Idempotent. */
+  free() {
+    if (this._freed) return;
+    this._freed = true;
+    if (!this._completed) this.complete();
+    for (const h of this._hops) {
+      if (h.handle) { _fn.traceFree(h.handle); h.handle = null; }
+    }
+  }
+}
+AsyncStitchedTrace._als = new AsyncLocalStorage();
+AsyncStitchedTrace._nextScopeId = 0;
+
 /** Out-of-process / foreign-process tracing (asmtest_ptrace.h): single-step a
  *  forked or externally-attached target out of band, and resolve the code region
  *  to trace from the OS — /proc/<pid>/maps, a JIT perf-map, or a binary jitdump.
@@ -1628,7 +1760,7 @@ function _renderWindow(scope) {
 }
 
 module.exports = {
-  HwTrace, NativeCode, AddrChannel, Ptrace, Descent, CodeImage,
+  HwTrace, NativeCode, AddrChannel, AsyncStitchedTrace, Ptrace, Descent, CodeImage,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM,
   INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,
