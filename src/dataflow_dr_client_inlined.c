@@ -192,6 +192,19 @@ static app_pc g_origin;
  * (off the runtime hot path), atomically since bb builds can race across threads. */
 static volatile uint64_t g_inscount;
 static int g_scope_whole; /* set by the `scope=whole` client option */
+#ifdef ASMTEST_TAINT
+/* PRODUCTION taint mode (`prod` client option): skip the L0 VALUE-capture RECORDING — the GP
+ * register-file snapshot (~16 stores/insn) and the memory operand VALUE/size/valid stores — which
+ * exist only for the emulator-oracle cross-check, not for taint. The memory-source EA is still
+ * captured (the inline propagation reads it from the record) and the tag propagation + shadow +
+ * sink are unchanged, so taint semantics are identical (the taint SET is the step_taint witness +
+ * offset, not the GP values). This is the Increment-9 production posture: the value trace is the
+ * ~300x cost the overhead bench isolated; dropping it is what a real deployment does. */
+static int g_prod;
+#define AT_PROD_SKIP (g_prod) /* taint build: honor `prod` */
+#else
+#define AT_PROD_SKIP (0)      /* value build: always capture (oracle) — keeps it 14/14 */
+#endif
 
 static void *g_lock;
 
@@ -1437,14 +1450,19 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     /* gpr[16]: each register's APP value. drreg_get_app_value(X, s_a) restores X
      * IN PLACE, so capturing the register that backs s_ptr here would destroy the
      * buffer pointer — skip s_ptr in the loop and capture it last (below), after
-     * copying the buffer pointer to s_b. s_a/s_b are safe to restore in place. */
-    for (int g = 0; g < AT_GPR_COUNT; g++) {
-        if (g_gpr_order[g] == s_ptr)
-            continue;
-        drreg_get_app_value(dc, bb, instr, g_gpr_order[g], s_a);
-        drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                                 opnd_create_reg(s_a), OPSZ_8,
-                                 (short)(offsetof(raw_step_t, gpr) + g * 8));
+     * copying the buffer pointer to s_b. s_a/s_b are safe to restore in place.
+     * PRODUCTION (prod): the register-file snapshot is oracle-only (taint reads reg TAGS
+     * from the TLS reg-tag file, never these values) — the ~16 stores/insn the overhead
+     * bench isolated as the dominant cost; skip it. */
+    if (!AT_PROD_SKIP) {
+        for (int g = 0; g < AT_GPR_COUNT; g++) {
+            if (g_gpr_order[g] == s_ptr)
+                continue;
+            drreg_get_app_value(dc, bb, instr, g_gpr_order[g], s_a);
+            drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
+                                     opnd_create_reg(s_a), OPSZ_8,
+                                     (short)(offsetof(raw_step_t, gpr) + g * 8));
+        }
     }
 
     /* memory operands: EA (inlined lea over app-restored base/index) + value. */
@@ -1462,48 +1480,56 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                                  opnd_create_reg(s_a), OPSZ_8,
                                  (short)(offsetof(raw_step_t, mem_ea) + j * 8));
 
-        /* Inlined value load [s_a] -> s_b, zero-extended per size (see header:
-         * assumes a valid EA). */
-        opnd_t src;
-        if (memsz[j] == 8) {
-            src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0, OPSZ_8);
-            instrlist_meta_preinsert(
-                bb, instr, INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_b), src));
-        } else if (memsz[j] == 4) {
-            src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0, OPSZ_4);
-            instrlist_meta_preinsert(
-                bb, instr,
-                INSTR_CREATE_mov_ld(
-                    dc, opnd_create_reg(reg_resize_to_opsz(s_b, OPSZ_4)), src));
-        } else { /* 1 or 2 */
-            src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0,
-                                        memsz[j] == 2 ? OPSZ_2 : OPSZ_1);
-            instrlist_meta_preinsert(
-                bb, instr, INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
+        /* Inlined value load [s_a] -> s_b + the value/size/valid stores are oracle-only
+         * (propagation reads the shadow at the EA above, never these values). PRODUCTION
+         * (prod) skips them; the EA store above stays. */
+        if (!AT_PROD_SKIP) {
+            opnd_t src;
+            if (memsz[j] == 8) {
+                src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0, OPSZ_8);
+                instrlist_meta_preinsert(
+                    bb, instr,
+                    INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_b), src));
+            } else if (memsz[j] == 4) {
+                src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0, OPSZ_4);
+                instrlist_meta_preinsert(
+                    bb, instr,
+                    INSTR_CREATE_mov_ld(
+                        dc, opnd_create_reg(reg_resize_to_opsz(s_b, OPSZ_4)),
+                        src));
+            } else { /* 1 or 2 */
+                src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0,
+                                            memsz[j] == 2 ? OPSZ_2 : OPSZ_1);
+                instrlist_meta_preinsert(
+                    bb, instr, INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
+            }
+            drx_buf_insert_buf_store(
+                dc, g_buf, bb, instr, s_ptr, DR_REG_NULL, opnd_create_reg(s_b),
+                OPSZ_8, (short)(offsetof(raw_step_t, mem_val) + j * 8));
         }
-        drx_buf_insert_buf_store(
-            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL, opnd_create_reg(s_b),
-            OPSZ_8, (short)(offsetof(raw_step_t, mem_val) + j * 8));
 
         if (swap != DR_REG_NULL)
             drreg_unreserve_register(dc, bb, instr, swap);
 
-        /* size + valid: compile-time immediates (materialize 64-bit, store narrow). */
-        instrlist_meta_preinsert(
-            bb, instr,
-            INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
-                                 OPND_CREATE_INTPTR((ptr_uint_t)memsz[j])));
-        drx_buf_insert_buf_store(
-            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-            opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_2)), OPSZ_2,
-            (short)(offsetof(raw_step_t, mem_size) + j * 2));
-        instrlist_meta_preinsert(bb, instr,
-                                 INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
-                                                      OPND_CREATE_INTPTR(1)));
-        drx_buf_insert_buf_store(
-            dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-            opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_1)), OPSZ_1,
-            (short)(offsetof(raw_step_t, mem_valid) + j));
+        if (!AT_PROD_SKIP) {
+            /* size + valid: compile-time immediates (materialize 64-bit, store narrow). */
+            instrlist_meta_preinsert(
+                bb, instr,
+                INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
+                                     OPND_CREATE_INTPTR((ptr_uint_t)memsz[j])));
+            drx_buf_insert_buf_store(
+                dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
+                opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_2)), OPSZ_2,
+                (short)(offsetof(raw_step_t, mem_size) + j * 2));
+            instrlist_meta_preinsert(
+                bb, instr,
+                INSTR_CREATE_mov_imm(dc, opnd_create_reg(s_a),
+                                     OPND_CREATE_INTPTR(1)));
+            drx_buf_insert_buf_store(
+                dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
+                opnd_create_reg(reg_resize_to_opsz(s_a, OPSZ_1)), OPSZ_1,
+                (short)(offsetof(raw_step_t, mem_valid) + j));
+        }
     }
 
 #ifdef ASMTEST_TAINT
@@ -1538,13 +1564,18 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     for (int g = 0; g < AT_GPR_COUNT; g++) {
         if (g_gpr_order[g] != s_ptr)
             continue;
+        /* The buffer-pointer copy into s_b is ALWAYS needed (the advance below uses it). */
         instrlist_meta_preinsert(bb, instr,
                                  INSTR_CREATE_mov_ld(dc, opnd_create_reg(s_b),
                                                      opnd_create_reg(s_ptr)));
-        drreg_get_app_value(dc, bb, instr, s_ptr, s_a);
-        drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_b, DR_REG_NULL,
-                                 opnd_create_reg(s_a), OPSZ_8,
-                                 (short)(offsetof(raw_step_t, gpr) + g * 8));
+        /* The s_ptr app-value capture is oracle-only; skip in PRODUCTION (drreg still
+         * restores s_ptr before the app instruction). */
+        if (!AT_PROD_SKIP) {
+            drreg_get_app_value(dc, bb, instr, s_ptr, s_a);
+            drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_b, DR_REG_NULL,
+                                     opnd_create_reg(s_a), OPSZ_8,
+                                     (short)(offsetof(raw_step_t, gpr) + g * 8));
+        }
         break;
     }
 
@@ -1668,7 +1699,8 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
             dr_snprintf(g_methodscan, sizeof g_methodscan, "%s", argv[i] + 11);
             g_methodscan[sizeof g_methodscan - 1] = '\0';
             g_methodscan_active = (g_methodscan[0] != '\0');
-        }
+        } else if (strcmp(argv[i], "prod") == 0)
+            g_prod = 1;
 #endif
     }
 #ifdef ASMTEST_TAINT_GCREMAP

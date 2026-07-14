@@ -922,9 +922,17 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > ≈ 1.4× over value capture; whole-tier ≈ 437× bare.** The load-bearing FINDING (and a CORRECTION of
 > this slice's first cut, which wrongly blamed the per-branch sink clean call): the whole-tier cost is
 > **DOMINATED by the L0 VALUE-capture recording** — a full register-file snapshot per instruction, an
-> **oracle-validation** feature — **NOT by taint**; propagation itself is cheap. So the ~10-50× band is
-> reachable by a **PRODUCTION propagation-only build that drops the value trace**, and the band-threshold
-> HARD gate over such a build is Increment 9 proper. Also landed alongside: the **guarded-inline-sink-skip**
+> **oracle-validation** feature — **NOT by taint**; propagation itself is cheap. **The PRODUCTION build
+> (client option `prod`) LANDED 2026-07-14** — it drops that value-capture recording (the GP register-file
+> snapshot + the memory value/size/valid stores), keeping only the mem-source EA + tag propagation +
+> shadow + sink, so taint semantics are IDENTICAL (the out-of-process taint-set oracle still passes 9/9;
+> the taint set is the `step_taint` witness + offset, never the GP values; the flag-off value client stays
+> 14/14). **Measured: full-taint ≈ 423× → PROD-taint ≈ 216× bare — a ~2× win, but NOT yet in the ~10-50×
+> band.** A CORRECTION of this note's earlier optimism ("the band is reachable by just dropping the value
+> trace"): the remaining ~216× is the **2-level create-on-touch shadow** (multiple loads per access) + the
+> **drx_buf record round-trip** for the EA. The next lever to the band is a **direct-mapped shadow +
+> drx_buf-free EA**; the band-threshold HARD gate over the `prod` build is Increment 9 proper. Also landed
+> alongside: the **guarded-inline-sink-skip**
 > (the Increment-4 follow-on) — the branch-condition sink now inline-tests the eflags tag (drreg-reserved
 > aflags around it, so the app flags the branch reads are preserved) and only makes the on_sink clean call
 > when tainted; a clean branch pays a TLS load + test, not a clean call. It is a correctness-preserving
@@ -932,9 +940,11 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > band lever (the value trace is). INFORMATIONAL: wall-clock ratios are noise-prone (as the Increment-3
 > microbench notes), so the lane asserts only the monotonic structural fact `T_taint >= T_value > T_dr >=
 > T_bare` and REPORTS the decomposition. The **managed seed→sink** half of this increment's exit criteria
-> is already met by Increment 5 ([taint_managed](../../../examples/taint_managed/)); what remains for full
-> Increment 9 is GC-survival (Increment 7, Phase-4-blocked), the shared-fixture emulator cross-check, the
-> production propagation-only build, and the hard band + non-detection CI gate.
+> is already met by Increment 5 ([taint_managed](../../../examples/taint_managed/)), and the production
+> propagation-only build now landed (above); what remains for full Increment 9 is the **direct-mapped
+> shadow + drx_buf-free EA** to bring `prod` into the ~10-50× band, GC-survival (Increment 7 — now
+> unblocked, profiler path), the shared-fixture emulator cross-check, and the hard band + non-detection
+> CI gate.
 
 The Phase-5 exit gate the whole plan works backward from: everything above composed into a real
 managed data-flow assertion with a measured cost, replacing the offset-only dotnet smoke

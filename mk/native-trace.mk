@@ -781,22 +781,26 @@ else
 	        $(abspath $(BUILD)/taint_overhead) mark $(OVERHEAD_ITERS) 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
 	 taint=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) -- \
 	        $(abspath $(BUILD)/taint_overhead) mark $(OVERHEAD_ITERS) 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
-	 [ -z "$$bare" ] && bare=0; [ -z "$$dr" ] && dr=0; [ -z "$$val" ] && val=0; [ -z "$$taint" ] && taint=0; \
-	 echo "# hotns: bare=$$bare  DR-baseline=$$dr  value-capture=$$val  +taint=$$taint  (iters=$(OVERHEAD_ITERS))"; \
-	 awk -v b=$$bare -v d=$$dr -v v=$$val -v t=$$taint 'BEGIN{ if (b>0) printf \
-	   "# DR-baseline = %.1fx bare;  value-capture = %.1fx bare;  taint-propagation adds = %.2fx value;  WHOLE-TIER = %.1fx bare (plan band ~10-50x)\n", \
-	   d/b, v/b, (v>0?t/v:0), t/b }'; \
-	 echo "# FINDING: DR steady-state on a hot loop is ~1x (near-native code cache). The whole-tier cost"; \
-	 echo "#   is DOMINATED by the L0 VALUE-capture recording (a full register-file snapshot per insn — an"; \
-	 echo "#   oracle-validation feature), NOT by taint: propagation adds only ~1.4x over value capture, and"; \
-	 echo "#   the guarded-inline sink skip keeps a clean branch off the clean-call path. So the ~10-50x band"; \
-	 echo "#   is reachable by a PRODUCTION propagation-only build that drops the value trace; the band-threshold"; \
-	 echo "#   HARD gate over such a build is Increment 9 proper."; \
-	 if [ "$$taint" -ge "$$val" ] && [ "$$val" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]; then \
-	   echo "ok 1 - overhead measured + monotonic (taint >= value > DR-baseline >= bare > 0)"; \
-	 else echo "not ok 1 - expected taint >= value > DR-baseline >= bare > 0 (bare=$$bare dr=$$dr val=$$val taint=$$taint)"; fi; \
+	 prod=$$($(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) prod -- \
+	        $(abspath $(BUILD)/taint_overhead) mark $(OVERHEAD_ITERS) 2>/dev/null | grep -oE 'hotns=[0-9]+' | grep -oE '[0-9]+'); \
+	 [ -z "$$bare" ] && bare=0; [ -z "$$dr" ] && dr=0; [ -z "$$val" ] && val=0; [ -z "$$taint" ] && taint=0; [ -z "$$prod" ] && prod=0; \
+	 echo "# hotns: bare=$$bare  DR-baseline=$$dr  value-capture=$$val  full-taint=$$taint  PROD-taint=$$prod  (iters=$(OVERHEAD_ITERS))"; \
+	 awk -v b=$$bare -v d=$$dr -v v=$$val -v t=$$taint -v p=$$prod 'BEGIN{ if (b>0) printf \
+	   "# DR-baseline = %.1fx bare;  value-capture = %.1fx bare;  full-taint (value+taint) = %.1fx bare;  PROD-taint (value-trace-free) = %.1fx bare\n", \
+	   d/b, v/b, t/b, p/b }'; \
+	 echo "# FINDING: DR steady-state on a hot loop is ~1x (near-native code cache). The FULL-tier cost is"; \
+	 echo "#   DOMINATED by the L0 VALUE-capture recording (a full register-file snapshot per insn — an"; \
+	 echo "#   oracle-validation feature), NOT by taint. The PRODUCTION build (client option 'prod') drops"; \
+	 echo "#   that recording, keeping only tag propagation + shadow + sink (taint semantics identical — the"; \
+	 echo "#   out-of-process taint-set oracle still passes): ~2x faster than full-taint here. It is NOT yet"; \
+	 echo "#   in the plan's ~10-50x band, though — the remaining cost is the 2-level create-on-touch shadow"; \
+	 echo "#   (multiple loads/access) + the drx_buf record round-trip for the EA; a direct-mapped shadow +"; \
+	 echo "#   drx_buf-free EA is the next lever, and the band-threshold HARD gate is Increment 9 proper."; \
+	 if [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]; then \
+	   echo "ok 1 - overhead measured + monotonic (full-taint >= prod-taint > DR-baseline >= bare > 0)"; \
+	 else echo "not ok 1 - expected full-taint >= prod-taint > DR-baseline >= bare > 0 (bare=$$bare dr=$$dr prod=$$prod taint=$$taint)"; fi; \
 	 echo "1..1"; \
-	 [ "$$taint" -ge "$$val" ] && [ "$$val" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]
+	 [ "$$taint" -ge "$$prod" ] && [ "$$prod" -gt "$$dr" ] && [ "$$dr" -ge "$$bare" ] && [ "$$bare" -gt 0 ]
 endif
 
 # --- GC-move-range extraction: DR + ICorProfiler coexistence PROBE (go/no-go) -----
