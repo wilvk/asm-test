@@ -1,0 +1,19 @@
+<!-- Managed seed->sink workload for the DynamoRIO taint tier (dynamorio-taint-tier-plan.md,
+     Increment 5 exit criterion 3). Driven by mk/native-trace.mk dr-taint-managed-test as the
+     target of a drrun client launch with DOTNET_PerfMapEnabled=1 and methodscan=Hot: the
+     client's perfmap poller auto-registers the JIT'd HotSeedSink range, and a seed painted on
+     a native buffer (via the P/Invoked shim) flows through HotSeedSink's load->cmp->branch to
+     the branch-condition sink, reported out-of-process over shm. AllowUnsafeBlocks: HotSeedSink
+     reads the seed buffer through a raw pointer so the JIT emits a plain instrumented load.
+     TieredCompilation off so HotSeedSink JITs once to a stable perfmap address. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>taint_managed</AssemblyName>
+    <TieredCompilation>false</TieredCompilation>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

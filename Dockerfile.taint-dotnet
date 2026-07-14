@@ -37,11 +37,15 @@ ENV DYNAMORIO_HOME=/opt/dynamorio
 WORKDIR /src
 COPY . .
 
-# Run (1) the coexistence smoke (make dr-taint-dotnet-test) and (2) the Increment-6 method-
-# range auto-registration lane (make dr-taint-methods-test): DOTNET_PerfMapEnabled=1 +
-# methodscan=Hot so the client's perfmap poller auto-registers the JIT'd HotAlpha/HotBeta
-# ranges (range-count > 1) with no C marker and instruments real managed code. Self-skip
-# cleanly if DynamoRIO / the .NET SDK were absent, but here both are installed, so they run.
+# Run (1) the coexistence smoke (make dr-taint-dotnet-test); (2) the Increment-6 method-range
+# auto-registration lane (make dr-taint-methods-test): DOTNET_PerfMapEnabled=1 + methodscan=Hot
+# so the client's perfmap poller auto-registers the JIT'd HotAlpha/HotBeta ranges (range-count
+# > 1) with no C marker and instruments real managed code; and (3) the Increment-5 exit-crit-3
+# MANAGED seed->sink lane (make dr-taint-managed-test): a seed on a native buffer flows through
+# a JIT'd Hot method's branch to the sink, reported + validated OUT OF PROCESS over shm, with an
+# unseeded negative control. Self-skip cleanly if DynamoRIO / the .NET SDK were absent, but here
+# both are installed, so they run.
 CMD set -eux; \
     make dr-taint-dotnet-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
-    make dr-taint-methods-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-methods-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-managed-test DYNAMORIO_HOME=$DYNAMORIO_HOME

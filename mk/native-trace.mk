@@ -695,6 +695,62 @@ else
 	  [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "HELLO_TAINT_METHODS" && [ "$$reg" -ge 2 ] && [ "$$ins" -gt 0 ]
 endif
 
+# --- Taint tier Increment 5 (exit crit 3): MANAGED seed->sink over JIT'd .NET code ---
+# The last Increment-5 exit criterion — a taint seed on a buffer flows through REAL JIT'd
+# managed code to a branch-condition sink, REPORTED OUT OF PROCESS over shm — composing
+# Increment 6's method-range auto-registration with Increment 5's shm channel + validator.
+# A native shim (libtaint_managed_shim.so, P/Invoked by the managed workload) exports the
+# seed/sink marker symbols the client resolves by PC, maps the shm channel, and holds a
+# NATIVE seed buffer (a stable address — painting a GC-movable managed object is Increment 7).
+# The client's methodscan=Hot poller auto-registers the JIT'd HotSeedSink; its seeded
+# load->cmp->branch trips the branch-condition sink; a SEPARATE taint_managed_validator drains
+# the hit. Seeded run must report a tainted branch hit (kind=1); the unseeded negative control
+# must report ZERO. Self-skips without DynamoRIO OR without the .NET SDK.
+$(BUILD)/libtaint_managed_shim.so: examples/taint_managed_shim.c include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h src/dataflow_dr.h \
+                          $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc -shared -fPIC \
+	      examples/taint_managed_shim.c -lrt -o $@
+
+$(BUILD)/taint_managed_validator: examples/taint_managed_validator.c include/asmtest_taint.h \
+                          include/asmtest_taint_shm.h src/dataflow_dr.h \
+                          $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -DASMTEST_TAINT -Isrc examples/taint_managed_validator.c -lrt -o $@
+
+MANAGED_SHM ?= /asmtest_taint_managed_ci
+.PHONY: dr-taint-managed-test
+dr-taint-managed-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-managed-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { \
+	  echo "== dr-taint-managed-test =="; echo "# SKIP: dotnet SDK not found"; \
+	  echo "1..0 # skipped"; exit 0; }
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/libtaint_managed_shim.so $(BUILD)/taint_managed_validator
+	@echo "== dr-taint-managed-test (drrun methodscan=Hot -- dotnet: managed seed->sink over JIT'd code) =="
+	@rm -rf $(BUILD)/taint_managed_out
+	@$(DOTNET) build -c Release examples/taint_managed/taint_managed.csproj \
+	    -o $(BUILD)/taint_managed_out >$(BUILD)/taint_managed_build.log 2>&1 \
+	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/taint_managed_build.log; exit 1; }
+	@rm -f /dev/shm$(MANAGED_SHM) 2>/dev/null || true
+	@echo "-- seeded run (expect a tainted branch-condition sink hit) --"
+	@LD_LIBRARY_PATH=$(abspath $(BUILD)) DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 \
+	    $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) methodscan=Hot -- \
+	    $(DOTNET) $(abspath $(BUILD)/taint_managed_out/taint_managed.dll) seed $(MANAGED_SHM) 2>&1 | \
+	  grep -E 'HELLO_TAINT_MANAGED|taint_managed_shim:|ASMTEST_TAINT_INSCOUNT' || true
+	@$(BUILD)/taint_managed_validator seed $(MANAGED_SHM)
+	@rm -f /dev/shm$(MANAGED_SHM) 2>/dev/null || true
+	@echo "-- negative control (unseeded => zero hits) --"
+	@LD_LIBRARY_PATH=$(abspath $(BUILD)) DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 \
+	    $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) methodscan=Hot -- \
+	    $(DOTNET) $(abspath $(BUILD)/taint_managed_out/taint_managed.dll) noseed $(MANAGED_SHM) 2>&1 | \
+	  grep -E 'HELLO_TAINT_MANAGED|taint_managed_shim:' || true
+	@$(BUILD)/taint_managed_validator noseed $(MANAGED_SHM)
+endif
+
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------
 # Times one whole asmtest_dataflow_dr_run over a LOOPING fixture under each value
 # client across fresh processes and reports the per-instruction capture-cost

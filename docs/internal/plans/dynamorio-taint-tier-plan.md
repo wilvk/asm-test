@@ -615,7 +615,29 @@ together, but all on a single-threaded native fixture, so it carries no launch/m
 The concurrency *policy* is cheap to state; its *validation* is deferred to Increment 5 where real
 concurrency exists.
 
-## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(native launch + dotnet JIT-coexistence + concurrency-stress LANDED 2026-07-13; managed seed→sink (needs Inc6 method ranges) remains)*
+## Increment 5 - Launch-under-DR container (drrun -c … -- dotnet app.dll) + out-of-process validator *(ALL exit criteria MET — native launch + dotnet JIT-coexistence + concurrency-stress LANDED 2026-07-13, managed seed→sink LANDED 2026-07-14; **Increment 5 COMPLETE**)*
+
+> **Managed seed→sink LANDED 2026-07-14 — exit criterion (3) MET; Increment 5 is now COMPLETE.**
+> `make dr-taint-managed-test` (folded into `Dockerfile.taint-dotnet`): the last exit criterion —
+> a taint seed flowing through **REAL JIT'd managed code** to a sink, reported **out of process** — by
+> composing Increment 6's method-range auto-registration with this increment's shm channel + validator.
+> A native P/Invoke shim ([taint_managed_shim.c](../../../examples/taint_managed_shim.c),
+> `libtaint_managed_shim.so`) exports the seed/sink marker symbols the client resolves by PC (the
+> client's `event_module_load` resolves them when the .so loads), maps the shm channel, and holds a
+> **native** seed buffer (a stable address — painting a GC-movable managed object is Increment 7). The
+> managed workload ([taint_managed/Program.cs](../../../examples/taint_managed/Program.cs)) P/Invokes the
+> shim to seed, then loops calling a `[MethodImpl(NoInlining)]` `HotSeedSink(ptr)` that reads the seeded
+> buffer and uses it as a **loop bound** — a real conditional branch (an `if (x==k)` folds to a
+> branchless `cmov`, so no branch sink fires; a loop's `cmp i,x` is the reliable tainted-eflags branch).
+> `methodscan=Hot` auto-registers HotSeedSink; the seeded load→cmp→branch trips the branch-condition
+> sink and the hit crosses to a SEPARATE [taint_managed_validator](../../../examples/taint_managed_validator.c).
+> **Seeded run: the sink reports a tainted `kind=1` hit over JIT'd managed code (4/4); unseeded negative
+> control: ZERO hits (2/2)** — deterministic over repeated runs, clean exit (no hang, riding the
+> Increment-6 exit-hang fix). Validation is STRUCTURAL, not the emulator oracle diff the native lanes use
+> (the L0 emulator cannot replay JIT'd .NET code — the full shared-fixture oracle cross-check is
+> Increment 9). **Client UNCHANGED** (the seed/sink markers + methodscan already existed; the feature is
+> pure workload + shim + validator + lane). Validated in a fresh `docker-taint-dotnet` image alongside the
+> coexistence (2/2) + methods (3/3) lanes.
 
 > **Concurrent-writer stress LANDED 2026-07-13 — exit criterion (4) MET; the Increment-4 race policy is
 > now VALIDATED, not just stated.** `make dr-taint-stress-test` /
